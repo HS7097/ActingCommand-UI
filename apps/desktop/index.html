@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GachaPilot Preview</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-avatar">GP</div>
+          <div>
+            <div class="brand-title">GachaPilot</div>
+            <div class="brand-subtitle">多游戏自动化控制台</div>
+          </div>
+        </div>
+        <div class="topbar-center" id="topbarTitle">总览</div>
+        <div class="window-controls">
+          <span class="dot blue"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+          <span class="dot red"></span>
+        </div>
+      </header>
+
+      <div class="layout">
+        <aside class="primary-sidebar">
+          <button class="primary-nav active" data-nav="overview" title="总览">
+            <span class="nav-symbol monitor"></span>
+            <span>总览</span>
+          </button>
+
+          <div class="instance-list" id="instanceList"></div>
+
+          <button class="primary-nav settings-entry" data-nav="settings" title="设置">
+            <span class="nav-symbol gear"></span>
+            <span>设置</span>
+          </button>
+        </aside>
+
+        <main class="main">
+          <section id="overviewPage" class="page">
+            <div class="page-heading">
+              <div>
+                <h1>资源总览</h1>
+                <p>Azur.jp、Ark.cn、BA.jp</p>
+              </div>
+              <div class="heading-actions">
+                <button class="button subtle" data-command="refresh">刷新状态</button>
+                <button class="button" data-command="start">启动自动化</button>
+              </div>
+            </div>
+            <div class="runtime-banner" id="runtimeBanner"></div>
+            <div class="overview-resources" id="overviewResources"></div>
+          </section>
+
+          <section id="instancePage" class="page hidden">
+            <section class="instance-content standalone">
+              <div class="instance-heading">
+                <div>
+                  <h1 id="instanceTitle">AlasR</h1>
+                  <p id="instanceSubtitle">Azur.jp</p>
+                </div>
+                <div class="heading-actions">
+                  <button class="button subtle" data-command="refresh">刷新</button>
+                  <button class="button subtle" data-command="stop">停止自动化</button>
+                  <button class="button" data-command="start">启动自动化</button>
+                </div>
+              </div>
+
+              <div class="runtime-banner compact" id="profileRuntimeBanner"></div>
+              <div class="profileSurface" id="profileSurface"></div>
+            </section>
+          </section>
+
+          <section id="settingsPage" class="page hidden">
+            <div class="page-heading">
+              <div>
+                <h1>设置</h1>
+                <p>全局配置、运行时连接、资源仓库、适配器和开发者工具。</p>
+              </div>
+              <button class="button subtle" data-command="refresh">检查运行时</button>
+            </div>
+            <div class="runtime-banner" id="settingsRuntimeBanner"></div>
+            <div class="settings-grid">
+              <article class="panel">
+                <div class="panel-title"><h2>实例</h2></div>
+                <div class="settings-list" id="settingsInstances"></div>
+              </article>
+              <article class="panel">
+                <div class="panel-title"><h2>AliceRuntimeOrchestrator</h2></div>
+                <div class="settings-list" id="runtimeSettings"></div>
+              </article>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script src="./mock-data.js"></script>
+    <script src="./runtime-client.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
