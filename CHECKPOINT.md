@@ -13,17 +13,19 @@ Future UI tasks should update and commit this repository's `PLANS.md` and `CHECK
 - Added UI-local `AGENTS.md`, `PLANS.md`, and `CHECKPOINT.md`.
 - Supersedes the previous routine behavior of mirroring UI task planning files into the umbrella repository.
 - UI future task close-out should commit and push planning/checkpoint updates in this repository.
+- UI-local planning initialization was pushed to `HS7097/ActingCommand-UI`.
 
 ### Files changed
 
+- `CHECKPOINT.md`
 - `AGENTS.md`
 - `PLANS.md`
-- `CHECKPOINT.md`
 
 ### Commands run
 
 - Checked UI repository status.
 - Created UI-local planning files.
+- Committed and pushed UI-local planning files.
 
 ### Test results
 
@@ -35,4 +37,4 @@ Future UI tasks should update and commit this repository's `PLANS.md` and `CHECK
 
 ### Next step
 
-1. Push UI-local planning initialization to `HS7097/ActingCommand-UI`.
+1. Use UI-local `PLANS.md` and `CHECKPOINT.md` for the next UI task.
