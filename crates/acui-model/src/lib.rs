@@ -48,7 +48,12 @@ impl Filters {
 #[derive(Debug, Clone)]
 pub struct InstanceCard {
     pub source_label: String,
-    pub event_count: usize,
+    /// Rows actually loaded from the given page files.
+    pub loaded_count: usize,
+    /// `event_count` as stated by open.json; `None` without `--open`.
+    pub ledger_event_count: Option<u64>,
+    /// `read_complete` / `corrupt_tail` / `repair_count` from open.json, rendered.
+    pub ledger_integrity: Option<String>,
     pub first_timestamp: Option<String>,
     pub last_timestamp: Option<String>,
     pub severity_counts: Vec<(Severity, usize)>,
@@ -114,7 +119,11 @@ impl ViewModel {
 
     pub fn detail(&self) -> Option<DetailView<'_>> {
         let sequence = self.selected_sequence?;
-        let row = self.rows.iter().find(|row| row.sequence == sequence)?;
+        let row = self
+            .rows
+            .iter()
+            .find(|row| row.sequence == sequence)
+            .filter(|row| self.tab.membership(row) && self.filters.accepts(row))?;
         Some(DetailView {
             row,
             pretty_payload_json: serde_json::to_string_pretty(&row.payload)
@@ -147,7 +156,9 @@ impl ViewModel {
         let last = self.rows.last().map(|row| row.timestamp_unix_ms);
         InstanceCard {
             source_label: self.source_label.clone(),
-            event_count: self.rows.len(),
+            loaded_count: self.rows.len(),
+            ledger_event_count: self.open.as_ref().and_then(|open| open.event_count),
+            ledger_integrity: self.open.as_ref().map(integrity_text),
             first_timestamp: self.rows.first().map(|row| format_full(row.timestamp_unix_ms)),
             last_timestamp: last.map(format_full),
             severity_counts,
@@ -159,6 +170,29 @@ impl ViewModel {
             last_event_age_text: last.map(age_text).unwrap_or_else(|| "—".to_string()),
         }
     }
+}
+
+/// Ledger integrity as stated by open.json: 正常, or the raw values when not.
+fn integrity_text(open: &OpenReport) -> String {
+    let corrupt = open
+        .corrupt_tail
+        .as_ref()
+        .filter(|value| !value.is_null());
+    if open.read_complete == Some(true) && corrupt.is_none() && open.repair_count.unwrap_or(0) == 0 {
+        return "正常".to_string();
+    }
+    format!(
+        "read_complete={} / corrupt_tail={} / repair_count={}",
+        open.read_complete
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "—".to_string()),
+        corrupt
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "null".to_string()),
+        open.repair_count
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "—".to_string()),
+    )
 }
 
 /// `hh:mm:ss.mmm` in local time, for list rows.

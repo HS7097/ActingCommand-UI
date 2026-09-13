@@ -3,6 +3,9 @@
 //!
 //! These are read-only mirrors, not the contract itself: unknown fields are
 //! ignored so a newer Runtime projection still loads.
+//!
+//! Mirrored on purpose, not surfaced on purpose: v0 displays only part of these
+//! fields; the rest are kept so the row contract can be wired in without a reload.
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -164,6 +167,12 @@ pub struct OpenReport {
     pub latest_sequence: Option<u64>,
     pub event_count: Option<u64>,
     pub storage_backend: Option<String>,
+    #[serde(default)]
+    pub read_complete: Option<bool>,
+    #[serde(default)]
+    pub corrupt_tail: Option<Value>,
+    #[serde(default)]
+    pub repair_count: Option<u64>,
     #[serde(default)]
     pub writer: Option<Writer>,
 }

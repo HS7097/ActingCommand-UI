@@ -9,8 +9,7 @@ use acui_rows::{EventRow, OpenEnvelope, OpenReport, PageEnvelope};
 use anyhow::{bail, Context, Result};
 
 pub trait EventSource {
-    fn rows(&self) -> &[EventRow];
-    fn open_report(&self) -> Option<&OpenReport>;
+    /// What the console shows as 来源; the rows themselves come from `into_parts`.
     fn source_label(&self) -> String;
 }
 
@@ -67,8 +66,8 @@ impl FileSource {
     }
 
     /// Hand the loaded rows to the view model.
-    pub fn into_parts(self) -> (Vec<EventRow>, Option<OpenReport>, String) {
-        (self.rows, self.open, self.label)
+    pub fn into_parts(self) -> (Vec<EventRow>, Option<OpenReport>) {
+        (self.rows, self.open)
     }
 }
 
@@ -90,14 +89,6 @@ fn file_name(path: &Path) -> &str {
 }
 
 impl EventSource for FileSource {
-    fn rows(&self) -> &[EventRow] {
-        &self.rows
-    }
-
-    fn open_report(&self) -> Option<&OpenReport> {
-        self.open.as_ref()
-    }
-
     fn source_label(&self) -> String {
         self.label.clone()
     }

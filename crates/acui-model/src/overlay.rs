@@ -1,8 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Geometry pulled out of an opaque payload, defensively: whatever looks like a
-//! rectangle or a point is drawn, everything else is ignored.
+//! Geometry pulled out of an opaque payload, defensively: only values under a
+//! geometry key are read as rectangles or points, everything else is ignored.
 
 use serde_json::Value;
+
+/// Payload keys whose contents are geometry; nothing outside them is drawn.
+const GEOMETRY_KEYS: [&str; 6] = [
+    "source_regions",
+    "action",
+    "boxes",
+    "points",
+    "region",
+    "rect",
+];
 
 /// A rectangle in frame coordinates; a point is a rectangle of zero size.
 #[derive(Debug, Clone, PartialEq)]
@@ -22,7 +32,7 @@ impl Overlay {
 
 pub fn extract_overlays(payload: &Value) -> Vec<Overlay> {
     let mut overlays = Vec::new();
-    walk(payload, "payload", &mut overlays);
+    walk(payload, "payload", false, &mut overlays);
     overlays
 }
 
@@ -38,40 +48,48 @@ pub fn extract_frame_size(payload: &Value) -> Option<(f32, f32)> {
     }
 }
 
-fn walk(value: &Value, name: &str, overlays: &mut Vec<Overlay>) {
+/// `geometry` is true once the walk has entered one of `GEOMETRY_KEYS`.
+fn walk(value: &Value, name: &str, geometry: bool, overlays: &mut Vec<Overlay>) {
     match value {
         Value::Object(map) => {
-            let x = number(map.get("x"));
-            let y = number(map.get("y"));
-            if let (Some(x), Some(y)) = (x, y) {
-                overlays.push(Overlay {
-                    kind: name.to_string(),
-                    x,
-                    y,
-                    width: number(map.get("width")).unwrap_or(0.0),
-                    height: number(map.get("height")).unwrap_or(0.0),
-                });
-            }
-            for index in 1..=3 {
-                let x = number(map.get(&format!("x{index}")));
-                let y = number(map.get(&format!("y{index}")));
+            if geometry {
+                let x = number(map.get("x"));
+                let y = number(map.get("y"));
                 if let (Some(x), Some(y)) = (x, y) {
                     overlays.push(Overlay {
-                        kind: format!("{name}.{index}"),
+                        kind: name.to_string(),
                         x,
                         y,
-                        width: 0.0,
-                        height: 0.0,
+                        width: number(map.get("width")).unwrap_or(0.0),
+                        height: number(map.get("height")).unwrap_or(0.0),
                     });
+                }
+                for index in 1..=3 {
+                    let x = number(map.get(&format!("x{index}")));
+                    let y = number(map.get(&format!("y{index}")));
+                    if let (Some(x), Some(y)) = (x, y) {
+                        overlays.push(Overlay {
+                            kind: format!("{name}.{index}"),
+                            x,
+                            y,
+                            width: 0.0,
+                            height: 0.0,
+                        });
+                    }
                 }
             }
             for (key, child) in map {
-                walk(child, key, overlays);
+                walk(
+                    child,
+                    key,
+                    geometry || GEOMETRY_KEYS.contains(&key.as_str()),
+                    overlays,
+                );
             }
         }
         Value::Array(items) => {
             for (index, child) in items.iter().enumerate() {
-                walk(child, &format!("{name}[{index}]"), overlays);
+                walk(child, &format!("{name}[{index}]"), geometry, overlays);
             }
         }
         _ => {}
