@@ -1,0 +1,10 @@
+[package]
+name = "acui-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+acui-rows = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+serde_json = { workspace = true }
