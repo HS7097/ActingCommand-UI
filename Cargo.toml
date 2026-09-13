@@ -17,8 +17,9 @@ serde_json = "1"
 # Only what the console needs: the trim drops the renderers and backends this
 # program never uses (software renderer, testing backend, Linux system tray).
 # It does not drop image decoding: `image` stays a normal dependency of
-# i-slint-core (`cargo tree -e normal -i image`); it is simply never invoked
-# here, because no Image element is ever fed bytes.
+# i-slint-core (`cargo tree -e normal -i image`). The only image this program
+# decodes is its own compile-time embedded application icon (Window.icon);
+# no ledger material is ever fed to an Image element.
 slint = { version = "1.17.1", default-features = false, features = [
     "std",
     "backend-winit",
