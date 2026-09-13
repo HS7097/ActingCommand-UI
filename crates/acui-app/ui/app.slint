@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { ComboBox, LineEdit, ListView, ScrollView, Slider, TextEdit } from "std-widgets.slint";
+import { ComboBox, LineEdit, ListView, Palette, ScrollView, Slider, TextEdit } from "std-widgets.slint";
 
 export struct RowItem {
-    sequence: int,
+    sequence-text: string,
     clock: string,
     severity: string,
     module: string,
@@ -32,19 +32,29 @@ export struct OverlayItem {
     point: bool,
 }
 
+// Severity keeps semantic colours; these mid tones stay legible on both palettes.
+global Severity {
+    out property <color> info: #3fa14b;
+    out property <color> warning: #d08a00;
+    out property <color> debug: #8a8a8a;
+    out property <color> error: #e0525f;
+}
+
 component TabButton inherits Rectangle {
     in property <string> label;
     in property <bool> active;
     callback clicked();
     height: 30px;
-    background: active ? #2f6fb3 : #e6e6e6;
+    background: active ? Palette.accent-background : Palette.control-background;
     border-radius: 4px;
+    border-width: 1px;
+    border-color: active ? Palette.accent-background : Palette.border;
     HorizontalLayout {
         padding-left: 10px;
         padding-right: 10px;
         Text {
             text: label;
-            color: active ? white : #222222;
+            color: active ? Palette.accent-foreground : Palette.control-foreground;
             vertical-alignment: center;
         }
     }
@@ -55,16 +65,26 @@ component TabButton inherits Rectangle {
     }
 }
 
+component Panel inherits Rectangle {
+    background: Palette.alternate-background;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: Palette.border;
+}
+
 export component AppWindow inherits Window {
     title: "ActingCommand 监控台 v0";
-    width: 1400px;
-    height: 900px;
+    preferred-width: 1400px;
+    preferred-height: 900px;
+    min-width: 1100px;
+    min-height: 700px;
     default-font-size: 13px;
-    background: #f5f5f5;
+    background: Palette.background;
 
     in property <string> mode-text;
     in property <string> source-label;
     in property <string> counter-text;
+    in property <string> loaded-text;
     in property <[FieldLine]> card-lines;
     in property <[string]> tab-labels;
     in property <int> active-tab;
@@ -72,7 +92,7 @@ export component AppWindow inherits Window {
     in property <[string]> module-options;
     in property <[RowItem]> rows;
     in property <string> list-summary;
-    in property <int> selected-sequence;
+    in property <int> selected-index;
     in property <[FieldLine]> detail-lines;
     in property <[ArtifactItem]> artifacts;
     in property <[OverlayItem]> overlays;
@@ -95,20 +115,26 @@ export component AppWindow inherits Window {
         spacing: 8px;
 
         // top bar
-        Rectangle {
+        Panel {
             height: 46px;
-            background: white;
-            border-radius: 4px;
             HorizontalLayout {
                 padding-left: 12px;
                 padding-right: 12px;
-                spacing: 16px;
-                Text { text: root.mode-text; vertical-alignment: center; color: #222222; font-weight: 700; }
-                Text { text: root.source-label; vertical-alignment: center; color: #444444; }
-                Text { text: root.counter-text; vertical-alignment: center; color: #444444; }
-                Text { text: "时间游标"; vertical-alignment: center; color: #444444; }
+                spacing: 12px;
+                Text { text: root.mode-text; vertical-alignment: center; color: Palette.foreground; font-weight: 700; }
+                Text {
+                    text: root.source-label;
+                    vertical-alignment: center;
+                    color: Palette.foreground.with-alpha(0.7);
+                    overflow: elide;
+                    min-width: 40px;
+                    horizontal-stretch: 1;
+                }
+                Text { text: root.counter-text; vertical-alignment: center; color: Palette.foreground; }
+                Text { text: root.loaded-text; vertical-alignment: center; color: Palette.foreground.with-alpha(0.7); }
+                Text { text: "时间游标"; vertical-alignment: center; color: Palette.foreground.with-alpha(0.7); }
                 Slider {
-                    width: 260px;
+                    width: 180px;
                     minimum: 0;
                     maximum: max(root.cursor-max, 1);
                     value: root.cursor-value;
@@ -116,7 +142,7 @@ export component AppWindow inherits Window {
                         root.cursor-changed(v);
                     }
                 }
-                Text { text: "≤ " + round(root.cursor-value); vertical-alignment: center; width: 90px; color: #444444; }
+                Text { text: "≤ " + round(root.cursor-value); vertical-alignment: center; width: 90px; color: Palette.foreground.with-alpha(0.7); }
             }
         }
 
@@ -124,30 +150,39 @@ export component AppWindow inherits Window {
             spacing: 8px;
 
             // left: instance card
-            Rectangle {
-                width: 300px;
-                background: white;
-                border-radius: 4px;
-                ScrollView {
-                    VerticalLayout {
-                        padding: 10px;
-                        spacing: 6px;
-                        Text { text: "实例卡"; color: #222222; font-weight: 700; }
-                        for line in root.card-lines: VerticalLayout {
-                            spacing: 1px;
-                            vertical-stretch: 0;
-                            Text { text: line.label; color: #777777; font-size: 11px; }
-                            Text { text: line.value; width: 272px; color: #222222; wrap: word-wrap; }
+            Panel {
+                horizontal-stretch: 0;
+                min-width: 200px;
+                preferred-width: 300px;
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 6px;
+                    Text { text: "实例卡"; color: Palette.foreground; font-weight: 700; }
+                    Text {
+                        text: "以下数值为已载入范围，不随时间游标变化";
+                        color: Palette.foreground.with-alpha(0.6);
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+                    ScrollView {
+                        viewport-width: self.visible-width;
+                        VerticalLayout {
+                            spacing: 6px;
+                            for line in root.card-lines: VerticalLayout {
+                                spacing: 1px;
+                                vertical-stretch: 0;
+                                Text { text: line.label; color: Palette.foreground.with-alpha(0.6); font-size: 11px; }
+                                Text { text: line.value; color: Palette.foreground; wrap: char-wrap; }
+                            }
+                            Rectangle { }
                         }
-                        Rectangle { }
                     }
                 }
             }
 
             // middle: timeline
-            Rectangle {
-                background: white;
-                border-radius: 4px;
+            Panel {
+                horizontal-stretch: 1;
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
@@ -163,7 +198,7 @@ export component AppWindow inherits Window {
                     }
                     if root.provisional-note != "": Text {
                         text: root.provisional-note;
-                        color: #b06000;
+                        color: Severity.warning;
                     }
                     HorizontalLayout {
                         spacing: 6px;
@@ -191,32 +226,34 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
-                    Text { text: root.list-summary; color: #666666; font-size: 11px; }
+                    Text { text: root.list-summary; color: Palette.foreground.with-alpha(0.6); font-size: 11px; }
                     ListView {
-                        for row in root.rows: Rectangle {
+                        for row[index] in root.rows: Rectangle {
                             height: 24px;
-                            background: row.sequence == root.selected-sequence ? #cfe0f5 : transparent;
+                            background: index == root.selected-index
+                                ? Palette.accent-background.with-alpha(0.35)
+                                : transparent;
                             HorizontalLayout {
                                 padding-left: 6px;
                                 padding-right: 6px;
                                 spacing: 8px;
-                                Text { text: row.sequence; width: 56px; color: #666666; vertical-alignment: center; }
-                                Text { text: row.clock; width: 86px; color: #222222; vertical-alignment: center; }
+                                Text { text: row.sequence-text; width: 56px; color: Palette.foreground.with-alpha(0.6); vertical-alignment: center; }
+                                Text { text: row.clock; width: 86px; color: Palette.foreground; vertical-alignment: center; }
                                 Text {
                                     text: row.severity;
                                     width: 56px;
                                     vertical-alignment: center;
-                                    color: row.severity == "info" ? #3a7d3a
-                                        : row.severity == "warning" ? #b06000
-                                        : row.severity == "debug" ? #888888 : #b00020;
+                                    color: row.severity == "info" ? Severity.info
+                                        : row.severity == "warning" ? Severity.warning
+                                        : row.severity == "debug" ? Severity.debug : Severity.error;
                                 }
-                                Text { text: row.module; width: 112px; overflow: elide; vertical-alignment: center; color: #444444; }
-                                Text { text: row.event-type; width: 164px; overflow: elide; color: #222222; vertical-alignment: center; }
-                                Text { text: row.link-id; vertical-alignment: center; color: #777777; overflow: elide; }
+                                Text { text: row.module; width: 112px; overflow: elide; vertical-alignment: center; color: Palette.foreground.with-alpha(0.75); }
+                                Text { text: row.event-type; width: 164px; overflow: elide; color: Palette.foreground; vertical-alignment: center; }
+                                Text { text: row.link-id; vertical-alignment: center; color: Palette.foreground.with-alpha(0.6); overflow: elide; }
                             }
                             TouchArea {
                                 clicked => {
-                                    root.row-clicked(row.sequence);
+                                    root.row-clicked(index);
                                 }
                             }
                         }
@@ -225,54 +262,56 @@ export component AppWindow inherits Window {
             }
 
             // right: detail
-            Rectangle {
-                width: 420px;
-                background: white;
-                border-radius: 4px;
+            Panel {
+                horizontal-stretch: 0;
+                min-width: 320px;
+                preferred-width: 420px;
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
-                    Text { text: "详情"; color: #222222; font-weight: 700; }
-                    ScrollView {
-                        height: 200px;
-                        VerticalLayout {
-                            spacing: 2px;
-                            for line in root.detail-lines: HorizontalLayout {
-                                spacing: 6px;
-                                vertical-stretch: 0;
-                                Text { text: line.label; width: 110px; color: #777777; }
-                                Text { text: line.value; width: 276px; color: #222222; wrap: word-wrap; }
-                            }
-                            Rectangle { }
+                    Text { text: "详情"; color: Palette.foreground; font-weight: 700; }
+                    VerticalLayout {
+                        spacing: 2px;
+                        vertical-stretch: 0;
+                        for line in root.detail-lines: HorizontalLayout {
+                            spacing: 6px;
+                            vertical-stretch: 0;
+                            Text { text: line.label; width: 110px; color: Palette.foreground.with-alpha(0.6); }
+                            Text { text: line.value; color: Palette.foreground; wrap: char-wrap; }
                         }
                     }
-                    Text { text: "产物（仅哈希占位，不载入图像）"; color: #222222; font-weight: 700; }
+                    Text { text: "产物（仅哈希占位，不载入图像）"; color: Palette.foreground; font-weight: 700; }
                     ScrollView {
-                        height: 110px;
+                        viewport-width: self.visible-width;
+                        min-height: 70px;
+                        preferred-height: 110px;
+                        max-height: 110px;
                         VerticalLayout {
                             spacing: 4px;
                             for artifact in root.artifacts: Rectangle {
-                                background: #f0f4f8;
+                                background: Palette.control-background;
                                 border-radius: 3px;
                                 vertical-stretch: 0;
                                 VerticalLayout {
                                     padding: 5px;
                                     spacing: 1px;
-                                    Text { text: artifact.artifact-id; color: #222222; wrap: word-wrap; font-size: 11px; }
+                                    Text { text: artifact.artifact-id; color: Palette.foreground; wrap: char-wrap; font-size: 11px; }
                                     Text {
                                         text: artifact.kind + " · " + artifact.media-type + " · " + artifact.byte-count;
-                                        color: #555555;
+                                        color: Palette.foreground.with-alpha(0.7);
                                         font-size: 11px;
                                     }
-                                    Text { text: artifact.sha256; color: #555555; wrap: word-wrap; font-size: 11px; }
+                                    Text { text: artifact.sha256; color: Palette.foreground.with-alpha(0.7); wrap: char-wrap; font-size: 11px; }
                                 }
                             }
                             Rectangle { }
                         }
                     }
-                    Text { text: root.canvas-note; font-size: 11px; color: #666666; }
+                    Text { text: root.canvas-note; font-size: 11px; color: Palette.foreground.with-alpha(0.6); }
                     Rectangle {
-                        height: 180px;
+                        min-height: 120px;
+                        preferred-height: 180px;
+                        max-height: 180px;
                         background: #1c1c1c;
                         border-radius: 3px;
                         clip: true;
@@ -291,6 +330,8 @@ export component AppWindow inherits Window {
                     TextEdit {
                         read-only: true;
                         wrap: word-wrap;
+                        min-height: 60px;
+                        vertical-stretch: 1;
                         text: root.payload-json;
                     }
                 }

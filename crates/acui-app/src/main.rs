@@ -13,13 +13,17 @@ use slint::{ModelRc, SharedString, VecModel};
 
 slint::include_modules!();
 
+const USAGE: &str = "用法：acui [--events <events.json>]... [--open <open.json>] \
+[--tab <stream|errors|observe|changes|health|lab>]";
+
 struct Args {
     events: Vec<PathBuf>,
     open: Option<PathBuf>,
     tab: ViewTab,
 }
 
-fn parse_args() -> Result<Args> {
+/// `Ok(None)` means the usage line was printed and the process should stop.
+fn parse_args() -> Result<Option<Args>> {
     let mut events = Vec::new();
     let mut open = None;
     let mut tab = ViewTab::EventStream;
@@ -46,21 +50,28 @@ fn parse_args() -> Result<Args> {
                     other => bail!("未知的 --tab 取值：{other}"),
                 };
             }
-            other => bail!("未知参数：{other}"),
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return Ok(None);
+            }
+            other => bail!("未知参数：{other}\n{USAGE}"),
         }
     }
-    Ok(Args { events, open, tab })
+    Ok(Some(Args { events, open, tab }))
 }
 
 fn main() -> Result<()> {
-    let args = parse_args()?;
+    let args = match parse_args()? {
+        Some(args) => args,
+        None => return Ok(()),
+    };
     let source = if args.events.is_empty() {
         FileSource::empty()
     } else {
         FileSource::load(&args.events, args.open.as_deref())?
     };
     let label = source.source_label();
-    let (rows, open, _) = source.into_parts();
+    let (rows, open) = source.into_parts();
     let mut model = ViewModel::new(rows, open, label);
     model.tab = args.tab;
     let model = Rc::new(RefCell::new(model));
@@ -136,13 +147,19 @@ fn install_callbacks(window: &AppWindow, model: &Rc<RefCell<ViewModel>>) {
             Some(text.to_string())
         }
     });
+    // The slider carries the sequence as f32: exact only below 2^24, so past that
+    // the cursor quantises to the nearest representable sequence. v0 accepts this.
     on!(on_cursor_changed, |view, value| {
         let max = view.max_sequence();
         let cursor = value.round().max(0.0) as u64;
         view.filters.through_sequence = if cursor >= max { None } else { Some(cursor) }
     });
-    on!(on_row_clicked, |view, sequence| {
-        view.selected_sequence = Some(sequence as u64)
+    on!(on_row_clicked, |view, index| {
+        let sequence = view
+            .visible()
+            .get(index.max(0) as usize)
+            .map(|row| row.sequence);
+        view.selected_sequence = sequence;
     });
 }
 
@@ -150,27 +167,30 @@ fn refresh(window: &AppWindow, model: &ViewModel) {
     let card = model.instance_card();
     window.set_mode_text("模式：离线·文件".into());
     window.set_source_label(format!("来源：{}", card.source_label).into());
+    // Ledger facts come from open.json only; the loaded count is shown separately.
     window.set_counter_text(
         format!(
-            "latest_sequence {} / event_count {}",
-            card.latest_sequence
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "—".to_string()),
-            card.event_count
+            "账本 latest_sequence {} / event_count {}",
+            optional(card.latest_sequence),
+            optional(card.ledger_event_count)
         )
         .into(),
     );
+    window.set_loaded_text(format!("事件条数（已载入）{}", card.loaded_count).into());
 
     let max_sequence = model.max_sequence();
     window.set_cursor_max(max_sequence as f32);
     window.set_cursor_value(model.filters.through_sequence.unwrap_or(max_sequence) as f32);
 
     let mut card_lines = vec![
-        line("事件条数（已载入）", card.event_count.to_string()),
+        line("事件条数（已载入）", card.loaded_count.to_string()),
         line("最早事件", card.first_timestamp.unwrap_or_else(dash)),
         line("最新事件", card.last_timestamp.unwrap_or_else(dash)),
         line("最新事件距今", card.last_event_age_text),
     ];
+    if let Some(integrity) = card.ledger_integrity {
+        card_lines.push(line("账本完整性", integrity));
+    }
     for (severity, count) in &card.severity_counts {
         card_lines.push(line(severity.as_str(), count.to_string()));
     }
@@ -206,7 +226,7 @@ fn refresh(window: &AppWindow, model: &ViewModel) {
     let rows: Vec<RowItem> = visible
         .iter()
         .map(|row| RowItem {
-            sequence: row.sequence as i32,
+            sequence_text: row.sequence.to_string().into(),
             clock: format_clock(row.timestamp_unix_ms).into(),
             severity: row.severity.as_str().into(),
             module: row.origin.module.as_str().into(),
@@ -215,7 +235,13 @@ fn refresh(window: &AppWindow, model: &ViewModel) {
         })
         .collect();
     window.set_rows(models(rows));
-    window.set_selected_sequence(model.selected_sequence.unwrap_or(0) as i32);
+    window.set_selected_index(
+        visible
+            .iter()
+            .position(|row| Some(row.sequence) == model.selected_sequence)
+            .map(|index| index as i32)
+            .unwrap_or(-1),
+    );
 
     match model.detail() {
         Some(detail) => {
@@ -319,6 +345,10 @@ fn line(label: &str, value: String) -> FieldLine {
 
 fn dash() -> String {
     "—".to_string()
+}
+
+fn optional(value: Option<u64>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_else(dash)
 }
 
 fn models<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
