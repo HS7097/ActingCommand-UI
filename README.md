@@ -81,6 +81,12 @@ acui --events page1.json --events page2.json [--open open.json]
   `rect`）下提取 x/y/width/height 与 x1..y3，其他位置的数字不当作几何；payload 未给画面尺寸时，
   按几何范围铺排并标注「画面尺寸未知」。
 - 时间游标滑杆用 f32 传递 sequence：超过 2^24 的 sequence 会量化到最近的可表示值，v0 接受这一限制。
+- `slint` 按 `default-features = false` 只留 winit 后端、femtovg 渲染器等必需项，裁掉的是用不到的
+  渲染器与后端（软件渲染器、测试后端、Linux 托盘）。**图像解码没有被裁掉**：`image` 仍是
+  `i-slint-core` 的普通依赖（`cargo tree -p acui-app -e normal -i image` 可见），只是本程序从不
+  调用它——没有任何 Image 元素被喂过字节。
+- 窄窗口下实例卡与详情的长值（各类 id）改为省略号截断而不是折行：Slint 的按宽定高只在布局求解
+  拿得到容器宽度时生效，ScrollView 与嵌套布局里拿不到，折行的第二行不会被预留高度而压到下一行。
 
 ## 待 Alice 裁定
 
