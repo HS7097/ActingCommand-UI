@@ -1,0 +1,19 @@
+[package]
+name = "acui-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "acui"
+path = "src/main.rs"
+
+[dependencies]
+acui-model = { workspace = true }
+acui-rows = { workspace = true }
+acui-source = { workspace = true }
+anyhow = { workspace = true }
+slint = { workspace = true }
+
+[build-dependencies]
+slint-build = { workspace = true }

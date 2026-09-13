@@ -1,0 +1,300 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+import { ComboBox, LineEdit, ListView, ScrollView, Slider, TextEdit } from "std-widgets.slint";
+
+export struct RowItem {
+    sequence: int,
+    clock: string,
+    severity: string,
+    module: string,
+    event-type: string,
+    link-id: string,
+}
+
+export struct FieldLine {
+    label: string,
+    value: string,
+}
+
+export struct ArtifactItem {
+    artifact-id: string,
+    kind: string,
+    media-type: string,
+    byte-count: string,
+    sha256: string,
+}
+
+export struct OverlayItem {
+    kind: string,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    point: bool,
+}
+
+component TabButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+    height: 30px;
+    background: active ? #2f6fb3 : #e6e6e6;
+    border-radius: 4px;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        Text {
+            text: label;
+            color: active ? white : #222222;
+            vertical-alignment: center;
+        }
+    }
+    TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "ActingCommand 监控台 v0";
+    width: 1400px;
+    height: 900px;
+    default-font-size: 13px;
+    background: #f5f5f5;
+
+    in property <string> mode-text;
+    in property <string> source-label;
+    in property <string> counter-text;
+    in property <[FieldLine]> card-lines;
+    in property <[string]> tab-labels;
+    in property <int> active-tab;
+    in property <string> provisional-note;
+    in property <[string]> module-options;
+    in property <[RowItem]> rows;
+    in property <string> list-summary;
+    in property <int> selected-sequence;
+    in property <[FieldLine]> detail-lines;
+    in property <[ArtifactItem]> artifacts;
+    in property <[OverlayItem]> overlays;
+    in property <float> canvas-width;
+    in property <float> canvas-height;
+    in property <string> canvas-note;
+    in property <string> payload-json;
+    in property <float> cursor-max;
+    in property <float> cursor-value;
+
+    callback tab-changed(int);
+    callback severity-changed(int);
+    callback module-changed(int);
+    callback id-changed(string);
+    callback cursor-changed(float);
+    callback row-clicked(int);
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        // top bar
+        Rectangle {
+            height: 46px;
+            background: white;
+            border-radius: 4px;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 16px;
+                Text { text: root.mode-text; vertical-alignment: center; color: #222222; font-weight: 700; }
+                Text { text: root.source-label; vertical-alignment: center; color: #444444; }
+                Text { text: root.counter-text; vertical-alignment: center; color: #444444; }
+                Text { text: "时间游标"; vertical-alignment: center; color: #444444; }
+                Slider {
+                    width: 260px;
+                    minimum: 0;
+                    maximum: max(root.cursor-max, 1);
+                    value: root.cursor-value;
+                    changed(v) => {
+                        root.cursor-changed(v);
+                    }
+                }
+                Text { text: "≤ " + round(root.cursor-value); vertical-alignment: center; width: 90px; color: #444444; }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            // left: instance card
+            Rectangle {
+                width: 300px;
+                background: white;
+                border-radius: 4px;
+                ScrollView {
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+                        Text { text: "实例卡"; color: #222222; font-weight: 700; }
+                        for line in root.card-lines: VerticalLayout {
+                            spacing: 1px;
+                            vertical-stretch: 0;
+                            Text { text: line.label; color: #777777; font-size: 11px; }
+                            Text { text: line.value; width: 272px; color: #222222; wrap: word-wrap; }
+                        }
+                        Rectangle { }
+                    }
+                }
+            }
+
+            // middle: timeline
+            Rectangle {
+                background: white;
+                border-radius: 4px;
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        for label[index] in root.tab-labels: TabButton {
+                            label: label;
+                            active: index == root.active-tab;
+                            clicked => {
+                                root.tab-changed(index);
+                            }
+                        }
+                    }
+                    if root.provisional-note != "": Text {
+                        text: root.provisional-note;
+                        color: #b06000;
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        vertical-stretch: 0;
+                        ComboBox {
+                            width: 160px;
+                            model: ["全部", "warning 及以上", "error 及以上"];
+                            current-index: 0;
+                            selected => {
+                                root.severity-changed(self.current-index);
+                            }
+                        }
+                        ComboBox {
+                            width: 180px;
+                            model: root.module-options;
+                            current-index: 0;
+                            selected => {
+                                root.module-changed(self.current-index);
+                            }
+                        }
+                        LineEdit {
+                            placeholder-text: "按 id 过滤（event_id 或任一 link）";
+                            edited(text) => {
+                                root.id-changed(text);
+                            }
+                        }
+                    }
+                    Text { text: root.list-summary; color: #666666; font-size: 11px; }
+                    ListView {
+                        for row in root.rows: Rectangle {
+                            height: 24px;
+                            background: row.sequence == root.selected-sequence ? #cfe0f5 : transparent;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                spacing: 8px;
+                                Text { text: row.sequence; width: 56px; color: #666666; vertical-alignment: center; }
+                                Text { text: row.clock; width: 86px; color: #222222; vertical-alignment: center; }
+                                Text {
+                                    text: row.severity;
+                                    width: 56px;
+                                    vertical-alignment: center;
+                                    color: row.severity == "info" ? #3a7d3a
+                                        : row.severity == "warning" ? #b06000
+                                        : row.severity == "debug" ? #888888 : #b00020;
+                                }
+                                Text { text: row.module; width: 112px; overflow: elide; vertical-alignment: center; color: #444444; }
+                                Text { text: row.event-type; width: 164px; overflow: elide; color: #222222; vertical-alignment: center; }
+                                Text { text: row.link-id; vertical-alignment: center; color: #777777; overflow: elide; }
+                            }
+                            TouchArea {
+                                clicked => {
+                                    root.row-clicked(row.sequence);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // right: detail
+            Rectangle {
+                width: 420px;
+                background: white;
+                border-radius: 4px;
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 6px;
+                    Text { text: "详情"; color: #222222; font-weight: 700; }
+                    ScrollView {
+                        height: 200px;
+                        VerticalLayout {
+                            spacing: 2px;
+                            for line in root.detail-lines: HorizontalLayout {
+                                spacing: 6px;
+                                vertical-stretch: 0;
+                                Text { text: line.label; width: 110px; color: #777777; }
+                                Text { text: line.value; width: 276px; color: #222222; wrap: word-wrap; }
+                            }
+                            Rectangle { }
+                        }
+                    }
+                    Text { text: "产物（仅哈希占位，不载入图像）"; color: #222222; font-weight: 700; }
+                    ScrollView {
+                        height: 110px;
+                        VerticalLayout {
+                            spacing: 4px;
+                            for artifact in root.artifacts: Rectangle {
+                                background: #f0f4f8;
+                                border-radius: 3px;
+                                vertical-stretch: 0;
+                                VerticalLayout {
+                                    padding: 5px;
+                                    spacing: 1px;
+                                    Text { text: artifact.artifact-id; color: #222222; wrap: word-wrap; font-size: 11px; }
+                                    Text {
+                                        text: artifact.kind + " · " + artifact.media-type + " · " + artifact.byte-count;
+                                        color: #555555;
+                                        font-size: 11px;
+                                    }
+                                    Text { text: artifact.sha256; color: #555555; wrap: word-wrap; font-size: 11px; }
+                                }
+                            }
+                            Rectangle { }
+                        }
+                    }
+                    Text { text: root.canvas-note; font-size: 11px; color: #666666; }
+                    Rectangle {
+                        height: 180px;
+                        background: #1c1c1c;
+                        border-radius: 3px;
+                        clip: true;
+                        property <float> scale: min(self.width / 1px / max(root.canvas-width, 1),
+                                                   self.height / 1px / max(root.canvas-height, 1));
+                        for overlay in root.overlays: Rectangle {
+                            x: overlay.x * parent.scale * 1px;
+                            y: overlay.y * parent.scale * 1px;
+                            width: overlay.point ? 7px : max(overlay.width * parent.scale * 1px, 1px);
+                            height: overlay.point ? 7px : max(overlay.height * parent.scale * 1px, 1px);
+                            background: overlay.point ? #ff6a3d : transparent;
+                            border-color: #59c2ff;
+                            border-width: 1px;
+                        }
+                    }
+                    TextEdit {
+                        read-only: true;
+                        wrap: word-wrap;
+                        text: root.payload-json;
+                    }
+                }
+            }
+        }
+    }
+}
