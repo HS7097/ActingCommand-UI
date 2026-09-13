@@ -1,0 +1,29 @@
+[workspace]
+members = ["crates/acui-rows", "crates/acui-source", "crates/acui-model", "crates/acui-app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[workspace.dependencies]
+acui-rows = { path = "crates/acui-rows" }
+acui-source = { path = "crates/acui-source" }
+acui-model = { path = "crates/acui-model" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Only what the console needs: the trim drops the renderers and backends this
+# program never uses (software renderer, testing backend, Linux system tray).
+# It does not drop image decoding: `image` stays a normal dependency of
+# i-slint-core (`cargo tree -e normal -i image`); it is simply never invoked
+# here, because no Image element is ever fed bytes.
+slint = { version = "1.17.1", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "renderer-femtovg",
+    "compat-1-2",
+    "accessibility",
+] }
+slint-build = "1.17.1"
