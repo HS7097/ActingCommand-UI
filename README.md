@@ -51,6 +51,19 @@ acui --events page1.json --events page2.json [--open open.json]
 
 窗口可缩放：默认 1400×900，最小 1100×700，中栏随窗口伸缩，两侧栏保持定宽。
 
+## 图标
+
+应用图标是 Alice 裁定的黑色单人「指挥官」标记，素材在 `crates/acui-app/assets/`：
+`acui-256.png`（256×256 透明 PNG）与 `acui.ico`（16..256 多尺寸）。
+
+- **窗口与任务栏图标**：`app.slint` 的 `Window.icon: @image-url("../assets/acui-256.png")`，
+  Slint 在编译期把 PNG 嵌进程序。
+- **可执行文件图标**：`build.rs` 里 `#[cfg(windows)]` 调 `winresource` 把 `acui.ico` 编进
+  exe 资源段；这条依赖挂在 `[target.'cfg(windows)'.build-dependencies]` 下，Linux 上不编译。
+
+图标是编译期嵌入的自带素材，不是账本素材：**「不载入图像字节」的裁定不变**，帧视图依旧只显示
+哈希占位。
+
 ## 六个页签
 
 | 页签 | 归类依据 | 状态 |
