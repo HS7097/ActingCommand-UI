@@ -14,7 +14,7 @@
   唯一输入是命令行上给出的导出事件页 JSON 文件。
 - **四层四 crate**（同一个 Cargo workspace）：
   - `acui-rows`：`EventRow` 等行类型，镜像 `actingcommand.event.v2` 投影；serde 容忍未知字段。
-  - `acui-source`：`EventSource` trait 与 `FileSource`（合并多页、按 sequence 排序去重）。
+  - `acui-source`：`EventSource` trait（只有 `source_label`）与 `FileSource`（合并多页、按 sequence 排序去重）。
   - `acui-model`：纯 Rust 视图模型（页签、过滤、时间游标、选中项），不依赖 slint。
   - `acui-app`：唯一依赖 slint 的 crate，`.slint` 文件在 `crates/acui-app/ui/`。
   - 依赖方向：app → model → rows ← source。
@@ -42,6 +42,14 @@ acui --events page1.json --events page2.json [--open open.json]
 
 页可以任意顺序给出；行按 sequence 排序，重复 sequence 去重。
 `--tab <stream|errors|observe|changes|health|lab>` 可指定启动时的页签（截图与复核用）。
+`--help` / `-h` 打印这一行用法后退出。
+
+顶栏左侧是账本事实：`latest_sequence` 与 `event_count` 都来自 `open.json`，不给 `--open` 时显示
+「—」；本地实际载入的条数另有标签「事件条数（已载入）」，两者不混用。实例卡在给出 `--open` 时
+多一行「账本完整性」：`read_complete` / `corrupt_tail` / `repair_count` 三项齐全且干净时显示
+「正常」，否则原样列出三个值。实例卡其余数值都是**已载入范围**的统计，不随时间游标变化。
+
+窗口可缩放：默认 1400×900，最小 1100×700，中栏随窗口伸缩，两侧栏保持定宽。
 
 ## 六个页签
 
@@ -62,18 +70,21 @@ acui --events page1.json --events page2.json [--open open.json]
 - 在线模式（订阅 Runtime、实时跟随）——只有离线文件模式。
 - 真实帧图：不载入图像字节，只有哈希占位与几何叠加。
 - 任何控制/审批动作。
-- 皮肤与主题系统：只用 Slint 自带控件样式，且固定为浅色（见下）。
+- 自带皮肤与主题系统：不做调色板设置，只跟随系统（见下）。
 
 ## 已知取舍
 
-- 界面固定浅色（`fluent-light`）。系统处于深色模式时不跟随：窗口自绘的浅色面板与深色控件
-  调色板混在一起会导致白底白字，v0 选择固定浅色而不是引入主题系统。
-- 几何叠加从 payload 里按通用键（x/y/width/height、x1..y3）提取；payload 未给画面尺寸时，
+- 界面不再固定浅色：不钉 `fluent-light`，颜色全部取自 std-widgets 的 `Palette`，跟随平台默认
+  样式与系统深/浅色设置。只有 severity 保留语义色（info 绿 / warning 橙 / debug 灰 / error 红），
+  这几个中间色在两套调色板上都可读。
+- 几何叠加只从 payload 的白名单键（`source_regions`、`action`、`boxes`、`points`、`region`、
+  `rect`）下提取 x/y/width/height 与 x1..y3，其他位置的数字不当作几何；payload 未给画面尺寸时，
   按几何范围铺排并标注「画面尺寸未知」。
+- 时间游标滑杆用 f32 传递 sequence：超过 2^24 的 sequence 会量化到最近的可表示值，v0 接受这一限制。
 
-## 许可
+## 待 Alice 裁定
 
-工作区声明 `AGPL-3.0-only`，每个 `.rs` 文件带 SPDX 头。**最终许可待 Alice 裁定**，
-仓库暂未附 LICENSE 全文；裁定后再补。
-
-界面由 [Slint](https://slint.dev) 渲染（Slint 按其许可条款分发）。
+- **许可**：工作区声明 `AGPL-3.0-only`，每个 `.rs` 文件带 SPDX 头，但**最终许可待裁定**，
+  仓库暂未附 LICENSE 全文；裁定后再补。
+- **Slint 许可选项**：界面由 [Slint](https://slint.dev) 渲染，选哪一种 Slint 许可待裁定。
+- **帧素材读取**：v0 永不载入图像字节；将来是否、以及如何读取帧素材待裁定。

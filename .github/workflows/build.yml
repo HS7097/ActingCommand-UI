@@ -30,4 +30,4 @@ jobs:
             libfreetype6-dev \
             libxkbcommon-x11-dev
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release --workspace
+      - run: cargo build --locked --release --workspace

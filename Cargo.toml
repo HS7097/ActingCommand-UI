@@ -14,5 +14,13 @@ acui-model = { path = "crates/acui-model" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-slint = "1.17.1"
+# Only what the console needs: no software renderer, no system tray, and no
+# image-decoding stack (the frame viewer never loads image bytes).
+slint = { version = "1.17.1", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "renderer-femtovg",
+    "compat-1-2",
+    "accessibility",
+] }
 slint-build = "1.17.1"
