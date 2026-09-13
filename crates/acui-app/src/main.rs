@@ -39,7 +39,10 @@ fn parse_args() -> Result<Option<Args>> {
                 None => bail!("--open 缺少文件路径"),
             },
             "--tab" => {
-                let name = argv.next().unwrap_or_default();
+                let name = match argv.next() {
+                    Some(name) => name,
+                    None => bail!("缺少 --tab 取值"),
+                };
                 tab = match name.as_str() {
                     "stream" => ViewTab::EventStream,
                     "errors" => ViewTab::Errors,

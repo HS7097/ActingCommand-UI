@@ -172,7 +172,9 @@ export component AppWindow inherits Window {
                                 spacing: 1px;
                                 vertical-stretch: 0;
                                 Text { text: line.label; color: Palette.foreground.with-alpha(0.6); font-size: 11px; }
-                                Text { text: line.value; color: Palette.foreground; wrap: char-wrap; }
+                                // Elide, not wrap: a wrapped line's height is not reserved here, so
+                                // the second line would be drawn over the next label.
+                                Text { text: line.value; color: Palette.foreground; overflow: elide; }
                             }
                             Rectangle { }
                         }
@@ -237,7 +239,7 @@ export component AppWindow inherits Window {
                                 padding-left: 6px;
                                 padding-right: 6px;
                                 spacing: 8px;
-                                Text { text: row.sequence-text; width: 56px; color: Palette.foreground.with-alpha(0.6); vertical-alignment: center; }
+                                Text { text: row.sequence-text; width: 96px; overflow: elide; color: Palette.foreground.with-alpha(0.6); vertical-alignment: center; }
                                 Text { text: row.clock; width: 86px; color: Palette.foreground; vertical-alignment: center; }
                                 Text {
                                     text: row.severity;
@@ -277,34 +279,41 @@ export component AppWindow inherits Window {
                             spacing: 6px;
                             vertical-stretch: 0;
                             Text { text: line.label; width: 110px; color: Palette.foreground.with-alpha(0.6); }
-                            Text { text: line.value; color: Palette.foreground; wrap: char-wrap; }
+                            // Elide so a narrow panel cuts with an ellipsis instead of silently
+                            // turning a long id into a shorter, wrong-looking one.
+                            Text { text: line.value; color: Palette.foreground; overflow: elide; }
                         }
                     }
-                    Text { text: "产物（仅哈希占位，不载入图像）"; color: Palette.foreground; font-weight: 700; }
-                    ScrollView {
-                        viewport-width: self.visible-width;
-                        min-height: 70px;
-                        preferred-height: 110px;
-                        max-height: 110px;
-                        VerticalLayout {
-                            spacing: 4px;
-                            for artifact in root.artifacts: Rectangle {
-                                background: Palette.control-background;
-                                border-radius: 3px;
-                                vertical-stretch: 0;
-                                VerticalLayout {
-                                    padding: 5px;
-                                    spacing: 1px;
-                                    Text { text: artifact.artifact-id; color: Palette.foreground; wrap: char-wrap; font-size: 11px; }
-                                    Text {
-                                        text: artifact.kind + " · " + artifact.media-type + " · " + artifact.byte-count;
-                                        color: Palette.foreground.with-alpha(0.7);
-                                        font-size: 11px;
+                    // No artifacts on the selected event: the whole block collapses, no blank band.
+                    if root.artifacts.length > 0: VerticalLayout {
+                        spacing: 6px;
+                        vertical-stretch: 0;
+                        Text { text: "产物（仅哈希占位，不载入图像）"; color: Palette.foreground; font-weight: 700; }
+                        ScrollView {
+                            viewport-width: self.visible-width;
+                            min-height: 70px;
+                            preferred-height: 110px;
+                            max-height: 110px;
+                            VerticalLayout {
+                                spacing: 4px;
+                                for artifact in root.artifacts: Rectangle {
+                                    background: Palette.control-background;
+                                    border-radius: 3px;
+                                    vertical-stretch: 0;
+                                    VerticalLayout {
+                                        padding: 5px;
+                                        spacing: 1px;
+                                        Text { text: artifact.artifact-id; color: Palette.foreground; overflow: elide; font-size: 11px; }
+                                        Text {
+                                            text: artifact.kind + " · " + artifact.media-type + " · " + artifact.byte-count;
+                                            color: Palette.foreground.with-alpha(0.7);
+                                            font-size: 11px;
+                                        }
+                                        Text { text: artifact.sha256; color: Palette.foreground.with-alpha(0.7); overflow: elide; font-size: 11px; }
                                     }
-                                    Text { text: artifact.sha256; color: Palette.foreground.with-alpha(0.7); wrap: char-wrap; font-size: 11px; }
                                 }
+                                Rectangle { }
                             }
-                            Rectangle { }
                         }
                     }
                     Text { text: root.canvas-note; font-size: 11px; color: Palette.foreground.with-alpha(0.6); }
