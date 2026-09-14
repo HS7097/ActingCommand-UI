@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { ComboBox, LineEdit, ListView, Palette, ScrollView, Slider, TextEdit } from "std-widgets.slint";
+import { Button, ComboBox, LineEdit, ListView, Palette, ScrollView, Slider, TextEdit } from "std-widgets.slint";
 
 export struct RowItem {
+    // A run's recovery header, with its folded rows following it.
+    recovery: bool,
+    folded: bool,
     sequence-text: string,
     clock: string,
     severity: string,
     module: string,
     event-type: string,
     link-id: string,
+    note: string,
 }
 
 export struct FieldLine {
@@ -73,7 +77,7 @@ component Panel inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
-    title: "ActingCommand 监控台 v0";
+    title: "ActingCommand 监控台";
     icon: @image-url("../assets/acui-256.png");
     preferred-width: 1400px;
     preferred-height: 900px;
@@ -85,31 +89,36 @@ export component AppWindow inherits Window {
     in property <string> mode-text;
     in property <string> source-label;
     in property <string> counter-text;
-    in property <string> loaded-text;
+    in property <string> scope-text;
     in property <[FieldLine]> card-lines;
     in property <[string]> tab-labels;
     in property <int> active-tab;
-    in property <string> provisional-note;
     in property <[string]> module-options;
     in property <[RowItem]> rows;
     in property <string> list-summary;
+    in property <string> filter-error;
+    in property <bool> has-more;
     in property <int> selected-index;
     in property <[FieldLine]> detail-lines;
     in property <[ArtifactItem]> artifacts;
     in property <[OverlayItem]> overlays;
     in property <float> canvas-width;
     in property <float> canvas-height;
-    in property <string> canvas-note;
+    in property <string> frame-note;
+    in property <image> frame-image;
+    in property <bool> frame-ready;
     in property <string> payload-json;
-    in property <float> cursor-max;
     in property <float> cursor-value;
+    in property <string> cursor-label;
 
     callback tab-changed(int);
-    callback severity-changed(int);
+    callback minimum-severity-changed(int);
+    callback maximum-severity-changed(int);
     callback module-changed(int);
     callback id-changed(string);
     callback cursor-changed(float);
     callback row-clicked(int);
+    callback load-more();
 
     VerticalLayout {
         padding: 8px;
@@ -132,18 +141,17 @@ export component AppWindow inherits Window {
                     horizontal-stretch: 1;
                 }
                 Text { text: root.counter-text; vertical-alignment: center; color: Palette.foreground; }
-                Text { text: root.loaded-text; vertical-alignment: center; color: Palette.foreground.with-alpha(0.7); }
-                Text { text: "时间游标"; vertical-alignment: center; color: Palette.foreground.with-alpha(0.7); }
+                Text { text: "时间上界"; vertical-alignment: center; color: Palette.foreground.with-alpha(0.7); }
                 Slider {
                     width: 180px;
                     minimum: 0;
-                    maximum: max(root.cursor-max, 1);
+                    maximum: 1000;
                     value: root.cursor-value;
                     changed(v) => {
                         root.cursor-changed(v);
                     }
                 }
-                Text { text: "≤ " + round(root.cursor-value); vertical-alignment: center; width: 90px; color: Palette.foreground.with-alpha(0.7); }
+                Text { text: root.cursor-label; vertical-alignment: center; width: 168px; color: Palette.foreground.with-alpha(0.7); }
             }
         }
 
@@ -160,7 +168,7 @@ export component AppWindow inherits Window {
                     spacing: 6px;
                     Text { text: "实例卡"; color: Palette.foreground; font-weight: 700; }
                     Text {
-                        text: "以下数值为已载入范围，不随时间游标变化";
+                        text: "账本事实取自读面；统计值只覆盖已载入的页";
                         color: Palette.foreground.with-alpha(0.6);
                         font-size: 11px;
                         wrap: word-wrap;
@@ -199,23 +207,27 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
-                    if root.provisional-note != "": Text {
-                        text: root.provisional-note;
-                        color: Severity.warning;
-                    }
                     HorizontalLayout {
                         spacing: 6px;
                         vertical-stretch: 0;
                         ComboBox {
-                            width: 160px;
-                            model: ["全部", "warning 及以上", "error 及以上"];
+                            width: 140px;
+                            model: ["严重度不限", "≥ warning", "≥ error", "≥ fatal"];
                             current-index: 0;
                             selected => {
-                                root.severity-changed(self.current-index);
+                                root.minimum-severity-changed(self.current-index);
                             }
                         }
                         ComboBox {
-                            width: 180px;
+                            width: 140px;
+                            model: ["上限不限", "≤ info", "≤ warning", "≤ error"];
+                            current-index: 0;
+                            selected => {
+                                root.maximum-severity-changed(self.current-index);
+                            }
+                        }
+                        ComboBox {
+                            width: 170px;
                             model: root.module-options;
                             current-index: 0;
                             selected => {
@@ -223,26 +235,52 @@ export component AppWindow inherits Window {
                             }
                         }
                         LineEdit {
-                            placeholder-text: "按 id 过滤（event_id 或任一 link）";
+                            placeholder-text: "correlation_ / request_ / run_ / task_ 完整 id";
                             edited(text) => {
                                 root.id-changed(text);
                             }
                         }
                     }
-                    Text { text: root.list-summary; color: Palette.foreground.with-alpha(0.6); font-size: 11px; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        vertical-stretch: 0;
+                        Text { text: root.list-summary; color: Palette.foreground.with-alpha(0.6); font-size: 11px; vertical-alignment: center; }
+                        Text {
+                            text: root.filter-error;
+                            color: Severity.error;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        if root.has-more: Button {
+                            text: "加载更多";
+                            clicked => {
+                                root.load-more();
+                            }
+                        }
+                    }
                     ListView {
                         for row[index] in root.rows: Rectangle {
                             height: 24px;
-                            background: index == root.selected-index
-                                ? Palette.accent-background.with-alpha(0.35)
-                                : transparent;
+                            background: row.recovery
+                                ? Palette.control-background
+                                : index == root.selected-index
+                                    ? Palette.accent-background.with-alpha(0.35)
+                                    : transparent;
                             HorizontalLayout {
-                                padding-left: 6px;
+                                padding-left: row.folded ? 22px : 6px;
                                 padding-right: 6px;
                                 spacing: 8px;
-                                Text { text: row.sequence-text; width: 96px; overflow: elide; color: Palette.foreground.with-alpha(0.6); vertical-alignment: center; }
-                                Text { text: row.clock; width: 86px; color: Palette.foreground; vertical-alignment: center; }
-                                Text {
+                                if row.recovery: Text {
+                                    text: row.note;
+                                    color: Severity.warning;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                if !row.recovery: Text { text: row.sequence-text; width: row.folded ? 44px : 56px; overflow: elide; color: Palette.foreground.with-alpha(0.6); vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.clock; width: 86px; color: Palette.foreground; vertical-alignment: center; }
+                                if !row.recovery: Text {
                                     text: row.severity;
                                     width: 56px;
                                     vertical-alignment: center;
@@ -250,9 +288,10 @@ export component AppWindow inherits Window {
                                         : row.severity == "warning" ? Severity.warning
                                         : row.severity == "debug" ? Severity.debug : Severity.error;
                                 }
-                                Text { text: row.module; width: 112px; overflow: elide; vertical-alignment: center; color: Palette.foreground.with-alpha(0.75); }
-                                Text { text: row.event-type; width: 164px; overflow: elide; color: Palette.foreground; vertical-alignment: center; }
-                                Text { text: row.link-id; vertical-alignment: center; color: Palette.foreground.with-alpha(0.6); overflow: elide; }
+                                if !row.recovery: Text { text: row.module; width: 108px; overflow: elide; vertical-alignment: center; color: Palette.foreground.with-alpha(0.75); }
+                                if !row.recovery: Text { text: row.event-type; width: 170px; overflow: elide; color: Palette.foreground; vertical-alignment: center; }
+                                if row.folded: Text { text: row.note; width: 48px; color: Severity.warning; font-size: 11px; vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.link-id; vertical-alignment: center; color: Palette.foreground.with-alpha(0.6); overflow: elide; }
                             }
                             TouchArea {
                                 clicked => {
@@ -268,7 +307,7 @@ export component AppWindow inherits Window {
             Panel {
                 horizontal-stretch: 0;
                 min-width: 320px;
-                preferred-width: 420px;
+                preferred-width: 440px;
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
@@ -289,12 +328,12 @@ export component AppWindow inherits Window {
                     if root.artifacts.length > 0: VerticalLayout {
                         spacing: 6px;
                         vertical-stretch: 0;
-                        Text { text: "产物（仅哈希占位，不载入图像）"; color: Palette.foreground; font-weight: 700; }
+                        Text { text: "产物"; color: Palette.foreground; font-weight: 700; }
                         ScrollView {
                             viewport-width: self.visible-width;
-                            min-height: 70px;
-                            preferred-height: 110px;
-                            max-height: 110px;
+                            min-height: 60px;
+                            preferred-height: 92px;
+                            max-height: 92px;
                             VerticalLayout {
                                 spacing: 4px;
                                 for artifact in root.artifacts: Rectangle {
@@ -317,16 +356,26 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
-                    Text { text: root.canvas-note; font-size: 11px; color: Palette.foreground.with-alpha(0.6); }
+                    Text { text: root.frame-note; font-size: 11px; color: Palette.foreground.with-alpha(0.6); wrap: word-wrap; }
                     Rectangle {
-                        min-height: 120px;
-                        preferred-height: 180px;
-                        max-height: 180px;
+                        min-height: 150px;
+                        preferred-height: 260px;
+                        max-height: 300px;
                         background: #1c1c1c;
                         border-radius: 3px;
                         clip: true;
                         property <float> scale: min(self.width / 1px / max(root.canvas-width, 1),
                                                    self.height / 1px / max(root.canvas-height, 1));
+                        // The verified frame and the geometry share one coordinate space,
+                        // so the overlays land on the pixels they describe.
+                        if root.frame-ready: Image {
+                            x: 0;
+                            y: 0;
+                            width: root.canvas-width * parent.scale * 1px;
+                            height: root.canvas-height * parent.scale * 1px;
+                            image-fit: fill;
+                            source: root.frame-image;
+                        }
                         for overlay in root.overlays: Rectangle {
                             x: overlay.x * parent.scale * 1px;
                             y: overlay.y * parent.scale * 1px;

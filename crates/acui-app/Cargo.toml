@@ -13,6 +13,7 @@ acui-model = { workspace = true }
 acui-rows = { workspace = true }
 acui-source = { workspace = true }
 anyhow = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
 slint = { workspace = true }
 
 [build-dependencies]
