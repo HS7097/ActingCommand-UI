@@ -56,15 +56,28 @@ global Severity {
 // a base size for a human at normal DPI multiplied by `factor`; nothing else
 // scales the interface, so 标准 / 大 / 特大 is a single number.
 // The list's column widths, in one place: the header and the rows read the same
-// numbers, so the two can never drift apart.
+// numbers, so the two can never drift apart. These are what each column wants;
+// a list too narrow to give every column its want hands each the same fraction
+// of it, so a column elides instead of being pushed off the pane's edge.
 global Column {
     out property <length> seq: 44px * Scale.factor;
+    // The clock is the one column that never gives way: half a timestamp is a
+    // wrong timestamp, so the others take the whole squeeze.
     out property <length> time: 90px * Scale.factor;
     out property <length> level: 56px * Scale.factor;
     out property <length> module: 120px * Scale.factor;
     out property <length> event: 136px * Scale.factor;
     out property <length> raw: 96px * Scale.factor;
+    // The link column takes whatever is left; this is the width that shows its
+    // own header in full, in both languages.
+    out property <length> link: 150px * Scale.factor;
     out property <length> spacing: 6px;
+    out property <length> margin: 6px;
+    out property <length> wanted: root.seq + root.level + root.module + root.event + root.raw
+        + root.link;
+    // What the squeezed columns never get: the two margins, the six gaps and
+    // the clock.
+    out property <length> fixed: 2 * root.margin + 6 * root.spacing + root.time;
 }
 
 export global Scale {
@@ -310,8 +323,8 @@ export component AppWindow inherits Window {
             // left: instance card
             Panel {
                 horizontal-stretch: 0;
-                min-width: 220px;
-                preferred-width: 280px;
+                min-width: 200px;
+                preferred-width: 240px;
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
@@ -357,6 +370,9 @@ export component AppWindow inherits Window {
             // middle: timeline
             Panel {
                 horizontal-stretch: 1;
+                // The list is the pane a narrow window must keep: at the
+                // window's own minimum the panes beside it give way first.
+                min-width: 560px;
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
@@ -375,7 +391,9 @@ export component AppWindow inherits Window {
                         spacing: 6px;
                         vertical-stretch: 0;
                         ComboBox {
-                            min-width: 80px;
+                            // The floor scales with the text: at 特大 an 80px
+                            // box holds two characters and an ellipsis.
+                            min-width: 100px * Scale.factor;
                             preferred-width: 150px * Scale.factor;
                             model: Strings.severity-min-options;
                             current-index: 0;
@@ -384,7 +402,7 @@ export component AppWindow inherits Window {
                             }
                         }
                         ComboBox {
-                            min-width: 80px;
+                            min-width: 100px * Scale.factor;
                             preferred-width: 150px * Scale.factor;
                             model: Strings.severity-max-options;
                             current-index: 0;
@@ -420,23 +438,33 @@ export component AppWindow inherits Window {
                     // Column header. Placed by hand rather than by a layout: a
                     // layout of fixed columns would push its own width up into
                     // the window's minimum and squeeze the panes beside it.
-                    Rectangle {
+                    // It also holds the widths the rows use: one width per
+                    // column, read by both, is the only way the two stay aligned.
+                    head := Rectangle {
                         height: Scale.row;
                         vertical-stretch: 0;
                         clip: true;
-                        property <length> seq-x: 6px;
-                        property <length> time-x: self.seq-x + Column.seq + Column.spacing;
-                        property <length> level-x: self.time-x + Column.time + Column.spacing;
-                        property <length> module-x: self.level-x + Column.level + Column.spacing;
-                        property <length> event-x: self.module-x + Column.module + Column.spacing;
-                        property <length> link-x: self.event-x + Column.event + Column.spacing + Column.raw + Column.spacing;
-                        Caption { x: parent.seq-x; y: 0; height: parent.height; width: Column.seq; text: Strings.col-seq; overflow: elide; }
-                        Caption { x: parent.time-x; y: 0; height: parent.height; width: Column.time; text: Strings.col-time; overflow: elide; }
-                        Caption { x: parent.level-x; y: 0; height: parent.height; width: Column.level; text: Strings.col-level; overflow: elide; }
-                        Caption { x: parent.module-x; y: 0; height: parent.height; width: Column.module; text: Strings.col-module; overflow: elide; }
+                        // The fraction of its want each column can have here.
+                        property <float> fit: min((self.width - Column.fixed) / Column.wanted, 1.0);
+                        property <length> w-seq: Column.seq * self.fit;
+                        property <length> w-time: Column.time;
+                        property <length> w-level: Column.level * self.fit;
+                        property <length> w-module: Column.module * self.fit;
+                        property <length> w-event: Column.event * self.fit;
+                        property <length> w-raw: Column.raw * self.fit;
+                        property <length> seq-x: Column.margin;
+                        property <length> time-x: self.seq-x + self.w-seq + Column.spacing;
+                        property <length> level-x: self.time-x + self.w-time + Column.spacing;
+                        property <length> module-x: self.level-x + self.w-level + Column.spacing;
+                        property <length> event-x: self.module-x + self.w-module + Column.spacing;
+                        property <length> link-x: self.event-x + self.w-event + Column.spacing + self.w-raw + Column.spacing;
+                        Caption { x: parent.seq-x; y: 0; height: parent.height; width: parent.w-seq; text: Strings.col-seq; overflow: elide; }
+                        Caption { x: parent.time-x; y: 0; height: parent.height; width: parent.w-time; text: Strings.col-time; overflow: elide; }
+                        Caption { x: parent.level-x; y: 0; height: parent.height; width: parent.w-level; text: Strings.col-level; overflow: elide; }
+                        Caption { x: parent.module-x; y: 0; height: parent.height; width: parent.w-module; text: Strings.col-module; overflow: elide; }
                         // The event name and the raw type behind it are one column.
-                        Caption { x: parent.event-x; y: 0; height: parent.height; width: Column.event + Column.spacing + Column.raw; text: Strings.col-event; overflow: elide; }
-                        Caption { x: parent.link-x; y: 0; height: parent.height; width: max(parent.width - parent.link-x - 6px, 0px); text: Strings.col-link; overflow: elide; }
+                        Caption { x: parent.event-x; y: 0; height: parent.height; width: parent.w-event + Column.spacing + parent.w-raw; text: Strings.col-event; overflow: elide; }
+                        Caption { x: parent.link-x; y: 0; height: parent.height; width: max(parent.width - parent.link-x - Column.margin, 0px); text: Strings.col-link; overflow: elide; }
                     }
                     ListView {
                         for row[index] in root.rows: Rectangle {
@@ -447,8 +475,8 @@ export component AppWindow inherits Window {
                                     ? Palette.accent-background.with-alpha(0.35)
                                     : transparent;
                             HorizontalLayout {
-                                padding-left: row.folded ? 22px : 6px;
-                                padding-right: 6px;
+                                padding-left: row.folded ? 22px : Column.margin;
+                                padding-right: Column.margin;
                                 spacing: Column.spacing;
                                 if row.recovery: Text {
                                     text: row.note;
@@ -457,21 +485,21 @@ export component AppWindow inherits Window {
                                     vertical-alignment: center;
                                     overflow: elide;
                                 }
-                                if !row.recovery: Text { text: row.sequence-text; font-size: Scale.list-font; width: row.folded ? max(Column.seq - 22px, 8px) : Column.seq; overflow: elide; color: Palette.foreground.with-alpha(0.6); vertical-alignment: center; }
-                                if !row.recovery: Text { text: row.clock; font-size: Scale.list-font; width: Column.time; color: Palette.foreground; vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.sequence-text; font-size: Scale.list-font; width: row.folded ? max(head.w-seq - 22px, 8px) : head.w-seq; overflow: elide; color: Palette.foreground.with-alpha(0.6); vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.clock; font-size: Scale.list-font; width: head.w-time; overflow: elide; color: Palette.foreground; vertical-alignment: center; }
                                 if !row.recovery: Text {
                                     text: row.level;
                                     font-size: Scale.list-font;
-                                    width: Column.level;
+                                    width: head.w-level;
                                     overflow: elide;
                                     vertical-alignment: center;
                                     color: row.level-tone == 0 ? Severity.debug
                                         : row.level-tone == 1 ? Severity.info
                                         : row.level-tone == 2 ? Severity.warning : Severity.error;
                                 }
-                                if !row.recovery: Text { text: row.module; font-size: Scale.list-font; width: Column.module; overflow: elide; vertical-alignment: center; color: Palette.foreground.with-alpha(0.8); }
-                                if !row.recovery: Text { text: row.event-name; font-size: Scale.list-font; width: Column.event; overflow: elide; color: Palette.foreground; vertical-alignment: center; }
-                                if !row.recovery: Text { text: row.event-raw; font-size: Scale.grey-font; width: Column.raw; overflow: elide; color: Palette.foreground.with-alpha(0.45); vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.module; font-size: Scale.list-font; width: head.w-module; overflow: elide; vertical-alignment: center; color: Palette.foreground.with-alpha(0.8); }
+                                if !row.recovery: Text { text: row.event-name; font-size: Scale.list-font; width: head.w-event; overflow: elide; color: Palette.foreground; vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.event-raw; font-size: Scale.grey-font; width: head.w-raw; overflow: elide; color: Palette.foreground.with-alpha(0.45); vertical-alignment: center; }
                                 if row.folded: Text { text: row.note; font-size: Scale.grey-font; color: Severity.warning; vertical-alignment: center; }
                                 if !row.recovery: Text { text: row.link-id; font-size: Scale.grey-font; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; color: Palette.foreground.with-alpha(0.55); overflow: elide; }
                             }
@@ -495,8 +523,8 @@ export component AppWindow inherits Window {
             // right: detail
             Panel {
                 horizontal-stretch: 0;
-                min-width: 340px;
-                preferred-width: 400px;
+                min-width: 300px;
+                preferred-width: 360px;
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
