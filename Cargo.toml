@@ -21,10 +21,10 @@ actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.
 actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "e41467b9f51d68ddf754f1b898ba4747963a9a1f" }
 # Only what the console needs: the trim drops the renderers and backends this
 # program never uses (software renderer, testing backend, Linux system tray).
-# It does not drop image decoding: `image` stays a normal dependency of
-# i-slint-core (`cargo tree -e normal -i image`). The only image this program
-# decodes is its own compile-time embedded application icon (Window.icon);
-# no ledger material is ever fed to an Image element.
+# It does not drop image decoding, and the console does decode: the capture
+# frames it reads through the material read face and verifies whole against
+# their committed sha256, plus its own compile-time embedded application icon
+# (Window.icon). Nothing else is ever fed to an Image element.
 slint = { version = "1.17.1", default-features = false, features = [
     "std",
     "backend-winit",
