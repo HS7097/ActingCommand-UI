@@ -1,21 +1,34 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Pure view model over the formal page: tabs, filters, paging, recovery
-//! folding, selection. No toolkit here, and no classification of its own.
+//! folding, selection. No toolkit here, no classification of its own, and no
+//! human-facing wording — every name a person reads is chosen in `acui-app`,
+//! which is the only crate that holds the two language tables.
 
 mod overlay;
 mod tabs;
 
 pub use overlay::{extract_frame_size, extract_overlays, Overlay};
-pub use tabs::{tab_from_name, tab_label, tab_name, ALL_TABS};
+pub use tabs::{tab_from_name, tab_name, ALL_TABS};
 
 use acui_rows::{
-    code, format_full, links_named, payload_value, ArtifactEvictionObservation, ArtifactKind,
-    EventQuery, EventSeverity, LedgerEventPosition, LedgerRecoveryState, LedgerRunRecovery,
-    LedgerView, OpenReport, OriginModule, ProjectedArtifactReference, ProjectedEvent,
-    RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    code, payload_value, ArtifactEvictionObservation, ArtifactKind, EventQuery, EventSeverity,
+    LedgerEventPosition, LedgerRecoveryGap, LedgerRecoveryState, LedgerRunRecovery, LedgerView,
+    OpenReport, OriginModule, ProjectedArtifactReference, ProjectedEvent, RuntimeEventQueryCursor,
+    RuntimeEventQueryPage, WriterFacts,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+
+/// Why this view has no page: the filters as written, or the read itself.
+#[derive(Debug, Clone)]
+pub enum QueryError {
+    /// The id box holds something that is not a whole canonical id.
+    IdNotCanonical,
+    /// The ledger refused the assembled query; carries the ledger's own code.
+    Rejected(String),
+    /// The read face could not answer; carries what it reported.
+    ReadFailed(String),
+}
 
 /// Filter state, turned into one `EventQuery` and re-run against the ledger.
 /// Nothing here filters rows the console already holds.
@@ -31,7 +44,7 @@ pub struct Filters {
 }
 
 impl Filters {
-    pub fn query(&self, view: LedgerView) -> Result<EventQuery, String> {
+    pub fn query(&self, view: LedgerView) -> Result<EventQuery, QueryError> {
         let mut query = EventQuery {
             view: Some(view),
             minimum_severity: self.minimum_severity,
@@ -55,12 +68,12 @@ impl Filters {
                 None
             };
             if assigned.is_none() {
-                return Err("id 需为完整的 correlation_ / request_ / run_ / task_ 标识".to_string());
+                return Err(QueryError::IdNotCanonical);
             }
         }
         query
             .validate()
-            .map_err(|error| format!("过滤条件无效：{}", error.code()))?;
+            .map_err(|error| QueryError::Rejected(error.code().to_string()))?;
         Ok(query)
     }
 }
@@ -69,15 +82,49 @@ fn parse_id<T: DeserializeOwned>(text: &str) -> Option<T> {
     serde_json::from_value(Value::String(text.to_string())).ok()
 }
 
-/// A run whose failures the ledger itself resolved at this snapshot.
+/// A run whose failures the ledger itself resolved at this snapshot. Merged
+/// across pages by run id: a later page adds evidence, it never takes any away.
 #[derive(Debug, Clone)]
 pub struct RecoveryGroup {
     pub run_id: String,
     pub state: LedgerRecoveryState,
-    /// The ledger-given basis: which failure was answered by which success.
-    pub basis: String,
-    pub gaps: String,
-    pub folded: Vec<u64>,
+    /// `(failure position, the success the ledger says answered it)`.
+    pub evidence: Vec<(u64, Option<u64>)>,
+    pub gaps: Vec<LedgerRecoveryGap>,
+}
+
+impl RecoveryGroup {
+    /// The failures this group folds: every failure the ledger answered.
+    pub fn folded(&self) -> Vec<u64> {
+        self.evidence
+            .iter()
+            .filter_map(|(failure, success)| success.map(|_| *failure))
+            .collect()
+    }
+
+    /// Takes in what a later page states about the same run. Positions already
+    /// held are kept, and a folded row is never unfolded: a failure that this
+    /// group already answered keeps its success.
+    fn absorb(&mut self, group: &LedgerRunRecovery) {
+        self.state = group.state;
+        for item in &group.evidence {
+            let success = item.success.as_ref().map(|success| success.sequence);
+            match self
+                .evidence
+                .iter_mut()
+                .find(|(failure, _)| *failure == item.failure.sequence)
+            {
+                Some((_, held)) => *held = held.or(success),
+                None => self.evidence.push((item.failure.sequence, success)),
+            }
+        }
+        self.evidence.sort_by_key(|(failure, _)| *failure);
+        for gap in &group.gaps {
+            if !self.gaps.contains(gap) {
+                self.gaps.push(*gap);
+            }
+        }
+    }
 }
 
 /// One line of the middle list: either a run's recovery header, or an event.
@@ -86,18 +133,28 @@ pub enum DisplayRow<'a> {
     Event { event: &'a ProjectedEvent, folded: bool },
 }
 
+/// How far into the snapshot the page read, as the page itself states it.
+pub struct ReadScope {
+    pub scanned_through_position: Option<u64>,
+    pub read_complete: bool,
+}
+
+/// The ledger facts about the open source, plus the two page-scoped counts.
 #[derive(Debug, Clone)]
 pub struct InstanceCard {
-    pub source_label: String,
+    pub state_root: String,
     pub backend: String,
-    pub snapshot_position: u64,
     pub latest_sequence: u64,
     pub event_count: Option<u64>,
-    pub integrity: String,
-    pub writer: String,
+    pub read_complete: bool,
+    pub corrupt_tail: Option<String>,
+    pub repair_count: Option<u64>,
+    pub writer: WriterFacts,
+    /// Rows this view has loaded so far — the one page-scoped count here.
     pub loaded_count: usize,
-    pub first_timestamp: Option<String>,
-    pub last_timestamp: Option<String>,
+    /// The committed span of the whole snapshot, not of the loaded page.
+    pub first_timestamp_unix_ms: Option<u64>,
+    pub last_timestamp_unix_ms: Option<u64>,
     pub severity_counts: Vec<(EventSeverity, usize)>,
     pub modules: Vec<OriginModule>,
 }
@@ -105,8 +162,8 @@ pub struct InstanceCard {
 pub struct DetailView<'a> {
     pub event: &'a ProjectedEvent,
     pub pretty_payload_json: String,
-    pub lines: Vec<(String, String)>,
     pub overlays: Vec<Overlay>,
+    /// The frame size the payload states, when it states one.
     pub frame_size: Option<(f32, f32)>,
 }
 
@@ -121,15 +178,14 @@ pub struct ViewModel {
     pub tab: LedgerView,
     pub filters: Filters,
     pub selected_sequence: Option<u64>,
-    pub filter_error: Option<String>,
+    pub query_error: Option<QueryError>,
     rows: Vec<ProjectedEvent>,
     recovery: Vec<RecoveryGroup>,
     next_cursor: Option<RuntimeEventQueryCursor>,
-    scope_text: String,
-    source_complete: bool,
+    scope: ReadScope,
     snapshot_position: u64,
     open: OpenReport,
-    source_label: String,
+    state_root: String,
     span: Option<(u64, u64)>,
 }
 
@@ -137,22 +193,21 @@ impl ViewModel {
     pub fn new(
         open: OpenReport,
         snapshot_position: u64,
-        source_label: String,
+        state_root: String,
         span: Option<(u64, u64)>,
     ) -> Self {
         Self {
             tab: LedgerView::Events,
             filters: Filters::default(),
             selected_sequence: None,
-            filter_error: None,
+            query_error: None,
             rows: Vec::new(),
             recovery: Vec::new(),
             next_cursor: None,
-            scope_text: String::new(),
-            source_complete: true,
+            scope: ReadScope { scanned_through_position: None, read_complete: true },
             snapshot_position,
             open,
-            source_label,
+            state_root,
             span,
         }
     }
@@ -162,7 +217,7 @@ impl ViewModel {
         self.span
     }
 
-    pub fn query(&self) -> Result<EventQuery, String> {
+    pub fn query(&self) -> Result<EventQuery, QueryError> {
         self.filters.query(self.tab)
     }
 
@@ -183,41 +238,36 @@ impl ViewModel {
         }
         self.rows.extend(page.events().iter().cloned());
         self.next_cursor = page.next_cursor().cloned();
-        self.source_complete = page.read_scope().is_none_or(|scope| scope.read_complete);
-        self.scope_text = match page.read_scope() {
-            Some(scope) => format!(
-                "已读到 #{}{}",
-                scope.scanned_through_position,
-                if scope.read_complete { "" } else { " · 源不完整" }
-            ),
-            None => "读取范围未给".to_string(),
+        self.scope = ReadScope {
+            scanned_through_position: page
+                .read_scope()
+                .map(|scope| scope.scanned_through_position),
+            read_complete: page.read_scope().is_none_or(|scope| scope.read_complete),
         };
         for group in page.run_recovery() {
             let run_id = code(&group.run_id);
-            self.recovery.retain(|existing| existing.run_id != run_id);
-            self.recovery.push(recovery_group(run_id, group));
-        }
-    }
-
-    pub fn scope_text(&self) -> &str {
-        &self.scope_text
-    }
-
-    pub fn source_complete(&self) -> bool {
-        self.source_complete
-    }
-
-    /// How many loaded rows each view claims, from the membership the page carries.
-    pub fn membership_counts(&self) -> [usize; 6] {
-        let mut counts = [0_usize; 6];
-        for event in &self.rows {
-            for (index, view) in ALL_TABS.into_iter().enumerate() {
-                if event.views.contains(&view) {
-                    counts[index] += 1;
+            match self
+                .recovery
+                .iter_mut()
+                .find(|existing| existing.run_id == run_id)
+            {
+                Some(existing) => existing.absorb(group),
+                None => {
+                    let mut fresh = RecoveryGroup {
+                        run_id,
+                        state: group.state,
+                        evidence: Vec::new(),
+                        gaps: Vec::new(),
+                    };
+                    fresh.absorb(group);
+                    self.recovery.push(fresh);
                 }
             }
         }
-        counts
+    }
+
+    pub fn read_scope(&self) -> &ReadScope {
+        &self.scope
     }
 
     pub fn modules(&self) -> Vec<OriginModule> {
@@ -232,6 +282,7 @@ impl ViewModel {
     /// gets a header at its first row, and every failure the ledger resolved is
     /// folded under it.
     pub fn display_rows(&self) -> Vec<DisplayRow<'_>> {
+        let folded: Vec<Vec<u64>> = self.recovery.iter().map(RecoveryGroup::folded).collect();
         let mut header_shown = vec![false; self.recovery.len()];
         let mut emitted: Vec<u64> = Vec::new();
         let mut display = Vec::new();
@@ -242,14 +293,13 @@ impl ViewModel {
             let run = event.links.run_id().map(code);
             let anchor = self.recovery.iter().enumerate().position(|(index, group)| {
                 !header_shown[index]
-                    && (group.folded.contains(&event.sequence)
+                    && (folded[index].contains(&event.sequence)
                         || run.as_deref() == Some(group.run_id.as_str()))
             });
             if let Some(index) = anchor {
                 header_shown[index] = true;
-                let group = &self.recovery[index];
-                display.push(DisplayRow::Recovery(group));
-                for sequence in &group.folded {
+                display.push(DisplayRow::Recovery(&self.recovery[index]));
+                for sequence in &folded[index] {
                     if let Some(member) = self.rows.iter().find(|row| row.sequence == *sequence) {
                         emitted.push(*sequence);
                         display.push(DisplayRow::Event { event: member, folded: true });
@@ -271,35 +321,10 @@ impl ViewModel {
     pub fn detail(&self) -> Option<DetailView<'_>> {
         let event = self.selected()?;
         let payload = payload_value(event);
-        let mut lines = vec![
-            ("sequence".to_string(), event.sequence.to_string()),
-            ("event_id".to_string(), code(&event.event_id)),
-            ("时间".to_string(), format_full(event.timestamp_unix_ms)),
-            ("event_type".to_string(), code(&event.event_type)),
-            ("severity".to_string(), event.severity.as_str().to_string()),
-            ("sensitivity".to_string(), code(&event.sensitivity)),
-            (
-                "origin".to_string(),
-                format!(
-                    "{} / {} / {}",
-                    code(&event.origin.source()),
-                    event.origin.module(),
-                    code(&event.origin.actor())
-                ),
-            ),
-            ("所属视图".to_string(), views_text(event)),
-            ("payload_schema".to_string(), event.payload_schema.clone()),
-        ];
-        lines.extend(
-            links_named(&event.links)
-                .into_iter()
-                .map(|(name, value)| (name.to_string(), value)),
-        );
         Some(DetailView {
             event,
             pretty_payload_json: serde_json::to_string_pretty(&payload)
                 .unwrap_or_else(|_| payload.to_string()),
-            lines,
             overlays: extract_overlays(&payload),
             frame_size: extract_frame_size(&payload),
         })
@@ -341,97 +366,24 @@ impl ViewModel {
             }
         }
         InstanceCard {
-            source_label: self.source_label.clone(),
+            state_root: self.state_root.clone(),
             backend: self.open.backend.clone(),
-            snapshot_position: self.snapshot_position,
             latest_sequence: self.open.latest_sequence,
             event_count: self.open.event_count,
-            integrity: integrity_text(&self.open),
-            writer: writer_text(&self.open),
+            read_complete: self.open.read_complete,
+            corrupt_tail: self.open.corrupt_tail.clone(),
+            repair_count: self.open.repair_count,
+            writer: self.open.writer.clone(),
             loaded_count: self.rows.len(),
-            first_timestamp: self
-                .rows
-                .first()
-                .map(|event| format_full(event.timestamp_unix_ms)),
-            last_timestamp: self
-                .rows
-                .last()
-                .map(|event| format_full(event.timestamp_unix_ms)),
+            first_timestamp_unix_ms: self.span.map(|(first, _)| first),
+            last_timestamp_unix_ms: self.span.map(|(_, last)| last),
             severity_counts,
             modules: self.modules(),
         }
     }
-}
 
-fn recovery_group(run_id: String, group: &LedgerRunRecovery) -> RecoveryGroup {
-    let basis = group
-        .evidence
-        .iter()
-        .map(|item| match &item.success {
-            Some(success) => format!("失败 #{} → 成功 #{}", item.failure.sequence, success.sequence),
-            None => format!("失败 #{} 未见成功", item.failure.sequence),
-        })
-        .collect::<Vec<_>>()
-        .join("；");
-    RecoveryGroup {
-        run_id,
-        state: group.state,
-        basis,
-        gaps: group
-            .gaps
-            .iter()
-            .map(code)
-            .collect::<Vec<_>>()
-            .join("、"),
-        folded: group
-            .evidence
-            .iter()
-            .filter(|item| item.success.is_some())
-            .map(|item| item.failure.sequence)
-            .collect(),
-    }
-}
-
-pub const fn recovery_state_text(state: LedgerRecoveryState) -> &'static str {
-    match state {
-        LedgerRecoveryState::Recovered => "已恢复",
-        LedgerRecoveryState::Unresolved => "未解决",
-        LedgerRecoveryState::Unknown => "未知",
-    }
-}
-
-fn views_text(event: &ProjectedEvent) -> String {
-    event
-        .views
-        .iter()
-        .map(|view| tab_label(*view))
-        .collect::<Vec<_>>()
-        .join("、")
-}
-
-fn integrity_text(open: &OpenReport) -> String {
-    match (&open.corrupt_tail, open.read_complete) {
-        (None, true) => match open.repair_count {
-            Some(0) | None => "正常".to_string(),
-            Some(count) => format!("正常 · 修复记录 {count}"),
-        },
-        (tail, complete) => format!(
-            "read_complete={complete} / corrupt_tail={}",
-            tail.as_deref().unwrap_or("无")
-        ),
-    }
-}
-
-fn writer_text(open: &OpenReport) -> String {
-    match &open.writer {
-        acui_rows::WriterFacts::Absent => "无写入方记录".to_string(),
-        acui_rows::WriterFacts::Locked { byte_count } => format!("被占用（{byte_count} 字节）"),
-        acui_rows::WriterFacts::Readable { owner_id, pid, active, started_at_unix_ms } => {
-            format!(
-                "{owner_id} · pid {pid} · {} · 起 {}",
-                if *active { "在线" } else { "离线" },
-                format_full(*started_at_unix_ms)
-            )
-        }
+    /// The position this whole session reads at; the same for every page.
+    pub fn snapshot_position(&self) -> u64 {
+        self.snapshot_position
     }
 }

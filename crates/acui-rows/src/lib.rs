@@ -4,19 +4,22 @@
 //! Nothing is mirrored here any more: the page, its events, the view membership
 //! each event carries, the retention facts and the material read result are the
 //! contract's own types, re-exported unchanged. What this crate adds is display
-//! only — local time, wire codes as text, shortened ids — plus the two plain
-//! structs `acui-source` fills from the ledger's own observations.
+//! only — local time, wire codes as text, shortened ids, the display-name
+//! dictionary — plus the two plain structs `acui-source` fills from the
+//! ledger's own observations.
+
+mod display;
+
+pub use display::{event_type_names, format_bytes, module_names};
 
 pub use actingcommand_contract::{
-    ArtifactEvictionDisposition, ArtifactEvictionObservation, ArtifactKind, ArtifactMediaType,
-    EventLinks, EventOrigin, EventQuery, EventSeverity, EventSource, EventType,
-    LedgerEventPosition, LedgerFailureResolution, LedgerPageLimit, LedgerReadScope,
-    LedgerReadSource, LedgerRecoveryGap, LedgerRecoveryState, LedgerRunRecovery, LedgerView,
-    MAX_RUNTIME_EVENT_QUERY_EVENTS, MAX_RUNTIME_MATERIAL_CHUNK_BYTES,
-    MAX_RUNTIME_MATERIAL_REPLY_BYTES, OriginModule, ProjectedArtifactReference, ProjectedEvent,
-    ProjectionProfile, RuntimeEventQueryCursor, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit, RuntimeMaterialReadRequest,
-    RuntimeMaterialReadResult, RuntimeMaterialReadState, Sensitivity,
+    ArtifactEvictionObservation, ArtifactKind, ArtifactMediaType, EventLinks, EventQuery,
+    EventSeverity, EventSource, LedgerEventPosition, LedgerRecoveryGap, LedgerRecoveryState,
+    LedgerRunRecovery, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS,
+    MAX_RUNTIME_MATERIAL_CHUNK_BYTES, MAX_RUNTIME_MATERIAL_REPLY_BYTES, OriginModule,
+    ProjectedArtifactReference, ProjectedEvent, ProjectionProfile, RuntimeEventQueryCursor,
+    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit,
+    RuntimeMaterialReadRequest, RuntimeMaterialReadResult, RuntimeMaterialReadState, Sensitivity,
 };
 
 use chrono::{Local, TimeZone, Utc};
@@ -73,16 +76,16 @@ pub fn links_named(links: &EventLinks) -> Vec<(&'static str, String)> {
             named.push((name, value));
         }
     };
-    push("task_id", links.task_id().map(code));
-    push("run_id", links.run_id().map(code));
     push("request_id", links.request_id().map(code));
     push("correlation_id", links.correlation_id().map(code));
     push("causation_id", links.causation_id().map(code));
     push("action_id", links.action_id().map(code));
+    push("run_id", links.run_id().map(code));
+    push("task_id", links.task_id().map(code));
+    push("instance_id", links.instance_id().map(code));
     push("recognition_id", links.recognition_id().map(code));
     push("frame_id", links.frame_id().map(code));
     push("lease_id", links.lease_id().map(code));
-    push("instance_id", links.instance_id().map(code));
     named
 }
 
@@ -106,6 +109,11 @@ pub fn format_full(timestamp_unix_ms: u64) -> String {
         Some(time) => time.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
         None => "—".to_string(),
     }
+}
+
+/// Whole seconds from a committed timestamp to now; negative if it is ahead.
+pub fn seconds_since(timestamp_unix_ms: u64) -> i64 {
+    Local::now().timestamp_millis().saturating_sub(timestamp_unix_ms as i64) / 1000
 }
 
 fn local(timestamp_unix_ms: u64) -> Option<chrono::DateTime<Local>> {

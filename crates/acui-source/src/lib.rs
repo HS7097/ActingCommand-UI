@@ -121,12 +121,17 @@ pub struct MaterialOutcome {
 /// resolved, guarded and hash-verified against the whole material by the read
 /// face before its bytes are handed back; a range that is not `verified` ends
 /// the assembly with that range's own outcome.
+///
+/// `still_wanted` is asked before every range. A read whose answer has stopped
+/// mattering stops issuing ranges and gives back `None`: each range re-hashes
+/// the whole material, so a superseded read is expensive to let run on.
 pub fn read_material(
     state_root: &Path,
     event: LedgerEventPosition,
     artifact: &ProjectedArtifactReference,
     snapshot_position: u64,
-) -> Result<MaterialOutcome> {
+    still_wanted: &dyn Fn() -> bool,
+) -> Result<Option<MaterialOutcome>> {
     if artifact.byte_count > MAX_FRAME_BYTES {
         bail!(
             "素材 {} 字节超出监控台上限 {} 字节（{} 段 × {} 字节）",
@@ -138,6 +143,9 @@ pub fn read_material(
     }
     let mut bytes = Vec::with_capacity(artifact.byte_count as usize);
     while (bytes.len() as u64) < artifact.byte_count {
+        if !still_wanted() {
+            return Ok(None);
+        }
         let offset = bytes.len() as u64;
         let remaining = artifact.byte_count - offset;
         let request = RuntimeMaterialReadRequest {
@@ -160,23 +168,23 @@ pub fn read_material(
                 bytes.extend_from_slice(&chunk.bytes)
             }
             _ => {
-                return Ok(MaterialOutcome {
+                return Ok(Some(MaterialOutcome {
                     bytes: None,
                     state: result.state,
                     limit: result.limit,
                     eviction: result.source.and_then(|source| source.eviction),
                     failure: result.failure.map(|failure| failure.code),
-                })
+                }))
             }
         }
     }
-    Ok(MaterialOutcome {
+    Ok(Some(MaterialOutcome {
         bytes: Some(bytes),
         state: RuntimeMaterialReadState::Verified,
         limit: None,
         eviction: None,
         failure: None,
-    })
+    }))
 }
 
 /// `read_material_to` writes its structured result and then reports a non-verified
