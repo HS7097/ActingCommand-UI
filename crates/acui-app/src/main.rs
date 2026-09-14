@@ -22,7 +22,7 @@ use acui_rows::{
 };
 use acui_source::{read_material, EvidenceSource, MaterialOutcome, MAX_FRAME_BYTES};
 use anyhow::{bail, Result};
-use settings::{Settings, TextSize};
+use settings::TextSize;
 use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 use strings::{fill, Labels, Language};
 
@@ -79,8 +79,6 @@ struct App {
     source: EvidenceSource,
     model: RefCell<ViewModel>,
     labels: &'static Labels,
-    language: Language,
-    text_size: Cell<TextSize>,
     /// The module option list as the box currently shows it, and what each
     /// entry after the first one means. Rebuilt from every page.
     module_options: RefCell<Vec<SharedString>>,
@@ -120,8 +118,6 @@ fn main() -> Result<()> {
         source,
         model: RefCell::new(model),
         labels,
-        language,
-        text_size: Cell::new(stored.text_size),
         module_options: RefCell::new(Vec::new()),
         module_choices: RefCell::new(Vec::new()),
         pending: Cell::new(None),
@@ -291,27 +287,23 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         });
     }
     {
-        // Text size applies now, through the one scale property.
+        // Text size applies now, through the one scale property. Only the text
+        // size is written: the language is the file's own, or a `--lang`
+        // override that this run must not save over it.
         let weak = window.as_weak();
-        let app = Rc::clone(app);
         window.on_text_size_changed(move |index| {
             let size = TextSize::from_index(index);
-            app.text_size.set(size);
-            settings::save(Settings { language: app.language, text_size: size });
+            settings::save_text_size(size);
             if let Some(window) = weak.upgrade() {
                 window.global::<Scale>().set_factor(size.factor());
             }
         });
     }
-    {
-        // Language is written now and read at the next start; the note beside
-        // the box says so.
-        let app = Rc::clone(app);
-        window.on_language_changed(move |index| {
-            let language = if index == 1 { Language::En } else { Language::Zh };
-            settings::save(Settings { language, text_size: app.text_size.get() });
-        });
-    }
+    // Language is written now and read at the next start; the note beside the
+    // box says so.
+    window.on_language_changed(move |index| {
+        settings::save_language(if index == 1 { Language::En } else { Language::Zh });
+    });
 }
 
 fn refresh(window: &AppWindow, app: &Rc<App>) {

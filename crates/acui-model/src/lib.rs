@@ -106,7 +106,18 @@ impl RecoveryGroup {
     /// held are kept, and a folded row is never unfolded: a failure that this
     /// group already answered keeps its success.
     fn absorb(&mut self, group: &LedgerRunRecovery) {
-        self.state = group.state;
+        // How resolved a state is; a page that states less never pulls the
+        // group back, so a run folded by an earlier page stays folded.
+        const fn rank(state: LedgerRecoveryState) -> u8 {
+            match state {
+                LedgerRecoveryState::Unknown => 0,
+                LedgerRecoveryState::Unresolved => 1,
+                LedgerRecoveryState::Recovered => 2,
+            }
+        }
+        if rank(group.state) > rank(self.state) {
+            self.state = group.state;
+        }
         for item in &group.evidence {
             let success = item.success.as_ref().map(|success| success.sequence);
             match self

@@ -146,7 +146,7 @@ text_size = "standard"   # standard | large | extra-large
   这两项的 `GlobalLedger::open_evidence`（同文件 `:417`）要求调用方为每个产物引用交出
   `VerifiedArtifactReference`，验证不了的事件会被丢掉（在 0828 根上实测 2585 条只剩 10 条），
   等于开台就要把整个 artifacts 目录（457 MB）全哈希一遍。实例卡因此把 `event_count` 显示为
-  「—（读面未给）」，另外标出**本视图已载入**的条数，两者不混用。
+  「—（读面未给，见 README）」，另外标出**本视图已载入**的条数，两者不混用。
 - **整份素材没有入口，读一帧很贵**。`crates/ledger-forensics/src/material.rs:51` 的
   `read_material_to` 只做一段，且每段都要重开两次账本元数据并把整份素材重新哈希一遍；
   读一张 3.6 MB 的帧要 57 段，实测约 5 秒（release）。没有整份读入口，也没有跨段复用的

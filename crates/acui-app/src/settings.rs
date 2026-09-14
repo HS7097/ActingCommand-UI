@@ -111,9 +111,21 @@ pub fn load() -> Settings {
     settings
 }
 
+/// Writes the language, keeping whatever the file says about the text size.
+pub fn save_language(language: Language) {
+    save(Settings { language, ..load() });
+}
+
+/// Writes the text size, keeping whatever the file says about the language: the
+/// language this run shows may be a `--lang` override, which is this run's alone
+/// and must never reach the file.
+pub fn save_text_size(text_size: TextSize) {
+    save(Settings { text_size, ..load() });
+}
+
 /// Writes both keys. A console that cannot save a preference still runs, so a
 /// failure here is reported and otherwise ignored.
-pub fn save(settings: Settings) {
+fn save(settings: Settings) {
     let Some(path) = path() else {
         return;
     };
