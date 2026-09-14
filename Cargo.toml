@@ -12,6 +12,9 @@ acui-rows = { path = "crates/acui-rows" }
 acui-source = { path = "crates/acui-source" }
 acui-model = { path = "crates/acui-model" }
 anyhow = "1"
+# Only the PNG decoder: the console decodes exactly two kinds of image, a
+# verified capture frame and its own embedded application icon.
+image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The formal ledger read face. temporary pin to PR398 head; bump to main after
