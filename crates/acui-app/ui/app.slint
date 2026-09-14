@@ -1,25 +1,37 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { ComboBox, LineEdit, ListView, Palette, ScrollView, Slider, TextEdit } from "std-widgets.slint";
+import { Button, ComboBox, LineEdit, ListView, Palette, ScrollView, Slider, TextEdit } from "std-widgets.slint";
 
 export struct RowItem {
+    // A run's recovery header, with its folded rows following it.
+    recovery: bool,
+    folded: bool,
     sequence-text: string,
     clock: string,
-    severity: string,
+    level: string,
+    // 0 debug, 1 info, 2 warning, 3 error and above: the colour band only.
+    level-tone: int,
     module: string,
-    event-type: string,
+    event-name: string,
+    event-raw: string,
     link-id: string,
+    note: string,
 }
 
+// `raw` is the second layer: the wire spelling behind the name, or empty.
 export struct FieldLine {
     label: string,
     value: string,
+    raw: string,
+    // Only the last line of a card may wrap: a wrapped line's height is not
+    // reserved here, so one in the middle would be drawn over the next label.
+    wrap: bool,
 }
 
 export struct ArtifactItem {
     artifact-id: string,
     kind: string,
-    media-type: string,
-    byte-count: string,
+    detail: string,
+    sha256-label: string,
     sha256: string,
 }
 
@@ -40,22 +52,98 @@ global Severity {
     out property <color> error: #e0525f;
 }
 
+// The one text-size knob. Every font size and every row height in this file is
+// a base size for a human at normal DPI multiplied by `factor`; nothing else
+// scales the interface, so 标准 / 大 / 特大 is a single number.
+// The list's column widths, in one place: the header and the rows read the same
+// numbers, so the two can never drift apart. These are what each column wants;
+// a list too narrow to give every column its want hands each the same fraction
+// of it, so a column elides instead of being pushed off the pane's edge.
+global Column {
+    out property <length> seq: 44px * Scale.factor;
+    // The clock is the one column that never gives way: half a timestamp is a
+    // wrong timestamp, so the others take the whole squeeze.
+    out property <length> time: 90px * Scale.factor;
+    out property <length> level: 56px * Scale.factor;
+    out property <length> module: 120px * Scale.factor;
+    out property <length> event: 136px * Scale.factor;
+    out property <length> raw: 96px * Scale.factor;
+    // The link column takes whatever is left; this is the width that shows its
+    // own header in full, in both languages.
+    out property <length> link: 150px * Scale.factor;
+    out property <length> spacing: 6px;
+    out property <length> margin: 6px;
+    out property <length> wanted: root.seq + root.level + root.module + root.event + root.raw
+        + root.link;
+    // What the squeezed columns never get: the two margins, the six gaps and
+    // the clock.
+    out property <length> fixed: 2 * root.margin + 6 * root.spacing + root.time;
+}
+
+export global Scale {
+    in property <float> factor: 1.0;
+    out property <length> list-font: 14px * root.factor;
+    out property <length> body-font: 13px * root.factor;
+    out property <length> head-font: 16px * root.factor;
+    out property <length> grey-font: 11px * root.factor;
+    out property <length> row: 26px * root.factor;
+}
+
+// Every label a person reads, filled once at startup from the Rust table for
+// the chosen language. There is no runtime re-render: the switch takes effect
+// when the program is started again.
+export global Strings {
+    in property <string> window-title;
+    in property <string> data-source;
+    in property <string> ledger-dir;
+    in property <string> storage-format;
+    in property <string> show-up-to;
+    in property <string> text-size;
+    in property <string> language;
+    in property <string> restart-note;
+    in property <[string]> text-size-options;
+    in property <[string]> language-options;
+    in property <[string]> severity-min-options;
+    in property <[string]> severity-max-options;
+    in property <string> id-placeholder;
+    in property <string> continue-reading;
+    in property <string> card-title;
+    in property <string> card-note;
+    in property <string> detail-title;
+    in property <string> artifacts-title;
+    in property <string> overlays-title;
+    in property <string> raw-data-title;
+    in property <string> col-seq;
+    in property <string> col-time;
+    in property <string> col-level;
+    in property <string> col-module;
+    in property <string> col-event;
+    in property <string> col-link;
+}
+
 component TabButton inherits Rectangle {
     in property <string> label;
     in property <bool> active;
     callback clicked();
-    height: 30px;
+    height: Scale.row + 6px;
     background: active ? Palette.accent-background : Palette.control-background;
     border-radius: 4px;
     border-width: 1px;
     border-color: active ? Palette.accent-background : Palette.border;
+    // The tabs give way first when the window is narrow, so the panes beside
+    // the list keep their own width instead of being squeezed by six names.
+    min-width: 52px;
+    clip: true;
     HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
+        padding-left: 7px;
+        padding-right: 7px;
         Text {
             text: label;
+            font-size: Scale.body-font;
             color: active ? Palette.accent-foreground : Palette.control-foreground;
             vertical-alignment: center;
+            overflow: elide;
+            min-width: 0px;
         }
     }
     TouchArea {
@@ -72,44 +160,65 @@ component Panel inherits Rectangle {
     border-color: Palette.border;
 }
 
+// A grey caption over the value it names: the two-layer label, top layer.
+component Caption inherits Text {
+    font-size: Scale.grey-font;
+    color: Palette.foreground.with-alpha(0.6);
+    vertical-alignment: center;
+}
+
 export component AppWindow inherits Window {
-    title: "ActingCommand 监控台 v0";
+    title: Strings.window-title;
     icon: @image-url("../assets/acui-256.png");
     preferred-width: 1400px;
     preferred-height: 900px;
     min-width: 1100px;
     min-height: 700px;
-    default-font-size: 13px;
+    default-font-size: Scale.body-font;
     background: Palette.background;
 
-    in property <string> mode-text;
-    in property <string> source-label;
-    in property <string> counter-text;
-    in property <string> loaded-text;
+    in property <string> ledger-dir-value;
+    in property <string> storage-format-value;
+    in property <string> read-up-to-text;
+    in property <string> loaded-rows-text;
+    in property <string> cursor-label;
     in property <[FieldLine]> card-lines;
     in property <[string]> tab-labels;
     in property <int> active-tab;
-    in property <string> provisional-note;
     in property <[string]> module-options;
     in property <[RowItem]> rows;
-    in property <string> list-summary;
+    in property <string> filter-error;
+    in property <bool> has-more;
     in property <int> selected-index;
     in property <[FieldLine]> detail-lines;
     in property <[ArtifactItem]> artifacts;
     in property <[OverlayItem]> overlays;
     in property <float> canvas-width;
     in property <float> canvas-height;
-    in property <string> canvas-note;
+    in property <string> frame-size-text;
+    in property <string> frame-note;
+    in property <image> frame-image;
+    in property <bool> frame-ready;
     in property <string> payload-json;
-    in property <float> cursor-max;
-    in property <float> cursor-value;
+
+    // Two-way aliases, so the console can put a box back on the option it means
+    // after the option list is rebuilt, without ever losing the box's own state.
+    in-out property <int> module-index <=> module-box.current-index;
+    in-out property <int> text-size-index <=> text-size-box.current-index;
+    in-out property <int> language-index <=> language-box.current-index;
 
     callback tab-changed(int);
-    callback severity-changed(int);
-    callback module-changed(int);
+    callback minimum-severity-changed(int);
+    callback maximum-severity-changed(int);
+    // By name: the option list is rebuilt from every page, so a position in it
+    // is not a lasting way to say which module was picked.
+    callback module-changed(string);
     callback id-changed(string);
     callback cursor-changed(float);
     callback row-clicked(int);
+    callback load-more();
+    callback text-size-changed(int);
+    callback language-changed(int);
 
     VerticalLayout {
         padding: 8px;
@@ -117,33 +226,94 @@ export component AppWindow inherits Window {
 
         // top bar
         Panel {
-            height: 46px;
-            HorizontalLayout {
+            vertical-stretch: 0;
+            VerticalLayout {
+                padding: 8px;
                 padding-left: 12px;
                 padding-right: 12px;
-                spacing: 12px;
-                Text { text: root.mode-text; vertical-alignment: center; color: Palette.foreground; font-weight: 700; }
-                Text {
-                    text: root.source-label;
-                    vertical-alignment: center;
-                    color: Palette.foreground.with-alpha(0.7);
-                    overflow: elide;
-                    min-width: 40px;
-                    horizontal-stretch: 1;
-                }
-                Text { text: root.counter-text; vertical-alignment: center; color: Palette.foreground; }
-                Text { text: root.loaded-text; vertical-alignment: center; color: Palette.foreground.with-alpha(0.7); }
-                Text { text: "时间游标"; vertical-alignment: center; color: Palette.foreground.with-alpha(0.7); }
-                Slider {
-                    width: 180px;
-                    minimum: 0;
-                    maximum: max(root.cursor-max, 1);
-                    value: root.cursor-value;
-                    changed(v) => {
-                        root.cursor-changed(v);
+                spacing: 4px;
+                HorizontalLayout {
+                    spacing: 14px;
+                    Text {
+                        text: Strings.data-source;
+                        font-size: Scale.body-font;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        color: Palette.foreground;
+                    }
+                    Caption { text: Strings.ledger-dir; }
+                    Text {
+                        text: root.ledger-dir-value;
+                        font-size: Scale.body-font;
+                        vertical-alignment: center;
+                        color: Palette.foreground.with-alpha(0.85);
+                        overflow: elide;
+                        min-width: 40px;
+                        horizontal-stretch: 1;
+                    }
+                    Caption { text: Strings.storage-format; }
+                    Text {
+                        text: root.storage-format-value;
+                        font-size: Scale.body-font;
+                        vertical-alignment: center;
+                        color: Palette.foreground;
                     }
                 }
-                Text { text: "≤ " + round(root.cursor-value); vertical-alignment: center; width: 90px; color: Palette.foreground.with-alpha(0.7); }
+                HorizontalLayout {
+                    spacing: 14px;
+                    Text {
+                        text: root.read-up-to-text;
+                        font-size: Scale.body-font;
+                        vertical-alignment: center;
+                        color: Palette.foreground;
+                    }
+                    Text {
+                        text: root.loaded-rows-text;
+                        font-size: Scale.body-font;
+                        vertical-alignment: center;
+                        color: Palette.foreground.with-alpha(0.75);
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                        min-width: 20px;
+                    }
+                    Caption { text: Strings.show-up-to; }
+                    Slider {
+                        width: 150px;
+                        minimum: 0;
+                        maximum: 1000;
+                        // The handle starts where the state starts: at the top of
+                        // the range, which is the whole span. The first drag narrows.
+                        value: 1000;
+                        changed(v) => {
+                            root.cursor-changed(v);
+                        }
+                    }
+                    Text {
+                        text: root.cursor-label;
+                        font-size: Scale.body-font;
+                        vertical-alignment: center;
+                        width: 150px * Scale.factor;
+                        overflow: elide;
+                        color: Palette.foreground.with-alpha(0.75);
+                    }
+                    Caption { text: Strings.text-size; }
+                    text-size-box := ComboBox {
+                        width: 110px * Scale.factor;
+                        model: Strings.text-size-options;
+                        selected => {
+                            root.text-size-changed(self.current-index);
+                        }
+                    }
+                    Caption { text: Strings.language; }
+                    language-box := ComboBox {
+                        width: 100px * Scale.factor;
+                        model: Strings.language-options;
+                        selected => {
+                            root.language-changed(self.current-index);
+                        }
+                    }
+                    Caption { text: Strings.restart-note; }
+                }
             }
         }
 
@@ -154,15 +324,15 @@ export component AppWindow inherits Window {
             Panel {
                 horizontal-stretch: 0;
                 min-width: 200px;
-                preferred-width: 300px;
+                preferred-width: 240px;
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
-                    Text { text: "实例卡"; color: Palette.foreground; font-weight: 700; }
+                    Text { text: Strings.card-title; font-size: Scale.head-font; color: Palette.foreground; font-weight: 700; }
                     Text {
-                        text: "以下数值为已载入范围，不随时间游标变化";
+                        text: Strings.card-note;
                         color: Palette.foreground.with-alpha(0.6);
-                        font-size: 11px;
+                        font-size: Scale.grey-font;
                         wrap: word-wrap;
                     }
                     ScrollView {
@@ -172,10 +342,24 @@ export component AppWindow inherits Window {
                             for line in root.card-lines: VerticalLayout {
                                 spacing: 1px;
                                 vertical-stretch: 0;
-                                Text { text: line.label; color: Palette.foreground.with-alpha(0.6); font-size: 11px; }
-                                // Elide, not wrap: a wrapped line's height is not reserved here, so
-                                // the second line would be drawn over the next label.
-                                Text { text: line.value; color: Palette.foreground; overflow: elide; }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    vertical-stretch: 0;
+                                    Caption { text: line.label; }
+                                    Caption {
+                                        text: line.raw;
+                                        color: Palette.foreground.with-alpha(0.4);
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                                Text {
+                                    text: line.value;
+                                    font-size: Scale.body-font;
+                                    color: Palette.foreground;
+                                    wrap: line.wrap ? word-wrap : no-wrap;
+                                    overflow: line.wrap ? clip : elide;
+                                }
                             }
                             Rectangle { }
                         }
@@ -186,11 +370,15 @@ export component AppWindow inherits Window {
             // middle: timeline
             Panel {
                 horizontal-stretch: 1;
+                // The list is the pane a narrow window must keep: at the
+                // window's own minimum the panes beside it give way first.
+                min-width: 560px;
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
                     HorizontalLayout {
                         spacing: 6px;
+                        vertical-stretch: 0;
                         for label[index] in root.tab-labels: TabButton {
                             label: label;
                             active: index == root.active-tab;
@@ -199,60 +387,121 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
-                    if root.provisional-note != "": Text {
-                        text: root.provisional-note;
-                        color: Severity.warning;
-                    }
                     HorizontalLayout {
                         spacing: 6px;
                         vertical-stretch: 0;
                         ComboBox {
-                            width: 160px;
-                            model: ["全部", "warning 及以上", "error 及以上"];
+                            // The floor scales with the text: at 特大 an 80px
+                            // box holds two characters and an ellipsis.
+                            min-width: 100px * Scale.factor;
+                            preferred-width: 150px * Scale.factor;
+                            model: Strings.severity-min-options;
                             current-index: 0;
                             selected => {
-                                root.severity-changed(self.current-index);
+                                root.minimum-severity-changed(self.current-index);
                             }
                         }
                         ComboBox {
-                            width: 180px;
-                            model: root.module-options;
+                            min-width: 100px * Scale.factor;
+                            preferred-width: 150px * Scale.factor;
+                            model: Strings.severity-max-options;
                             current-index: 0;
                             selected => {
-                                root.module-changed(self.current-index);
+                                root.maximum-severity-changed(self.current-index);
+                            }
+                        }
+                        module-box := ComboBox {
+                            min-width: 90px;
+                            preferred-width: 180px * Scale.factor;
+                            model: root.module-options;
+                            selected => {
+                                root.module-changed(self.current-value);
                             }
                         }
                         LineEdit {
-                            placeholder-text: "按 id 过滤（event_id 或任一 link）";
+                            min-width: 70px;
+                            horizontal-stretch: 1;
+                            placeholder-text: Strings.id-placeholder;
+                            font-size: Scale.body-font;
                             edited(text) => {
                                 root.id-changed(text);
                             }
                         }
                     }
-                    Text { text: root.list-summary; color: Palette.foreground.with-alpha(0.6); font-size: 11px; }
+                    if root.filter-error != "": Text {
+                        text: root.filter-error;
+                        color: Severity.error;
+                        font-size: Scale.body-font;
+                        vertical-stretch: 0;
+                        wrap: word-wrap;
+                    }
+                    // Column header. Placed by hand rather than by a layout: a
+                    // layout of fixed columns would push its own width up into
+                    // the window's minimum and squeeze the panes beside it.
+                    // It also holds the widths the rows use: one width per
+                    // column, read by both, is the only way the two stay aligned.
+                    head := Rectangle {
+                        height: Scale.row;
+                        vertical-stretch: 0;
+                        clip: true;
+                        // The fraction of its want each column can have here.
+                        property <float> fit: min((self.width - Column.fixed) / Column.wanted, 1.0);
+                        property <length> w-seq: Column.seq * self.fit;
+                        property <length> w-time: Column.time;
+                        property <length> w-level: Column.level * self.fit;
+                        property <length> w-module: Column.module * self.fit;
+                        property <length> w-event: Column.event * self.fit;
+                        property <length> w-raw: Column.raw * self.fit;
+                        property <length> seq-x: Column.margin;
+                        property <length> time-x: self.seq-x + self.w-seq + Column.spacing;
+                        property <length> level-x: self.time-x + self.w-time + Column.spacing;
+                        property <length> module-x: self.level-x + self.w-level + Column.spacing;
+                        property <length> event-x: self.module-x + self.w-module + Column.spacing;
+                        property <length> link-x: self.event-x + self.w-event + Column.spacing + self.w-raw + Column.spacing;
+                        Caption { x: parent.seq-x; y: 0; height: parent.height; width: parent.w-seq; text: Strings.col-seq; overflow: elide; }
+                        Caption { x: parent.time-x; y: 0; height: parent.height; width: parent.w-time; text: Strings.col-time; overflow: elide; }
+                        Caption { x: parent.level-x; y: 0; height: parent.height; width: parent.w-level; text: Strings.col-level; overflow: elide; }
+                        Caption { x: parent.module-x; y: 0; height: parent.height; width: parent.w-module; text: Strings.col-module; overflow: elide; }
+                        // The event name and the raw type behind it are one column.
+                        Caption { x: parent.event-x; y: 0; height: parent.height; width: parent.w-event + Column.spacing + parent.w-raw; text: Strings.col-event; overflow: elide; }
+                        Caption { x: parent.link-x; y: 0; height: parent.height; width: max(parent.width - parent.link-x - Column.margin, 0px); text: Strings.col-link; overflow: elide; }
+                    }
                     ListView {
                         for row[index] in root.rows: Rectangle {
-                            height: 24px;
-                            background: index == root.selected-index
-                                ? Palette.accent-background.with-alpha(0.35)
-                                : transparent;
+                            height: Scale.row;
+                            background: row.recovery
+                                ? Palette.control-background
+                                : index == root.selected-index
+                                    ? Palette.accent-background.with-alpha(0.35)
+                                    : transparent;
                             HorizontalLayout {
-                                padding-left: 6px;
-                                padding-right: 6px;
-                                spacing: 8px;
-                                Text { text: row.sequence-text; width: 96px; overflow: elide; color: Palette.foreground.with-alpha(0.6); vertical-alignment: center; }
-                                Text { text: row.clock; width: 86px; color: Palette.foreground; vertical-alignment: center; }
-                                Text {
-                                    text: row.severity;
-                                    width: 56px;
+                                padding-left: row.folded ? 22px : Column.margin;
+                                padding-right: Column.margin;
+                                spacing: Column.spacing;
+                                if row.recovery: Text {
+                                    text: row.note;
+                                    font-size: Scale.list-font;
+                                    color: Severity.warning;
                                     vertical-alignment: center;
-                                    color: row.severity == "info" ? Severity.info
-                                        : row.severity == "warning" ? Severity.warning
-                                        : row.severity == "debug" ? Severity.debug : Severity.error;
+                                    overflow: elide;
                                 }
-                                Text { text: row.module; width: 112px; overflow: elide; vertical-alignment: center; color: Palette.foreground.with-alpha(0.75); }
-                                Text { text: row.event-type; width: 164px; overflow: elide; color: Palette.foreground; vertical-alignment: center; }
-                                Text { text: row.link-id; vertical-alignment: center; color: Palette.foreground.with-alpha(0.6); overflow: elide; }
+                                if !row.recovery: Text { text: row.sequence-text; font-size: Scale.list-font; width: row.folded ? max(head.w-seq - 22px, 8px) : head.w-seq; overflow: elide; color: Palette.foreground.with-alpha(0.6); vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.clock; font-size: Scale.list-font; width: head.w-time; overflow: elide; color: Palette.foreground; vertical-alignment: center; }
+                                if !row.recovery: Text {
+                                    text: row.level;
+                                    font-size: Scale.list-font;
+                                    width: head.w-level;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                    color: row.level-tone == 0 ? Severity.debug
+                                        : row.level-tone == 1 ? Severity.info
+                                        : row.level-tone == 2 ? Severity.warning : Severity.error;
+                                }
+                                if !row.recovery: Text { text: row.module; font-size: Scale.list-font; width: head.w-module; overflow: elide; vertical-alignment: center; color: Palette.foreground.with-alpha(0.8); }
+                                if !row.recovery: Text { text: row.event-name; font-size: Scale.list-font; width: head.w-event; overflow: elide; color: Palette.foreground; vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.event-raw; font-size: Scale.grey-font; width: head.w-raw; overflow: elide; color: Palette.foreground.with-alpha(0.45); vertical-alignment: center; }
+                                if row.folded: Text { text: row.note; font-size: Scale.grey-font; color: Severity.warning; vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.link-id; font-size: Scale.grey-font; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; color: Palette.foreground.with-alpha(0.55); overflow: elide; }
                             }
                             TouchArea {
                                 clicked => {
@@ -261,40 +510,48 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                    if root.has-more: Button {
+                        text: Strings.continue-reading;
+                        vertical-stretch: 0;
+                        clicked => {
+                            root.load-more();
+                        }
+                    }
                 }
             }
 
             // right: detail
             Panel {
                 horizontal-stretch: 0;
-                min-width: 320px;
-                preferred-width: 420px;
+                min-width: 300px;
+                preferred-width: 360px;
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
-                    Text { text: "详情"; color: Palette.foreground; font-weight: 700; }
+                    Text { text: Strings.detail-title; font-size: Scale.head-font; color: Palette.foreground; font-weight: 700; }
                     VerticalLayout {
                         spacing: 2px;
                         vertical-stretch: 0;
                         for line in root.detail-lines: HorizontalLayout {
                             spacing: 6px;
                             vertical-stretch: 0;
-                            Text { text: line.label; width: 110px; color: Palette.foreground.with-alpha(0.6); }
+                            Caption { text: line.label; width: 150px * Scale.factor; overflow: elide; }
                             // Elide so a narrow panel cuts with an ellipsis instead of silently
                             // turning a long id into a shorter, wrong-looking one.
-                            Text { text: line.value; color: Palette.foreground; overflow: elide; }
+                            Text { text: line.value; font-size: Scale.body-font; color: Palette.foreground; overflow: elide; }
+                            Text { text: line.raw; font-size: Scale.grey-font; vertical-alignment: center; color: Palette.foreground.with-alpha(0.45); overflow: elide; }
                         }
                     }
                     // No artifacts on the selected event: the whole block collapses, no blank band.
                     if root.artifacts.length > 0: VerticalLayout {
-                        spacing: 6px;
+                        spacing: 4px;
                         vertical-stretch: 0;
-                        Text { text: "产物（仅哈希占位，不载入图像）"; color: Palette.foreground; font-weight: 700; }
+                        Text { text: Strings.artifacts-title; font-size: Scale.head-font; color: Palette.foreground; font-weight: 700; }
                         ScrollView {
                             viewport-width: self.visible-width;
-                            min-height: 70px;
-                            preferred-height: 110px;
-                            max-height: 110px;
+                            min-height: 54px * Scale.factor;
+                            preferred-height: 86px * Scale.factor;
+                            max-height: 86px * Scale.factor;
                             VerticalLayout {
                                 spacing: 4px;
                                 for artifact in root.artifacts: Rectangle {
@@ -304,32 +561,55 @@ export component AppWindow inherits Window {
                                     VerticalLayout {
                                         padding: 5px;
                                         spacing: 1px;
-                                        Text { text: artifact.artifact-id; color: Palette.foreground; overflow: elide; font-size: 11px; }
+                                        Text { text: artifact.kind; font-size: Scale.body-font; color: Palette.foreground; overflow: elide; }
                                         Text {
-                                            text: artifact.kind + " · " + artifact.media-type + " · " + artifact.byte-count;
+                                            text: artifact.detail;
                                             color: Palette.foreground.with-alpha(0.7);
-                                            font-size: 11px;
+                                            font-size: Scale.grey-font;
                                         }
-                                        Text { text: artifact.sha256; color: Palette.foreground.with-alpha(0.7); overflow: elide; font-size: 11px; }
+                                        HorizontalLayout {
+                                            spacing: 5px;
+                                            Caption { text: artifact.sha256-label; }
+                                            Text { text: artifact.sha256; color: Palette.foreground.with-alpha(0.45); overflow: elide; font-size: Scale.grey-font; }
+                                        }
+                                        Text { text: artifact.artifact-id; color: Palette.foreground.with-alpha(0.45); overflow: elide; font-size: Scale.grey-font; }
                                     }
                                 }
                                 Rectangle { }
                             }
                         }
                     }
-                    Text { text: root.canvas-note; font-size: 11px; color: Palette.foreground.with-alpha(0.6); }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        vertical-stretch: 0;
+                        Text { text: Strings.overlays-title; font-size: Scale.head-font; color: Palette.foreground; font-weight: 700; }
+                        Caption { text: root.frame-size-text; horizontal-stretch: 1; overflow: elide; }
+                    }
+                    // The frame takes every pixel the pane can spare; the raw data
+                    // below it keeps a fixed band.
                     Rectangle {
-                        min-height: 120px;
-                        preferred-height: 180px;
-                        max-height: 180px;
+                        min-height: 160px;
+                        vertical-stretch: 1;
                         background: #1c1c1c;
                         border-radius: 3px;
                         clip: true;
                         property <float> scale: min(self.width / 1px / max(root.canvas-width, 1),
                                                    self.height / 1px / max(root.canvas-height, 1));
+                        property <length> offset-x: (self.width - root.canvas-width * self.scale * 1px) / 2;
+                        property <length> offset-y: (self.height - root.canvas-height * self.scale * 1px) / 2;
+                        // The verified frame and the geometry share one coordinate space,
+                        // so the overlays land on the pixels they describe.
+                        if root.frame-ready: Image {
+                            x: parent.offset-x;
+                            y: parent.offset-y;
+                            width: root.canvas-width * parent.scale * 1px;
+                            height: root.canvas-height * parent.scale * 1px;
+                            image-fit: fill;
+                            source: root.frame-image;
+                        }
                         for overlay in root.overlays: Rectangle {
-                            x: overlay.x * parent.scale * 1px;
-                            y: overlay.y * parent.scale * 1px;
+                            x: parent.offset-x + overlay.x * parent.scale * 1px;
+                            y: parent.offset-y + overlay.y * parent.scale * 1px;
                             width: overlay.point ? 7px : max(overlay.width * parent.scale * 1px, 1px);
                             height: overlay.point ? 7px : max(overlay.height * parent.scale * 1px, 1px);
                             background: overlay.point ? #ff6a3d : transparent;
@@ -337,11 +617,16 @@ export component AppWindow inherits Window {
                             border-width: 1px;
                         }
                     }
+                    Text { text: root.frame-note; font-size: Scale.grey-font; vertical-stretch: 0; color: Palette.foreground.with-alpha(0.6); wrap: word-wrap; }
+                    Text { text: Strings.raw-data-title; font-size: Scale.head-font; vertical-stretch: 0; color: Palette.foreground; font-weight: 700; }
                     TextEdit {
                         read-only: true;
                         wrap: word-wrap;
-                        min-height: 60px;
-                        vertical-stretch: 1;
+                        font-size: Scale.body-font;
+                        min-height: 80px;
+                        preferred-height: 150px * Scale.factor;
+                        max-height: 150px * Scale.factor;
+                        vertical-stretch: 0;
                         text: root.payload-json;
                     }
                 }

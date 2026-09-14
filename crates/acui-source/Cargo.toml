@@ -6,5 +6,8 @@ license.workspace = true
 
 [dependencies]
 acui-rows = { workspace = true }
+actingcommand-ledger = { workspace = true }
+actingcommand-ledger-forensics = { workspace = true }
 anyhow = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }

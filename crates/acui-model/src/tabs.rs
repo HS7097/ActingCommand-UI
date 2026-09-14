@@ -1,77 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! The six view tabs. 事件流 and 错误 are ruling-defined; the other four are
-//! provisional classifications by event_type prefix and origin.module, kept
-//! until the row contract lands.
+//! The six tabs are the contract's six `LedgerView`s. The console does not
+//! classify anything: a row belongs to a tab when the page says it does. The
+//! names a person reads live in `acui-app`; only the wire names are here.
 
-use acui_rows::{EventRow, Severity};
+use acui_rows::LedgerView;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ViewTab {
-    EventStream,
-    Errors,
-    ObserveAndAct,
-    Changes,
-    Health,
-    Lab,
-}
+pub const ALL_TABS: [LedgerView; 6] = LedgerView::ALL;
 
-pub const ALL_TABS: [ViewTab; 6] = [
-    ViewTab::EventStream,
-    ViewTab::Errors,
-    ViewTab::ObserveAndAct,
-    ViewTab::Changes,
-    ViewTab::Health,
-    ViewTab::Lab,
-];
-
-impl ViewTab {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::EventStream => "事件流",
-            Self::Errors => "错误",
-            Self::ObserveAndAct => "观察与操作",
-            Self::Changes => "变更",
-            Self::Health => "运行状况",
-            Self::Lab => "Lab",
-        }
-    }
-
-    /// Provisional tabs carry a visible marker; the two ruling-defined tabs do not.
-    pub const fn is_provisional(self) -> bool {
-        !matches!(self, Self::EventStream | Self::Errors)
-    }
-
-    pub fn membership(self, row: &EventRow) -> bool {
-        let event_type = row.event_type.as_str();
-        let module = row.origin.module.as_str();
-        match self {
-            Self::EventStream => true,
-            Self::Errors => row.severity >= Severity::Warning,
-            Self::Lab => {
-                matches!(module, "actinglab" | "actingctl")
-                    || starts_with_any(event_type, &["lab.", "cli."])
-            }
-            Self::ObserveAndAct => {
-                matches!(module, "capture" | "capture-pipeline" | "recognition" | "device-proxy")
-                    || starts_with_any(event_type, &["capture.", "recognition.", "input."])
-            }
-            Self::Changes => {
-                matches!(module, "artifact-store" | "scheduler")
-                    || starts_with_any(
-                        event_type,
-                        &["task.", "artifact.", "command.", "lease.", "scheduler."],
-                    )
-            }
-            Self::Health => {
-                matches!(module, "performance-monitor")
-                    || starts_with_any(event_type, &["perf.", "runtime."])
-            }
-        }
+/// The `--tab` spelling, which is the view's own wire name.
+pub const fn tab_name(view: LedgerView) -> &'static str {
+    match view {
+        LedgerView::Events => "events",
+        LedgerView::Observation => "observation",
+        LedgerView::Changes => "changes",
+        LedgerView::Errors => "errors",
+        LedgerView::Health => "health",
+        LedgerView::Lab => "lab",
     }
 }
 
-fn starts_with_any(event_type: &str, prefixes: &[&str]) -> bool {
-    prefixes
-        .iter()
-        .any(|prefix| event_type.starts_with(prefix))
+pub fn tab_from_name(name: &str) -> Option<LedgerView> {
+    ALL_TABS.into_iter().find(|view| tab_name(*view) == name)
 }
