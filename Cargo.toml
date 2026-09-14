@@ -14,6 +14,11 @@ acui-model = { path = "crates/acui-model" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The formal ledger read face. temporary pin to PR398 head; bump to main after
+# PR398 merges. One rev for every Runtime crate the console reads through.
+actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "e41467b9f51d68ddf754f1b898ba4747963a9a1f" }
+actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "e41467b9f51d68ddf754f1b898ba4747963a9a1f" }
+actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "e41467b9f51d68ddf754f1b898ba4747963a9a1f" }
 # Only what the console needs: the trim drops the renderers and backends this
 # program never uses (software renderer, testing backend, Linux system tray).
 # It does not drop image decoding: `image` stays a normal dependency of
