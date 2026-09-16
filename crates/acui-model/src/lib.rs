@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-only
 //! Pure view model over the formal page: tabs, filters, paging, recovery
 //! folding, selection. No toolkit here, no classification of its own, and no
 //! human-facing wording — every name a person reads is chosen in `acui-app`,

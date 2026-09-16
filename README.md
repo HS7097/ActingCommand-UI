@@ -157,8 +157,8 @@ text_size = "standard"   # standard | large | extra-large
   `frame_id`。账本没有给出把这两者连起来的关系，监控台就不连——真实帧照画，叠加为空。
 - **两个根里都没有产物淘汰事实**，所以淘汰占位在这两个根上不会出现；代码路径按契约写好。
 
-## 待 Alice 裁定
+## 许可
 
-- **许可**：工作区声明 `AGPL-3.0-only`，每个 `.rs` 文件带 SPDX 头，但**最终许可待裁定**，
-  仓库暂未附 LICENSE 全文；裁定后再补。
-- **Slint 许可选项**：界面由 [Slint](https://slint.dev) 渲染，选哪一种 Slint 许可待裁定。
+`GPL-3.0-only`（Alice 2026-09-17 裁定）。仓库附 LICENSE 全文；工作区 `license` 字段与每个 `.rs` / `.slint`
+文件的 SPDX 头与之一致。界面由 [Slint](https://slint.dev) 渲染，按其 GPLv3 许可选项使用。依赖的 Runtime
+crate（contract / ledger / ledger-forensics）为 `AGPL-3.0-only`，两者按 GPLv3 第 13 条合并。

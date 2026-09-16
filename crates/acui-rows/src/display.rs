@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-only
 //! Display-only names for the two closed vocabularies a row shows: the event
 //! type and the origin module. These are names for a human, never a fact: a
 //! wire string this table does not know keeps its raw spelling, and the raw

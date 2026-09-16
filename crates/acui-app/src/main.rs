@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-only
 //! ActingCommand 监控台 / ActingCommand Console: a read-only window over one
 //! Runtime state root, opened through the formal ledger read face.
 
