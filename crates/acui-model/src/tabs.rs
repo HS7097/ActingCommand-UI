@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-only
 //! The six tabs are the contract's six `LedgerView`s. The console does not
 //! classify anything: a row belongs to a tab when the page says it does. The
 //! names a person reads live in `acui-app`; only the wire names are here.

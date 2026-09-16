@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-only
 //! The two language tables. Every word a person reads in this program is here
 //! and nowhere else; the wire spellings a row also shows — raw event types,
 //! module names, ids, schema strings, sha256 — are never translated.

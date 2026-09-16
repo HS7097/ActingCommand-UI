@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-only
 //! The one file this program reads and writes itself: its own two preferences,
 //! in the per-user config directory. Never inside a state root, and never
 //! anything else — a state root is the read face's to touch, not this one's.

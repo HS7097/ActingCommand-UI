@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-only
 //! The read face, and the only place that touches a state root.
 //!
 //! The console never joins a path into the state root, never opens `ledger/`,

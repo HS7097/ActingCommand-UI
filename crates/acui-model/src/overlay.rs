@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-only
 //! Geometry pulled out of an opaque payload, defensively: only values under a
 //! geometry key are read as rectangles or points, everything else is ignored.
 

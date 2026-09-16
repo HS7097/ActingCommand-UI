@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-only
 //! The only crate that names the Runtime contract types for the view model.
 //!
 //! Nothing is mirrored here any more: the page, its events, the view membership
