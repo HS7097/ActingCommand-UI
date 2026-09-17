@@ -31,3 +31,61 @@ jobs:
             libxkbcommon-x11-dev
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --locked --release --workspace
+
+      # Windows only: stage acui.exe with a build manifest in the same shape as
+      # the Runtime's exact-SHA artifacts, so the umbrella can fetch and verify
+      # it by commit SHA. Nothing below changes the build itself.
+      - name: Stage Windows artifact with build manifest
+        if: runner.os == 'Windows'
+        id: stage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sha = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sha -cnotmatch '^[0-9a-f]{40}$') { throw "cannot resolve HEAD: '$sha'" }
+          $tree = (& git rev-parse 'HEAD^{tree}').Trim()
+          $name = "acui-windows-$sha"
+          $dir = Join-Path $env:RUNNER_TEMP $name
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          $payload = @('acui.exe', 'LICENSE', 'README.md')
+          Copy-Item -LiteralPath 'target\release\acui.exe' -Destination (Join-Path $dir 'acui.exe')
+          Copy-Item -LiteralPath 'LICENSE' -Destination (Join-Path $dir 'LICENSE')
+          Copy-Item -LiteralPath 'README.md' -Destination (Join-Path $dir 'README.md')
+          $files = foreach ($f in $payload) {
+            $p = Join-Path $dir $f
+            $item = Get-Item -LiteralPath $p -ErrorAction Stop
+            if ($item.Length -le 0) { throw "staged file is empty: $f" }
+            [ordered]@{
+              path = $f
+              size_bytes = [int64]$item.Length
+              sha256 = (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          }
+          $rustc = ((& rustc --version --verbose) -join "`n").Trim()
+          if ($LASTEXITCODE -ne 0) { throw "rustc version query failed with exit code $LASTEXITCODE" }
+          $manifest = [ordered]@{
+            repository = $env:GITHUB_REPOSITORY
+            commit_sha = $sha
+            tree_sha = $tree
+            cargo_lock_sha256 = (Get-FileHash -LiteralPath 'Cargo.lock' -Algorithm SHA256).Hash.ToLowerInvariant()
+            rust_toolchain = $rustc
+            target = 'x86_64-pc-windows-msvc'
+            configuration = 'release'
+            workflow_run_id = [uint64]$env:GITHUB_RUN_ID
+            workflow_run_attempt = [uint32]$env:GITHUB_RUN_ATTEMPT
+            source_artifact_name = $name
+            files = @($files)
+          }
+          $json = $manifest | ConvertTo-Json -Depth 6
+          [IO.File]::WriteAllText((Join-Path $dir 'BUILD-MANIFEST.json'), "$json`n", [Text.UTF8Encoding]::new($false))
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "name=$name"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "dir=$dir"
+
+      - name: Upload Windows artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.stage.outputs.name }}
+          path: ${{ steps.stage.outputs.dir }}
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
