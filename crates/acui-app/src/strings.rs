@@ -68,6 +68,14 @@ pub struct Labels {
     pub severity_min: [&'static str; 4],
     pub severity_max: [&'static str; 4],
     pub all_modules: &'static str,
+    /// The port box: its first item, one item per port (port, latest member
+    /// id), and the one item it shows when it is disabled and why.
+    pub all_instances: &'static str,
+    pub port_option: &'static str,
+    pub no_binding_records: &'static str,
+    pub port_online_unsupported: &'static str,
+    /// The port column of a row that links no instance.
+    pub host: &'static str,
     pub id_placeholder: &'static str,
     pub continue_reading: &'static str,
     pub card_title: &'static str,
@@ -78,8 +86,8 @@ pub struct Labels {
     pub raw_data_title: &'static str,
     pub no_event_selected: &'static str,
     pub not_selected: &'static str,
-    /// seq, time, level, module, event, link.
-    pub columns: [&'static str; 6],
+    /// seq, time, level, module, event, link, port.
+    pub columns: [&'static str; 7],
     /// The #109 view names, in `LedgerView::ALL` order.
     pub tabs: [&'static str; 6],
     /// debug, info, warning, error, fatal.
@@ -89,7 +97,9 @@ pub struct Labels {
     /// `EventSource`, in the contract's declaration order.
     pub sources: [(&'static str, &'static str); 8],
     /// Field key to label, for the instance card and the detail pane.
-    pub fields: [(&'static str, &'static str); 29],
+    pub fields: [(&'static str, &'static str); 35],
+    /// `ExecutionBackendProvenance`, by wire value.
+    pub provenances: [(&'static str, &'static str); 2],
     pub artifact_kinds: [(&'static str, &'static str); 6],
     pub media_types: [(&'static str, &'static str); 4],
     pub checksum: &'static str,
@@ -131,6 +141,7 @@ pub struct Labels {
     pub frame_decode_failed: &'static str,
     pub frame_too_large: &'static str,
     pub filter_id_error: &'static str,
+    pub filter_instance_conflict: &'static str,
     pub filter_rejected: &'static str,
     pub read_failed: &'static str,
     /// The launcher block in the top bar: status, two buttons, one line.
@@ -196,7 +207,12 @@ pub const ZH: Labels = Labels {
     severity_min: ["严重度不限", "≥ 警告", "≥ 错误", "≥ 致命"],
     severity_max: ["上限不限", "≤ 信息", "≤ 警告", "≤ 错误"],
     all_modules: "全部模块",
-    id_placeholder: "完整的 correlation_ / request_ / run_ / task_ 编号",
+    all_instances: "全部实例",
+    port_option: "端口 {} ／ {}",
+    no_binding_records: "无绑定记录",
+    port_online_unsupported: "在线态不支持",
+    host: "宿主",
+    id_placeholder: "完整的 correlation_ / request_ / run_ / task_ / instance_ 编号",
     continue_reading: "继续读",
     card_title: "实例卡",
     card_note: "账本事实取自读面；只有「本页条数」算的是已载入的页",
@@ -206,7 +222,15 @@ pub const ZH: Labels = Labels {
     raw_data_title: "原始数据",
     no_event_selected: "未选中事件",
     not_selected: "未选中",
-    columns: ["序号", "时间（本地）", "级别", "来源模块", "事件", "关联：请求／任务／运行"],
+    columns: [
+        "序号",
+        "时间（本地）",
+        "级别",
+        "来源模块",
+        "事件",
+        "关联：请求／任务／运行",
+        "端口",
+    ],
     tabs: ["事件流", "观察与操作", "变更", "错误", "运行状况", "Lab"],
     levels: ["调试", "信息", "警告", "错误", "致命"],
     sensitivities: ["公开", "内部", "敏感", "机密"],
@@ -250,6 +274,16 @@ pub const ZH: Labels = Labels {
         ("recognition_id", "识别编号"),
         ("frame_id", "帧编号"),
         ("lease_id", "租约编号"),
+        ("instance_alias", "实例别名"),
+        ("adb_port", "端口"),
+        ("provenance", "来源"),
+        ("bound_ids", "绑定编号数"),
+        ("latest_binding", "最新绑定序号"),
+        ("port_bindings", "实例绑定"),
+    ],
+    provenances: [
+        ("physical_device", "实机"),
+        ("fixture_simulation", "夹具"),
     ],
     artifact_kinds: [
         ("capture.frame", "截图帧"),
@@ -306,7 +340,8 @@ pub const ZH: Labels = Labels {
     frame_evicted: "材料已淘汰（{}）：意图 #{}{} · 观察至 #{}",
     frame_decode_failed: "PNG 解码失败：{}",
     frame_too_large: "素材 {} 字节超出监控台上限 {} 字节",
-    filter_id_error: "编号需填完整的 correlation_ / request_ / run_ / task_ 标识",
+    filter_id_error: "编号需填完整的 correlation_ / request_ / run_ / task_ / instance_ 标识",
+    filter_instance_conflict: "端口与实例编号只能选一",
     filter_rejected: "过滤条件无效：{}",
     read_failed: "读取失败：{}",
     launcher_title: "启动器",
@@ -357,7 +392,12 @@ pub const EN: Labels = Labels {
     severity_min: ["Any Level", "≥ Warning", "≥ Error", "≥ Fatal"],
     severity_max: ["Any Upper Bound", "≤ Info", "≤ Warning", "≤ Error"],
     all_modules: "All Modules",
-    id_placeholder: "Whole correlation_ / request_ / run_ / task_ id",
+    all_instances: "All Instances",
+    port_option: "Port {} ／ {}",
+    no_binding_records: "No Binding Records",
+    port_online_unsupported: "Not in Online Mode",
+    host: "Host",
+    id_placeholder: "Whole correlation_ / request_ / run_ / task_ / instance_ id",
     continue_reading: "Continue Reading",
     card_title: "Instance Card",
     card_note: "Ledger facts come from the read face; only Loaded Rows counts the loaded page",
@@ -367,7 +407,15 @@ pub const EN: Labels = Labels {
     raw_data_title: "Raw Data",
     no_event_selected: "No event selected",
     not_selected: "Not Selected",
-    columns: ["Seq", "Time (Local)", "Level", "Source Module", "Event", "Link: Request／Task／Run"],
+    columns: [
+        "Seq",
+        "Time (Local)",
+        "Level",
+        "Source Module",
+        "Event",
+        "Link: Request／Task／Run",
+        "Port",
+    ],
     tabs: ["Event Stream", "Observe and Act", "Changes", "Errors", "Health", "Lab"],
     levels: ["Debug", "Info", "Warning", "Error", "Fatal"],
     sensitivities: ["Public", "Internal", "Sensitive", "Secret"],
@@ -411,6 +459,16 @@ pub const EN: Labels = Labels {
         ("recognition_id", "Recognition ID"),
         ("frame_id", "Frame ID"),
         ("lease_id", "Lease ID"),
+        ("instance_alias", "Alias"),
+        ("adb_port", "Port"),
+        ("provenance", "Provenance"),
+        ("bound_ids", "Bound IDs"),
+        ("latest_binding", "Latest Binding"),
+        ("port_bindings", "Instance Bindings"),
+    ],
+    provenances: [
+        ("physical_device", "Physical Device"),
+        ("fixture_simulation", "Fixture"),
     ],
     artifact_kinds: [
         ("capture.frame", "Capture Frame"),
@@ -467,7 +525,8 @@ pub const EN: Labels = Labels {
     frame_evicted: "Material evicted ({}): intent #{}{} · observed through #{}",
     frame_decode_failed: "PNG decode failed: {}",
     frame_too_large: "Material of {} bytes is over the console's limit of {} bytes",
-    filter_id_error: "The id must be a whole correlation_ / request_ / run_ / task_ identifier",
+    filter_id_error: "The id must be a whole correlation_ / request_ / run_ / task_ / instance_ identifier",
+    filter_instance_conflict: "Pick a port or type an instance id, not both",
     filter_rejected: "Filter rejected: {}",
     read_failed: "Read failed: {}",
     launcher_title: "Launcher",
@@ -513,6 +572,10 @@ impl Labels {
 
     pub fn recovery_gap<'a>(&self, wire: &'a str) -> &'a str {
         pick(&self.recovery_gaps, wire).unwrap_or(wire)
+    }
+
+    pub fn provenance<'a>(&self, wire: &'a str) -> &'a str {
+        pick(&self.provenances, wire).unwrap_or(wire)
     }
 }
 

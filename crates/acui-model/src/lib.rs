@@ -12,9 +12,9 @@ pub use tabs::{tab_from_name, tab_name, ALL_TABS};
 
 use acui_rows::{
     code, payload_value, ArtifactEvictionObservation, ArtifactKind, EventQuery, EventSeverity,
-    LedgerEventPosition, LedgerRecoveryGap, LedgerRecoveryState, LedgerRunRecovery, LedgerView,
-    OpenReport, OriginModule, ProjectedArtifactReference, ProjectedEvent, RuntimeEventQueryCursor,
-    RuntimeEventQueryPage, WriterFacts,
+    InstanceId, LedgerEventPosition, LedgerRecoveryGap, LedgerRecoveryState, LedgerRunRecovery,
+    LedgerView, OpenReport, OriginModule, PortBindings, PortEntry, ProjectedArtifactReference,
+    ProjectedEvent, RuntimeEventQueryCursor, RuntimeEventQueryPage, WriterFacts,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -24,6 +24,9 @@ use serde_json::Value;
 pub enum QueryError {
     /// The id box holds something that is not a whole canonical id.
     IdNotCanonical,
+    /// A port is picked and an `instance_` id is typed: the ledger takes one
+    /// instance filter, and the console gives neither precedence.
+    InstanceFilterConflict,
     /// The ledger refused the assembled query; carries the ledger's own code.
     Rejected(String),
     /// The read face could not answer; carries what it reported.
@@ -37,8 +40,14 @@ pub struct Filters {
     pub minimum_severity: Option<EventSeverity>,
     pub maximum_severity: Option<EventSeverity>,
     pub origin_module: Option<OriginModule>,
-    /// One canonical `correlation_` / `request_` / `run_` / `task_` id.
+    /// One canonical `correlation_` / `request_` / `run_` / `task_` /
+    /// `instance_` id.
     pub id_text: String,
+    /// Every instance id ever bound to the picked port: one instance, queried
+    /// as the whole set or not at all.
+    pub instance_ids: Vec<InstanceId>,
+    /// The port that set stands for; display only, the query carries the set.
+    pub port: Option<u16>,
     pub from_timestamp_unix_ms: Option<u64>,
     pub to_timestamp_unix_ms: Option<u64>,
 }
@@ -64,6 +73,8 @@ impl Filters {
                 parse_id(text).map(|id| query.run_id = Some(id))
             } else if text.starts_with("task_") {
                 parse_id(text).map(|id| query.task_id = Some(id))
+            } else if text.starts_with("instance_") {
+                parse_id(text).map(|id| query.instance_id = Some(id))
             } else {
                 None
             };
@@ -71,6 +82,10 @@ impl Filters {
                 return Err(QueryError::IdNotCanonical);
             }
         }
+        if query.instance_id.is_some() && !self.instance_ids.is_empty() {
+            return Err(QueryError::InstanceFilterConflict);
+        }
+        query.instance_ids = self.instance_ids.clone();
         query
             .validate()
             .map_err(|error| QueryError::Rejected(error.code().to_string()))?;
@@ -168,6 +183,9 @@ pub struct InstanceCard {
     pub last_timestamp_unix_ms: Option<u64>,
     pub severity_counts: Vec<(EventSeverity, usize)>,
     pub modules: Vec<OriginModule>,
+    /// The picked port's set and latest binding facts; `None` while every
+    /// instance is shown.
+    pub port: Option<PortEntry>,
 }
 
 pub struct DetailView<'a> {
@@ -358,7 +376,10 @@ impl ViewModel {
         })
     }
 
-    pub fn instance_card(&self) -> InstanceCard {
+    /// `bindings` is the port map the session read once; the card takes the
+    /// picked port's entry from it. Severity and loaded counts come from the
+    /// re-queried page, never from the map.
+    pub fn instance_card(&self, bindings: Option<&PortBindings>) -> InstanceCard {
         let mut severity_counts = Vec::new();
         for severity in [
             EventSeverity::Debug,
@@ -390,6 +411,9 @@ impl ViewModel {
             last_timestamp_unix_ms: self.span.map(|(_, last)| last),
             severity_counts,
             modules: self.modules(),
+            port: self.filters.port.and_then(|port| {
+                bindings?.ports.iter().find(|entry| entry.port == port).cloned()
+            }),
         }
     }
 

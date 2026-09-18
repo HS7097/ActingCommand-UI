@@ -22,7 +22,8 @@ use acui_model::{
 use acui_rows::{
     code, event_type_names, format_bytes, format_clock, format_full, links_named, module_names,
     seconds_since, short_id, ArtifactEvictionObservation, EventQuery, EventSeverity, LedgerView,
-    OriginModule, ProjectedEvent, Sensitivity, WriterFacts, MAX_RUNTIME_EVENT_QUERY_EVENTS,
+    OriginModule, PortBindings, PortEntry, ProjectedEvent, Sensitivity, WriterFacts,
+    MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 use acui_source::{MaterialOutcome, OfflineReason, ReadSource, SourceMode, MAX_FRAME_BYTES};
 use anyhow::{bail, Result};
@@ -99,6 +100,13 @@ struct App {
     /// entry after the first one means. Rebuilt from every page.
     module_options: RefCell<Vec<SharedString>>,
     module_choices: RefCell<Vec<OriginModule>>,
+    /// Instance identity by ADB port, read once at the pinned snapshot.
+    port_map: PortMap,
+    /// The port option list, fixed for the session like the map it comes
+    /// from, and the port each entry after the first one means. Empty
+    /// choices mean the box is disabled and its one item says why.
+    port_options: Vec<SharedString>,
+    port_choices: Vec<u16>,
     /// Which event's frame the pane has already asked for.
     pending: Cell<Option<u64>>,
     /// Bumped per request so a slow read can never paint a stale frame, and so
@@ -108,6 +116,29 @@ struct App {
     worker: Arc<Mutex<()>>,
     /// The state root and the two launcher paths, as this run resolved them.
     launcher: launcher::Launcher,
+}
+
+/// The port map this session filters by: the offline read face derives it
+/// once from the binding facts through the pinned snapshot.
+enum PortMap {
+    /// Online: the Runtime does not derive bindings through its page.
+    Online,
+    /// The read face refused, with its typed code as the outermost context.
+    Failed(anyhow::Error),
+    Read(PortBindings),
+}
+
+impl App {
+    fn port_bindings(&self) -> Option<&PortBindings> {
+        match &self.port_map {
+            PortMap::Read(bindings) => Some(bindings),
+            PortMap::Online | PortMap::Failed(_) => None,
+        }
+    }
+
+    fn port_entry(&self, port: u16) -> Option<&PortEntry> {
+        self.port_bindings()?.ports.iter().find(|entry| entry.port == port)
+    }
 }
 
 fn main() -> Result<()> {
@@ -134,6 +165,12 @@ fn main() -> Result<()> {
     };
 
     let source = ReadSource::open(&state_root, args.source)?;
+    let port_map = match source.instance_bindings() {
+        Ok(Some(bindings)) => PortMap::Read(bindings),
+        Ok(None) => PortMap::Online,
+        Err(error) => PortMap::Failed(error),
+    };
+    let (port_options, port_choices) = port_options(labels, &port_map);
     let span = time_span(&source);
     let mut model = ViewModel::new(
         source.open_report(),
@@ -148,6 +185,9 @@ fn main() -> Result<()> {
         labels,
         module_options: RefCell::new(Vec::new()),
         module_choices: RefCell::new(Vec::new()),
+        port_map,
+        port_options,
+        port_choices,
         pending: Cell::new(None),
         generation: Arc::new(AtomicU64::new(0)),
         worker: Arc::new(Mutex::new(())),
@@ -204,9 +244,40 @@ fn install_strings(window: &AppWindow, labels: &'static Labels, online: bool) {
     global.set_col_module(labels.columns[3].into());
     global.set_col_event(labels.columns[4].into());
     global.set_col_link(labels.columns[5].into());
+    global.set_col_port(labels.columns[6].into());
     global.set_launcher_title(labels.launcher_title.into());
     global.set_start(labels.start.into());
     global.set_request_shutdown(labels.request_shutdown.into());
+}
+
+/// The port box's items: the first means every instance, then one per port,
+/// ascending, naming the port and the member its latest binding is for, with
+/// ` +n` for the further members of the same port. A map with nothing to
+/// pick — no binding facts, facts that name no port, online, or a refused
+/// read — gives one item that says which, and no choices, so the box is
+/// disabled.
+fn port_options(labels: &Labels, port_map: &PortMap) -> (Vec<SharedString>, Vec<u16>) {
+    let bindings = match port_map {
+        PortMap::Read(bindings) if !bindings.ports.is_empty() => bindings,
+        PortMap::Read(bindings) if !bindings.unported.is_empty() => {
+            return (vec![labels.all_instances.into()], Vec::new())
+        }
+        PortMap::Read(_) => return (vec![labels.no_binding_records.into()], Vec::new()),
+        PortMap::Online => return (vec![labels.port_online_unsupported.into()], Vec::new()),
+        PortMap::Failed(error) => return (vec![error.to_string().into()], Vec::new()),
+    };
+    let mut options = vec![SharedString::from(labels.all_instances)];
+    options.extend(bindings.ports.iter().map(|entry| {
+        let mut text = fill(
+            labels.port_option,
+            &[&entry.port.to_string(), &short_id(&code(&entry.latest_instance_id))],
+        );
+        if entry.members.len() > 1 {
+            text.push_str(&format!(" +{}", entry.members.len() - 1));
+        }
+        SharedString::from(text)
+    }));
+    (options, bindings.ports.iter().map(|entry| entry.port).collect())
 }
 
 /// The committed time span, read as the first and the last event of the snapshot.
@@ -294,6 +365,24 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         app.model.borrow_mut().filters.origin_module = module;
         reload(&app, false)
     });
+    // A port is one instance: its whole set of ids goes into the query, or
+    // nothing does. The first item, and any name not on the list, clears both.
+    on!(on_port_changed, |app, name| {
+        let entry = app
+            .port_options
+            .iter()
+            .position(|option| *option == name)
+            .and_then(|index| index.checked_sub(1))
+            .and_then(|index| app.port_choices.get(index))
+            .and_then(|port| app.port_entry(*port));
+        {
+            let mut model = app.model.borrow_mut();
+            model.filters.port = entry.map(|entry| entry.port);
+            model.filters.instance_ids =
+                entry.map(|entry| entry.members.clone()).unwrap_or_default();
+        }
+        reload(&app, false)
+    });
     on!(on_id_changed, |app, text| {
         app.model.borrow_mut().filters.id_text = text.to_string();
         reload(&app, false)
@@ -349,7 +438,7 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
 fn refresh(window: &AppWindow, app: &Rc<App>) {
     let labels = app.labels;
     let model = app.model.borrow();
-    let card = model.instance_card();
+    let card = model.instance_card(app.port_bindings());
 
     window.set_ledger_dir_value(card.state_root.as_str().into());
     window.set_storage_format_value(backend_text(labels, &card.backend).into());
@@ -411,6 +500,35 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
         field(labels, "integrity", integrity_text(labels, &card), ""),
         field(labels, "writer", writer_text(labels, &card.writer), ""),
     ];
+    // The port map could not be read: the code, and behind it the read
+    // face's own words. The box beside the list carries the same code.
+    if let PortMap::Failed(error) = &app.port_map {
+        lines.push(field(
+            labels,
+            "port_bindings",
+            fill(labels.read_failed, &[&error.to_string()]),
+            error.root_cause().to_string(),
+        ));
+    }
+    // The picked port: its latest binding's facts and the size of its set.
+    // The counts below still come from the re-queried page.
+    if let Some(entry) = &card.port {
+        lines.push(field(
+            labels,
+            "instance_alias",
+            entry.latest_alias.clone(),
+            code(&entry.latest_instance_id),
+        ));
+        lines.push(field(labels, "adb_port", entry.port.to_string(), ""));
+        lines.push(field(
+            labels,
+            "provenance",
+            labels.provenance(&entry.latest_provenance).to_string(),
+            entry.latest_provenance.clone(),
+        ));
+        lines.push(field(labels, "bound_ids", entry.members.len().to_string(), ""));
+        lines.push(field(labels, "latest_binding", entry.latest_sequence.to_string(), ""));
+    }
     for (severity, count) in &card.severity_counts {
         lines.push(FieldLine {
             label: labels.levels[severity_index(*severity)].into(),
@@ -455,6 +573,7 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
     window.set_active_tab(active as i32);
 
     sync_modules(window, app, &model.filters.origin_module.clone(), card.modules);
+    sync_ports(window, app, model.filters.port);
 
     let display = model.display_rows();
     window.set_filter_error(query_error_text(labels, model.query_error.as_ref()).into());
@@ -479,6 +598,16 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
                     module: module_text(labels, event.origin.module()).into(),
                     event_name: event_text(labels, &raw_type).into(),
                     event_raw: raw_type.into(),
+                    // The port the map gives the linked instance; the id itself
+                    // when the map gives none — never a port the ledger did not state.
+                    port: match event.links.instance_id() {
+                        None => labels.host.to_string(),
+                        Some(id) => match app.port_bindings().and_then(|map| map.port_of.get(id)) {
+                            Some(port) => port.to_string(),
+                            None => short_id(&code(id)),
+                        },
+                    }
+                    .into(),
                     note: if *folded { labels.recovered_badge } else { "" }.into(),
                     link_id: links_named(&event.links)
                         .first()
@@ -600,6 +729,18 @@ fn sync_modules(
     *app.module_options.borrow_mut() = options.clone();
     window.set_module_options(models(options));
     window.set_module_index(index);
+}
+
+/// Puts the port box back on the port the console is filtering by, found in
+/// the session's fixed list; the first item when there is none.
+fn sync_ports(window: &AppWindow, app: &Rc<App>, picked: Option<u16>) {
+    let index = picked
+        .and_then(|port| app.port_choices.iter().position(|choice| *choice == port))
+        .map(|index| index as i32 + 1)
+        .unwrap_or(0);
+    window.set_port_options(models(app.port_options.clone()));
+    window.set_port_enabled(!app.port_choices.is_empty());
+    window.set_port_index(index);
 }
 
 fn detail_lines(labels: &Labels, event: &ProjectedEvent) -> Vec<FieldLine> {
@@ -891,6 +1032,7 @@ fn query_error_text(labels: &Labels, error: Option<&QueryError>) -> String {
     match error {
         None => String::new(),
         Some(QueryError::IdNotCanonical) => labels.filter_id_error.to_string(),
+        Some(QueryError::InstanceFilterConflict) => labels.filter_instance_conflict.to_string(),
         Some(QueryError::Rejected(reason)) => fill(labels.filter_rejected, &[reason]),
         Some(QueryError::ReadFailed(reason)) => fill(labels.read_failed, &[reason]),
     }

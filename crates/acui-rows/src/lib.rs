@@ -14,14 +14,16 @@ pub use display::{event_type_names, format_bytes, module_names};
 
 pub use actingcommand_contract::{
     ArtifactEvictionObservation, ArtifactKind, ClientActionKind, ClientActionRecord, EventActor,
-    EventLinks, EventQuery, EventSeverity, EventSource, LedgerEventPosition, LedgerRecoveryGap,
-    LedgerRecoveryState,
+    EventLinks, EventQuery, EventSeverity, EventSource, InstanceId, LedgerEventPosition,
+    LedgerRecoveryGap, LedgerRecoveryState,
     LedgerRunRecovery, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS,
     MAX_RUNTIME_MATERIAL_CHUNK_BYTES, MAX_RUNTIME_MATERIAL_REPLY_BYTES, OriginModule,
     ProjectedArtifactReference, ProjectedEvent, ProjectionProfile, RuntimeEventQueryCursor,
     RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit,
     RuntimeMaterialReadRequest, RuntimeMaterialReadResult, RuntimeMaterialReadState, Sensitivity,
 };
+
+use std::collections::BTreeMap;
 
 use chrono::{Local, TimeZone, Utc};
 use serde::Serialize;
@@ -51,6 +53,37 @@ pub enum WriterFacts {
     Readable { owner_id: String, pid: u32, active: bool, started_at_unix_ms: u64 },
     /// The running Runtime this session is connected to, as its `runtime-info.json` states it.
     Runtime { pid: u32, owner_epoch: String, started_at_unix_ms: u64 },
+}
+
+/// Instance identity by ADB port, as the offline read face derived it from
+/// every `runtime.instance_bound` fact through the session's snapshot. Filled
+/// by `acui-source` once per session, read by `acui-model` and the console.
+#[derive(Debug, Clone)]
+pub struct PortBindings {
+    /// One entry per port, ascending.
+    pub ports: Vec<PortEntry>,
+    /// Instances outside the port map: serial-configured or never given an
+    /// ADB port. Binding facts exist for them, so they are not "no records".
+    pub unported: Vec<InstanceId>,
+    /// The port an instance id's latest binding names as HOST:PORT, for the
+    /// rows' port column. An id whose latest binding is serial-configured or
+    /// has no port is absent here even if it belongs to a port's set.
+    pub port_of: BTreeMap<InstanceId, u16>,
+}
+
+/// One ADB port: every instance id ever bound to it — one instance, always
+/// queried together as the whole set — and the facts of its latest binding.
+#[derive(Debug, Clone)]
+pub struct PortEntry {
+    pub port: u16,
+    /// The whole set, in first-binding order.
+    pub members: Vec<InstanceId>,
+    /// The member whose binding has the highest sequence; `latest_*` are its.
+    pub latest_instance_id: InstanceId,
+    pub latest_alias: String,
+    /// The provenance's wire value: `physical_device` or `fixture_simulation`.
+    pub latest_provenance: String,
+    pub latest_sequence: u64,
 }
 
 /// A schema-owned code as its wire text, e.g. `capture.completed`, `run_18cf…`.

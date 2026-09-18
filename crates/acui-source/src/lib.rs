@@ -13,12 +13,13 @@
 //! questions — is a Runtime running here, and will it accept a shutdown
 //! request — are asked through that same typed client, at the end of this file.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use acui_rows::{
     code, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord, EventActor,
     EventQuery, EventSource, LedgerEventPosition, LedgerView, MAX_RUNTIME_MATERIAL_CHUNK_BYTES,
-    MAX_RUNTIME_MATERIAL_REPLY_BYTES, OpenReport,
+    MAX_RUNTIME_MATERIAL_REPLY_BYTES, OpenReport, PortBindings, PortEntry,
     ProjectedArtifactReference, ProjectionProfile, RuntimeEventQueryCursor, RuntimeEventQueryPage,
     RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit, RuntimeMaterialReadRequest,
     RuntimeMaterialReadResult, RuntimeMaterialReadState, WriterFacts,
@@ -79,6 +80,55 @@ impl EvidenceSource {
             &request,
         )
         .map_err(|error| anyhow!("账本查询失败：{}", error))
+    }
+
+    /// Instance identity by ADB port at this session's snapshot, as the read
+    /// face derives it from every `runtime.instance_bound` fact. Read once per
+    /// session: the snapshot is pinned, so the answer cannot change. A ledger
+    /// with no binding facts is an empty map, not an error; a typed refusal
+    /// (`instance_bindings_incomplete`, `instance_binding_malformed`, …) comes
+    /// back with its code as the outermost context.
+    pub fn instance_bindings(&self) -> Result<PortBindings> {
+        let bindings = actingcommand_ledger_forensics::instance_bindings(
+            &self.snapshot,
+            self.snapshot_position(),
+        )
+        .map_err(|error| {
+            let code = error.code();
+            anyhow::Error::new(error).context(code)
+        })?;
+        let mut ports = Vec::with_capacity(bindings.ports.len());
+        for (port, members) in &bindings.ports {
+            // The facts shown for a port are those of its latest binding.
+            let latest = members
+                .iter()
+                .filter_map(|id| bindings.latest.get(id))
+                .max_by_key(|binding| binding.sequence)
+                .ok_or_else(|| {
+                    anyhow!("instance_binding_malformed: 端口 {port} 没有绑定事实")
+                })?;
+            ports.push(PortEntry {
+                port: *port,
+                members: members.clone(),
+                latest_instance_id: latest.instance_id,
+                latest_alias: latest.instance_alias.clone(),
+                latest_provenance: code(&latest.provenance),
+                latest_sequence: latest.sequence,
+            });
+        }
+        // An id's own port is the one its latest binding names as HOST:PORT —
+        // the same rule the read face uses for port membership.
+        let port_of: BTreeMap<_, _> = bindings
+            .latest
+            .values()
+            .filter(|binding| !binding.serial_configured)
+            .filter_map(|binding| binding.adb_port.map(|port| (binding.instance_id, port)))
+            .collect();
+        Ok(PortBindings {
+            ports,
+            unported: bindings.unported.into_iter().collect(),
+            port_of,
+        })
     }
 
     pub fn open_report(&self) -> OpenReport {
@@ -300,6 +350,15 @@ impl ReadSource {
         match self {
             Self::Offline { reason, .. } => Some(reason),
             Self::Online(_) => None,
+        }
+    }
+
+    /// The port map, offline only: the Runtime does not derive bindings
+    /// through its page, so online is `Ok(None)`, not a read.
+    pub fn instance_bindings(&self) -> Result<Option<PortBindings>> {
+        match self {
+            Self::Offline { source, .. } => source.instance_bindings().map(Some),
+            Self::Online(_) => Ok(None),
         }
     }
 

@@ -13,6 +13,10 @@ export struct RowItem {
     module: string,
     event-name: string,
     event-raw: string,
+    // The instance the row links, by its ADB port: the port number, the
+    // shortened id when the port map has no port for it, or "host" when the
+    // row links no instance at all.
+    port: string,
     link-id: string,
     note: string,
 }
@@ -65,19 +69,22 @@ global Column {
     // wrong timestamp, so the others take the whole squeeze.
     out property <length> time: 90px * Scale.factor;
     out property <length> level: 56px * Scale.factor;
-    out property <length> module: 120px * Scale.factor;
-    out property <length> event: 136px * Scale.factor;
-    out property <length> raw: 96px * Scale.factor;
+    out property <length> module: 104px * Scale.factor;
+    out property <length> event: 120px * Scale.factor;
+    out property <length> raw: 80px * Scale.factor;
+    // A port number, "host" or 宿主 in full; a shortened id elides. Its width
+    // and gap came out of module, event and raw, so the sum did not grow.
+    out property <length> port: 48px * Scale.factor;
     // The link column takes whatever is left; this is the width that shows its
     // own header in full, in both languages.
     out property <length> link: 150px * Scale.factor;
     out property <length> spacing: 6px;
     out property <length> margin: 6px;
     out property <length> wanted: root.seq + root.level + root.module + root.event + root.raw
-        + root.link;
-    // What the squeezed columns never get: the two margins, the six gaps and
+        + root.port + root.link;
+    // What the squeezed columns never get: the two margins, the seven gaps and
     // the clock.
-    out property <length> fixed: 2 * root.margin + 6 * root.spacing + root.time;
+    out property <length> fixed: 2 * root.margin + 7 * root.spacing + root.time;
 }
 
 export global Scale {
@@ -119,6 +126,7 @@ export global Strings {
     in property <string> col-module;
     in property <string> col-event;
     in property <string> col-link;
+    in property <string> col-port;
     in property <string> launcher-title;
     in property <string> start;
     in property <string> request-shutdown;
@@ -189,6 +197,10 @@ export component AppWindow inherits Window {
     in property <[string]> tab-labels;
     in property <int> active-tab;
     in property <[string]> module-options;
+    // The port box: fixed for the session, one item per port. Disabled with a
+    // single item that says why when there is nothing to pick.
+    in property <[string]> port-options;
+    in property <bool> port-enabled;
     in property <[RowItem]> rows;
     in property <string> filter-error;
     in property <bool> has-more;
@@ -211,6 +223,7 @@ export component AppWindow inherits Window {
     // Two-way aliases, so the console can put a box back on the option it means
     // after the option list is rebuilt, without ever losing the box's own state.
     in-out property <int> module-index <=> module-box.current-index;
+    in-out property <int> port-index <=> port-box.current-index;
     in-out property <int> text-size-index <=> text-size-box.current-index;
     in-out property <int> language-index <=> language-box.current-index;
 
@@ -220,6 +233,7 @@ export component AppWindow inherits Window {
     // By name: the option list is rebuilt from every page, so a position in it
     // is not a lasting way to say which module was picked.
     callback module-changed(string);
+    callback port-changed(string);
     callback id-changed(string);
     callback cursor-changed(float);
     callback row-clicked(int);
@@ -460,6 +474,15 @@ export component AppWindow inherits Window {
                                 root.module-changed(self.current-value);
                             }
                         }
+                        port-box := ComboBox {
+                            min-width: 90px;
+                            preferred-width: 180px * Scale.factor;
+                            enabled: root.port-enabled;
+                            model: root.port-options;
+                            selected => {
+                                root.port-changed(self.current-value);
+                            }
+                        }
                         LineEdit {
                             min-width: 70px;
                             horizontal-stretch: 1;
@@ -494,18 +517,21 @@ export component AppWindow inherits Window {
                         property <length> w-module: Column.module * self.fit;
                         property <length> w-event: Column.event * self.fit;
                         property <length> w-raw: Column.raw * self.fit;
+                        property <length> w-port: Column.port * self.fit;
                         property <length> seq-x: Column.margin;
                         property <length> time-x: self.seq-x + self.w-seq + Column.spacing;
                         property <length> level-x: self.time-x + self.w-time + Column.spacing;
                         property <length> module-x: self.level-x + self.w-level + Column.spacing;
                         property <length> event-x: self.module-x + self.w-module + Column.spacing;
-                        property <length> link-x: self.event-x + self.w-event + Column.spacing + self.w-raw + Column.spacing;
+                        property <length> port-x: self.event-x + self.w-event + Column.spacing + self.w-raw + Column.spacing;
+                        property <length> link-x: self.port-x + self.w-port + Column.spacing;
                         Caption { x: parent.seq-x; y: 0; height: parent.height; width: parent.w-seq; text: Strings.col-seq; overflow: elide; }
                         Caption { x: parent.time-x; y: 0; height: parent.height; width: parent.w-time; text: Strings.col-time; overflow: elide; }
                         Caption { x: parent.level-x; y: 0; height: parent.height; width: parent.w-level; text: Strings.col-level; overflow: elide; }
                         Caption { x: parent.module-x; y: 0; height: parent.height; width: parent.w-module; text: Strings.col-module; overflow: elide; }
                         // The event name and the raw type behind it are one column.
                         Caption { x: parent.event-x; y: 0; height: parent.height; width: parent.w-event + Column.spacing + parent.w-raw; text: Strings.col-event; overflow: elide; }
+                        Caption { x: parent.port-x; y: 0; height: parent.height; width: parent.w-port; text: Strings.col-port; overflow: elide; }
                         Caption { x: parent.link-x; y: 0; height: parent.height; width: max(parent.width - parent.link-x - Column.margin, 0px); text: Strings.col-link; overflow: elide; }
                     }
                     ListView {
@@ -542,6 +568,7 @@ export component AppWindow inherits Window {
                                 if !row.recovery: Text { text: row.module; font-size: Scale.list-font; width: head.w-module; overflow: elide; vertical-alignment: center; color: Palette.foreground.with-alpha(0.8); }
                                 if !row.recovery: Text { text: row.event-name; font-size: Scale.list-font; width: head.w-event; overflow: elide; color: Palette.foreground; vertical-alignment: center; }
                                 if !row.recovery: Text { text: row.event-raw; font-size: Scale.grey-font; width: head.w-raw; overflow: elide; color: Palette.foreground.with-alpha(0.45); vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.port; font-size: Scale.list-font; width: head.w-port; overflow: elide; vertical-alignment: center; color: Palette.foreground.with-alpha(0.8); }
                                 if row.folded: Text { text: row.note; font-size: Scale.grey-font; color: Severity.warning; vertical-alignment: center; }
                                 if !row.recovery: Text { text: row.link-id; font-size: Scale.grey-font; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; color: Palette.foreground.with-alpha(0.55); overflow: elide; }
                             }
