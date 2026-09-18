@@ -13,8 +13,8 @@ mod display;
 pub use display::{event_type_names, format_bytes, module_names};
 
 pub use actingcommand_contract::{
-    ArtifactEvictionObservation, ArtifactKind, EventLinks, EventQuery,
-    EventSeverity, LedgerEventPosition, LedgerRecoveryGap, LedgerRecoveryState,
+    ArtifactEvictionObservation, ArtifactKind, EventActor, EventLinks, EventQuery,
+    EventSeverity, EventSource, LedgerEventPosition, LedgerRecoveryGap, LedgerRecoveryState,
     LedgerRunRecovery, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS,
     MAX_RUNTIME_MATERIAL_CHUNK_BYTES, MAX_RUNTIME_MATERIAL_REPLY_BYTES, OriginModule,
     ProjectedArtifactReference, ProjectedEvent, ProjectionProfile, RuntimeEventQueryCursor,
@@ -30,7 +30,8 @@ use serde_json::Value;
 /// `acui-source` (which fills it) and `acui-model` (which shows it) can name it.
 #[derive(Debug, Clone)]
 pub struct OpenReport {
-    /// `segment` or `sqlite`, chosen by the ledger from the state root.
+    /// `segment` or `sqlite`, chosen by the ledger from the state root; `runtime`
+    /// when the session reads a running Runtime, which does not state its medium.
     pub backend: String,
     pub latest_sequence: u64,
     /// `None` when the read face cannot state it without verifying material.
@@ -47,6 +48,8 @@ pub enum WriterFacts {
     Absent,
     Locked { byte_count: u64 },
     Readable { owner_id: String, pid: u32, active: bool, started_at_unix_ms: u64 },
+    /// The running Runtime this session is connected to, as its `runtime-info.json` states it.
+    Runtime { pid: u32, owner_epoch: String, started_at_unix_ms: u64 },
 }
 
 /// A schema-owned code as its wire text, e.g. `capture.completed`, `run_18cf…`.

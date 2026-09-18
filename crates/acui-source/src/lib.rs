@@ -3,23 +3,28 @@
 //!
 //! The console never joins a path into the state root, never opens `ledger/`,
 //! `artifacts/` or `runtime-state.sqlite`, and never spawns a CLI. Everything
-//! below goes through the Runtime's own offline entries: `GlobalLedger` picks
+//! below goes through the Runtime's own entries. Offline, `GlobalLedger` picks
 //! the medium and authenticates the snapshot, `query_view_page` projects the
 //! formal page, and `read_material_to` resolves, guards and verifies material.
+//! Online, the same page and material operations are asked of the running
+//! Runtime through `actingcommand_runtime_client`, the one typed IPC path a
+//! client has. The console is a client only: it never starts, stops or waits
+//! on the Runtime, and never writes into the state root.
 
 use std::path::{Path, PathBuf};
 
 use acui_rows::{
-    ArtifactEvictionObservation, EventQuery, LedgerEventPosition, MAX_RUNTIME_MATERIAL_CHUNK_BYTES,
-    MAX_RUNTIME_MATERIAL_REPLY_BYTES, OpenReport, ProjectedArtifactReference, ProjectionProfile,
-    RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
-    RuntimeMaterialReadLimit, RuntimeMaterialReadRequest, RuntimeMaterialReadResult,
-    RuntimeMaterialReadState, WriterFacts,
+    code, ArtifactEvictionObservation, EventActor, EventQuery, EventSource, LedgerEventPosition,
+    LedgerView, MAX_RUNTIME_MATERIAL_CHUNK_BYTES, MAX_RUNTIME_MATERIAL_REPLY_BYTES, OpenReport,
+    ProjectedArtifactReference, ProjectionProfile, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit, RuntimeMaterialReadRequest,
+    RuntimeMaterialReadResult, RuntimeMaterialReadState, WriterFacts,
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
     GlobalLedgerWriterMetadataObservation,
 };
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 
@@ -107,6 +112,241 @@ impl EvidenceSource {
     }
 }
 
+/// One session against the running Runtime, read at the one snapshot the
+/// Runtime stated on the session's first page — the same pinned-snapshot
+/// session the offline face gives, so both faces page and cursor alike.
+pub struct OnlineSource {
+    root: PathBuf,
+    client: RuntimeClient,
+    snapshot: u64,
+    read_complete: bool,
+}
+
+impl OnlineSource {
+    /// Discovery is the client's: it reads `runtime-info.json`, takes the
+    /// loopback address from it and checks the owner epoch on connect.
+    fn connect(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
+        RuntimeClient::connect(RuntimeClientConfig::new(root, EventActor::Ui, EventSource::Ui))
+    }
+
+    /// The first page, asked without a snapshot, is where the Runtime states
+    /// the position this session then reads at.
+    fn pin(root: PathBuf, client: RuntimeClient) -> Result<Self> {
+        let request = RuntimeEventQueryPageRequest::new(1, None)
+            .map_err(|error| anyhow!("页请求无效：{}", error.code()))?;
+        let page = client
+            .query_event_page(
+                EventQuery { view: Some(LedgerView::Events), ..EventQuery::default() },
+                ProjectionProfile::Ui,
+                request,
+            )
+            .map_err(|error| anyhow!("Runtime 查询失败：{error}"))?;
+        Ok(Self {
+            root,
+            client,
+            snapshot: page.snapshot_ledger_position(),
+            read_complete: page.read_scope().is_none_or(|scope| scope.read_complete),
+        })
+    }
+
+    pub fn state_root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn snapshot_position(&self) -> u64 {
+        self.snapshot
+    }
+
+    /// The same page request as offline, answered by the Runtime.
+    pub fn query(
+        &self,
+        query: &EventQuery,
+        limit: u16,
+        cursor: Option<RuntimeEventQueryCursor>,
+    ) -> Result<RuntimeEventQueryPage> {
+        let request = RuntimeEventQueryPageRequest::new(limit, cursor)
+            .map_err(|error| anyhow!("页请求无效：{}", error.code()))?
+            .at_snapshot(self.snapshot)
+            .map_err(|error| anyhow!("快照位置无效：{}", error.code()))?;
+        self.client
+            .query_event_page(query.clone(), ProjectionProfile::Ui, request)
+            .map_err(|error| anyhow!("Runtime 查询失败：{error}"))
+    }
+
+    /// The medium, the corrupt tail and the writer record are the offline
+    /// face's observations of the files; the Runtime does not state them
+    /// through its page. Online, the writer is the Runtime this session is
+    /// connected to, as its own `runtime-info.json` describes it.
+    pub fn open_report(&self) -> OpenReport {
+        let info = self.client.runtime_info();
+        OpenReport {
+            backend: "runtime".to_string(),
+            latest_sequence: self.snapshot,
+            event_count: None,
+            read_complete: self.read_complete,
+            corrupt_tail: None,
+            repair_count: None,
+            writer: WriterFacts::Runtime {
+                pid: info.pid(),
+                owner_epoch: code(&info.owner_epoch()),
+                started_at_unix_ms: info.started_at_unix_ms(),
+            },
+        }
+    }
+}
+
+/// Which read face `--source` asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SourceMode {
+    /// Online when the client can reach a Runtime through the state root,
+    /// offline otherwise; the instance card says which and why.
+    #[default]
+    Auto,
+    Offline,
+    Online,
+}
+
+impl SourceMode {
+    pub fn from_wire(text: &str) -> Option<Self> {
+        match text {
+            "auto" => Some(Self::Auto),
+            "offline" => Some(Self::Offline),
+            "online" => Some(Self::Online),
+            _ => None,
+        }
+    }
+}
+
+/// Why a session reads offline. Stated on the instance card, so an `auto`
+/// pick is never silent.
+#[derive(Debug, Clone)]
+pub enum OfflineReason {
+    /// `--source offline`.
+    Requested,
+    /// `auto`: the client found no `runtime-info.json` in the state root.
+    RuntimeInfoAbsent,
+    /// `auto`: the state root names a Runtime, but the client could not
+    /// connect to it. Carries the client's own error code and operation.
+    ConnectFailed { code: &'static str, operation: &'static str },
+}
+
+/// The read face this session uses. Both faces answer the same query with the
+/// same page, cursor and snapshot semantics; only where the answer comes from
+/// differs.
+pub enum ReadSource {
+    Offline { source: EvidenceSource, reason: OfflineReason },
+    Online(OnlineSource),
+}
+
+impl ReadSource {
+    /// `Online` fails loud with the client's own error. `Auto` reads offline
+    /// only when the client could not reach a Runtime, and keeps the reason;
+    /// a Runtime that was reached but could not answer the first page is an
+    /// error in every mode.
+    pub fn open(state_root: impl Into<PathBuf>, mode: SourceMode) -> Result<Self> {
+        let root = state_root.into();
+        let reason = match mode {
+            SourceMode::Offline => OfflineReason::Requested,
+            SourceMode::Auto | SourceMode::Online => match OnlineSource::connect(&root) {
+                Ok(client) => return OnlineSource::pin(root, client).map(Self::Online),
+                Err(error) if mode == SourceMode::Auto => match error.code() {
+                    "runtime_info_unavailable" => OfflineReason::RuntimeInfoAbsent,
+                    code => OfflineReason::ConnectFailed { code, operation: error.operation() },
+                },
+                Err(error) => bail!("在线读面不可用 / online source unavailable: {error}"),
+            },
+        };
+        Ok(Self::Offline { source: EvidenceSource::open(root)?, reason })
+    }
+
+    pub fn state_root(&self) -> &Path {
+        match self {
+            Self::Offline { source, .. } => source.state_root(),
+            Self::Online(source) => source.state_root(),
+        }
+    }
+
+    /// The committed position this whole session reads at.
+    pub fn snapshot_position(&self) -> u64 {
+        match self {
+            Self::Offline { source, .. } => source.snapshot_position(),
+            Self::Online(source) => source.snapshot_position(),
+        }
+    }
+
+    pub fn query(
+        &self,
+        query: &EventQuery,
+        limit: u16,
+        cursor: Option<RuntimeEventQueryCursor>,
+    ) -> Result<RuntimeEventQueryPage> {
+        match self {
+            Self::Offline { source, .. } => source.query(query, limit, cursor),
+            Self::Online(source) => source.query(query, limit, cursor),
+        }
+    }
+
+    pub fn open_report(&self) -> OpenReport {
+        match self {
+            Self::Offline { source, .. } => source.open_report(),
+            Self::Online(source) => source.open_report(),
+        }
+    }
+
+    pub fn offline_reason(&self) -> Option<&OfflineReason> {
+        match self {
+            Self::Offline { reason, .. } => Some(reason),
+            Self::Online(_) => None,
+        }
+    }
+
+    /// A handle a background thread reads material through.
+    pub fn material_reader(&self) -> MaterialReader {
+        match self {
+            Self::Offline { source, .. } => MaterialReader::Offline(source.root.clone()),
+            Self::Online(source) => MaterialReader::Online(source.client.clone()),
+        }
+    }
+}
+
+/// Where a material read goes. Offline it is the forensic read face over the
+/// state root; online it is the Runtime's own typed material read, on the same
+/// connection the pages come from.
+#[derive(Clone)]
+pub enum MaterialReader {
+    Offline(PathBuf),
+    Online(RuntimeClient),
+}
+
+impl MaterialReader {
+    /// See [`read_material`]; the online face assembles the same ranges, each
+    /// verified by the Runtime against the whole committed material.
+    pub fn read(
+        &self,
+        event: LedgerEventPosition,
+        artifact: &ProjectedArtifactReference,
+        snapshot_position: u64,
+        still_wanted: &dyn Fn() -> bool,
+    ) -> Result<Option<MaterialOutcome>> {
+        match self {
+            Self::Offline(root) => {
+                read_material(root, event, artifact, snapshot_position, still_wanted)
+            }
+            Self::Online(client) => assemble(
+                |request| {
+                    client
+                        .read_material(request)
+                        .map_err(|error| anyhow!("Runtime 素材读取失败：{error}"))
+                },
+                event,
+                artifact,
+                snapshot_position,
+                still_wanted,
+            ),
+        }
+    }
+}
+
 /// What one material read produced. `bytes` is present only for a fully
 /// verified assembly; everything else is the read face's own typed outcome.
 pub struct MaterialOutcome {
@@ -127,6 +367,23 @@ pub struct MaterialOutcome {
 /// the whole material, so a superseded read is expensive to let run on.
 pub fn read_material(
     state_root: &Path,
+    event: LedgerEventPosition,
+    artifact: &ProjectedArtifactReference,
+    snapshot_position: u64,
+    still_wanted: &dyn Fn() -> bool,
+) -> Result<Option<MaterialOutcome>> {
+    assemble(
+        |request| read_range(state_root, request),
+        event,
+        artifact,
+        snapshot_position,
+        still_wanted,
+    )
+}
+
+/// The range loop both faces share; `read_range` is the one face-specific step.
+fn assemble(
+    read_range: impl Fn(RuntimeMaterialReadRequest) -> Result<RuntimeMaterialReadResult>,
     event: LedgerEventPosition,
     artifact: &ProjectedArtifactReference,
     snapshot_position: u64,
@@ -162,7 +419,7 @@ pub fn read_material(
             requested_length: remaining.min(MAX_RUNTIME_MATERIAL_CHUNK_BYTES as u64) as u32,
             max_reply_bytes: MAX_RUNTIME_MATERIAL_REPLY_BYTES,
         };
-        let result = read_range(state_root, request)?;
+        let result = read_range(request)?;
         match result.chunk {
             Some(chunk) if result.state == RuntimeMaterialReadState::Verified => {
                 bytes.extend_from_slice(&chunk.bytes)
