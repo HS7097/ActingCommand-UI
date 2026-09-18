@@ -1,5 +1,11 @@
 [workspace]
-members = ["crates/acui-rows", "crates/acui-source", "crates/acui-model", "crates/acui-app"]
+members = [
+    "crates/acui-rows",
+    "crates/acui-source",
+    "crates/acui-model",
+    "crates/acui-app",
+    "crates/acui-setup",
+]
 resolver = "2"
 
 [workspace.package]
@@ -38,3 +44,14 @@ slint = { version = "1.17.1", default-features = false, features = [
     "accessibility",
 ] }
 slint-build = "1.17.1"
+# The setup wizard only. sha2 re-hashes every release file against SHA256SUMS
+# and the BUILD-MANIFEST.json inside each zip; it is the crate the Runtime's
+# own artifact store already hashes with, so the lock gains nothing new.
+sha2 = "0.10"
+# zip reads the three release zips into staging. Deflate is the one method the
+# umbrella's `zip -r -X` writes: no crypto, no bzip2, no zstd, no time. The 0.6
+# line is what the Runtime's artifact store already locks.
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+# getrandom fills the 32-byte secret_fingerprint_salt from the OS RNG; nothing
+# else in the wizard needs randomness.
+getrandom = "0.4"
