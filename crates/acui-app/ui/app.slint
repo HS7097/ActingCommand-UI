@@ -119,6 +119,9 @@ export global Strings {
     in property <string> col-module;
     in property <string> col-event;
     in property <string> col-link;
+    in property <string> launcher-title;
+    in property <string> start;
+    in property <string> request-shutdown;
 }
 
 component TabButton inherits Rectangle {
@@ -200,6 +203,10 @@ export component AppWindow inherits Window {
     in property <image> frame-image;
     in property <bool> frame-ready;
     in property <string> payload-json;
+    // The launcher block: what the last probe said about the Runtime, and the
+    // outcome of the last button press.
+    in property <string> runtime-status-text;
+    in property <string> launcher-line;
 
     // Two-way aliases, so the console can put a box back on the option it means
     // after the option list is rebuilt, without ever losing the box's own state.
@@ -219,6 +226,8 @@ export component AppWindow inherits Window {
     callback load-more();
     callback text-size-changed(int);
     callback language-changed(int);
+    callback start-runtime();
+    callback request-shutdown();
 
     VerticalLayout {
         padding: 8px;
@@ -313,6 +322,39 @@ export component AppWindow inherits Window {
                         }
                     }
                     Caption { text: Strings.restart-note; }
+                }
+                // launcher: Runtime status, the two requests, and one line for
+                // what the last request came back with.
+                HorizontalLayout {
+                    spacing: 14px;
+                    Caption { text: Strings.launcher-title; }
+                    Text {
+                        text: root.runtime-status-text;
+                        font-size: Scale.body-font;
+                        vertical-alignment: center;
+                        color: Palette.foreground;
+                        overflow: elide;
+                        min-width: 40px;
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: Strings.start;
+                        clicked => {
+                            root.start-runtime();
+                        }
+                    }
+                    Button {
+                        text: Strings.request-shutdown;
+                        clicked => {
+                            root.request-shutdown();
+                        }
+                    }
+                }
+                Text {
+                    text: root.launcher-line;
+                    font-size: Scale.grey-font;
+                    color: Palette.foreground.with-alpha(0.7);
+                    overflow: elide;
                 }
             }
         }

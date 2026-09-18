@@ -24,8 +24,9 @@
 **在线**（经 `actingcommand-runtime-client`，客户端唯一的类型化 IPC 路径）：
 
 - `RuntimeClient::connect(RuntimeClientConfig::new(state_root, Ui, Ui))`：`runtime-info.json`
-  由客户端自己读、回环地址由它取、owner epoch 由它在连接时核对。监控台只是客户端：
-  不拉起、不杀、不等 Runtime，不碰 `owner.lock`，不往状态根里写任何东西。
+  由客户端自己读、回环地址由它取、owner epoch 由它在连接时核对。读面只是客户端：
+  不杀、不等 Runtime，不碰 `owner.lock`，不往状态根里写任何东西；拉起与请求关闭归
+  顶栏的启动器（见「启动器」一节），关闭也只经这同一个类型化客户端。
 - 开台第一页不带快照位置去问，Runtime 在页上说出的 `snapshot_ledger_position` 就是这一
   会话固定读的位置——和离线一样，整个会话一个快照。之后每页都是
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`，
@@ -94,12 +95,13 @@ rev = "c30c3c45aae8b06b96feca15c5ec9fbb744a70a7"
 ## 运行
 
 ```
-acui --state-root <state_root> [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]
+acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]
 acui --help
 ```
 
-`--source` 选读面（见上）。`--tab` 指定启动页签（截图与复核用），取值就是视图自己的 wire 名。
-`--lang` 只对**这一次运行**有效，覆盖设置文件里的语言，不写回设置文件。
+`--state-root` 只对这一次运行有效，覆盖设置文件里的 `state_root`；两处都没有就打印用法退出，
+不猜默认值。`--source` 选读面（见上）。`--tab` 指定启动页签（截图与复核用），取值就是视图
+自己的 wire 名。`--lang` 只对**这一次运行**有效，覆盖设置文件里的语言，不写回设置文件。
 
 窗口可缩放：默认 1400×900，最小 1100×700，中栏随窗口伸缩，两侧栏保持定宽。窗口跟随系统
 DPI；程序自己不设缩放。
@@ -131,10 +133,44 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml（没有就用 $HOME/.config/
 ```toml
 lang = "zh"          # zh | en
 text_size = "standard"   # standard | large | extra-large
+state_root = 'D:\ActingCommand\state'                    # 可选，绝对路径
+actingd_config = 'D:\ActingCommand\actingd.toml'         # 可选，绝对路径
+actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对路径
 ```
 
-开台时读一次，下拉框一改就写一次。**这是监控台唯一自己读写的文件**：它不在任何状态根里，
-状态根依旧全归读面。文件不存在、读不出来或取值不认识，都按默认值（中文、标准）来。
+开台时读一次，下拉框一改就写一次；写回时三个路径键原样保留。**这是监控台唯一自己读写的
+文件**：它不在任何状态根里，状态根依旧全归读面。文件不存在、读不出来或取值不认识，都按
+默认值（中文、标准）来。解析器是手写的：一行一个 `key = value`，去掉一对成对的引号，不处理
+转义——Windows 路径写在单引号里（TOML 字面量字符串），不要写 `"D:\\…"`。
+
+## 启动器
+
+顶栏第三行。左边是上一次探测的 Runtime 状态，两个按钮，下面一行是上一次按钮的结果。
+
+- **Runtime 状态**：开台时探测一次，之后每按一次按钮再探测。探测就是一次
+  `RuntimeClient::connect`：连上了写「运行中 · PID · owner epoch」（取自它自己的
+  `runtime-info.json`，经客户端的 owner epoch 核对）；连不上写「未运行」加客户端的错误码与
+  操作名，不猜原因。
+- **启动**：先探测，已在运行就只写「已在运行，未拉起」。否则按 `actingd_exe` 分离拉起
+  `actingcommand-actingd --config <actingd_config>`——命令行就这一条；两个键缺一个或不是
+  绝对路径，都写明是哪个键，什么也不拉。stdout / stderr 都进监控台**自己**目录下的日志：
+  `%LOCALAPPDATA%\ActingCommand\logs\actingd-<unix_ms>.log`（Linux：`$XDG_STATE_HOME` 或
+  `$HOME/.local/state` 下同名路径），目录由监控台建，**永不在状态根里**。Windows 下用
+  `DETACHED_PROCESS` 拉起：守护进程不继承监控台的控制台，收不到它的 Ctrl+C。
+- **就绪判定**：最多 60 次、每次 500 ms。每次先 `try_wait()`：子进程已退出就停下，写退出码与
+  日志路径；没退出就再 `connect` 一次，连上即就绪，写 PID 与 owner epoch；本台若按离线读，
+  追加一句「要在线读请带 `--source online` 重启」——**不会在会话中途悄悄换读面**。60 次都
+  没连上，写「仍未就绪」和最后一次客户端错误码。**不解析守护进程的输出**。
+- **请求关闭**：只走类型化客户端，从不杀进程。新开一条连接，`begin_interaction()` 开一个
+  交互，先用 `record_client_action_receipt` 把这次按钮记成 `client_action`（surface
+  `acui.launcher`、control `request_shutdown`），拿到带 terminal 的回执后再发
+  `request_shutdown()`——动作先落账，再请求。受理了写回执状态、请求编号、动作落账的序号；
+  被拒（owner / governance 等）就把 Runtime 的拒绝码**原样**写出，外加客户端错误码与操作名；
+  **不重试**。之后再探测一次状态——Runtime 按自己的节奏停，这一眼可能还写着运行中。
+- **永不杀**：`Child` 句柄只用来 `try_wait()` 看有没有早退，不 `kill`、不阻塞 `wait`、不挂
+  job object；就绪判定结束就丢掉句柄，守护进程活得比监控台久。
+
+暂停/恢复、解锁 owner、开机自启、安装器、联网下载都不在这一片里。
 
 ## 四层四 crate
 
@@ -150,7 +186,9 @@ text_size = "standard"   # standard | large | extra-large
 - `acui-app`：唯一依赖 slint 的 crate，`.slint` 文件在 `crates/acui-app/ui/`；两张语言表在
   `strings.rs`，设置文件的读写在 `settings.rs`。
 
-`slint` 1.17.x，`default-features = false`；只读，没有任何控制按钮或审批入口；不写测试。
+`slint` 1.17.x，`default-features = false`；账本只读，控制入口只有启动器的两个按钮（启动 /
+请求关闭，见上），没有审批入口；不写测试。启动器在 `crates/acui-app/src/launcher.rs`，探测与
+请求关闭这两个客户端操作在 `acui-source`（`probe_runtime` / `request_shutdown`）。
 
 ## 图标
 

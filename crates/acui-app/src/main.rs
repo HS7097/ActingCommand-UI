@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! ActingCommand 监控台 / ActingCommand Console: a read-only window over one
 //! Runtime state root, opened through the formal ledger read face — offline
-//! over the files, or online through the typed client of the running Runtime.
+//! over the files, or online through the typed client of the running Runtime —
+//! with a launcher block that starts the daemon detached and asks it, through
+//! the same typed client, to shut down.
 
+mod launcher;
 mod settings;
 mod strings;
 
@@ -103,6 +106,8 @@ struct App {
     generation: Arc<AtomicU64>,
     /// One material worker at a time.
     worker: Arc<Mutex<()>>,
+    /// The state root and the two launcher paths, as this run resolved them.
+    launcher: launcher::Launcher,
 }
 
 fn main() -> Result<()> {
@@ -114,8 +119,18 @@ fn main() -> Result<()> {
         println!("{}", labels.usage);
         return Ok(());
     }
-    let Some(state_root) = args.state_root else {
-        bail!("{}", labels.usage);
+    // `--state-root` is this run's; the file's `state_root` stands in for it.
+    // Neither is a silent default: with both missing the usage is the answer.
+    let state_root = match args.state_root {
+        Some(root) => root,
+        None => match stored.state_root.clone() {
+            Some(root) if root.is_absolute() => root,
+            Some(root) => bail!(
+                "acui.toml 的 state_root 不是绝对路径 / state_root in acui.toml is not absolute: {}",
+                root.display()
+            ),
+            None => bail!("{}", labels.usage),
+        },
     };
 
     let source = ReadSource::open(&state_root, args.source)?;
@@ -136,6 +151,11 @@ fn main() -> Result<()> {
         pending: Cell::new(None),
         generation: Arc::new(AtomicU64::new(0)),
         worker: Arc::new(Mutex::new(())),
+        launcher: launcher::Launcher::new(
+            state_root,
+            stored.actingd_config.clone(),
+            stored.actingd_exe.clone(),
+        ),
     });
     reload(&app, false);
 
@@ -145,7 +165,9 @@ fn main() -> Result<()> {
     window.set_text_size_index(stored.text_size.index());
     window.set_language_index(if language == Language::Zh { 0 } else { 1 });
     install_callbacks(&window, &app);
+    launcher::install(&window, &app);
     refresh(&window, &app);
+    launcher::refresh_status(&window, &app);
     window.run()?;
     Ok(())
 }
@@ -182,6 +204,9 @@ fn install_strings(window: &AppWindow, labels: &'static Labels, online: bool) {
     global.set_col_module(labels.columns[3].into());
     global.set_col_event(labels.columns[4].into());
     global.set_col_link(labels.columns[5].into());
+    global.set_launcher_title(labels.launcher_title.into());
+    global.set_start(labels.start.into());
+    global.set_request_shutdown(labels.request_shutdown.into());
 }
 
 /// The committed time span, read as the first and the last event of the snapshot.
