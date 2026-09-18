@@ -133,12 +133,47 @@ pub struct Labels {
     pub filter_id_error: &'static str,
     pub filter_rejected: &'static str,
     pub read_failed: &'static str,
+    /// The launcher block in the top bar: status, two buttons, one line.
+    pub launcher_title: &'static str,
+    pub start: &'static str,
+    pub request_shutdown: &'static str,
+    /// pid, owner epoch.
+    pub runtime_running: &'static str,
+    /// client error code, client operation.
+    pub runtime_not_running: &'static str,
+    pub already_running: &'static str,
+    pub start_busy: &'static str,
+    /// settings key.
+    pub key_not_configured: &'static str,
+    /// settings key, value.
+    pub key_not_absolute: &'static str,
+    /// directory, error.
+    pub log_dir_failed: &'static str,
+    /// executable, error.
+    pub spawn_failed: &'static str,
+    /// error.
+    pub child_status_failed: &'static str,
+    /// pid, attempt, attempts, log path.
+    pub start_waiting: &'static str,
+    /// exit code, log path.
+    pub start_exited: &'static str,
+    /// pid, owner epoch.
+    pub start_ready: &'static str,
+    pub restart_online: &'static str,
+    /// attempts, client error code, client operation.
+    pub start_not_ready: &'static str,
+    /// receipt state, request id, action sequence.
+    pub shutdown_accepted: &'static str,
+    /// runtime refusal code, client error code, client operation.
+    pub shutdown_refused: &'static str,
+    /// client error code, client operation.
+    pub shutdown_failed: &'static str,
 }
 
 pub const ZH: Labels = Labels {
     tongue: Language::Zh,
     window_title: "ActingCommand 监控台",
-    usage: "用法：acui --state-root <状态根> [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]",
+    usage: "用法：acui [--state-root <状态根>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]\n不给 --state-root 时取 acui.toml 的 state_root；两处都没有就不开台。",
     data_source: "数据来源：本机账本（只读）",
     data_source_online: "数据来源：运行中的 Runtime（只读）",
     ledger_dir: "账本目录",
@@ -274,12 +309,32 @@ pub const ZH: Labels = Labels {
     filter_id_error: "编号需填完整的 correlation_ / request_ / run_ / task_ 标识",
     filter_rejected: "过滤条件无效：{}",
     read_failed: "读取失败：{}",
+    launcher_title: "启动器",
+    start: "启动",
+    request_shutdown: "请求关闭",
+    runtime_running: "Runtime 运行中 · PID {} · owner epoch {}",
+    runtime_not_running: "Runtime 未运行 · {}（{}）",
+    already_running: "已在运行，未拉起",
+    start_busy: "上一次启动仍在等待就绪",
+    key_not_configured: "acui.toml 未配置 {}",
+    key_not_absolute: "acui.toml 的 {} 不是绝对路径：{}",
+    log_dir_failed: "无法建立日志目录 {}：{}",
+    spawn_failed: "拉起 {} 失败：{}",
+    child_status_failed: "读取子进程状态失败：{}",
+    start_waiting: "已拉起 PID {} · 等待就绪 {}/{} · 日志 {}",
+    start_exited: "actingd 已退出，退出码 {}，见 {}",
+    start_ready: "Runtime 已就绪 · PID {} · owner epoch {}",
+    restart_online: "本台按离线读；要在线读请带 --source online 重启",
+    start_not_ready: "{} 次尝试后仍未就绪 · 最后错误 {}（{}）",
+    shutdown_accepted: "关闭请求已受理 · 回执 {} · 请求 {} · 动作已记账 #{}",
+    shutdown_refused: "关闭请求被拒：{} · 客户端 {}（{}）",
+    shutdown_failed: "关闭请求失败：{}（{}）",
 };
 
 pub const EN: Labels = Labels {
     tongue: Language::En,
     window_title: "ActingCommand Console",
-    usage: "Usage: acui --state-root <state_root> [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]",
+    usage: "Usage: acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]\nWithout --state-root the state_root key of acui.toml is used; with neither, the console does not open.",
     data_source: "Data Source: Local Ledger (Read-Only)",
     data_source_online: "Data Source: Running Runtime (Read-Only)",
     ledger_dir: "Ledger Directory",
@@ -415,6 +470,26 @@ pub const EN: Labels = Labels {
     filter_id_error: "The id must be a whole correlation_ / request_ / run_ / task_ identifier",
     filter_rejected: "Filter rejected: {}",
     read_failed: "Read failed: {}",
+    launcher_title: "Launcher",
+    start: "Start",
+    request_shutdown: "Request Shutdown",
+    runtime_running: "Runtime Running · PID {} · Owner Epoch {}",
+    runtime_not_running: "Runtime Not Running · {} ({})",
+    already_running: "Already Running, Nothing Started",
+    start_busy: "The Previous Start Is Still Waiting for Readiness",
+    key_not_configured: "{} Not Configured in acui.toml",
+    key_not_absolute: "{} in acui.toml Is Not an Absolute Path: {}",
+    log_dir_failed: "Cannot Create Log Directory {}: {}",
+    spawn_failed: "Starting {} Failed: {}",
+    child_status_failed: "Reading the Child's Status Failed: {}",
+    start_waiting: "Started PID {} · Waiting for Readiness {}/{} · Log {}",
+    start_exited: "actingd Exited with Code {}, See {}",
+    start_ready: "Runtime Ready · PID {} · Owner Epoch {}",
+    restart_online: "This Console Reads Offline; Restart with --source online to Read It",
+    start_not_ready: "Not Ready After {} Attempts · Last Error {} ({})",
+    shutdown_accepted: "Shutdown Accepted · Receipt {} · Request {} · Action Recorded at #{}",
+    shutdown_refused: "Shutdown Refused: {} · Client {} ({})",
+    shutdown_failed: "Shutdown Request Failed: {} ({})",
 };
 
 impl Labels {

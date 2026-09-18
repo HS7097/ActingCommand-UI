@@ -8,14 +8,17 @@
 //! formal page, and `read_material_to` resolves, guards and verifies material.
 //! Online, the same page and material operations are asked of the running
 //! Runtime through `actingcommand_runtime_client`, the one typed IPC path a
-//! client has. The console is a client only: it never starts, stops or waits
-//! on the Runtime, and never writes into the state root.
+//! client has. This crate is a client only: it never starts, kills or waits
+//! on the Runtime, and never writes into the state root. The launcher's two
+//! questions — is a Runtime running here, and will it accept a shutdown
+//! request — are asked through that same typed client, at the end of this file.
 
 use std::path::{Path, PathBuf};
 
 use acui_rows::{
-    code, ArtifactEvictionObservation, EventActor, EventQuery, EventSource, LedgerEventPosition,
-    LedgerView, MAX_RUNTIME_MATERIAL_CHUNK_BYTES, MAX_RUNTIME_MATERIAL_REPLY_BYTES, OpenReport,
+    code, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord, EventActor,
+    EventQuery, EventSource, LedgerEventPosition, LedgerView, MAX_RUNTIME_MATERIAL_CHUNK_BYTES,
+    MAX_RUNTIME_MATERIAL_REPLY_BYTES, OpenReport,
     ProjectedArtifactReference, ProjectionProfile, RuntimeEventQueryCursor, RuntimeEventQueryPage,
     RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit, RuntimeMaterialReadRequest,
     RuntimeMaterialReadResult, RuntimeMaterialReadState, WriterFacts,
@@ -307,6 +310,92 @@ impl ReadSource {
             Self::Online(source) => MaterialReader::Online(source.client.clone()),
         }
     }
+}
+
+/// The Runtime a state root names, as one fresh connect learned it: the pid
+/// and owner epoch from its own `runtime-info.json`, after the client's
+/// owner-epoch check on connect.
+#[derive(Debug, Clone)]
+pub struct RuntimeFacts {
+    pub pid: u32,
+    pub owner_epoch: String,
+}
+
+/// A client operation that did not succeed: the client's own error code and
+/// operation, and, when the Runtime answered with a refusal, that refusal's
+/// code verbatim.
+#[derive(Debug, Clone)]
+pub struct ClientFailure {
+    pub code: &'static str,
+    pub operation: &'static str,
+    pub runtime_code: Option<String>,
+}
+
+impl From<RuntimeClientError> for ClientFailure {
+    fn from(error: RuntimeClientError) -> Self {
+        Self {
+            code: error.code(),
+            operation: error.operation(),
+            runtime_code: error.projection().map(|projection| code(&projection.code)),
+        }
+    }
+}
+
+/// One connect, nothing else: the launcher's "is a Runtime running here"
+/// question, answered by the client's own discovery and owner-epoch check.
+pub fn probe_runtime(state_root: &Path) -> Result<RuntimeFacts, ClientFailure> {
+    let client = OnlineSource::connect(state_root)?;
+    let info = client.runtime_info();
+    Ok(RuntimeFacts { pid: info.pid(), owner_epoch: code(&info.owner_epoch()) })
+}
+
+/// What an accepted shutdown request came back with.
+#[derive(Debug, Clone)]
+pub struct ShutdownAccepted {
+    /// The receipt's state, as the contract spells it.
+    pub receipt_state: String,
+    pub request_id: String,
+    /// The ledger position of the console's own `client_action` record,
+    /// committed before the shutdown request was sent.
+    pub action_sequence: u64,
+}
+
+/// Asks the running Runtime to shut down, through the typed client only:
+/// one fresh connection, one interaction on it, the console's button press
+/// recorded as a client action first (its receipt must carry a terminal
+/// event), then `request_shutdown` to the owner frozen at connect time. A
+/// refusal at either step comes back as a [`ClientFailure`] with the
+/// Runtime's code; nothing here retries, kills or waits.
+pub fn request_shutdown(state_root: &Path) -> Result<ShutdownAccepted, ClientFailure> {
+    let client = OnlineSource::connect(state_root)?;
+    let interaction = client.begin_interaction()?;
+    let action = ClientActionRecord::new(
+        "acui.launcher",
+        "request_shutdown",
+        ClientActionKind::Button,
+        None,
+        None,
+    )
+    .map_err(|_| ClientFailure {
+        code: "client_action_invalid",
+        operation: "record_client_action",
+        runtime_code: None,
+    })?;
+    let recorded = interaction.record_client_action_receipt(action)?;
+    let action_sequence = recorded
+        .terminal()
+        .ok_or(ClientFailure {
+            code: "client_action_terminal_missing",
+            operation: "record_client_action",
+            runtime_code: None,
+        })?
+        .sequence;
+    let receipt = interaction.request_shutdown()?;
+    Ok(ShutdownAccepted {
+        receipt_state: code(&receipt.state()),
+        request_id: code(&receipt.request_id()),
+        action_sequence,
+    })
 }
 
 /// Where a material read goes. Offline it is the forensic read face over the
