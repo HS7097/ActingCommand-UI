@@ -1,143 +1,189 @@
-# ActingCommand 监控台
+**🌐 Language / 语言:** English · [简体中文](./README.zh-CN.md)
 
-这是 ActingCommand 的**人类监控台**，一个只读的原生程序。它在一个 Runtime 状态根上打开
-账本的**正式读面**，把账本自己给出的视图页渲染成三栏界面：实例卡、时间线、详情。
+# ActingCommand Console
 
-它不是 Runtime 的一部分，是 Runtime 的**外部可拆客户端**。
+**⚠️ This program is still iterating rapidly; expect it to be complete within 2–5 weeks.**
 
-## 数据来源：读面，不是文件
+This is ActingCommand's **human console**, a read-only native program. On one Runtime state root it opens
+the ledger's **official read face**, and renders the view pages the ledger itself hands out into a
+three-column interface: instance card, timeline, detail pane.
 
-程序只认一个参数：状态根。**所有文件 IO 都归读面**，监控台自己从不拼接状态根里的路径，
-不打开 `ledger/`、`artifacts/` 或 `runtime-state.sqlite`，也不拉起任何 CLI。
+It is not part of the Runtime; it is the Runtime's **external, detachable client**.
 
-读面有两张，同一套查询、页、游标语义，只是答案从哪来不同：
+## Data source: the read face, not files
 
-**离线**（原路径，一行未改）：
+The program accepts only one argument: the state root. **All file IO belongs to the read face**; the
+console never assembles paths inside the state root itself, never opens `ledger/`, `artifacts/` or
+`runtime-state.sqlite`, and never launches any CLI.
 
-- `GlobalLedger::open_metadata` 打开状态根，由账本自己判定介质（segment / sqlite）、
-  认证快照、给出 `latest_sequence` 与完整性观察。整个会话固定在这一个快照位置上读。
-- `actingcommand_ledger_forensics::query_view_page` 出正式页 `RuntimeEventQueryPage`：
-  事件、每条事件自带的视图归属、读取范围、页游标、运行恢复分组、产物淘汰事实。
-- `actingcommand_ledger_forensics::read_material_to` 读素材：每段由读面解析引用、拿到
-  共享读保护、二次核对引用与保留状态，并在整份 sha256 校验通过后才交出这一段字节。
+There are two read faces, with the same query, page and cursor semantics; they differ only in where the
+answers come from:
 
-**在线**（经 `actingcommand-runtime-client`，客户端唯一的类型化 IPC 路径）：
+**Offline** (the original path, not a line changed):
 
-- `RuntimeClient::connect(RuntimeClientConfig::new(state_root, Ui, Ui))`：`runtime-info.json`
-  由客户端自己读、回环地址由它取、owner epoch 由它在连接时核对。读面只是客户端：
-  不杀、不等 Runtime，不碰 `owner.lock`，不往状态根里写任何东西；拉起与请求关闭归
-  顶栏的启动器（见「启动器」一节），关闭也只经这同一个类型化客户端。
-- 开台第一页不带快照位置去问，Runtime 在页上说出的 `snapshot_ledger_position` 就是这一
-  会话固定读的位置——和离线一样，整个会话一个快照。之后每页都是
-  `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`，
-  同一个 `EventQuery`、同一个页上限、同一个 `next_cursor`。
-- 素材走 `RuntimeClient::read_material`：同样的 `RuntimeMaterialReadRequest`、同样的
-  分段与整份校验，只是校验由 Runtime 做，在同一条连接上。
-- 介质、损坏尾部、写入进程记录是离线读面对文件的观察，Runtime 不在页上说这些；在线时
-  实例卡的「存储格式」写「由 Runtime 判定」，「写入进程」写的是所连的 Runtime 本身
-  （PID、owner epoch、启动时间，均出自它自己的 `runtime-info.json`）。
+- `GlobalLedger::open_metadata` opens the state root; the ledger itself determines the medium
+  (segment / sqlite), authenticates the snapshot, and gives `latest_sequence` and the completeness
+  observation. The whole session reads fixed at this one snapshot position.
+- `actingcommand_ledger_forensics::query_view_page` produces the official page `RuntimeEventQueryPage`:
+  events, the view membership each event carries, the read range, the page cursor, run recovery
+  grouping, and artifact eviction facts.
+- `actingcommand_ledger_forensics::read_material_to` reads material: for each chunk the read face
+  resolves the reference, takes the shared read protection, re-checks the reference and the retention
+  state, and hands over that chunk's bytes only after the whole-file sha256 check passes.
 
-`--source <auto|offline|online>`，默认 `auto`：客户端能连上状态根所指的 Runtime 就在线，
-否则离线；实例卡第一行「读面」写明选了哪张、为什么（`runtime-info.json` 不存在，或连接
-失败的客户端错误码）。`online` 连不上就**带着客户端的错误码直接退出**，不会悄悄改走离线。
-两张读面里，连上了却答不出第一页的 Runtime 在任何模式下都是错误，不回退。
+**Online** (via `actingcommand-runtime-client`, the client's only typed IPC path):
 
-依赖钉在 Runtime **main** 上（`Cargo.toml`）：
+- `RuntimeClient::connect(RuntimeClientConfig::new(state_root, Ui, Ui))`: `runtime-info.json` is read by
+  the client itself, the loopback address is taken by it, and the owner epoch is checked by it at connect
+  time. The read face is only a client: it does not kill or wait for the Runtime, does not touch
+  `owner.lock`, and writes nothing into the state root; launching and requesting shutdown belong to the
+  top bar's launcher (see the "Launcher" section), and shutdown too goes only through this same typed
+  client.
+- The first page at startup asks without a snapshot position; the `snapshot_ledger_position` the Runtime
+  states on that page is the position this session reads at, fixed — as offline, one snapshot for the
+  whole session. Every page after that is
+  `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`,
+  the same `EventQuery`, the same page limit, the same `next_cursor`.
+- Material goes through `RuntimeClient::read_material`: the same `RuntimeMaterialReadRequest`, the same
+  chunking and whole-file verification, only the verification is done by the Runtime, on the same connection.
+- Medium, corrupt tail and writer-process record are the offline read face's observations of files; the
+  Runtime does not state these on the page. Online, the instance card's "storage format" says "determined
+  by the Runtime", and "writer process" states the connected Runtime itself
+  (PID, owner epoch, start time, all out of its own `runtime-info.json`).
+
+`--source <auto|offline|online>`, default `auto`: if the client can connect to the Runtime the state root
+points at, online; otherwise offline. The instance card's first line, "read face", states which one was
+chosen and why (`runtime-info.json` absent, or the client error code of the failed connection). With
+`online`, a failed connection **exits directly carrying the client's error code**; it does not quietly
+switch to offline. Across both read faces, a Runtime that connects but cannot answer the first page is an
+error in any mode, with no fallback.
+
+Dependencies are pinned to the Runtime's **main** (`Cargo.toml`):
 
 ```
 rev = "7f3df214ed613dcae20780bce26e384eee95310a"
 ```
 
-四个 crate（contract / ledger / ledger-forensics / runtime-client）共用这一个 rev。
-`Cargo.lock` 入库，CI 在 windows-latest 与 ubuntu-latest 上跑
-`cargo build --locked --release --workspace`；闭包里含 `rusqlite`（bundled），两边都要 C 编译器。
+The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
+`Cargo.lock` is checked in; CI runs `cargo build --locked --release --workspace` on windows-latest and
+ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compiler.
 
-## 变了什么
+## What changed
 
-- **归类由契约说了算**：六个页签就是契约的六个 `LedgerView`。一行属于哪个页签，看页里
-  那条事件自带的 `views`。页签上的数字**只出现在当前页签上**，是这一视图**已载入的行数**；
-  读面没有给出每个视图的总数，所以别的视图的页签上不摆数字。
-- **过滤是账本查询**：视图、严重度上下界、来源模块、`correlation_`/`request_`/`run_`/`task_`/
-  `instance_` id、时间上界组装成一个 `EventQuery`，在**同一个快照位置**上重新查一次账本；不在
-  本地已有的行上筛选然后自称是账本查询。id 必须是完整的规范 id，否则会说明要填完整标识。
-  「来源模块」的选项**每次载入都按当前页重建**，选中项按**模块名**解析——列表会变，下标
-  不是一个能存住的说法。
-- **实例按端口筛选（只在离线读面）**：ADB 端口就是一个模拟器实例的身份。开台时按同一快照位置
-  经 `actingcommand_ledger_forensics::instance_bindings` 把 `runtime.instance_bound` 事实读**一次**，
-  得到每个端口下**曾经绑定过的全部** `instance_id`（按首次绑定顺序）。「端口」下拉框选一个端口，
-  就把这一整组编号作为 `EventQuery.instance_ids` 在同一快照上重新查一次账本——整组一起查，
-  从不拆开、从不只查一部分；选「全部实例」清掉；下拉框的项按端口升序，写端口号与最新一次绑定
-  的实例编号缩写，同一端口不止一个编号时追加 ` +n`。端口与 `instance_` 编号只能选一：两个都给了，
-  过滤错误行直接说明，不做默认优先。账本里没有绑定事实时框里只有「无绑定记录」一项且不可用；
-  有绑定事实但没有一条给出端口（串口配置等）时框里只有「全部实例」且不可用——两种情形编号框都
-  仍可直接填 `instance_` 编号；读绑定失败时框里只有读面的错误码，实例卡也写这个码；
-  在线读面下框不可用，写「在线态不支持」。选中端口时实例卡多写实例别名、端口、来源
-  （`physical_device` / `fixture_simulation` 原样在下层）、绑定编号数与最新绑定序号；级别计数与
-  本页条数仍来自重查后的页。行多一列「端口」：事件没有实例关联的写「宿主」；有关联且该编号最新
-  一次绑定给了 HOST:PORT 的写端口号；有关联但端口表里没有的（夹具、串口配置、未见绑定）写缩写
-  的实例编号——不编造端口。
-- **翻页是页游标**：「继续读」拿页给的 `next_cursor` 取下一页并追加。顶栏常驻
-  「读到第 N 条」，源不完整时追加「源不完整」。
-- **恢复分组来自账本**：页里带的 `run_recovery` 在各自运行的第一行前插一条分组行，显示
-  账本给的状态（已恢复 / 未解决 / 未知）、依据（第 N 条失败，第 M 条已恢复）与缺口；被账本
-  判为已恢复的失败行折叠在分组行下，带「已恢复」标记。这是读时分组，不是改写失败事件。
-  跨页时按**运行编号合并**：后一页只往里加证据，先前页给出的位置一律保留，已经折叠起来的
-  「已恢复」行不会被后一页重新展开。
-- **时间上界**：滑块的起始位置就是它代表的状态——最右端即「全部」，第一次拖动是收窄。
-- **行类型不再镜像**：`acui-rows` 直接再导出契约类型，只额外提供本地时间、id 缩写、
-  wire 码与显示名字典这些显示用函数。
+- **The contract decides the classification**: the six tabs are the contract's six `LedgerView`s. Which
+  tab a row belongs to is read from the `views` that event on the page carries. The number on a tab
+  **appears only on the current tab** and is that view's **number of loaded rows**; the read face does not
+  give a total per view, so no numbers are placed on the other views' tabs.
+- **Filtering is a ledger query**: view, severity lower and upper bounds, source module,
+  `correlation_`/`request_`/`run_`/`task_`/`instance_` id and time upper bound are assembled into one
+  `EventQuery`, and the ledger is queried again at the **same snapshot position**; it does not filter the
+  rows already held locally and then call itself a ledger query. An id must be a complete canonical id,
+  otherwise it states that a complete identifier is required. The "source module" options are **rebuilt
+  from the current page on every load**, and the selected item is resolved by **module name** — the list
+  changes, and an index is not a statement that keeps.
+- **Instance filtering by port (offline read face only)**: an ADB port is the identity of an emulator
+  instance. At startup, at the same snapshot position, the `runtime.instance_bound` facts are read
+  **once** via `actingcommand_ledger_forensics::instance_bindings`, yielding **every** `instance_id`
+  **ever bound** under each port (in first-binding order). Selecting a port in the "port" dropdown queries
+  the ledger again at the same snapshot with that whole group of ids as `EventQuery.instance_ids` — the
+  whole group together, never split, never only part of it; "all instances" clears it. The dropdown items
+  are in ascending port order and state the port number and the abbreviated instance id of the most recent
+  binding, with ` +n` appended when one port has more than one id. Port and `instance_` id are mutually
+  exclusive: if both are given, the filter error line states it outright, with no default precedence.
+  When the ledger holds no binding facts, the box has only the item "no binding records" and is disabled;
+  when there are binding facts but not one of them gives a port (serial-port configurations and the like),
+  the box has only "all instances" and is disabled — in both cases the id box can still take an
+  `instance_` id directly. When reading the bindings fails, the box holds only the read face's error code,
+  and the instance card states that code too; under the online read face the box is disabled and says
+  "not supported online". With a port selected, the instance card additionally states the instance alias,
+  the port, the source (`physical_device` / `fixture_simulation` verbatim on the lower layer), the number
+  of bound ids and the sequence number of the most recent binding; the severity counts and this page's row
+  count still come from the re-queried page. Rows gain a "port" column: an event with no instance
+  association says "host"; one with an association whose id's most recent binding gave HOST:PORT says the
+  port number; one with an association but absent from the port table (fixtures, serial-port
+  configurations, no binding seen) says the abbreviated instance id — no port is invented.
+- **Paging is the page cursor**: "continue reading" takes the `next_cursor` the page gave, fetches the
+  next page and appends it. The top bar permanently shows "read up to row N", with "source incomplete"
+  appended when the source is incomplete.
+- **Recovery grouping comes from the ledger**: the `run_recovery` carried on the page inserts a group row
+  before the first row of each run, showing the state the ledger gives (recovered / unresolved / unknown),
+  the grounds (row N failed, row M recovered) and the gaps; failure rows the ledger judges recovered are
+  collapsed under the group row with a "recovered" mark. This is read-time grouping, not a rewrite of
+  failure events. Across pages it **merges by run id**: a later page only adds evidence into it, positions
+  given by earlier pages are all kept, and "recovered" rows already collapsed are not re-expanded by a
+  later page.
+- **Time upper bound**: the slider's starting position is the state it represents — the far right is
+  "all", and the first drag narrows.
+- **Row types are no longer mirrored**: `acui-rows` re-exports the contract types directly, and only adds
+  display functions such as local time, id abbreviation, wire codes and the display-name dictionary.
 
-## 帧素材：读了，但只读已校验的
+## Frame material: read, but only what is verified
 
-裁定已改：监控台**会**载入帧字节，但只走素材读面，且只在下面这条规则内：
+The ruling has changed: the console **does** load frame bytes, but only through the material read face,
+and only within this rule:
 
-- 只读**选中事件自己**带的 `capture.frame` 产物，按需读，一次一份。
-- 按 `MAX_RUNTIME_MATERIAL_CHUNK_BYTES`（64 KiB）分段请求，每段由读面做整份长度与
-  sha256 校验；任何一段不是 `verified` 就中止，已拿到的字节全部丢弃。
-- 整份上限是契约的段上限 × 128 段（8 MiB）；超出的产物直接拒读并说明。
-- 产物已被淘汰时，只显示淘汰事实（处置、意图/结果位置、观察至哪个位置），不去碰文件。
-- 读取失败时显示读面给的状态与安全错误码。
-- 读取在后台线程里做，每次请求带代号；慢读回来时若选中项已变就丢弃。**任何时候都不会
-  显示过期的或未校验的图。**
-- 读取由一条后台工作线程做，**同时只有一条**：请求被顶掉的那条在下一段之前就停手，不再
-  发下一段——每一段都要把整份素材重新哈希一遍，让一份没人等的读继续跑是最贵的错。
-- 解码只用 `image`（只开 `png` feature，版本钉在工作区的 `[workspace.dependencies]`）。程序
-  解码的图只有两类：这样读回来的帧，和自带的应用图标。
+- Only the `capture.frame` artifact **the selected event itself** carries is read, on demand, one at a time.
+- Requests are chunked by `MAX_RUNTIME_MATERIAL_CHUNK_BYTES` (64 KiB), and for each chunk the read face
+  verifies the whole file's length and sha256; if any chunk is not `verified` it aborts, and all bytes
+  already obtained are discarded.
+- The whole-file limit is the contract's chunk limit × 128 chunks (8 MiB); an artifact beyond that is
+  refused outright, with a statement.
+- When an artifact has been evicted, only the eviction facts are shown (disposition, intent/outcome
+  position, the position observed up to); the file is not touched.
+- On a read failure, the state and safe error code the read face gives are shown.
+- Reading is done on a background thread, and every request carries a token; if a slow read returns after
+  the selection has changed, it is discarded. **A stale or unverified image is never displayed, at any
+  time.**
+- Reading is done by one background worker thread, **only one at a time**: the one whose request has been
+  displaced stops before the next chunk and sends no further chunk — every chunk re-hashes the whole
+  material, so letting a read nobody is waiting for keep running is the most expensive mistake.
+- Decoding uses only `image` (with only the `png` feature enabled, version pinned in the workspace's
+  `[workspace.dependencies]`). The program decodes only two kinds of image: frames read back this way,
+  and its own application icon.
 
-几何叠加与帧共用同一个坐标系：payload 给了画面尺寸就用它，没给就用解码出的像素尺寸。
+The geometry overlay shares one coordinate system with the frame: if the payload gives the screen size it
+is used, otherwise the decoded pixel size is used.
 
-## 运行
+## Running
 
 ```
 acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]
 acui --help
 ```
 
-`--state-root` 只对这一次运行有效，覆盖设置文件里的 `state_root`；两处都没有就打印用法退出，
-不猜默认值。`--source` 选读面（见上）。`--tab` 指定启动页签（截图与复核用），取值就是视图
-自己的 wire 名。`--lang` 只对**这一次运行**有效，覆盖设置文件里的语言，不写回设置文件。
+`--state-root` applies to this run only and overrides `state_root` in the settings file; if neither is
+present it prints the usage and exits, guessing no default. `--source` selects the read face (see above).
+`--tab` specifies the startup tab (for screenshots and review), and its values are the views' own wire
+names. `--lang` applies to **this run only**, overrides the language in the settings file, and is not
+written back to the settings file.
 
-窗口可缩放：默认 1400×900，最小 1100×700，中栏随窗口伸缩，两侧栏保持定宽。窗口跟随系统
-DPI；程序自己不设缩放。
+The window is resizable: 1400×900 by default, 1100×700 minimum; the middle column stretches with the
+window and the two side columns keep a fixed width. The window follows the system DPI; the program sets no
+scaling of its own.
 
-## 界面语言与字号
+## Interface language and text size
 
-顶栏右侧两个下拉框，选完就写进设置文件：
+Two dropdowns at the right of the top bar; a choice is written into the settings file as soon as it is
+made:
 
-- **字号**：标准 / 大 / 特大 = 1.0 / 1.25 / 1.5。**当场生效**。界面里所有字号与行高都是一个
-  给正常 DPI 下的人看的基准尺寸（列表行 14px、详情 13px、小标题 16px、行高 26px）乘这一个
-  系数，`app.slint` 里只有 `Scale.factor` 这一个旋钮。
-- **语言**：中文 / English。**重启后生效**，框旁边就写着这句话。两张语言表在
-  `crates/acui-app/src/strings.rs`（`ZH` 与 `EN`），开台时按选定的那张填一次 `Strings` 全局，
-  之后不再重排——没有 gettext，也没有运行时换词。
+- **Text size**: standard / large / extra-large = 1.0 / 1.25 / 1.5. **Takes effect on the spot**. Every
+  font size and line height in the interface is one base size meant for a person at normal DPI (list row
+  14px, detail pane 13px, subheading 16px, line height 26px) multiplied by this one factor; `app.slint`
+  has only this one knob, `Scale.factor`.
+- **Language**: 中文 / English. **Takes effect after a restart**, and that sentence is written right next
+  to the box. The two language tables are in `crates/acui-app/src/strings.rs` (`ZH` and `EN`); at startup
+  the selected one fills the `Strings` global once, and there is no re-layout afterwards — there is no
+  gettext, and no swapping of words at runtime.
 
-两层标签：上层是给人看的名字，下层灰色的是程序里的原样写法——原始 `event_type`、模块名、
-各种 id、`payload_schema`、sha256 一律不翻译。字典在 `crates/acui-rows/src/display.rs`，覆盖
-契约里全部 115 个 `event_type` 与 19 个 `origin.module`；**表里没有的一律照原样显示，不猜**。
+Two-layer labels: the upper layer is the name for a person to read, and the grey lower layer is the
+verbatim form used in the program — the raw `event_type`, module names, ids of every kind,
+`payload_schema` and sha256 are never translated. The dictionary is in `crates/acui-rows/src/display.rs`
+and covers all 115 `event_type`s and 19 `origin.module`s in the contract; **anything not in the table is
+displayed verbatim, not guessed**.
 
-### 设置文件
+### Settings file
 
-语言与字号存在按用户区分的配置目录下：
+Language and text size are stored under the per-user configuration directory:
 
 ```
 Windows:  %APPDATA%\ActingCommand\acui.toml
@@ -152,143 +198,189 @@ actingd_config = 'D:\ActingCommand\actingd.toml'         # 可选，绝对路径
 actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对路径
 ```
 
-开台时读一次，下拉框一改就写一次；写回时三个路径键原样保留。**这是监控台唯一自己读写的
-文件**：它不在任何状态根里，状态根依旧全归读面。文件不存在、读不出来或取值不认识，都按
-默认值（中文、标准）来。解析器是手写的：一行一个 `key = value`，去掉一对成对的引号，不处理
-转义——Windows 路径写在单引号里（TOML 字面量字符串），不要写 `"D:\\…"`。
+It is read once at startup and written once on every dropdown change; on write-back the three path keys
+are kept verbatim. **This is the only file the console itself reads and writes**: it is not inside any
+state root, and the state root still belongs entirely to the read face. If the file is absent, unreadable,
+or holds an unrecognized value, the defaults (Chinese, standard) are used. The parser is hand-written: one
+`key = value` per line, one matching pair of quotes stripped, no escape handling — write Windows paths in
+single quotes (TOML literal strings), not as `"D:\\…"`.
 
-## 启动器
+## Launcher
 
-顶栏第三行。左边是上一次探测的 Runtime 状态，两个按钮，下面一行是上一次按钮的结果。
+The third line of the top bar. On the left is the Runtime state from the last probe, then two buttons, and
+the line below it is the result of the last button press.
 
-- **Runtime 状态**：开台时探测一次，之后每按一次按钮再探测。探测就是一次
-  `RuntimeClient::connect`：连上了写「运行中 · PID · owner epoch」（取自它自己的
-  `runtime-info.json`，经客户端的 owner epoch 核对）；连不上写「未运行」加客户端的错误码与
-  操作名，不猜原因。
-- **启动**：先探测，已在运行就只写「已在运行，未拉起」。否则按 `actingd_exe` 分离拉起
-  `actingcommand-actingd --config <actingd_config>`——命令行就这一条；两个键缺一个或不是
-  绝对路径，都写明是哪个键，什么也不拉。stdout / stderr 都进监控台**自己**目录下的日志：
-  `%LOCALAPPDATA%\ActingCommand\logs\actingd-<unix_ms>.log`（Linux：`$XDG_STATE_HOME` 或
-  `$HOME/.local/state` 下同名路径），目录由监控台建，**永不在状态根里**。Windows 下用
-  `DETACHED_PROCESS` 拉起：守护进程不继承监控台的控制台，收不到它的 Ctrl+C。
-- **就绪判定**：最多 60 次、每次 500 ms。每次先 `try_wait()`：子进程已退出就停下，写退出码与
-  日志路径；没退出就再 `connect` 一次，连上即就绪，写 PID 与 owner epoch；本台若按离线读，
-  追加一句「要在线读请带 `--source online` 重启」——**不会在会话中途悄悄换读面**。60 次都
-  没连上，写「仍未就绪」和最后一次客户端错误码。**不解析守护进程的输出**。
-- **请求关闭**：只走类型化客户端，从不杀进程。新开一条连接，`begin_interaction()` 开一个
-  交互，先用 `record_client_action_receipt` 把这次按钮记成 `client_action`（surface
-  `acui.launcher`、control `request_shutdown`），拿到带 terminal 的回执后再发
-  `request_shutdown()`——动作先落账，再请求。受理了写回执状态、请求编号、动作落账的序号；
-  被拒（owner / governance 等）就把 Runtime 的拒绝码**原样**写出，外加客户端错误码与操作名；
-  **不重试**。之后再探测一次状态——Runtime 按自己的节奏停，这一眼可能还写着运行中。
-- **永不杀**：`Child` 句柄只用来 `try_wait()` 看有没有早退，不 `kill`、不阻塞 `wait`、不挂
-  job object；就绪判定结束就丢掉句柄，守护进程活得比监控台久。
+- **Runtime state**: probed once at startup, and probed again after every button press. A probe is one
+  `RuntimeClient::connect`: on a connection it says "running · PID · owner epoch" (taken from its own
+  `runtime-info.json`, checked against the client's owner epoch); on no connection it says "not running"
+  plus the client's error code and operation name, guessing no cause.
+- **Start**: probe first; if it is already running it only says "already running, not launched".
+  Otherwise it launches `actingcommand-actingd --config <actingd_config>` detached, from `actingd_exe` —
+  that is the whole command line. If either of the two keys is missing or is not an absolute path, it
+  states which key it is and launches nothing. stdout / stderr both go into a log under the console's
+  **own** directory: `%LOCALAPPDATA%\ActingCommand\logs\actingd-<unix_ms>.log` (Linux: the same path under
+  `$XDG_STATE_HOME` or `$HOME/.local/state`); the directory is created by the console and is **never
+  inside the state root**. On Windows it is launched with `DETACHED_PROCESS`: the daemon does not inherit
+  the console program's console, and does not receive its Ctrl+C.
+- **Readiness decision**: at most 60 attempts, 500 ms each. Each attempt does `try_wait()` first: if the
+  child process has exited it stops and states the exit code and the log path; if it has not exited it
+  does one more `connect`, and a connection means ready, stating the PID and owner epoch. If this console
+  is reading offline, it appends the sentence "to read online, restart with `--source online`" — it
+  **never quietly switches read face mid-session**. If all 60 attempts fail to connect, it says "still not
+  ready" and the last client error code. It **does not parse the daemon's output**.
+- **Request shutdown**: only through the typed client, never killing a process. It opens a new connection,
+  opens an interaction with `begin_interaction()`, first records this button press as a `client_action`
+  with `record_client_action_receipt` (surface `acui.launcher`, control `request_shutdown`), and only
+  after obtaining a receipt bearing terminal does it send `request_shutdown()` — the action lands in the
+  ledger first, then the request. If accepted, it states the receipt state, the request id and the
+  sequence number at which the action landed in the ledger; if refused (owner / governance and the like)
+  it states the Runtime's refusal code **verbatim**, plus the client error code and operation name; it
+  **does not retry**. Afterwards it probes the state once more — the Runtime stops at its own pace, so
+  this glance may still say running.
+- **Never kill**: the `Child` handle is used only for `try_wait()`, to see whether it exited early — no
+  `kill`, no blocking `wait`, no job object attached; the handle is dropped once the readiness decision
+  ends, and the daemon outlives the console.
 
-暂停/恢复、解锁 owner、开机自启、安装器、联网下载都不在这一片里。
+Pause/resume, unlocking the owner, start-at-boot, the installer and network downloads are all outside this
+slice.
 
-## 安装引导程序 acsetup
+## Setup wizard acsetup
 
-`crates/acui-setup` 是一个独立的二进制 `acsetup.exe`（Slint 窗口，与监控台同一套样式与图标），把
-伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases) 里的发布件装成一份**按用户**的安装。
-它随 UI 仓的 Windows 构建产物一起发布（`acui-windows-<sha>.zip` 里多一个 `acsetup.exe`）。
-**v1 离线**：程序里没有任何联网代码，发布件由人先下载到一个文件夹。一个窗口，上一步 / 下一步，六步：
+`crates/acui-setup` is a standalone binary `acsetup.exe` (a Slint window, the same styling and icon as the
+console) that installs the release files from the umbrella repository's
+[Releases](https://github.com/HS7097/ActingCommand/releases) into a **per-user** installation. It ships
+together with the UI repository's Windows build artifact (`acui-windows-<sha>.zip` gains one more file,
+`acsetup.exe`). **v1 is offline**: there is no networking code in the program at all, and a person
+downloads the release files into a folder first. One window, back / next, six steps:
 
-0. **准备**：安装根（可改，默认 `%LOCALAPPDATA%\Programs\ActingCommand`，不需要管理员）、该卷的
-   可用空间、此处是否已有安装（看 `runtime\BUILD-MANIFEST.json`；已有就停在这一步——v1 没有升级
-   流程，换一个根）、发布件所在文件夹（默认 `%USERPROFILE%\Downloads`，可改；v1 没有原生目录对话框，
-   路径直接填）。
-1. **校验**：要求文件夹里有 `SHA256SUMS`、`MEMBERS.json`、`actingcommand-runtime-<sha>.zip`、
-   `actingcommand-tools-<sha>.zip`、`acui-windows-<sha>.zip`（`<sha>` 取 `MEMBERS.json` 的
-   `runtime_sha` / `ui_sha`，三个 zip 必须在 `SHA256SUMS` 里）。逐条核对 `SHA256SUMS`；解压到安装根
-   下的临时目录 `.staging-<unix_ms>`；再按每个 zip 自带的 `BUILD-MANIFEST.json` 核对来源仓、提交号
-   （等于 MEMBERS 的 sha）、Runtime 的 `runtime_payload_layout`（`distribution-v1`），以及 `files[]`
-   每一项的大小与 sha256；zip 里多出清单没列的文件也算不一致。任何不一致都停下，措辞是
-   「内容与创建时不一致」——这是完整性陈述，不是授权口吻。校验期间不运行 zip 里的任何东西。
-2. **铺开**：`runtime\`（Runtime 全部载荷 + 清单，`actingd.config.example.json` 逐字节原样）、
-   `ui\`（监控台载荷 + 清单）、`tools\`（**只有** `actinglab.exe`、`actingledger.exe`、
-   `ac_fastdeploy_ppocr.dll`；tools 包里另外两个 exe 不装、不显示）。之后删除临时目录。
-3. **配置**：状态根默认 `<安装根>\state`（必须不存在或为空目录，**已有内容的状态根一律不接管**）；
-   生成 `secret_fingerprint_salt` = 系统随机源 32 字节的十六进制（`getrandom`；**不显示、不写日志**）；
-   写 `<安装根>\actingd.config.json`，字段只有 `schema_version`、`state_root`、`bind_host`
-   （127.0.0.1）、`bind_port`（0）、`secret_fingerprint_salt`、`instances`（空）——Runtime 的解析器
-   `deny_unknown_fields`，多一个字段都不写。再写监控台设置 `%APPDATA%\ActingCommand\acui.toml` 的
-   `state_root`、`actingd_config`、`actingd_exe`（同「设置文件」一节的格式，单引号字面量；已有的
-   `lang` / `text_size` 原样保留）。写法与 `crates/acui-app/src/settings.rs` 一致，但 `acui-setup`
-   不依赖 `acui-app`，是一份小的重复写入器。**实例（模拟器 / 设备）不在引导里配置**，`instances`
-   留空，之后在监控台里添加。
-4. **开机自启**（可选，默认不勾）：勾了才写按用户的启动文件夹里的
-   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd`，内容是
-   `start "" "<安装根>\runtime\actingcommand-actingd.exe" --config "<安装根>\actingd.config.json"`；
-   再勾「同时拉起监控台」才多一行 `start "" "<安装根>\ui\acui.exe"`。批处理里不出现 acsetup。
-   不勾就什么也不写；启动文件夹里已有的同名文件不动，只在完成页说一句。
-5. **完成**：「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe`（从不直接拉 actingd，
-   Runtime 由监控台的启动器拉）并关闭引导；「完成」只关闭。
+0. **Prepare**: the install root (changeable, default `%LOCALAPPDATA%\Programs\ActingCommand`, no
+   administrator needed), the free space on that volume, whether an installation is already here (looking
+   at `runtime\BUILD-MANIFEST.json`; if there is one it stops at this step — v1 has no upgrade flow, so
+   pick another root), and the folder holding the release files (default `%USERPROFILE%\Downloads`,
+   changeable; v1 has no native directory dialog, so the path is typed in directly).
+1. **Verify**: the folder is required to hold `SHA256SUMS`, `MEMBERS.json`,
+   `actingcommand-runtime-<sha>.zip`, `actingcommand-tools-<sha>.zip` and `acui-windows-<sha>.zip`
+   (`<sha>` taken from `MEMBERS.json`'s `runtime_sha` / `ui_sha`; the three zips must appear in
+   `SHA256SUMS`). `SHA256SUMS` is checked entry by entry; the archives are extracted into the temporary
+   directory `.staging-<unix_ms>` under the install root; then, against the `BUILD-MANIFEST.json` each zip
+   carries, the source repository, the commit id (equal to the MEMBERS sha), the Runtime's
+   `runtime_payload_layout` (`distribution-v1`) and the size and sha256 of every entry in `files[]` are
+   checked; a file in the zip that the manifest does not list also counts as a mismatch. Any mismatch
+   stops it, worded as "the content differs from what it was at creation" — this is an integrity
+   statement, not an authorization tone. Nothing inside the zips is run during verification.
+2. **Lay out**: `runtime\` (the Runtime's entire payload + manifest, with `actingd.config.example.json`
+   byte-for-byte verbatim), `ui\` (the console payload + manifest), `tools\` (**only** `actinglab.exe`,
+   `actingledger.exe` and `ac_fastdeploy_ppocr.dll`; the other two exes in the tools pack are neither
+   installed nor shown). The temporary directory is deleted afterwards.
+3. **Configure**: the state root defaults to `<install root>\state` (it must not exist or must be an empty
+   directory; **a state root that already holds content is never taken over**); `secret_fingerprint_salt`
+   is generated as the hex of 32 bytes from the system random source (`getrandom`; **not displayed, not
+   logged**); `<install root>\actingd.config.json` is written, with only the fields `schema_version`,
+   `state_root`, `bind_host` (127.0.0.1), `bind_port` (0), `secret_fingerprint_salt` and `instances`
+   (empty) — the Runtime's parser is `deny_unknown_fields`, so not one extra field is written. Then the
+   console settings `%APPDATA%\ActingCommand\acui.toml` are written with `state_root`, `actingd_config`
+   and `actingd_exe` (the format of the "Settings file" section, single-quoted literals; existing `lang` /
+   `text_size` kept verbatim). The way it writes matches `crates/acui-app/src/settings.rs`, but
+   `acui-setup` does not depend on `acui-app` and is a small duplicate writer. **Instances (emulators /
+   devices) are not configured in the wizard**; `instances` is left empty and they are added in the
+   console afterwards.
+4. **Start at boot** (optional, unchecked by default): only when checked does it write
+   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd` in the per-user startup
+   folder, whose content is
+   `start "" "<install root>\runtime\actingcommand-actingd.exe" --config "<install root>\actingd.config.json"`;
+   only when "also launch the console" is checked as well does it add one more line,
+   `start "" "<install root>\ui\acui.exe"`. acsetup does not appear in the batch file. Unchecked, it
+   writes nothing; a file of the same name already in the startup folder is left alone, and merely
+   mentioned in one sentence on the finish page.
+5. **Finish**: "启动监控台 / Open console" launches `<install root>\ui\acui.exe` detached (it never
+   launches actingd directly; the Runtime is launched by the console's launcher) and closes the wizard;
+   "finish" only closes.
 
-**安装日志**：从第 1 步起每一步都往 `<安装根>\acsetup-<unix_ms>.log` 追加人话行；失败时最后一行写
-原因，窗口上显示日志路径。除安装载荷、配置、设置与（勾选时的）自启批处理之外，引导写的文件只有这一个。
+**Install log**: from step 1 onward every step appends a plain-language line to
+`<install root>\acsetup-<unix_ms>.log`; on failure the last line states the reason, and the window shows
+the log path. Apart from the installed payload, the configuration, the settings and (when checked) the
+start-at-boot batch file, this is the only file the wizard writes.
 
-**永远不做的事**：不装服务、不建计划任务、不改 PATH、不写注册表；不改配置模板；不碰已有内容的状态根；
-不配置实例；不联网；不做升级、不装资源包。Linux 上 crate 照常编译（CI 两条腿都跑 `--workspace`），
-运行即以 `acsetup v1 is Windows-only` 退出。
+**Things it never does**: it does not install a service, does not create a scheduled task, does not change
+PATH, does not write the registry; does not modify the configuration template; does not touch a state root
+that already holds content; does not configure instances; does not go on the network; does not upgrade and
+does not install resource packs. On Linux the crate compiles as usual (CI runs `--workspace` on both
+legs), and running it exits immediately with `acsetup v1 is Windows-only`.
 
-依赖只多三个，都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`
-（`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（salt）。
+Only three dependencies are added, each with its purpose noted in `[workspace.dependencies]`: `sha2`
+(verification), `zip` (`default-features = false`, only `deflate` enabled, the same version line the
+Runtime locks) and `getrandom` (the salt).
 
-## 四层四 crate
+## Four layers, four crates
 
-同一个 Cargo workspace，依赖方向 app → model → rows ← source：
+One Cargo workspace, dependency direction app → model → rows ← source:
 
-- `acui-rows`：唯一为视图模型命名契约类型的地方；再导出契约类型，外加显示用函数、显示名
-  字典，与两个由 `acui-source` 填、`acui-model` 读的平铺结构。
-- `acui-source`：读面，唯一碰状态根的地方。离线 `EvidenceSource::open` / `query` /
-  `open_report` / `read_material` 原样保留；`ReadSource::open(root, mode)` 按 `--source`
-  在它和在线的 `OnlineSource` 之间选一张，`material_reader()` 交给后台线程读素材。
-- `acui-model`：纯 Rust 视图模型（页签、过滤、翻页、恢复折叠、选中项），不依赖 slint，**也不
-  出人话**——它只给结构化事实，措辞一律由 `acui-app` 按语言表挑。
-- `acui-app`：唯一依赖 slint 的 crate，`.slint` 文件在 `crates/acui-app/ui/`；两张语言表在
-  `strings.rs`，设置文件的读写在 `settings.rs`。
+- `acui-rows`: the only place that names contract types for the view model; it re-exports the contract
+  types, and adds display functions, the display-name dictionary, and two flattened structures filled by
+  `acui-source` and read by `acui-model`.
+- `acui-source`: the read face, the only place that touches the state root. The offline
+  `EvidenceSource::open` / `query` / `open_report` / `read_material` are kept verbatim;
+  `ReadSource::open(root, mode)` picks one of it and the online `OnlineSource` according to `--source`,
+  and `material_reader()` hands material reading to the background thread.
+- `acui-model`: a pure Rust view model (tabs, filtering, paging, recovery collapsing, selection), with no
+  dependency on slint and **no plain language either** — it gives structured facts only, and all wording
+  is chosen by `acui-app` from the language tables.
+- `acui-app`: the only crate that depends on slint; the `.slint` files are in `crates/acui-app/ui/`, the
+  two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`.
 
-`slint` 1.17.x，`default-features = false`；账本只读，控制入口只有启动器的两个按钮（启动 /
-请求关闭，见上），没有审批入口；不写测试。启动器在 `crates/acui-app/src/launcher.rs`，探测与
-请求关闭这两个客户端操作在 `acui-source`（`probe_runtime` / `request_shutdown`）。
+`slint` 1.17.x, `default-features = false`; the ledger is read-only, the only control entry points are the
+launcher's two buttons (start / request shutdown, see above), and there is no approval entry point; no
+tests are written. The launcher is in `crates/acui-app/src/launcher.rs`, and the two client operations,
+probe and request shutdown, are in `acui-source` (`probe_runtime` / `request_shutdown`).
 
-第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、sha2、
-zip、getrandom，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
+A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
+depending only on slint, serde, sha2, zip and getrandom, and on none of the layers above; see the previous
+section, "Setup wizard acsetup".
 
-## 图标
+## Icon
 
-应用图标是 Alice 裁定的黑色单人「指挥官」标记，素材在 `crates/acui-app/assets/`：
-`acui-256.png`（256×256 透明 PNG）与 `acui.ico`（16..256 多尺寸）。
+The application icon is the black single-figure "commander" mark Alice ruled on; the assets are in
+`crates/acui-app/assets/`: `acui-256.png` (256×256 transparent PNG) and `acui.ico` (multi-size, 16..256).
 
-- **窗口与任务栏图标**：`app.slint` 的 `Window.icon: @image-url("../assets/acui-256.png")`。
-- **可执行文件图标**：`build.rs` 里 `#[cfg(windows)]` 调 `winresource` 把 `acui.ico` 编进
-  exe 资源段；这条依赖挂在 `[target.'cfg(windows)'.build-dependencies]` 下，Linux 上不编译。
-- **acsetup**：同一套素材，不复制：`crates/acui-setup/build.rs` 与 `ui/setup.slint` 用相对路径指向
-  `crates/acui-app/assets/` 里的这两个文件。
+- **Window and taskbar icon**: `Window.icon: @image-url("../assets/acui-256.png")` in `app.slint`.
+- **Executable icon**: in `build.rs`, `#[cfg(windows)]` calls `winresource` to compile `acui.ico` into the
+  exe's resource section; this dependency hangs under `[target.'cfg(windows)'.build-dependencies]` and is
+  not compiled on Linux.
+- **acsetup**: the same assets, not copied: `crates/acui-setup/build.rs` and `ui/setup.slint` point at
+  those two files in `crates/acui-app/assets/` with relative paths.
 
-## 读面挡住的事
+## What the read face blocks
 
-这些不是绕过去了，是照实显示、在此记账：
+These are not worked around; they are displayed as they are, and booked here:
 
-- **`event_count` 与 `repair_count` 没有**。`GlobalLedgerMetadata`
-  （`crates/ledger/src/global/evidence.rs:257`）只给 `latest_sequence` / `read_complete` /
-  `backend` / `writer_metadata` / `corrupt_tail`，没有事件条数与修复条数的访问器；唯一给出
-  这两项的 `GlobalLedger::open_evidence`（同文件 `:417`）要求调用方为每个产物引用交出
-  `VerifiedArtifactReference`，验证不了的事件会被丢掉（在 0828 根上实测 2585 条只剩 10 条），
-  等于开台就要把整个 artifacts 目录（457 MB）全哈希一遍。实例卡因此把 `event_count` 显示为
-  「—（读面未给，见 README）」，另外标出**本视图已载入**的条数，两者不混用。
-- **整份素材没有入口，读一帧很贵**。`crates/ledger-forensics/src/material.rs:51` 的
-  `read_material_to` 只做一段，且每段都要重开两次账本元数据并把整份素材重新哈希一遍；
-  读一张 3.6 MB 的帧要 57 段，实测约 5 秒（release）。没有整份读入口，也没有跨段复用的
-  reader，所以监控台把读取放进后台线程，而不是自己去拼一套简化的读取流程。
-- **几何与帧在这两个根上凑不到一起**。0828 与 v5 两个根里，带 `capture.frame` 产物的事件
-  只有 `artifact.created` / `artifact.verified`，payload 里没有几何；带几何的事件只有
-  `task.effect_intent`（0828 六条、v5 五条），payload 里是一个 tap 坐标，`links` 里**没有**
-  `frame_id`。账本没有给出把这两者连起来的关系，监控台就不连——真实帧照画，叠加为空。
-- **两个根里都没有产物淘汰事实**，所以淘汰占位在这两个根上不会出现；代码路径按契约写好。
+- **There is no `event_count` or `repair_count`**. `GlobalLedgerMetadata`
+  (`crates/ledger/src/global/evidence.rs:257`) gives only `latest_sequence` / `read_complete` /
+  `backend` / `writer_metadata` / `corrupt_tail`, with no accessor for the event count or the repair
+  count; the only thing that gives these two, `GlobalLedger::open_evidence` (same file, `:417`), requires
+  the caller to hand over a `VerifiedArtifactReference` for every artifact reference, and events that
+  cannot be verified are dropped (measured on the 0828 root: of 2585 rows only 10 were left), which
+  amounts to hashing the entire artifacts directory (457 MB) at startup. The instance card therefore
+  displays `event_count` as "—(not given by the read face, see README)", and separately marks the number
+  of rows **loaded in this view**; the two are never mixed.
+- **There is no whole-material entry point, and reading one frame is expensive**. `read_material_to` in
+  `crates/ledger-forensics/src/material.rs:51` does one chunk only, and every chunk has to reopen the
+  ledger metadata twice and re-hash the whole material; reading one 3.6 MB frame takes 57 chunks, measured
+  at about 5 seconds (release). There is no whole-file read entry point, and no reader reused across
+  chunks, so the console puts reading on a background thread rather than assembling a simplified read
+  path of its own.
+- **Geometry and frames cannot be brought together on these two roots**. In the 0828 and v5 roots, the
+  only events carrying a `capture.frame` artifact are `artifact.created` / `artifact.verified`, and their
+  payloads hold no geometry; the only events carrying geometry are `task.effect_intent` (six on 0828,
+  five on v5), whose payload is a single tap coordinate and whose `links` hold **no** `frame_id`. The
+  ledger gives no relation joining the two, so the console does not join them — the real frame is drawn as
+  it is, and the overlay is empty.
+- **Neither root holds artifact eviction facts**, so the eviction placeholder does not appear on these two
+  roots; the code path is written to the contract.
 
-## 许可
+## License
 
-`GPL-3.0-only`（Alice 2026-09-17 裁定）。仓库附 LICENSE 全文；工作区 `license` 字段与每个 `.rs` / `.slint`
-文件的 SPDX 头与之一致。界面由 [Slint](https://slint.dev) 渲染，按其 GPLv3 许可选项使用。依赖的 Runtime
-crate（contract / ledger / ledger-forensics / runtime-client）为 `AGPL-3.0-only`，两者按 GPLv3 第 13 条合并。
+`GPL-3.0-only` (Alice ruled on 2026-09-17). The repository includes the full LICENSE text; the workspace
+`license` field and the SPDX header of every `.rs` / `.slint` file agree with it. The interface is
+rendered by [Slint](https://slint.dev), used under its GPLv3 licensing option. The Runtime crates depended
+on (contract / ledger / ledger-forensics / runtime-client) are `AGPL-3.0-only`, and the two combine under
+GPLv3 section 13.
