@@ -45,7 +45,7 @@
 依赖钉在 Runtime **main** 上（`Cargo.toml`）：
 
 ```
-rev = "c30c3c45aae8b06b96feca15c5ec9fbb744a70a7"
+rev = "7f3df214ed613dcae20780bce26e384eee95310a"
 ```
 
 四个 crate（contract / ledger / ledger-forensics / runtime-client）共用这一个 rev。
