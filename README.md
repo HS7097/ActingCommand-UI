@@ -10,6 +10,10 @@
 程序只认一个参数：状态根。**所有文件 IO 都归读面**，监控台自己从不拼接状态根里的路径，
 不打开 `ledger/`、`artifacts/` 或 `runtime-state.sqlite`，也不拉起任何 CLI。
 
+读面有两张，同一套查询、页、游标语义，只是答案从哪来不同：
+
+**离线**（原路径，一行未改）：
+
 - `GlobalLedger::open_metadata` 打开状态根，由账本自己判定介质（segment / sqlite）、
   认证快照、给出 `latest_sequence` 与完整性观察。整个会话固定在这一个快照位置上读。
 - `actingcommand_ledger_forensics::query_view_page` 出正式页 `RuntimeEventQueryPage`：
@@ -17,14 +21,34 @@
 - `actingcommand_ledger_forensics::read_material_to` 读素材：每段由读面解析引用、拿到
   共享读保护、二次核对引用与保留状态，并在整份 sha256 校验通过后才交出这一段字节。
 
-依赖按 **PR398 头**钉在 `Cargo.toml`：
+**在线**（经 `actingcommand-runtime-client`，客户端唯一的类型化 IPC 路径）：
+
+- `RuntimeClient::connect(RuntimeClientConfig::new(state_root, Ui, Ui))`：`runtime-info.json`
+  由客户端自己读、回环地址由它取、owner epoch 由它在连接时核对。监控台只是客户端：
+  不拉起、不杀、不等 Runtime，不碰 `owner.lock`，不往状态根里写任何东西。
+- 开台第一页不带快照位置去问，Runtime 在页上说出的 `snapshot_ledger_position` 就是这一
+  会话固定读的位置——和离线一样，整个会话一个快照。之后每页都是
+  `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`，
+  同一个 `EventQuery`、同一个页上限、同一个 `next_cursor`。
+- 素材走 `RuntimeClient::read_material`：同样的 `RuntimeMaterialReadRequest`、同样的
+  分段与整份校验，只是校验由 Runtime 做，在同一条连接上。
+- 介质、损坏尾部、写入进程记录是离线读面对文件的观察，Runtime 不在页上说这些；在线时
+  实例卡的「存储格式」写「由 Runtime 判定」，「写入进程」写的是所连的 Runtime 本身
+  （PID、owner epoch、启动时间，均出自它自己的 `runtime-info.json`）。
+
+`--source <auto|offline|online>`，默认 `auto`：客户端能连上状态根所指的 Runtime 就在线，
+否则离线；实例卡第一行「读面」写明选了哪张、为什么（`runtime-info.json` 不存在，或连接
+失败的客户端错误码）。`online` 连不上就**带着客户端的错误码直接退出**，不会悄悄改走离线。
+两张读面里，连上了却答不出第一页的 Runtime 在任何模式下都是错误，不回退。
+
+依赖钉在 Runtime **main** 上（`Cargo.toml`）：
 
 ```
-rev = "e41467b9f51d68ddf754f1b898ba4747963a9a1f"
+rev = "c30c3c45aae8b06b96feca15c5ec9fbb744a70a7"
 ```
 
-三个 crate（contract / ledger / ledger-forensics）共用这一个 rev。旁边留了注记：
-**PR398 合并后改钉 main**。`Cargo.lock` 入库，CI 在 windows-latest 与 ubuntu-latest 上跑
+四个 crate（contract / ledger / ledger-forensics / runtime-client）共用这一个 rev。
+`Cargo.lock` 入库，CI 在 windows-latest 与 ubuntu-latest 上跑
 `cargo build --locked --release --workspace`；闭包里含 `rusqlite`（bundled），两边都要 C 编译器。
 
 ## 变了什么
@@ -70,12 +94,12 @@ rev = "e41467b9f51d68ddf754f1b898ba4747963a9a1f"
 ## 运行
 
 ```
-acui --state-root <state_root> [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]
+acui --state-root <state_root> [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]
 acui --help
 ```
 
-`--tab` 指定启动页签（截图与复核用），取值就是视图自己的 wire 名。`--lang` 只对**这一次
-运行**有效，覆盖设置文件里的语言，不写回设置文件。
+`--source` 选读面（见上）。`--tab` 指定启动页签（截图与复核用），取值就是视图自己的 wire 名。
+`--lang` 只对**这一次运行**有效，覆盖设置文件里的语言，不写回设置文件。
 
 窗口可缩放：默认 1400×900，最小 1100×700，中栏随窗口伸缩，两侧栏保持定宽。窗口跟随系统
 DPI；程序自己不设缩放。
@@ -118,8 +142,9 @@ text_size = "standard"   # standard | large | extra-large
 
 - `acui-rows`：唯一为视图模型命名契约类型的地方；再导出契约类型，外加显示用函数、显示名
   字典，与两个由 `acui-source` 填、`acui-model` 读的平铺结构。
-- `acui-source`：读面，唯一碰状态根的地方。`EvidenceSource::open` / `query` /
-  `open_report` / `read_material`。
+- `acui-source`：读面，唯一碰状态根的地方。离线 `EvidenceSource::open` / `query` /
+  `open_report` / `read_material` 原样保留；`ReadSource::open(root, mode)` 按 `--source`
+  在它和在线的 `OnlineSource` 之间选一张，`material_reader()` 交给后台线程读素材。
 - `acui-model`：纯 Rust 视图模型（页签、过滤、翻页、恢复折叠、选中项），不依赖 slint，**也不
   出人话**——它只给结构化事实，措辞一律由 `acui-app` 按语言表挑。
 - `acui-app`：唯一依赖 slint 的 crate，`.slint` 文件在 `crates/acui-app/ui/`；两张语言表在
@@ -161,4 +186,4 @@ text_size = "standard"   # standard | large | extra-large
 
 `GPL-3.0-only`（Alice 2026-09-17 裁定）。仓库附 LICENSE 全文；工作区 `license` 字段与每个 `.rs` / `.slint`
 文件的 SPDX 头与之一致。界面由 [Slint](https://slint.dev) 渲染，按其 GPLv3 许可选项使用。依赖的 Runtime
-crate（contract / ledger / ledger-forensics）为 `AGPL-3.0-only`，两者按 GPLv3 第 13 条合并。
+crate（contract / ledger / ledger-forensics / runtime-client）为 `AGPL-3.0-only`，两者按 GPLv3 第 13 条合并。

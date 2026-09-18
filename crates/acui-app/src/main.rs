@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! ActingCommand 监控台 / ActingCommand Console: a read-only window over one
-//! Runtime state root, opened through the formal ledger read face.
+//! Runtime state root, opened through the formal ledger read face — offline
+//! over the files, or online through the typed client of the running Runtime.
 
 mod settings;
 mod strings;
@@ -20,7 +21,7 @@ use acui_rows::{
     seconds_since, short_id, ArtifactEvictionObservation, EventQuery, EventSeverity, LedgerView,
     OriginModule, ProjectedEvent, Sensitivity, WriterFacts, MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
-use acui_source::{read_material, EvidenceSource, MaterialOutcome, MAX_FRAME_BYTES};
+use acui_source::{MaterialOutcome, OfflineReason, ReadSource, SourceMode, MAX_FRAME_BYTES};
 use anyhow::{bail, Result};
 use settings::TextSize;
 use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
@@ -34,6 +35,8 @@ struct Args {
     tab: Option<LedgerView>,
     /// `--lang` overrides the settings file for this run only.
     language: Option<Language>,
+    /// `--source`: `auto` unless told otherwise.
+    source: SourceMode,
     help: bool,
 }
 
@@ -66,6 +69,16 @@ fn parse_args() -> Result<Args> {
                     None => bail!("未知的 --lang 取值 / unknown --lang value: {name}"),
                 };
             }
+            "--source" => {
+                let name = match argv.next() {
+                    Some(name) => name,
+                    None => bail!("--source 缺少取值 / --source needs a value"),
+                };
+                args.source = match SourceMode::from_wire(&name) {
+                    Some(mode) => mode,
+                    None => bail!("未知的 --source 取值 / unknown --source value: {name}"),
+                };
+            }
             "--help" | "-h" => args.help = true,
             other => bail!("未知参数 / unknown argument: {other}"),
         }
@@ -76,7 +89,7 @@ fn parse_args() -> Result<Args> {
 /// One open state root, its view model, the chosen language, and the frame read
 /// in flight.
 struct App {
-    source: EvidenceSource,
+    source: ReadSource,
     model: RefCell<ViewModel>,
     labels: &'static Labels,
     /// The module option list as the box currently shows it, and what each
@@ -105,7 +118,7 @@ fn main() -> Result<()> {
         bail!("{}", labels.usage);
     };
 
-    let source = EvidenceSource::open(&state_root)?;
+    let source = ReadSource::open(&state_root, args.source)?;
     let span = time_span(&source);
     let mut model = ViewModel::new(
         source.open_report(),
@@ -127,7 +140,7 @@ fn main() -> Result<()> {
     reload(&app, false);
 
     let window = AppWindow::new()?;
-    install_strings(&window, labels);
+    install_strings(&window, labels, matches!(app.source, ReadSource::Online(_)));
     window.global::<Scale>().set_factor(stored.text_size.factor());
     window.set_text_size_index(stored.text_size.index());
     window.set_language_index(if language == Language::Zh { 0 } else { 1 });
@@ -139,10 +152,12 @@ fn main() -> Result<()> {
 
 /// Fills the `Strings` global once. There is no second call: the language
 /// switch takes effect when the program is started again.
-fn install_strings(window: &AppWindow, labels: &'static Labels) {
+fn install_strings(window: &AppWindow, labels: &'static Labels, online: bool) {
     let global = window.global::<Strings>();
     global.set_window_title(labels.window_title.into());
-    global.set_data_source(labels.data_source.into());
+    global.set_data_source(
+        if online { labels.data_source_online } else { labels.data_source }.into(),
+    );
     global.set_ledger_dir(labels.ledger_dir.into());
     global.set_storage_format(labels.storage_format.into());
     global.set_show_up_to(labels.show_up_to.into());
@@ -170,7 +185,7 @@ fn install_strings(window: &AppWindow, labels: &'static Labels) {
 }
 
 /// The committed time span, read as the first and the last event of the snapshot.
-fn time_span(source: &EvidenceSource) -> Option<(u64, u64)> {
+fn time_span(source: &ReadSource) -> Option<(u64, u64)> {
     let events = EventQuery { view: Some(LedgerView::Events), ..EventQuery::default() };
     let first = source.query(&events, 1, None).ok()?;
     let last = source
@@ -341,6 +356,13 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
     );
 
     let mut lines = vec![
+        // Which face answered, and for an `auto` pick, why: never a silent choice.
+        field(
+            labels,
+            "source",
+            source_text(labels, &app.source),
+            if app.source.offline_reason().is_some() { "offline" } else { "online" },
+        ),
         field(labels, "latest_sequence", card.latest_sequence.to_string(), "latest_sequence"),
         field(
             labels,
@@ -638,7 +660,7 @@ fn update_frame(
     let generation = app.generation.fetch_add(1, Ordering::SeqCst) + 1;
     let shared = Arc::clone(&app.generation);
     let worker = Arc::clone(&app.worker);
-    let root = app.source.state_root().to_path_buf();
+    let reader = app.source.material_reader();
     let snapshot = app.source.snapshot_position();
     let weak = window.as_weak();
     std::thread::spawn(move || {
@@ -650,7 +672,7 @@ fn update_frame(
         if !still_wanted() {
             return;
         }
-        let read = read_material(&root, target.event, &target.artifact, snapshot, &still_wanted);
+        let read = reader.read(target.event, &target.artifact, snapshot, &still_wanted);
         let painted = match read {
             Err(error) => Err(error.to_string()),
             Ok(None) => return,
@@ -798,6 +820,21 @@ fn writer_text(labels: &Labels, writer: &WriterFacts) -> String {
             if *active { labels.writer_running } else { labels.writer_stopped },
             &[owner_id, &pid.to_string(), &format_full(*started_at_unix_ms)],
         ),
+        WriterFacts::Runtime { pid, owner_epoch, started_at_unix_ms } => fill(
+            labels.writer_runtime,
+            &[&pid.to_string(), owner_epoch, &format_full(*started_at_unix_ms)],
+        ),
+    }
+}
+
+fn source_text(labels: &Labels, source: &ReadSource) -> String {
+    match source.offline_reason() {
+        None => labels.source_online.to_string(),
+        Some(OfflineReason::Requested) => labels.source_offline_requested.to_string(),
+        Some(OfflineReason::RuntimeInfoAbsent) => labels.source_offline_absent.to_string(),
+        Some(OfflineReason::ConnectFailed { code, operation }) => {
+            fill(labels.source_offline_failed, &[code, operation])
+        }
     }
 }
 
@@ -838,6 +875,7 @@ fn backend_text(labels: &Labels, backend: &str) -> String {
     match backend {
         "segment" => labels.storage_segments.to_string(),
         "sqlite" => labels.storage_sqlite.to_string(),
+        "runtime" => labels.storage_runtime.to_string(),
         other => other.to_string(),
     }
 }
