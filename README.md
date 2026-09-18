@@ -187,15 +187,15 @@ Language and text size are stored under the per-user configuration directory:
 
 ```
 Windows:  %APPDATA%\ActingCommand\acui.toml
-Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml（没有就用 $HOME/.config/…）
+Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml (falls back to $HOME/.config/…)
 ```
 
 ```toml
 lang = "zh"          # zh | en
 text_size = "standard"   # standard | large | extra-large
-state_root = 'D:\ActingCommand\state'                    # 可选，绝对路径
-actingd_config = 'D:\ActingCommand\actingd.toml'         # 可选，绝对路径
-actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对路径
+state_root = 'D:\ActingCommand\state'                    # optional, absolute path
+actingd_config = 'D:\ActingCommand\actingd.toml'         # optional, absolute path
+actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # optional, absolute path
 ```
 
 It is read once at startup and written once on every dropdown change; on write-back the three path keys
