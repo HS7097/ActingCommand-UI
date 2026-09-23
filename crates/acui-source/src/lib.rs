@@ -63,14 +63,16 @@ pub struct EvidenceSource {
 }
 
 /// The ledger's refusal to open a state root: its own code, operation and
-/// detail, verbatim. The ledger keeps an io error's OS text in `detail`, not
-/// its kind, so the pair cannot tell a state root with no ledger yet from one
-/// whose ledger cannot be read; `detail` is localized, and never parsed here.
+/// detail, verbatim, and for an io error its kind as the ledger spells it
+/// (`not_found`, `permission_denied`, …). The kind, not the localized
+/// `detail`, tells a state root with no ledger yet from one whose ledger
+/// cannot be read; `detail` is never parsed here.
 #[derive(Debug, Clone)]
 pub struct LedgerOpenFailure {
     pub code: &'static str,
     pub operation: &'static str,
     pub detail: Option<String>,
+    pub io_kind: Option<String>,
 }
 
 impl From<GlobalLedgerError> for LedgerOpenFailure {
@@ -79,6 +81,7 @@ impl From<GlobalLedgerError> for LedgerOpenFailure {
             code: error.code(),
             operation: error.operation(),
             detail: error.detail().map(str::to_string),
+            io_kind: error.io_kind().map(|kind| code(&kind)),
         }
     }
 }
@@ -191,8 +194,9 @@ impl EvidenceSource {
             ForensicRuntimeFactsResult::NotAvailable { position, latest_sequence, reason } => {
                 OfflineFacts::NotAvailable { position, latest_sequence, reason: code(&reason) }
             }
-            ForensicRuntimeFactsResult::Failed { position, code, operation, detail } => {
-                OfflineFacts::Failed { position, code, operation, detail }
+            ForensicRuntimeFactsResult::Failed { position, code, operation, detail, io_kind } => {
+                let io_kind = io_kind.map(|kind| acui_rows::code(&kind));
+                OfflineFacts::Failed { position, code, operation, detail, io_kind }
             }
         }
     }
@@ -285,7 +289,14 @@ pub enum OfflineFacts {
     Available { position: u64, instances: Vec<RuntimeInstance> },
     /// `reason` as the read face spells it (`ledger_empty`, `position_beyond_snapshot`).
     NotAvailable { position: u64, latest_sequence: u64, reason: String },
-    Failed { position: u64, code: &'static str, operation: &'static str, detail: String },
+    Failed {
+        position: u64,
+        code: &'static str,
+        operation: &'static str,
+        detail: String,
+        /// The io error's kind, when the failure came from one.
+        io_kind: Option<String>,
+    },
 }
 
 /// What a session read about its instances, once: online, status and facts
@@ -307,9 +318,19 @@ pub struct RuntimeInstanceLive {
 
 impl OnlineSource {
     /// Discovery is the client's: it reads `runtime-info.json`, takes the
-    /// loopback address from it and checks the owner epoch on connect.
+    /// loopback address from it and checks the owner epoch on connect. This is
+    /// the console's own connection (actor `ui`, source `ui`), for what it asks
+    /// on its own — pages, material, the status and facts read at open, probes.
     fn connect(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
         RuntimeClient::connect(RuntimeClientConfig::new(root, EventActor::Ui, EventSource::Ui))
+    }
+
+    /// A connection for what a person does at the console — a button press, a
+    /// shutdown request, a discovery query: actor `user`, source `ui`. The
+    /// Runtime admits a shutdown request and an instance discovery only from
+    /// this origin or an operator's CLI.
+    fn connect_as_person(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
+        RuntimeClient::connect(RuntimeClientConfig::new(root, EventActor::User, EventSource::Ui))
     }
 
     /// The first page, asked without a snapshot, is where the Runtime states
@@ -697,17 +718,14 @@ pub struct DiscoveredInstance {
 }
 
 /// Asks the running Runtime to re-run its provider's instance discovery: one
-/// fresh connection, one `discover_instances()`. The contract admits this
-/// query only from a person at the console (actor `user`, source `ui`) or an
-/// operator's CLI, so this connection says `user` / `ui`, not the read face's
-/// `ui` / `ui`. It binds nothing and touches no device; by contract the
+/// fresh person's connection (see `OnlineSource::connect_as_person`), one
+/// `discover_instances()`. It binds nothing and touches no device; by contract the
 /// Runtime records an answered query as one observation event
 /// (`command.validated`), and a refusal as `command.rejected` plus
 /// `runtime.failed`. A refusal carries the Runtime's code and, when the
 /// provider's tool failed, the host failure.
 pub fn discover_instances(state_root: &Path) -> Result<Discovery, ClientFailure> {
-    let config = RuntimeClientConfig::new(state_root, EventActor::User, EventSource::Ui);
-    let client = RuntimeClient::connect(config)?;
+    let client = OnlineSource::connect_as_person(state_root)?;
     let discovery = client.discover_instances()?;
     let instances = discovery
         .instances()
@@ -803,11 +821,13 @@ pub fn record_start(state_root: &Path, spawned: bool) -> Result<u64, ClientFailu
     Ok(sequence)
 }
 
-/// One fresh connection, one interaction on it, and one launcher press recorded
-/// there as a value-less button client action whose receipt must carry a
-/// terminal event. Gives back the interaction and the record's ledger position.
+/// One fresh person's connection, one interaction on it, and one launcher
+/// press recorded there as a value-less button client action whose receipt
+/// must carry a terminal event: a press is a person's act, so the record says
+/// actor `user`, source `ui`. Gives back the interaction, on which a shutdown
+/// request goes out as the same person, and the record's ledger position.
 fn record_press(state_root: &Path, control_id: &str) -> Result<(RuntimeClient, u64), ClientFailure> {
-    let client = OnlineSource::connect(state_root)?;
+    let client = OnlineSource::connect_as_person(state_root)?;
     let interaction = client.begin_interaction()?;
     let action =
         ClientActionRecord::new("acui.launcher", control_id, ClientActionKind::Button, None, None)

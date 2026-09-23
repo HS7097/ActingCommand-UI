@@ -97,7 +97,7 @@ pub struct Labels {
     /// `EventSource`, in the contract's declaration order.
     pub sources: [(&'static str, &'static str); 8],
     /// Field key to label, for the instance card and the detail pane.
-    pub fields: [(&'static str, &'static str); 49],
+    pub fields: [(&'static str, &'static str); 50],
     /// `ExecutionBackendProvenance`, by wire value.
     pub provenances: [(&'static str, &'static str); 2],
     pub artifact_kinds: [(&'static str, &'static str); 6],
@@ -131,9 +131,11 @@ pub struct Labels {
     pub source_offline_absent: &'static str,
     pub source_offline_failed: &'static str,
     /// The offline face the ledger refused to open: ledger code, operation,
-    /// detail; the hint only follows `ledger_io` in `canonicalize_read_only_root`.
+    /// detail; the hint only follows `ledger_io` with io kind `not_found`.
     pub source_unopened: &'static str,
     pub source_unopened_hint: &'static str,
+    /// The ledger's io kind; appended to the unopened line.
+    pub io_kind_text: &'static str,
     /// Unopened: the top bar and the two boxes, then the list and the frame pane.
     pub ledger_unopened: &'static str,
     pub list_unopened: &'static str,
@@ -465,6 +467,7 @@ pub const ZH: Labels = Labels {
         ("instance_facts", "实例事实·钉点序号"),
         ("facts_error", "事实读取错误"),
         ("facts_detail", "详情"),
+        ("io_kind", "IO 类别"),
     ],
     provenances: [
         ("physical_device", "实机"),
@@ -514,7 +517,8 @@ pub const ZH: Labels = Labels {
     source_offline_absent: "离线 · 自动：状态根里没有 runtime-info.json",
     source_offline_failed: "离线 · 自动：连接 Runtime 失败 {}（{}）",
     source_unopened: "账本未能打开：{}（{}）· {}",
-    source_unopened_hint: "状态根里可能还没有账本，多半是 Runtime 从未启动过；可用启动器的「启动」",
+    source_unopened_hint: "状态根里还没有账本，多半是 Runtime 从未在这里启动过；可用启动器的「启动」",
+    io_kind_text: " · IO 类别 {}",
     ledger_unopened: "账本未打开",
     list_unopened: "账本未打开：没有读取任何事件，原因见实例卡",
     age_days: "{} 天前",
@@ -774,6 +778,7 @@ pub const EN: Labels = Labels {
         ("instance_facts", "Instance Facts at Pin"),
         ("facts_error", "Fact Read Error"),
         ("facts_detail", "Detail"),
+        ("io_kind", "IO Kind"),
     ],
     provenances: [
         ("physical_device", "Physical Device"),
@@ -823,7 +828,8 @@ pub const EN: Labels = Labels {
     source_offline_absent: "Offline · auto: no runtime-info.json in the state root",
     source_offline_failed: "Offline · auto: connecting to the Runtime failed with {} ({})",
     source_unopened: "ledger could not be opened: {} ({}) · {}",
-    source_unopened_hint: "the state root probably has no ledger yet, most likely because the Runtime has never been started; use Start in the launcher",
+    source_unopened_hint: "the state root has no ledger yet, most likely because the Runtime has never been started here; use Start in the launcher",
+    io_kind_text: " · io kind {}",
     ledger_unopened: "Ledger Not Opened",
     list_unopened: "Ledger not opened: no events were read; the instance card says why",
     age_days: "{} days ago",
