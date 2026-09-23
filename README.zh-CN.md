@@ -233,8 +233,8 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   事件循环之外跑 `<actingd_exe> check-config --config <临时文件>`（30 秒上限，不弹控制台窗口，
   stdout 整段按一份 `actingcommand.actingd.check-config.v1` 报告解析）。只有 `status: ok` 且退出码
   成功才改名覆盖原文件；否则删掉临时文件、原文件不动，窗口写明原因：原样写出 `error.code` 与
-  `stage`，或是 `actingd_exe` 没配或非绝对、拉起失败、超时、输出无法识别、报 ok 但退出码非零、
-  改名失败中的哪一种。
+  `stage`，或是 `actingd_exe` 没配或非绝对、拉起失败、超时、输出读不出或无法识别、
+  报 ok 但退出码非零、改名失败中的哪一种。
 - **生效**：没有热加载，保存的实例在 Runtime 重启后生效。再保存一次改的是同一项；「新增实例」
   换一个新的 `instance_id` 另起一项。
 

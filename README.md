@@ -300,8 +300,8 @@ of `actingd_config`, the file Start hands to actingd.
   window, stdout parsed whole as one `actingcommand.actingd.check-config.v1` report). Only `status: ok`
   with a successful exit renames it over the file; otherwise the candidate is removed, the file stays as
   it was, and the window says why: `error.code` and `stage` verbatim, or a missing or relative
-  `actingd_exe`, a spawn failure, the timeout, unrecognized output, ok with a non-zero exit, or the
-  rename failing.
+  `actingd_exe`, a spawn failure, the timeout, unreadable or unrecognized output, ok with a non-zero
+  exit, or the rename failing.
 - **Effect**: there is no hot reload; a saved entry takes effect when the Runtime restarts. Saving again
   updates that same entry; Add Instance starts a new one under a fresh `instance_id`.
 
