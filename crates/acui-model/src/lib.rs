@@ -10,9 +10,11 @@
 //! one query reads it, following the cursor only when the reply's byte limit
 //! splits it.
 
+mod frame_group;
 mod overlay;
 mod tabs;
 
+pub use frame_group::{BasisVia, FrameGroup, Mark};
 pub use overlay::{extract_frame_size, extract_overlays, Overlay};
 pub use tabs::{tab_from_name, tab_name, ALL_TABS};
 
@@ -497,6 +499,18 @@ impl ViewModel {
         })
     }
 
+    /// The frame the selected event was taken on or acted on, found among the
+    /// loaded rows: the event that names it, and how.
+    pub fn selected_basis(&self) -> Option<(&ProjectedEvent, BasisVia)> {
+        frame_group::basis(self.selected()?, &self.rows)
+    }
+
+    /// What the loaded rows and `extra`, events read for it, say about frame
+    /// `frame` (its id as `code` writes it).
+    pub fn frame_group(&self, frame: &str, extra: &[ProjectedEvent]) -> FrameGroup {
+        frame_group::frame_group(frame, self.rows.iter().chain(extra))
+    }
+
     pub fn frame_target(&self) -> Option<FrameTarget> {
         let event = self.selected()?;
         let artifact = event
@@ -565,16 +579,21 @@ impl ViewModel {
 /// `frame_extent`, or the frame a geometry observation was made on. The
 /// console reads the `Ui` profile, which the ledger projects as `Public`.
 fn frame_extent(event: &ProjectedEvent) -> Option<(f32, f32)> {
+    let extent = match task_fact(event)? {
+        TaskSemanticFact::EffectIntent { frame_extent, .. } => (*frame_extent)?,
+        TaskSemanticFact::GeometryObserved { observation } => observation.frame.as_ref()?.extent,
+        _ => return None,
+    };
+    Some((extent.width() as f32, extent.height() as f32))
+}
+
+/// The task fact an event states, as the `Ui` profile projects it: `Public`.
+fn task_fact(event: &ProjectedEvent) -> Option<&TaskSemanticFact> {
     let ProjectionPayload::Public(payload) = &event.payload else {
         return None;
     };
     let PublicEventPayload::Task(task) = payload.as_ref() else {
         return None;
     };
-    let extent = match task.task_semantic_fact()? {
-        TaskSemanticFact::EffectIntent { frame_extent, .. } => (*frame_extent)?,
-        TaskSemanticFact::GeometryObserved { observation } => observation.frame.as_ref()?.extent,
-        _ => return None,
-    };
-    Some((extent.width() as f32, extent.height() as f32))
+    task.task_semantic_fact()
 }

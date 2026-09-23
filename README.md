@@ -197,7 +197,8 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
 The ruling has changed: the console **does** load frame bytes, but only through the material read face,
 and only within this rule:
 
-- Only the `capture.frame` artifact **the selected event itself** carries is read, on demand, one at a time.
+- Only the `capture.frame` artifact of **the frame the selected event was taken on or acted on** is read
+  (see "Every row on its frame" below), on demand, one at a time.
 - Offline, one `read_material_complete` call reads the whole object and verifies its length and sha256
   before any byte is handed over, within a 30-second deadline. Online,
   `RuntimeClient::read_material_complete` does the same over the Runtime's verified ranges, with the same
@@ -223,10 +224,36 @@ and only within this rule:
 
 The geometry overlay shares one coordinate system with the frame, sized in this order: the frame extent
 the ledger formally states (`frame_extent` of `task.effect_intent`, the frame extent of
-`task.geometry_observed`), else `frame_width`/`frame_height` in the payload, else the pixel size the
+`task.geometry_observed`), else `frame_width`/`frame_height` in the payload, else the size the frame's
+recognition or effect intent states (see below), else the pixel size the
 verified frame decoded to, else the overlays' own extent. The decoded size belongs to the frame request
 it came from: reselecting the event or reading earlier keeps it; switching events, clearing, or a
 failed read drops it.
+
+### Every row on its frame
+
+A step's events name their frame in `links.frame_id`: the capture, the frame's `artifact.created` /
+`artifact.verified`, the recognition, the effect intent. The frame pane shows that frame for any of
+them, and for the step's other events through the effect intent that shares their `action_id`. A
+physical input (`input.*`) does not carry its frame under the `Ui` profile — its `before_frame_id` is
+projected away — so its frame is the one of the last effect intent of its run before it; the sentence
+under the frame says which event the frame was taken from. The frame is found among the loaded rows
+first; only when they hold no capture of it are the frame's own events read, with one query by frame
+id, kept while the pane stays on that frame. A failed or incomplete read is stated in the frame note
+under the frame, and the next reload tries again.
+
+On the frame, beside the event's own geometry:
+
+- **The page label** in the top-left corner: the page the recognition on this frame matched, or that it
+  matched none.
+- **The tap mark**: a ringed dot centred on each point of the step's effect intent (`action.x, y`; a
+  swipe or drag has one per point). It replaces the event's own `action` geometry, which would draw the
+  same input twice.
+- **One sentence** under the frame, per input meant on it: "Step 0 notice_close: recognized
+  bluearchive/news, tap (1142, 102)".
+
+Recognition target boxes (`targets[].region`) come with the Runtime's recognition targets; the
+contract pinned here does not have them yet, so none are drawn.
 
 ## Running
 
