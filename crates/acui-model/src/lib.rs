@@ -14,7 +14,7 @@ mod frame_group;
 mod overlay;
 mod tabs;
 
-pub use frame_group::{BasisVia, FrameGroup, Mark};
+pub use frame_group::{BasisVia, FrameGroup, Mark, TargetBox};
 pub use overlay::{extract_frame_size, extract_overlays, Overlay};
 pub use tabs::{tab_from_name, tab_name, ALL_TABS};
 

@@ -65,6 +65,21 @@ pub struct Mark {
     pub points: Vec<(f32, f32)>,
 }
 
+/// One target the recognition evaluated on the frame, where it has a region:
+/// the matched page's (or, with no match, the first candidate's), in frame
+/// pixels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TargetBox {
+    pub target_id: String,
+    /// `required`, `any_of`, `optional` or `forbidden`, as the ledger writes it.
+    pub role: String,
+    pub passed: bool,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 /// What the ledger says about one frame.
 pub struct FrameGroup {
     /// The capture's verified artifact, else the one created, when read.
@@ -74,6 +89,10 @@ pub struct FrameGroup {
     /// `Some` once a recognition on the frame is read: its matched page, and
     /// how many pages it tried.
     pub recognition: Option<(Option<String>, usize)>,
+    /// The latest recognition's targets: how many it evaluated and how many
+    /// passed, and the boxes of those with a region.
+    pub targets: (usize, usize),
+    pub boxes: Vec<TargetBox>,
     pub marks: Vec<Mark>,
 }
 
@@ -83,7 +102,14 @@ pub fn frame_group<'a>(
     frame: &str,
     events: impl IntoIterator<Item = &'a ProjectedEvent>,
 ) -> FrameGroup {
-    let mut group = FrameGroup { target: None, extent: None, recognition: None, marks: Vec::new() };
+    let mut group = FrameGroup {
+        target: None,
+        extent: None,
+        recognition: None,
+        targets: (0, 0),
+        boxes: Vec::new(),
+        marks: Vec::new(),
+    };
     let mut events: Vec<&ProjectedEvent> = events
         .into_iter()
         .filter(|event| event.links.frame_id().map(code).as_deref() == Some(frame))
@@ -117,9 +143,27 @@ pub fn frame_group<'a>(
                 matched_page,
                 frame_width,
                 frame_height,
+                targets,
             }) => {
                 group.recognition = Some((matched_page.clone(), candidate_pages.len()));
                 group.extent = Some((*frame_width as f32, *frame_height as f32));
+                let passed = targets.iter().filter(|target| target.passed).count();
+                group.targets = (passed, targets.len());
+                group.boxes = targets
+                    .iter()
+                    .filter_map(|target| {
+                        let region = target.region.as_ref()?;
+                        Some(TargetBox {
+                            target_id: target.target_id.clone(),
+                            role: code(&target.role),
+                            passed: target.passed,
+                            x: region.x as f32,
+                            y: region.y as f32,
+                            width: region.width as f32,
+                            height: region.height as f32,
+                        })
+                    })
+                    .collect();
             }
             Some(TaskSemanticFact::EffectIntent {
                 step_index,
