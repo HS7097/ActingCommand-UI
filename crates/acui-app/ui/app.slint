@@ -178,6 +178,23 @@ component Caption inherits Text {
     vertical-alignment: center;
 }
 
+// The instance-configuration window's labels, and the top-bar button's. A
+// global is one per window instance, so the console fills it on both windows.
+export global ConfigStrings {
+    in property <string> title;
+    in property <string> intro;
+    in property <string> add;
+    // alias, instance_id, binding, adb_path, nemu_app_index, application_id,
+    // capture_backend, touch_backend.
+    in property <[string]> fields;
+    in property <[string]> kinds;
+    // instance_index, instance_name, host, port; adb_path optional, then
+    // required; nemu_app_index.
+    in property <[string]> placeholders;
+    in property <string> optional-note;
+    in property <string> save;
+}
+
 export component AppWindow inherits Window {
     title: Strings.window-title;
     icon: @image-url("../assets/acui-256.png");
@@ -242,6 +259,7 @@ export component AppWindow inherits Window {
     callback language-changed(int);
     callback start-runtime();
     callback request-shutdown();
+    callback open-config();
 
     VerticalLayout {
         padding: 8px;
@@ -361,6 +379,12 @@ export component AppWindow inherits Window {
                         text: Strings.request-shutdown;
                         clicked => {
                             root.request-shutdown();
+                        }
+                    }
+                    Button {
+                        text: ConfigStrings.title;
+                        clicked => {
+                            root.open-config();
                         }
                     }
                 }
@@ -698,6 +722,75 @@ export component AppWindow inherits Window {
                         vertical-stretch: 0;
                         text: root.payload-json;
                     }
+                }
+            }
+        }
+    }
+}
+
+export component ConfigWindow inherits Window {
+    title: ConfigStrings.title;
+    icon: @image-url("../assets/acui-256.png");
+    preferred-width: 760px;
+    default-font-size: Scale.body-font;
+    background: Palette.background;
+
+    // False when the form has no instance_id to save under.
+    in property <bool> form-ready;
+    in property <string> form-id;
+    in property <bool> saving;
+    in property <string> outcome;
+    in property <bool> outcome-failed;
+    in-out property <string> form-alias;
+    in-out property <int> form-kind;
+    in-out property <string> form-index;
+    in-out property <string> form-name;
+    in-out property <string> form-host;
+    in-out property <string> form-port;
+    in-out property <string> form-adb;
+    in-out property <string> form-nemu;
+    in-out property <string> form-application;
+    in-out property <string> form-capture;
+    in-out property <string> form-touch;
+
+    callback add-instance();
+    callback save();
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+        Panel {
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+                Caption { text: ConfigStrings.intro; wrap: word-wrap; }
+                GridLayout {
+                    spacing: 6px;
+                    Row { Caption { text: ConfigStrings.fields[0]; } LineEdit { text <=> root.form-alias; } }
+                    Row { Caption { text: ConfigStrings.fields[1]; } Text { text: root.form-id; color: Palette.foreground; vertical-alignment: center; } }
+                    Row {
+                        Caption { text: ConfigStrings.fields[2]; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            ComboBox { width: 240px * Scale.factor; model: ConfigStrings.kinds; current-index <=> root.form-kind; }
+                            if root.form-kind == 0: LineEdit { text <=> root.form-index; placeholder-text: ConfigStrings.placeholders[0]; }
+                            if root.form-kind == 1: LineEdit { text <=> root.form-name; placeholder-text: ConfigStrings.placeholders[1]; }
+                            if root.form-kind == 2: LineEdit { text <=> root.form-host; placeholder-text: ConfigStrings.placeholders[2]; }
+                            if root.form-kind == 2: LineEdit { text <=> root.form-port; placeholder-text: ConfigStrings.placeholders[3]; }
+                        }
+                    }
+                    Row { Caption { text: ConfigStrings.fields[3]; } LineEdit { text <=> root.form-adb; placeholder-text: ConfigStrings.placeholders[root.form-kind == 2 ? 5 : 4]; } }
+                    Row { Caption { text: ConfigStrings.fields[4]; } LineEdit { text <=> root.form-nemu; placeholder-text: ConfigStrings.placeholders[6]; } }
+                    Row { Caption { text: ConfigStrings.fields[5]; } LineEdit { text <=> root.form-application; } }
+                    Row { Caption { text: ConfigStrings.fields[6]; } LineEdit { text <=> root.form-capture; } }
+                    Row { Caption { text: ConfigStrings.fields[7]; } LineEdit { text <=> root.form-touch; } }
+                }
+                Caption { text: ConfigStrings.optional-note; wrap: word-wrap; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Button { text: ConfigStrings.save; primary: true; enabled: root.form-ready && !root.saving; clicked => { root.save(); } }
+                    Button { text: ConfigStrings.add; enabled: !root.saving; clicked => { root.add-instance(); } }
+                    Text { text: root.outcome; color: root.outcome-failed ? Severity.error : Palette.foreground; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
         }

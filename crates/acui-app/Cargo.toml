@@ -13,7 +13,10 @@ acui-model = { workspace = true }
 acui-rows = { workspace = true }
 acui-source = { workspace = true }
 anyhow = { workspace = true }
+getrandom = { workspace = true }
 image = { workspace = true }
+# preserve_order: a saved actingd config keeps its keys in the file's order.
+serde_json = { workspace = true, features = ["preserve_order"] }
 slint = { workspace = true }
 
 [build-dependencies]

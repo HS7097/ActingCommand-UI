@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The launcher block: the one place the console starts a process, and the
+//! The launcher block: the one place the console starts the daemon, and the
 //! one place it asks the Runtime to stop.
 //!
 //! Start spawns `actingcommand-actingd --config <actingd_config>` detached,
@@ -42,8 +42,8 @@ const DETACHED_PROCESS: u32 = 0x0000_0008;
 
 pub struct Launcher {
     state_root: PathBuf,
-    actingd_config: Option<PathBuf>,
-    actingd_exe: Option<PathBuf>,
+    pub actingd_config: Option<PathBuf>,
+    pub actingd_exe: Option<PathBuf>,
     /// One start in flight at a time: set until its readiness poll ends.
     starting: Arc<AtomicBool>,
 }
@@ -248,7 +248,7 @@ fn start(window: &AppWindow, app: &Rc<App>) {
 }
 
 /// A configured key, checked to be an absolute path; the text to show otherwise.
-fn configured<'a>(
+pub fn configured<'a>(
     labels: &Labels,
     key: &str,
     value: &'a Option<PathBuf>,

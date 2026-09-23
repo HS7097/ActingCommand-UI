@@ -171,7 +171,8 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 
 ## 启动器
 
-顶栏第三行。左边是上一次探测的 Runtime 状态，两个按钮，下面一行是上一次按钮的结果。
+顶栏第三行。左边是上一次探测的 Runtime 状态，两个按钮（最后还有「实例配置」按钮，见下一节），
+下面一行是上一次按钮的结果。
 
 - **Runtime 状态**：开台时探测一次，之后每按一次按钮再探测。探测就是一次
   `RuntimeClient::connect`：连上了写「运行中 · PID · owner epoch」（取自它自己的
@@ -210,6 +211,28 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   job object；就绪判定结束就丢掉句柄，守护进程活得比监控台久。
 
 暂停/恢复、解锁 owner、开机自启、安装器、联网下载都不在这一片里。
+
+## 实例配置
+
+「实例配置」按钮打开第二个窗口，给 `actingd_config`——「启动」交给 actingd 的那份文件——的
+`instances` 新增一项。
+
+- **表单**：`alias` 必填；新实例的 `instance_id` 是 `instance_` 加系统随机源的 32 位小写十六进制，
+  只读显示；绑定恰好一种——`instance_index`（MuMu 序号）、`instance_name`（MuMu 名称），或
+  `host` + `port`（显式 ADB 地址）。`adb_path` 在 `host` + `port` 下必填，在 MuMu 绑定下选填（由
+  MuMu 发现报告 adb）；`nemu_app_index` 是选填的整数；`application_id`、`capture_backend`、
+  `touch_backend` 选填，取值由 check-config 判定。文本去掉首尾空白，留空的选填框不写这个键；
+  必填项为空、数字解析不了，都在写任何东西之前直说。
+- **保存**：重新把文件当普通 JSON 读——`actingd_config` 没配或不是绝对路径、文件不存在或读不出、
+  JSON 解析失败、没有 `instances` 数组，各自直说——再把这一项追加进去，文件里其余的键一概原样、
+  次序不变。结果写到同目录的 `<配置文件名>.candidate-<pid>`（里面的相对路径按这个目录解析），在
+  事件循环之外跑 `<actingd_exe> check-config --config <临时文件>`（30 秒上限，不弹控制台窗口，
+  stdout 整段按一份 `actingcommand.actingd.check-config.v1` 报告解析）。只有 `status: ok` 且退出码
+  成功才改名覆盖原文件；否则删掉临时文件、原文件不动，窗口写明原因：原样写出 `error.code` 与
+  `stage`，或是 `actingd_exe` 没配或非绝对、拉起失败、超时、输出无法识别、报 ok 但退出码非零、
+  改名失败中的哪一种。
+- **生效**：没有热加载，保存的实例在 Runtime 重启后生效。再保存一次改的是同一项；「新增实例」
+  换一个新的 `instance_id` 另起一项。
 
 ## 安装引导程序 acsetup
 
@@ -274,9 +297,9 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   `strings.rs`，设置文件的读写在 `settings.rs`。
 
 `slint` 1.17.x，`default-features = false`；账本只读，控制入口只有启动器的两个按钮（启动 /
-请求关闭，见上），没有审批入口；不写测试。启动器在 `crates/acui-app/src/launcher.rs`，探测、
-请求关闭、记下启动按钮这三个客户端操作在 `acui-source`（`probe_runtime` / `request_shutdown` /
-`record_start`）。
+请求关闭，见上），没有审批入口；不写测试。启动器在 `crates/acui-app/src/launcher.rs`，实例配置
+窗口在 `instances.rs`，探测、请求关闭、记下启动按钮这三个客户端操作在 `acui-source`
+（`probe_runtime` / `request_shutdown` / `record_start`）。
 
 第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、sha2、
 zip、getrandom，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。

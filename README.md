@@ -218,8 +218,9 @@ single quotes (TOML literal strings), not as `"D:\\…"`.
 
 ## Launcher
 
-The third line of the top bar. On the left is the Runtime state from the last probe, then two buttons, and
-the line below it is the result of the last button press.
+The third line of the top bar. On the left is the Runtime state from the last probe, then two buttons (and
+last the instance-configuration button, see the next section), and the line below it is the result of the
+last button press.
 
 - **Runtime state**: probed once at startup, and probed again after every button press. A probe is one
   `RuntimeClient::connect`: on a connection it says "running · PID · owner epoch" (taken from its own
@@ -273,6 +274,31 @@ the line below it is the result of the last button press.
 
 Pause/resume, unlocking the owner, start-at-boot, the installer and network downloads are all outside this
 slice.
+
+## Instance configuration
+
+The 实例配置 / Instance Configuration button opens a second window that adds an entry to the `instances`
+of `actingd_config`, the file Start hands to actingd.
+
+- **The form**: `alias` is required; the new entry's `instance_id` is `instance_` + 32 lowercase hex
+  characters from the OS RNG, shown read-only; the binding is exactly one of `instance_index` (MuMu
+  index), `instance_name` (MuMu name), or `host` + `port` (an explicit ADB address). `adb_path` is
+  required with `host` + `port` and optional with a MuMu binding, whose discovery reports adb;
+  `nemu_app_index` is an optional whole number; `application_id`, `capture_backend` and `touch_backend`
+  are optional text that check-config judges. Text is trimmed and an empty optional box writes no key;
+  a missing required value or a number that does not parse is stated before anything is written.
+- **Save**: the file is read again as plain JSON — a missing or relative `actingd_config`, a missing or
+  unreadable file, JSON that does not parse, or no `instances` array is each stated as such — and the
+  entry is appended; every other key of the file is kept, in its order. The result goes to
+  `<config name>.candidate-<pid>` beside it (relative paths inside resolve against that directory) and
+  `<actingd_exe> check-config --config <candidate>` runs off the event loop (30 s bound, no console
+  window, stdout parsed whole as one `actingcommand.actingd.check-config.v1` report). Only `status: ok`
+  with a successful exit renames it over the file; otherwise the candidate is removed, the file stays as
+  it was, and the window says why: `error.code` and `stage` verbatim, or a missing or relative
+  `actingd_exe`, a spawn failure, the timeout, unrecognized output, ok with a non-zero exit, or the
+  rename failing.
+- **Effect**: there is no hot reload; a saved entry takes effect when the Runtime restarts. Saving again
+  updates that same entry; Add Instance starts a new one under a fresh `instance_id`.
 
 ## Setup wizard acsetup
 
@@ -360,9 +386,9 @@ One Cargo workspace, dependency direction app → model → rows ← source:
 
 `slint` 1.17.x, `default-features = false`; the ledger is read-only, the only control entry points are the
 launcher's two buttons (start / request shutdown, see above), and there is no approval entry point; no
-tests are written. The launcher is in `crates/acui-app/src/launcher.rs`, and the three client operations,
-probe, request shutdown and recording the start press, are in `acui-source` (`probe_runtime` /
-`request_shutdown` / `record_start`).
+tests are written. The launcher is in `crates/acui-app/src/launcher.rs`, the instance-configuration
+window in `instances.rs`, and the three client operations, probe, request shutdown and recording the start
+press, are in `acui-source` (`probe_runtime` / `request_shutdown` / `record_start`).
 
 A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
 depending only on slint, serde, sha2, zip and getrandom, and on none of the layers above; see the previous
