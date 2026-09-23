@@ -23,7 +23,7 @@ use acui_source::{discover_instances, probe_runtime, DiscoveredInstance};
 use serde_json::{json, Value};
 use slint::{ComponentHandle, SharedString};
 
-use crate::launcher::{configured, failure_text, status_text};
+use crate::launcher::{configured, failure_text, spawn_worker, status_text};
 use crate::strings::{fill, Labels};
 use crate::{
     models, shared, App, AppWindow, ConfigStrings, ConfigWindow, InstanceRow, PortMap, Scale,
@@ -277,7 +277,7 @@ fn discover(editor: &Editor, config: &ConfigWindow) {
             config.set_discovering(false);
         });
     };
-    if let Err(error) = std::thread::Builder::new().name("acui-discover".into()).spawn(worker) {
+    if let Err(error) = spawn_worker("acui-discover", worker) {
         // No stale result stays pickable under the failure.
         editor.discovered.lock().unwrap_or_else(PoisonError::into_inner).clear();
         config.set_discovered(models(vec![SharedString::from(labels.discover_pick)]));
@@ -379,7 +379,7 @@ fn save(editor: &Editor, config: &ConfigWindow) {
     config.set_saving(true);
     set_outcome(config, false, labels.checking);
     let (root, weak) = (launcher.state_root.clone(), config.as_weak());
-    std::thread::spawn(move || {
+    let saved = spawn_worker("acui-save", move || {
         let (failed, text) = match commit(labels, &path, &exe, &editing, &form) {
             Err(text) => (true, format!("{text}{}", labels.config_unchanged)),
             // One probe says whether a Runtime runs now, to point at the
@@ -397,6 +397,12 @@ fn save(editor: &Editor, config: &ConfigWindow) {
             set_outcome(&config, failed, text);
         });
     });
+    // Nothing was written: no candidate, no check-config.
+    if let Err(error) = saved {
+        config.set_saving(false);
+        let failed = fill(labels.thread_failed, &[&error.to_string()]);
+        set_outcome(config, true, format!("{failed}{}", labels.config_unchanged));
+    }
 }
 
 fn read_form(labels: &Labels, config: &ConfigWindow) -> Result<Form, String> {
@@ -568,11 +574,16 @@ fn check(labels: &Labels, exe: &Path, candidate: &Path) -> Result<(), String> {
     }
 }
 
-/// Kills and reaps the child. One the kill fails on is not waited on: it may never exit.
+/// Kills and reaps the child. One the kill fails on is not waited on: it may
+/// never exit. A wait that fails after a kill is said as that, not as a kill
+/// that failed.
 fn stop(labels: &Labels, child: &mut Child) -> String {
-    match child.kill().and_then(|()| child.wait()) {
-        Ok(_) => labels.check_stopped.to_string(),
+    match child.kill() {
         Err(error) => fill(labels.check_unstoppable, &[&error.to_string()]),
+        Ok(()) => match child.wait() {
+            Ok(_) => labels.check_stopped.to_string(),
+            Err(error) => fill(labels.check_unreaped, &[&error.to_string()]),
+        },
     }
 }
 

@@ -16,12 +16,11 @@ pub use actingcommand_contract::{
     ArtifactEvictionObservation, ArtifactKind, ClientActionKind, ClientActionRecord, EventActor,
     EventLinks, EventQuery, EventSeverity, EventSource, InstanceId, LedgerEventPosition,
     LedgerRecoveryGap, LedgerRecoveryState,
-    LedgerRunRecovery, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS,
-    MAX_RUNTIME_MATERIAL_CHUNK_BYTES, MAX_RUNTIME_MATERIAL_REPLY_BYTES, OriginModule,
+    LedgerRunRecovery, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule,
     ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
     PublicEventPayload, RuntimeEventQueryCursor, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit, RuntimeMaterialReadRequest,
-    RuntimeMaterialReadResult, RuntimeMaterialReadState, Sensitivity, TaskSemanticFact,
+    RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit, RuntimeMaterialReadState, Sensitivity,
+    TaskSemanticFact,
 };
 
 use std::collections::BTreeMap;

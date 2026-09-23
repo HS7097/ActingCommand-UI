@@ -417,7 +417,8 @@ list.
   with a successful exit renames it over the file; otherwise the candidate is removed, the file stays as
   it was, and the window says why: `error.code` and `stage` verbatim, or a missing or relative
   `actingd_exe`, writing the candidate failing, a spawn failure, no output reader thread, reading the
-  child's status failing, the timeout (these three also say whether check-config could be terminated),
+  child's status failing, the timeout (these three also say whether check-config could be terminated
+  and then reaped),
   unreadable or unrecognized output, ok with a non-zero exit, or the rename failing.
 - **Effect**: there is no hot reload; a saved entry takes effect when the Runtime restarts. After a save,
   one probe off the event loop says whether a Runtime is running now and points at the launcher's own
@@ -522,6 +523,14 @@ approval entry point; no tests are written. The launcher is in
 operations — probe, request shutdown, recording the start press, the online open's status and fact
 reads, and instance discovery — are in `acui-source` (`probe_runtime` / `request_shutdown` /
 `record_start` / `instance_facts` / `discover_instances`).
+
+Every background worker — the start's readiness poll and its record, request shutdown, unlock-owner, a
+save's check-config, discovery, a frame read, and acsetup's verify and layout steps — is started through
+`std::thread::Builder`. A thread the system refuses is stated, with the OS error, where that action
+reports, and what the worker would have cleared (the start or unlock in flight, the save in progress,
+the frame request) is reset: never a panic on the event loop. A launched actingd whose readiness poll
+cannot start keeps running, and the line says so and that pressing Start again probes it. A child that was killed but could not be reaped is
+said as that, not as a kill that failed.
 
 A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
 depending only on slint, serde, sha2, zip and getrandom, and on none of the layers above; see the previous
