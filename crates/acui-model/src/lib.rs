@@ -187,7 +187,7 @@ pub struct ReadScope {
     pub read_complete: bool,
 }
 
-/// The ledger facts about the open source, plus the two page-scoped counts.
+/// The ledger facts about the open source, plus the counts of the loaded rows.
 #[derive(Debug, Clone)]
 pub struct InstanceCard {
     pub state_root: String,
@@ -198,7 +198,8 @@ pub struct InstanceCard {
     pub corrupt_tail: Option<String>,
     pub repair_count: LedgerCount,
     pub writer: WriterFacts,
-    /// Rows this view has loaded so far — the one page-scoped count here.
+    /// Rows this view has loaded so far, hidden performance-monitor events not
+    /// among them.
     pub loaded_count: usize,
     /// The committed span of the whole snapshot, not of the loaded page.
     pub first_timestamp_unix_ms: Option<u64>,

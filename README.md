@@ -116,8 +116,8 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   rows already held locally and then call itself a ledger query (the one stated exception is the
   performance monitor, below). An id must be a complete canonical id,
   otherwise it states that a complete identifier is required. The "source module" options are **rebuilt
-  from the current page on every load**, and the selected item is resolved by **module name** — the list
-  changes, and an index is not a statement that keeps. (The options come from the loaded rows.)
+  from the loaded rows on every load**, and the selected item is resolved by **module name** — the list
+  changes, and an index is not a statement that keeps.
 - **Instance filtering by port (offline read face only)**: an ADB port is the identity of an emulator
   instance. At startup, at the same snapshot position, the `runtime.instance_bound` facts are read
   **once** via `actingcommand_ledger_forensics::instance_bindings`, yielding **every** `instance_id`
@@ -144,7 +144,8 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   one page's event limit, so one query reads it (following the cursor only when the reply's byte limit
   splits it), every filter applied by the ledger. Each page query costs the Runtime a read and
   verification of the whole ledger — online, on its ledger writer — so one fill reads at least one window
-  and stops at 256 more rows, position 1, 16 windows or one second, whichever comes first. Rows are listed
+  and starts no further window once it has 256 more rows, has read position 1, has read 16 windows or has
+  run for one second. Rows are listed
   **newest first**; "read earlier" at the bottom continues below what is loaded. The top bar permanently
   states the positions the loaded windows cover ("read positions A–B"), with "source incomplete" appended
   when a window's page said its read was incomplete.
@@ -166,10 +167,13 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   later page.
 - **Time upper bound**: the slider's starting position is the state it represents — the far right is
   "all", and the first drag narrows. The bound and its label follow the handle at once; the view reloads
-  once the handle has rested for 0.4 s. With a bound set, reading starts where the bound is estimated to
-  fall — from the committed time span, as if events were even in time, plus two windows of slack, with
-  no read spent on it — and the query's own time bound still decides what shows; the top bar states the
-  positions actually read.
+  once the handle has rested for 0.4 s (a tab switch or "read earlier" meanwhile applies the new bound
+  first). Reading only goes down, so with a bound set it must start above every matching event: the
+  start is estimated from the committed time span, as if events were even in time, plus two windows of
+  slack, and one probe with the view's own query asks for the first matching event above it. None:
+  reading starts there. One found: the start moves above it, the step doubling each time, for at most
+  three probes, and otherwise falls back to the pin. The query's own time bound still decides what
+  shows; the top bar states the positions actually read.
 - **Row types are no longer mirrored**: `acui-rows` re-exports the contract types directly, and only adds
   display functions such as local time, id abbreviation, wire codes and the display-name dictionary.
 
