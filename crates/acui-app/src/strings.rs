@@ -162,6 +162,8 @@ pub struct Labels {
     pub filter_instance_conflict: &'static str,
     pub filter_rejected: &'static str,
     pub read_failed: &'static str,
+    /// A follow tick's failure, shown beside the view's own.
+    pub follow_failed: &'static str,
     /// The launcher block in the top bar: status, two buttons, one line.
     pub launcher_title: &'static str,
     pub start: &'static str,
@@ -556,6 +558,7 @@ pub const ZH: Labels = Labels {
     filter_instance_conflict: "端口与实例编号只能选一",
     filter_rejected: "过滤条件无效：{}",
     read_failed: "读取失败：{}",
+    follow_failed: "跟随最新：{}",
     launcher_title: "启动器",
     start: "启动",
     request_shutdown: "请求关闭",
@@ -875,6 +878,7 @@ pub const EN: Labels = Labels {
     filter_instance_conflict: "Pick a port or type an instance id, not both",
     filter_rejected: "Filter rejected: {}",
     read_failed: "Read failed: {}",
+    follow_failed: "Following latest: {}",
     launcher_title: "Launcher",
     start: "Start",
     request_shutdown: "Request Shutdown",

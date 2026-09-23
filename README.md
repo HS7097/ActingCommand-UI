@@ -43,9 +43,10 @@ answers come from:
   top bar's launcher (see the "Launcher" section), and shutdown too goes only through this same typed
   client.
 - The first page at startup asks without a snapshot position; the `snapshot_ledger_position` the Runtime
-  states on that page is the position this session reads at — the pin. It moves only when a person jumps
-  to the latest or turns on following (below), each time by the same kind of fresh first page; offline
-  it never moves. Every page after that is
+  states on that page is the position this session reads at — the pin. A person's jump to the latest,
+  and turning following on, move it by the same kind of fresh first page; while following, each poll
+  moves it to the position the Runtime's fact snapshot states (below). Offline it never moves. Every page
+  after that is
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`,
   the same `EventQuery` bounded to one window, the same page limit, the same `next_cursor`.
 - Material goes through `RuntimeClient::read_material_complete` on the same connection: the client
@@ -159,8 +160,10 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   and writes nothing. Only when that position has moved does the pin move to it and are the windows
   between the old and new pin read onto the top of the view, with page queries; the loaded rows, the
   selection and a frame being read stay, and the task facts come from that same snapshot. Setting a time
-  bound while following stops it. Offline there is no running Runtime writing newer events, and both
-  controls are off.
+  bound while following stops it. The span's end follows the pin: taken from the newer windows when they
+  hold the event at the pin, otherwise one more one-event read. A failed tick shows as "following latest:
+  …" beside the view's own error, and stays until a later tick gets past it or following is turned off.
+  Offline there is no running Runtime writing newer events, and both controls are off.
 - **The performance monitor's routine events are hidden by default**: `perf.summary` arrives every 2
   seconds and would bury everything else, and the ledger query cannot exclude a module. Unless "show
   performance monitor" is ticked, the performance monitor is picked as the module, or the Health tab

@@ -203,14 +203,19 @@ fn main() -> Result<()> {
     };
 
     let source = Session::open(&state_root, args.source)?;
-    let (model, port_map) = match &source {
+    let (model, port_map, span_failure) = match &source {
         Session::Open(source) => {
             let port_map = match source.instance_bindings() {
                 Ok(Some(bindings)) => PortMap::Read(bindings),
                 Ok(None) => PortMap::Online,
                 Err(error) => PortMap::Failed(error),
             };
-            let span = time_span(source);
+            // A failed span read leaves the time cursor without a range, and
+            // shows once the first reload has read.
+            let (span, span_failure) = match time_span(source) {
+                Ok(span) => (span, None),
+                Err(error) => (None, Some(format!("时间跨度 / time span: {error}"))),
+            };
             let mut model = ViewModel::new(
                 source.open_report(),
                 source.snapshot_position(),
@@ -218,10 +223,10 @@ fn main() -> Result<()> {
                 span,
             );
             model.tab = args.tab.unwrap_or(LedgerView::Events);
-            (Some(RefCell::new(model)), port_map)
+            (Some(RefCell::new(model)), port_map, span_failure)
         }
         // Nothing is asked of a face that is not open.
-        Session::Unopened { .. } => (None, PortMap::Unopened),
+        Session::Unopened { .. } => (None, PortMap::Unopened, None),
     };
     let (port_options, port_choices) = port_options(labels, &port_map);
     let app = Rc::new(App {
@@ -245,6 +250,9 @@ fn main() -> Result<()> {
         cursor_rest: Timer::default(),
     });
     reload(&app, false);
+    if let (Some(failure), Some(model)) = (span_failure, &app.model) {
+        model.borrow_mut().query_error.get_or_insert(QueryError::ReadFailed(failure));
+    }
 
     let window = AppWindow::new()?;
     install_strings(&window, labels, matches!(app.source, Session::Open(ReadSource::Online(_))));
@@ -336,21 +344,23 @@ fn port_options(labels: &Labels, port_map: &PortMap) -> (Vec<SharedString>, Vec<
     (options, bindings.ports.iter().map(|entry| entry.port).collect())
 }
 
+/// The time of the first event at or after `from` in the snapshot; `None`
+/// when there is none.
+fn event_time(source: &ReadSource, from: Option<u64>) -> Result<Option<u64>> {
+    let query = EventQuery {
+        view: Some(LedgerView::Events),
+        from_sequence: from,
+        ..EventQuery::default()
+    };
+    let page = source.query(&query, 1, None)?;
+    Ok(page.events().first().map(|event| event.timestamp_unix_ms))
+}
+
 /// The committed time span, read as the first and the last event of the snapshot.
-fn time_span(source: &ReadSource) -> Option<(u64, u64)> {
-    let events = EventQuery { view: Some(LedgerView::Events), ..EventQuery::default() };
-    let first = source.query(&events, 1, None).ok()?;
-    let last = source
-        .query(
-            &EventQuery { from_sequence: Some(source.snapshot_position()), ..events },
-            1,
-            None,
-        )
-        .ok()?;
-    Some((
-        first.events().first()?.timestamp_unix_ms,
-        last.events().first()?.timestamp_unix_ms,
-    ))
+fn time_span(source: &ReadSource) -> Result<Option<(u64, u64)>> {
+    let first = event_time(source, None)?;
+    let last = event_time(source, Some(source.snapshot_position()))?;
+    Ok(first.zip(last))
 }
 
 /// How long one fill may keep reading windows after the first.
@@ -585,11 +595,8 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
             });
             model.borrow_mut().filters.to_timestamp_unix_ms = bound;
             // A time bound reads down from the past; following stops at once.
-            if bound.is_some() {
-                app.follow.stop();
-                if let Some(window) = weak.upgrade() {
-                    window.set_following(false);
-                }
+            if let (Some(_), Some(window)) = (bound, weak.upgrade()) {
+                stop_following(&window, &app);
             }
             let (rested, held) = (weak.clone(), Rc::downgrade(&app));
             app.cursor_rest.start(TimerMode::SingleShot, CURSOR_REST, move || {
@@ -683,17 +690,49 @@ fn jump_latest(window: &AppWindow, app: &Rc<App>) {
         }
         Ok(_) => {
             source.refresh_instances();
-            {
-                let mut model = model.borrow_mut();
-                model.set_pin(source.open_report(), source.snapshot_position());
-                model.set_span(time_span(source));
-                model.filters.to_timestamp_unix_ms = None;
-            }
-            window.set_cursor_value(1000.0);
-            reload(app, false);
+            start_at_pin(window, app, source, model);
         }
     }
     refresh(window, app);
+}
+
+/// The view starts over from a pin just moved: no time bound, the time cursor
+/// back at the top, the span's end read at the new pin. A failed span read
+/// shows beside what the reload states.
+fn start_at_pin(window: &AppWindow, app: &Rc<App>, source: &ReadSource, model: &RefCell<ViewModel>) {
+    let span_read = {
+        let mut model = model.borrow_mut();
+        model.set_pin(source.open_report(), source.snapshot_position());
+        model.filters.to_timestamp_unix_ms = None;
+        advance_span(source, &mut model, None)
+    };
+    window.set_cursor_value(1000.0);
+    reload(app, false);
+    if let Err(error) = span_read {
+        model.borrow_mut().query_error.get_or_insert(error);
+    }
+}
+
+/// Moves the span's end to the event at the pin: `time` when a read already
+/// holds that event, one read of it otherwise. A span never read is read whole.
+fn advance_span(
+    source: &ReadSource,
+    model: &mut ViewModel,
+    time: Option<u64>,
+) -> Result<(), QueryError> {
+    let failed = |error: anyhow::Error| {
+        QueryError::ReadFailed(format!("时间跨度 / time span: {error}"))
+    };
+    let span = match (model.span(), time) {
+        (Some((first, _)), Some(last)) => Some((first, last)),
+        (Some((first, last)), None) => {
+            let pin = Some(source.snapshot_position());
+            Some((first, event_time(source, pin).map_err(failed)?.unwrap_or(last)))
+        }
+        (None, _) => time_span(source).map_err(failed)?,
+    };
+    model.set_span(span);
+    Ok(())
 }
 
 /// Turning following on catches up like a jump to the latest, without the
@@ -702,32 +741,22 @@ fn jump_latest(window: &AppWindow, app: &Rc<App>) {
 /// has moved since. Then a tick runs every `FOLLOW_INTERVAL`. Turning it off
 /// stops the ticks and leaves the view as it is.
 fn set_following(window: &AppWindow, app: &Rc<App>, on: bool) {
-    if !on {
-        app.follow.stop();
-        return;
-    }
     let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
         return;
     };
-    match source.repin() {
-        Err(error) => {
-            model.borrow_mut().query_error = Some(QueryError::ReadFailed(error.to_string()));
-            window.set_following(false);
-            refresh(window, app);
-            return;
-        }
-        Ok(_) => {
-            {
-                let mut model = model.borrow_mut();
-                model.set_pin(source.open_report(), source.snapshot_position());
-                model.set_span(time_span(source));
-                model.filters.to_timestamp_unix_ms = None;
-            }
-            window.set_cursor_value(1000.0);
-            reload(app, false);
-            refresh(window, app);
-        }
+    if !on {
+        stop_following(window, app);
+        refresh(window, app);
+        return;
     }
+    if let Err(error) = source.repin() {
+        model.borrow_mut().query_error = Some(QueryError::ReadFailed(error.to_string()));
+        window.set_following(false);
+        refresh(window, app);
+        return;
+    }
+    start_at_pin(window, app, source, model);
+    refresh(window, app);
     let (weak, held) = (window.as_weak(), Rc::downgrade(app));
     app.follow.start(TimerMode::Repeated, FOLLOW_INTERVAL, move || {
         if let (Some(window), Some(app)) = (weak.upgrade(), held.upgrade()) {
@@ -736,38 +765,54 @@ fn set_following(window: &AppWindow, app: &Rc<App>, on: bool) {
     });
 }
 
+/// Stops following: no more ticks, the box unticked, and what a tick failed
+/// at goes with it; the view keeps what it read.
+fn stop_following(window: &AppWindow, app: &App) {
+    app.follow.stop();
+    window.set_following(false);
+    if let Some(model) = &app.model {
+        model.borrow_mut().follow_error = None;
+    }
+}
+
 /// One follow tick. One fact snapshot says where the ledger is and brings the
 /// task facts; only when the pin moved, or an earlier tick left windows unread,
-/// are the newer windows read onto the top of the view. No status is read and
-/// nothing is written to the ledger. A time bound set meanwhile stops the
-/// following.
+/// are the newer windows read onto the top of the view, and the span's end
+/// follows the pin. No status is read and nothing is written to the ledger. A
+/// failure stays in `follow_error` until a tick gets past it; a time bound set
+/// meanwhile stops the following.
 fn follow_tick(window: &AppWindow, app: &Rc<App>) {
     let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
         return;
     };
     if model.borrow().filters.to_timestamp_unix_ms.is_some() {
-        app.follow.stop();
-        window.set_following(false);
+        stop_following(window, app);
+        refresh(window, app);
         return;
     }
     let moved = match source.poll() {
         Ok(moved) => moved,
         Err(error) => {
-            model.borrow_mut().query_error = Some(QueryError::ReadFailed(error.to_string()));
+            model.borrow_mut().follow_error = Some(QueryError::ReadFailed(error.to_string()));
             refresh(window, app);
             return;
         }
     };
     {
         let mut model = model.borrow_mut();
+        let cleared = model.follow_error.take().is_some();
         if moved {
             model.set_pin(source.open_report(), source.snapshot_position());
         }
         if !moved && model.next_newer_window().is_none() {
+            drop(model);
+            if cleared {
+                refresh(window, app);
+            }
             return;
         }
-        model.query_error = None;
-        let started = Instant::now();
+        let (pin, started) = (source.snapshot_position(), Instant::now());
+        let mut pin_time = None;
         for read in 0..FILL_WINDOWS {
             if read > 0 && started.elapsed() >= FILL_BUDGET {
                 break;
@@ -780,11 +825,23 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
                     .map_err(|error| QueryError::ReadFailed(error.to_string()))
             });
             match pages {
-                Ok(pages) => model.apply_newer_window(window, &pages),
+                Ok(pages) => {
+                    pin_time = pin_time.or_else(|| {
+                        let mut events = pages.iter().flat_map(|page| page.events());
+                        let at_pin = events.find(|event| event.sequence == pin);
+                        at_pin.map(|event| event.timestamp_unix_ms)
+                    });
+                    model.apply_newer_window(window, &pages);
+                }
                 Err(error) => {
-                    model.query_error = Some(error);
+                    model.follow_error = Some(error);
                     break;
                 }
+            }
+        }
+        if moved {
+            if let Err(error) = advance_span(source, &mut model, pin_time) {
+                model.follow_error.get_or_insert(error);
             }
         }
     }
@@ -936,7 +993,14 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
     sync_ports(window, app, model.filters.port);
 
     let display = model.display_rows();
-    window.set_filter_error(query_error_text(labels, model.query_error.as_ref()).into());
+    let mut errors = Vec::new();
+    if let Some(error) = &model.query_error {
+        errors.push(query_error_text(labels, Some(error)));
+    }
+    if let Some(error) = &model.follow_error {
+        errors.push(fill(labels.follow_failed, &[&query_error_text(labels, Some(error))]));
+    }
+    window.set_filter_error(errors.join(" · ").into());
     window.set_has_more(model.has_earlier());
     let rows: Vec<RowItem> = display
         .iter()

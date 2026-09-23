@@ -232,6 +232,10 @@ pub struct ViewModel {
     pub filters: Filters,
     pub selected_sequence: Option<u64>,
     pub query_error: Option<QueryError>,
+    /// What the last follow tick failed at, shown beside `query_error`. Only a
+    /// follow tick sets or clears it, so following never wipes a failure of
+    /// another read.
+    pub follow_error: Option<QueryError>,
     /// Loaded rows in ledger order, oldest first; shown newest first.
     rows: Vec<ProjectedEvent>,
     recovery: Vec<RecoveryGroup>,
@@ -258,6 +262,7 @@ impl ViewModel {
             filters: Filters::default(),
             selected_sequence: None,
             query_error: None,
+            follow_error: None,
             rows: Vec::new(),
             recovery: Vec::new(),
             upper: snapshot_position,
@@ -363,21 +368,15 @@ impl ViewModel {
             .then(|| (from, (from + WINDOW - 1).min(self.snapshot_position)))
     }
 
-    /// One newer window read whole, put above the rows already loaded. The
-    /// span's end moves to the newest event the window holds, so following
-    /// needs no read of its own for it.
+    /// One newer window read whole, put above the rows already loaded. When
+    /// no window below was read yet — the reload's first one failed — the
+    /// view's lowest read position becomes this window's, so "read earlier"
+    /// reads what lies below it, once.
     pub fn apply_newer_window(&mut self, (from, to): (u64, u64), pages: &[RuntimeEventQueryPage]) {
-        let newest = pages
-            .iter()
-            .flat_map(|page| page.events())
-            .map(|event| event.timestamp_unix_ms)
-            .max();
-        if let (Some((first, last)), Some(newest)) = (self.span, newest) {
-            self.span = Some((first, last.max(newest)));
-        }
         let (mut events, complete) = self.take_window(pages);
         self.rows.append(&mut events);
         self.upper = to;
+        self.lowest_read.get_or_insert(from);
         self.scope = ReadScope {
             range: Some((self.scope.range.map_or(from, |(low, _)| low), to)),
             read_complete: self.scope.read_complete && complete,
@@ -552,7 +551,7 @@ impl ViewModel {
         }
     }
 
-    /// The position this whole session reads at; the same for every page.
+    /// The pin every page reads at; it moves only by `set_pin`.
     pub fn snapshot_position(&self) -> u64 {
         self.snapshot_position
     }

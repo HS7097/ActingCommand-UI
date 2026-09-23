@@ -248,17 +248,19 @@ impl EvidenceSource {
 pub struct OnlineSource {
     root: PathBuf,
     client: RuntimeClient,
-    /// The pin every page reads at; moved only by `repin`, on a person's jump
-    /// to the latest or while the console follows it.
+    /// The pin every page reads at. `repin` moves it on a person's jump to the
+    /// latest or when following is turned on; `poll` moves it while following.
     snapshot: Cell<u64>,
     read_complete: Cell<bool>,
     instances: RefCell<Result<RuntimeInstances, ClientFailure>>,
 }
 
-/// The running Runtime's instances, read once right after the session's page
-/// pin and never refreshed: one status read and one fact snapshot, each at the
-/// ledger position the Runtime stated for it, which may be past the pin. State
-/// at open, not state at the pinned snapshot, and the card says so. By contract
+/// The running Runtime's instances: one status read and one fact snapshot,
+/// right after the session's page pin and again on a person's jump to the
+/// latest; while following, each poll's fact snapshot refreshes the task facts
+/// alone. Each read is at the ledger position the Runtime stated for it, which
+/// may be past the pin: state as last read, not state at the pinned snapshot,
+/// and the card says so. By contract
 /// the Runtime records the status read as one observation event
 /// (`command.validated`), after the pin and so outside this session's snapshot.
 #[derive(Debug, Clone)]
@@ -302,8 +304,8 @@ pub enum OfflineFacts {
     },
 }
 
-/// What a session read about its instances, once: online, status and facts
-/// right after the pin; offline, the facts at the pin.
+/// What a session read about its instances: online, status and facts as last
+/// read (see `RuntimeInstances`); offline, the facts at the pin.
 pub enum InstanceFacts<'a> {
     Online(Ref<'a, Result<RuntimeInstances, ClientFailure>>),
     Offline(&'a OfflineFacts),
@@ -592,7 +594,8 @@ impl ReadSource {
         }
     }
 
-    /// The committed position this whole session reads at.
+    /// The committed position pages read at: offline, fixed for the whole
+    /// session; online, the pin as last moved.
     pub fn snapshot_position(&self) -> u64 {
         match self {
             Self::Offline { source, .. } => source.snapshot_position(),
@@ -635,8 +638,8 @@ impl ReadSource {
         }
     }
 
-    /// The instances' task facts, read once per session: online with their
-    /// status right after the pin, offline replayed at the pinned position.
+    /// The instances' task facts: online with their status, as last read;
+    /// offline replayed at the pinned position, once per session.
     pub fn instance_facts(&self) -> InstanceFacts<'_> {
         match self {
             Self::Offline { facts, .. } => InstanceFacts::Offline(facts),
