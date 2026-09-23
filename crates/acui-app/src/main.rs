@@ -203,30 +203,25 @@ fn main() -> Result<()> {
     };
 
     let source = Session::open(&state_root, args.source)?;
-    let (model, port_map, span_failure) = match &source {
+    let (model, port_map) = match &source {
         Session::Open(source) => {
             let port_map = match source.instance_bindings() {
                 Ok(Some(bindings)) => PortMap::Read(bindings),
                 Ok(None) => PortMap::Online,
                 Err(error) => PortMap::Failed(error),
             };
-            // A failed span read leaves the time cursor without a range, and
-            // shows once the first reload has read.
-            let (span, span_failure) = match time_span(source) {
-                Ok(span) => (span, None),
-                Err(error) => (None, Some(format!("时间跨度 / time span: {error}"))),
-            };
             let mut model = ViewModel::new(
                 source.open_report(),
                 source.snapshot_position(),
                 state_root.display().to_string(),
-                span,
+                None,
             );
+            advance_span(source, &mut model, None);
             model.tab = args.tab.unwrap_or(LedgerView::Events);
-            (Some(RefCell::new(model)), port_map, span_failure)
+            (Some(RefCell::new(model)), port_map)
         }
         // Nothing is asked of a face that is not open.
-        Session::Unopened { .. } => (None, PortMap::Unopened, None),
+        Session::Unopened { .. } => (None, PortMap::Unopened),
     };
     let (port_options, port_choices) = port_options(labels, &port_map);
     let app = Rc::new(App {
@@ -250,9 +245,6 @@ fn main() -> Result<()> {
         cursor_rest: Timer::default(),
     });
     reload(&app, false);
-    if let (Some(failure), Some(model)) = (span_failure, &app.model) {
-        model.borrow_mut().query_error.get_or_insert(QueryError::ReadFailed(failure));
-    }
 
     let window = AppWindow::new()?;
     install_strings(&window, labels, matches!(app.source, Session::Open(ReadSource::Online(_))));
@@ -697,42 +689,39 @@ fn jump_latest(window: &AppWindow, app: &Rc<App>) {
 }
 
 /// The view starts over from a pin just moved: no time bound, the time cursor
-/// back at the top, the span's end read at the new pin. A failed span read
-/// shows beside what the reload states.
+/// back at the top, the span's end read at the new pin.
 fn start_at_pin(window: &AppWindow, app: &Rc<App>, source: &ReadSource, model: &RefCell<ViewModel>) {
-    let span_read = {
+    {
         let mut model = model.borrow_mut();
         model.set_pin(source.open_report(), source.snapshot_position());
         model.filters.to_timestamp_unix_ms = None;
-        advance_span(source, &mut model, None)
-    };
+        advance_span(source, &mut model, None);
+    }
     window.set_cursor_value(1000.0);
     reload(app, false);
-    if let Err(error) = span_read {
-        model.borrow_mut().query_error.get_or_insert(error);
-    }
 }
 
 /// Moves the span's end to the event at the pin: `time` when a read already
-/// holds that event, one read of it otherwise. A span never read is read whole.
-fn advance_span(
-    source: &ReadSource,
-    model: &mut ViewModel,
-    time: Option<u64>,
-) -> Result<(), QueryError> {
-    let failed = |error: anyhow::Error| {
-        QueryError::ReadFailed(format!("时间跨度 / time span: {error}"))
-    };
+/// holds that event, one read of it otherwise. A span never read is read
+/// whole. A failed read leaves the span as it was and stays in `span_error`
+/// until one succeeds.
+fn advance_span(source: &ReadSource, model: &mut ViewModel, time: Option<u64>) {
     let span = match (model.span(), time) {
-        (Some((first, _)), Some(last)) => Some((first, last)),
-        (Some((first, last)), None) => {
-            let pin = Some(source.snapshot_position());
-            Some((first, event_time(source, pin).map_err(failed)?.unwrap_or(last)))
-        }
-        (None, _) => time_span(source).map_err(failed)?,
+        (Some((first, _)), Some(last)) => Ok(Some((first, last))),
+        (Some((first, last)), None) => event_time(source, Some(source.snapshot_position()))
+            .map(|time| Some((first, time.unwrap_or(last)))),
+        (None, _) => time_span(source),
     };
-    model.set_span(span);
-    Ok(())
+    match span {
+        Ok(span) => {
+            model.set_span(span);
+            model.span_error = None;
+        }
+        Err(error) => {
+            let reason = format!("时间跨度 / time span: {error}");
+            model.span_error = Some(QueryError::ReadFailed(reason));
+        }
+    }
 }
 
 /// Turning following on catches up like a jump to the latest, without the
@@ -813,7 +802,10 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
         }
         let (pin, started) = (source.snapshot_position(), Instant::now());
         let mut pin_time = None;
-        for read in 0..FILL_WINDOWS {
+        // Filters that do not form a query already show why; following reads
+        // nothing under them and does not state it a second time.
+        let reads = if model.query().is_ok() { FILL_WINDOWS } else { 0 };
+        for read in 0..reads {
             if read > 0 && started.elapsed() >= FILL_BUDGET {
                 break;
             }
@@ -839,10 +831,10 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
                 }
             }
         }
-        if moved {
-            if let Err(error) = advance_span(source, &mut model, pin_time) {
-                model.follow_error.get_or_insert(error);
-            }
+        // After a failed window the span's end waits for the next tick that
+        // moves the pin, rather than spend one more read now.
+        if moved && model.follow_error.is_none() {
+            advance_span(source, &mut model, pin_time);
         }
     }
     refresh(window, app);
@@ -999,6 +991,9 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
     }
     if let Some(error) = &model.follow_error {
         errors.push(fill(labels.follow_failed, &[&query_error_text(labels, Some(error))]));
+    }
+    if let Some(error) = &model.span_error {
+        errors.push(query_error_text(labels, Some(error)));
     }
     window.set_filter_error(errors.join(" · ").into());
     window.set_has_more(model.has_earlier());

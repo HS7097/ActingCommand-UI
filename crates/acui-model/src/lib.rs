@@ -236,6 +236,9 @@ pub struct ViewModel {
     /// follow tick sets or clears it, so following never wipes a failure of
     /// another read.
     pub follow_error: Option<QueryError>,
+    /// Why the committed span could not be read, which leaves the time cursor
+    /// without a range; stays until a span read succeeds.
+    pub span_error: Option<QueryError>,
     /// Loaded rows in ledger order, oldest first; shown newest first.
     rows: Vec<ProjectedEvent>,
     recovery: Vec<RecoveryGroup>,
@@ -263,6 +266,7 @@ impl ViewModel {
             selected_sequence: None,
             query_error: None,
             follow_error: None,
+            span_error: None,
             rows: Vec::new(),
             recovery: Vec::new(),
             upper: snapshot_position,
