@@ -48,6 +48,15 @@
 失败的客户端错误码）。`online` 连不上就**带着客户端的错误码直接退出**，不会悄悄改走离线。
 两张读面里，连上了却答不出第一页的 Runtime 在任何模式下都是错误，不回退。
 
+离线读面打不开时——`offline`，或 `auto` 退到离线——监控台不退出，窗口以**未打开**状态开台；
+刚装好的机器就是这样，账本要等 Runtime 第一次启动才建。这时实例卡只有第一行「读面」：写明账本
+未能打开，并原样写出读面自己的 `code`、`operation` 与 `detail`。账本对 io 错误只留系统的原文、
+不留错误种类，单凭这对码分不出「还没有账本」和「账本在但读不了」，`detail` 也从不解析；只有恰为
+`ledger_io` / `canonicalize_read_only_root` 时，才补一句状态根里可能还没有账本、多半是 Runtime
+从未启动过，并指向启动器的「启动」。不显示任何账本事实，连 0 也不写：列表写账本未打开，不留一片
+空白；页签、过滤框、编号框和时间滑块都停用；模块框、端口框与帧区写「账本未打开」。不向账本发
+任何查询，不读任何素材。启动器照常可用。
+
 依赖钉在 Runtime **main** 上（`Cargo.toml`）：
 
 ```
@@ -187,9 +196,9 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 - **就绪判定**：最多 60 次、每次 500 ms。每次先 `try_wait()`：子进程已退出就停下，写退出码、
   该日志里最后一行以 `FATAL actingd:` 开头的**原文**（日志读不了就写读取错误，没有这样的行就照直
   说没有）与日志路径；没退出就再 `connect` 一次，连上即就绪，写 PID 与 owner epoch，随后记下这次按钮
-  （见下）；本台若按离线读，追加一句「要在线读请带 `--source online` 重启」——**不会在会话
-  中途悄悄换读面**。60 次都没连上，写「仍未就绪」和最后一次客户端错误码。就绪**从不看守护进程的
-  输出**：只在早退之后读回日志、只取那一行，其中只认它是否带 `owner_resource_unconfirmed`（见下）。
+  （见下）；本台若按离线读（含离线读面未打开），追加一句「要在线读请带 `--source online` 重启」——
+  **不会在会话中途悄悄换读面**。60 次都没连上，写「仍未就绪」和最后一次客户端错误码。就绪**从不看
+  守护进程的输出**：只在早退之后读回日志、只取那一行，其中只认它是否带 `owner_resource_unconfirmed`（见下）。
 - **记下启动按钮**：Runtime 存在之后才记得下，所以顺序是探测 →（需要时）拉起 → 就绪判定 → 记账。
   记账新开一条连接，`begin_interaction()` 开一个交互，用 `record_client_action_receipt` 记一条
   `client_action`（surface `acui.launcher`，类别 `button`、不带值；这次按钮拉起了进程记 control
@@ -287,8 +296,9 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 - `acui-rows`：唯一为视图模型命名契约类型的地方；再导出契约类型，外加显示用函数、显示名
   字典，与两个由 `acui-source` 填、`acui-model` 读的平铺结构。
 - `acui-source`：读面，唯一碰状态根的地方。离线读面是 `EvidenceSource::open` / `query` /
-  `open_report` / `read_material`；`ReadSource::open(root, mode)` 按 `--source`
-  在它和在线的 `OnlineSource` 之间选一张，`material_reader()` 交给后台线程读素材。
+  `open_report` / `read_material`；`Session::open(root, mode)` 按 `--source`
+  在它和在线的 `OnlineSource` 之间选一张，账本拒开离线读面时交回带账本原错误的
+  `Session::Unopened`（`LedgerOpenFailure`：code、operation、detail），`material_reader()` 交给后台线程读素材。
 - `acui-model`：纯 Rust 视图模型（页签、过滤、翻页、恢复折叠、选中项），不依赖 slint，**也不
   出人话**——它只给结构化事实，措辞一律由 `acui-app` 按语言表挑。
 - `acui-app`：唯一依赖 slint 的 crate，`.slint` 文件在 `crates/acui-app/ui/`；两张语言表在

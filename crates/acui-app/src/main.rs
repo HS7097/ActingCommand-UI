@@ -25,7 +25,9 @@ use acui_rows::{
     LedgerView, OriginModule, PortBindings, PortEntry, ProjectedEvent, Sensitivity, WriterFacts,
     MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
-use acui_source::{MaterialOutcome, OfflineReason, ReadSource, SourceMode, MAX_FRAME_BYTES};
+use acui_source::{
+    MaterialOutcome, OfflineReason, ReadSource, Session, SourceMode, MAX_FRAME_BYTES,
+};
 use anyhow::{bail, Result};
 use settings::TextSize;
 use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
@@ -90,11 +92,12 @@ fn parse_args() -> Result<Args> {
     Ok(args)
 }
 
-/// One open state root, its view model, the chosen language, and the frame read
-/// in flight.
+/// One state root (its read face open or unopened), its view model when open,
+/// the chosen language, and the frame read in flight.
 struct App {
-    source: ReadSource,
-    model: RefCell<ViewModel>,
+    source: Session,
+    /// `None` while the read face is unopened: there is no page to model.
+    model: Option<RefCell<ViewModel>>,
     labels: &'static Labels,
     /// The module option list as the box currently shows it, and what each
     /// entry after the first one means. Rebuilt from every page.
@@ -124,6 +127,8 @@ struct App {
 enum PortMap {
     /// Online: the Runtime does not derive bindings through its page.
     Online,
+    /// The read face is unopened: nothing was read.
+    Unopened,
     /// The read face refused, with its typed code as the outermost context.
     Failed(anyhow::Error),
     Read(PortBindings),
@@ -133,7 +138,7 @@ impl App {
     fn port_bindings(&self) -> Option<&PortBindings> {
         match &self.port_map {
             PortMap::Read(bindings) => Some(bindings),
-            PortMap::Online | PortMap::Failed(_) => None,
+            PortMap::Online | PortMap::Unopened | PortMap::Failed(_) => None,
         }
     }
 
@@ -187,24 +192,31 @@ fn main() -> Result<()> {
         },
     };
 
-    let source = ReadSource::open(&state_root, args.source)?;
-    let port_map = match source.instance_bindings() {
-        Ok(Some(bindings)) => PortMap::Read(bindings),
-        Ok(None) => PortMap::Online,
-        Err(error) => PortMap::Failed(error),
+    let source = Session::open(&state_root, args.source)?;
+    let (model, port_map) = match &source {
+        Session::Open(source) => {
+            let port_map = match source.instance_bindings() {
+                Ok(Some(bindings)) => PortMap::Read(bindings),
+                Ok(None) => PortMap::Online,
+                Err(error) => PortMap::Failed(error),
+            };
+            let span = time_span(source);
+            let mut model = ViewModel::new(
+                source.open_report(),
+                source.snapshot_position(),
+                state_root.display().to_string(),
+                span,
+            );
+            model.tab = args.tab.unwrap_or(LedgerView::Events);
+            (Some(RefCell::new(model)), port_map)
+        }
+        // Nothing is asked of a face that is not open.
+        Session::Unopened { .. } => (None, PortMap::Unopened),
     };
     let (port_options, port_choices) = port_options(labels, &port_map);
-    let span = time_span(&source);
-    let mut model = ViewModel::new(
-        source.open_report(),
-        source.snapshot_position(),
-        state_root.display().to_string(),
-        span,
-    );
-    model.tab = args.tab.unwrap_or(LedgerView::Events);
     let app = Rc::new(App {
         source,
-        model: RefCell::new(model),
+        model,
         labels,
         module_options: RefCell::new(Vec::new()),
         module_choices: RefCell::new(Vec::new()),
@@ -223,7 +235,7 @@ fn main() -> Result<()> {
     reload(&app, false);
 
     let window = AppWindow::new()?;
-    install_strings(&window, labels, matches!(app.source, ReadSource::Online(_)));
+    install_strings(&window, labels, matches!(app.source, Session::Open(ReadSource::Online(_))));
     window.global::<Scale>().set_factor(stored.text_size.factor());
     window.set_text_size_index(stored.text_size.index());
     window.set_language_index(if language == Language::Zh { 0 } else { 1 });
@@ -279,9 +291,9 @@ fn install_strings(window: &AppWindow, labels: &'static Labels, online: bool) {
 /// The port box's items: the first means every instance, then one per port,
 /// ascending, naming the port and the member its latest binding is for, with
 /// ` +n` for the further members of the same port. A map with nothing to
-/// pick — no binding facts, facts that name no port, online, or a refused
-/// read — gives one item that says which, and no choices, so the box is
-/// disabled.
+/// pick — no binding facts, facts that name no port, online, an unopened
+/// face, or a refused read — gives one item that says which, and no choices,
+/// so the box is disabled.
 fn port_options(labels: &Labels, port_map: &PortMap) -> (Vec<SharedString>, Vec<u16>) {
     let bindings = match port_map {
         PortMap::Read(bindings) if !bindings.ports.is_empty() => bindings,
@@ -290,6 +302,7 @@ fn port_options(labels: &Labels, port_map: &PortMap) -> (Vec<SharedString>, Vec<
         }
         PortMap::Read(_) => return (vec![labels.no_binding_records.into()], Vec::new()),
         PortMap::Online => return (vec![labels.port_online_unsupported.into()], Vec::new()),
+        PortMap::Unopened => return (vec![labels.ledger_unopened.into()], Vec::new()),
         PortMap::Failed(error) => return (vec![error.to_string().into()], Vec::new()),
     };
     let mut options = vec![SharedString::from(labels.all_instances)];
@@ -325,11 +338,14 @@ fn time_span(source: &ReadSource) -> Option<(u64, u64)> {
 
 /// Re-runs the current filters as one ledger query at the pinned snapshot.
 fn reload(app: &Rc<App>, append: bool) {
-    let mut model = app.model.borrow_mut();
+    let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
+        return;
+    };
+    let mut model = model.borrow_mut();
     let cursor = if append { model.cursor() } else { None };
     match model.query() {
         Err(error) => model.query_error = Some(error),
-        Ok(query) => match app.source.query(&query, MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor) {
+        Ok(query) => match source.query(&query, MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor) {
             Ok(page) => {
                 model.query_error = None;
                 model.apply(page, append);
@@ -344,10 +360,14 @@ fn reload(app: &Rc<App>, append: bool) {
 
 fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
     macro_rules! on {
-        ($setter:ident, |$app:ident, $value:ident| $body:expr) => {{
+        ($setter:ident, |$app:ident, $model:ident, $value:ident| $body:expr) => {{
             let weak = window.as_weak();
             let $app = Rc::clone(app);
             window.$setter(move |$value| {
+                // Unopened there is no model, and every control that calls these is off.
+                let Some($model) = &$app.model else {
+                    return;
+                };
                 $body;
                 if let Some(window) = weak.upgrade() {
                     refresh(&window, &$app);
@@ -356,12 +376,12 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         }};
     }
 
-    on!(on_tab_changed, |app, index| {
-        app.model.borrow_mut().tab = ALL_TABS[index.clamp(0, ALL_TABS.len() as i32 - 1) as usize];
+    on!(on_tab_changed, |app, model, index| {
+        model.borrow_mut().tab = ALL_TABS[index.clamp(0, ALL_TABS.len() as i32 - 1) as usize];
         reload(&app, false)
     });
-    on!(on_minimum_severity_changed, |app, index| {
-        app.model.borrow_mut().filters.minimum_severity = match index {
+    on!(on_minimum_severity_changed, |app, model, index| {
+        model.borrow_mut().filters.minimum_severity = match index {
             1 => Some(EventSeverity::Warning),
             2 => Some(EventSeverity::Error),
             3 => Some(EventSeverity::Fatal),
@@ -369,8 +389,8 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         };
         reload(&app, false)
     });
-    on!(on_maximum_severity_changed, |app, index| {
-        app.model.borrow_mut().filters.maximum_severity = match index {
+    on!(on_maximum_severity_changed, |app, model, index| {
+        model.borrow_mut().filters.maximum_severity = match index {
             1 => Some(EventSeverity::Info),
             2 => Some(EventSeverity::Warning),
             3 => Some(EventSeverity::Error),
@@ -380,7 +400,7 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
     });
     // By name against the list as it stands now, never by a position taken from
     // a list that the next page may have rebuilt.
-    on!(on_module_changed, |app, name| {
+    on!(on_module_changed, |app, model, name| {
         let module = app
             .module_options
             .borrow()
@@ -388,12 +408,12 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
             .position(|option| *option == name)
             .and_then(|index| index.checked_sub(1))
             .and_then(|index| app.module_choices.borrow().get(index).copied());
-        app.model.borrow_mut().filters.origin_module = module;
+        model.borrow_mut().filters.origin_module = module;
         reload(&app, false)
     });
     // A port is one instance: its whole set of ids goes into the query, or
     // nothing does. The first item, and any name not on the list, clears both.
-    on!(on_port_changed, |app, name| {
+    on!(on_port_changed, |app, model, name| {
         let entry = app
             .port_options
             .iter()
@@ -402,27 +422,27 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
             .and_then(|index| app.port_choices.get(index))
             .and_then(|port| app.port_entry(*port));
         {
-            let mut model = app.model.borrow_mut();
+            let mut model = model.borrow_mut();
             model.filters.port = entry.map(|entry| entry.port);
             model.filters.instance_ids =
                 entry.map(|entry| entry.members.clone()).unwrap_or_default();
         }
         reload(&app, false)
     });
-    on!(on_id_changed, |app, text| {
-        app.model.borrow_mut().filters.id_text = text.to_string();
+    on!(on_id_changed, |app, model, text| {
+        model.borrow_mut().filters.id_text = text.to_string();
         reload(&app, false)
     });
-    on!(on_cursor_changed, |app, value| {
-        let bound = app.model.borrow().span().and_then(|(from, to)| {
+    on!(on_cursor_changed, |app, model, value| {
+        let bound = model.borrow().span().and_then(|(from, to)| {
             let ratio = (value as f64 / 1000.0).clamp(0.0, 1.0);
             (ratio < 1.0).then(|| from + ((to - from) as f64 * ratio) as u64)
         });
-        app.model.borrow_mut().filters.to_timestamp_unix_ms = bound;
+        model.borrow_mut().filters.to_timestamp_unix_ms = bound;
         reload(&app, false)
     });
-    on!(on_row_clicked, |app, index| {
-        let mut model = app.model.borrow_mut();
+    on!(on_row_clicked, |app, model, index| {
+        let mut model = model.borrow_mut();
         let selected = match model.display_rows().get(index.max(0) as usize) {
             Some(DisplayRow::Event { event, .. }) => Some(event.sequence),
             _ => None,
@@ -463,7 +483,11 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
 
 fn refresh(window: &AppWindow, app: &Rc<App>) {
     let labels = app.labels;
-    let model = app.model.borrow();
+    let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
+        paint_unopened(window, app);
+        return;
+    };
+    let model = model.borrow();
     let card = model.instance_card(app.port_bindings());
 
     window.set_ledger_dir_value(card.state_root.as_str().into());
@@ -681,7 +705,7 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
             ));
             let target = model.frame_target();
             let sequence = target.as_ref().map(|target| target.event.sequence);
-            update_frame(window, app, target, detail.frame_size);
+            update_frame(window, app, source, target, detail.frame_size);
             // The size the event states, else what this event's verified frame
             // decoded to, else the overlays' own extent.
             let frame_size = detail
@@ -723,6 +747,30 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
             clear_frame(window, app, labels.no_event_selected.to_string());
         }
     }
+}
+
+/// The window over an unopened read face, painted once: nothing was read, so
+/// the card has the read-face line only, and the list, the boxes and the frame
+/// pane say the ledger is not opened instead of standing empty, which would
+/// read as an empty ledger. The controls that would query it are off.
+fn paint_unopened(window: &AppWindow, app: &Rc<App>) {
+    let labels = app.labels;
+    window.set_ledger_dir_value(app.source.state_root().display().to_string().into());
+    window.set_storage_format_value(labels.none.into());
+    window.set_read_up_to_text(labels.ledger_unopened.into());
+    // The card's only line, and so the one that may wrap.
+    window.set_card_lines(models(vec![FieldLine {
+        label: labels.field("source").into(),
+        value: source_text(labels, &app.source).into(),
+        raw: "offline".into(),
+        wrap: true,
+    }]));
+    window.set_tab_labels(shared(&labels.tabs));
+    window.set_active_tab(-1);
+    window.set_module_options(models(vec![SharedString::from(labels.ledger_unopened)]));
+    sync_ports(window, app, None);
+    window.set_unopened_note(labels.list_unopened.into());
+    window.set_frame_note(labels.list_unopened.into());
 }
 
 /// Rebuilds the module option list from this page and puts the box back on the
@@ -817,6 +865,7 @@ fn detail_lines(labels: &Labels, event: &ProjectedEvent) -> Vec<FieldLine> {
 fn update_frame(
     window: &AppWindow,
     app: &Rc<App>,
+    source: &ReadSource,
     target: Option<FrameTarget>,
     payload_frame_size: Option<(f32, f32)>,
 ) {
@@ -858,8 +907,8 @@ fn update_frame(
     let shared = Arc::clone(&app.generation);
     let frame = Arc::clone(&app.frame);
     let worker = Arc::clone(&app.worker);
-    let reader = app.source.material_reader();
-    let snapshot = app.source.snapshot_position();
+    let reader = source.material_reader();
+    let snapshot = source.snapshot_position();
     let weak = window.as_weak();
     std::thread::spawn(move || {
         // One worker at a time. A superseded read stops at its next range
@@ -1042,15 +1091,28 @@ fn writer_text(labels: &Labels, writer: &WriterFacts) -> String {
     }
 }
 
-fn source_text(labels: &Labels, source: &ReadSource) -> String {
-    match source.offline_reason() {
+fn source_text(labels: &Labels, source: &Session) -> String {
+    let mut text = match source.offline_reason() {
         None => labels.source_online.to_string(),
         Some(OfflineReason::Requested) => labels.source_offline_requested.to_string(),
         Some(OfflineReason::RuntimeInfoAbsent) => labels.source_offline_absent.to_string(),
         Some(OfflineReason::ConnectFailed { code, operation }) => {
             fill(labels.source_offline_failed, &[code, operation])
         }
+    };
+    // The ledger's own words, verbatim. Its pair alone cannot tell a state
+    // root with no ledger yet from an unreadable one, so the hint is a guess
+    // and says so.
+    if let Session::Unopened { failure, .. } = source {
+        let detail = failure.detail.as_deref().unwrap_or(labels.none);
+        text.push_str(" · ");
+        text.push_str(&fill(labels.source_unopened, &[failure.code, failure.operation, detail]));
+        if (failure.code, failure.operation) == ("ledger_io", "canonicalize_read_only_root") {
+            text.push_str(" · ");
+            text.push_str(labels.source_unopened_hint);
+        }
     }
+    text
 }
 
 fn age_text(labels: &Labels, timestamp_unix_ms: u64) -> String {

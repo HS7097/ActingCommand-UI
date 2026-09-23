@@ -61,6 +61,19 @@ chosen and why (`runtime-info.json` absent, or the client error code of the fail
 switch to offline. Across both read faces, a Runtime that connects but cannot answer the first page is an
 error in any mode, with no fallback.
 
+When the offline read face cannot be opened — with `offline`, or with `auto` falling back to it — the
+console does not exit: the window opens **unopened**, which is what a fresh install looks like, since the
+Runtime creates the ledger on its first start. The instance card then has only its first line, "read
+face", which says the ledger could not be opened and states the read face's own `code`, `operation` and
+`detail` verbatim. The ledger keeps an io error's OS text, not its kind, so the pair alone cannot tell "no
+ledger yet" from "a ledger that cannot be read", and `detail` is never parsed; only for exactly
+`ledger_io` / `canonicalize_read_only_root` does the line add that the state root probably has no ledger
+yet, most likely because the Runtime has never been started, and point at the launcher's Start. No ledger
+fact is shown, not even a zero: the list says the ledger is not opened instead of standing empty; the
+tabs, the filter boxes, the id box and the time slider are off; the module and port boxes and the frame
+pane say "ledger not opened". Nothing is asked of the ledger and no material is read. The launcher works
+as usual.
+
 Dependencies are pinned to the Runtime's **main** (`Cargo.toml`):
 
 ```
@@ -239,11 +252,12 @@ the line below it is the result of the last button press.
   `FATAL actingd:` **verbatim** — or that the log could not be read, with the error, or holds no such
   line — and the log path; if it has not exited it
   does one more `connect`, and a connection means ready, stating the PID and owner epoch, and then the
-  press is recorded (see below). If this console is reading offline, it appends the sentence "to read
-  online, restart with `--source online`" — it **never quietly switches read face mid-session**. If all
-  60 attempts fail to connect, it says "still not ready" and the last client error code. Readiness is
-  **never read from the daemon's output**: the log is read back only after an early exit, for that one
-  line, and nothing in it is interpreted but whether it names `owner_resource_unconfirmed` (below).
+  press is recorded (see below). If this console is reading offline, or its offline face is unopened, it
+  appends the sentence "to read online, restart with `--source online`" — it **never quietly switches
+  read face mid-session**. If all 60 attempts fail to connect, it says "still not ready" and the last
+  client error code. Readiness is **never read from the daemon's output**: the log is read back only
+  after an early exit, for that one line, and nothing in it is interpreted but whether it names
+  `owner_resource_unconfirmed` (below).
 - **Recording the start press**: the press can only be recorded once a Runtime exists, so the order is
   probe → (if needed) launch → readiness decision → record. Recording opens a new connection, opens an
   interaction with `begin_interaction()` and records one `client_action` with
@@ -376,8 +390,10 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   `acui-source` and read by `acui-model`.
 - `acui-source`: the read face, the only place that touches the state root. The offline face is
   `EvidenceSource::open` / `query` / `open_report` / `read_material`;
-  `ReadSource::open(root, mode)` picks one of it and the online `OnlineSource` according to `--source`,
-  and `material_reader()` hands material reading to the background thread.
+  `Session::open(root, mode)` picks one of it and the online `OnlineSource` according to `--source`, or
+  gives back `Session::Unopened` with the ledger's own error (`LedgerOpenFailure`: code, operation,
+  detail) when the ledger refuses the offline face, and `material_reader()` hands material reading to
+  the background thread.
 - `acui-model`: a pure Rust view model (tabs, filtering, paging, recovery collapsing, selection), with no
   dependency on slint and **no plain language either** — it gives structured facts only, and all wording
   is chosen by `acui-app` from the language tables.
