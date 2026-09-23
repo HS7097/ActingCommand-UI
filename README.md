@@ -250,13 +250,15 @@ the line below it is the result of the last button press.
   failed, the Runtime's refusal code (if any) **verbatim** plus the client error code and operation name
   — the Runtime is still reported ready / running. Its kind is `command`, not `button`: the contract
   refuses any value on a `button`. If readiness fails there is no connection and **nothing is
-  recorded**; the failure is shown only on the line — the one launcher action that can go unrecorded.
+  recorded**; the failure is shown only on the line — the one launcher action that can take effect
+  without being recorded.
 - **Request shutdown**: only through the typed client, never killing a process. It opens a new connection,
   opens an interaction with `begin_interaction()`, first records this button press as a `client_action`
   with `record_client_action_receipt` (surface `acui.launcher`, control `request_shutdown`), and only
   after obtaining a receipt bearing terminal does it send `request_shutdown()` — the action lands in the
   ledger first, then the request. If it is refused as `runtime_busy` — the Runtime holds its lifecycle
-  admission briefly after another request, such as a status read — it sends `request_shutdown()` again
+  admission briefly after another request, such as a status read; it is also refused as busy while a
+  lease is active or requests are queued, which these retries will not outlast — it sends `request_shutdown()` again
   on the same interaction a second later, at most 5 attempts in all, the line saying "busy, retry n/5"
   meanwhile; the press is still recorded only once. If accepted, it states the receipt state, the
   request id and the sequence number at which the action landed in the ledger; if refused otherwise

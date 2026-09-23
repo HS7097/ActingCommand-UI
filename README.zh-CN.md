@@ -194,12 +194,12 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   拉起了进程），回执必须带 terminal；在工作线程上做，不占窗口的事件循环。结果行追加动作落账的
   序号；记账失败就把 Runtime 的拒绝码（若有）**原样**写出，外加客户端错误码与操作名——Runtime
   仍照写已就绪 / 运行中。类别是 `command` 而不是 `button`：契约不许 `button` 带值。就绪判定
-  失败时没有连接，**什么也不记**，失败只写在结果行上——这是启动器里唯一可能不落账的动作。
+  失败时没有连接，**什么也不记**，失败只写在结果行上——这是启动器里唯一可能生效却不落账的动作。
 - **请求关闭**：只走类型化客户端，从不杀进程。新开一条连接，`begin_interaction()` 开一个
   交互，先用 `record_client_action_receipt` 把这次按钮记成 `client_action`（surface
   `acui.launcher`、control `request_shutdown`），拿到带 terminal 的回执后再发
   `request_shutdown()`——动作先落账，再请求。被拒为 `runtime_busy`（别的请求——比如一次状态
-  查询——之后 Runtime 会短暂占着生命周期准入）就隔一秒在同一个交互上再发，总共最多 5 次，其间
+  查询——之后 Runtime 会短暂占着生命周期准入；有租约在用或有排队请求时也会被拒为忙碌，这几次重试等不过去）就隔一秒在同一个交互上再发，总共最多 5 次，其间
   结果行写「忙碌重试 n/5」；按钮仍只记一次。受理了写回执状态、请求编号、动作落账的序号；以别的
   理由被拒（owner / governance 等）或第 5 次仍忙，就把 Runtime 的拒绝码**原样**写出，外加客户端
   错误码与操作名；其他拒绝或错误立即停下。最终结果行也写发了几次。之后再探测一次状态——Runtime

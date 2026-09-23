@@ -445,6 +445,8 @@ pub struct ShutdownOutcome {
 /// Shutdown requests one press sends at most. The Runtime refuses one as
 /// `runtime_busy` while another request still holds its lifecycle admission,
 /// as one briefly does after its reply; each refusal is its own ledgered request.
+/// It is also refused as busy while a lease is active or requests are queued,
+/// which these retries will not outlast.
 pub const SHUTDOWN_ATTEMPTS: u32 = 5;
 const SHUTDOWN_BUSY_WAIT: Duration = Duration::from_secs(1);
 
