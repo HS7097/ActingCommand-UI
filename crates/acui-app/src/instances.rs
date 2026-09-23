@@ -7,21 +7,23 @@
 //! save re-reads the file, writes a candidate beside it (relative paths inside
 //! resolve against that directory), runs `<actingd_exe> check-config` on it off
 //! the event loop, and renames it over the file only on a parsed `ok` with a
-//! successful exit.
+//! successful exit. Discovery asks the running Runtime which MuMu instances its
+//! provider reports; picking an unbound one starts an entry bound by its index.
 
 use std::cell::RefCell;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use acui_rows::{code, InstanceId};
-use acui_source::probe_runtime;
+use acui_source::{discover_instances, probe_runtime, DiscoveredInstance};
 use serde_json::{json, Value};
 use slint::{ComponentHandle, SharedString};
 
-use crate::launcher::{configured, status_text};
+use crate::launcher::{configured, failure_text, status_text};
 use crate::strings::{fill, Labels};
 use crate::{
     models, shared, App, AppWindow, ConfigStrings, ConfigWindow, InstanceRow, PortMap, Scale,
@@ -45,6 +47,9 @@ struct Editor {
     editing: RefCell<Option<Editing>>,
     /// The entries as last listed, for a click on a row.
     entries: RefCell<Vec<Value>>,
+    /// The last discovery's instances, in the box's order after its
+    /// placeholder; the discovery thread writes them before it posts.
+    discovered: Arc<Mutex<Vec<DiscoveredInstance>>>,
 }
 
 #[derive(Clone)]
@@ -66,6 +71,7 @@ pub fn install(window: &AppWindow, config: &ConfigWindow, app: &Rc<App>) {
         app: Rc::clone(app),
         editing: RefCell::new(None),
         entries: RefCell::new(Vec::new()),
+        discovered: Arc::new(Mutex::new(Vec::new())),
     });
     {
         let (main, weak, editor) = (window.as_weak(), config.as_weak(), Rc::clone(&editor));
@@ -94,6 +100,15 @@ pub fn install(window: &AppWindow, config: &ConfigWindow, app: &Rc<App>) {
     config.on_add_instance(on(begin_new));
     config.on_save(on(save));
     config.on_reload(on(load_list));
+    config.on_discover(on(discover));
+    {
+        let (weak, editor) = (config.as_weak(), Rc::clone(&editor));
+        config.on_discovered_picked(move |index| {
+            if let Some(config) = weak.upgrade() {
+                pick(&editor, &config, index);
+            }
+        });
+    }
     let weak = config.as_weak();
     config.on_row_clicked(move |index| {
         if let Some(config) = weak.upgrade() {
@@ -111,6 +126,8 @@ fn fill_strings(global: ConfigStrings<'_>, labels: &Labels) {
     global.set_placeholders(shared(&labels.form_placeholders));
     global.set_optional_note(labels.optional_note.into());
     global.set_save(labels.check_and_save.into());
+    global.set_discover(labels.discover.into());
+    global.set_discover_use(labels.discover_use.into());
 }
 
 /// Reads the file again and lists it. A reason it cannot be listed takes the
@@ -221,6 +238,119 @@ fn show_form(config: &ConfigWindow, id: Option<&str>, entry: &Value) {
     config.set_form_application(value("application_id"));
     config.set_form_capture(value("capture_backend"));
     config.set_form_touch(value("touch_backend"));
+}
+
+/// Asks the running Runtime for its provider's instance discovery, off the
+/// event loop, and fills the discovery box with what it reported. The Runtime
+/// records the query itself; nothing is bound and no device is touched.
+fn discover(editor: &Editor, config: &ConfigWindow) {
+    let labels = editor.app.labels;
+    config.set_discovering(true);
+    config.set_discover_failed(false);
+    config.set_discover_note(labels.discovering.into());
+    let root = editor.app.launcher.state_root.clone();
+    let (weak, store) = (config.as_weak(), Arc::clone(&editor.discovered));
+    let worker = move || {
+        let (failed, note, items) = match discover_instances(&root) {
+            Ok(discovery) => {
+                let items: Vec<String> =
+                    discovery.instances.iter().map(|found| found_text(labels, found)).collect();
+                let count = discovery.instances.len().to_string();
+                let sequence = discovery.sequence.to_string();
+                let parts = [count.as_str(), &discovery.provider_version, &sequence];
+                *store.lock().unwrap_or_else(PoisonError::into_inner) = discovery.instances;
+                (false, fill(labels.discovered, &parts), items)
+            }
+            Err(failure) => {
+                store.lock().unwrap_or_else(PoisonError::into_inner).clear();
+                let (refused, failed) = (labels.discover_refused, labels.discover_failed);
+                (true, failure_text(labels, refused, failed, &failure), Vec::new())
+            }
+        };
+        let _ = weak.upgrade_in_event_loop(move |config| {
+            let mut model = vec![SharedString::from(labels.discover_pick)];
+            model.extend(items.into_iter().map(SharedString::from));
+            config.set_discovered(models(model));
+            config.set_discovered_index(0);
+            config.set_discover_failed(failed);
+            config.set_discover_note(note.into());
+            config.set_discovering(false);
+        });
+    };
+    if let Err(error) = std::thread::Builder::new().name("acui-discover".into()).spawn(worker) {
+        // No stale result stays pickable under the failure.
+        editor.discovered.lock().unwrap_or_else(PoisonError::into_inner).clear();
+        config.set_discovered(models(vec![SharedString::from(labels.discover_pick)]));
+        config.set_discovered_index(0);
+        config.set_discovering(false);
+        config.set_discover_failed(true);
+        config.set_discover_note(fill(labels.discover_spawn_failed, &[&error.to_string()]).into());
+    }
+}
+
+/// One discovered instance as the box lists it; the name, up to 256 bytes,
+/// comes last, so a long one cannot push the rest out of a narrow box.
+fn found_text(labels: &Labels, found: &DiscoveredInstance) -> String {
+    let host = found.adb_host.as_deref().unwrap_or(labels.none);
+    let port = found.adb_port.map_or_else(|| labels.none.to_string(), |port| port.to_string());
+    let running = if found.running { labels.instance_running } else { labels.instance_stopped };
+    let mut parts =
+        vec![fill(labels.discovered_index, &[&found.index.to_string()]), running.to_string()];
+    if let Some(alias) = &found.bound_alias {
+        parts.push(fill(labels.bound_to, &[alias]));
+    }
+    parts.push(format!("{host}:{port}"));
+    if let Some(version) = &found.android_version {
+        parts.push(fill(labels.android_version, &[version]));
+    }
+    parts.push(found.name.clone());
+    parts.join(" · ")
+}
+
+/// Use Selected in the discovery box: an instance neither the file nor the
+/// running Runtime binds starts a new entry bound by its MuMu index, the rest of
+/// the form left to fill. One the file already has an entry for is pointed at in
+/// the list (the running Runtime may not have loaded it yet), and one the
+/// Runtime binds is named; neither changes the form.
+fn pick(editor: &Editor, config: &ConfigWindow, index: i32) {
+    let labels = editor.app.labels;
+    let found = usize::try_from(index)
+        .ok()
+        .and_then(|index| index.checked_sub(1))
+        .and_then(|index| {
+            editor.discovered.lock().unwrap_or_else(PoisonError::into_inner).get(index).cloned()
+        });
+    let Some(found) = found else {
+        return;
+    };
+    config.set_discovered_index(0);
+    let number = found.index.to_string();
+    // The file's own entry for this instance, by the keys the Runtime binds it
+    // by: its index, its name, or (an explicit entry) its ADB port.
+    let listed = editor.entries.borrow().iter().find_map(|entry| {
+        let number = |key| field(entry, key).and_then(Value::as_u64);
+        let by_index = number("instance_index") == Some(u64::from(found.index));
+        let by_name = field(entry, "instance_name").and_then(Value::as_str) == Some(&found.name);
+        let by_port = found.adb_port.is_some() && number("port") == found.adb_port.map(u64::from);
+        (by_index || by_name || by_port)
+            .then(|| text(entry, "alias").unwrap_or_else(|| labels.none.to_string()))
+    });
+    if let Some(alias) = listed {
+        set_outcome(config, false, fill(labels.discover_listed, &[&number, &alias]));
+        return;
+    }
+    if let Some(alias) = &found.bound_alias {
+        set_outcome(config, false, fill(labels.discover_bound, &[&number, alias]));
+        return;
+    }
+    begin_new(editor, config);
+    // Without an instance_id there is nothing to save under; begin_new said why.
+    if editor.editing.borrow().is_none() {
+        return;
+    }
+    config.set_form_kind(0);
+    config.set_form_index(number.clone().into());
+    set_outcome(config, false, fill(labels.discover_applied, &[&number, &found.name]));
 }
 
 fn set_outcome(config: &ConfigWindow, failed: bool, text: impl Into<SharedString>) {

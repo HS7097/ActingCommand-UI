@@ -28,7 +28,8 @@ use acui_rows::{
     MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 use acui_source::{
-    MaterialOutcome, OfflineReason, ReadSource, Session, SourceMode, MAX_FRAME_BYTES,
+    InstanceFacts, MaterialOutcome, OfflineFacts, OfflineReason, ReadSource, RuntimeInstance,
+    Session, SourceMode, MAX_FRAME_BYTES,
 };
 use anyhow::{bail, Result};
 use settings::TextSize;
@@ -1266,16 +1267,14 @@ fn canvas_size(overlays: &[Overlay], frame_size: Option<(f32, f32)>) -> (f32, f3
 /// The card's instance lines. Online they come from the status read and fact
 /// snapshot taken once, right after the pin, at the positions the first two
 /// lines state: state at open, not state at the pinned snapshot, and never
-/// refreshed. Offline there is no fact read yet. One short value per line,
+/// refreshed. Offline they are the facts the read face replays at the pinned
+/// position itself; there is no status offline. One short value per line,
 /// since a line in the middle of the card cannot wrap: a failure is split into
-/// the Runtime's refusal, the client error and the host failure.
+/// its parts.
 fn instance_lines(labels: &Labels, source: &ReadSource) -> Vec<FieldLine> {
-    let read = match source.runtime_instances() {
-        None => {
-            let text = labels.instances_offline.to_string();
-            return vec![field(labels, "runtime_instances", text, "offline")];
-        }
-        Some(Err(failure)) => {
+    let read = match source.instance_facts() {
+        InstanceFacts::Offline(facts) => return offline_instance_lines(labels, facts),
+        InstanceFacts::Online(Err(failure)) => {
             let text = labels.instances_unread.to_string();
             let mut lines = vec![field(labels, "runtime_instances", text, "")];
             if let Some(runtime_code) = &failure.runtime_code {
@@ -1288,7 +1287,7 @@ fn instance_lines(labels: &Labels, source: &ReadSource) -> Vec<FieldLine> {
             }
             return lines;
         }
-        Some(Ok(read)) => read,
+        InstanceFacts::Online(Ok(read)) => read,
     };
     let mut lines = vec![
         field(labels, "instances_status_at", read.status_sequence.to_string(), ""),
@@ -1297,9 +1296,6 @@ fn instance_lines(labels: &Labels, source: &ReadSource) -> Vec<FieldLine> {
     if read.instances.is_empty() {
         lines.push(field(labels, "runtime_instances", labels.instances_none.to_string(), ""));
     }
-    let fact = |value: &Option<String>| {
-        value.clone().unwrap_or_else(|| labels.fact_unrecorded.to_string())
-    };
     for instance in &read.instances {
         let id = instance.instance_id.as_str();
         match &instance.status {
@@ -1324,11 +1320,63 @@ fn instance_lines(labels: &Labels, source: &ReadSource) -> Vec<FieldLine> {
                 lines.push(field(labels, "instance_alias", text, id));
             }
         }
-        lines.push(field(labels, "task_game", fact(&instance.game), "task.game"));
-        lines.push(field(labels, "task_server", fact(&instance.server), "task.server"));
-        lines.push(field(labels, "task_page", fact(&instance.page), "task.page"));
+        lines.extend(task_fact_lines(labels, instance));
     }
     lines
+}
+
+/// The offline instance lines: the pinned position, that there is no lease
+/// offline, then each instance's facts; or the read face's own reason or error.
+fn offline_instance_lines(labels: &Labels, facts: &OfflineFacts) -> Vec<FieldLine> {
+    match facts {
+        OfflineFacts::NoEvents => {
+            vec![field(labels, "instance_facts", labels.facts_no_events.to_string(), "0")]
+        }
+        OfflineFacts::Available { position, instances } => {
+            let mut header = position.to_string();
+            if instances.is_empty() {
+                header.push_str(" · ");
+                header.push_str(labels.facts_none);
+            }
+            let lease = labels.offline_not_provided.to_string();
+            let mut lines = vec![
+                field(labels, "instance_facts", header, "offline"),
+                field(labels, "lease", lease, ""),
+            ];
+            for instance in instances {
+                let id = instance.instance_id.as_str();
+                lines.push(field(labels, "instance_id", short_id(id), id));
+                lines.extend(task_fact_lines(labels, instance));
+            }
+            lines
+        }
+        OfflineFacts::NotAvailable { position, reason, .. } => {
+            let text = fill(labels.facts_not_available, &[reason]);
+            vec![field(labels, "instance_facts", text, position.to_string())]
+        }
+        OfflineFacts::Failed { position, code, operation, detail } => vec![
+            field(
+                labels,
+                "instance_facts",
+                labels.instances_unread.to_string(),
+                position.to_string(),
+            ),
+            field(labels, "facts_error", code.to_string(), *operation),
+            field(labels, "facts_detail", detail.clone(), ""),
+        ],
+    }
+}
+
+/// An instance's three task facts, or "not recorded".
+fn task_fact_lines(labels: &Labels, instance: &RuntimeInstance) -> [FieldLine; 3] {
+    let fact = |value: &Option<String>| {
+        value.clone().unwrap_or_else(|| labels.fact_unrecorded.to_string())
+    };
+    [
+        field(labels, "task_game", fact(&instance.game), "task.game"),
+        field(labels, "task_server", fact(&instance.server), "task.server"),
+        field(labels, "task_page", fact(&instance.page), "task.page"),
+    ]
 }
 
 fn field(

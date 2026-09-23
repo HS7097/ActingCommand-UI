@@ -51,8 +51,10 @@
   实例写：别名（灰字是实例编号）、端口、租约（占用中 / 接管冷却中 / 空闲，有排队请求时加上排队
   数），以及实例事实 `task.game`、`task.server`、`task.page`（最近一次识别匹配到的页面标签）原样，
   没有就写「未记录」。快照里有事实、状态却没登记的编号，单独一行写明未登记。任一次读失败，就分行
-  写 Runtime 拒绝码、客户端错误与宿主失败，会话照常打开。离线读面还没有事实读取，这一行写「离线
-  读面不提供」。
+  写 Runtime 拒绝码、客户端错误与宿主失败，会话照常打开。离线时由读面的 `runtime_facts_at` 在钉住的
+  位置本身重放事实库，就是每一页读的那个位置：几行写出这个位置、离线没有租约，以及每个实例的编号
+  （缩写，灰字是完整编号）与三项事实。账本里还没有事件时直说；读面拒绝重放时写它给的原因，重放
+  失败就分行写 code、operation 与 detail。重放在会话打开时、窗口出现之前跑一次，期限 30 秒。
 
 `--source <auto|offline|online>`，默认 `auto`：客户端能连上状态根所指的 Runtime 就在线，
 否则离线；实例卡第一行「读面」写明选了哪张、为什么（`runtime-info.json` 不存在，或连接
@@ -269,6 +271,18 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 当作没写。每次打开窗口、每次保存之后都重新读文件；列不出来的原因写在条数的位置上，绝不显示
 成一个空列表。
 
+- **发现**：「发现实例」在工作线程上经类型化客户端（`discover_instances()`）请正在运行的 Runtime 重跑
+  一次其提供者的 MuMu 实例发现；Runtime 会在宿主上运行 `MuMuManager`，客户端最多等 25 秒。契约只接受
+  控制台前的人或操作员 CLI 发起这个查询，所以它单独开一条连接，身份是 actor `user`、source `ui`（枚举
+  值，不是系统用户名）。它不绑定任何东西，也不碰设备；按契约，Runtime 把答复了的查询记成一条观察事件
+  （`command.validated`），把拒绝记成 `command.rejected` 加 `runtime.failed`。旁边的框随后列出报告的
+  每个实例：MuMu 序号、是否在运行、运行中的 Runtime 给它绑定的别名（若有）、ADB 地址、Android 版本，
+  名称放最后；那一行写出个数、提供者版本和这次查询的序号。在框里选只是选中，点「采用所选」才生效：
+  配置文件里没有指向它的项（`instance_index` 等于其序号、`instance_name` 等于其名称，或 `port` 等于其
+  ADB 端口）、运行中的 Runtime 也没绑定它时，就以这个序号为绑定起一个新项（别名等照填；地址留给启动
+  时的发现）；已被绑定的只指明是哪一项，什么也不改。没有 Runtime 在跑，或
+  被拒（`instance_discovery_unavailable`、`mumu_manager_version_unsupported` 等）时，那一行写 Runtime
+  的码、客户端错误与宿主失败，之前的结果也不再可选。
 - **表单**：「新增实例」另起一项，点一行把那一项载入表单。没有字符串 `instance_id` 的项，以及表单
   的哪种绑定都表示不了的项——配置了 `fixture_backend`、设了 `serial`、一个绑定键都没写——照样列
   出，但点它会写明原因、不能保存。没有删除。`alias` 必填；新实例的 `instance_id` 是 `instance_`
@@ -353,20 +367,20 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   `open_report` / `read_material`；`Session::open(root, mode)` 按 `--source`
   在它和在线的 `OnlineSource` 之间选一张，账本拒开离线读面时交回带账本原错误的
   `Session::Unopened`（`LedgerOpenFailure`：code、operation、detail），`material_reader()` 交给后台线程读素材。
-  在线时它还在钉住之后读一次实例状态与任务事实（`runtime_instances()`）；事实快照的作用域与
-  取值类型直接从契约 crate 取。
+  它还每个会话读一次实例的任务事实（`instance_facts()`）：离线在钉住的位置重放，在线在钉住之后连同
+  实例状态一起读；事实快照的作用域与取值类型直接从契约 crate 取。
 - `acui-model`：纯 Rust 视图模型（页签、过滤、翻页、恢复折叠、选中项），不依赖 slint，**也不
   出人话**——它只给结构化事实，措辞一律由 `acui-app` 按语言表挑。
 - `acui-app`：唯一依赖 slint 的 crate，`.slint` 文件在 `crates/acui-app/ui/`；两张语言表在
   `strings.rs`，设置文件的读写在 `settings.rs`。
 
 `slint` 1.17.x，`default-features = false`；账本对监控台只读（监控台发出的请求——启动按钮、关闭
-请求、在线开台时的那次状态读取——由 Runtime 自己记账），控制入口只有启动器的两个按钮（启动 /
+请求、在线开台时的那次状态读取、实例发现查询——由 Runtime 自己记账），控制入口只有启动器的两个按钮（启动 /
 请求关闭，见上）、启动器的解锁入口（经确认的 `actingd unlock-owner`）与实例配置窗口经 check-config
 把关的保存，没有审批入口；不写测试。启动器在
 `crates/acui-app/src/launcher.rs`，实例配置窗口在 `instances.rs`，探测、请求关闭、记下启动按钮、
-在线开台时的状态与事实读取这几个客户端操作在 `acui-source`（`probe_runtime` / `request_shutdown` /
-`record_start` / `runtime_instances`）。
+在线开台时的状态与事实读取、实例发现这几个客户端操作在 `acui-source`（`probe_runtime` /
+`request_shutdown` / `record_start` / `instance_facts` / `discover_instances`）。
 
 第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、sha2、
 zip、getrandom，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
@@ -399,18 +413,19 @@ zip、getrandom，不依赖上面任何一层，见上一节「安装引导程�
   reader、整份哈希一次，受 `max_material_bytes` 与期限约束。离线读面以 8 MiB 帧上限和 30 秒
   期限调用它（Runtime 里还没有它的调用方定下期限；契约的 4 秒 `RUNTIME_MATERIAL_READ_BUDGET_MS`
   约束的是单段读，不是整份对象）。在线由类型化客户端的 `RuntimeClient::read_material_complete`
-  （`crates/runtime-client/src/client.rs:2072`）在校验过的分段上给出同样形状的结果，监控台以同样
+  （`crates/runtime-client/src/client.rs:2089`）在校验过的分段上给出同样形状的结果，监控台以同样
   的上限与期限调用它；Runtime 仍对每一段校验整份素材（一张 3.6 MB 的帧是 19 段 192 KiB）。
-- **实例事实：只在在线读面**。事实库经 `RuntimeClient::runtime_fact_snapshot()`
-  （`crates/runtime-client/src/client.rs:831`）读，它答的是 Runtime 最新位置上的状态。钉住的 rev
-  上取证 crate 没有事实读取，监控台也不自己折叠 `runtime.fact_*` 事件，所以离线时实例几行写「离线
-  读面不提供」。
+- **实例事实：两张读面都已解决，位置不同**。在线经 `RuntimeClient::runtime_fact_snapshot()`
+  （`crates/runtime-client/src/client.rs:848`）读，它答的是 Runtime 最新位置上的状态，晚于钉点。离线由
+  `runtime_facts_at`（`crates/ledger-forensics/src/runtime_facts.rs:56`）按 Runtime 自己的重放规则，在
+  钉住的位置本身重放事实库；监控台从不自己折叠 `runtime.fact_*` 事件。租约只来自在线的状态读取，离线
+  没有。
 - **几何与帧在这两个根上凑不到一起**。0828 与 v5 两个根里，带 `capture.frame` 产物的事件
   只有 `artifact.created` / `artifact.verified`，payload 里没有几何；带几何的事件只有
   `task.effect_intent`（0828 六条、v5 五条），payload 里是一个 tap 坐标，`links` 里**没有**
   `frame_id`。账本没有给出把这两者连起来的关系，监控台就不连——真实帧照画，叠加为空。
   钉住的 rev 上，`task.effect_intent` 可以给出坐标所在的画面范围（`frame_extent`，
-  `crates/actingcommand-contract/src/event/payload.rs:3311`），`task.geometry_observed` 可以给出其
+  `crates/actingcommand-contract/src/event/payload.rs:3313`），`task.geometry_observed` 可以给出其
   画面的范围（`:3039`）；事件给了，叠加画布就用它。这两个根上的 effect intent 都没给，尺寸仍是
   「未记录」。
 - **两个根里都没有产物淘汰事实**，所以淘汰占位在这两个根上不会出现；代码路径按契约写好。

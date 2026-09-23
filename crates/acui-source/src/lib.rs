@@ -6,10 +6,12 @@
 //! below goes through the Runtime's own entries. Offline, `GlobalLedger` picks
 //! the medium and authenticates the snapshot, `query_view_page` projects the
 //! formal page, and `read_material_complete` resolves, guards and verifies material.
-//! Online, the same pages, material whole (the client's own
-//! `read_material_complete` assembles the verified ranges), and the instances'
-//! live status and task facts are asked of the running Runtime through
-//! `actingcommand_runtime_client`, the one typed IPC path a client has. This
+//! Offline, `runtime_facts_at` replays the instances' task facts at the pinned
+//! position. Online, the same pages, material whole (the client's own
+//! `read_material_complete` assembles the verified ranges), the instances'
+//! status and task facts, and instance discovery are asked of the running
+//! Runtime through `actingcommand_runtime_client`, the one typed IPC path a
+//! client has. This
 //! crate is a client only: it never starts, kills or waits on the Runtime, and
 //! never writes into the state root. The launcher's two
 //! questions — is a Runtime running here, and will it accept a shutdown
@@ -27,12 +29,12 @@ use acui_rows::{
     RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
     RuntimeMaterialReadLimit, RuntimeMaterialReadState, WriterFacts,
 };
-use actingcommand_contract::{FactValue, RuntimeFactScope};
+use actingcommand_contract::{FactValue, RuntimeFactRecord, RuntimeFactScope};
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
     GlobalLedgerWriterMetadataObservation, LedgerArtifactSelection,
 };
-use actingcommand_ledger_forensics::ForensicMaterialCompleteResult;
+use actingcommand_ledger_forensics::{ForensicMaterialCompleteResult, ForensicRuntimeFactsResult};
 use actingcommand_runtime_client::{
     RuntimeClient, RuntimeClientConfig, RuntimeClientError, RuntimeMaterialCompleteResult,
     RuntimeMaterialSelection,
@@ -50,6 +52,9 @@ pub const MAX_FRAME_BYTES: u64 = 8 * 1024 * 1024;
 /// well inside it. Online the deadline is cooperative: the client checks it
 /// between ranges, not inside one exchange.
 const MATERIAL_READ_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Bound on the offline face's one fact replay per session.
+const FACTS_READ_DEADLINE: Duration = Duration::from_secs(30);
 
 /// One authenticated snapshot of one state root.
 pub struct EvidenceSource {
@@ -164,6 +169,34 @@ impl EvidenceSource {
         })
     }
 
+    /// The runtime fact store replayed at this session's snapshot position by
+    /// the read face's own `runtime_facts_at`: the same position every page
+    /// reads at. Read once per session; the snapshot is pinned.
+    pub fn instance_facts(&self) -> OfflineFacts {
+        let position = self.snapshot_position();
+        // Positions start at 1: at 0 the ledger holds no event, and the read
+        // face would refuse the position itself rather than say so.
+        if position == 0 {
+            return OfflineFacts::NoEvents;
+        }
+        let deadline = Instant::now() + FACTS_READ_DEADLINE;
+        let result =
+            actingcommand_ledger_forensics::runtime_facts_at(&self.root, position, deadline);
+        match result {
+            ForensicRuntimeFactsResult::Available { position, facts, .. } => {
+                let mut instances = Vec::new();
+                fold_task_facts(&facts.records, &mut instances);
+                OfflineFacts::Available { position, instances }
+            }
+            ForensicRuntimeFactsResult::NotAvailable { position, latest_sequence, reason } => {
+                OfflineFacts::NotAvailable { position, latest_sequence, reason: code(&reason) }
+            }
+            ForensicRuntimeFactsResult::Failed { position, code, operation, detail } => {
+                OfflineFacts::Failed { position, code, operation, detail }
+            }
+        }
+    }
+
     pub fn open_report(&self) -> OpenReport {
         let event_count = self.snapshot.event_count() as u64;
         let complete = self.snapshot.read_complete() && self.snapshot.corrupt_tail().is_none();
@@ -232,7 +265,8 @@ pub struct RuntimeInstances {
 
 /// One instance as the status read registers it, with the `task.` facts the
 /// snapshot holds for its id. A fact the snapshot holds for an id the status
-/// does not register gets a row of its own with `status: None`.
+/// does not register gets a row of its own with `status: None`; offline there
+/// is no status read, and every row has `status: None`.
 #[derive(Debug, Clone)]
 pub struct RuntimeInstance {
     pub instance_id: String,
@@ -240,6 +274,25 @@ pub struct RuntimeInstance {
     pub game: Option<String>,
     pub server: Option<String>,
     pub page: Option<String>,
+}
+
+/// The instances' task facts as the offline face replays them at the pinned
+/// position, or why it could not: the read face's own reason or error.
+#[derive(Debug, Clone)]
+pub enum OfflineFacts {
+    /// The pinned position is 0: the ledger holds no event yet.
+    NoEvents,
+    Available { position: u64, instances: Vec<RuntimeInstance> },
+    /// `reason` as the read face spells it (`ledger_empty`, `position_beyond_snapshot`).
+    NotAvailable { position: u64, latest_sequence: u64, reason: String },
+    Failed { position: u64, code: &'static str, operation: &'static str, detail: String },
+}
+
+/// What a session read about its instances, once: online, status and facts
+/// right after the pin; offline, the facts at the pin.
+pub enum InstanceFacts<'a> {
+    Online(&'a Result<RuntimeInstances, ClientFailure>),
+    Offline(&'a OfflineFacts),
 }
 
 #[derive(Debug, Clone)]
@@ -373,7 +426,7 @@ pub enum OfflineReason {
 /// same page, cursor and snapshot semantics; only where the answer comes from
 /// differs.
 pub enum ReadSource {
-    Offline { source: Box<EvidenceSource>, reason: OfflineReason },
+    Offline { source: Box<EvidenceSource>, reason: OfflineReason, facts: OfflineFacts },
     Online(OnlineSource),
 }
 
@@ -409,7 +462,10 @@ impl Session {
             },
         };
         Ok(match EvidenceSource::open(&root) {
-            Ok(source) => Self::Open(ReadSource::Offline { source: Box::new(source), reason }),
+            Ok(source) => {
+                let facts = source.instance_facts();
+                Self::Open(ReadSource::Offline { source: Box::new(source), reason, facts })
+            }
             Err(failure) => Self::Unopened { root, reason, failure },
         })
     }
@@ -480,12 +536,12 @@ impl ReadSource {
         }
     }
 
-    /// The instances' live status and task facts, online only: the offline
-    /// face has no fact read yet, so offline is `None`, not a read.
-    pub fn runtime_instances(&self) -> Option<&Result<RuntimeInstances, ClientFailure>> {
+    /// The instances' task facts, read once per session: online with their
+    /// status right after the pin, offline replayed at the pinned position.
+    pub fn instance_facts(&self) -> InstanceFacts<'_> {
         match self {
-            Self::Offline { .. } => None,
-            Self::Online(source) => Some(source.instances()),
+            Self::Offline { facts, .. } => InstanceFacts::Offline(facts),
+            Self::Online(source) => InstanceFacts::Online(source.instances()),
         }
     }
 
@@ -574,7 +630,16 @@ fn read_instances(client: &RuntimeClient) -> Result<RuntimeInstances, ClientFail
             page: None,
         })
         .collect();
-    for record in &snapshot.records {
+    fold_task_facts(&snapshot.records, &mut instances);
+    Ok(RuntimeInstances { status_sequence, facts_position: snapshot.ledger_position, instances })
+}
+
+/// Folds a snapshot's instance-scoped `task.game` / `task.server` / `task.page`
+/// records into `instances`, adding a row with `status: None` for an id not
+/// there yet. The task keys are strings by contract; any other value is shown
+/// as the wire states it, never dropped.
+fn fold_task_facts(records: &[RuntimeFactRecord], instances: &mut Vec<RuntimeInstance>) {
+    for record in records {
         let RuntimeFactScope::Instance { instance_id } = &record.scope else {
             continue;
         };
@@ -595,8 +660,6 @@ fn read_instances(client: &RuntimeClient) -> Result<RuntimeInstances, ClientFail
                 instances.len() - 1
             }
         };
-        // The task keys are strings by contract; any other value is shown as
-        // the wire states it, never dropped.
         let text = match &record.value {
             FactValue::String(text) => text.clone(),
             other => code(other),
@@ -608,7 +671,62 @@ fn read_instances(client: &RuntimeClient) -> Result<RuntimeInstances, ClientFail
             _ => instance.page = Some(text),
         }
     }
-    Ok(RuntimeInstances { status_sequence, facts_position: snapshot.ledger_position, instances })
+}
+
+/// One instance discovery query as the Runtime answered it: the provider's
+/// version, the sequence of its committed observation, and every instance the
+/// provider reported, in index order.
+#[derive(Debug, Clone)]
+pub struct Discovery {
+    pub provider_version: String,
+    pub sequence: u64,
+    pub instances: Vec<DiscoveredInstance>,
+}
+
+/// One reported instance. `bound_alias` is the registered instance the
+/// Runtime has bound to it, if any.
+#[derive(Debug, Clone)]
+pub struct DiscoveredInstance {
+    pub index: u16,
+    pub name: String,
+    pub adb_host: Option<String>,
+    pub adb_port: Option<u16>,
+    pub running: bool,
+    pub bound_alias: Option<String>,
+    pub android_version: Option<String>,
+}
+
+/// Asks the running Runtime to re-run its provider's instance discovery: one
+/// fresh connection, one `discover_instances()`. The contract admits this
+/// query only from a person at the console (actor `user`, source `ui`) or an
+/// operator's CLI, so this connection says `user` / `ui`, not the read face's
+/// `ui` / `ui`. It binds nothing and touches no device; by contract the
+/// Runtime records an answered query as one observation event
+/// (`command.validated`), and a refusal as `command.rejected` plus
+/// `runtime.failed`. A refusal carries the Runtime's code and, when the
+/// provider's tool failed, the host failure.
+pub fn discover_instances(state_root: &Path) -> Result<Discovery, ClientFailure> {
+    let config = RuntimeClientConfig::new(state_root, EventActor::User, EventSource::Ui);
+    let client = RuntimeClient::connect(config)?;
+    let discovery = client.discover_instances()?;
+    let instances = discovery
+        .instances()
+        .iter()
+        .map(|instance| DiscoveredInstance {
+            index: instance.instance_index,
+            name: instance.instance_name.clone(),
+            adb_host: instance.adb_host.clone(),
+            adb_port: instance.adb_port,
+            running: instance.running,
+            bound_alias: instance.bound_alias.clone(),
+            android_version: instance.android_version.clone(),
+        })
+        .collect();
+    Ok(Discovery {
+        provider_version: discovery.provider_version().to_string(),
+        sequence: discovery.source().sequence,
+        instances,
+    })
 }
 
 /// What an accepted shutdown request came back with.
