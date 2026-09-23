@@ -365,20 +365,27 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 `crates/acui-setup` 是一个独立的二进制 `acsetup.exe`（Slint 窗口，与监控台同一套样式与图标），把
 伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases) 里的发布件装成一份**按用户**的安装。
 它随 UI 仓的 Windows 构建产物一起发布（`acui-windows-<sha>.zip` 里多一个 `acsetup.exe`）。
-**v1 离线**：程序里没有任何联网代码，发布件由人先下载到一个文件夹。一个窗口，上一步 / 下一步，六步：
+它自己去取发布件，也可以用人手工下好的文件夹。一个窗口，只有下一步，五步：
 
-0. **准备**：安装根（可改，默认 `%LOCALAPPDATA%\Programs\ActingCommand`，不需要管理员）、该卷的
-   可用空间、此处是否已有安装（看 `runtime\BUILD-MANIFEST.json`；已有就停在这一步——v1 没有升级
-   流程，换一个根）、发布件所在文件夹（默认 `%USERPROFILE%\Downloads`，可改；v1 没有原生目录对话框，
-   路径直接填）。
-1. **校验**：要求文件夹里有 `SHA256SUMS`、`MEMBERS.json`、`actingcommand-runtime-<sha>.zip`、
+0. **位置**：只有安装根（可改，默认 `%LOCALAPPDATA%\Programs\ActingCommand`，不需要管理员）、该卷的
+   可用空间、此处是否已有安装（看 `runtime\BUILD-MANIFEST.json`；已有就停在这一步——升级流程是下一片，
+   现在先换一个根）。下一步时建好安装根与安装日志。
+1. **取件**：默认联网。一进这一步就经 HTTPS 列出伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases)，
+   选一个发布件：有正式版取最新正式版，否则取最新预发布（每日构建），从不取草稿；页面与日志写明它的标签、
+   名称、日期、种类与大小。下一步时依次下载 `SHA256SUMS`、`MEMBERS.json`，再下载 `SHA256SUMS` 列出的
+   其余文件——别的一个不下——存到 `<安装根>\downloads\<标签>\`；每个文件先写 `.part`，长度等于发布件
+   声明的长度才改名，每满十分之一写一行进度；目录里已有的同名文件重新下载，从不直接采信。标签只含字母、
+   数字、`.`、`-`、`_` 时才用作文件夹名。改勾**离线**则用一个已放好同一发布件全部文件的文件夹（默认
+   `%USERPROFILE%\Downloads`，路径直接填）。查询失败写在页面与日志里，离线仍可选；下载失败则停下。这是
+   程序唯一的联网代码（`ureq`，阻塞式，rustls 加编译进去的 Mozilla 根证书）；Runtime 没有任何联网代码。
+2. **校验与铺开**，一步做完：要求文件夹里有 `SHA256SUMS`、`MEMBERS.json`、`actingcommand-runtime-<sha>.zip`、
    `actingcommand-tools-<sha>.zip`、`acui-windows-<sha>.zip`（`<sha>` 取 `MEMBERS.json` 的
    `runtime_sha` / `ui_sha`，三个 zip 必须在 `SHA256SUMS` 里）。逐条核对 `SHA256SUMS`；解压到安装根
    下的临时目录 `.staging-<unix_ms>`；再按每个 zip 自带的 `BUILD-MANIFEST.json` 核对来源仓、提交号
    （等于 MEMBERS 的 sha）、Runtime 的 `runtime_payload_layout`（`distribution-v1`），以及 `files[]`
    每一项的大小与 sha256；zip 里多出清单没列的文件也算不一致。任何不一致都停下，措辞是
-   「内容与创建时不一致」——这是完整性陈述，不是授权口吻。校验期间不运行 zip 里的任何东西。
-2. **铺开**：`runtime\`（Runtime 全部载荷 + 清单，`actingd.config.example.json` 逐字节原样）、
+   「内容与创建时不一致」——这是完整性陈述，不是授权口吻。校验期间不运行 zip 里的任何东西。随后铺开：
+   `runtime\`（Runtime 全部载荷 + 清单，`actingd.config.example.json` 逐字节原样）、
    `ui\`（监控台载荷 + 清单）、`tools\`（**只有** `actinglab.exe`、`actingledger.exe`、
    `ac_fastdeploy_ppocr.dll`；tools 包里另外两个 exe 不装、不显示）。之后删除临时目录。
 3. **配置**：状态根默认 `<安装根>\state`（必须不存在或为空目录，**已有内容的状态根一律不接管**）；
@@ -390,23 +397,26 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `lang` / `text_size` 原样保留）。写法与 `crates/acui-app/src/settings.rs` 一致，但 `acui-setup`
    不依赖 `acui-app`，是一份小的重复写入器。**实例（模拟器 / 设备）不在引导里配置**，`instances`
    留空，之后点监控台顶栏的「实例配置」按钮添加；完成页也这样写。
-4. **开机自启**（可选，默认不勾）：勾了才写按用户的启动文件夹里的
+   **开机自启**在同一页（可选，默认不勾）：勾了才写按用户的启动文件夹里的
    `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd`，内容是
    `start "" "<安装根>\runtime\actingcommand-actingd.exe" --config "<安装根>\actingd.config.json"`；
    再勾「同时拉起监控台」才多一行 `start "" "<安装根>\ui\acui.exe"`。批处理里不出现 acsetup。
    不勾就什么也不写；启动文件夹里已有的同名文件不动，只在完成页说一句。
-5. **完成**：「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe`（从不直接拉 actingd，
+4. **完成**：「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe`（从不直接拉 actingd，
    Runtime 由监控台的启动器拉）并关闭引导；「完成」只关闭。
 
-**安装日志**：从第 1 步起每一步都往 `<安装根>\acsetup-<unix_ms>.log` 追加人话行；失败时最后一行写
-原因，窗口上显示日志路径。除安装载荷、配置、设置与（勾选时的）自启批处理之外，引导写的文件只有这一个。
+**安装日志**：离开第 0 步起每一步都往 `<安装根>\acsetup-<unix_ms>.log` 追加人话行；失败时最后一行写
+原因，窗口上显示日志路径。除安装载荷、配置、设置、`downloads\` 下取回的发布件与（勾选时的）自启批处理
+之外，引导写的文件只有这一个。
 
 **永远不做的事**：不装服务、不建计划任务、不改 PATH、不写注册表；不改配置模板；不碰已有内容的状态根；
-不配置实例；不联网；不做升级、不装资源包。Linux 上 crate 照常编译（CI 两条腿都跑 `--workspace`），
+不配置实例；联网只为列出与下载伞仓发布件；不做升级、不装资源包。Linux 上 crate 照常编译（CI 两条腿都跑 `--workspace`），
 运行即以 `acsetup v1 is Windows-only` 退出。
 
-依赖只多三个，都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`
-（`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（salt）。
+依赖多四个，都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`
+（`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（salt）、
+`ureq`（取件；`default-features = false`，只开 `tls`：rustls、它的 `ring` 实现与编译进去的
+`webpki-roots`，不用系统 TLS 库）。
 
 ## 四层四 crate
 
@@ -440,7 +450,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 回收失败时照实写，不说成终止失败。
 
 第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、sha2、
-zip、getrandom，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
+zip、getrandom、ureq，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
 
 ## 图标
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Step 1: the release assets in the download folder, checked against what
+//! Step 2: the release assets in the download folder, checked against what
 //! the umbrella published — SHA256SUMS over the zips and MEMBERS.json, then
 //! each zip's own BUILD-MANIFEST.json over every file inside it — and
 //! unpacked into a staging directory under the install root.
@@ -177,7 +177,7 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
 
 /// `<hex>  <name>` or `<hex> *<name>`, as sha256sum writes them; blank lines
 /// skipped; a name is a plain file name in the same folder.
-fn parse_sha256sums(text: &str) -> Result<Vec<(String, String)>, String> {
+pub fn parse_sha256sums(text: &str) -> Result<Vec<(String, String)>, String> {
     let mut entries = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = raw.trim_end_matches('\r');
