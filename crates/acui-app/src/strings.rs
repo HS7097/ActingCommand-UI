@@ -233,6 +233,50 @@ pub struct Labels {
     pub shutdown_refused: &'static str,
     /// client error code, client operation.
     pub shutdown_failed: &'static str,
+    /// The instance-configuration window, and the top-bar button that opens it.
+    pub instance_config: &'static str,
+    pub config_intro: &'static str,
+    pub add_instance: &'static str,
+    /// alias, instance_id, binding, adb_path, nemu_app_index, application_id,
+    /// capture_backend, touch_backend.
+    pub form_fields: [&'static str; 8],
+    pub binding_kinds: [&'static str; 3],
+    /// instance_index, instance_name, host, port; adb_path optional, then
+    /// required; nemu_app_index.
+    pub form_placeholders: [&'static str; 7],
+    pub optional_note: &'static str,
+    pub check_and_save: &'static str,
+    /// error.
+    pub id_failed: &'static str,
+    /// field; field, largest value, value.
+    pub value_missing: &'static str,
+    pub value_not_number: &'static str,
+    /// config path; config path, error; config path, error; config path.
+    pub config_missing: &'static str,
+    pub config_unreadable: &'static str,
+    pub config_not_json: &'static str,
+    pub config_no_instances: &'static str,
+    pub checking: &'static str,
+    /// candidate path, error; error.
+    pub candidate_failed: &'static str,
+    pub reader_failed: &'static str,
+    /// seconds; exit code, output; error.code, stage; exit code; exit code, error; exit code.
+    pub check_timeout: &'static str,
+    pub check_unparsed: &'static str,
+    pub check_failed: &'static str,
+    pub check_ok_nonzero: &'static str,
+    pub check_read_failed: &'static str,
+    pub check_reader_lost: &'static str,
+    /// Ends a failure that stopped check-config; error.
+    pub check_stopped: &'static str,
+    pub check_unstoppable: &'static str,
+    /// config path, error; candidate path, error.
+    pub replace_failed: &'static str,
+    pub candidate_left: &'static str,
+    /// Ends every failed save.
+    pub config_unchanged: &'static str,
+    /// config path.
+    pub saved: &'static str,
 }
 
 pub const ZH: Labels = Labels {
@@ -448,6 +492,36 @@ pub const ZH: Labels = Labels {
     shutdown_accepted: "关闭请求已受理 · 回执 {} · 请求 {} · 动作已记账 #{}",
     shutdown_refused: "关闭请求被拒：{} · 客户端 {}（{}）",
     shutdown_failed: "关闭请求失败：{}（{}）",
+    instance_config: "实例配置",
+    config_intro: "给 actingd_config 的 instances 新增一项。填好后「校验并保存」：先在同一目录写临时文件，交 actingd check-config 校验，通过才替换原文件；文件里其余的键、值与键的次序原样保留，整份文件按 2 空格缩进的 JSON 重新写出。改动在 Runtime 重启后生效。",
+    add_instance: "新增实例",
+    form_fields: ["alias（必填）", "instance_id", "绑定方式", "adb_path", "nemu_app_index", "application_id", "capture_backend", "touch_backend"],
+    binding_kinds: ["MuMu 序号 instance_index", "MuMu 名称 instance_name", "ADB 地址 host + port"],
+    form_placeholders: ["instance_index（0–65535）", "instance_name", "host", "port（0–65535）", "选填：留空则用 MuMu 发现报告的 adb", "必填：adb 可执行文件的路径", "选填（0–4294967295）"],
+    optional_note: "adb_path 在 ADB 地址方式下必填、MuMu 方式下选填；nemu_app_index 选填。application_id 与两个后端表单不检查，要不要填、取值是否有效都由 check-config 判定。MuMu 方式下 nemu_app_index 的配对、adb_path 与发现结果的冲突，check-config 不查，Runtime 启动时才查。留空的框不写进文件。",
+    check_and_save: "校验并保存",
+    id_failed: "生成 instance_id 失败：{}",
+    value_missing: "{} 不能为空",
+    value_not_number: "{} 须为 0–{} 的整数：{}",
+    config_missing: "{} 不存在",
+    config_unreadable: "读取 {} 失败：{}",
+    config_not_json: "{} 不是合法的 JSON：{}",
+    config_no_instances: "{} 里没有 instances 数组",
+    checking: "正在用 check-config 校验…",
+    candidate_failed: "写临时文件 {} 失败：{}",
+    reader_failed: "无法启动读取 check-config 输出的线程：{}",
+    check_timeout: "check-config {} 秒内未结束",
+    check_unparsed: "check-config 的输出无法识别（退出码 {}）：{}",
+    check_failed: "check-config 未通过 · error.code {} · stage {}",
+    check_ok_nonzero: "check-config 报 ok 但退出码为 {}，不保存",
+    check_read_failed: "读取 check-config 的输出失败（退出码 {}）：{}",
+    check_reader_lost: "读取 check-config 输出的线程异常结束，输出未取得（退出码 {}）",
+    check_stopped: "；已终止 check-config",
+    check_unstoppable: "；终止 check-config 失败（{}），它可能仍在运行",
+    replace_failed: "替换 {} 失败：{}",
+    candidate_left: "；临时文件 {} 未能删除：{}",
+    config_unchanged: " · 原配置未改动",
+    saved: "已保存进 {}（check-config 通过）· Runtime 重启后生效",
 };
 
 pub const EN: Labels = Labels {
@@ -663,6 +737,37 @@ pub const EN: Labels = Labels {
     shutdown_accepted: "Shutdown Accepted · Receipt {} · Request {} · Action Recorded at #{}",
     shutdown_refused: "Shutdown Refused: {} · Client {} ({})",
     shutdown_failed: "Shutdown Request Failed: {} ({})",
+    instance_config: "Instance Configuration",
+    config_intro: "Adds an entry to the instances of actingd_config. Fill it in, then Check and Save: a temporary file is written in the same directory and checked by actingd check-config, and only an ok replaces the file; the file's other keys, values and key order are kept, and the whole file is rewritten as JSON indented by 2 spaces. Changes take effect when the Runtime restarts.",
+    add_instance: "Add Instance",
+    form_fields: ["alias (required)", "instance_id", "Binding", "adb_path", "nemu_app_index", "application_id", "capture_backend", "touch_backend"],
+    binding_kinds: ["MuMu Index instance_index", "MuMu Name instance_name", "ADB Address host + port"],
+    form_placeholders: ["instance_index (0–65535)", "instance_name", "host", "port (0–65535)", "Optional: empty uses the adb MuMu discovery reports", "Required: path to the adb executable", "Optional (0–4294967295)"],
+    optional_note: "adb_path is required with an ADB address and optional with a MuMu binding; nemu_app_index is optional. The form does not check application_id or the two backends: whether they are needed and valid is decided by check-config. With a MuMu binding, the nemu_app_index pairing and an adb_path conflict with discovery are not checked by check-config, only when the Runtime starts. An empty box writes no key.",
+    check_and_save: "Check and Save",
+    id_failed: "Generating an instance_id Failed: {}",
+    value_missing: "{} Must Not Be Empty",
+    value_not_number: "{} Must Be a Whole Number 0–{}: {}",
+    config_missing: "{} Does Not Exist",
+    config_unreadable: "Reading {} Failed: {}",
+    config_not_json: "{} Is Not Valid JSON: {}",
+    config_no_instances: "{} Has No instances Array",
+    checking: "Checking with check-config…",
+    candidate_failed: "Writing the Temporary File {} Failed: {}",
+    reader_failed: "Starting a Thread to Read check-config's Output Failed: {}",
+    check_timeout: "check-config Did Not Finish Within {} s",
+    check_unparsed: "check-config Output Not Recognized (Exit Code {}): {}",
+    check_failed: "check-config Rejected It · error.code {} · stage {}",
+    check_ok_nonzero: "check-config Said ok but Exited with {}; Not Saved",
+    check_read_failed: "Reading check-config's Output Failed (Exit Code {}): {}",
+    check_reader_lost:
+        "The Thread Reading check-config's Output Ended Abnormally; No Output Obtained (Exit Code {})",
+    check_stopped: "; check-config Was Terminated",
+    check_unstoppable: "; Terminating check-config Failed ({}); It May Still Be Running",
+    replace_failed: "Replacing {} Failed: {}",
+    candidate_left: "; Temporary File {} Not Removed: {}",
+    config_unchanged: " · The Config File Was Not Changed",
+    saved: "Saved to {} (check-config ok) · Takes Effect When the Runtime Restarts",
 };
 
 impl Labels {

@@ -217,6 +217,7 @@ dependencies = [
  "acui-rows",
  "acui-source",
  "anyhow",
+ "getrandom 0.4.3",
  "image",
  "serde_json",
  "slint",

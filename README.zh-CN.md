@@ -11,8 +11,10 @@
 
 ## 数据来源：读面，不是文件
 
-程序只认一个参数：状态根。**所有文件 IO 都归读面**，监控台自己从不拼接状态根里的路径，
-不打开 `ledger/`、`artifacts/` 或 `runtime-state.sqlite`，也不拉起任何 CLI。
+程序只认一个参数：状态根。**读账本数据的文件 IO 都归读面**，监控台自己从不拼接状态根里的路径，
+不打开 `ledger/`、`artifacts/` 或 `runtime-state.sqlite`，也不为读数据拉起任何 CLI。它拉起的
+进程只有两种：actingd 本身（「启动」，见「启动器」一节），和保存实例配置时用来校验的
+`actingd check-config`（见「实例配置」一节）。
 
 读面有两张，同一套查询、页、游标语义，只是答案从哪来不同：
 
@@ -169,20 +171,23 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml（没有就用 $HOME/.config/
 lang = "zh"          # zh | en
 text_size = "standard"   # standard | large | extra-large
 state_root = 'D:\ActingCommand\state'                    # 可选，绝对路径
-actingd_config = 'D:\ActingCommand\actingd.toml'         # 可选，绝对路径
+actingd_config = 'D:\ActingCommand\actingd.config.json'  # 可选，绝对路径
 actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对路径
 ```
 
 开台时读一次，下拉框一改就写一次；写回时三个路径键原样保留。**这是监控台唯一自己读写的
-文件**：它不在任何状态根里，状态根依旧全归读面。文件不存在、读不出来或取值不认识，都按
-默认值（中文、标准）来。解析器是手写的：一行一个 `key = value`，去掉一对成对的引号，不处理
-转义——Windows 路径写在单引号里（TOML 字面量字符串），不要写 `"D:\\…"`。
+文件**（实例配置窗口保存进 `actingd_config` 的 `instances`，以及启动器创建、早退后读回的 actingd
+启动日志除外，见各自那一节）：它不在任何
+状态根里，状态根依旧全归读面。文件不存在、读不出来或取值不认识，都按默认值（中文、标准）
+来。解析器是手写的：一行一个 `key = value`，去掉一对成对的引号，不处理转义——Windows 路径
+写在单引号里（TOML 字面量字符串），不要写 `"D:\\…"`。
 
 ## 启动器
 
-顶栏第三行。左边是上一次探测的 Runtime 状态，两个按钮，下面一行是上一次按钮的结果。
+顶栏第三行。左边是上一次探测的 Runtime 状态，两个按钮（最后还有「实例配置」按钮，见下一节），
+下面一行是上一次「启动」或「请求关闭」的结果，或实例配置窗口没能打开的原因。
 
-- **Runtime 状态**：开台时探测一次，之后每按一次按钮再探测。探测就是一次
+- **Runtime 状态**：开台时探测一次，之后每按一次「启动」或「请求关闭」再探测。探测就是一次
   `RuntimeClient::connect`：连上了写「运行中 · PID · owner epoch」（取自它自己的
   `runtime-info.json`，经客户端的 owner epoch 核对）；连不上写「未运行」加客户端的错误码与
   操作名，不猜原因。
@@ -240,6 +245,30 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   job object；就绪判定结束就丢掉句柄，守护进程活得比监控台久。
 
 暂停/恢复、开机自启、安装器、联网下载都不在这一片里。
+
+## 实例配置
+
+「实例配置」按钮打开第二个窗口，给 `actingd_config`——「启动」交给 actingd 的那份文件——的
+`instances` 新增一项。
+
+- **表单**：`alias` 必填；新实例的 `instance_id` 是 `instance_` 加系统随机源的 32 位小写十六进制，
+  只读显示；绑定恰好一种——`instance_index`（MuMu 序号）、`instance_name`（MuMu 名称），或
+  `host` + `port`（显式 ADB 地址）。`adb_path` 在 `host` + `port` 下必填，在 MuMu 绑定下选填（由
+  MuMu 发现报告 adb）；`nemu_app_index` 是选填的整数。`application_id`、`capture_backend`、
+  `touch_backend` 表单不检查，要不要填、取值是否有效都由 check-config 判定。MuMu 绑定的项，
+  `nemu_app_index` 的配对、`adb_path` 与发现结果的冲突，check-config 不查，Runtime 启动时才查。
+  文本去掉首尾空白，留空的框不写这个键；必填项为空、数字解析不了，都在写任何东西之前直说。
+- **保存**：把文件当普通 JSON 读——`actingd_config` 没配或不是绝对路径、文件不存在或读不出、
+  JSON 解析失败、没有 `instances` 数组，各自直说——再把这一项追加进去，文件里其余的键一概原样、
+  次序不变。结果写到同目录的 `<配置文件名>.candidate-<pid>`（里面的相对路径按这个目录解析），在
+  事件循环之外跑 `<actingd_exe> check-config --config <临时文件>`（30 秒上限，不弹控制台窗口，
+  stdout 整段按一份 `actingcommand.actingd.check-config.v1` 报告解析）。只有 `status: ok` 且退出码
+  成功才改名覆盖原文件；否则删掉临时文件、原文件不动，窗口写明原因：原样写出 `error.code` 与
+  `stage`，或是 `actingd_exe` 没配或非绝对、写临时文件失败、拉起失败、读输出的线程起不来、
+  读子进程状态失败、超时（这三种还写明 check-config 能否终止）、输出读不出或无法识别、
+  报 ok 但退出码非零、改名失败中的哪一种。
+- **生效**：没有热加载，保存的实例在 Runtime 重启后生效。再保存一次改的是同一项；「新增实例」
+  换一个新的 `instance_id` 另起一项。
 
 ## 安装引导程序 acsetup
 
@@ -305,9 +334,10 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   `strings.rs`，设置文件的读写在 `settings.rs`。
 
 `slint` 1.17.x，`default-features = false`；账本只读，控制入口只有启动器的两个按钮（启动 /
-请求关闭，见上），没有审批入口；不写测试。启动器在 `crates/acui-app/src/launcher.rs`，探测、
-请求关闭、记下启动按钮这三个客户端操作在 `acui-source`（`probe_runtime` / `request_shutdown` /
-`record_start`）。
+请求关闭，见上）、启动器的解锁入口（经确认的 `actingd unlock-owner`）与实例配置窗口经 check-config
+把关的保存，没有审批入口；不写测试。启动器在
+`crates/acui-app/src/launcher.rs`，实例配置窗口在 `instances.rs`，探测、请求关闭、记下启动按钮
+这三个客户端操作在 `acui-source`（`probe_runtime` / `request_shutdown` / `record_start`）。
 
 第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、sha2、
 zip、getrandom，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。

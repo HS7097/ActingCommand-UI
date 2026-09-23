@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The one file this program reads and writes itself: its own preferences and
+//! The one file this program reads and writes itself, besides the `instances`
+//! that `instances.rs` saves into actingd's configuration: its preferences and
 //! the three paths the launcher needs, in the per-user config directory. Never
 //! inside a state root, and never anything else — a state root is the read
 //! face's to touch, not this one's.
