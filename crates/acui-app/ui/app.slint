@@ -728,13 +728,28 @@ export component AppWindow inherits Window {
     }
 }
 
+// One entry of the actingd configuration's `instances`, as the file states it.
+export struct InstanceRow {
+    alias: string,
+    binding: string,
+    detail: string,
+    // What the session's port map says about this instance_id.
+    ledger: string,
+}
+
 export component ConfigWindow inherits Window {
     title: ConfigStrings.title;
     icon: @image-url("../assets/acui-256.png");
-    preferred-width: 760px;
+    preferred-width: 960px;
+    preferred-height: 720px;
     default-font-size: Scale.body-font;
     background: Palette.background;
 
+    // The file's path and count, or the reason it could not be listed.
+    in property <string> list-note;
+    in property <bool> list-failed;
+    in property <[InstanceRow]> rows;
+    in property <int> selected-index;
     // False when the form has no instance_id to save under.
     in property <bool> form-ready;
     in property <string> form-id;
@@ -754,7 +769,10 @@ export component ConfigWindow inherits Window {
     in-out property <string> form-touch;
 
     callback add-instance();
+    callback row-clicked(int);
     callback save();
+    // The file read and listed again; the console calls it after a save.
+    callback reload();
 
     VerticalLayout {
         padding: 8px;
@@ -764,6 +782,33 @@ export component ConfigWindow inherits Window {
                 padding: 10px;
                 spacing: 6px;
                 Caption { text: ConfigStrings.intro; wrap: word-wrap; }
+                Text { text: root.list-note; color: root.list-failed ? Severity.error : Palette.foreground; wrap: word-wrap; }
+                ListView {
+                    min-height: 120px;
+                    for row[index] in root.rows: Rectangle {
+                        height: Scale.row * 2;
+                        background: index == root.selected-index ? Palette.accent-background.with-alpha(0.35) : transparent;
+                        VerticalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text { text: row.alias; font-size: Scale.list-font; font-weight: 700; color: Palette.foreground; vertical-alignment: center; }
+                                Text { text: row.binding; font-size: Scale.list-font; color: Palette.foreground; vertical-alignment: center; }
+                                Text { text: row.ledger; font-size: Scale.list-font; color: Palette.foreground.with-alpha(0.75); vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                            }
+                            Text { text: row.detail; font-size: Scale.grey-font; color: Palette.foreground.with-alpha(0.6); overflow: elide; }
+                        }
+                        TouchArea { enabled: !root.saving; clicked => { root.row-clicked(index); } }
+                    }
+                }
+            }
+        }
+        Panel {
+            vertical-stretch: 0;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
                 GridLayout {
                     spacing: 6px;
                     Row { Caption { text: ConfigStrings.fields[0]; } LineEdit { text <=> root.form-alias; } }

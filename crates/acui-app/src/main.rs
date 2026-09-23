@@ -3,7 +3,7 @@
 //! Runtime state root, opened through the formal ledger read face — offline
 //! over the files, or online through the typed client of the running Runtime —
 //! with a launcher block that starts the daemon detached and asks it, through
-//! the same typed client, to shut down. A second window adds to the
+//! the same typed client, to shut down. A second window lists and edits the
 //! `instances` of the actingd configuration that block starts the daemon with.
 
 mod instances;

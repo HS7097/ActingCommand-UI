@@ -165,7 +165,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 ```
 
 开台时读一次，下拉框一改就写一次；写回时三个路径键原样保留。**这是监控台唯一自己读写的
-文件**：它不在任何状态根里，状态根依旧全归读面。文件不存在、读不出来或取值不认识，都按
+文件**（实例配置窗口保存进 `actingd_config` 的 `instances` 除外，见那一节）：它不在任何状态根里，状态根依旧全归读面。文件不存在、读不出来或取值不认识，都按
 默认值（中文、标准）来。解析器是手写的：一行一个 `key = value`，去掉一对成对的引号，不处理
 转义——Windows 路径写在单引号里（TOML 字面量字符串），不要写 `"D:\\…"`。
 
@@ -214,25 +214,31 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 
 ## 实例配置
 
-「实例配置」按钮打开第二个窗口，给 `actingd_config`——「启动」交给 actingd 的那份文件——的
-`instances` 新增一项。
+「实例配置」按钮打开第二个窗口，对象是 `actingd_config`——「启动」交给 actingd 的那份文件——里的
+`instances`。每一项列出别名、`instance_id`、绑定（MuMu 序号 / MuMu 名称 / ADB host:port / 未绑定）、
+`application_id`、截图与触控后端，以及本会话的端口映射对这个编号怎么说——绑在某个端口、绑了但没有
+端口、没有绑定；在线读面或读绑定失败时，行里直说。每次打开窗口、每次保存之后都重新读文件；列不出来
+的原因写在条数的位置上，绝不显示成一个空列表。
 
-- **表单**：`alias` 必填；新实例的 `instance_id` 是 `instance_` 加系统随机源的 32 位小写十六进制，
-  只读显示；绑定恰好一种——`instance_index`（MuMu 序号）、`instance_name`（MuMu 名称），或
+- **表单**：「新增实例」另起一项，点一行把那一项载入表单；没有字符串 `instance_id` 的项照样列出，
+  但写明原因、不能保存。没有删除。`alias` 必填；新实例的 `instance_id` 是 `instance_` 加系统随机源的
+  32 位小写十六进制，所有 `instance_id` 都只读显示；绑定恰好一种——`instance_index`（MuMu 序号）、`instance_name`（MuMu 名称），或
   `host` + `port`（显式 ADB 地址）。`adb_path` 在 `host` + `port` 下必填，在 MuMu 绑定下选填（由
   MuMu 发现报告 adb）；`nemu_app_index` 是选填的整数；`application_id`、`capture_backend`、
   `touch_backend` 选填，取值由 check-config 判定。文本去掉首尾空白，留空的选填框不写这个键；
   必填项为空、数字解析不了，都在写任何东西之前直说。
 - **保存**：重新把文件当普通 JSON 读——`actingd_config` 没配或不是绝对路径、文件不存在或读不出、
-  JSON 解析失败、没有 `instances` 数组，各自直说——再把这一项追加进去，文件里其余的键一概原样、
-  次序不变。结果写到同目录的 `<配置文件名>.candidate-<pid>`（里面的相对路径按这个目录解析），在
+  JSON 解析失败、没有 `instances` 数组、某一项不是对象，各自直说。新实例追加进去；已有的按
+  `instance_id` 重新找到（文件里已经没有了就停下并说明），只改表单管的键，换了绑定种类就删掉别的
+  种类的键。这一项和整个文件里其余的键一概原样、次序不变。结果写到同目录的 `<配置文件名>.candidate-<pid>`（里面的相对路径按这个目录解析），在
   事件循环之外跑 `<actingd_exe> check-config --config <临时文件>`（30 秒上限，不弹控制台窗口，
   stdout 整段按一份 `actingcommand.actingd.check-config.v1` 报告解析）。只有 `status: ok` 且退出码
   成功才改名覆盖原文件；否则删掉临时文件、原文件不动，窗口写明原因：原样写出 `error.code` 与
   `stage`，或是 `actingd_exe` 没配或非绝对、拉起失败、超时、输出无法识别、报 ok 但退出码非零、
   改名失败中的哪一种。
-- **生效**：没有热加载，保存的实例在 Runtime 重启后生效。再保存一次改的是同一项；「新增实例」
-  换一个新的 `instance_id` 另起一项。
+- **生效**：没有热加载，保存的实例在 Runtime 重启后生效。保存之后在事件循环之外探测一次，写明现在
+  有没有 Runtime 在跑，并指向启动器自己的按钮：先「请求关闭」，停下后再「启动」——没在跑就直接
+  「启动」。窗口本身不重启任何东西。
 
 ## 安装引导程序 acsetup
 
@@ -263,7 +269,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `state_root`、`actingd_config`、`actingd_exe`（同「设置文件」一节的格式，单引号字面量；已有的
    `lang` / `text_size` 原样保留）。写法与 `crates/acui-app/src/settings.rs` 一致，但 `acui-setup`
    不依赖 `acui-app`，是一份小的重复写入器。**实例（模拟器 / 设备）不在引导里配置**，`instances`
-   留空，之后在监控台里添加。
+   留空，之后点监控台顶栏的「实例配置」按钮添加；完成页也这样写。
 4. **开机自启**（可选，默认不勾）：勾了才写按用户的启动文件夹里的
    `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd`，内容是
    `start "" "<安装根>\runtime\actingcommand-actingd.exe" --config "<安装根>\actingd.config.json"`；
@@ -297,7 +303,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   `strings.rs`，设置文件的读写在 `settings.rs`。
 
 `slint` 1.17.x，`default-features = false`；账本只读，控制入口只有启动器的两个按钮（启动 /
-请求关闭，见上），没有审批入口；不写测试。启动器在 `crates/acui-app/src/launcher.rs`，实例配置
+请求关闭，见上）与实例配置窗口经 check-config 把关的保存，没有审批入口；不写测试。启动器在 `crates/acui-app/src/launcher.rs`，实例配置
 窗口在 `instances.rs`，探测、请求关闭、记下启动按钮这三个客户端操作在 `acui-source`
 （`probe_runtime` / `request_shutdown` / `record_start`）。
 
