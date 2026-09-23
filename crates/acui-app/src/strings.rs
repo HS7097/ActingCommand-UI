@@ -439,7 +439,7 @@ pub const ZH: Labels = Labels {
         ("source", "读面"),
         ("latest_sequence", "账本最新序号"),
         ("event_count", "账本事件总数"),
-        ("loaded_rows", "本页条数"),
+        ("loaded_rows", "已载入条数"),
         ("first_event", "最早一条时间"),
         ("latest_event", "最新一条时间"),
         ("age", "距今"),

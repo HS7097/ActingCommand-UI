@@ -35,7 +35,7 @@ pub const FILL_WINDOWS: usize = 16;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-/// Why this view has no page: the filters as written, or the read itself.
+/// Why this view has no rows to show: the filters as written, or the read itself.
 #[derive(Debug, Clone)]
 pub enum QueryError {
     /// The id box holds something that is not a whole canonical id.
@@ -187,7 +187,7 @@ pub struct ReadScope {
     pub read_complete: bool,
 }
 
-/// The ledger facts about the open source, plus the two page-scoped counts.
+/// The ledger facts about the open source, plus the counts of the loaded rows.
 #[derive(Debug, Clone)]
 pub struct InstanceCard {
     pub state_root: String,
@@ -198,9 +198,10 @@ pub struct InstanceCard {
     pub corrupt_tail: Option<String>,
     pub repair_count: LedgerCount,
     pub writer: WriterFacts,
-    /// Rows this view has loaded so far — the one page-scoped count here.
+    /// Rows this view has loaded so far, hidden performance-monitor events not
+    /// among them.
     pub loaded_count: usize,
-    /// The committed span of the whole snapshot, not of the loaded page.
+    /// The committed span of the whole snapshot, not of the loaded rows.
     pub first_timestamp_unix_ms: Option<u64>,
     pub last_timestamp_unix_ms: Option<u64>,
     pub severity_counts: Vec<(EventSeverity, usize)>,
@@ -512,7 +513,7 @@ impl ViewModel {
 
     /// `bindings` is the port map the session read once; the card takes the
     /// picked port's entry from it. Severity and loaded counts come from the
-    /// re-queried page, never from the map.
+    /// re-queried rows, never from the map.
     pub fn instance_card(&self, bindings: Option<&PortBindings>) -> InstanceCard {
         let mut severity_counts = Vec::new();
         for severity in [

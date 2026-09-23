@@ -355,8 +355,10 @@ fn time_span(source: &ReadSource) -> Option<(u64, u64)> {
 
 /// How long one fill may keep reading windows after the first.
 const FILL_BUDGET: Duration = Duration::from_secs(1);
-/// Windows of slack above a time bound's estimated position.
+/// Windows of slack above a time bound's estimated position, and the most
+/// probes that check it.
 const TIME_SLACK_WINDOWS: u64 = 2;
+const TIME_PROBES: usize = 3;
 /// How long the time cursor's handle must rest before the view reloads.
 const CURSOR_REST: Duration = Duration::from_millis(400);
 
@@ -374,13 +376,25 @@ fn reload(app: &Rc<App>, earlier: bool) {
     };
     let mut model = model.borrow_mut();
     if !earlier {
+        // This reload applies the bound the time cursor holds now.
+        app.cursor_rest.stop();
         let snapshot = source.snapshot_position();
         let upper = match model.filters.to_timestamp_unix_ms {
-            None => snapshot,
-            Some(bound) => upper_for_time(model.span(), snapshot, bound),
+            None => Ok(snapshot),
+            Some(bound) => {
+                let estimate = upper_for_time(model.span(), snapshot, bound);
+                checked_upper(source, &model, estimate, snapshot)
+            }
         };
-        model.begin(upper);
         *app.frame_request() = None;
+        match upper {
+            Ok(upper) => model.begin(upper),
+            Err(error) => {
+                model.begin(0);
+                model.query_error = Some(error);
+                return;
+            }
+        }
     }
     let (target, started) = (model.row_count() + FILL_ROWS, Instant::now());
     model.query_error = None;
@@ -422,11 +436,10 @@ fn read_window(source: &ReadSource, query: &EventQuery) -> Result<Vec<RuntimeEve
     }
 }
 
-/// Where to read down from under a time bound, estimated from the committed
-/// span without any read: the position the bound would fall at if events were
-/// even in time, plus `TIME_SLACK_WINDOWS` windows, capped at the pin. A
-/// bound before the first event reads nothing. What shows is still decided by
-/// the query's own time bound, and the top bar states the positions read.
+/// Where a time bound is estimated to fall, from the committed span without any
+/// read: the position it would take if events were even in time, plus
+/// `TIME_SLACK_WINDOWS` windows, capped at the pin; 0 for a bound before the
+/// first event. `checked_upper` makes the estimate safe.
 fn upper_for_time(span: Option<(u64, u64)>, snapshot: u64, bound: u64) -> u64 {
     let Some((first, last)) = span else {
         return snapshot;
@@ -440,6 +453,40 @@ fn upper_for_time(span: Option<(u64, u64)>, snapshot: u64, bound: u64) -> u64 {
     let ratio = (bound - first) as f64 / (last - first) as f64;
     let estimate = (ratio * snapshot as f64) as u64;
     (estimate + TIME_SLACK_WINDOWS * WINDOW).min(snapshot)
+}
+
+/// Makes an estimated start safe, since reading only goes down from it: one
+/// probe with the view's own query — its time bound included — asks for the
+/// first matching event above the start. None: nothing above could show, and
+/// reading starts there. One found: the start moves above it by a step that
+/// doubles each time, for at most `TIME_PROBES` probes and within the fill
+/// budget; past either, the pin, which is always safe.
+fn checked_upper(
+    source: &ReadSource,
+    model: &ViewModel,
+    estimate: u64,
+    snapshot: u64,
+) -> Result<u64, QueryError> {
+    let (mut upper, mut step, started) = (estimate, TIME_SLACK_WINDOWS * WINDOW, Instant::now());
+    for probe in 0..TIME_PROBES {
+        if upper >= snapshot || (probe > 0 && started.elapsed() >= FILL_BUDGET) {
+            return Ok(snapshot);
+        }
+        let mut query = model.query()?;
+        query.from_sequence = Some(upper + 1);
+        query
+            .validate()
+            .map_err(|error| QueryError::Rejected(error.code().to_string()))?;
+        let page = source
+            .query(&query, 1, None)
+            .map_err(|error| QueryError::ReadFailed(error.to_string()))?;
+        let Some(found) = page.events().first() else {
+            return Ok(upper);
+        };
+        upper = found.sequence + step;
+        step *= 2;
+    }
+    Ok(snapshot)
 }
 
 fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
@@ -581,7 +628,10 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         let weak = window.as_weak();
         let app = Rc::clone(app);
         window.on_load_more(move || {
-            reload(&app, true);
+            // A bound the time cursor set but has not applied yet goes first:
+            // no window of it is appended below rows read under the old one.
+            let pending = app.cursor_rest.running();
+            reload(&app, !pending);
             if let Some(window) = weak.upgrade() {
                 refresh(&window, &app);
             }
@@ -1032,15 +1082,15 @@ fn paint_unopened(window: &AppWindow, app: &Rc<App>) {
     window.set_frame_note(labels.list_unopened.into());
 }
 
-/// Rebuilds the module option list from this page and puts the box back on the
-/// module it is filtering by, found by name in the list that now exists.
+/// Rebuilds the module option list from the loaded rows and puts the box back
+/// on the module it is filtering by, found by name in the list that now exists.
 fn sync_modules(
     window: &AppWindow,
     app: &Rc<App>,
     picked: &Option<OriginModule>,
     mut choices: Vec<OriginModule>,
 ) {
-    // A picked module stays on the list even when this page shows none of it,
+    // A picked module stays on the list even when the loaded rows show none of it,
     // so the box never displays a module the console is not filtering by.
     if let Some(module) = picked {
         if !choices.contains(module) {
