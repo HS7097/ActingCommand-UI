@@ -63,6 +63,19 @@ chosen and why (`runtime-info.json` absent, or the client error code of the fail
 switch to offline. Across both read faces, a Runtime that connects but cannot answer the first page is an
 error in any mode, with no fallback.
 
+When the offline read face cannot be opened — with `offline`, or with `auto` falling back to it — the
+console does not exit: the window opens **unopened**, which is what a fresh install looks like, since the
+Runtime creates the ledger on its first start. The instance card then has only its first line, "read
+face", which says the ledger could not be opened and states the read face's own `code`, `operation` and
+`detail` verbatim. The ledger keeps an io error's OS text, not its kind, so the pair alone cannot tell "no
+ledger yet" from "a ledger that cannot be read", and `detail` is never parsed; only for exactly
+`ledger_io` / `canonicalize_read_only_root` does the line add that the state root probably has no ledger
+yet, most likely because the Runtime has never been started, and point at the launcher's Start. No ledger
+fact is shown, not even a zero: the list says the ledger is not opened instead of standing empty; the
+tabs, the filter boxes, the id box and the time slider are off; the module and port boxes and the frame
+pane say "ledger not opened". Nothing is asked of the ledger and no material is read. The launcher works
+as usual.
+
 Dependencies are pinned to the Runtime's **main** (`Cargo.toml`):
 
 ```
@@ -213,7 +226,8 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # optional, absolut
 
 It is read once at startup and written once on every dropdown change; on write-back the three path keys
 are kept verbatim. **This is the only file the console itself reads and writes**, besides the `instances`
-the instance-configuration window saves into `actingd_config` (see that section): it is not inside any
+the instance-configuration window saves into `actingd_config` and the actingd start logs the launcher
+creates and, after an early exit, reads back (see those sections): it is not inside any
 state root, and the state root still belongs entirely to the read face. If the file is absent, unreadable,
 or holds an unrecognized value, the defaults (Chinese, standard) are used. The parser is hand-written: one
 `key = value` per line, one matching pair of quotes stripped, no escape handling — write Windows paths in
@@ -239,12 +253,16 @@ last Start or Request shutdown press, or why the instance-configuration window d
   inside the state root**. On Windows it is launched with `DETACHED_PROCESS`: the daemon does not inherit
   the console program's console, and does not receive its Ctrl+C.
 - **Readiness decision**: at most 60 attempts, 500 ms each. Each attempt does `try_wait()` first: if the
-  child process has exited it stops and states the exit code and the log path; if it has not exited it
+  child process has exited it stops and states the exit code, the last line of that log starting with
+  `FATAL actingd:` **verbatim** — or that the log could not be read, with the error, or holds no such
+  line — and the log path; if it has not exited it
   does one more `connect`, and a connection means ready, stating the PID and owner epoch, and then the
-  press is recorded (see below). If this console is reading offline, it appends the sentence "to read
-  online, restart with `--source online`" — it **never quietly switches read face mid-session**. If all
-  60 attempts fail to connect, it says "still not ready" and the last client error code. It **does not
-  parse the daemon's output**.
+  press is recorded (see below). If this console is reading offline, or its offline face is unopened, it
+  appends the sentence "to read online, restart with `--source online`" — it **never quietly switches
+  read face mid-session**. If all 60 attempts fail to connect, it says "still not ready" and the last
+  client error code. Readiness is **never read from the daemon's output**: the log is read back only
+  after an early exit, for that one line, and nothing in it is interpreted but whether it names
+  `owner_resource_unconfirmed` (below).
 - **Recording the start press**: the press can only be recorded once a Runtime exists, so the order is
   probe → (if needed) launch → readiness decision → record. Recording opens a new connection, opens an
   interaction with `begin_interaction()` and records one `client_action` with
@@ -255,8 +273,32 @@ last Start or Request shutdown press, or why the instance-configuration window d
   (`runtime.started`), not a value of the press. The line appends the sequence number at which it landed, or, if recording
   failed, the Runtime's refusal code (if any) **verbatim** plus the client error code and operation name
   — the Runtime is still reported ready / running. If readiness fails there is no connection and **nothing is
-  recorded**; the failure is shown only on the line — the one launcher action that can take effect
-  without being recorded.
+  recorded**; the failure is shown only on the line — one of the two launcher actions that can take
+  effect without being recorded; the other is an unlock that fails at stage `ledger` or is killed (on
+  timeout, or when reading its status fails; below).
+- **Unlock owner**: offered only when the fatal line of the last start names `owner_resource_unconfirmed`
+  — actingd refused the state root because its last Runtime owner exited with device resources in use or
+  unconfirmed. A line below the result line then shows an "Unlock Owner…" button. The first press runs
+  nothing: it only shows the statement "the device resources of the last Runtime are released" and a
+  "Confirm and Unlock" button. The second press runs, from `actingd_exe` (absolute, as for Start), exactly
+  `unlock-owner --config <actingd_config> --actor acui --confirm-resources-released`, on a worker thread,
+  with no console window (`CREATE_NO_WINDOW` on Windows: its output is captured, not detached), stdout
+  and stderr captured, for at most 180 s — well above the Runtime's own 120 s budget for the ledger stage,
+  so a run that would finish is never cut off; past that it is killed and reaped and the line says the
+  outcome is unknown. The actor `acui` names the console, never a person: no OS user name reaches the ledger.
+  The whole trimmed stdout must be one JSON object with `schema_version`
+  `actingcommand.actingd.unlock-owner.v1`. `ok` with exit code 0 states the unlocked owner epoch, the
+  disposition before (`in_use` / `unconfirmed`) and the `owner.lock` revision, withdraws the entry and
+  presses Start once more, through the same path. `failed` states `error.code`, `error.stage` and
+  `journal_appended` **verbatim** (`true` only at stage `ledger`: the unlock is durable and the next
+  start takes the epoch over, but its ledger fact is missing). With no JSON, the last `FATAL actingd:`
+  line on stderr is shown **verbatim** — an argument error, or an actingd too old to know the command. A
+  spawn failure, a timeout, output that does not parse or does not match the contract, and an `ok` with
+  a non-zero exit code each have their own line, and none retries the start. After any outcome but an
+  unlock the entry is back at its first step; a new start withdraws it, and Start is refused while the
+  unlock runs. The console records no client action for it: there is no running Runtime to record
+  through, and `unlock-owner` appends its own `cli.command` fact (action `owner.unlock`). It never
+  deletes `owner.lock` (Runtime `contracts/actingd-unlock-owner.md`).
 - **Request shutdown**: only through the typed client, never killing a process. It opens a new connection,
   opens an interaction with `begin_interaction()`, first records this button press as a `client_action`
   with `record_client_action_receipt` (surface `acui.launcher`, control `request_shutdown`), and only
@@ -275,8 +317,7 @@ last Start or Request shutdown press, or why the instance-configuration window d
   `kill`, no blocking `wait`, no job object attached; the handle is dropped once the readiness decision
   ends, and the daemon outlives the console.
 
-Pause/resume, unlocking the owner, start-at-boot, the installer and network downloads are all outside this
-slice.
+Pause/resume, start-at-boot, the installer and network downloads are all outside this slice.
 
 ## Instance configuration
 
@@ -399,8 +440,10 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   `acui-source` and read by `acui-model`.
 - `acui-source`: the read face, the only place that touches the state root. The offline face is
   `EvidenceSource::open` / `query` / `open_report` / `read_material`;
-  `ReadSource::open(root, mode)` picks one of it and the online `OnlineSource` according to `--source`,
-  and `material_reader()` hands material reading to the background thread.
+  `Session::open(root, mode)` picks one of it and the online `OnlineSource` according to `--source`, or
+  gives back `Session::Unopened` with the ledger's own error (`LedgerOpenFailure`: code, operation,
+  detail) when the ledger refuses the offline face, and `material_reader()` hands material reading to
+  the background thread.
 - `acui-model`: a pure Rust view model (tabs, filtering, paging, recovery collapsing, selection), with no
   dependency on slint and **no plain language either** — it gives structured facts only, and all wording
   is chosen by `acui-app` from the language tables.
@@ -408,8 +451,9 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`.
 
 `slint` 1.17.x, `default-features = false`; the ledger is read-only, the only control entry points are the
-launcher's two buttons (start / request shutdown, see above) and the instance-configuration window's
-check-config-gated save, and there is no approval entry point; no tests are written. The launcher is in
+launcher's two buttons (start / request shutdown, see above), its owner-unlock entry (a confirmed
+`actingd unlock-owner`), and the instance-configuration window's check-config-gated save, and there is no
+approval entry point; no tests are written. The launcher is in
 `crates/acui-app/src/launcher.rs`, the instance-configuration window in `instances.rs`, and the three
 client operations, probe, request shutdown and recording the start press, are in `acui-source`
 (`probe_runtime` / `request_shutdown` / `record_start`).

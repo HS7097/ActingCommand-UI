@@ -130,6 +130,13 @@ pub struct Labels {
     pub source_offline_requested: &'static str,
     pub source_offline_absent: &'static str,
     pub source_offline_failed: &'static str,
+    /// The offline face the ledger refused to open: ledger code, operation,
+    /// detail; the hint only follows `ledger_io` in `canonicalize_read_only_root`.
+    pub source_unopened: &'static str,
+    pub source_unopened_hint: &'static str,
+    /// Unopened: the top bar and the two boxes, then the list and the frame pane.
+    pub ledger_unopened: &'static str,
+    pub list_unopened: &'static str,
     pub age_days: &'static str,
     pub age_hours: &'static str,
     pub age_minutes: &'static str,
@@ -169,7 +176,8 @@ pub struct Labels {
     pub child_status_failed: &'static str,
     /// pid, attempt, attempts, log path.
     pub start_waiting: &'static str,
-    /// exit code, log path.
+    /// exit code, the log's last `FATAL actingd:` line or why there is none,
+    /// log path.
     pub start_exited: &'static str,
     /// pid, owner epoch.
     pub start_ready: &'static str,
@@ -182,6 +190,39 @@ pub struct Labels {
     pub start_record_refused: &'static str,
     /// client error code, client operation.
     pub start_record_failed: &'static str,
+    pub log_no_fatal: &'static str,
+    /// error.
+    pub log_unreadable: &'static str,
+    /// The unlock entry, offered after a start whose fatal line names
+    /// `owner_resource_unconfirmed`: its button, the statement the second
+    /// press makes, and the button that makes it.
+    pub unlock_owner: &'static str,
+    pub unlock_statement: &'static str,
+    pub unlock_confirm: &'static str,
+    pub unlock_busy: &'static str,
+    /// actor.
+    pub unlock_running: &'static str,
+    /// owner epoch, previous resource disposition, revision.
+    pub unlock_ok: &'static str,
+    /// exit code, owner epoch, previous resource disposition, revision.
+    pub unlock_ok_nonzero: &'static str,
+    /// error code, stage, journal_appended, exit code.
+    pub unlock_failed: &'static str,
+    /// exit code, the `FATAL actingd:` line.
+    pub unlock_fatal: &'static str,
+    /// why, exit code.
+    pub unlock_unparseable: &'static str,
+    /// JSON pointer.
+    pub unlock_field_invalid: &'static str,
+    pub unlock_no_output: &'static str,
+    /// seconds.
+    pub unlock_timeout: &'static str,
+    pub unlock_killed: &'static str,
+    /// error.
+    pub unlock_kill_failed: &'static str,
+    /// error.
+    pub unlock_output_failed: &'static str,
+    pub unlock_spawn_failed: &'static str,
     /// attempt, attempts.
     pub shutdown_busy_retry: &'static str,
     /// attempts sent, attempts.
@@ -415,6 +456,10 @@ pub const ZH: Labels = Labels {
     source_offline_requested: "离线 · 按 --source offline",
     source_offline_absent: "离线 · 自动：状态根里没有 runtime-info.json",
     source_offline_failed: "离线 · 自动：连接 Runtime 失败 {}（{}）",
+    source_unopened: "账本未能打开：{}（{}）· {}",
+    source_unopened_hint: "状态根里可能还没有账本，多半是 Runtime 从未启动过；可用启动器的「启动」",
+    ledger_unopened: "账本未打开",
+    list_unopened: "账本未打开：没有读取任何事件，原因见实例卡",
     age_days: "{} 天前",
     age_hours: "{} 小时前",
     age_minutes: "{} 分钟前",
@@ -445,13 +490,32 @@ pub const ZH: Labels = Labels {
     spawn_failed: "拉起 {} 失败：{}",
     child_status_failed: "读取子进程状态失败：{}",
     start_waiting: "已拉起 PID {} · 等待就绪 {}/{} · 日志 {}",
-    start_exited: "actingd 已退出，退出码 {}，见 {}",
+    start_exited: "actingd 已退出，退出码 {} · {} · 日志 {}",
     start_ready: "Runtime 已就绪 · PID {} · owner epoch {}",
     restart_online: "本台按离线读；要在线读请带 --source online 重启",
     start_not_ready: "{} 次尝试后仍未就绪 · 最后错误 {}（{}）",
     start_recorded: "动作已记账 #{}",
     start_record_refused: "动作记账被拒：{} · 客户端 {}（{}）",
     start_record_failed: "动作记账失败：{}（{}）",
+    log_no_fatal: "日志里没有 FATAL actingd: 行",
+    log_unreadable: "读取日志失败：{}",
+    unlock_owner: "解锁 owner…",
+    unlock_statement: "确认：上一个 Runtime 的设备资源已经释放",
+    unlock_confirm: "确认并解锁",
+    unlock_busy: "解锁仍在进行",
+    unlock_running: "正在运行 actingd unlock-owner --actor {} --confirm-resources-released…",
+    unlock_ok: "已解锁 owner epoch {} · 解锁前处置 {} · owner.lock 修订 {} · 已自动重试启动一次（结果见上一行）",
+    unlock_ok_nonzero: "unlock-owner 报 ok 却以退出码 {} 结束：不算解锁成功，未重试启动 · owner epoch {} · 解锁前处置 {} · owner.lock 修订 {}",
+    unlock_failed: "解锁失败：{}（阶段 {}）· journal_appended={} · 退出码 {}",
+    unlock_fatal: "unlock-owner 退出码 {} · {}",
+    unlock_unparseable: "unlock-owner 输出无法解析：{} · 退出码 {}",
+    unlock_field_invalid: "字段 {} 缺失或不合约定",
+    unlock_no_output: "stdout 没有 JSON，stderr 没有 FATAL actingd: 行",
+    unlock_timeout: "unlock-owner {} 秒内未结束，结果未知",
+    unlock_killed: "已终止并回收",
+    unlock_kill_failed: "终止失败：{}",
+    unlock_output_failed: "读取 unlock-owner 输出失败：{} · 退出码 {}",
+    unlock_spawn_failed: "运行 unlock-owner（{}）失败：{}",
     shutdown_busy_retry: "请求关闭 · 忙碌重试 {}/{}",
     shutdown_attempts: "第 {}/{} 次",
     shutdown_accepted: "关闭请求已受理 · 回执 {} · 请求 {} · 动作已记账 #{}",
@@ -659,6 +723,10 @@ pub const EN: Labels = Labels {
     source_offline_requested: "Offline · by --source offline",
     source_offline_absent: "Offline · auto: no runtime-info.json in the state root",
     source_offline_failed: "Offline · auto: connecting to the Runtime failed with {} ({})",
+    source_unopened: "ledger could not be opened: {} ({}) · {}",
+    source_unopened_hint: "the state root probably has no ledger yet, most likely because the Runtime has never been started; use Start in the launcher",
+    ledger_unopened: "Ledger Not Opened",
+    list_unopened: "Ledger not opened: no events were read; the instance card says why",
     age_days: "{} days ago",
     age_hours: "{} hours ago",
     age_minutes: "{} minutes ago",
@@ -689,13 +757,32 @@ pub const EN: Labels = Labels {
     spawn_failed: "Starting {} Failed: {}",
     child_status_failed: "Reading the Child's Status Failed: {}",
     start_waiting: "Started PID {} · Waiting for Readiness {}/{} · Log {}",
-    start_exited: "actingd Exited with Code {}, See {}",
+    start_exited: "actingd Exited with Code {} · {} · Log {}",
     start_ready: "Runtime Ready · PID {} · Owner Epoch {}",
     restart_online: "This Console Reads Offline; Restart with --source online to Read It",
     start_not_ready: "Not Ready After {} Attempts · Last Error {} ({})",
     start_recorded: "Action Recorded at #{}",
     start_record_refused: "Action Record Refused: {} · Client {} ({})",
     start_record_failed: "Action Record Failed: {} ({})",
+    log_no_fatal: "No FATAL actingd: Line in the Log",
+    log_unreadable: "Reading the Log Failed: {}",
+    unlock_owner: "Unlock Owner…",
+    unlock_statement: "Confirm: the Device Resources of the Last Runtime Are Released",
+    unlock_confirm: "Confirm and Unlock",
+    unlock_busy: "The Unlock Is Still Running",
+    unlock_running: "Running actingd unlock-owner --actor {} --confirm-resources-released…",
+    unlock_ok: "Unlocked Owner Epoch {} · Disposition Before {} · owner.lock Revision {} · Start Retried Once (See the Line Above)",
+    unlock_ok_nonzero: "unlock-owner Said ok but Exited with Code {}: Not Taken as Unlocked, Start Not Retried · Owner Epoch {} · Disposition Before {} · owner.lock Revision {}",
+    unlock_failed: "Unlock Failed: {} (Stage {}) · journal_appended={} · Exit Code {}",
+    unlock_fatal: "unlock-owner Exited with Code {} · {}",
+    unlock_unparseable: "unlock-owner Output Unparseable: {} · Exit Code {}",
+    unlock_field_invalid: "Field {} Missing or Off-Contract",
+    unlock_no_output: "No JSON on stdout, No FATAL actingd: Line on stderr",
+    unlock_timeout: "unlock-owner Not Finished Within {} s, Outcome Unknown",
+    unlock_killed: "Killed and Reaped",
+    unlock_kill_failed: "Killing It Failed: {}",
+    unlock_output_failed: "Reading unlock-owner Output Failed: {} · Exit Code {}",
+    unlock_spawn_failed: "Running unlock-owner ({}) Failed: {}",
     shutdown_busy_retry: "Request Shutdown · Busy, Retry {}/{}",
     shutdown_attempts: "Attempt {}/{}",
     shutdown_accepted: "Shutdown Accepted · Receipt {} · Request {} · Action Recorded at #{}",
