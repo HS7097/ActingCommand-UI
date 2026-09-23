@@ -821,7 +821,7 @@ pub const EN: Labels = Labels {
     saved: "Saved to {} (check-config ok) · Takes Effect When the Runtime Restarts",
     saved_running: "Now: {} · In the Main Window, Request Shutdown, Then Start Once It Has Stopped",
     saved_stopped: "Now: {} · Start in the Main Window Runs the New Configuration",
-    config_listed: "{} · {} Instances",
+    config_listed: "{} · Instances: {}",
     config_bad_entry: "In {}, instances Entry {} Is Not an Object",
     ledger_online: "Ledger Binding: Not Given Online",
     ledger_failed: "Reading Ledger Bindings Failed: {}",
