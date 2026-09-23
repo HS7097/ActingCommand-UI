@@ -163,11 +163,15 @@ fn start(window: &AppWindow, app: &Rc<App>) {
         window.set_launcher_line(labels.already_running.into());
         let root = launcher.state_root.clone();
         let weak = window.as_weak();
-        std::thread::spawn(move || {
+        let recorded = spawn_worker("acui-start-record", move || {
             let record = record_text(labels, record_start(&root, false));
             let line = format!("{} · {record}", labels.already_running);
             post(&weak, None, line);
         });
+        if let Err(error) = recorded {
+            let failed = fill(labels.thread_failed, &[&error.to_string()]);
+            window.set_launcher_line(format!("{} · {failed}", labels.already_running).into());
+        }
         return;
     }
     let (exe, config) = match actingd_paths(labels, launcher) {
@@ -217,7 +221,7 @@ fn start(window: &AppWindow, app: &Rc<App>) {
     let root = launcher.state_root.clone();
     let offline = app.source.offline_reason().is_some();
     let weak = window.as_weak();
-    std::thread::spawn(move || {
+    let polled = spawn_worker("acui-start-ready", move || {
         let mut child = child;
         let mut last: Option<ClientFailure> = None;
         let mut outcome: Option<(Option<String>, String)> = None;
@@ -311,6 +315,14 @@ fn start(window: &AppWindow, app: &Rc<App>) {
         });
         // `child` is dropped here: not killed, not waited on.
     });
+    // actingd is already running; without the poll nothing will say whether it
+    // got ready, so the line says so. The child handle went with the closure:
+    // dropped, not killed.
+    if let Err(error) = polled {
+        launcher.starting.store(false, Ordering::SeqCst);
+        let text = fill(labels.start_unwatched, &[&pid.to_string(), &error.to_string()]);
+        window.set_launcher_line(text.into());
+    }
 }
 
 /// Both configured paths, or the text naming the first one that is missing
@@ -426,7 +438,7 @@ fn unlock(window: &AppWindow, app: &Rc<App>) {
     window.set_unlock_line(fill(labels.unlock_running, &[UNLOCK_ACTOR]).into());
     let unlocking = Arc::clone(&launcher.unlocking);
     let weak = window.as_weak();
-    std::thread::spawn(move || {
+    let ran = spawn_worker("acui-unlock", move || {
         let (line, unlocked) = unlock_outcome(labels, &exe, &config);
         let _ = slint::invoke_from_event_loop(move || {
             unlocking.store(false, Ordering::SeqCst);
@@ -442,6 +454,12 @@ fn unlock(window: &AppWindow, app: &Rc<App>) {
             window.set_unlock_line(line.into());
         });
     });
+    // Nothing ran: the entry goes back to its first step, with the reason.
+    if let Err(error) = ran {
+        launcher.unlocking.store(false, Ordering::SeqCst);
+        window.set_unlock_offered(true);
+        window.set_unlock_line(fill(labels.thread_failed, &[&error.to_string()]).into());
+    }
 }
 
 /// The line unlock-owner's answer comes to, and whether it unlocked: only an
@@ -593,10 +611,16 @@ fn run_unlock(
     Ok((status, output(stdout)?, output(stderr)?))
 }
 
+/// Kills and reaps the child. A kill that fails leaves it unwaited: it may
+/// never exit. A wait that fails after a kill is said as that, not as a kill
+/// that failed.
 fn reap(labels: &Labels, child: &mut Child) -> String {
-    match child.kill().and_then(|()| child.wait()) {
-        Ok(_) => labels.unlock_killed.to_owned(),
+    match child.kill() {
         Err(error) => fill(labels.unlock_kill_failed, &[&error.to_string()]),
+        Ok(()) => match child.wait() {
+            Ok(_) => labels.unlock_killed.to_owned(),
+            Err(error) => fill(labels.unlock_unreaped, &[&error.to_string()]),
+        },
     }
 }
 
@@ -624,7 +648,7 @@ fn shutdown(window: &AppWindow, app: &Rc<App>) {
     let root = app.launcher.state_root.clone();
     let weak = window.as_weak();
     window.set_launcher_line(format!("{}…", labels.request_shutdown).into());
-    std::thread::spawn(move || {
+    let sent = spawn_worker("acui-shutdown", move || {
         let total = SHUTDOWN_ATTEMPTS.to_string();
         let outcome = request_shutdown(&root, |attempt| {
             let line = fill(labels.shutdown_busy_retry, &[&attempt.to_string(), &total]);
@@ -653,6 +677,16 @@ fn shutdown(window: &AppWindow, app: &Rc<App>) {
         let status = status_text(labels, &probe_runtime(&root));
         post(&weak, Some(status), line);
     });
+    // Nothing was sent and nothing recorded.
+    if let Err(error) = sent {
+        window.set_launcher_line(fill(labels.thread_failed, &[&error.to_string()]).into());
+    }
+}
+
+/// A named worker thread. A thread the system refuses comes back as the error
+/// to show, never as a panic on the event loop.
+pub fn spawn_worker(name: &str, work: impl FnOnce() + Send + 'static) -> io::Result<()> {
+    std::thread::Builder::new().name(name.to_owned()).spawn(work).map(drop)
 }
 
 /// Where the start press landed in the ledger, or why it did not.

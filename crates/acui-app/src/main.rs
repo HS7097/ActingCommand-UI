@@ -916,7 +916,7 @@ fn update_frame(
     let reader = source.material_reader();
     let snapshot = source.snapshot_position();
     let weak = window.as_weak();
-    std::thread::spawn(move || {
+    let started = launcher::spawn_worker("acui-frame", move || {
         // One worker at a time. A whole read cannot be stopped midway on either
         // face, so a superseded one runs to its end, bounded by the byte cap and
         // the deadline, and its result is dropped; one queued behind the slot
@@ -978,6 +978,10 @@ fn update_frame(
             }
         });
     });
+    // No read runs. The request is dropped, so choosing the event again retries.
+    if let Err(error) = started {
+        clear_frame(window, app, fill(labels.thread_failed, &[&error.to_string()]));
+    }
 }
 
 fn clear_frame(window: &AppWindow, app: &Rc<App>, note: String) {
