@@ -46,7 +46,7 @@ answers come from:
   states on that page is the position this session reads at, fixed — as offline, one snapshot for the
   whole session. Every page after that is
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`,
-  the same `EventQuery`, the same page limit, the same `next_cursor`.
+  the same `EventQuery` bounded to one window, the same page limit, the same `next_cursor`.
 - Material goes through `RuntimeClient::read_material_complete` on the same connection: the client
   reads the ranges itself (192 KiB each, 64 KiB against a Runtime that refuses larger ones), the Runtime
   verifies each against the whole file, and the client checks the assembled length and sha256 — the same
@@ -113,9 +113,10 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
 - **Filtering is a ledger query**: view, severity lower and upper bounds, source module,
   `correlation_`/`request_`/`run_`/`task_`/`instance_` id and time upper bound are assembled into one
   `EventQuery`, and the ledger is queried again at the **same snapshot position**; it does not filter the
-  rows already held locally and then call itself a ledger query. An id must be a complete canonical id,
+  rows already held locally and then call itself a ledger query (the one stated exception is the
+  performance monitor, below). An id must be a complete canonical id,
   otherwise it states that a complete identifier is required. The "source module" options are **rebuilt
-  from the current page on every load**, and the selected item is resolved by **module name** — the list
+  from the loaded rows on every load**, and the selected item is resolved by **module name** — the list
   changes, and an index is not a statement that keeps.
 - **Instance filtering by port (offline read face only)**: an ADB port is the identity of an emulator
   instance. At startup, at the same snapshot position, the `runtime.instance_bound` facts are read
@@ -133,23 +134,46 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   and the instance card states that code too; under the online read face the box is disabled and says
   "not supported online". With a port selected, the instance card additionally states the instance alias,
   the port, the source (`physical_device` / `fixture_simulation` verbatim on the lower layer), the number
-  of bound ids and the sequence number of the most recent binding; the severity counts and this page's row
-  count still come from the re-queried page. Rows gain a "port" column: an event with no instance
+  of bound ids and the sequence number of the most recent binding; the severity counts and the row count
+  still come from the re-queried rows. Rows gain a "port" column: an event with no instance
   association says "host"; one with an association whose id's most recent binding gave HOST:PORT says the
   port number; one with an association but absent from the port table (fixtures, serial-port
   configurations, no binding seen) says the abbreviated instance id — no port is invented.
-- **Paging is the page cursor**: "continue reading" takes the `next_cursor` the page gave, fetches the
-  next page and appends it. The top bar permanently shows "read up to row N", with "source incomplete"
-  appended when the source is incomplete.
-- **Recovery grouping comes from the ledger**: the `run_recovery` carried on the page inserts a group row
-  before the first row of each run, showing the state the ledger gives (recovered / unresolved / unknown),
+- **Reading from the latest end**: the ledger query has no descending order, so the timeline reads
+  backward windows of 256 positions down from the pinned position. A window holds no more events than
+  one page's event limit, so one query reads it (following the cursor only when the reply's byte limit
+  splits it), every filter applied by the ledger. Each page query costs the Runtime a read and
+  verification of the whole ledger — online, on its ledger writer — so one fill reads at least one window
+  and starts no further window once it has 256 more rows, has read position 1, has read 16 windows or has
+  run for one second. Rows are listed
+  **newest first**; "read earlier" at the bottom continues below what is loaded. The top bar permanently
+  states the positions the loaded windows cover ("read positions A–B"), with "source incomplete" appended
+  when a window's page said its read was incomplete.
+- **The performance monitor's routine events are hidden by default**: `perf.summary` arrives every 2
+  seconds and would bury everything else, and the ledger query cannot exclude a module. Unless "show
+  performance monitor" is ticked, the performance monitor is picked as the module, or the Health tab
+  (made of these events) is open, the console drops its events **below Warning** from each window it
+  reads, says how many next to the loaded-row count, and keeps the performance monitor on the module list
+  so it can still be picked. Its warnings and errors (disk pressure, high pressure, failed sampling)
+  always show. The row and level counts on the card cover the loaded rows only. This is the one filter
+  applied to rows the console holds; it moves into the ledger query once the query can exclude event
+  types.
+- **Recovery grouping comes from the ledger**: the `run_recovery` carried on the pages inserts a group row
+  above each run's newest row, showing the state the ledger gives (recovered / unresolved / unknown),
   the grounds (row N failed, row M recovered) and the gaps; failure rows the ledger judges recovered are
   collapsed under the group row with a "recovered" mark. This is read-time grouping, not a rewrite of
   failure events. Across pages it **merges by run id**: a later page only adds evidence into it, positions
   given by earlier pages are all kept, and "recovered" rows already collapsed are not re-expanded by a
   later page.
 - **Time upper bound**: the slider's starting position is the state it represents — the far right is
-  "all", and the first drag narrows.
+  "all", and the first drag narrows. The bound and its label follow the handle at once; the view reloads
+  once the handle has rested for 0.4 s (a tab switch or "read earlier" meanwhile applies the new bound
+  first). Reading only goes down, so with a bound set it must start above every matching event: the
+  start is estimated from the committed time span, as if events were even in time, plus two windows of
+  slack, and one probe with the view's own query asks for the first matching event above it. None:
+  reading starts there. One found: the start moves above it, the step doubling each time, for at most
+  three probes within the one-second budget, and otherwise falls back to the pin. The query's own time bound still decides what
+  shows; the top bar states the positions actually read.
 - **Row types are no longer mirrored**: `acui-rows` re-exports the contract types directly, and only adds
   display functions such as local time, id abbreviation, wire codes and the display-name dictionary.
 
@@ -186,7 +210,7 @@ The geometry overlay shares one coordinate system with the frame, sized in this 
 the ledger formally states (`frame_extent` of `task.effect_intent`, the frame extent of
 `task.geometry_observed`), else `frame_width`/`frame_height` in the payload, else the pixel size the
 verified frame decoded to, else the overlays' own extent. The decoded size belongs to the frame request
-it came from: reselecting the event or continuing to read keeps it; switching events, clearing, or a
+it came from: reselecting the event or reading earlier keeps it; switching events, clearing, or a
 failed read drops it.
 
 ## Running

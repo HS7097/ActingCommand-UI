@@ -3,6 +3,12 @@
 //! folding, selection. No toolkit here, no classification of its own, and no
 //! human-facing wording — every name a person reads is chosen in `acui-app`,
 //! which is the only crate that holds the two language tables.
+//!
+//! The view reads from the latest end: backward windows of `WINDOW` positions,
+//! newest first on screen. The ledger query has no descending order, but a
+//! window of `WINDOW` positions holds at most one page's worth of events, so
+//! one query reads it, following the cursor only when the reply's byte limit
+//! splits it.
 
 mod overlay;
 mod tabs;
@@ -15,12 +21,21 @@ use acui_rows::{
     InstanceId, LedgerCount, LedgerEventPosition, LedgerRecoveryGap, LedgerRecoveryState,
     LedgerRunRecovery, LedgerView, OpenReport, OriginModule, PortBindings, PortEntry,
     ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, PublicEventPayload,
-    RuntimeEventQueryCursor, RuntimeEventQueryPage, TaskSemanticFact, WriterFacts,
+    RuntimeEventQueryPage, TaskSemanticFact, WriterFacts, MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
+
+/// Positions one backward window spans: never more events than one page's
+/// event limit.
+pub const WINDOW: u64 = MAX_RUNTIME_EVENT_QUERY_EVENTS as u64;
+/// Rows one fill aims to add, and the most windows it ever reads to get them;
+/// the console also stops a fill at a time budget, since every query costs the
+/// Runtime a read of the whole ledger.
+pub const FILL_ROWS: usize = MAX_RUNTIME_EVENT_QUERY_EVENTS as usize;
+pub const FILL_WINDOWS: usize = 16;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-/// Why this view has no page: the filters as written, or the read itself.
+/// Why this view has no rows to show: the filters as written, or the read itself.
 #[derive(Debug, Clone)]
 pub enum QueryError {
     /// The id box holds something that is not a whole canonical id.
@@ -35,9 +50,14 @@ pub enum QueryError {
 }
 
 /// Filter state, turned into one `EventQuery` and re-run against the ledger.
-/// Nothing here filters rows the console already holds.
+/// Nothing here filters rows the console already holds, with one exception
+/// the view states: the performance monitor's routine events (below Warning),
+/// which the ledger query cannot exclude, are dropped from each window read
+/// and counted — unless shown here, picked as the module, or on the Health
+/// tab, which is made of them. Its warnings and errors always show.
 #[derive(Debug, Clone, Default)]
 pub struct Filters {
+    pub show_performance: bool,
     pub minimum_severity: Option<EventSeverity>,
     pub maximum_severity: Option<EventSeverity>,
     pub origin_module: Option<OriginModule>,
@@ -160,13 +180,14 @@ pub enum DisplayRow<'a> {
     Event { event: &'a ProjectedEvent, folded: bool },
 }
 
-/// How far into the snapshot the page read, as the page itself states it.
+/// The positions the loaded windows cover, lowest to highest, and whether
+/// every window's page said it read its range completely.
 pub struct ReadScope {
-    pub scanned_through_position: Option<u64>,
+    pub range: Option<(u64, u64)>,
     pub read_complete: bool,
 }
 
-/// The ledger facts about the open source, plus the two page-scoped counts.
+/// The ledger facts about the open source, plus the counts of the loaded rows.
 #[derive(Debug, Clone)]
 pub struct InstanceCard {
     pub state_root: String,
@@ -177,9 +198,10 @@ pub struct InstanceCard {
     pub corrupt_tail: Option<String>,
     pub repair_count: LedgerCount,
     pub writer: WriterFacts,
-    /// Rows this view has loaded so far — the one page-scoped count here.
+    /// Rows this view has loaded so far, hidden performance-monitor events not
+    /// among them.
     pub loaded_count: usize,
-    /// The committed span of the whole snapshot, not of the loaded page.
+    /// The committed span of the whole snapshot, not of the loaded rows.
     pub first_timestamp_unix_ms: Option<u64>,
     pub last_timestamp_unix_ms: Option<u64>,
     pub severity_counts: Vec<(EventSeverity, usize)>,
@@ -210,9 +232,13 @@ pub struct ViewModel {
     pub filters: Filters,
     pub selected_sequence: Option<u64>,
     pub query_error: Option<QueryError>,
+    /// Loaded rows in ledger order, oldest first; shown newest first.
     rows: Vec<ProjectedEvent>,
     recovery: Vec<RecoveryGroup>,
-    next_cursor: Option<RuntimeEventQueryCursor>,
+    /// The position this view reads down from, and the lowest one read so far.
+    upper: u64,
+    lowest_read: Option<u64>,
+    hidden_performance: usize,
     scope: ReadScope,
     snapshot_position: u64,
     open: OpenReport,
@@ -234,8 +260,10 @@ impl ViewModel {
             query_error: None,
             rows: Vec::new(),
             recovery: Vec::new(),
-            next_cursor: None,
-            scope: ReadScope { scanned_through_position: None, read_complete: true },
+            upper: snapshot_position,
+            lowest_read: None,
+            hidden_performance: 0,
+            scope: ReadScope { range: None, read_complete: true },
             snapshot_position,
             open,
             state_root,
@@ -252,47 +280,97 @@ impl ViewModel {
         self.filters.query(self.tab)
     }
 
-    pub fn cursor(&self) -> Option<RuntimeEventQueryCursor> {
-        self.next_cursor.clone()
+    /// Starts the view over, reading down from `upper`: the pinned position,
+    /// or the last one a time bound allows.
+    pub fn begin(&mut self, upper: u64) {
+        self.rows.clear();
+        self.recovery.clear();
+        self.selected_sequence = None;
+        self.upper = upper;
+        self.lowest_read = None;
+        self.hidden_performance = 0;
+        self.scope = ReadScope { range: None, read_complete: true };
     }
 
-    pub fn has_more(&self) -> bool {
-        self.next_cursor.is_some()
+    /// The next window down, `(from, to)`, or `None` once position 1 is read.
+    pub fn next_window(&self) -> Option<(u64, u64)> {
+        let to = self.lowest_read.map_or(self.upper, |lowest| lowest - 1);
+        (to > 0).then(|| (to.saturating_sub(WINDOW - 1).max(1), to))
     }
 
-    /// Replaces the rows, or appends the next page of the same query.
-    pub fn apply(&mut self, page: RuntimeEventQueryPage, append: bool) {
-        if !append {
-            self.rows.clear();
-            self.recovery.clear();
-            self.selected_sequence = None;
-        }
-        self.rows.extend(page.events().iter().cloned());
-        self.next_cursor = page.next_cursor().cloned();
-        self.scope = ReadScope {
-            scanned_through_position: page
-                .read_scope()
-                .map(|scope| scope.scanned_through_position),
-            read_complete: page.read_scope().is_none_or(|scope| scope.read_complete),
-        };
-        for group in page.run_recovery() {
-            let run_id = code(&group.run_id);
-            match self
-                .recovery
-                .iter_mut()
-                .find(|existing| existing.run_id == run_id)
-            {
-                Some(existing) => existing.absorb(group),
-                None => {
-                    let mut fresh = RecoveryGroup {
-                        run_id,
-                        state: group.state,
-                        evidence: Vec::new(),
-                        gaps: Vec::new(),
-                    };
-                    fresh.absorb(group);
-                    self.recovery.push(fresh);
+    pub fn has_earlier(&self) -> bool {
+        self.next_window().is_some()
+    }
+
+    /// The filters' query bounded to one window.
+    pub fn window_query(&self, (from, to): (u64, u64)) -> Result<EventQuery, QueryError> {
+        let mut query = self.query()?;
+        query.from_sequence = Some(from);
+        query.to_sequence = Some(to);
+        query
+            .validate()
+            .map_err(|error| QueryError::Rejected(error.code().to_string()))?;
+        Ok(query)
+    }
+
+    pub fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Routine performance-monitor events dropped from the windows read so far.
+    pub fn hidden_performance(&self) -> usize {
+        self.hidden_performance
+    }
+
+    fn hides_performance(&self) -> bool {
+        !self.filters.show_performance
+            && self.filters.origin_module != Some(OriginModule::PerformanceMonitor)
+            && self.tab != LedgerView::Health
+    }
+
+    /// One window read whole — its pages in order — put below the rows already
+    /// loaded. The performance monitor's routine events are dropped and counted
+    /// when hidden.
+    pub fn apply_window(&mut self, (from, to): (u64, u64), pages: &[RuntimeEventQueryPage]) {
+        let hide = self.hides_performance();
+        let mut events = Vec::new();
+        let mut complete = true;
+        for page in pages {
+            for event in page.events() {
+                let routine = matches!(event.severity, EventSeverity::Debug | EventSeverity::Info);
+                if hide && routine && event.origin.module() == OriginModule::PerformanceMonitor {
+                    self.hidden_performance += 1;
+                } else {
+                    events.push(event.clone());
                 }
+            }
+            complete &= page.read_scope().is_none_or(|scope| scope.read_complete);
+            for group in page.run_recovery() {
+                self.absorb_recovery(group);
+            }
+        }
+        events.append(&mut self.rows);
+        self.rows = events;
+        self.lowest_read = Some(from);
+        self.scope = ReadScope {
+            range: Some((from, self.scope.range.map_or(to, |(_, high)| high))),
+            read_complete: self.scope.read_complete && complete,
+        };
+    }
+
+    fn absorb_recovery(&mut self, group: &LedgerRunRecovery) {
+        let run_id = code(&group.run_id);
+        match self.recovery.iter_mut().find(|existing| existing.run_id == run_id) {
+            Some(existing) => existing.absorb(group),
+            None => {
+                let mut fresh = RecoveryGroup {
+                    run_id,
+                    state: group.state,
+                    evidence: Vec::new(),
+                    gaps: Vec::new(),
+                };
+                fresh.absorb(group);
+                self.recovery.push(fresh);
             }
         }
     }
@@ -301,23 +379,28 @@ impl ViewModel {
         &self.scope
     }
 
+    /// The modules of the loaded rows, and the performance monitor while any
+    /// of its events are hidden, so it can still be picked.
     pub fn modules(&self) -> Vec<OriginModule> {
         let mut modules: Vec<OriginModule> =
             self.rows.iter().map(|event| event.origin.module()).collect();
+        if self.hidden_performance > 0 {
+            modules.push(OriginModule::PerformanceMonitor);
+        }
         modules.sort();
         modules.dedup();
         modules
     }
 
-    /// Rows in ledger order. Each run the page carries a recovery statement for
-    /// gets a header at its first row, and every failure the ledger resolved is
-    /// folded under it.
+    /// Rows newest first. Each run the pages carry a recovery statement for
+    /// gets a header at its newest row, and every failure the ledger resolved
+    /// is folded under it.
     pub fn display_rows(&self) -> Vec<DisplayRow<'_>> {
         let folded: Vec<Vec<u64>> = self.recovery.iter().map(RecoveryGroup::folded).collect();
         let mut header_shown = vec![false; self.recovery.len()];
         let mut emitted: Vec<u64> = Vec::new();
         let mut display = Vec::new();
-        for event in &self.rows {
+        for event in self.rows.iter().rev() {
             if emitted.contains(&event.sequence) {
                 continue;
             }
@@ -330,7 +413,7 @@ impl ViewModel {
             if let Some(index) = anchor {
                 header_shown[index] = true;
                 display.push(DisplayRow::Recovery(&self.recovery[index]));
-                for sequence in &folded[index] {
+                for sequence in folded[index].iter().rev() {
                     if let Some(member) = self.rows.iter().find(|row| row.sequence == *sequence) {
                         emitted.push(*sequence);
                         display.push(DisplayRow::Event { event: member, folded: true });
@@ -380,7 +463,7 @@ impl ViewModel {
 
     /// `bindings` is the port map the session read once; the card takes the
     /// picked port's entry from it. Severity and loaded counts come from the
-    /// re-queried page, never from the map.
+    /// re-queried rows, never from the map.
     pub fn instance_card(&self, bindings: Option<&PortBindings>) -> InstanceCard {
         let mut severity_counts = Vec::new();
         for severity in [

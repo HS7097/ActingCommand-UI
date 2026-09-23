@@ -16,16 +16,17 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use acui_model::{
     tab_from_name, DisplayRow, FrameTarget, InstanceCard, Overlay, QueryError, RecoveryGroup,
-    ViewModel, ALL_TABS,
+    ViewModel, ALL_TABS, FILL_ROWS, FILL_WINDOWS, WINDOW,
 };
 use acui_rows::{
     code, event_type_names, format_bytes, format_clock, format_full, links_named, module_names,
     seconds_since, short_id, ArtifactEvictionObservation, EventQuery, EventSeverity, LedgerCount,
-    LedgerView, OriginModule, PortBindings, PortEntry, ProjectedEvent, Sensitivity, WriterFacts,
-    MAX_RUNTIME_EVENT_QUERY_EVENTS,
+    LedgerView, OriginModule, PortBindings, PortEntry, ProjectedEvent, RuntimeEventQueryPage,
+    Sensitivity, WriterFacts, MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 use acui_source::{
     InstanceFacts, MaterialOutcome, OfflineFacts, OfflineReason, ReadSource, RuntimeInstance,
@@ -33,7 +34,9 @@ use acui_source::{
 };
 use anyhow::{bail, Result};
 use settings::TextSize;
-use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
+use slint::{
+    Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode, VecModel,
+};
 use strings::{fill, Labels, Language};
 
 slint::include_modules!();
@@ -123,6 +126,8 @@ struct App {
     worker: Arc<Mutex<()>>,
     /// The state root and the two launcher paths, as this run resolved them.
     launcher: launcher::Launcher,
+    /// Reloads once the time cursor's handle rests.
+    cursor_rest: Timer,
 }
 
 /// The port map this session filters by: the offline read face derives it
@@ -234,6 +239,7 @@ fn main() -> Result<()> {
             stored.actingd_config.clone(),
             stored.actingd_exe.clone(),
         ),
+        cursor_rest: Timer::default(),
     });
     reload(&app, false);
 
@@ -272,6 +278,7 @@ fn install_strings(window: &AppWindow, labels: &'static Labels, online: bool) {
     global.set_severity_max_options(shared(&labels.severity_max));
     global.set_id_placeholder(labels.id_placeholder.into());
     global.set_continue_reading(labels.continue_reading.into());
+    global.set_show_performance(labels.show_performance.into());
     global.set_card_title(labels.card_title.into());
     global.set_card_note(labels.card_note.into());
     global.set_detail_title(labels.detail_title.into());
@@ -341,26 +348,140 @@ fn time_span(source: &ReadSource) -> Option<(u64, u64)> {
     ))
 }
 
-/// Re-runs the current filters as one ledger query at the pinned snapshot.
-fn reload(app: &Rc<App>, append: bool) {
+/// How long one fill may keep reading windows after the first.
+const FILL_BUDGET: Duration = Duration::from_secs(1);
+/// Windows of slack above a time bound's estimated position, and the most
+/// probes that check it.
+const TIME_SLACK_WINDOWS: u64 = 2;
+const TIME_PROBES: usize = 3;
+/// How long the time cursor's handle must rest before the view reloads.
+const CURSOR_REST: Duration = Duration::from_millis(400);
+
+/// Fills the timeline from the latest end at the pinned snapshot: backward
+/// windows, each read whole, until `FILL_ROWS` more rows show, position 1 is
+/// read, `FILL_WINDOWS` windows were read, or `FILL_BUDGET` has passed — at
+/// least one window each time. Every page query costs the Runtime a read and
+/// verification of the whole ledger (online, on its writer), so what the
+/// budget leaves is for "read earlier"; the top bar states what was read.
+/// `earlier` continues below what is loaded; otherwise the view starts over
+/// from the pin, or from where a time bound is estimated to fall.
+fn reload(app: &Rc<App>, earlier: bool) {
     let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
         return;
     };
     let mut model = model.borrow_mut();
-    let cursor = if append { model.cursor() } else { None };
-    match model.query() {
-        Err(error) => model.query_error = Some(error),
-        Ok(query) => match source.query(&query, MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor) {
-            Ok(page) => {
-                model.query_error = None;
-                model.apply(page, append);
+    if !earlier {
+        // This reload applies the bound the time cursor holds now.
+        app.cursor_rest.stop();
+        let snapshot = source.snapshot_position();
+        let upper = match model.filters.to_timestamp_unix_ms {
+            None => Ok(snapshot),
+            Some(bound) => {
+                let estimate = upper_for_time(model.span(), snapshot, bound);
+                checked_upper(source, &model, estimate, snapshot)
             }
-            Err(error) => model.query_error = Some(QueryError::ReadFailed(error.to_string())),
-        },
-    }
-    if !append {
+        };
         *app.frame_request() = None;
+        match upper {
+            Ok(upper) => model.begin(upper),
+            Err(error) => {
+                model.begin(0);
+                model.query_error = Some(error);
+                return;
+            }
+        }
     }
+    let (target, started) = (model.row_count() + FILL_ROWS, Instant::now());
+    model.query_error = None;
+    for read in 0..FILL_WINDOWS {
+        if read > 0 && (model.row_count() >= target || started.elapsed() >= FILL_BUDGET) {
+            break;
+        }
+        let Some(window) = model.next_window() else {
+            break;
+        };
+        let pages = model
+            .window_query(window)
+            .and_then(|query| {
+                read_window(source, &query)
+                    .map_err(|error| QueryError::ReadFailed(error.to_string()))
+            });
+        match pages {
+            Ok(pages) => model.apply_window(window, &pages),
+            Err(error) => {
+                model.query_error = Some(error);
+                break;
+            }
+        }
+    }
+}
+
+/// One window read whole: its pages, following the cursor when the reply's
+/// byte limit splits it.
+fn read_window(source: &ReadSource, query: &EventQuery) -> Result<Vec<RuntimeEventQueryPage>> {
+    let mut pages = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = source.query(query, MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor)?;
+        cursor = page.next_cursor().cloned();
+        pages.push(page);
+        if cursor.is_none() {
+            return Ok(pages);
+        }
+    }
+}
+
+/// Where a time bound is estimated to fall, from the committed span without any
+/// read: the position it would take if events were even in time, plus
+/// `TIME_SLACK_WINDOWS` windows, capped at the pin; 0 for a bound before the
+/// first event. `checked_upper` makes the estimate safe.
+fn upper_for_time(span: Option<(u64, u64)>, snapshot: u64, bound: u64) -> u64 {
+    let Some((first, last)) = span else {
+        return snapshot;
+    };
+    if bound >= last {
+        return snapshot;
+    }
+    if bound < first {
+        return 0;
+    }
+    let ratio = (bound - first) as f64 / (last - first) as f64;
+    let estimate = (ratio * snapshot as f64) as u64;
+    (estimate + TIME_SLACK_WINDOWS * WINDOW).min(snapshot)
+}
+
+/// Makes an estimated start safe, since reading only goes down from it: one
+/// probe with the view's own query — its time bound included — asks for the
+/// first matching event above the start. None: nothing above could show, and
+/// reading starts there. One found: the start moves above it by a step that
+/// doubles each time, for at most `TIME_PROBES` probes and within the fill
+/// budget; past either, the pin, which is always safe.
+fn checked_upper(
+    source: &ReadSource,
+    model: &ViewModel,
+    estimate: u64,
+    snapshot: u64,
+) -> Result<u64, QueryError> {
+    let (mut upper, mut step, started) = (estimate, TIME_SLACK_WINDOWS * WINDOW, Instant::now());
+    for probe in 0..TIME_PROBES {
+        if upper >= snapshot || (probe > 0 && started.elapsed() >= FILL_BUDGET) {
+            return Ok(snapshot);
+        }
+        let mut query = model.query()?;
+        query.from_sequence = Some(upper + 1);
+        query
+            .validate()
+            .map_err(|error| QueryError::Rejected(error.code().to_string()))?;
+        let page = source
+            .query(&query, 1, None)
+            .map_err(|error| QueryError::ReadFailed(error.to_string()))?;
+        let Some(found) = page.events().first() else {
+            return Ok(upper);
+        };
+        upper = found.sequence + step;
+        step *= 2;
+    }
+    Ok(snapshot)
 }
 
 fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
@@ -434,18 +555,42 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         }
         reload(&app, false)
     });
+    // Shown or hidden again from the pin: the performance monitor's events are
+    // dropped as each window is read, not from rows already held.
+    on!(on_show_performance_changed, |app, model, shown| {
+        model.borrow_mut().filters.show_performance = shown;
+        reload(&app, false)
+    });
     on!(on_id_changed, |app, model, text| {
         model.borrow_mut().filters.id_text = text.to_string();
         reload(&app, false)
     });
-    on!(on_cursor_changed, |app, model, value| {
-        let bound = model.borrow().span().and_then(|(from, to)| {
-            let ratio = (value as f64 / 1000.0).clamp(0.0, 1.0);
-            (ratio < 1.0).then(|| from + ((to - from) as f64 * ratio) as u64)
+    // The bound and its label follow the handle at once; the reload waits
+    // until the handle rests, since each one reads the whole ledger.
+    {
+        let weak = window.as_weak();
+        let app = Rc::clone(app);
+        window.on_cursor_changed(move |value| {
+            let Some(model) = &app.model else {
+                return;
+            };
+            let bound = model.borrow().span().and_then(|(from, to)| {
+                let ratio = (value as f64 / 1000.0).clamp(0.0, 1.0);
+                (ratio < 1.0).then(|| from + ((to - from) as f64 * ratio) as u64)
+            });
+            model.borrow_mut().filters.to_timestamp_unix_ms = bound;
+            let (rested, held) = (weak.clone(), Rc::downgrade(&app));
+            app.cursor_rest.start(TimerMode::SingleShot, CURSOR_REST, move || {
+                if let (Some(window), Some(app)) = (rested.upgrade(), held.upgrade()) {
+                    reload(&app, false);
+                    refresh(&window, &app);
+                }
+            });
+            if let Some(window) = weak.upgrade() {
+                refresh(&window, &app);
+            }
         });
-        model.borrow_mut().filters.to_timestamp_unix_ms = bound;
-        reload(&app, false)
-    });
+    }
     on!(on_row_clicked, |app, model, index| {
         let mut model = model.borrow_mut();
         let selected = match model.display_rows().get(index.max(0) as usize) {
@@ -460,7 +605,10 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         let weak = window.as_weak();
         let app = Rc::clone(app);
         window.on_load_more(move || {
-            reload(&app, true);
+            // A bound the time cursor set but has not applied yet goes first:
+            // no window of it is appended below rows read under the old one.
+            let pending = app.cursor_rest.running();
+            reload(&app, !pending);
             if let Some(window) = weak.upgrade() {
                 refresh(&window, &app);
             }
@@ -499,9 +647,9 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
     window.set_storage_format_value(backend_text(labels, &card.backend).into());
     let scope = model.read_scope();
     window.set_read_up_to_text(
-        match scope.scanned_through_position {
-            Some(position) => {
-                let mut text = fill(labels.read_up_to, &[&position.to_string()]);
+        match scope.range {
+            Some((low, high)) => {
+                let mut text = fill(labels.read_range, &[&low.to_string(), &high.to_string()]);
                 if !scope.read_complete {
                     text.push_str(" · ");
                     text.push_str(labels.source_incomplete);
@@ -512,9 +660,13 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
         }
         .into(),
     );
-    window.set_loaded_rows_text(
-        fill(labels.loaded_rows_top, &[&card.loaded_count.to_string()]).into(),
-    );
+    let mut loaded = fill(labels.loaded_rows_top, &[&card.loaded_count.to_string()]);
+    if model.hidden_performance() > 0 {
+        let hidden = model.hidden_performance().to_string();
+        loaded.push_str(&fill(labels.performance_hidden, &[&hidden]));
+    }
+    window.set_loaded_rows_text(loaded.into());
+    window.set_show_performance(model.filters.show_performance);
     window.set_cursor_label(
         model
             .filters
@@ -627,7 +779,7 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
 
     let display = model.display_rows();
     window.set_filter_error(query_error_text(labels, model.query_error.as_ref()).into());
-    window.set_has_more(model.has_more());
+    window.set_has_more(model.has_earlier());
     let rows: Vec<RowItem> = display
         .iter()
         .map(|row| match row {
@@ -779,15 +931,15 @@ fn paint_unopened(window: &AppWindow, app: &Rc<App>) {
     window.set_frame_note(labels.list_unopened.into());
 }
 
-/// Rebuilds the module option list from this page and puts the box back on the
-/// module it is filtering by, found by name in the list that now exists.
+/// Rebuilds the module option list from the loaded rows and puts the box back
+/// on the module it is filtering by, found by name in the list that now exists.
 fn sync_modules(
     window: &AppWindow,
     app: &Rc<App>,
     picked: &Option<OriginModule>,
     mut choices: Vec<OriginModule>,
 ) {
-    // A picked module stays on the list even when this page shows none of it,
+    // A picked module stays on the list even when the loaded rows show none of it,
     // so the box never displays a module the console is not filtering by.
     if let Some(module) = picked {
         if !choices.contains(module) {
