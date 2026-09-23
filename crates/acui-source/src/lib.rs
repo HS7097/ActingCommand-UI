@@ -1071,9 +1071,9 @@ pub fn read_material(
 }
 
 /// The online counterpart of [`read_material`]: `RuntimeClient::read_material_complete`
-/// on the session's connection, under the same byte cap and deadline. It checks
-/// `still_wanted` before and after, not between ranges; the client drops an
-/// unfinished assembly itself. A client error is kept whole (code, operation,
+/// on the session's connection, under the same byte cap and deadline. The
+/// client asks `still_wanted` between ranges and drops an unfinished assembly
+/// itself; a read stopped that way is superseded, and nothing is shown. A client error is kept whole (code, operation,
 /// the Runtime's refusal and host failure), not reduced to its code.
 fn read_material_online(
     client: &RuntimeClient,
@@ -1100,6 +1100,7 @@ fn read_material_online(
         selection,
         MAX_FRAME_BYTES as usize,
         Instant::now() + MATERIAL_READ_DEADLINE,
+        still_wanted,
     );
     if !still_wanted() {
         return None;

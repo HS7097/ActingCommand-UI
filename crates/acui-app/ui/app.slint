@@ -39,6 +39,54 @@ export struct ArtifactItem {
     sha256: string,
 }
 
+// A target the recognition evaluated, in frame pixels: passed ones are drawn
+// solid, the rest dashed.
+export struct TargetItem {
+    label: string,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    passed: bool,
+}
+
+// A box edged in dashes: Slint borders are solid only.
+component DashedBox inherits Rectangle {
+    in property <color> stroke;
+    property <length> dash: 6px;
+    property <length> line: 2px;
+    property <int> across: max(1, floor(self.width / (self.dash * 2)));
+    property <int> down: max(1, floor(self.height / (self.dash * 2)));
+    for dash[index] in root.across: Rectangle {
+        x: index * root.dash * 2;
+        y: 0;
+        width: min(root.dash, root.width - self.x);
+        height: root.line;
+        background: root.stroke;
+    }
+    for dash[index] in root.across: Rectangle {
+        x: index * root.dash * 2;
+        y: root.height - root.line;
+        width: min(root.dash, root.width - self.x);
+        height: root.line;
+        background: root.stroke;
+    }
+    for dash[index] in root.down: Rectangle {
+        x: 0;
+        y: index * root.dash * 2;
+        width: root.line;
+        height: min(root.dash, root.height - self.y);
+        background: root.stroke;
+    }
+    for dash[index] in root.down: Rectangle {
+        x: root.width - root.line;
+        y: index * root.dash * 2;
+        width: root.line;
+        height: min(root.dash, root.height - self.y);
+        background: root.stroke;
+    }
+}
+
 export struct OverlayItem {
     kind: string,
     x: float,
@@ -248,6 +296,7 @@ export component AppWindow inherits Window {
     in property <[FieldLine]> detail-lines;
     in property <[ArtifactItem]> artifacts;
     in property <[OverlayItem]> overlays;
+    in property <[TargetItem]> targets;
     in property <float> canvas-width;
     in property <float> canvas-height;
     in property <string> frame-size-text;
@@ -807,6 +856,35 @@ export component AppWindow inherits Window {
                             height: root.canvas-height * parent.scale * 1px;
                             image-fit: fill;
                             source: root.frame-image;
+                        }
+                        for target in root.targets: Rectangle {
+                            x: parent.offset-x + target.x * parent.scale * 1px;
+                            y: parent.offset-y + target.y * parent.scale * 1px;
+                            width: max(target.width * parent.scale * 1px, 2px);
+                            height: max(target.height * parent.scale * 1px, 2px);
+                            if target.passed: Rectangle {
+                                border-color: #4cd964;
+                                border-width: 2px;
+                            }
+                            if !target.passed: DashedBox {
+                                stroke: #ffb020;
+                            }
+                            Rectangle {
+                                x: 0;
+                                y: -self.height;
+                                width: min(target-label.preferred-width + 6px, max(parent.width, 80px));
+                                height: target-label.preferred-height + 2px;
+                                background: #000000a0;
+                                target-label := Text {
+                                    x: 3px;
+                                    y: 1px;
+                                    width: parent.width - 6px;
+                                    text: target.label;
+                                    font-size: Scale.grey-font;
+                                    color: target.passed ? #4cd964 : #ffb020;
+                                    overflow: elide;
+                                }
+                            }
                         }
                         // A point is a dot centred on it; the step's tap mark is
                         // larger and ringed so it reads on any frame.

@@ -100,7 +100,7 @@ as usual.
 Dependencies are pinned to the Runtime's **main** (`Cargo.toml`):
 
 ```
-rev = "75ed4b3f537439310bc891b52abd0cc12532f5b1"
+rev = "5e462b0a6d1ba730d510ca3d23e658eddbc69114"
 ```
 
 The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
@@ -213,11 +213,11 @@ and only within this rule:
 - Reading is done on a background thread, and every request carries a token; if a slow read returns after
   the selection has changed, it is discarded. **A stale or unverified image is never displayed, at any
   time.**
-- Reading is done by one background worker thread, **only one at a time**. The whole-object read cannot
-  be stopped midway on either face: a displaced one runs to its end, bounded by the 8 MiB limit and the
-  30-second deadline, and its result is discarded; a request displaced while it still waits for the
-  worker never starts. Online this costs more than it did while the console assembled ranges itself and
-  could stop before the next one — the Runtime re-hashes the whole material for every range.
+- Reading is done by one background worker thread, **only one at a time**. Offline the whole-object
+  read cannot be stopped midway: a displaced one runs to its end, bounded by the 8 MiB limit and the
+  30-second deadline, and its result is discarded. Online the client asks between ranges whether the
+  read is still wanted, so a displaced one stops at the next range. A request displaced while it still
+  waits for the worker never starts.
 - Decoding uses only `image` (with only the `png` feature enabled, version pinned in the workspace's
   `[workspace.dependencies]`). The program decodes only two kinds of image: frames read back this way,
   and its own application icon.
@@ -251,9 +251,11 @@ On the frame, beside the event's own geometry:
   same input twice.
 - **One sentence** under the frame, per input meant on it: "Step 0 notice_close: recognized
   bluearchive/news, tap (1142, 102)".
-
-Recognition target boxes (`targets[].region`) come with the Runtime's recognition targets; the
-contract pinned here does not have them yet, so none are drawn.
+- **The recognition target boxes**: the targets the frame's latest recognition evaluated
+  (`task.recognition_completed.targets`, those of the matched page or, with no match, of the first
+  candidate), each in its `region`: solid green when it passed, dashed amber when it did not, labelled
+  with its `target_id` and role. A keyword-only target has no region and is not drawn; the sentence
+  counts all of them ("… (3 of 4 targets passed)").
 
 ## Running
 

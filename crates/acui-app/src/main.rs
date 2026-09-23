@@ -1150,6 +1150,20 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
                 })
             }));
             window.set_overlays(models(overlays));
+            let boxes = frame.as_ref().map_or(&[][..], |frame| frame.group.boxes.as_slice());
+            window.set_targets(models(
+                boxes
+                    .iter()
+                    .map(|target| TargetItem {
+                        label: format!("{} · {}", target.target_id, target.role).into(),
+                        x: target.x,
+                        y: target.y,
+                        width: target.width,
+                        height: target.height,
+                        passed: target.passed,
+                    })
+                    .collect::<Vec<_>>(),
+            ));
             window.set_frame_page(
                 frame.as_ref().map(|frame| page_text(labels, &frame.group)).unwrap_or_default().into(),
             );
@@ -1167,6 +1181,7 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
             }]));
             window.set_artifacts(models(Vec::<ArtifactItem>::new()));
             window.set_overlays(models(Vec::<OverlayItem>::new()));
+            window.set_targets(models(Vec::<TargetItem>::new()));
             window.set_frame_page(SharedString::new());
             window.set_frame_explain(SharedString::new());
             window.set_canvas_width(1.0);
@@ -1736,9 +1751,17 @@ fn page_text(labels: &Labels, group: &FrameGroup) -> String {
 /// what was done where — then how the frame was found when the event does not
 /// name it.
 fn explain_text(labels: &Labels, frame: &FrameView) -> String {
-    let recognition = frame.group.recognition.as_ref().map(|(page, candidates)| match page {
-        Some(page) => fill(labels.frame_matched, &[page]),
-        None => fill(labels.frame_unmatched, &[&candidates.to_string()]),
+    let recognition = frame.group.recognition.as_ref().map(|(page, candidates)| {
+        let seen = match page {
+            Some(page) => fill(labels.frame_matched, &[page]),
+            None => fill(labels.frame_unmatched, &[&candidates.to_string()]),
+        };
+        match frame.group.targets {
+            (_, 0) => seen,
+            (passed, total) => {
+                fill(labels.frame_targets, &[&seen, &passed.to_string(), &total.to_string()])
+            }
+        }
     });
     let mut parts: Vec<String> = frame
         .group
