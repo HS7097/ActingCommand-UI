@@ -165,6 +165,10 @@ pub struct Labels {
     /// client error code, client operation.
     pub runtime_not_running: &'static str,
     pub already_running: &'static str,
+    /// The OS error of a worker thread that could not be started.
+    pub thread_failed: &'static str,
+    /// actingd's pid, the OS error.
+    pub start_unwatched: &'static str,
     pub start_busy: &'static str,
     /// settings key.
     pub key_not_configured: &'static str,
@@ -222,6 +226,8 @@ pub struct Labels {
     pub unlock_killed: &'static str,
     /// error.
     pub unlock_kill_failed: &'static str,
+    /// The wait's error, after a kill that worked.
+    pub unlock_unreaped: &'static str,
     /// error.
     pub unlock_output_failed: &'static str,
     pub unlock_spawn_failed: &'static str,
@@ -272,6 +278,8 @@ pub struct Labels {
     /// Ends a failure that stopped check-config; error.
     pub check_stopped: &'static str,
     pub check_unstoppable: &'static str,
+    /// The wait's error, after a kill that worked.
+    pub check_unreaped: &'static str,
     /// config path, error; candidate path, error.
     pub replace_failed: &'static str,
     pub candidate_left: &'static str,
@@ -544,6 +552,8 @@ pub const ZH: Labels = Labels {
     runtime_running: "Runtime 运行中 · PID {} · owner epoch {}",
     runtime_not_running: "Runtime 未运行 · {}（{}）",
     already_running: "已在运行，未拉起",
+    thread_failed: "无法启动后台线程：{}",
+    start_unwatched: "已拉起 actingd（PID {}），但等待就绪的线程启动失败：{}；要知道它是否就绪，再按一次「启动」探测",
     start_busy: "上一次启动仍在等待就绪",
     key_not_configured: "acui.toml 未配置 {}",
     key_not_absolute: "acui.toml 的 {} 不是绝对路径：{}",
@@ -575,6 +585,7 @@ pub const ZH: Labels = Labels {
     unlock_timeout: "unlock-owner {} 秒内未结束，结果未知",
     unlock_killed: "已终止并回收",
     unlock_kill_failed: "终止失败：{}",
+    unlock_unreaped: "已终止，但回收失败：{}",
     unlock_output_failed: "读取 unlock-owner 输出失败：{} · 退出码 {}",
     unlock_spawn_failed: "运行 unlock-owner（{}）失败：{}",
     shutdown_busy_retry: "请求关闭 · 忙碌重试 {}/{}",
@@ -608,6 +619,7 @@ pub const ZH: Labels = Labels {
     check_reader_lost: "读取 check-config 输出的线程异常结束，输出未取得（退出码 {}）",
     check_stopped: "；已终止 check-config",
     check_unstoppable: "；终止 check-config 失败（{}），它可能仍在运行",
+    check_unreaped: "；已终止 check-config，但回收它失败（{}）",
     replace_failed: "替换 {} 失败：{}",
     candidate_left: "；临时文件 {} 未能删除：{}",
     config_unchanged: " · 原配置未改动",
@@ -855,6 +867,8 @@ pub const EN: Labels = Labels {
     runtime_running: "Runtime Running · PID {} · Owner Epoch {}",
     runtime_not_running: "Runtime Not Running · {} ({})",
     already_running: "Already Running, Nothing Started",
+    thread_failed: "Starting a Background Thread Failed: {}",
+    start_unwatched: "actingd Launched (PID {}), but the Readiness Thread Failed to Start: {}; Press Start Again to Probe Whether It Is Ready",
     start_busy: "The Previous Start Is Still Waiting for Readiness",
     key_not_configured: "{} Not Configured in acui.toml",
     key_not_absolute: "{} in acui.toml Is Not an Absolute Path: {}",
@@ -886,6 +900,7 @@ pub const EN: Labels = Labels {
     unlock_timeout: "unlock-owner Not Finished Within {} s, Outcome Unknown",
     unlock_killed: "Killed and Reaped",
     unlock_kill_failed: "Killing It Failed: {}",
+    unlock_unreaped: "Killed, but Reaping It Failed: {}",
     unlock_output_failed: "Reading unlock-owner Output Failed: {} · Exit Code {}",
     unlock_spawn_failed: "Running unlock-owner ({}) Failed: {}",
     shutdown_busy_retry: "Request Shutdown · Busy, Retry {}/{}",
@@ -920,6 +935,7 @@ pub const EN: Labels = Labels {
         "The Thread Reading check-config's Output Ended Abnormally; No Output Obtained (Exit Code {})",
     check_stopped: "; check-config Was Terminated",
     check_unstoppable: "; Terminating check-config Failed ({}); It May Still Be Running",
+    check_unreaped: "; check-config Was Terminated, but Reaping It Failed ({})",
     replace_failed: "Replacing {} Failed: {}",
     candidate_left: "; Temporary File {} Not Removed: {}",
     config_unchanged: " · The Config File Was Not Changed",

@@ -307,7 +307,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   `actingcommand.actingd.check-config.v1` 报告解析）。只有 `status: ok` 且退出码成功才改名覆盖原
   文件；否则删掉临时文件、原文件不动，窗口写明原因：原样写出 `error.code` 与 `stage`，或是
   `actingd_exe` 没配或非绝对、写临时文件失败、拉起失败、读输出的线程起不来、读子进程状态失败、
-  超时（这三种还写明 check-config 能否终止）、输出读不出或无法识别、报 ok 但退出码非零、改名失败
+  超时（这三种还写明 check-config 能否终止、终止后能否回收）、输出读不出或无法识别、报 ok 但退出码非零、改名失败
   中的哪一种。
 - **生效**：没有热加载，保存的实例在 Runtime 重启后生效。保存之后在事件循环之外探测一次，写明现在
   有没有 Runtime 在跑，并指向启动器自己的按钮：先「请求关闭」，停下后再「启动」——没在跑就直接
@@ -385,6 +385,12 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 `crates/acui-app/src/launcher.rs`，实例配置窗口在 `instances.rs`，探测、请求关闭、记下启动按钮、
 在线开台时的状态与事实读取、实例发现这几个客户端操作在 `acui-source`（`probe_runtime` /
 `request_shutdown` / `record_start` / `instance_facts` / `discover_instances`）。
+
+每个后台工作线程——启动的就绪等待与记账、请求关闭、unlock-owner、保存时的 check-config、实例发现、
+读帧，以及 acsetup 的校验与铺开两步——都经 `std::thread::Builder` 启动。系统拒绝建线程时，在这个动作
+回报的位置写明，附系统错误，并把工作线程本该复位的状态（进行中的启动或解锁、保存中、帧请求）复位：
+绝不在事件循环里 panic。已拉起的 actingd 若等不到就绪线程，照样在跑，结果行直说，并提示再按一次「启动」即可探测。子进程终止了但
+回收失败时照实写，不说成终止失败。
 
 第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、sha2、
 zip、getrandom，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。

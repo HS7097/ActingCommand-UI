@@ -258,8 +258,10 @@ fn begin_verify(window: &SetupWindow, state: &Shared) {
 
     let staging = root.join(format!(".staging-{unix_ms}"));
     let weak = window.as_weak();
-    let state = Arc::clone(state);
-    std::thread::spawn(move || {
+    let shared = Arc::clone(state);
+    let (state, worker_weak) = (Arc::clone(state), weak.clone());
+    let spawned = std::thread::Builder::new().name("acsetup-verify".into()).spawn(move || {
+        let (state, weak) = (state, worker_weak);
         let mut report = reporter(&state, &weak);
         let outcome = (|| {
             report(&format!(
@@ -294,6 +296,15 @@ fn begin_verify(window: &SetupWindow, state: &Shared) {
             }
         }
     });
+    // Nothing was verified and staging was never made: the step fails, said so.
+    if let Err(error) = spawned {
+        fail(&shared, &weak, thread_failed(&error));
+    }
+}
+
+/// A worker the system refused to start, as the wizard says it.
+fn thread_failed(error: &std::io::Error) -> String {
+    format!("无法启动工作线程 / The worker thread could not start: {error}")
 }
 
 /// Step 1 → 2: the layout worker.
@@ -304,8 +315,10 @@ fn begin_layout(window: &SetupWindow, state: &Shared) {
     window.set_can_next(false);
     window.set_can_back(false);
     let weak = window.as_weak();
-    let state = Arc::clone(state);
-    std::thread::spawn(move || {
+    let shared = Arc::clone(state);
+    let (state, worker_weak) = (Arc::clone(state), weak.clone());
+    let spawned = std::thread::Builder::new().name("acsetup-layout".into()).spawn(move || {
+        let (state, weak) = (state, worker_weak);
         let mut report = reporter(&state, &weak);
         let (root, verified) = {
             let mut state = lock(&state);
@@ -326,6 +339,10 @@ fn begin_layout(window: &SetupWindow, state: &Shared) {
             Err(reason) => fail(&state, &weak, reason),
         }
     });
+    // Nothing was laid out; the verified staging is still in the state.
+    if let Err(error) = spawned {
+        fail(&shared, &weak, thread_failed(&error));
+    }
 }
 
 /// Step 2 → 3: the configure page, its state root defaulted once.
