@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { Button, ComboBox, LineEdit, ListView, Palette, ScrollView, Slider, TextEdit } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ListView, Palette, ScrollView, Slider, TextEdit } from "std-widgets.slint";
 
 export struct RowItem {
     // A run's recovery header, with its folded rows following it.
@@ -114,6 +114,7 @@ export global Strings {
     in property <[string]> severity-max-options;
     in property <string> id-placeholder;
     in property <string> continue-reading;
+    in property <string> show-performance;
     in property <string> card-title;
     in property <string> card-note;
     in property <string> detail-title;
@@ -232,6 +233,8 @@ export component AppWindow inherits Window {
     in property <string> unopened-note;
     property <bool> ledger-live: root.unopened-note == "";
     in property <bool> has-more;
+    // Performance-monitor events shown; hidden by default.
+    in property <bool> show-performance;
     in property <int> selected-index;
     in property <[FieldLine]> detail-lines;
     in property <[ArtifactItem]> artifacts;
@@ -272,6 +275,7 @@ export component AppWindow inherits Window {
     callback cursor-changed(float);
     callback row-clicked(int);
     callback load-more();
+    callback show-performance-changed(bool);
     callback text-size-changed(int);
     callback language-changed(int);
     callback start-runtime();
@@ -551,6 +555,14 @@ export component AppWindow inherits Window {
                             model: root.module-options;
                             selected => {
                                 root.module-changed(self.current-value);
+                            }
+                        }
+                        CheckBox {
+                            text: Strings.show-performance;
+                            enabled: root.ledger-live;
+                            checked: root.show-performance;
+                            toggled => {
+                                root.show-performance-changed(self.checked);
                             }
                         }
                         port-box := ComboBox {

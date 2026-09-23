@@ -19,13 +19,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use acui_model::{
     tab_from_name, DisplayRow, FrameTarget, InstanceCard, Overlay, QueryError, RecoveryGroup,
-    ViewModel, ALL_TABS,
+    ViewModel, ALL_TABS, FILL_ROWS, FILL_WINDOWS, WINDOW,
 };
 use acui_rows::{
     code, event_type_names, format_bytes, format_clock, format_full, links_named, module_names,
     seconds_since, short_id, ArtifactEvictionObservation, EventQuery, EventSeverity, LedgerCount,
-    LedgerView, OriginModule, PortBindings, PortEntry, ProjectedEvent, Sensitivity, WriterFacts,
-    MAX_RUNTIME_EVENT_QUERY_EVENTS,
+    LedgerView, OriginModule, PortBindings, PortEntry, ProjectedEvent, RuntimeEventQueryPage,
+    Sensitivity, WriterFacts, MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 use acui_source::{
     InstanceFacts, MaterialOutcome, OfflineFacts, OfflineReason, ReadSource, RuntimeInstance,
@@ -272,6 +272,7 @@ fn install_strings(window: &AppWindow, labels: &'static Labels, online: bool) {
     global.set_severity_max_options(shared(&labels.severity_max));
     global.set_id_placeholder(labels.id_placeholder.into());
     global.set_continue_reading(labels.continue_reading.into());
+    global.set_show_performance(labels.show_performance.into());
     global.set_card_title(labels.card_title.into());
     global.set_card_note(labels.card_note.into());
     global.set_detail_title(labels.detail_title.into());
@@ -341,26 +342,97 @@ fn time_span(source: &ReadSource) -> Option<(u64, u64)> {
     ))
 }
 
-/// Re-runs the current filters as one ledger query at the pinned snapshot.
-fn reload(app: &Rc<App>, append: bool) {
+/// Fills the timeline from the latest end at the pinned snapshot: backward
+/// windows, each read whole, until `FILL_ROWS` more rows show, position 1 is
+/// read, or `FILL_WINDOWS` windows were read. `earlier` continues below what is
+/// loaded; otherwise the view starts over from the pin, or from the last
+/// position a time bound allows.
+fn reload(app: &Rc<App>, earlier: bool) {
     let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
         return;
     };
     let mut model = model.borrow_mut();
-    let cursor = if append { model.cursor() } else { None };
-    match model.query() {
-        Err(error) => model.query_error = Some(error),
-        Ok(query) => match source.query(&query, MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor) {
-            Ok(page) => {
-                model.query_error = None;
-                model.apply(page, append);
+    if !earlier {
+        let snapshot = source.snapshot_position();
+        let upper = match model.filters.to_timestamp_unix_ms {
+            None => Ok(snapshot),
+            Some(bound) => upper_for_time(source, snapshot, bound),
+        };
+        match upper {
+            Ok(upper) => model.begin(upper),
+            Err(error) => {
+                model.begin(0);
+                model.query_error = Some(QueryError::ReadFailed(error.to_string()));
+                *app.frame_request() = None;
+                return;
             }
-            Err(error) => model.query_error = Some(QueryError::ReadFailed(error.to_string())),
-        },
-    }
-    if !append {
+        }
         *app.frame_request() = None;
     }
+    let target = model.row_count() + FILL_ROWS;
+    model.query_error = None;
+    for _ in 0..FILL_WINDOWS {
+        let Some(window) = model.next_window().filter(|_| model.row_count() < target) else {
+            break;
+        };
+        let pages = model
+            .window_query(window)
+            .and_then(|query| {
+                read_window(source, &query)
+                    .map_err(|error| QueryError::ReadFailed(error.to_string()))
+            });
+        match pages {
+            Ok(pages) => model.apply_window(window, &pages),
+            Err(error) => {
+                model.query_error = Some(error);
+                break;
+            }
+        }
+    }
+}
+
+/// One window read whole: its pages, following the cursor should a window
+/// ever hold more than one page.
+fn read_window(source: &ReadSource, query: &EventQuery) -> Result<Vec<RuntimeEventQueryPage>> {
+    let mut pages = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = source.query(query, MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor)?;
+        cursor = page.next_cursor().cloned();
+        pages.push(page);
+        if cursor.is_none() {
+            return Ok(pages);
+        }
+    }
+}
+
+/// The position to read down from under a time bound: the last event at or
+/// before `bound`, found by bisection over one-event reads, plus one window of
+/// slack, since ledger time is not promised to be strictly ordered. What
+/// shows is still decided by the query's own time bound.
+fn upper_for_time(source: &ReadSource, snapshot: u64, bound: u64) -> Result<u64> {
+    let time_at = |position: u64| -> Result<Option<u64>> {
+        let query = EventQuery {
+            view: Some(LedgerView::Events),
+            from_sequence: Some(position),
+            to_sequence: Some(position),
+            ..EventQuery::default()
+        };
+        let page = source.query(&query, 1, None)?;
+        Ok(page.events().first().map(|event| event.timestamp_unix_ms))
+    };
+    let (mut low, mut high, mut found) = (1, snapshot, 0);
+    while low <= high {
+        let middle = low + (high - low) / 2;
+        match time_at(middle)? {
+            Some(time) if time <= bound => {
+                found = middle;
+                low = middle + 1;
+            }
+            _ => high = middle - 1,
+        }
+    }
+    Ok((found + WINDOW).min(snapshot))
 }
 
 fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
@@ -434,6 +506,12 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         }
         reload(&app, false)
     });
+    // Shown or hidden again from the pin: the performance monitor's events are
+    // dropped as each window is read, not from rows already held.
+    on!(on_show_performance_changed, |app, model, shown| {
+        model.borrow_mut().filters.show_performance = shown;
+        reload(&app, false)
+    });
     on!(on_id_changed, |app, model, text| {
         model.borrow_mut().filters.id_text = text.to_string();
         reload(&app, false)
@@ -499,9 +577,9 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
     window.set_storage_format_value(backend_text(labels, &card.backend).into());
     let scope = model.read_scope();
     window.set_read_up_to_text(
-        match scope.scanned_through_position {
-            Some(position) => {
-                let mut text = fill(labels.read_up_to, &[&position.to_string()]);
+        match scope.range {
+            Some((low, high)) => {
+                let mut text = fill(labels.read_range, &[&low.to_string(), &high.to_string()]);
                 if !scope.read_complete {
                     text.push_str(" · ");
                     text.push_str(labels.source_incomplete);
@@ -512,9 +590,13 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
         }
         .into(),
     );
-    window.set_loaded_rows_text(
-        fill(labels.loaded_rows_top, &[&card.loaded_count.to_string()]).into(),
-    );
+    let mut loaded = fill(labels.loaded_rows_top, &[&card.loaded_count.to_string()]);
+    if model.hidden_performance() > 0 {
+        let hidden = model.hidden_performance().to_string();
+        loaded.push_str(&fill(labels.performance_hidden, &[&hidden]));
+    }
+    window.set_loaded_rows_text(loaded.into());
+    window.set_show_performance(model.filters.show_performance);
     window.set_cursor_label(
         model
             .filters
@@ -627,7 +709,7 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
 
     let display = model.display_rows();
     window.set_filter_error(query_error_text(labels, model.query_error.as_ref()).into());
-    window.set_has_more(model.has_more());
+    window.set_has_more(model.has_earlier());
     let rows: Vec<RowItem> = display
         .iter()
         .map(|row| match row {
