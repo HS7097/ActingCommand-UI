@@ -187,7 +187,7 @@ export component SetupWindow inherits Window {
                         text: "写 <安装根>\\actingd.config.json：schema_version、state_root、bind_host 127.0.0.1、bind_port 0、secret_fingerprint_salt（本机随机源生成的 32 字节，十六进制；不显示、不写日志）、instances 为空——别的字段一个不加。再写监控台设置 %APPDATA%\\ActingCommand\\acui.toml 的 state_root、actingd_config、actingd_exe（已有的 lang / text_size 保留）。\nWrites <root>\\actingd.config.json with exactly those six fields (the salt: 32 bytes from the OS RNG, hex; never shown, never logged) and the console's acui.toml (state_root, actingd_config, actingd_exe; lang / text_size kept).";
                     }
                     Body {
-                        text: "实例（模拟器 / 设备）不在本引导里配置，instances 留空：之后在监控台里添加。\nInstances (emulators / devices) are not configured here, instances stays empty: add them later in the console.";
+                        text: "实例（模拟器 / 设备）不在本引导里配置，instances 留空：之后点监控台顶栏的「实例配置」按钮添加。\nInstances (emulators / devices) are not configured here, instances stays empty: add them with the Instance Configuration button in the console's top bar.";
                     }
                     Body { text: root.note; }
                     Rectangle { }

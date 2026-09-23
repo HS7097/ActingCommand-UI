@@ -210,7 +210,8 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # optional, absolut
 ```
 
 It is read once at startup and written once on every dropdown change; on write-back the three path keys
-are kept verbatim. **This is the only file the console itself reads and writes**: it is not inside any
+are kept verbatim. **This is the only file the console itself reads and writes**, besides the `instances`
+the instance-configuration window saves into `actingd_config` (see that section): it is not inside any
 state root, and the state root still belongs entirely to the read face. If the file is absent, unreadable,
 or holds an unrecognized value, the defaults (Chinese, standard) are used. The parser is hand-written: one
 `key = value` per line, one matching pair of quotes stripped, no escape handling — write Windows paths in
@@ -218,8 +219,9 @@ single quotes (TOML literal strings), not as `"D:\\…"`.
 
 ## Launcher
 
-The third line of the top bar. On the left is the Runtime state from the last probe, then two buttons, and
-the line below it is the result of the last button press.
+The third line of the top bar. On the left is the Runtime state from the last probe, then two buttons (and
+last the instance-configuration button, see the next section), and the line below it is the result of the
+last button press.
 
 - **Runtime state**: probed once at startup, and probed again after every button press. A probe is one
   `RuntimeClient::connect`: on a connection it says "running · PID · owner epoch" (taken from its own
@@ -254,6 +256,29 @@ the line below it is the result of the last button press.
 
 Pause/resume, unlocking the owner, start-at-boot, the installer and network downloads are all outside this
 slice.
+
+## Instance configuration
+
+The 实例配置 / Instance Configuration button opens a second window over the `instances` of `actingd_config`,
+the file Start hands to actingd. Each entry is listed with its alias, `instance_id`, binding (MuMu index /
+MuMu name / ADB host:port / none), `application_id`, capture and touch backend, and whether the offline
+read face's port map holds a binding for that id and its port; online, or when that read failed, the row
+says so. A missing or relative `actingd_config`, an unreadable file, or JSON that does not parse or has no
+`instances` array is stated in place of the count, never shown as an empty list.
+
+- **Add and edit, no delete**: `alias` is required; a new entry's `instance_id` is `instance_` + 32 hex
+  characters from the OS RNG, an existing one's is read-only; the binding is exactly one of
+  `instance_index`, `instance_name`, or `host` + `port`, and changing the kind removes the other kinds'
+  keys; `application_id`, `capture_backend`, `touch_backend` are optional text that check-config judges.
+- **Save**: the file is re-read as plain JSON and only the managed keys of that one entry change; every
+  other field is kept. The result goes to a temporary file beside it (relative paths inside resolve against
+  that directory) and `<actingd_exe> check-config --config <temp>` runs off the event loop (30 s bound,
+  stdout captured, no console window). Only a parsed `status: ok` with a successful exit renames it over the
+  file; otherwise it is deleted, the file stays as it was, and the window states `error.code` and `stage`
+  verbatim, or which of missing/relative `actingd_exe`, spawn, timeout, unrecognized output or ok with a
+  non-zero exit it was.
+- **Effect**: there is no hot reload. After a save the window says the change takes effect when the Runtime
+  restarts and, from one probe, whether one is running now: Request Shutdown, then Start.
 
 ## Setup wizard acsetup
 
@@ -293,8 +318,8 @@ downloads the release files into a folder first. One window, back / next, six st
    and `actingd_exe` (the format of the "Settings file" section, single-quoted literals; existing `lang` /
    `text_size` kept verbatim). The way it writes matches `crates/acui-app/src/settings.rs`, but
    `acui-setup` does not depend on `acui-app` and is a small duplicate writer. **Instances (emulators /
-   devices) are not configured in the wizard**; `instances` is left empty and they are added in the
-   console afterwards.
+   devices) are not configured in the wizard**; `instances` is left empty and they are added afterwards
+   with the console's top-bar 实例配置 / Instance Configuration button; the finish page says so.
 4. **Start at boot** (optional, unchecked by default): only when checked does it write
    `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd` in the per-user startup
    folder, whose content is
@@ -340,9 +365,10 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`.
 
 `slint` 1.17.x, `default-features = false`; the ledger is read-only, the only control entry points are the
-launcher's two buttons (start / request shutdown, see above), and there is no approval entry point; no
-tests are written. The launcher is in `crates/acui-app/src/launcher.rs`, and the two client operations,
-probe and request shutdown, are in `acui-source` (`probe_runtime` / `request_shutdown`).
+launcher's two buttons (start / request shutdown, see above) and the instance-configuration window's
+check-config-gated save, and there is no approval entry point; no tests are written. The launcher is in
+`crates/acui-app/src/launcher.rs`, the instance-configuration window in `instances.rs`, and the two client
+operations, probe and request shutdown, are in `acui-source` (`probe_runtime` / `request_shutdown`).
 
 A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
 depending only on slint, serde, sha2, zip and getrandom, and on none of the layers above; see the previous

@@ -3,8 +3,10 @@
 //! Runtime state root, opened through the formal ledger read face — offline
 //! over the files, or online through the typed client of the running Runtime —
 //! with a launcher block that starts the daemon detached and asks it, through
-//! the same typed client, to shut down.
+//! the same typed client, to shut down. A second window edits the `instances`
+//! of the actingd configuration that block starts the daemon with.
 
+mod instances;
 mod launcher;
 mod settings;
 mod strings;
@@ -202,6 +204,11 @@ fn main() -> Result<()> {
         span,
     );
     model.tab = args.tab.unwrap_or(LedgerView::Events);
+    let paths = instances::Paths {
+        state_root: state_root.clone(),
+        actingd_config: stored.actingd_config.clone(),
+        actingd_exe: stored.actingd_exe.clone(),
+    };
     let app = Rc::new(App {
         source,
         model: RefCell::new(model),
@@ -229,6 +236,8 @@ fn main() -> Result<()> {
     window.set_language_index(if language == Language::Zh { 0 } else { 1 });
     install_callbacks(&window, &app);
     launcher::install(&window, &app);
+    let config_window = ConfigWindow::new()?;
+    instances::install(&window, &config_window, &app, paths);
     refresh(&window, &app);
     launcher::refresh_status(&window, &app);
     window.run()?;

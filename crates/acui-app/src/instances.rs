@@ -1,0 +1,488 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! The instance-configuration window: the `instances` of the actingd
+//! configuration the launcher starts with, listed, added to and edited.
+//!
+//! The file is plain JSON here. Only `instances` changes, and in an entry only
+//! the keys the form manages; the Runtime's config struct is not mirrored. A
+//! save re-reads the file, writes a candidate beside it (relative paths inside
+//! resolve against that directory), runs `<actingd_exe> check-config` on it off
+//! the event loop, and renames it over the file only on a parsed `ok` with a
+//! successful exit.
+
+use std::cell::RefCell;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+use acui_rows::{code, InstanceId};
+use acui_source::probe_runtime;
+use serde_json::{json, Value};
+use slint::{ComponentHandle, SharedString};
+
+use crate::strings::{fill, Labels};
+use crate::{
+    models, shared, App, AppWindow, ConfigStrings, ConfigWindow, InstanceRow, PortMap, Scale,
+};
+
+const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+const CHECK_SCHEMA: &str = "actingcommand.actingd.check-config.v1";
+
+/// Windows `CREATE_NO_WINDOW`: no console window flashes up per save.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// The binding kinds in the kind box's order, which is also the Runtime's
+/// order of precedence, and the keys each one writes.
+const KINDS: [&[&str]; 3] = [&["instance_index"], &["instance_name"], &["host", "port"]];
+
+/// The three paths as this run resolved them; the launcher keeps its own.
+pub struct Paths {
+    pub state_root: PathBuf,
+    pub actingd_config: Option<PathBuf>,
+    pub actingd_exe: Option<PathBuf>,
+}
+
+struct Editor {
+    app: Rc<App>,
+    paths: Paths,
+    /// The entry the form is for, found again by its instance_id; `None` when
+    /// there is no instance_id to save under.
+    editing: RefCell<Option<Editing>>,
+    /// The entries as last listed, for a click on a row.
+    entries: RefCell<Vec<Value>>,
+}
+
+#[derive(Clone)]
+struct Editing {
+    instance_id: String,
+    existing: bool,
+}
+
+/// The managed keys in the schema's spelling; `None` removes an optional key.
+struct Form {
+    kind: usize,
+    fields: Vec<(&'static str, Option<Value>)>,
+}
+
+pub fn install(window: &AppWindow, config: &ConfigWindow, app: &Rc<App>, paths: Paths) {
+    fill_strings(window.global::<ConfigStrings>(), app.labels);
+    fill_strings(config.global::<ConfigStrings>(), app.labels);
+    let editor = Rc::new(Editor {
+        app: Rc::clone(app),
+        paths,
+        editing: RefCell::new(None),
+        entries: RefCell::new(Vec::new()),
+    });
+    {
+        let (main, weak, editor) = (window.as_weak(), config.as_weak(), Rc::clone(&editor));
+        window.on_open_config(move || {
+            let (Some(main), Some(config)) = (main.upgrade(), weak.upgrade()) else {
+                return;
+            };
+            config.global::<Scale>().set_factor(main.global::<Scale>().get_factor());
+            if editor.editing.borrow().is_none() {
+                begin_new(&editor, &config);
+            }
+            load_list(&editor, &config);
+            if let Err(error) = config.show() {
+                main.set_launcher_line(error.to_string().into());
+            }
+        });
+    }
+    let on = |action: fn(&Editor, &ConfigWindow)| {
+        let (weak, editor) = (config.as_weak(), Rc::clone(&editor));
+        move || {
+            if let Some(config) = weak.upgrade() {
+                action(&editor, &config);
+            }
+        }
+    };
+    config.on_add_instance(on(begin_new));
+    config.on_save(on(save));
+    config.on_reload(on(load_list));
+    let weak = config.as_weak();
+    config.on_row_clicked(move |index| {
+        if let Some(config) = weak.upgrade() {
+            edit(&editor, &config, index);
+        }
+    });
+}
+
+fn fill_strings(global: ConfigStrings<'_>, labels: &Labels) {
+    global.set_title(labels.instance_config.into());
+    global.set_intro(labels.config_intro.into());
+    global.set_add(labels.add_instance.into());
+    global.set_fields(shared(&labels.form_fields));
+    global.set_kinds(shared(&labels.binding_kinds));
+    global.set_placeholders(shared(&labels.binding_placeholders));
+    global.set_optional_note(labels.optional_note.into());
+    global.set_save(labels.check_and_save.into());
+}
+
+/// Reads the file again and lists it. A reason it cannot be listed takes the
+/// count's place, never an empty list that reads as zero instances.
+fn load_list(editor: &Editor, config: &ConfigWindow) {
+    let labels = editor.app.labels;
+    let listed = configured(labels, "actingd_config", &editor.paths.actingd_config)
+        .and_then(|path| Ok((path, load(labels, path)?.1)));
+    config.set_list_failed(listed.is_err());
+    let (note, entries) = match listed {
+        Ok((path, entries)) => {
+            let count = entries.len().to_string();
+            (fill(labels.config_listed, &[&path.display().to_string(), &count]), entries)
+        }
+        Err(text) => (text, Vec::new()),
+    };
+    config.set_list_note(note.into());
+    let rows = entries.iter().map(|entry| {
+        let value = |key| text(entry, key).unwrap_or_else(|| labels.none.to_string());
+        let parts = [
+            value("instance_id"),
+            value("application_id"),
+            value("capture_backend"),
+            value("touch_backend"),
+        ];
+        InstanceRow {
+            alias: value("alias").into(),
+            binding: binding_text(labels, entry).into(),
+            detail: fill(labels.instance_detail, &parts.each_ref().map(String::as_str)).into(),
+            ledger: ledger_text(labels, &editor.app.port_map, id_of(entry)).into(),
+        }
+    });
+    config.set_rows(models(rows.collect()));
+    // A new entry a save has put in the file is an existing one from now on.
+    let mut editing = editor.editing.borrow_mut();
+    let position = editing.as_ref().and_then(|editing| {
+        entries.iter().position(|entry| id_of(entry) == Some(&editing.instance_id))
+    });
+    if let (Some(editing), Some(_)) = (editing.as_mut(), position) {
+        editing.existing = true;
+    }
+    config.set_selected_index(position.map_or(-1, |index| index as i32));
+    *editor.entries.borrow_mut() = entries;
+}
+
+/// A new entry: a fresh instance_id from the OS RNG and an empty form.
+fn begin_new(editor: &Editor, config: &ConfigWindow) {
+    let mut bytes = [0u8; 16];
+    let editing = getrandom::fill(&mut bytes).map(|()| Editing {
+        instance_id: bytes
+            .iter()
+            .fold("instance_".to_string(), |id, byte| id + &format!("{byte:02x}")),
+        existing: false,
+    });
+    let failure = editing
+        .as_ref()
+        .err()
+        .map(|error| fill(editor.app.labels.id_failed, &[&error.to_string()]));
+    set_outcome(config, failure.is_some(), failure.unwrap_or_default());
+    config.set_selected_index(-1);
+    show_form(config, editing.as_ref().ok(), &Value::Null);
+    *editor.editing.borrow_mut() = editing.ok();
+}
+
+fn edit(editor: &Editor, config: &ConfigWindow, index: i32) {
+    let entries = editor.entries.borrow();
+    let Some(entry) = entries.get(index.max(0) as usize) else {
+        return;
+    };
+    let editing = id_of(entry).map(|id| Editing { instance_id: id.to_string(), existing: true });
+    let failure = if editing.is_none() { editor.app.labels.entry_no_id } else { "" };
+    set_outcome(config, editing.is_none(), failure);
+    config.set_selected_index(index);
+    show_form(config, editing.as_ref(), entry);
+    *editor.editing.borrow_mut() = editing;
+}
+
+fn show_form(config: &ConfigWindow, editing: Option<&Editing>, entry: &Value) {
+    let value = |key| SharedString::from(text(entry, key).unwrap_or_default());
+    config.set_form_ready(editing.is_some());
+    config.set_form_id(
+        editing.map(|editing| editing.instance_id.as_str()).unwrap_or_default().into(),
+    );
+    config.set_form_kind(kind_of(entry).unwrap_or(0) as i32);
+    config.set_form_alias(value("alias"));
+    config.set_form_index(value("instance_index"));
+    config.set_form_name(value("instance_name"));
+    config.set_form_host(value("host"));
+    config.set_form_port(value("port"));
+    config.set_form_application(value("application_id"));
+    config.set_form_capture(value("capture_backend"));
+    config.set_form_touch(value("touch_backend"));
+}
+
+fn set_outcome(config: &ConfigWindow, failed: bool, text: impl Into<SharedString>) {
+    config.set_outcome_failed(failed);
+    config.set_outcome(text.into());
+}
+
+fn save(editor: &Editor, config: &ConfigWindow) {
+    let labels = editor.app.labels;
+    let Some(editing) = editor.editing.borrow().clone() else {
+        return;
+    };
+    let paths = &editor.paths;
+    let (form, path, exe) = match (
+        read_form(labels, config),
+        configured(labels, "actingd_config", &paths.actingd_config),
+        configured(labels, "actingd_exe", &paths.actingd_exe),
+    ) {
+        (Ok(form), Ok(path), Ok(exe)) => (form, path.to_path_buf(), exe.to_path_buf()),
+        (Err(text), _, _) | (_, Err(text), _) | (_, _, Err(text)) => {
+            set_outcome(config, true, text);
+            return;
+        }
+    };
+    config.set_saving(true);
+    set_outcome(config, false, labels.checking);
+    let (root, weak) = (paths.state_root.clone(), config.as_weak());
+    std::thread::spawn(move || {
+        // After a save, one probe of the launcher's says whether a Runtime runs.
+        let (failed, text) = match commit(labels, &path, &exe, &editing, &form) {
+            Err(text) => (true, format!("{text}{}", labels.config_unchanged)),
+            Ok(()) => (
+                false,
+                match probe_runtime(&root) {
+                    Ok(facts) => {
+                        let status = fill(
+                            labels.runtime_running,
+                            &[&facts.pid.to_string(), &facts.owner_epoch],
+                        );
+                        fill(labels.saved_running, &[&status])
+                    }
+                    Err(failure) => {
+                        let status =
+                            fill(labels.runtime_not_running, &[failure.code, failure.operation]);
+                        fill(labels.saved_stopped, &[&status])
+                    }
+                },
+            ),
+        };
+        let _ = weak.upgrade_in_event_loop(move |config| {
+            config.invoke_reload();
+            config.set_saving(false);
+            set_outcome(&config, failed, text);
+        });
+    });
+}
+
+fn read_form(labels: &Labels, config: &ConfigWindow) -> Result<Form, String> {
+    let required = |key: &str, value: SharedString| match value.trim() {
+        "" => Err(fill(labels.value_missing, &[key])),
+        text => Ok(Some(Value::from(text))),
+    };
+    let number = |key: &str, value: SharedString| match value.trim().parse::<u16>() {
+        Ok(number) => Ok(Some(Value::from(number))),
+        Err(_) => Err(fill(labels.value_not_u16, &[key, value.as_str()])),
+    };
+    let optional =
+        |value: SharedString| Some(value.trim()).filter(|text| !text.is_empty()).map(Value::from);
+    let kind = config.get_form_kind().clamp(0, 2) as usize;
+    let mut fields = vec![("alias", required("alias", config.get_form_alias())?)];
+    match kind {
+        0 => fields.push(("instance_index", number("instance_index", config.get_form_index())?)),
+        1 => fields.push(("instance_name", required("instance_name", config.get_form_name())?)),
+        _ => fields.extend([
+            ("host", required("host", config.get_form_host())?),
+            ("port", number("port", config.get_form_port())?),
+        ]),
+    }
+    fields.extend([
+        ("application_id", optional(config.get_form_application())),
+        ("capture_backend", optional(config.get_form_capture())),
+        ("touch_backend", optional(config.get_form_touch())),
+    ]);
+    Ok(Form { kind, fields })
+}
+
+/// Applies the form to the file as it is now, not as it was listed, and puts
+/// the candidate in place only when check-config accepts it.
+fn commit(
+    labels: &Labels,
+    path: &Path,
+    exe: &Path,
+    editing: &Editing,
+    form: &Form,
+) -> Result<(), String> {
+    let (mut document, mut entries) = load(labels, path)?;
+    let index = match entries.iter().position(|entry| id_of(entry) == Some(&editing.instance_id)) {
+        Some(index) => index,
+        None if editing.existing => return Err(fill(labels.entry_gone, &[&editing.instance_id])),
+        None => {
+            entries.push(json!({ "instance_id": editing.instance_id }));
+            entries.len() - 1
+        }
+    };
+    apply(&mut entries[index], form);
+    document["instances"] = Value::Array(entries);
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".candidate-{}", std::process::id()));
+    let candidate = path.with_file_name(name);
+    let shown = candidate.display().to_string();
+    std::fs::write(&candidate, format!("{document:#}\n"))
+        .map_err(|error| fill(labels.candidate_failed, &[&shown, &error.to_string()]))
+        .and_then(|()| check(labels, exe, &candidate))
+        .and_then(|()| {
+            std::fs::rename(&candidate, path).map_err(|error| {
+                fill(labels.replace_failed, &[&path.display().to_string(), &error.to_string()])
+            })
+        })
+        .map_err(|mut text| {
+            match std::fs::remove_file(&candidate) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    text.push_str(&fill(labels.candidate_left, &[&shown, &error.to_string()]))
+                }
+                _ => {}
+            }
+            text
+        })
+}
+
+/// Writes the form's keys into one entry and leaves every other key as it
+/// was. A binding kind other than the file's drops the other kinds' keys, so at
+/// most one binding is ever written.
+fn apply(entry: &mut Value, form: &Form) {
+    let changed = kind_of(entry) != Some(form.kind);
+    if let Value::Object(entry) = entry {
+        entry.retain(|name, _| {
+            let other_kind = KINDS
+                .iter()
+                .enumerate()
+                .any(|(kind, keys)| kind != form.kind && keys.contains(&name.as_str()));
+            !(changed && other_kind)
+                && !form.fields.iter().any(|(key, value)| *key == name.as_str() && value.is_none())
+        });
+        for (key, value) in &form.fields {
+            if let Some(value) = value {
+                entry.insert((*key).to_string(), value.clone());
+            }
+        }
+    }
+}
+
+/// `<actingd_exe> check-config --config <candidate>`, bounded. Stdout is read
+/// whole on its own thread, so a long report can never fill the pipe and stall
+/// the child until the timeout.
+fn check(labels: &Labels, exe: &Path, candidate: &Path) -> Result<(), String> {
+    let mut command = Command::new(exe);
+    command.arg("check-config").arg("--config").arg(candidate);
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command.spawn().map_err(|error| {
+        fill(labels.spawn_failed, &[&exe.display().to_string(), &error.to_string()])
+    })?;
+    let reader = child.stdout.take().map(|mut stdout| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            stdout.read_to_string(&mut text).map(|_| text)
+        })
+    });
+    let deadline = Instant::now() + CHECK_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            waited => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(match waited {
+                    Err(error) => fill(labels.child_status_failed, &[&error.to_string()]),
+                    _ => fill(labels.check_timeout, &[&CHECK_TIMEOUT.as_secs().to_string()]),
+                });
+            }
+        }
+    };
+    let text =
+        reader.and_then(|reader| reader.join().ok()).and_then(Result::ok).unwrap_or_default();
+    let exit = status.code().map_or_else(|| labels.none.to_string(), |code| code.to_string());
+    let report: Value = serde_json::from_str(text.trim()).unwrap_or_default();
+    let unparsed = || fill(labels.check_unparsed, &[&exit, text.trim()]);
+    let error = &report["error"];
+    match (report["status"].as_str(), error["code"].as_str(), error["stage"].as_str()) {
+        _ if report["schema_version"] != CHECK_SCHEMA => Err(unparsed()),
+        (Some("ok"), _, _) if status.success() => Ok(()),
+        (Some("ok"), _, _) => Err(fill(labels.check_ok_nonzero, &[&exit])),
+        (Some("failed"), Some(code), Some(stage)) => Err(fill(labels.check_failed, &[code, stage])),
+        _ => Err(unparsed()),
+    }
+}
+
+/// The file as JSON, and its `instances` taken out — each an object, the one
+/// shape the form edits in place. The key stays where it was, holding null.
+fn load(labels: &Labels, path: &Path) -> Result<(Value, Vec<Value>), String> {
+    let shown = path.display().to_string();
+    let bytes = std::fs::read(path)
+        .map_err(|error| fill(labels.config_unreadable, &[&shown, &error.to_string()]))?;
+    let mut document: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| fill(labels.config_not_json, &[&shown, &error.to_string()]))?;
+    let Some(Value::Array(entries)) = document.get_mut("instances").map(Value::take) else {
+        return Err(fill(labels.config_no_instances, &[&shown]));
+    };
+    match entries.iter().position(|entry| !entry.is_object()) {
+        Some(index) => Err(fill(labels.config_bad_entry, &[&shown, &index.to_string()])),
+        None => Ok((document, entries)),
+    }
+}
+
+/// The launcher's rule for a path key of `acui.toml`: configured and absolute.
+fn configured<'a>(
+    labels: &Labels,
+    key: &str,
+    value: &'a Option<PathBuf>,
+) -> Result<&'a Path, String> {
+    match value {
+        None => Err(fill(labels.key_not_configured, &[key])),
+        Some(path) if !path.is_absolute() => {
+            Err(fill(labels.key_not_absolute, &[key, &path.display().to_string()]))
+        }
+        Some(path) => Ok(path),
+    }
+}
+
+/// A field as the file states it: a string as is, anything else as JSON.
+fn text(entry: &Value, key: &str) -> Option<String> {
+    entry.get(key).map(|value| value.as_str().map_or_else(|| value.to_string(), str::to_owned))
+}
+
+fn id_of(entry: &Value) -> Option<&str> {
+    entry.get("instance_id").and_then(Value::as_str)
+}
+
+fn kind_of(entry: &Value) -> Option<usize> {
+    KINDS.iter().position(|keys| keys.iter().any(|key| entry.get(key).is_some()))
+}
+
+fn binding_text(labels: &Labels, entry: &Value) -> String {
+    let value = |key| text(entry, key).unwrap_or_else(|| labels.none.to_string());
+    match kind_of(entry) {
+        Some(0) => fill(labels.binding_index, &[&value("instance_index")]),
+        Some(1) => fill(labels.binding_name, &[&value("instance_name")]),
+        Some(_) => fill(labels.binding_adb, &[&value("host"), &value("port")]),
+        None => labels.binding_none.to_string(),
+    }
+}
+
+/// What the session's port map says about one instance_id: its port, a binding
+/// whose latest fact names no port, or none; online or unread, it says so.
+fn ledger_text(labels: &Labels, port_map: &PortMap, id: Option<&str>) -> String {
+    let bindings = match port_map {
+        PortMap::Read(bindings) => bindings,
+        PortMap::Online => return labels.ledger_online.to_string(),
+        PortMap::Failed(error) => return fill(labels.ledger_failed, &[&error.to_string()]),
+    };
+    let named = |other: &InstanceId| Some(code(other).as_str()) == id;
+    let members = bindings.ports.iter().flat_map(|entry| &entry.members);
+    match bindings.port_of.iter().find(|(other, _)| named(other)) {
+        Some((_, port)) => fill(labels.ledger_port, &[&port.to_string()]),
+        None if bindings.unported.iter().chain(members).any(named) => {
+            labels.ledger_no_port.to_string()
+        }
+        None => labels.ledger_none.to_string(),
+    }
+}

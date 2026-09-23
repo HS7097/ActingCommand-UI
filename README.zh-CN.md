@@ -165,13 +165,14 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 ```
 
 开台时读一次，下拉框一改就写一次；写回时三个路径键原样保留。**这是监控台唯一自己读写的
-文件**：它不在任何状态根里，状态根依旧全归读面。文件不存在、读不出来或取值不认识，都按
+文件**（实例配置窗口保存进 `actingd_config` 的 `instances` 除外，见那一节）：它不在任何状态根里，状态根依旧全归读面。文件不存在、读不出来或取值不认识，都按
 默认值（中文、标准）来。解析器是手写的：一行一个 `key = value`，去掉一对成对的引号，不处理
 转义——Windows 路径写在单引号里（TOML 字面量字符串），不要写 `"D:\\…"`。
 
 ## 启动器
 
-顶栏第三行。左边是上一次探测的 Runtime 状态，两个按钮，下面一行是上一次按钮的结果。
+顶栏第三行。左边是上一次探测的 Runtime 状态，两个按钮（最后还有「实例配置」按钮，见下一节），
+下面一行是上一次按钮的结果。
 
 - **Runtime 状态**：开台时探测一次，之后每按一次按钮再探测。探测就是一次
   `RuntimeClient::connect`：连上了写「运行中 · PID · owner epoch」（取自它自己的
@@ -197,6 +198,26 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   job object；就绪判定结束就丢掉句柄，守护进程活得比监控台久。
 
 暂停/恢复、解锁 owner、开机自启、安装器、联网下载都不在这一片里。
+
+## 实例配置
+
+「实例配置」按钮打开第二个窗口，对象是 `actingd_config`——「启动」交给 actingd 的那份文件——里的
+`instances`。每一项列出别名、`instance_id`、绑定（MuMu 序号 / MuMu 名称 / ADB host:port / 未绑定）、
+`application_id`、截图与触控后端，以及离线读面的端口映射里账本有没有这个编号的绑定、端口是几；
+在线读面或读绑定失败时，行里直说。`actingd_config` 没配或不是绝对路径、文件读不出、JSON 解析失败
+或没有 `instances` 数组，都写在条数的位置上，绝不显示成一个空列表。
+
+- **只增改，不删**：`alias` 必填；新实例的 `instance_id` 是 `instance_` 加系统随机源的 32 位小写
+  十六进制，已有实例的只读；绑定恰好一种——`instance_index`、`instance_name`，或 `host` + `port`，
+  换了种类就删掉别的种类的键；`application_id`、`capture_backend`、`touch_backend` 选填，取值由
+  check-config 判定。
+- **保存**：重新把文件当普通 JSON 读，只改这一项里表单管的键，其余字段一概原样。结果写到同目录的
+  临时文件（里面的相对路径按这个目录解析），在事件循环之外跑 `<actingd_exe> check-config --config
+  <临时文件>`（30 秒上限，捕获 stdout，Windows 下不弹控制台窗口）。只有解析出 `status: ok` 且退出码
+  成功才改名覆盖原文件；否则删掉临时文件、原文件不动，窗口原样写出 `error.code` 与 `stage`，或写明是
+  `actingd_exe` 缺失/非绝对、拉起失败、超时、输出无法识别、报 ok 但退出码非零中的哪一种。
+- **生效**：没有热加载。保存后窗口写明重启 Runtime 才生效，并按一次探测写明现在有没有 Runtime 在跑：
+  先「请求关闭」，停下后再「启动」。
 
 ## 安装引导程序 acsetup
 
@@ -227,7 +248,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `state_root`、`actingd_config`、`actingd_exe`（同「设置文件」一节的格式，单引号字面量；已有的
    `lang` / `text_size` 原样保留）。写法与 `crates/acui-app/src/settings.rs` 一致，但 `acui-setup`
    不依赖 `acui-app`，是一份小的重复写入器。**实例（模拟器 / 设备）不在引导里配置**，`instances`
-   留空，之后在监控台里添加。
+   留空，之后点监控台顶栏的「实例配置」按钮添加；完成页也这样写。
 4. **开机自启**（可选，默认不勾）：勾了才写按用户的启动文件夹里的
    `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd`，内容是
    `start "" "<安装根>\runtime\actingcommand-actingd.exe" --config "<安装根>\actingd.config.json"`；
@@ -261,8 +282,9 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   `strings.rs`，设置文件的读写在 `settings.rs`。
 
 `slint` 1.17.x，`default-features = false`；账本只读，控制入口只有启动器的两个按钮（启动 /
-请求关闭，见上），没有审批入口；不写测试。启动器在 `crates/acui-app/src/launcher.rs`，探测与
-请求关闭这两个客户端操作在 `acui-source`（`probe_runtime` / `request_shutdown`）。
+请求关闭，见上）与实例配置窗口经 check-config 把关的保存，没有审批入口；不写测试。启动器在
+`crates/acui-app/src/launcher.rs`，实例配置窗口在 `instances.rs`，探测与请求关闭这两个客户端操作在
+`acui-source`（`probe_runtime` / `request_shutdown`）。
 
 第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、sha2、
 zip、getrandom，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。

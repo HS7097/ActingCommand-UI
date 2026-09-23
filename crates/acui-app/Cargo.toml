@@ -13,7 +13,9 @@ acui-model = { workspace = true }
 acui-rows = { workspace = true }
 acui-source = { workspace = true }
 anyhow = { workspace = true }
+getrandom = { workspace = true }
 image = { workspace = true }
+serde_json = { workspace = true }
 slint = { workspace = true }
 
 [build-dependencies]
