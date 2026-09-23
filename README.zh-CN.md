@@ -54,7 +54,8 @@
   写 Runtime 拒绝码、客户端错误与宿主失败，会话照常打开。离线时由读面的 `runtime_facts_at` 在钉住的
   位置本身重放事实库，就是每一页读的那个位置：几行写出这个位置、离线没有租约，以及每个实例的编号
   （缩写，灰字是完整编号）与三项事实。账本里还没有事件时直说；读面拒绝重放时写它给的原因，重放
-  失败就分行写 code、operation 与 detail。重放在会话打开时、窗口出现之前跑一次，期限 30 秒。
+  失败就分行写 code、operation、IO 类别（io 错误时）与 detail。重放在会话打开时、窗口出现之前跑
+  一次，期限 30 秒。
 
 `--source <auto|offline|online>`，默认 `auto`：客户端能连上状态根所指的 Runtime 就在线，
 否则离线；实例卡第一行「读面」写明选了哪张、为什么（`runtime-info.json` 不存在，或连接
@@ -63,17 +64,17 @@
 
 离线读面打不开时——`offline`，或 `auto` 退到离线——监控台不退出，窗口以**未打开**状态开台；
 刚装好的机器就是这样，账本要等 Runtime 第一次启动才建。这时实例卡只有第一行「读面」：写明账本
-未能打开，并原样写出读面自己的 `code`、`operation` 与 `detail`。账本对 io 错误只留系统的原文、
-不留错误种类，单凭这对码分不出「还没有账本」和「账本在但读不了」，`detail` 也从不解析；只有恰为
-`ledger_io` / `canonicalize_read_only_root` 时，才补一句状态根里可能还没有账本、多半是 Runtime
-从未启动过，并指向启动器的「启动」。不显示任何账本事实，连 0 也不写：列表写账本未打开，不留一片
-空白；页签、过滤框、编号框和时间滑块都停用；模块框、端口框与帧区写「账本未打开」。不向账本发
+未能打开，并原样写出读面自己的 `code`、`operation` 与 `detail`；io 错误另写 IO 类别
+（`LedgerIoKind`：`not_found`、`permission_denied` 等）。分辨「还没有账本」和「账本在但读不了」靠的
+是这个类别，从不解析本地化的 `detail`：只有 `ledger_io` 且 IO 类别为 `not_found` 时，才补一句状态根里
+还没有账本、多半是 Runtime 从未在这里启动过，并指向启动器的「启动」。不显示任何账本事实，连 0 也
+不写：列表写账本未打开，不留一片空白；页签、过滤框、编号框和时间滑块都停用；模块框、端口框与帧区写「账本未打开」。不向账本发
 任何查询，不读任何素材。启动器照常可用。
 
 依赖钉在 Runtime **main** 上（`Cargo.toml`）：
 
 ```
-rev = "e1316149e2ec75683fbcc707c5f3427fc0e0cdf5"
+rev = "75ed4b3f537439310bc891b52abd0cc12532f5b1"
 ```
 
 四个 crate（contract / ledger / ledger-forensics / runtime-client）共用这一个 rev。
@@ -217,7 +218,8 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   **不会在会话中途悄悄换读面**。60 次都没连上，写「仍未就绪」和最后一次客户端错误码。就绪**从不看
   守护进程的输出**：只在早退之后读回日志、只取那一行，其中只认它是否带 `owner_resource_unconfirmed`（见下）。
 - **记下启动按钮**：Runtime 存在之后才记得下，所以顺序是探测 →（需要时）拉起 → 就绪判定 → 记账。
-  记账新开一条连接，`begin_interaction()` 开一个交互，用 `record_client_action_receipt` 记一条
+  按按钮是人的动作，所以记账新开一条身份为 actor `user`、source `ui` 的连接（控制台自己发起的读用
+  `ui` / `ui`），`begin_interaction()` 开一个交互，用 `record_client_action_receipt` 记一条
   `client_action`（surface `acui.launcher`，类别 `button`、不带值；这次按钮拉起了进程记 control
   `launcher.start`，发现 Runtime 已在运行记 `launcher.start.skipped_running`），回执必须带 terminal；
   在工作线程上做，不占窗口的事件循环。有没有拉起进程是账本自己记下的结果（`runtime.started`），
@@ -245,7 +247,9 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   任何结果之后入口回到第一步；新的一次启动收起它，解锁进行中「启动」被拒。监控台不为它记
   `client_action`：没有运行中的 Runtime 可经手，`unlock-owner` 自己追加 `cli.command` 事实（action
   `owner.unlock`）。它从不删除 `owner.lock`（Runtime `contracts/actingd-unlock-owner.md`）。
-- **请求关闭**：只走类型化客户端，从不杀进程。新开一条连接，`begin_interaction()` 开一个
+- **请求关闭**：只走类型化客户端，从不杀进程。新开一条身份为 actor `user`、source `ui` 的连接
+  （Runtime 只接受控制台前的人或操作员 CLI 发起关闭请求：`75ed4b3f` 起如此，之前只接受 CLI，这个按钮
+  因此从未成功过），`begin_interaction()` 开一个
   交互，先用 `record_client_action_receipt` 把这次按钮记成 `client_action`（surface
   `acui.launcher`、control `request_shutdown`），拿到带 terminal 的回执后再发
   `request_shutdown()`——动作先落账，再请求。被拒为 `runtime_busy`（别的请求——比如一次状态
@@ -274,8 +278,8 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 - **发现**：「发现实例」在工作线程上经类型化客户端（`discover_instances()`）请正在运行的 Runtime 重跑
   一次其提供者的 MuMu 实例发现；Runtime 会在宿主上运行 `MuMuManager`，客户端最多等 25 秒。契约只接受
   控制台前的人或操作员 CLI 发起这个查询，所以它单独开一条连接，身份是 actor `user`、source `ui`（枚举
-  值，不是系统用户名）。它不绑定任何东西，也不碰设备；按契约，Runtime 把答复了的查询记成一条观察事件
-  （`command.validated`），把拒绝记成 `command.rejected` 加 `runtime.failed`。旁边的框随后列出报告的
+  值，不是系统用户名），与启动器的按钮相同。它不绑定任何东西，也不碰设备；按契约，Runtime 把答复了
+  的查询记成一条观察事件（`command.validated`），把拒绝记成 `command.rejected` 加 `runtime.failed`。旁边的框随后列出报告的
   每个实例：MuMu 序号、是否在运行、运行中的 Runtime 给它绑定的别名（若有）、ADB 地址、Android 版本，
   名称放最后；那一行写出个数、提供者版本和这次查询的序号。在框里选只是选中，点「采用所选」才生效：
   配置文件里没有指向它的项（`instance_index` 等于其序号、`instance_name` 等于其名称，或 `port` 等于其
@@ -366,7 +370,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 - `acui-source`：读面，唯一碰状态根的地方。离线读面是 `EvidenceSource::open` / `query` /
   `open_report` / `read_material`；`Session::open(root, mode)` 按 `--source`
   在它和在线的 `OnlineSource` 之间选一张，账本拒开离线读面时交回带账本原错误的
-  `Session::Unopened`（`LedgerOpenFailure`：code、operation、detail），`material_reader()` 交给后台线程读素材。
+  `Session::Unopened`（`LedgerOpenFailure`：code、operation、detail、IO 类别），`material_reader()` 交给后台线程读素材。
   它还每个会话读一次实例的任务事实（`instance_facts()`）：离线在钉住的位置重放，在线在钉住之后连同
   实例状态一起读；事实快照的作用域与取值类型直接从契约 crate 取。
 - `acui-model`：纯 Rust 视图模型（页签、过滤、翻页、恢复折叠、选中项），不依赖 slint，**也不
@@ -417,7 +421,7 @@ zip、getrandom，不依赖上面任何一层，见上一节「安装引导程�
   的上限与期限调用它；Runtime 仍对每一段校验整份素材（一张 3.6 MB 的帧是 19 段 192 KiB）。
 - **实例事实：两张读面都已解决，位置不同**。在线经 `RuntimeClient::runtime_fact_snapshot()`
   （`crates/runtime-client/src/client.rs:848`）读，它答的是 Runtime 最新位置上的状态，晚于钉点。离线由
-  `runtime_facts_at`（`crates/ledger-forensics/src/runtime_facts.rs:56`）按 Runtime 自己的重放规则，在
+  `runtime_facts_at`（`crates/ledger-forensics/src/runtime_facts.rs:61`）按 Runtime 自己的重放规则，在
   钉住的位置本身重放事实库；监控台从不自己折叠 `runtime.fact_*` 事件。租约只来自在线的状态读取，离线
   没有。
 - **几何与帧在这两个根上凑不到一起**。0828 与 v5 两个根里，带 `capture.frame` 产物的事件
@@ -425,8 +429,8 @@ zip、getrandom，不依赖上面任何一层，见上一节「安装引导程�
   `task.effect_intent`（0828 六条、v5 五条），payload 里是一个 tap 坐标，`links` 里**没有**
   `frame_id`。账本没有给出把这两者连起来的关系，监控台就不连——真实帧照画，叠加为空。
   钉住的 rev 上，`task.effect_intent` 可以给出坐标所在的画面范围（`frame_extent`，
-  `crates/actingcommand-contract/src/event/payload.rs:3313`），`task.geometry_observed` 可以给出其
-  画面的范围（`:3039`）；事件给了，叠加画布就用它。这两个根上的 effect intent 都没给，尺寸仍是
+  `crates/actingcommand-contract/src/event/payload.rs:3315`），`task.geometry_observed` 可以给出其
+  画面的范围（`:3041`）；事件给了，叠加画布就用它。这两个根上的 effect intent 都没给，尺寸仍是
   「未记录」。
 - **两个根里都没有产物淘汰事实**，所以淘汰占位在这两个根上不会出现；代码路径按契约写好。
 

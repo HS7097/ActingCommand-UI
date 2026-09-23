@@ -71,8 +71,8 @@ answers come from:
   pinned position itself, the same position every page reads at: the lines state that position, that
   there is no lease offline, and each instance's id (short; the full id in grey) with its three facts. A
   ledger with no event yet says so; a replay the read face declines states its reason, and a failed one
-  its code, operation and detail, one per line. The replay runs once as the session opens, before the
-  window shows, bounded by a 30-second deadline.
+  its code, operation, io kind (for an io error) and detail, one per line. The replay runs once as the
+  session opens, before the window shows, bounded by a 30-second deadline.
 
 `--source <auto|offline|online>`, default `auto`: if the client can connect to the Runtime the state root
 points at, online; otherwise offline. The instance card's first line, "read face", states which one was
@@ -85,10 +85,10 @@ When the offline read face cannot be opened — with `offline`, or with `auto` f
 console does not exit: the window opens **unopened**, which is what a fresh install looks like, since the
 Runtime creates the ledger on its first start. The instance card then has only its first line, "read
 face", which says the ledger could not be opened and states the read face's own `code`, `operation` and
-`detail` verbatim. The ledger keeps an io error's OS text, not its kind, so the pair alone cannot tell "no
-ledger yet" from "a ledger that cannot be read", and `detail` is never parsed; only for exactly
-`ledger_io` / `canonicalize_read_only_root` does the line add that the state root probably has no ledger
-yet, most likely because the Runtime has never been started, and point at the launcher's Start. No ledger
+`detail` verbatim, and for an io error its io kind (`LedgerIoKind`: `not_found`, `permission_denied`,
+…). The kind, never the localized `detail`, tells "no ledger yet" from "a ledger that cannot be read":
+only for `ledger_io` with io kind `not_found` does the line add that the state root has no ledger yet,
+most likely because the Runtime has never been started here, and point at the launcher's Start. No ledger
 fact is shown, not even a zero: the list says the ledger is not opened instead of standing empty; the
 tabs, the filter boxes, the id box and the time slider are off; the module and port boxes and the frame
 pane say "ledger not opened". Nothing is asked of the ledger and no material is read. The launcher works
@@ -97,7 +97,7 @@ as usual.
 Dependencies are pinned to the Runtime's **main** (`Cargo.toml`):
 
 ```
-rev = "e1316149e2ec75683fbcc707c5f3427fc0e0cdf5"
+rev = "75ed4b3f537439310bc891b52abd0cc12532f5b1"
 ```
 
 The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
@@ -283,7 +283,8 @@ last Start or Request shutdown press, or why the instance-configuration window d
   after an early exit, for that one line, and nothing in it is interpreted but whether it names
   `owner_resource_unconfirmed` (below).
 - **Recording the start press**: the press can only be recorded once a Runtime exists, so the order is
-  probe → (if needed) launch → readiness decision → record. Recording opens a new connection, opens an
+  probe → (if needed) launch → readiness decision → record. A press is a person's act, so recording
+  opens a new connection as actor `user`, source `ui` (the console's own reads use `ui` / `ui`), opens an
   interaction with `begin_interaction()` and records one `client_action` with
   `record_client_action_receipt` (surface `acui.launcher`, kind `button` with no value, control
   `launcher.start` when this press launched a process, `launcher.start.skipped_running` when it found the
@@ -319,9 +320,12 @@ last Start or Request shutdown press, or why the instance-configuration window d
   unlock runs. The console records no client action for it: there is no running Runtime to record
   through, and `unlock-owner` appends its own `cli.command` fact (action `owner.unlock`). It never
   deletes `owner.lock` (Runtime `contracts/actingd-unlock-owner.md`).
-- **Request shutdown**: only through the typed client, never killing a process. It opens a new connection,
-  opens an interaction with `begin_interaction()`, first records this button press as a `client_action`
-  with `record_client_action_receipt` (surface `acui.launcher`, control `request_shutdown`), and only
+- **Request shutdown**: only through the typed client, never killing a process. It opens a new connection
+  as actor `user`, source `ui` (the Runtime admits a shutdown request only from a person at the console
+  or an operator's CLI — from Runtime `75ed4b3f` on; before, only from the CLI, so the button could never
+  succeed), opens an interaction with `begin_interaction()`, first records this button press as a
+  `client_action` with `record_client_action_receipt` (surface `acui.launcher`, control
+  `request_shutdown`), and only
   after obtaining a receipt bearing terminal does it send `request_shutdown()` — the action lands in the
   ledger first, then the request. If it is refused as `runtime_busy` — the Runtime holds its lifecycle
   admission briefly after another request, such as a status read; it is also refused as busy while a
@@ -359,8 +363,9 @@ list.
   (`discover_instances()`) on a worker thread, to re-run its provider's MuMu instance discovery; the
   Runtime runs `MuMuManager` on the host, and the client waits up to 25 seconds. The contract admits
   this query only from a person at the console or an operator's CLI, so it goes out on its own
-  connection as actor `user`, source `ui` (the enum, not an OS user name). It binds nothing and touches
-  no device; by contract the Runtime records an answered query as one observation event
+  connection as actor `user`, source `ui` (the enum, not an OS user name), like the launcher's
+  presses. It binds nothing and touches no device; by contract the Runtime records an answered query as
+  one observation event
   (`command.validated`), and a refusal as `command.rejected` plus `runtime.failed`. The box beside it then
   lists every instance reported: its MuMu index, whether it runs, the alias the running Runtime binds
   to it (if any), its ADB address, the Android version, and its name last; the line states how many,
@@ -484,10 +489,10 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   `EvidenceSource::open` / `query` / `open_report` / `read_material`;
   `Session::open(root, mode)` picks one of it and the online `OnlineSource` according to `--source`, or
   gives back `Session::Unopened` with the ledger's own error (`LedgerOpenFailure`: code, operation,
-  detail) when the ledger refuses the offline face, and `material_reader()` hands material reading to
-  the background thread. It also reads the instances' task facts once per session (`instance_facts()`):
-  offline replayed at the pinned position, online with their status right after the pin; for the fact
-  snapshot's scope and value types it names the contract crate directly.
+  detail, io kind) when the ledger refuses the offline face, and `material_reader()` hands material
+  reading to the background thread. It also reads the instances' task facts once per session
+  (`instance_facts()`): offline replayed at the pinned position, online with their status right after
+  the pin; for the fact snapshot's scope and value types it names the contract crate directly.
 - `acui-model`: a pure Rust view model (tabs, filtering, paging, recovery collapsing, selection), with no
   dependency on slint and **no plain language either** — it gives structured facts only, and all wording
   is chosen by `acui-app` from the language tables.
@@ -549,7 +554,7 @@ pinned rev.
 - **Instance facts: resolved on both faces, at different positions**. Online, the fact store is read
   through `RuntimeClient::runtime_fact_snapshot()` (`crates/runtime-client/src/client.rs:848`), which
   answers at the Runtime's latest position, past the pin. Offline, `runtime_facts_at`
-  (`crates/ledger-forensics/src/runtime_facts.rs:56`) replays the store at the pinned position itself,
+  (`crates/ledger-forensics/src/runtime_facts.rs:61`) replays the store at the pinned position itself,
   under the Runtime's own replay rules; the console never folds `runtime.fact_*` events itself. Lease
   state comes only from the online status read, so offline has none.
 - **Geometry and frames cannot be brought together on these two roots**. In the 0828 and v5 roots, the
@@ -558,8 +563,8 @@ pinned rev.
   five on v5), whose payload is a single tap coordinate and whose `links` hold **no** `frame_id`. The
   ledger gives no relation joining the two, so the console does not join them — the real frame is drawn as
   it is, and the overlay is empty. At the pin, `task.effect_intent` can state the frame extent its
-  coordinates are in (`frame_extent`, `crates/actingcommand-contract/src/event/payload.rs:3313`) and
-  `task.geometry_observed` its frame's extent (`:3039`); the overlay canvas uses that extent when an event
+  coordinates are in (`frame_extent`, `crates/actingcommand-contract/src/event/payload.rs:3315`) and
+  `task.geometry_observed` its frame's extent (`:3041`); the overlay canvas uses that extent when an event
   states one. The effect intents on these two roots state none, so their size stays "not recorded".
 - **Neither root holds artifact eviction facts**, so the eviction placeholder does not appear on these two
   roots; the code path is written to the contract.

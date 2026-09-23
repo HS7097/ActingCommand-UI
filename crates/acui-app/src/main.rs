@@ -1107,14 +1107,16 @@ fn source_text(labels: &Labels, source: &Session) -> String {
             fill(labels.source_offline_failed, &[code, operation])
         }
     };
-    // The ledger's own words, verbatim. Its pair alone cannot tell a state
-    // root with no ledger yet from an unreadable one, so the hint is a guess
-    // and says so.
+    // The ledger's own words, verbatim, and its io kind: only `not_found`
+    // says the state root has no ledger yet.
     if let Session::Unopened { failure, .. } = source {
         let detail = failure.detail.as_deref().unwrap_or(labels.none);
         text.push_str(" · ");
         text.push_str(&fill(labels.source_unopened, &[failure.code, failure.operation, detail]));
-        if (failure.code, failure.operation) == ("ledger_io", "canonicalize_read_only_root") {
+        if let Some(kind) = &failure.io_kind {
+            text.push_str(&fill(labels.io_kind_text, &[kind]));
+        }
+        if failure.code == "ledger_io" && failure.io_kind.as_deref() == Some("not_found") {
             text.push_str(" · ");
             text.push_str(labels.source_unopened_hint);
         }
@@ -1354,16 +1356,18 @@ fn offline_instance_lines(labels: &Labels, facts: &OfflineFacts) -> Vec<FieldLin
             let text = fill(labels.facts_not_available, &[reason]);
             vec![field(labels, "instance_facts", text, position.to_string())]
         }
-        OfflineFacts::Failed { position, code, operation, detail } => vec![
-            field(
-                labels,
-                "instance_facts",
-                labels.instances_unread.to_string(),
-                position.to_string(),
-            ),
-            field(labels, "facts_error", code.to_string(), *operation),
-            field(labels, "facts_detail", detail.clone(), ""),
-        ],
+        OfflineFacts::Failed { position, code, operation, detail, io_kind } => {
+            let unread = labels.instances_unread.to_string();
+            let mut lines = vec![
+                field(labels, "instance_facts", unread, position.to_string()),
+                field(labels, "facts_error", code.to_string(), *operation),
+            ];
+            if let Some(kind) = io_kind {
+                lines.push(field(labels, "io_kind", kind.clone(), ""));
+            }
+            lines.push(field(labels, "facts_detail", detail.clone(), ""));
+            lines
+        }
     }
 }
 
