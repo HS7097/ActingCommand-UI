@@ -256,6 +256,10 @@ pub struct Labels {
     pub entry_gone: &'static str,
     pub entry_no_id: &'static str,
     pub entry_serial: &'static str,
+    pub entry_fixture: &'static str,
+    pub entry_no_binding: &'static str,
+    /// The ledger column of a row without a string instance_id.
+    pub row_no_id: &'static str,
 }
 
 pub const ZH: Labels = Labels {
@@ -493,6 +497,9 @@ pub const ZH: Labels = Labels {
     entry_gone: "配置文件里已没有 {}（别处改过）",
     entry_no_id: "这一项没有字符串 instance_id，不能在这里编辑",
     entry_serial: "这一项以 ADB 序列号 serial 绑定，表单表示不了这种绑定，不能在这里编辑",
+    entry_fixture: "这一项配置了 fixture_backend，表单表示不了这种后端，不能在这里编辑",
+    entry_no_binding: "这一项文件里没写绑定键（MuMu 序号、MuMu 名称、host / port、serial 都没有），表单表示不了，不能在这里编辑",
+    row_no_id: "不可编辑：没有字符串 instance_id",
 };
 
 pub const EN: Labels = Labels {
@@ -733,6 +740,9 @@ pub const EN: Labels = Labels {
     entry_no_id: "This Entry Has No String instance_id and Cannot Be Edited Here",
     entry_serial:
         "This Entry Is Bound by ADB serial, Which the Form Cannot Represent, and Cannot Be Edited Here",
+    entry_fixture: "This Entry Has a fixture_backend, Which the Form Cannot Represent, and Cannot Be Edited Here",
+    entry_no_binding: "This Entry Has No Binding Key in the File (No MuMu Index or Name, host / port or serial), Which the Form Cannot Represent, and Cannot Be Edited Here",
+    row_no_id: "Not Editable: No String instance_id",
 };
 
 impl Labels {
