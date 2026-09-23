@@ -4,7 +4,7 @@
 //!
 //! The file is plain JSON here. Only `instances` changes, and in an entry only
 //! the keys the form manages; the Runtime's config struct is not mirrored. A
-//! save re-reads the file, writes a candidate beside it (relative paths inside
+//! save reads the file, writes a candidate beside it (relative paths inside
 //! resolve against that directory), runs `<actingd_exe> check-config` on it off
 //! the event loop, and renames it over the file only on a parsed `ok` with a
 //! successful exit.
@@ -12,7 +12,7 @@
 use std::cell::RefCell;
 use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -271,23 +271,25 @@ fn check(labels: &Labels, exe: &Path, candidate: &Path) -> Result<(), String> {
         fill(labels.spawn_failed, &[&exe.display().to_string(), &error.to_string()])
     })?;
     let reader = child.stdout.take().map(|mut stdout| {
-        std::thread::spawn(move || {
+        std::thread::Builder::new().spawn(move || {
             let mut text = String::new();
             stdout.read_to_string(&mut text).map(|_| text)
         })
     });
+    let reader = reader.transpose().map_err(|error| {
+        fill(labels.reader_failed, &[&error.to_string()]) + &stop(labels, &mut child)
+    })?;
     let deadline = Instant::now() + CHECK_TIMEOUT;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             waited => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(match waited {
+                let failure = match waited {
                     Err(error) => fill(labels.child_status_failed, &[&error.to_string()]),
                     _ => fill(labels.check_timeout, &[&CHECK_TIMEOUT.as_secs().to_string()]),
-                });
+                };
+                return Err(failure + &stop(labels, &mut child));
             }
         }
     };
@@ -309,6 +311,14 @@ fn check(labels: &Labels, exe: &Path, candidate: &Path) -> Result<(), String> {
         (Some("ok"), _, _) => Err(fill(labels.check_ok_nonzero, &[&exit])),
         (Some("failed"), Some(code), Some(stage)) => Err(fill(labels.check_failed, &[code, stage])),
         _ => Err(unparsed()),
+    }
+}
+
+/// Kills and reaps the child. One the kill fails on is not waited on: it may never exit.
+fn stop(labels: &Labels, child: &mut Child) -> String {
+    match child.kill().and_then(|()| child.wait()) {
+        Ok(_) => labels.check_stopped.to_string(),
+        Err(error) => fill(labels.check_unstoppable, &[&error.to_string()]),
     }
 }
 

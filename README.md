@@ -12,11 +12,11 @@ It is not part of the Runtime; it is the Runtime's **external, detachable client
 
 ## Data source: the read face, not files
 
-The program accepts only one argument: the state root. **All file IO belongs to the read face**; the
-console never assembles paths inside the state root itself, never opens `ledger/`, `artifacts/` or
-`runtime-state.sqlite`, and never launches a CLI to read data. The only processes it starts are actingd
-itself (**Start**, see "Launcher") and `actingd check-config` when an instance-configuration save is
-checked (see "Instance configuration").
+The program accepts only one argument: the state root. **All file IO for reading ledger data belongs to
+the read face**; the console never assembles paths inside the state root itself, never opens `ledger/`,
+`artifacts/` or `runtime-state.sqlite`, and never launches a CLI to read data. The only processes it
+starts are actingd itself (**Start**, see "Launcher") and `actingd check-config` when an
+instance-configuration save is checked (see "Instance configuration").
 
 There are two read faces, with the same query, page and cursor semantics; they differ only in where the
 answers come from:
@@ -207,7 +207,7 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml (falls back to $HOME/.config/
 lang = "zh"          # zh | en
 text_size = "standard"   # standard | large | extra-large
 state_root = 'D:\ActingCommand\state'                    # optional, absolute path
-actingd_config = 'D:\ActingCommand\actingd.toml'         # optional, absolute path
+actingd_config = 'D:\ActingCommand\actingd.config.json'  # optional, absolute path
 actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # optional, absolute path
 ```
 
@@ -300,8 +300,9 @@ of `actingd_config`, the file Start hands to actingd.
   window, stdout parsed whole as one `actingcommand.actingd.check-config.v1` report). Only `status: ok`
   with a successful exit renames it over the file; otherwise the candidate is removed, the file stays as
   it was, and the window says why: `error.code` and `stage` verbatim, or a missing or relative
-  `actingd_exe`, a spawn failure, the timeout, unreadable or unrecognized output, ok with a non-zero
-  exit, or the rename failing.
+  `actingd_exe`, writing the candidate failing, a spawn failure, no output reader thread, reading the
+  child's status failing, the timeout (these three also say whether check-config could be terminated),
+  unreadable or unrecognized output, ok with a non-zero exit, or the rename failing.
 - **Effect**: there is no hot reload; a saved entry takes effect when the Runtime restarts. Saving again
   updates that same entry; Add Instance starts a new one under a fresh `instance_id`.
 
