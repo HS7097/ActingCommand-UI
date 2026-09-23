@@ -47,14 +47,25 @@ answers come from:
   whole session. Every page after that is
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`,
   the same `EventQuery`, the same page limit, the same `next_cursor`.
-- Material goes through `RuntimeClient::read_material`: `RuntimeMaterialReadRequest` ranges, each
-  verified against the whole file, the verification done by the Runtime, on the same connection. The
-  client has no whole-object read, so online stays chunked (see "What the read face blocks").
-- Medium, corrupt tail, writer-process record and the event and repair counts are the offline read face's
+- Material goes through `RuntimeClient::read_material_complete` on the same connection: the client
+  reads the ranges itself (192 KiB each, 64 KiB against a Runtime that refuses larger ones), the Runtime
+  verifies each against the whole file, and the client checks the assembled length and sha256 — the same
+  result shape as the offline whole-object read. The console no longer assembles ranges itself.
+- Medium, corrupt tail, writer-process record and the repair count are the offline read face's
   observations of files; the Runtime does not state these on the page. Online, the instance card's
-  "storage format" says "determined by the Runtime", the two counts say the Runtime does not state them,
-  and "writer process" states the connected Runtime itself
+  "storage format" says "determined by the Runtime", the repair count says the Runtime does not state it,
+  the event count is the pinned position (the contract states sequences are gap-free from 1, so the count
+  at a position is that position), and "writer process" states the connected Runtime itself
   (PID, owner epoch, start time, all out of its own `runtime-info.json`).
+- Right after the pin, one `status()` and one `runtime_fact_snapshot()` on the same connection give the
+  instance card its "instances (live)" lines. The header states the sequence each read was taken at; both
+  may be past the pinned snapshot, so these lines are live state, not state at the pin. Then, per
+  instance the status registers: its alias (the instance id in grey), port, lease (leased / idle, plus
+  the queued request count when there is one), and the instance facts `task.game`, `task.server` and
+  `task.page` verbatim, or "not recorded". A fact whose id the status does not register gets a row that
+  says so. If either read fails, the line states the refusal, the client error and any host failure
+  instead; the session still opens. Offline there is no fact read yet, and the line says "not provided
+  offline".
 
 `--source <auto|offline|online>`, default `auto`: if the client can connect to the Runtime the state root
 points at, online; otherwise offline. The instance card's first line, "read face", states which one was
@@ -79,7 +90,7 @@ as usual.
 Dependencies are pinned to the Runtime's **main** (`Cargo.toml`):
 
 ```
-rev = "eb63af3115d9f3c1785ce9c309a26f71465f7719"
+rev = "2e18e7bc41b6ac39987ee7de49387643daebb50a"
 ```
 
 The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
@@ -142,12 +153,13 @@ and only within this rule:
 
 - Only the `capture.frame` artifact **the selected event itself** carries is read, on demand, one at a time.
 - Offline, one `read_material_complete` call reads the whole object and verifies its length and sha256
-  before any byte is handed over, within a 30-second deadline. Online, requests are chunked by
-  `MAX_RUNTIME_MATERIAL_CHUNK_BYTES` (64 KiB), and for each chunk the Runtime verifies the whole file's
-  length and sha256; if any chunk is not `verified` it aborts, and all bytes already obtained are
-  discarded.
-- The whole-file limit is the contract's chunk limit × 128 chunks (8 MiB) on both faces (offline it is
-  the read's own `max_material_bytes`); an artifact beyond that is refused outright, with a statement.
+  before any byte is handed over, within a 30-second deadline. Online,
+  `RuntimeClient::read_material_complete` does the same over the Runtime's verified ranges, with the same
+  deadline (checked between ranges); if any range is not `verified` it stops, and the unfinished assembly
+  is dropped.
+- The whole-file limit is 8 MiB on both faces, the read's own `max_material_bytes` (the bound the console
+  kept while it still assembled 64 KiB ranges itself, 128 of them); an artifact beyond that is refused
+  outright, with a statement.
 - When an artifact has been evicted, only the eviction facts are shown (disposition, intent/outcome
   position, the position observed up to); the file is not touched.
 - On a read failure, the state and safe error code the read face gives are shown.
@@ -271,7 +283,8 @@ last Start or Request shutdown press, or why the instance-configuration window d
   Runtime already running), whose receipt must bear a terminal; it runs on a worker thread, never on the
   window's event loop. Whether a process was launched is an outcome the ledger records on its own
   (`runtime.started`), not a value of the press. The line appends the sequence number at which it landed, or, if recording
-  failed, the Runtime's refusal code (if any) **verbatim** plus the client error code and operation name
+  failed, the Runtime's refusal code (if any) **verbatim** plus the client error code and operation name,
+  and the host code and operation when the refusal names one
   — the Runtime is still reported ready / running. If readiness fails there is no connection and **nothing is
   recorded**; the failure is shown only on the line — one of the two launcher actions that can take
   effect without being recorded; the other is an unlock that fails at stage `ledger` or is killed (on
@@ -310,7 +323,8 @@ last Start or Request shutdown press, or why the instance-configuration window d
   meanwhile; the press is still recorded only once. If accepted, it states the receipt state, the
   request id and the sequence number at which the action landed in the ledger; if refused otherwise
   (owner / governance and the like), or still busy after the 5th attempt, it states the Runtime's
-  refusal code **verbatim**, plus the client error code and operation name; any other refusal or error
+  refusal code **verbatim**, plus the client error code and operation name (and the host code and
+  operation when the refusal names one); any other refusal or error
   stops at once. The final line also states how many attempts were sent. Afterwards it probes the state
   once more — the Runtime stops at its own pace, so this glance may still say running.
 - **Never kill**: the `Child` handle is used only for `try_wait()`, to see whether it exited early — no
@@ -444,7 +458,9 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   `Session::open(root, mode)` picks one of it and the online `OnlineSource` according to `--source`, or
   gives back `Session::Unopened` with the ledger's own error (`LedgerOpenFailure`: code, operation,
   detail) when the ledger refuses the offline face, and `material_reader()` hands material reading to
-  the background thread.
+  the background thread. Online it also reads the instances' status and task facts once, right after the
+  pin (`runtime_instances()`); for the fact snapshot's scope and value types it names the contract crate
+  directly.
 - `acui-model`: a pure Rust view model (tabs, filtering, paging, recovery collapsing, selection), with no
   dependency on slint and **no plain language either** — it gives structured facts only, and all wording
   is chosen by `acui-app` from the language tables.
@@ -480,24 +496,31 @@ The application icon is the black single-figure "commander" mark Alice ruled on;
 These are not worked around; they are displayed as they are, and booked here. Line references are at the
 pinned rev.
 
-- **Event and repair counts: resolved offline, not stated online**. `GlobalLedgerMetadata`
+- **Event and repair counts: resolved offline; online, the event count only**. `GlobalLedgerMetadata`
   (`crates/ledger/src/global/evidence.rs:257`) now states `event_count()` (`:319`) and `repair_count()`
   (`:326`) from the authenticated metadata, without verifying any material, so the console no longer
   needs `GlobalLedger::open_evidence` (same file, `:434`) for them. The instance card shows both, and the
   number of rows **loaded in this view** separately; the two are never mixed. Over an incomplete read the
   event count covers only the verified prefix, and the card says so. The SQLite medium has no repair log
   (`None`), and the card says so instead of showing 0; the repair log does not share the event snapshot's
-  sequence boundary. Online, neither the page (`LedgerReadScope`) nor `runtime-info.json` states either
-  count, so both lines say the Runtime does not state it.
-- **Whole-material read: resolved offline, still chunked online**. `read_material_complete`
+  sequence boundary. Online, the event count is the pinned position, as
+  `contracts/runtime-state-observation.md` states (sequences are gap-free from 1); neither the page
+  (`LedgerReadScope`) nor `runtime-info.json` states the repair count, so that line says the Runtime does
+  not state it.
+- **Whole-material read: resolved on both faces**. `read_material_complete`
   (`crates/ledger-forensics/src/material.rs:74`) reads one whole object: fresh ledger metadata twice, one
   reader, one whole-file hash, bounded by `max_material_bytes` and a deadline. The offline face calls it
   with the 8 MiB frame limit and a 30-second deadline (no Runtime caller of it sets one yet; the
   contract's 4-second `RUNTIME_MATERIAL_READ_BUDGET_MS` bounds a single range read, not a whole
-  object). The typed client still has only the range read `RuntimeClient::read_material`
-  (`crates/runtime-client/src/client.rs:1999`), and the Runtime verifies the whole material for every
-  range, so the online face keeps assembling ranges on the background thread (a 3.6 MB frame is 57 of
-  them).
+  object). Online, the typed client's `RuntimeClient::read_material_complete`
+  (`crates/runtime-client/src/client.rs:2072`) gives the same result shape over verified ranges, and the
+  console calls it with the same limit and deadline; the Runtime still verifies the whole material for
+  every range (a 3.6 MB frame is 19 ranges of 192 KiB).
+- **Instance facts: online only**. The fact store is read through
+  `RuntimeClient::runtime_fact_snapshot()` (`crates/runtime-client/src/client.rs:831`), which answers at
+  the Runtime's latest position. The forensic crate at the pinned rev has no fact read, and the console
+  does not fold `runtime.fact_*` events itself, so offline the instance lines say "not provided
+  offline".
 - **Geometry and frames cannot be brought together on these two roots**. In the 0828 and v5 roots, the
   only events carrying a `capture.frame` artifact are `artifact.created` / `artifact.verified`, and their
   payloads hold no geometry; the only events carrying geometry are `task.effect_intent` (six on 0828,

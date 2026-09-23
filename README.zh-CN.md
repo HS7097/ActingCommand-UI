@@ -37,13 +37,20 @@
   会话固定读的位置——和离线一样，整个会话一个快照。之后每页都是
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`，
   同一个 `EventQuery`、同一个页上限、同一个 `next_cursor`。
-- 素材走 `RuntimeClient::read_material`：按 `RuntimeMaterialReadRequest` 分段，每段都对
-  整份校验，校验由 Runtime 做，在同一条连接上。客户端没有整份读入口，所以在线仍分段
-  （见「读面挡住的事」）。
-- 介质、损坏尾部、写入进程记录、事件条数与修复条数是离线读面对文件的观察，Runtime 不在
-  页上说这些；在线时实例卡的「存储格式」写「由 Runtime 判定」，两项条数写 Runtime 不提供，
-  「写入进程」写的是所连的 Runtime 本身（PID、owner epoch、启动时间，均出自它自己的
-  `runtime-info.json`）。
+- 素材走同一条连接上的 `RuntimeClient::read_material_complete`：客户端自己分段读（每段
+  192 KiB，遇到拒收大段的 Runtime 退到 64 KiB），每段由 Runtime 对整份校验，拼完后客户端再核
+  一次总长与 sha256——结果形状与离线整份读相同。监控台不再自己拼段。
+- 介质、损坏尾部、写入进程记录与修复条数是离线读面对文件的观察，Runtime 不在页上说这些；
+  在线时实例卡的「存储格式」写「由 Runtime 判定」，修复条数写 Runtime 不提供，事件条数就是钉住
+  的位置（契约规定序号从 1 起无缺口，所以某位置上的条数就是该位置），「写入进程」写的是所连的
+  Runtime 本身（PID、owner epoch、启动时间，均出自它自己的 `runtime-info.json`）。
+- 钉住之后，立刻在同一条连接上读一次 `status()` 和一次 `runtime_fact_snapshot()`，给实例卡
+  「实例（实时）」几行。首行写两次读各自所在的序号；两者都可能晚于钉住的快照，所以这几行是实时
+  状态，不是钉点上的状态。随后对状态里登记的每个实例写：别名（灰字是实例编号）、端口、租约（占用中
+  / 空闲，有排队请求时加上排队数），以及实例事实 `task.game`、`task.server`、`task.page` 原样，
+  没有就写「未记录」。快照里有事实、状态却没登记的编号，单独一行写明未登记。任一次读失败，这一行
+  改写拒绝码、客户端错误与宿主失败，会话照常打开。离线读面还没有事实读取，这一行写「离线读面不提
+  供」。
 
 `--source <auto|offline|online>`，默认 `auto`：客户端能连上状态根所指的 Runtime 就在线，
 否则离线；实例卡第一行「读面」写明选了哪张、为什么（`runtime-info.json` 不存在，或连接
@@ -62,7 +69,7 @@
 依赖钉在 Runtime **main** 上（`Cargo.toml`）：
 
 ```
-rev = "eb63af3115d9f3c1785ce9c309a26f71465f7719"
+rev = "2e18e7bc41b6ac39987ee7de49387643daebb50a"
 ```
 
 四个 crate（contract / ledger / ledger-forensics / runtime-client）共用这一个 rev。
@@ -110,10 +117,10 @@ rev = "eb63af3115d9f3c1785ce9c309a26f71465f7719"
 
 - 只读**选中事件自己**带的 `capture.frame` 产物，按需读，一次一份。
 - 离线一次 `read_material_complete` 调用读整份，整份长度与 sha256 校验通过后才交出任何字节，
-  期限 30 秒。在线按 `MAX_RUNTIME_MATERIAL_CHUNK_BYTES`（64 KiB）分段请求，每段由 Runtime
-  做整份长度与 sha256 校验；任何一段不是 `verified` 就中止，已拿到的字节全部丢弃。
-- 整份上限是契约的段上限 × 128 段（8 MiB），两张读面一样（离线它就是这次读的
-  `max_material_bytes`）；超出的产物直接拒读并说明。
+  期限 30 秒。在线由 `RuntimeClient::read_material_complete` 在 Runtime 校验过的分段上做同样的
+  事，期限相同（在段与段之间检查）；任何一段不是 `verified` 就停下，没拼完的部分丢弃。
+- 整份上限两张读面都是 8 MiB，即这次读的 `max_material_bytes`（监控台还自己拼 64 KiB 分段时
+  定下的上限，128 段）；超出的产物直接拒读并说明。
 - 产物已被淘汰时，只显示淘汰事实（处置、意图/结果位置、观察至哪个位置），不去碰文件。
 - 读取失败时显示读面给的状态与安全错误码。
 - 读取在后台线程里做，每次请求带代号；慢读回来时若选中项已变就丢弃。**任何时候都不会
@@ -210,7 +217,8 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   `launcher.start`，发现 Runtime 已在运行记 `launcher.start.skipped_running`），回执必须带 terminal；
   在工作线程上做，不占窗口的事件循环。有没有拉起进程是账本自己记下的结果（`runtime.started`），
   不是按钮的值。结果行追加动作落账的
-  序号；记账失败就把 Runtime 的拒绝码（若有）**原样**写出，外加客户端错误码与操作名——Runtime
+  序号；记账失败就把 Runtime 的拒绝码（若有）**原样**写出，外加客户端错误码与操作名，拒绝带出
+  宿主失败时再写宿主码与操作——Runtime
   仍照写已就绪 / 运行中。就绪判定
   失败时没有连接，**什么也不记**，失败只写在结果行上——这是启动器里可能生效却不落账的两种动作之一，
   另一种是在 `ledger` 阶段失败或被终止（超时或读取子进程状态失败）的解锁（见下）。
@@ -239,7 +247,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   查询——之后 Runtime 会短暂占着生命周期准入；有租约在用或有排队请求时也会被拒为忙碌，这几次重试等不过去）就隔一秒在同一个交互上再发，总共最多 5 次，其间
   结果行写「忙碌重试 n/5」；按钮仍只记一次。受理了写回执状态、请求编号、动作落账的序号；以别的
   理由被拒（owner / governance 等）或第 5 次仍忙，就把 Runtime 的拒绝码**原样**写出，外加客户端
-  错误码与操作名；其他拒绝或错误立即停下。最终结果行也写发了几次。之后再探测一次状态——Runtime
+  错误码与操作名（拒绝带出宿主失败时再写宿主码与操作）；其他拒绝或错误立即停下。最终结果行也写发了几次。之后再探测一次状态——Runtime
   按自己的节奏停，这一眼可能还写着运行中。
 - **永不杀**：`Child` 句柄只用来 `try_wait()` 看有没有早退，不 `kill`、不阻塞 `wait`、不挂
   job object；就绪判定结束就丢掉句柄，守护进程活得比监控台久。
@@ -341,6 +349,8 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   `open_report` / `read_material`；`Session::open(root, mode)` 按 `--source`
   在它和在线的 `OnlineSource` 之间选一张，账本拒开离线读面时交回带账本原错误的
   `Session::Unopened`（`LedgerOpenFailure`：code、operation、detail），`material_reader()` 交给后台线程读素材。
+  在线时它还在钉住之后读一次实例状态与任务事实（`runtime_instances()`）；事实快照的作用域与
+  取值类型直接从契约 crate 取。
 - `acui-model`：纯 Rust 视图模型（页签、过滤、翻页、恢复折叠、选中项），不依赖 slint，**也不
   出人话**——它只给结构化事实，措辞一律由 `acui-app` 按语言表挑。
 - `acui-app`：唯一依赖 slint 的 crate，`.slint` 文件在 `crates/acui-app/ui/`；两张语言表在
@@ -370,20 +380,25 @@ zip、getrandom，不依赖上面任何一层，见上一节「安装引导程�
 
 这些不是绕过去了，是照实显示、在此记账。行号都指钉住的 rev：
 
-- **事件条数与修复条数：离线已解决，在线不提供**。`GlobalLedgerMetadata`
+- **事件条数与修复条数：离线都已解决，在线只有事件条数**。`GlobalLedgerMetadata`
   （`crates/ledger/src/global/evidence.rs:257`）现在给出 `event_count()`（`:319`）与
   `repair_count()`（`:326`），取自已认证的元数据，不校验任何素材，监控台不再需要为此去调
   `GlobalLedger::open_evidence`（同文件 `:434`）。实例卡两项都显示，另外标出**本视图已载入**的
   条数，两者不混用。读取不完整时事件条数只计已校验的前缀，实例卡写明这一点。SQLite 介质没有
   修复日志（`None`），实例卡照写，不显示成 0；修复日志与事件快照不共用同一个序号边界。在线时
-  页（`LedgerReadScope`）与 `runtime-info.json` 都不给这两项，两行都写 Runtime 不提供。
-- **整份读素材：离线已解决，在线仍分段**。`read_material_complete`
+  事件条数就是钉住的位置，依据 `contracts/runtime-state-observation.md`（序号从 1 起无缺口）；页
+  （`LedgerReadScope`）与 `runtime-info.json` 都不给修复条数，这一行写 Runtime 不提供。
+- **整份读素材：两张读面都已解决**。`read_material_complete`
   （`crates/ledger-forensics/src/material.rs:74`）整份读一个对象：重开两次账本元数据、一个
   reader、整份哈希一次，受 `max_material_bytes` 与期限约束。离线读面以 8 MiB 帧上限和 30 秒
   期限调用它（Runtime 里还没有它的调用方定下期限；契约的 4 秒 `RUNTIME_MATERIAL_READ_BUDGET_MS`
-  约束的是单段读，不是整份对象）。类型化客户端仍只有分段读
-  `RuntimeClient::read_material`（`crates/runtime-client/src/client.rs:1999`），Runtime 对每一段
-  都校验整份素材，所以在线读面仍在后台线程里逐段拼（一张 3.6 MB 的帧是 57 段）。
+  约束的是单段读，不是整份对象）。在线由类型化客户端的 `RuntimeClient::read_material_complete`
+  （`crates/runtime-client/src/client.rs:2072`）在校验过的分段上给出同样形状的结果，监控台以同样
+  的上限与期限调用它；Runtime 仍对每一段校验整份素材（一张 3.6 MB 的帧是 19 段 192 KiB）。
+- **实例事实：只在在线读面**。事实库经 `RuntimeClient::runtime_fact_snapshot()`
+  （`crates/runtime-client/src/client.rs:831`）读，它答的是 Runtime 最新位置上的状态。钉住的 rev
+  上取证 crate 没有事实读取，监控台也不自己折叠 `runtime.fact_*` 事件，所以离线时实例几行写「离线
+  读面不提供」。
 - **几何与帧在这两个根上凑不到一起**。0828 与 v5 两个根里，带 `capture.frame` 产物的事件
   只有 `artifact.created` / `artifact.verified`，payload 里没有几何；带几何的事件只有
   `task.effect_intent`（0828 六条、v5 五条），payload 里是一个 tap 坐标，`links` 里**没有**

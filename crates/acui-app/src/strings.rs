@@ -97,7 +97,7 @@ pub struct Labels {
     /// `EventSource`, in the contract's declaration order.
     pub sources: [(&'static str, &'static str); 8],
     /// Field key to label, for the instance card and the detail pane.
-    pub fields: [(&'static str, &'static str); 36],
+    pub fields: [(&'static str, &'static str); 41],
     /// `ExecutionBackendProvenance`, by wire value.
     pub provenances: [(&'static str, &'static str); 2],
     pub artifact_kinds: [(&'static str, &'static str); 6],
@@ -306,6 +306,21 @@ pub struct Labels {
     pub entry_no_binding: &'static str,
     /// The ledger column of a row without a string instance_id.
     pub row_no_id: &'static str,
+    /// Status sequence, facts position.
+    pub instances_live: &'static str,
+    pub instances_none: &'static str,
+    pub instances_offline: &'static str,
+    /// Runtime code, client code, operation; client code, operation.
+    pub instances_refused: &'static str,
+    pub instances_failed: &'static str,
+    pub lease_active: &'static str,
+    pub lease_idle: &'static str,
+    /// Lease text, queued request count.
+    pub lease_queued: &'static str,
+    pub not_registered: &'static str,
+    pub fact_unrecorded: &'static str,
+    /// Host code, host operation; appended to a client failure.
+    pub host_failure: &'static str,
 }
 
 pub const ZH: Labels = Labels {
@@ -408,6 +423,11 @@ pub const ZH: Labels = Labels {
         ("bound_ids", "绑定编号数"),
         ("latest_binding", "最新绑定序号"),
         ("port_bindings", "实例绑定"),
+        ("runtime_instances", "实例（实时）"),
+        ("lease", "租约"),
+        ("task_game", "游戏"),
+        ("task_server", "区服"),
+        ("task_page", "当前页面"),
     ],
     provenances: [
         ("physical_device", "实机"),
@@ -573,6 +593,17 @@ pub const ZH: Labels = Labels {
     entry_fixture: "这一项配置了 fixture_backend，表单表示不了这种后端，不能在这里编辑",
     entry_no_binding: "这一项文件里没写绑定键（MuMu 序号、MuMu 名称、host / port、serial 都没有），表单表示不了，不能在这里编辑",
     row_no_id: "不可编辑：没有字符串 instance_id",
+    instances_live: "状态读于序号 {} · 事实读于序号 {}",
+    instances_none: "无登记实例",
+    instances_offline: "离线读面不提供（仅在线可读）",
+    instances_refused: "读取被拒：{} · 客户端 {}（{}）",
+    instances_failed: "读取失败：{}（{}）",
+    lease_active: "占用中",
+    lease_idle: "空闲",
+    lease_queued: "{} · 排队 {}",
+    not_registered: "未登记（仅有任务事实）",
+    fact_unrecorded: "未记录",
+    host_failure: " · 宿主 {}（{}）",
 };
 
 pub const EN: Labels = Labels {
@@ -675,6 +706,11 @@ pub const EN: Labels = Labels {
         ("bound_ids", "Bound IDs"),
         ("latest_binding", "Latest Binding"),
         ("port_bindings", "Instance Bindings"),
+        ("runtime_instances", "Instances (Live)"),
+        ("lease", "Lease"),
+        ("task_game", "Game"),
+        ("task_server", "Server"),
+        ("task_page", "Current Page"),
     ],
     provenances: [
         ("physical_device", "Physical Device"),
@@ -842,6 +878,17 @@ pub const EN: Labels = Labels {
     entry_fixture: "This Entry Has a fixture_backend, Which the Form Cannot Represent, and Cannot Be Edited Here",
     entry_no_binding: "This Entry Has No Binding Key in the File (No MuMu Index or Name, host / port or serial), Which the Form Cannot Represent, and Cannot Be Edited Here",
     row_no_id: "Not Editable: No String instance_id",
+    instances_live: "Status at Sequence {} · Facts at Sequence {}",
+    instances_none: "No Registered Instance",
+    instances_offline: "Not Provided Offline (Online Only)",
+    instances_refused: "Read Refused: {} · Client {} ({})",
+    instances_failed: "Read Failed: {} ({})",
+    lease_active: "Leased",
+    lease_idle: "Idle",
+    lease_queued: "{} · {} Queued",
+    not_registered: "Not Registered (Task Facts Only)",
+    fact_unrecorded: "Not Recorded",
+    host_failure: " · Host {} ({})",
 };
 
 impl Labels {

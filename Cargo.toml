@@ -26,10 +26,10 @@ serde_json = "1"
 # The formal ledger read face (offline) and the typed IPC client (online),
 # pinned to Runtime main. One rev for every Runtime crate the console reads
 # through.
-actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "eb63af3115d9f3c1785ce9c309a26f71465f7719" }
-actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "eb63af3115d9f3c1785ce9c309a26f71465f7719" }
-actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "eb63af3115d9f3c1785ce9c309a26f71465f7719" }
-actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "eb63af3115d9f3c1785ce9c309a26f71465f7719" }
+actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "2e18e7bc41b6ac39987ee7de49387643daebb50a" }
+actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "2e18e7bc41b6ac39987ee7de49387643daebb50a" }
+actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "2e18e7bc41b6ac39987ee7de49387643daebb50a" }
+actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "2e18e7bc41b6ac39987ee7de49387643daebb50a" }
 # Only what the console needs: the trim drops the renderers and backends this
 # program never uses (software renderer, testing backend, Linux system tray).
 # It does not drop image decoding, and the console does decode: the capture

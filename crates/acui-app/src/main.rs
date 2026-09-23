@@ -558,6 +558,7 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
             error.root_cause().to_string(),
         ));
     }
+    lines.extend(instance_lines(labels, source));
     // The picked port: its latest binding's facts and the size of its set.
     // The counts below still come from the re-queried page.
     if let Some(entry) = &card.port {
@@ -1259,6 +1260,60 @@ fn canvas_size(overlays: &[Overlay], frame_size: Option<(f32, f32)>) -> (f32, f3
             (width * 1.1, height * 1.1)
         }
     }
+}
+
+/// The card's instance lines. Online they come from the status read and fact
+/// snapshot taken right after the pin, at the positions the header states — live
+/// state, not state at the pinned snapshot. Offline there is no fact read yet.
+/// One short line per value, since a line in the middle of the card cannot wrap.
+fn instance_lines(labels: &Labels, source: &ReadSource) -> Vec<FieldLine> {
+    let read = match source.runtime_instances() {
+        None => {
+            let text = labels.instances_offline.to_string();
+            return vec![field(labels, "runtime_instances", text, "offline")];
+        }
+        Some(Err(failure)) => {
+            let (refused, failed) = (labels.instances_refused, labels.instances_failed);
+            let text = launcher::failure_text(labels, refused, failed, failure);
+            return vec![field(labels, "runtime_instances", text, failure.code)];
+        }
+        Some(Ok(read)) => read,
+    };
+    let positions = [&read.status_sequence.to_string(), &read.facts_position.to_string()];
+    let mut header = fill(labels.instances_live, &positions.map(String::as_str));
+    if read.instances.is_empty() {
+        header.push_str(" · ");
+        header.push_str(labels.instances_none);
+    }
+    let mut lines = vec![field(labels, "runtime_instances", header, "")];
+    let fact = |value: &Option<String>| {
+        value.clone().unwrap_or_else(|| labels.fact_unrecorded.to_string())
+    };
+    for instance in &read.instances {
+        let id = instance.instance_id.as_str();
+        match &instance.status {
+            Some(live) => {
+                lines.push(field(labels, "instance_alias", live.alias.clone(), id));
+                let port =
+                    live.adb_port.map_or_else(|| labels.none.to_string(), |port| port.to_string());
+                lines.push(field(labels, "adb_port", port, ""));
+                let lease = if live.lease_active { labels.lease_active } else { labels.lease_idle };
+                let lease = match live.queued_request_count {
+                    0 => lease.to_string(),
+                    queued => fill(labels.lease_queued, &[lease, &queued.to_string()]),
+                };
+                lines.push(field(labels, "lease", lease, ""));
+            }
+            None => {
+                let text = labels.not_registered.to_string();
+                lines.push(field(labels, "instance_alias", text, id));
+            }
+        }
+        lines.push(field(labels, "task_game", fact(&instance.game), "task.game"));
+        lines.push(field(labels, "task_server", fact(&instance.server), "task.server"));
+        lines.push(field(labels, "task_page", fact(&instance.page), "task.page"));
+    }
+    lines
 }
 
 fn field(

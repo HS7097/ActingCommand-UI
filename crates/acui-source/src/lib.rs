@@ -6,10 +6,12 @@
 //! below goes through the Runtime's own entries. Offline, `GlobalLedger` picks
 //! the medium and authenticates the snapshot, `query_view_page` projects the
 //! formal page, and `read_material_complete` resolves, guards and verifies material.
-//! Online, the same pages, and material one range at a time, are asked of the
-//! running Runtime through `actingcommand_runtime_client`, the one typed IPC path a
-//! client has. This crate is a client only: it never starts, kills or waits
-//! on the Runtime, and never writes into the state root. The launcher's two
+//! Online, the same pages, material whole (the client's own
+//! `read_material_complete` assembles the verified ranges), and the instances'
+//! live status and task facts are asked of the running Runtime through
+//! `actingcommand_runtime_client`, the one typed IPC path a client has. This
+//! crate is a client only: it never starts, kills or waits on the Runtime, and
+//! never writes into the state root. The launcher's two
 //! questions — is a Runtime running here, and will it accept a shutdown
 //! request — are asked through that same typed client, and its start press is
 //! recorded through it, at the end of this file.
@@ -20,31 +22,33 @@ use std::time::{Duration, Instant};
 
 use acui_rows::{
     code, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord, EventActor,
-    EventQuery, EventSource, LedgerCount, LedgerEventPosition, LedgerView,
-    MAX_RUNTIME_MATERIAL_CHUNK_BYTES, MAX_RUNTIME_MATERIAL_REPLY_BYTES, OpenReport, PortBindings,
-    PortEntry, ProjectedArtifactReference, ProjectionProfile, RuntimeEventQueryCursor,
-    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit,
-    RuntimeMaterialReadRequest, RuntimeMaterialReadResult, RuntimeMaterialReadState, WriterFacts,
+    EventQuery, EventSource, LedgerCount, LedgerEventPosition, LedgerView, OpenReport,
+    PortBindings, PortEntry, ProjectedArtifactReference, ProjectionProfile,
+    RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
+    RuntimeMaterialReadLimit, RuntimeMaterialReadState, WriterFacts,
 };
+use actingcommand_contract::{FactValue, RuntimeFactScope};
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
     GlobalLedgerWriterMetadataObservation, LedgerArtifactSelection,
 };
 use actingcommand_ledger_forensics::ForensicMaterialCompleteResult;
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
+use actingcommand_runtime_client::{
+    RuntimeClient, RuntimeClientConfig, RuntimeClientError, RuntimeMaterialCompleteResult,
+    RuntimeMaterialSelection,
+};
 use anyhow::{anyhow, bail, Result};
 
-/// Ranges one frame may cost online, where the contract bounds a single range
-/// (`MAX_RUNTIME_MATERIAL_CHUNK_BYTES`) and a single reply. The byte bound it
-/// yields, `MAX_FRAME_BYTES`, caps the material the console reads on either face.
-pub const MAX_FRAME_RANGES: u64 = 128;
-pub const MAX_FRAME_BYTES: u64 = MAX_RUNTIME_MATERIAL_CHUNK_BYTES as u64 * MAX_FRAME_RANGES;
+/// The console's cap on one material, on either face: 8 MiB, the bound it kept
+/// while it still assembled 64 KiB online ranges itself (128 of them). Both
+/// faces' whole-object reads take it as their byte limit.
+pub const MAX_FRAME_BYTES: u64 = 8 * 1024 * 1024;
 
-/// Bound on one offline whole-object read. No Runtime caller of
-/// `read_material_complete` sets one yet, and the contract's 4 s
+/// Bound on one whole-object read, offline or online. The contract's 4 s
 /// `RUNTIME_MATERIAL_READ_BUDGET_MS` bounds a single range read, not a whole
 /// object; a verified read of at most `MAX_FRAME_BYTES` is expected to finish
-/// well inside it.
+/// well inside it. Online the deadline is cooperative: the client checks it
+/// between ranges, not inside one exchange.
 const MATERIAL_READ_DEADLINE: Duration = Duration::from_secs(30);
 
 /// One authenticated snapshot of one state root.
@@ -208,6 +212,40 @@ pub struct OnlineSource {
     client: RuntimeClient,
     snapshot: u64,
     read_complete: bool,
+    instances: Result<RuntimeInstances, ClientFailure>,
+}
+
+/// The running Runtime's instances, read once right after the session's page
+/// pin: one status read and one fact snapshot, each at the ledger position the
+/// Runtime stated for it, which may be past the pin. Live state, not state at
+/// the pinned snapshot, and the card says so.
+#[derive(Debug, Clone)]
+pub struct RuntimeInstances {
+    /// The sequence of the status read's own committed observation.
+    pub status_sequence: u64,
+    /// The ledger position the fact snapshot is sealed at.
+    pub facts_position: u64,
+    pub instances: Vec<RuntimeInstance>,
+}
+
+/// One instance as the status read registers it, with the `task.` facts the
+/// snapshot holds for its id. A fact the snapshot holds for an id the status
+/// does not register gets a row of its own with `status: None`.
+#[derive(Debug, Clone)]
+pub struct RuntimeInstance {
+    pub instance_id: String,
+    pub status: Option<RuntimeInstanceLive>,
+    pub game: Option<String>,
+    pub server: Option<String>,
+    pub page: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeInstanceLive {
+    pub alias: String,
+    pub adb_port: Option<u16>,
+    pub lease_active: bool,
+    pub queued_request_count: u32,
 }
 
 impl OnlineSource {
@@ -229,12 +267,18 @@ impl OnlineSource {
                 request,
             )
             .map_err(|error| anyhow!("Runtime 查询失败：{error}"))?;
+        let instances = read_instances(&client);
         Ok(Self {
             root,
             client,
             snapshot: page.snapshot_ledger_position(),
             read_complete: page.read_scope().is_none_or(|scope| scope.read_complete),
+            instances,
         })
+    }
+
+    pub fn instances(&self) -> &Result<RuntimeInstances, ClientFailure> {
+        &self.instances
     }
 
     pub fn state_root(&self) -> &Path {
@@ -261,17 +305,19 @@ impl OnlineSource {
             .map_err(|error| anyhow!("Runtime 查询失败：{error}"))
     }
 
-    /// The medium, the corrupt tail, the writer record and the two counts are
+    /// The medium, the corrupt tail, the writer record and the repair count are
     /// the offline face's observations of the files; the Runtime does not
     /// state them through its page or its runtime info. Online, the writer is
     /// the Runtime this session is connected to, as its own
-    /// `runtime-info.json` describes it.
+    /// `runtime-info.json` describes it. The event count is the pinned position:
+    /// the contract states sequences are gap-free from 1, so the count at a
+    /// position is that position (`runtime-state-observation.md`).
     pub fn open_report(&self) -> OpenReport {
         let info = self.client.runtime_info();
         OpenReport {
             backend: "runtime".to_string(),
             latest_sequence: self.snapshot,
-            event_count: LedgerCount::NotStatedByRuntime,
+            event_count: LedgerCount::Counted(self.snapshot),
             read_complete: self.read_complete,
             corrupt_tail: None,
             repair_count: LedgerCount::NotStatedByRuntime,
@@ -430,6 +476,15 @@ impl ReadSource {
         }
     }
 
+    /// The instances' live status and task facts, online only: the offline
+    /// face has no fact read yet, so offline is `None`, not a read.
+    pub fn runtime_instances(&self) -> Option<&Result<RuntimeInstances, ClientFailure>> {
+        match self {
+            Self::Offline { .. } => None,
+            Self::Online(source) => Some(source.instances()),
+        }
+    }
+
     /// A handle a background thread reads material through.
     pub fn material_reader(&self) -> MaterialReader {
         match self {
@@ -450,12 +505,14 @@ pub struct RuntimeFacts {
 
 /// A client operation that did not succeed: the client's own error code and
 /// operation, and, when the Runtime answered with a refusal, that refusal's
-/// code verbatim.
+/// code verbatim, with the host failure behind it when the refusal names one.
 #[derive(Debug, Clone)]
 pub struct ClientFailure {
     pub code: &'static str,
     pub operation: &'static str,
     pub runtime_code: Option<String>,
+    /// The host's own code and operation (`host_code`, `host_operation`).
+    pub host: Option<(String, String)>,
 }
 
 impl From<RuntimeClientError> for ClientFailure {
@@ -464,6 +521,9 @@ impl From<RuntimeClientError> for ClientFailure {
             code: error.code(),
             operation: error.operation(),
             runtime_code: error.projection().map(|projection| code(&projection.code)),
+            host: error
+                .host_failure()
+                .map(|(host_code, operation)| (host_code.to_string(), operation.to_string())),
         }
     }
 }
@@ -474,6 +534,75 @@ pub fn probe_runtime(state_root: &Path) -> Result<RuntimeFacts, ClientFailure> {
     let client = OnlineSource::connect(state_root)?;
     let info = client.runtime_info();
     Ok(RuntimeFacts { pid: info.pid(), owner_epoch: code(&info.owner_epoch()) })
+}
+
+/// One status read, then one fact snapshot, on the session's connection. Either
+/// failing fails the pair with its own error; a status without its observation
+/// source is `status_source_missing`, since the card would otherwise state a
+/// position the Runtime did not give. Only the three `task.` keys are taken.
+fn read_instances(client: &RuntimeClient) -> Result<RuntimeInstances, ClientFailure> {
+    let status = client.status()?;
+    let status_sequence = status
+        .source()
+        .ok_or(ClientFailure {
+            code: "status_source_missing",
+            operation: "runtime_status",
+            runtime_code: None,
+            host: None,
+        })?
+        .sequence;
+    let snapshot = client.runtime_fact_snapshot()?;
+    let mut instances: Vec<RuntimeInstance> = status
+        .instances()
+        .iter()
+        .map(|instance| RuntimeInstance {
+            instance_id: code(&instance.instance_id()),
+            status: Some(RuntimeInstanceLive {
+                alias: instance.instance_alias().to_string(),
+                adb_port: instance.adb_port(),
+                lease_active: instance.lease_active(),
+                queued_request_count: instance.queued_request_count(),
+            }),
+            game: None,
+            server: None,
+            page: None,
+        })
+        .collect();
+    for record in &snapshot.records {
+        let RuntimeFactScope::Instance { instance_id } = &record.scope else {
+            continue;
+        };
+        if !matches!(record.key.as_str(), "task.game" | "task.server" | "task.page") {
+            continue;
+        }
+        let id = code(instance_id);
+        let index = match instances.iter().position(|instance| instance.instance_id == id) {
+            Some(index) => index,
+            None => {
+                instances.push(RuntimeInstance {
+                    instance_id: id,
+                    status: None,
+                    game: None,
+                    server: None,
+                    page: None,
+                });
+                instances.len() - 1
+            }
+        };
+        // The task keys are strings by contract; any other value is shown as
+        // the wire states it, never dropped.
+        let text = match &record.value {
+            FactValue::String(text) => text.clone(),
+            other => code(other),
+        };
+        let instance = &mut instances[index];
+        match record.key.as_str() {
+            "task.game" => instance.game = Some(text),
+            "task.server" => instance.server = Some(text),
+            _ => instance.page = Some(text),
+        }
+    }
+    Ok(RuntimeInstances { status_sequence, facts_position: snapshot.ledger_position, instances })
 }
 
 /// What an accepted shutdown request came back with.
@@ -562,6 +691,7 @@ fn record_press(state_root: &Path, control_id: &str) -> Result<(RuntimeClient, u
                 code: "client_action_invalid",
                 operation: "record_client_action",
                 runtime_code: None,
+                host: None,
             })?;
     let recorded = interaction.record_client_action_receipt(action)?;
     let sequence = recorded
@@ -570,6 +700,7 @@ fn record_press(state_root: &Path, control_id: &str) -> Result<(RuntimeClient, u
             code: "client_action_terminal_missing",
             operation: "record_client_action",
             runtime_code: None,
+            host: None,
         })?
         .sequence;
     Ok((interaction, sequence))
@@ -585,8 +716,9 @@ pub enum MaterialReader {
 }
 
 impl MaterialReader {
-    /// See [`read_material`]; the online face assembles ranges instead, each
-    /// verified by the Runtime against the whole committed material.
+    /// See [`read_material`]; online, the client's own complete read assembles
+    /// the ranges, each verified by the Runtime against the whole committed
+    /// material, with the offline result semantics.
     pub fn read(
         &self,
         event: LedgerEventPosition,
@@ -598,18 +730,9 @@ impl MaterialReader {
             Self::Offline(root) => {
                 read_material(root, event, artifact, snapshot_position, still_wanted)
             }
-            // runtime-client reads one range per call; only the forensic face reads whole objects.
-            Self::Online(client) => assemble(
-                |request| {
-                    client
-                        .read_material(request)
-                        .map_err(|error| anyhow!("Runtime 素材读取失败：{error}"))
-                },
-                event,
-                artifact,
-                snapshot_position,
-                still_wanted,
-            ),
+            Self::Online(client) => {
+                Ok(read_material_online(client, event, artifact, snapshot_position, still_wanted))
+            }
         }
     }
 }
@@ -692,72 +815,70 @@ pub fn read_material(
     }))
 }
 
-/// The online range loop. Every range is resolved, guarded and hash-verified
-/// against the whole material by the Runtime before its bytes are handed back;
-/// a range that is not `verified` ends the assembly with that range's own
-/// outcome.
-///
-/// `still_wanted` is asked before every range. A read whose answer has stopped
-/// mattering stops issuing ranges and gives back `None`: each range re-hashes
-/// the whole material, so a superseded read is expensive to let run on.
-fn assemble(
-    read_range: impl Fn(RuntimeMaterialReadRequest) -> Result<RuntimeMaterialReadResult>,
+/// The online counterpart of [`read_material`]: `RuntimeClient::read_material_complete`
+/// on the session's connection, under the same byte cap and deadline. It checks
+/// `still_wanted` before and after, not between ranges; the client drops an
+/// unfinished assembly itself. A client error is kept whole (code, operation,
+/// the Runtime's refusal and host failure), not reduced to its code.
+fn read_material_online(
+    client: &RuntimeClient,
     event: LedgerEventPosition,
     artifact: &ProjectedArtifactReference,
     snapshot_position: u64,
     still_wanted: &dyn Fn() -> bool,
-) -> Result<Option<MaterialOutcome>> {
-    if artifact.byte_count > MAX_FRAME_BYTES {
-        bail!(
-            "素材 {} 字节超出监控台上限 {} 字节（{} 段 × {} 字节）",
-            artifact.byte_count,
-            MAX_FRAME_BYTES,
-            MAX_FRAME_RANGES,
-            MAX_RUNTIME_MATERIAL_CHUNK_BYTES
-        );
+) -> Option<MaterialOutcome> {
+    if !still_wanted() {
+        return None;
     }
-    let mut bytes = Vec::with_capacity(artifact.byte_count as usize);
-    while (bytes.len() as u64) < artifact.byte_count {
-        if !still_wanted() {
-            return Ok(None);
-        }
-        let offset = bytes.len() as u64;
-        let remaining = artifact.byte_count - offset;
-        let request = RuntimeMaterialReadRequest {
-            event,
-            artifact_id: artifact.artifact_id,
-            snapshot_position,
-            byte_count: artifact.byte_count,
-            sha256: artifact.sha256.clone(),
-            expected_run_id: artifact.run_id,
-            expected_frame_id: artifact.frame_id,
-            expected_request_id: None,
-            expected_correlation_id: artifact.correlation_id,
-            offset,
-            requested_length: remaining.min(MAX_RUNTIME_MATERIAL_CHUNK_BYTES as u64) as u32,
-            max_reply_bytes: MAX_RUNTIME_MATERIAL_REPLY_BYTES,
-        };
-        let result = read_range(request)?;
-        match result.chunk {
-            Some(chunk) if result.state == RuntimeMaterialReadState::Verified => {
-                bytes.extend_from_slice(&chunk.bytes)
-            }
-            _ => {
-                return Ok(Some(MaterialOutcome {
-                    bytes: None,
-                    state: result.state,
-                    limit: result.limit,
-                    eviction: result.source.and_then(|source| source.eviction),
-                    failure: result.failure.map(|failure| failure.code),
-                }))
+    let selection = RuntimeMaterialSelection {
+        event,
+        artifact_id: artifact.artifact_id,
+        snapshot_position,
+        sha256: artifact.sha256.clone(),
+        byte_count: artifact.byte_count,
+        run_id: artifact.run_id,
+        frame_id: artifact.frame_id,
+        request_id: None,
+        correlation_id: artifact.correlation_id,
+    };
+    let result = client.read_material_complete(
+        selection,
+        MAX_FRAME_BYTES as usize,
+        Instant::now() + MATERIAL_READ_DEADLINE,
+    );
+    if !still_wanted() {
+        return None;
+    }
+    Some(match result {
+        RuntimeMaterialCompleteResult::Verified { bytes, .. } => MaterialOutcome {
+            bytes: Some(bytes),
+            state: RuntimeMaterialReadState::Verified,
+            limit: None,
+            eviction: None,
+            failure: None,
+        },
+        RuntimeMaterialCompleteResult::NotProvided { source, limit, failure, error } => {
+            MaterialOutcome {
+                bytes: None,
+                state: RuntimeMaterialReadState::NotProvided,
+                limit: Some(limit),
+                eviction: source.and_then(|source| source.eviction),
+                failure: failure
+                    .map(|failure| failure.code)
+                    .or_else(|| error.map(|error| error.to_string())),
             }
         }
-    }
-    Ok(Some(MaterialOutcome {
-        bytes: Some(bytes),
-        state: RuntimeMaterialReadState::Verified,
-        limit: None,
-        eviction: None,
-        failure: None,
-    }))
+        RuntimeMaterialCompleteResult::Failed { source, state, failure, error } => {
+            MaterialOutcome {
+                bytes: None,
+                state,
+                limit: None,
+                eviction: source.and_then(|source| source.eviction),
+                failure: Some(match failure {
+                    Some(failure) => format!("{} · {error}", failure.code),
+                    None => error.to_string(),
+                }),
+            }
+        }
+    })
 }
