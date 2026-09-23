@@ -67,7 +67,11 @@ answers come from:
   `task.game`, `task.server` and `task.page` (the page label the last recognition matched) verbatim, or
   "not recorded". A fact whose id the status does not register gets a row that says so. If either read
   fails, the lines state the Runtime's refusal, the client error and any host failure, one per line;
-  the session still opens. Offline there is no fact read yet, and the line says "not provided offline".
+  the session still opens. Offline, the read face's `runtime_facts_at` replays the fact store at the
+  pinned position itself, the same position every page reads at: the lines state that position, that
+  there is no lease offline, and each instance's id (short; the full id in grey) with its three facts. A
+  ledger with no event states the read face's reason instead; a failed replay states its code,
+  operation and detail, one per line.
 
 `--source <auto|offline|online>`, default `auto`: if the client can connect to the Runtime the state root
 points at, online; otherwise offline. The instance card's first line, "read face", states which one was
@@ -350,6 +354,16 @@ holding JSON `null` reads as absent, in the list and in the form. The file is re
 window opens and after every save; a reason it cannot be listed takes the count's place, never an empty
 list.
 
+- **Discover**: Discover Instances asks the running Runtime, through the typed client
+  (`discover_instances()`) on a worker thread, to re-run its provider's MuMu instance discovery. It binds
+  nothing and touches no device; by contract the Runtime records each query as one observation event
+  (`command.validated`). The box beside it then lists every instance reported: its MuMu index, name,
+  ADB address, whether it runs, the Android version, and the alias it is bound to, if any; the line
+  states how many, the provider version and the query's sequence. Picking an unbound instance starts a
+  new entry bound by that index (the alias and the rest still to fill; its address is left to discovery
+  at startup); picking a bound one points at its entry in the list and changes nothing. With no Runtime
+  running, or a refusal (`instance_discovery_unavailable`, `mumu_manager_version_unsupported`, …), the
+  line states the Runtime's code, the client error and any host failure.
 - **The form**: Add Instance starts a new entry and a click on a row loads that entry. An entry without a
   string `instance_id`, or one whose binding no kind of the form represents — with `fixture_backend`,
   with `serial` set, or with no binding key at all — is listed, but a click on it says why and it cannot
@@ -463,9 +477,9 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   `Session::open(root, mode)` picks one of it and the online `OnlineSource` according to `--source`, or
   gives back `Session::Unopened` with the ledger's own error (`LedgerOpenFailure`: code, operation,
   detail) when the ledger refuses the offline face, and `material_reader()` hands material reading to
-  the background thread. Online it also reads the instances' status and task facts once, right after the
-  pin (`runtime_instances()`); for the fact snapshot's scope and value types it names the contract crate
-  directly.
+  the background thread. It also reads the instances' task facts once per session (`instance_facts()`):
+  offline replayed at the pinned position, online with their status right after the pin; for the fact
+  snapshot's scope and value types it names the contract crate directly.
 - `acui-model`: a pure Rust view model (tabs, filtering, paging, recovery collapsing, selection), with no
   dependency on slint and **no plain language either** — it gives structured facts only, and all wording
   is chosen by `acui-app` from the language tables.
@@ -474,14 +488,14 @@ One Cargo workspace, dependency direction app → model → rows ← source:
 
 `slint` 1.17.x, `default-features = false`; the ledger is read-only to the console (what the Runtime
 records of the console's own requests — the start press, shutdown requests, the status read at an online
-open — it records itself), the only control entry points are the
+open, instance discovery queries — it records itself), the only control entry points are the
 launcher's two buttons (start / request shutdown, see above), its owner-unlock entry (a confirmed
 `actingd unlock-owner`), and the instance-configuration window's check-config-gated save, and there is no
 approval entry point; no tests are written. The launcher is in
 `crates/acui-app/src/launcher.rs`, the instance-configuration window in `instances.rs`, and the client
-operations — probe, request shutdown, recording the start press, and the online open's status and fact
-reads — are in `acui-source` (`probe_runtime` / `request_shutdown` / `record_start` /
-`runtime_instances`).
+operations — probe, request shutdown, recording the start press, the online open's status and fact
+reads, and instance discovery — are in `acui-source` (`probe_runtime` / `request_shutdown` /
+`record_start` / `instance_facts` / `discover_instances`).
 
 A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
 depending only on slint, serde, sha2, zip and getrandom, and on none of the layers above; see the previous
@@ -521,14 +535,15 @@ pinned rev.
   with the 8 MiB frame limit and a 30-second deadline (no Runtime caller of it sets one yet; the
   contract's 4-second `RUNTIME_MATERIAL_READ_BUDGET_MS` bounds a single range read, not a whole
   object). Online, the typed client's `RuntimeClient::read_material_complete`
-  (`crates/runtime-client/src/client.rs:2072`) gives the same result shape over verified ranges, and the
+  (`crates/runtime-client/src/client.rs:2089`) gives the same result shape over verified ranges, and the
   console calls it with the same limit and deadline; the Runtime still verifies the whole material for
   every range (a 3.6 MB frame is 19 ranges of 192 KiB).
-- **Instance facts: online only**. The fact store is read through
-  `RuntimeClient::runtime_fact_snapshot()` (`crates/runtime-client/src/client.rs:831`), which answers at
-  the Runtime's latest position. The forensic crate at the pinned rev has no fact read, and the console
-  does not fold `runtime.fact_*` events itself, so offline the instance lines say "not provided
-  offline".
+- **Instance facts: resolved on both faces, at different positions**. Online, the fact store is read
+  through `RuntimeClient::runtime_fact_snapshot()` (`crates/runtime-client/src/client.rs:848`), which
+  answers at the Runtime's latest position, past the pin. Offline, `runtime_facts_at`
+  (`crates/ledger-forensics/src/runtime_facts.rs:56`) replays the store at the pinned position itself,
+  under the Runtime's own replay rules; the console never folds `runtime.fact_*` events itself. Lease
+  state comes only from the online status read, so offline has none.
 - **Geometry and frames cannot be brought together on these two roots**. In the 0828 and v5 roots, the
   only events carrying a `capture.frame` artifact are `artifact.created` / `artifact.verified`, and their
   payloads hold no geometry; the only events carrying geometry are `task.effect_intent` (six on 0828,

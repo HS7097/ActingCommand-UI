@@ -97,7 +97,7 @@ pub struct Labels {
     /// `EventSource`, in the contract's declaration order.
     pub sources: [(&'static str, &'static str); 8],
     /// Field key to label, for the instance card and the detail pane.
-    pub fields: [(&'static str, &'static str); 46],
+    pub fields: [(&'static str, &'static str); 49],
     /// `ExecutionBackendProvenance`, by wire value.
     pub provenances: [(&'static str, &'static str); 2],
     pub artifact_kinds: [(&'static str, &'static str); 6],
@@ -307,7 +307,10 @@ pub struct Labels {
     /// The ledger column of a row without a string instance_id.
     pub row_no_id: &'static str,
     pub instances_none: &'static str,
-    pub instances_offline: &'static str,
+    pub offline_not_provided: &'static str,
+    pub facts_none: &'static str,
+    /// The read face's reason.
+    pub facts_not_available: &'static str,
     /// The instance lines' first line when a read failed; the lines below it
     /// say how.
     pub instances_unread: &'static str,
@@ -320,6 +323,29 @@ pub struct Labels {
     pub fact_unrecorded: &'static str,
     /// Host code, host operation; appended to a client failure.
     pub host_failure: &'static str,
+    pub discover: &'static str,
+    /// The discovery box's first item, which picks nothing.
+    pub discover_pick: &'static str,
+    pub discovering: &'static str,
+    /// Instance count, provider version, observation sequence.
+    pub discovered: &'static str,
+    /// Runtime code, client code, operation; client code, operation.
+    pub discover_refused: &'static str,
+    pub discover_failed: &'static str,
+    /// The OS error.
+    pub discover_spawn_failed: &'static str,
+    /// MuMu index.
+    pub discovered_index: &'static str,
+    pub instance_running: &'static str,
+    pub instance_stopped: &'static str,
+    /// Android version.
+    pub android_version: &'static str,
+    /// Bound alias.
+    pub bound_to: &'static str,
+    /// MuMu index, bound alias.
+    pub discover_bound: &'static str,
+    /// MuMu index, instance name.
+    pub discover_applied: &'static str,
 }
 
 pub const ZH: Labels = Labels {
@@ -432,6 +458,9 @@ pub const ZH: Labels = Labels {
         ("runtime_refusal", "Runtime 拒绝码"),
         ("client_error", "客户端错误"),
         ("host_failure", "宿主失败"),
+        ("instance_facts", "实例事实·钉点序号"),
+        ("facts_error", "事实读取错误"),
+        ("facts_detail", "详情"),
     ],
     provenances: [
         ("physical_device", "实机"),
@@ -598,7 +627,9 @@ pub const ZH: Labels = Labels {
     entry_no_binding: "这一项文件里没写绑定键（MuMu 序号、MuMu 名称、host / port、serial 都没有），表单表示不了，不能在这里编辑",
     row_no_id: "不可编辑：没有字符串 instance_id",
     instances_none: "无登记实例",
-    instances_offline: "离线读面不提供",
+    offline_not_provided: "离线读面不提供",
+    facts_none: "无任务事实",
+    facts_not_available: "不可用：{}",
     instances_unread: "读取失败，原因见下",
     lease_active: "占用中",
     lease_cooldown: "接管冷却中",
@@ -607,6 +638,20 @@ pub const ZH: Labels = Labels {
     not_registered: "未登记（仅有任务事实）",
     fact_unrecorded: "未记录",
     host_failure: " · 宿主 {}（{}）",
+    discover: "发现实例",
+    discover_pick: "选一个发现的实例…",
+    discovering: "正在请 Runtime 发现实例…",
+    discovered: "发现 {} 个实例 · MuMuManager {} · 读于序号 {}",
+    discover_refused: "发现被拒：{} · 客户端 {}（{}）",
+    discover_failed: "发现失败：{}（{}）",
+    discover_spawn_failed: "无法启动发现线程：{}",
+    discovered_index: "序号 {}",
+    instance_running: "运行中",
+    instance_stopped: "未运行",
+    android_version: "Android {}",
+    bound_to: "已绑定 {}",
+    discover_bound: "序号 {} 已绑定到 {}，请在上面的列表里编辑它",
+    discover_applied: "已按发现结果起一个新项：MuMu 序号 {}（{}）。填好别名等再「校验并保存」",
 };
 
 pub const EN: Labels = Labels {
@@ -719,6 +764,9 @@ pub const EN: Labels = Labels {
         ("runtime_refusal", "Runtime Refusal"),
         ("client_error", "Client Error"),
         ("host_failure", "Host Failure"),
+        ("instance_facts", "Instance Facts at Pin"),
+        ("facts_error", "Fact Read Error"),
+        ("facts_detail", "Detail"),
     ],
     provenances: [
         ("physical_device", "Physical Device"),
@@ -887,7 +935,9 @@ pub const EN: Labels = Labels {
     entry_no_binding: "This Entry Has No Binding Key in the File (No MuMu Index or Name, host / port or serial), Which the Form Cannot Represent, and Cannot Be Edited Here",
     row_no_id: "Not Editable: No String instance_id",
     instances_none: "No Registered Instance",
-    instances_offline: "Not Provided Offline",
+    offline_not_provided: "Not Provided Offline",
+    facts_none: "No Task Fact",
+    facts_not_available: "Not Available: {}",
     instances_unread: "Not Read, See Below",
     lease_active: "Leased",
     lease_cooldown: "Takeover Cooldown",
@@ -896,6 +946,20 @@ pub const EN: Labels = Labels {
     not_registered: "Not Registered (Task Facts Only)",
     fact_unrecorded: "Not Recorded",
     host_failure: " · Host {} ({})",
+    discover: "Discover Instances",
+    discover_pick: "Pick a Discovered Instance…",
+    discovering: "Asking the Runtime to Discover Instances…",
+    discovered: "Instances Found: {} · MuMuManager {} · at Sequence {}",
+    discover_refused: "Discovery Refused: {} · Client {} ({})",
+    discover_failed: "Discovery Failed: {} ({})",
+    discover_spawn_failed: "Starting the Discovery Thread Failed: {}",
+    discovered_index: "Index {}",
+    instance_running: "Running",
+    instance_stopped: "Not Running",
+    android_version: "Android {}",
+    bound_to: "Bound to {}",
+    discover_bound: "Index {} Is Already Bound to {}; Edit It in the List Above",
+    discover_applied: "New Entry from Discovery: MuMu Index {} ({}). Fill In the Alias and the Rest, Then Check and Save",
 };
 
 impl Labels {
