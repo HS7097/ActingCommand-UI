@@ -330,6 +330,25 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                         color: Palette.foreground;
                     }
+                    // Display settings share the source row, so the reading row below
+                    // keeps its width for what was read and what is hidden.
+                    Caption { text: Strings.text-size; }
+                    text-size-box := ComboBox {
+                        width: 110px * Scale.factor;
+                        model: Strings.text-size-options;
+                        selected => {
+                            root.text-size-changed(self.current-index);
+                        }
+                    }
+                    Caption { text: Strings.language; }
+                    language-box := ComboBox {
+                        width: 100px * Scale.factor;
+                        model: Strings.language-options;
+                        selected => {
+                            root.language-changed(self.current-index);
+                        }
+                    }
+                    Caption { text: Strings.restart-note; }
                 }
                 HorizontalLayout {
                     spacing: 14px;
@@ -384,23 +403,6 @@ export component AppWindow inherits Window {
                         overflow: elide;
                         color: Palette.foreground.with-alpha(0.75);
                     }
-                    Caption { text: Strings.text-size; }
-                    text-size-box := ComboBox {
-                        width: 110px * Scale.factor;
-                        model: Strings.text-size-options;
-                        selected => {
-                            root.text-size-changed(self.current-index);
-                        }
-                    }
-                    Caption { text: Strings.language; }
-                    language-box := ComboBox {
-                        width: 100px * Scale.factor;
-                        model: Strings.language-options;
-                        selected => {
-                            root.language-changed(self.current-index);
-                        }
-                    }
-                    Caption { text: Strings.restart-note; }
                 }
                 // launcher: Runtime status, the two requests, the instance-configuration
                 // button, and one line for what the last request came back with, or
