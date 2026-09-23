@@ -43,8 +43,10 @@ answers come from:
   top bar's launcher (see the "Launcher" section), and shutdown too goes only through this same typed
   client.
 - The first page at startup asks without a snapshot position; the `snapshot_ledger_position` the Runtime
-  states on that page is the position this session reads at, fixed — as offline, one snapshot for the
-  whole session. Every page after that is
+  states on that page is the position this session reads at — the pin. A person's jump to the latest,
+  and turning following on, move it by the same kind of fresh first page; while following, each poll
+  moves it to the position the Runtime's fact snapshot states (below). Offline it never moves. Every page
+  after that is
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`,
   the same `EventQuery` bounded to one window, the same page limit, the same `next_cursor`.
 - Material goes through `RuntimeClient::read_material_complete` on the same connection: the client
@@ -58,9 +60,10 @@ answers come from:
   at a position is that position), and "writer process" states the connected Runtime itself
   (PID, owner epoch, start time, all out of its own `runtime-info.json`).
 - Right after the pin, one `status()` and one `runtime_fact_snapshot()` on the same connection give the
-  instance card its "instances (read at open)" lines, once per session and never refreshed. The first two
+  instance card its "runtime instances" lines. Status is read again only on a person's jump to the
+  latest; while following, the task facts alone are read again whenever the pin moves. The first two
   lines state the sequence each read was taken at; both may be past the pinned snapshot, so this is state
-  at open, not state at the pin. By contract the Runtime records the status read itself as one
+  as last read, not state at the pin. By contract the Runtime records the status read itself as one
   observation event (`command.validated`), after the pin and so outside this session's snapshot. Then,
   per instance the status registers: its alias (the instance id in grey), port, lease (leased / takeover
   cooldown / idle, plus the queued request count when there is one), and the instance facts
@@ -149,6 +152,18 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   **newest first**; "read earlier" at the bottom continues below what is loaded. The top bar permanently
   states the positions the loaded windows cover ("read positions A–B"), with "source incomplete" appended
   when a window's page said its read was incomplete.
+- **Jump to latest, follow latest (online only)**: "jump to latest" moves the pin to the Runtime's latest
+  position (one fresh first page), reads status and facts again (the status read leaves one observation
+  event in the ledger), drops any time bound and starts the view over from the new pin. "Follow latest"
+  first catches up the same way without the status read, then every 5 seconds reads the Runtime's fact
+  snapshot — its in-memory fact store, stated at the ledger's latest position, which costs no ledger read
+  and writes nothing. Only when that position has moved does the pin move to it and are the windows
+  between the old and new pin read onto the top of the view, with page queries; the loaded rows, the
+  selection and a frame being read stay, and the task facts come from that same snapshot. Setting a time
+  bound while following stops it. The span's end follows the pin: taken from the newer windows when they
+  hold the event at the pin, otherwise one more one-event read. A failed tick shows as "following latest:
+  …" beside the view's own error, and stays until a later tick gets past it or following is turned off.
+  Offline there is no running Runtime writing newer events, and both controls are off.
 - **The performance monitor's routine events are hidden by default**: `perf.summary` arrives every 2
   seconds and would bury everything else, and the ledger query cannot exclude a module. Unless "show
   performance monitor" is ticked, the performance monitor is picked as the module, or the Health tab

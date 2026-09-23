@@ -232,6 +232,13 @@ pub struct ViewModel {
     pub filters: Filters,
     pub selected_sequence: Option<u64>,
     pub query_error: Option<QueryError>,
+    /// What the last follow tick failed at, shown beside `query_error`. Only a
+    /// follow tick sets or clears it, so following never wipes a failure of
+    /// another read.
+    pub follow_error: Option<QueryError>,
+    /// Why the committed span could not be read, which leaves the time cursor
+    /// without a range; stays until a span read succeeds.
+    pub span_error: Option<QueryError>,
     /// Loaded rows in ledger order, oldest first; shown newest first.
     rows: Vec<ProjectedEvent>,
     recovery: Vec<RecoveryGroup>,
@@ -258,6 +265,8 @@ impl ViewModel {
             filters: Filters::default(),
             selected_sequence: None,
             query_error: None,
+            follow_error: None,
+            span_error: None,
             rows: Vec::new(),
             recovery: Vec::new(),
             upper: snapshot_position,
@@ -332,6 +341,56 @@ impl ViewModel {
     /// loaded. The performance monitor's routine events are dropped and counted
     /// when hidden.
     pub fn apply_window(&mut self, (from, to): (u64, u64), pages: &[RuntimeEventQueryPage]) {
+        let (mut events, complete) = self.take_window(pages);
+        events.append(&mut self.rows);
+        self.rows = events;
+        self.lowest_read = Some(from);
+        self.scope = ReadScope {
+            range: Some((from, self.scope.range.map_or(to, |(_, high)| high))),
+            read_complete: self.scope.read_complete && complete,
+        };
+    }
+
+    /// The pin moved: what the source now states about itself. Rows already
+    /// read stay; the newer windows read what came after them.
+    pub fn set_pin(&mut self, open: OpenReport, snapshot_position: u64) {
+        self.open = open;
+        self.snapshot_position = snapshot_position;
+    }
+
+    /// The committed span the time cursor runs over, read again.
+    pub fn set_span(&mut self, span: Option<(u64, u64)>) {
+        self.span = span;
+    }
+
+    /// The next window above what is loaded, up to the pin; `None` once the
+    /// view reaches the pin, and always under a time bound, where the view does
+    /// not read down from the pin.
+    pub fn next_newer_window(&self) -> Option<(u64, u64)> {
+        let from = self.upper + 1;
+        (self.filters.to_timestamp_unix_ms.is_none() && from <= self.snapshot_position)
+            .then(|| (from, (from + WINDOW - 1).min(self.snapshot_position)))
+    }
+
+    /// One newer window read whole, put above the rows already loaded. When
+    /// no window below was read yet — the reload's first one failed — the
+    /// view's lowest read position becomes this window's, so "read earlier"
+    /// reads what lies below it, once.
+    pub fn apply_newer_window(&mut self, (from, to): (u64, u64), pages: &[RuntimeEventQueryPage]) {
+        let (mut events, complete) = self.take_window(pages);
+        self.rows.append(&mut events);
+        self.upper = to;
+        self.lowest_read.get_or_insert(from);
+        self.scope = ReadScope {
+            range: Some((self.scope.range.map_or(from, |(low, _)| low), to)),
+            read_complete: self.scope.read_complete && complete,
+        };
+    }
+
+    /// A window's events in ledger order, performance-monitor ones dropped and
+    /// counted when hidden, its recovery statements merged; and whether every
+    /// page read its range completely.
+    fn take_window(&mut self, pages: &[RuntimeEventQueryPage]) -> (Vec<ProjectedEvent>, bool) {
         let hide = self.hides_performance();
         let mut events = Vec::new();
         let mut complete = true;
@@ -349,13 +408,7 @@ impl ViewModel {
                 self.absorb_recovery(group);
             }
         }
-        events.append(&mut self.rows);
-        self.rows = events;
-        self.lowest_read = Some(from);
-        self.scope = ReadScope {
-            range: Some((from, self.scope.range.map_or(to, |(_, high)| high))),
-            read_complete: self.scope.read_complete && complete,
-        };
+        (events, complete)
     }
 
     fn absorb_recovery(&mut self, group: &LedgerRunRecovery) {
@@ -502,7 +555,7 @@ impl ViewModel {
         }
     }
 
-    /// The position this whole session reads at; the same for every page.
+    /// The pin every page reads at; it moves only by `set_pin`.
     pub fn snapshot_position(&self) -> u64 {
         self.snapshot_position
     }

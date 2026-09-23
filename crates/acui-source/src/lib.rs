@@ -18,6 +18,7 @@
 //! request — are asked through that same typed client, and its start press is
 //! recorded through it, at the end of this file.
 
+use std::cell::{Cell, Ref, RefCell};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -29,7 +30,7 @@ use acui_rows::{
     RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
     RuntimeMaterialReadLimit, RuntimeMaterialReadState, WriterFacts,
 };
-use actingcommand_contract::{FactValue, RuntimeFactRecord, RuntimeFactScope};
+use actingcommand_contract::{FactValue, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot};
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
     GlobalLedgerWriterMetadataObservation, LedgerArtifactSelection,
@@ -247,15 +248,19 @@ impl EvidenceSource {
 pub struct OnlineSource {
     root: PathBuf,
     client: RuntimeClient,
-    snapshot: u64,
-    read_complete: bool,
-    instances: Result<RuntimeInstances, ClientFailure>,
+    /// The pin every page reads at. `repin` moves it on a person's jump to the
+    /// latest or when following is turned on; `poll` moves it while following.
+    snapshot: Cell<u64>,
+    read_complete: Cell<bool>,
+    instances: RefCell<Result<RuntimeInstances, ClientFailure>>,
 }
 
-/// The running Runtime's instances, read once right after the session's page
-/// pin and never refreshed: one status read and one fact snapshot, each at the
-/// ledger position the Runtime stated for it, which may be past the pin. State
-/// at open, not state at the pinned snapshot, and the card says so. By contract
+/// The running Runtime's instances: one status read and one fact snapshot,
+/// right after the session's page pin and again on a person's jump to the
+/// latest; while following, each poll's fact snapshot refreshes the task facts
+/// alone. Each read is at the ledger position the Runtime stated for it, which
+/// may be past the pin: state as last read, not state at the pinned snapshot,
+/// and the card says so. By contract
 /// the Runtime records the status read as one observation event
 /// (`command.validated`), after the pin and so outside this session's snapshot.
 #[derive(Debug, Clone)]
@@ -299,10 +304,10 @@ pub enum OfflineFacts {
     },
 }
 
-/// What a session read about its instances, once: online, status and facts
-/// right after the pin; offline, the facts at the pin.
+/// What a session read about its instances: online, status and facts as last
+/// read (see `RuntimeInstances`); offline, the facts at the pin.
 pub enum InstanceFacts<'a> {
-    Online(&'a Result<RuntimeInstances, ClientFailure>),
+    Online(Ref<'a, Result<RuntimeInstances, ClientFailure>>),
     Offline(&'a OfflineFacts),
 }
 
@@ -336,27 +341,84 @@ impl OnlineSource {
     /// The first page, asked without a snapshot, is where the Runtime states
     /// the position this session then reads at.
     fn pin(root: PathBuf, client: RuntimeClient) -> Result<Self> {
-        let request = RuntimeEventQueryPageRequest::new(1, None)
-            .map_err(|error| anyhow!("页请求无效：{}", error.code()))?;
-        let page = client
-            .query_event_page(
-                EventQuery { view: Some(LedgerView::Events), ..EventQuery::default() },
-                ProjectionProfile::Ui,
-                request,
-            )
-            .map_err(|error| anyhow!("Runtime 查询失败：{error}"))?;
+        let (snapshot, read_complete) = latest(&client)?;
         let instances = read_instances(&client);
         Ok(Self {
             root,
             client,
-            snapshot: page.snapshot_ledger_position(),
-            read_complete: page.read_scope().is_none_or(|scope| scope.read_complete),
-            instances,
+            snapshot: Cell::new(snapshot),
+            read_complete: Cell::new(read_complete),
+            instances: RefCell::new(instances),
         })
     }
 
-    pub fn instances(&self) -> &Result<RuntimeInstances, ClientFailure> {
-        &self.instances
+    pub fn instances(&self) -> Ref<'_, Result<RuntimeInstances, ClientFailure>> {
+        self.instances.borrow()
+    }
+
+    /// Moves the pin to the Runtime's latest position, as a fresh first page
+    /// states it; `Ok(true)` when it moved. Pages read after this read at the
+    /// new pin. A page query writes nothing into the ledger.
+    pub fn repin(&self) -> Result<bool> {
+        let (snapshot, read_complete) = latest(&self.client)?;
+        let moved = snapshot != self.snapshot.get();
+        self.snapshot.set(snapshot);
+        self.read_complete.set(read_complete);
+        Ok(moved)
+    }
+
+    /// One follow poll: a single fact snapshot. The Runtime keeps its fact
+    /// store in memory and states it at the ledger's latest position, so this
+    /// reads no ledger and writes nothing. When that position is past the pin,
+    /// the pin moves to it (`Ok(true)`); the task facts are taken from the same
+    /// snapshot, each instance keeping its status as last read — a status read
+    /// is recorded in the ledger, and following never repeats it.
+    pub fn poll(&self) -> Result<bool> {
+        let snapshot = self
+            .client
+            .runtime_fact_snapshot()
+            .map_err(|error| anyhow!("Runtime 事实快照读取失败：{error}"))?;
+        let moved = snapshot.ledger_position > self.snapshot.get();
+        if moved {
+            self.snapshot.set(snapshot.ledger_position);
+        }
+        self.refold(&snapshot);
+        Ok(moved)
+    }
+
+    /// The task facts of one snapshot over the instances as last read; a
+    /// failed status read at open stays as it was.
+    fn refold(&self, snapshot: &RuntimeFactSnapshot) {
+        let refolded = match &*self.instances.borrow() {
+            Err(_) => return,
+            Ok(current) => {
+                let mut instances: Vec<RuntimeInstance> = current
+                    .instances
+                    .iter()
+                    .filter(|instance| instance.status.is_some())
+                    .map(|instance| RuntimeInstance {
+                        game: None,
+                        server: None,
+                        page: None,
+                        ..instance.clone()
+                    })
+                    .collect();
+                fold_task_facts(&snapshot.records, &mut instances);
+                RuntimeInstances {
+                    status_sequence: current.status_sequence,
+                    facts_position: snapshot.ledger_position,
+                    instances,
+                }
+            }
+        };
+        *self.instances.borrow_mut() = Ok(refolded);
+    }
+
+    /// Re-reads status and facts, as at open: for a person's jump to the
+    /// latest, which may leave one status observation event in the ledger.
+    pub fn refresh_instances(&self) {
+        let refreshed = read_instances(&self.client);
+        *self.instances.borrow_mut() = refreshed;
     }
 
     pub fn state_root(&self) -> &Path {
@@ -364,7 +426,7 @@ impl OnlineSource {
     }
 
     pub fn snapshot_position(&self) -> u64 {
-        self.snapshot
+        self.snapshot.get()
     }
 
     /// The same page request as offline, answered by the Runtime.
@@ -376,7 +438,7 @@ impl OnlineSource {
     ) -> Result<RuntimeEventQueryPage> {
         let request = RuntimeEventQueryPageRequest::new(limit, cursor)
             .map_err(|error| anyhow!("页请求无效：{}", error.code()))?
-            .at_snapshot(self.snapshot)
+            .at_snapshot(self.snapshot.get())
             .map_err(|error| anyhow!("快照位置无效：{}", error.code()))?;
         self.client
             .query_event_page(query.clone(), ProjectionProfile::Ui, request)
@@ -394,9 +456,9 @@ impl OnlineSource {
         let info = self.client.runtime_info();
         OpenReport {
             backend: "runtime".to_string(),
-            latest_sequence: self.snapshot,
-            event_count: LedgerCount::Counted(self.snapshot),
-            read_complete: self.read_complete,
+            latest_sequence: self.snapshot.get(),
+            event_count: LedgerCount::Counted(self.snapshot.get()),
+            read_complete: self.read_complete.get(),
             corrupt_tail: None,
             repair_count: LedgerCount::NotStatedByRuntime,
             writer: WriterFacts::Runtime {
@@ -406,6 +468,24 @@ impl OnlineSource {
             },
         }
     }
+}
+
+/// The Runtime's latest position and whether its first page read completely:
+/// one first page, asked without a snapshot.
+fn latest(client: &RuntimeClient) -> Result<(u64, bool)> {
+    let request = RuntimeEventQueryPageRequest::new(1, None)
+        .map_err(|error| anyhow!("页请求无效：{}", error.code()))?;
+    let page = client
+        .query_event_page(
+            EventQuery { view: Some(LedgerView::Events), ..EventQuery::default() },
+            ProjectionProfile::Ui,
+            request,
+        )
+        .map_err(|error| anyhow!("Runtime 查询失败：{error}"))?;
+    Ok((
+        page.snapshot_ledger_position(),
+        page.read_scope().is_none_or(|scope| scope.read_complete),
+    ))
 }
 
 /// Which read face `--source` asks for.
@@ -514,7 +594,8 @@ impl ReadSource {
         }
     }
 
-    /// The committed position this whole session reads at.
+    /// The committed position pages read at: offline, fixed for the whole
+    /// session; online, the pin as last moved.
     pub fn snapshot_position(&self) -> u64 {
         match self {
             Self::Offline { source, .. } => source.snapshot_position(),
@@ -557,12 +638,42 @@ impl ReadSource {
         }
     }
 
-    /// The instances' task facts, read once per session: online with their
-    /// status right after the pin, offline replayed at the pinned position.
+    /// The instances' task facts: online with their status, as last read;
+    /// offline replayed at the pinned position, once per session.
     pub fn instance_facts(&self) -> InstanceFacts<'_> {
         match self {
             Self::Offline { facts, .. } => InstanceFacts::Offline(facts),
             Self::Online(source) => InstanceFacts::Online(source.instances()),
+        }
+    }
+
+    /// Whether this face can follow the ledger: online only. Offline there
+    /// is no running Runtime to write newer events.
+    pub fn follows(&self) -> bool {
+        matches!(self, Self::Online(_))
+    }
+
+    /// Online, moves the pin to the Runtime's latest position; offline,
+    /// `Ok(false)`.
+    pub fn repin(&self) -> Result<bool> {
+        match self {
+            Self::Offline { .. } => Ok(false),
+            Self::Online(source) => source.repin(),
+        }
+    }
+
+    /// Online, one follow poll (see `OnlineSource::poll`); offline, `Ok(false)`.
+    pub fn poll(&self) -> Result<bool> {
+        match self {
+            Self::Offline { .. } => Ok(false),
+            Self::Online(source) => source.poll(),
+        }
+    }
+
+    /// Online, re-reads status and facts; offline, nothing.
+    pub fn refresh_instances(&self) {
+        if let Self::Online(source) = self {
+            source.refresh_instances();
         }
     }
 
