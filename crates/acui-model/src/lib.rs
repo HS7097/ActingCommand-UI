@@ -6,8 +6,9 @@
 //!
 //! The view reads from the latest end: backward windows of `WINDOW` positions,
 //! newest first on screen. The ledger query has no descending order, but a
-//! window of `WINDOW` positions holds at most one page of events, so one query
-//! reads a window whole.
+//! window of `WINDOW` positions holds at most one page's worth of events, so
+//! one query reads it, following the cursor only when the reply's byte limit
+//! splits it.
 
 mod overlay;
 mod tabs;
@@ -23,12 +24,14 @@ use acui_rows::{
     RuntimeEventQueryPage, TaskSemanticFact, WriterFacts, MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 
-/// Positions one backward window spans: never more events than one page
-/// holds, so one query reads a window whole.
+/// Positions one backward window spans: never more events than one page's
+/// event limit.
 pub const WINDOW: u64 = MAX_RUNTIME_EVENT_QUERY_EVENTS as u64;
-/// Rows one fill aims to add, and the most windows it reads to get them.
+/// Rows one fill aims to add, and the most windows it ever reads to get them;
+/// the console also stops a fill at a time budget, since every query costs the
+/// Runtime a read of the whole ledger.
 pub const FILL_ROWS: usize = MAX_RUNTIME_EVENT_QUERY_EVENTS as usize;
-pub const FILL_WINDOWS: usize = 64;
+pub const FILL_WINDOWS: usize = 16;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -48,9 +51,10 @@ pub enum QueryError {
 
 /// Filter state, turned into one `EventQuery` and re-run against the ledger.
 /// Nothing here filters rows the console already holds, with one exception
-/// the view states: performance-monitor events, which the ledger query cannot
-/// exclude, are dropped from each window read and counted, unless shown here
-/// or picked as the module.
+/// the view states: the performance monitor's routine events (below Warning),
+/// which the ledger query cannot exclude, are dropped from each window read
+/// and counted — unless shown here, picked as the module, or on the Health
+/// tab, which is made of them. Its warnings and errors always show.
 #[derive(Debug, Clone, Default)]
 pub struct Filters {
     pub show_performance: bool,
@@ -312,7 +316,7 @@ impl ViewModel {
         self.rows.len()
     }
 
-    /// Performance-monitor events dropped from the windows read so far.
+    /// Routine performance-monitor events dropped from the windows read so far.
     pub fn hidden_performance(&self) -> usize {
         self.hidden_performance
     }
@@ -320,10 +324,12 @@ impl ViewModel {
     fn hides_performance(&self) -> bool {
         !self.filters.show_performance
             && self.filters.origin_module != Some(OriginModule::PerformanceMonitor)
+            && self.tab != LedgerView::Health
     }
 
     /// One window read whole — its pages in order — put below the rows already
-    /// loaded. Performance-monitor events are dropped and counted when hidden.
+    /// loaded. The performance monitor's routine events are dropped and counted
+    /// when hidden.
     pub fn apply_window(&mut self, (from, to): (u64, u64), pages: &[RuntimeEventQueryPage]) {
         let (mut events, complete) = self.take_window(pages);
         events.append(&mut self.rows);
@@ -373,7 +379,8 @@ impl ViewModel {
         let mut complete = true;
         for page in pages {
             for event in page.events() {
-                if hide && event.origin.module() == OriginModule::PerformanceMonitor {
+                let routine = matches!(event.severity, EventSeverity::Debug | EventSeverity::Info);
+                if hide && routine && event.origin.module() == OriginModule::PerformanceMonitor {
                     self.hidden_performance += 1;
                 } else {
                     events.push(event.clone());
@@ -442,7 +449,7 @@ impl ViewModel {
             if let Some(index) = anchor {
                 header_shown[index] = true;
                 display.push(DisplayRow::Recovery(&self.recovery[index]));
-                for sequence in &folded[index] {
+                for sequence in folded[index].iter().rev() {
                     if let Some(member) = self.rows.iter().find(|row| row.sequence == *sequence) {
                         emitted.push(*sequence);
                         display.push(DisplayRow::Event { event: member, folded: true });

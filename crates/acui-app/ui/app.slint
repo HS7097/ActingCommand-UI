@@ -240,8 +240,8 @@ export component AppWindow inherits Window {
     in property <string> unopened-note;
     property <bool> ledger-live: root.unopened-note == "";
     in property <bool> has-more;
-    // Performance-monitor events shown; hidden by default.
-    in property <bool> show-performance;
+    // The performance monitor's routine events shown; hidden by default.
+    in-out property <bool> show-performance;
     in property <int> selected-index;
     in property <[FieldLine]> detail-lines;
     in property <[ArtifactItem]> artifacts;
@@ -584,7 +584,7 @@ export component AppWindow inherits Window {
                         CheckBox {
                             text: Strings.show-performance;
                             enabled: root.ledger-live;
-                            checked: root.show-performance;
+                            checked <=> root.show-performance;
                             toggled => {
                                 root.show-performance-changed(self.checked);
                             }

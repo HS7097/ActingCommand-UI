@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use acui_model::{
     tab_from_name, DisplayRow, FrameTarget, InstanceCard, Overlay, QueryError, RecoveryGroup,
@@ -128,6 +128,8 @@ struct App {
     launcher: launcher::Launcher,
     /// Runs the follow ticks while "follow latest" is on.
     follow: Timer,
+    /// Reloads once the time cursor's handle rests.
+    cursor_rest: Timer,
 }
 
 /// The port map this session filters by: the offline read face derives it
@@ -240,6 +242,7 @@ fn main() -> Result<()> {
             stored.actingd_exe.clone(),
         ),
         follow: Timer::default(),
+        cursor_rest: Timer::default(),
     });
     reload(&app, false);
 
@@ -350,11 +353,21 @@ fn time_span(source: &ReadSource) -> Option<(u64, u64)> {
     ))
 }
 
+/// How long one fill may keep reading windows after the first.
+const FILL_BUDGET: Duration = Duration::from_secs(1);
+/// Windows of slack above a time bound's estimated position.
+const TIME_SLACK_WINDOWS: u64 = 2;
+/// How long the time cursor's handle must rest before the view reloads.
+const CURSOR_REST: Duration = Duration::from_millis(400);
+
 /// Fills the timeline from the latest end at the pinned snapshot: backward
 /// windows, each read whole, until `FILL_ROWS` more rows show, position 1 is
-/// read, or `FILL_WINDOWS` windows were read. `earlier` continues below what is
-/// loaded; otherwise the view starts over from the pin, or from the last
-/// position a time bound allows.
+/// read, `FILL_WINDOWS` windows were read, or `FILL_BUDGET` has passed — at
+/// least one window each time. Every page query costs the Runtime a read and
+/// verification of the whole ledger (online, on its writer), so what the
+/// budget leaves is for "read earlier"; the top bar states what was read.
+/// `earlier` continues below what is loaded; otherwise the view starts over
+/// from the pin, or from where a time bound is estimated to fall.
 fn reload(app: &Rc<App>, earlier: bool) {
     let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
         return;
@@ -363,24 +376,19 @@ fn reload(app: &Rc<App>, earlier: bool) {
     if !earlier {
         let snapshot = source.snapshot_position();
         let upper = match model.filters.to_timestamp_unix_ms {
-            None => Ok(snapshot),
-            Some(bound) => upper_for_time(source, snapshot, bound),
+            None => snapshot,
+            Some(bound) => upper_for_time(model.span(), snapshot, bound),
         };
-        match upper {
-            Ok(upper) => model.begin(upper),
-            Err(error) => {
-                model.begin(0);
-                model.query_error = Some(QueryError::ReadFailed(error.to_string()));
-                *app.frame_request() = None;
-                return;
-            }
-        }
+        model.begin(upper);
         *app.frame_request() = None;
     }
-    let target = model.row_count() + FILL_ROWS;
+    let (target, started) = (model.row_count() + FILL_ROWS, Instant::now());
     model.query_error = None;
-    for _ in 0..FILL_WINDOWS {
-        let Some(window) = model.next_window().filter(|_| model.row_count() < target) else {
+    for read in 0..FILL_WINDOWS {
+        if read > 0 && (model.row_count() >= target || started.elapsed() >= FILL_BUDGET) {
+            break;
+        }
+        let Some(window) = model.next_window() else {
             break;
         };
         let pages = model
@@ -399,8 +407,8 @@ fn reload(app: &Rc<App>, earlier: bool) {
     }
 }
 
-/// One window read whole: its pages, following the cursor should a window
-/// ever hold more than one page.
+/// One window read whole: its pages, following the cursor when the reply's
+/// byte limit splits it.
 fn read_window(source: &ReadSource, query: &EventQuery) -> Result<Vec<RuntimeEventQueryPage>> {
     let mut pages = Vec::new();
     let mut cursor = None;
@@ -414,33 +422,24 @@ fn read_window(source: &ReadSource, query: &EventQuery) -> Result<Vec<RuntimeEve
     }
 }
 
-/// The position to read down from under a time bound: the last event at or
-/// before `bound`, found by bisection over one-event reads, plus one window of
-/// slack, since ledger time is not promised to be strictly ordered. What
-/// shows is still decided by the query's own time bound.
-fn upper_for_time(source: &ReadSource, snapshot: u64, bound: u64) -> Result<u64> {
-    let time_at = |position: u64| -> Result<Option<u64>> {
-        let query = EventQuery {
-            view: Some(LedgerView::Events),
-            from_sequence: Some(position),
-            to_sequence: Some(position),
-            ..EventQuery::default()
-        };
-        let page = source.query(&query, 1, None)?;
-        Ok(page.events().first().map(|event| event.timestamp_unix_ms))
+/// Where to read down from under a time bound, estimated from the committed
+/// span without any read: the position the bound would fall at if events were
+/// even in time, plus `TIME_SLACK_WINDOWS` windows, capped at the pin. A
+/// bound before the first event reads nothing. What shows is still decided by
+/// the query's own time bound, and the top bar states the positions read.
+fn upper_for_time(span: Option<(u64, u64)>, snapshot: u64, bound: u64) -> u64 {
+    let Some((first, last)) = span else {
+        return snapshot;
     };
-    let (mut low, mut high, mut found) = (1, snapshot, 0);
-    while low <= high {
-        let middle = low + (high - low) / 2;
-        match time_at(middle)? {
-            Some(time) if time <= bound => {
-                found = middle;
-                low = middle + 1;
-            }
-            _ => high = middle - 1,
-        }
+    if bound >= last {
+        return snapshot;
     }
-    Ok((found + WINDOW).min(snapshot))
+    if bound < first {
+        return 0;
+    }
+    let ratio = (bound - first) as f64 / (last - first) as f64;
+    let estimate = (ratio * snapshot as f64) as u64;
+    (estimate + TIME_SLACK_WINDOWS * WINDOW).min(snapshot)
 }
 
 fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
@@ -524,14 +523,32 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         model.borrow_mut().filters.id_text = text.to_string();
         reload(&app, false)
     });
-    on!(on_cursor_changed, |app, model, value| {
-        let bound = model.borrow().span().and_then(|(from, to)| {
-            let ratio = (value as f64 / 1000.0).clamp(0.0, 1.0);
-            (ratio < 1.0).then(|| from + ((to - from) as f64 * ratio) as u64)
+    // The bound and its label follow the handle at once; the reload waits
+    // until the handle rests, since each one reads the whole ledger.
+    {
+        let weak = window.as_weak();
+        let app = Rc::clone(app);
+        window.on_cursor_changed(move |value| {
+            let Some(model) = &app.model else {
+                return;
+            };
+            let bound = model.borrow().span().and_then(|(from, to)| {
+                let ratio = (value as f64 / 1000.0).clamp(0.0, 1.0);
+                (ratio < 1.0).then(|| from + ((to - from) as f64 * ratio) as u64)
+            });
+            model.borrow_mut().filters.to_timestamp_unix_ms = bound;
+            let (rested, held) = (weak.clone(), Rc::downgrade(&app));
+            app.cursor_rest.start(TimerMode::SingleShot, CURSOR_REST, move || {
+                if let (Some(window), Some(app)) = (rested.upgrade(), held.upgrade()) {
+                    reload(&app, false);
+                    refresh(&window, &app);
+                }
+            });
+            if let Some(window) = weak.upgrade() {
+                refresh(&window, &app);
+            }
         });
-        model.borrow_mut().filters.to_timestamp_unix_ms = bound;
-        reload(&app, false)
-    });
+    }
     on!(on_row_clicked, |app, model, index| {
         let mut model = model.borrow_mut();
         let selected = match model.display_rows().get(index.max(0) as usize) {
