@@ -282,14 +282,17 @@ slice.
 
 The 实例配置 / Instance Configuration button opens a second window over the `instances` of
 `actingd_config`, the file Start hands to actingd. Each entry is listed with its alias, `instance_id`,
-binding (MuMu index / MuMu name / ADB host:port / none), `application_id`, capture and touch backend, and
-what the session's port map says about that id — bound on a port, bound with no port, or not bound; read
-online, or when reading the bindings failed, the row says that instead. The file is read again whenever
+binding as the file states it (MuMu index / MuMu name / ADB host:port / ADB serial / no binding key in the
+file — the Runtime's default address is not restated), `application_id`, capture and touch backend, and
+what the session's port map says about that id — bound on a port, bound with the latest binding outside
+the port map (serial-configured or with no port; the map does not tell which), or not bound; read online,
+or when reading the bindings failed, the row says that instead. The file is read again whenever
 the window opens and after every save; a reason it cannot be listed takes the count's place, never an
 empty list.
 
 - **The form**: Add Instance starts a new entry and a click on a row loads that entry; an entry without a
-  string `instance_id` is listed, but says so and cannot be saved. There is no delete. `alias` is
+  string `instance_id`, or one bound by `serial`, which no binding kind of the form represents, is listed,
+  but says so and cannot be saved. There is no delete. `alias` is
   required; a new entry's `instance_id` is `instance_` + 32 lowercase hex characters from the OS RNG,
   and every `instance_id` is shown read-only; the binding is exactly one of `instance_index` (MuMu
   index), `instance_name` (MuMu name), or `host` + `port` (an explicit ADB address). `adb_path` is

@@ -236,22 +236,24 @@ pub struct Labels {
     /// config path, instance count; config path, entry index.
     pub config_listed: &'static str,
     pub config_bad_entry: &'static str,
-    /// Online; error; port; bound with no port; not bound.
+    /// Online; error; port; bound outside the port map; not bound.
     pub ledger_online: &'static str,
     pub ledger_failed: &'static str,
     pub ledger_port: &'static str,
-    pub ledger_no_port: &'static str,
+    pub ledger_outside_map: &'static str,
     pub ledger_none: &'static str,
-    /// index; name; host, port.
+    /// index; name; host, port; serial.
     pub binding_index: &'static str,
     pub binding_name: &'static str,
     pub binding_adb: &'static str,
+    pub binding_serial: &'static str,
     pub binding_none: &'static str,
     /// instance_id, application_id, capture_backend, touch_backend.
     pub instance_detail: &'static str,
     /// instance_id.
     pub entry_gone: &'static str,
     pub entry_no_id: &'static str,
+    pub entry_serial: &'static str,
 }
 
 pub const ZH: Labels = Labels {
@@ -476,15 +478,17 @@ pub const ZH: Labels = Labels {
     ledger_online: "账本绑定：在线读面不给",
     ledger_failed: "账本绑定读取失败：{}",
     ledger_port: "账本已绑定 · 端口 {}",
-    ledger_no_port: "账本已绑定 · 最新一次没有端口",
+    ledger_outside_map: "账本已绑定 · 最新一次不在端口映射里（序列号配置或无端口）",
     ledger_none: "账本里没有此实例的绑定",
     binding_index: "MuMu 序号 {}",
     binding_name: "MuMu 名称 {}",
     binding_adb: "ADB {}:{}",
-    binding_none: "未绑定",
+    binding_serial: "ADB 序列号 {}",
+    binding_none: "文件未写绑定键",
     instance_detail: "{} · 应用 {} · 截图 {} · 触控 {}",
     entry_gone: "配置文件里已没有 {}（别处改过）",
     entry_no_id: "这一项没有字符串 instance_id，不能在这里编辑",
+    entry_serial: "这一项以 ADB 序列号 serial 绑定，表单表示不了这种绑定，不能在这里编辑",
 };
 
 pub const EN: Labels = Labels {
@@ -709,15 +713,19 @@ pub const EN: Labels = Labels {
     ledger_online: "Ledger Binding: Not Given Online",
     ledger_failed: "Reading Ledger Bindings Failed: {}",
     ledger_port: "Bound in the Ledger · Port {}",
-    ledger_no_port: "Bound in the Ledger · Latest Binding Has No Port",
+    ledger_outside_map:
+        "Bound in the Ledger · Latest Binding Outside the Port Map (Serial-Configured or No Port)",
     ledger_none: "No Ledger Binding for This Instance",
     binding_index: "MuMu Index {}",
     binding_name: "MuMu Name {}",
     binding_adb: "ADB {}:{}",
-    binding_none: "No Binding",
+    binding_serial: "ADB Serial {}",
+    binding_none: "No Binding Key in the File",
     instance_detail: "{} · App {} · Capture {} · Touch {}",
     entry_gone: "{} Is No Longer in the Config File (Changed Elsewhere)",
     entry_no_id: "This Entry Has No String instance_id and Cannot Be Edited Here",
+    entry_serial:
+        "This Entry Is Bound by ADB serial, Which the Form Cannot Represent, and Cannot Be Edited Here",
 };
 
 impl Labels {

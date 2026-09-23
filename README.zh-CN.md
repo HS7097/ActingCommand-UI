@@ -217,13 +217,15 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 ## 实例配置
 
 「实例配置」按钮打开第二个窗口，对象是 `actingd_config`——「启动」交给 actingd 的那份文件——里的
-`instances`。每一项列出别名、`instance_id`、绑定（MuMu 序号 / MuMu 名称 / ADB host:port / 未绑定）、
-`application_id`、截图与触控后端，以及本会话的端口映射对这个编号怎么说——绑在某个端口、绑了但没有
-端口、没有绑定；在线读面或读绑定失败时，行里直说。每次打开窗口、每次保存之后都重新读文件；列不出来
-的原因写在条数的位置上，绝不显示成一个空列表。
+`instances`。每一项列出别名、`instance_id`、文件里写的绑定（MuMu 序号 / MuMu 名称 / ADB host:port /
+ADB 序列号 / 文件未写绑定键——不替 Runtime 复述默认地址）、`application_id`、截图与触控后端，以及本会话
+的端口映射对这个编号怎么说——绑在某个端口、绑了但最新一次不在端口映射里（序列号配置或无端口，映射
+分不出是哪种）、没有绑定；在线读面或读绑定失败时，行里直说。
+每次打开窗口、每次保存之后都重新读文件；列不出来的原因写在条数的位置上，绝不显示成一个空列表。
 
-- **表单**：「新增实例」另起一项，点一行把那一项载入表单；没有字符串 `instance_id` 的项照样列出，
-  但写明原因、不能保存。没有删除。`alias` 必填；新实例的 `instance_id` 是 `instance_` 加系统随机源的
+- **表单**：「新增实例」另起一项，点一行把那一项载入表单；没有字符串 `instance_id` 的项、以 `serial`
+  绑定（表单的哪种绑定都表示不了）的项照样列出，但写明原因、不能保存。没有删除。`alias` 必填；
+  新实例的 `instance_id` 是 `instance_` 加系统随机源的
   32 位小写十六进制，所有 `instance_id` 都只读显示；绑定恰好一种——`instance_index`（MuMu 序号）、`instance_name`（MuMu 名称），或
   `host` + `port`（显式 ADB 地址）。`adb_path` 在 `host` + `port` 下必填，在 MuMu 绑定下选填（由
   MuMu 发现报告 adb）；`nemu_app_index` 是选填的整数；`application_id`、`capture_backend`、

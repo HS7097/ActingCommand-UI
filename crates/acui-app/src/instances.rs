@@ -172,14 +172,21 @@ fn begin_new(editor: &Editor, config: &ConfigWindow) {
 }
 
 /// An entry of the list loaded into the form; one without a string
-/// instance_id is shown but cannot be saved.
+/// instance_id, or bound by `serial`, which no binding kind of the form
+/// represents, is shown but cannot be saved.
 fn edit(editor: &Editor, config: &ConfigWindow, index: i32) {
     let entries = editor.entries.borrow();
     let Some(entry) = entries.get(index.max(0) as usize) else {
         return;
     };
-    let id = id_of(entry);
-    let failure = if id.is_none() { editor.app.labels.entry_no_id } else { "" };
+    let labels = editor.app.labels;
+    let (id, serial) = (id_of(entry), entry.get("serial").is_some());
+    let failure = match id {
+        None => labels.entry_no_id,
+        Some(_) if serial => labels.entry_serial,
+        Some(_) => "",
+    };
+    let id = id.filter(|_| !serial);
     set_outcome(config, id.is_none(), failure);
     config.set_selected_index(index);
     show_form(config, id, entry);
@@ -445,12 +452,18 @@ fn binding_text(labels: &Labels, entry: &Value) -> String {
         Some(0) => fill(labels.binding_index, &[&value("instance_index")]),
         Some(1) => fill(labels.binding_name, &[&value("instance_name")]),
         Some(_) => fill(labels.binding_adb, &[&value("host"), &value("port")]),
-        None => labels.binding_none.to_string(),
+        // The Runtime's default address for an entry with neither is its
+        // business; this only says what the file holds.
+        None => text(entry, "serial").map_or_else(
+            || labels.binding_none.to_string(),
+            |serial| fill(labels.binding_serial, &[&serial]),
+        ),
     }
 }
 
-/// What the session's port map says about one instance_id: its port, a binding
-/// whose latest fact names no port, or none; online or unread, it says so.
+/// What the session's port map says about one instance_id: the port its latest
+/// binding names, a binding outside the map — serial-configured or portless,
+/// which the map does not tell apart — or none; online or unread, it says so.
 fn ledger_text(labels: &Labels, port_map: &PortMap, id: Option<&str>) -> String {
     let bindings = match port_map {
         PortMap::Read(bindings) => bindings,
@@ -462,7 +475,7 @@ fn ledger_text(labels: &Labels, port_map: &PortMap, id: Option<&str>) -> String 
     match bindings.port_of.iter().find(|(other, _)| named(other)) {
         Some((_, port)) => fill(labels.ledger_port, &[&port.to_string()]),
         None if bindings.unported.iter().chain(members).any(named) => {
-            labels.ledger_no_port.to_string()
+            labels.ledger_outside_map.to_string()
         }
         None => labels.ledger_none.to_string(),
     }
