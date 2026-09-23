@@ -18,9 +18,10 @@ pub use actingcommand_contract::{
     LedgerRecoveryGap, LedgerRecoveryState,
     LedgerRunRecovery, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS,
     MAX_RUNTIME_MATERIAL_CHUNK_BYTES, MAX_RUNTIME_MATERIAL_REPLY_BYTES, OriginModule,
-    ProjectedArtifactReference, ProjectedEvent, ProjectionProfile, RuntimeEventQueryCursor,
-    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit,
-    RuntimeMaterialReadRequest, RuntimeMaterialReadResult, RuntimeMaterialReadState, Sensitivity,
+    ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
+    PublicEventPayload, RuntimeEventQueryCursor, RuntimeEventQueryPage,
+    RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit, RuntimeMaterialReadRequest,
+    RuntimeMaterialReadResult, RuntimeMaterialReadState, Sensitivity, TaskSemanticFact,
 };
 
 use std::collections::BTreeMap;
@@ -37,13 +38,24 @@ pub struct OpenReport {
     /// when the session reads a running Runtime, which does not state its medium.
     pub backend: String,
     pub latest_sequence: u64,
-    /// `None` when the read face cannot state it without verifying material.
-    pub event_count: Option<u64>,
+    pub event_count: LedgerCount,
     pub read_complete: bool,
     pub corrupt_tail: Option<String>,
-    /// `None` when the read face cannot state it without verifying material.
-    pub repair_count: Option<u64>,
+    /// The repair log's own count; it does not share the event snapshot's boundary.
+    pub repair_count: LedgerCount,
     pub writer: WriterFacts,
+}
+
+/// A ledger-wide count as the read face states it, or why it states none.
+#[derive(Debug, Clone, Copy)]
+pub enum LedgerCount {
+    Counted(u64),
+    /// Over an incomplete read: the verified prefix only.
+    VerifiedPrefix(u64),
+    /// The medium keeps no such record: SQLite has no repair log.
+    NoRepairLog,
+    /// Online: neither the page nor `runtime-info.json` states it.
+    NotStatedByRuntime,
 }
 
 #[derive(Debug, Clone)]

@@ -5,12 +5,16 @@
 //! spelling is shown next to the name either way.
 
 /// `(wire, 中文, English)` for every `EventType` the contract declares.
-const EVENT_TYPES: [(&str, &str, &str); 115] = [
+const EVENT_TYPES: [(&str, &str, &str); 120] = [
     ("provider.startup_observed", "厂商启动已观察", "Provider Startup Observed"),
     ("runtime.started", "运行时已启动", "Runtime Started"),
     ("runtime.takeover", "运行时已接管", "Runtime Takeover"),
     ("runtime.failed", "运行时失败", "Runtime Failed"),
     ("runtime.lifecycle_observed", "运行时生命周期已观察", "Runtime Lifecycle Observed"),
+    ("runtime.instance_bound", "运行时实例已绑定", "Runtime Instance Bound"),
+    ("runtime.fact_recorded", "运行时事实已记录", "Runtime Fact Recorded"),
+    ("runtime.fact_invalidated", "运行时事实已作废", "Runtime Fact Invalidated"),
+    ("runtime.fact_snapshot", "运行时事实快照", "Runtime Fact Snapshot"),
     ("monitor.probe_requested", "探针已请求", "Monitor Probe Requested"),
     ("monitor.probe_started", "探针已开始", "Monitor Probe Started"),
     ("monitor.probe_completed", "探针已完成", "Monitor Probe Completed"),
@@ -56,6 +60,7 @@ const EVENT_TYPES: [(&str, &str, &str); 115] = [
     ("task.started", "任务已开始", "Task Started"),
     ("task.step_started", "步骤已开始", "Task Step Started"),
     ("task.evidence_indexed", "证据已入索引", "Task Evidence Indexed"),
+    ("task.geometry_observed", "画面几何已观察", "Task Geometry Observed"),
     ("task.recognition_started", "识别已开始", "Task Recognition Started"),
     ("task.recognition_completed", "识别已完成", "Task Recognition Completed"),
     ("task.entry_preflight", "入口预检", "Task Entry Preflight"),
@@ -124,7 +129,7 @@ const EVENT_TYPES: [(&str, &str, &str); 115] = [
 ];
 
 /// `(wire, 中文, English)` for every `OriginModule` the contract declares.
-const MODULES: [(&str, &str, &str); 19] = [
+const MODULES: [(&str, &str, &str); 20] = [
     ("provider", "厂商", "Provider"),
     ("actingctl", "命令行工具", "Actingctl"),
     ("actinglab", "实验台", "Actinglab"),
@@ -141,6 +146,7 @@ const MODULES: [(&str, &str, &str); 19] = [
     ("global-ledger", "全局账本", "Global Ledger"),
     ("performance-monitor", "性能监视", "Performance Monitor"),
     ("fact-store", "事实库", "Fact Store"),
+    ("runtime-facts", "运行时事实", "Runtime Facts"),
     ("governance", "治理", "Governance"),
     ("agent-dispatcher", "代理调度", "Agent Dispatcher"),
     ("process-test", "流程测试", "Process Test"),

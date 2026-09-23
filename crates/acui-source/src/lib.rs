@@ -5,9 +5,9 @@
 //! `artifacts/` or `runtime-state.sqlite`, and never spawns a CLI. Everything
 //! below goes through the Runtime's own entries. Offline, `GlobalLedger` picks
 //! the medium and authenticates the snapshot, `query_view_page` projects the
-//! formal page, and `read_material_to` resolves, guards and verifies material.
-//! Online, the same page and material operations are asked of the running
-//! Runtime through `actingcommand_runtime_client`, the one typed IPC path a
+//! formal page, and `read_material_complete` resolves, guards and verifies material.
+//! Online, the same pages, and material one range at a time, are asked of the
+//! running Runtime through `actingcommand_runtime_client`, the one typed IPC path a
 //! client has. This crate is a client only: it never starts, kills or waits
 //! on the Runtime, and never writes into the state root. The launcher's two
 //! questions — is a Runtime running here, and will it accept a shutdown
@@ -15,28 +15,36 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use acui_rows::{
     code, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord, EventActor,
-    EventQuery, EventSource, LedgerEventPosition, LedgerView, MAX_RUNTIME_MATERIAL_CHUNK_BYTES,
-    MAX_RUNTIME_MATERIAL_REPLY_BYTES, OpenReport, PortBindings, PortEntry,
-    ProjectedArtifactReference, ProjectionProfile, RuntimeEventQueryCursor, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit, RuntimeMaterialReadRequest,
-    RuntimeMaterialReadResult, RuntimeMaterialReadState, WriterFacts,
+    EventQuery, EventSource, LedgerCount, LedgerEventPosition, LedgerView,
+    MAX_RUNTIME_MATERIAL_CHUNK_BYTES, MAX_RUNTIME_MATERIAL_REPLY_BYTES, OpenReport, PortBindings,
+    PortEntry, ProjectedArtifactReference, ProjectionProfile, RuntimeEventQueryCursor,
+    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit,
+    RuntimeMaterialReadRequest, RuntimeMaterialReadResult, RuntimeMaterialReadState, WriterFacts,
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
-    GlobalLedgerWriterMetadataObservation,
+    GlobalLedgerWriterMetadataObservation, LedgerArtifactSelection,
 };
+use actingcommand_ledger_forensics::ForensicMaterialCompleteResult;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
 use anyhow::{anyhow, bail, Context, Result};
-use serde::Deserialize;
 
-/// Ranges one frame may cost. The contract bounds a single range
-/// (`MAX_RUNTIME_MATERIAL_CHUNK_BYTES`) and a single reply; the range budget is
-/// what bounds the whole material the console is willing to assemble.
+/// Ranges one frame may cost online, where the contract bounds a single range
+/// (`MAX_RUNTIME_MATERIAL_CHUNK_BYTES`) and a single reply. The byte bound it
+/// yields, `MAX_FRAME_BYTES`, caps the material the console reads on either face.
 pub const MAX_FRAME_RANGES: u64 = 128;
 pub const MAX_FRAME_BYTES: u64 = MAX_RUNTIME_MATERIAL_CHUNK_BYTES as u64 * MAX_FRAME_RANGES;
+
+/// Bound on one offline whole-object read. No Runtime caller of
+/// `read_material_complete` sets one yet, and the contract's 4 s
+/// `RUNTIME_MATERIAL_READ_BUDGET_MS` bounds a single range read, not a whole
+/// object; a verified read of at most `MAX_FRAME_BYTES` is expected to finish
+/// well inside it.
+const MATERIAL_READ_DEADLINE: Duration = Duration::from_secs(30);
 
 /// One authenticated snapshot of one state root.
 pub struct EvidenceSource {
@@ -132,13 +140,16 @@ impl EvidenceSource {
     }
 
     pub fn open_report(&self) -> OpenReport {
+        let event_count = self.snapshot.event_count() as u64;
+        let complete = self.snapshot.read_complete() && self.snapshot.corrupt_tail().is_none();
         OpenReport {
             backend: self.snapshot.backend().to_string(),
             latest_sequence: self.snapshot.latest_sequence(),
-            // Only `GlobalLedger::open_evidence` states these, and it drops every
-            // event whose material the caller cannot verify, so asking for them
-            // would mean hashing every artifact in the root at startup.
-            event_count: None,
+            event_count: if complete {
+                LedgerCount::Counted(event_count)
+            } else {
+                LedgerCount::VerifiedPrefix(event_count)
+            },
             read_complete: self.snapshot.read_complete(),
             corrupt_tail: self.snapshot.corrupt_tail().map(|tail| {
                 format!(
@@ -146,7 +157,10 @@ impl EvidenceSource {
                     tail.code, tail.segment_index, tail.byte_offset, tail.dangling_byte_count
                 )
             }),
-            repair_count: None,
+            repair_count: match self.snapshot.repair_count() {
+                Some(count) => LedgerCount::Counted(count as u64),
+                None => LedgerCount::NoRepairLog,
+            },
             writer: match self.snapshot.writer_metadata() {
                 GlobalLedgerWriterMetadataObservation::Absent => WriterFacts::Absent,
                 GlobalLedgerWriterMetadataObservation::Locked { byte_count } => {
@@ -226,19 +240,20 @@ impl OnlineSource {
             .map_err(|error| anyhow!("Runtime 查询失败：{error}"))
     }
 
-    /// The medium, the corrupt tail and the writer record are the offline
-    /// face's observations of the files; the Runtime does not state them
-    /// through its page. Online, the writer is the Runtime this session is
-    /// connected to, as its own `runtime-info.json` describes it.
+    /// The medium, the corrupt tail, the writer record and the two counts are
+    /// the offline face's observations of the files; the Runtime does not
+    /// state them through its page or its runtime info. Online, the writer is
+    /// the Runtime this session is connected to, as its own
+    /// `runtime-info.json` describes it.
     pub fn open_report(&self) -> OpenReport {
         let info = self.client.runtime_info();
         OpenReport {
             backend: "runtime".to_string(),
             latest_sequence: self.snapshot,
-            event_count: None,
+            event_count: LedgerCount::NotStatedByRuntime,
             read_complete: self.read_complete,
             corrupt_tail: None,
-            repair_count: None,
+            repair_count: LedgerCount::NotStatedByRuntime,
             writer: WriterFacts::Runtime {
                 pid: info.pid(),
                 owner_epoch: code(&info.owner_epoch()),
@@ -287,7 +302,7 @@ pub enum OfflineReason {
 /// same page, cursor and snapshot semantics; only where the answer comes from
 /// differs.
 pub enum ReadSource {
-    Offline { source: EvidenceSource, reason: OfflineReason },
+    Offline { source: Box<EvidenceSource>, reason: OfflineReason },
     Online(OnlineSource),
 }
 
@@ -309,7 +324,7 @@ impl ReadSource {
                 Err(error) => bail!("在线读面不可用 / online source unavailable: {error}"),
             },
         };
-        Ok(Self::Offline { source: EvidenceSource::open(root)?, reason })
+        Ok(Self::Offline { source: Box::new(EvidenceSource::open(root)?), reason })
     }
 
     pub fn state_root(&self) -> &Path {
@@ -467,7 +482,7 @@ pub enum MaterialReader {
 }
 
 impl MaterialReader {
-    /// See [`read_material`]; the online face assembles the same ranges, each
+    /// See [`read_material`]; the online face assembles ranges instead, each
     /// verified by the Runtime against the whole committed material.
     pub fn read(
         &self,
@@ -480,6 +495,7 @@ impl MaterialReader {
             Self::Offline(root) => {
                 read_material(root, event, artifact, snapshot_position, still_wanted)
             }
+            // runtime-client reads one range per call; only the forensic face reads whole objects.
             Self::Online(client) => assemble(
                 |request| {
                     client
@@ -496,7 +512,7 @@ impl MaterialReader {
 }
 
 /// What one material read produced. `bytes` is present only for a fully
-/// verified assembly; everything else is the read face's own typed outcome.
+/// verified material; everything else is the read face's own typed outcome.
 pub struct MaterialOutcome {
     pub bytes: Option<Vec<u8>>,
     pub state: RuntimeMaterialReadState,
@@ -505,14 +521,13 @@ pub struct MaterialOutcome {
     pub failure: Option<String>,
 }
 
-/// Assembles one committed material from verified ranges. Every range is
-/// resolved, guarded and hash-verified against the whole material by the read
-/// face before its bytes are handed back; a range that is not `verified` ends
-/// the assembly with that range's own outcome.
+/// Reads one committed material whole: the read face resolves and guards the
+/// reference, re-checks it and its retention, and hands bytes back only once
+/// the whole object is hash-verified; no prefix is ever exposed.
 ///
-/// `still_wanted` is asked before every range. A read whose answer has stopped
-/// mattering stops issuing ranges and gives back `None`: each range re-hashes
-/// the whole material, so a superseded read is expensive to let run on.
+/// `still_wanted` is asked before the read and after it. The read itself
+/// cannot be stopped midway, so a read superseded while it ran gives back
+/// `None` and its result is dropped.
 pub fn read_material(
     state_root: &Path,
     event: LedgerEventPosition,
@@ -520,16 +535,68 @@ pub fn read_material(
     snapshot_position: u64,
     still_wanted: &dyn Fn() -> bool,
 ) -> Result<Option<MaterialOutcome>> {
-    assemble(
-        |request| read_range(state_root, request),
+    if !still_wanted() {
+        return Ok(None);
+    }
+    let selection = LedgerArtifactSelection {
         event,
-        artifact,
+        artifact_id: artifact.artifact_id,
         snapshot_position,
-        still_wanted,
-    )
+        sha256: artifact.sha256.clone(),
+        byte_count: artifact.byte_count,
+        run_id: artifact.run_id,
+        frame_id: artifact.frame_id,
+        request_id: None,
+        correlation_id: artifact.correlation_id,
+    };
+    let result = actingcommand_ledger_forensics::read_material_complete(
+        state_root,
+        selection,
+        MAX_FRAME_BYTES as usize,
+        Instant::now() + MATERIAL_READ_DEADLINE,
+    );
+    if !still_wanted() {
+        return Ok(None);
+    }
+    Ok(Some(match result {
+        ForensicMaterialCompleteResult::Verified { bytes, .. } => MaterialOutcome {
+            bytes: Some(bytes),
+            state: RuntimeMaterialReadState::Verified,
+            limit: None,
+            eviction: None,
+            failure: None,
+        },
+        // A retention limit carries no failure record; any other limit does,
+        // or at least the read face's own error.
+        ForensicMaterialCompleteResult::NotProvided { source, limit, failure, error } => {
+            MaterialOutcome {
+                bytes: None,
+                state: RuntimeMaterialReadState::NotProvided,
+                limit: Some(limit),
+                eviction: source.and_then(|source| source.eviction),
+                failure: failure
+                    .map(|failure| failure.code)
+                    .or_else(|| error.map(|error| error.code().to_string())),
+            }
+        }
+        ForensicMaterialCompleteResult::Failed { source, state, failure, .. } => MaterialOutcome {
+            bytes: None,
+            state,
+            limit: None,
+            eviction: source.and_then(|source| source.eviction),
+            failure: Some(failure.code),
+        },
+    }))
 }
 
-/// The range loop both faces share; `read_range` is the one face-specific step.
+/// The online range loop. Every range is resolved, guarded and hash-verified
+/// against the whole material by the Runtime before its bytes are handed back;
+/// a range that is not `verified` ends the assembly with that range's own
+/// outcome.
+///
+/// `still_wanted` is asked before every range. A read whose answer has stopped
+/// mattering stops issuing ranges and gives back `None`: each range re-hashes
+/// the whole material, so a superseded read is expensive to let run on.
 fn assemble(
     read_range: impl Fn(RuntimeMaterialReadRequest) -> Result<RuntimeMaterialReadResult>,
     event: LedgerEventPosition,
@@ -590,30 +657,4 @@ fn assemble(
         eviction: None,
         failure: None,
     }))
-}
-
-/// `read_material_to` writes its structured result and then reports a non-verified
-/// outcome as an error; the typed result is the answer, so it is parsed either way.
-fn read_range(
-    state_root: &Path,
-    request: RuntimeMaterialReadRequest,
-) -> Result<RuntimeMaterialReadResult> {
-    let request = actingcommand_ledger_forensics::ForensicMaterialRequest::new(state_root, request)
-        .map_err(|error| anyhow!("素材请求无效：{error}"))?;
-    let mut body = Vec::new();
-    let reported = actingcommand_ledger_forensics::read_material_to(request, &mut body);
-    match serde_json::from_slice::<MaterialEnvelope>(&body) {
-        Ok(envelope) => Ok(envelope.data),
-        Err(_) => Err(match reported {
-            Err(error) => anyhow!("素材读取失败：{error}"),
-            Ok(()) => anyhow!("素材读取未给出可解析的结果"),
-        }),
-    }
-}
-
-#[derive(Deserialize)]
-struct MaterialEnvelope {
-    #[allow(dead_code)]
-    command: String,
-    data: RuntimeMaterialReadResult,
 }

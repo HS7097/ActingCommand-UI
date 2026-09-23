@@ -12,9 +12,10 @@ pub use tabs::{tab_from_name, tab_name, ALL_TABS};
 
 use acui_rows::{
     code, payload_value, ArtifactEvictionObservation, ArtifactKind, EventQuery, EventSeverity,
-    InstanceId, LedgerEventPosition, LedgerRecoveryGap, LedgerRecoveryState, LedgerRunRecovery,
-    LedgerView, OpenReport, OriginModule, PortBindings, PortEntry, ProjectedArtifactReference,
-    ProjectedEvent, RuntimeEventQueryCursor, RuntimeEventQueryPage, WriterFacts,
+    InstanceId, LedgerCount, LedgerEventPosition, LedgerRecoveryGap, LedgerRecoveryState,
+    LedgerRunRecovery, LedgerView, OpenReport, OriginModule, PortBindings, PortEntry,
+    ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, PublicEventPayload,
+    RuntimeEventQueryCursor, RuntimeEventQueryPage, TaskSemanticFact, WriterFacts,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -171,10 +172,10 @@ pub struct InstanceCard {
     pub state_root: String,
     pub backend: String,
     pub latest_sequence: u64,
-    pub event_count: Option<u64>,
+    pub event_count: LedgerCount,
     pub read_complete: bool,
     pub corrupt_tail: Option<String>,
-    pub repair_count: Option<u64>,
+    pub repair_count: LedgerCount,
     pub writer: WriterFacts,
     /// Rows this view has loaded so far — the one page-scoped count here.
     pub loaded_count: usize,
@@ -192,7 +193,8 @@ pub struct DetailView<'a> {
     pub event: &'a ProjectedEvent,
     pub pretty_payload_json: String,
     pub overlays: Vec<Overlay>,
-    /// The frame size the payload states, when it states one.
+    /// The frame size the event states: its formal extent, else a
+    /// `frame_width`/`frame_height` pair in the payload.
     pub frame_size: Option<(f32, f32)>,
 }
 
@@ -355,7 +357,7 @@ impl ViewModel {
             pretty_payload_json: serde_json::to_string_pretty(&payload)
                 .unwrap_or_else(|_| payload.to_string()),
             overlays: extract_overlays(&payload),
-            frame_size: extract_frame_size(&payload),
+            frame_size: frame_extent(event).or_else(|| extract_frame_size(&payload)),
         })
     }
 
@@ -421,4 +423,22 @@ impl ViewModel {
     pub fn snapshot_position(&self) -> u64 {
         self.snapshot_position
     }
+}
+
+/// The frame extent the ledger formally states: an effect intent's
+/// `frame_extent`, or the frame a geometry observation was made on. The
+/// console reads the `Ui` profile, which the ledger projects as `Public`.
+fn frame_extent(event: &ProjectedEvent) -> Option<(f32, f32)> {
+    let ProjectionPayload::Public(payload) = &event.payload else {
+        return None;
+    };
+    let PublicEventPayload::Task(task) = payload.as_ref() else {
+        return None;
+    };
+    let extent = match task.task_semantic_fact()? {
+        TaskSemanticFact::EffectIntent { frame_extent, .. } => (*frame_extent)?,
+        TaskSemanticFact::GeometryObserved { observation } => observation.frame.as_ref()?.extent,
+        _ => return None,
+    };
+    Some((extent.width() as f32, extent.height() as f32))
 }

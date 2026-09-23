@@ -9,11 +9,11 @@ mod launcher;
 mod settings;
 mod strings;
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use acui_model::{
     tab_from_name, DisplayRow, FrameTarget, InstanceCard, Overlay, QueryError, RecoveryGroup,
@@ -21,8 +21,8 @@ use acui_model::{
 };
 use acui_rows::{
     code, event_type_names, format_bytes, format_clock, format_full, links_named, module_names,
-    seconds_since, short_id, ArtifactEvictionObservation, EventQuery, EventSeverity, LedgerView,
-    OriginModule, PortBindings, PortEntry, ProjectedEvent, Sensitivity, WriterFacts,
+    seconds_since, short_id, ArtifactEvictionObservation, EventQuery, EventSeverity, LedgerCount,
+    LedgerView, OriginModule, PortBindings, PortEntry, ProjectedEvent, Sensitivity, WriterFacts,
     MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 use acui_source::{MaterialOutcome, OfflineReason, ReadSource, SourceMode, MAX_FRAME_BYTES};
@@ -107,8 +107,9 @@ struct App {
     /// choices mean the box is disabled and its one item says why.
     port_options: Vec<SharedString>,
     port_choices: Vec<u16>,
-    /// Which event's frame the pane has already asked for.
-    pending: Cell<Option<u64>>,
+    /// The frame request the pane has made, if any. Shared with the read's
+    /// completion, which runs on the event loop but has to be `Send`.
+    frame: Arc<Mutex<Option<FrameRequest>>>,
     /// Bumped per request so a slow read can never paint a stale frame, and so
     /// a superseded read can see that it has been superseded.
     generation: Arc<AtomicU64>,
@@ -139,6 +140,28 @@ impl App {
     fn port_entry(&self, port: u16) -> Option<&PortEntry> {
         self.port_bindings()?.ports.iter().find(|entry| entry.port == port)
     }
+
+    fn frame_request(&self) -> MutexGuard<'_, Option<FrameRequest>> {
+        self.frame.lock().unwrap_or_else(|held| held.into_inner())
+    }
+
+    /// The pixel size the current request's verified frame decoded to, when
+    /// that request was made for this event.
+    fn decoded_size(&self, sequence: u64) -> Option<(f32, f32)> {
+        let request = (*self.frame_request())?;
+        let (width, height) = request.decoded.filter(|_| request.sequence == sequence)?;
+        Some((width as f32, height as f32))
+    }
+}
+
+/// One frame read: the event it is for and its generation, and once that read
+/// is verified and decoded, the pixel size. A switch, a clear or a failure
+/// drops the size with the request it belongs to.
+#[derive(Clone, Copy)]
+struct FrameRequest {
+    sequence: u64,
+    generation: u64,
+    decoded: Option<(u32, u32)>,
 }
 
 fn main() -> Result<()> {
@@ -188,7 +211,7 @@ fn main() -> Result<()> {
         port_map,
         port_options,
         port_choices,
-        pending: Cell::new(None),
+        frame: Arc::new(Mutex::new(None)),
         generation: Arc::new(AtomicU64::new(0)),
         worker: Arc::new(Mutex::new(())),
         launcher: launcher::Launcher::new(
@@ -312,7 +335,7 @@ fn reload(app: &Rc<App>, append: bool) {
         },
     }
     if !append {
-        app.pending.set(None);
+        *app.frame_request() = None;
     }
 }
 
@@ -478,14 +501,7 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
             if app.source.offline_reason().is_some() { "offline" } else { "online" },
         ),
         field(labels, "latest_sequence", card.latest_sequence.to_string(), "latest_sequence"),
-        field(
-            labels,
-            "event_count",
-            card.event_count
-                .map(|count| count.to_string())
-                .unwrap_or_else(|| labels.event_count_missing.to_string()),
-            "event_count",
-        ),
+        field(labels, "event_count", count_text(labels, card.event_count), "event_count"),
         field(labels, "loaded_rows", card.loaded_count.to_string(), ""),
         field(labels, "first_event", stamp(labels, card.first_timestamp_unix_ms), ""),
         field(labels, "latest_event", stamp(labels, card.last_timestamp_unix_ms), ""),
@@ -498,6 +514,7 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
             "",
         ),
         field(labels, "integrity", integrity_text(labels, &card), ""),
+        field(labels, "repair_count", count_text(labels, card.repair_count), "repair_count"),
         field(labels, "writer", writer_text(labels, &card.writer), ""),
     ];
     // The port map could not be read: the code, and behind it the read
@@ -659,10 +676,18 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
                     })
                     .collect::<Vec<_>>(),
             ));
-            let (canvas_width, canvas_height) = canvas_size(&detail.overlays, detail.frame_size);
+            let target = model.frame_target();
+            let sequence = target.as_ref().map(|target| target.event.sequence);
+            update_frame(window, app, target, detail.frame_size);
+            // The size the event states, else what this event's verified frame
+            // decoded to, else the overlays' own extent.
+            let frame_size = detail
+                .frame_size
+                .or_else(|| sequence.and_then(|sequence| app.decoded_size(sequence)));
+            let (canvas_width, canvas_height) = canvas_size(&detail.overlays, frame_size);
             window.set_canvas_width(canvas_width);
             window.set_canvas_height(canvas_height);
-            window.set_frame_size_text(frame_size_text(labels, detail.frame_size).into());
+            window.set_frame_size_text(frame_size_text(labels, frame_size).into());
             window.set_overlays(models(
                 detail
                     .overlays
@@ -678,8 +703,6 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
                     .collect::<Vec<_>>(),
             ));
             window.set_payload_json(detail.pretty_payload_json.into());
-            // The size the payload states, as the detail already resolved it.
-            update_frame(window, app, model.frame_target(), detail.frame_size);
         }
         None => {
             window.set_detail_lines(models(vec![FieldLine {
@@ -814,24 +837,30 @@ fn update_frame(
         );
         return;
     }
-    if app.pending.get() == Some(target.event.sequence) {
-        return;
-    }
-    app.pending.set(Some(target.event.sequence));
+    let generation = {
+        let mut request = app.frame_request();
+        if request.is_some_and(|request| request.sequence == target.event.sequence) {
+            return;
+        }
+        let generation = app.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *request =
+            Some(FrameRequest { sequence: target.event.sequence, generation, decoded: None });
+        generation
+    };
     window.set_frame_ready(false);
     window.set_frame_note(
         fill(labels.frame_reading, &[&target.artifact.byte_count.to_string()]).into(),
     );
 
-    let generation = app.generation.fetch_add(1, Ordering::SeqCst) + 1;
     let shared = Arc::clone(&app.generation);
+    let frame = Arc::clone(&app.frame);
     let worker = Arc::clone(&app.worker);
     let reader = app.source.material_reader();
     let snapshot = app.source.snapshot_position();
     let weak = window.as_weak();
     std::thread::spawn(move || {
-        // One worker at a time. A superseded read stops at its next range and
-        // lets the slot go; every range re-hashes the whole material, so
+        // One worker at a time. A superseded read stops at its next range
+        // online, or has its whole read dropped offline, and lets the slot go;
         // letting a read nobody waits for run on is the expensive mistake.
         let _slot = worker.lock().unwrap_or_else(|held| held.into_inner());
         let still_wanted = || shared.load(Ordering::SeqCst) == generation;
@@ -850,6 +879,15 @@ fn update_frame(
         let _ = slint::invoke_from_event_loop(move || {
             if shared.load(Ordering::SeqCst) != generation {
                 return;
+            }
+            // The decoded size belongs to this request; a failure leaves it unknown.
+            if let Some(request) = frame
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .as_mut()
+                .filter(|request| request.generation == generation)
+            {
+                request.decoded = painted.as_ref().ok().map(|(width, height, _)| (*width, *height));
             }
             let Some(window) = weak.upgrade() else {
                 return;
@@ -884,7 +922,7 @@ fn update_frame(
 }
 
 fn clear_frame(window: &AppWindow, app: &Rc<App>, note: String) {
-    app.pending.set(None);
+    *app.frame_request() = None;
     app.generation.fetch_add(1, Ordering::SeqCst);
     window.set_frame_ready(false);
     window.set_frame_note(note.into());
@@ -965,14 +1003,22 @@ fn recovery_text(labels: &Labels, group: &RecoveryGroup) -> String {
 
 fn integrity_text(labels: &Labels, card: &InstanceCard) -> String {
     match (&card.corrupt_tail, card.read_complete) {
-        (None, true) => match card.repair_count {
-            Some(0) | None => labels.integrity_ok.to_string(),
-            Some(count) => fill(labels.integrity_repairs, &[&count.to_string()]),
-        },
+        (None, true) => labels.integrity_ok.to_string(),
         (tail, complete) => fill(
             labels.integrity_bad,
             &[&complete.to_string(), tail.as_deref().unwrap_or(labels.none)],
         ),
+    }
+}
+
+fn count_text(labels: &Labels, count: LedgerCount) -> String {
+    match count {
+        LedgerCount::Counted(count) => count.to_string(),
+        LedgerCount::VerifiedPrefix(count) => {
+            fill(labels.count_verified_prefix, &[&count.to_string()])
+        }
+        LedgerCount::NoRepairLog => labels.count_no_repair_log.to_string(),
+        LedgerCount::NotStatedByRuntime => labels.count_not_stated.to_string(),
     }
 }
 
