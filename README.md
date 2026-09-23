@@ -172,7 +172,7 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   start is estimated from the committed time span, as if events were even in time, plus two windows of
   slack, and one probe with the view's own query asks for the first matching event above it. None:
   reading starts there. One found: the start moves above it, the step doubling each time, for at most
-  three probes, and otherwise falls back to the pin. The query's own time bound still decides what
+  three probes within the one-second budget, and otherwise falls back to the pin. The query's own time bound still decides what
   shows; the top bar states the positions actually read.
 - **Row types are no longer mirrored**: `acui-rows` re-exports the contract types directly, and only adds
   display functions such as local time, id abbreviation, wire codes and the display-name dictionary.

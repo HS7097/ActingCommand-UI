@@ -433,8 +433,8 @@ fn read_window(source: &ReadSource, query: &EventQuery) -> Result<Vec<RuntimeEve
 
 /// Where a time bound is estimated to fall, from the committed span without any
 /// read: the position it would take if events were even in time, plus
-/// `TIME_SLACK_WINDOWS` windows, capped at the pin. A bound before the first
-/// event reads nothing. `checked_upper` makes the estimate safe.
+/// `TIME_SLACK_WINDOWS` windows, capped at the pin; 0 for a bound before the
+/// first event. `checked_upper` makes the estimate safe.
 fn upper_for_time(span: Option<(u64, u64)>, snapshot: u64, bound: u64) -> u64 {
     let Some((first, last)) = span else {
         return snapshot;
@@ -454,16 +454,17 @@ fn upper_for_time(span: Option<(u64, u64)>, snapshot: u64, bound: u64) -> u64 {
 /// probe with the view's own query — its time bound included — asks for the
 /// first matching event above the start. None: nothing above could show, and
 /// reading starts there. One found: the start moves above it by a step that
-/// doubles each time, for at most `TIME_PROBES` probes; past that, the pin.
+/// doubles each time, for at most `TIME_PROBES` probes and within the fill
+/// budget; past either, the pin, which is always safe.
 fn checked_upper(
     source: &ReadSource,
     model: &ViewModel,
     estimate: u64,
     snapshot: u64,
 ) -> Result<u64, QueryError> {
-    let (mut upper, mut step) = (estimate, TIME_SLACK_WINDOWS * WINDOW);
-    for _ in 0..TIME_PROBES {
-        if upper >= snapshot {
+    let (mut upper, mut step, started) = (estimate, TIME_SLACK_WINDOWS * WINDOW, Instant::now());
+    for probe in 0..TIME_PROBES {
+        if upper >= snapshot || (probe > 0 && started.elapsed() >= FILL_BUDGET) {
             return Ok(snapshot);
         }
         let mut query = model.query()?;
