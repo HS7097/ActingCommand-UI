@@ -46,6 +46,8 @@ export struct OverlayItem {
     width: float,
     height: float,
     point: bool,
+    // A point the step's input was meant at, drawn as the tap mark.
+    mark: bool,
 }
 
 // Severity keeps semantic colours; these mid tones stay legible on both palettes.
@@ -250,6 +252,10 @@ export component AppWindow inherits Window {
     in property <float> canvas-height;
     in property <string> frame-size-text;
     in property <string> frame-note;
+    // The page the recognition matched on this frame, drawn on it, and the
+    // sentence that says what was done where.
+    in property <string> frame-page;
+    in property <string> frame-explain;
     in property <image> frame-image;
     in property <bool> frame-ready;
     in property <string> payload-json;
@@ -802,15 +808,41 @@ export component AppWindow inherits Window {
                             image-fit: fill;
                             source: root.frame-image;
                         }
+                        // A point is a dot centred on it; the step's tap mark is
+                        // larger and ringed so it reads on any frame.
                         for overlay in root.overlays: Rectangle {
-                            x: parent.offset-x + overlay.x * parent.scale * 1px;
-                            y: parent.offset-y + overlay.y * parent.scale * 1px;
-                            width: overlay.point ? 7px : max(overlay.width * parent.scale * 1px, 1px);
-                            height: overlay.point ? 7px : max(overlay.height * parent.scale * 1px, 1px);
+                            property <length> dot: overlay.mark ? 18px : 8px;
+                            x: parent.offset-x + overlay.x * parent.scale * 1px - (overlay.point ? self.dot / 2 : 0px);
+                            y: parent.offset-y + overlay.y * parent.scale * 1px - (overlay.point ? self.dot / 2 : 0px);
+                            width: overlay.point ? self.dot : max(overlay.width * parent.scale * 1px, 1px);
+                            height: overlay.point ? self.dot : max(overlay.height * parent.scale * 1px, 1px);
+                            border-radius: overlay.point ? self.dot / 2 : 0px;
                             background: overlay.point ? #ff6a3d : transparent;
-                            border-color: #59c2ff;
-                            border-width: 1px;
+                            border-color: overlay.mark ? #ffffff : #59c2ff;
+                            border-width: overlay.mark ? 2px : 1px;
                         }
+                        if root.frame-page != "": Rectangle {
+                            x: parent.offset-x + 6px;
+                            y: parent.offset-y + 6px;
+                            width: page-text.preferred-width + 12px;
+                            height: page-text.preferred-height + 6px;
+                            background: #000000c0;
+                            border-radius: 3px;
+                            page-text := Text {
+                                x: 6px;
+                                y: 3px;
+                                text: root.frame-page;
+                                font-size: Scale.body-font;
+                                color: #ffffff;
+                            }
+                        }
+                    }
+                    if root.frame-explain != "": Text {
+                        text: root.frame-explain;
+                        font-size: Scale.body-font;
+                        vertical-stretch: 0;
+                        color: Palette.foreground;
+                        wrap: word-wrap;
                     }
                     Text { text: root.frame-note; font-size: Scale.grey-font; vertical-stretch: 0; color: Palette.foreground.with-alpha(0.6); wrap: word-wrap; }
                     Text { text: Strings.raw-data-title; font-size: Scale.head-font; vertical-stretch: 0; color: Palette.foreground; font-weight: 700; }
