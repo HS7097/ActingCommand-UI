@@ -388,6 +388,11 @@ fn reload(app: &Rc<App>, earlier: bool) {
     if !earlier {
         // This reload applies the bound the time cursor holds now.
         app.cursor_rest.stop();
+        // And it retries a frame read that failed.
+        let failed = matches!(&*app.frame_events.borrow(), Some((_, Err(_))));
+        if failed {
+            app.frame_events.replace(None);
+        }
         let snapshot = source.snapshot_position();
         let upper = match model.filters.to_timestamp_unix_ms {
             None => Ok(snapshot),
@@ -1112,13 +1117,13 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
             // to, else the overlays' own extent.
             let frame_size =
                 stated_size.or_else(|| sequence.and_then(|sequence| app.decoded_size(sequence)));
-            let (canvas_width, canvas_height) = canvas_size(&detail.overlays, frame_size);
-            window.set_canvas_width(canvas_width);
-            window.set_canvas_height(canvas_height);
-            window.set_frame_size_text(frame_size_text(labels, frame_size).into());
             // The step's own marks replace the event's `action` geometry, which
             // would draw the same input twice.
             let marks = frame.as_ref().map_or(&[][..], |frame| frame.group.marks.as_slice());
+            let (canvas_width, canvas_height) = canvas_size(&detail.overlays, marks, frame_size);
+            window.set_canvas_width(canvas_width);
+            window.set_canvas_height(canvas_height);
+            window.set_frame_size_text(frame_size_text(labels, frame_size).into());
             let mut overlays: Vec<OverlayItem> = detail
                 .overlays
                 .iter()
@@ -1669,7 +1674,6 @@ const fn recovery_index(state: acui_rows::LedgerRecoveryState) -> usize {
     }
 }
 
-/// The coordinate space the overlays and the frame share.
 /// The frame pane's view of the selected event's frame: what the ledger says
 /// about it, how it was found, and why the frame's events could not be read.
 struct FrameView {
@@ -1681,8 +1685,8 @@ struct FrameView {
 
 /// The selected event's frame, found among the loaded rows. When they hold no
 /// capture of it, the frame's own events are read once — one query by frame
-/// id, kept for that frame — so an event still lands on its frame when the
-/// capture is filtered out or not loaded.
+/// id, kept while the pane stays on that frame — so an event still lands on its
+/// frame when the capture is filtered out or not loaded.
 fn frame_view(app: &App, source: &ReadSource, model: &ViewModel) -> Option<FrameView> {
     let (basis, via) = model.selected_basis()?;
     let frame_id = *basis.links.frame_id()?;
@@ -1696,9 +1700,13 @@ fn frame_view(app: &App, source: &ReadSource, model: &ViewModel) -> Option<Frame
             frame_id: Some(frame_id),
             ..EventQuery::default()
         };
-        let read = read_window(source, &query)
-            .map(|pages| pages.iter().flat_map(|page| page.events().iter().cloned()).collect())
-            .map_err(|error| error.to_string());
+        // A read the page says is incomplete cannot say the capture is absent.
+        let read = read_window(source, &query).map_err(|error| error.to_string()).and_then(|pages| {
+            match pages.iter().all(|page| page.read_scope().is_none_or(|scope| scope.read_complete)) {
+                true => Ok(pages.iter().flat_map(|page| page.events().iter().cloned()).collect()),
+                false => Err(app.labels.source_incomplete.to_string()),
+            }
+        });
         *cache = Some((frame.clone(), read));
     }
     let (extra, failure) = match cache.as_ref() {
@@ -1773,20 +1781,20 @@ fn mark_text(labels: &Labels, mark: &Mark) -> String {
     }
 }
 
-fn canvas_size(overlays: &[Overlay], frame_size: Option<(f32, f32)>) -> (f32, f32) {
+/// The coordinate space the overlays and the frame share: the frame's size,
+/// else the extent of the event's overlays and the step's marks.
+fn canvas_size(overlays: &[Overlay], marks: &[Mark], frame_size: Option<(f32, f32)>) -> (f32, f32) {
     match frame_size {
         Some(size) => size,
         None => {
-            let width = overlays
+            let points = marks.iter().flat_map(|mark| mark.points.iter().copied());
+            let extents = overlays
                 .iter()
-                .map(|overlay| overlay.x + overlay.width)
-                .fold(0.0_f32, f32::max)
-                .max(1.0);
-            let height = overlays
-                .iter()
-                .map(|overlay| overlay.y + overlay.height)
-                .fold(0.0_f32, f32::max)
-                .max(1.0);
+                .map(|overlay| (overlay.x + overlay.width, overlay.y + overlay.height))
+                .chain(points);
+            let (width, height) = extents
+                .fold((0.0_f32, 0.0_f32), |(width, height), (x, y)| (width.max(x), height.max(y)));
+            let (width, height) = (width.max(1.0), height.max(1.0));
             (width * 1.1, height * 1.1)
         }
     }

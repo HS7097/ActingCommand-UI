@@ -573,7 +573,7 @@ pub const ZH: Labels = Labels {
     frame_explain_short: "{}：{}",
     frame_via_step: "帧取自同一步骤的操作意图 #{}",
     frame_via_input: "帧取自同一运行中前一条操作意图 #{}",
-    frame_basis_missing: "已载入的行里没有它所基于的帧：同一运行中更早的操作意图未载入",
+    frame_basis_missing: "已载入的行里找不到它所基于的帧",
     frame_capture_missing: "账本里没有这一帧的截图产物",
     frame_events_failed: "读取这一帧的事件失败：{}",
     action_kinds: &[
@@ -913,7 +913,7 @@ pub const EN: Labels = Labels {
     frame_explain_short: "{}: {}",
     frame_via_step: "frame taken from the same step's effect intent #{}",
     frame_via_input: "frame taken from the run's previous effect intent #{}",
-    frame_basis_missing: "The frame it acted on is not among the loaded rows: the run's earlier effect intent is not loaded",
+    frame_basis_missing: "The frame it acted on is not found among the loaded rows",
     frame_capture_missing: "The ledger holds no capture of this frame",
     frame_events_failed: "Reading this frame's events failed: {}",
     action_kinds: &[

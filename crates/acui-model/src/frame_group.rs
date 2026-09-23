@@ -77,22 +77,21 @@ pub struct FrameGroup {
     pub marks: Vec<Mark>,
 }
 
-/// The group of frame `frame` (as `code` writes its id) over `events`; each
-/// event counts once, by sequence.
+/// The group of frame `frame` (as `code` writes its id) over `events`, taken
+/// in ledger order, each event once: a later recognition states the page.
 pub fn frame_group<'a>(
     frame: &str,
     events: impl IntoIterator<Item = &'a ProjectedEvent>,
 ) -> FrameGroup {
     let mut group = FrameGroup { target: None, extent: None, recognition: None, marks: Vec::new() };
-    let mut seen = Vec::new();
+    let mut events: Vec<&ProjectedEvent> = events
+        .into_iter()
+        .filter(|event| event.links.frame_id().map(code).as_deref() == Some(frame))
+        .collect();
+    events.sort_by_key(|event| event.sequence);
+    events.dedup_by_key(|event| event.sequence);
     let mut verified = false;
     for event in events {
-        if seen.contains(&event.sequence)
-            || event.links.frame_id().map(code).as_deref() != Some(frame)
-        {
-            continue;
-        }
-        seen.push(event.sequence);
         let capture = event
             .artifacts
             .iter()
