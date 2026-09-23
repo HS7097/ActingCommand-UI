@@ -27,12 +27,12 @@ use acui_rows::{
     RuntimeMaterialReadRequest, RuntimeMaterialReadResult, RuntimeMaterialReadState, WriterFacts,
 };
 use actingcommand_ledger::{
-    GlobalLedger, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
+    GlobalLedger, GlobalLedgerError, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
     GlobalLedgerWriterMetadataObservation, LedgerArtifactSelection,
 };
 use actingcommand_ledger_forensics::ForensicMaterialCompleteResult;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 
 /// Ranges one frame may cost online, where the contract bounds a single range
 /// (`MAX_RUNTIME_MATERIAL_CHUNK_BYTES`) and a single reply. The byte bound it
@@ -53,11 +53,31 @@ pub struct EvidenceSource {
     snapshot: GlobalLedgerMetadata,
 }
 
+/// The ledger's refusal to open a state root: its own code, operation and
+/// detail, verbatim. The ledger keeps an io error's OS text in `detail`, not
+/// its kind, so the pair cannot tell a state root with no ledger yet from one
+/// whose ledger cannot be read; `detail` is localized, and never parsed here.
+#[derive(Debug, Clone)]
+pub struct LedgerOpenFailure {
+    pub code: &'static str,
+    pub operation: &'static str,
+    pub detail: Option<String>,
+}
+
+impl From<GlobalLedgerError> for LedgerOpenFailure {
+    fn from(error: GlobalLedgerError) -> Self {
+        Self {
+            code: error.code(),
+            operation: error.operation(),
+            detail: error.detail().map(str::to_string),
+        }
+    }
+}
+
 impl EvidenceSource {
-    pub fn open(state_root: impl Into<PathBuf>) -> Result<Self> {
+    pub fn open(state_root: impl Into<PathBuf>) -> Result<Self, LedgerOpenFailure> {
         let root = state_root.into();
-        let snapshot = GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(&root))
-            .with_context(|| format!("打开状态根 {} 失败", root.display()))?;
+        let snapshot = GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(&root))?;
         Ok(Self { root, snapshot })
     }
 
@@ -307,17 +327,30 @@ pub enum ReadSource {
     Online(OnlineSource),
 }
 
-impl ReadSource {
+/// What this session reads through: an open read face, or the offline face
+/// the ledger refused to open. Unopened, nothing is read — no page, no port
+/// map, no material — and the launcher still works: the Runtime it starts is
+/// what creates the ledger.
+pub enum Session {
+    Open(ReadSource),
+    Unopened { root: PathBuf, reason: OfflineReason, failure: LedgerOpenFailure },
+}
+
+impl Session {
     /// `Online` fails loud with the client's own error. `Auto` reads offline
     /// only when the client could not reach a Runtime, and keeps the reason;
     /// a Runtime that was reached but could not answer the first page is an
-    /// error in every mode.
+    /// error in every mode. An offline face the ledger refuses to open is not
+    /// an error of the session: it is `Unopened`, with the ledger's own error.
     pub fn open(state_root: impl Into<PathBuf>, mode: SourceMode) -> Result<Self> {
         let root = state_root.into();
         let reason = match mode {
             SourceMode::Offline => OfflineReason::Requested,
             SourceMode::Auto | SourceMode::Online => match OnlineSource::connect(&root) {
-                Ok(client) => return OnlineSource::pin(root, client).map(Self::Online),
+                Ok(client) => {
+                    return OnlineSource::pin(root, client)
+                        .map(|source| Self::Open(ReadSource::Online(source)))
+                }
                 Err(error) if mode == SourceMode::Auto => match error.code() {
                     "runtime_info_unavailable" => OfflineReason::RuntimeInfoAbsent,
                     code => OfflineReason::ConnectFailed { code, operation: error.operation() },
@@ -325,9 +358,28 @@ impl ReadSource {
                 Err(error) => bail!("在线读面不可用 / online source unavailable: {error}"),
             },
         };
-        Ok(Self::Offline { source: Box::new(EvidenceSource::open(root)?), reason })
+        Ok(match EvidenceSource::open(&root) {
+            Ok(source) => Self::Open(ReadSource::Offline { source: Box::new(source), reason }),
+            Err(failure) => Self::Unopened { root, reason, failure },
+        })
     }
 
+    pub fn state_root(&self) -> &Path {
+        match self {
+            Self::Open(source) => source.state_root(),
+            Self::Unopened { root, .. } => root,
+        }
+    }
+
+    pub fn offline_reason(&self) -> Option<&OfflineReason> {
+        match self {
+            Self::Open(source) => source.offline_reason(),
+            Self::Unopened { reason, .. } => Some(reason),
+        }
+    }
+}
+
+impl ReadSource {
     pub fn state_root(&self) -> &Path {
         match self {
             Self::Offline { source, .. } => source.state_root(),

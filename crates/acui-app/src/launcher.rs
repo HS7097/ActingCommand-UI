@@ -14,19 +14,29 @@
 //! refusal is shown verbatim. A start press is recorded as a client action too,
 //! but only once a Runtime takes a connection: a start that never got ready
 //! records nothing.
+//!
+//! After an early exit the log is read back once, for its last `FATAL actingd:`
+//! line, shown as written. When that line names `owner_resource_unconfirmed`
+//! the block offers `actingd unlock-owner`, run only on a second, confirming
+//! press: no console window, output captured, killed and reaped if it outlives
+//! its timeout. It appends its own ledger fact, so no client action is recorded
+//! for it; an `ok` with exit code 0 presses start once more.
 
 use std::fs::File;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use acui_source::{
     probe_runtime, record_start, request_shutdown, ClientFailure, RuntimeFacts, SHUTDOWN_ATTEMPTS,
 };
-use slint::ComponentHandle;
+use serde_json::Value;
+use slint::{ComponentHandle, SharedString};
 
 use crate::strings::{fill, Labels};
 use crate::{App, AppWindow};
@@ -40,12 +50,32 @@ const READY_INTERVAL: Duration = Duration::from_millis(500);
 #[cfg(windows)]
 const DETACHED_PROCESS: u32 = 0x0000_0008;
 
+/// Windows `CREATE_NO_WINDOW`: unlock-owner's output is captured, so it gets
+/// no console of its own rather than a detached one.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+const FATAL_PREFIX: &str = "FATAL actingd:";
+/// The one code in a fatal line the block answers, with the unlock entry.
+const OWNER_RESOURCE_UNCONFIRMED: &str = "owner_resource_unconfirmed";
+/// Names the surface, not a person: no user name goes into the ledger.
+const UNLOCK_ACTOR: &str = "acui";
+const UNLOCK_SCHEMA: &str = "actingcommand.actingd.unlock-owner.v1";
+/// After its journal append the command opens the ledger and recovers the
+/// exited owner's writer within the Runtime's own 120 s maintenance budget;
+/// killing it inside that window would leave the journal record without its
+/// ledger fact, so this bound sits well above it.
+const UNLOCK_TIMEOUT: Duration = Duration::from_secs(180);
+const UNLOCK_POLL: Duration = Duration::from_millis(100);
+
 pub struct Launcher {
     state_root: PathBuf,
     pub actingd_config: Option<PathBuf>,
     pub actingd_exe: Option<PathBuf>,
     /// One start in flight at a time: set until its readiness poll ends.
     starting: Arc<AtomicBool>,
+    /// Set while unlock-owner runs; a start is refused meanwhile.
+    unlocking: Arc<AtomicBool>,
 }
 
 impl Launcher {
@@ -59,6 +89,7 @@ impl Launcher {
             actingd_config,
             actingd_exe,
             starting: Arc::new(AtomicBool::new(false)),
+            unlocking: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -79,6 +110,15 @@ pub fn install(window: &AppWindow, app: &Rc<App>) {
         window.on_request_shutdown(move || {
             if let Some(window) = weak.upgrade() {
                 shutdown(&window, &app);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let app = Rc::clone(app);
+        window.on_unlock_owner(move || {
+            if let Some(window) = weak.upgrade() {
+                unlock(&window, &app);
             }
         });
     }
@@ -106,10 +146,17 @@ fn status_text(labels: &Labels, probe: &Result<RuntimeFacts, ClientFailure>) -> 
 fn start(window: &AppWindow, app: &Rc<App>) {
     let labels = app.labels;
     let launcher = &app.launcher;
+    if launcher.unlocking.load(Ordering::SeqCst) {
+        window.set_launcher_line(labels.unlock_busy.into());
+        return;
+    }
     if launcher.starting.load(Ordering::SeqCst) {
         window.set_launcher_line(labels.start_busy.into());
         return;
     }
+    window.set_unlock_offered(false);
+    window.set_unlock_confirming(false);
+    window.set_unlock_line(SharedString::new());
     let probe = probe_runtime(&launcher.state_root);
     window.set_runtime_status_text(status_text(labels, &probe).into());
     if probe.is_ok() {
@@ -123,12 +170,9 @@ fn start(window: &AppWindow, app: &Rc<App>) {
         });
         return;
     }
-    let (exe, config) = match (
-        configured(labels, "actingd_exe", &launcher.actingd_exe),
-        configured(labels, "actingd_config", &launcher.actingd_config),
-    ) {
-        (Ok(exe), Ok(config)) => (exe, config),
-        (Err(text), _) | (_, Err(text)) => {
+    let (exe, config) = match actingd_paths(labels, launcher) {
+        Ok(paths) => paths,
+        Err(text) => {
             window.set_launcher_line(text.into());
             return;
         }
@@ -177,6 +221,7 @@ fn start(window: &AppWindow, app: &Rc<App>) {
         let mut child = child;
         let mut last: Option<ClientFailure> = None;
         let mut outcome: Option<(Option<String>, String)> = None;
+        let mut offer_unlock = false;
         for attempt in 1..=READY_ATTEMPTS {
             match child.try_wait() {
                 Ok(None) => {}
@@ -185,7 +230,17 @@ fn start(window: &AppWindow, app: &Rc<App>) {
                         .code()
                         .map(|code| code.to_string())
                         .unwrap_or_else(|| labels.none.to_string());
-                    outcome = Some((None, fill(labels.start_exited, &[&exit, &log_text])));
+                    let said = match std::fs::read(&log).map(|bytes| last_fatal(&bytes)) {
+                        Ok(Some(line)) => {
+                            offer_unlock = line
+                                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                                .any(|word| word == OWNER_RESOURCE_UNCONFIRMED);
+                            line
+                        }
+                        Ok(None) => labels.log_no_fatal.to_owned(),
+                        Err(error) => fill(labels.log_unreadable, &[&error.to_string()]),
+                    };
+                    outcome = Some((None, fill(labels.start_exited, &[&exit, &said, &log_text])));
                     break;
                 }
                 Err(error) => {
@@ -241,10 +296,42 @@ fn start(window: &AppWindow, app: &Rc<App>) {
                 ),
             )
         });
-        starting.store(false, Ordering::SeqCst);
-        post(&weak, status, line);
+        // One paint, clearing `starting` with it, so no start press lands
+        // between the line and the offer.
+        let _ = slint::invoke_from_event_loop(move || {
+            starting.store(false, Ordering::SeqCst);
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            if let Some(status) = status {
+                window.set_runtime_status_text(status.into());
+            }
+            window.set_launcher_line(line.into());
+            window.set_unlock_offered(offer_unlock);
+        });
         // `child` is dropped here: not killed, not waited on.
     });
+}
+
+/// Both configured paths, or the text naming the first one that is missing
+/// or not absolute.
+fn actingd_paths<'a>(
+    labels: &Labels,
+    launcher: &'a Launcher,
+) -> Result<(&'a Path, &'a Path), String> {
+    Ok((
+        configured(labels, "actingd_exe", &launcher.actingd_exe)?,
+        configured(labels, "actingd_config", &launcher.actingd_config)?,
+    ))
+}
+
+/// The last line of `output` that starts with `FATAL actingd:`.
+fn last_fatal(output: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .rev()
+        .find(|line| line.starts_with(FATAL_PREFIX))
+        .map(str::to_owned)
 }
 
 /// A configured key, checked to be an absolute path; the text to show otherwise.
@@ -319,6 +406,217 @@ fn spawn(exe: &Path, config: &Path, log: &Path) -> std::io::Result<Child> {
         command.creation_flags(DETACHED_PROCESS);
     }
     command.spawn()
+}
+
+/// The confirming press. The entry is withdrawn while unlock-owner runs, back
+/// at its first step after any outcome but an unlock, and gone after one.
+fn unlock(window: &AppWindow, app: &Rc<App>) {
+    let labels = app.labels;
+    let launcher = &app.launcher;
+    window.set_unlock_confirming(false);
+    let (exe, config) = match actingd_paths(labels, launcher) {
+        Ok((exe, config)) => (exe.to_path_buf(), config.to_path_buf()),
+        Err(text) => {
+            window.set_unlock_line(text.into());
+            return;
+        }
+    };
+    launcher.unlocking.store(true, Ordering::SeqCst);
+    window.set_unlock_offered(false);
+    window.set_unlock_line(fill(labels.unlock_running, &[UNLOCK_ACTOR]).into());
+    let unlocking = Arc::clone(&launcher.unlocking);
+    let weak = window.as_weak();
+    std::thread::spawn(move || {
+        let (line, unlocked) = unlock_outcome(labels, &exe, &config);
+        let _ = slint::invoke_from_event_loop(move || {
+            unlocking.store(false, Ordering::SeqCst);
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            if unlocked {
+                window.invoke_start_runtime();
+            } else {
+                window.set_unlock_offered(true);
+            }
+            // After the start, which clears the unlock line.
+            window.set_unlock_line(line.into());
+        });
+    });
+}
+
+/// The line unlock-owner's answer comes to, and whether it unlocked: only an
+/// `ok` report with exit code 0 did.
+fn unlock_outcome(labels: &Labels, exe: &Path, config: &Path) -> (String, bool) {
+    let (status, stdout, stderr) = match run_unlock(labels, exe, config) {
+        Ok(output) => output,
+        Err(text) => return (text, false),
+    };
+    let exit = exit_text(labels, status);
+    let stdout = stdout.trim_ascii();
+    if stdout.is_empty() {
+        let text = match last_fatal(&stderr) {
+            Some(line) => fill(labels.unlock_fatal, &[&exit, &line]),
+            None => fill(labels.unlock_unparseable, &[labels.unlock_no_output, &exit]),
+        };
+        return (text, false);
+    }
+    let report = serde_json::from_slice::<Value>(stdout).map_err(|error| error.to_string());
+    match report.and_then(|report| unlock_report(labels, &report, &exit, status.success())) {
+        Ok(outcome) => outcome,
+        Err(why) => (fill(labels.unlock_unparseable, &[&why, &exit]), false),
+    }
+}
+
+/// The v1 report read field by field; `Err` names the first field that is
+/// missing or not as the contract states.
+fn unlock_report(
+    labels: &Labels,
+    report: &Value,
+    exit: &str,
+    success: bool,
+) -> Result<(String, bool), String> {
+    let invalid = |pointer: &str| fill(labels.unlock_field_invalid, &[pointer]);
+    let text = |pointer: &str| {
+        report
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid(pointer))
+    };
+    if text("/schema_version")? != UNLOCK_SCHEMA {
+        return Err(invalid("/schema_version"));
+    }
+    match text("/status")? {
+        "ok" => {
+            let epoch = text("/owner_epoch")?;
+            let disposition = text("/previous_resource_disposition")?;
+            let revision = report
+                .pointer("/revision")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| invalid("/revision"))?
+                .to_string();
+            Ok(if success {
+                (
+                    fill(labels.unlock_ok, &[epoch, disposition, &revision]),
+                    true,
+                )
+            } else {
+                (
+                    fill(
+                        labels.unlock_ok_nonzero,
+                        &[exit, epoch, disposition, &revision],
+                    ),
+                    false,
+                )
+            })
+        }
+        "failed" => {
+            let appended = report
+                .pointer("/journal_appended")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| invalid("/journal_appended"))?
+                .to_string();
+            let values = [text("/error/code")?, text("/error/stage")?, &appended, exit];
+            Ok((fill(labels.unlock_failed, &values), false))
+        }
+        _ => Err(invalid("/status")),
+    }
+}
+
+/// Exactly `<actingd_exe> unlock-owner --config <actingd_config> --actor acui
+/// --confirm-resources-released`: its exit status and both output streams, or
+/// the text for why there are none.
+fn run_unlock(
+    labels: &Labels,
+    exe: &Path,
+    config: &Path,
+) -> Result<(ExitStatus, Vec<u8>, Vec<u8>), String> {
+    let mut command = Command::new(exe);
+    command
+        .arg("unlock-owner")
+        .arg("--config")
+        .arg(config)
+        .args(["--actor", UNLOCK_ACTOR, "--confirm-resources-released"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command.spawn().map_err(|error| {
+        fill(
+            labels.unlock_spawn_failed,
+            &[&exe.display().to_string(), &error.to_string()],
+        )
+    })?;
+    // Drained while it runs, so a full pipe can never stall it.
+    let drains =
+        drain(child.stdout.take()).and_then(|stdout| Ok((stdout, drain(child.stderr.take())?)));
+    let (stdout, stderr) = match drains {
+        Ok(drains) => drains,
+        Err(error) => {
+            let reaped = reap(labels, &mut child);
+            let why = fill(
+                labels.unlock_output_failed,
+                &[&error.to_string(), labels.none],
+            );
+            return Err(format!("{why} · {reaped}"));
+        }
+    };
+    let deadline = Instant::now() + UNLOCK_TIMEOUT;
+    let stopped = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(UNLOCK_POLL),
+            Ok(None) => {
+                let seconds = UNLOCK_TIMEOUT.as_secs().to_string();
+                break Err(fill(labels.unlock_timeout, &[&seconds]));
+            }
+            Err(error) => break Err(fill(labels.child_status_failed, &[&error.to_string()])),
+        }
+    };
+    let status = match stopped {
+        Ok(status) => status,
+        Err(text) => return Err(format!("{text} · {}", reap(labels, &mut child))),
+    };
+    // The exit code stays on the line: by the contract, 0 alone says the unlock took effect.
+    let exit = exit_text(labels, status);
+    let output = |pipe: JoinHandle<io::Result<Vec<u8>>>| match pipe.join() {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(error)) => Err(fill(
+            labels.unlock_output_failed,
+            &[&error.to_string(), &exit],
+        )),
+        Err(_) => Err(fill(labels.unlock_output_failed, &[labels.none, &exit])),
+    };
+    Ok((status, output(stdout)?, output(stderr)?))
+}
+
+fn reap(labels: &Labels, child: &mut Child) -> String {
+    match child.kill().and_then(|()| child.wait()) {
+        Ok(_) => labels.unlock_killed.to_owned(),
+        Err(error) => fill(labels.unlock_kill_failed, &[&error.to_string()]),
+    }
+}
+
+fn exit_text(labels: &Labels, status: ExitStatus) -> String {
+    status
+        .code()
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| labels.none.to_string())
+}
+
+/// A reader thread for one pipe; a thread the system refuses is an error to
+/// report, never a panic on a detached worker that would leave the unlock stuck.
+fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> io::Result<JoinHandle<io::Result<Vec<u8>>>> {
+    std::thread::Builder::new().spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            pipe.read_to_end(&mut bytes)?;
+        }
+        Ok(bytes)
+    })
 }
 
 fn shutdown(window: &AppWindow, app: &Rc<App>) {
