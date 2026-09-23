@@ -11,7 +11,7 @@
 
 ## 数据来源：读面，不是文件
 
-程序只认一个参数：状态根。**所有文件 IO 都归读面**，监控台自己从不拼接状态根里的路径，
+程序只认一个参数：状态根。**读账本数据的文件 IO 都归读面**，监控台自己从不拼接状态根里的路径，
 不打开 `ledger/`、`artifacts/` 或 `runtime-state.sqlite`，也不为读数据拉起任何 CLI。它拉起的
 进程只有两种：actingd 本身（「启动」，见「启动器」一节），和保存实例配置时用来校验的
 `actingd check-config`（见「实例配置」一节）。
@@ -162,7 +162,7 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml（没有就用 $HOME/.config/
 lang = "zh"          # zh | en
 text_size = "standard"   # standard | large | extra-large
 state_root = 'D:\ActingCommand\state'                    # 可选，绝对路径
-actingd_config = 'D:\ActingCommand\actingd.toml'         # 可选，绝对路径
+actingd_config = 'D:\ActingCommand\actingd.config.json'  # 可选，绝对路径
 actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对路径
 ```
 
@@ -244,7 +244,8 @@ Runtime 复述默认地址）、`application_id`、截图与触控后端，以�
   `<actingd_exe> check-config --config <临时文件>`（30 秒上限，不弹控制台窗口，stdout 整段按一份
   `actingcommand.actingd.check-config.v1` 报告解析）。只有 `status: ok` 且退出码成功才改名覆盖原
   文件；否则删掉临时文件、原文件不动，窗口写明原因：原样写出 `error.code` 与 `stage`，或是
-  `actingd_exe` 没配或非绝对、拉起失败、超时、输出读不出或无法识别、报 ok 但退出码非零、改名失败
+  `actingd_exe` 没配或非绝对、写临时文件失败、拉起失败、读输出的线程起不来、读子进程状态失败、
+  超时（这三种还写明 check-config 能否终止）、输出读不出或无法识别、报 ok 但退出码非零、改名失败
   中的哪一种。
 - **生效**：没有热加载，保存的实例在 Runtime 重启后生效。保存之后在事件循环之外探测一次，写明现在
   有没有 Runtime 在跑，并指向启动器自己的按钮：先「请求关闭」，停下后再「启动」——没在跑就直接
