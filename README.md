@@ -486,15 +486,28 @@ list.
 console) that installs the release files from the umbrella repository's
 [Releases](https://github.com/HS7097/ActingCommand/releases) into a **per-user** installation. It ships
 together with the UI repository's Windows build artifact (`acui-windows-<sha>.zip` gains one more file,
-`acsetup.exe`). **v1 is offline**: there is no networking code in the program at all, and a person
-downloads the release files into a folder first. One window, back / next, six steps:
+`acsetup.exe`). It fetches the release itself, or takes a folder a person filled by hand. One window,
+next only, five steps:
 
-0. **Prepare**: the install root (changeable, default `%LOCALAPPDATA%\Programs\ActingCommand`, no
-   administrator needed), the free space on that volume, whether an installation is already here (looking
-   at `runtime\BUILD-MANIFEST.json`; if there is one it stops at this step — v1 has no upgrade flow, so
-   pick another root), and the folder holding the release files (default `%USERPROFILE%\Downloads`,
-   changeable; v1 has no native directory dialog, so the path is typed in directly).
-1. **Verify**: the folder is required to hold `SHA256SUMS`, `MEMBERS.json`,
+0. **Location**: the install root only (changeable, default `%LOCALAPPDATA%\Programs\ActingCommand`, no
+   administrator needed), the free space on that volume, and whether an installation is already here
+   (looking at `runtime\BUILD-MANIFEST.json`; if there is one it stops at this step — the upgrade flow
+   comes next, so for now pick another root). Next creates the root and the install log.
+1. **Get**: by default online. On entering, the umbrella
+   [Releases](https://github.com/HS7097/ActingCommand/releases) are asked over HTTPS for one release: the
+   newest stable release when there is one (GitHub's `releases/latest`), else the newest pre-release (the
+   daily builds); never a draft. Its tag, name, date, kind and size are shown and logged. Next fetches `SHA256SUMS`,
+   `MEMBERS.json` and then every other file `SHA256SUMS` lists — nothing else — into
+   `<install root>\downloads\<tag>\`, each through a `.part` file renamed once its length is the length
+   the release states, with a progress line per tenth for a file of a MiB or more; a file already there is
+   fetched again, never trusted, and a failed one's `.part` file is removed. The tag and every file name
+   are used only if they are letters, digits, `.`, `-` and `_`, do not start with a dot and are no Windows
+   device name. HTTPS only, redirects included; a connection quiet for a minute fails. Ticking **Offline**
+   instead takes a folder that already holds one release's files (default `%USERPROFILE%\Downloads`,
+   typed in). A failed lookup is stated on the page and in the log and leaves Offline open (ticking and
+   unticking it looks up again); a failed fetch stops the run. This is the program's only network code (`ureq`, blocking, rustls with the
+   Mozilla root set compiled in); the Runtime has none.
+2. **Verify and lay out**, one step: the folder is required to hold `SHA256SUMS`, `MEMBERS.json`,
    `actingcommand-runtime-<sha>.zip`, `actingcommand-tools-<sha>.zip` and `acui-windows-<sha>.zip`
    (`<sha>` taken from `MEMBERS.json`'s `runtime_sha` / `ui_sha`; the three zips must appear in
    `SHA256SUMS`). `SHA256SUMS` is checked entry by entry; the archives are extracted into the temporary
@@ -503,8 +516,8 @@ downloads the release files into a folder first. One window, back / next, six st
    `runtime_payload_layout` (`distribution-v1`) and the size and sha256 of every entry in `files[]` are
    checked; a file in the zip that the manifest does not list also counts as a mismatch. Any mismatch
    stops it, worded as "the content differs from what it was at creation" — this is an integrity
-   statement, not an authorization tone. Nothing inside the zips is run during verification.
-2. **Lay out**: `runtime\` (the Runtime's entire payload + manifest, with `actingd.config.example.json`
+   statement, not an authorization tone. Nothing inside the zips is run during verification. Then the
+   layout: `runtime\` (the Runtime's entire payload + manifest, with `actingd.config.example.json`
    byte-for-byte verbatim), `ui\` (the console payload + manifest), `tools\` (**only** `actinglab.exe`,
    `actingledger.exe` and `ac_fastdeploy_ppocr.dll`; the other two exes in the tools pack are neither
    installed nor shown). The temporary directory is deleted afterwards.
@@ -520,7 +533,7 @@ downloads the release files into a folder first. One window, back / next, six st
    `acui-setup` does not depend on `acui-app` and is a small duplicate writer. **Instances (emulators /
    devices) are not configured in the wizard**; `instances` is left empty and they are added afterwards
    with the console's top-bar 实例配置 / Instance Configuration button; the finish page says so.
-4. **Start at boot** (optional, unchecked by default): only when checked does it write
+   **Start at boot** is on the same page (optional, unchecked by default): only when checked does it write
    `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd` in the per-user startup
    folder, whose content is
    `start "" "<install root>\runtime\actingcommand-actingd.exe" --config "<install root>\actingd.config.json"`;
@@ -528,24 +541,26 @@ downloads the release files into a folder first. One window, back / next, six st
    `start "" "<install root>\ui\acui.exe"`. acsetup does not appear in the batch file. Unchecked, it
    writes nothing; a file of the same name already in the startup folder is left alone, and merely
    mentioned in one sentence on the finish page.
-5. **Finish**: "启动监控台 / Open console" launches `<install root>\ui\acui.exe` detached (it never
+4. **Finish**: "启动监控台 / Open console" launches `<install root>\ui\acui.exe` detached (it never
    launches actingd directly; the Runtime is launched by the console's launcher) and closes the wizard;
    "finish" only closes.
 
-**Install log**: from step 1 onward every step appends a plain-language line to
+**Install log**: from leaving step 0 onward every step appends a plain-language line to
 `<install root>\acsetup-<unix_ms>.log`; on failure the last line states the reason, and the window shows
-the log path. Apart from the installed payload, the configuration, the settings and (when checked) the
-start-at-boot batch file, this is the only file the wizard writes.
+the log path. Apart from the installed payload, the configuration, the settings, the fetched release
+files under `downloads\` and (when checked) the start-at-boot batch file, this is the only file the wizard
+writes.
 
 **Things it never does**: it does not install a service, does not create a scheduled task, does not change
 PATH, does not write the registry; does not modify the configuration template; does not touch a state root
-that already holds content; does not configure instances; does not go on the network; does not upgrade and
-does not install resource packs. On Linux the crate compiles as usual (CI runs `--workspace` on both
+that already holds content; does not configure instances; goes on the network only to list and fetch the
+umbrella release; does not upgrade and does not install resource packs. On Linux the crate compiles as usual (CI runs `--workspace` on both
 legs), and running it exits immediately with `acsetup v1 is Windows-only`.
 
-Only three dependencies are added, each with its purpose noted in `[workspace.dependencies]`: `sha2`
+Four dependencies are added, each with its purpose noted in `[workspace.dependencies]`: `sha2`
 (verification), `zip` (`default-features = false`, only `deflate` enabled, the same version line the
-Runtime locks) and `getrandom` (the salt).
+Runtime locks), `getrandom` (the salt) and `ureq` (the fetch; `default-features = false` with only `tls`:
+rustls, its `ring` provider and the compiled-in `webpki-roots`, so no system TLS library).
 
 ## Four layers, four crates
 
@@ -588,7 +603,7 @@ cannot start keeps running, and the line says so and that pressing Start again p
 said as that, not as a kill that failed.
 
 A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
-depending only on slint, serde, sha2, zip and getrandom, and on none of the layers above; see the previous
+depending only on slint, serde, sha2, zip, getrandom and ureq, and on none of the layers above; see the previous
 section, "Setup wizard acsetup".
 
 ## Icon

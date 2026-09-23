@@ -75,36 +75,38 @@ export component SetupWindow inherits Window {
     in property <string> failure-text;
     in property <string> log-path;
     in property <bool> can-next;
-    in property <bool> can-back;
     // The line under a page's inputs: why Next did nothing, or what went
     // wrong short of stopping.
     in property <string> note;
-    // The running lines of the verify and layout workers.
+    // The running lines of the fetch, verify and layout workers.
     in property <string> progress;
     in property <string> free-space-text;
     in property <string> existing-text;
+    // The release the online path would install, or why none was found.
+    in property <string> release-text;
     // Set once the configuration is written: the state root is then fixed.
     in property <bool> configured;
     in property <string> summary;
     in-out property <string> install-root;
+    // Step 1: a folder a person filled by hand instead of the fetch.
+    in-out property <bool> offline;
     in-out property <string> download-dir;
     in-out property <string> state-root;
     in-out property <bool> autostart;
     in-out property <bool> autostart-console;
 
     callback next();
-    callback back();
     callback close-wizard();
     callback open-console();
     callback install-root-edited(string);
+    callback offline-toggled(bool);
 
     property <[string]> step-labels: [
-        "0 准备 / Preflight",
-        "1 校验 / Verify",
-        "2 铺开 / Layout",
+        "0 位置 / Location",
+        "1 取件 / Get",
+        "2 校验与铺开 / Verify & lay out",
         "3 配置 / Configure",
-        "4 自启 / Autostart",
-        "5 完成 / Finish",
+        "4 完成 / Finish",
     ];
 
     VerticalLayout {
@@ -134,7 +136,7 @@ export component SetupWindow inherits Window {
 
                 if !root.failed && root.step == 0: VerticalLayout {
                     spacing: 8px;
-                    Head { text: "安装根 / Install root"; }
+                    Head { text: "安装位置 / Install location"; }
                     LineEdit {
                         text <=> root.install-root;
                         edited(text) => {
@@ -143,32 +145,41 @@ export component SetupWindow inherits Window {
                     }
                     Caption { text: root.free-space-text; }
                     Caption { text: root.existing-text; }
-                    Head { text: "发布件所在文件夹 / Download folder"; }
-                    LineEdit {
-                        text <=> root.download-dir;
-                        placeholder-text: "例如 / e.g. C:\\Users\\<you>\\Downloads\\ActingCommand";
-                    }
-                    Body {
-                        text: "从伞仓 Releases 下载 SHA256SUMS、MEMBERS.json 与 actingcommand-runtime-<sha>.zip、actingcommand-tools-<sha>.zip、acui-windows-<sha>.zip 到同一个文件夹，这里填它。v1 离线：本程序没有任何联网代码。\nPut SHA256SUMS, MEMBERS.json and the three zips from the umbrella release in one folder and name it here. v1 is offline: this program has no network code.";
-                    }
                     Body { text: root.note; }
                     Rectangle { }
                 }
 
                 if !root.failed && root.step == 1: VerticalLayout {
                     spacing: 8px;
-                    Head { text: "校验 / Verify"; }
-                    Caption {
-                        text: "逐条核对 SHA256SUMS；解压到安装根下的临时目录；再按每个 zip 自带的 BUILD-MANIFEST.json 核对来源仓、提交号与 files[] 每一项的大小、sha256。校验期间不运行 zip 里的任何东西。\nEvery SHA256SUMS entry; unpack under the install root; then every file in every zip against its BUILD-MANIFEST.json (repository, commit, size, sha256). Nothing from the zips is run.";
+                    Head { text: "取件 / Get the release"; }
+                    CheckBox {
+                        text: "离线：用已下载的发布件文件夹 / Offline: use a folder of downloaded release files";
+                        checked <=> root.offline;
+                        enabled: !root.busy;
+                        toggled => {
+                            root.offline-toggled(self.checked);
+                        }
+                    }
+                    if !root.offline: Body { text: root.release-text; }
+                    if !root.offline: Caption {
+                        text: "从伞仓 Releases（github.com/HS7097/ActingCommand/releases）取发布件：有正式版取最新正式版，否则取最新预发布（每日构建）。只下载 SHA256SUMS、MEMBERS.json 和 SHA256SUMS 列出的文件，存到 <安装根>\\downloads\\<标签>\\；下一步按同样的规则校验。这是本程序唯一的联网代码。\nFrom the umbrella Releases: the newest stable release when there is one, else the newest pre-release (a daily build). Only SHA256SUMS, MEMBERS.json and what SHA256SUMS lists are fetched, into <install root>\\downloads\\<tag>\\, and verified next exactly like a folder filled by hand. This is the program's only network code.";
+                    }
+                    if root.offline: LineEdit {
+                        text <=> root.download-dir;
+                        placeholder-text: "例如 / e.g. C:\\Users\\<you>\\Downloads\\ActingCommand";
+                    }
+                    if root.offline: Body {
+                        text: "把同一个伞仓发布件的 SHA256SUMS、MEMBERS.json 与 actingcommand-runtime-<sha>.zip、actingcommand-tools-<sha>.zip、acui-windows-<sha>.zip 放在同一个文件夹，这里填它。\nPut SHA256SUMS, MEMBERS.json and the three zips of one umbrella release in one folder and name it here.";
                     }
                     Transcript { text: root.progress; }
+                    Body { text: root.note; }
                 }
 
                 if !root.failed && root.step == 2: VerticalLayout {
                     spacing: 8px;
-                    Head { text: "铺开 / Layout"; }
+                    Head { text: "校验与铺开 / Verify and lay out"; }
                     Caption {
-                        text: "runtime\\（Runtime 全部载荷与清单，配置模板逐字节原样）、ui\\（监控台载荷与清单）、tools\\（只有 actinglab.exe、actingledger.exe、ac_fastdeploy_ppocr.dll）；之后删除临时目录。不改 PATH、不写注册表、不装服务。\nruntime\\ (the whole Runtime payload and its manifest), ui\\ (the console and its manifest), tools\\ (only the three named tools); the staging directory is removed afterwards. No PATH, no registry, no service.";
+                        text: "逐条核对 SHA256SUMS；解压到安装根下的临时目录；按每个 zip 自带的 BUILD-MANIFEST.json 核对来源仓、提交号与 files[] 每一项的大小、sha256，期间不运行 zip 里的任何东西。然后铺开：runtime\\（Runtime 全部载荷与清单，配置模板逐字节原样）、ui\\（监控台载荷与清单）、tools\\（只有 actinglab.exe、actingledger.exe、ac_fastdeploy_ppocr.dll），再删除临时目录。不改 PATH、不写注册表、不装服务。\nEvery SHA256SUMS entry; unpack under the install root; every file in every zip against its BUILD-MANIFEST.json, nothing from the zips run. Then runtime\\, ui\\ and tools\\ (only the three named tools) are laid out and staging is removed. No PATH, no registry, no service.";
                     }
                     Transcript { text: root.progress; }
                 }
@@ -186,6 +197,18 @@ export component SetupWindow inherits Window {
                     Body {
                         text: "写 <安装根>\\actingd.config.json：schema_version、state_root、bind_host 127.0.0.1、bind_port 0、secret_fingerprint_salt（本机随机源生成的 32 字节，十六进制；不显示、不写日志）、instances 为空——别的字段一个不加。再写监控台设置 %APPDATA%\\ActingCommand\\acui.toml 的 state_root、actingd_config、actingd_exe（已有的 lang / text_size 保留）。\nWrites <root>\\actingd.config.json with exactly those six fields (the salt: 32 bytes from the OS RNG, hex; never shown, never logged) and the console's acui.toml (state_root, actingd_config, actingd_exe; lang / text_size kept).";
                     }
+                    CheckBox {
+                        text: "登录时启动 Runtime（可选，默认不勾）/ Start the Runtime at sign-in (optional, off by default)";
+                        checked <=> root.autostart;
+                    }
+                    CheckBox {
+                        text: "同时拉起监控台 / Also open the console";
+                        checked <=> root.autostart-console;
+                        enabled: root.autostart;
+                    }
+                    Caption {
+                        text: "勾选后只写一个按用户的启动文件夹批处理 %APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\ActingCommand.cmd；不装服务、不建计划任务、不写注册表；不勾就什么也不写。\nWhen checked, one per-user Startup-folder .cmd is written and nothing else; unchecked writes nothing.";
+                    }
                     Body {
                         text: "实例（模拟器 / 设备）不在本引导里配置，instances 留空：之后点监控台顶栏的「实例配置」按钮添加。\nInstances (emulators / devices) are not configured here, instances stays empty: add them with the Instance Configuration button in the console's top bar.";
                     }
@@ -194,24 +217,6 @@ export component SetupWindow inherits Window {
                 }
 
                 if !root.failed && root.step == 4: VerticalLayout {
-                    spacing: 8px;
-                    Head { text: "开机自启 / Autostart（可选，默认不勾 / optional, off by default）"; }
-                    CheckBox {
-                        text: "登录时启动 Runtime / Start the Runtime at sign-in";
-                        checked <=> root.autostart;
-                    }
-                    CheckBox {
-                        text: "同时拉起监控台 / Also open the console";
-                        checked <=> root.autostart-console;
-                        enabled: root.autostart;
-                    }
-                    Body {
-                        text: "勾选后只写一个按用户的启动文件夹批处理：%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\ActingCommand.cmd，内容是 start \"\" \"<安装根>\\runtime\\actingcommand-actingd.exe\" --config \"<安装根>\\actingd.config.json\"；勾了第二项再加一行 start \"\" \"<安装根>\\ui\\acui.exe\"。不装服务、不建计划任务、不写注册表；不勾就什么也不写。\nWhen checked, one per-user Startup-folder .cmd is written and nothing else: no service, no scheduled task, no registry. Unchecked writes nothing.";
-                    }
-                    Rectangle { }
-                }
-
-                if !root.failed && root.step == 5: VerticalLayout {
                     spacing: 8px;
                     Head { text: "完成 / Finish"; }
                     Transcript { text: root.summary; }
@@ -240,14 +245,7 @@ export component SetupWindow inherits Window {
                     root.close-wizard();
                 }
             }
-            if !root.failed && root.step < 5: Button {
-                text: "上一步 / Back";
-                enabled: root.can-back && !root.busy;
-                clicked => {
-                    root.back();
-                }
-            }
-            if !root.failed && root.step < 5: Button {
+            if !root.failed && root.step < 4: Button {
                 text: "下一步 / Next";
                 primary: true;
                 enabled: root.can-next && !root.busy;
@@ -255,14 +253,14 @@ export component SetupWindow inherits Window {
                     root.next();
                 }
             }
-            if !root.failed && root.step == 5: Button {
+            if !root.failed && root.step == 4: Button {
                 text: "启动监控台 / Open console";
                 primary: true;
                 clicked => {
                     root.open-console();
                 }
             }
-            if !root.failed && root.step == 5: Button {
+            if !root.failed && root.step == 4: Button {
                 text: "完成 / Done";
                 clicked => {
                     root.close-wizard();
