@@ -76,13 +76,13 @@ fn plain(name: &str) -> bool {
         && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
 }
 
-/// HTTPS only, redirects included, and no request longer than half an hour.
+/// HTTPS only, redirects included. A connection that goes quiet for a minute
+/// fails; there is no overall limit, which in ureq 2 would replace that one.
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .https_only(true)
         .timeout_connect(Duration::from_secs(15))
         .timeout_read(Duration::from_secs(60))
-        .timeout(Duration::from_secs(30 * 60))
         .user_agent(USER_AGENT)
         .build()
 }
@@ -175,8 +175,10 @@ fn get(
         }
     };
     let path = dir.join(name);
-    fs::rename(&part, &path)
-        .map_err(|error| format!("无法改名 / cannot rename {}: {error}", part.display()))?;
+    if let Err(error) = fs::rename(&part, &path) {
+        let _ = fs::remove_file(&part);
+        return Err(format!("无法改名 / cannot rename {}: {error}", part.display()));
+    }
     report(&format!("已下载 / fetched: {name}（{written} 字节 / bytes）"))
 }
 

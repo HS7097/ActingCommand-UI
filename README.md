@@ -502,7 +502,7 @@ next only, five steps:
    the release states, with a progress line per tenth for a file of a MiB or more; a file already there is
    fetched again, never trusted, and a failed one's `.part` file is removed. The tag and every file name
    are used only if they are letters, digits, `.`, `-` and `_`, do not start with a dot and are no Windows
-   device name. HTTPS only, redirects included, each request within half an hour. Ticking **Offline**
+   device name. HTTPS only, redirects included; a connection quiet for a minute fails. Ticking **Offline**
    instead takes a folder that already holds one release's files (default `%USERPROFILE%\Downloads`,
    typed in). A failed lookup is stated on the page and in the log and leaves Offline open (ticking and
    unticking it looks up again); a failed fetch stops the run. This is the program's only network code (`ureq`, blocking, rustls with the
