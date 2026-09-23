@@ -190,10 +190,12 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   中途悄悄换读面**。60 次都没连上，写「仍未就绪」和最后一次客户端错误码。**不解析守护进程的输出**。
 - **记下启动按钮**：Runtime 存在之后才记得下，所以顺序是探测 →（需要时）拉起 → 就绪判定 → 记账。
   记账新开一条连接，`begin_interaction()` 开一个交互，用 `record_client_action_receipt` 记一条
-  `client_action`（surface `acui.launcher`、control `start_runtime`，值是布尔：这次按钮是否真的
-  拉起了进程），回执必须带 terminal；在工作线程上做，不占窗口的事件循环。结果行追加动作落账的
+  `client_action`（surface `acui.launcher`，类别 `button`、不带值；这次按钮拉起了进程记 control
+  `launcher.start`，发现 Runtime 已在运行记 `launcher.start.skipped_running`），回执必须带 terminal；
+  在工作线程上做，不占窗口的事件循环。有没有拉起进程是账本自己记下的结果（`runtime.started`），
+  不是按钮的值。结果行追加动作落账的
   序号；记账失败就把 Runtime 的拒绝码（若有）**原样**写出，外加客户端错误码与操作名——Runtime
-  仍照写已就绪 / 运行中。类别是 `command` 而不是 `button`：契约不许 `button` 带值。就绪判定
+  仍照写已就绪 / 运行中。就绪判定
   失败时没有连接，**什么也不记**，失败只写在结果行上——这是启动器里唯一可能生效却不落账的动作。
 - **请求关闭**：只走类型化客户端，从不杀进程。新开一条连接，`begin_interaction()` 开一个
   交互，先用 `record_client_action_receipt` 把这次按钮记成 `client_action`（surface

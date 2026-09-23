@@ -244,12 +244,13 @@ the line below it is the result of the last button press.
 - **Recording the start press**: the press can only be recorded once a Runtime exists, so the order is
   probe → (if needed) launch → readiness decision → record. Recording opens a new connection, opens an
   interaction with `begin_interaction()` and records one `client_action` with
-  `record_client_action_receipt` (surface `acui.launcher`, control `start_runtime`, value a Boolean:
-  did this press launch a process), whose receipt must bear a terminal; it runs on a worker thread, never
-  on the window's event loop. The line appends the sequence number at which it landed, or, if recording
+  `record_client_action_receipt` (surface `acui.launcher`, kind `button` with no value, control
+  `launcher.start` when this press launched a process, `launcher.start.skipped_running` when it found the
+  Runtime already running), whose receipt must bear a terminal; it runs on a worker thread, never on the
+  window's event loop. Whether a process was launched is an outcome the ledger records on its own
+  (`runtime.started`), not a value of the press. The line appends the sequence number at which it landed, or, if recording
   failed, the Runtime's refusal code (if any) **verbatim** plus the client error code and operation name
-  — the Runtime is still reported ready / running. Its kind is `command`, not `button`: the contract
-  refuses any value on a `button`. If readiness fails there is no connection and **nothing is
+  — the Runtime is still reported ready / running. If readiness fails there is no connection and **nothing is
   recorded**; the failure is shown only on the line — the one launcher action that can take effect
   without being recorded.
 - **Request shutdown**: only through the typed client, never killing a process. It opens a new connection,

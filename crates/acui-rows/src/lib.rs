@@ -13,9 +13,9 @@ mod display;
 pub use display::{event_type_names, format_bytes, module_names};
 
 pub use actingcommand_contract::{
-    ArtifactEvictionObservation, ArtifactKind, ClientActionKind, ClientActionRecord,
-    ClientActionValue, EventActor, EventLinks, EventQuery, EventSeverity, EventSource, InstanceId,
-    LedgerEventPosition, LedgerRecoveryGap, LedgerRecoveryState,
+    ArtifactEvictionObservation, ArtifactKind, ClientActionKind, ClientActionRecord, EventActor,
+    EventLinks, EventQuery, EventSeverity, EventSource, InstanceId, LedgerEventPosition,
+    LedgerRecoveryGap, LedgerRecoveryState,
     LedgerRunRecovery, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS,
     MAX_RUNTIME_MATERIAL_CHUNK_BYTES, MAX_RUNTIME_MATERIAL_REPLY_BYTES, OriginModule,
     ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,

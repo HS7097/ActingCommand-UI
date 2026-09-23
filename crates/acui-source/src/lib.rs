@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use acui_rows::{
-    code, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord, ClientActionValue,
-    EventActor, EventQuery, EventSource, LedgerCount, LedgerEventPosition, LedgerView,
+    code, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord, EventActor,
+    EventQuery, EventSource, LedgerCount, LedgerEventPosition, LedgerView,
     MAX_RUNTIME_MATERIAL_CHUNK_BYTES, MAX_RUNTIME_MATERIAL_REPLY_BYTES, OpenReport, PortBindings,
     PortEntry, ProjectedArtifactReference, ProjectionProfile, RuntimeEventQueryCursor,
     RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit,
@@ -460,7 +460,7 @@ const SHUTDOWN_BUSY_WAIT: Duration = Duration::from_secs(1);
 /// waits for it to stop.
 pub fn request_shutdown(state_root: &Path, mut retrying: impl FnMut(u32)) -> ShutdownOutcome {
     let (interaction, action_sequence) =
-        match record_press(state_root, "request_shutdown", ClientActionKind::Button, None) {
+        match record_press(state_root, "request_shutdown") {
             Ok(recorded) => recorded,
             Err(failure) => return ShutdownOutcome { attempts: 0, result: Err(failure) },
         };
@@ -488,35 +488,29 @@ pub fn request_shutdown(state_root: &Path, mut retrying: impl FnMut(u32)) -> Shu
 }
 
 /// Records the launcher's start press, once the Runtime it started, or found
-/// already running, takes a connection; `spawned` says which. Before that there
-/// is no Runtime to record it, so a start that never got ready records nothing.
+/// already running, takes a connection. Before that there is no Runtime to
+/// record it, so a start that never got ready records nothing. Whether a
+/// process was launched is an outcome the ledger states on its own, not a
+/// value of the press; a press that found the Runtime running is its own control.
 pub fn record_start(state_root: &Path, spawned: bool) -> Result<u64, ClientFailure> {
-    // The contract refuses any value on a `Button`; a `Command` may carry one.
-    let kind = ClientActionKind::Command;
-    let value = Some(ClientActionValue::Boolean(spawned));
-    let (_, sequence) = record_press(state_root, "start_runtime", kind, value)?;
+    let control_id = if spawned { "launcher.start" } else { "launcher.start.skipped_running" };
+    let (_, sequence) = record_press(state_root, control_id)?;
     Ok(sequence)
 }
 
 /// One fresh connection, one interaction on it, and one launcher press recorded
-/// there as a client action whose receipt must carry a terminal event. Gives
-/// back the interaction and the record's ledger position.
-fn record_press(
-    state_root: &Path,
-    control_id: &str,
-    kind: ClientActionKind,
-    value: Option<ClientActionValue>,
-) -> Result<(RuntimeClient, u64), ClientFailure> {
+/// there as a value-less button client action whose receipt must carry a
+/// terminal event. Gives back the interaction and the record's ledger position.
+fn record_press(state_root: &Path, control_id: &str) -> Result<(RuntimeClient, u64), ClientFailure> {
     let client = OnlineSource::connect(state_root)?;
     let interaction = client.begin_interaction()?;
     let action =
-        ClientActionRecord::new("acui.launcher", control_id, kind, None, value).map_err(|_| {
-            ClientFailure {
+        ClientActionRecord::new("acui.launcher", control_id, ClientActionKind::Button, None, None)
+            .map_err(|_| ClientFailure {
                 code: "client_action_invalid",
                 operation: "record_client_action",
                 runtime_code: None,
-            }
-        })?;
+            })?;
     let recorded = interaction.record_client_action_receipt(action)?;
     let sequence = recorded
         .terminal()
