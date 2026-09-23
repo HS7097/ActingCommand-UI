@@ -218,8 +218,7 @@ pub struct Labels {
     pub checking: &'static str,
     /// candidate path, error.
     pub candidate_failed: &'static str,
-    /// seconds; exit code, output; error.code, stage; exit code; exit code,
-    /// error; exit code.
+    /// seconds; exit code, output; error.code, stage; exit code; exit code, error; exit code.
     pub check_timeout: &'static str,
     pub check_unparsed: &'static str,
     pub check_failed: &'static str,
