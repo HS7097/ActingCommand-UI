@@ -359,9 +359,12 @@ list.
   explicit ADB address). `adb_path` is required with `host` + `port` and optional with a MuMu binding,
   whose discovery reports adb; `nemu_app_index` is an optional whole number. The form does not check
   `application_id`, `capture_backend` or `touch_backend`: whether they are needed and valid is decided by
-  check-config. For a MuMu binding, the `nemu_app_index` pairing and an `adb_path` conflict with discovery
-  are checked only when the Runtime starts, not by check-config. Text is trimmed and an empty box writes
-  no key; a missing required value or a number that does not parse is stated before anything is written.
+  check-config, which also checks the `nemu_app_index` pairing. Only what needs the MuMu discovery
+  result waits until the Runtime starts: the `MuMuManager` version and capabilities, exactly one
+  discovered match, a declared `adb_path`, `host` or `port` against the discovered values, and the ADB
+  endpoint (Runtime `contracts/actingd-check-config.md`, from `3d5398d6`). Text is trimmed and an empty
+  box writes no key; a missing required value or a number that does not parse is stated before anything
+  is written.
 - **Save**: the file is read again as plain JSON — a missing or relative `actingd_config`, a missing or
   unreadable file, JSON that does not parse, no `instances` array, or an entry that is not an object is
   each stated as such. A new entry is appended; an existing one is found again by its `instance_id`
