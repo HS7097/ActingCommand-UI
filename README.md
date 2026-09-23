@@ -14,7 +14,9 @@ It is not part of the Runtime; it is the Runtime's **external, detachable client
 
 The program accepts only one argument: the state root. **All file IO belongs to the read face**; the
 console never assembles paths inside the state root itself, never opens `ledger/`, `artifacts/` or
-`runtime-state.sqlite`, and never launches any CLI.
+`runtime-state.sqlite`, and never launches a CLI to read data. The only processes it starts are actingd
+itself (**Start**, see "Launcher") and `actingd check-config` when an instance-configuration save is
+checked (see "Instance configuration").
 
 There are two read faces, with the same query, page and cursor semantics; they differ only in where the
 answers come from:
