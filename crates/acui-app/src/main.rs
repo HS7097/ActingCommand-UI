@@ -916,9 +916,10 @@ fn update_frame(
     let snapshot = source.snapshot_position();
     let weak = window.as_weak();
     std::thread::spawn(move || {
-        // One worker at a time. A superseded read stops at its next range
-        // online, or has its whole read dropped offline, and lets the slot go;
-        // letting a read nobody waits for run on is the expensive mistake.
+        // One worker at a time. A whole read cannot be stopped midway on either
+        // face, so a superseded one runs to its end, bounded by the byte cap and
+        // the deadline, and its result is dropped; one queued behind the slot
+        // that is superseded by then never starts.
         let _slot = worker.lock().unwrap_or_else(|held| held.into_inner());
         let still_wanted = || shared.load(Ordering::SeqCst) == generation;
         if !still_wanted() {
@@ -1263,9 +1264,11 @@ fn canvas_size(overlays: &[Overlay], frame_size: Option<(f32, f32)>) -> (f32, f3
 }
 
 /// The card's instance lines. Online they come from the status read and fact
-/// snapshot taken right after the pin, at the positions the header states — live
-/// state, not state at the pinned snapshot. Offline there is no fact read yet.
-/// One short line per value, since a line in the middle of the card cannot wrap.
+/// snapshot taken once, right after the pin, at the positions the first two
+/// lines state: state at open, not state at the pinned snapshot, and never
+/// refreshed. Offline there is no fact read yet. One short value per line,
+/// since a line in the middle of the card cannot wrap: a failure is split into
+/// the Runtime's refusal, the client error and the host failure.
 fn instance_lines(labels: &Labels, source: &ReadSource) -> Vec<FieldLine> {
     let read = match source.runtime_instances() {
         None => {
@@ -1273,19 +1276,27 @@ fn instance_lines(labels: &Labels, source: &ReadSource) -> Vec<FieldLine> {
             return vec![field(labels, "runtime_instances", text, "offline")];
         }
         Some(Err(failure)) => {
-            let (refused, failed) = (labels.instances_refused, labels.instances_failed);
-            let text = launcher::failure_text(labels, refused, failed, failure);
-            return vec![field(labels, "runtime_instances", text, failure.code)];
+            let text = labels.instances_unread.to_string();
+            let mut lines = vec![field(labels, "runtime_instances", text, "")];
+            if let Some(runtime_code) = &failure.runtime_code {
+                lines.push(field(labels, "runtime_refusal", runtime_code.clone(), ""));
+            }
+            let code = failure.code.to_string();
+            lines.push(field(labels, "client_error", code, failure.operation));
+            if let Some((host_code, operation)) = &failure.host {
+                lines.push(field(labels, "host_failure", host_code.clone(), operation.as_str()));
+            }
+            return lines;
         }
         Some(Ok(read)) => read,
     };
-    let positions = [&read.status_sequence.to_string(), &read.facts_position.to_string()];
-    let mut header = fill(labels.instances_live, &positions.map(String::as_str));
+    let mut lines = vec![
+        field(labels, "instances_status_at", read.status_sequence.to_string(), ""),
+        field(labels, "instances_facts_at", read.facts_position.to_string(), ""),
+    ];
     if read.instances.is_empty() {
-        header.push_str(" · ");
-        header.push_str(labels.instances_none);
+        lines.push(field(labels, "runtime_instances", labels.instances_none.to_string(), ""));
     }
-    let mut lines = vec![field(labels, "runtime_instances", header, "")];
     let fact = |value: &Option<String>| {
         value.clone().unwrap_or_else(|| labels.fact_unrecorded.to_string())
     };
@@ -1297,7 +1308,11 @@ fn instance_lines(labels: &Labels, source: &ReadSource) -> Vec<FieldLine> {
                 let port =
                     live.adb_port.map_or_else(|| labels.none.to_string(), |port| port.to_string());
                 lines.push(field(labels, "adb_port", port, ""));
-                let lease = if live.lease_active { labels.lease_active } else { labels.lease_idle };
+                let lease = match (live.lease_active, live.takeover_cooldown_active) {
+                    (true, _) => labels.lease_active,
+                    (false, true) => labels.lease_cooldown,
+                    (false, false) => labels.lease_idle,
+                };
                 let lease = match live.queued_request_count {
                     0 => lease.to_string(),
                     queued => fill(labels.lease_queued, &[lease, &queued.to_string()]),

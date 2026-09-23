@@ -216,9 +216,11 @@ pub struct OnlineSource {
 }
 
 /// The running Runtime's instances, read once right after the session's page
-/// pin: one status read and one fact snapshot, each at the ledger position the
-/// Runtime stated for it, which may be past the pin. Live state, not state at
-/// the pinned snapshot, and the card says so.
+/// pin and never refreshed: one status read and one fact snapshot, each at the
+/// ledger position the Runtime stated for it, which may be past the pin. State
+/// at open, not state at the pinned snapshot, and the card says so. By contract
+/// the Runtime records the status read as one observation event
+/// (`command.validated`), after the pin and so outside this session's snapshot.
 #[derive(Debug, Clone)]
 pub struct RuntimeInstances {
     /// The sequence of the status read's own committed observation.
@@ -245,6 +247,8 @@ pub struct RuntimeInstanceLive {
     pub alias: String,
     pub adb_port: Option<u16>,
     pub lease_active: bool,
+    /// Never true together with `lease_active`, by contract.
+    pub takeover_cooldown_active: bool,
     pub queued_request_count: u32,
 }
 
@@ -536,8 +540,9 @@ pub fn probe_runtime(state_root: &Path) -> Result<RuntimeFacts, ClientFailure> {
     Ok(RuntimeFacts { pid: info.pid(), owner_epoch: code(&info.owner_epoch()) })
 }
 
-/// One status read, then one fact snapshot, on the session's connection. Either
-/// failing fails the pair with its own error; a status without its observation
+/// One status read, then one fact snapshot, on the session's connection; the
+/// status read is the one that leaves an observation event. Either failing
+/// fails the pair with its own error; a status without its observation
 /// source is `status_source_missing`, since the card would otherwise state a
 /// position the Runtime did not give. Only the three `task.` keys are taken.
 fn read_instances(client: &RuntimeClient) -> Result<RuntimeInstances, ClientFailure> {
@@ -561,6 +566,7 @@ fn read_instances(client: &RuntimeClient) -> Result<RuntimeInstances, ClientFail
                 alias: instance.instance_alias().to_string(),
                 adb_port: instance.adb_port(),
                 lease_active: instance.lease_active(),
+                takeover_cooldown_active: instance.takeover_cooldown_active(),
                 queued_request_count: instance.queued_request_count(),
             }),
             game: None,
@@ -863,9 +869,11 @@ fn read_material_online(
                 state: RuntimeMaterialReadState::NotProvided,
                 limit: Some(limit),
                 eviction: source.and_then(|source| source.eviction),
-                failure: failure
-                    .map(|failure| failure.code)
-                    .or_else(|| error.map(|error| error.to_string())),
+                failure: match (failure, error) {
+                    (Some(failure), Some(error)) => Some(format!("{} · {error}", failure.code)),
+                    (Some(failure), None) => Some(failure.code),
+                    (None, error) => error.map(|error| error.to_string()),
+                },
             }
         }
         RuntimeMaterialCompleteResult::Failed { source, state, failure, error } => {

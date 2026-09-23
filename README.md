@@ -58,14 +58,16 @@ answers come from:
   at a position is that position), and "writer process" states the connected Runtime itself
   (PID, owner epoch, start time, all out of its own `runtime-info.json`).
 - Right after the pin, one `status()` and one `runtime_fact_snapshot()` on the same connection give the
-  instance card its "instances (live)" lines. The header states the sequence each read was taken at; both
-  may be past the pinned snapshot, so these lines are live state, not state at the pin. Then, per
-  instance the status registers: its alias (the instance id in grey), port, lease (leased / idle, plus
-  the queued request count when there is one), and the instance facts `task.game`, `task.server` and
-  `task.page` verbatim, or "not recorded". A fact whose id the status does not register gets a row that
-  says so. If either read fails, the line states the refusal, the client error and any host failure
-  instead; the session still opens. Offline there is no fact read yet, and the line says "not provided
-  offline".
+  instance card its "instances (read at open)" lines, once per session and never refreshed. The first two
+  lines state the sequence each read was taken at; both may be past the pinned snapshot, so this is state
+  at open, not state at the pin. By contract the Runtime records the status read itself as one
+  observation event (`command.validated`), after the pin and so outside this session's snapshot. Then,
+  per instance the status registers: its alias (the instance id in grey), port, lease (leased / takeover
+  cooldown / idle, plus the queued request count when there is one), and the instance facts
+  `task.game`, `task.server` and `task.page` (the page label the last recognition matched) verbatim, or
+  "not recorded". A fact whose id the status does not register gets a row that says so. If either read
+  fails, the lines state the Runtime's refusal, the client error and any host failure, one per line;
+  the session still opens. Offline there is no fact read yet, and the line says "not provided offline".
 
 `--source <auto|offline|online>`, default `auto`: if the client can connect to the Runtime the state root
 points at, online; otherwise offline. The instance card's first line, "read face", states which one was
@@ -166,11 +168,11 @@ and only within this rule:
 - Reading is done on a background thread, and every request carries a token; if a slow read returns after
   the selection has changed, it is discarded. **A stale or unverified image is never displayed, at any
   time.**
-- Reading is done by one background worker thread, **only one at a time**: online, the one whose request
-  has been displaced stops before the next chunk and sends no further chunk — every chunk re-hashes the
-  whole material, so letting a read nobody is waiting for keep running is the most expensive mistake.
-  Offline, the whole-object read cannot be stopped midway; a displaced one runs to its end and its
-  result is discarded.
+- Reading is done by one background worker thread, **only one at a time**. The whole-object read cannot
+  be stopped midway on either face: a displaced one runs to its end, bounded by the 8 MiB limit and the
+  30-second deadline, and its result is discarded; a request displaced while it still waits for the
+  worker never starts. Online this costs more than it did while the console assembled ranges itself and
+  could stop before the next one — the Runtime re-hashes the whole material for every range.
 - Decoding uses only `image` (with only the `png` feature enabled, version pinned in the workspace's
   `[workspace.dependencies]`). The program decodes only two kinds of image: frames read back this way,
   and its own application icon.
@@ -467,13 +469,16 @@ One Cargo workspace, dependency direction app → model → rows ← source:
 - `acui-app`: the only crate that depends on slint; the `.slint` files are in `crates/acui-app/ui/`, the
   two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`.
 
-`slint` 1.17.x, `default-features = false`; the ledger is read-only, the only control entry points are the
+`slint` 1.17.x, `default-features = false`; the ledger is read-only to the console (what the Runtime
+records of the console's own requests — the start press, shutdown requests, the status read at an online
+open — it records itself), the only control entry points are the
 launcher's two buttons (start / request shutdown, see above), its owner-unlock entry (a confirmed
 `actingd unlock-owner`), and the instance-configuration window's check-config-gated save, and there is no
 approval entry point; no tests are written. The launcher is in
-`crates/acui-app/src/launcher.rs`, the instance-configuration window in `instances.rs`, and the three
-client operations, probe, request shutdown and recording the start press, are in `acui-source`
-(`probe_runtime` / `request_shutdown` / `record_start`).
+`crates/acui-app/src/launcher.rs`, the instance-configuration window in `instances.rs`, and the client
+operations — probe, request shutdown, recording the start press, and the online open's status and fact
+reads — are in `acui-source` (`probe_runtime` / `request_shutdown` / `record_start` /
+`runtime_instances`).
 
 A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
 depending only on slint, serde, sha2, zip and getrandom, and on none of the layers above; see the previous
