@@ -14,6 +14,7 @@ acui-rows = { workspace = true }
 acui-source = { workspace = true }
 anyhow = { workspace = true }
 image = { workspace = true }
+serde_json = { workspace = true }
 slint = { workspace = true }
 
 [build-dependencies]

@@ -128,6 +128,9 @@ export global Strings {
     in property <string> col-link;
     in property <string> col-port;
     in property <string> launcher-title;
+    in property <string> unlock-owner;
+    in property <string> unlock-statement;
+    in property <string> unlock-confirm;
     in property <string> start;
     in property <string> request-shutdown;
 }
@@ -225,6 +228,12 @@ export component AppWindow inherits Window {
     // outcome of the last button press.
     in property <string> runtime-status-text;
     in property <string> launcher-line;
+    // The unlock entry, offered only after a start whose fatal line named
+    // owner_resource_unconfirmed: its first press only opens the confirmation,
+    // and only the confirm runs anything. Then the last unlock's outcome.
+    in property <bool> unlock-offered;
+    in-out property <bool> unlock-confirming;
+    in property <string> unlock-line;
 
     // Two-way aliases, so the console can put a box back on the option it means
     // after the option list is rebuilt, without ever losing the box's own state.
@@ -247,6 +256,7 @@ export component AppWindow inherits Window {
     callback text-size-changed(int);
     callback language-changed(int);
     callback start-runtime();
+    callback unlock-owner();
     callback request-shutdown();
 
     VerticalLayout {
@@ -376,6 +386,37 @@ export component AppWindow inherits Window {
                     font-size: Scale.grey-font;
                     color: Palette.foreground.with-alpha(0.7);
                     overflow: elide;
+                }
+                if root.unlock-offered || root.unlock-line != "": HorizontalLayout {
+                    spacing: 14px;
+                    if root.unlock-offered && !root.unlock-confirming: Button {
+                        text: Strings.unlock-owner;
+                        clicked => {
+                            root.unlock-confirming = true;
+                        }
+                    }
+                    if root.unlock-offered && root.unlock-confirming: Text {
+                        text: Strings.unlock-statement;
+                        font-size: Scale.body-font;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        color: Palette.foreground;
+                    }
+                    if root.unlock-offered && root.unlock-confirming: Button {
+                        text: Strings.unlock-confirm;
+                        clicked => {
+                            root.unlock-owner();
+                        }
+                    }
+                    Text {
+                        text: root.unlock-line;
+                        font-size: Scale.grey-font;
+                        vertical-alignment: center;
+                        color: Palette.foreground.with-alpha(0.7);
+                        overflow: elide;
+                        min-width: 40px;
+                        horizontal-stretch: 1;
+                    }
                 }
             }
         }

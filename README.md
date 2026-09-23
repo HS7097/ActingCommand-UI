@@ -248,12 +248,16 @@ the line below it is the result of the last button press.
   inside the state root**. On Windows it is launched with `DETACHED_PROCESS`: the daemon does not inherit
   the console program's console, and does not receive its Ctrl+C.
 - **Readiness decision**: at most 60 attempts, 500 ms each. Each attempt does `try_wait()` first: if the
-  child process has exited it stops and states the exit code and the log path; if it has not exited it
+  child process has exited it stops and states the exit code, the last line of that log starting with
+  `FATAL actingd:` **verbatim** — or that the log could not be read, with the error, or holds no such
+  line — and the log path; if it has not exited it
   does one more `connect`, and a connection means ready, stating the PID and owner epoch, and then the
   press is recorded (see below). If this console is reading offline, or its offline face is unopened, it
   appends the sentence "to read online, restart with `--source online`" — it **never quietly switches
-  read face mid-session**. If all 60 attempts fail to connect, it says "still not ready" and the last client error code. It **does not
-  parse the daemon's output**.
+  read face mid-session**. If all 60 attempts fail to connect, it says "still not ready" and the last
+  client error code. Readiness is **never read from the daemon's output**: the log is read back only
+  after an early exit, for that one line, and nothing in it is interpreted but whether it names
+  `owner_resource_unconfirmed` (below).
 - **Recording the start press**: the press can only be recorded once a Runtime exists, so the order is
   probe → (if needed) launch → readiness decision → record. Recording opens a new connection, opens an
   interaction with `begin_interaction()` and records one `client_action` with
@@ -264,8 +268,32 @@ the line below it is the result of the last button press.
   (`runtime.started`), not a value of the press. The line appends the sequence number at which it landed, or, if recording
   failed, the Runtime's refusal code (if any) **verbatim** plus the client error code and operation name
   — the Runtime is still reported ready / running. If readiness fails there is no connection and **nothing is
-  recorded**; the failure is shown only on the line — the one launcher action that can take effect
-  without being recorded.
+  recorded**; the failure is shown only on the line — one of the two launcher actions that can take
+  effect without being recorded; the other is an unlock that fails at stage `ledger` or is killed (on
+  timeout, or when reading its status fails; below).
+- **Unlock owner**: offered only when the fatal line of the last start names `owner_resource_unconfirmed`
+  — actingd refused the state root because its last Runtime owner exited with device resources in use or
+  unconfirmed. A line below the result line then shows an "Unlock Owner…" button. The first press runs
+  nothing: it only shows the statement "the device resources of the last Runtime are released" and a
+  "Confirm and Unlock" button. The second press runs, from `actingd_exe` (absolute, as for Start), exactly
+  `unlock-owner --config <actingd_config> --actor acui --confirm-resources-released`, on a worker thread,
+  with no console window (`CREATE_NO_WINDOW` on Windows: its output is captured, not detached), stdout
+  and stderr captured, for at most 180 s — well above the Runtime's own 120 s budget for the ledger stage,
+  so a run that would finish is never cut off; past that it is killed and reaped and the line says the
+  outcome is unknown. The actor `acui` names the console, never a person: no OS user name reaches the ledger.
+  The whole trimmed stdout must be one JSON object with `schema_version`
+  `actingcommand.actingd.unlock-owner.v1`. `ok` with exit code 0 states the unlocked owner epoch, the
+  disposition before (`in_use` / `unconfirmed`) and the `owner.lock` revision, withdraws the entry and
+  presses Start once more, through the same path. `failed` states `error.code`, `error.stage` and
+  `journal_appended` **verbatim** (`true` only at stage `ledger`: the unlock is durable and the next
+  start takes the epoch over, but its ledger fact is missing). With no JSON, the last `FATAL actingd:`
+  line on stderr is shown **verbatim** — an argument error, or an actingd too old to know the command. A
+  spawn failure, a timeout, output that does not parse or does not match the contract, and an `ok` with
+  a non-zero exit code each have their own line, and none retries the start. After any outcome but an
+  unlock the entry is back at its first step; a new start withdraws it, and Start is refused while the
+  unlock runs. The console records no client action for it: there is no running Runtime to record
+  through, and `unlock-owner` appends its own `cli.command` fact (action `owner.unlock`). It never
+  deletes `owner.lock` (Runtime `contracts/actingd-unlock-owner.md`).
 - **Request shutdown**: only through the typed client, never killing a process. It opens a new connection,
   opens an interaction with `begin_interaction()`, first records this button press as a `client_action`
   with `record_client_action_receipt` (surface `acui.launcher`, control `request_shutdown`), and only
@@ -284,8 +312,7 @@ the line below it is the result of the last button press.
   `kill`, no blocking `wait`, no job object attached; the handle is dropped once the readiness decision
   ends, and the daemon outlives the console.
 
-Pause/resume, unlocking the owner, start-at-boot, the installer and network downloads are all outside this
-slice.
+Pause/resume, start-at-boot, the installer and network downloads are all outside this slice.
 
 ## Setup wizard acsetup
 
