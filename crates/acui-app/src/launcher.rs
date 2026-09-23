@@ -639,7 +639,9 @@ fn shutdown(window: &AppWindow, app: &Rc<App>) {
                     &accepted.action_sequence.to_string(),
                 ],
             ),
-            Err(failure) => failure_text(labels.shutdown_refused, labels.shutdown_failed, &failure),
+            Err(failure) => {
+                failure_text(labels, labels.shutdown_refused, labels.shutdown_failed, &failure)
+            }
         };
         if outcome.attempts > 0 {
             let attempts = outcome.attempts.to_string();
@@ -658,17 +660,27 @@ fn record_text(labels: &Labels, record: Result<u64, ClientFailure>) -> String {
     let (refused, failed) = (labels.start_record_refused, labels.start_record_failed);
     match record {
         Ok(sequence) => fill(labels.start_recorded, &[&sequence.to_string()]),
-        Err(failure) => failure_text(refused, failed, &failure),
+        Err(failure) => failure_text(labels, refused, failed, &failure),
     }
 }
 
 /// The Runtime's refusal code verbatim when it answered with one, then the
-/// client's own error code and operation.
-fn failure_text(refused: &str, failed: &str, failure: &ClientFailure) -> String {
-    match &failure.runtime_code {
+/// client's own error code and operation, then the host failure behind the
+/// refusal when the receipt names one.
+pub fn failure_text(
+    labels: &Labels,
+    refused: &str,
+    failed: &str,
+    failure: &ClientFailure,
+) -> String {
+    let mut text = match &failure.runtime_code {
         Some(runtime_code) => fill(refused, &[runtime_code, failure.code, failure.operation]),
         None => fill(failed, &[failure.code, failure.operation]),
+    };
+    if let Some((host_code, operation)) = &failure.host {
+        text.push_str(&fill(labels.host_failure, &[host_code, operation]));
     }
+    text
 }
 
 /// Paints the block from a worker thread.
