@@ -10,5 +10,3 @@ actingcommand-ledger = { workspace = true }
 actingcommand-ledger-forensics = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
 anyhow = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }

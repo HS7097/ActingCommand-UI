@@ -19,7 +19,7 @@ console never assembles paths inside the state root itself, never opens `ledger/
 There are two read faces, with the same query, page and cursor semantics; they differ only in where the
 answers come from:
 
-**Offline** (the original path, not a line changed):
+**Offline** (the original path):
 
 - `GlobalLedger::open_metadata` opens the state root; the ledger itself determines the medium
   (segment / sqlite), authenticates the snapshot, and gives `latest_sequence` and the completeness
@@ -27,9 +27,10 @@ answers come from:
 - `actingcommand_ledger_forensics::query_view_page` produces the official page `RuntimeEventQueryPage`:
   events, the view membership each event carries, the read range, the page cursor, run recovery
   grouping, and artifact eviction facts.
-- `actingcommand_ledger_forensics::read_material_to` reads material: for each chunk the read face
-  resolves the reference, takes the shared read protection, re-checks the reference and the retention
-  state, and hands over that chunk's bytes only after the whole-file sha256 check passes.
+- `actingcommand_ledger_forensics::read_material_complete` reads material as one whole object: the read
+  face resolves the reference, takes the shared read protection, re-checks the reference and the
+  retention state, and hands over the bytes only after the whole-file sha256 check passes; no prefix is
+  ever handed over.
 
 **Online** (via `actingcommand-runtime-client`, the client's only typed IPC path):
 
@@ -44,11 +45,13 @@ answers come from:
   whole session. Every page after that is
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`,
   the same `EventQuery`, the same page limit, the same `next_cursor`.
-- Material goes through `RuntimeClient::read_material`: the same `RuntimeMaterialReadRequest`, the same
-  chunking and whole-file verification, only the verification is done by the Runtime, on the same connection.
-- Medium, corrupt tail and writer-process record are the offline read face's observations of files; the
-  Runtime does not state these on the page. Online, the instance card's "storage format" says "determined
-  by the Runtime", and "writer process" states the connected Runtime itself
+- Material goes through `RuntimeClient::read_material`: `RuntimeMaterialReadRequest` ranges, each
+  verified against the whole file, the verification done by the Runtime, on the same connection. The
+  client has no whole-object read, so online stays chunked (see "What the read face blocks").
+- Medium, corrupt tail, writer-process record and the event and repair counts are the offline read face's
+  observations of files; the Runtime does not state these on the page. Online, the instance card's
+  "storage format" says "determined by the Runtime", the two counts say the Runtime does not state them,
+  and "writer process" states the connected Runtime itself
   (PID, owner epoch, start time, all out of its own `runtime-info.json`).
 
 `--source <auto|offline|online>`, default `auto`: if the client can connect to the Runtime the state root
@@ -61,7 +64,7 @@ error in any mode, with no fallback.
 Dependencies are pinned to the Runtime's **main** (`Cargo.toml`):
 
 ```
-rev = "7f3df214ed613dcae20780bce26e384eee95310a"
+rev = "3e05e52c3558d29869febf0319242d5ce7fa8ff7"
 ```
 
 The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
@@ -123,26 +126,34 @@ The ruling has changed: the console **does** load frame bytes, but only through 
 and only within this rule:
 
 - Only the `capture.frame` artifact **the selected event itself** carries is read, on demand, one at a time.
-- Requests are chunked by `MAX_RUNTIME_MATERIAL_CHUNK_BYTES` (64 KiB), and for each chunk the read face
-  verifies the whole file's length and sha256; if any chunk is not `verified` it aborts, and all bytes
-  already obtained are discarded.
-- The whole-file limit is the contract's chunk limit × 128 chunks (8 MiB); an artifact beyond that is
-  refused outright, with a statement.
+- Offline, one `read_material_complete` call reads the whole object and verifies its length and sha256
+  before any byte is handed over, within a 30-second deadline. Online, requests are chunked by
+  `MAX_RUNTIME_MATERIAL_CHUNK_BYTES` (64 KiB), and for each chunk the Runtime verifies the whole file's
+  length and sha256; if any chunk is not `verified` it aborts, and all bytes already obtained are
+  discarded.
+- The whole-file limit is the contract's chunk limit × 128 chunks (8 MiB) on both faces (offline it is
+  the read's own `max_material_bytes`); an artifact beyond that is refused outright, with a statement.
 - When an artifact has been evicted, only the eviction facts are shown (disposition, intent/outcome
   position, the position observed up to); the file is not touched.
 - On a read failure, the state and safe error code the read face gives are shown.
 - Reading is done on a background thread, and every request carries a token; if a slow read returns after
   the selection has changed, it is discarded. **A stale or unverified image is never displayed, at any
   time.**
-- Reading is done by one background worker thread, **only one at a time**: the one whose request has been
-  displaced stops before the next chunk and sends no further chunk — every chunk re-hashes the whole
-  material, so letting a read nobody is waiting for keep running is the most expensive mistake.
+- Reading is done by one background worker thread, **only one at a time**: online, the one whose request
+  has been displaced stops before the next chunk and sends no further chunk — every chunk re-hashes the
+  whole material, so letting a read nobody is waiting for keep running is the most expensive mistake.
+  Offline, the whole-object read cannot be stopped midway; a displaced one runs to its end and its
+  result is discarded.
 - Decoding uses only `image` (with only the `png` feature enabled, version pinned in the workspace's
   `[workspace.dependencies]`). The program decodes only two kinds of image: frames read back this way,
   and its own application icon.
 
-The geometry overlay shares one coordinate system with the frame: if the payload gives the screen size it
-is used, otherwise the decoded pixel size is used.
+The geometry overlay shares one coordinate system with the frame, sized in this order: the frame extent
+the ledger formally states (`frame_extent` of `task.effect_intent`, the frame extent of
+`task.geometry_observed`), else `frame_width`/`frame_height` in the payload, else the pixel size the
+verified frame decoded to, else the overlays' own extent. The decoded size belongs to the frame request
+it came from: reselecting the event or continuing to read keeps it; switching events, clearing, or a
+failed read drops it.
 
 ## Running
 
@@ -178,7 +189,7 @@ made:
 Two-layer labels: the upper layer is the name for a person to read, and the grey lower layer is the
 verbatim form used in the program — the raw `event_type`, module names, ids of every kind,
 `payload_schema` and sha256 are never translated. The dictionary is in `crates/acui-rows/src/display.rs`
-and covers all 115 `event_type`s and 19 `origin.module`s in the contract; **anything not in the table is
+and covers all 120 `event_type`s and 20 `origin.module`s in the contract; **anything not in the table is
 displayed verbatim, not guessed**.
 
 ### Settings file
@@ -318,8 +329,8 @@ One Cargo workspace, dependency direction app → model → rows ← source:
 - `acui-rows`: the only place that names contract types for the view model; it re-exports the contract
   types, and adds display functions, the display-name dictionary, and two flattened structures filled by
   `acui-source` and read by `acui-model`.
-- `acui-source`: the read face, the only place that touches the state root. The offline
-  `EvidenceSource::open` / `query` / `open_report` / `read_material` are kept verbatim;
+- `acui-source`: the read face, the only place that touches the state root. The offline face is
+  `EvidenceSource::open` / `query` / `open_report` / `read_material`;
   `ReadSource::open(root, mode)` picks one of it and the online `OnlineSource` according to `--source`,
   and `material_reader()` hands material reading to the background thread.
 - `acui-model`: a pure Rust view model (tabs, filtering, paging, recovery collapsing, selection), with no
@@ -351,29 +362,36 @@ The application icon is the black single-figure "commander" mark Alice ruled on;
 
 ## What the read face blocks
 
-These are not worked around; they are displayed as they are, and booked here:
+These are not worked around; they are displayed as they are, and booked here. Line references are at the
+pinned rev.
 
-- **There is no `event_count` or `repair_count`**. `GlobalLedgerMetadata`
-  (`crates/ledger/src/global/evidence.rs:257`) gives only `latest_sequence` / `read_complete` /
-  `backend` / `writer_metadata` / `corrupt_tail`, with no accessor for the event count or the repair
-  count; the only thing that gives these two, `GlobalLedger::open_evidence` (same file, `:417`), requires
-  the caller to hand over a `VerifiedArtifactReference` for every artifact reference, and events that
-  cannot be verified are dropped (measured on the 0828 root: of 2585 rows only 10 were left), which
-  amounts to hashing the entire artifacts directory (457 MB) at startup. The instance card therefore
-  displays `event_count` as "—(not given by the read face, see README)", and separately marks the number
-  of rows **loaded in this view**; the two are never mixed.
-- **There is no whole-material entry point, and reading one frame is expensive**. `read_material_to` in
-  `crates/ledger-forensics/src/material.rs:51` does one chunk only, and every chunk has to reopen the
-  ledger metadata twice and re-hash the whole material; reading one 3.6 MB frame takes 57 chunks, measured
-  at about 5 seconds (release). There is no whole-file read entry point, and no reader reused across
-  chunks, so the console puts reading on a background thread rather than assembling a simplified read
-  path of its own.
+- **Event and repair counts: resolved offline, not stated online**. `GlobalLedgerMetadata`
+  (`crates/ledger/src/global/evidence.rs:257`) now states `event_count()` (`:319`) and `repair_count()`
+  (`:326`) from the authenticated metadata, without verifying any material, so the console no longer
+  needs `GlobalLedger::open_evidence` (same file, `:434`) for them. The instance card shows both, and the
+  number of rows **loaded in this view** separately; the two are never mixed. Over an incomplete read the
+  event count covers only the verified prefix, and the card says so. The SQLite medium has no repair log
+  (`None`), and the card says so instead of showing 0; the repair log does not share the event snapshot's
+  sequence boundary. Online, neither the page (`LedgerReadScope`) nor `runtime-info.json` states either
+  count, so both lines say the Runtime does not state it.
+- **Whole-material read: resolved offline, still chunked online**. `read_material_complete`
+  (`crates/ledger-forensics/src/material.rs:74`) reads one whole object: fresh ledger metadata twice, one
+  reader, one whole-file hash, bounded by `max_material_bytes` and a deadline. The offline face calls it
+  with the 8 MiB frame limit and a 30-second deadline (no Runtime caller of it sets one yet; the
+  contract's 4-second `RUNTIME_MATERIAL_READ_BUDGET_MS` bounds a single range read, not a whole
+  object). The typed client still has only the range read `RuntimeClient::read_material`
+  (`crates/runtime-client/src/client.rs:1999`), and the Runtime verifies the whole material for every
+  range, so the online face keeps assembling ranges on the background thread (a 3.6 MB frame is 57 of
+  them).
 - **Geometry and frames cannot be brought together on these two roots**. In the 0828 and v5 roots, the
   only events carrying a `capture.frame` artifact are `artifact.created` / `artifact.verified`, and their
   payloads hold no geometry; the only events carrying geometry are `task.effect_intent` (six on 0828,
   five on v5), whose payload is a single tap coordinate and whose `links` hold **no** `frame_id`. The
   ledger gives no relation joining the two, so the console does not join them — the real frame is drawn as
-  it is, and the overlay is empty.
+  it is, and the overlay is empty. At the pin, `task.effect_intent` can state the frame extent its
+  coordinates are in (`frame_extent`, `crates/actingcommand-contract/src/event/payload.rs:3311`) and
+  `task.geometry_observed` its frame's extent (`:3039`); the overlay canvas uses that extent when an event
+  states one. The effect intents on these two roots state none, so their size stays "not recorded".
 - **Neither root holds artifact eviction facts**, so the eviction placeholder does not appear on these two
   roots; the code path is written to the contract.
 
