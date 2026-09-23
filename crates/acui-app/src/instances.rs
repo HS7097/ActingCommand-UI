@@ -291,9 +291,15 @@ fn check(labels: &Labels, exe: &Path, candidate: &Path) -> Result<(), String> {
             }
         }
     };
-    let text =
-        reader.and_then(|reader| reader.join().ok()).and_then(Result::ok).unwrap_or_default();
     let exit = status.code().map_or_else(|| labels.none.to_string(), |code| code.to_string());
+    // stdout is piped above, so a missing reader is only ever a panicked one.
+    let text = match reader.map(std::thread::JoinHandle::join) {
+        Some(Ok(Ok(text))) => text,
+        Some(Ok(Err(error))) => {
+            return Err(fill(labels.check_read_failed, &[&exit, &error.to_string()]))
+        }
+        _ => return Err(fill(labels.check_reader_lost, &[&exit])),
+    };
     let report: Value = serde_json::from_str(text.trim()).unwrap_or_default();
     let unparsed = || fill(labels.check_unparsed, &[&exit, text.trim()]);
     let error = &report["error"];

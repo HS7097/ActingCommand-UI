@@ -212,7 +212,8 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # optional, absolut
 ```
 
 It is read once at startup and written once on every dropdown change; on write-back the three path keys
-are kept verbatim. **This is the only file the console itself reads and writes**: it is not inside any
+are kept verbatim. **This is the only file the console itself reads and writes**, besides the `instances`
+the instance-configuration window saves into `actingd_config` (see that section): it is not inside any
 state root, and the state root still belongs entirely to the read face. If the file is absent, unreadable,
 or holds an unrecognized value, the defaults (Chinese, standard) are used. The parser is hand-written: one
 `key = value` per line, one matching pair of quotes stripped, no escape handling — write Windows paths in
@@ -222,12 +223,12 @@ single quotes (TOML literal strings), not as `"D:\\…"`.
 
 The third line of the top bar. On the left is the Runtime state from the last probe, then two buttons (and
 last the instance-configuration button, see the next section), and the line below it is the result of the
-last button press.
+last Start or Request shutdown press, or why the instance-configuration window did not open.
 
-- **Runtime state**: probed once at startup, and probed again after every button press. A probe is one
-  `RuntimeClient::connect`: on a connection it says "running · PID · owner epoch" (taken from its own
-  `runtime-info.json`, checked against the client's owner epoch); on no connection it says "not running"
-  plus the client's error code and operation name, guessing no cause.
+- **Runtime state**: probed once at startup, and probed again after every Start or Request shutdown
+  press. A probe is one `RuntimeClient::connect`: on a connection it says "running · PID · owner epoch"
+  (taken from its own `runtime-info.json`, checked against the client's owner epoch); on no connection
+  it says "not running" plus the client's error code and operation name, guessing no cause.
 - **Start**: probe first; if it is already running it launches nothing, says "already running, not
   launched" and records the press (see below). Otherwise it launches
   `actingcommand-actingd --config <actingd_config>` detached, from `actingd_exe` —
@@ -286,10 +287,12 @@ of `actingd_config`, the file Start hands to actingd.
   characters from the OS RNG, shown read-only; the binding is exactly one of `instance_index` (MuMu
   index), `instance_name` (MuMu name), or `host` + `port` (an explicit ADB address). `adb_path` is
   required with `host` + `port` and optional with a MuMu binding, whose discovery reports adb;
-  `nemu_app_index` is an optional whole number; `application_id`, `capture_backend` and `touch_backend`
-  are optional text that check-config judges. Text is trimmed and an empty optional box writes no key;
-  a missing required value or a number that does not parse is stated before anything is written.
-- **Save**: the file is read again as plain JSON — a missing or relative `actingd_config`, a missing or
+  `nemu_app_index` is an optional whole number. The form does not check `application_id`,
+  `capture_backend` or `touch_backend`: whether they are needed and valid is decided by check-config. For
+  a MuMu binding, the `nemu_app_index` pairing and an `adb_path` conflict with discovery are checked only
+  when the Runtime starts, not by check-config. Text is trimmed and an empty box writes no key; a missing
+  required value or a number that does not parse is stated before anything is written.
+- **Save**: the file is read as plain JSON — a missing or relative `actingd_config`, a missing or
   unreadable file, JSON that does not parse, or no `instances` array is each stated as such — and the
   entry is appended; every other key of the file is kept, in its order. The result goes to
   `<config name>.candidate-<pid>` beside it (relative paths inside resolve against that directory) and
@@ -387,10 +390,11 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`.
 
 `slint` 1.17.x, `default-features = false`; the ledger is read-only, the only control entry points are the
-launcher's two buttons (start / request shutdown, see above), and there is no approval entry point; no
-tests are written. The launcher is in `crates/acui-app/src/launcher.rs`, the instance-configuration
-window in `instances.rs`, and the three client operations, probe, request shutdown and recording the start
-press, are in `acui-source` (`probe_runtime` / `request_shutdown` / `record_start`).
+launcher's two buttons (start / request shutdown, see above) and the instance-configuration window's
+check-config-gated save, and there is no approval entry point; no tests are written. The launcher is in
+`crates/acui-app/src/launcher.rs`, the instance-configuration window in `instances.rs`, and the three
+client operations, probe, request shutdown and recording the start press, are in `acui-source`
+(`probe_runtime` / `request_shutdown` / `record_start`).
 
 A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
 depending only on slint, serde, sha2, zip and getrandom, and on none of the layers above; see the previous
