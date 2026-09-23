@@ -176,30 +176,34 @@ fn begin_new(editor: &Editor, config: &ConfigWindow) {
         id.ok().map(|instance_id| Editing { instance_id, existing: false });
 }
 
-/// An entry of the list loaded into the form; one without a string
-/// instance_id, or bound in a way no binding kind of the form represents
-/// (`fixture_backend`, `serial`, or no binding key at all), is shown with the
-/// reason but cannot be saved.
+/// An entry of the list loaded into the form; one `uneditable` refuses is
+/// shown with the reason but cannot be saved.
 fn edit(editor: &Editor, config: &ConfigWindow, index: i32) {
     let entries = editor.entries.borrow();
     let Some(entry) = entries.get(index.max(0) as usize) else {
         return;
     };
-    let labels = editor.app.labels;
-    let set = |key: &str| field(entry, key).is_some();
-    let failure = match id_of(entry) {
-        None => Some(labels.entry_no_id),
-        Some(_) if set("fixture_backend") => Some(labels.entry_fixture),
-        Some(_) if set("serial") => Some(labels.entry_serial),
-        Some(_) if kind_of(entry).is_none() => Some(labels.entry_no_binding),
-        Some(_) => None,
-    };
+    let failure = uneditable(editor.app.labels, entry);
     let id = id_of(entry).filter(|_| failure.is_none());
     set_outcome(config, failure.is_some(), failure.unwrap_or_default());
     config.set_selected_index(index);
     show_form(config, id, entry);
     *editor.editing.borrow_mut() =
         id.map(|id| Editing { instance_id: id.to_string(), existing: true });
+}
+
+/// Why the form cannot save an entry: no string instance_id, or bound in a way
+/// no binding kind of the form represents (`fixture_backend`, `serial`, or no
+/// binding key at all).
+fn uneditable(labels: &Labels, entry: &Value) -> Option<&'static str> {
+    let set = |key: &str| field(entry, key).is_some();
+    match id_of(entry) {
+        None => Some(labels.entry_no_id),
+        Some(_) if set("fixture_backend") => Some(labels.entry_fixture),
+        Some(_) if set("serial") => Some(labels.entry_serial),
+        Some(_) if kind_of(entry).is_none() => Some(labels.entry_no_binding),
+        Some(_) => None,
+    }
 }
 
 fn show_form(config: &ConfigWindow, id: Option<&str>, entry: &Value) {
@@ -317,7 +321,11 @@ fn commit(
     let (mut document, mut entries) = load(labels, path)?;
     let id = editing.instance_id.as_str();
     let index = match entries.iter().position(|entry| id_of(entry) == Some(id)) {
-        Some(index) => index,
+        // Another program may have changed the entry since it was loaded.
+        Some(index) => match uneditable(labels, &entries[index]) {
+            Some(reason) => return Err(reason.to_string()),
+            None => index,
+        },
         None if editing.existing => return Err(fill(labels.entry_gone, &[id])),
         None => {
             entries.push(json!({ "instance_id": id }));
@@ -478,6 +486,8 @@ fn kind_of(entry: &Value) -> Option<usize> {
 fn binding_text(labels: &Labels, entry: &Value) -> String {
     let value = |key| text(entry, key).unwrap_or_else(|| labels.none.to_string());
     match (kind_of(entry), text(entry, "serial")) {
+        // The Runtime takes a fixture before any binding key.
+        _ if field(entry, "fixture_backend").is_some() => labels.binding_fixture.to_string(),
         (Some(0), _) => fill(labels.binding_index, &[&value("instance_index")]),
         (Some(1), _) => fill(labels.binding_name, &[&value("instance_name")]),
         // An explicit target with a serial is reached by that serial alone.

@@ -282,19 +282,19 @@ slice.
 
 The 实例配置 / Instance Configuration button opens a second window over the `instances` of
 `actingd_config`, the file Start hands to actingd. Each entry is listed with its alias, `instance_id`,
-binding as the file states it (MuMu index / MuMu name / ADB serial, shown instead of `host` + `port`
-when an entry has both / ADB host:port / no binding key in the file — the Runtime's default address is
-not restated), `application_id`, capture and touch backend, and what the session's port map says about
-that id — bound on a port, bound with the latest binding outside the port map (serial-configured or
-with no port; the map does not tell which), or not bound; read online, or when reading the bindings
-failed, the row says that instead, and an entry without a string `instance_id` says there that it
-cannot be edited. A key holding JSON `null` reads as absent, in the list and in the form. The file is
-read again whenever the window opens and after every save; a reason it cannot be listed takes the
-count's place, never an empty list.
+binding as the file states it (`fixture_backend`, which the Runtime takes before any binding key / MuMu
+index / MuMu name / ADB serial, shown instead of `host` + `port` when an entry has both / ADB host:port /
+no binding key in the file — the Runtime's default address is not restated), `application_id`, capture
+and touch backend, and what the session's port map says about that id — bound on a port, bound with the
+latest binding outside the port map (serial-configured or with no port; the map does not tell which), or
+not bound; read online, or when reading the bindings failed, the row says that instead, and an entry
+without a string `instance_id` says there that it cannot be edited. A key holding JSON `null` reads as
+absent, in the list and in the form. The file is read again whenever the window opens and after every
+save; a reason it cannot be listed takes the count's place, never an empty list.
 
 - **The form**: Add Instance starts a new entry and a click on a row loads that entry. An entry without a
   string `instance_id`, or one whose binding no kind of the form represents — with `fixture_backend`,
-  bound by `serial`, or with no binding key at all — is listed, but a click on it says why and it cannot
+  with `serial` set, or with no binding key at all — is listed, but a click on it says why and it cannot
   be saved. There is no delete. `alias` is required; a new entry's `instance_id` is `instance_` + 32
   lowercase hex characters from the OS RNG, and every `instance_id` is shown read-only; the binding is
   exactly one of `instance_index` (MuMu index), `instance_name` (MuMu name), or `host` + `port` (an
@@ -307,17 +307,17 @@ count's place, never an empty list.
 - **Save**: the file is read again as plain JSON — a missing or relative `actingd_config`, a missing or
   unreadable file, JSON that does not parse, no `instances` array, or an entry that is not an object is
   each stated as such. A new entry is appended; an existing one is found again by its `instance_id`
-  (gone from the file, the save stops and says so) and only the keys the form manages change, a changed
-  binding kind removing the other kinds' keys. Every other key of the entry and of the file is kept, in
-  its order. The result goes to `<config name>.candidate-<pid>` beside it (relative paths inside resolve
-  against that directory) and `<actingd_exe> check-config --config <candidate>` runs off the event loop
-  (30 s bound, no console window, stdout parsed whole as one `actingcommand.actingd.check-config.v1`
-  report). Only `status: ok` with a successful exit renames it over the file; otherwise the candidate is
-  removed, the file stays as it was, and the window says why: `error.code` and `stage` verbatim, or a
-  missing or relative `actingd_exe`, writing the candidate failing, a spawn failure, no output reader
-  thread, reading the child's status failing, the timeout (these three also say whether check-config
-  could be terminated), unreadable or unrecognized output, ok with a non-zero exit, or the rename
-  failing.
+  (gone from the file, or changed there into one the form cannot save, the save stops and says why) and
+  only the keys the form manages change, a changed binding kind removing the other kinds' keys. Every
+  other key of the entry and of the file is kept, in its order. The result goes to
+  `<config name>.candidate-<pid>` beside it (relative paths inside resolve against that directory) and
+  `<actingd_exe> check-config --config <candidate>` runs off the event loop (30 s bound, no console
+  window, stdout parsed whole as one `actingcommand.actingd.check-config.v1` report). Only `status: ok`
+  with a successful exit renames it over the file; otherwise the candidate is removed, the file stays as
+  it was, and the window says why: `error.code` and `stage` verbatim, or a missing or relative
+  `actingd_exe`, writing the candidate failing, a spawn failure, no output reader thread, reading the
+  child's status failing, the timeout (these three also say whether check-config could be terminated),
+  unreadable or unrecognized output, ok with a non-zero exit, or the rename failing.
 - **Effect**: there is no hot reload; a saved entry takes effect when the Runtime restarts. After a save,
   one probe off the event loop says whether a Runtime is running now and points at the launcher's own
   buttons: Request Shutdown, then Start once it has stopped — or, with none running, just Start. The

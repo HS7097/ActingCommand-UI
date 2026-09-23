@@ -239,7 +239,7 @@ pub struct Labels {
     /// Runtime status as the launcher words it.
     pub saved_running: &'static str,
     pub saved_stopped: &'static str,
-    /// config path, instance count; config path, entry index.
+    /// config path, instance count; config path, entry number counted from 1.
     pub config_listed: &'static str,
     pub config_bad_entry: &'static str,
     /// Online; error; port; bound outside the port map; not bound.
@@ -254,6 +254,7 @@ pub struct Labels {
     pub binding_adb: &'static str,
     pub binding_serial: &'static str,
     pub binding_none: &'static str,
+    pub binding_fixture: &'static str,
     /// instance_id, application_id, capture_backend, touch_backend.
     pub instance_detail: &'static str,
     /// instance_id.
@@ -500,10 +501,11 @@ pub const ZH: Labels = Labels {
     binding_adb: "ADB {}:{}",
     binding_serial: "ADB 序列号 {}",
     binding_none: "文件未写绑定键",
+    binding_fixture: "fixture_backend（不连设备）",
     instance_detail: "{} · 应用 {} · 截图 {} · 触控 {}",
     entry_gone: "配置文件里已没有 {}（别处改过）",
     entry_no_id: "这一项没有字符串 instance_id，不能在这里编辑",
-    entry_serial: "这一项以 ADB 序列号 serial 绑定，表单表示不了这种绑定，不能在这里编辑",
+    entry_serial: "这一项设了 serial，表单表示不了，不能在这里编辑",
     entry_fixture: "这一项配置了 fixture_backend，表单表示不了这种后端，不能在这里编辑",
     entry_no_binding: "这一项文件里没写绑定键（MuMu 序号、MuMu 名称、host / port、serial 都没有），表单表示不了，不能在这里编辑",
     row_no_id: "不可编辑：没有字符串 instance_id",
@@ -745,11 +747,11 @@ pub const EN: Labels = Labels {
     binding_adb: "ADB {}:{}",
     binding_serial: "ADB Serial {}",
     binding_none: "No Binding Key in the File",
+    binding_fixture: "fixture_backend (No Device)",
     instance_detail: "{} · App {} · Capture {} · Touch {}",
     entry_gone: "{} Is No Longer in the Config File (Changed Elsewhere)",
     entry_no_id: "This Entry Has No String instance_id and Cannot Be Edited Here",
-    entry_serial:
-        "This Entry Is Bound by ADB serial, Which the Form Cannot Represent, and Cannot Be Edited Here",
+    entry_serial: "This Entry Sets serial, Which the Form Cannot Represent, and Cannot Be Edited Here",
     entry_fixture: "This Entry Has a fixture_backend, Which the Form Cannot Represent, and Cannot Be Edited Here",
     entry_no_binding: "This Entry Has No Binding Key in the File (No MuMu Index or Name, host / port or serial), Which the Form Cannot Represent, and Cannot Be Edited Here",
     row_no_id: "Not Editable: No String instance_id",

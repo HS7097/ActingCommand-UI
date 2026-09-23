@@ -218,16 +218,17 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 ## 实例配置
 
 「实例配置」按钮打开第二个窗口，对象是 `actingd_config`——「启动」交给 actingd 的那份文件——
-里的 `instances`。每一项列出别名、`instance_id`、文件里写的绑定（MuMu 序号 / MuMu 名称 /
-ADB 序列号，与 `host` + `port` 同在时只显示序列号 / ADB host:port / 文件未写绑定键——不替
-Runtime 复述默认地址）、`application_id`、截图与触控后端，以及本会话的端口映射对这个编号怎
-么说——绑在某个端口、绑了但最新一次不在端口映射里（序列号配置或无端口，映射分不出是哪种）、
-没有绑定；在线读面或读绑定失败时，行里直说；没有字符串 `instance_id` 的项在这个位置写明不可
-编辑。值为 JSON `null` 的键，列表和表单里都当作没写。每次打开窗口、每次保存之后都重新读文
-件；列不出来的原因写在条数的位置上，绝不显示成一个空列表。
+里的 `instances`。每一项列出别名、`instance_id`、文件里写的绑定（`fixture_backend`，Runtime
+先于任何绑定键采用它 / MuMu 序号 / MuMu 名称 / ADB 序列号，与 `host` + `port` 同在时只显示
+序列号 / ADB host:port / 文件未写绑定键——不替 Runtime 复述默认地址）、`application_id`、截
+图与触控后端，以及本会话的端口映射对这个编号怎么说——绑在某个端口、绑了但最新一次不在端口映
+射里（序列号配置或无端口，映射分不出是哪种）、没有绑定；在线读面或读绑定失败时，行里直说；
+没有字符串 `instance_id` 的项在这个位置写明不可编辑。值为 JSON `null` 的键，列表和表单里都
+当作没写。每次打开窗口、每次保存之后都重新读文件；列不出来的原因写在条数的位置上，绝不显示
+成一个空列表。
 
 - **表单**：「新增实例」另起一项，点一行把那一项载入表单。没有字符串 `instance_id` 的项，以及表单
-  的哪种绑定都表示不了的项——配置了 `fixture_backend`、以 `serial` 绑定、一个绑定键都没写——照样列
+  的哪种绑定都表示不了的项——配置了 `fixture_backend`、设了 `serial`、一个绑定键都没写——照样列
   出，但点它会写明原因、不能保存。没有删除。`alias` 必填；新实例的 `instance_id` 是 `instance_`
   加系统随机源的 32 位小写十六进制，所有 `instance_id` 都只读显示；绑定恰好一种——`instance_index`
   （MuMu 序号）、`instance_name`（MuMu 名称），或 `host` + `port`（显式 ADB 地址）。`adb_path` 在
@@ -238,9 +239,9 @@ Runtime 复述默认地址）、`application_id`、截图与触控后端，以�
   析不了，都在写任何东西之前直说。
 - **保存**：重新把文件当普通 JSON 读——`actingd_config` 没配或不是绝对路径、文件不存在或读不出、
   JSON 解析失败、没有 `instances` 数组、某一项不是对象，各自直说。新实例追加进去；已有的按
-  `instance_id` 重新找到（文件里已经没有了就停下并说明），只改表单管的键，换了绑定种类就删掉别的
-  种类的键。这一项和整个文件里其余的键一概原样、次序不变。结果写到同目录的
-  `<配置文件名>.candidate-<pid>`（里面的相对路径按这个目录解析），在事件循环之外跑
+  `instance_id` 重新找到（文件里已经没有了，或已被改成表单存不了的样子，就停下并写明原因），只改
+  表单管的键，换了绑定种类就删掉别的种类的键。这一项和整个文件里其余的键一概原样、次序不变。结果
+  写到同目录的 `<配置文件名>.candidate-<pid>`（里面的相对路径按这个目录解析），在事件循环之外跑
   `<actingd_exe> check-config --config <临时文件>`（30 秒上限，不弹控制台窗口，stdout 整段按一份
   `actingcommand.actingd.check-config.v1` 报告解析）。只有 `status: ok` 且退出码成功才改名覆盖原
   文件；否则删掉临时文件、原文件不动，窗口写明原因：原样写出 `error.code` 与 `stage`，或是
