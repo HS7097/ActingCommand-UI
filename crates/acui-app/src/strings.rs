@@ -176,6 +176,16 @@ pub struct Labels {
     pub restart_online: &'static str,
     /// attempts, client error code, client operation.
     pub start_not_ready: &'static str,
+    /// The start press as a client action: its sequence.
+    pub start_recorded: &'static str,
+    /// runtime refusal code, client error code, client operation.
+    pub start_record_refused: &'static str,
+    /// client error code, client operation.
+    pub start_record_failed: &'static str,
+    /// attempt, attempts.
+    pub shutdown_busy_retry: &'static str,
+    /// attempts sent, attempts.
+    pub shutdown_attempts: &'static str,
     /// receipt state, request id, action sequence.
     pub shutdown_accepted: &'static str,
     /// runtime refusal code, client error code, client operation.
@@ -366,6 +376,11 @@ pub const ZH: Labels = Labels {
     start_ready: "Runtime 已就绪 · PID {} · owner epoch {}",
     restart_online: "本台按离线读；要在线读请带 --source online 重启",
     start_not_ready: "{} 次尝试后仍未就绪 · 最后错误 {}（{}）",
+    start_recorded: "动作已记账 #{}",
+    start_record_refused: "动作记账被拒：{} · 客户端 {}（{}）",
+    start_record_failed: "动作记账失败：{}（{}）",
+    shutdown_busy_retry: "请求关闭 · 忙碌重试 {}/{}",
+    shutdown_attempts: "第 {}/{} 次",
     shutdown_accepted: "关闭请求已受理 · 回执 {} · 请求 {} · 动作已记账 #{}",
     shutdown_refused: "关闭请求被拒：{} · 客户端 {}（{}）",
     shutdown_failed: "关闭请求失败：{}（{}）",
@@ -553,6 +568,11 @@ pub const EN: Labels = Labels {
     start_ready: "Runtime Ready · PID {} · Owner Epoch {}",
     restart_online: "This Console Reads Offline; Restart with --source online to Read It",
     start_not_ready: "Not Ready After {} Attempts · Last Error {} ({})",
+    start_recorded: "Action Recorded at #{}",
+    start_record_refused: "Action Record Refused: {} · Client {} ({})",
+    start_record_failed: "Action Record Failed: {} ({})",
+    shutdown_busy_retry: "Request Shutdown · Busy, Retry {}/{}",
+    shutdown_attempts: "Attempt {}/{}",
     shutdown_accepted: "Shutdown Accepted · Receipt {} · Request {} · Action Recorded at #{}",
     shutdown_refused: "Shutdown Refused: {} · Client {} ({})",
     shutdown_failed: "Shutdown Request Failed: {} ({})",

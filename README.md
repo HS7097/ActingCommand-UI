@@ -225,8 +225,9 @@ the line below it is the result of the last button press.
   `RuntimeClient::connect`: on a connection it says "running · PID · owner epoch" (taken from its own
   `runtime-info.json`, checked against the client's owner epoch); on no connection it says "not running"
   plus the client's error code and operation name, guessing no cause.
-- **Start**: probe first; if it is already running it only says "already running, not launched".
-  Otherwise it launches `actingcommand-actingd --config <actingd_config>` detached, from `actingd_exe` —
+- **Start**: probe first; if it is already running it launches nothing, says "already running, not
+  launched" and records the press (see below). Otherwise it launches
+  `actingcommand-actingd --config <actingd_config>` detached, from `actingd_exe` —
   that is the whole command line. If either of the two keys is missing or is not an absolute path, it
   states which key it is and launches nothing. stdout / stderr both go into a log under the console's
   **own** directory: `%LOCALAPPDATA%\ActingCommand\logs\actingd-<unix_ms>.log` (Linux: the same path under
@@ -235,19 +236,34 @@ the line below it is the result of the last button press.
   the console program's console, and does not receive its Ctrl+C.
 - **Readiness decision**: at most 60 attempts, 500 ms each. Each attempt does `try_wait()` first: if the
   child process has exited it stops and states the exit code and the log path; if it has not exited it
-  does one more `connect`, and a connection means ready, stating the PID and owner epoch. If this console
-  is reading offline, it appends the sentence "to read online, restart with `--source online`" — it
-  **never quietly switches read face mid-session**. If all 60 attempts fail to connect, it says "still not
-  ready" and the last client error code. It **does not parse the daemon's output**.
+  does one more `connect`, and a connection means ready, stating the PID and owner epoch, and then the
+  press is recorded (see below). If this console is reading offline, it appends the sentence "to read
+  online, restart with `--source online`" — it **never quietly switches read face mid-session**. If all
+  60 attempts fail to connect, it says "still not ready" and the last client error code. It **does not
+  parse the daemon's output**.
+- **Recording the start press**: the press can only be recorded once a Runtime exists, so the order is
+  probe → (if needed) launch → readiness decision → record. Recording opens a new connection, opens an
+  interaction with `begin_interaction()` and records one `client_action` with
+  `record_client_action_receipt` (surface `acui.launcher`, control `start_runtime`, value a Boolean:
+  did this press launch a process), whose receipt must bear a terminal; it runs on a worker thread, never
+  on the window's event loop. The line appends the sequence number at which it landed, or, if recording
+  failed, the Runtime's refusal code (if any) **verbatim** plus the client error code and operation name
+  — the Runtime is still reported ready / running. Its kind is `command`, not `button`: the contract
+  refuses any value on a `button`. If readiness fails there is no connection and **nothing is
+  recorded**; the failure is shown only on the line — the one launcher action that can go unrecorded.
 - **Request shutdown**: only through the typed client, never killing a process. It opens a new connection,
   opens an interaction with `begin_interaction()`, first records this button press as a `client_action`
   with `record_client_action_receipt` (surface `acui.launcher`, control `request_shutdown`), and only
   after obtaining a receipt bearing terminal does it send `request_shutdown()` — the action lands in the
-  ledger first, then the request. If accepted, it states the receipt state, the request id and the
-  sequence number at which the action landed in the ledger; if refused (owner / governance and the like)
-  it states the Runtime's refusal code **verbatim**, plus the client error code and operation name; it
-  **does not retry**. Afterwards it probes the state once more — the Runtime stops at its own pace, so
-  this glance may still say running.
+  ledger first, then the request. If it is refused as `runtime_busy` — the Runtime holds its lifecycle
+  admission briefly after another request, such as a status read — it sends `request_shutdown()` again
+  on the same interaction a second later, at most 5 attempts in all, the line saying "busy, retry n/5"
+  meanwhile; the press is still recorded only once. If accepted, it states the receipt state, the
+  request id and the sequence number at which the action landed in the ledger; if refused otherwise
+  (owner / governance and the like), or still busy after the 5th attempt, it states the Runtime's
+  refusal code **verbatim**, plus the client error code and operation name; any other refusal or error
+  stops at once. The final line also states how many attempts were sent. Afterwards it probes the state
+  once more — the Runtime stops at its own pace, so this glance may still say running.
 - **Never kill**: the `Child` handle is used only for `try_wait()`, to see whether it exited early — no
   `kill`, no blocking `wait`, no job object attached; the handle is dropped once the readiness decision
   ends, and the daemon outlives the console.
@@ -341,8 +357,9 @@ One Cargo workspace, dependency direction app → model → rows ← source:
 
 `slint` 1.17.x, `default-features = false`; the ledger is read-only, the only control entry points are the
 launcher's two buttons (start / request shutdown, see above), and there is no approval entry point; no
-tests are written. The launcher is in `crates/acui-app/src/launcher.rs`, and the two client operations,
-probe and request shutdown, are in `acui-source` (`probe_runtime` / `request_shutdown`).
+tests are written. The launcher is in `crates/acui-app/src/launcher.rs`, and the three client operations,
+probe, request shutdown and recording the start press, are in `acui-source` (`probe_runtime` /
+`request_shutdown` / `record_start`).
 
 A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
 depending only on slint, serde, sha2, zip and getrandom, and on none of the layers above; see the previous
