@@ -79,7 +79,7 @@ as usual.
 Dependencies are pinned to the Runtime's **main** (`Cargo.toml`):
 
 ```
-rev = "3e05e52c3558d29869febf0319242d5ce7fa8ff7"
+rev = "eb63af3115d9f3c1785ce9c309a26f71465f7719"
 ```
 
 The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
