@@ -12,7 +12,9 @@
 ## 数据来源：读面，不是文件
 
 程序只认一个参数：状态根。**所有文件 IO 都归读面**，监控台自己从不拼接状态根里的路径，
-不打开 `ledger/`、`artifacts/` 或 `runtime-state.sqlite`，也不拉起任何 CLI。
+不打开 `ledger/`、`artifacts/` 或 `runtime-state.sqlite`，也不为读数据拉起任何 CLI。它拉起的
+进程只有两种：actingd 本身（「启动」，见「启动器」一节），和保存实例配置时用来校验的
+`actingd check-config`（见「实例配置」一节）。
 
 读面有两张，同一套查询、页、游标语义，只是答案从哪来不同：
 
