@@ -30,7 +30,7 @@ use acui_rows::{
     RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
     RuntimeMaterialReadLimit, RuntimeMaterialReadState, WriterFacts,
 };
-use actingcommand_contract::{FactValue, RuntimeFactRecord, RuntimeFactScope};
+use actingcommand_contract::{FactValue, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot};
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
     GlobalLedgerWriterMetadataObservation, LedgerArtifactSelection,
@@ -365,12 +365,29 @@ impl OnlineSource {
         Ok(moved)
     }
 
-    /// Re-reads the task facts only, keeping each instance's status as last
-    /// read: a status read is recorded in the ledger as an observation event,
-    /// so following never repeats it. A failed read replaces the lines with
-    /// its failure; a failed status read at open stays as it was.
-    pub fn refresh_facts(&self) {
-        let refreshed = match &*self.instances.borrow() {
+    /// One follow poll: a single fact snapshot. The Runtime keeps its fact
+    /// store in memory and states it at the ledger's latest position, so this
+    /// reads no ledger and writes nothing. When that position is past the pin,
+    /// the pin moves to it (`Ok(true)`); the task facts are taken from the same
+    /// snapshot, each instance keeping its status as last read — a status read
+    /// is recorded in the ledger, and following never repeats it.
+    pub fn poll(&self) -> Result<bool> {
+        let snapshot = self
+            .client
+            .runtime_fact_snapshot()
+            .map_err(|error| anyhow!("Runtime 事实快照读取失败：{error}"))?;
+        let moved = snapshot.ledger_position > self.snapshot.get();
+        if moved {
+            self.snapshot.set(snapshot.ledger_position);
+        }
+        self.refold(&snapshot);
+        Ok(moved)
+    }
+
+    /// The task facts of one snapshot over the instances as last read; a
+    /// failed status read at open stays as it was.
+    fn refold(&self, snapshot: &RuntimeFactSnapshot) {
+        let refolded = match &*self.instances.borrow() {
             Err(_) => return,
             Ok(current) => {
                 let mut instances: Vec<RuntimeInstance> = current
@@ -384,19 +401,15 @@ impl OnlineSource {
                         ..instance.clone()
                     })
                     .collect();
-                self.client.runtime_fact_snapshot().map_err(ClientFailure::from).map(
-                    |snapshot| {
-                        fold_task_facts(&snapshot.records, &mut instances);
-                        RuntimeInstances {
-                            status_sequence: current.status_sequence,
-                            facts_position: snapshot.ledger_position,
-                            instances,
-                        }
-                    },
-                )
+                fold_task_facts(&snapshot.records, &mut instances);
+                RuntimeInstances {
+                    status_sequence: current.status_sequence,
+                    facts_position: snapshot.ledger_position,
+                    instances,
+                }
             }
         };
-        *self.instances.borrow_mut() = refreshed;
+        *self.instances.borrow_mut() = Ok(refolded);
     }
 
     /// Re-reads status and facts, as at open: for a person's jump to the
@@ -646,10 +659,11 @@ impl ReadSource {
         }
     }
 
-    /// Online, re-reads the task facts only; offline, nothing.
-    pub fn refresh_facts(&self) {
-        if let Self::Online(source) = self {
-            source.refresh_facts();
+    /// Online, one follow poll (see `OnlineSource::poll`); offline, `Ok(false)`.
+    pub fn poll(&self) -> Result<bool> {
+        match self {
+            Self::Offline { .. } => Ok(false),
+            Self::Online(source) => source.poll(),
         }
     }
 

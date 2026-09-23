@@ -607,9 +607,10 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
     });
 }
 
-/// How often "follow latest" asks where the ledger is: one page query, which
-/// writes nothing to the ledger.
-const FOLLOW_INTERVAL: Duration = Duration::from_secs(2);
+/// How often "follow latest" asks where the ledger is: one fact snapshot,
+/// which reads no ledger and writes nothing. A page query follows only when the
+/// ledger moved; each one costs the Runtime a read of the whole ledger.
+const FOLLOW_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A person's jump to the latest: the pin moves to the Runtime's latest
 /// position, status and facts are read again — the status read leaves one
@@ -627,7 +628,8 @@ fn jump_latest(window: &AppWindow, app: &Rc<App>) {
             source.refresh_instances();
             {
                 let mut model = model.borrow_mut();
-                model.set_pin(source.open_report(), source.snapshot_position(), time_span(source));
+                model.set_pin(source.open_report(), source.snapshot_position());
+                model.set_span(time_span(source));
                 model.filters.to_timestamp_unix_ms = None;
             }
             window.set_cursor_value(1000.0);
@@ -637,23 +639,38 @@ fn jump_latest(window: &AppWindow, app: &Rc<App>) {
     refresh(window, app);
 }
 
-/// Following reads down from the pin, so turning it on drops a time bound
-/// and starts over from the pin first; then a tick runs every
-/// `FOLLOW_INTERVAL`. Turning it off stops the ticks and leaves the view as it is.
+/// Turning following on catches up like a jump to the latest, without the
+/// status read: the pin moves to the latest position, any time bound is
+/// dropped and the view starts over from the new pin, however far the ledger
+/// has moved since. Then a tick runs every `FOLLOW_INTERVAL`. Turning it off
+/// stops the ticks and leaves the view as it is.
 fn set_following(window: &AppWindow, app: &Rc<App>, on: bool) {
     if !on {
         app.follow.stop();
         return;
     }
-    if let Some(model) = &app.model {
-        let bounded = model.borrow().filters.to_timestamp_unix_ms.is_some();
-        if bounded {
-            model.borrow_mut().filters.to_timestamp_unix_ms = None;
+    let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
+        return;
+    };
+    match source.repin() {
+        Err(error) => {
+            model.borrow_mut().query_error = Some(QueryError::ReadFailed(error.to_string()));
+            window.set_following(false);
+            refresh(window, app);
+            return;
+        }
+        Ok(_) => {
+            {
+                let mut model = model.borrow_mut();
+                model.set_pin(source.open_report(), source.snapshot_position());
+                model.set_span(time_span(source));
+                model.filters.to_timestamp_unix_ms = None;
+            }
             window.set_cursor_value(1000.0);
             reload(app, false);
+            refresh(window, app);
         }
     }
-    follow_tick(window, app);
     let (weak, held) = (window.as_weak(), Rc::downgrade(app));
     app.follow.start(TimerMode::Repeated, FOLLOW_INTERVAL, move || {
         if let (Some(window), Some(app)) = (weak.upgrade(), held.upgrade()) {
@@ -662,10 +679,11 @@ fn set_following(window: &AppWindow, app: &Rc<App>, on: bool) {
     });
 }
 
-/// One follow tick. A fresh first page says where the ledger is; newer
-/// windows are read onto the top of the view, and when the pin moved the task
-/// facts are read again. No status is read and nothing is written to the
-/// ledger. A time bound set meanwhile stops the following, and says so.
+/// One follow tick. One fact snapshot says where the ledger is and brings the
+/// task facts; only when the pin moved, or an earlier tick left windows unread,
+/// are the newer windows read onto the top of the view. No status is read and
+/// nothing is written to the ledger. A time bound set meanwhile stops the
+/// following.
 fn follow_tick(window: &AppWindow, app: &Rc<App>) {
     let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
         return;
@@ -675,7 +693,7 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
         window.set_following(false);
         return;
     }
-    let moved = match source.repin() {
+    let moved = match source.poll() {
         Ok(moved) => moved,
         Err(error) => {
             model.borrow_mut().query_error = Some(QueryError::ReadFailed(error.to_string()));
@@ -686,13 +704,17 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
     {
         let mut model = model.borrow_mut();
         if moved {
-            model.set_pin(source.open_report(), source.snapshot_position(), time_span(source));
+            model.set_pin(source.open_report(), source.snapshot_position());
         }
         if !moved && model.next_newer_window().is_none() {
             return;
         }
         model.query_error = None;
-        for _ in 0..FILL_WINDOWS {
+        let started = Instant::now();
+        for read in 0..FILL_WINDOWS {
+            if read > 0 && started.elapsed() >= FILL_BUDGET {
+                break;
+            }
             let Some(window) = model.next_newer_window() else {
                 break;
             };
@@ -708,9 +730,6 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
                 }
             }
         }
-    }
-    if moved {
-        source.refresh_facts();
     }
     refresh(window, app);
 }

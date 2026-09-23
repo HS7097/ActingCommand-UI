@@ -341,12 +341,15 @@ impl ViewModel {
         };
     }
 
-    /// The pin moved: what the source now states about itself, and the span
-    /// the time cursor runs over. Rows already read stay; the newer windows
-    /// read what came after them.
-    pub fn set_pin(&mut self, open: OpenReport, snapshot_position: u64, span: Option<(u64, u64)>) {
+    /// The pin moved: what the source now states about itself. Rows already
+    /// read stay; the newer windows read what came after them.
+    pub fn set_pin(&mut self, open: OpenReport, snapshot_position: u64) {
         self.open = open;
         self.snapshot_position = snapshot_position;
+    }
+
+    /// The committed span the time cursor runs over, read again.
+    pub fn set_span(&mut self, span: Option<(u64, u64)>) {
         self.span = span;
     }
 
@@ -359,8 +362,18 @@ impl ViewModel {
             .then(|| (from, (from + WINDOW - 1).min(self.snapshot_position)))
     }
 
-    /// One newer window read whole, put above the rows already loaded.
+    /// One newer window read whole, put above the rows already loaded. The
+    /// span's end moves to the newest event the window holds, so following
+    /// needs no read of its own for it.
     pub fn apply_newer_window(&mut self, (from, to): (u64, u64), pages: &[RuntimeEventQueryPage]) {
+        let newest = pages
+            .iter()
+            .flat_map(|page| page.events())
+            .map(|event| event.timestamp_unix_ms)
+            .max();
+        if let (Some((first, last)), Some(newest)) = (self.span, newest) {
+            self.span = Some((first, last.max(newest)));
+        }
         let (mut events, complete) = self.take_window(pages);
         self.rows.append(&mut events);
         self.upper = to;
