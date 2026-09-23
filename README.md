@@ -313,8 +313,8 @@ empty list.
   window, stdout parsed whole as one `actingcommand.actingd.check-config.v1` report). Only `status: ok`
   with a successful exit renames it over the file; otherwise the candidate is removed, the file stays as
   it was, and the window says why: `error.code` and `stage` verbatim, or a missing or relative
-  `actingd_exe`, a spawn failure, the timeout, unrecognized output, ok with a non-zero exit, or the
-  rename failing.
+  `actingd_exe`, a spawn failure, the timeout, unreadable or unrecognized output, ok with a non-zero
+  exit, or the rename failing.
 - **Effect**: there is no hot reload; a saved entry takes effect when the Runtime restarts. After a save,
   one probe off the event loop says whether a Runtime is running now and points at the launcher's own
   buttons: Request Shutdown, then Start once it has stopped — or, with none running, just Start. The
