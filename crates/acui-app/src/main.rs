@@ -269,6 +269,9 @@ fn install_strings(window: &AppWindow, labels: &'static Labels, online: bool) {
     global.set_col_link(labels.columns[5].into());
     global.set_col_port(labels.columns[6].into());
     global.set_launcher_title(labels.launcher_title.into());
+    global.set_unlock_owner(labels.unlock_owner.into());
+    global.set_unlock_statement(labels.unlock_statement.into());
+    global.set_unlock_confirm(labels.unlock_confirm.into());
     global.set_start(labels.start.into());
     global.set_request_shutdown(labels.request_shutdown.into());
 }

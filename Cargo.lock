@@ -218,6 +218,7 @@ dependencies = [
  "acui-source",
  "anyhow",
  "image",
+ "serde_json",
  "slint",
  "slint-build",
  "winresource",
