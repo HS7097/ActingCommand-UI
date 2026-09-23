@@ -9,8 +9,11 @@
 //! put in a job object, and is dropped when the readiness poll ends, so the
 //! daemon outlives the console. Readiness is one typed connect per attempt,
 //! never a parse of the daemon's output. Shutdown is a typed request through
-//! the client, recorded as a client action first; a refusal is shown verbatim
-//! and never retried.
+//! the client, recorded as a client action first; a request refused as
+//! `runtime_busy` is sent again, a second later, a few times, and any other
+//! refusal is shown verbatim. A start press is recorded as a client action too,
+//! but only once a Runtime takes a connection: a start that never got ready
+//! records nothing.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -20,7 +23,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use acui_source::{probe_runtime, request_shutdown, ClientFailure, RuntimeFacts};
+use acui_source::{
+    probe_runtime, record_start, request_shutdown, ClientFailure, RuntimeFacts, SHUTDOWN_ATTEMPTS,
+};
 use slint::ComponentHandle;
 
 use crate::strings::{fill, Labels};
@@ -109,6 +114,13 @@ fn start(window: &AppWindow, app: &Rc<App>) {
     window.set_runtime_status_text(status_text(labels, &probe).into());
     if probe.is_ok() {
         window.set_launcher_line(labels.already_running.into());
+        let root = launcher.state_root.clone();
+        let weak = window.as_weak();
+        std::thread::spawn(move || {
+            let record = record_text(labels, record_start(&root, false));
+            let line = format!("{} · {record}", labels.already_running);
+            post(&weak, None, line);
+        });
         return;
     }
     let (exe, config) = match (
@@ -190,6 +202,8 @@ fn start(window: &AppWindow, app: &Rc<App>) {
                         labels.start_ready,
                         &[&facts.pid.to_string(), &facts.owner_epoch],
                     );
+                    line.push_str(" · ");
+                    line.push_str(&record_text(labels, record_start(&root, true)));
                     if offline {
                         line.push_str(" · ");
                         line.push_str(labels.restart_online);
@@ -313,7 +327,12 @@ fn shutdown(window: &AppWindow, app: &Rc<App>) {
     let weak = window.as_weak();
     window.set_launcher_line(format!("{}…", labels.request_shutdown).into());
     std::thread::spawn(move || {
-        let line = match request_shutdown(&root) {
+        let total = SHUTDOWN_ATTEMPTS.to_string();
+        let outcome = request_shutdown(&root, |attempt| {
+            let line = fill(labels.shutdown_busy_retry, &[&attempt.to_string(), &total]);
+            post(&weak, None, line);
+        });
+        let mut line = match outcome.result {
             Ok(accepted) => fill(
                 labels.shutdown_accepted,
                 &[
@@ -322,19 +341,36 @@ fn shutdown(window: &AppWindow, app: &Rc<App>) {
                     &accepted.action_sequence.to_string(),
                 ],
             ),
-            Err(failure) => match &failure.runtime_code {
-                Some(runtime_code) => fill(
-                    labels.shutdown_refused,
-                    &[runtime_code, failure.code, failure.operation],
-                ),
-                None => fill(labels.shutdown_failed, &[failure.code, failure.operation]),
-            },
+            Err(failure) => failure_text(labels.shutdown_refused, labels.shutdown_failed, &failure),
         };
+        if outcome.attempts > 0 {
+            let attempts = outcome.attempts.to_string();
+            line.push_str(" · ");
+            line.push_str(&fill(labels.shutdown_attempts, &[&attempts, &total]));
+        }
         // One probe after the answer: the Runtime stops on its own time, so
         // this may still say running.
         let status = status_text(labels, &probe_runtime(&root));
         post(&weak, Some(status), line);
     });
+}
+
+/// Where the start press landed in the ledger, or why it did not.
+fn record_text(labels: &Labels, record: Result<u64, ClientFailure>) -> String {
+    let (refused, failed) = (labels.start_record_refused, labels.start_record_failed);
+    match record {
+        Ok(sequence) => fill(labels.start_recorded, &[&sequence.to_string()]),
+        Err(failure) => failure_text(refused, failed, &failure),
+    }
+}
+
+/// The Runtime's refusal code verbatim when it answered with one, then the
+/// client's own error code and operation.
+fn failure_text(refused: &str, failed: &str, failure: &ClientFailure) -> String {
+    match &failure.runtime_code {
+        Some(runtime_code) => fill(refused, &[runtime_code, failure.code, failure.operation]),
+        None => fill(failed, &[failure.code, failure.operation]),
+    }
 }
 
 /// Paints the block from a worker thread.

@@ -11,7 +11,8 @@
 //! client has. This crate is a client only: it never starts, kills or waits
 //! on the Runtime, and never writes into the state root. The launcher's two
 //! questions — is a Runtime running here, and will it accept a shutdown
-//! request — are asked through that same typed client, at the end of this file.
+//! request — are asked through that same typed client, and its start press is
+//! recorded through it, at the end of this file.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -434,29 +435,84 @@ pub struct ShutdownAccepted {
     pub action_sequence: u64,
 }
 
-/// Asks the running Runtime to shut down, through the typed client only:
-/// one fresh connection, one interaction on it, the console's button press
-/// recorded as a client action first (its receipt must carry a terminal
-/// event), then `request_shutdown` to the owner frozen at connect time. A
-/// refusal at either step comes back as a [`ClientFailure`] with the
-/// Runtime's code; nothing here retries, kills or waits.
-pub fn request_shutdown(state_root: &Path) -> Result<ShutdownAccepted, ClientFailure> {
+/// One press of request shutdown: the shutdown requests it sent, 0 when it
+/// failed before the first, and how the last one was answered.
+pub struct ShutdownOutcome {
+    pub attempts: u32,
+    pub result: Result<ShutdownAccepted, ClientFailure>,
+}
+
+/// Shutdown requests one press sends at most. The Runtime refuses one as
+/// `runtime_busy` while another request still holds its lifecycle admission,
+/// as one briefly does after its reply; each refusal is its own ledgered request.
+/// It is also refused as busy while a lease is active or requests are queued,
+/// which these retries will not outlast.
+pub const SHUTDOWN_ATTEMPTS: u32 = 5;
+const SHUTDOWN_BUSY_WAIT: Duration = Duration::from_secs(1);
+
+/// Asks the running Runtime to shut down, through the typed client only: the
+/// console's button press recorded once, first (see `record_press`), then
+/// `request_shutdown` to the owner frozen at connect time, on that same
+/// interaction, sent again a second later while it is refused as
+/// `runtime_busy`, `retrying` told each new attempt's number first. Any other
+/// refusal or error, or the last busy refusal, comes back as a
+/// [`ClientFailure`] with the Runtime's code. Nothing here kills the Runtime or
+/// waits for it to stop.
+pub fn request_shutdown(state_root: &Path, mut retrying: impl FnMut(u32)) -> ShutdownOutcome {
+    let (interaction, action_sequence) =
+        match record_press(state_root, "request_shutdown") {
+            Ok(recorded) => recorded,
+            Err(failure) => return ShutdownOutcome { attempts: 0, result: Err(failure) },
+        };
+    let mut attempts = 1;
+    let result = loop {
+        let failure = match interaction.request_shutdown() {
+            Ok(receipt) => {
+                break Ok(ShutdownAccepted {
+                    receipt_state: code(&receipt.state()),
+                    request_id: code(&receipt.request_id()),
+                    action_sequence,
+                })
+            }
+            Err(error) => ClientFailure::from(error),
+        };
+        let busy = failure.runtime_code.as_deref() == Some("runtime_busy");
+        if !busy || attempts == SHUTDOWN_ATTEMPTS {
+            break Err(failure);
+        }
+        attempts += 1;
+        retrying(attempts);
+        std::thread::sleep(SHUTDOWN_BUSY_WAIT);
+    };
+    ShutdownOutcome { attempts, result }
+}
+
+/// Records the launcher's start press, once the Runtime it started, or found
+/// already running, takes a connection. Before that there is no Runtime to
+/// record it, so a start that never got ready records nothing. Whether a
+/// process was launched is an outcome the ledger states on its own, not a
+/// value of the press; a press that found the Runtime running is its own control.
+pub fn record_start(state_root: &Path, spawned: bool) -> Result<u64, ClientFailure> {
+    let control_id = if spawned { "launcher.start" } else { "launcher.start.skipped_running" };
+    let (_, sequence) = record_press(state_root, control_id)?;
+    Ok(sequence)
+}
+
+/// One fresh connection, one interaction on it, and one launcher press recorded
+/// there as a value-less button client action whose receipt must carry a
+/// terminal event. Gives back the interaction and the record's ledger position.
+fn record_press(state_root: &Path, control_id: &str) -> Result<(RuntimeClient, u64), ClientFailure> {
     let client = OnlineSource::connect(state_root)?;
     let interaction = client.begin_interaction()?;
-    let action = ClientActionRecord::new(
-        "acui.launcher",
-        "request_shutdown",
-        ClientActionKind::Button,
-        None,
-        None,
-    )
-    .map_err(|_| ClientFailure {
-        code: "client_action_invalid",
-        operation: "record_client_action",
-        runtime_code: None,
-    })?;
+    let action =
+        ClientActionRecord::new("acui.launcher", control_id, ClientActionKind::Button, None, None)
+            .map_err(|_| ClientFailure {
+                code: "client_action_invalid",
+                operation: "record_client_action",
+                runtime_code: None,
+            })?;
     let recorded = interaction.record_client_action_receipt(action)?;
-    let action_sequence = recorded
+    let sequence = recorded
         .terminal()
         .ok_or(ClientFailure {
             code: "client_action_terminal_missing",
@@ -464,12 +520,7 @@ pub fn request_shutdown(state_root: &Path) -> Result<ShutdownAccepted, ClientFai
             runtime_code: None,
         })?
         .sequence;
-    let receipt = interaction.request_shutdown()?;
-    Ok(ShutdownAccepted {
-        receipt_state: code(&receipt.state()),
-        request_id: code(&receipt.request_id()),
-        action_sequence,
-    })
+    Ok((interaction, sequence))
 }
 
 /// Where a material read goes. Offline it is the forensic read face over the

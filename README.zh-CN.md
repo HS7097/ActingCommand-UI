@@ -177,22 +177,35 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   `RuntimeClient::connect`：连上了写「运行中 · PID · owner epoch」（取自它自己的
   `runtime-info.json`，经客户端的 owner epoch 核对）；连不上写「未运行」加客户端的错误码与
   操作名，不猜原因。
-- **启动**：先探测，已在运行就只写「已在运行，未拉起」。否则按 `actingd_exe` 分离拉起
+- **启动**：先探测，已在运行就什么也不拉，写「已在运行，未拉起」并记下这次按钮（见下）。
+  否则按 `actingd_exe` 分离拉起
   `actingcommand-actingd --config <actingd_config>`——命令行就这一条；两个键缺一个或不是
   绝对路径，都写明是哪个键，什么也不拉。stdout / stderr 都进监控台**自己**目录下的日志：
   `%LOCALAPPDATA%\ActingCommand\logs\actingd-<unix_ms>.log`（Linux：`$XDG_STATE_HOME` 或
   `$HOME/.local/state` 下同名路径），目录由监控台建，**永不在状态根里**。Windows 下用
   `DETACHED_PROCESS` 拉起：守护进程不继承监控台的控制台，收不到它的 Ctrl+C。
 - **就绪判定**：最多 60 次、每次 500 ms。每次先 `try_wait()`：子进程已退出就停下，写退出码与
-  日志路径；没退出就再 `connect` 一次，连上即就绪，写 PID 与 owner epoch；本台若按离线读，
-  追加一句「要在线读请带 `--source online` 重启」——**不会在会话中途悄悄换读面**。60 次都
-  没连上，写「仍未就绪」和最后一次客户端错误码。**不解析守护进程的输出**。
+  日志路径；没退出就再 `connect` 一次，连上即就绪，写 PID 与 owner epoch，随后记下这次按钮
+  （见下）；本台若按离线读，追加一句「要在线读请带 `--source online` 重启」——**不会在会话
+  中途悄悄换读面**。60 次都没连上，写「仍未就绪」和最后一次客户端错误码。**不解析守护进程的输出**。
+- **记下启动按钮**：Runtime 存在之后才记得下，所以顺序是探测 →（需要时）拉起 → 就绪判定 → 记账。
+  记账新开一条连接，`begin_interaction()` 开一个交互，用 `record_client_action_receipt` 记一条
+  `client_action`（surface `acui.launcher`，类别 `button`、不带值；这次按钮拉起了进程记 control
+  `launcher.start`，发现 Runtime 已在运行记 `launcher.start.skipped_running`），回执必须带 terminal；
+  在工作线程上做，不占窗口的事件循环。有没有拉起进程是账本自己记下的结果（`runtime.started`），
+  不是按钮的值。结果行追加动作落账的
+  序号；记账失败就把 Runtime 的拒绝码（若有）**原样**写出，外加客户端错误码与操作名——Runtime
+  仍照写已就绪 / 运行中。就绪判定
+  失败时没有连接，**什么也不记**，失败只写在结果行上——这是启动器里唯一可能生效却不落账的动作。
 - **请求关闭**：只走类型化客户端，从不杀进程。新开一条连接，`begin_interaction()` 开一个
   交互，先用 `record_client_action_receipt` 把这次按钮记成 `client_action`（surface
   `acui.launcher`、control `request_shutdown`），拿到带 terminal 的回执后再发
-  `request_shutdown()`——动作先落账，再请求。受理了写回执状态、请求编号、动作落账的序号；
-  被拒（owner / governance 等）就把 Runtime 的拒绝码**原样**写出，外加客户端错误码与操作名；
-  **不重试**。之后再探测一次状态——Runtime 按自己的节奏停，这一眼可能还写着运行中。
+  `request_shutdown()`——动作先落账，再请求。被拒为 `runtime_busy`（别的请求——比如一次状态
+  查询——之后 Runtime 会短暂占着生命周期准入；有租约在用或有排队请求时也会被拒为忙碌，这几次重试等不过去）就隔一秒在同一个交互上再发，总共最多 5 次，其间
+  结果行写「忙碌重试 n/5」；按钮仍只记一次。受理了写回执状态、请求编号、动作落账的序号；以别的
+  理由被拒（owner / governance 等）或第 5 次仍忙，就把 Runtime 的拒绝码**原样**写出，外加客户端
+  错误码与操作名；其他拒绝或错误立即停下。最终结果行也写发了几次。之后再探测一次状态——Runtime
+  按自己的节奏停，这一眼可能还写着运行中。
 - **永不杀**：`Child` 句柄只用来 `try_wait()` 看有没有早退，不 `kill`、不阻塞 `wait`、不挂
   job object；就绪判定结束就丢掉句柄，守护进程活得比监控台久。
 
@@ -261,8 +274,9 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   `strings.rs`，设置文件的读写在 `settings.rs`。
 
 `slint` 1.17.x，`default-features = false`；账本只读，控制入口只有启动器的两个按钮（启动 /
-请求关闭，见上），没有审批入口；不写测试。启动器在 `crates/acui-app/src/launcher.rs`，探测与
-请求关闭这两个客户端操作在 `acui-source`（`probe_runtime` / `request_shutdown`）。
+请求关闭，见上），没有审批入口；不写测试。启动器在 `crates/acui-app/src/launcher.rs`，探测、
+请求关闭、记下启动按钮这三个客户端操作在 `acui-source`（`probe_runtime` / `request_shutdown` /
+`record_start`）。
 
 第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、sha2、
 zip、getrandom，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
