@@ -346,7 +346,7 @@ pub struct Labels {
     pub bound_to: &'static str,
     /// MuMu index, bound alias.
     pub discover_bound: &'static str,
-    /// MuMu index, the alias of the file's entry.
+    /// MuMu index, the alias of the file's entry for that instance.
     pub discover_listed: &'static str,
     /// MuMu index, instance name.
     pub discover_applied: &'static str,
@@ -657,7 +657,7 @@ pub const ZH: Labels = Labels {
     android_version: "Android {}",
     bound_to: "已绑定 {}",
     discover_bound: "序号 {} 已被运行中的 Runtime 绑定到 {}，不另起新项",
-    discover_listed: "配置文件里已有序号 {} 的项（{}），请在上面的列表里编辑它",
+    discover_listed: "序号 {} 的实例在配置文件里已有对应项（{}），请在上面的列表里编辑它",
     discover_applied: "已按发现结果起一个新项：MuMu 序号 {}（{}）。填好别名等再「校验并保存」",
 };
 
@@ -968,7 +968,7 @@ pub const EN: Labels = Labels {
     android_version: "Android {}",
     bound_to: "Bound to {}",
     discover_bound: "Index {} Is Already Bound to {} by the Running Runtime; No New Entry",
-    discover_listed: "The File Already Has an Entry with Index {} ({}); Edit It in the List Above",
+    discover_listed: "The File Already Has an Entry for Index {} ({}); Edit It in the List Above",
     discover_applied: "New Entry from Discovery: MuMu Index {} ({}). Fill In the Alias and the Rest, Then Check and Save",
 };
 

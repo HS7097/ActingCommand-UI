@@ -309,8 +309,8 @@ fn found_text(labels: &Labels, found: &DiscoveredInstance) -> String {
 
 /// Use Selected in the discovery box: an instance neither the file nor the
 /// running Runtime binds starts a new entry bound by its MuMu index, the rest of
-/// the form left to fill. One the file already binds by that index is pointed
-/// at in the list (the running Runtime may not have loaded it yet), and one the
+/// the form left to fill. One the file already has an entry for is pointed at in
+/// the list (the running Runtime may not have loaded it yet), and one the
 /// Runtime binds is named; neither changes the form.
 fn pick(editor: &Editor, config: &ConfigWindow, index: i32) {
     let labels = editor.app.labels;
@@ -325,8 +325,14 @@ fn pick(editor: &Editor, config: &ConfigWindow, index: i32) {
     };
     config.set_discovered_index(0);
     let number = found.index.to_string();
+    // The file's own entry for this instance, by the keys the Runtime binds it
+    // by: its index, its name, or (an explicit entry) its ADB port.
     let listed = editor.entries.borrow().iter().find_map(|entry| {
-        (field(entry, "instance_index").and_then(Value::as_u64) == Some(u64::from(found.index)))
+        let number = |key| field(entry, key).and_then(Value::as_u64);
+        let by_index = number("instance_index") == Some(u64::from(found.index));
+        let by_name = field(entry, "instance_name").and_then(Value::as_str) == Some(&found.name);
+        let by_port = found.adb_port.is_some() && number("port") == found.adb_port.map(u64::from);
+        (by_index || by_name || by_port)
             .then(|| text(entry, "alias").unwrap_or_else(|| labels.none.to_string()))
     });
     if let Some(alias) = listed {

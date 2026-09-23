@@ -278,8 +278,9 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   （`command.validated`），把拒绝记成 `command.rejected` 加 `runtime.failed`。旁边的框随后列出报告的
   每个实例：MuMu 序号、是否在运行、运行中的 Runtime 给它绑定的别名（若有）、ADB 地址、Android 版本，
   名称放最后；那一行写出个数、提供者版本和这次查询的序号。在框里选只是选中，点「采用所选」才生效：
-  配置文件里没有该 `instance_index` 的项、运行中的 Runtime 也没绑定它时，就以这个序号为绑定起一个新项
-  （别名等照填；地址留给启动时的发现）；已被绑定的只指明是哪一项，什么也不改。没有 Runtime 在跑，或
+  配置文件里没有指向它的项（`instance_index` 等于其序号、`instance_name` 等于其名称，或 `port` 等于其
+  ADB 端口）、运行中的 Runtime 也没绑定它时，就以这个序号为绑定起一个新项（别名等照填；地址留给启动
+  时的发现）；已被绑定的只指明是哪一项，什么也不改。没有 Runtime 在跑，或
   被拒（`instance_discovery_unavailable`、`mumu_manager_version_unsupported` 等）时，那一行写 Runtime
   的码、客户端错误与宿主失败，之前的结果也不再可选。
 - **表单**：「新增实例」另起一项，点一行把那一项载入表单。没有字符串 `instance_id` 的项，以及表单

@@ -365,9 +365,10 @@ list.
   lists every instance reported: its MuMu index, whether it runs, the alias the running Runtime binds
   to it (if any), its ADB address, the Android version, and its name last; the line states how many,
   the provider version and the query's sequence. Choosing in the box only selects; Use Selected applies:
-  an instance neither the file (an entry with that `instance_index`) nor the running Runtime binds
-  starts a new entry bound by that index (the alias and the rest still to fill; its address is left to
-  discovery at startup), while one already bound is pointed at and nothing changes. With no Runtime
+  an instance neither the file (an entry with its index as `instance_index`, its name as
+  `instance_name`, or its ADB port as `port`) nor the running Runtime binds starts a new entry bound by
+  that index (the alias and the rest still to fill; its address is left to discovery at startup), while
+  one already bound is pointed at and nothing changes. With no Runtime
   running, or a refusal (`instance_discovery_unavailable`, `mumu_manager_version_unsupported`, …), the
   line states the Runtime's code, the client error and any host failure, and no earlier result stays
   pickable.
