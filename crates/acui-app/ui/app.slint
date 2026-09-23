@@ -135,6 +135,7 @@ export global Strings {
 component TabButton inherits Rectangle {
     in property <string> label;
     in property <bool> active;
+    in property <bool> enabled: true;
     callback clicked();
     height: Scale.row + 6px;
     background: active ? Palette.accent-background : Palette.control-background;
@@ -158,6 +159,7 @@ component TabButton inherits Rectangle {
         }
     }
     TouchArea {
+        enabled: root.enabled;
         clicked => {
             root.clicked();
         }
@@ -203,6 +205,10 @@ export component AppWindow inherits Window {
     in property <bool> port-enabled;
     in property <[RowItem]> rows;
     in property <string> filter-error;
+    // Set only while the read face is unopened: shown where the rows would be,
+    // and every control that would query the ledger is off.
+    in property <string> unopened-note;
+    property <bool> ledger-live: root.unopened-note == "";
     in property <bool> has-more;
     in property <int> selected-index;
     in property <[FieldLine]> detail-lines;
@@ -302,6 +308,7 @@ export component AppWindow inherits Window {
                     Caption { text: Strings.show-up-to; }
                     Slider {
                         width: 150px;
+                        enabled: root.ledger-live;
                         minimum: 0;
                         maximum: 1000;
                         // The handle starts where the state starts: at the top of
@@ -438,6 +445,7 @@ export component AppWindow inherits Window {
                         for label[index] in root.tab-labels: TabButton {
                             label: label;
                             active: index == root.active-tab;
+                            enabled: root.ledger-live;
                             clicked => {
                                 root.tab-changed(index);
                             }
@@ -451,6 +459,7 @@ export component AppWindow inherits Window {
                             // box holds two characters and an ellipsis.
                             min-width: 100px * Scale.factor;
                             preferred-width: 150px * Scale.factor;
+                            enabled: root.ledger-live;
                             model: Strings.severity-min-options;
                             current-index: 0;
                             selected => {
@@ -460,6 +469,7 @@ export component AppWindow inherits Window {
                         ComboBox {
                             min-width: 100px * Scale.factor;
                             preferred-width: 150px * Scale.factor;
+                            enabled: root.ledger-live;
                             model: Strings.severity-max-options;
                             current-index: 0;
                             selected => {
@@ -469,6 +479,7 @@ export component AppWindow inherits Window {
                         module-box := ComboBox {
                             min-width: 90px;
                             preferred-width: 180px * Scale.factor;
+                            enabled: root.ledger-live;
                             model: root.module-options;
                             selected => {
                                 root.module-changed(self.current-value);
@@ -486,6 +497,7 @@ export component AppWindow inherits Window {
                         LineEdit {
                             min-width: 70px;
                             horizontal-stretch: 1;
+                            enabled: root.ledger-live;
                             placeholder-text: Strings.id-placeholder;
                             font-size: Scale.body-font;
                             edited(text) => {
@@ -497,6 +509,14 @@ export component AppWindow inherits Window {
                         text: root.filter-error;
                         color: Severity.error;
                         font-size: Scale.body-font;
+                        vertical-stretch: 0;
+                        wrap: word-wrap;
+                    }
+                    // An empty list here would read as an empty ledger.
+                    if !root.ledger-live: Text {
+                        text: root.unopened-note;
+                        color: Severity.error;
+                        font-size: Scale.list-font;
                         vertical-stretch: 0;
                         wrap: word-wrap;
                     }
