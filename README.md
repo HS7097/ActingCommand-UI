@@ -321,21 +321,37 @@ Pause/resume, start-at-boot, the installer and network downloads are all outside
 
 ## Instance configuration
 
-The 实例配置 / Instance Configuration button opens a second window that adds an entry to the `instances`
-of `actingd_config`, the file Start hands to actingd.
+The 实例配置 / Instance Configuration button opens a second window over the `instances` of
+`actingd_config`, the file Start hands to actingd. Each entry is listed with its alias, `instance_id`,
+binding as the file states it (`fixture_backend`, which the Runtime takes before any binding key / MuMu
+index / MuMu name / ADB serial, shown instead of `host` + `port` when an entry has both / ADB host:port /
+no binding key in the file — the Runtime's default address is not restated), `application_id`, capture
+and touch backend, and what the session's port map says about that id — bound on a port, bound with the
+latest binding outside the port map (serial-configured or with no port; the map does not tell which), or
+not bound; read online, with the ledger not opened, or when reading the bindings failed, the row says
+that instead, and an entry without a string `instance_id` says there that it cannot be edited. A key
+holding JSON `null` reads as absent, in the list and in the form. The file is read again whenever the
+window opens and after every save; a reason it cannot be listed takes the count's place, never an empty
+list.
 
-- **The form**: `alias` is required; the new entry's `instance_id` is `instance_` + 32 lowercase hex
-  characters from the OS RNG, shown read-only; the binding is exactly one of `instance_index` (MuMu
-  index), `instance_name` (MuMu name), or `host` + `port` (an explicit ADB address). `adb_path` is
-  required with `host` + `port` and optional with a MuMu binding, whose discovery reports adb;
-  `nemu_app_index` is an optional whole number. The form does not check `application_id`,
-  `capture_backend` or `touch_backend`: whether they are needed and valid is decided by check-config. For
-  a MuMu binding, the `nemu_app_index` pairing and an `adb_path` conflict with discovery are checked only
-  when the Runtime starts, not by check-config. Text is trimmed and an empty box writes no key; a missing
-  required value or a number that does not parse is stated before anything is written.
-- **Save**: the file is read as plain JSON — a missing or relative `actingd_config`, a missing or
-  unreadable file, JSON that does not parse, or no `instances` array is each stated as such — and the
-  entry is appended; every other key of the file is kept, in its order. The result goes to
+- **The form**: Add Instance starts a new entry and a click on a row loads that entry. An entry without a
+  string `instance_id`, or one whose binding no kind of the form represents — with `fixture_backend`,
+  with `serial` set, or with no binding key at all — is listed, but a click on it says why and it cannot
+  be saved. There is no delete. `alias` is required; a new entry's `instance_id` is `instance_` + 32
+  lowercase hex characters from the OS RNG, and every `instance_id` is shown read-only; the binding is
+  exactly one of `instance_index` (MuMu index), `instance_name` (MuMu name), or `host` + `port` (an
+  explicit ADB address). `adb_path` is required with `host` + `port` and optional with a MuMu binding,
+  whose discovery reports adb; `nemu_app_index` is an optional whole number. The form does not check
+  `application_id`, `capture_backend` or `touch_backend`: whether they are needed and valid is decided by
+  check-config. For a MuMu binding, the `nemu_app_index` pairing and an `adb_path` conflict with discovery
+  are checked only when the Runtime starts, not by check-config. Text is trimmed and an empty box writes
+  no key; a missing required value or a number that does not parse is stated before anything is written.
+- **Save**: the file is read again as plain JSON — a missing or relative `actingd_config`, a missing or
+  unreadable file, JSON that does not parse, no `instances` array, or an entry that is not an object is
+  each stated as such. A new entry is appended; an existing one is found again by its `instance_id`
+  (gone from the file, or changed there into one the form cannot save, the save stops and says why) and
+  only the keys the form manages change, a changed binding kind removing the other kinds' keys. Every
+  other key of the entry and of the file is kept, in its order. The result goes to
   `<config name>.candidate-<pid>` beside it (relative paths inside resolve against that directory) and
   `<actingd_exe> check-config --config <candidate>` runs off the event loop (30 s bound, no console
   window, stdout parsed whole as one `actingcommand.actingd.check-config.v1` report). Only `status: ok`
@@ -344,8 +360,10 @@ of `actingd_config`, the file Start hands to actingd.
   `actingd_exe`, writing the candidate failing, a spawn failure, no output reader thread, reading the
   child's status failing, the timeout (these three also say whether check-config could be terminated),
   unreadable or unrecognized output, ok with a non-zero exit, or the rename failing.
-- **Effect**: there is no hot reload; a saved entry takes effect when the Runtime restarts. Saving again
-  updates that same entry; Add Instance starts a new one under a fresh `instance_id`.
+- **Effect**: there is no hot reload; a saved entry takes effect when the Runtime restarts. After a save,
+  one probe off the event loop says whether a Runtime is running now and points at the launcher's own
+  buttons: Request Shutdown, then Start once it has stopped — or, with none running, just Start. The
+  window restarts nothing itself.
 
 ## Setup wizard acsetup
 
@@ -385,8 +403,8 @@ downloads the release files into a folder first. One window, back / next, six st
    and `actingd_exe` (the format of the "Settings file" section, single-quoted literals; existing `lang` /
    `text_size` kept verbatim). The way it writes matches `crates/acui-app/src/settings.rs`, but
    `acui-setup` does not depend on `acui-app` and is a small duplicate writer. **Instances (emulators /
-   devices) are not configured in the wizard**; `instances` is left empty and they are added in the
-   console afterwards.
+   devices) are not configured in the wizard**; `instances` is left empty and they are added afterwards
+   with the console's top-bar 实例配置 / Instance Configuration button; the finish page says so.
 4. **Start at boot** (optional, unchecked by default): only when checked does it write
    `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd` in the per-user startup
    folder, whose content is

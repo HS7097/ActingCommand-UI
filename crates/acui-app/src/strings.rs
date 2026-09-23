@@ -277,6 +277,35 @@ pub struct Labels {
     pub config_unchanged: &'static str,
     /// config path.
     pub saved: &'static str,
+    /// Runtime status as the launcher words it.
+    pub saved_running: &'static str,
+    pub saved_stopped: &'static str,
+    /// config path, instance count; config path, entry number counted from 1.
+    pub config_listed: &'static str,
+    pub config_bad_entry: &'static str,
+    /// Online; error; port; bound outside the port map; not bound.
+    pub ledger_online: &'static str,
+    pub ledger_failed: &'static str,
+    pub ledger_port: &'static str,
+    pub ledger_outside_map: &'static str,
+    pub ledger_none: &'static str,
+    /// index; name; host, port; serial.
+    pub binding_index: &'static str,
+    pub binding_name: &'static str,
+    pub binding_adb: &'static str,
+    pub binding_serial: &'static str,
+    pub binding_none: &'static str,
+    pub binding_fixture: &'static str,
+    /// instance_id, application_id, capture_backend, touch_backend.
+    pub instance_detail: &'static str,
+    /// instance_id.
+    pub entry_gone: &'static str,
+    pub entry_no_id: &'static str,
+    pub entry_serial: &'static str,
+    pub entry_fixture: &'static str,
+    pub entry_no_binding: &'static str,
+    /// The ledger column of a row without a string instance_id.
+    pub row_no_id: &'static str,
 }
 
 pub const ZH: Labels = Labels {
@@ -493,7 +522,7 @@ pub const ZH: Labels = Labels {
     shutdown_refused: "关闭请求被拒：{} · 客户端 {}（{}）",
     shutdown_failed: "关闭请求失败：{}（{}）",
     instance_config: "实例配置",
-    config_intro: "给 actingd_config 的 instances 新增一项。填好后「校验并保存」：先在同一目录写临时文件，交 actingd check-config 校验，通过才替换原文件；文件里其余的键、值与键的次序原样保留，整份文件按 2 空格缩进的 JSON 重新写出。改动在 Runtime 重启后生效。",
+    config_intro: "列出 actingd_config 的 instances。点一行载入下面的表单编辑，或「新增实例」另起一项，然后「校验并保存」：先在同一目录写临时文件，交 actingd check-config 校验，通过才替换原文件；表单不管的键与值原样保留、键的次序不变，整份文件按 2 空格缩进的 JSON 重新写出。改动在 Runtime 重启后生效。",
     add_instance: "新增实例",
     form_fields: ["alias（必填）", "instance_id", "绑定方式", "adb_path", "nemu_app_index", "application_id", "capture_backend", "touch_backend"],
     binding_kinds: ["MuMu 序号 instance_index", "MuMu 名称 instance_name", "ADB 地址 host + port"],
@@ -522,6 +551,28 @@ pub const ZH: Labels = Labels {
     candidate_left: "；临时文件 {} 未能删除：{}",
     config_unchanged: " · 原配置未改动",
     saved: "已保存进 {}（check-config 通过）· Runtime 重启后生效",
+    saved_running: "现在：{} · 在主窗口先「请求关闭」，停下后再「启动」",
+    saved_stopped: "现在：{} · 在主窗口点「启动」即按新配置运行",
+    config_listed: "{} · 共 {} 个实例",
+    config_bad_entry: "{} 的 instances 第 {} 项不是对象",
+    ledger_online: "账本绑定：在线读面不给",
+    ledger_failed: "账本绑定读取失败：{}",
+    ledger_port: "账本已绑定 · 端口 {}",
+    ledger_outside_map: "账本已绑定 · 最新一次不在端口映射里（序列号配置或无端口）",
+    ledger_none: "账本里没有此实例的绑定",
+    binding_index: "MuMu 序号 {}",
+    binding_name: "MuMu 名称 {}",
+    binding_adb: "ADB {}:{}",
+    binding_serial: "ADB 序列号 {}",
+    binding_none: "文件未写绑定键",
+    binding_fixture: "fixture_backend（不连设备）",
+    instance_detail: "{} · 应用 {} · 截图 {} · 触控 {}",
+    entry_gone: "配置文件里已没有 {}（别处改过）",
+    entry_no_id: "这一项没有字符串 instance_id，不能在这里编辑",
+    entry_serial: "这一项设了 serial，表单表示不了，不能在这里编辑",
+    entry_fixture: "这一项配置了 fixture_backend，表单表示不了这种后端，不能在这里编辑",
+    entry_no_binding: "这一项文件里没写绑定键（MuMu 序号、MuMu 名称、host / port、serial 都没有），表单表示不了，不能在这里编辑",
+    row_no_id: "不可编辑：没有字符串 instance_id",
 };
 
 pub const EN: Labels = Labels {
@@ -738,7 +789,7 @@ pub const EN: Labels = Labels {
     shutdown_refused: "Shutdown Refused: {} · Client {} ({})",
     shutdown_failed: "Shutdown Request Failed: {} ({})",
     instance_config: "Instance Configuration",
-    config_intro: "Adds an entry to the instances of actingd_config. Fill it in, then Check and Save: a temporary file is written in the same directory and checked by actingd check-config, and only an ok replaces the file; the file's other keys, values and key order are kept, and the whole file is rewritten as JSON indented by 2 spaces. Changes take effect when the Runtime restarts.",
+    config_intro: "Lists the instances of actingd_config. Click a row to edit it in the form below, or Add Instance to start a new one, then Check and Save: a temporary file is written in the same directory and checked by actingd check-config, and only an ok replaces the file; keys and values the form does not manage are kept, key order is kept, and the whole file is rewritten as JSON indented by 2 spaces. Changes take effect when the Runtime restarts.",
     add_instance: "Add Instance",
     form_fields: ["alias (required)", "instance_id", "Binding", "adb_path", "nemu_app_index", "application_id", "capture_backend", "touch_backend"],
     binding_kinds: ["MuMu Index instance_index", "MuMu Name instance_name", "ADB Address host + port"],
@@ -768,6 +819,29 @@ pub const EN: Labels = Labels {
     candidate_left: "; Temporary File {} Not Removed: {}",
     config_unchanged: " · The Config File Was Not Changed",
     saved: "Saved to {} (check-config ok) · Takes Effect When the Runtime Restarts",
+    saved_running: "Now: {} · In the Main Window, Request Shutdown, Then Start Once It Has Stopped",
+    saved_stopped: "Now: {} · Start in the Main Window Runs the New Configuration",
+    config_listed: "{} · Instances: {}",
+    config_bad_entry: "In {}, instances Entry {} Is Not an Object",
+    ledger_online: "Ledger Binding: Not Given Online",
+    ledger_failed: "Reading Ledger Bindings Failed: {}",
+    ledger_port: "Bound in the Ledger · Port {}",
+    ledger_outside_map:
+        "Bound in the Ledger · Latest Binding Outside the Port Map (Serial-Configured or No Port)",
+    ledger_none: "No Ledger Binding for This Instance",
+    binding_index: "MuMu Index {}",
+    binding_name: "MuMu Name {}",
+    binding_adb: "ADB {}:{}",
+    binding_serial: "ADB Serial {}",
+    binding_none: "No Binding Key in the File",
+    binding_fixture: "fixture_backend (No Device)",
+    instance_detail: "{} · App {} · Capture {} · Touch {}",
+    entry_gone: "{} Is No Longer in the Config File (Changed Elsewhere)",
+    entry_no_id: "This Entry Has No String instance_id and Cannot Be Edited Here",
+    entry_serial: "This Entry Sets serial, Which the Form Cannot Represent, and Cannot Be Edited Here",
+    entry_fixture: "This Entry Has a fixture_backend, Which the Form Cannot Represent, and Cannot Be Edited Here",
+    entry_no_binding: "This Entry Has No Binding Key in the File (No MuMu Index or Name, host / port or serial), Which the Form Cannot Represent, and Cannot Be Edited Here",
+    row_no_id: "Not Editable: No String instance_id",
 };
 
 impl Labels {

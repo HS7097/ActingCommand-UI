@@ -248,27 +248,40 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 
 ## 实例配置
 
-「实例配置」按钮打开第二个窗口，给 `actingd_config`——「启动」交给 actingd 的那份文件——的
-`instances` 新增一项。
+「实例配置」按钮打开第二个窗口，对象是 `actingd_config`——「启动」交给 actingd 的那份文件——
+里的 `instances`。每一项列出别名、`instance_id`、文件里写的绑定（`fixture_backend`，Runtime
+先于任何绑定键采用它 / MuMu 序号 / MuMu 名称 / ADB 序列号，与 `host` + `port` 同在时只显示
+序列号 / ADB host:port / 文件未写绑定键——不替 Runtime 复述默认地址）、`application_id`、截
+图与触控后端，以及本会话的端口映射对这个编号怎么说——绑在某个端口、绑了但最新一次不在端口映
+射里（序列号配置或无端口，映射分不出是哪种）、没有绑定；在线读面、账本未打开或读绑定失败时，行里直说；
+没有字符串 `instance_id` 的项在这个位置写明不可编辑。值为 JSON `null` 的键，列表和表单里都
+当作没写。每次打开窗口、每次保存之后都重新读文件；列不出来的原因写在条数的位置上，绝不显示
+成一个空列表。
 
-- **表单**：`alias` 必填；新实例的 `instance_id` 是 `instance_` 加系统随机源的 32 位小写十六进制，
-  只读显示；绑定恰好一种——`instance_index`（MuMu 序号）、`instance_name`（MuMu 名称），或
-  `host` + `port`（显式 ADB 地址）。`adb_path` 在 `host` + `port` 下必填，在 MuMu 绑定下选填（由
-  MuMu 发现报告 adb）；`nemu_app_index` 是选填的整数。`application_id`、`capture_backend`、
-  `touch_backend` 表单不检查，要不要填、取值是否有效都由 check-config 判定。MuMu 绑定的项，
-  `nemu_app_index` 的配对、`adb_path` 与发现结果的冲突，check-config 不查，Runtime 启动时才查。
-  文本去掉首尾空白，留空的框不写这个键；必填项为空、数字解析不了，都在写任何东西之前直说。
-- **保存**：把文件当普通 JSON 读——`actingd_config` 没配或不是绝对路径、文件不存在或读不出、
-  JSON 解析失败、没有 `instances` 数组，各自直说——再把这一项追加进去，文件里其余的键一概原样、
-  次序不变。结果写到同目录的 `<配置文件名>.candidate-<pid>`（里面的相对路径按这个目录解析），在
-  事件循环之外跑 `<actingd_exe> check-config --config <临时文件>`（30 秒上限，不弹控制台窗口，
-  stdout 整段按一份 `actingcommand.actingd.check-config.v1` 报告解析）。只有 `status: ok` 且退出码
-  成功才改名覆盖原文件；否则删掉临时文件、原文件不动，窗口写明原因：原样写出 `error.code` 与
-  `stage`，或是 `actingd_exe` 没配或非绝对、写临时文件失败、拉起失败、读输出的线程起不来、
-  读子进程状态失败、超时（这三种还写明 check-config 能否终止）、输出读不出或无法识别、
-  报 ok 但退出码非零、改名失败中的哪一种。
-- **生效**：没有热加载，保存的实例在 Runtime 重启后生效。再保存一次改的是同一项；「新增实例」
-  换一个新的 `instance_id` 另起一项。
+- **表单**：「新增实例」另起一项，点一行把那一项载入表单。没有字符串 `instance_id` 的项，以及表单
+  的哪种绑定都表示不了的项——配置了 `fixture_backend`、设了 `serial`、一个绑定键都没写——照样列
+  出，但点它会写明原因、不能保存。没有删除。`alias` 必填；新实例的 `instance_id` 是 `instance_`
+  加系统随机源的 32 位小写十六进制，所有 `instance_id` 都只读显示；绑定恰好一种——`instance_index`
+  （MuMu 序号）、`instance_name`（MuMu 名称），或 `host` + `port`（显式 ADB 地址）。`adb_path` 在
+  `host` + `port` 下必填，在 MuMu 绑定下选填（由 MuMu 发现报告 adb）；`nemu_app_index` 是选填的整
+  数。`application_id`、`capture_backend`、`touch_backend` 表单不检查，要不要填、取值是否有效都由
+  check-config 判定。MuMu 绑定的项，`nemu_app_index` 的配对、`adb_path` 与发现结果的冲突，
+  check-config 不查，Runtime 启动时才查。文本去掉首尾空白，留空的框不写这个键；必填项为空、数字解
+  析不了，都在写任何东西之前直说。
+- **保存**：重新把文件当普通 JSON 读——`actingd_config` 没配或不是绝对路径、文件不存在或读不出、
+  JSON 解析失败、没有 `instances` 数组、某一项不是对象，各自直说。新实例追加进去；已有的按
+  `instance_id` 重新找到（文件里已经没有了，或已被改成表单存不了的样子，就停下并写明原因），只改
+  表单管的键，换了绑定种类就删掉别的种类的键。这一项和整个文件里其余的键一概原样、次序不变。结果
+  写到同目录的 `<配置文件名>.candidate-<pid>`（里面的相对路径按这个目录解析），在事件循环之外跑
+  `<actingd_exe> check-config --config <临时文件>`（30 秒上限，不弹控制台窗口，stdout 整段按一份
+  `actingcommand.actingd.check-config.v1` 报告解析）。只有 `status: ok` 且退出码成功才改名覆盖原
+  文件；否则删掉临时文件、原文件不动，窗口写明原因：原样写出 `error.code` 与 `stage`，或是
+  `actingd_exe` 没配或非绝对、写临时文件失败、拉起失败、读输出的线程起不来、读子进程状态失败、
+  超时（这三种还写明 check-config 能否终止）、输出读不出或无法识别、报 ok 但退出码非零、改名失败
+  中的哪一种。
+- **生效**：没有热加载，保存的实例在 Runtime 重启后生效。保存之后在事件循环之外探测一次，写明现在
+  有没有 Runtime 在跑，并指向启动器自己的按钮：先「请求关闭」，停下后再「启动」——没在跑就直接
+  「启动」。窗口本身不重启任何东西。
 
 ## 安装引导程序 acsetup
 
@@ -299,7 +312,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `state_root`、`actingd_config`、`actingd_exe`（同「设置文件」一节的格式，单引号字面量；已有的
    `lang` / `text_size` 原样保留）。写法与 `crates/acui-app/src/settings.rs` 一致，但 `acui-setup`
    不依赖 `acui-app`，是一份小的重复写入器。**实例（模拟器 / 设备）不在引导里配置**，`instances`
-   留空，之后在监控台里添加。
+   留空，之后点监控台顶栏的「实例配置」按钮添加；完成页也这样写。
 4. **开机自启**（可选，默认不勾）：勾了才写按用户的启动文件夹里的
    `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd`，内容是
    `start "" "<安装根>\runtime\actingcommand-actingd.exe" --config "<安装根>\actingd.config.json"`；

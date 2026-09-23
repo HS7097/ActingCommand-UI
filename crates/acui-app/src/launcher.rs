@@ -69,7 +69,7 @@ const UNLOCK_TIMEOUT: Duration = Duration::from_secs(180);
 const UNLOCK_POLL: Duration = Duration::from_millis(100);
 
 pub struct Launcher {
-    state_root: PathBuf,
+    pub state_root: PathBuf,
     pub actingd_config: Option<PathBuf>,
     pub actingd_exe: Option<PathBuf>,
     /// One start in flight at a time: set until its readiness poll ends.
@@ -130,7 +130,7 @@ pub fn refresh_status(window: &AppWindow, app: &App) {
     window.set_runtime_status_text(status_text(app.labels, &probe).into());
 }
 
-fn status_text(labels: &Labels, probe: &Result<RuntimeFacts, ClientFailure>) -> String {
+pub fn status_text(labels: &Labels, probe: &Result<RuntimeFacts, ClientFailure>) -> String {
     match probe {
         Ok(facts) => fill(
             labels.runtime_running,

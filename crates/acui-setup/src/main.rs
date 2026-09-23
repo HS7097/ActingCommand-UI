@@ -444,9 +444,12 @@ fn summary(state: &Shared) -> String {
         lines.push(format!("日志 / Log: {}", log.path().display()));
     }
     lines.push(String::new());
-    lines.push("实例（模拟器 / 设备）本引导未配置，instances 为空：之后在监控台里添加。".to_string());
     lines.push(
-        "No instance was configured here (instances is empty): add them later in the console."
+        "实例（模拟器 / 设备）本引导未配置，instances 为空：之后点监控台顶栏的「实例配置」按钮添加。"
+            .to_string(),
+    );
+    lines.push(
+        "No instance was configured here (instances is empty): add them with the Instance Configuration button in the console's top bar."
             .to_string(),
     );
     lines.join("\n")
