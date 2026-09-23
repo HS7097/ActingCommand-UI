@@ -145,9 +145,9 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   splits it), every filter applied by the ledger. Each page query costs the Runtime a read and
   verification of the whole ledger — online, on its ledger writer — so one fill reads at least one window
   and stops at 256 more rows, position 1, 16 windows or one second, whichever comes first. Rows are listed
-  **newest first**; "read earlier" at the bottom continues below what is loaded. The top bar permanently states the
-  positions the loaded windows cover ("read positions A–B"), with "source incomplete" appended when a
-  window's page said its read was incomplete.
+  **newest first**; "read earlier" at the bottom continues below what is loaded. The top bar permanently
+  states the positions the loaded windows cover ("read positions A–B"), with "source incomplete" appended
+  when a window's page said its read was incomplete.
 - **The performance monitor's routine events are hidden by default**: `perf.summary` arrives every 2
   seconds and would bury everything else, and the ledger query cannot exclude a module. Unless "show
   performance monitor" is ticked, the performance monitor is picked as the module, or the Health tab
