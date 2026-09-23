@@ -355,8 +355,9 @@ export component AppWindow inherits Window {
                     }
                     Caption { text: Strings.restart-note; }
                 }
-                // launcher: Runtime status, the two requests, and one line for
-                // what the last request came back with.
+                // launcher: Runtime status, the two requests, the instance-configuration
+                // button, and one line for what the last request came back with, or
+                // why that window did not open.
                 HorizontalLayout {
                     spacing: 14px;
                     Caption { text: Strings.launcher-title; }

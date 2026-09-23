@@ -167,16 +167,17 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 ```
 
 开台时读一次，下拉框一改就写一次；写回时三个路径键原样保留。**这是监控台唯一自己读写的
-文件**（实例配置窗口保存进 `actingd_config` 的 `instances` 除外，见那一节）：它不在任何状态根里，状态根依旧全归读面。文件不存在、读不出来或取值不认识，都按
-默认值（中文、标准）来。解析器是手写的：一行一个 `key = value`，去掉一对成对的引号，不处理
-转义——Windows 路径写在单引号里（TOML 字面量字符串），不要写 `"D:\\…"`。
+文件**（实例配置窗口保存进 `actingd_config` 的 `instances` 除外，见那一节）：它不在任何
+状态根里，状态根依旧全归读面。文件不存在、读不出来或取值不认识，都按默认值（中文、标准）
+来。解析器是手写的：一行一个 `key = value`，去掉一对成对的引号，不处理转义——Windows 路径
+写在单引号里（TOML 字面量字符串），不要写 `"D:\\…"`。
 
 ## 启动器
 
 顶栏第三行。左边是上一次探测的 Runtime 状态，两个按钮（最后还有「实例配置」按钮，见下一节），
-下面一行是上一次按钮的结果。
+下面一行是上一次「启动」或「请求关闭」的结果，或实例配置窗口没能打开的原因。
 
-- **Runtime 状态**：开台时探测一次，之后每按一次按钮再探测。探测就是一次
+- **Runtime 状态**：开台时探测一次，之后每按一次「启动」或「请求关闭」再探测。探测就是一次
   `RuntimeClient::connect`：连上了写「运行中 · PID · owner epoch」（取自它自己的
   `runtime-info.json`，经客户端的 owner epoch 核对）；连不上写「未运行」加客户端的错误码与
   操作名，不猜原因。
@@ -228,9 +229,10 @@ ADB 序列号 / 文件未写绑定键——不替 Runtime 复述默认地址）�
   新实例的 `instance_id` 是 `instance_` 加系统随机源的
   32 位小写十六进制，所有 `instance_id` 都只读显示；绑定恰好一种——`instance_index`（MuMu 序号）、`instance_name`（MuMu 名称），或
   `host` + `port`（显式 ADB 地址）。`adb_path` 在 `host` + `port` 下必填，在 MuMu 绑定下选填（由
-  MuMu 发现报告 adb）；`nemu_app_index` 是选填的整数；`application_id`、`capture_backend`、
-  `touch_backend` 选填，取值由 check-config 判定。文本去掉首尾空白，留空的选填框不写这个键；
-  必填项为空、数字解析不了，都在写任何东西之前直说。
+  MuMu 发现报告 adb）；`nemu_app_index` 是选填的整数。`application_id`、`capture_backend`、
+  `touch_backend` 表单不检查，要不要填、取值是否有效都由 check-config 判定。MuMu 绑定的项，
+  `nemu_app_index` 的配对、`adb_path` 与发现结果的冲突，check-config 不查，Runtime 启动时才查。
+  文本去掉首尾空白，留空的框不写这个键；必填项为空、数字解析不了，都在写任何东西之前直说。
 - **保存**：重新把文件当普通 JSON 读——`actingd_config` 没配或不是绝对路径、文件不存在或读不出、
   JSON 解析失败、没有 `instances` 数组、某一项不是对象，各自直说。新实例追加进去；已有的按
   `instance_id` 重新找到（文件里已经没有了就停下并说明），只改表单管的键，换了绑定种类就删掉别的
@@ -307,9 +309,9 @@ ADB 序列号 / 文件未写绑定键——不替 Runtime 复述默认地址）�
   `strings.rs`，设置文件的读写在 `settings.rs`。
 
 `slint` 1.17.x，`default-features = false`；账本只读，控制入口只有启动器的两个按钮（启动 /
-请求关闭，见上）与实例配置窗口经 check-config 把关的保存，没有审批入口；不写测试。启动器在 `crates/acui-app/src/launcher.rs`，实例配置
-窗口在 `instances.rs`，探测、请求关闭、记下启动按钮这三个客户端操作在 `acui-source`
-（`probe_runtime` / `request_shutdown` / `record_start`）。
+请求关闭，见上）与实例配置窗口经 check-config 把关的保存，没有审批入口；不写测试。启动器在
+`crates/acui-app/src/launcher.rs`，实例配置窗口在 `instances.rs`，探测、请求关闭、记下启动按钮
+这三个客户端操作在 `acui-source`（`probe_runtime` / `request_shutdown` / `record_start`）。
 
 第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、sha2、
 zip、getrandom，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
