@@ -127,6 +127,7 @@ fn fill_strings(global: ConfigStrings<'_>, labels: &Labels) {
     global.set_optional_note(labels.optional_note.into());
     global.set_save(labels.check_and_save.into());
     global.set_discover(labels.discover.into());
+    global.set_discover_use(labels.discover_use.into());
 }
 
 /// Reads the file again and lists it. A reason it cannot be listed takes the
@@ -277,35 +278,40 @@ fn discover(editor: &Editor, config: &ConfigWindow) {
         });
     };
     if let Err(error) = std::thread::Builder::new().name("acui-discover".into()).spawn(worker) {
+        // No stale result stays pickable under the failure.
+        editor.discovered.lock().unwrap_or_else(PoisonError::into_inner).clear();
+        config.set_discovered(models(vec![SharedString::from(labels.discover_pick)]));
+        config.set_discovered_index(0);
         config.set_discovering(false);
         config.set_discover_failed(true);
         config.set_discover_note(fill(labels.discover_spawn_failed, &[&error.to_string()]).into());
     }
 }
 
-/// One discovered instance as the box lists it.
+/// One discovered instance as the box lists it; the name, up to 256 bytes,
+/// comes last, so a long one cannot push the rest out of a narrow box.
 fn found_text(labels: &Labels, found: &DiscoveredInstance) -> String {
     let host = found.adb_host.as_deref().unwrap_or(labels.none);
     let port = found.adb_port.map_or_else(|| labels.none.to_string(), |port| port.to_string());
     let running = if found.running { labels.instance_running } else { labels.instance_stopped };
-    let mut parts = vec![
-        fill(labels.discovered_index, &[&found.index.to_string()]),
-        found.name.clone(),
-        format!("{host}:{port}"),
-        running.to_string(),
-    ];
-    if let Some(version) = &found.android_version {
-        parts.push(fill(labels.android_version, &[version]));
-    }
+    let mut parts =
+        vec![fill(labels.discovered_index, &[&found.index.to_string()]), running.to_string()];
     if let Some(alias) = &found.bound_alias {
         parts.push(fill(labels.bound_to, &[alias]));
     }
+    parts.push(format!("{host}:{port}"));
+    if let Some(version) = &found.android_version {
+        parts.push(fill(labels.android_version, &[version]));
+    }
+    parts.push(found.name.clone());
     parts.join(" · ")
 }
 
-/// A pick in the discovery box: an unbound instance starts a new entry bound
-/// by its MuMu index, the rest of the form left to fill; one the Runtime has
-/// already bound is pointed at instead, and nothing changes.
+/// Use Selected in the discovery box: an instance neither the file nor the
+/// running Runtime binds starts a new entry bound by its MuMu index, the rest of
+/// the form left to fill. One the file already binds by that index is pointed
+/// at in the list (the running Runtime may not have loaded it yet), and one the
+/// Runtime binds is named; neither changes the form.
 fn pick(editor: &Editor, config: &ConfigWindow, index: i32) {
     let labels = editor.app.labels;
     let found = usize::try_from(index)
@@ -319,6 +325,14 @@ fn pick(editor: &Editor, config: &ConfigWindow, index: i32) {
     };
     config.set_discovered_index(0);
     let number = found.index.to_string();
+    let listed = editor.entries.borrow().iter().find_map(|entry| {
+        (field(entry, "instance_index").and_then(Value::as_u64) == Some(u64::from(found.index)))
+            .then(|| text(entry, "alias").unwrap_or_else(|| labels.none.to_string()))
+    });
+    if let Some(alias) = listed {
+        set_outcome(config, false, fill(labels.discover_listed, &[&number, &alias]));
+        return;
+    }
     if let Some(alias) = &found.bound_alias {
         set_outcome(config, false, fill(labels.discover_bound, &[&number, alias]));
         return;

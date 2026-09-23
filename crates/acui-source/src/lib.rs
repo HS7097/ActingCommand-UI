@@ -173,12 +173,15 @@ impl EvidenceSource {
     /// the read face's own `runtime_facts_at`: the same position every page
     /// reads at. Read once per session; the snapshot is pinned.
     pub fn instance_facts(&self) -> OfflineFacts {
+        let position = self.snapshot_position();
+        // Positions start at 1: at 0 the ledger holds no event, and the read
+        // face would refuse the position itself rather than say so.
+        if position == 0 {
+            return OfflineFacts::NoEvents;
+        }
         let deadline = Instant::now() + FACTS_READ_DEADLINE;
-        let result = actingcommand_ledger_forensics::runtime_facts_at(
-            &self.root,
-            self.snapshot_position(),
-            deadline,
-        );
+        let result =
+            actingcommand_ledger_forensics::runtime_facts_at(&self.root, position, deadline);
         match result {
             ForensicRuntimeFactsResult::Available { position, facts, .. } => {
                 let mut instances = Vec::new();
@@ -277,6 +280,8 @@ pub struct RuntimeInstance {
 /// position, or why it could not: the read face's own reason or error.
 #[derive(Debug, Clone)]
 pub enum OfflineFacts {
+    /// The pinned position is 0: the ledger holds no event yet.
+    NoEvents,
     Available { position: u64, instances: Vec<RuntimeInstance> },
     /// `reason` as the read face spells it (`ledger_empty`, `position_beyond_snapshot`).
     NotAvailable { position: u64, latest_sequence: u64, reason: String },
@@ -692,12 +697,17 @@ pub struct DiscoveredInstance {
 }
 
 /// Asks the running Runtime to re-run its provider's instance discovery: one
-/// fresh connection, one `discover_instances()`. It binds nothing and touches
-/// no device; by contract the Runtime records the query as one observation
-/// event (`command.validated`). A refusal carries the Runtime's code and, when
-/// the provider's tool failed, the host failure.
+/// fresh connection, one `discover_instances()`. The contract admits this
+/// query only from a person at the console (actor `user`, source `ui`) or an
+/// operator's CLI, so this connection says `user` / `ui`, not the read face's
+/// `ui` / `ui`. It binds nothing and touches no device; by contract the
+/// Runtime records an answered query as one observation event
+/// (`command.validated`), and a refusal as `command.rejected` plus
+/// `runtime.failed`. A refusal carries the Runtime's code and, when the
+/// provider's tool failed, the host failure.
 pub fn discover_instances(state_root: &Path) -> Result<Discovery, ClientFailure> {
-    let client = OnlineSource::connect(state_root)?;
+    let config = RuntimeClientConfig::new(state_root, EventActor::User, EventSource::Ui);
+    let client = RuntimeClient::connect(config)?;
     let discovery = client.discover_instances()?;
     let instances = discovery
         .instances()

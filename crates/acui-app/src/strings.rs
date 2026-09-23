@@ -309,6 +309,7 @@ pub struct Labels {
     pub instances_none: &'static str,
     pub offline_not_provided: &'static str,
     pub facts_none: &'static str,
+    pub facts_no_events: &'static str,
     /// The read face's reason.
     pub facts_not_available: &'static str,
     /// The instance lines' first line when a read failed; the lines below it
@@ -324,6 +325,7 @@ pub struct Labels {
     /// Host code, host operation; appended to a client failure.
     pub host_failure: &'static str,
     pub discover: &'static str,
+    pub discover_use: &'static str,
     /// The discovery box's first item, which picks nothing.
     pub discover_pick: &'static str,
     pub discovering: &'static str,
@@ -344,6 +346,8 @@ pub struct Labels {
     pub bound_to: &'static str,
     /// MuMu index, bound alias.
     pub discover_bound: &'static str,
+    /// MuMu index, the alias of the file's entry.
+    pub discover_listed: &'static str,
     /// MuMu index, instance name.
     pub discover_applied: &'static str,
 }
@@ -629,6 +633,7 @@ pub const ZH: Labels = Labels {
     instances_none: "无登记实例",
     offline_not_provided: "离线读面不提供",
     facts_none: "无任务事实",
+    facts_no_events: "账本里还没有事件",
     facts_not_available: "不可用：{}",
     instances_unread: "读取失败，原因见下",
     lease_active: "占用中",
@@ -639,6 +644,7 @@ pub const ZH: Labels = Labels {
     fact_unrecorded: "未记录",
     host_failure: " · 宿主 {}（{}）",
     discover: "发现实例",
+    discover_use: "采用所选",
     discover_pick: "选一个发现的实例…",
     discovering: "正在请 Runtime 发现实例…",
     discovered: "发现 {} 个实例 · MuMuManager {} · 读于序号 {}",
@@ -650,7 +656,8 @@ pub const ZH: Labels = Labels {
     instance_stopped: "未运行",
     android_version: "Android {}",
     bound_to: "已绑定 {}",
-    discover_bound: "序号 {} 已绑定到 {}，请在上面的列表里编辑它",
+    discover_bound: "序号 {} 已被运行中的 Runtime 绑定到 {}，不另起新项",
+    discover_listed: "配置文件里已有序号 {} 的项（{}），请在上面的列表里编辑它",
     discover_applied: "已按发现结果起一个新项：MuMu 序号 {}（{}）。填好别名等再「校验并保存」",
 };
 
@@ -937,6 +944,7 @@ pub const EN: Labels = Labels {
     instances_none: "No Registered Instance",
     offline_not_provided: "Not Provided Offline",
     facts_none: "No Task Fact",
+    facts_no_events: "No Event in the Ledger Yet",
     facts_not_available: "Not Available: {}",
     instances_unread: "Not Read, See Below",
     lease_active: "Leased",
@@ -947,6 +955,7 @@ pub const EN: Labels = Labels {
     fact_unrecorded: "Not Recorded",
     host_failure: " · Host {} ({})",
     discover: "Discover Instances",
+    discover_use: "Use Selected",
     discover_pick: "Pick a Discovered Instance…",
     discovering: "Asking the Runtime to Discover Instances…",
     discovered: "Instances Found: {} · MuMuManager {} · at Sequence {}",
@@ -958,7 +967,8 @@ pub const EN: Labels = Labels {
     instance_stopped: "Not Running",
     android_version: "Android {}",
     bound_to: "Bound to {}",
-    discover_bound: "Index {} Is Already Bound to {}; Edit It in the List Above",
+    discover_bound: "Index {} Is Already Bound to {} by the Running Runtime; No New Entry",
+    discover_listed: "The File Already Has an Entry with Index {} ({}); Edit It in the List Above",
     discover_applied: "New Entry from Discovery: MuMu Index {} ({}). Fill In the Alias and the Rest, Then Check and Save",
 };
 

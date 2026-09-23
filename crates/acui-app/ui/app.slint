@@ -199,6 +199,7 @@ export global ConfigStrings {
     in property <string> optional-note;
     in property <string> save;
     in property <string> discover;
+    in property <string> discover-use;
 }
 
 export component AppWindow inherits Window {
@@ -839,7 +840,7 @@ export component ConfigWindow inherits Window {
 
     callback add-instance();
     callback discover();
-    // An item of the discovery box, counted with its placeholder at 0.
+    // The discovery box's chosen item, counted with its placeholder at 0.
     callback discovered-picked(int);
     callback row-clicked(int);
     callback save();
@@ -884,12 +885,18 @@ export component ConfigWindow inherits Window {
                 HorizontalLayout {
                     spacing: 6px;
                     Button { text: ConfigStrings.discover; enabled: !root.saving && !root.discovering; clicked => { root.discover(); } }
+                    // Choosing only selects; the button applies, so arrow keys
+                    // or the wheel over the box never replace the form.
                     if root.discovered.length > 1: ComboBox {
                         width: 360px * Scale.factor;
                         model: root.discovered;
                         current-index <=> root.discovered-index;
                         enabled: !root.saving && !root.discovering;
-                        selected(value) => { root.discovered-picked(self.current-index); }
+                    }
+                    if root.discovered.length > 1: Button {
+                        text: ConfigStrings.discover-use;
+                        enabled: root.discovered-index > 0 && !root.saving && !root.discovering;
+                        clicked => { root.discovered-picked(root.discovered-index); }
                     }
                     Text { text: root.discover-note; color: root.discover-failed ? Severity.error : Palette.foreground; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
                 }

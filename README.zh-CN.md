@@ -53,8 +53,8 @@
   没有就写「未记录」。快照里有事实、状态却没登记的编号，单独一行写明未登记。任一次读失败，就分行
   写 Runtime 拒绝码、客户端错误与宿主失败，会话照常打开。离线时由读面的 `runtime_facts_at` 在钉住的
   位置本身重放事实库，就是每一页读的那个位置：几行写出这个位置、离线没有租约，以及每个实例的编号
-  （缩写，灰字是完整编号）与三项事实。账本里一条事件都没有时，写读面给的原因；重放失败就分行写
-  code、operation 与 detail。
+  （缩写，灰字是完整编号）与三项事实。账本里还没有事件时直说；读面拒绝重放时写它给的原因，重放
+  失败就分行写 code、operation 与 detail。重放在会话打开时、窗口出现之前跑一次，期限 30 秒。
 
 `--source <auto|offline|online>`，默认 `auto`：客户端能连上状态根所指的 Runtime 就在线，
 否则离线；实例卡第一行「读面」写明选了哪张、为什么（`runtime-info.json` 不存在，或连接
@@ -272,12 +272,16 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 成一个空列表。
 
 - **发现**：「发现实例」在工作线程上经类型化客户端（`discover_instances()`）请正在运行的 Runtime 重跑
-  一次其提供者的 MuMu 实例发现。它不绑定任何东西，也不碰设备；按契约，Runtime 把每次查询记成一条观察
-  事件（`command.validated`）。旁边的框随后列出报告的每个实例：MuMu 序号、名称、ADB 地址、是否在运行、
-  Android 版本，以及已绑定的别名（若有）；那一行写出个数、提供者版本和这次查询的序号。选一个未绑定的
-  实例，就以它的序号为绑定起一个新项（别名等照填；地址留给启动时的发现）；选已绑定的，只指明它在列表
-  里是哪一项，什么也不改。没有 Runtime 在跑，或被拒（`instance_discovery_unavailable`、
-  `mumu_manager_version_unsupported` 等）时，那一行写 Runtime 的码、客户端错误与宿主失败。
+  一次其提供者的 MuMu 实例发现；Runtime 会在宿主上运行 `MuMuManager`，客户端最多等 25 秒。契约只接受
+  控制台前的人或操作员 CLI 发起这个查询，所以它单独开一条连接，身份是 actor `user`、source `ui`（枚举
+  值，不是系统用户名）。它不绑定任何东西，也不碰设备；按契约，Runtime 把答复了的查询记成一条观察事件
+  （`command.validated`），把拒绝记成 `command.rejected` 加 `runtime.failed`。旁边的框随后列出报告的
+  每个实例：MuMu 序号、是否在运行、运行中的 Runtime 给它绑定的别名（若有）、ADB 地址、Android 版本，
+  名称放最后；那一行写出个数、提供者版本和这次查询的序号。在框里选只是选中，点「采用所选」才生效：
+  配置文件里没有该 `instance_index` 的项、运行中的 Runtime 也没绑定它时，就以这个序号为绑定起一个新项
+  （别名等照填；地址留给启动时的发现）；已被绑定的只指明是哪一项，什么也不改。没有 Runtime 在跑，或
+  被拒（`instance_discovery_unavailable`、`mumu_manager_version_unsupported` 等）时，那一行写 Runtime
+  的码、客户端错误与宿主失败，之前的结果也不再可选。
 - **表单**：「新增实例」另起一项，点一行把那一项载入表单。没有字符串 `instance_id` 的项，以及表单
   的哪种绑定都表示不了的项——配置了 `fixture_backend`、设了 `serial`、一个绑定键都没写——照样列
   出，但点它会写明原因、不能保存。没有删除。`alias` 必填；新实例的 `instance_id` 是 `instance_`
@@ -420,7 +424,7 @@ zip、getrandom，不依赖上面任何一层，见上一节「安装引导程�
   `task.effect_intent`（0828 六条、v5 五条），payload 里是一个 tap 坐标，`links` 里**没有**
   `frame_id`。账本没有给出把这两者连起来的关系，监控台就不连——真实帧照画，叠加为空。
   钉住的 rev 上，`task.effect_intent` 可以给出坐标所在的画面范围（`frame_extent`，
-  `crates/actingcommand-contract/src/event/payload.rs:3311`），`task.geometry_observed` 可以给出其
+  `crates/actingcommand-contract/src/event/payload.rs:3313`），`task.geometry_observed` 可以给出其
   画面的范围（`:3039`）；事件给了，叠加画布就用它。这两个根上的 effect intent 都没给，尺寸仍是
   「未记录」。
 - **两个根里都没有产物淘汰事实**，所以淘汰占位在这两个根上不会出现；代码路径按契约写好。

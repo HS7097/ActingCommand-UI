@@ -1329,6 +1329,9 @@ fn instance_lines(labels: &Labels, source: &ReadSource) -> Vec<FieldLine> {
 /// offline, then each instance's facts; or the read face's own reason or error.
 fn offline_instance_lines(labels: &Labels, facts: &OfflineFacts) -> Vec<FieldLine> {
     match facts {
+        OfflineFacts::NoEvents => {
+            vec![field(labels, "instance_facts", labels.facts_no_events.to_string(), "0")]
+        }
         OfflineFacts::Available { position, instances } => {
             let mut header = position.to_string();
             if instances.is_empty() {

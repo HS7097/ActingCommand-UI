@@ -70,8 +70,9 @@ answers come from:
   the session still opens. Offline, the read face's `runtime_facts_at` replays the fact store at the
   pinned position itself, the same position every page reads at: the lines state that position, that
   there is no lease offline, and each instance's id (short; the full id in grey) with its three facts. A
-  ledger with no event states the read face's reason instead; a failed replay states its code,
-  operation and detail, one per line.
+  ledger with no event yet says so; a replay the read face declines states its reason, and a failed one
+  its code, operation and detail, one per line. The replay runs once as the session opens, before the
+  window shows, bounded by a 30-second deadline.
 
 `--source <auto|offline|online>`, default `auto`: if the client can connect to the Runtime the state root
 points at, online; otherwise offline. The instance card's first line, "read face", states which one was
@@ -355,15 +356,21 @@ window opens and after every save; a reason it cannot be listed takes the count'
 list.
 
 - **Discover**: Discover Instances asks the running Runtime, through the typed client
-  (`discover_instances()`) on a worker thread, to re-run its provider's MuMu instance discovery. It binds
-  nothing and touches no device; by contract the Runtime records each query as one observation event
-  (`command.validated`). The box beside it then lists every instance reported: its MuMu index, name,
-  ADB address, whether it runs, the Android version, and the alias it is bound to, if any; the line
-  states how many, the provider version and the query's sequence. Picking an unbound instance starts a
-  new entry bound by that index (the alias and the rest still to fill; its address is left to discovery
-  at startup); picking a bound one points at its entry in the list and changes nothing. With no Runtime
+  (`discover_instances()`) on a worker thread, to re-run its provider's MuMu instance discovery; the
+  Runtime runs `MuMuManager` on the host, and the client waits up to 25 seconds. The contract admits
+  this query only from a person at the console or an operator's CLI, so it goes out on its own
+  connection as actor `user`, source `ui` (the enum, not an OS user name). It binds nothing and touches
+  no device; by contract the Runtime records an answered query as one observation event
+  (`command.validated`), and a refusal as `command.rejected` plus `runtime.failed`. The box beside it then
+  lists every instance reported: its MuMu index, whether it runs, the alias the running Runtime binds
+  to it (if any), its ADB address, the Android version, and its name last; the line states how many,
+  the provider version and the query's sequence. Choosing in the box only selects; Use Selected applies:
+  an instance neither the file (an entry with that `instance_index`) nor the running Runtime binds
+  starts a new entry bound by that index (the alias and the rest still to fill; its address is left to
+  discovery at startup), while one already bound is pointed at and nothing changes. With no Runtime
   running, or a refusal (`instance_discovery_unavailable`, `mumu_manager_version_unsupported`, …), the
-  line states the Runtime's code, the client error and any host failure.
+  line states the Runtime's code, the client error and any host failure, and no earlier result stays
+  pickable.
 - **The form**: Add Instance starts a new entry and a click on a row loads that entry. An entry without a
   string `instance_id`, or one whose binding no kind of the form represents — with `fixture_backend`,
   with `serial` set, or with no binding key at all — is listed, but a click on it says why and it cannot
@@ -550,7 +557,7 @@ pinned rev.
   five on v5), whose payload is a single tap coordinate and whose `links` hold **no** `frame_id`. The
   ledger gives no relation joining the two, so the console does not join them — the real frame is drawn as
   it is, and the overlay is empty. At the pin, `task.effect_intent` can state the frame extent its
-  coordinates are in (`frame_extent`, `crates/actingcommand-contract/src/event/payload.rs:3311`) and
+  coordinates are in (`frame_extent`, `crates/actingcommand-contract/src/event/payload.rs:3313`) and
   `task.geometry_observed` its frame's extent (`:3039`); the overlay canvas uses that extent when an event
   states one. The effect intents on these two roots state none, so their size stays "not recorded".
 - **Neither root holds artifact eviction facts**, so the eviction placeholder does not appear on these two
