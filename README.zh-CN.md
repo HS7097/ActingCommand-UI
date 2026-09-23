@@ -276,9 +276,10 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   （MuMu 序号）、`instance_name`（MuMu 名称），或 `host` + `port`（显式 ADB 地址）。`adb_path` 在
   `host` + `port` 下必填，在 MuMu 绑定下选填（由 MuMu 发现报告 adb）；`nemu_app_index` 是选填的整
   数。`application_id`、`capture_backend`、`touch_backend` 表单不检查，要不要填、取值是否有效都由
-  check-config 判定。MuMu 绑定的项，`nemu_app_index` 的配对、`adb_path` 与发现结果的冲突，
-  check-config 不查，Runtime 启动时才查。文本去掉首尾空白，留空的框不写这个键；必填项为空、数字解
-  析不了，都在写任何东西之前直说。
+  check-config 判定，`nemu_app_index` 的配对也由它查。只有要靠 MuMu 发现结果的几项到 Runtime 启动
+  时才查：`MuMuManager` 版本与能力、发现结果恰好匹配一个、声明的 `adb_path`、`host`、`port` 与发现值
+  不冲突、ADB 端点（Runtime `contracts/actingd-check-config.md`，`3d5398d6` 起）。文本去掉首尾空白，
+  留空的框不写这个键；必填项为空、数字解析不了，都在写任何东西之前直说。
 - **保存**：重新把文件当普通 JSON 读——`actingd_config` 没配或不是绝对路径、文件不存在或读不出、
   JSON 解析失败、没有 `instances` 数组、某一项不是对象，各自直说。新实例追加进去；已有的按
   `instance_id` 重新找到（文件里已经没有了，或已被改成表单存不了的样子，就停下并写明原因），只改
