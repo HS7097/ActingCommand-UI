@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The install log: `<root>\acsetup-<unix_ms>.log`, one human-readable line
 //! per thing the wizard did or found, appended as it happens. It is created
-//! at the verify step, the first moment the wizard writes anything at all,
+//! when step 0 is left, the first moment the wizard writes anything at all,
 //! and it never holds the salt.
 
 use std::fs::{File, OpenOptions};

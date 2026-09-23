@@ -287,7 +287,7 @@ fn find_release(window: &SetupWindow, state: &Shared) {
             window.set_can_next(ok || window.get_offline());
             if !ok {
                 window.set_note(
-                    "可勾选「离线」改用已下载的发布件文件夹 / Tick Offline to use a folder of downloaded release files"
+                    "可勾选「离线」改用已下载的发布件文件夹；勾上再取消即重新查询 / Tick Offline to use a folder of downloaded release files; tick and untick it to look up again"
                         .into(),
                 );
             }
@@ -546,7 +546,7 @@ fn summary(state: &Shared) -> String {
     lines.join("\n")
 }
 
-/// Step 5: the console, detached, and the wizard closed — never actingd.
+/// Step 4: the console, detached, and the wizard closed — never actingd.
 fn open_console(window: &SetupWindow, state: &Shared) {
     let console = lock(state)
         .laid_out

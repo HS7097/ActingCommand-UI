@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Steps 2 to 5: lay the verified files out under the install root, write
+//! Steps 2 to 4: lay the verified files out under the install root, write
 //! the Runtime's configuration and the console's settings, the optional
 //! per-user Startup launcher, and start the console.
 //!

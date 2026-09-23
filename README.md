@@ -494,16 +494,18 @@ next only, five steps:
    (looking at `runtime\BUILD-MANIFEST.json`; if there is one it stops at this step — the upgrade flow
    comes next, so for now pick another root). Next creates the root and the install log.
 1. **Get**: by default online. On entering, the umbrella
-   [Releases](https://github.com/HS7097/ActingCommand/releases) are listed over HTTPS and one release is
-   chosen: the newest stable release when there is one, else the newest pre-release (the daily builds);
-   never a draft. Its tag, name, date, kind and size are shown and logged. Next fetches `SHA256SUMS`,
+   [Releases](https://github.com/HS7097/ActingCommand/releases) are asked over HTTPS for one release: the
+   newest stable release when there is one (GitHub's `releases/latest`), else the newest pre-release (the
+   daily builds); never a draft. Its tag, name, date, kind and size are shown and logged. Next fetches `SHA256SUMS`,
    `MEMBERS.json` and then every other file `SHA256SUMS` lists — nothing else — into
    `<install root>\downloads\<tag>\`, each through a `.part` file renamed once its length is the length
-   the release states, with a progress line per tenth; a file already there is fetched again, never
-   trusted. The tag names a folder only if it is letters, digits, `.`, `-` and `_`. Ticking **Offline**
+   the release states, with a progress line per tenth for a file of a MiB or more; a file already there is
+   fetched again, never trusted, and a failed one's `.part` file is removed. The tag and every file name
+   are used only if they are letters, digits, `.`, `-` and `_`, do not start with a dot and are no Windows
+   device name. HTTPS only, redirects included, each request within half an hour. Ticking **Offline**
    instead takes a folder that already holds one release's files (default `%USERPROFILE%\Downloads`,
-   typed in). A failed lookup is stated on the page and in the log and leaves Offline open; a failed
-   fetch stops the run. This is the program's only network code (`ureq`, blocking, rustls with the
+   typed in). A failed lookup is stated on the page and in the log and leaves Offline open (ticking and
+   unticking it looks up again); a failed fetch stops the run. This is the program's only network code (`ureq`, blocking, rustls with the
    Mozilla root set compiled in); the Runtime has none.
 2. **Verify and lay out**, one step: the folder is required to hold `SHA256SUMS`, `MEMBERS.json`,
    `actingcommand-runtime-<sha>.zip`, `actingcommand-tools-<sha>.zip` and `acui-windows-<sha>.zip`

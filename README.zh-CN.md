@@ -370,13 +370,14 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 0. **位置**：只有安装根（可改，默认 `%LOCALAPPDATA%\Programs\ActingCommand`，不需要管理员）、该卷的
    可用空间、此处是否已有安装（看 `runtime\BUILD-MANIFEST.json`；已有就停在这一步——升级流程是下一片，
    现在先换一个根）。下一步时建好安装根与安装日志。
-1. **取件**：默认联网。一进这一步就经 HTTPS 列出伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases)，
-   选一个发布件：有正式版取最新正式版，否则取最新预发布（每日构建），从不取草稿；页面与日志写明它的标签、
+1. **取件**：默认联网。一进这一步就经 HTTPS 向伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases)
+   要一个发布件：有正式版取最新正式版（GitHub 的 `releases/latest`），否则取最新预发布（每日构建），从不取草稿；页面与日志写明它的标签、
    名称、日期、种类与大小。下一步时依次下载 `SHA256SUMS`、`MEMBERS.json`，再下载 `SHA256SUMS` 列出的
    其余文件——别的一个不下——存到 `<安装根>\downloads\<标签>\`；每个文件先写 `.part`，长度等于发布件
-   声明的长度才改名，每满十分之一写一行进度；目录里已有的同名文件重新下载，从不直接采信。标签只含字母、
-   数字、`.`、`-`、`_` 时才用作文件夹名。改勾**离线**则用一个已放好同一发布件全部文件的文件夹（默认
-   `%USERPROFILE%\Downloads`，路径直接填）。查询失败写在页面与日志里，离线仍可选；下载失败则停下。这是
+   声明的长度才改名，1 MiB 以上的文件每满十分之一写一行进度；目录里已有的同名文件重新下载，从不直接采信，
+   下载失败的 `.part` 文件会删掉。标签与每个文件名都只在只含字母、数字、`.`、`-`、`_`，不以点开头，且不是
+   Windows 设备名时才使用。只走 HTTPS（重定向也一样），每个请求半小时内完成。改勾**离线**则用一个已放好同一发布件全部文件的文件夹（默认
+   `%USERPROFILE%\Downloads`，路径直接填）。查询失败写在页面与日志里，离线仍可选（勾上再取消即重新查询）；下载失败则停下。这是
    程序唯一的联网代码（`ureq`，阻塞式，rustls 加编译进去的 Mozilla 根证书）；Runtime 没有任何联网代码。
 2. **校验与铺开**，一步做完：要求文件夹里有 `SHA256SUMS`、`MEMBERS.json`、`actingcommand-runtime-<sha>.zip`、
    `actingcommand-tools-<sha>.zip`、`acui-windows-<sha>.zip`（`<sha>` 取 `MEMBERS.json` 的
