@@ -501,12 +501,14 @@ fn binding_text(labels: &Labels, entry: &Value) -> String {
 
 /// What the session's port map says about one instance_id: the port its latest
 /// binding names, a binding outside the map — serial-configured or portless,
-/// which the map does not tell apart — or none; online or unread, it says so.
+/// which the map does not tell apart — or none; online, unread or with the
+/// ledger not opened, it says so.
 fn ledger_text(labels: &Labels, port_map: &PortMap, id: &str) -> String {
     let bindings = match port_map {
         PortMap::Read(bindings) => bindings,
         PortMap::Online => return labels.ledger_online.to_string(),
         PortMap::Failed(error) => return fill(labels.ledger_failed, &[&error.to_string()]),
+        PortMap::Unopened => return labels.ledger_unopened.to_string(),
     };
     let named = |other: &InstanceId| code(other) == id;
     let members = bindings.ports.iter().flat_map(|entry| &entry.members);

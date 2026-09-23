@@ -328,10 +328,11 @@ index / MuMu name / ADB serial, shown instead of `host` + `port` when an entry h
 no binding key in the file — the Runtime's default address is not restated), `application_id`, capture
 and touch backend, and what the session's port map says about that id — bound on a port, bound with the
 latest binding outside the port map (serial-configured or with no port; the map does not tell which), or
-not bound; read online, or when reading the bindings failed, the row says that instead, and an entry
-without a string `instance_id` says there that it cannot be edited. A key holding JSON `null` reads as
-absent, in the list and in the form. The file is read again whenever the window opens and after every
-save; a reason it cannot be listed takes the count's place, never an empty list.
+not bound; read online, with the ledger not opened, or when reading the bindings failed, the row says
+that instead, and an entry without a string `instance_id` says there that it cannot be edited. A key
+holding JSON `null` reads as absent, in the list and in the form. The file is read again whenever the
+window opens and after every save; a reason it cannot be listed takes the count's place, never an empty
+list.
 
 - **The form**: Add Instance starts a new entry and a click on a row loads that entry. An entry without a
   string `instance_id`, or one whose binding no kind of the form represents — with `fixture_backend`,
