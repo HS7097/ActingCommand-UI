@@ -43,8 +43,9 @@ answers come from:
   top bar's launcher (see the "Launcher" section), and shutdown too goes only through this same typed
   client.
 - The first page at startup asks without a snapshot position; the `snapshot_ledger_position` the Runtime
-  states on that page is the position this session reads at, fixed — as offline, one snapshot for the
-  whole session. Every page after that is
+  states on that page is the position this session reads at — the pin. It moves only when a person jumps
+  to the latest or turns on following (below), each time by the same kind of fresh first page; offline
+  it never moves. Every page after that is
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`,
   the same `EventQuery` bounded to one window, the same page limit, the same `next_cursor`.
 - Material goes through `RuntimeClient::read_material_complete` on the same connection: the client
@@ -58,7 +59,8 @@ answers come from:
   at a position is that position), and "writer process" states the connected Runtime itself
   (PID, owner epoch, start time, all out of its own `runtime-info.json`).
 - Right after the pin, one `status()` and one `runtime_fact_snapshot()` on the same connection give the
-  instance card its "instances (read at open)" lines, once per session and never refreshed. The first two
+  instance card its "runtime instances" lines. Status is read again only on a person's jump to the
+  latest; while following, the task facts alone are read again whenever the pin moves. The first two
   lines state the sequence each read was taken at; both may be past the pinned snapshot, so this is state
   at open, not state at the pin. By contract the Runtime records the status read itself as one
   observation event (`command.validated`), after the pin and so outside this session's snapshot. Then,
@@ -146,6 +148,15 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   "read earlier" at the bottom continues below what is loaded. The top bar permanently states the
   positions the loaded windows cover ("read positions A–B"), with "source incomplete" appended when a
   window's page said its read was incomplete.
+- **Jump to latest, follow latest (online only)**: "jump to latest" moves the pin to the Runtime's latest
+  position, reads status and facts again (the status read leaves one observation event in the ledger),
+  drops any time bound and starts the view over from the new pin. "Follow latest" does the same without
+  the status read, then every 2 seconds asks one first page where the ledger is: when the pin moved, the
+  windows between the old and new pin are read onto the top of the view — the loaded rows, the
+  selection and a frame being read stay — and the task facts are read again. A page query and a fact
+  snapshot write nothing to the ledger, so following adds no events of its own. Setting a time bound
+  while following stops it. Offline there is no running Runtime writing newer events, and both controls
+  are off.
 - **Performance-monitor events are hidden by default**: `perf.summary` arrives every 2 seconds and would
   bury everything else, and the ledger query cannot exclude a module. Unless "show performance monitor"
   is ticked, or the performance monitor is picked as the module, the console drops those events from

@@ -115,6 +115,8 @@ export global Strings {
     in property <string> id-placeholder;
     in property <string> continue-reading;
     in property <string> show-performance;
+    in property <string> jump-latest;
+    in property <string> follow-latest;
     in property <string> card-title;
     in property <string> card-note;
     in property <string> detail-title;
@@ -218,6 +220,11 @@ export component AppWindow inherits Window {
     in property <string> read-up-to-text;
     in property <string> loaded-rows-text;
     in property <string> cursor-label;
+    // The time cursor's handle; put back at the top when the view jumps to the latest.
+    in-out property <float> cursor-value: 1000;
+    // Online only: the pin can move to the Runtime's latest position.
+    in property <bool> follow-available;
+    in-out property <bool> following;
     in property <[FieldLine]> card-lines;
     in property <[string]> tab-labels;
     in property <int> active-tab;
@@ -276,6 +283,8 @@ export component AppWindow inherits Window {
     callback row-clicked(int);
     callback load-more();
     callback show-performance-changed(bool);
+    callback jump-latest();
+    callback follow-changed(bool);
     callback text-size-changed(int);
     callback language-changed(int);
     callback start-runtime();
@@ -330,6 +339,21 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                         color: Palette.foreground;
                     }
+                    Button {
+                        text: Strings.jump-latest;
+                        enabled: root.ledger-live && root.follow-available;
+                        clicked => {
+                            root.jump-latest();
+                        }
+                    }
+                    CheckBox {
+                        text: Strings.follow-latest;
+                        enabled: root.ledger-live && root.follow-available;
+                        checked <=> root.following;
+                        toggled => {
+                            root.follow-changed(self.checked);
+                        }
+                    }
                     Text {
                         text: root.loaded-rows-text;
                         font-size: Scale.body-font;
@@ -347,7 +371,7 @@ export component AppWindow inherits Window {
                         maximum: 1000;
                         // The handle starts where the state starts: at the top of
                         // the range, which is the whole span. The first drag narrows.
-                        value: 1000;
+                        value <=> root.cursor-value;
                         changed(v) => {
                             root.cursor-changed(v);
                         }

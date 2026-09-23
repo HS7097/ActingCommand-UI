@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use acui_model::{
     tab_from_name, DisplayRow, FrameTarget, InstanceCard, Overlay, QueryError, RecoveryGroup,
@@ -33,7 +34,9 @@ use acui_source::{
 };
 use anyhow::{bail, Result};
 use settings::TextSize;
-use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
+use slint::{
+    Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode, VecModel,
+};
 use strings::{fill, Labels, Language};
 
 slint::include_modules!();
@@ -123,6 +126,8 @@ struct App {
     worker: Arc<Mutex<()>>,
     /// The state root and the two launcher paths, as this run resolved them.
     launcher: launcher::Launcher,
+    /// Runs the follow ticks while "follow latest" is on.
+    follow: Timer,
 }
 
 /// The port map this session filters by: the offline read face derives it
@@ -234,6 +239,7 @@ fn main() -> Result<()> {
             stored.actingd_config.clone(),
             stored.actingd_exe.clone(),
         ),
+        follow: Timer::default(),
     });
     reload(&app, false);
 
@@ -273,6 +279,8 @@ fn install_strings(window: &AppWindow, labels: &'static Labels, online: bool) {
     global.set_id_placeholder(labels.id_placeholder.into());
     global.set_continue_reading(labels.continue_reading.into());
     global.set_show_performance(labels.show_performance.into());
+    global.set_jump_latest(labels.jump_latest.into());
+    global.set_follow_latest(labels.follow_latest.into());
     global.set_card_title(labels.card_title.into());
     global.set_card_note(labels.card_note.into());
     global.set_detail_title(labels.detail_title.into());
@@ -537,6 +545,24 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
     {
         let weak = window.as_weak();
         let app = Rc::clone(app);
+        window.on_jump_latest(move || {
+            if let Some(window) = weak.upgrade() {
+                jump_latest(&window, &app);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let app = Rc::clone(app);
+        window.on_follow_changed(move |on| {
+            if let Some(window) = weak.upgrade() {
+                set_following(&window, &app, on);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let app = Rc::clone(app);
         window.on_load_more(move || {
             reload(&app, true);
             if let Some(window) = weak.upgrade() {
@@ -562,6 +588,114 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
     window.on_language_changed(move |index| {
         settings::save_language(if index == 1 { Language::En } else { Language::Zh });
     });
+}
+
+/// How often "follow latest" asks where the ledger is: one page query, which
+/// writes nothing to the ledger.
+const FOLLOW_INTERVAL: Duration = Duration::from_secs(2);
+
+/// A person's jump to the latest: the pin moves to the Runtime's latest
+/// position, status and facts are read again — the status read leaves one
+/// observation event in the ledger — and the view starts over from the new
+/// pin, with no time bound.
+fn jump_latest(window: &AppWindow, app: &Rc<App>) {
+    let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
+        return;
+    };
+    match source.repin() {
+        Err(error) => {
+            model.borrow_mut().query_error = Some(QueryError::ReadFailed(error.to_string()));
+        }
+        Ok(_) => {
+            source.refresh_instances();
+            {
+                let mut model = model.borrow_mut();
+                model.set_pin(source.open_report(), source.snapshot_position(), time_span(source));
+                model.filters.to_timestamp_unix_ms = None;
+            }
+            window.set_cursor_value(1000.0);
+            reload(app, false);
+        }
+    }
+    refresh(window, app);
+}
+
+/// Following reads down from the pin, so turning it on drops a time bound
+/// and starts over from the pin first; then a tick runs every
+/// `FOLLOW_INTERVAL`. Turning it off stops the ticks and leaves the view as it is.
+fn set_following(window: &AppWindow, app: &Rc<App>, on: bool) {
+    if !on {
+        app.follow.stop();
+        return;
+    }
+    if let Some(model) = &app.model {
+        let bounded = model.borrow().filters.to_timestamp_unix_ms.is_some();
+        if bounded {
+            model.borrow_mut().filters.to_timestamp_unix_ms = None;
+            window.set_cursor_value(1000.0);
+            reload(app, false);
+        }
+    }
+    follow_tick(window, app);
+    let (weak, held) = (window.as_weak(), Rc::downgrade(app));
+    app.follow.start(TimerMode::Repeated, FOLLOW_INTERVAL, move || {
+        if let (Some(window), Some(app)) = (weak.upgrade(), held.upgrade()) {
+            follow_tick(&window, &app);
+        }
+    });
+}
+
+/// One follow tick. A fresh first page says where the ledger is; newer
+/// windows are read onto the top of the view, and when the pin moved the task
+/// facts are read again. No status is read and nothing is written to the
+/// ledger. A time bound set meanwhile stops the following, and says so.
+fn follow_tick(window: &AppWindow, app: &Rc<App>) {
+    let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
+        return;
+    };
+    if model.borrow().filters.to_timestamp_unix_ms.is_some() {
+        app.follow.stop();
+        window.set_following(false);
+        return;
+    }
+    let moved = match source.repin() {
+        Ok(moved) => moved,
+        Err(error) => {
+            model.borrow_mut().query_error = Some(QueryError::ReadFailed(error.to_string()));
+            refresh(window, app);
+            return;
+        }
+    };
+    {
+        let mut model = model.borrow_mut();
+        if moved {
+            model.set_pin(source.open_report(), source.snapshot_position(), time_span(source));
+        }
+        if !moved && model.next_newer_window().is_none() {
+            return;
+        }
+        model.query_error = None;
+        for _ in 0..FILL_WINDOWS {
+            let Some(window) = model.next_newer_window() else {
+                break;
+            };
+            let pages = model.window_query(window).and_then(|query| {
+                read_window(source, &query)
+                    .map_err(|error| QueryError::ReadFailed(error.to_string()))
+            });
+            match pages {
+                Ok(pages) => model.apply_newer_window(window, &pages),
+                Err(error) => {
+                    model.query_error = Some(error);
+                    break;
+                }
+            }
+        }
+    }
+    if moved {
+        source.refresh_facts();
+    }
+    refresh(window, app);
 }
 
 fn refresh(window: &AppWindow, app: &Rc<App>) {
@@ -597,6 +731,7 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
     }
     window.set_loaded_rows_text(loaded.into());
     window.set_show_performance(model.filters.show_performance);
+    window.set_follow_available(source.follows());
     window.set_cursor_label(
         model
             .filters
@@ -1360,9 +1495,12 @@ fn canvas_size(overlays: &[Overlay], frame_size: Option<(f32, f32)>) -> (f32, f3
 /// since a line in the middle of the card cannot wrap: a failure is split into
 /// its parts.
 fn instance_lines(labels: &Labels, source: &ReadSource) -> Vec<FieldLine> {
-    let read = match source.instance_facts() {
+    let online = match source.instance_facts() {
         InstanceFacts::Offline(facts) => return offline_instance_lines(labels, facts),
-        InstanceFacts::Online(Err(failure)) => {
+        InstanceFacts::Online(online) => online,
+    };
+    let read = match &*online {
+        Err(failure) => {
             let text = labels.instances_unread.to_string();
             let mut lines = vec![field(labels, "runtime_instances", text, "")];
             if let Some(runtime_code) = &failure.runtime_code {
@@ -1375,7 +1513,7 @@ fn instance_lines(labels: &Labels, source: &ReadSource) -> Vec<FieldLine> {
             }
             return lines;
         }
-        InstanceFacts::Online(Ok(read)) => read,
+        Ok(read) => read,
     };
     let mut lines = vec![
         field(labels, "instances_status_at", read.status_sequence.to_string(), ""),

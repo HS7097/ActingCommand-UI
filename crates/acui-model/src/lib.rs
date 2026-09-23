@@ -325,6 +325,49 @@ impl ViewModel {
     /// One window read whole — its pages in order — put below the rows already
     /// loaded. Performance-monitor events are dropped and counted when hidden.
     pub fn apply_window(&mut self, (from, to): (u64, u64), pages: &[RuntimeEventQueryPage]) {
+        let (mut events, complete) = self.take_window(pages);
+        events.append(&mut self.rows);
+        self.rows = events;
+        self.lowest_read = Some(from);
+        self.scope = ReadScope {
+            range: Some((from, self.scope.range.map_or(to, |(_, high)| high))),
+            read_complete: self.scope.read_complete && complete,
+        };
+    }
+
+    /// The pin moved: what the source now states about itself, and the span
+    /// the time cursor runs over. Rows already read stay; the newer windows
+    /// read what came after them.
+    pub fn set_pin(&mut self, open: OpenReport, snapshot_position: u64, span: Option<(u64, u64)>) {
+        self.open = open;
+        self.snapshot_position = snapshot_position;
+        self.span = span;
+    }
+
+    /// The next window above what is loaded, up to the pin; `None` once the
+    /// view reaches the pin, and always under a time bound, where the view does
+    /// not read down from the pin.
+    pub fn next_newer_window(&self) -> Option<(u64, u64)> {
+        let from = self.upper + 1;
+        (self.filters.to_timestamp_unix_ms.is_none() && from <= self.snapshot_position)
+            .then(|| (from, (from + WINDOW - 1).min(self.snapshot_position)))
+    }
+
+    /// One newer window read whole, put above the rows already loaded.
+    pub fn apply_newer_window(&mut self, (from, to): (u64, u64), pages: &[RuntimeEventQueryPage]) {
+        let (mut events, complete) = self.take_window(pages);
+        self.rows.append(&mut events);
+        self.upper = to;
+        self.scope = ReadScope {
+            range: Some((self.scope.range.map_or(from, |(low, _)| low), to)),
+            read_complete: self.scope.read_complete && complete,
+        };
+    }
+
+    /// A window's events in ledger order, performance-monitor ones dropped and
+    /// counted when hidden, its recovery statements merged; and whether every
+    /// page read its range completely.
+    fn take_window(&mut self, pages: &[RuntimeEventQueryPage]) -> (Vec<ProjectedEvent>, bool) {
         let hide = self.hides_performance();
         let mut events = Vec::new();
         let mut complete = true;
@@ -341,13 +384,7 @@ impl ViewModel {
                 self.absorb_recovery(group);
             }
         }
-        events.append(&mut self.rows);
-        self.rows = events;
-        self.lowest_read = Some(from);
-        self.scope = ReadScope {
-            range: Some((from, self.scope.range.map_or(to, |(_, high)| high))),
-            read_complete: self.scope.read_complete && complete,
-        };
+        (events, complete)
     }
 
     fn absorb_recovery(&mut self, group: &LedgerRunRecovery) {
