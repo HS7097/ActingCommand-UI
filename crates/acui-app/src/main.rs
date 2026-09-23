@@ -584,6 +584,13 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
                 (ratio < 1.0).then(|| from + ((to - from) as f64 * ratio) as u64)
             });
             model.borrow_mut().filters.to_timestamp_unix_ms = bound;
+            // A time bound reads down from the past; following stops at once.
+            if bound.is_some() {
+                app.follow.stop();
+                if let Some(window) = weak.upgrade() {
+                    window.set_following(false);
+                }
+            }
             let (rested, held) = (weak.clone(), Rc::downgrade(&app));
             app.cursor_rest.start(TimerMode::SingleShot, CURSOR_REST, move || {
                 if let (Some(window), Some(app)) = (rested.upgrade(), held.upgrade()) {

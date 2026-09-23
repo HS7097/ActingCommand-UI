@@ -62,7 +62,7 @@ answers come from:
   instance card its "runtime instances" lines. Status is read again only on a person's jump to the
   latest; while following, the task facts alone are read again whenever the pin moves. The first two
   lines state the sequence each read was taken at; both may be past the pinned snapshot, so this is state
-  at open, not state at the pin. By contract the Runtime records the status read itself as one
+  as last read, not state at the pin. By contract the Runtime records the status read itself as one
   observation event (`command.validated`), after the pin and so outside this session's snapshot. Then,
   per instance the status registers: its alias (the instance id in grey), port, lease (leased / takeover
   cooldown / idle, plus the queued request count when there is one), and the instance facts
