@@ -13,35 +13,18 @@
 //! own, so going back stays a person's choice.
 
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
 
 use serde::Deserialize;
-use serde_json::Value;
 
 use crate::install::{self, LaidOut};
+use crate::runtime::{
+    check_config, request_shutdown, restart, runtime_answers, state_root, ACTINGCTL, ACTINGD,
+};
 use crate::verify::{Report, Verified, MANIFEST};
 
-const ACTINGD: &str = "actingcommand-actingd.exe";
-const ACTINGCTL: &str = "actingctl.exe";
-const CHECK_SCHEMA: &str = "actingcommand.actingd.check-config.v1";
-/// How long `request-shutdown --wait` waits for the Runtime to be gone, and
-/// how long any child the upgrade runs may take in all.
-const SHUTDOWN_WAIT_SECONDS: u64 = 60;
-const CHILD_TIMEOUT: Duration = Duration::from_secs(SHUTDOWN_WAIT_SECONDS + 30);
-/// How long a restarted Runtime has to write its own `runtime-info.json`.
-const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const UNCONFIRMED_NOTE: &str = "Runtime 的关闭未确认，它可能仍在运行或正在退出，未重新拉起：稍后在监控台确认 / The Runtime's shutdown was not confirmed; it may still run or be exiting, and was not started again: check in the console later";
 const STOPPED_NOTE: &str = "Runtime 已被请求关闭，可能已停止，未重新拉起：请在监控台点「启动」 / The Runtime was asked to shut down and may have stopped; it was not started again: press Start in the console";
-
-/// Windows `CREATE_NO_WINDOW` for the checks, `DETACHED_PROCESS` for the
-/// Runtime started again, which outlives the wizard.
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-#[cfg(windows)]
-const DETACHED_PROCESS: u32 = 0x0000_0008;
 
 /// What is installed: the commits the two manifests name.
 pub struct Installed {
@@ -85,7 +68,8 @@ pub struct Upgraded {
 pub fn upgrade(root: &Path, verified: &Verified, report: Report<'_>) -> Result<Upgraded, String> {
     let config = root.join("actingd.config.json");
     let state_root = state_root(&config)?;
-    check_config(&verified.runtime.dir.join(ACTINGD), &config)?;
+    check_config(&verified.runtime.dir.join(ACTINGD), &config)
+        .map_err(|reason| format!("{reason}\n新版本未装，未做任何改动 / the new version is not installed, nothing was changed"))?;
     report("新 Runtime 接受现有配置 / the new Runtime accepts the configuration as it is")?;
 
     let mut swap = Swap {
@@ -289,250 +273,5 @@ impl Swap<'_> {
             }
         }
         Ok(())
-    }
-}
-
-/// `state_root` from the configuration. The wizard writes an absolute one; a
-/// relative one would depend on the Runtime's working directory, so it stops.
-fn state_root(config: &Path) -> Result<PathBuf, String> {
-    let text = fs::read_to_string(config)
-        .map_err(|error| format!("读取失败 / read failed: {}: {error}", config.display()))?;
-    let document: Value = serde_json::from_str(&text)
-        .map_err(|error| format!("配置无法解析 / config unreadable: {}: {error}", config.display()))?;
-    let root = document["state_root"].as_str().map(PathBuf::from).ok_or_else(|| {
-        format!("配置里没有 state_root / no state_root in {}", config.display())
-    })?;
-    match root.is_absolute() {
-        true => Ok(root),
-        false => Err(format!(
-            "配置的 state_root 不是绝对路径，向导无法确定它 / state_root in {} is not absolute: {}",
-            config.display(),
-            root.display()
-        )),
-    }
-}
-
-/// Whether a Runtime runs on the state root: `runtime-info.json` there and
-/// the new `actingctl status` answered by it (`Ok`). Otherwise `Err`, with the
-/// reason when the file is there but no Runtime answered — one that ended
-/// without shutting down leaves it — said and taken as not running.
-fn runtime_answers(
-    actingctl: &Path,
-    state_root: &Path,
-    report: Report<'_>,
-) -> Result<Result<(), Option<String>>, String> {
-    if !state_root.join("runtime-info.json").is_file() {
-        report("Runtime 未在运行 / the Runtime is not running")?;
-        return Ok(Err(None));
-    }
-    let out = run(Command::new(actingctl).arg("status").arg("--state-root").arg(state_root))?;
-    if out.success {
-        return Ok(Ok(()));
-    }
-    let line = format!(
-        "有 runtime-info.json 但 Runtime 不应答（退出码 {}），按未运行处理 / runtime-info.json is there but no Runtime answers (exit {}), taken as not running: {}",
-        out.exit,
-        out.exit,
-        out.stderr.trim()
-    );
-    report(&line)?;
-    Ok(Err(Some(line)))
-}
-
-/// `<new actingd> check-config --config <config>`: the report is stdout;
-/// stderr is kept for the failure text.
-fn check_config(actingd: &Path, config: &Path) -> Result<(), String> {
-    let out = run(Command::new(actingd).arg("check-config").arg("--config").arg(config))?;
-    let report: Value = serde_json::from_str(out.stdout.trim()).unwrap_or_default();
-    let error = &report["error"];
-    let exit = &out.exit;
-    match (report["status"].as_str(), error["code"].as_str(), error["stage"].as_str()) {
-        _ if report["schema_version"] != CHECK_SCHEMA => Err(format!(
-            "新 Runtime 的 check-config 输出无法识别（退出码 {exit}），未做任何改动 / unreadable check-config output (exit {exit}), nothing was changed: {} {}",
-            out.stdout.trim(),
-            out.stderr.trim()
-        )),
-        (Some("ok"), _, _) if out.success => Ok(()),
-        (Some("failed"), Some(code), Some(stage)) => Err(format!(
-            "新 Runtime 不接受现有配置，未做任何改动 / the new Runtime refuses the configuration, nothing was changed: {code}（{stage}）{}",
-            out.stderr.trim()
-        )),
-        _ => Err(format!(
-            "新 Runtime 的 check-config 未通过（退出码 {exit}），未做任何改动 / check-config did not pass (exit {exit}), nothing was changed: {} {}",
-            out.stdout.trim(),
-            out.stderr.trim()
-        )),
-    }
-}
-
-/// `<new actingctl> request-shutdown --state-root <root> --wait <s>`: exit 0
-/// once the ownership record is closed and the process gone. Anything else
-/// may still end with the Runtime stopping, and is said that way.
-fn request_shutdown(actingctl: &Path, state_root: &Path) -> Result<(), String> {
-    let out = run(
-        Command::new(actingctl)
-            .arg("request-shutdown")
-            .arg("--state-root")
-            .arg(state_root)
-            .arg("--wait")
-            .arg(SHUTDOWN_WAIT_SECONDS.to_string()),
-    )?;
-    match out.success {
-        true => Ok(()),
-        false => Err(format!(
-            "Runtime 的关闭没有在 {SHUTDOWN_WAIT_SECONDS} 秒内确认（退出码 {}）/ the Runtime's shutdown was not confirmed within {SHUTDOWN_WAIT_SECONDS} s (exit {}): {} {}",
-            out.exit,
-            out.exit,
-            out.stdout.trim(),
-            out.stderr.trim()
-        )),
-    }
-}
-
-/// A Runtime, detached, from the install root, its output in
-/// `<root>\actingd-<unix_ms>.log`: up once its own `runtime-info.json` names
-/// its pid, within `READY_TIMEOUT`; an exit before that is said with its
-/// `FATAL` line.
-fn restart(
-    root: &Path,
-    actingd: &Path,
-    config: &Path,
-    state_root: &Path,
-    report: Report<'_>,
-) -> Result<PathBuf, String> {
-    let log = root.join(format!("actingd-{}.log", crate::log::unix_ms()));
-    let stdout = fs::File::create(&log)
-        .map_err(|error| format!("无法创建 / cannot create {}: {error}", log.display()))?;
-    let stderr = stdout
-        .try_clone()
-        .map_err(|error| format!("无法写入 / cannot write {}: {error}", log.display()))?;
-    let mut command = Command::new(actingd);
-    command
-        .arg("--config")
-        .arg(config)
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .stdout(stdout)
-        .stderr(stderr);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(DETACHED_PROCESS);
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|error| {
-            format!("无法拉起 Runtime，现在未运行 / cannot start the Runtime, which is not running: {error}")
-        })?;
-    let info = state_root.join("runtime-info.json");
-    let deadline = Instant::now() + READY_TIMEOUT;
-    while Instant::now() < deadline {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(format!(
-                "Runtime 启动后退出（{status}），现在未运行 / the Runtime exited on start ({status}) and is not running{}\n日志 / log: {}",
-                fatal_line(&log),
-                log.display()
-            ));
-        }
-        let pid = fs::read_to_string(&info)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            .and_then(|info| info["pid"].as_u64());
-        if pid == Some(u64::from(child.id())) {
-            report(&format!("Runtime 已就绪 / the Runtime is up; 日志 / log: {}", log.display()))?;
-            return Ok(log);
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    Err(format!(
-        "Runtime 在 {} 秒内没有就绪，可能仍在启动：请看日志，或在监控台确认 / the Runtime was not up within {} s and may still be starting: see the log, or check in the console\n日志 / log: {}",
-        READY_TIMEOUT.as_secs(),
-        READY_TIMEOUT.as_secs(),
-        log.display()
-    ))
-}
-
-/// The Runtime's own `FATAL actingd:` line from its log, when there is one.
-fn fatal_line(log: &Path) -> String {
-    fs::read_to_string(log)
-        .ok()
-        .and_then(|text| text.lines().find(|line| line.starts_with("FATAL")).map(str::to_string))
-        .map(|line| format!("：{line}"))
-        .unwrap_or_default()
-}
-
-/// A child's outcome: whether it succeeded, its exit code as text, and its two
-/// output streams, each read whole.
-struct Output {
-    success: bool,
-    exit: String,
-    stdout: String,
-    stderr: String,
-}
-
-/// Runs a child without a window within `CHILD_TIMEOUT`.
-fn run(command: &mut Command) -> Result<Output, String> {
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    let program = format!("{:?}", command.get_program());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("无法运行 / cannot run {program}: {error}"))?;
-    let stdout = child.stdout.take().map(drain);
-    let stderr = child.stderr.take().map(drain);
-    let deadline = Instant::now() + CHILD_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
-            Ok(None) => {
-                return Err(format!(
-                    "{program} 超过 {} 秒未结束 / did not finish within {} s{}",
-                    CHILD_TIMEOUT.as_secs(),
-                    CHILD_TIMEOUT.as_secs(),
-                    stop(&mut child)
-                ))
-            }
-            Err(error) => return Err(format!("{program}: {error}{}", stop(&mut child))),
-        }
-    };
-    Ok(Output {
-        success: status.success(),
-        exit: status.code().map_or_else(|| "—".to_string(), |code| code.to_string()),
-        stdout: collect(stdout),
-        stderr: collect(stderr),
-    })
-}
-
-type Drained = std::io::Result<std::thread::JoinHandle<std::io::Result<String>>>;
-
-/// A pipe read whole on its own thread, so a long output never stalls the child.
-fn drain(mut pipe: impl Read + Send + 'static) -> Drained {
-    std::thread::Builder::new().name("acsetup-output".into()).spawn(move || {
-        let mut text = String::new();
-        pipe.read_to_string(&mut text).map(|_| text)
-    })
-}
-
-/// A drained stream's text, or a line saying why it could not be read.
-fn collect(reader: Option<Drained>) -> String {
-    match reader.map(|reader| reader.map(std::thread::JoinHandle::join)) {
-        Some(Ok(Ok(Ok(text)))) => text,
-        Some(Ok(Ok(Err(error)))) => format!("（输出读取失败 / output unreadable: {error}）"),
-        Some(Ok(Err(_))) => "（输出读取线程失败 / output reader failed）".to_string(),
-        Some(Err(error)) => format!("（输出读取线程未能启动 / output reader not started: {error}）"),
-        None => String::new(),
-    }
-}
-
-/// Stops a child past its time, and says how that went.
-fn stop(child: &mut Child) -> String {
-    match child.kill().and_then(|()| child.wait().map(|_| ())) {
-        Ok(()) => "；已终止 / stopped".to_string(),
-        Err(error) => format!("；未能终止 / could not be stopped: {error}"),
     }
 }

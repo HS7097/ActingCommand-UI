@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! acsetup: the install wizard for ActingCommand on Windows. One window, five
-//! pages — location, get, verify and lay out, configure, finish. It fetches
-//! the release to install from the umbrella repository's Releases, or takes a
-//! folder a person filled by hand, checks it against what the umbrella
+//! acsetup: the install wizard for ActingCommand on Windows. One window, six
+//! pages — location, get, verify and lay out, configure, instances, finish. It
+//! fetches the release to install from the umbrella repository's Releases, or
+//! takes a folder a person filled by hand, checks it against what the umbrella
 //! published, lays it out under a per-user install root, writes the Runtime
 //! configuration and the console's settings, optionally a Startup-folder
-//! launcher, and can open the console. On a root that already holds an
-//! installation it upgrades instead: the payload replaced, state and
-//! configuration kept (see `upgrade`). That fetch is its only network code; it
-//! registers no service and no scheduled task, touches neither PATH nor the
-//! registry, and configures no instance.
+//! launcher and the emulator instances (see `instance_step`), and can open the
+//! console. On a root that already holds an installation it upgrades instead:
+//! the payload replaced, state and configuration kept (see `upgrade`). Those
+//! fetches — the release and a resource package given as a URL — are its only
+//! network code; it registers no service and no scheduled task, and touches
+//! neither PATH nor the registry.
 //!
 //! The wizard is Windows-only. Elsewhere it compiles, and the first platform
 //! question is the loud stop, before any window is opened.
@@ -18,12 +19,15 @@
 
 mod fetch;
 mod install;
+mod instance_step;
 mod log;
 mod platform;
+mod runtime;
 mod upgrade;
 mod verify;
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::Result;
@@ -31,7 +35,9 @@ use slint::ComponentHandle;
 
 use fetch::Release;
 use install::{Autostart, Configured, LaidOut};
+use instance_step::{Chosen, Found};
 use log::InstallLog;
+use slint::{Model, VecModel};
 use upgrade::{Installed, Upgraded};
 
 slint::include_modules!();
@@ -51,6 +57,10 @@ struct State {
     laid_out: Option<LaidOut>,
     configured: Option<Configured>,
     autostart: Option<Autostart>,
+    /// Step 4 started a Runtime, and it runs still.
+    runtime_started: bool,
+    /// The aliases step 4 wrote into the configuration.
+    instances: Vec<String>,
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -114,6 +124,27 @@ fn install_callbacks(window: &SetupWindow, state: &Shared) {
             }
         });
     }
+    {
+        let weak = window.as_weak();
+        let state = Arc::clone(state);
+        window.on_discover(move || {
+            if let Some(window) = weak.upgrade() {
+                begin_discover(&window, &state);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let state = Arc::clone(state);
+        window.on_skip_instances(move || {
+            if let Some(window) = weak.upgrade() {
+                match write_log(&state, "实例：跳过 / instances: skipped") {
+                    Ok(()) => finish(&window, &state),
+                    Err(reason) => fail(&state, &window.as_weak(), reason),
+                }
+            }
+        });
+    }
     window.on_close_wizard(|| {
         let _ = slint::quit_event_loop();
     });
@@ -150,6 +181,7 @@ fn next(window: &SetupWindow, state: &Shared) {
         2 if lock(state).upgraded.is_some() => finish(window, state),
         2 => enter_configure(window, state),
         3 => run_configure(window, state),
+        4 => begin_apply(window, state),
         _ => {}
     }
 }
@@ -523,12 +555,12 @@ fn begin_verify(window: &SetupWindow, state: &Shared) {
     }
 }
 
-/// Step 2 → 4 on an upgrade: the configuration, the settings and the Startup
-/// launcher stay as they were; the summary says what was replaced.
+/// The finish page: from step 2 on an upgrade — configuration, settings and
+/// the Startup launcher as they were — or from step 4 on a fresh install.
 fn finish(window: &SetupWindow, state: &Shared) {
     window.set_summary(summary(state).into());
     window.set_note("".into());
-    window.set_step(4);
+    window.set_step(5);
     window.set_can_next(false);
 }
 
@@ -547,7 +579,7 @@ fn enter_configure(window: &SetupWindow, state: &Shared) {
 }
 
 /// Step 3 → 4: the configuration and the console's settings, written once,
-/// then the optional launcher and the summary.
+/// then the optional launcher; the instances page follows.
 fn run_configure(window: &SetupWindow, state: &Shared) {
     if lock(state).configured.is_none() {
         let state_root = PathBuf::from(window.get_state_root().as_str());
@@ -585,12 +617,155 @@ fn run_configure(window: &SetupWindow, state: &Shared) {
     ) {
         Ok(outcome) => {
             lock(state).autostart = Some(outcome);
-            window.set_summary(summary(state).into());
             window.set_note("".into());
+            window.set_progress("".into());
             window.set_step(4);
-            window.set_can_next(false);
+            window.set_can_next(true);
         }
         Err(reason) => fail(state, &window.as_weak(), reason),
+    }
+}
+
+/// Step 4's Discover: the MuMu folder written when given, a Runtime running,
+/// and the instances it lists shown for picking. A failure is said on the page
+/// and in the log; the person may correct the folder, try again, or skip. The
+/// summary says a Runtime runs only after one was seen up.
+fn begin_discover(window: &SetupWindow, state: &Shared) {
+    let text = window.get_mumu_root().trim().to_string();
+    let mumu = (!text.is_empty()).then(|| PathBuf::from(&text));
+    if mumu.as_ref().is_some_and(|mumu| !mumu.is_absolute()) {
+        window.set_note("MuMu 安装目录必须是绝对路径 / The MuMu folder must be an absolute path".into());
+        return;
+    }
+    window.set_note("".into());
+    window.set_progress("".into());
+    window.set_busy(true);
+    let root = lock(state).root.clone();
+    let weak = window.as_weak();
+    let shared = Arc::clone(state);
+    let (state, worker_weak) = (Arc::clone(state), weak.clone());
+    let spawned = std::thread::Builder::new().name("acsetup-discover".into()).spawn(move || {
+        let mut report = reporter(&state, &worker_weak);
+        let started = instance_step::start(&root, mumu.as_deref(), &mut report);
+        lock(&state).runtime_started = started.is_ok();
+        match started.and_then(|()| instance_step::discover(&root, &mut report)) {
+            Ok(found) => {
+                let rows: Vec<InstanceRow> = found.iter().map(instance_row).collect();
+                let _ = worker_weak.upgrade_in_event_loop(move |window| {
+                    window.set_instances(Rc::new(VecModel::from(rows)).into());
+                    window.set_discovered(true);
+                    window.set_busy(false);
+                });
+            }
+            Err(reason) => retryable(&state, &worker_weak, reason),
+        }
+    });
+    if let Err(error) = spawned {
+        window.set_busy(false);
+        fail(&shared, &weak, thread_failed(&error));
+    }
+}
+
+fn instance_row(found: &Found) -> InstanceRow {
+    let mut detail = vec![found.adb.clone().unwrap_or_else(|| "adb —".to_string())];
+    detail.push(if found.running { "运行中 / running" } else { "未运行 / not running" }.to_string());
+    detail.extend(found.android.as_ref().map(|android| format!("Android {android}")));
+    detail.extend(found.bound_alias.as_ref().map(|alias| format!("已绑定 / bound: {alias}")));
+    InstanceRow {
+        picked: false,
+        index: i32::from(found.index),
+        title: format!("#{} {}", found.index, found.name).into(),
+        detail: detail.join(" · ").into(),
+        alias: found.bound_alias.clone().unwrap_or_else(|| format!("mumu-{}", found.index)).into(),
+        application: "".into(),
+        package: "".into(),
+        sha256: "".into(),
+    }
+}
+
+/// A step-4 failure that left the configuration as it was: logged, said on
+/// the page, and the page usable again. A log write failing stops the run.
+fn retryable(state: &Shared, weak: &slint::Weak<SetupWindow>, reason: String) {
+    if let Err(unlogged) = write_log(state, &format!("未完成 / not done: {reason}")) {
+        fail(state, weak, unlogged);
+        return;
+    }
+    let _ = weak.upgrade_in_event_loop(move |window| {
+        window.set_busy(false);
+        window.set_note(reason.into());
+    });
+}
+
+/// Step 4 → 5: the picked instances written — each with an alias, an
+/// application_id and a resource package — then the Runtime restarted on them.
+/// A failure before the configuration is replaced leaves the page usable; one
+/// after it stops the run.
+fn begin_apply(window: &SetupWindow, state: &Shared) {
+    let picked: Vec<InstanceRow> = window.get_instances().iter().filter(|row| row.picked).collect();
+    if picked.is_empty() {
+        window.set_note(
+            "没有勾选实例：不配置实例就点「跳过」/ No instance is ticked: Skip to configure none".into(),
+        );
+        return;
+    }
+    let mut chosen = Vec::new();
+    for row in &picked {
+        let missing = [
+            (row.alias.trim(), "别名 / alias"),
+            (row.application.trim(), "application_id"),
+            (row.package.trim(), "资源包 / resource package"),
+        ]
+        .into_iter()
+        .find(|(value, _)| value.is_empty());
+        if let Some((_, field)) = missing {
+            window.set_note(format!("{}：{field} 未填 / {field} is empty", row.title).into());
+            return;
+        }
+        chosen.push(Chosen {
+            index: u16::try_from(row.index).unwrap_or_default(),
+            alias: row.alias.trim().to_string(),
+            application_id: row.application.trim().to_string(),
+            package: row.package.trim().to_string(),
+            sha256: row.sha256.trim().to_string(),
+        });
+    }
+    window.set_note("".into());
+    window.set_progress("".into());
+    window.set_busy(true);
+    let root = lock(state).root.clone();
+    let weak = window.as_weak();
+    let shared = Arc::clone(state);
+    let (state, worker_weak) = (Arc::clone(state), weak.clone());
+    let spawned = std::thread::Builder::new().name("acsetup-instances".into()).spawn(move || {
+        let mut report = reporter(&state, &worker_weak);
+        if let Err(reason) = instance_step::write(&root, &chosen, &mut report) {
+            retryable(&state, &worker_weak, reason);
+            return;
+        }
+        let aliases = chosen.iter().map(|pick| pick.alias.clone()).collect();
+        lock(&state).instances = aliases;
+        let restarted = instance_step::restart(&root, &mut report)
+            .and_then(|status| report(&format!("actingctl status: {status}")));
+        match restarted {
+            Ok(()) => {
+                lock(&state).runtime_started = true;
+                let _ = worker_weak.upgrade_in_event_loop(move |window| {
+                    window.set_busy(false);
+                    finish(&window, &state);
+                });
+            }
+            Err(reason) => fail(
+                &state,
+                &worker_weak,
+                format!(
+                    "{reason}\n实例已写入配置，但 Runtime 没有按新配置运行起来 / The instances are in the configuration, but the Runtime is not running on it"
+                ),
+            ),
+        }
+    });
+    if let Err(error) = spawned {
+        window.set_busy(false);
+        fail(&shared, &weak, thread_failed(&error));
     }
 }
 
@@ -650,24 +825,32 @@ fn summary(state: &Shared) -> String {
             "开机自启 / Autostart: 未启用 / not enabled".to_string()
         }
     }));
+    if fresh && !state.instances.is_empty() {
+        lines.push(format!(
+            "实例 / Instances: {}（已写入配置并通过检查，Runtime 已按新配置运行 / in the configuration, checked, and the Runtime runs with them）",
+            state.instances.join("、")
+        ));
+    } else if fresh && state.runtime_started {
+        lines.push("第 4 步拉起的 Runtime 仍在运行 / The Runtime started in step 4 is still running".to_string());
+    }
     if let Some(log) = &state.log {
         lines.push(format!("日志 / Log: {}", log.path().display()));
     }
-    if fresh {
+    if fresh && state.instances.is_empty() {
         lines.push(String::new());
         lines.push(
-            "实例（模拟器 / 设备）本引导未配置，instances 为空：之后点监控台顶栏的「实例配置」按钮添加。"
+            "实例（模拟器 / 设备）未配置，instances 为空：之后点监控台顶栏的「实例配置」按钮添加。"
                 .to_string(),
         );
         lines.push(
-            "No instance was configured here (instances is empty): add them with the Instance Configuration button in the console's top bar."
+            "No instance was configured (instances is empty): add them with the Instance Configuration button in the console's top bar."
                 .to_string(),
         );
     }
     lines.join("\n")
 }
 
-/// Step 4: the console, detached, and the wizard closed.
+/// Step 5: the console, detached, and the wizard closed.
 fn open_console(window: &SetupWindow, state: &Shared) {
     let console = lock(state)
         .laid_out

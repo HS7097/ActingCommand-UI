@@ -1,5 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { Button, CheckBox, LineEdit, Palette, TextEdit } from "std-widgets.slint";
+import { Button, CheckBox, LineEdit, ListView, Palette, TextEdit } from "std-widgets.slint";
+
+// One instance the emulator reported, and what a person fills in to use it.
+export struct InstanceRow {
+    picked: bool,
+    index: int,
+    title: string,
+    detail: string,
+    alias: string,
+    application: string,
+    package: string,
+    sha256: string,
+}
 
 // The same drawing as the console: the std-widgets Palette, so the wizard
 // follows the platform style and the system light/dark setting. No text-size
@@ -94,19 +106,26 @@ export component SetupWindow inherits Window {
     in-out property <string> state-root;
     in-out property <bool> autostart;
     in-out property <bool> autostart-console;
+    // Step 4: the MuMu folder, and the instances discovery listed.
+    in-out property <string> mumu-root;
+    in-out property <[InstanceRow]> instances;
+    in property <bool> discovered;
 
     callback next();
     callback close-wizard();
     callback open-console();
     callback install-root-edited(string);
     callback offline-toggled(bool);
+    callback discover();
+    callback skip-instances();
 
     property <[string]> step-labels: [
         "0 位置 / Location",
         "1 取件 / Get",
         "2 校验与铺开 / Verify & lay out",
         "3 配置 / Configure",
-        "4 完成 / Finish",
+        "4 实例（可选）/ Instances (optional)",
+        "5 完成 / Finish",
     ];
 
     VerticalLayout {
@@ -210,7 +229,7 @@ export component SetupWindow inherits Window {
                         text: "勾选后只写一个按用户的启动文件夹批处理 %APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\ActingCommand.cmd；不装服务、不建计划任务、不写注册表；不勾就什么也不写。\nWhen checked, one per-user Startup-folder .cmd is written and nothing else; unchecked writes nothing.";
                     }
                     Body {
-                        text: "实例（模拟器 / 设备）不在本引导里配置，instances 留空：之后点监控台顶栏的「实例配置」按钮添加。\nInstances (emulators / devices) are not configured here, instances stays empty: add them with the Instance Configuration button in the console's top bar.";
+                        text: "实例（模拟器 / 设备）在下一步配置，可以跳过：跳过时 instances 留空，之后点监控台顶栏的「实例配置」按钮添加。\nInstances (emulators / devices) come next and may be skipped: then instances stays empty, to be added with the Instance Configuration button in the console's top bar.";
                     }
                     Body { text: root.note; }
                     Rectangle { }
@@ -218,10 +237,101 @@ export component SetupWindow inherits Window {
 
                 if !root.failed && root.step == 4: VerticalLayout {
                     spacing: 8px;
+                    Head { text: "实例（可选）/ Instances (optional)"; }
+                    Caption {
+                        text: "从安装根拉起 Runtime，用 actingctl emulator discover 读 MuMu 的实例清单——不启动、不关闭任何模拟器。勾选要用的实例并填别名、application_id（游戏包名）、资源包（本机绝对路径，或 https:// 网址：下载到 <安装根>\\packages\\；填了 sha256 就核对）。候选配置先经 check-config 检查，通过才替换，再重启 Runtime 绑定实例。输入用 adb_shell_input；抓图在填了 MuMu 目录时用 nemu_ipc，否则用 adb。不配置就点「跳过」。\nThe Runtime is started from the install root and actingctl emulator discover reads MuMu's instance list — no emulator is started or stopped. Tick the instances to use and fill in an alias, the application_id (the game's package) and a resource package (a local absolute path, or an https:// URL fetched into <install root>\\packages\\, checked against the sha256 when one is given). The candidate configuration is checked by check-config before it replaces the configuration, then the Runtime restarts to bind the instances. Input: adb_shell_input; capture: nemu_ipc with the MuMu folder, else adb. Skip to configure none.";
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        LineEdit {
+                            text <=> root.mumu-root;
+                            enabled: !root.busy;
+                            placeholder-text: "MuMu 安装目录（绝对路径，可空）/ MuMu folder (absolute, optional)";
+                            horizontal-stretch: 1;
+                        }
+                        Button {
+                            text: "发现实例 / Discover";
+                            enabled: !root.busy;
+                            clicked => {
+                                root.discover();
+                            }
+                        }
+                    }
+                    if root.discovered && root.instances.length == 0: Body {
+                        text: "没有发现实例 / No instance found";
+                    }
+                    ListView {
+                        vertical-stretch: 2;
+                        min-height: 120px;
+                        for row in root.instances: VerticalLayout {
+                            padding-bottom: 8px;
+                            spacing: 4px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                CheckBox {
+                                    text: row.title;
+                                    checked <=> row.picked;
+                                    enabled: !root.busy;
+                                }
+                                Caption {
+                                    text: row.detail;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                            if row.picked: HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit {
+                                    text <=> row.alias;
+                                    enabled: !root.busy;
+                                    placeholder-text: "别名 / alias";
+                                    width: 140px;
+                                }
+                                LineEdit {
+                                    text <=> row.application;
+                                    enabled: !root.busy;
+                                    placeholder-text: "application_id";
+                                    horizontal-stretch: 1;
+                                }
+                                Button {
+                                    text: "BlueArchiveJP";
+                                    enabled: !root.busy;
+                                    clicked => {
+                                        row.application = "com.YostarJP.BlueArchive";
+                                    }
+                                }
+                            }
+                            if row.picked: HorizontalLayout {
+                                spacing: 6px;
+                                LineEdit {
+                                    text <=> row.package;
+                                    enabled: !root.busy;
+                                    placeholder-text: "资源包：绝对路径或 https:// 网址 / resource package: absolute path or https:// URL";
+                                    horizontal-stretch: 2;
+                                }
+                                LineEdit {
+                                    text <=> row.sha256;
+                                    enabled: !root.busy;
+                                    placeholder-text: "sha256（可空 / optional）";
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                        }
+                    }
+                    Transcript {
+                        text: root.progress;
+                        vertical-stretch: 1;
+                        min-height: 60px;
+                    }
+                    Body { text: root.note; }
+                }
+
+                if !root.failed && root.step == 5: VerticalLayout {
+                    spacing: 8px;
                     Head { text: "完成 / Finish"; }
                     Transcript { text: root.summary; }
                     Caption {
-                        text: "「启动监控台」分离拉起 ui\\acui.exe 并关闭本引导。新装时 Runtime 由监控台的启动器拉起；升级时，原先在运行的 Runtime 已用新版本重新拉起。\n\"Open console\" starts ui\\acui.exe detached and closes this wizard. After a fresh install the console's launcher starts the Runtime; after an upgrade, a Runtime that was running has been started again on the new version.";
+                        text: "「启动监控台」分离拉起 ui\\acui.exe 并关闭本引导。新装时，第 4 步拉起过的 Runtime 仍在运行，否则由监控台的启动器拉起；升级时，原先在运行的 Runtime 已用新版本重新拉起。\n\"Open console\" starts ui\\acui.exe detached and closes this wizard. After a fresh install, a Runtime started in step 4 is still running, else the console's launcher starts one; after an upgrade, a Runtime that was running has been started again on the new version.";
                     }
                     Body { text: root.note; }
                 }
@@ -245,22 +355,29 @@ export component SetupWindow inherits Window {
                     root.close-wizard();
                 }
             }
-            if !root.failed && root.step < 4: Button {
-                text: "下一步 / Next";
+            if !root.failed && root.step == 4: Button {
+                text: "跳过 / Skip";
+                enabled: !root.busy;
+                clicked => {
+                    root.skip-instances();
+                }
+            }
+            if !root.failed && root.step < 5: Button {
+                text: root.step == 4 ? "写入实例 / Apply" : "下一步 / Next";
                 primary: true;
                 enabled: root.can-next && !root.busy;
                 clicked => {
                     root.next();
                 }
             }
-            if !root.failed && root.step == 4: Button {
+            if !root.failed && root.step == 5: Button {
                 text: "启动监控台 / Open console";
                 primary: true;
                 clicked => {
                     root.open-console();
                 }
             }
-            if !root.failed && root.step == 4: Button {
+            if !root.failed && root.step == 5: Button {
                 text: "完成 / Done";
                 clicked => {
                     root.close-wizard();

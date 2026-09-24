@@ -137,6 +137,75 @@ pub fn members(release: &Release) -> Result<(String, String), String> {
     verify::members_of(&text)
 }
 
+/// A file named by a person's `https://` URL — a resource package — fetched
+/// into `dir`, under the URL's last path segment when that is a plain name,
+/// else `fallback`: through a `.part` file, its sha256 taken on the way and
+/// compared with `expected` when one is given. Returns the file's path.
+pub fn fetch_url(
+    url: &str,
+    dir: &Path,
+    fallback: &str,
+    expected: Option<&str>,
+    report: Report<'_>,
+) -> Result<std::path::PathBuf, String> {
+    if !url.starts_with("https://") {
+        return Err(format!("只接受 https:// 网址 / only https:// URLs: {url}"));
+    }
+    let last = url.split(['?', '#']).next().unwrap_or_default().rsplit('/').next().unwrap_or_default();
+    let name = if plain(last) { last.to_string() } else { fallback.to_string() };
+    if !plain(&name) {
+        return Err(format!("文件名不能使用 / the file name cannot be used: {name}"));
+    }
+    fs::create_dir_all(dir)
+        .map_err(|error| format!("无法创建 / cannot create {}: {error}", dir.display()))?;
+    let failed = |error: &dyn std::fmt::Display| format!("下载失败 / download failed: {url}: {error}");
+    let response = agent().get(url).call().map_err(|error| failed(&error))?;
+    let part = dir.join(format!("{name}.part"));
+    let path = dir.join(&name);
+    let outcome = (|| {
+        let cannot_write =
+            |error: std::io::Error| format!("无法写入 / cannot write {}: {error}", part.display());
+        let mut file = File::create(&part).map_err(cannot_write)?;
+        let mut body = response.into_reader();
+        let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
+        let mut buffer = vec![0; 64 * 1024];
+        let (mut written, mut mark) = (0u64, 0u64);
+        loop {
+            let read = body.read(&mut buffer).map_err(|error| failed(&error))?;
+            if read == 0 {
+                break;
+            }
+            sha2::Digest::update(&mut hasher, &buffer[..read]);
+            file.write_all(&buffer[..read]).map_err(cannot_write)?;
+            written += read as u64;
+            if written >= mark + (16 << 20) {
+                mark = written;
+                report(&format!("  {name}: {} MiB", written >> 20))?;
+            }
+        }
+        file.sync_all().map_err(cannot_write)?;
+        let actual = verify::hex(&sha2::Digest::finalize(hasher));
+        if let Some(expected) = expected {
+            if !expected.eq_ignore_ascii_case(&actual) {
+                return Err(format!(
+                    "{}: {name} sha256 应为 / expected {expected}，实为 / actual {actual}",
+                    verify::MISMATCH
+                ));
+            }
+        }
+        report(&format!("已下载 / fetched: {name}（{written} 字节 / bytes，sha256 {actual}）"))
+    })();
+    if let Err(reason) = outcome {
+        let _ = fs::remove_file(&part);
+        return Err(reason);
+    }
+    if let Err(error) = fs::rename(&part, &path) {
+        let _ = fs::remove_file(&part);
+        return Err(format!("无法改名 / cannot rename {}: {error}", part.display()));
+    }
+    Ok(path)
+}
+
 /// Fetches `release` into `dir`: `SHA256SUMS` and `MEMBERS.json`, then every
 /// other file `SHA256SUMS` lists. Each is written to a `.part` file and renamed
 /// once its length is the length the release states; a file already in `dir`
