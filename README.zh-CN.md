@@ -374,8 +374,9 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 它自己去取发布件，也可以用人手工下好的文件夹。一个窗口，只有下一步，五步：
 
 0. **位置**：只有安装根（可改，默认 `%LOCALAPPDATA%\Programs\ActingCommand`，不需要管理员）、该卷的
-   可用空间、此处是否已有安装（看 `runtime\BUILD-MANIFEST.json`；已有就停在这一步——升级流程是下一片，
-   现在先换一个根）。下一步时建好安装根与安装日志。
+   可用空间、此处是否已有安装（看 `runtime\BUILD-MANIFEST.json`，写出它与 `ui\` 清单的提交号；已有就是
+   **升级**，见下文）。下一步时建好安装根与安装日志。引导若正从要升级的这份安装里运行，就停在这一步：
+   它自己的目录挪不开。
 1. **取件**：默认联网。一进这一步就经 HTTPS 向伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases)
    要一个发布件：有正式版取最新正式版（GitHub 的 `releases/latest`），否则取最新预发布（每日构建），从不取草稿；页面与日志写明它的标签、
    名称、日期、种类与大小。下一步时依次下载 `SHA256SUMS`、`MEMBERS.json`，再下载 `SHA256SUMS` 列出的
@@ -409,16 +410,32 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `start "" "<安装根>\runtime\actingcommand-actingd.exe" --config "<安装根>\actingd.config.json"`；
    再勾「同时拉起监控台」才多一行 `start "" "<安装根>\ui\acui.exe"`。批处理里不出现 acsetup。
    不勾就什么也不写；启动文件夹里已有的同名文件不动，只在完成页说一句。
-4. **完成**：「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe`（从不直接拉 actingd，
-   Runtime 由监控台的启动器拉）并关闭引导；「完成」只关闭。
+4. **完成**：「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe` 并关闭引导；「完成」只关闭。
+   新装时引导从不拉起 actingd，由监控台的启动器拉。
+
+**升级**：安装根里已有安装时。第 1 步先读发布件的 `MEMBERS.json`（联网时只读不存，离线时读文件夹里的），
+与已装清单的两个提交号比对：两个都相同就停在这里，写「已是这个发布件的版本」，什么也不下载。否则第 2 步
+在按上文校验之后：
+
+1. 用新 Runtime 对现有 `actingd.config.json` 跑 `check-config`；不接受就什么都不改；
+2. 把 `ui\`、`tools\` 移到 `<安装根>\previous\`（那里更早的一份先删掉）；有目录挪不动——监控台开着——
+   就把已挪的放回去并停下，此时什么都还没停；
+3. `<状态根>\runtime-info.json` 存在时，用新的 `actingctl request-shutdown --state-root <状态根> --wait 60`
+   请 Runtime 关闭，并等到所有权记录闭合、进程退出；没按时关掉，就把挪开的放回去并停下；
+4. 再移开 `runtime\`，按新装的方式铺开已校验的载荷；失败就删掉铺了一半的，放回旧版本；
+5. 原先在运行的 Runtime 用新版本分离拉起，输出写进 `<安装根>\actingd-<unix_ms>.log`，30 秒内要写出
+   `runtime-info.json`；没按时就绪就带着日志路径停下，旧版本留在 `previous\`。
+
+状态根、`actingd.config.json`、监控台的 `acui.toml`、开机自启与 `downloads\` 都不动，配置那一步跳过。
+被替换的版本整份留在 `previous\`，只留一份：Runtime 不带状态迁移，也不带回滚，退回去仍是人的决定。
 
 **安装日志**：离开第 0 步起每一步都往 `<安装根>\acsetup-<unix_ms>.log` 追加人话行；失败时最后一行写
-原因，窗口上显示日志路径。除安装载荷、配置、设置、`downloads\` 下取回的发布件与（勾选时的）自启批处理
-之外，引导写的文件只有这一个。
+原因，窗口上显示日志路径。除安装载荷、配置、设置、`downloads\` 下取回的发布件、（勾选时的）自启批处理，
+以及升级时的 `previous\` 与重新拉起的 Runtime 日志之外，引导写的文件只有这一个。
 
 **永远不做的事**：不装服务、不建计划任务、不改 PATH、不写注册表；不改配置模板；不碰已有内容的状态根；
-不配置实例；联网只为列出与下载伞仓发布件；不做升级、不装资源包。Linux 上 crate 照常编译（CI 两条腿都跑 `--workspace`），
-运行即以 `acsetup v1 is Windows-only` 退出。
+不配置实例；联网只为列出与下载伞仓发布件；只在升级时按上文关闭与拉起 Runtime；不装资源包。Linux 上 crate
+照常编译（CI 两条腿都跑 `--workspace`），运行即以 `acsetup v1 is Windows-only` 退出。
 
 依赖多四个，都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`
 （`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（salt）、

@@ -179,7 +179,7 @@ export component SetupWindow inherits Window {
                     spacing: 8px;
                     Head { text: "校验与铺开 / Verify and lay out"; }
                     Caption {
-                        text: "逐条核对 SHA256SUMS；解压到安装根下的临时目录；按每个 zip 自带的 BUILD-MANIFEST.json 核对来源仓、提交号与 files[] 每一项的大小、sha256，期间不运行 zip 里的任何东西。然后铺开：runtime\\（Runtime 全部载荷与清单，配置模板逐字节原样）、ui\\（监控台载荷与清单）、tools\\（只有 actinglab.exe、actingledger.exe、ac_fastdeploy_ppocr.dll），再删除临时目录。不改 PATH、不写注册表、不装服务。\nEvery SHA256SUMS entry; unpack under the install root; every file in every zip against its BUILD-MANIFEST.json, nothing from the zips run. Then runtime\\, ui\\ and tools\\ (only the three named tools) are laid out and staging is removed. No PATH, no registry, no service.";
+                        text: "逐条核对 SHA256SUMS；解压到安装根下的临时目录；按每个 zip 自带的 BUILD-MANIFEST.json 核对来源仓、提交号与 files[] 每一项的大小、sha256，期间不运行 zip 里的任何东西。然后铺开：runtime\\（Runtime 全部载荷与清单，配置模板逐字节原样）、ui\\（监控台载荷与清单）、tools\\（只有 actinglab.exe、actingledger.exe、ac_fastdeploy_ppocr.dll），再删除临时目录。不改 PATH、不写注册表、不装服务。\nEvery SHA256SUMS entry; unpack under the install root; every file in every zip against its BUILD-MANIFEST.json, nothing from the zips run. Then runtime\\, ui\\ and tools\\ (only the three named tools) are laid out and staging is removed. No PATH, no registry, no service.\n已有安装时是升级：先用新 Runtime 检查现有配置；移开 ui\\、tools\\（监控台开着就停下，什么都没动），请 Runtime 关闭并等它退出，再移开 runtime\\；铺开新版本，原先在运行的 Runtime 用新版本重新拉起。被替换的版本留在 previous\\；状态根、配置与设置不动。\nOn an installed root this upgrades: the new Runtime checks the configuration first; ui\\ and tools\\ move aside (an open console stops it here, with nothing changed), the Runtime is asked to shut down and awaited, then runtime\\ moves aside; the new version is laid out and a Runtime that was running starts again on it. The version replaced stays in previous\\; state, configuration and settings are kept.";
                     }
                     Transcript { text: root.progress; }
                 }
@@ -221,7 +221,7 @@ export component SetupWindow inherits Window {
                     Head { text: "完成 / Finish"; }
                     Transcript { text: root.summary; }
                     Caption {
-                        text: "「启动监控台」分离拉起 ui\\acui.exe 并关闭本引导；Runtime 由监控台的启动器拉起，本引导从不直接拉起 actingd。\n\"Open console\" starts ui\\acui.exe detached and closes this wizard; the Runtime is started by the console's launcher, never by this wizard.";
+                        text: "「启动监控台」分离拉起 ui\\acui.exe 并关闭本引导。新装时 Runtime 由监控台的启动器拉起；升级时，原先在运行的 Runtime 已用新版本重新拉起。\n\"Open console\" starts ui\\acui.exe detached and closes this wizard. After a fresh install the console's launcher starts the Runtime; after an upgrade, a Runtime that was running has been started again on the new version.";
                     }
                     Body { text: root.note; }
                 }

@@ -5,7 +5,9 @@
 //! folder a person filled by hand, checks it against what the umbrella
 //! published, lays it out under a per-user install root, writes the Runtime
 //! configuration and the console's settings, optionally a Startup-folder
-//! launcher, and can open the console. That fetch is its only network code; it
+//! launcher, and can open the console. On a root that already holds an
+//! installation it upgrades instead: the payload replaced, state and
+//! configuration kept (see `upgrade`). That fetch is its only network code; it
 //! registers no service and no scheduled task, touches neither PATH nor the
 //! registry, and configures no instance.
 //!
@@ -18,6 +20,7 @@ mod fetch;
 mod install;
 mod log;
 mod platform;
+mod upgrade;
 mod verify;
 
 use std::path::{Path, PathBuf};
@@ -29,10 +32,10 @@ use slint::ComponentHandle;
 use fetch::Release;
 use install::{Autostart, Configured, LaidOut};
 use log::InstallLog;
+use upgrade::{Installed, Upgraded};
 
 slint::include_modules!();
 
-const EXISTING: &str = "此处已有安装（runtime\\BUILD-MANIFEST.json 存在）；v1 没有升级流程，请换一个安装根 / An installation is already here; v1 has no upgrade flow, choose another root";
 
 /// What the steps so far established: one run, one root, one log.
 #[derive(Default)]
@@ -42,6 +45,9 @@ struct State {
     log: Option<InstallLog>,
     /// The release the online path installs, once looked up.
     release: Option<Release>,
+    /// What the root already holds: set, the run is an upgrade.
+    installed: Option<Installed>,
+    upgraded: Option<Upgraded>,
     laid_out: Option<LaidOut>,
     configured: Option<Configured>,
     autostart: Option<Autostart>,
@@ -113,10 +119,6 @@ fn install_callbacks(window: &SetupWindow, state: &Shared) {
     });
 }
 
-fn installed(root: &Path) -> bool {
-    root.join("runtime").join("BUILD-MANIFEST.json").is_file()
-}
-
 /// The two lines under the install root: the room on its volume, and whether
 /// a Runtime is already installed there.
 fn refresh_preflight(window: &SetupWindow) {
@@ -129,10 +131,14 @@ fn refresh_preflight(window: &SetupWindow) {
         Err(reason) => format!("可用空间未知 / Free space unknown: {reason}"),
     };
     window.set_free_space_text(free.into());
-    let existing = if installed(&root) {
-        EXISTING
-    } else {
-        "此处没有已安装的 Runtime / No installation here yet"
+    let existing = match upgrade::installed(&root) {
+        Ok(None) => "此处没有已安装的 Runtime / No installation here yet".to_string(),
+        Ok(Some(installed)) => format!(
+            "此处已有安装：runtime {} · ui {}；下一步将升级，保留 state、配置与设置 / Installed here: the next steps upgrade it, keeping state, configuration and settings",
+            short(&installed.runtime_sha),
+            short(&installed.ui_sha)
+        ),
+        Err(reason) => reason,
     };
     window.set_existing_text(existing.into());
 }
@@ -141,6 +147,7 @@ fn next(window: &SetupWindow, state: &Shared) {
     match window.get_step() {
         0 => enter_get(window, state),
         1 => begin_get(window, state),
+        2 if lock(state).upgraded.is_some() => finish(window, state),
         2 => enter_configure(window, state),
         3 => run_configure(window, state),
         _ => {}
@@ -197,17 +204,25 @@ fn fail(state: &Shared, weak: &slint::Weak<SetupWindow>, reason: String) {
 /// first thing the wizard writes — and, online, the release looked up.
 fn enter_get(window: &SetupWindow, state: &Shared) {
     let root = PathBuf::from(window.get_install_root().as_str());
-    let blocked = if !root.is_absolute() {
-        Some("安装根必须是绝对路径 / The install root must be an absolute path".to_string())
-    } else if installed(&root) {
-        Some(EXISTING.to_string())
+    let installed = if root.is_absolute() {
+        upgrade::installed(&root)
     } else {
-        None
+        Err("安装根必须是绝对路径 / The install root must be an absolute path".to_string())
     };
-    if let Some(text) = blocked {
-        window.set_note(text.into());
-        return;
-    }
+    let installed = match installed {
+        Ok(Some(_)) if running_from(&root) => Err(
+            "本引导正从要升级的这份安装里运行：请把 acsetup.exe 复制到别处再运行 / This wizard runs from the installation it would upgrade: copy acsetup.exe elsewhere and run it from there"
+                .to_string(),
+        ),
+        other => other,
+    };
+    let installed = match installed {
+        Ok(installed) => installed,
+        Err(text) => {
+            window.set_note(text.into());
+            return;
+        }
+    };
     let log = match std::fs::create_dir_all(&root)
         .and_then(|()| InstallLog::create(&root, log::unix_ms()))
     {
@@ -224,16 +239,21 @@ fn enter_get(window: &SetupWindow, state: &Shared) {
         }
     };
     window.set_log_path(format!("日志 / Log: {}", log.path().display()).into());
+    let started = format!(
+        "acsetup {} · 安装根 / install root: {}{}",
+        env!("CARGO_PKG_VERSION"),
+        root.display(),
+        installed.as_ref().map_or(String::new(), |installed| format!(
+            " · 升级 / upgrade from runtime {} · ui {}",
+            installed.runtime_sha, installed.ui_sha
+        ))
+    );
     {
         let mut state = lock(state);
         state.root = root.clone();
         state.log = Some(log);
+        state.installed = installed;
     }
-    let started = format!(
-        "acsetup {} · 安装根 / install root: {}",
-        env!("CARGO_PKG_VERSION"),
-        root.display()
-    );
     if let Err(reason) = write_log(state, &started) {
         fail(state, &window.as_weak(), reason);
         return;
@@ -266,26 +286,42 @@ fn find_release(window: &SetupWindow, state: &Shared) {
     let shared = Arc::clone(state);
     let (state, worker_weak) = (Arc::clone(state), weak.clone());
     let spawned = std::thread::Builder::new().name("acsetup-release".into()).spawn(move || {
+        let have = lock(&state)
+            .installed
+            .as_ref()
+            .map(|installed| (installed.runtime_sha.clone(), installed.ui_sha.clone()));
+        // An upgrade reads the release's MEMBERS.json first: the same two
+        // commits need nothing fetched.
         let found = fetch::choose().and_then(|release| {
             release.folder()?;
-            Ok(release)
+            let wanted = have.as_ref().map(|_| fetch::members(&release)).transpose()?;
+            Ok((release, wanted))
         });
-        let line = match &found {
-            Ok(release) => release_line(release),
-            Err(reason) => reason.clone(),
+        let (line, current) = match &found {
+            Ok((release, wanted)) => {
+                let mut line = release_line(release);
+                if let (Some(have), Some(wanted)) = (&have, wanted) {
+                    line.push('\n');
+                    line.push_str(&upgrade_line(have, wanted));
+                }
+                (line, wanted.is_some() && wanted.as_ref() == have.as_ref())
+            }
+            Err(reason) => (reason.clone(), false),
         };
         if let Err(reason) = write_log(&state, &line) {
             fail(&state, &worker_weak, reason);
             return;
         }
-        let found = found.ok();
+        let found = found.ok().filter(|_| !current).map(|(release, _)| release);
         let ok = found.is_some();
         lock(&state).release = found;
         let _ = worker_weak.upgrade_in_event_loop(move |window| {
             window.set_busy(false);
             window.set_release_text(line.into());
             window.set_can_next(ok || window.get_offline());
-            if !ok {
+            if current {
+                window.set_note(UP_TO_DATE.into());
+            } else if !ok {
                 window.set_note(
                     "可勾选「离线」改用已下载的发布件文件夹；勾上再取消即重新查询 / Tick Offline to use a folder of downloaded release files; tick and untick it to look up again"
                         .into(),
@@ -296,6 +332,33 @@ fn find_release(window: &SetupWindow, state: &Shared) {
     if let Err(error) = spawned {
         window.set_busy(false);
         fail(&shared, &weak, thread_failed(&error));
+    }
+}
+
+const UP_TO_DATE: &str = "已是这个发布件的版本，无需升级 / Already at this release's version: nothing to upgrade";
+
+/// What an upgrade replaces with what.
+fn upgrade_line(have: &(String, String), wanted: &(String, String)) -> String {
+    format!(
+        "升级 / Upgrade: runtime {} → {} · ui {} → {}",
+        short(&have.0),
+        short(&wanted.0),
+        short(&have.1),
+        short(&wanted.1)
+    )
+}
+
+fn short(sha: &str) -> &str {
+    sha.get(..8).unwrap_or(sha)
+}
+
+/// Whether this wizard's own executable lies under `root`: its directory could
+/// not move aside while it runs.
+fn running_from(root: &Path) -> bool {
+    let exe = std::env::current_exe().and_then(|exe| exe.canonicalize());
+    match (exe, root.canonicalize()) {
+        (Ok(exe), Ok(root)) => exe.starts_with(root),
+        _ => false,
     }
 }
 
@@ -325,7 +388,31 @@ fn begin_get(window: &SetupWindow, state: &Shared) {
             );
             return;
         }
-        let line = format!("发布件文件夹 / download folder: {}", download.display());
+        let have = lock(state)
+            .installed
+            .as_ref()
+            .map(|installed| (installed.runtime_sha.clone(), installed.ui_sha.clone()));
+        let mut line = format!("发布件文件夹 / download folder: {}", download.display());
+        if let Some(have) = &have {
+            let members = download.join("MEMBERS.json");
+            let wanted = std::fs::read_to_string(&members)
+                .map_err(|error| format!("读取失败 / read failed: {}: {error}", members.display()))
+                .and_then(|text| verify::members_of(&text));
+            match wanted {
+                Ok(wanted) if &wanted == have => {
+                    window.set_note(UP_TO_DATE.into());
+                    return;
+                }
+                Ok(wanted) => {
+                    line.push_str(" · ");
+                    line.push_str(&upgrade_line(have, &wanted));
+                }
+                Err(reason) => {
+                    window.set_note(reason.into());
+                    return;
+                }
+            }
+        }
         if let Err(reason) = write_log(state, &line) {
             fail(state, &window.as_weak(), reason);
             return;
@@ -397,11 +484,20 @@ fn begin_verify(window: &SetupWindow, state: &Shared) {
     let spawned = std::thread::Builder::new().name("acsetup-verify".into()).spawn(move || {
         let (state, weak) = (state, worker_weak);
         let mut report = reporter(&state, &weak);
-        let outcome = verify::run(&download, &staging, &mut report)
-            .and_then(|verified| install::lay_out(&root, &verified, &mut report));
+        let upgrading = lock(&state).installed.is_some();
+        let outcome = verify::run(&download, &staging, &mut report).and_then(|verified| {
+            match upgrading {
+                true => upgrade::upgrade(&root, &verified, &mut report)
+                    .map(|upgraded| (upgraded.laid_out.clone(), Some(upgraded))),
+                false => install::lay_out(&root, &verified, &mut report).map(|laid_out| (laid_out, None)),
+            }
+        });
         match outcome {
-            Ok(laid_out) => {
-                lock(&state).laid_out = Some(laid_out);
+            Ok((laid_out, upgraded)) => {
+                let mut locked = lock(&state);
+                locked.laid_out = Some(laid_out);
+                locked.upgraded = upgraded;
+                drop(locked);
                 let _ = weak.upgrade_in_event_loop(|window| {
                     window.set_busy(false);
                     window.set_can_next(true);
@@ -425,6 +521,15 @@ fn begin_verify(window: &SetupWindow, state: &Shared) {
     if let Err(error) = spawned {
         fail(&shared, &weak, thread_failed(&error));
     }
+}
+
+/// Step 2 → 4 on an upgrade: the configuration, the settings and the Startup
+/// launcher stay as they were; the summary says what was replaced.
+fn finish(window: &SetupWindow, state: &Shared) {
+    window.set_summary(summary(state).into());
+    window.set_note("".into());
+    window.set_step(4);
+    window.set_can_next(false);
 }
 
 /// Step 2 → 3: the configure page, its state root defaulted once.
@@ -492,6 +597,19 @@ fn run_configure(window: &SetupWindow, state: &Shared) {
 fn summary(state: &Shared) -> String {
     let state = lock(state);
     let mut lines = vec![format!("安装根 / Install root: {}", state.root.display())];
+    if let (Some(installed), Some(upgraded)) = (&state.installed, &state.upgraded) {
+        lines.push(format!(
+            "已升级 / Upgraded from runtime {} · ui {}",
+            short(&installed.runtime_sha),
+            short(&installed.ui_sha)
+        ));
+        lines.push(format!("被替换的版本 / Version replaced, kept in: {}", upgraded.previous.display()));
+        lines.push(match &upgraded.restarted {
+            Some(log) => format!("Runtime 已用新版本重新拉起 / restarted on the new version; 日志 / log: {}", log.display()),
+            None => "Runtime 升级前未在运行，未拉起 / was not running, not started".to_string(),
+        });
+        lines.push("状态根、配置、监控台设置与开机自启保持不变 / State, configuration, console settings and autostart are unchanged".to_string());
+    }
     if let Some(laid_out) = &state.laid_out {
         lines.push(format!("Runtime: {}", laid_out.actingd_exe.display()));
         lines.push(format!("监控台 / Console: {}", laid_out.acui_exe.display()));
