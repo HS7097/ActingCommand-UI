@@ -181,7 +181,7 @@ export component SetupWindow inherits Window {
                     }
                     if !root.offline: Body { text: root.release-text; }
                     if !root.offline: Caption {
-                        text: "从伞仓 Releases（github.com/HS7097/ActingCommand/releases）取发布件：有正式版取最新正式版，否则取最新预发布（每日构建）。只下载 SHA256SUMS、MEMBERS.json 和 SHA256SUMS 列出的文件，存到 <安装根>\\downloads\\<标签>\\；下一步按同样的规则校验。这是本程序唯一的联网代码。\nFrom the umbrella Releases: the newest stable release when there is one, else the newest pre-release (a daily build). Only SHA256SUMS, MEMBERS.json and what SHA256SUMS lists are fetched, into <install root>\\downloads\\<tag>\\, and verified next exactly like a folder filled by hand. This is the program's only network code.";
+                        text: "从伞仓 Releases（github.com/HS7097/ActingCommand/releases）取发布件：有正式版取最新正式版，否则取最新预发布（每日构建）。只下载 SHA256SUMS、MEMBERS.json 和 SHA256SUMS 列出的文件，存到 <安装根>\\downloads\\<标签>\\；下一步按同样的规则校验。它与第 4 步下载资源包网址是本程序仅有的联网代码。\nFrom the umbrella Releases: the newest stable release when there is one, else the newest pre-release (a daily build). Only SHA256SUMS, MEMBERS.json and what SHA256SUMS lists are fetched, into <install root>\\downloads\\<tag>\\, and verified next exactly like a folder filled by hand. This and step 4's fetch of a resource package URL are the program's only network code.";
                     }
                     if root.offline: LineEdit {
                         text <=> root.download-dir;
