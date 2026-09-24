@@ -173,7 +173,7 @@ pub fn write(root: &Path, chosen: &[Chosen], report: Report<'_>) -> Result<(), S
 }
 
 /// The Runtime restarted on the configuration `write` put in place, so it
-/// binds the instances. Returns what `actingctl status` then says.
+/// binds the instances. Returns what `actingctl status` then says of them.
 pub fn restart(root: &Path, report: Report<'_>) -> Result<String, String> {
     let paths = paths(root)?;
     ensure_running(root, &paths, true, report)?;
@@ -181,7 +181,7 @@ pub fn restart(root: &Path, report: Report<'_>) -> Result<String, String> {
     match out.success {
         true => {
             report("Runtime 已按新配置运行 / the Runtime runs with the new configuration")?;
-            Ok(out.stdout.trim().to_string())
+            Ok(status_line(out.stdout.trim()))
         }
         false => Err(format!(
             "Runtime 已重启，但 status 未应答（退出码 {}）/ restarted, but status did not answer (exit {}): {}",
@@ -190,6 +190,28 @@ pub fn restart(root: &Path, report: Report<'_>) -> Result<String, String> {
             out.stderr.trim()
         )),
     }
+}
+
+/// Each instance `actingctl status` lists, with whether a lease holds it — the
+/// rest of its answer (every capability claim) is the console's to show.
+/// Output that does not read as a status is kept whole.
+fn status_line(stdout: &str) -> String {
+    let document: Value = serde_json::from_str(stdout).unwrap_or_default();
+    let Some(listed) = document["instances"].as_array() else {
+        return stdout.to_string();
+    };
+    let instances: Vec<String> = listed
+        .iter()
+        .map(|item| {
+            let lease = match item["lease_active"].as_bool() {
+                Some(true) => "租约占用 / leased",
+                Some(false) => "空闲 / idle",
+                None => "租约未知 / lease unknown",
+            };
+            format!("{}（{lease}）", item["instance_alias"].as_str().unwrap_or("?"))
+        })
+        .collect();
+    format!("{} 个实例 / instances: {}", instances.len(), instances.join("、"))
 }
 
 /// A local package as an absolute path to a file; an `https://` one fetched
