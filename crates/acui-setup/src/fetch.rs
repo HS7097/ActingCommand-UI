@@ -201,7 +201,8 @@ pub fn fetch_url(
         return Err(discard(&part, reason));
     }
     if path.exists() {
-        report(&format!("替换已有的 / replacing the existing {}", path.display()))?;
+        report(&format!("替换已有的 / replacing the existing {}", path.display()))
+            .map_err(|error| discard(&part, error))?;
     }
     if let Err(error) = fs::rename(&part, &path) {
         return Err(discard(&part, format!("无法改名 / cannot rename {}: {error}", part.display())));

@@ -87,8 +87,13 @@ pub struct Settled {
 pub fn settle(root: &Path, report: Report<'_>) -> Result<Settled, String> {
     let paths = paths(root)?;
     let mumu_root = read_config(&paths)?["mumu_root"].as_str().map(str::to_string);
-    let running = runtime::runtime_answers(&paths.actingctl, &paths.state_root, report)
-        .map(|answers| answers.is_ok());
+    // `runtime-info.json` there without an answer may be a Runtime still
+    // starting or stuck: not confirmed, rather than not running.
+    let running = match runtime::runtime_answers(&paths.actingctl, &paths.state_root, report) {
+        Ok(Ok(())) => Ok(true),
+        Ok(Err(None)) => Ok(false),
+        Ok(Err(Some(reason))) | Err(reason) => Err(reason),
+    };
     Ok(Settled { mumu_root, running })
 }
 
@@ -230,8 +235,9 @@ fn set_config(paths: &Paths, report: Report<'_>, edit: impl FnOnce(&mut Value)) 
     let candidate = paths
         .config
         .with_file_name(format!("actingd.config.candidate-{}.json", std::process::id()));
-    fs::write(&candidate, candidate_text)
-        .map_err(|error| format!("写入失败 / write failed: {}: {error}", candidate.display()))?;
+    fs::write(&candidate, candidate_text).map_err(|error| {
+        fetch::discard(&candidate, format!("写入失败 / write failed: {}: {error}", candidate.display()))
+    })?;
     if let Err(reason) = runtime::check_config(&paths.actingd, &candidate) {
         let reason = format!("{reason}\n配置未改动 / the configuration was not changed");
         return Err(fetch::discard(&candidate, reason));
@@ -243,7 +249,9 @@ fn set_config(paths: &Paths, report: Report<'_>, edit: impl FnOnce(&mut Value)) 
         );
         return Err(fetch::discard(&candidate, reason));
     }
-    report(&format!("配置已更新并通过检查 / configuration updated and checked: {}", paths.config.display()))
+    let path = paths.config.display();
+    report(&format!("配置已更新并通过检查 / configuration updated and checked: {path}"))
+        .map_err(|error| format!("{error}\n配置已替换为新内容 / the configuration was replaced: {path}"))
 }
 
 fn read_config(paths: &Paths) -> Result<Value, String> {

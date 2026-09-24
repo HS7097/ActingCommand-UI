@@ -710,7 +710,8 @@ fn retryable(state: &Shared, weak: &slint::Weak<SetupWindow>, reason: String) {
         None => write_log(state, &format!("未完成 / not done: {reason}")),
     };
     if let Err(error) = logged {
-        fail(state, weak, format!("{reason}\n{error}"));
+        let text = if reason.contains(&error) { reason } else { format!("{reason}\n{error}") };
+        fail(state, weak, text);
         return;
     }
     let _ = weak.upgrade_in_event_loop(move |window| {
