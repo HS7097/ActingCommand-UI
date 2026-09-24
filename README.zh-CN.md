@@ -371,7 +371,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 `crates/acui-setup` 是一个独立的二进制 `acsetup.exe`（Slint 窗口，与监控台同一套样式与图标），把
 伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases) 里的发布件装成一份**按用户**的安装。
 它随 UI 仓的 Windows 构建产物一起发布（`acui-windows-<sha>.zip` 里多一个 `acsetup.exe`）。
-它自己去取发布件，也可以用人手工下好的文件夹。一个窗口，只有下一步，五步：
+它自己去取发布件，也可以用人手工下好的文件夹。一个窗口，只有下一步（第 4 步可跳过），六步：
 
 0. **位置**：只有安装根（可改，默认 `%LOCALAPPDATA%\Programs\ActingCommand`，不需要管理员）、该卷的
    可用空间、此处是否已有安装（看 `runtime\BUILD-MANIFEST.json`，写出它与 `ui\` 清单的提交号；已有就是
@@ -384,8 +384,9 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    声明的长度才改名，1 MiB 以上的文件每满十分之一写一行进度；目录里已有的同名文件重新下载，从不直接采信，
    下载失败的 `.part` 文件会删掉。标签与每个文件名都只在只含字母、数字、`.`、`-`、`_`，不以点开头，且不是
    Windows 设备名时才使用。只走 HTTPS（重定向也一样）；连接一分钟没有数据即失败。改勾**离线**则用一个已放好同一发布件全部文件的文件夹（默认
-   `%USERPROFILE%\Downloads`，路径直接填）。查询失败写在页面与日志里，离线仍可选（勾上再取消即重新查询）；下载失败则停下。这是
-   程序唯一的联网代码（`ureq`，阻塞式，rustls 加编译进去的 Mozilla 根证书）；Runtime 没有任何联网代码。
+   `%USERPROFILE%\Downloads`，路径直接填）。查询失败写在页面与日志里，离线仍可选（勾上再取消即重新查询）；下载失败则停下。这与
+   第 4 步下载资源包网址是程序仅有的联网代码（`ureq`，阻塞式，rustls 加编译进去的 Mozilla 根证书）；
+   Runtime 没有任何联网代码。
 2. **校验与铺开**，一步做完：要求文件夹里有 `SHA256SUMS`、`MEMBERS.json`、`actingcommand-runtime-<sha>.zip`、
    `actingcommand-tools-<sha>.zip`、`acui-windows-<sha>.zip`（`<sha>` 取 `MEMBERS.json` 的
    `runtime_sha` / `ui_sha`，三个 zip 必须在 `SHA256SUMS` 里）。逐条核对 `SHA256SUMS`；解压到安装根
@@ -403,15 +404,30 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `deny_unknown_fields`，多一个字段都不写。再写监控台设置 `%APPDATA%\ActingCommand\acui.toml` 的
    `state_root`、`actingd_config`、`actingd_exe`（同「设置文件」一节的格式，单引号字面量；已有的
    `lang` / `text_size` 原样保留）。写法与 `crates/acui-app/src/settings.rs` 一致，但 `acui-setup`
-   不依赖 `acui-app`，是一份小的重复写入器。**实例（模拟器 / 设备）不在引导里配置**，`instances`
-   留空，之后点监控台顶栏的「实例配置」按钮添加；完成页也这样写。
+   不依赖 `acui-app`，是一份小的重复写入器。这里 `instances` 留空，由第 4 步填。
    **开机自启**在同一页（可选，默认不勾）：勾了才写按用户的启动文件夹里的
    `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd`，内容是
    `start "" "<安装根>\runtime\actingcommand-actingd.exe" --config "<安装根>\actingd.config.json"`；
    再勾「同时拉起监控台」才多一行 `start "" "<安装根>\ui\acui.exe"`。批处理里不出现 acsetup。
    不勾就什么也不写；启动文件夹里已有的同名文件不动，只在完成页说一句。
-4. **完成**：「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe` 并关闭引导；「完成」只关闭。
-   新装时引导从不拉起 actingd，由监控台的启动器拉。
+4. **实例**，可选：「跳过」让 `instances` 留空，之后点监控台顶栏的「实例配置」按钮添加；完成页也这样写。
+   可填 MuMu 安装目录（存在的文件夹的绝对路径），再点「发现实例」：目录经与下文同样的候选文件与
+   `check-config` 写成 `mumu_root`——输入框为空则把它去掉；按下文升级的方式从安装根拉起 Runtime（已应答的
+   先请它关闭再重新拉起：它还没有实例，读的是哪个目录也问不出来）；再用 `actingctl emulator discover` 从
+   MuMu 自己的实例清单列出实例——不启动、不关闭任何模拟器。发现前先清空列表；发现失败写明后页面可继续用，
+   即便目录已经写入。每个勾选的实例填别名（默认 `mumu-<序号>`）、`application_id`（「BlueArchiveJP」
+   按钮填 `com.YostarJP.BlueArchive`）和资源包：已存在文件的绝对路径，或 `https://` 网址——经 `.part`
+   文件下载到 `<安装根>\packages\<序号>\`，文件名取网址最后一段（不是普通文件名时用 `package.zip`；已有的
+   同名文件被替换并写明）；填了 sha256 就核对。「写入实例」为每个
+   勾选的实例写一项——别名、新的 `instance_id`（`instance_` + 系统随机源 32 位十六进制）、
+   `instance_index`、`application_id`、`touch_backend` 为 `adb_shell_input`、`capture_backend` 填了
+   MuMu 目录为 `nemu_ipc` 否则 `adb`、资源包的绝对路径作 `resource_package`——先写进配置旁的
+   `actingd.config.candidate-<pid>.json`，由 Runtime 的 `check-config` 检查（资源包加载不了的，写明别名、
+   路径与加载器的原话）；通过才替换配置，随后重启 Runtime，`actingctl status` 必须应答。替换配置之前的
+   失败写在页面与日志里，页面可继续用；之后的失败停下，任何一次日志写入失败也停下。点过「发现实例」的，
+   离开第 4 步时再问一次 `mumu_root` 的现值与 Runtime 是否应答，写进摘要。
+5. **完成**：「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe` 并关闭引导；「完成」只关闭。
+   第 4 步拉起的 Runtime 继续运行；没有在运行的，由监控台的启动器拉起。
 
 **升级**：安装根里已有安装时。第 1 步先读发布件的 `MEMBERS.json`（联网时只读不存，离线时读文件夹里的），
 与已装清单的两个提交号比对：两个都相同就停在这里，写「已是这个发布件的版本」，什么也不下载。否则第 2 步
@@ -437,15 +453,17 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 被替换的版本整份留在 `previous\`，只留一份：Runtime 不带状态迁移，也不带回滚，退回去仍是人的决定。
 
 **安装日志**：离开第 0 步起每一步都往 `<安装根>\acsetup-<unix_ms>.log` 追加人话行；失败时最后一行写
-原因，窗口上显示日志路径。除安装载荷、配置、设置、`downloads\` 下取回的发布件、（勾选时的）自启批处理，
-以及升级时的 `previous\` 与重新拉起的 Runtime 日志之外，引导写的文件只有这一个。
+原因，窗口上显示日志路径。除安装载荷、配置、设置、`downloads\` 下取回的发布件、（勾选时的）自启批处理、
+`packages\` 下取回的资源包、引导拉起的 Runtime 的日志，以及升级时的 `previous\` 之外，引导写的文件只有这一个。
 
 **永远不做的事**：不装服务、不建计划任务、不改 PATH、不写注册表；不改配置模板；不碰已有内容的状态根；
-不配置实例；联网只为列出与下载伞仓发布件；只在升级时按上文关闭与拉起 Runtime；不装资源包。Linux 上 crate
+联网只为列出与下载伞仓发布件、下载第 4 步填的资源包网址；只在升级时与第 4 步按上文关闭与拉起 Runtime；
+不解压资源包——由 Runtime 加载。Linux 上 crate
 照常编译（CI 两条腿都跑 `--workspace`），运行即以 `acsetup v1 is Windows-only` 退出。
 
 依赖多四个，都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`
-（`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（salt）、
+（`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（salt 与
+`instance_id`）、
 `ureq`（取件；`default-features = false`，只开 `tls`：rustls、它的 `ring` 实现与编译进去的
 `webpki-roots`，不用系统 TLS 库）。
 

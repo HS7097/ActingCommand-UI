@@ -496,7 +496,7 @@ console) that installs the release files from the umbrella repository's
 [Releases](https://github.com/HS7097/ActingCommand/releases) into a **per-user** installation. It ships
 together with the UI repository's Windows build artifact (`acui-windows-<sha>.zip` gains one more file,
 `acsetup.exe`). It fetches the release itself, or takes a folder a person filled by hand. One window,
-next only, five steps:
+next only (step 4 can also be skipped), six steps:
 
 0. **Location**: the install root only (changeable, default `%LOCALAPPDATA%\Programs\ActingCommand`, no
    administrator needed), the free space on that volume, and whether an installation is already here
@@ -515,8 +515,9 @@ next only, five steps:
    device name. HTTPS only, redirects included; a connection quiet for a minute fails. Ticking **Offline**
    instead takes a folder that already holds one release's files (default `%USERPROFILE%\Downloads`,
    typed in). A failed lookup is stated on the page and in the log and leaves Offline open (ticking and
-   unticking it looks up again); a failed fetch stops the run. This is the program's only network code (`ureq`, blocking, rustls with the
-   Mozilla root set compiled in); the Runtime has none.
+   unticking it looks up again); a failed fetch stops the run. This and step 4's fetch of a package URL
+   are the program's only network code (`ureq`, blocking, rustls with the Mozilla root set compiled in);
+   the Runtime has none.
 2. **Verify and lay out**, one step: the folder is required to hold `SHA256SUMS`, `MEMBERS.json`,
    `actingcommand-runtime-<sha>.zip`, `actingcommand-tools-<sha>.zip` and `acui-windows-<sha>.zip`
    (`<sha>` taken from `MEMBERS.json`'s `runtime_sha` / `ui_sha`; the three zips must appear in
@@ -540,9 +541,8 @@ next only, five steps:
    console settings `%APPDATA%\ActingCommand\acui.toml` are written with `state_root`, `actingd_config`
    and `actingd_exe` (the format of the "Settings file" section, single-quoted literals; existing `lang` /
    `text_size` kept verbatim). The way it writes matches `crates/acui-app/src/settings.rs`, but
-   `acui-setup` does not depend on `acui-app` and is a small duplicate writer. **Instances (emulators /
-   devices) are not configured in the wizard**; `instances` is left empty and they are added afterwards
-   with the console's top-bar 实例配置 / Instance Configuration button; the finish page says so.
+   `acui-setup` does not depend on `acui-app` and is a small duplicate writer. `instances` stays empty
+   here; step 4 fills it.
    **Start at boot** is on the same page (optional, unchecked by default): only when checked does it write
    `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd` in the per-user startup
    folder, whose content is
@@ -551,9 +551,31 @@ next only, five steps:
    `start "" "<install root>\ui\acui.exe"`. acsetup does not appear in the batch file. Unchecked, it
    writes nothing; a file of the same name already in the startup folder is left alone, and merely
    mentioned in one sentence on the finish page.
-4. **Finish**: "启动监控台 / Open console" launches `<install root>\ui\acui.exe` detached and closes the
-   wizard; "finish" only closes. After a fresh install the wizard never launches actingd — the console's
-   launcher does.
+4. **Instances**, optional: "跳过 / Skip" leaves `instances` empty, to be filled later with the
+   console's top-bar 实例配置 / Instance Configuration button; the finish page says so. An optional MuMu
+   folder (an existing absolute folder) and "发现实例 / Discover": the folder is written as `mumu_root` —
+   an empty field takes it out — through the same candidate and `check-config` as below; a Runtime is
+   started from the install root as on an upgrade below (one that answers is shut down and started again:
+   it has no instance yet, and which folder it read cannot be asked); and `actingctl emulator discover`
+   lists the instances from MuMu's own inventory — no emulator is started or stopped. The list is cleared
+   first, and a failed Discover is said and leaves the page usable, even with the folder already written.
+   Each ticked instance takes an alias (default `mumu-<index>`), an `application_id` (a BlueArchiveJP
+   button fills `com.YostarJP.BlueArchive`) and a resource package: the absolute path of an existing
+   file, or an `https://` URL fetched through a `.part` file into `<install root>\packages\<index>\`,
+   named by the URL's last path segment when that is a plain name, else `package.zip` (a file already
+   there is replaced, and said so); a sha256 given is compared. "写入实例 / Apply" writes one entry per ticked instance — alias, a
+   new `instance_id` (`instance_` + 32 hex from the OS RNG), `instance_index`, `application_id`,
+   `touch_backend` `adb_shell_input`, `capture_backend` `nemu_ipc` with a MuMu folder else `adb`, and the
+   package's absolute path as `resource_package` — into `actingd.config.candidate-<pid>.json` next to the
+   configuration. The Runtime's `check-config` checks it (a package that does not load is named with its
+   alias, path and the loader's message); only an accepted candidate replaces the configuration, and the
+   Runtime is restarted on it and `actingctl status` must answer. A failure before the configuration is
+   replaced is said on the page and in the log and leaves the page usable; one after it stops the run, as
+   does any failed log write. Leaving step 4 after a Discover asks again, for the summary, what
+   `mumu_root` is and whether a Runtime answers.
+5. **Finish**: "启动监控台 / Open console" launches `<install root>\ui\acui.exe` detached and closes the
+   wizard; "finish" only closes. A Runtime step 4 started keeps running; when none runs, the console's
+   launcher starts one.
 
 **Upgrade**, on a root that already holds an installation. Step 1 reads the release's `MEMBERS.json`
 first (online without saving it, offline from the folder) and compares its two commits with the ones the
@@ -592,19 +614,20 @@ person's choice.
 **Install log**: from leaving step 0 onward every step appends a plain-language line to
 `<install root>\acsetup-<unix_ms>.log`; on failure the last line states the reason, and the window shows
 the log path. Apart from the installed payload, the configuration, the settings, the fetched release
-files under `downloads\`, (when checked) the start-at-boot batch file and, on an upgrade, `previous\` and
-the restarted Runtime's log, this is the only file the wizard writes.
+files under `downloads\`, (when checked) the start-at-boot batch file, the packages fetched into
+`packages\`, and the log of a Runtime it started, this is the only file the wizard writes (with
+`previous\` on an upgrade).
 
 **Things it never does**: it does not install a service, does not create a scheduled task, does not change
 PATH, does not write the registry; does not modify the configuration template; does not touch a state root
-that already holds content; does not configure instances; goes on the network only to list and fetch the
-umbrella release; stops or starts the Runtime only on an upgrade, as above; does not install resource
-packs. On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
+that already holds content; goes on the network only to list and fetch the umbrella release and a
+package URL given in step 4; stops or starts the Runtime only on an upgrade and in step 4, as above;
+does not unpack resource packages — the Runtime loads them. On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
 immediately with `acsetup v1 is Windows-only`.
 
 Four dependencies are added, each with its purpose noted in `[workspace.dependencies]`: `sha2`
 (verification), `zip` (`default-features = false`, only `deflate` enabled, the same version line the
-Runtime locks), `getrandom` (the salt) and `ureq` (the fetch; `default-features = false` with only `tls`:
+Runtime locks), `getrandom` (the salt and `instance_id`) and `ureq` (the fetch; `default-features = false` with only `tls`:
 rustls, its `ring` provider and the compiled-in `webpki-roots`, so no system TLS library).
 
 ## Four layers, four crates
