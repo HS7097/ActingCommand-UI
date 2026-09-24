@@ -94,18 +94,23 @@ pub fn upgrade(root: &Path, verified: &Verified, report: Report<'_>) -> Result<U
         older: None,
         moved: Vec::new(),
         stopped: false,
+        confirmed: false,
+        made_previous: false,
         unanswered: None,
     };
     let laid_out = match swap.lay(verified, &state_root, report) {
         Ok(laid_out) => laid_out,
         Err(reason) => {
-            let mut reason = swap.undo(reason);
+            let (mut reason, clean) = swap.undo(reason);
             if swap.stopped {
                 reason.push('\n');
-                if state_root.join("runtime-info.json").is_file() {
+                if !swap.confirmed {
                     // The shutdown was not confirmed: a second Runtime would
                     // contend for the same state root.
                     reason.push_str(UNCONFIRMED_NOTE);
+                } else if !clean {
+                    // What is in `runtime\` may not be the version installed.
+                    reason.push_str(STOPPED_NOTE);
                 } else {
                     // Everything is back: the Runtime starts again on the
                     // version that stays installed.
@@ -115,7 +120,7 @@ pub fn upgrade(root: &Path, verified: &Verified, report: Report<'_>) -> Result<U
                             "Runtime 已用原版本重新拉起 / the Runtime was started again on the version still installed; 日志 / log: {}",
                             log.display()
                         ),
-                        Err(failed) => format!("{STOPPED_NOTE}\n{failed}"),
+                        Err(failed) => failed,
                     });
                 }
             }
@@ -124,18 +129,18 @@ pub fn upgrade(root: &Path, verified: &Verified, report: Report<'_>) -> Result<U
     };
     // The new version is in place: from here nothing is put back, since a
     // Runtime started on it may already have touched state.
-    swap.drop_older(report)?;
+    let laid = format!(
+        "新版本已铺开；被替换的版本在 / The new version is laid out; the version replaced is in: {}",
+        swap.previous.display()
+    );
     let restarted = match swap.stopped {
-        true => Some(restart(root, &laid_out.actingd_exe, &config, &state_root, report).map_err(
-            |reason| {
-                format!(
-                    "{reason}\n新版本已铺开；被替换的版本在 / The new version is laid out; the version replaced is in: {}",
-                    swap.previous.display()
-                )
-            },
-        )?),
+        true => Some(
+            restart(root, &laid_out.actingd_exe, &config, &state_root, report)
+                .map_err(|reason| format!("{reason}\n{laid}"))?,
+        ),
         false => None,
     };
+    swap.drop_older(report).map_err(|reason| format!("{reason}\n{laid}"))?;
     Ok(Upgraded { laid_out, previous: swap.previous, restarted })
 }
 
@@ -147,8 +152,12 @@ struct Swap<'a> {
     /// is laid out.
     older: Option<PathBuf>,
     moved: Vec<&'static str>,
-    /// Whether the Runtime was asked to shut down.
+    /// Whether the Runtime was asked to shut down, and whether its shutdown
+    /// was confirmed.
     stopped: bool,
+    confirmed: bool,
+    /// Whether this upgrade made `previous\`, so a failure removes it.
+    made_previous: bool,
     /// Why a `runtime-info.json` that is there was taken as no Runtime.
     unanswered: Option<String>,
 }
@@ -165,6 +174,7 @@ impl Swap<'_> {
         }
         fs::create_dir(&self.previous)
             .map_err(|error| format!("无法创建 / cannot create {}: {error}", self.previous.display()))?;
+        self.made_previous = true;
         // The Runtime first: one the console started works in `ui\`, which
         // cannot move while it runs.
         let ctl = verified.runtime.dir.join(ACTINGCTL);
@@ -173,6 +183,7 @@ impl Swap<'_> {
                 self.stopped = true;
                 report("请求 Runtime 关闭并等待 / asking the Runtime to shut down, and waiting")?;
                 request_shutdown(&ctl, state_root)?;
+                self.confirmed = true;
                 report("Runtime 已关闭 / the Runtime has shut down")?;
             }
             Err(unanswered) => self.unanswered = unanswered,
@@ -201,8 +212,10 @@ impl Swap<'_> {
     }
 
     /// Puts everything moved back where it was, the version kept from before
-    /// included, and says what could not be and whether the Runtime is stopped.
-    fn undo(&mut self, mut reason: String) -> String {
+    /// included, and says what could not be; `true` when everything went back.
+    fn undo(&mut self, reason: String) -> (String, bool) {
+        let first = reason.len();
+        let mut reason = reason;
         for name in self.moved.iter().rev() {
             let placed = self.root.join(name);
             if placed.exists() {
@@ -222,7 +235,7 @@ impl Swap<'_> {
                 ));
             }
         }
-        if self.previous.exists() {
+        if self.made_previous {
             if let Err(error) = fs::remove_dir(&self.previous) {
                 reason.push_str(&format!("\n未能删除 / not removed: {}: {error}", self.previous.display()));
             }
@@ -236,7 +249,8 @@ impl Swap<'_> {
                 ));
             }
         }
-        reason
+        let clean = reason.len() == first;
+        (reason, clean)
     }
 
     /// The version from the upgrade before, no longer needed once this one is
@@ -407,7 +421,9 @@ fn restart(
     }
     let mut child = command
         .spawn()
-        .map_err(|error| format!("无法拉起新 Runtime / cannot start the new Runtime: {error}"))?;
+        .map_err(|error| {
+            format!("无法拉起 Runtime，现在未运行 / cannot start the Runtime, which is not running: {error}")
+        })?;
     let info = state_root.join("runtime-info.json");
     let deadline = Instant::now() + READY_TIMEOUT;
     while Instant::now() < deadline {
