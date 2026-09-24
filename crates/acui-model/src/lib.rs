@@ -4,11 +4,12 @@
 //! human-facing wording — every name a person reads is chosen in `acui-app`,
 //! which is the only crate that holds the two language tables.
 //!
-//! The view reads from the latest end: backward windows of `WINDOW` positions,
-//! newest first on screen. The ledger query has no descending order, but a
-//! window of `WINDOW` positions holds at most one page's worth of events, so
-//! one query reads it, following the cursor only when the reply's byte limit
-//! splits it.
+//! The view reads from the latest end: backward windows of positions, newest
+//! first on screen. The ledger query has no descending order, but a window of
+//! `WINDOW` positions holds at most one page's worth of events, so one query
+//! reads it. A window that comes back sparse widens the next, up to
+//! `MAX_WIDTH`; a wider one may take more than one page, read by following the
+//! cursor, as the reply's byte limit may split any window.
 
 mod frame_group;
 mod overlay;
@@ -29,9 +30,16 @@ use acui_rows::{
 /// Positions one backward window spans: never more events than one page's
 /// event limit.
 pub const WINDOW: u64 = MAX_RUNTIME_EVENT_QUERY_EVENTS as u64;
+/// The widest a backward window grows while the windows come back sparse.
+pub const MAX_WIDTH: u64 = WINDOW * 16;
+/// The performance monitor's event types that are `Info` from every writer,
+/// as the ledger names them: the ledger itself leaves them out while the view
+/// hides routine performance events. `perf.summary` is not among them: the
+/// capacity monitor writes it as a warning or an error under disk pressure.
+const ROUTINE_PERFORMANCE: [&str; 2] = ["perf.pressure_ended", "perf.monitor_recovered"];
 /// Rows one fill aims to add, and the most windows it ever reads to get them;
-/// the console also stops a fill at a time budget, since every query costs the
-/// Runtime a read of the whole ledger.
+/// the console also stops a fill at a time budget, since every query is served
+/// on the Runtime's ledger writer.
 pub const FILL_ROWS: usize = MAX_RUNTIME_EVENT_QUERY_EVENTS as usize;
 pub const FILL_WINDOWS: usize = 16;
 use serde::de::DeserializeOwned;
@@ -53,10 +61,11 @@ pub enum QueryError {
 
 /// Filter state, turned into one `EventQuery` and re-run against the ledger.
 /// Nothing here filters rows the console already holds, with one exception
-/// the view states: the performance monitor's routine events (below Warning),
-/// which the ledger query cannot exclude, are dropped from each window read
-/// and counted — unless shown here, picked as the module, or on the Health
-/// tab, which is made of them. Its warnings and errors always show.
+/// the view states: the performance monitor's routine events are hidden —
+/// the two types that are always `Info` left out by the ledger, its other
+/// events below Warning dropped from each window read and counted — unless
+/// shown here, picked as the module, or on the Health tab, which is made of
+/// them. Its warnings and errors always show.
 #[derive(Debug, Clone, Default)]
 pub struct Filters {
     pub show_performance: bool,
@@ -247,6 +256,8 @@ pub struct ViewModel {
     /// The position this view reads down from, and the lowest one read so far.
     upper: u64,
     lowest_read: Option<u64>,
+    /// The span of the next backward window: `WINDOW`, widened while sparse.
+    width: u64,
     hidden_performance: usize,
     scope: ReadScope,
     snapshot_position: u64,
@@ -273,6 +284,7 @@ impl ViewModel {
             recovery: Vec::new(),
             upper: snapshot_position,
             lowest_read: None,
+            width: WINDOW,
             hidden_performance: 0,
             scope: ReadScope { range: None, read_complete: true },
             snapshot_position,
@@ -287,8 +299,21 @@ impl ViewModel {
         self.span
     }
 
+    /// The filters' query, the routine performance types left out by the
+    /// ledger while they are hidden.
     pub fn query(&self) -> Result<EventQuery, QueryError> {
-        self.filters.query(self.tab)
+        let mut query = self.filters.query(self.tab)?;
+        if self.hides_performance() {
+            query.exclude_event_types = ROUTINE_PERFORMANCE
+                .iter()
+                .map(|name| parse_id(name))
+                .collect::<Option<_>>()
+                .ok_or_else(|| QueryError::Rejected("routine_performance_type_unknown".into()))?;
+            query
+                .validate()
+                .map_err(|error| QueryError::Rejected(error.code().to_string()))?;
+        }
+        Ok(query)
     }
 
     /// Starts the view over, reading down from `upper`: the pinned position,
@@ -299,6 +324,7 @@ impl ViewModel {
         self.selected_sequence = None;
         self.upper = upper;
         self.lowest_read = None;
+        self.width = WINDOW;
         self.hidden_performance = 0;
         self.scope = ReadScope { range: None, read_complete: true };
     }
@@ -306,7 +332,7 @@ impl ViewModel {
     /// The next window down, `(from, to)`, or `None` once position 1 is read.
     pub fn next_window(&self) -> Option<(u64, u64)> {
         let to = self.lowest_read.map_or(self.upper, |lowest| lowest - 1);
-        (to > 0).then(|| (to.saturating_sub(WINDOW - 1).max(1), to))
+        (to > 0).then(|| (to.saturating_sub(self.width - 1).max(1), to))
     }
 
     pub fn has_earlier(&self) -> bool {
@@ -328,12 +354,15 @@ impl ViewModel {
         self.rows.len()
     }
 
-    /// Routine performance-monitor events dropped from the windows read so far.
+    /// Routine performance-monitor events the ledger did return, dropped from
+    /// the windows read so far; the types it leaves out are not counted.
     pub fn hidden_performance(&self) -> usize {
         self.hidden_performance
     }
 
-    fn hides_performance(&self) -> bool {
+    /// Whether the performance monitor's routine events are hidden: not asked
+    /// for, not the module picked, not the Health tab.
+    pub fn hides_performance(&self) -> bool {
         !self.filters.show_performance
             && self.filters.origin_module != Some(OriginModule::PerformanceMonitor)
             && self.tab != LedgerView::Health
@@ -341,9 +370,18 @@ impl ViewModel {
 
     /// One window read whole — its pages in order — put below the rows already
     /// loaded. The performance monitor's routine events are dropped and counted
-    /// when hidden.
+    /// when hidden. A window that brought back fewer than a quarter page of
+    /// events doubles the next one's span, up to `MAX_WIDTH`; one that brought
+    /// half a page or more puts it back to `WINDOW`.
     pub fn apply_window(&mut self, (from, to): (u64, u64), pages: &[RuntimeEventQueryPage]) {
-        let (mut events, complete) = self.take_window(pages);
+        let (mut events, complete, read) = self.take_window(pages);
+        self.width = if read < WINDOW / 4 {
+            (self.width * 2).min(MAX_WIDTH)
+        } else if read >= WINDOW / 2 {
+            WINDOW
+        } else {
+            self.width
+        };
         events.append(&mut self.rows);
         self.rows = events;
         self.lowest_read = Some(from);
@@ -379,7 +417,7 @@ impl ViewModel {
     /// view's lowest read position becomes this window's, so "read earlier"
     /// reads what lies below it, once.
     pub fn apply_newer_window(&mut self, (from, to): (u64, u64), pages: &[RuntimeEventQueryPage]) {
-        let (mut events, complete) = self.take_window(pages);
+        let (mut events, complete, _) = self.take_window(pages);
         self.rows.append(&mut events);
         self.upper = to;
         self.lowest_read.get_or_insert(from);
@@ -390,13 +428,15 @@ impl ViewModel {
     }
 
     /// A window's events in ledger order, performance-monitor ones dropped and
-    /// counted when hidden, its recovery statements merged; and whether every
-    /// page read its range completely.
-    fn take_window(&mut self, pages: &[RuntimeEventQueryPage]) -> (Vec<ProjectedEvent>, bool) {
+    /// counted when hidden, its recovery statements merged; whether every page
+    /// read its range completely; and how many events the ledger returned.
+    fn take_window(&mut self, pages: &[RuntimeEventQueryPage]) -> (Vec<ProjectedEvent>, bool, u64) {
         let hide = self.hides_performance();
         let mut events = Vec::new();
         let mut complete = true;
+        let mut read = 0;
         for page in pages {
+            read += page.events().len() as u64;
             for event in page.events() {
                 let routine = matches!(event.severity, EventSeverity::Debug | EventSeverity::Info);
                 if hide && routine && event.origin.module() == OriginModule::PerformanceMonitor {
@@ -410,7 +450,7 @@ impl ViewModel {
                 self.absorb_recovery(group);
             }
         }
-        (events, complete)
+        (events, complete, read)
     }
 
     fn absorb_recovery(&mut self, group: &LedgerRunRecovery) {

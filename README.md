@@ -100,7 +100,7 @@ as usual.
 Dependencies are pinned to the Runtime's **main** (`Cargo.toml`):
 
 ```
-rev = "5e462b0a6d1ba730d510ca3d23e658eddbc69114"
+rev = "a1e40e091f400d7cde038c777756aac473cffa75"
 ```
 
 The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
@@ -143,10 +143,14 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   port number; one with an association but absent from the port table (fixtures, serial-port
   configurations, no binding seen) says the abbreviated instance id — no port is invented.
 - **Reading from the latest end**: the ledger query has no descending order, so the timeline reads
-  backward windows of 256 positions down from the pinned position. A window holds no more events than
-  one page's event limit, so one query reads it (following the cursor only when the reply's byte limit
-  splits it), every filter applied by the ledger. Each page query costs the Runtime a read and
-  verification of the whole ledger — online, on its ledger writer — so one fill reads at least one window
+  backward windows down from the pinned position, starting at 256 positions. A window that size holds no
+  more events than one page's event limit, so one query reads it, every filter applied by the ledger. A
+  window that comes back with fewer than 64 events doubles the next one's span, up to 4096 positions; one
+  with 128 or more puts it back to 256. A wider window, and any the reply's byte limit splits, is read by
+  following the cursor, whole — so one fill can add more rows than it aims for. Online, every page query
+  is served on the Runtime's ledger writer (since Runtime `71db072d` it re-verifies only the head, the
+  boundary and a new tail, about 15 ms a page at ten thousand events, where it used to read and verify
+  the whole ledger), so one fill reads at least one window
   and starts no further window once it has 256 more rows, has read position 1, has read 16 windows or has
   run for one second. Rows are listed
   **newest first**; "read earlier" at the bottom continues below what is loaded. The top bar permanently
@@ -162,17 +166,22 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   selection and a frame being read stay, and the task facts come from that same snapshot. Setting a time
   bound while following stops it. The span's end follows the pin: taken from the newer windows when they
   hold the event at the pin, otherwise one more one-event read. A failed tick shows as "following latest:
-  …" beside the view's own error, and stays until a later tick gets past it or following is turned off.
+  …" beside the view's own error; a failed poll stays until a later tick gets past it, and a failed page
+  read also stops the following — a Runtime refusing the query is not asked again every five seconds —
+  until it is turned on again.
   Offline there is no running Runtime writing newer events, and both controls are off.
-- **The performance monitor's routine events are hidden by default**: `perf.summary` arrives every 2
-  seconds and would bury everything else, and the ledger query cannot exclude a module. Unless "show
-  performance monitor" is ticked, the performance monitor is picked as the module, or the Health tab
-  (made of these events) is open, the console drops its events **below Warning** from each window it
-  reads, says how many next to the loaded-row count, and keeps the performance monitor on the module list
-  so it can still be picked. Its warnings and errors (disk pressure, high pressure, failed sampling)
-  always show. The row and level counts on the card cover the loaded rows only. This is the one filter
-  applied to rows the console holds; it moves into the ledger query once the query can exclude event
-  types.
+- **The performance monitor's routine events are hidden by default**: they would bury everything else.
+  Unless "show performance monitor" is ticked, the performance monitor is picked as the module, or the
+  Health tab (made of these events) is open, the query asks the ledger to leave out the two types that are
+  `Info` from every writer — `perf.pressure_ended` and `perf.monitor_recovered` (`exclude_event_types`)
+  — and the console drops the performance monitor's other events **below Warning**, `perf.summary`
+  among them, from each window it reads. `perf.summary` stays with the console because the capacity
+  monitor writes it as a warning or an error under disk pressure. The top bar says how many were dropped;
+  the two types the ledger leaves out are not counted. The performance monitor stays on the module list
+  while any are dropped, so it can still be picked. Its warnings and errors (disk pressure, high
+  pressure, stutter, degraded monitoring, a summary under pressure) always show. The row and level
+  counts on the card cover the loaded rows only. A Runtime before `51ba5565` does not know `exclude_event_types` and refuses the query while
+  events are hidden; ticking "show performance monitor" reads it.
 - **Recovery grouping comes from the ledger**: the `run_recovery` carried on the pages inserts a group row
   above each run's newest row, showing the state the ledger gives (recovered / unresolved / unknown),
   the grounds (row N failed, row M recovered) and the gaps; failure rows the ledger judges recovered are
@@ -244,8 +253,8 @@ under the frame, and the next reload tries again.
 
 On the frame, beside the event's own geometry:
 
-- **The page label** in the top-left corner: the page the recognition on this frame matched, or that it
-  matched none.
+- **The page label** above the frame, beside its title: the page the recognition on this frame matched,
+  or that it matched none. On the frame it would cover the page's own header targets.
 - **The tap mark**: a ringed dot centred on each point of the step's effect intent (`action.x, y`; a
   swipe or drag has one per point). It replaces the event's own `action` geometry, which would draw the
   same input twice.

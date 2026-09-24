@@ -375,9 +375,9 @@ const CURSOR_REST: Duration = Duration::from_millis(400);
 /// Fills the timeline from the latest end at the pinned snapshot: backward
 /// windows, each read whole, until `FILL_ROWS` more rows show, position 1 is
 /// read, `FILL_WINDOWS` windows were read, or `FILL_BUDGET` has passed — at
-/// least one window each time. Every page query costs the Runtime a read and
-/// verification of the whole ledger (online, on its writer), so what the
-/// budget leaves is for "read earlier"; the top bar states what was read.
+/// least one window each time. Every page query is served on the Runtime's
+/// ledger writer (online), so what the budget leaves is for "read earlier";
+/// the top bar states what was read.
 /// `earlier` continues below what is loaded; otherwise the view starts over
 /// from the pin, or from where a time bound is estimated to fall.
 fn reload(app: &Rc<App>, earlier: bool) {
@@ -575,8 +575,9 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         }
         reload(&app, false)
     });
-    // Shown or hidden again from the pin: the performance monitor's events are
-    // dropped as each window is read, not from rows already held.
+    // Shown or hidden again from the pin: the performance monitor's routine
+    // events are left out by the query or dropped as each window is read, never
+    // from rows already held.
     on!(on_show_performance_changed, |app, model, shown| {
         model.borrow_mut().filters.show_performance = shown;
         reload(&app, false)
@@ -586,7 +587,7 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         reload(&app, false)
     });
     // The bound and its label follow the handle at once; the reload waits
-    // until the handle rests, since each one reads the whole ledger.
+    // until the handle rests, so a drag is one reload, not one per step.
     {
         let weak = window.as_weak();
         let app = Rc::clone(app);
@@ -677,8 +678,8 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
 }
 
 /// How often "follow latest" asks where the ledger is: one fact snapshot,
-/// which reads no ledger and writes nothing. A page query follows only when the
-/// ledger moved; each one costs the Runtime a read of the whole ledger.
+/// which reads no ledger and writes nothing. A page query, served on the
+/// Runtime's ledger writer, follows only when the ledger moved.
 const FOLLOW_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A person's jump to the latest: the pin moves to the Runtime's latest
@@ -751,6 +752,8 @@ fn set_following(window: &AppWindow, app: &Rc<App>, on: bool) {
         refresh(window, app);
         return;
     }
+    // What an earlier following failed at goes once it is turned on again.
+    model.borrow_mut().follow_error = None;
     if let Err(error) = source.repin() {
         model.borrow_mut().query_error = Some(QueryError::ReadFailed(error.to_string()));
         window.set_following(false);
@@ -781,8 +784,9 @@ fn stop_following(window: &AppWindow, app: &App) {
 /// task facts; only when the pin moved, or an earlier tick left windows unread,
 /// are the newer windows read onto the top of the view, and the span's end
 /// follows the pin. No status is read and nothing is written to the ledger. A
-/// failure stays in `follow_error` until a tick gets past it; a time bound set
-/// meanwhile stops the following.
+/// failed poll stays in `follow_error` until a tick gets past it; a failed page
+/// read stays there too and stops the following; a time bound set meanwhile
+/// stops it as well.
 fn follow_tick(window: &AppWindow, app: &Rc<App>) {
     let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
         return;
@@ -844,9 +848,13 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
                 }
             }
         }
-        // After a failed window the span's end waits for the next tick that
-        // moves the pin, rather than spend one more read now.
-        if moved && model.follow_error.is_none() {
+        if model.follow_error.is_some() {
+            // A read that failed stops the following, its reason kept on
+            // screen: a Runtime refusing each query is not asked again every
+            // tick. Turning following on again retries.
+            app.follow.stop();
+            window.set_following(false);
+        } else if moved {
             advance_span(source, &mut model, pin_time);
         }
     }
@@ -1737,7 +1745,7 @@ fn is_input(event: &ProjectedEvent) -> bool {
     code(&event.event_type).starts_with("input.")
 }
 
-/// The page label drawn on the frame: the page the recognition matched, or
+/// The page label shown above the frame: the page the recognition matched, or
 /// that it matched none; nothing before a recognition is read.
 fn page_text(labels: &Labels, group: &FrameGroup) -> String {
     match &group.recognition {
