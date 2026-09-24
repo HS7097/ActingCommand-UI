@@ -119,6 +119,24 @@ pub fn choose() -> Result<Release, String> {
         .ok_or_else(|| "伞仓还没有任何发布件 / The umbrella repository has no release yet".into())
 }
 
+/// The two commits the release's `MEMBERS.json` names, read without saving
+/// anything: what an upgrade compares with what is installed.
+pub fn members(release: &Release) -> Result<(String, String), String> {
+    let asset = release.assets.iter().find(|asset| asset.name == "MEMBERS.json").ok_or_else(|| {
+        format!("发布件 {} 缺少 / release {} lacks MEMBERS.json", release.tag_name, release.tag_name)
+    })?;
+    let failed = |error: &dyn std::fmt::Display| {
+        format!("读取 MEMBERS.json 失败 / reading MEMBERS.json failed: {error}")
+    };
+    let text = agent()
+        .get(&asset.browser_download_url)
+        .call()
+        .map_err(|error| failed(&error))?
+        .into_string()
+        .map_err(|error| failed(&error))?;
+    verify::members_of(&text)
+}
+
 /// Fetches `release` into `dir`: `SHA256SUMS` and `MEMBERS.json`, then every
 /// other file `SHA256SUMS` lists. Each is written to a `.part` file and renamed
 /// once its length is the length the release states; a file already in `dir`

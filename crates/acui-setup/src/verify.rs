@@ -109,14 +109,11 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
     }
 
     // MEMBERS.json names the two commits, and so the three zips.
-    let members: Members = read_json(&download.join("MEMBERS.json"))?;
-    for (key, sha) in [("runtime_sha", &members.runtime_sha), ("ui_sha", &members.ui_sha)] {
-        if sha.len() != 40 || !sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
-            return Err(format!(
-                "MEMBERS.json {key} 不是 40 位小写十六进制 / is not 40 lowercase hex characters: {sha}"
-            ));
-        }
-    }
+    let members_path = download.join("MEMBERS.json");
+    let members_text = fs::read_to_string(&members_path)
+        .map_err(|error| format!("读取失败 / read failed: {}: {error}", members_path.display()))?;
+    let (runtime_sha, ui_sha) = members_of(&members_text)?;
+    let members = Members { runtime_sha, ui_sha };
     report(&format!(
         "MEMBERS.json: runtime {} · ui {}",
         members.runtime_sha, members.ui_sha
@@ -173,6 +170,20 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
         ui,
         tools,
     })
+}
+
+/// The two commits a `MEMBERS.json` names, each 40 lowercase hex characters.
+pub fn members_of(text: &str) -> Result<(String, String), String> {
+    let members: Members = serde_json::from_str(text)
+        .map_err(|error| format!("MEMBERS.json 无法解析 / MEMBERS.json unreadable: {error}"))?;
+    for (key, sha) in [("runtime_sha", &members.runtime_sha), ("ui_sha", &members.ui_sha)] {
+        if sha.len() != 40 || !sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+            return Err(format!(
+                "MEMBERS.json {key} 不是 40 位小写十六进制 / is not 40 lowercase hex characters: {sha}"
+            ));
+        }
+    }
+    Ok((members.runtime_sha, members.ui_sha))
 }
 
 /// `<hex>  <name>` or `<hex> *<name>`, as sha256sum writes them; blank lines

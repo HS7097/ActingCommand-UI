@@ -500,8 +500,9 @@ next only, five steps:
 
 0. **Location**: the install root only (changeable, default `%LOCALAPPDATA%\Programs\ActingCommand`, no
    administrator needed), the free space on that volume, and whether an installation is already here
-   (looking at `runtime\BUILD-MANIFEST.json`; if there is one it stops at this step — the upgrade flow
-   comes next, so for now pick another root). Next creates the root and the install log.
+   (looking at `runtime\BUILD-MANIFEST.json`, whose commit and `ui\`'s are shown; if there is one, the
+   run is an **upgrade**, see below). Next creates the root and the install log. A wizard running from
+   inside the installation it would upgrade stops here: its own directory could not move aside.
 1. **Get**: by default online. On entering, the umbrella
    [Releases](https://github.com/HS7097/ActingCommand/releases) are asked over HTTPS for one release: the
    newest stable release when there is one (GitHub's `releases/latest`), else the newest pre-release (the
@@ -550,21 +551,56 @@ next only, five steps:
    `start "" "<install root>\ui\acui.exe"`. acsetup does not appear in the batch file. Unchecked, it
    writes nothing; a file of the same name already in the startup folder is left alone, and merely
    mentioned in one sentence on the finish page.
-4. **Finish**: "启动监控台 / Open console" launches `<install root>\ui\acui.exe` detached (it never
-   launches actingd directly; the Runtime is launched by the console's launcher) and closes the wizard;
-   "finish" only closes.
+4. **Finish**: "启动监控台 / Open console" launches `<install root>\ui\acui.exe` detached and closes the
+   wizard; "finish" only closes. After a fresh install the wizard never launches actingd — the console's
+   launcher does.
+
+**Upgrade**, on a root that already holds an installation. Step 1 reads the release's `MEMBERS.json`
+first (online without saving it, offline from the folder) and compares its two commits with the ones the
+installed manifests name: the same two stop there, "already at this release's version", with nothing
+fetched. Otherwise step 2, after verifying as above:
+
+1. the new Runtime runs `check-config` on the existing `actingd.config.json` (its `state_root` must be
+   absolute); refused, nothing is changed;
+2. a `previous\` kept from the upgrade before is set aside as `previous.older-<unix_ms>\` (any such
+   directory an earlier upgrade could not remove goes first), and a new `<install root>\previous\` is
+   made;
+3. when `<state root>\runtime-info.json` exists and the new `actingctl status` is answered, the new
+   `actingctl request-shutdown --state-root <state root> --wait 60` asks the Runtime to shut down and
+   waits until its ownership record is closed and the process gone — first, because a Runtime the
+   console started works in `ui\`. A file left by a Runtime that ended without shutting down, with no
+   answer, is said and taken as not running;
+4. `ui\`, `tools\` and `runtime\` move aside — an open console makes the first fail — and the verified
+   payload is laid out as on a fresh install.
+
+Until the payload is laid out, any failure removes what was half laid out, puts every moved directory
+and the older `previous\` back, and starts a Runtime that was asked to shut down — and is gone — again
+on the version still installed (said, with its log, or why it could not be); one whose shutdown was not
+confirmed is left alone, and said so. Once laid out, the older `previous\` is
+removed, and a Runtime that was running is started again on the new version: detached, from the install
+root, its output in `<install root>\actingd-<unix_ms>.log`, up once its own `runtime-info.json` names
+its pid within 30 seconds. An exit before that is said with its `FATAL` line; no answer in time is said
+as possibly still starting. Either way the new version stays laid out and the version replaced in
+`previous\`. The release is installed as it is, newer
+or older: the wizard compares commits for sameness only.
+
+State, `actingd.config.json`, the console's `acui.toml`, the Startup launcher and `downloads\` are left as
+they are, and the configure step is skipped. The version replaced is kept whole in `previous\`, one
+version deep: the Runtime ships no state migration and no rollback of its own, so going back stays a
+person's choice.
 
 **Install log**: from leaving step 0 onward every step appends a plain-language line to
 `<install root>\acsetup-<unix_ms>.log`; on failure the last line states the reason, and the window shows
 the log path. Apart from the installed payload, the configuration, the settings, the fetched release
-files under `downloads\` and (when checked) the start-at-boot batch file, this is the only file the wizard
-writes.
+files under `downloads\`, (when checked) the start-at-boot batch file and, on an upgrade, `previous\` and
+the restarted Runtime's log, this is the only file the wizard writes.
 
 **Things it never does**: it does not install a service, does not create a scheduled task, does not change
 PATH, does not write the registry; does not modify the configuration template; does not touch a state root
 that already holds content; does not configure instances; goes on the network only to list and fetch the
-umbrella release; does not upgrade and does not install resource packs. On Linux the crate compiles as usual (CI runs `--workspace` on both
-legs), and running it exits immediately with `acsetup v1 is Windows-only`.
+umbrella release; stops or starts the Runtime only on an upgrade, as above; does not install resource
+packs. On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
+immediately with `acsetup v1 is Windows-only`.
 
 Four dependencies are added, each with its purpose noted in `[workspace.dependencies]`: `sha2`
 (verification), `zip` (`default-features = false`, only `deflate` enabled, the same version line the
