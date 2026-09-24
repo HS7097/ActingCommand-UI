@@ -562,22 +562,26 @@ fetched. Otherwise step 2, after verifying as above:
 
 1. the new Runtime runs `check-config` on the existing `actingd.config.json` (its `state_root` must be
    absolute); refused, nothing is changed;
-2. a `previous\` kept from the upgrade before is set aside as `previous.older-<unix_ms>\`, and `ui\` moves
-   into a new `<install root>\previous\`; an open console makes that fail, and it stops there with nothing
-   stopped;
+2. a `previous\` kept from the upgrade before is set aside as `previous.older-<unix_ms>\` (any such
+   directory an earlier upgrade could not remove goes first), and a new `<install root>\previous\` is
+   made;
 3. when `<state root>\runtime-info.json` exists and the new `actingctl status` is answered, the new
    `actingctl request-shutdown --state-root <state root> --wait 60` asks the Runtime to shut down and
-   waits until its ownership record is closed and the process gone. A file left by a Runtime that ended
-   without shutting down, with no answer, is said and taken as not running;
-4. `tools\` and `runtime\` move aside, and the verified payload is laid out as on a fresh install.
+   waits until its ownership record is closed and the process gone — first, because a Runtime the
+   console started works in `ui\`. A file left by a Runtime that ended without shutting down, with no
+   answer, is said and taken as not running;
+4. `ui\`, `tools\` and `runtime\` move aside — an open console makes the first fail — and the verified
+   payload is laid out as on a fresh install.
 
 Until the payload is laid out, any failure removes what was half laid out, puts every moved directory
-and the older `previous\` back, and — when the Runtime was asked to shut down, which may still stop it —
-says that it was not started again. Once laid out, the older `previous\` is removed, and a Runtime that
-was running is started again on the new version: detached, from the install root, its output in
-`<install root>\actingd-<unix_ms>.log`, up once its own `runtime-info.json` names its pid within 30
-seconds. An exit before that is said with its `FATAL` line; either way the new version stays laid out,
-the Runtime not running, and the version replaced in `previous\`. The release is installed as it is, newer
+and the older `previous\` back, and starts a Runtime that was asked to shut down — and is gone — again
+on the version still installed (said, with its log, or why it could not be); one whose shutdown was not
+confirmed is left alone, and said so. Once laid out, the older `previous\` is
+removed, and a Runtime that was running is started again on the new version: detached, from the install
+root, its output in `<install root>\actingd-<unix_ms>.log`, up once its own `runtime-info.json` names
+its pid within 30 seconds. An exit before that is said with its `FATAL` line; no answer in time is said
+as possibly still starting. Either way the new version stays laid out and the version replaced in
+`previous\`. The release is installed as it is, newer
 or older: the wizard compares commits for sameness only.
 
 State, `actingd.config.json`, the console's `acui.toml`, the Startup launcher and `downloads\` are left as
