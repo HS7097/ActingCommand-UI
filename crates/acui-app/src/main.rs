@@ -375,9 +375,9 @@ const CURSOR_REST: Duration = Duration::from_millis(400);
 /// Fills the timeline from the latest end at the pinned snapshot: backward
 /// windows, each read whole, until `FILL_ROWS` more rows show, position 1 is
 /// read, `FILL_WINDOWS` windows were read, or `FILL_BUDGET` has passed — at
-/// least one window each time. Every page query costs the Runtime a read and
-/// verification of the whole ledger (online, on its writer), so what the
-/// budget leaves is for "read earlier"; the top bar states what was read.
+/// least one window each time. Every page query is served on the Runtime's
+/// ledger writer (online), so what the budget leaves is for "read earlier";
+/// the top bar states what was read.
 /// `earlier` continues below what is loaded; otherwise the view starts over
 /// from the pin, or from where a time bound is estimated to fall.
 fn reload(app: &Rc<App>, earlier: bool) {
@@ -586,7 +586,7 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         reload(&app, false)
     });
     // The bound and its label follow the handle at once; the reload waits
-    // until the handle rests, since each one reads the whole ledger.
+    // until the handle rests, so a drag is one reload, not one per step.
     {
         let weak = window.as_weak();
         let app = Rc::clone(app);
@@ -677,8 +677,8 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
 }
 
 /// How often "follow latest" asks where the ledger is: one fact snapshot,
-/// which reads no ledger and writes nothing. A page query follows only when the
-/// ledger moved; each one costs the Runtime a read of the whole ledger.
+/// which reads no ledger and writes nothing. A page query, served on the
+/// Runtime's ledger writer, follows only when the ledger moved.
 const FOLLOW_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A person's jump to the latest: the pin moves to the Runtime's latest
@@ -879,10 +879,15 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
         }
         .into(),
     );
+    // The ledger leaves the always-routine types out uncounted; what it did
+    // return and the console dropped is counted.
     let mut loaded = fill(labels.loaded_rows_top, &[&card.loaded_count.to_string()]);
+    if model.hides_performance() {
+        loaded.push_str(labels.performance_hidden);
+    }
     if model.hidden_performance() > 0 {
-        let hidden = model.hidden_performance().to_string();
-        loaded.push_str(&fill(labels.performance_hidden, &[&hidden]));
+        let dropped = model.hidden_performance().to_string();
+        loaded.push_str(&fill(labels.performance_dropped, &[&dropped]));
     }
     window.set_loaded_rows_text(loaded.into());
     window.set_show_performance(model.filters.show_performance);

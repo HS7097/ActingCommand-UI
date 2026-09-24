@@ -301,7 +301,7 @@ export component AppWindow inherits Window {
     in property <float> canvas-height;
     in property <string> frame-size-text;
     in property <string> frame-note;
-    // The page the recognition matched on this frame, drawn on it, and the
+    // The page the recognition matched on this frame, shown above it, and the
     // sentence that says what was done where.
     in property <string> frame-page;
     in property <string> frame-explain;
@@ -833,6 +833,15 @@ export component AppWindow inherits Window {
                         spacing: 8px;
                         vertical-stretch: 0;
                         Text { text: Strings.overlays-title; font-size: Scale.head-font; color: Palette.foreground; font-weight: 700; }
+                        // The recognized page sits above the frame, not on it:
+                        // on it, it would cover the page's own header targets.
+                        if root.frame-page != "": Text {
+                            text: root.frame-page;
+                            font-size: Scale.body-font;
+                            font-weight: 700;
+                            color: Palette.foreground;
+                            vertical-alignment: center;
+                        }
                         Caption { text: root.frame-size-text; horizontal-stretch: 1; overflow: elide; }
                     }
                     // The frame takes every pixel the pane can spare; the raw data
@@ -898,21 +907,6 @@ export component AppWindow inherits Window {
                             background: overlay.point ? #ff6a3d : transparent;
                             border-color: overlay.mark ? #ffffff : #59c2ff;
                             border-width: overlay.mark ? 2px : 1px;
-                        }
-                        if root.frame-page != "": Rectangle {
-                            x: parent.offset-x + 6px;
-                            y: parent.offset-y + 6px;
-                            width: page-text.preferred-width + 12px;
-                            height: page-text.preferred-height + 6px;
-                            background: #000000c0;
-                            border-radius: 3px;
-                            page-text := Text {
-                                x: 6px;
-                                y: 3px;
-                                text: root.frame-page;
-                                font-size: Scale.body-font;
-                                color: #ffffff;
-                            }
                         }
                     }
                     if root.frame-explain != "": Text {
