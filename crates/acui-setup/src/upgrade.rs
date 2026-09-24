@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Step 2 on a root that already holds an installation: the upgrade. The new
-//! Runtime first checks the configuration as it is; the console's and the
-//! tools' directories move aside, then — the running Runtime asked to shut
-//! down and awaited with the new `actingctl` — the Runtime's; the verified
-//! payload is laid out in their place, and the Runtime is started again when
-//! it was running. State, the configuration, the console's settings and the
-//! downloads stay as they are. The version replaced is kept whole in
-//! `previous\`, one version deep: the Runtime ships no state migration and no
-//! rollback of its own, so going back stays a person's choice.
+//! Runtime first checks the configuration as it is. The console's directory
+//! moves aside first — an open console stops the upgrade there, with nothing
+//! stopped — then a Runtime that answers is asked to shut down and awaited
+//! with the new `actingctl`, and the tools' and the Runtime's directories move
+//! aside. The verified payload is laid out in their place and a Runtime that
+//! was running starts again on it. Until the new version is laid out, any
+//! failure puts every moved directory back. State, the configuration, the
+//! console's settings and the downloads stay as they are. The version
+//! replaced is kept whole in `previous\`, one version deep: the Runtime ships
+//! no state migration and no rollback of its own, so going back stays a
+//! person's choice.
 
 use std::fs;
 use std::io::Read;
@@ -28,8 +31,9 @@ const CHECK_SCHEMA: &str = "actingcommand.actingd.check-config.v1";
 /// how long any child the upgrade runs may take in all.
 const SHUTDOWN_WAIT_SECONDS: u64 = 60;
 const CHILD_TIMEOUT: Duration = Duration::from_secs(SHUTDOWN_WAIT_SECONDS + 30);
-/// How long a restarted Runtime has to write its `runtime-info.json`.
+/// How long a restarted Runtime has to write its own `runtime-info.json`.
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
+const STOPPED_NOTE: &str = "Runtime 已被请求关闭，可能已停止，未重新拉起：请在监控台点「启动」 / The Runtime was asked to shut down and may have stopped; it was not started again: press Start in the console";
 
 /// Windows `CREATE_NO_WINDOW` for the checks, `DETACHED_PROCESS` for the
 /// Runtime started again, which outlives the wizard.
@@ -83,145 +87,214 @@ pub fn upgrade(root: &Path, verified: &Verified, report: Report<'_>) -> Result<U
     check_config(&verified.runtime.dir.join(ACTINGD), &config)?;
     report("新 Runtime 接受现有配置 / the new Runtime accepts the configuration as it is")?;
 
-    let previous = root.join("previous");
-    if previous.exists() {
-        fs::remove_dir_all(&previous).map_err(|error| {
-            format!("无法删除更早的旧版本 / cannot remove {}: {error}", previous.display())
-        })?;
-        report(&format!("已删除更早的旧版本 / older previous version removed: {}", previous.display()))?;
-    }
-    fs::create_dir_all(&previous)
-        .map_err(|error| format!("无法创建 / cannot create {}: {error}", previous.display()))?;
-
-    // The console's and the tools' first: one that cannot move has a program
-    // running from it, and nothing has been stopped yet.
-    move_aside(root, &previous, &["ui", "tools"], report)?;
-    let running = state_root.join("runtime-info.json").is_file();
-    if running {
-        report("请求 Runtime 关闭并等待 / asking the Runtime to shut down, and waiting")?;
-        let ctl = verified.runtime.dir.join(ACTINGCTL);
-        if let Err(reason) = request_shutdown(&ctl, &state_root, report) {
-            return Err(put_back(root, &previous, &["ui", "tools"], reason));
-        }
-    } else {
-        report("Runtime 未在运行 / the Runtime is not running")?;
-    }
-    if let Err(reason) = move_aside(root, &previous, &["runtime"], report) {
-        let mut reason = put_back(root, &previous, &["ui", "tools"], reason);
-        if running {
-            reason.push_str("\nRuntime 已关闭，未重新拉起 / the Runtime was shut down and not started again");
-        }
-        return Err(reason);
-    }
-
-    let laid_out = match install::lay_out(root, verified, report) {
-        Ok(laid_out) => laid_out,
-        Err(reason) => {
-            let mut reason = reason;
-            for name in ["runtime", "ui", "tools"] {
-                let partial = root.join(name);
-                if partial.exists() {
-                    if let Err(error) = fs::remove_dir_all(&partial) {
-                        reason.push_str(&format!(
-                            "\n未能删除铺了一半的 / half-laid-out not removed: {}: {error}",
-                            partial.display()
-                        ));
-                    }
-                }
-            }
-            return Err(put_back(root, &previous, &["runtime", "ui", "tools"], reason));
-        }
+    let mut swap = Swap {
+        root,
+        previous: root.join("previous"),
+        older: None,
+        moved: Vec::new(),
+        stopped: false,
     };
-    let restarted = match running {
-        true => Some(restart(root, &laid_out.actingd_exe, &config, &state_root, &previous, report)?),
+    let laid_out = match swap.lay(verified, &state_root, report) {
+        Ok(laid_out) => laid_out,
+        Err(reason) => return Err(swap.undo(reason)),
+    };
+    // The new version is in place: from here nothing is put back, since a
+    // Runtime started on it may already have touched state.
+    swap.drop_older(report);
+    let restarted = match swap.stopped {
+        true => Some(restart(root, &laid_out.actingd_exe, &config, &state_root, report).map_err(
+            |reason| {
+                format!(
+                    "{reason}\n新版本已铺开，Runtime 现在未运行；被替换的版本在 / The new version is laid out and the Runtime is not running; the version replaced is in: {}",
+                    swap.previous.display()
+                )
+            },
+        )?),
         false => None,
     };
-    Ok(Upgraded { laid_out, previous, restarted })
+    Ok(Upgraded { laid_out, previous: swap.previous, restarted })
 }
 
-/// `state_root` from the configuration; a relative one is resolved against
-/// the configuration's folder, as the Runtime resolves it.
+/// The directories an upgrade has moved, so a failure can put them back.
+struct Swap<'a> {
+    root: &'a Path,
+    previous: PathBuf,
+    /// The version kept from the upgrade before, moved aside until this one
+    /// is laid out.
+    older: Option<PathBuf>,
+    moved: Vec<&'static str>,
+    /// Whether the Runtime was asked to shut down.
+    stopped: bool,
+}
+
+impl Swap<'_> {
+    fn lay(&mut self, verified: &Verified, state_root: &Path, report: Report<'_>) -> Result<LaidOut, String> {
+        if self.previous.exists() {
+            let older = self.root.join(format!("previous.older-{}", crate::log::unix_ms()));
+            fs::rename(&self.previous, &older).map_err(|error| {
+                format!("无法移开更早的旧版本 / cannot move {} aside: {error}", self.previous.display())
+            })?;
+            self.older = Some(older);
+        }
+        fs::create_dir(&self.previous)
+            .map_err(|error| format!("无法创建 / cannot create {}: {error}", self.previous.display()))?;
+        // The console's first: one that cannot move has the console running
+        // from it, and nothing has been stopped yet.
+        self.move_aside("ui", "请先关闭监控台 / close the console first", report)?;
+        let ctl = verified.runtime.dir.join(ACTINGCTL);
+        if runtime_answers(&ctl, state_root, report)? {
+            self.stopped = true;
+            report("请求 Runtime 关闭并等待 / asking the Runtime to shut down, and waiting")?;
+            request_shutdown(&ctl, state_root)?;
+            report("Runtime 已关闭 / the Runtime has shut down")?;
+        }
+        let busy = "多半有程序正从这里运行 / most likely a program runs from it";
+        self.move_aside("tools", busy, report)?;
+        self.move_aside("runtime", busy, report)?;
+        install::lay_out(self.root, verified, report)
+    }
+
+    fn move_aside(&mut self, name: &'static str, hint: &str, report: Report<'_>) -> Result<(), String> {
+        let from = self.root.join(name);
+        if !from.exists() {
+            return Ok(());
+        }
+        fs::rename(&from, self.previous.join(name))
+            .map_err(|error| format!("无法移开 / cannot move {}: {error}\n{hint}", from.display()))?;
+        self.moved.push(name);
+        report(&format!("已移开旧版本 / moved aside: {}", from.display()))
+    }
+
+    /// Puts everything moved back where it was, the version kept from before
+    /// included, and says what could not be and whether the Runtime is stopped.
+    fn undo(&mut self, mut reason: String) -> String {
+        for name in self.moved.iter().rev() {
+            let placed = self.root.join(name);
+            if placed.exists() {
+                if let Err(error) = fs::remove_dir_all(&placed) {
+                    reason.push_str(&format!(
+                        "\n未能删除铺了一半的 / half-laid-out not removed: {}: {error}",
+                        placed.display()
+                    ));
+                    continue;
+                }
+            }
+            if let Err(error) = fs::rename(self.previous.join(name), &placed) {
+                reason.push_str(&format!(
+                    "\n未能放回 / not put back: {} → {}: {error}",
+                    self.previous.join(name).display(),
+                    placed.display()
+                ));
+            }
+        }
+        if self.previous.exists() {
+            if let Err(error) = fs::remove_dir(&self.previous) {
+                reason.push_str(&format!("\n未能删除 / not removed: {}: {error}", self.previous.display()));
+            }
+        }
+        if let Some(older) = &self.older {
+            if let Err(error) = fs::rename(older, &self.previous) {
+                reason.push_str(&format!(
+                    "\n更早的旧版本未能放回 / the older version was not put back: {} → {}: {error}",
+                    older.display(),
+                    self.previous.display()
+                ));
+            }
+        }
+        if self.stopped {
+            reason.push('\n');
+            reason.push_str(STOPPED_NOTE);
+        }
+        reason
+    }
+
+    /// The version from the upgrade before, no longer needed once this one is
+    /// laid out; one that cannot be removed is said, not fatal.
+    fn drop_older(&self, report: Report<'_>) {
+        if let Some(older) = &self.older {
+            let line = match fs::remove_dir_all(older) {
+                Ok(()) => format!("已删除更早的旧版本 / older version removed: {}", older.display()),
+                Err(error) => format!(
+                    "更早的旧版本未能删除，可手动删 / older version not removed, delete it by hand: {}: {error}",
+                    older.display()
+                ),
+            };
+            let _ = report(&line);
+        }
+    }
+}
+
+/// `state_root` from the configuration. The wizard writes an absolute one; a
+/// relative one would depend on the Runtime's working directory, so it stops.
 fn state_root(config: &Path) -> Result<PathBuf, String> {
     let text = fs::read_to_string(config)
         .map_err(|error| format!("读取失败 / read failed: {}: {error}", config.display()))?;
     let document: Value = serde_json::from_str(&text)
         .map_err(|error| format!("配置无法解析 / config unreadable: {}: {error}", config.display()))?;
-    let root = document["state_root"].as_str().ok_or_else(|| {
+    let root = document["state_root"].as_str().map(PathBuf::from).ok_or_else(|| {
         format!("配置里没有 state_root / no state_root in {}", config.display())
     })?;
-    let root = PathBuf::from(root);
-    Ok(match (root.is_absolute(), config.parent()) {
-        (false, Some(folder)) => folder.join(root),
-        _ => root,
-    })
-}
-
-/// Moves `names` out of `root` into `previous`. A move that fails puts back
-/// those already moved and says which directory could not move.
-fn move_aside(root: &Path, previous: &Path, names: &[&str], report: Report<'_>) -> Result<(), String> {
-    for (index, name) in names.iter().enumerate() {
-        let from = root.join(name);
-        if !from.exists() {
-            continue;
-        }
-        if let Err(error) = fs::rename(&from, previous.join(name)) {
-            let reason = format!(
-                "无法移开 / cannot move {}: {error}\n多半有程序正从这里运行：请先关闭监控台 / most likely a program runs from it: close the console first",
-                from.display()
-            );
-            return Err(put_back(root, previous, &names[..index], reason));
-        }
-        report(&format!("已移开旧版本 / moved aside: {}", from.display()))?;
+    match root.is_absolute() {
+        true => Ok(root),
+        false => Err(format!(
+            "配置的 state_root 不是绝对路径，向导无法确定它 / state_root in {} is not absolute: {}",
+            config.display(),
+            root.display()
+        )),
     }
-    Ok(())
 }
 
-/// Puts `names` back from `previous` into `root`, appending to `reason` what
-/// could not be.
-fn put_back(root: &Path, previous: &Path, names: &[&str], mut reason: String) -> String {
-    for name in names {
-        let kept = previous.join(name);
-        if kept.exists() {
-            if let Err(error) = fs::rename(&kept, root.join(name)) {
-                reason.push_str(&format!(
-                    "\n未能放回 / not put back: {} → {}: {error}",
-                    kept.display(),
-                    root.join(name).display()
-                ));
-            }
-        }
+/// Whether a Runtime runs on the state root: `runtime-info.json` there and
+/// the new `actingctl status` answered by it. A leftover file — the Runtime
+/// ended without shutting down — is said and taken as not running.
+fn runtime_answers(actingctl: &Path, state_root: &Path, report: Report<'_>) -> Result<bool, String> {
+    if !state_root.join("runtime-info.json").is_file() {
+        report("Runtime 未在运行 / the Runtime is not running")?;
+        return Ok(false);
     }
-    reason
+    let out = run(Command::new(actingctl).arg("status").arg("--state-root").arg(state_root))?;
+    if !out.success {
+        report(&format!(
+            "有 runtime-info.json 但 Runtime 不应答（退出码 {}），按未运行处理 / runtime-info.json is there but no Runtime answers (exit {}), taken as not running: {}",
+            out.exit,
+            out.exit,
+            out.stderr.trim()
+        ))?;
+    }
+    Ok(out.success)
 }
 
-/// `<new actingd> check-config --config <config>`, as the console's instance
-/// window runs it.
+/// `<new actingd> check-config --config <config>`: the report is stdout;
+/// stderr is kept for the failure text.
 fn check_config(actingd: &Path, config: &Path) -> Result<(), String> {
-    let (success, exit, output) = run(
-        Command::new(actingd).arg("check-config").arg("--config").arg(config),
-    )?;
-    let report: Value = serde_json::from_str(output.trim()).unwrap_or_default();
+    let out = run(Command::new(actingd).arg("check-config").arg("--config").arg(config))?;
+    let report: Value = serde_json::from_str(out.stdout.trim()).unwrap_or_default();
     let error = &report["error"];
+    let exit = &out.exit;
     match (report["status"].as_str(), error["code"].as_str(), error["stage"].as_str()) {
         _ if report["schema_version"] != CHECK_SCHEMA => Err(format!(
-            "新 Runtime 的 check-config 输出无法识别（退出码 {exit}）/ unreadable check-config output (exit {exit}): {}",
-            output.trim()
+            "新 Runtime 的 check-config 输出无法识别（退出码 {exit}），未做任何改动 / unreadable check-config output (exit {exit}), nothing was changed: {} {}",
+            out.stdout.trim(),
+            out.stderr.trim()
         )),
-        (Some("ok"), _, _) if success => Ok(()),
+        (Some("ok"), _, _) if out.success => Ok(()),
         (Some("failed"), Some(code), Some(stage)) => Err(format!(
-            "新 Runtime 不接受现有配置，未做任何改动 / the new Runtime refuses the configuration, nothing was changed: {code}（{stage}）"
+            "新 Runtime 不接受现有配置，未做任何改动 / the new Runtime refuses the configuration, nothing was changed: {code}（{stage}）{}",
+            out.stderr.trim()
         )),
         _ => Err(format!(
-            "新 Runtime 的 check-config 未通过（退出码 {exit}）/ check-config did not pass (exit {exit}): {}",
-            output.trim()
+            "新 Runtime 的 check-config 未通过（退出码 {exit}），未做任何改动 / check-config did not pass (exit {exit}), nothing was changed: {} {}",
+            out.stdout.trim(),
+            out.stderr.trim()
         )),
     }
 }
 
 /// `<new actingctl> request-shutdown --state-root <root> --wait <s>`: exit 0
-/// once the ownership record is closed and the process is gone.
-fn request_shutdown(actingctl: &Path, state_root: &Path, report: Report<'_>) -> Result<(), String> {
-    let (success, exit, output) = run(
+/// once the ownership record is closed and the process gone. Anything else
+/// may still end with the Runtime stopping, and is said that way.
+fn request_shutdown(actingctl: &Path, state_root: &Path) -> Result<(), String> {
+    let out = run(
         Command::new(actingctl)
             .arg("request-shutdown")
             .arg("--state-root")
@@ -229,23 +302,27 @@ fn request_shutdown(actingctl: &Path, state_root: &Path, report: Report<'_>) -> 
             .arg("--wait")
             .arg(SHUTDOWN_WAIT_SECONDS.to_string()),
     )?;
-    if !success {
-        return Err(format!(
-            "Runtime 未能在 {SHUTDOWN_WAIT_SECONDS} 秒内关闭（退出码 {exit}），未做任何改动 / the Runtime did not shut down (exit {exit}), nothing was changed: {}",
-            output.trim()
-        ));
+    match out.success {
+        true => Ok(()),
+        false => Err(format!(
+            "Runtime 的关闭没有在 {SHUTDOWN_WAIT_SECONDS} 秒内确认（退出码 {}）/ the Runtime's shutdown was not confirmed within {SHUTDOWN_WAIT_SECONDS} s (exit {}): {} {}",
+            out.exit,
+            out.exit,
+            out.stdout.trim(),
+            out.stderr.trim()
+        )),
     }
-    report("Runtime 已关闭 / the Runtime has shut down")
 }
 
-/// The new Runtime, detached, its output in `<root>\actingd-<unix_ms>.log`,
-/// given `READY_TIMEOUT` to write its `runtime-info.json`.
+/// The new Runtime, detached, from the install root, its output in
+/// `<root>\actingd-<unix_ms>.log`: up once its own `runtime-info.json` names
+/// its pid, within `READY_TIMEOUT`; an exit before that is said with its
+/// `FATAL` line.
 fn restart(
     root: &Path,
     actingd: &Path,
     config: &Path,
     state_root: &Path,
-    previous: &Path,
     report: Report<'_>,
 ) -> Result<PathBuf, String> {
     let log = root.join(format!("actingd-{}.log", crate::log::unix_ms()));
@@ -255,36 +332,69 @@ fn restart(
         .try_clone()
         .map_err(|error| format!("无法写入 / cannot write {}: {error}", log.display()))?;
     let mut command = Command::new(actingd);
-    command.arg("--config").arg(config).stdin(Stdio::null()).stdout(stdout).stderr(stderr);
+    command
+        .arg("--config")
+        .arg(config)
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(DETACHED_PROCESS);
     }
-    command
+    let mut child = command
         .spawn()
         .map_err(|error| format!("无法拉起新 Runtime / cannot start the new Runtime: {error}"))?;
+    let info = state_root.join("runtime-info.json");
     let deadline = Instant::now() + READY_TIMEOUT;
     while Instant::now() < deadline {
-        if state_root.join("runtime-info.json").is_file() {
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(format!(
+                "新 Runtime 启动后退出（{status}）/ the new Runtime exited on start ({status}){}\n日志 / log: {}",
+                fatal_line(&log),
+                log.display()
+            ));
+        }
+        let pid = fs::read_to_string(&info)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .and_then(|info| info["pid"].as_u64());
+        if pid == Some(u64::from(child.id())) {
             report(&format!("新 Runtime 已就绪 / the new Runtime is up; 日志 / log: {}", log.display()))?;
             return Ok(log);
         }
         std::thread::sleep(Duration::from_millis(250));
     }
     Err(format!(
-        "新 Runtime 在 {} 秒内没有就绪 / the new Runtime was not up within {} s\n日志 / log: {}\n被替换的版本保留在 / the version replaced is kept in: {}",
+        "新 Runtime 在 {} 秒内没有就绪 / the new Runtime was not up within {} s\n日志 / log: {}",
         READY_TIMEOUT.as_secs(),
         READY_TIMEOUT.as_secs(),
-        log.display(),
-        previous.display()
+        log.display()
     ))
 }
 
-/// Runs a child without a window, its output read whole, within
-/// `CHILD_TIMEOUT`: whether it succeeded, its exit code as text, and stdout
-/// then stderr.
-fn run(command: &mut Command) -> Result<(bool, String, String), String> {
+/// The Runtime's own `FATAL actingd:` line from its log, when there is one.
+fn fatal_line(log: &Path) -> String {
+    fs::read_to_string(log)
+        .ok()
+        .and_then(|text| text.lines().find(|line| line.starts_with("FATAL")).map(str::to_string))
+        .map(|line| format!("：{line}"))
+        .unwrap_or_default()
+}
+
+/// A child's outcome: whether it succeeded, its exit code as text, and its two
+/// output streams, each read whole.
+struct Output {
+    success: bool,
+    exit: String,
+    stdout: String,
+    stderr: String,
+}
+
+/// Runs a child without a window within `CHILD_TIMEOUT`.
+fn run(command: &mut Command) -> Result<Output, String> {
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     {
@@ -295,7 +405,8 @@ fn run(command: &mut Command) -> Result<(bool, String, String), String> {
     let mut child = command
         .spawn()
         .map_err(|error| format!("无法运行 / cannot run {program}: {error}"))?;
-    let readers = [child.stdout.take().map(drain), child.stderr.take().map(drain)];
+    let stdout = child.stdout.take().map(drain);
+    let stderr = child.stderr.take().map(drain);
     let deadline = Instant::now() + CHILD_TIMEOUT;
     let status = loop {
         match child.try_wait() {
@@ -312,21 +423,12 @@ fn run(command: &mut Command) -> Result<(bool, String, String), String> {
             Err(error) => return Err(format!("{program}: {error}{}", stop(&mut child))),
         }
     };
-    let mut output = String::new();
-    for reader in readers.into_iter().flatten() {
-        match reader.map(std::thread::JoinHandle::join) {
-            Ok(Ok(Ok(text))) => output.push_str(&text),
-            Ok(Ok(Err(error))) => {
-                output.push_str(&format!("\n（输出读取失败 / output unreadable: {error}）"))
-            }
-            Ok(Err(_)) => output.push_str("\n（输出读取线程失败 / output reader failed）"),
-            Err(error) => output.push_str(&format!(
-                "\n（输出读取线程未能启动 / output reader not started: {error}）"
-            )),
-        }
-    }
-    let exit = status.code().map_or_else(|| "—".to_string(), |code| code.to_string());
-    Ok((status.success(), exit, output))
+    Ok(Output {
+        success: status.success(),
+        exit: status.code().map_or_else(|| "—".to_string(), |code| code.to_string()),
+        stdout: collect(stdout),
+        stderr: collect(stderr),
+    })
 }
 
 type Drained = std::io::Result<std::thread::JoinHandle<std::io::Result<String>>>;
@@ -337,6 +439,17 @@ fn drain(mut pipe: impl Read + Send + 'static) -> Drained {
         let mut text = String::new();
         pipe.read_to_string(&mut text).map(|_| text)
     })
+}
+
+/// A drained stream's text, or a line saying why it could not be read.
+fn collect(reader: Option<Drained>) -> String {
+    match reader.map(|reader| reader.map(std::thread::JoinHandle::join)) {
+        Some(Ok(Ok(Ok(text)))) => text,
+        Some(Ok(Ok(Err(error)))) => format!("（输出读取失败 / output unreadable: {error}）"),
+        Some(Ok(Err(_))) => "（输出读取线程失败 / output reader failed）".to_string(),
+        Some(Err(error)) => format!("（输出读取线程未能启动 / output reader not started: {error}）"),
+        None => String::new(),
+    }
 }
 
 /// Stops a child past its time, and says how that went.

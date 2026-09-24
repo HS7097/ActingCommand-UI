@@ -627,7 +627,8 @@ fn summary(state: &Shared) -> String {
             configured.settings_path.display()
         ));
     }
-    lines.push(match &state.autostart {
+    let fresh = state.upgraded.is_none();
+    lines.extend(fresh.then(|| match &state.autostart {
         Some(Autostart::Written {
             path,
             with_console: true,
@@ -648,23 +649,25 @@ fn summary(state: &Shared) -> String {
         Some(Autostart::NotWanted { existing: None }) | None => {
             "开机自启 / Autostart: 未启用 / not enabled".to_string()
         }
-    });
+    }));
     if let Some(log) = &state.log {
         lines.push(format!("日志 / Log: {}", log.path().display()));
     }
-    lines.push(String::new());
-    lines.push(
-        "实例（模拟器 / 设备）本引导未配置，instances 为空：之后点监控台顶栏的「实例配置」按钮添加。"
-            .to_string(),
-    );
-    lines.push(
-        "No instance was configured here (instances is empty): add them with the Instance Configuration button in the console's top bar."
-            .to_string(),
-    );
+    if fresh {
+        lines.push(String::new());
+        lines.push(
+            "实例（模拟器 / 设备）本引导未配置，instances 为空：之后点监控台顶栏的「实例配置」按钮添加。"
+                .to_string(),
+        );
+        lines.push(
+            "No instance was configured here (instances is empty): add them with the Instance Configuration button in the console's top bar."
+                .to_string(),
+        );
+    }
     lines.join("\n")
 }
 
-/// Step 4: the console, detached, and the wizard closed — never actingd.
+/// Step 4: the console, detached, and the wizard closed.
 fn open_console(window: &SetupWindow, state: &Shared) {
     let console = lock(state)
         .laid_out

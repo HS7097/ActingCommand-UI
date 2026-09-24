@@ -417,14 +417,20 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 与已装清单的两个提交号比对：两个都相同就停在这里，写「已是这个发布件的版本」，什么也不下载。否则第 2 步
 在按上文校验之后：
 
-1. 用新 Runtime 对现有 `actingd.config.json` 跑 `check-config`；不接受就什么都不改；
-2. 把 `ui\`、`tools\` 移到 `<安装根>\previous\`（那里更早的一份先删掉）；有目录挪不动——监控台开着——
-   就把已挪的放回去并停下，此时什么都还没停；
-3. `<状态根>\runtime-info.json` 存在时，用新的 `actingctl request-shutdown --state-root <状态根> --wait 60`
-   请 Runtime 关闭，并等到所有权记录闭合、进程退出；没按时关掉，就把挪开的放回去并停下；
-4. 再移开 `runtime\`，按新装的方式铺开已校验的载荷；失败就删掉铺了一半的，放回旧版本；
-5. 原先在运行的 Runtime 用新版本分离拉起，输出写进 `<安装根>\actingd-<unix_ms>.log`，30 秒内要写出
-   `runtime-info.json`；没按时就绪就带着日志路径停下，旧版本留在 `previous\`。
+1. 用新 Runtime 对现有 `actingd.config.json` 跑 `check-config`（其中 `state_root` 必须是绝对路径）；
+   不接受就什么都不改；
+2. 上次升级留下的 `previous\` 先改名为 `previous.older-<unix_ms>\` 暂存，`ui\` 移进新建的
+   `<安装根>\previous\`；监控台开着会让这一步失败，就停在这里，此时什么都还没停；
+3. `<状态根>\runtime-info.json` 存在、且新的 `actingctl status` 有应答时，用新的
+   `actingctl request-shutdown --state-root <状态根> --wait 60` 请 Runtime 关闭，并等到所有权记录闭合、
+   进程退出。没正常关闭就结束的 Runtime 留下的文件、没有应答的，写明并按未运行处理；
+4. 移开 `tools\`、`runtime\`，按新装的方式铺开已校验的载荷。
+
+载荷铺好之前，任何失败都会删掉铺了一半的、把移开的目录和更早的 `previous\` 都放回去；Runtime 已被请求
+关闭的（它仍可能停下），写明没有重新拉起。铺好之后删掉更早的 `previous\`，原先在运行的 Runtime 用新版本
+分离拉起：从安装根启动，输出写进 `<安装根>\actingd-<unix_ms>.log`，30 秒内它自己的 `runtime-info.json`
+写出它的 pid 才算就绪。在那之前退出的，连同 `FATAL` 行一起写明；无论哪种，新版本都已铺好、Runtime
+未在运行、被替换的版本在 `previous\`。发布件按原样安装，不论新旧：向导只比对提交号是否相同。
 
 状态根、`actingd.config.json`、监控台的 `acui.toml`、开机自启与 `downloads\` 都不动，配置那一步跳过。
 被替换的版本整份留在 `previous\`，只留一份：Runtime 不带状态迁移，也不带回滚，退回去仍是人的决定。
