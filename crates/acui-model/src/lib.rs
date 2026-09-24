@@ -32,11 +32,11 @@ use acui_rows::{
 pub const WINDOW: u64 = MAX_RUNTIME_EVENT_QUERY_EVENTS as u64;
 /// The widest a backward window grows while the windows come back sparse.
 pub const MAX_WIDTH: u64 = WINDOW * 16;
-/// The performance monitor's event types that are always `Info`, as the
-/// ledger names them: the ledger itself leaves them out while the view hides
-/// routine performance events. Warnings and errors never are.
-const ROUTINE_PERFORMANCE: [&str; 3] =
-    ["perf.summary", "perf.pressure_ended", "perf.monitor_recovered"];
+/// The performance monitor's event types that are `Info` from every writer,
+/// as the ledger names them: the ledger itself leaves them out while the view
+/// hides routine performance events. `perf.summary` is not among them: the
+/// capacity monitor writes it as a warning or an error under disk pressure.
+const ROUTINE_PERFORMANCE: [&str; 2] = ["perf.pressure_ended", "perf.monitor_recovered"];
 /// Rows one fill aims to add, and the most windows it ever reads to get them;
 /// the console also stops a fill at a time budget, since every query is served
 /// on the Runtime's ledger writer.
@@ -61,10 +61,11 @@ pub enum QueryError {
 
 /// Filter state, turned into one `EventQuery` and re-run against the ledger.
 /// Nothing here filters rows the console already holds, with one exception
-/// the view states: the performance monitor's routine events (below Warning),
-/// which the ledger query cannot exclude, are dropped from each window read
-/// and counted — unless shown here, picked as the module, or on the Health
-/// tab, which is made of them. Its warnings and errors always show.
+/// the view states: the performance monitor's routine events are hidden —
+/// the two types that are always `Info` left out by the ledger, its other
+/// events below Warning dropped from each window read and counted — unless
+/// shown here, picked as the module, or on the Health tab, which is made of
+/// them. Its warnings and errors always show.
 #[derive(Debug, Clone, Default)]
 pub struct Filters {
     pub show_performance: bool,
@@ -354,7 +355,7 @@ impl ViewModel {
     }
 
     /// Routine performance-monitor events the ledger did return, dropped from
-    /// the windows read so far; the always-routine types never come back.
+    /// the windows read so far; the types it leaves out are not counted.
     pub fn hidden_performance(&self) -> usize {
         self.hidden_performance
     }
@@ -473,12 +474,12 @@ impl ViewModel {
         &self.scope
     }
 
-    /// The modules of the loaded rows, and the performance monitor while its
-    /// routine events are hidden, so it can still be picked.
+    /// The modules of the loaded rows, and the performance monitor while any
+    /// of its events are hidden, so it can still be picked.
     pub fn modules(&self) -> Vec<OriginModule> {
         let mut modules: Vec<OriginModule> =
             self.rows.iter().map(|event| event.origin.module()).collect();
-        if self.hides_performance() {
+        if self.hidden_performance > 0 {
             modules.push(OriginModule::PerformanceMonitor);
         }
         modules.sort();

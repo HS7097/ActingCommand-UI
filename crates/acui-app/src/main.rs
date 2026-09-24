@@ -575,8 +575,9 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         }
         reload(&app, false)
     });
-    // Shown or hidden again from the pin: the performance monitor's events are
-    // dropped as each window is read, not from rows already held.
+    // Shown or hidden again from the pin: the performance monitor's routine
+    // events are left out by the query or dropped as each window is read, never
+    // from rows already held.
     on!(on_show_performance_changed, |app, model, shown| {
         model.borrow_mut().filters.show_performance = shown;
         reload(&app, false)
@@ -844,9 +845,13 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
                 }
             }
         }
-        // After a failed window the span's end waits for the next tick that
-        // moves the pin, rather than spend one more read now.
-        if moved && model.follow_error.is_none() {
+        if model.follow_error.is_some() {
+            // A read that failed stops the following, its reason kept on
+            // screen: a Runtime refusing each query is not asked again every
+            // tick. Turning following on again retries.
+            app.follow.stop();
+            window.set_following(false);
+        } else if moved {
             advance_span(source, &mut model, pin_time);
         }
     }
@@ -879,15 +884,10 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
         }
         .into(),
     );
-    // The ledger leaves the always-routine types out uncounted; what it did
-    // return and the console dropped is counted.
     let mut loaded = fill(labels.loaded_rows_top, &[&card.loaded_count.to_string()]);
-    if model.hides_performance() {
-        loaded.push_str(labels.performance_hidden);
-    }
     if model.hidden_performance() > 0 {
-        let dropped = model.hidden_performance().to_string();
-        loaded.push_str(&fill(labels.performance_dropped, &[&dropped]));
+        let hidden = model.hidden_performance().to_string();
+        loaded.push_str(&fill(labels.performance_hidden, &[&hidden]));
     }
     window.set_loaded_rows_text(loaded.into());
     window.set_show_performance(model.filters.show_performance);
@@ -1742,7 +1742,7 @@ fn is_input(event: &ProjectedEvent) -> bool {
     code(&event.event_type).starts_with("input.")
 }
 
-/// The page label drawn on the frame: the page the recognition matched, or
+/// The page label shown above the frame: the page the recognition matched, or
 /// that it matched none; nothing before a recognition is read.
 fn page_text(labels: &Labels, group: &FrameGroup) -> String {
     match &group.recognition {

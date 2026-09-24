@@ -147,7 +147,7 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   more events than one page's event limit, so one query reads it, every filter applied by the ledger. A
   window that comes back with fewer than 64 events doubles the next one's span, up to 4096 positions; one
   with 128 or more puts it back to 256. A wider window, and any the reply's byte limit splits, is read by
-  following the cursor. Online, every page query is served on the Runtime's ledger writer (since Runtime
+  following the cursor, whole — so one fill can add more rows than it aims for. Online, every page query is served on the Runtime's ledger writer (since Runtime
   `71db072d` it re-verifies only the head, the boundary and a new tail, about 15 ms a page at ten thousand
   events, where it used to read and verify the whole ledger), so one fill reads at least one window
   and starts no further window once it has 256 more rows, has read position 1, has read 16 windows or has
@@ -165,17 +165,20 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   selection and a frame being read stay, and the task facts come from that same snapshot. Setting a time
   bound while following stops it. The span's end follows the pin: taken from the newer windows when they
   hold the event at the pin, otherwise one more one-event read. A failed tick shows as "following latest:
-  …" beside the view's own error, and stays until a later tick gets past it or following is turned off.
+  …" beside the view's own error; a failed poll stays until a later tick gets past it, and a failed page
+  read also stops the following — a Runtime refusing the query is not asked again every five seconds —
+  until it is turned on again.
   Offline there is no running Runtime writing newer events, and both controls are off.
 - **The performance monitor's routine events are hidden by default**: they would bury everything else.
   Unless "show performance monitor" is ticked, the performance monitor is picked as the module, or the
-  Health tab (made of these events) is open, the query asks the ledger to leave out the three types that
-  are always `Info` — `perf.summary`, `perf.pressure_ended`, `perf.monitor_recovered`
-  (`exclude_event_types`) — and the console drops the performance monitor's other events **below
-  Warning** from each window it reads. The top bar says routine events are hidden, and how many were
-  dropped after reading; the ledger does not count what it leaves out. The performance monitor stays on
-  the module list so it can still be picked. Its warnings and errors (disk pressure, high pressure,
-  stutter, degraded monitoring) always show. The row and level counts on the card cover the loaded rows
+  Health tab (made of these events) is open, the query asks the ledger to leave out the two types that are
+  `Info` from every writer — `perf.pressure_ended` and `perf.monitor_recovered` (`exclude_event_types`)
+  — and the console drops the performance monitor's other events **below Warning**, `perf.summary`
+  among them, from each window it reads. `perf.summary` stays with the console because the capacity
+  monitor writes it as a warning or an error under disk pressure. The top bar says how many were dropped;
+  the two types the ledger leaves out are not counted. The performance monitor stays on the module list
+  while any are dropped, so it can still be picked. Its warnings and errors (disk pressure, high
+  pressure, stutter, degraded monitoring, a summary under pressure) always show. The row and level counts on the card cover the loaded rows
   only. A Runtime before `51ba5565` does not know `exclude_event_types` and refuses the query while
   events are hidden; ticking "show performance monitor" reads it.
 - **Recovery grouping comes from the ledger**: the `run_recovery` carried on the pages inserts a group row
