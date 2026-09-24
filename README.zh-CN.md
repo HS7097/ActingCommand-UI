@@ -371,23 +371,24 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 `crates/acui-setup` 是一个独立的二进制 `acsetup.exe`（Slint 窗口，与监控台同一套样式与图标），把
 伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases) 里的发布件装成一份**按用户**的安装。
 它随 UI 仓的 Windows 构建产物一起发布（`acui-windows-<sha>.zip` 里多一个 `acsetup.exe`）。
-它自己去取发布件，也可以用人手工下好的文件夹。一个窗口，只有下一步（第 4 步可跳过），六步：
+它自己去取发布件，也可以用人手工下好的文件夹。一个窗口，只有下一步（实例步可跳过），五步；每页像安装器那样只显示
+进行到哪了，详情全写进安装日志（见下文「进度与安装日志」）：
 
 0. **位置**：只有安装根（可改，默认 `%LOCALAPPDATA%\Programs\ActingCommand`，不需要管理员）、该卷的
    可用空间、此处是否已有安装（看 `runtime\BUILD-MANIFEST.json`，写出它与 `ui\` 清单的提交号；已有就是
    **升级**，见下文）。下一步时建好安装根与安装日志。引导若正从要升级的这份安装里运行，就停在这一步：
    它自己的目录挪不开。
-1. **取件**：默认联网。一进这一步就经 HTTPS 向伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases)
+1. **安装**（已有安装时为**升级**，见下文），一页从下载做到铺开，成功后自动进入下一页。默认联网。一进这一步就经 HTTPS 向伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases)
    要一个发布件：有正式版取最新正式版（GitHub 的 `releases/latest`），否则取最新预发布（每日构建），从不取草稿；页面与日志写明它的标签、
-   名称、日期、种类与大小。下一步时依次下载 `SHA256SUMS`、`MEMBERS.json`，再下载 `SHA256SUMS` 列出的
+   名称、日期、种类与大小。点「安装」依次下载 `SHA256SUMS`、`MEMBERS.json`，再下载 `SHA256SUMS` 列出的
    其余文件——别的一个不下——存到 `<安装根>\downloads\<标签>\`；每个文件先写 `.part`，长度等于发布件
    声明的长度才改名，1 MiB 以上的文件每满十分之一写一行进度；目录里已有的同名文件重新下载，从不直接采信，
    下载失败的 `.part` 文件会删掉。标签与每个文件名都只在只含字母、数字、`.`、`-`、`_`，不以点开头，且不是
    Windows 设备名时才使用。只走 HTTPS（重定向也一样）；连接一分钟没有数据即失败。改勾**离线**则用一个已放好同一发布件全部文件的文件夹（默认
-   `%USERPROFILE%\Downloads`，路径直接填）。查询失败写在页面与日志里，离线仍可选（勾上再取消即重新查询）；下载失败则停下。这与
-   第 4 步下载资源包网址是程序仅有的联网代码（`ureq`，阻塞式，rustls 加编译进去的 Mozilla 根证书）；
+   `%USERPROFILE%\Downloads`，路径直接填）。查询失败写在页面与日志里，可点「重新查询」，离线仍可选；下载失败则停下。这与
+   实例步下载资源包网址是程序仅有的联网代码（`ureq`，阻塞式，rustls 加编译进去的 Mozilla 根证书）；
    Runtime 没有任何联网代码。
-2. **校验与铺开**，一步做完：要求文件夹里有 `SHA256SUMS`、`MEMBERS.json`、`actingcommand-runtime-<sha>.zip`、
+   下好的（或离线的）文件夹随后在同一页校验并铺开：要求文件夹里有 `SHA256SUMS`、`MEMBERS.json`、`actingcommand-runtime-<sha>.zip`、
    `actingcommand-tools-<sha>.zip`、`acui-windows-<sha>.zip`（`<sha>` 取 `MEMBERS.json` 的
    `runtime_sha` / `ui_sha`，三个 zip 必须在 `SHA256SUMS` 里）。逐条核对 `SHA256SUMS`；解压到安装根
    下的临时目录 `.staging-<unix_ms>`；再按每个 zip 自带的 `BUILD-MANIFEST.json` 核对来源仓、提交号
@@ -397,20 +398,20 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `runtime\`（Runtime 全部载荷 + 清单，`actingd.config.example.json` 逐字节原样）、
    `ui\`（监控台载荷 + 清单）、`tools\`（**只有** `actinglab.exe`、`actingledger.exe`、
    `ac_fastdeploy_ppocr.dll`；tools 包里另外两个 exe 不装、不显示）。之后删除临时目录。
-3. **配置**：状态根默认 `<安装根>\state`（必须不存在或为空目录，**已有内容的状态根一律不接管**）；
+2. **配置**：状态根默认 `<安装根>\state`（必须不存在或为空目录，**已有内容的状态根一律不接管**）；
    生成 `secret_fingerprint_salt` = 系统随机源 32 字节的十六进制（`getrandom`；**不显示、不写日志**）；
    写 `<安装根>\actingd.config.json`，字段只有 `schema_version`、`state_root`、`bind_host`
    （127.0.0.1）、`bind_port`（0）、`secret_fingerprint_salt`、`instances`（空）——Runtime 的解析器
    `deny_unknown_fields`，多一个字段都不写。再写监控台设置 `%APPDATA%\ActingCommand\acui.toml` 的
    `state_root`、`actingd_config`、`actingd_exe`（同「设置文件」一节的格式，单引号字面量；已有的
    `lang` / `text_size` 原样保留）。写法与 `crates/acui-app/src/settings.rs` 一致，但 `acui-setup`
-   不依赖 `acui-app`，是一份小的重复写入器。这里 `instances` 留空，由第 4 步填。
+   不依赖 `acui-app`，是一份小的重复写入器。这里 `instances` 留空，由实例步填。
    **开机自启**在同一页（可选，默认不勾）：勾了才写按用户的启动文件夹里的
    `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd`，内容是
    `start "" "<安装根>\runtime\actingcommand-actingd.exe" --config "<安装根>\actingd.config.json"`；
    再勾「同时拉起监控台」才多一行 `start "" "<安装根>\ui\acui.exe"`。批处理里不出现 acsetup。
    不勾就什么也不写；启动文件夹里已有的同名文件不动，只在完成页说一句。
-4. **实例**，可选：「跳过」让 `instances` 留空，之后点监控台顶栏的「实例配置」按钮添加；完成页也这样写。
+3. **实例**，可选：「跳过」让 `instances` 留空，之后点监控台顶栏的「实例配置」按钮添加；完成页也这样写。
    可填 MuMu 安装目录（存在的文件夹的绝对路径），再点「发现实例」：目录经与下文同样的候选文件与
    `check-config` 写成 `mumu_root`——输入框为空则把它去掉；按下文升级的方式从安装根拉起 Runtime（已应答的
    先请它关闭再重新拉起：它还没有实例，读的是哪个目录也问不出来）；再用 `actingctl emulator discover` 从
@@ -425,12 +426,13 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `actingd.config.candidate-<pid>.json`，由 Runtime 的 `check-config` 检查（资源包加载不了的，写明别名、
    路径与加载器的原话）；通过才替换配置，随后重启 Runtime，`actingctl status` 必须应答。替换配置之前的
    失败写在页面与日志里，页面可继续用；之后的失败停下，任何一次日志写入失败也停下。点过「发现实例」的，
-   离开第 4 步时再问一次 `mumu_root` 的现值与 Runtime 是否应答，写进摘要。
-5. **完成**：「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe` 并关闭引导；「完成」只关闭。
-   第 4 步拉起的 Runtime 继续运行；没有在运行的，由监控台的启动器拉起。
+   离开这一步时再问一次 `mumu_root` 的现值与 Runtime 是否应答，写进摘要。
+4. **完成**：摘要写出装上的是什么（runtime 与 ui 的提交号，以及发布件标签或离线文件夹）、各路径，以及各步
+   留下的注意事项。「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe` 并关闭引导；「完成」只关闭。
+   实例步拉起的 Runtime 继续运行；没有在运行的，由监控台的启动器拉起。
 
-**升级**：安装根里已有安装时。第 1 步先读发布件的 `MEMBERS.json`（联网时只读不存，离线时读文件夹里的），
-与已装清单的两个提交号比对：两个都相同就停在这里，写「已是这个发布件的版本」，什么也不下载。否则第 2 步
+**升级**：安装根里已有安装时。安装步先读发布件的 `MEMBERS.json`（联网时只读不存，离线时读文件夹里的），
+与已装清单的两个提交号比对：两个都相同就停在这里，写「已是这个发布件的版本」，什么也不下载。否则
 在按上文校验之后：
 
 1. 用新 Runtime 对现有 `actingd.config.json` 跑 `check-config`（其中 `state_root` 必须是绝对路径）；
@@ -452,12 +454,17 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 状态根、`actingd.config.json`、监控台的 `acui.toml`、开机自启与 `downloads\` 都不动，配置那一步跳过。
 被替换的版本整份留在 `previous\`，只留一份：Runtime 不带状态迁移，也不带回滚，退回去仍是人的决定。
 
-**安装日志**：离开第 0 步起每一步都往 `<安装根>\acsetup-<unix_ms>.log` 追加人话行；失败时最后一行写
-原因，窗口上显示日志路径。除安装载荷、配置、设置、`downloads\` 下取回的发布件、（勾选时的）自启批处理、
+**进度与安装日志**：离开第 0 步起，每一行工作都写进 `<安装根>\acsetup-<unix_ms>.log`，日志写失败即停下。
+页面只显示阶段（例如「下载 / Downloading · 41.2/74.0 MiB」「安装文件 / Installing files · 118/260」）、
+一条进度条（不知道总量时——比如等 Runtime 关闭——只走动不计量）和最新一行日志作为「正在做什么」。
+人必须看到的——更早的 `previous\` 或残留目录没删掉、有 `runtime-info.json` 却没有 Runtime 应答——留在进度条下方，
+并写进摘要。失败时页面写原因、磁盘上留下了什么（临时目录删没删；新装时 `runtime\`、`ui\`、`tools\` 哪些已铺开、
+重试前须清空）和日志路径。工作进行中窗口不关；实例步拉起过 Runtime 时，第一次关闭会先说明它仍在运行。
+有程序文件却没有 `actingd.config.json` 的安装根——配置之前就中断的安装——在第 0 步写明未完成，从不当作升级。除安装载荷、配置、设置、`downloads\` 下取回的发布件、（勾选时的）自启批处理、
 `packages\` 下取回的资源包、引导拉起的 Runtime 的日志，以及升级时的 `previous\` 之外，引导写的文件只有这一个。
 
 **永远不做的事**：不装服务、不建计划任务、不改 PATH、不写注册表；不改配置模板；不碰已有内容的状态根；
-联网只为列出与下载伞仓发布件、下载第 4 步填的资源包网址；只在升级时与第 4 步按上文关闭与拉起 Runtime；
+联网只为列出与下载伞仓发布件、下载实例步填的资源包网址；只在升级时与实例步按上文关闭与拉起 Runtime；
 不解压资源包——由 Runtime 加载。Linux 上 crate
 照常编译（CI 两条腿都跑 `--workspace`），运行即以 `acsetup v1 is Windows-only` 退出。
 

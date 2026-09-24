@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Steps 2 to 4: lay the verified files out under the install root, write
+//! The install and configure steps: lay the verified files out under the install root, write
 //! the Runtime's configuration and the console's settings, the optional
 //! per-user Startup launcher, and start the console.
 //!
@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::platform;
-use crate::verify::{hex, Report, Staged, Verified, MANIFEST, MISMATCH, TOOLS_INSTALLED};
+use crate::verify::{hex, Report, Staged, Step, Total, Verified, MANIFEST, MISMATCH, TOOLS_INSTALLED};
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 
@@ -34,16 +34,20 @@ pub fn lay_out(root: &Path, verified: &Verified, report: Report<'_>) -> Result<L
     let runtime_dir = root.join("runtime");
     let ui_dir = root.join("ui");
     let tools_dir = root.join("tools");
-    copy_all(&verified.runtime, &runtime_dir, report)?;
-    copy_all(&verified.ui, &ui_dir, report)?;
-    copy_named(&verified.tools, &tools_dir, TOOLS_INSTALLED, report)?;
+    // Every manifest-bound file and the two manifests, then the three tools.
+    let total = verified.runtime.files.len() + verified.ui.files.len() + 2 + TOOLS_INSTALLED.len();
+    report.step(Step::Phase("安装文件 / Installing files", Some(Total::Items(total as u64))))?;
+    let mut done = 0;
+    copy_all(&verified.runtime, &runtime_dir, &mut done, report)?;
+    copy_all(&verified.ui, &ui_dir, &mut done, report)?;
+    copy_named(&verified.tools, &tools_dir, TOOLS_INSTALLED, &mut done, report)?;
     fs::remove_dir_all(&verified.staging).map_err(|error| {
         format!(
             "临时目录未能删除 / staging not removed: {}: {error}",
             verified.staging.display()
         )
     })?;
-    report(&format!("已删除临时目录 / staging removed: {}", verified.staging.display()))?;
+    report.line(&format!("已删除临时目录 / staging removed: {}", verified.staging.display()))?;
     Ok(LaidOut {
         actingd_exe: runtime_dir.join("actingcommand-actingd.exe"),
         acui_exe: ui_dir.join("acui.exe"),
@@ -52,17 +56,23 @@ pub fn lay_out(root: &Path, verified: &Verified, report: Report<'_>) -> Result<L
     })
 }
 
-fn copy_all(staged: &Staged, dest: &Path, report: Report<'_>) -> Result<(), String> {
+fn copy_all(staged: &Staged, dest: &Path, done: &mut u64, report: Report<'_>) -> Result<(), String> {
     let names: Vec<&str> = staged
         .files
         .iter()
         .map(String::as_str)
         .chain(std::iter::once(MANIFEST))
         .collect();
-    copy_named(staged, dest, &names, report)
+    copy_named(staged, dest, &names, done, report)
 }
 
-fn copy_named(staged: &Staged, dest: &Path, names: &[&str], report: Report<'_>) -> Result<(), String> {
+fn copy_named(
+    staged: &Staged,
+    dest: &Path,
+    names: &[&str],
+    done: &mut u64,
+    report: Report<'_>,
+) -> Result<(), String> {
     fs::create_dir_all(dest)
         .map_err(|error| format!("无法创建目录 / cannot create: {}: {error}", dest.display()))?;
     for name in names {
@@ -85,7 +95,9 @@ fn copy_named(staged: &Staged, dest: &Path, names: &[&str], report: Report<'_>) 
                 to.display()
             ));
         }
-        report(&format!("已安装 / installed: {}", to.display()))?;
+        report.line(&format!("已安装 / installed: {}", to.display()))?;
+        *done += 1;
+        report.step(Step::Done(*done))?;
     }
     Ok(())
 }
@@ -155,7 +167,7 @@ pub fn configure(
     fs::create_dir_all(state_root).map_err(|error| {
         format!("无法创建状态根 / cannot create the state root: {}: {error}", state_root.display())
     })?;
-    report(&format!("状态根已就绪 / state root ready: {}", state_root.display()))?;
+    report.line(&format!("状态根已就绪 / state root ready: {}", state_root.display()))?;
 
     let mut salt = [0u8; 32];
     getrandom::fill(&mut salt)
@@ -176,14 +188,14 @@ pub fn configure(
     let config_path = root.join("actingd.config.json");
     fs::write(&config_path, json)
         .map_err(|error| format!("写入失败 / write failed: {}: {error}", config_path.display()))?;
-    report(&format!(
+    report.line(&format!(
         "已写 Runtime 配置 / config written: {}（salt 已生成，不记录 / salt generated, not recorded）",
         config_path.display()
     ))?;
 
     let settings_path = platform::console_settings_path()?;
     write_console_settings(&settings_path, state_root, &config_path, &laid_out.actingd_exe)?;
-    report(&format!(
+    report.line(&format!(
         "已写监控台设置 / console settings written: {}",
         settings_path.display()
     ))?;
@@ -261,7 +273,7 @@ pub fn autostart(
     let path = platform::startup_launcher_path()?;
     if !wanted {
         let existing = path.is_file().then(|| path.clone());
-        report(&match &existing {
+        report.line(&match &existing {
             Some(existing) => format!(
                 "未勾选开机自启；启动文件夹已有 {}，未改动 / autostart not wanted; the existing launcher is left as is",
                 existing.display()
@@ -293,7 +305,7 @@ pub fn autostart(
     }
     fs::write(&path, body)
         .map_err(|error| format!("写入失败 / write failed: {}: {error}", path.display()))?;
-    report(&format!(
+    report.line(&format!(
         "已写开机自启 / autostart written: {}{}",
         path.display(),
         if with_console {

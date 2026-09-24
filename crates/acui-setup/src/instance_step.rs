@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Step 4, on a fresh install: the instances, optional. A zero-instance
+//! The instances step, on a fresh install, optional. A zero-instance
 //! Runtime is started from the install root and `actingctl emulator discover`
 //! lists the emulator's instances — it reads the MuMu manager's inventory and
 //! starts or stops none. The instances a person picks are written into the
@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::fetch;
 use crate::runtime::{self, ACTINGCTL, ACTINGD};
-use crate::verify::{hex, Report};
+use crate::verify::{hex, Report, Step};
 
 /// The default input and capture for a MuMu instance: `nemu_ipc` capture
 /// needs `mumu_root` in the configuration; without it, capture goes through
@@ -77,7 +77,7 @@ pub fn start(root: &Path, mumu_root: Option<&Path>, report: Report<'_>) -> Resul
     ensure_running(root, &paths, true, report)
 }
 
-/// Step 4's outcome as it stands at the end: the configured MuMu folder, and
+/// The instances step's outcome as it stands at the end: the configured MuMu folder, and
 /// whether a Runtime answers — asked then, not remembered.
 pub struct Settled {
     pub mumu_root: Option<String>,
@@ -100,7 +100,8 @@ pub fn settle(root: &Path, report: Report<'_>) -> Result<Settled, String> {
 /// The emulator's instances, as the running Runtime lists them.
 pub fn discover(root: &Path, report: Report<'_>) -> Result<Vec<Found>, String> {
     let paths = paths(root)?;
-    report("发现模拟器实例 / discovering emulator instances")?;
+    report.step(Step::Phase("查找模拟器实例 / Finding the emulator's instances", None))?;
+    report.line("发现模拟器实例 / discovering emulator instances")?;
     let out = runtime::run(
         Command::new(&paths.actingctl)
             .arg("emulator")
@@ -141,7 +142,7 @@ pub fn discover(root: &Path, report: Report<'_>) -> Result<Vec<Found>, String> {
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    report(&format!("发现 {} 个实例 / {} instances found", found.len(), found.len()))?;
+    report.line(&format!("发现 {} 个实例 / {} instances found", found.len(), found.len()))?;
     Ok(found)
 }
 
@@ -180,7 +181,7 @@ pub fn restart(root: &Path, report: Report<'_>) -> Result<String, String> {
     let out = runtime::run(Command::new(&paths.actingctl).arg("status").arg("--state-root").arg(&paths.state_root))?;
     match out.success {
         true => {
-            report("Runtime 已按新配置运行 / the Runtime runs with the new configuration")?;
+            report.line("Runtime 已按新配置运行 / the Runtime runs with the new configuration")?;
             Ok(status_line(out.stdout.trim()))
         }
         false => Err(format!(
@@ -221,7 +222,7 @@ fn package_path(root: &Path, pick: &Chosen, report: Report<'_>) -> Result<PathBu
     let given = pick.package.trim();
     let expected = Some(pick.sha256.trim()).filter(|sha| !sha.is_empty());
     if given.starts_with("https://") || given.starts_with("http://") {
-        report(&format!("下载资源包 / fetching the resource package for {}: {given}", pick.alias))?;
+        report.line(&format!("下载资源包 / fetching the resource package for {}: {given}", pick.alias))?;
         let dir = root.join("packages").join(pick.index.to_string());
         return fetch::fetch_url(given, &dir, "package.zip", expected, report);
     }
@@ -250,6 +251,7 @@ fn package_path(root: &Path, pick: &Chosen, report: Report<'_>) -> Result<PathBu
 /// installed Runtime's `check-config`, and put in place only when accepted.
 fn set_config(paths: &Paths, report: Report<'_>, edit: impl FnOnce(&mut Value)) -> Result<(), String> {
     let mut document = read_config(paths)?;
+    report.step(Step::Phase("检查并写入配置 / Checking and writing the configuration", None))?;
     edit(&mut document);
     let mut candidate_text = serde_json::to_string_pretty(&document)
         .map_err(|error| format!("配置序列化失败 / config serialization failed: {error}"))?;
@@ -272,7 +274,7 @@ fn set_config(paths: &Paths, report: Report<'_>, edit: impl FnOnce(&mut Value)) 
         return Err(fetch::discard(&candidate, reason));
     }
     let path = paths.config.display();
-    report(&format!("配置已更新并通过检查 / configuration updated and checked: {path}"))
+    report.line(&format!("配置已更新并通过检查 / configuration updated and checked: {path}"))
         .map_err(|error| format!("{error}\n配置已替换为新内容 / the configuration was replaced: {path}"))
 }
 
@@ -288,11 +290,12 @@ fn ensure_running(root: &Path, paths: &Paths, restart: bool, report: Report<'_>)
     match runtime::runtime_answers(&paths.actingctl, &paths.state_root, report)? {
         Ok(()) if !restart => return Ok(()),
         Ok(()) => {
-            report("请求 Runtime 关闭，以便按新配置重启 / asking the Runtime to shut down, to restart it on the new configuration")?;
+            report.line("请求 Runtime 关闭，以便按新配置重启 / asking the Runtime to shut down, to restart it on the new configuration")?;
             runtime::request_shutdown(&paths.actingctl, &paths.state_root)?;
         }
         Err(_) => {}
     }
-    report("拉起 Runtime / starting the Runtime")?;
+    report.step(Step::Phase("拉起 Runtime / Starting the Runtime", None))?;
+    report.line("拉起 Runtime / starting the Runtime")?;
     runtime::restart(root, &paths.actingd, &paths.config, &paths.state_root, report).map(|_| ())
 }

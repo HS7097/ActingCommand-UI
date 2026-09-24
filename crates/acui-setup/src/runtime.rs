@@ -60,7 +60,7 @@ pub(crate) fn runtime_answers(
     report: Report<'_>,
 ) -> Result<Result<(), Option<String>>, String> {
     if !state_root.join("runtime-info.json").is_file() {
-        report("Runtime 未在运行 / the Runtime is not running")?;
+        report.line("Runtime 未在运行 / the Runtime is not running")?;
         return Ok(Err(None));
     }
     let out = run(Command::new(actingctl).arg("status").arg("--state-root").arg(state_root))?;
@@ -73,7 +73,7 @@ pub(crate) fn runtime_answers(
         out.exit,
         out.stderr.trim()
     );
-    report(&line)?;
+    report.warn(&line)?;
     Ok(Err(Some(line)))
 }
 
@@ -189,7 +189,7 @@ pub(crate) fn restart(
             .and_then(|text| serde_json::from_str::<Value>(&text).ok())
             .and_then(|info| info["pid"].as_u64());
         if pid == Some(u64::from(child.id())) {
-            report(&format!("Runtime 已就绪 / the Runtime is up; 日志 / log: {}", log.display()))?;
+            report.line(&format!("Runtime 已就绪 / the Runtime is up; 日志 / log: {}", log.display()))?;
             return Ok(log);
         }
         std::thread::sleep(Duration::from_millis(250));

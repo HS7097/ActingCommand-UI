@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Step 1 online: the release to install, taken from the umbrella repository's
+//! The install step online: the release to install, taken from the umbrella repository's
 //! Releases over HTTPS, and its files fetched into `<root>\downloads\<tag>\`.
 //! The newest stable release when there is one, else the newest pre-release
 //! (the daily builds). Only `SHA256SUMS`, `MEMBERS.json` and what `SHA256SUMS`
-//! lists are fetched; step 2 then verifies that folder exactly as it verifies
-//! one a person filled by hand. Step 4 fetches a resource package a person
+//! lists are fetched; that folder is then verified exactly as one a person
+//! filled by hand. The instances step fetches a resource package a person
 //! gives as a URL (`fetch_url`). These are the program's only network code.
 
 use std::fs::{self, File};
@@ -15,7 +15,7 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
-use crate::verify::{self, Report};
+use crate::verify::{self, Report, Step, Total};
 
 /// The newest stable release, as GitHub states it: 404 while there is none.
 const LATEST: &str = "https://api.github.com/repos/HS7097/ActingCommand/releases/latest";
@@ -162,6 +162,7 @@ pub fn fetch_url(
         .map_err(|error| format!("无法创建 / cannot create {}: {error}", dir.display()))?;
     let failed = |error: &dyn std::fmt::Display| format!("下载失败 / download failed: {url}: {error}");
     let response = agent().get(url).call().map_err(|error| failed(&error))?;
+    report.step(Step::Phase("下载资源包 / Downloading the resource package", None))?;
     let part = dir.join(format!("{name}.part"));
     let path = dir.join(&name);
     let outcome = (|| {
@@ -182,7 +183,7 @@ pub fn fetch_url(
             written += read as u64;
             if written >= mark + (16 << 20) {
                 mark = written;
-                report(&format!("  {name}: {} MiB", written >> 20))?;
+                report.line(&format!("  {name}: {} MiB", written >> 20))?;
             }
         }
         file.sync_all().map_err(cannot_write)?;
@@ -195,13 +196,13 @@ pub fn fetch_url(
                 ));
             }
         }
-        report(&format!("已下载 / fetched: {name}（{written} 字节 / bytes，sha256 {actual}）"))
+        report.line(&format!("已下载 / fetched: {name}（{written} 字节 / bytes，sha256 {actual}）"))
     })();
     if let Err(reason) = outcome {
         return Err(discard(&part, reason));
     }
     if path.exists() {
-        report(&format!("替换已有的 / replacing the existing {}", path.display()))
+        report.line(&format!("替换已有的 / replacing the existing {}", path.display()))
             .map_err(|error| discard(&part, error))?;
     }
     if let Err(error) = fs::rename(&part, &path) {
@@ -227,11 +228,13 @@ pub fn discard(path: &Path, reason: String) -> String {
 pub fn fetch(release: &Release, dir: &Path, report: Report<'_>) -> Result<(), String> {
     fs::create_dir_all(dir)
         .map_err(|error| format!("无法创建下载目录 / cannot create {}: {error}", dir.display()))?;
-    report(&format!("下载目录 / download folder: {}", dir.display()))?;
+    report.line(&format!("下载目录 / download folder: {}", dir.display()))?;
+    report.step(Step::Phase("下载 / Downloading", Some(Total::Bytes(release.size()))))?;
     let agent = agent();
     let mut fetched = Vec::new();
+    let mut done = 0;
     for name in ["SHA256SUMS", "MEMBERS.json"] {
-        get(&agent, release, name, dir, report)?;
+        done += get(&agent, release, name, dir, done, report)?;
         fetched.push(name.to_string());
     }
     let sums_path = dir.join("SHA256SUMS");
@@ -239,22 +242,24 @@ pub fn fetch(release: &Release, dir: &Path, report: Report<'_>) -> Result<(), St
         .map_err(|error| format!("读取失败 / read failed: {}: {error}", sums_path.display()))?;
     for (_, name) in verify::parse_sha256sums(&sums)? {
         if !fetched.contains(&name) {
-            get(&agent, release, &name, dir, report)?;
+            done += get(&agent, release, &name, dir, done, report)?;
             fetched.push(name);
         }
     }
-    report("下载完成 / fetched")
+    report.line("下载完成 / fetched")
 }
 
-/// One file of the release. A failed download removes its `.part` file, and
-/// says so when it cannot.
+/// One file of the release, `before` bytes into the whole download; returns
+/// its length. A failed download removes its `.part` file, and says so when it
+/// cannot.
 fn get(
     agent: &ureq::Agent,
     release: &Release,
     name: &str,
     dir: &Path,
+    before: u64,
     report: Report<'_>,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     if !plain(name) {
         return Err(format!("发布件文件名不能使用 / The release file name cannot be used: {name}"));
     }
@@ -262,12 +267,13 @@ fn get(
         format!("发布件 {} 缺少 / release {} lacks {name}", release.tag_name, release.tag_name)
     })?;
     let part = dir.join(format!("{name}.part"));
-    let written = download(agent, asset, &part, report).map_err(|reason| discard(&part, reason))?;
+    let written = download(agent, asset, &part, before, report).map_err(|reason| discard(&part, reason))?;
     let path = dir.join(name);
     if let Err(error) = fs::rename(&part, &path) {
         return Err(discard(&part, format!("无法改名 / cannot rename {}: {error}", part.display())));
     }
-    report(&format!("已下载 / fetched: {name}（{written} 字节 / bytes）"))
+    report.line(&format!("已下载 / fetched: {name}（{written} 字节 / bytes）"))?;
+    Ok(written)
 }
 
 /// Streams one asset into `part`, a progress line per tenth for a file of a
@@ -276,6 +282,7 @@ fn download(
     agent: &ureq::Agent,
     asset: &Asset,
     part: &Path,
+    before: u64,
     report: Report<'_>,
 ) -> Result<u64, String> {
     let name = &asset.name;
@@ -298,10 +305,11 @@ fn download(
         }
         file.write_all(&buffer[..read]).map_err(cannot_write)?;
         written += read as u64;
+        report.step(Step::Done(before + written))?;
         let now = written.saturating_mul(10) / asset.size.max(1);
         if asset.size >= 1 << 20 && now > tenth && now < 10 {
             tenth = now;
-            report(&format!("  {name}: {}%", now * 10))?;
+            report.line(&format!("  {name}: {}%", now * 10))?;
         }
     }
     file.sync_all().map_err(cannot_write)?;
