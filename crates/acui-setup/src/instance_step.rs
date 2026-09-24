@@ -5,8 +5,8 @@
 //! starts or stops none. The instances a person picks are written into the
 //! configuration as a candidate first, checked by `check-config`, and put in
 //! place; the Runtime is then restarted so it binds them. A resource package
-//! given as an `https://` URL is fetched into `<root>\packages\` first; the
-//! Runtime only ever sees a local path.
+//! given as an `https://` URL is fetched into `<root>\packages\<index>\`
+//! first; the Runtime only ever sees a local file.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -63,17 +63,33 @@ fn paths(root: &Path) -> Result<Paths, String> {
     })
 }
 
-/// `mumu_root` written when given, and a Runtime running that has read it:
-/// with a folder given, one that answers is restarted — it has no instance
-/// yet, and whether it read this folder cannot be asked.
+/// `mumu_root` made what the page says — the folder, or none — and a Runtime
+/// running that has read it: one that answers is restarted, since it has no
+/// instance yet and which folder it read cannot be asked.
 pub fn start(root: &Path, mumu_root: Option<&Path>, report: Report<'_>) -> Result<(), String> {
     let paths = paths(root)?;
-    if let Some(mumu) = mumu_root {
-        set_config(&paths, report, |document| {
-            document["mumu_root"] = json!(mumu.display().to_string());
-        })?;
-    }
-    ensure_running(root, &paths, mumu_root.is_some(), report)
+    set_config(&paths, report, |document| match mumu_root {
+        Some(mumu) => document["mumu_root"] = json!(mumu.display().to_string()),
+        None => {
+            document.as_object_mut().map(|object| object.remove("mumu_root"));
+        }
+    })?;
+    ensure_running(root, &paths, true, report)
+}
+
+/// Step 4's outcome as it stands at the end: the configured MuMu folder, and
+/// whether a Runtime answers — asked then, not remembered.
+pub struct Settled {
+    pub mumu_root: Option<String>,
+    pub running: Result<bool, String>,
+}
+
+pub fn settle(root: &Path, report: Report<'_>) -> Result<Settled, String> {
+    let paths = paths(root)?;
+    let mumu_root = read_config(&paths)?["mumu_root"].as_str().map(str::to_string);
+    let running = runtime::runtime_answers(&paths.actingctl, &paths.state_root, report)
+        .map(|answers| answers.is_ok());
+    Ok(Settled { mumu_root, running })
 }
 
 /// The emulator's instances, as the running Runtime lists them.
@@ -89,7 +105,7 @@ pub fn discover(root: &Path, report: Report<'_>) -> Result<Vec<Found>, String> {
     )?;
     if !out.success {
         return Err(format!(
-            "发现实例失败（退出码 {}）/ discovery failed (exit {}): {}\n填上 MuMu 安装目录再试 / fill in the MuMu folder and try again",
+            "发现实例失败（退出码 {}）/ discovery failed (exit {}): {}\n检查 MuMu 安装目录后再试 / check the MuMu folder and try again",
             out.exit,
             out.exit,
             out.stderr.trim()
@@ -129,13 +145,7 @@ pub fn discover(root: &Path, report: Report<'_>) -> Result<Vec<Found>, String> {
 /// configuration is as it was.
 pub fn write(root: &Path, chosen: &[Chosen], report: Report<'_>) -> Result<(), String> {
     let paths = paths(root)?;
-    let with_mumu = {
-        let text = fs::read_to_string(&paths.config)
-            .map_err(|error| format!("读取失败 / read failed: {}: {error}", paths.config.display()))?;
-        let document: Value = serde_json::from_str(&text)
-            .map_err(|error| format!("配置无法解析 / config unreadable: {error}"))?;
-        document["mumu_root"].is_string()
-    };
+    let with_mumu = read_config(&paths)?["mumu_root"].is_string();
     let mut blocks = Vec::new();
     for pick in chosen {
         let package = package_path(root, pick, report)?;
@@ -177,19 +187,21 @@ pub fn restart(root: &Path, report: Report<'_>) -> Result<String, String> {
     }
 }
 
-/// A local package as an absolute path that exists; an `https://` one fetched
-/// into `<root>\packages\`.
+/// A local package as an absolute path to a file; an `https://` one fetched
+/// into `<root>\packages\<index>\`, so two instances' packages never share a
+/// name.
 fn package_path(root: &Path, pick: &Chosen, report: Report<'_>) -> Result<PathBuf, String> {
     let given = pick.package.trim();
     let expected = Some(pick.sha256.trim()).filter(|sha| !sha.is_empty());
     if given.starts_with("https://") || given.starts_with("http://") {
         report(&format!("下载资源包 / fetching the resource package for {}: {given}", pick.alias))?;
-        return fetch::fetch_url(given, &root.join("packages"), &format!("{}.zip", pick.index), expected, report);
+        let dir = root.join("packages").join(pick.index.to_string());
+        return fetch::fetch_url(given, &dir, "package.zip", expected, report);
     }
     let path = PathBuf::from(given);
-    if !path.is_absolute() || !path.exists() {
+    if !path.is_absolute() || !path.is_file() {
         return Err(format!(
-            "{} 的资源包路径须为存在的绝对路径 / the resource package of {} must be an existing absolute path: {given}",
+            "{} 的资源包须为存在的文件的绝对路径 / the resource package of {} must be the absolute path of an existing file: {given}",
             pick.alias, pick.alias
         ));
     }
@@ -210,10 +222,7 @@ fn package_path(root: &Path, pick: &Chosen, report: Report<'_>) -> Result<PathBu
 /// The configuration edited as a candidate next to it, checked by the
 /// installed Runtime's `check-config`, and put in place only when accepted.
 fn set_config(paths: &Paths, report: Report<'_>, edit: impl FnOnce(&mut Value)) -> Result<(), String> {
-    let text = fs::read_to_string(&paths.config)
-        .map_err(|error| format!("读取失败 / read failed: {}: {error}", paths.config.display()))?;
-    let mut document: Value = serde_json::from_str(&text)
-        .map_err(|error| format!("配置无法解析 / config unreadable: {error}"))?;
+    let mut document = read_config(paths)?;
     edit(&mut document);
     let mut candidate_text = serde_json::to_string_pretty(&document)
         .map_err(|error| format!("配置序列化失败 / config serialization failed: {error}"))?;
@@ -224,14 +233,23 @@ fn set_config(paths: &Paths, report: Report<'_>, edit: impl FnOnce(&mut Value)) 
     fs::write(&candidate, candidate_text)
         .map_err(|error| format!("写入失败 / write failed: {}: {error}", candidate.display()))?;
     if let Err(reason) = runtime::check_config(&paths.actingd, &candidate) {
-        let _ = fs::remove_file(&candidate);
-        return Err(format!("{reason}\n配置未改动 / the configuration was not changed"));
+        let reason = format!("{reason}\n配置未改动 / the configuration was not changed");
+        return Err(fetch::discard(&candidate, reason));
     }
-    fs::rename(&candidate, &paths.config).map_err(|error| {
-        let _ = fs::remove_file(&candidate);
-        format!("无法写入配置 / cannot put the configuration in place: {}: {error}", paths.config.display())
-    })?;
+    if let Err(error) = fs::rename(&candidate, &paths.config) {
+        let reason = format!(
+            "无法写入配置，配置未改动 / cannot put the configuration in place, it was not changed: {}: {error}",
+            paths.config.display()
+        );
+        return Err(fetch::discard(&candidate, reason));
+    }
     report(&format!("配置已更新并通过检查 / configuration updated and checked: {}", paths.config.display()))
+}
+
+fn read_config(paths: &Paths) -> Result<Value, String> {
+    let text = fs::read_to_string(&paths.config)
+        .map_err(|error| format!("读取失败 / read failed: {}: {error}", paths.config.display()))?;
+    serde_json::from_str(&text).map_err(|error| format!("配置无法解析 / config unreadable: {error}"))
 }
 
 /// A Runtime running on the configuration as it now is: started when none

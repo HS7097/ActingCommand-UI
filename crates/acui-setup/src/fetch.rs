@@ -4,7 +4,8 @@
 //! The newest stable release when there is one, else the newest pre-release
 //! (the daily builds). Only `SHA256SUMS`, `MEMBERS.json` and what `SHA256SUMS`
 //! lists are fetched; step 2 then verifies that folder exactly as it verifies
-//! one a person filled by hand. This is the program's only network code.
+//! one a person filled by hand. Step 4 fetches a resource package a person
+//! gives as a URL (`fetch_url`). These are the program's only network code.
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -140,7 +141,8 @@ pub fn members(release: &Release) -> Result<(String, String), String> {
 /// A file named by a person's `https://` URL — a resource package — fetched
 /// into `dir`, under the URL's last path segment when that is a plain name,
 /// else `fallback`: through a `.part` file, its sha256 taken on the way and
-/// compared with `expected` when one is given. Returns the file's path.
+/// compared with `expected` when one is given; a file already there is
+/// replaced, and said so. Returns the file's path.
 pub fn fetch_url(
     url: &str,
     dir: &Path,
@@ -196,14 +198,25 @@ pub fn fetch_url(
         report(&format!("已下载 / fetched: {name}（{written} 字节 / bytes，sha256 {actual}）"))
     })();
     if let Err(reason) = outcome {
-        let _ = fs::remove_file(&part);
-        return Err(reason);
+        return Err(discard(&part, reason));
+    }
+    if path.exists() {
+        report(&format!("替换已有的 / replacing the existing {}", path.display()))?;
     }
     if let Err(error) = fs::rename(&part, &path) {
-        let _ = fs::remove_file(&part);
-        return Err(format!("无法改名 / cannot rename {}: {error}", part.display()));
+        return Err(discard(&part, format!("无法改名 / cannot rename {}: {error}", part.display())));
     }
     Ok(path)
+}
+
+/// `reason`, with a file left over from the failed work removed — or, when it
+/// could not be, that said too.
+pub fn discard(path: &Path, reason: String) -> String {
+    match fs::remove_file(path) {
+        Ok(()) => reason,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => reason,
+        Err(error) => format!("{reason}\n未完成的文件未能删除 / unfinished file not removed: {}: {error}", path.display()),
+    }
 }
 
 /// Fetches `release` into `dir`: `SHA256SUMS` and `MEMBERS.json`, then every
@@ -248,23 +261,10 @@ fn get(
         format!("发布件 {} 缺少 / release {} lacks {name}", release.tag_name, release.tag_name)
     })?;
     let part = dir.join(format!("{name}.part"));
-    let written = match download(agent, asset, &part, report) {
-        Ok(written) => written,
-        Err(reason) => {
-            return Err(match fs::remove_file(&part) {
-                Ok(()) => reason,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => reason,
-                Err(error) => format!(
-                    "{reason}\n未完成的文件未能删除 / unfinished file not removed: {}: {error}",
-                    part.display()
-                ),
-            });
-        }
-    };
+    let written = download(agent, asset, &part, report).map_err(|reason| discard(&part, reason))?;
     let path = dir.join(name);
     if let Err(error) = fs::rename(&part, &path) {
-        let _ = fs::remove_file(&part);
-        return Err(format!("无法改名 / cannot rename {}: {error}", part.display()));
+        return Err(discard(&part, format!("无法改名 / cannot rename {}: {error}", part.display())));
     }
     report(&format!("已下载 / fetched: {name}（{written} 字节 / bytes）"))
 }

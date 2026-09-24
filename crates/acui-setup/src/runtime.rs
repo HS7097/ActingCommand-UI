@@ -18,7 +18,7 @@ pub(crate) const ACTINGD: &str = "actingcommand-actingd.exe";
 pub(crate) const ACTINGCTL: &str = "actingctl.exe";
 pub(crate) const CHECK_SCHEMA: &str = "actingcommand.actingd.check-config.v1";
 /// How long `request-shutdown --wait` waits for the Runtime to be gone, and
-/// how long any child the upgrade runs may take in all.
+/// how long any child the wizard runs may take in all.
 pub(crate) const SHUTDOWN_WAIT_SECONDS: u64 = 60;
 pub(crate) const CHILD_TIMEOUT: Duration = Duration::from_secs(SHUTDOWN_WAIT_SECONDS + 30);
 /// How long a restarted Runtime has to write its own `runtime-info.json`.
@@ -77,8 +77,8 @@ pub(crate) fn runtime_answers(
     Ok(Err(Some(line)))
 }
 
-/// `<new actingd> check-config --config <config>`: the report is stdout;
-/// stderr is kept for the failure text.
+/// `<actingd> check-config --config <config>`: the report is stdout; stderr
+/// is kept for the failure text.
 pub(crate) fn check_config(actingd: &Path, config: &Path) -> Result<(), String> {
     let out = run(Command::new(actingd).arg("check-config").arg("--config").arg(config))?;
     let report: Value = serde_json::from_str(out.stdout.trim()).unwrap_or_default();
@@ -115,7 +115,7 @@ pub(crate) fn check_config(actingd: &Path, config: &Path) -> Result<(), String> 
     }
 }
 
-/// `<new actingctl> request-shutdown --state-root <root> --wait <s>`: exit 0
+/// `<actingctl> request-shutdown --state-root <root> --wait <s>`: exit 0
 /// once the ownership record is closed and the process gone. Anything else
 /// may still end with the Runtime stopping, and is said that way.
 pub(crate) fn request_shutdown(actingctl: &Path, state_root: &Path) -> Result<(), String> {

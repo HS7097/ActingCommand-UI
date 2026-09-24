@@ -239,7 +239,7 @@ export component SetupWindow inherits Window {
                     spacing: 8px;
                     Head { text: "实例（可选）/ Instances (optional)"; }
                     Caption {
-                        text: "从安装根拉起 Runtime，用 actingctl emulator discover 读 MuMu 的实例清单——不启动、不关闭任何模拟器。勾选要用的实例并填别名、application_id（游戏包名）、资源包（本机绝对路径，或 https:// 网址：下载到 <安装根>\\packages\\；填了 sha256 就核对）。候选配置先经 check-config 检查，通过才替换，再重启 Runtime 绑定实例。输入用 adb_shell_input；抓图在填了 MuMu 目录时用 nemu_ipc，否则用 adb。不配置就点「跳过」。\nThe Runtime is started from the install root and actingctl emulator discover reads MuMu's instance list — no emulator is started or stopped. Tick the instances to use and fill in an alias, the application_id (the game's package) and a resource package (a local absolute path, or an https:// URL fetched into <install root>\\packages\\, checked against the sha256 when one is given). The candidate configuration is checked by check-config before it replaces the configuration, then the Runtime restarts to bind the instances. Input: adb_shell_input; capture: nemu_ipc with the MuMu folder, else adb. Skip to configure none.";
+                        text: "从安装根拉起 Runtime，用 actingctl emulator discover 读 MuMu 的实例清单——不启动、不关闭任何模拟器。勾选要用的实例并填别名、application_id（游戏包名）、资源包（本机文件的绝对路径，或 https:// 网址：下载到 <安装根>\\packages\\<序号>\\；填了 sha256 就核对）。候选配置先经 check-config 检查，通过才替换，再重启 Runtime 绑定实例。输入用 adb_shell_input；抓图在填了 MuMu 目录时用 nemu_ipc，否则用 adb。不配置就点「跳过」。\nThe Runtime is started from the install root and actingctl emulator discover reads MuMu's instance list — no emulator is started or stopped. Tick the instances to use and fill in an alias, the application_id (the game's package) and a resource package (a local file's absolute path, or an https:// URL fetched into <install root>\\packages\\<index>\\, checked against the sha256 when one is given). The candidate configuration is checked by check-config before it replaces the configuration, then the Runtime restarts to bind the instances. Input: adb_shell_input; capture: nemu_ipc with the MuMu folder, else adb. Skip to configure none.";
                     }
                     HorizontalLayout {
                         spacing: 8px;
@@ -331,7 +331,7 @@ export component SetupWindow inherits Window {
                     Head { text: "完成 / Finish"; }
                     Transcript { text: root.summary; }
                     Caption {
-                        text: "「启动监控台」分离拉起 ui\\acui.exe 并关闭本引导。新装时，第 4 步拉起过的 Runtime 仍在运行，否则由监控台的启动器拉起；升级时，原先在运行的 Runtime 已用新版本重新拉起。\n\"Open console\" starts ui\\acui.exe detached and closes this wizard. After a fresh install, a Runtime started in step 4 is still running, else the console's launcher starts one; after an upgrade, a Runtime that was running has been started again on the new version.";
+                        text: "「启动监控台」分离拉起 ui\\acui.exe 并关闭本引导。新装时 Runtime 是否在运行见上面的摘要，未在运行就由监控台的启动器拉起；升级时，原先在运行的 Runtime 已用新版本重新拉起。\n\"Open console\" starts ui\\acui.exe detached and closes this wizard. After a fresh install the summary above says whether a Runtime runs; if none does, the console's launcher starts one. After an upgrade, a Runtime that was running has been started again on the new version.";
                     }
                     Body { text: root.note; }
                 }

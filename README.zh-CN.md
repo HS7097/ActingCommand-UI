@@ -411,19 +411,23 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    再勾「同时拉起监控台」才多一行 `start "" "<安装根>\ui\acui.exe"`。批处理里不出现 acsetup。
    不勾就什么也不写；启动文件夹里已有的同名文件不动，只在完成页说一句。
 4. **实例**，可选：「跳过」让 `instances` 留空，之后点监控台顶栏的「实例配置」按钮添加；完成页也这样写。
-   可填 MuMu 安装目录（绝对路径），再点「发现实例」：目录写成 `mumu_root`，按下文升级的方式从安装根拉起
-   Runtime（填了目录时，已应答的先请它关闭再重新拉起），用 `actingctl emulator discover` 从 MuMu 自己的
-   实例清单列出实例——不启动、不关闭任何模拟器。每个勾选的实例填别名（默认 `mumu-<序号>`）、
-   `application_id`（「BlueArchiveJP」按钮填 `com.YostarJP.BlueArchive`）和资源包：已存在的绝对路径，
-   或 `https://` 网址——经 `.part` 文件下载到 `<安装根>\packages\`；填了 sha256 就核对。「写入实例」为每个
+   可填 MuMu 安装目录（存在的文件夹的绝对路径），再点「发现实例」：目录经与下文同样的候选文件与
+   `check-config` 写成 `mumu_root`——输入框为空则把它去掉；按下文升级的方式从安装根拉起 Runtime（已应答的
+   先请它关闭再重新拉起：它还没有实例，读的是哪个目录也问不出来）；再用 `actingctl emulator discover` 从
+   MuMu 自己的实例清单列出实例——不启动、不关闭任何模拟器。发现前先清空列表；发现失败写明后页面可继续用，
+   即便目录已经写入。每个勾选的实例填别名（默认 `mumu-<序号>`）、`application_id`（「BlueArchiveJP」
+   按钮填 `com.YostarJP.BlueArchive`）和资源包：已存在文件的绝对路径，或 `https://` 网址——经 `.part`
+   文件下载到 `<安装根>\packages\<序号>\`，文件名取网址最后一段（不是普通文件名时用 `package.zip`；已有的
+   同名文件被替换并写明）；填了 sha256 就核对。「写入实例」为每个
    勾选的实例写一项——别名、新的 `instance_id`（`instance_` + 系统随机源 32 位十六进制）、
    `instance_index`、`application_id`、`touch_backend` 为 `adb_shell_input`、`capture_backend` 填了
    MuMu 目录为 `nemu_ipc` 否则 `adb`、资源包的绝对路径作 `resource_package`——先写进配置旁的
    `actingd.config.candidate-<pid>.json`，由 Runtime 的 `check-config` 检查（资源包加载不了的，写明别名、
    路径与加载器的原话）；通过才替换配置，随后重启 Runtime，`actingctl status` 必须应答。替换配置之前的
-   失败写在页面与日志里，页面可继续用；之后的失败停下。
+   失败写在页面与日志里，页面可继续用；之后的失败停下，任何一次日志写入失败也停下。点过「发现实例」的，
+   离开第 4 步时再问一次 `mumu_root` 的现值与 Runtime 是否应答，写进摘要。
 5. **完成**：「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe` 并关闭引导；「完成」只关闭。
-   第 4 步拉起的 Runtime 继续运行；否则由监控台的启动器拉起。
+   第 4 步拉起的 Runtime 继续运行；没有在运行的，由监控台的启动器拉起。
 
 **升级**：安装根里已有安装时。第 1 步先读发布件的 `MEMBERS.json`（联网时只读不存，离线时读文件夹里的），
 与已装清单的两个提交号比对：两个都相同就停在这里，写「已是这个发布件的版本」，什么也不下载。否则第 2 步
@@ -458,7 +462,8 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 照常编译（CI 两条腿都跑 `--workspace`），运行即以 `acsetup v1 is Windows-only` 退出。
 
 依赖多四个，都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`
-（`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（salt）、
+（`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（salt 与
+`instance_id`）、
 `ureq`（取件；`default-features = false`，只开 `tls`：rustls、它的 `ring` 实现与编译进去的
 `webpki-roots`，不用系统 TLS 库）。
 

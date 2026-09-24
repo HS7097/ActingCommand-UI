@@ -35,7 +35,7 @@ use slint::ComponentHandle;
 
 use fetch::Release;
 use install::{Autostart, Configured, LaidOut};
-use instance_step::{Chosen, Found};
+use instance_step::{Chosen, Found, Settled};
 use log::InstallLog;
 use slint::{Model, VecModel};
 use upgrade::{Installed, Upgraded};
@@ -57,10 +57,14 @@ struct State {
     laid_out: Option<LaidOut>,
     configured: Option<Configured>,
     autostart: Option<Autostart>,
-    /// Step 4 started a Runtime, and it runs still.
-    runtime_started: bool,
+    /// Step 4 touched the configuration and the Runtime: the finish page then
+    /// asks how they stand.
+    discover_tried: bool,
+    settled: Option<Settled>,
     /// The aliases step 4 wrote into the configuration.
     instances: Vec<String>,
+    /// The first log write that failed: nothing goes on after it.
+    log_error: Option<String>,
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -139,7 +143,7 @@ fn install_callbacks(window: &SetupWindow, state: &Shared) {
         window.on_skip_instances(move || {
             if let Some(window) = weak.upgrade() {
                 match write_log(&state, "实例：跳过 / instances: skipped") {
-                    Ok(()) => finish(&window, &state),
+                    Ok(()) => settle_and_finish(&window, &state),
                     Err(reason) => fail(&state, &window.as_weak(), reason),
                 }
             }
@@ -206,12 +210,18 @@ fn reporter(state: &Shared, weak: &slint::Weak<SetupWindow>) -> impl FnMut(&str)
 
 fn write_log(state: &Shared, line: &str) -> Result<(), String> {
     let mut state = lock(state);
-    let Some(log) = state.log.as_mut() else {
-        return Err("日志尚未创建 / The log has not been created".into());
+    let written = match state.log.as_mut() {
+        None => Err("日志尚未创建 / The log has not been created".to_string()),
+        Some(log) => {
+            let path = log.path().display().to_string();
+            log.line(line)
+                .map_err(|error| format!("日志写入失败 / Log write failed: {path}: {error}"))
+        }
     };
-    let path = log.path().display().to_string();
-    log.line(line)
-        .map_err(|error| format!("日志写入失败 / Log write failed: {path}: {error}"))
+    if let Err(error) = &written {
+        state.log_error.get_or_insert_with(|| error.clone());
+    }
+    written
 }
 
 /// The loud stop: the reason as the log's last line, then the page that
@@ -628,26 +638,34 @@ fn run_configure(window: &SetupWindow, state: &Shared) {
 
 /// Step 4's Discover: the MuMu folder written when given, a Runtime running,
 /// and the instances it lists shown for picking. A failure is said on the page
-/// and in the log; the person may correct the folder, try again, or skip. The
-/// summary says a Runtime runs only after one was seen up.
+/// and in the log; the person may correct the folder, try again, or skip. An
+/// empty folder field takes `mumu_root` out of the configuration.
 fn begin_discover(window: &SetupWindow, state: &Shared) {
     let text = window.get_mumu_root().trim().to_string();
     let mumu = (!text.is_empty()).then(|| PathBuf::from(&text));
-    if mumu.as_ref().is_some_and(|mumu| !mumu.is_absolute()) {
-        window.set_note("MuMu 安装目录必须是绝对路径 / The MuMu folder must be an absolute path".into());
+    if mumu.as_ref().is_some_and(|mumu| !mumu.is_absolute() || !mumu.is_dir()) {
+        window.set_note(
+            "MuMu 安装目录必须是存在的文件夹的绝对路径 / The MuMu folder must be the absolute path of an existing folder".into(),
+        );
         return;
     }
+    // What an earlier discovery listed may not hold for this folder.
+    window.set_instances(Rc::new(VecModel::<InstanceRow>::default()).into());
+    window.set_discovered(false);
     window.set_note("".into());
     window.set_progress("".into());
     window.set_busy(true);
-    let root = lock(state).root.clone();
+    let root = {
+        let mut state = lock(state);
+        state.discover_tried = true;
+        state.root.clone()
+    };
     let weak = window.as_weak();
     let shared = Arc::clone(state);
     let (state, worker_weak) = (Arc::clone(state), weak.clone());
     let spawned = std::thread::Builder::new().name("acsetup-discover".into()).spawn(move || {
         let mut report = reporter(&state, &worker_weak);
         let started = instance_step::start(&root, mumu.as_deref(), &mut report);
-        lock(&state).runtime_started = started.is_ok();
         match started.and_then(|()| instance_step::discover(&root, &mut report)) {
             Ok(found) => {
                 let rows: Vec<InstanceRow> = found.iter().map(instance_row).collect();
@@ -683,11 +701,16 @@ fn instance_row(found: &Found) -> InstanceRow {
     }
 }
 
-/// A step-4 failure that left the configuration as it was: logged, said on
-/// the page, and the page usable again. A log write failing stops the run.
+/// A step-4 failure the page can be used again after: logged, and said on the
+/// page. Any log write that failed, then or before, stops the run instead.
 fn retryable(state: &Shared, weak: &slint::Weak<SetupWindow>, reason: String) {
-    if let Err(unlogged) = write_log(state, &format!("未完成 / not done: {reason}")) {
-        fail(state, weak, unlogged);
+    let broken = lock(state).log_error.clone();
+    let logged = match broken {
+        Some(error) => Err(error),
+        None => write_log(state, &format!("未完成 / not done: {reason}")),
+    };
+    if let Err(error) = logged {
+        fail(state, weak, format!("{reason}\n{error}"));
         return;
     }
     let _ = weak.upgrade_in_event_loop(move |window| {
@@ -748,19 +771,49 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
             .and_then(|status| report(&format!("actingctl status: {status}")));
         match restarted {
             Ok(()) => {
-                lock(&state).runtime_started = true;
-                let _ = worker_weak.upgrade_in_event_loop(move |window| {
-                    window.set_busy(false);
-                    finish(&window, &state);
-                });
+                let _ = worker_weak.upgrade_in_event_loop(move |window| settle_and_finish(&window, &state));
             }
             Err(reason) => fail(
                 &state,
                 &worker_weak,
                 format!(
-                    "{reason}\n实例已写入配置，但 Runtime 没有按新配置运行起来 / The instances are in the configuration, but the Runtime is not running on it"
+                    "{reason}\n实例已写入配置，但未确认 Runtime 已按新配置运行 / The instances are in the configuration, but it is not confirmed that the Runtime runs on it"
                 ),
             ),
+        }
+    });
+    if let Err(error) = spawned {
+        window.set_busy(false);
+        fail(&shared, &weak, thread_failed(&error));
+    }
+}
+
+/// Step 4 → 5. When step 4 touched the configuration and the Runtime, the
+/// configured MuMu folder and whether a Runtime answers are asked now, so the
+/// summary says how they stand rather than how they were meant to.
+fn settle_and_finish(window: &SetupWindow, state: &Shared) {
+    if !lock(state).discover_tried {
+        finish(window, state);
+        return;
+    }
+    window.set_busy(true);
+    let root = lock(state).root.clone();
+    let weak = window.as_weak();
+    let shared = Arc::clone(state);
+    let (state, worker_weak) = (Arc::clone(state), weak.clone());
+    let spawned = std::thread::Builder::new().name("acsetup-settle".into()).spawn(move || {
+        let mut report = reporter(&state, &worker_weak);
+        let settled = instance_step::settle(&root, &mut report);
+        let broken = lock(&state).log_error.clone();
+        match (settled, broken) {
+            (Err(reason), _) | (Ok(_), Some(reason)) => fail(&state, &worker_weak, reason),
+            (Ok(settled), None) => {
+                lock(&state).settled = Some(settled);
+                let _ = worker_weak.upgrade_in_event_loop(move |window| {
+                    window.set_busy(false);
+                    finish(&window, &state);
+                });
+            }
         }
     });
     if let Err(error) = spawned {
@@ -827,11 +880,17 @@ fn summary(state: &Shared) -> String {
     }));
     if fresh && !state.instances.is_empty() {
         lines.push(format!(
-            "实例 / Instances: {}（已写入配置并通过检查，Runtime 已按新配置运行 / in the configuration, checked, and the Runtime runs with them）",
+            "实例 / Instances: {}（已写入配置并通过检查 / in the configuration, checked）",
             state.instances.join("、")
         ));
-    } else if fresh && state.runtime_started {
-        lines.push("第 4 步拉起的 Runtime 仍在运行 / The Runtime started in step 4 is still running".to_string());
+    }
+    if let Some(settled) = &state.settled {
+        lines.extend(settled.mumu_root.as_ref().map(|mumu| format!("MuMu 目录 / MuMu folder (mumu_root): {mumu}")));
+        lines.push(match &settled.running {
+            Ok(true) => "Runtime 在运行（第 4 步拉起）/ The Runtime is running (started in step 4)".to_string(),
+            Ok(false) => "Runtime 未在运行 / The Runtime is not running".to_string(),
+            Err(reason) => format!("Runtime 是否在运行未能确认 / Whether the Runtime runs is not confirmed: {reason}"),
+        });
     }
     if let Some(log) = &state.log {
         lines.push(format!("日志 / Log: {}", log.path().display()));

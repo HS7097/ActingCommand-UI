@@ -553,23 +553,29 @@ next only (step 4 can also be skipped), six steps:
    mentioned in one sentence on the finish page.
 4. **Instances**, optional: "跳过 / Skip" leaves `instances` empty, to be filled later with the
    console's top-bar 实例配置 / Instance Configuration button; the finish page says so. An optional MuMu
-   folder (absolute) and "发现实例 / Discover": the folder is written as `mumu_root`, a Runtime is started
-   from the install root as on an upgrade below (with a folder given, one that answers is shut down and
-   started again), and `actingctl emulator discover` lists the instances from MuMu's own inventory — no
-   emulator is started or stopped. Each ticked instance takes an alias (default `mumu-<index>`), an
-   `application_id` (a BlueArchiveJP button fills `com.YostarJP.BlueArchive`) and a resource package: an
-   existing absolute path, or an `https://` URL fetched into `<install root>\packages\` through a `.part`
-   file; a sha256 given is compared. "写入实例 / Apply" writes one entry per ticked instance — alias, a
+   folder (an existing absolute folder) and "发现实例 / Discover": the folder is written as `mumu_root` —
+   an empty field takes it out — through the same candidate and `check-config` as below; a Runtime is
+   started from the install root as on an upgrade below (one that answers is shut down and started again:
+   it has no instance yet, and which folder it read cannot be asked); and `actingctl emulator discover`
+   lists the instances from MuMu's own inventory — no emulator is started or stopped. The list is cleared
+   first, and a failed Discover is said and leaves the page usable, even with the folder already written.
+   Each ticked instance takes an alias (default `mumu-<index>`), an `application_id` (a BlueArchiveJP
+   button fills `com.YostarJP.BlueArchive`) and a resource package: the absolute path of an existing
+   file, or an `https://` URL fetched through a `.part` file into `<install root>\packages\<index>\`,
+   named by the URL's last path segment when that is a plain name, else `package.zip` (a file already
+   there is replaced, and said so); a sha256 given is compared. "写入实例 / Apply" writes one entry per ticked instance — alias, a
    new `instance_id` (`instance_` + 32 hex from the OS RNG), `instance_index`, `application_id`,
    `touch_backend` `adb_shell_input`, `capture_backend` `nemu_ipc` with a MuMu folder else `adb`, and the
    package's absolute path as `resource_package` — into `actingd.config.candidate-<pid>.json` next to the
    configuration. The Runtime's `check-config` checks it (a package that does not load is named with its
    alias, path and the loader's message); only an accepted candidate replaces the configuration, and the
    Runtime is restarted on it and `actingctl status` must answer. A failure before the configuration is
-   replaced is said on the page and in the log and leaves the page usable; one after it stops the run.
+   replaced is said on the page and in the log and leaves the page usable; one after it stops the run, as
+   does any failed log write. Leaving step 4 after a Discover asks again, for the summary, what
+   `mumu_root` is and whether a Runtime answers.
 5. **Finish**: "启动监控台 / Open console" launches `<install root>\ui\acui.exe` detached and closes the
-   wizard; "finish" only closes. A Runtime step 4 started keeps running; otherwise the console's launcher
-   starts one.
+   wizard; "finish" only closes. A Runtime step 4 started keeps running; when none runs, the console's
+   launcher starts one.
 
 **Upgrade**, on a root that already holds an installation. Step 1 reads the release's `MEMBERS.json`
 first (online without saving it, offline from the folder) and compares its two commits with the ones the
@@ -621,7 +627,7 @@ immediately with `acsetup v1 is Windows-only`.
 
 Four dependencies are added, each with its purpose noted in `[workspace.dependencies]`: `sha2`
 (verification), `zip` (`default-features = false`, only `deflate` enabled, the same version line the
-Runtime locks), `getrandom` (the salt) and `ureq` (the fetch; `default-features = false` with only `tls`:
+Runtime locks), `getrandom` (the salt and `instance_id`) and `ureq` (the fetch; `default-features = false` with only `tls`:
 rustls, its `ring` provider and the compiled-in `webpki-roots`, so no system TLS library).
 
 ## Four layers, four crates

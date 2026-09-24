@@ -44,8 +44,9 @@ slint = { version = "1.17.1", default-features = false, features = [
     "accessibility",
 ] }
 slint-build = "1.17.1"
-# The wizard's one network path: the umbrella Releases over HTTPS. Blocking,
-# rustls with the Mozilla root set compiled in; no system TLS library.
+# The wizard's network paths: the umbrella Releases, and a resource package URL
+# a person gives, over HTTPS. Blocking, rustls with the Mozilla root set
+# compiled in; no system TLS library.
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
 # The setup wizard only. sha2 re-hashes every release file against SHA256SUMS
 # and the BUILD-MANIFEST.json inside each zip; it is the crate the Runtime's
@@ -55,6 +56,6 @@ sha2 = "0.10"
 # umbrella's `zip -r -X` writes: no crypto, no bzip2, no zstd, no time. The 0.6
 # line is what the Runtime's artifact store already locks.
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
-# getrandom fills the 32-byte secret_fingerprint_salt from the OS RNG; nothing
-# else in the wizard needs randomness.
+# getrandom fills the 32-byte secret_fingerprint_salt and each new
+# instance_id from the OS RNG; nothing else in the wizard needs randomness.
 getrandom = "0.4"
