@@ -147,9 +147,10 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   more events than one page's event limit, so one query reads it, every filter applied by the ledger. A
   window that comes back with fewer than 64 events doubles the next one's span, up to 4096 positions; one
   with 128 or more puts it back to 256. A wider window, and any the reply's byte limit splits, is read by
-  following the cursor, whole — so one fill can add more rows than it aims for. Online, every page query is served on the Runtime's ledger writer (since Runtime
-  `71db072d` it re-verifies only the head, the boundary and a new tail, about 15 ms a page at ten thousand
-  events, where it used to read and verify the whole ledger), so one fill reads at least one window
+  following the cursor, whole — so one fill can add more rows than it aims for. Online, every page query
+  is served on the Runtime's ledger writer (since Runtime `71db072d` it re-verifies only the head, the
+  boundary and a new tail, about 15 ms a page at ten thousand events, where it used to read and verify
+  the whole ledger), so one fill reads at least one window
   and starts no further window once it has 256 more rows, has read position 1, has read 16 windows or has
   run for one second. Rows are listed
   **newest first**; "read earlier" at the bottom continues below what is loaded. The top bar permanently
@@ -178,8 +179,8 @@ ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compi
   monitor writes it as a warning or an error under disk pressure. The top bar says how many were dropped;
   the two types the ledger leaves out are not counted. The performance monitor stays on the module list
   while any are dropped, so it can still be picked. Its warnings and errors (disk pressure, high
-  pressure, stutter, degraded monitoring, a summary under pressure) always show. The row and level counts on the card cover the loaded rows
-  only. A Runtime before `51ba5565` does not know `exclude_event_types` and refuses the query while
+  pressure, stutter, degraded monitoring, a summary under pressure) always show. The row and level
+  counts on the card cover the loaded rows only. A Runtime before `51ba5565` does not know `exclude_event_types` and refuses the query while
   events are hidden; ticking "show performance monitor" reads it.
 - **Recovery grouping comes from the ledger**: the `run_recovery` carried on the pages inserts a group row
   above each run's newest row, showing the state the ledger gives (recovered / unresolved / unknown),

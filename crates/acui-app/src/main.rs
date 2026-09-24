@@ -752,6 +752,8 @@ fn set_following(window: &AppWindow, app: &Rc<App>, on: bool) {
         refresh(window, app);
         return;
     }
+    // What an earlier following failed at goes once it is turned on again.
+    model.borrow_mut().follow_error = None;
     if let Err(error) = source.repin() {
         model.borrow_mut().query_error = Some(QueryError::ReadFailed(error.to_string()));
         window.set_following(false);
@@ -782,8 +784,9 @@ fn stop_following(window: &AppWindow, app: &App) {
 /// task facts; only when the pin moved, or an earlier tick left windows unread,
 /// are the newer windows read onto the top of the view, and the span's end
 /// follows the pin. No status is read and nothing is written to the ledger. A
-/// failure stays in `follow_error` until a tick gets past it; a time bound set
-/// meanwhile stops the following.
+/// failed poll stays in `follow_error` until a tick gets past it; a failed page
+/// read stays there too and stops the following; a time bound set meanwhile
+/// stops it as well.
 fn follow_tick(window: &AppWindow, app: &Rc<App>) {
     let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
         return;
