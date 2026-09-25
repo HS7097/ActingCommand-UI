@@ -281,6 +281,7 @@ fn stage(
         return Err(format!("SHA256SUMS 未列出 / not listed in SHA256SUMS: {name}"));
     }
     let dir = staging.join(name.trim_end_matches(".zip"));
+    report.line(&format!("正在解压 / unpacking: {name}"))?;
     let count = extract(&download.join(name), name, &dir)?;
     report.line(&format!("已解压 / unpacked: {name}（{count} 个文件 / files）"))?;
     check_manifest(&dir, expect, report)
