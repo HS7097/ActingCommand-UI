@@ -113,12 +113,18 @@ fn published(text: &str) -> Option<String> {
 
 /// Why installing the release whose `MEMBERS.json` is `wanted` over the
 /// installation at `root` needs the person's word — it was published before
-/// the one installed, or either time is unknown — or `None` when it is as new
-/// or newer. Publication time is a heuristic: it is said as one.
+/// the one installed, or either time is unknown, or the record does not name
+/// what the manifests say is installed (an upgrade that failed after laying
+/// out, an older wizard, a hand-made rollback) — or `None` when it is as new
+/// or newer. The note names the release to install, so a tick given for one
+/// release is not taken for another. Publication time is a heuristic: it is
+/// said as one.
 pub fn downgrade(root: &Path, wanted: &str) -> Option<String> {
     let record = root.join(INSTALLED_MEMBERS);
     let have = match fs::read_to_string(&record) {
-        Ok(text) => published(&text).ok_or_else(|| format!("{} 里没有可比较的发布时间 / has no publication time to compare", record.display())),
+        Ok(text) => current_record(root, &text).and_then(|()| {
+            published(&text).ok_or_else(|| format!("{} 里没有可比较的发布时间 / has no publication time to compare", record.display()))
+        }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
             "这份安装没有 {INSTALLED_MEMBERS} 记录 / this installation has no {INSTALLED_MEMBERS} record"
         )),
@@ -126,14 +132,32 @@ pub fn downgrade(root: &Path, wanted: &str) -> Option<String> {
     };
     let want = published(wanted)
         .ok_or_else(|| "要装的 MEMBERS.json 没有可比较的发布时间 / the MEMBERS.json to install has no publication time to compare".to_string());
+    let which = match crate::verify::members_of(wanted) {
+        Ok((runtime, ui)) => format!("runtime {} · ui {}", &runtime[..8], &ui[..8]),
+        Err(_) => "?".to_string(),
+    };
     match (have, want) {
         (Ok(have), Ok(want)) if want >= have => None,
         (Ok(have), Ok(want)) => Some(format!(
-            "按发布时间判断，看起来是降级：要装的发布于 {want}，已装的发布于 {have}。Runtime 没有状态迁移，也没有回滚 / By publication time this looks like a downgrade: the release to install was published {want}, the installed one {have}. The Runtime has no state migration and no rollback"
+            "按发布时间判断，看起来是降级：要装的（{which}）发布于 {want}，已装的发布于 {have}。Runtime 没有状态迁移，也没有回滚 / By publication time this looks like a downgrade: the release to install ({which}) was published {want}, the installed one {have}. The Runtime has no state migration and no rollback"
         )),
         (Err(reason), _) | (_, Err(reason)) => Some(format!(
-            "无法判断新旧：{reason}。Runtime 没有状态迁移，也没有回滚 / Cannot tell which is newer. The Runtime has no state migration and no rollback"
+            "无法判断新旧（要装的：{which}）：{reason}。Runtime 没有状态迁移，也没有回滚 / Cannot tell which is newer (to install: {which}). The Runtime has no state migration and no rollback"
         )),
+    }
+}
+
+/// Whether the record at `root` names the two commits its manifests say are
+/// installed.
+fn current_record(root: &Path, text: &str) -> Result<(), String> {
+    let stale = || {
+        format!("{INSTALLED_MEMBERS} 记下的不是现在装着的版本 / {INSTALLED_MEMBERS} does not name the version installed now")
+    };
+    let recorded = crate::verify::members_of(text).map_err(|_| stale())?;
+    match installed(root) {
+        Ok(Some(now)) if recorded.0 == now.runtime_sha && recorded.1 == now.ui_sha => Ok(()),
+        Ok(_) => Err(stale()),
+        Err(reason) => Err(reason),
     }
 }
 

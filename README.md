@@ -639,9 +639,11 @@ as possibly still starting. Either way the new version stays laid out and the ve
 Newer or older is judged by publication time. Every install and upgrade keeps the release's
 `MEMBERS.json` as `<install root>\installed-members.json`. A release whose `published_at_utc` is earlier
 than the one recorded is said as "按发布时间判断，看起来是降级 / by publication time this looks like a
-downgrade"; an installation without the record, or a time either one lacks, as "无法判断新旧 / cannot
-tell which is newer" — either way, with "the Runtime has no state migration and no rollback", and
-"确认降级 / Confirm downgrade" must be ticked before Install goes on. This holds for all three sources.
+downgrade"; an installation without the record, a record that does not name the two commits the
+installed manifests do (an upgrade that failed after laying out, an older wizard, a rollback by hand), or
+a time either one lacks, as "无法判断新旧 / cannot tell which is newer" — either way naming the release
+to install, with "the Runtime has no state migration and no rollback", and "确认降级 / Confirm
+downgrade" must be ticked before Install goes on; a tick given for one release is cleared for another. This holds for all three sources.
 Publication time is a heuristic (a stable line's dates may one day run against the code's age), and is
 said as one; the tick is the person's word, not the wizard's judgement.
 
@@ -679,7 +681,8 @@ from the executable itself before any window: the end of the PE image — the fu
 section, from a minimal hand-written reading of the DOS header, PE signature, COFF header, optional
 header, data directories and section table, all in checked arithmetic — against the file's effective
 end: its length, or, once signed, the certificate table's offset less at most seven NUL bytes of
-padding. Equal is the online edition; more must be a whole payload: trailer shape, payload start equal
+padding — a certificate table that does not end exactly at the end of the file is damage. Equal is the
+online edition; more must be a whole payload: trailer shape, payload start equal
 to the image end, index at most 1 MiB and matching its sha256, lengths adding up exactly to the effective
 end, names as the online fetch allows and also not starting with `-`, not ending in `.` or `.part`, and
 unique without regard to case, `SHA256SUMS` and `MEMBERS.json` read from the payload and matching the

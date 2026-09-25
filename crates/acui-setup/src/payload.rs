@@ -80,8 +80,8 @@ pub fn detect() -> Result<Option<Payload>, String> {
 
 struct Layout {
     image_end: u64,
-    /// The certificate table's file offset, when the file is signed.
-    certificates: Option<u64>,
+    /// The certificate table's file offset and size, when the file is signed.
+    certificates: Option<(u64, u64)>,
 }
 
 fn read_at(file: &mut File, offset: u64, buffer: &mut [u8]) -> Result<(), String> {
@@ -130,7 +130,7 @@ fn pe_layout(file: &mut File, length: u64) -> Result<Layout, String> {
     let certificates = match u32_at(&bytes, count_at)? > 4 && directories + 5 * 8 <= optional + optional_size {
         true => {
             let (offset, size) = (u32_at(&bytes, directories + 32)?, u32_at(&bytes, directories + 36)?);
-            (size > 0).then_some(u64::from(offset))
+            (size > 0).then_some((u64::from(offset), u64::from(size)))
         }
         false => None,
     };
@@ -158,13 +158,16 @@ fn pe_layout(file: &mut File, length: u64) -> Result<Layout, String> {
 
 /// The file's effective end: the certificate table's offset less at most
 /// seven bytes of NUL padding before it when the file is signed, else its
-/// length.
+/// length. A certificate table that does not run to the end of the file —
+/// bytes appended after signing — is damage, never the online edition.
 fn effective_end(file: &mut File, layout: &Layout, length: u64) -> Result<u64, String> {
-    let Some(certificates) = layout.certificates else {
+    let Some((certificates, size)) = layout.certificates else {
         return Ok(length);
     };
-    if certificates > length || certificates < layout.image_end {
-        return Err(format!("证书表偏移 {certificates} 不在映像末端与文件末尾之间 / the certificate table offset {certificates} is not between the image end and the file end"));
+    if certificates < layout.image_end || certificates.checked_add(size) != Some(length) {
+        return Err(format!(
+            "证书表（偏移 {certificates}，长 {size}）应从映像末端之后起、恰好止于文件末尾 {length} / the certificate table (offset {certificates}, {size} bytes) should start after the image end and end exactly at the file end {length}"
+        ));
     }
     let pad = (certificates - layout.image_end).min(7);
     let mut before = vec![0u8; pad as usize];
@@ -187,7 +190,7 @@ fn digits(text: &[u8], what: &str) -> Result<u64, String> {
 /// A name the payload may carry: what the online path accepts, and not one
 /// Windows would alter or the `.part` files could shadow.
 fn name_ok(name: &str) -> bool {
-    fetch::plain(name) && !name.starts_with('-') && !name.ends_with('.') && !name.ends_with(".part")
+    fetch::plain(name) && !name.starts_with('-') && !name.ends_with('.') && !name.to_ascii_lowercase().ends_with(".part")
 }
 
 fn read_payload(mut file: File, start: u64, end: u64) -> Result<Payload, String> {
