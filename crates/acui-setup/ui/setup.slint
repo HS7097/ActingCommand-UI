@@ -134,6 +134,13 @@ export component SetupWindow inherits Window {
     // Step 1: a folder a person filled by hand instead of the fetch.
     in-out property <bool> offline;
     in-out property <string> download-dir;
+    // Step 1: the offline edition's carried release is the only source.
+    in property <bool> embedded;
+    // Step 1: why the release to install needs the person's word over the one
+    // installed — published earlier, or which is newer cannot be told — and
+    // their tick.
+    in-out property <string> downgrade-note;
+    in-out property <bool> downgrade-ok;
     // Step 2: the options of a fresh install.
     in-out property <bool> autostart;
     in-out property <bool> autostart-console;
@@ -215,7 +222,7 @@ export component SetupWindow inherits Window {
                 if !root.failed && root.step == 1: VerticalLayout {
                     spacing: 8px;
                     Head { text: root.upgrading ? "升级 / Upgrade" : "安装 / Install"; }
-                    if !root.installing: CheckBox {
+                    if !root.installing && !root.embedded: CheckBox {
                         text: "离线：用已下载的发布件文件夹 / Offline: use a folder of downloaded release files";
                         checked <=> root.offline;
                         enabled: !root.busy;
@@ -223,8 +230,8 @@ export component SetupWindow inherits Window {
                             root.offline-toggled(self.checked);
                         }
                     }
-                    if !root.installing && !root.offline: Body { text: root.release-text; }
-                    if !root.installing && !root.offline && root.release-failed: HorizontalLayout {
+                    if !root.installing && (root.embedded || !root.offline): Body { text: root.release-text; }
+                    if !root.installing && !root.embedded && !root.offline && root.release-failed: HorizontalLayout {
                         Button {
                             text: "重新查询 / Look up again";
                             enabled: !root.busy;
@@ -234,16 +241,31 @@ export component SetupWindow inherits Window {
                         }
                         Rectangle { }
                     }
-                    if !root.installing && !root.offline: Caption {
+                    if !root.installing && root.embedded: Caption {
+                        text: "发布件在本安装包里，不联网取件：取出到安装位置下的 downloads\\<tag>，逐项校验后装进安装位置；详情写进日志。\nThe release is inside this installer and nothing is fetched: it is extracted into downloads\\<tag> under the install location, every file verified, then installed; the details go to the log.";
+                    }
+                    if !root.installing && !root.embedded && !root.offline: Caption {
                         text: "从伞仓 Releases 取件（有正式版取最新正式版，否则取最新预发布），下载、逐项校验后装进安装位置；详情写进日志。\nFetches from the umbrella Releases (the newest stable release when there is one, else the newest pre-release), verifies every file and installs it; the details go to the log.";
                     }
-                    if !root.installing && root.offline: LineEdit {
+                    if !root.installing && !root.embedded && root.offline: LineEdit {
                         text <=> root.download-dir;
                         enabled: !root.busy;
                         placeholder-text: "例如 / e.g. C:\\Users\\<you>\\Downloads\\ActingCommand";
+                        // Another folder is another release: judged again on Install.
+                        edited(text) => {
+                            root.downgrade-note = "";
+                            root.downgrade-ok = false;
+                            root.note = "";
+                        }
                     }
-                    if !root.installing && root.offline: Caption {
+                    if !root.installing && !root.embedded && root.offline: Caption {
                         text: "同一个发布件的 SHA256SUMS、MEMBERS.json 与三个 zip 放在一个文件夹里，这里填它。\nOne release's SHA256SUMS, MEMBERS.json and three zips in one folder, named here.";
+                    }
+                    if !root.installing && root.downgrade-note != "": Body { text: root.downgrade-note; }
+                    if !root.installing && root.downgrade-note != "": CheckBox {
+                        text: "确认降级 / Confirm downgrade";
+                        checked <=> root.downgrade-ok;
+                        enabled: !root.busy;
                     }
                     if root.installing: Working {
                         stage: root.stage-text;
@@ -442,7 +464,7 @@ export component SetupWindow inherits Window {
             if !root.failed && root.step < 4: Button {
                 text: root.step == 1 ? (root.upgrading ? "升级 / Upgrade" : "安装 / Install") : root.step == 3 ? "写入实例 / Apply" : "下一步 / Next";
                 primary: true;
-                enabled: root.can-next && !root.busy;
+                enabled: root.can-next && !root.busy && (root.step != 1 || root.downgrade-note == "" || root.downgrade-ok);
                 clicked => {
                     root.next();
                 }
