@@ -8,7 +8,7 @@
 //! first; the Runtime only ever sees one of them, a local file. The wizard
 //! knows no game: the package names come from the bundle.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -21,6 +21,8 @@ use crate::verify::{hex, Report, Step, Total, MISMATCH};
 
 const APPLICATIONS_SCHEMA: &str = "actingcommand.applications.v1";
 const BUNDLE_SCHEMA: &str = "actingcommand.bundle.v1";
+/// The most a bundle's two declarations may inflate to.
+const DECLARATION_LIMIT: u64 = 16 << 20;
 
 pub enum Resource {
     Bundle(Bundle),
@@ -96,12 +98,19 @@ pub fn get(root: &Path, given: &str, sha256: &str, report: Report<'_>) -> Result
     Ok(path)
 }
 
-/// A bundle when the zip holds `bundle.json`, else a single pack.
+/// A bundle when the zip holds `bundle.json`, a single sealed pack when it
+/// holds `control.json`; anything else is said to be neither.
 pub fn read(file: &Path) -> Result<Resource, String> {
     let mut archive = open(file)?;
     let bundle: BundleFile = match member(&mut archive, file, "bundle.json")? {
         Some(bytes) => parse(&bytes, file, "bundle.json")?,
-        None => return Ok(Resource::Single(file.to_path_buf())),
+        None if archive.by_name("control.json").is_ok() => return Ok(Resource::Single(file.to_path_buf())),
+        None => {
+            return Err(format!(
+                "既不是资源仓大包（根目录没有 bundle.json），也不是单个资源包（根目录没有 control.json）/ Neither a bundle (no bundle.json at its root) nor a single pack (no control.json at its root): {}",
+                file.display()
+            ))
+        }
     };
     let applications: ApplicationsFile = match member(&mut archive, file, "applications.json")? {
         Some(bytes) => parse(&bytes, file, "applications.json")?,
@@ -122,8 +131,12 @@ pub fn read(file: &Path) -> Result<Resource, String> {
     if !fetch::plain(&bundle.game) {
         return Err(format!("game 不能用作目录名 / the game cannot name a folder: {}", bundle.game));
     }
+    // Names that differ only in case are one file on NTFS.
+    let mut names = BTreeSet::new();
     for pack in &bundle.packs {
-        pack_name(pack)?;
+        if !names.insert(pack_name(pack)?.to_ascii_lowercase()) {
+            return Err(format!("大包里有重名的包 / the bundle lists a pack name twice: {}", pack.path));
+        }
     }
     for (server, path) in &bundle.default_packs {
         if !bundle.packs.iter().any(|pack| &pack.path == path && &pack.server == server) {
@@ -151,25 +164,54 @@ impl Bundle {
         ))?;
         let mut laid = BTreeMap::new();
         for (done, pack) in self.packs.iter().enumerate() {
-            let bytes = member(&mut archive, &self.file, &pack.path)?
-                .ok_or_else(|| format!("{MISMATCH}: 大包里缺少 / the bundle lacks {}", pack.path))?;
-            let actual = hex(&Sha256::digest(&bytes));
-            if bytes.len() as u64 != pack.byte_count || !pack.sha256.eq_ignore_ascii_case(&actual) {
+            let mut entry = match archive.by_name(&pack.path) {
+                Ok(entry) => entry,
+                Err(zip::result::ZipError::FileNotFound) => {
+                    return Err(format!("{MISMATCH}: 大包里缺少 / the bundle lacks {}", pack.path))
+                }
+                Err(error) => return Err(format!("{MISMATCH}: {} 读不出 / unreadable: {error}", pack.path)),
+            };
+            if entry.size() != pack.byte_count {
                 return Err(format!(
-                    "{MISMATCH}: {} 应为 / expected {} 字节 sha256 {}，实为 / actual {} 字节 sha256 {actual}",
+                    "{MISMATCH}: {} 应为 / expected {} 字节 / bytes，实为 / actual {}",
                     pack.path,
                     pack.byte_count,
-                    pack.sha256,
-                    bytes.len()
+                    entry.size()
                 ));
             }
             let target = dir.join(pack_name(pack)?);
             let part = target.with_extension("zip.part");
-            let written = File::create(&part)
-                .and_then(|mut file| file.write_all(&bytes).and_then(|()| file.sync_all()))
-                .and_then(|()| fs::rename(&part, &target));
-            if let Err(error) = written {
-                let reason = format!("无法写入 / cannot write {}: {error}", target.display());
+            // Streamed through a hash, never more than one byte past the size
+            // declared, and renamed only once size and sha256 both match.
+            let written = (|| {
+                let cannot = |error: std::io::Error| format!("无法写入 / cannot write {}: {error}", part.display());
+                let mut file = File::create(&part).map_err(cannot)?;
+                let mut limited = (&mut entry).take(pack.byte_count + 1);
+                let (mut hasher, mut buffer, mut count) = (Sha256::new(), vec![0u8; 64 * 1024], 0u64);
+                loop {
+                    let read = limited
+                        .read(&mut buffer)
+                        .map_err(|error| format!("{MISMATCH}: {} 解压失败 / inflate failed: {error}", pack.path))?;
+                    if read == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..read]);
+                    file.write_all(&buffer[..read]).map_err(cannot)?;
+                    count += read as u64;
+                }
+                file.sync_all().map_err(cannot)?;
+                let actual = hex(&hasher.finalize());
+                if count != pack.byte_count || !pack.sha256.eq_ignore_ascii_case(&actual) {
+                    return Err(format!(
+                        "{MISMATCH}: {} 应为 / expected {} 字节 sha256 {}，实为 / actual {count} 字节 sha256 {actual}",
+                        pack.path, pack.byte_count, pack.sha256
+                    ));
+                }
+                drop(file);
+                fs::rename(&part, &target)
+                    .map_err(|error| format!("无法改名 / cannot rename {}: {error}", part.display()))
+            })();
+            if let Err(reason) = written {
                 return Err(fetch::discard(&part, reason));
             }
             report.line(&format!("已放置 / placed: {}", target.display()))?;
@@ -194,17 +236,22 @@ fn open(file: &Path) -> Result<zip::ZipArchive<File>, String> {
         .map_err(|error| format!("不是可读的 zip / not a readable zip: {}: {error}", file.display()))
 }
 
-/// One member read whole, or `None` when the zip has no such name.
+/// One declaration read whole — at most `DECLARATION_LIMIT` — or `None` when
+/// the zip has no such name.
 fn member(archive: &mut zip::ZipArchive<File>, file: &Path, name: &str) -> Result<Option<Vec<u8>>, String> {
-    let mut entry = match archive.by_name(name) {
+    let entry = match archive.by_name(name) {
         Ok(entry) => entry,
         Err(zip::result::ZipError::FileNotFound) => return Ok(None),
         Err(error) => return Err(format!("{MISMATCH}: {} 内 {name} 读不出 / unreadable: {error}", file.display())),
     };
     let mut bytes = Vec::new();
     entry
+        .take(DECLARATION_LIMIT + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("{MISMATCH}: {} 内 {name} 解压失败 / inflate failed: {error}", file.display()))?;
+    if bytes.len() as u64 > DECLARATION_LIMIT {
+        return Err(format!("{MISMATCH}: {} 内 {name} 过大 / too large", file.display()));
+    }
     Ok(Some(bytes))
 }
 

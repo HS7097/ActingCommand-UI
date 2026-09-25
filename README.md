@@ -558,7 +558,8 @@ log" below):
 3. **Instances**, optional, looked for as soon as the page opens: "跳过 / Skip" leaves `instances`
    empty, to be filled later with the console's top-bar 实例配置 / Instance Configuration button; the
    finish page says so. Where MuMu is comes from the Runtime's own `check-config` (`mumu_root`: its path
-   and source — a running MuMu, the per-user or machine uninstall registry, the vendor folders; see the
+   and source — `ACTINGCOMMAND_NEMU_FOLDER`, a running MuMu, the per-user or machine uninstall registry,
+   the vendor folders; see the
    Runtime's `contracts/actingd-check-config.md`), or from the folder a person names when none is found;
    either way it is pinned into the configuration's `mumu_root` through the same candidate and
    `check-config` as below, so a second MuMu install cannot take the instances over later. A Runtime too
@@ -572,7 +573,9 @@ log" below):
    sha256 given is compared; "读取 / Read" opens it. A bundle holds `applications.json` (each server's
    Android package name) and `bundle.json` (every pack's path, package id, server, sha256 and size, and
    optionally `default_packs` per server); the page shows the game, its servers and package names, and a
-   pack list starting from the bundle's own default, else empty for the person to pick — the wizard
+   pack list starting from the bundle's own default when it names exactly one, else empty for the
+   person to pick; the resources read are the ones written (changing the field or its sha256 asks for
+   another Read); an empty MuMu field finds MuMu afresh — the wizard
    knows no game and guesses none. A single pack has no package name: the person gives it. "写入实例 /
    Apply" lays a bundle's packs out byte for byte under `<install root>\packages\<game>\`, each checked
    against `bundle.json` first, then writes one entry per ticked instance — alias, a new `instance_id`
@@ -639,8 +642,8 @@ removed on the next run, said in the log. The first close after the instances st
 says that it keeps running. A root with program files but no `actingd.config.json`, or the
 configuration without program files (an interrupted upgrade), is named on step 0 and neither installed
 over nor upgraded. Apart from the installed payload, the configuration, the settings, the fetched release
-files under `downloads\`, (when checked) the start-at-boot batch file, the packages fetched into
-`packages\`, and the log of a Runtime it started, this is the only file the wizard writes (with
+files under `downloads\`, (when checked) the start-at-boot batch file, the resources fetched into
+`packages\` and a bundle's packs placed under `packages\<game>\`, and the log of a Runtime it started, this is the only file the wizard writes (with
 `previous\` on an upgrade).
 
 **Things it never does**: it does not install a service, does not create a scheduled task, does not change
@@ -648,7 +651,7 @@ PATH, does not write the registry; does not modify the configuration template; d
 that already holds content; goes on the network only to list and fetch the umbrella release and a
 package URL given in the instances step; stops or starts the Runtime only on an upgrade and in the
 instances step, as above;
-does not unpack resource packages — the Runtime loads them. On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
+does not unpack a sealed resource pack — the Runtime loads it (a bundle's packs are taken out whole). On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
 immediately with `acsetup v1 is Windows-only`.
 
 Four dependencies are added, each with its purpose noted in `[workspace.dependencies]`: `sha2`

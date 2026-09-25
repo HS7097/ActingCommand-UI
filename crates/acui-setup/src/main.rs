@@ -74,8 +74,10 @@ struct State {
     /// resource package each got.
     instances: Vec<String>,
     package: Option<PathBuf>,
-    /// The instances' resources as last read: a bundle or a single pack.
+    /// The instances' resources as last read — a bundle or a single pack —
+    /// and the field and sha256 they were read from.
     resource: Option<Resource>,
+    resource_from: (String, String),
     /// The first log write that failed: nothing goes on after it.
     log_error: Option<String>,
     /// What the person must see from any step: on the page, and in the summary.
@@ -922,8 +924,23 @@ fn begin_discover(window: &SetupWindow, state: &Shared) {
         let held = Held::new(&state);
         let mut report = PageReport::new(&state, &worker_weak);
         let started = instance_step::start(&root, mumu.as_deref(), &mut report);
-        if started.is_ok() {
-            lock(&state).runtime_started = true;
+        let pinned = started.as_ref().ok().cloned().flatten();
+        let notes = {
+            let mut locked = lock(&state);
+            locked.runtime_started |= started.is_ok();
+            if pinned.is_some() {
+                locked.warnings.retain(|line| line != instance_step::NOT_PINNED);
+            }
+            locked.warnings.join("\n")
+        };
+        {
+            let pinned = pinned.clone();
+            let _ = worker_weak.upgrade_in_event_loop(move |window| {
+                window.set_notes(notes.into());
+                if let Some(pinned) = pinned {
+                    window.set_mumu_root(pinned.into());
+                }
+            });
         }
         let found = started.and_then(|pinned| instance_step::discover(&root, &mut report).map(|found| (pinned, found)));
         drop(held);
@@ -997,7 +1014,11 @@ fn begin_read_resource(window: &SetupWindow, state: &Shared) {
         });
         match read {
             Ok((resource, (text, labels, index, single))) => {
-                lock(&state).resource = Some(resource);
+                {
+                    let mut locked = lock(&state);
+                    locked.resource = Some(resource);
+                    locked.resource_from = (given, sha256);
+                }
                 let _ = worker_weak.upgrade_in_event_loop(move |window| {
                     let labels: Vec<slint::SharedString> = labels.into_iter().map(Into::into).collect();
                     window.set_resource_text(text.into());
@@ -1086,6 +1107,15 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
     }
     if let Some(row) = picked.iter().find(|row| row.alias.trim().is_empty()) {
         window.set_note(format!("{}：别名未填 / the alias is empty", row.title).into());
+        return;
+    }
+    let current = (window.get_resource().trim().to_string(), window.get_resource_sha().trim().to_string());
+    let stale = {
+        let locked = lock(state);
+        locked.resource.is_some() && locked.resource_from != current
+    };
+    if stale {
+        window.set_note("资源栏或 sha256 改过了，请重新「读取」/ The resources or their sha256 changed: Read them again".into());
         return;
     }
     // Where the package comes from and the name the game runs under.

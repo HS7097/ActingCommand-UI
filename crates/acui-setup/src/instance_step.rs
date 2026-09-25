@@ -25,6 +25,11 @@ use crate::verify::{hex, Report, Step};
 const TOUCH_BACKEND: &str = "adb_shell_input";
 const CAPTURE_BACKEND: &str = "adb";
 
+/// The note a Runtime too old to say where MuMu is leaves; taken back once
+/// MuMu is pinned after all.
+pub const NOT_PINNED: &str =
+    "这个 Runtime 版本不回报 MuMu 的位置，MuMu 没有钉住 / This Runtime does not say where MuMu is; MuMu is not pinned";
+
 /// One instance the emulator reports.
 pub struct Found {
     pub index: u16,
@@ -70,7 +75,7 @@ pub fn start(root: &Path, mumu_root: Option<&Path>, report: Report<'_>) -> Resul
         Some(mumu) => Some((mumu.display().to_string(), "person".to_string())),
         None => {
             report.step(Step::Phase("查找 MuMu / Finding MuMu", None))?;
-            found_mumu(&runtime::check_config_report(&paths.actingd, &paths.config)?)?
+            found_mumu(&probe_mumu(&paths)?)?
         }
     };
     match &pinned {
@@ -80,27 +85,67 @@ pub fn start(root: &Path, mumu_root: Option<&Path>, report: Report<'_>) -> Resul
             set_config(&paths, report, |document| document["mumu_root"] = json!(path))?;
         }
         Some((path, _)) => report.line(&format!("MuMu 位置已钉住 / MuMu is pinned at: {path}"))?,
-        None => report.warn(
-            "这个 Runtime 版本不回报 MuMu 的位置，MuMu 没有钉住 / This Runtime does not say where MuMu is; MuMu is not pinned",
-        )?,
+        None => report.warn(NOT_PINNED)?,
     }
     ensure_running(root, &paths, true, report)?;
     Ok(pinned.map(|(path, _)| path))
 }
 
+/// `check-config` asked where MuMu is, with any folder pinned before set
+/// aside — an empty field finds MuMu afresh — through a probe candidate that
+/// is removed afterwards.
+fn probe_mumu(paths: &Paths) -> Result<Value, String> {
+    let mut document = read_config(paths)?;
+    if document.as_object_mut().and_then(|object| object.remove("mumu_root")).is_none() {
+        return runtime::check_config_report(&paths.actingd, &paths.config);
+    }
+    let probe = paths.config.with_file_name(format!("actingd.config.probe-{}.json", std::process::id()));
+    let text = serde_json::to_string_pretty(&document)
+        .map_err(|error| format!("配置序列化失败 / config serialization failed: {error}"))?;
+    if let Err(error) = fs::write(&probe, text) {
+        return Err(fetch::discard(&probe, format!("写入失败 / write failed: {}: {error}", probe.display())));
+    }
+    match runtime::check_config_report(&paths.actingd, &probe) {
+        Err(reason) => Err(fetch::discard(&probe, reason)),
+        Ok(report) => match fs::remove_file(&probe) {
+            Ok(()) => Ok(report),
+            Err(error) => Err(format!("探测用的候选配置未能删除 / the probe configuration was not removed: {}: {error}", probe.display())),
+        },
+    }
+}
+
+/// A Windows verbatim path as a plain one: `\\?\C:\x` → `C:\x`,
+/// `\\?\UNC\host\share` → `\\host\share`; any other form kept as it is.
+fn plain_path(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    match path.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => path.to_string(),
+    }
+}
+
 /// Where `check-config` says MuMu is: `{path, source}`, the Windows verbatim
-/// prefix taken off; an error saying why when it found none; `None` when the
-/// report has no such field at all.
+/// prefix taken off; an error saying why when it found none — two installs
+/// said as such; `None` when the report has no such field at all.
 fn found_mumu(report: &Value) -> Result<Option<(String, String)>, String> {
     match report.get("mumu_root") {
         None => Ok(None),
-        Some(Value::Null) => Err(format!(
-            "没有找到 MuMu / No MuMu found: {}\n可以填 MuMu 安装目录后「重新查找」/ Name the MuMu folder and find again",
-            report["mumu_root_unresolved"]["message"].as_str().unwrap_or("—")
-        )),
+        Some(Value::Null) => {
+            let why = &report["mumu_root_unresolved"];
+            let reason = why["reason"].as_str().unwrap_or("?");
+            let hint = match reason {
+                "installation_ambiguous" => "找到不止一套 MuMu：填要用的那套的安装目录后「重新查找」/ More than one MuMu install: name the one to use and find again",
+                _ => "可以填 MuMu 安装目录后「重新查找」/ Name the MuMu folder and find again",
+            };
+            Err(format!(
+                "无法确定 MuMu 的位置 / MuMu's location is not resolved（{reason}）: {}\n{hint}",
+                why["message"].as_str().unwrap_or("—")
+            ))
+        }
         Some(found) => {
-            let path = found["path"].as_str().unwrap_or_default();
-            let path = path.strip_prefix(r"\\?\").unwrap_or(path).to_string();
+            let path = plain_path(found["path"].as_str().unwrap_or_default());
             let source = found["source"].as_str().unwrap_or("?").to_string();
             match path.is_empty() {
                 true => Err(format!("check-config 报告的 MuMu 位置无法读取 / unreadable MuMu location: {found}")),
