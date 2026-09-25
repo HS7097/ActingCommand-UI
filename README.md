@@ -643,7 +643,7 @@ or a leftover that could not be removed, a `runtime-info.json` no Runtime answer
 bar and is repeated in the summary. On failure the page shows the reason, what was left on disk (the
 staging directory removed or not; on a fresh install, which of `runtime\`, `ui\` and `tools\` this run
 laid out and must be removed before trying again) and the log path; a worker that panics stops the run
-too, with its message. While files are laid out, an upgrade swaps versions or the instances step writes, the
+too, with its message. While files are laid out and configured, an upgrade swaps versions, the options are written or the instances step writes, the
 window does not close; a lookup or a download may be closed, and a staging directory left that way is
 removed on the next run, said in the log. The first close after the instances step started a Runtime
 says that it keeps running. A root with program files but no `actingd.config.json`, or the
@@ -661,10 +661,13 @@ instances step, as above;
 does not unpack a sealed resource pack — the Runtime loads it (a bundle's packs are taken out whole). On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
 immediately with `acsetup v1 is Windows-only`.
 
-Four dependencies are added, each with its purpose noted in `[workspace.dependencies]`: `sha2`
+Five dependencies are added, each with its purpose noted in `[workspace.dependencies]`: `sha2`
 (verification), `zip` (`default-features = false`, only `deflate` enabled, the same version line the
-Runtime locks), `getrandom` (the salt and `instance_id`) and `ureq` (the fetch; `default-features = false` with only `tls`:
-rustls, its `ring` provider and the compiled-in `webpki-roots`, so no system TLS library).
+Runtime locks), `getrandom` (the salt and `instance_id`), `ureq` (the fetch; `default-features = false` with only `tls`:
+rustls, its `ring` provider and the compiled-in `webpki-roots`, so no system TLS library) and, on
+Windows only, `windows` 0.62 (`Win32_Foundation`, `Win32_System_Com`, `Win32_UI_Shell`: the Startup,
+Start menu and desktop folders through `SHGetKnownFolderPath`, and shortcuts through `IShellLinkW` +
+`IPersistFile`; the version Slint already locks, so the lock gains no crate).
 
 ## Four layers, four crates
 
@@ -700,7 +703,7 @@ reads, and instance discovery — are in `acui-source` (`probe_runtime` / `reque
 
 Every background worker — the start's readiness poll and its record, request shutdown, unlock-owner, a
 save's check-config, discovery, a frame read, and every acsetup worker (release lookup, install or
-upgrade, discovery, writing instances, settling) — is started through
+upgrade, writing the options, discovery, reading resources, writing instances, settling) — is started through
 `std::thread::Builder`. A thread the system refuses is stated, with the OS error, where that action
 reports, and what the worker would have cleared (the start or unlock in flight, the save in progress,
 the frame request) is reset: never a panic on the event loop. A launched actingd whose readiness poll
@@ -708,7 +711,7 @@ cannot start keeps running, and the line says so and that pressing Start again p
 said as that, not as a kill that failed.
 
 A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
-depending only on slint, serde, sha2, zip, getrandom and ureq, and on none of the layers above; see the previous
+depending only on slint, serde, sha2, zip, getrandom, ureq and (Windows only) windows, and on none of the layers above; see the previous
 section, "Setup wizard acsetup".
 
 ## Icon

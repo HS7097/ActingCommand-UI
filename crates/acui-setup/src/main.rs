@@ -44,7 +44,7 @@ use instance_step::{Chosen, Found, Settled};
 use log::InstallLog;
 use slint::{Model, VecModel};
 use upgrade::{Installed, Upgraded};
-use verify::{Reporter, Step, Total};
+use verify::{Report, Reporter, Step, Total};
 
 slint::include_modules!();
 
@@ -91,12 +91,14 @@ struct State {
     /// A worker is past the point where stopping it midway would leave the
     /// installation or the configuration half changed: the window stays open.
     guarded: bool,
-    /// Which of `runtime\`, `ui\` and `tools\` were there before this run.
-    existed: [bool; 3],
+    /// The launcher and shortcuts the options step wrote in this run, so a
+    /// retry can take back what it no longer wants.
+    options_written: Vec<PathBuf>,
 }
 
 /// The worker phases the window must not close in: held while laying files
-/// out, upgrading, and while the instances step writes or restarts.
+/// out and configuring, upgrading, writing the options, and while the
+/// instances step writes or restarts.
 struct Held(Shared);
 
 impl Held {
@@ -261,8 +263,9 @@ fn install_callbacks(window: &SetupWindow, state: &Shared) {
     });
 }
 
-/// The window's close button: refused while files are laid out, an upgrade
-/// swaps versions or the instances step writes — work half done there cannot
+/// The window's close button: refused while files are laid out and configured,
+/// an upgrade swaps versions, the options are written or the instances step
+/// writes — work half done there cannot
 /// be put back once the wizard is gone; a lookup or a download may be closed.
 /// The first time after the instances step started a Runtime, that is said.
 fn close_requested(window: &SetupWindow, state: &Shared) -> slint::CloseRequestResponse {
@@ -470,10 +473,17 @@ fn enter_get(window: &SetupWindow, state: &Shared) {
             return;
         }
     };
-    // A fresh install writes its state root under the root itself: one that
-    // cannot be taken is said before anything is fetched.
+    // A fresh install writes its state root under the root itself, and the
+    // console's settings name the root in TOML literal strings: either one
+    // that cannot be is said before anything is fetched.
     if installed.is_none() {
-        if let Err(reason) = install::state_root_usable(&root.join("state")) {
+        let usable = install::state_root_usable(&root.join("state")).and_then(|()| {
+            match root.display().to_string().contains('\'') {
+                true => Err("安装位置含单引号，监控台设置无法原样写入 / The install location contains a single quote, which the console's settings cannot hold".to_string()),
+                false => Ok(()),
+            }
+        });
+        if let Err(reason) = usable {
             window.set_note(reason.into());
             return;
         }
@@ -735,7 +745,6 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
     let root = lock(state).root.clone();
     let staging = root.join(format!(".staging-{}", log::unix_ms()));
     let existed = LAID.map(|name| root.join(name).exists());
-    lock(state).existed = existed;
     let weak = window.as_weak();
     let shared = Arc::clone(state);
     let (state, worker_weak) = (Arc::clone(state), weak.clone());
@@ -759,7 +768,9 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
                     // A fresh install is configured at once: the state root
                     // under the root, the salt, the console's settings.
                     false => install::lay_out(&root, &verified, &mut report).and_then(|laid_out| {
-                        install::configure(&root, &root.join("state"), &laid_out, &mut report)
+                        let state_root = root.join("state");
+                        install::state_root_usable(&state_root)
+                            .and_then(|()| install::configure(&root, &state_root, &laid_out, &mut report))
                             .map(|configured| (laid_out, None, members, Some(configured)))
                             .map_err(|reason| {
                                 format!("{reason}\n程序已铺开但没有配置；监控台设置可能已改写 / Laid out but not configured; the console settings may have been rewritten")
@@ -859,6 +870,7 @@ fn apply_options(window: &SetupWindow, state: &Shared) {
     };
     let (autostart, with_console) = (window.get_autostart(), window.get_autostart_console());
     let (start_menu, desktop) = (window.get_start_menu(), window.get_desktop_shortcut());
+    let earlier = lock(state).options_written.clone();
     window.set_note("".into());
     window.set_busy(true);
     let weak = window.as_weak();
@@ -868,10 +880,21 @@ fn apply_options(window: &SetupWindow, state: &Shared) {
         let _guard = PanicGuard::new(&state, &worker_weak);
         let held = Held::new(&state);
         let mut report = PageReport::new(&state, &worker_weak);
-        let written = report
+        let mut written = Vec::new();
+        // A retry starts from what was there before this run: whatever an
+        // earlier attempt wrote goes first, then the options as they are now.
+        let outcome = report
             .step(Step::Phase("写入选项 / Writing the options", None))
-            .and_then(|()| install::autostart(&root, autostart, with_console, &mut report))
-            .and_then(|outcome| install::shortcuts(&laid_out, start_menu, desktop, &mut report).map(|links| (outcome, links)));
+            .and_then(|()| take_back(&earlier, &mut report))
+            .and_then(|()| install::autostart(&root, autostart, with_console, &mut written, &mut report))
+            .and_then(|outcome| {
+                install::shortcuts(&laid_out, start_menu, desktop, &mut written, &mut report).map(|links| (outcome, links))
+            });
+        {
+            let mut locked = lock(&state);
+            locked.options_written = earlier.into_iter().filter(|path| path.exists()).chain(written).collect();
+        }
+        let written = outcome;
         drop(held);
         match written {
             Ok((outcome, links)) => {
@@ -896,6 +919,24 @@ fn apply_options(window: &SetupWindow, state: &Shared) {
         window.set_busy(false);
         fail(&shared, &weak, thread_failed(&error));
     }
+}
+
+/// What an earlier options attempt of this run wrote, removed; one that
+/// cannot be is the reason to stop.
+fn take_back(paths: &[PathBuf], report: Report<'_>) -> Result<(), String> {
+    for path in paths {
+        match std::fs::remove_file(path) {
+            Ok(()) => report.line(&format!("撤回本次早先写出的 / taken back what an earlier attempt wrote: {}", path.display()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "本次早先写出的未能删除 / cannot remove what an earlier attempt wrote: {}: {error}",
+                    path.display()
+                ))
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The instances step's discovery, run on entering it and again on request:

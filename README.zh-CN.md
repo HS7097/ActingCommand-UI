@@ -469,7 +469,7 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 一条进度条（不知道总量时——比如等 Runtime 关闭——只走动不计量）和最新一行日志作为「正在做什么」。
 人必须看到的——更早的 `previous\` 或残留目录没删掉、有 `runtime-info.json` 却没有 Runtime 应答——留在进度条下方，
 并写进摘要。失败时页面写原因、磁盘上留下了什么（临时目录删没删；新装时这次铺开了 `runtime\`、`ui\`、`tools\` 中哪些、
-重试前须删除）和日志路径；工作线程 panic 时也停下，写明 panic 信息。铺开文件、升级换版本、实例步写入期间窗口不关；查询或下载时
+重试前须删除）和日志路径；工作线程 panic 时也停下，写明 panic 信息。铺开并配置、升级换版本、写入选项、实例步写入期间窗口不关；查询或下载时
 可以关，这样留下的临时目录下次运行时删掉并写进日志。实例步拉起过 Runtime 时，第一次关闭会先说明它仍在运行。
 有程序文件却没有 `actingd.config.json`，或只有配置没有程序文件（中断的升级）的安装根，在第 0 步写明，既不在上面新装，
 也不当作升级。除安装载荷、配置、设置、`downloads\` 下取回的发布件、（勾选时的）自启批处理与开始菜单、桌面快捷方式、
@@ -480,11 +480,13 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 不解开密封资源包——由 Runtime 加载（大包里的资源包是整个取出）。Linux 上 crate
 照常编译（CI 两条腿都跑 `--workspace`），运行即以 `acsetup v1 is Windows-only` 退出。
 
-依赖多四个，都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`
+依赖多五个，都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`
 （`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（salt 与
 `instance_id`）、
 `ureq`（取件；`default-features = false`，只开 `tls`：rustls、它的 `ring` 实现与编译进去的
-`webpki-roots`，不用系统 TLS 库）。
+`webpki-roots`，不用系统 TLS 库），以及仅限 Windows 的 `windows` 0.62（`Win32_Foundation`、`Win32_System_Com`、
+`Win32_UI_Shell`：经 `SHGetKnownFolderPath` 找启动、开始菜单与桌面文件夹，经 `IShellLinkW` + `IPersistFile`
+写快捷方式；与 Slint 已锁定的同一版本，锁文件不新增 crate）。
 
 ## 四层四 crate
 
@@ -512,13 +514,13 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 `request_shutdown` / `record_start` / `instance_facts` / `discover_instances`）。
 
 每个后台工作线程——启动的就绪等待与记账、请求关闭、unlock-owner、保存时的 check-config、实例发现、
-读帧，以及 acsetup 的每个工作线程（查询发布件、安装或升级、实例发现、写入实例、收尾确认）——都经 `std::thread::Builder` 启动。系统拒绝建线程时，在这个动作
+读帧，以及 acsetup 的每个工作线程（查询发布件、安装或升级、写入选项、实例发现、读取资源、写入实例、收尾确认）——都经 `std::thread::Builder` 启动。系统拒绝建线程时，在这个动作
 回报的位置写明，附系统错误，并把工作线程本该复位的状态（进行中的启动或解锁、保存中、帧请求）复位：
 绝不在事件循环里 panic。已拉起的 actingd 若等不到就绪线程，照样在跑，结果行直说，并提示再按一次「启动」即可探测。子进程终止了但
 回收失败时照实写，不说成终止失败。
 
 第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、sha2、
-zip、getrandom、ureq，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
+zip、getrandom、ureq 与（仅 Windows 的）windows，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
 
 ## 图标
 

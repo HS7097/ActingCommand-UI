@@ -47,13 +47,14 @@ mod imp {
         Ok(env_dir("APPDATA")?.join("ActingCommand").join("acui.toml"))
     }
 
-    /// A known folder's path as the shell has it.
+    /// A known folder's path as the shell has it, whether or not the folder
+    /// exists yet: whoever writes into it creates it.
     fn known_folder(id: &windows::core::GUID, name: &str) -> Result<PathBuf, String> {
         use windows::Win32::System::Com::CoTaskMemFree;
-        use windows::Win32::UI::Shell::{SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+        use windows::Win32::UI::Shell::{SHGetKnownFolderPath, KF_FLAG_DONT_VERIFY};
         // SAFETY: `id` is a valid KNOWNFOLDERID; the returned buffer is owned
         // by the caller, read once and freed with CoTaskMemFree as documented.
-        let path = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }
+        let path = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DONT_VERIFY, None) }
             .map_err(|error| format!("找不到{name}文件夹 / cannot find the {name} folder: {error}"))?;
         let text = unsafe { path.to_string() };
         unsafe { CoTaskMemFree(Some(path.0 as *const _)) };
@@ -96,6 +97,9 @@ mod imp {
         let failed = |error: &dyn std::fmt::Display| {
             format!("无法创建快捷方式 / cannot create the shortcut {}: {error}", lnk.display())
         };
+        if let Some(parent) = lnk.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| failed(&error))?;
+        }
         // SAFETY: plain COM initialisation of the calling thread.
         let entered = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
         entered.ok().map_err(|error| failed(&error))?;
