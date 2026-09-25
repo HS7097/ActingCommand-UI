@@ -625,7 +625,7 @@ or a leftover that could not be removed, a `runtime-info.json` no Runtime answer
 bar and is repeated in the summary. On failure the page shows the reason, what was left on disk (the
 staging directory removed or not; on a fresh install, which of `runtime\`, `ui\` and `tools\` this run
 laid out and must be removed before trying again) and the log path; a worker that panics stops the run
-the same way. While files are laid out, an upgrade swaps versions or the instances step writes, the
+too, with its message. While files are laid out, an upgrade swaps versions or the instances step writes, the
 window does not close; a lookup or a download may be closed, and a staging directory left that way is
 removed on the next run, said in the log. The first close after the instances step started a Runtime
 says that it keeps running. A root with program files but no `actingd.config.json`, or the

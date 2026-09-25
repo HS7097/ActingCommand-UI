@@ -294,6 +294,7 @@ fn ensure_running(root: &Path, paths: &Paths, restart: bool, report: Report<'_>)
     match runtime::runtime_answers(&paths.actingctl, &paths.state_root, report)? {
         Ok(()) if !restart => return Ok(()),
         Ok(()) => {
+            report.step(Step::Phase("关闭 Runtime / Shutting the Runtime down", None))?;
             report.line("请求 Runtime 关闭，以便按新配置重启 / asking the Runtime to shut down, to restart it on the new configuration")?;
             runtime::request_shutdown(&paths.actingctl, &paths.state_root)?;
         }

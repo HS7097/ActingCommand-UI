@@ -81,6 +81,8 @@ struct State {
     /// A worker is past the point where stopping it midway would leave the
     /// installation or the configuration half changed: the window stays open.
     guarded: bool,
+    /// Which of `runtime\`, `ui\` and `tools\` were there before this run.
+    existed: [bool; 3],
 }
 
 /// The worker phases the window must not close in: held while laying files
@@ -255,7 +257,7 @@ fn close_requested(window: &SetupWindow, state: &Shared) -> slint::CloseRequestR
     if state.runtime_started && state.settled.is_none() && !state.close_warned && !window.get_failed() {
         state.close_warned = true;
         window.set_note(
-            "实例步拉起的 Runtime 在向导关闭后仍在后台运行，监控台会接上它；再点一次关闭即退出 / The Runtime the instances step started keeps running after this wizard closes, and the console attaches to it; close again to exit"
+            "实例步拉起过 Runtime，它在向导关闭后可能仍在后台运行，监控台会接上它；再点一次关闭即退出 / The instances step started a Runtime, which may keep running after this wizard closes, and the console attaches to it; close again to exit"
                 .into(),
         );
         return slint::CloseRequestResponse::KeepWindowShown;
@@ -485,6 +487,7 @@ fn enter_get(window: &SetupWindow, state: &Shared) {
         return;
     }
     window.set_note("".into());
+    window.set_notes(lock(state).warnings.join("\n").into());
     window.set_upgrading(lock(state).installed.is_some());
     window.set_step(1);
     offline_toggled(window, state, window.get_offline());
@@ -705,6 +708,7 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
     let root = lock(state).root.clone();
     let staging = root.join(format!(".staging-{}", log::unix_ms()));
     let existed = LAID.map(|name| root.join(name).exists());
+    lock(state).existed = existed;
     let weak = window.as_weak();
     let shared = Arc::clone(state);
     let (state, worker_weak) = (Arc::clone(state), weak.clone());
@@ -835,9 +839,16 @@ fn run_configure(window: &SetupWindow, state: &Shared) {
                 window.set_configured(true);
             }
             Err(reason) => {
+                let existed = lock(state).existed;
+                let laid: Vec<String> = LAID
+                    .into_iter()
+                    .zip(existed)
+                    .filter(|(_, before)| !before)
+                    .map(|(name, _)| root.join(name).display().to_string())
+                    .collect();
                 let reason = format!(
-                    "{reason}\n程序已装好但没有配置；重试前请删除 / Installed but not configured; remove before trying again: {}",
-                    LAID.map(|name| root.join(name).display().to_string()).join("、")
+                    "{reason}\n程序已装好但没有配置；重试前请删除这次铺开的 / Installed but not configured; remove what this run laid out before trying again: {}\n监控台设置可能已改写 / The console settings may have been rewritten",
+                    laid.join("、")
                 );
                 fail(state, &window.as_weak(), reason);
                 return;
@@ -1047,7 +1058,13 @@ fn settle_and_finish(window: &SetupWindow, state: &Shared) {
         match (settled, broken) {
             (Err(reason), _) | (Ok(_), Some(reason)) => fail(&state, &worker_weak, reason),
             (Ok(settled), None) => {
-                lock(&state).settled = Some(settled);
+                let mut locked = lock(&state);
+                // An earlier "runtime-info.json but no answer" no longer holds.
+                if matches!(settled.running, Ok(true)) {
+                    locked.warnings.retain(|line| !line.contains("runtime-info.json"));
+                }
+                locked.settled = Some(settled);
+                drop(locked);
                 let _ = worker_weak.upgrade_in_event_loop(move |window| {
                     window.set_busy(false);
                     finish(&window, &state);

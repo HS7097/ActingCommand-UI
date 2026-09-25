@@ -201,9 +201,12 @@ pub fn configure(
         .create_new(true)
         .open(&config_path)
         .map_err(|error| format!("无法新建（不覆盖已有的）/ cannot create, never over an existing one: {}: {error}", config_path.display()))?;
-    std::io::Write::write_all(&mut file, json.as_bytes())
-        .and_then(|()| file.sync_all())
-        .map_err(|error| format!("写入失败 / write failed: {}: {error}", config_path.display()))?;
+    // A file written halfway would read as a finished configuration: it goes.
+    if let Err(error) = std::io::Write::write_all(&mut file, json.as_bytes()).and_then(|()| file.sync_all()) {
+        drop(file);
+        let reason = format!("写入失败 / write failed: {}: {error}", config_path.display());
+        return Err(crate::fetch::discard(&config_path, reason));
+    }
     report.line(&format!(
         "已写 Runtime 配置 / config written: {}（salt 已生成，不记录 / salt generated, not recorded）",
         config_path.display()
