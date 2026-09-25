@@ -129,16 +129,16 @@ export component SetupWindow inherits Window {
     in property <string> release-text;
     in property <bool> release-failed;
     in property <bool> installing;
-    // Set once the configuration is written: the state root is then fixed.
-    in property <bool> configured;
     in property <string> summary;
     in-out property <string> install-root;
     // Step 1: a folder a person filled by hand instead of the fetch.
     in-out property <bool> offline;
     in-out property <string> download-dir;
-    in-out property <string> state-root;
+    // Step 2: the options of a fresh install.
     in-out property <bool> autostart;
     in-out property <bool> autostart-console;
+    in-out property <bool> start-menu: true;
+    in-out property <bool> desktop-shortcut: false;
     // Step 3: the MuMu folder, and the instances discovery listed.
     in-out property <string> mumu-root;
     in-out property <[InstanceRow]> instances;
@@ -167,7 +167,7 @@ export component SetupWindow inherits Window {
     property <[string]> step-labels: [
         "0 位置 / Location",
         root.upgrading ? "1 升级 / Upgrade" : "1 安装 / Install",
-        "2 配置 / Configure",
+        "2 选项 / Options",
         "3 实例（可选）/ Instances (optional)",
         "4 完成 / Finish",
     ];
@@ -258,28 +258,38 @@ export component SetupWindow inherits Window {
 
                 if !root.failed && root.step == 2: VerticalLayout {
                     spacing: 8px;
-                    Head { text: "配置 / Configure"; }
+                    Head { text: "选项 / Options"; }
                     Caption {
-                        text: "状态根 / State root — Runtime 的私有状态目录：不存在，或是空目录 / the Runtime's private state directory: absent, or an empty directory";
-                    }
-                    LineEdit {
-                        text <=> root.state-root;
-                        enabled: !root.configured;
-                    }
-                    Caption {
-                        text: "写 Runtime 配置 actingd.config.json 与监控台设置 acui.toml；密钥盐由本机随机源生成，不显示、不写日志。\nWrites the Runtime configuration and the console settings; the salt comes from the OS RNG and is never shown or logged.";
+                        text: "配置已自动写好：状态根在安装位置下的 state，Runtime 配置与监控台设置都已就位。下面几项按需勾选。\nThe configuration is written: the state root is state under the install location, the Runtime's configuration and the console's settings are in place. Tick what you want below.";
                     }
                     CheckBox {
-                        text: "登录时启动 Runtime（可选，默认不勾）/ Start the Runtime at sign-in (optional, off by default)";
+                        text: "登录时启动 Runtime / Start the Runtime at sign-in";
                         checked <=> root.autostart;
+                        enabled: !root.busy;
                     }
                     CheckBox {
                         text: "同时拉起监控台 / Also open the console";
                         checked <=> root.autostart-console;
-                        enabled: root.autostart;
+                        enabled: root.autostart && !root.busy;
+                    }
+                    CheckBox {
+                        text: "开始菜单快捷方式 / Start menu shortcut";
+                        checked <=> root.start-menu;
+                        enabled: !root.busy;
+                    }
+                    CheckBox {
+                        text: "桌面快捷方式 / Desktop shortcut";
+                        checked <=> root.desktop-shortcut;
+                        enabled: !root.busy;
                     }
                     Caption {
-                        text: "只写一个按用户的启动项批处理；不装服务、不写注册表。下一步配置模拟器实例，可以跳过。\nOne per-user Startup .cmd, no service, no registry. Emulator instances come next; they may be skipped.";
+                        text: "开机自启只写一个按用户的启动项批处理；快捷方式指向监控台。不装服务、不写注册表。\nAutostart writes one per-user Startup .cmd; the shortcuts open the console. No service, no registry.";
+                    }
+                    if root.busy: Working {
+                        stage: root.stage-text;
+                        detail: root.detail-text;
+                        fraction: root.fraction;
+                        indeterminate: root.indeterminate;
                     }
                     Body { text: root.note; }
                     Rectangle { }

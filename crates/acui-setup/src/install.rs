@@ -329,6 +329,30 @@ pub fn autostart(
     Ok(Autostart::Written { path, with_console })
 }
 
+/// The console's shortcuts a person asked for: in the Start menu and on the
+/// desktop, each `ActingCommand.lnk` to `ui\acui.exe`. One not asked for is
+/// not written, and one already there is left as it is and said so. Returns
+/// the shortcuts written.
+pub fn shortcuts(laid_out: &LaidOut, start_menu: bool, desktop: bool, report: Report<'_>) -> Result<Vec<PathBuf>, String> {
+    let mut written = Vec::new();
+    for (wanted, place, path) in [
+        (start_menu, "开始菜单 / Start menu", platform::start_menu_shortcut_path()?),
+        (desktop, "桌面 / desktop", platform::desktop_shortcut_path()?),
+    ] {
+        if !wanted {
+            report.line(&match path.exists() {
+                true => format!("未勾选{place}快捷方式；已有的 {} 未改动 / not wanted; the existing one is left as is", path.display()),
+                false => format!("未勾选{place}快捷方式 / {place} shortcut not wanted"),
+            })?;
+            continue;
+        }
+        platform::create_shortcut(&path, &laid_out.acui_exe, &laid_out.ui_dir, "ActingCommand 监控台 / console")?;
+        report.line(&format!("已建快捷方式 / shortcut written: {}", path.display()))?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
 /// The console, detached; never actingd — the console's launcher starts the
 /// Runtime.
 pub fn open_console(acui_exe: &Path, ui_dir: &Path) -> Result<(), String> {

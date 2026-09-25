@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! acsetup: the install wizard for ActingCommand on Windows. One window, five
-//! pages — location, install, configure, instances, finish — each showing
+//! pages — location, install, options, instances, finish — each showing
 //! where its work stands the way an installer does, the full account going to
 //! the install log. It fetches the release to install from the umbrella
 //! repository's Releases, or takes a folder a person filled by hand, checks it
@@ -62,6 +62,8 @@ struct State {
     laid_out: Option<LaidOut>,
     configured: Option<Configured>,
     autostart: Option<Autostart>,
+    /// The console's shortcuts the options wrote.
+    shortcuts: Vec<PathBuf>,
     /// The two commits laid out, and where they came from: a release tag or
     /// the offline folder.
     members: Option<(String, String)>,
@@ -310,7 +312,7 @@ fn next(window: &SetupWindow, state: &Shared) {
     match window.get_step() {
         0 => enter_get(window, state),
         1 => begin_install(window, state),
-        2 => run_configure(window, state),
+        2 => apply_options(window, state),
         3 => begin_apply(window, state),
         _ => {}
     }
@@ -468,6 +470,14 @@ fn enter_get(window: &SetupWindow, state: &Shared) {
             return;
         }
     };
+    // A fresh install writes its state root under the root itself: one that
+    // cannot be taken is said before anything is fetched.
+    if installed.is_none() {
+        if let Err(reason) = install::state_root_usable(&root.join("state")) {
+            window.set_note(reason.into());
+            return;
+        }
+    }
     let log = match std::fs::create_dir_all(&root)
         .and_then(|()| InstallLog::create(&root, log::unix_ms()))
     {
@@ -745,22 +755,31 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
                 let members = verified.members.clone();
                 match upgrading {
                     true => upgrade::upgrade(&root, &verified, &mut report)
-                        .map(|upgraded| (upgraded.laid_out.clone(), Some(upgraded), members)),
-                    false => install::lay_out(&root, &verified, &mut report).map(|laid_out| (laid_out, None, members)),
+                        .map(|upgraded| (upgraded.laid_out.clone(), Some(upgraded), members, None)),
+                    // A fresh install is configured at once: the state root
+                    // under the root, the salt, the console's settings.
+                    false => install::lay_out(&root, &verified, &mut report).and_then(|laid_out| {
+                        install::configure(&root, &root.join("state"), &laid_out, &mut report)
+                            .map(|configured| (laid_out, None, members, Some(configured)))
+                            .map_err(|reason| {
+                                format!("{reason}\n程序已铺开但没有配置；监控台设置可能已改写 / Laid out but not configured; the console settings may have been rewritten")
+                            })
+                    }),
                 }
             });
         match outcome {
-            Ok((laid_out, upgraded, members)) => {
+            Ok((laid_out, upgraded, members, configured)) => {
                 let mut locked = lock(&state);
                 locked.laid_out = Some(laid_out);
                 locked.upgraded = upgraded;
                 locked.members = Some(members);
+                locked.configured = configured;
                 drop(locked);
                 let _ = worker_weak.upgrade_in_event_loop(move |window| {
                     window.set_busy(false);
                     match upgrading {
                         true => finish(&window, &state),
-                        false => enter_configure(&window, &state),
+                        false => enter_options(&window, &state),
                     }
                 });
             }
@@ -818,77 +837,64 @@ fn finish(window: &SetupWindow, state: &Shared) {
     window.set_can_next(false);
 }
 
-/// The configure page, its state root defaulted once.
-fn enter_configure(window: &SetupWindow, state: &Shared) {
-    {
-        let state = lock(state);
-        if state.configured.is_none() {
-            window.set_state_root(state.root.join("state").display().to_string().into());
-        }
-        window.set_configured(state.configured.is_some());
-    }
+/// The options page of a fresh install, its configuration already written:
+/// autostart and the console's shortcuts are the person's to choose.
+fn enter_options(window: &SetupWindow, _state: &Shared) {
     window.set_note("".into());
     window.set_step(2);
     window.set_can_next(true);
 }
 
-/// Step 2 → 3: the configuration and the console's settings, written once,
-/// then the optional launcher; the instances page follows.
-fn run_configure(window: &SetupWindow, state: &Shared) {
-    if lock(state).configured.is_none() {
-        let state_root = PathBuf::from(window.get_state_root().as_str());
-        if let Err(reason) = install::state_root_usable(&state_root) {
-            window.set_note(reason.into());
-            return;
-        }
-        let (root, laid_out) = {
-            let state = lock(state);
-            (state.root.clone(), state.laid_out.clone())
-        };
-        let Some(laid_out) = laid_out else {
-            fail(state, &window.as_weak(), "尚未铺开，无法配置 / nothing laid out to configure".into());
-            return;
-        };
-        let mut report = |line: &str| write_log(state, line);
-        match install::configure(&root, &state_root, &laid_out, &mut report) {
-            Ok(configured) => {
-                lock(state).configured = Some(configured);
-                window.set_configured(true);
+/// Step 2 → 3: the Startup launcher and the shortcuts asked for, written off
+/// the event loop; the instances page follows and looks for the emulator at
+/// once. A failure is said on the page, which can be used again.
+fn apply_options(window: &SetupWindow, state: &Shared) {
+    let (root, laid_out) = {
+        let state = lock(state);
+        (state.root.clone(), state.laid_out.clone())
+    };
+    let Some(laid_out) = laid_out else {
+        fail(state, &window.as_weak(), "尚未铺开 / nothing laid out".into());
+        return;
+    };
+    let (autostart, with_console) = (window.get_autostart(), window.get_autostart_console());
+    let (start_menu, desktop) = (window.get_start_menu(), window.get_desktop_shortcut());
+    window.set_note("".into());
+    window.set_busy(true);
+    let weak = window.as_weak();
+    let shared = Arc::clone(state);
+    let (state, worker_weak) = (Arc::clone(state), weak.clone());
+    let spawned = std::thread::Builder::new().name("acsetup-options".into()).spawn(move || {
+        let _guard = PanicGuard::new(&state, &worker_weak);
+        let held = Held::new(&state);
+        let mut report = PageReport::new(&state, &worker_weak);
+        let written = report
+            .step(Step::Phase("写入选项 / Writing the options", None))
+            .and_then(|()| install::autostart(&root, autostart, with_console, &mut report))
+            .and_then(|outcome| install::shortcuts(&laid_out, start_menu, desktop, &mut report).map(|links| (outcome, links)));
+        drop(held);
+        match written {
+            Ok((outcome, links)) => {
+                {
+                    let mut locked = lock(&state);
+                    locked.autostart = Some(outcome);
+                    locked.shortcuts = links;
+                }
+                let _ = worker_weak.upgrade_in_event_loop(move |window| {
+                    window.set_busy(false);
+                    window.set_note("".into());
+                    window.set_step(3);
+                    window.set_can_next(true);
+                    // The emulator is looked for at once: nothing to press first.
+                    begin_discover(&window, &state);
+                });
             }
-            Err(reason) => {
-                let existed = lock(state).existed;
-                let laid: Vec<String> = LAID
-                    .into_iter()
-                    .zip(existed)
-                    .filter(|(_, before)| !before)
-                    .map(|(name, _)| root.join(name).display().to_string())
-                    .collect();
-                let reason = format!(
-                    "{reason}\n程序已装好但没有配置；重试前请删除这次铺开的 / Installed but not configured; remove what this run laid out before trying again: {}\n监控台设置可能已改写 / The console settings may have been rewritten",
-                    laid.join("、")
-                );
-                fail(state, &window.as_weak(), reason);
-                return;
-            }
+            Err(reason) => retryable(&state, &worker_weak, reason),
         }
-    }
-    let root = lock(state).root.clone();
-    let mut report = |line: &str| write_log(state, line);
-    match install::autostart(
-        &root,
-        window.get_autostart(),
-        window.get_autostart_console(),
-        &mut report,
-    ) {
-        Ok(outcome) => {
-            lock(state).autostart = Some(outcome);
-            window.set_note("".into());
-            window.set_step(3);
-            window.set_can_next(true);
-            // The emulator is looked for at once: nothing to press first.
-            begin_discover(window, state);
-        }
-        Err(reason) => fail(state, &window.as_weak(), reason),
+    });
+    if let Err(error) = spawned {
+        window.set_busy(false);
+        fail(&shared, &weak, thread_failed(&error));
     }
 }
 
@@ -1316,6 +1322,15 @@ fn summary(state: &Shared) -> String {
             "开机自启 / Autostart: 未启用 / not enabled".to_string()
         }
     }));
+    if fresh && state.autostart.is_some() {
+        lines.push(match state.shortcuts.as_slice() {
+            [] => "快捷方式 / Shortcuts: 未创建 / none".to_string(),
+            links => format!(
+                "快捷方式 / Shortcuts: {}",
+                links.iter().map(|link| link.display().to_string()).collect::<Vec<_>>().join("、")
+            ),
+        });
+    }
     if fresh && !state.instances.is_empty() {
         lines.push(format!(
             "实例 / Instances: {}（已写入配置并通过检查 / in the configuration, checked）",

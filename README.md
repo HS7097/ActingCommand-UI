@@ -535,26 +535,33 @@ log" below):
    byte-for-byte verbatim), `ui\` (the console payload + manifest), `tools\` (**only** `actinglab.exe`,
    `actingledger.exe` and `ac_fastdeploy_ppocr.dll`; the other two exes in the tools pack are neither
    installed nor shown). The temporary directory is deleted afterwards.
-2. **Configure**: the state root defaults to `<install root>\state` (it must not exist or must be an empty
-   directory; **a state root that already holds content is never taken over**); `secret_fingerprint_salt`
-   is generated as the hex of 32 bytes from the system random source (`getrandom`; **not displayed, not
-   logged**); the console settings are written first (below), then — last, so that its presence marks a
-   finished configuration, and never over an existing file — `<install root>\actingd.config.json`, with only the fields `schema_version`,
-   `state_root`, `bind_host` (127.0.0.1), `bind_port` (0), `secret_fingerprint_salt` and `instances`
-   (empty) — the Runtime's parser is `deny_unknown_fields`, so not one extra field is written. The
-   console settings `%APPDATA%\ActingCommand\acui.toml` get `state_root`, `actingd_config`
-   and `actingd_exe` (the format of the "Settings file" section, single-quoted literals; existing `lang` /
-   `text_size` kept verbatim). The way it writes matches `crates/acui-app/src/settings.rs`, but
-   `acui-setup` does not depend on `acui-app` and is a small duplicate writer. `instances` stays empty
-   here; the instances step fills it.
-   **Start at boot** is on the same page (optional, unchecked by default): only when checked does it write
-   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd` in the per-user startup
-   folder, whose content is
-   `start "" "<install root>\runtime\actingcommand-actingd.exe" --config "<install root>\actingd.config.json"`;
-   only when "also launch the console" is checked as well does it add one more line,
-   `start "" "<install root>\ui\acui.exe"`. acsetup does not appear in the batch file. Unchecked, it
-   writes nothing; a file of the same name already in the startup folder is left alone, and merely
-   mentioned in one sentence on the finish page.
+2. **Options**, the configuration already written. Right after the layout, on the install page and
+   inside its do-not-close span, the fresh install is configured with no question asked: the state root
+   is `<install root>\state` (it must not exist or must be an empty directory — checked on step 0,
+   before anything is fetched; **a state root that already holds content is never taken over**);
+   `secret_fingerprint_salt` is generated as the hex of 32 bytes from the system random source
+   (`getrandom`; **not displayed, not logged**); the console settings are written first (below), then
+   — last, so that its presence marks a finished configuration, and never over an existing file —
+   `<install root>\actingd.config.json`, with only the fields `schema_version`, `state_root`,
+   `bind_host` (127.0.0.1), `bind_port` (0), `secret_fingerprint_salt` and `instances` (empty) — the
+   Runtime's parser is `deny_unknown_fields`, so not one extra field is written. The console settings
+   `%APPDATA%\ActingCommand\acui.toml` get `state_root`, `actingd_config` and `actingd_exe` (the format
+   of the "Settings file" section, single-quoted literals; existing `lang` / `text_size` kept verbatim).
+   The way it writes matches `crates/acui-app/src/settings.rs`, but `acui-setup` does not depend on
+   `acui-app` and is a small duplicate writer. `instances` stays empty here; the instances step fills it.
+   The options page then offers four ticks, written together off the event loop (a failure is said on
+   the page, which can be used again):
+   - **Start at boot** (unchecked by default): only when checked does it write `ActingCommand.cmd` in
+     the per-user Startup folder (the shell's `FOLDERID_Startup`), whose content is
+     `start "" "<install root>\runtime\actingcommand-actingd.exe" --config "<install root>\actingd.config.json"`;
+     only when "also launch the console" is checked as well does it add one more line,
+     `start "" "<install root>\ui\acui.exe"`. acsetup does not appear in the batch file. Unchecked, it
+     writes nothing; a file of the same name already there is left alone, and mentioned in the log.
+   - **Start menu shortcut** (checked by default) and **desktop shortcut** (unchecked by default): an
+     `ActingCommand.lnk` to `<install root>\ui\acui.exe`, working in `ui\`, in the per-user Start
+     menu's Programs (`FOLDERID_Programs`) or on the desktop (`FOLDERID_Desktop`, so a redirected or
+     OneDrive desktop is found where Explorer finds it), written through the shell's own `IShellLink`.
+     Unchecked writes nothing; the finish page lists the shortcuts written.
 3. **Instances**, optional, looked for as soon as the page opens: "跳过 / Skip" leaves `instances`
    empty, to be filled later with the console's top-bar 实例配置 / Instance Configuration button; the
    finish page says so. Where MuMu is comes from the Runtime's own `check-config` (`mumu_root`: its path
@@ -623,7 +630,7 @@ as possibly still starting. Either way the new version stays laid out and the ve
 or older: the wizard compares commits for sameness only.
 
 State, `actingd.config.json`, the console's `acui.toml`, the Startup launcher and `downloads\` are left as
-they are, and the configure step is skipped. The version replaced is kept whole in `previous\`, one
+they are, and the options step is skipped. The version replaced is kept whole in `previous\`, one
 version deep: the Runtime ships no state migration and no rollback of its own, so going back stays a
 person's choice.
 
@@ -642,7 +649,7 @@ removed on the next run, said in the log. The first close after the instances st
 says that it keeps running. A root with program files but no `actingd.config.json`, or the
 configuration without program files (an interrupted upgrade), is named on step 0 and neither installed
 over nor upgraded. Apart from the installed payload, the configuration, the settings, the fetched release
-files under `downloads\`, (when checked) the start-at-boot batch file, the resources fetched into
+files under `downloads\`, (when checked) the start-at-boot batch file and the Start menu and desktop shortcuts, the resources fetched into
 `packages\` and a bundle's packs placed under `packages\<game>\`, and the log of a Runtime it started, this is the only file the wizard writes (with
 `previous\` on an upgrade).
 

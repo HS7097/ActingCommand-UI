@@ -59,3 +59,8 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # getrandom fills the 32-byte secret_fingerprint_salt and each new
 # instance_id from the OS RNG; nothing else in the wizard needs randomness.
 getrandom = "0.4"
+# The wizard's shell work on Windows: where the Start menu, the desktop and the
+# Startup folder are (SHGetKnownFolderPath, which follows a redirected or
+# OneDrive desktop), and shortcuts written through the shell's own IShellLink.
+# The same windows version Slint already locks, so the lock gains no crate.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
