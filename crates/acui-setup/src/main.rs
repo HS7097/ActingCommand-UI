@@ -91,6 +91,8 @@ struct State {
     /// local files added — and what an instance may be given from them.
     bundles: Vec<Bundle>,
     bundles_read: bool,
+    /// What of the release's bundles could not be read, one line each.
+    bundle_problems: Vec<String>,
     choices: Vec<Choice>,
     /// The first log write that failed: nothing goes on after it.
     log_error: Option<String>,
@@ -181,6 +183,8 @@ fn main() -> Result<()> {
             .into(),
     );
     window.set_can_next(true);
+    // One choices model for the page's life; see `show_offer`.
+    window.set_choices(Rc::new(VecModel::<slint::SharedString>::default()).into());
     // The edition is read before anything else: a carried release that cannot
     // be used stops the wizard here, with nothing written.
     match payload::detect() {
@@ -207,6 +211,8 @@ fn install_callbacks(window: &SetupWindow, state: &Shared) {
         let state = Arc::clone(state);
         window.on_install_root_edited(move |_| {
             if let Some(window) = weak.upgrade() {
+                // What was said of the location before is not said of this one.
+                window.set_note("".into());
                 refresh_preflight(&window, &state);
             }
         });
@@ -1160,18 +1166,22 @@ fn begin_discover(window: &SetupWindow, state: &Shared) {
             unread.then(|| locked.download.clone()).flatten()
         };
         if let Some(download) = unread {
-            match bundle::carried(&download, &mut report) {
-                // Appended: the choices already offered keep their places.
-                Ok(carried) => lock(&state).bundles.extend(carried),
-                Err(reason) => {
-                    let line = format!("发布件自带的大包读不出 / the release's bundles cannot be read: {reason}");
-                    let logged = report.warn(&line);
-                    if let Err(error) = logged {
-                        fail(&state, &worker_weak, error);
-                        return;
-                    }
+            let problems = match bundle::carried(&download, &mut report) {
+                Ok((carried, problems)) => {
+                    // Appended: the choices already offered keep their places.
+                    lock(&state).bundles.extend(carried);
+                    problems
+                }
+                Err(reason) => vec![reason],
+            };
+            for problem in &problems {
+                let line = format!("发布件自带的大包读不出 / a bundle the release carries cannot be read: {problem}");
+                if let Err(error) = report.warn(&line) {
+                    fail(&state, &worker_weak, error);
+                    return;
                 }
             }
+            lock(&state).bundle_problems = problems;
         }
         let notes = lock(&state).warnings.join("\n");
         match found {
@@ -1236,13 +1246,18 @@ struct Choice {
     label: String,
 }
 
-/// What the bundles offer the instances — each server that names a default
-/// pack — and, for the page, the programs and package names they support.
-fn offer(bundles: &[Bundle]) -> (Vec<Choice>, String) {
+/// What the bundles offer the instances — each server that names both a
+/// package name and a default pack — and, for the page, the programs and
+/// package names they support, what is not offered and why, and whether any of
+/// the release's bundles could not be read.
+fn offer(bundles: &[Bundle], problems: &[String]) -> (Vec<Choice>, String) {
     let mut choices = Vec::new();
     let mut lines = Vec::new();
     for (at, bundle) in bundles.iter().enumerate() {
         let mut servers = Vec::new();
+        for server in bundle.defaults.keys().filter(|server| !bundle.applications.contains_key(*server)) {
+            servers.push(format!("{server}（applications.json 没有它的包名，不可选 / no package name in applications.json, not offered）"));
+        }
         for (server, application) in &bundle.applications {
             let pack = bundle.defaults.get(server);
             servers.push(format!(
@@ -1270,9 +1285,12 @@ fn offer(bundles: &[Bundle]) -> (Vec<Choice>, String) {
             if bundle.carried { "发布件自带 / carried by the release" } else { "本机文件 / local file" }
         ));
     }
-    let text = match lines.is_empty() {
-        true => "发布件没有带资源大包：可在下面加入本机的大包文件 / The release carries no resource bundle: add a local bundle file below".to_string(),
-        false => format!("支持的程序与包名 / Supported programs and package names:\n{}", lines.join("\n")),
+    let unread = "发布件自带的大包有读不出的（见注意）/ Some bundles the release carries cannot be read (see the notes)";
+    let text = match (lines.is_empty(), problems.is_empty()) {
+        (true, true) => "发布件没有带资源大包：可在下面加入本机的大包文件 / The release carries no resource bundle: add a local bundle file below".to_string(),
+        (true, false) => format!("{unread}；可在下面加入本机的大包文件 / add a local bundle file below"),
+        (false, true) => format!("支持的程序与包名 / Supported programs and package names:\n{}", lines.join("\n")),
+        (false, false) => format!("支持的程序与包名 / Supported programs and package names:\n{}\n{unread}", lines.join("\n")),
     };
     (choices, text)
 }
@@ -1280,11 +1298,28 @@ fn offer(bundles: &[Bundle]) -> (Vec<Choice>, String) {
 /// The page's account of the bundles — what they support, and the choices
 /// each ticked instance picks from, made for it when there is only one.
 fn show_offer(window: &SetupWindow, state: &Shared) {
-    let (choices, text) = offer(&lock(state).bundles);
-    let labels: Vec<slint::SharedString> = choices.iter().map(|choice| choice.label.clone().into()).collect();
+    let (choices, text) = {
+        let locked = lock(state);
+        offer(&locked.bundles, &locked.bundle_problems)
+    };
     let single = choices.len() == 1;
+    // The page's one choices model only grows: a ComboBox whose model is
+    // replaced clamps its index, and would pick a first choice for an
+    // instance nobody chose for. Bundles are only ever appended, so the new
+    // choices extend the old.
+    let model = window.get_choices();
+    match model.as_any().downcast_ref::<VecModel<slint::SharedString>>() {
+        Some(shown) => {
+            for choice in choices.iter().skip(shown.row_count()) {
+                shown.push(choice.label.clone().into());
+            }
+        }
+        None => {
+            let labels: Vec<slint::SharedString> = choices.iter().map(|choice| choice.label.clone().into()).collect();
+            window.set_choices(Rc::new(VecModel::from(labels)).into());
+        }
+    }
     lock(state).choices = choices;
-    window.set_choices(Rc::new(VecModel::from(labels)).into());
     window.set_supported_text(text.into());
     if single {
         let rows = window.get_instances();
@@ -1318,7 +1353,8 @@ fn begin_add_bundle(window: &SetupWindow, state: &Shared) {
             let line = format!("本机大包 / local bundle: {} → {}", bundle.file.display(), bundle.name());
             {
                 let mut locked = lock(&state);
-                if let Some(twin) = locked.bundles.iter().find(|other| other.game == bundle.game) {
+                // `packages\<game>\` is one folder whatever the case.
+                if let Some(twin) = locked.bundles.iter().find(|other| other.game.eq_ignore_ascii_case(&bundle.game)) {
                     return Err(format!(
                         "已有 {} 的大包 / a bundle for {} is already offered: {}",
                         twin.name(),

@@ -583,15 +583,18 @@ log" below):
    started or stopped; a single instance is ticked for the person. "重新查找 / Find again" repeats it.
    An empty MuMu field finds MuMu afresh. The resources are the resource repositories' **bundles** the
    release carries: its `MEMBERS.json` names each in `bundles[]` with its sha256, and the file is in the
-   download folder, already checked against `SHA256SUMS`; the wizard checks that sha256 once more and
-   reads them on the first discovery. **No path, URL or hash is asked of the person.** A bundle holds
+   download folder, already checked against `SHA256SUMS`; on the first discovery the wizard holds each
+   to be listed in `SHA256SUMS` under that same sha256, checks the file's sha256 once more and reads it.
+   A bundle that fails any of this is named in the notes and not offered; the others still are.
+   **No path, URL or hash is asked of the person.** A bundle holds
    `applications.json` (the game, its display name `label` when given, and each server's label and
    Android package name) and `bundle.json` (every pack's path, package id, server, sha256 and size, and
    each server's default pack in `default_packs`). The page lists the programs and package names they
    support — for example "蔚蓝档案 / Blue Archive：日服 com.YostarJP.BlueArchive" (the game id when a
-   bundle gives no `label`) — and whether each came with the release. Only when the release carries no
-   bundle is a local bundle file the way in: its absolute path, "加入 / Add", no hash; a second bundle for
-   a game already offered is refused. Each ticked instance takes an alias (default `mumu-<index>`) and
+   bundle gives no `label`) — whether each came with the release, and a server that names a default
+   pack but no package name as not offered. A local bundle file can be added — the way in while the
+   release carries none: its absolute path, "加入 / Add", no hash; a second bundle for a game already
+   offered (whatever the case of its name) is refused. Each ticked instance takes an alias (default `mumu-<index>`) and
    **its own choice** of "program · server · package name", one per server that names a default pack;
    when there is only one, it is chosen for every instance. The wizard knows no game and guesses none.
    "写入实例 / Apply" lays each bundle used out once, byte for byte, under

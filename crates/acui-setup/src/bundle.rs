@@ -90,37 +90,65 @@ struct Carried {
 }
 
 /// The bundles the release in `download` carries, in the order its
-/// `MEMBERS.json` names them: each present beside it, its sha256 the one named,
-/// and readable as a bundle. A release that names none carries none.
-pub fn carried(download: &Path, report: Report<'_>) -> Result<Vec<Bundle>, String> {
+/// `MEMBERS.json` names them — each listed in `SHA256SUMS` under the same
+/// sha256, present beside it with that sha256, and readable as a bundle —
+/// and, one line each, the ones that are not: those are said, the rest still
+/// offered. A release that names none carries none; a `MEMBERS.json` or
+/// `SHA256SUMS` that cannot be read fails the lot.
+pub fn carried(download: &Path, report: Report<'_>) -> Result<(Vec<Bundle>, Vec<String>), String> {
     let path = download.join("MEMBERS.json");
     let text = fs::read_to_string(&path).map_err(|error| format!("读取失败 / read failed: {}: {error}", path.display()))?;
     let members: Members = serde_json::from_str(&text)
         .map_err(|error| format!("MEMBERS.json 的 bundles 无法解析 / MEMBERS.json bundles do not parse: {error}"))?;
-    let mut bundles: Vec<Bundle> = Vec::new();
-    for entry in members.bundles {
-        if !fetch::plain(&entry.asset) {
-            return Err(format!("MEMBERS.json 列出的大包文件名不能使用 / a bundle name MEMBERS.json lists cannot be used: {}", entry.asset));
-        }
-        let file = download.join(&entry.asset);
-        let actual = crate::verify::sha256_file(&file)
-            .map_err(|error| format!("读取失败 / read failed: {}: {error}", file.display()))?;
-        if !entry.sha256.eq_ignore_ascii_case(&actual) {
-            return Err(format!("{MISMATCH}: {} sha256 应为 / expected {}，实为 / actual {actual}", entry.asset, entry.sha256));
-        }
-        let mut bundle = read(&file)?;
-        bundle.carried = true;
-        if let Some(twin) = bundles.iter().find(|other| other.game == bundle.game) {
-            return Err(format!(
-                "发布件带了同一游戏的两个大包 / the release carries two bundles for one game: {} · {}",
-                twin.file.display(),
-                file.display()
-            ));
-        }
-        report.line(&format!("发布件自带的大包 / carried bundle: {} → {}", entry.asset, bundle.name()))?;
-        bundles.push(bundle);
+    if members.bundles.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
     }
-    Ok(bundles)
+    let sums_path = download.join("SHA256SUMS");
+    let sums = fs::read_to_string(&sums_path)
+        .map_err(|error| format!("读取失败 / read failed: {}: {error}", sums_path.display()))?;
+    let listed: BTreeMap<String, String> = crate::verify::parse_sha256sums(&sums)?
+        .into_iter()
+        .map(|(sha, name)| (name, sha))
+        .collect();
+    let (mut bundles, mut problems): (Vec<Bundle>, Vec<String>) = (Vec::new(), Vec::new());
+    for entry in members.bundles {
+        let one = (|| {
+            if !fetch::plain(&entry.asset) {
+                return Err("文件名不能使用 / the name cannot be used".to_string());
+            }
+            match listed.get(&entry.asset) {
+                Some(sha) if sha.eq_ignore_ascii_case(&entry.sha256) => {}
+                Some(sha) => {
+                    return Err(format!(
+                        "{MISMATCH}: SHA256SUMS 记为 / lists {sha}，MEMBERS.json 记为 / names {}",
+                        entry.sha256
+                    ))
+                }
+                None => return Err("SHA256SUMS 未列出 / not listed in SHA256SUMS".to_string()),
+            }
+            let file = download.join(&entry.asset);
+            let actual = crate::verify::sha256_file(&file)
+                .map_err(|error| format!("读取失败 / read failed: {}: {error}", file.display()))?;
+            if !entry.sha256.eq_ignore_ascii_case(&actual) {
+                return Err(format!("{MISMATCH}: sha256 应为 / expected {}，实为 / actual {actual}", entry.sha256));
+            }
+            let mut bundle = read(&file)?;
+            bundle.carried = true;
+            // `packages\<game>\` is one folder whatever the case.
+            if let Some(twin) = bundles.iter().find(|other| other.game.eq_ignore_ascii_case(&bundle.game)) {
+                return Err(format!("与 / the same game as {} 同一游戏 {}", twin.file.display(), bundle.game));
+            }
+            Ok(bundle)
+        })();
+        match one {
+            Ok(bundle) => {
+                report.line(&format!("发布件自带的大包 / carried bundle: {} → {}", entry.asset, bundle.name()))?;
+                bundles.push(bundle);
+            }
+            Err(reason) => problems.push(format!("{}: {reason}", entry.asset)),
+        }
+    }
+    Ok((bundles, problems))
 }
 
 /// A local bundle file the person added: the absolute path of an existing
