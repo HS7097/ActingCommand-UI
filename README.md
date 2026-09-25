@@ -555,28 +555,36 @@ log" below):
    `start "" "<install root>\ui\acui.exe"`. acsetup does not appear in the batch file. Unchecked, it
    writes nothing; a file of the same name already in the startup folder is left alone, and merely
    mentioned in one sentence on the finish page.
-3. **Instances**, optional: "跳过 / Skip" leaves `instances` empty, to be filled later with the
-   console's top-bar 实例配置 / Instance Configuration button; the finish page says so. An optional MuMu
-   folder (an existing absolute folder) and "发现实例 / Discover": the folder is written as `mumu_root` —
-   an empty field takes it out — through the same candidate and `check-config` as below; a Runtime is
-   started from the install root as on an upgrade below (one that answers is shut down and started again:
-   it has no instance yet, and which folder it read cannot be asked); and `actingctl emulator discover`
-   lists the instances from MuMu's own inventory — no emulator is started or stopped. The list is cleared
-   first, and a failed Discover is said and leaves the page usable, even with the folder already written.
-   Each ticked instance takes an alias (default `mumu-<index>`), an `application_id` (a BlueArchiveJP
-   button fills `com.YostarJP.BlueArchive`) and a resource package: the absolute path of an existing
-   file, or an `https://` URL fetched through a `.part` file into `<install root>\packages\<index>\`,
-   named by the URL's last path segment when that is a plain name, else `package.zip` (a file already
-   there is replaced, and said so); a sha256 given is compared. "写入实例 / Apply" writes one entry per ticked instance — alias, a
-   new `instance_id` (`instance_` + 32 hex from the OS RNG), `instance_index`, `application_id`,
-   `touch_backend` `adb_shell_input`, `capture_backend` `nemu_ipc` with a MuMu folder else `adb`, and the
-   package's absolute path as `resource_package` — into `actingd.config.candidate-<pid>.json` next to the
-   configuration. The Runtime's `check-config` checks it (a package that does not load is named with its
-   alias, path and the loader's message); only an accepted candidate replaces the configuration, and the
-   Runtime is restarted on it and `actingctl status` must answer. A failure before the configuration is
-   replaced is said on the page and in the log and leaves the page usable; one after it stops the run, as
-   does any failed log write. Leaving this step after a Discover asks again, for the summary, what
-   `mumu_root` is and whether a Runtime answers.
+3. **Instances**, optional, looked for as soon as the page opens: "跳过 / Skip" leaves `instances`
+   empty, to be filled later with the console's top-bar 实例配置 / Instance Configuration button; the
+   finish page says so. Where MuMu is comes from the Runtime's own `check-config` (`mumu_root`: its path
+   and source — a running MuMu, the per-user or machine uninstall registry, the vendor folders; see the
+   Runtime's `contracts/actingd-check-config.md`), or from the folder a person names when none is found;
+   either way it is pinned into the configuration's `mumu_root` through the same candidate and
+   `check-config` as below, so a second MuMu install cannot take the instances over later. A Runtime too
+   old to say where MuMu is leaves it unpinned, as a note. A Runtime is then started from the install
+   root as on an upgrade below (one that answers is shut down and started again: it has no instance yet),
+   and `actingctl emulator discover` lists the instances from MuMu's own inventory — no emulator is
+   started or stopped; a single instance is ticked for the person. "重新查找 / Find again" repeats it.
+   Each ticked instance takes an alias (default `mumu-<index>`). The resources are one field for all of
+   them: a resource repository's **bundle** or a **single sealed pack**, as the absolute path of an
+   existing file or an `https://` URL fetched through a `.part` file into `<install root>\packages\`; a
+   sha256 given is compared; "读取 / Read" opens it. A bundle holds `applications.json` (each server's
+   Android package name) and `bundle.json` (every pack's path, package id, server, sha256 and size, and
+   optionally `default_packs` per server); the page shows the game, its servers and package names, and a
+   pack list starting from the bundle's own default, else empty for the person to pick — the wizard
+   knows no game and guesses none. A single pack has no package name: the person gives it. "写入实例 /
+   Apply" lays a bundle's packs out byte for byte under `<install root>\packages\<game>\`, each checked
+   against `bundle.json` first, then writes one entry per ticked instance — alias, a new `instance_id`
+   (`instance_` + 32 hex from the OS RNG), `instance_index`, the package name of the chosen pack's
+   server, `touch_backend` `adb_shell_input`, `capture_backend` `adb` (until a first `nemu_ipc` frame
+   is confirmed on the real machine), and the chosen pack's absolute path as `resource_package` — into
+   `actingd.config.candidate-<pid>.json` next to the configuration. The Runtime's `check-config` checks
+   it (a package that does not load is named with its alias, path and the loader's message); only an
+   accepted candidate replaces the configuration, and the Runtime is restarted on it and `actingctl
+   status` must answer. A failure before the configuration is replaced is said on the page and in the log
+   and leaves the page usable; one after it stops the run, as does any failed log write. Leaving this step
+   asks again, for the summary, what `mumu_root` is and whether a Runtime answers.
 4. **Finish**: the summary — what was installed (runtime and ui commits, and the release tag or the
    offline folder), the paths, and every note from the steps. "启动监控台 / Open console" launches
    `<install root>\ui\acui.exe` detached and closes the wizard; "finish" only closes. A Runtime the

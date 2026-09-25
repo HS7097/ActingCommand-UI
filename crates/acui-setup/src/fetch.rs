@@ -65,7 +65,7 @@ impl Release {
 
 /// A name the wizard writes under `downloads\`: letters, digits, `.`, `-` and
 /// `_` only, not starting with a dot, and no Windows device name.
-fn plain(name: &str) -> bool {
+pub(crate) fn plain(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or_default().to_ascii_uppercase();
     let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
         || ((stem.starts_with("COM") || stem.starts_with("LPT"))
