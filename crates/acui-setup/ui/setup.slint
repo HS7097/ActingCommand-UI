@@ -396,6 +396,8 @@ export component SetupWindow inherits Window {
                     if root.resource-ready: Caption { text: root.resource-text; }
                     if root.resource-ready && !root.resource-single: HorizontalLayout {
                         spacing: 6px;
+                        // The list above takes the page's spare height, not the dropdown.
+                        vertical-stretch: 0;
                         Caption {
                             text: "资源包 / Resource pack";
                             vertical-alignment: center;
