@@ -398,19 +398,24 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `runtime\`（Runtime 全部载荷 + 清单，`actingd.config.example.json` 逐字节原样）、
    `ui\`（监控台载荷 + 清单）、`tools\`（**只有** `actinglab.exe`、`actingledger.exe`、
    `ac_fastdeploy_ppocr.dll`；tools 包里另外两个 exe 不装、不显示）。之后删除临时目录。
-2. **配置**：状态根默认 `<安装根>\state`（必须不存在或为空目录，**已有内容的状态根一律不接管**）；
+2. **选项**，配置已自动写好。铺开之后，在安装页、同一个不许关窗的区段里，新装不问任何问题就配置好：状态根为
+   `<安装根>\state`（必须不存在或为空目录——在第 0 步、下载之前就检查；**已有内容的状态根一律不接管**）；
    生成 `secret_fingerprint_salt` = 系统随机源 32 字节的十六进制（`getrandom`；**不显示、不写日志**）；
-   先写监控台设置（见下），最后才写——它在就代表配置完成，且从不覆盖已有文件——`<安装根>\actingd.config.json`，字段只有 `schema_version`、`state_root`、`bind_host`
-   （127.0.0.1）、`bind_port`（0）、`secret_fingerprint_salt`、`instances`（空）——Runtime 的解析器
-   `deny_unknown_fields`，多一个字段都不写。监控台设置 `%APPDATA%\ActingCommand\acui.toml` 写
-   `state_root`、`actingd_config`、`actingd_exe`（同「设置文件」一节的格式，单引号字面量；已有的
-   `lang` / `text_size` 原样保留）。写法与 `crates/acui-app/src/settings.rs` 一致，但 `acui-setup`
-   不依赖 `acui-app`，是一份小的重复写入器。这里 `instances` 留空，由实例步填。
-   **开机自启**在同一页（可选，默认不勾）：勾了才写按用户的启动文件夹里的
-   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd`，内容是
-   `start "" "<安装根>\runtime\actingcommand-actingd.exe" --config "<安装根>\actingd.config.json"`；
-   再勾「同时拉起监控台」才多一行 `start "" "<安装根>\ui\acui.exe"`。批处理里不出现 acsetup。
-   不勾就什么也不写；启动文件夹里已有的同名文件不动，只在完成页说一句。
+   先写监控台设置（见下），最后才写——它在就代表配置完成，且从不覆盖已有文件——`<安装根>\actingd.config.json`，
+   字段只有 `schema_version`、`state_root`、`bind_host`（127.0.0.1）、`bind_port`（0）、
+   `secret_fingerprint_salt`、`instances`（空）——Runtime 的解析器 `deny_unknown_fields`，多一个字段都不写。
+   监控台设置 `%APPDATA%\ActingCommand\acui.toml` 写 `state_root`、`actingd_config`、`actingd_exe`（同
+   「设置文件」一节的格式，单引号字面量；已有的 `lang` / `text_size` 原样保留）。写法与
+   `crates/acui-app/src/settings.rs` 一致，但 `acui-setup` 不依赖 `acui-app`，是一份小的重复写入器。这里
+   `instances` 留空，由实例步填。随后的选项页有四个勾选，在工作线程里一起写（失败写在页面上，页面可继续用）：
+   - **开机自启**（默认不勾）：勾了才在按用户的启动文件夹（系统的 `FOLDERID_Startup`）写 `ActingCommand.cmd`，
+     内容是 `start "" "<安装根>\runtime\actingcommand-actingd.exe" --config "<安装根>\actingd.config.json"`；
+     再勾「同时拉起监控台」才多一行 `start "" "<安装根>\ui\acui.exe"`。批处理里不出现 acsetup。不勾就什么也不写；
+     已有的同名文件不动，写进日志。
+   - **开始菜单快捷方式**（默认勾）与**桌面快捷方式**（默认不勾）：指向 `<安装根>\ui\acui.exe`、工作目录 `ui\`
+     的 `ActingCommand.lnk`，放在按用户的开始菜单「程序」（`FOLDERID_Programs`）或桌面（`FOLDERID_Desktop`，
+     桌面被重定向或在 OneDrive 里也照资源管理器的位置找），经系统自己的 `IShellLink` 写出。不勾就什么也不写；
+     完成页列出写出的快捷方式。
 3. **实例**，可选，一进页面就开始查找：「跳过」让 `instances` 留空，之后点监控台顶栏的「实例配置」按钮添加；
    完成页也这样写。MuMu 在哪由 Runtime 自己的 `check-config` 给出（`mumu_root`：路径与来源——
    `ACTINGCOMMAND_NEMU_FOLDER`、运行中的 MuMu、
@@ -456,7 +461,7 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 它自己的 `runtime-info.json` 写出它的 pid 才算就绪。在那之前退出的，连同 `FATAL` 行一起写明；没按时就绪
 的写明可能仍在启动。无论哪种，新版本都已铺好，被替换的版本在 `previous\`。发布件按原样安装，不论新旧：向导只比对提交号是否相同。
 
-状态根、`actingd.config.json`、监控台的 `acui.toml`、开机自启与 `downloads\` 都不动，配置那一步跳过。
+状态根、`actingd.config.json`、监控台的 `acui.toml`、开机自启与 `downloads\` 都不动，选项那一步跳过。
 被替换的版本整份留在 `previous\`，只留一份：Runtime 不带状态迁移，也不带回滚，退回去仍是人的决定。
 
 **进度与安装日志**：离开第 0 步起，每一行工作都写进 `<安装根>\acsetup-<unix_ms>.log`，日志写失败即停下。
@@ -464,10 +469,10 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 一条进度条（不知道总量时——比如等 Runtime 关闭——只走动不计量）和最新一行日志作为「正在做什么」。
 人必须看到的——更早的 `previous\` 或残留目录没删掉、有 `runtime-info.json` 却没有 Runtime 应答——留在进度条下方，
 并写进摘要。失败时页面写原因、磁盘上留下了什么（临时目录删没删；新装时这次铺开了 `runtime\`、`ui\`、`tools\` 中哪些、
-重试前须删除）和日志路径；工作线程 panic 时也停下，写明 panic 信息。铺开文件、升级换版本、实例步写入期间窗口不关；查询或下载时
+重试前须删除）和日志路径；工作线程 panic 时也停下，写明 panic 信息。铺开并配置、升级换版本、写入选项、实例步写入期间窗口不关；查询或下载时
 可以关，这样留下的临时目录下次运行时删掉并写进日志。实例步拉起过 Runtime 时，第一次关闭会先说明它仍在运行。
 有程序文件却没有 `actingd.config.json`，或只有配置没有程序文件（中断的升级）的安装根，在第 0 步写明，既不在上面新装，
-也不当作升级。除安装载荷、配置、设置、`downloads\` 下取回的发布件、（勾选时的）自启批处理、
+也不当作升级。除安装载荷、配置、设置、`downloads\` 下取回的发布件、（勾选时的）自启批处理与开始菜单、桌面快捷方式、
 `packages\` 下取回的资源与放到 `packages\<game>\` 的大包资源包、引导拉起的 Runtime 的日志，以及升级时的 `previous\` 之外，引导写的文件只有这一个。
 
 **永远不做的事**：不装服务、不建计划任务、不改 PATH、不写注册表；不改配置模板；不碰已有内容的状态根；
@@ -475,11 +480,13 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 不解开密封资源包——由 Runtime 加载（大包里的资源包是整个取出）。Linux 上 crate
 照常编译（CI 两条腿都跑 `--workspace`），运行即以 `acsetup v1 is Windows-only` 退出。
 
-依赖多四个，都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`
+依赖多五个，都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`
 （`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（salt 与
 `instance_id`）、
 `ureq`（取件；`default-features = false`，只开 `tls`：rustls、它的 `ring` 实现与编译进去的
-`webpki-roots`，不用系统 TLS 库）。
+`webpki-roots`，不用系统 TLS 库），以及仅限 Windows 的 `windows` 0.62（`Win32_Foundation`、`Win32_System_Com`、
+`Win32_UI_Shell`：经 `SHGetKnownFolderPath` 找启动、开始菜单与桌面文件夹，经 `IShellLinkW` + `IPersistFile`
+写快捷方式；与 Slint 已锁定的同一版本，锁文件不新增 crate）。
 
 ## 四层四 crate
 
@@ -507,13 +514,13 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 `request_shutdown` / `record_start` / `instance_facts` / `discover_instances`）。
 
 每个后台工作线程——启动的就绪等待与记账、请求关闭、unlock-owner、保存时的 check-config、实例发现、
-读帧，以及 acsetup 的每个工作线程（查询发布件、安装或升级、实例发现、写入实例、收尾确认）——都经 `std::thread::Builder` 启动。系统拒绝建线程时，在这个动作
+读帧，以及 acsetup 的每个工作线程（查询发布件、安装或升级、写入选项、实例发现、读取资源、写入实例、收尾确认）——都经 `std::thread::Builder` 启动。系统拒绝建线程时，在这个动作
 回报的位置写明，附系统错误，并把工作线程本该复位的状态（进行中的启动或解锁、保存中、帧请求）复位：
 绝不在事件循环里 panic。已拉起的 actingd 若等不到就绪线程，照样在跑，结果行直说，并提示再按一次「启动」即可探测。子进程终止了但
 回收失败时照实写，不说成终止失败。
 
 第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、sha2、
-zip、getrandom、ureq，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
+zip、getrandom、ureq 与（仅 Windows 的）windows，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
 
 ## 图标
 

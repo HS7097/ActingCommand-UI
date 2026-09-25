@@ -18,6 +18,9 @@ slint = { workspace = true }
 ureq = { workspace = true }
 zip = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }
+
 [build-dependencies]
 slint-build = { workspace = true }
 
