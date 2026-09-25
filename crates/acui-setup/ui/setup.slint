@@ -2,7 +2,8 @@
 import { Button, CheckBox, ComboBox, LineEdit, ListView, Palette, ProgressIndicator, TextEdit } from "std-widgets.slint";
 
 // One instance the emulator reported, the alias a person gives it and what
-// it runs: an index into the choices the resource bundles offer, -1 for none.
+// it runs: an index into `choices`, whose first entry stands for "not chosen"
+// — a ComboBox clamps its index into the model, so no index can mean "none".
 export struct InstanceRow {
     picked: bool,
     index: int,
@@ -156,6 +157,7 @@ export component SetupWindow inherits Window {
     // package names — the choices an instance picks from, and a local bundle
     // file to add when the release carries none.
     in property <string> supported-text;
+    // First entry: "choose what it runs"; the rest are the real choices.
     in property <[string]> choices;
     in-out property <string> local-bundle;
 
@@ -345,6 +347,10 @@ export component SetupWindow inherits Window {
                         vertical-stretch: 2;
                         min-height: 120px;
                         for row in root.instances: VerticalLayout {
+                            // A row is as tall as what it holds: the list hands
+                            // its spare height to whatever stretches, and the
+                            // picked row's fields would take all of it.
+                            vertical-stretch: 0;
                             padding-bottom: 8px;
                             spacing: 4px;
                             HorizontalLayout {
@@ -362,6 +368,10 @@ export component SetupWindow inherits Window {
                             }
                             if row.picked: HorizontalLayout {
                                 spacing: 8px;
+                                // The fields stretch vertically by themselves;
+                                // in a list row that would take the list's
+                                // whole spare height.
+                                height: 34px;
                                 LineEdit {
                                     text <=> row.alias;
                                     enabled: !root.busy;
@@ -371,7 +381,7 @@ export component SetupWindow inherits Window {
                                 ComboBox {
                                     model: root.choices;
                                     current-index <=> row.choice;
-                                    enabled: !root.busy && root.choices.length > 0;
+                                    enabled: !root.busy && root.choices.length > 1;
                                     horizontal-stretch: 1;
                                 }
                             }

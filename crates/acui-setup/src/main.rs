@@ -1229,7 +1229,7 @@ fn instance_row(found: &Found) -> InstanceRow {
         title: format!("#{} {}", found.index, found.name).into(),
         detail: detail.join(" · ").into(),
         alias: found.bound_alias.clone().unwrap_or_else(|| format!("mumu-{}", found.index)).into(),
-        choice: -1,
+        choice: 0,
     }
 }
 
@@ -1295,6 +1295,11 @@ fn offer(bundles: &[Bundle], problems: &[String]) -> (Vec<Choice>, String) {
     (choices, text)
 }
 
+/// What the page's first choice says: an instance is on it until someone
+/// chooses. A ComboBox clamps its index into its model, so "nothing chosen"
+/// cannot be an index outside it — it is this entry, at 0.
+const CHOOSE: &str = "请选择它运行的程序 / Choose what it runs";
+
 /// The page's account of the bundles — what they support, and the choices
 /// each ticked instance picks from, made for it when there is only one.
 fn show_offer(window: &SetupWindow, state: &Shared) {
@@ -1303,29 +1308,31 @@ fn show_offer(window: &SetupWindow, state: &Shared) {
         offer(&locked.bundles, &locked.bundle_problems)
     };
     let single = choices.len() == 1;
-    // The page's one choices model only grows: a ComboBox whose model is
-    // replaced clamps its index, and would pick a first choice for an
-    // instance nobody chose for. Bundles are only ever appended, so the new
-    // choices extend the old.
+    // The page's one choices model only grows, and its first entry is
+    // CHOOSE: bundles are only ever appended, so an index already chosen
+    // keeps meaning what it meant.
+    let labels = || {
+        std::iter::once(slint::SharedString::from(CHOOSE))
+            .chain(choices.iter().map(|choice| choice.label.clone().into()))
+            .collect::<Vec<_>>()
+    };
     let model = window.get_choices();
     match model.as_any().downcast_ref::<VecModel<slint::SharedString>>() {
         Some(shown) => {
-            for choice in choices.iter().skip(shown.row_count()) {
-                shown.push(choice.label.clone().into());
+            for label in labels().into_iter().skip(shown.row_count()) {
+                shown.push(label);
             }
         }
-        None => {
-            let labels: Vec<slint::SharedString> = choices.iter().map(|choice| choice.label.clone().into()).collect();
-            window.set_choices(Rc::new(VecModel::from(labels)).into());
-        }
+        None => window.set_choices(Rc::new(VecModel::from(labels())).into()),
     }
     lock(state).choices = choices;
     window.set_supported_text(text.into());
+    // One choice and nothing to weigh: it is made for every instance.
     if single {
         let rows = window.get_instances();
         for at in 0..rows.row_count() {
-            if let Some(mut row) = rows.row_data(at).filter(|row| row.choice < 0) {
-                row.choice = 0;
+            if let Some(mut row) = rows.row_data(at).filter(|row| row.choice < 1) {
+                row.choice = 1;
                 rows.set_row_data(at, row);
             }
         }
@@ -1427,7 +1434,8 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
     };
     let mut picks = Vec::new();
     for row in &picked {
-        let Some(choice) = usize::try_from(row.choice).ok().and_then(|at| choices.get(at)) else {
+        // Index 0 is CHOOSE: nothing has been chosen for this instance.
+        let Some(choice) = usize::try_from(row.choice - 1).ok().and_then(|at| choices.get(at)) else {
             window.set_note(format!("{}：请选它运行的程序 / choose what it runs", row.title).into());
             return;
         };
