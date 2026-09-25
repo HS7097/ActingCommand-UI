@@ -56,7 +56,6 @@ component Working inherits VerticalLayout {
     in property <string> detail;
     in property <float> fraction;
     in property <bool> indeterminate;
-    in property <string> notes;
     spacing: 6px;
     Body { text: stage; }
     ProgressIndicator {
@@ -68,7 +67,13 @@ component Working inherits VerticalLayout {
         wrap: no-wrap;
         overflow: elide;
     }
-    if notes != "": Body { text: "注意 / Note:\n" + notes; }
+}
+
+// What the person must see from the steps so far; it stays whether or not a
+// worker runs.
+component Notes inherits Body {
+    in property <string> notes;
+    text: "注意 / Note:\n" + notes;
 }
 
 component StepTag inherits Rectangle {
@@ -222,7 +227,7 @@ export component SetupWindow inherits Window {
                         Rectangle { }
                     }
                     if !root.installing && !root.offline: Caption {
-                        text: "从伞仓 Releases 取最新发布件，下载、逐项校验后装进安装位置；详情写进日志。\nFetches the newest release from the umbrella Releases, verifies every file and installs it; the details go to the log.";
+                        text: "从伞仓 Releases 取件（有正式版取最新正式版，否则取最新预发布），下载、逐项校验后装进安装位置；详情写进日志。\nFetches from the umbrella Releases (the newest stable release when there is one, else the newest pre-release), verifies every file and installs it; the details go to the log.";
                     }
                     if !root.installing && root.offline: LineEdit {
                         text <=> root.download-dir;
@@ -237,8 +242,8 @@ export component SetupWindow inherits Window {
                         detail: root.detail-text;
                         fraction: root.fraction;
                         indeterminate: root.indeterminate;
-                        notes: root.notes;
                     }
+                    if root.notes != "": Notes { notes: root.notes; }
                     Body { text: root.note; }
                     Rectangle { }
                 }
@@ -360,8 +365,8 @@ export component SetupWindow inherits Window {
                         detail: root.detail-text;
                         fraction: root.fraction;
                         indeterminate: root.indeterminate;
-                        notes: root.notes;
                     }
+                    if root.notes != "": Notes { notes: root.notes; }
                     Body { text: root.note; }
                 }
 

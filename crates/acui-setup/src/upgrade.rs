@@ -37,21 +37,42 @@ struct Manifest {
     commit_sha: String,
 }
 
-/// `Some` when `root\runtime\BUILD-MANIFEST.json` exists; a manifest that is
-/// there but unreadable is an error, never "not installed". So is a payload
-/// without the configuration a finished install writes: an install that
-/// stopped before it was configured, which an upgrade could not keep.
+/// `Some` when `root\runtime\BUILD-MANIFEST.json` and the configuration are
+/// both there; a manifest that is there but unreadable is an error, never "not
+/// installed". So is either one without the other: the configuration is the
+/// last thing a finished install writes, and an upgrade moves the program
+/// files aside before laying the new ones out — neither half is installed
+/// over, and neither is upgraded.
 pub fn installed(root: &Path) -> Result<Option<Installed>, String> {
     let runtime = root.join("runtime").join(MANIFEST);
-    if !runtime.is_file() {
-        return Ok(None);
-    }
-    if !root.join("actingd.config.json").is_file() {
-        return Err(format!(
-            "此处有一份未完成的安装（有程序文件，没有 actingd.config.json）：换一个空的安装位置，或清空 {} 后重新安装 / An unfinished install is here (program files, no actingd.config.json): choose an empty location, or empty {} and install again",
-            root.display(),
-            root.display()
-        ));
+    let config = root.join("actingd.config.json");
+    match (runtime.is_file(), config.is_file()) {
+        (false, false) => return Ok(None),
+        (false, true) => {
+            return Err(format!(
+                "此处有 {} 却没有程序文件（多半是一次中断的升级，被替换的版本在 previous\\）：向导不在这里新装，以免覆盖配置 / A configuration is here but no program files (most likely an interrupted upgrade; the version replaced is in previous\\): the wizard does not install over it",
+                config.display()
+            ))
+        }
+        (true, false) if has_content(&root.join("state")) || root.join("previous").exists() => {
+            return Err(format!(
+                "此处有程序文件和状态，但没有 {}：向导只升级配置在此处的安装，请换一个安装位置 / Program files and state are here but no {}: the wizard only upgrades an installation configured here; choose another location",
+                config.display(),
+                config.display()
+            ))
+        }
+        (true, false) => {
+            return Err(format!(
+                "此处有一份未完成的安装（有程序文件，没有配置）：删除 {}、{}、{} 后重新安装 / An unfinished install is here (program files, no configuration): remove {}, {} and {} and install again",
+                root.join("runtime").display(),
+                root.join("ui").display(),
+                root.join("tools").display(),
+                root.join("runtime").display(),
+                root.join("ui").display(),
+                root.join("tools").display()
+            ))
+        }
+        (true, true) => {}
     }
     let commit = |path: PathBuf| {
         let text = fs::read_to_string(&path)
@@ -64,6 +85,10 @@ pub fn installed(root: &Path) -> Result<Option<Installed>, String> {
         runtime_sha: commit(runtime)?,
         ui_sha: commit(root.join("ui").join(MANIFEST))?,
     }))
+}
+
+fn has_content(dir: &Path) -> bool {
+    fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
 }
 
 pub struct Upgraded {

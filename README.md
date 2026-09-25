@@ -538,10 +538,11 @@ log" below):
 2. **Configure**: the state root defaults to `<install root>\state` (it must not exist or must be an empty
    directory; **a state root that already holds content is never taken over**); `secret_fingerprint_salt`
    is generated as the hex of 32 bytes from the system random source (`getrandom`; **not displayed, not
-   logged**); `<install root>\actingd.config.json` is written, with only the fields `schema_version`,
+   logged**); the console settings are written first (below), then — last, so that its presence marks a
+   finished configuration, and never over an existing file — `<install root>\actingd.config.json`, with only the fields `schema_version`,
    `state_root`, `bind_host` (127.0.0.1), `bind_port` (0), `secret_fingerprint_salt` and `instances`
-   (empty) — the Runtime's parser is `deny_unknown_fields`, so not one extra field is written. Then the
-   console settings `%APPDATA%\ActingCommand\acui.toml` are written with `state_root`, `actingd_config`
+   (empty) — the Runtime's parser is `deny_unknown_fields`, so not one extra field is written. The
+   console settings `%APPDATA%\ActingCommand\acui.toml` get `state_root`, `actingd_config`
    and `actingd_exe` (the format of the "Settings file" section, single-quoted literals; existing `lang` /
    `text_size` kept verbatim). The way it writes matches `crates/acui-app/src/settings.rs`, but
    `acui-setup` does not depend on `acui-app` and is a small duplicate writer. `instances` stays empty
@@ -622,11 +623,14 @@ progress bar — moving without a size where none is known, such as while the Ru
 the latest log line as the one thing being done now. What the person must see — an older `previous\`
 or a leftover that could not be removed, a `runtime-info.json` no Runtime answers for — stays under the
 bar and is repeated in the summary. On failure the page shows the reason, what was left on disk (the
-staging directory removed or not; on a fresh install, which of `runtime\`, `ui\` and `tools\` were
-already laid out and must be cleared before trying again) and the log path. While work runs the window
-does not close; the first close after the instances step started a Runtime says that it keeps running.
-A root with program files but no `actingd.config.json` — an install stopped before it was configured —
-is named as unfinished on step 0 and never upgraded. Apart from the installed payload, the configuration, the settings, the fetched release
+staging directory removed or not; on a fresh install, which of `runtime\`, `ui\` and `tools\` this run
+laid out and must be removed before trying again) and the log path; a worker that panics stops the run
+the same way. While files are laid out, an upgrade swaps versions or the instances step writes, the
+window does not close; a lookup or a download may be closed, and a staging directory left that way is
+removed on the next run, said in the log. The first close after the instances step started a Runtime
+says that it keeps running. A root with program files but no `actingd.config.json`, or the
+configuration without program files (an interrupted upgrade), is named on step 0 and neither installed
+over nor upgraded. Apart from the installed payload, the configuration, the settings, the fetched release
 files under `downloads\`, (when checked) the start-at-boot batch file, the packages fetched into
 `packages\`, and the log of a Runtime it started, this is the only file the wizard writes (with
 `previous\` on an upgrade).
@@ -677,7 +681,8 @@ reads, and instance discovery — are in `acui-source` (`probe_runtime` / `reque
 `record_start` / `instance_facts` / `discover_instances`).
 
 Every background worker — the start's readiness poll and its record, request shutdown, unlock-owner, a
-save's check-config, discovery, a frame read, and acsetup's verify and layout steps — is started through
+save's check-config, discovery, a frame read, and every acsetup worker (release lookup, install or
+upgrade, discovery, writing instances, settling) — is started through
 `std::thread::Builder`. A thread the system refuses is stated, with the OS error, where that action
 reports, and what the worker would have cleared (the start or unlock in flight, the save in progress,
 the frame request) is reset: never a panic on the event loop. A launched actingd whose readiness poll

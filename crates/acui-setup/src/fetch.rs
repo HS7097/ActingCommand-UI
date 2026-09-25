@@ -240,7 +240,17 @@ pub fn fetch(release: &Release, dir: &Path, report: Report<'_>) -> Result<(), St
     let sums_path = dir.join("SHA256SUMS");
     let sums = fs::read_to_string(&sums_path)
         .map_err(|error| format!("读取失败 / read failed: {}: {error}", sums_path.display()))?;
-    for (_, name) in verify::parse_sha256sums(&sums)? {
+    let listed = verify::parse_sha256sums(&sums)?;
+    // What is fetched exactly: these two and what SHA256SUMS lists.
+    let total: u64 = release
+        .assets
+        .iter()
+        .filter(|asset| fetched.contains(&asset.name) || listed.iter().any(|(_, name)| name == &asset.name))
+        .map(|asset| asset.size)
+        .sum();
+    report.step(Step::Phase("下载 / Downloading", Some(Total::Bytes(total))))?;
+    report.step(Step::Done(done))?;
+    for (_, name) in listed {
         if !fetched.contains(&name) {
             done += get(&agent, release, &name, dir, done, report)?;
             fetched.push(name);

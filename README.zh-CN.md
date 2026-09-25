@@ -400,9 +400,9 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `ac_fastdeploy_ppocr.dll`；tools 包里另外两个 exe 不装、不显示）。之后删除临时目录。
 2. **配置**：状态根默认 `<安装根>\state`（必须不存在或为空目录，**已有内容的状态根一律不接管**）；
    生成 `secret_fingerprint_salt` = 系统随机源 32 字节的十六进制（`getrandom`；**不显示、不写日志**）；
-   写 `<安装根>\actingd.config.json`，字段只有 `schema_version`、`state_root`、`bind_host`
+   先写监控台设置（见下），最后才写——它在就代表配置完成，且从不覆盖已有文件——`<安装根>\actingd.config.json`，字段只有 `schema_version`、`state_root`、`bind_host`
    （127.0.0.1）、`bind_port`（0）、`secret_fingerprint_salt`、`instances`（空）——Runtime 的解析器
-   `deny_unknown_fields`，多一个字段都不写。再写监控台设置 `%APPDATA%\ActingCommand\acui.toml` 的
+   `deny_unknown_fields`，多一个字段都不写。监控台设置 `%APPDATA%\ActingCommand\acui.toml` 写
    `state_root`、`actingd_config`、`actingd_exe`（同「设置文件」一节的格式，单引号字面量；已有的
    `lang` / `text_size` 原样保留）。写法与 `crates/acui-app/src/settings.rs` 一致，但 `acui-setup`
    不依赖 `acui-app`，是一份小的重复写入器。这里 `instances` 留空，由实例步填。
@@ -458,9 +458,11 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 页面只显示阶段（例如「下载 / Downloading · 41.2/74.0 MiB」「安装文件 / Installing files · 118/260」）、
 一条进度条（不知道总量时——比如等 Runtime 关闭——只走动不计量）和最新一行日志作为「正在做什么」。
 人必须看到的——更早的 `previous\` 或残留目录没删掉、有 `runtime-info.json` 却没有 Runtime 应答——留在进度条下方，
-并写进摘要。失败时页面写原因、磁盘上留下了什么（临时目录删没删；新装时 `runtime\`、`ui\`、`tools\` 哪些已铺开、
-重试前须清空）和日志路径。工作进行中窗口不关；实例步拉起过 Runtime 时，第一次关闭会先说明它仍在运行。
-有程序文件却没有 `actingd.config.json` 的安装根——配置之前就中断的安装——在第 0 步写明未完成，从不当作升级。除安装载荷、配置、设置、`downloads\` 下取回的发布件、（勾选时的）自启批处理、
+并写进摘要。失败时页面写原因、磁盘上留下了什么（临时目录删没删；新装时这次铺开了 `runtime\`、`ui\`、`tools\` 中哪些、
+重试前须删除）和日志路径；工作线程 panic 也同样停下。铺开文件、升级换版本、实例步写入期间窗口不关；查询或下载时
+可以关，这样留下的临时目录下次运行时删掉并写进日志。实例步拉起过 Runtime 时，第一次关闭会先说明它仍在运行。
+有程序文件却没有 `actingd.config.json`，或只有配置没有程序文件（中断的升级）的安装根，在第 0 步写明，既不在上面新装，
+也不当作升级。除安装载荷、配置、设置、`downloads\` 下取回的发布件、（勾选时的）自启批处理、
 `packages\` 下取回的资源包、引导拉起的 Runtime 的日志，以及升级时的 `previous\` 之外，引导写的文件只有这一个。
 
 **永远不做的事**：不装服务、不建计划任务、不改 PATH、不写注册表；不改配置模板；不碰已有内容的状态根；
@@ -500,7 +502,7 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 `request_shutdown` / `record_start` / `instance_facts` / `discover_instances`）。
 
 每个后台工作线程——启动的就绪等待与记账、请求关闭、unlock-owner、保存时的 check-config、实例发现、
-读帧，以及 acsetup 的校验与铺开两步——都经 `std::thread::Builder` 启动。系统拒绝建线程时，在这个动作
+读帧，以及 acsetup 的每个工作线程（查询发布件、安装或升级、实例发现、写入实例、收尾确认）——都经 `std::thread::Builder` 启动。系统拒绝建线程时，在这个动作
 回报的位置写明，附系统错误，并把工作线程本该复位的状态（进行中的启动或解锁、保存中、帧请求）复位：
 绝不在事件循环里 panic。已拉起的 actingd 若等不到就绪线程，照样在跑，结果行直说，并提示再按一次「启动」即可探测。子进程终止了但
 回收失败时照实写，不说成终止失败。

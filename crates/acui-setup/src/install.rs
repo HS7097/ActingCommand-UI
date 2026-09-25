@@ -155,9 +155,11 @@ pub fn state_root_usable(state_root: &Path) -> Result<(), String> {
     }
 }
 
-/// The state root created, the configuration written with a fresh salt from
-/// the OS RNG (never shown, never logged), then the console's settings.
-/// `state_root` has passed `state_root_usable`.
+/// The state root created, the console's settings written, then — last, so
+/// that its presence means a finished configuration — the Runtime's
+/// configuration with a fresh salt from the OS RNG (never shown, never
+/// logged), never over one already there. `state_root` has passed
+/// `state_root_usable`.
 pub fn configure(
     root: &Path,
     state_root: &Path,
@@ -186,18 +188,25 @@ pub fn configure(
         .map_err(|error| format!("配置序列化失败 / config serialization failed: {error}"))?;
     json.push('\n');
     let config_path = root.join("actingd.config.json");
-    fs::write(&config_path, json)
-        .map_err(|error| format!("写入失败 / write failed: {}: {error}", config_path.display()))?;
-    report.line(&format!(
-        "已写 Runtime 配置 / config written: {}（salt 已生成，不记录 / salt generated, not recorded）",
-        config_path.display()
-    ))?;
 
     let settings_path = platform::console_settings_path()?;
     write_console_settings(&settings_path, state_root, &config_path, &laid_out.actingd_exe)?;
     report.line(&format!(
         "已写监控台设置 / console settings written: {}",
         settings_path.display()
+    ))?;
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&config_path)
+        .map_err(|error| format!("无法新建（不覆盖已有的）/ cannot create, never over an existing one: {}: {error}", config_path.display()))?;
+    std::io::Write::write_all(&mut file, json.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("写入失败 / write failed: {}: {error}", config_path.display()))?;
+    report.line(&format!(
+        "已写 Runtime 配置 / config written: {}（salt 已生成，不记录 / salt generated, not recorded）",
+        config_path.display()
     ))?;
     Ok(Configured {
         state_root: state_root.to_path_buf(),

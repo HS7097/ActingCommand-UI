@@ -86,10 +86,13 @@ pub struct Settled {
 
 pub fn settle(root: &Path, report: Report<'_>) -> Result<Settled, String> {
     let paths = paths(root)?;
+    report.step(Step::Phase("确认 Runtime 状态 / Checking whether the Runtime runs", None))?;
     let mumu_root = read_config(&paths)?["mumu_root"].as_str().map(str::to_string);
     // `runtime-info.json` there without an answer may be a Runtime still
-    // starting or stuck: not confirmed, rather than not running.
-    let running = match runtime::runtime_answers(&paths.actingctl, &paths.state_root, report) {
+    // starting or stuck: not confirmed, rather than not running — which the
+    // summary says itself, so here it is a log line, not a second note.
+    let mut quiet = |line: &str| report.line(line);
+    let running = match runtime::runtime_answers(&paths.actingctl, &paths.state_root, &mut quiet) {
         Ok(Ok(())) => Ok(true),
         Ok(Err(None)) => Ok(false),
         Ok(Err(Some(reason))) | Err(reason) => Err(reason),
@@ -234,6 +237,7 @@ fn package_path(root: &Path, pick: &Chosen, report: Report<'_>) -> Result<PathBu
         ));
     }
     if let Some(expected) = expected {
+        report.step(Step::Phase("核对资源包 / Checking the resource package", None))?;
         let actual = crate::verify::sha256_file(&path)
             .map_err(|error| format!("读取失败 / read failed: {}: {error}", path.display()))?;
         if !expected.eq_ignore_ascii_case(&actual) {
