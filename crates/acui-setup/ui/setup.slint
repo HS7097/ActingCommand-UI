@@ -255,6 +255,7 @@ export component SetupWindow inherits Window {
                         edited(text) => {
                             root.downgrade-note = "";
                             root.downgrade-ok = false;
+                            root.note = "";
                         }
                     }
                     if !root.installing && !root.embedded && root.offline: Caption {
