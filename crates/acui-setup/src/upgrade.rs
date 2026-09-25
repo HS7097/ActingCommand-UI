@@ -91,6 +91,89 @@ fn has_content(dir: &Path) -> bool {
     fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
 }
 
+/// The `MEMBERS.json` of the release last installed or upgraded to at a root,
+/// kept for telling an older release from a newer one.
+pub const INSTALLED_MEMBERS: &str = "installed-members.json";
+
+/// A `MEMBERS.json`'s `published_at_utc` when it is `YYYY-MM-DDTHH:MM:SSZ`,
+/// which sorts as text in time order.
+fn published(text: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let at = value.get("published_at_utc")?.as_str()?;
+    let shaped = at.len() == 20
+        && at.bytes().enumerate().all(|(index, byte)| match index {
+            4 | 7 => byte == b'-',
+            10 => byte == b'T',
+            13 | 16 => byte == b':',
+            19 => byte == b'Z',
+            _ => byte.is_ascii_digit(),
+        });
+    shaped.then(|| at.to_string())
+}
+
+/// Why installing the release whose `MEMBERS.json` is `wanted` over the
+/// installation at `root` needs the person's word — it was published before
+/// the one installed, or either time is unknown, or the record does not name
+/// what the manifests say is installed (an upgrade that failed after laying
+/// out, an older wizard, a hand-made rollback) — or `None` when it is as new
+/// or newer. The note names the release to install, so a tick given for one
+/// release is not taken for another. Publication time is a heuristic: it is
+/// said as one.
+pub fn downgrade(root: &Path, wanted: &str) -> Option<String> {
+    let record = root.join(INSTALLED_MEMBERS);
+    let have = match fs::read_to_string(&record) {
+        Ok(text) => current_record(root, &text).and_then(|()| {
+            published(&text).ok_or_else(|| format!("{} 里没有可比较的发布时间 / has no publication time to compare", record.display()))
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(format!(
+            "这份安装没有 {INSTALLED_MEMBERS} 记录 / this installation has no {INSTALLED_MEMBERS} record"
+        )),
+        Err(error) => Err(format!("读取失败 / read failed: {}: {error}", record.display())),
+    };
+    let want = published(wanted)
+        .ok_or_else(|| "要装的 MEMBERS.json 没有可比较的发布时间 / the MEMBERS.json to install has no publication time to compare".to_string());
+    let which = match crate::verify::members_of(wanted) {
+        Ok((runtime, ui)) => format!("runtime {} · ui {}", &runtime[..8], &ui[..8]),
+        Err(_) => "?".to_string(),
+    };
+    match (have, want) {
+        (Ok(have), Ok(want)) if want >= have => None,
+        (Ok(have), Ok(want)) => Some(format!(
+            "按发布时间判断，看起来是降级：要装的（{which}）发布于 {want}，已装的发布于 {have}。Runtime 没有状态迁移，也没有回滚 / By publication time this looks like a downgrade: the release to install ({which}) was published {want}, the installed one {have}. The Runtime has no state migration and no rollback"
+        )),
+        (Err(reason), _) | (_, Err(reason)) => Some(format!(
+            "无法判断新旧（要装的：{which}）：{reason}。Runtime 没有状态迁移，也没有回滚 / Cannot tell which is newer (to install: {which}). The Runtime has no state migration and no rollback"
+        )),
+    }
+}
+
+/// Whether the record at `root` names the two commits its manifests say are
+/// installed.
+fn current_record(root: &Path, text: &str) -> Result<(), String> {
+    let stale = || {
+        format!("{INSTALLED_MEMBERS} 记下的不是现在装着的版本 / {INSTALLED_MEMBERS} does not name the version installed now")
+    };
+    let recorded = crate::verify::members_of(text).map_err(|_| stale())?;
+    match installed(root) {
+        Ok(Some(now)) if recorded.0 == now.runtime_sha && recorded.1 == now.ui_sha => Ok(()),
+        Ok(_) => Err(stale()),
+        Err(reason) => Err(reason),
+    }
+}
+
+/// The `MEMBERS.json` just installed from `download`, kept at the root as the
+/// record `downgrade` reads next time.
+pub fn record_members(root: &Path, download: &Path) -> Result<(), String> {
+    let (from, to) = (download.join("MEMBERS.json"), root.join(INSTALLED_MEMBERS));
+    fs::copy(&from, &to).map(|_| ()).map_err(|error| {
+        format!(
+            "未能记下所装发布件（下次升级将无法判断新旧）/ could not record the release installed (the next upgrade cannot tell which is newer): {} → {}: {error}",
+            from.display(),
+            to.display()
+        )
+    })
+}
+
 pub struct Upgraded {
     pub laid_out: LaidOut,
     /// Where the version replaced is kept.

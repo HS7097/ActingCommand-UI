@@ -280,11 +280,20 @@ pub fn autostart(
     root: &Path,
     wanted: bool,
     with_console: bool,
+    written: &mut Vec<PathBuf>,
     report: Report<'_>,
 ) -> Result<Autostart, String> {
-    let path = platform::startup_launcher_path()?;
+    let path = platform::startup_launcher_path();
     if !wanted {
-        let existing = path.is_file().then(|| path.clone());
+        // Only a look for one already there: a folder that cannot be found
+        // is said in the log, and nothing stops.
+        let existing = match &path {
+            Ok(path) => path.is_file().then(|| path.clone()),
+            Err(reason) => {
+                report.line(&format!("启动文件夹无法确定，未查已有的启动项 / the Startup folder is unknown, no existing launcher looked for: {reason}"))?;
+                None
+            }
+        };
         report.line(&match &existing {
             Some(existing) => format!(
                 "未勾选开机自启；启动文件夹已有 {}，未改动 / autostart not wanted; the existing launcher is left as is",
@@ -294,6 +303,7 @@ pub fn autostart(
         })?;
         return Ok(Autostart::NotWanted { existing });
     }
+    let path = path?;
     let root_text = root.display().to_string();
     if root_text.contains('%') {
         return Err(format!(
@@ -317,6 +327,7 @@ pub fn autostart(
     }
     fs::write(&path, body)
         .map_err(|error| format!("写入失败 / write failed: {}: {error}", path.display()))?;
+    written.push(path.clone());
     report.line(&format!(
         "已写开机自启 / autostart written: {}{}",
         path.display(),
@@ -327,6 +338,44 @@ pub fn autostart(
         }
     ))?;
     Ok(Autostart::Written { path, with_console })
+}
+
+/// Where a shortcut goes, asked of the shell only when it is needed.
+type Locate = fn() -> Result<PathBuf, String>;
+
+/// The console's shortcuts a person asked for: in the Start menu and on the
+/// desktop, each `ActingCommand.lnk` to `ui\acui.exe`. One not asked for is
+/// not written, and one already there is left as it is and said so. Every
+/// shortcut written is added to `written` as it lands; returns this call's.
+pub fn shortcuts(
+    laid_out: &LaidOut,
+    start_menu: bool,
+    desktop: bool,
+    written: &mut Vec<PathBuf>,
+    report: Report<'_>,
+) -> Result<Vec<PathBuf>, String> {
+    let places: [(bool, &str, Locate); 2] = [
+        (start_menu, "开始菜单 / Start menu", platform::start_menu_shortcut_path),
+        (desktop, "桌面 / desktop", platform::desktop_shortcut_path),
+    ];
+    let mut made = Vec::new();
+    for (wanted, place, locate) in places {
+        if !wanted {
+            // Only a look for one already there, never a reason to stop.
+            report.line(&match locate() {
+                Ok(path) if path.exists() => format!("未勾选{place}快捷方式；已有的 {} 未改动 / not wanted; the existing one is left as is", path.display()),
+                Ok(_) => format!("未勾选{place}快捷方式 / {place} shortcut not wanted"),
+                Err(reason) => format!("未勾选{place}快捷方式；文件夹无法确定 / not wanted; the folder is unknown: {reason}"),
+            })?;
+            continue;
+        }
+        let path = locate()?;
+        platform::create_shortcut(&path, &laid_out.acui_exe, &laid_out.ui_dir, "ActingCommand 监控台 / console")?;
+        written.push(path.clone());
+        report.line(&format!("已建快捷方式 / shortcut written: {}", path.display()))?;
+        made.push(path);
+    }
+    Ok(made)
 }
 
 /// The console, detached; never actingd — the console's launcher starts the

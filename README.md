@@ -495,7 +495,9 @@ list.
 console) that installs the release files from the umbrella repository's
 [Releases](https://github.com/HS7097/ActingCommand/releases) into a **per-user** installation. It ships
 together with the UI repository's Windows build artifact (`acui-windows-<sha>.zip` gains one more file,
-`acsetup.exe`). It fetches the release itself, or takes a folder a person filled by hand. One window,
+`acsetup.exe`). The same program comes in two editions, and a person downloads only one of them: the
+online `acsetup.exe`, which fetches the release itself or takes a folder a person filled by hand, and
+the offline `acsetup-full-<tag>.exe`, which carries one whole release (see "Offline edition" below). One window,
 next only (the instances step can also be skipped), five steps; each page shows where its work stands
 the way an installer does, and the full account goes to the install log (see "Progress and the install
 log" below):
@@ -504,7 +506,9 @@ log" below):
    administrator needed), the free space on that volume, and whether an installation is already here
    (looking at `runtime\BUILD-MANIFEST.json`, whose commit and `ui\`'s are shown; if there is one, the
    run is an **upgrade**, see below). Next creates the root and the install log. A wizard running from
-   inside the installation it would upgrade stops here: its own directory could not move aside.
+   `runtime\`, `ui\`, `tools\` or `previous\` of the installation it would upgrade stops here, naming its
+   own file: that directory could not move aside; from the root itself or `downloads\` it upgrades as
+   usual. The offline edition adds to the free-space line what extracting its release takes.
 1. **Install** (**Upgrade** on an installed root, see below), one page from the download to the
    layout; on success the next page follows by itself. By default online. On entering, the umbrella
    [Releases](https://github.com/HS7097/ActingCommand/releases) are asked over HTTPS for one release: the
@@ -521,7 +525,11 @@ log" below):
    Offline both open; a failed fetch stops the run. This and the instances step's fetch of a package URL
    are the program's only network code (`ureq`, blocking, rustls with the Mozilla root set compiled in);
    the Runtime has none.
-   The folder — fetched or offline — is then verified and laid out on the same page. It must hold `SHA256SUMS`, `MEMBERS.json`,
+   The offline edition has neither the lookup nor the Offline tick: the page names the release it
+   carries — its tag and the two commits of its `MEMBERS.json`, checked at start — and "安装 / Install"
+   extracts it into `<install root>\downloads\<tag>\`, each file through a `.part` file whose length and
+   sha256 must match before it is renamed (a rename a scanner holds up is retried a few times).
+   The folder — fetched, offline or extracted — is then verified and laid out on the same page. It must hold `SHA256SUMS`, `MEMBERS.json`,
    `actingcommand-runtime-<sha>.zip`, `actingcommand-tools-<sha>.zip` and `acui-windows-<sha>.zip`
    (`<sha>` taken from `MEMBERS.json`'s `runtime_sha` / `ui_sha`; the three zips must appear in
    `SHA256SUMS`). `SHA256SUMS` is checked entry by entry; the archives are extracted into the temporary
@@ -535,26 +543,33 @@ log" below):
    byte-for-byte verbatim), `ui\` (the console payload + manifest), `tools\` (**only** `actinglab.exe`,
    `actingledger.exe` and `ac_fastdeploy_ppocr.dll`; the other two exes in the tools pack are neither
    installed nor shown). The temporary directory is deleted afterwards.
-2. **Configure**: the state root defaults to `<install root>\state` (it must not exist or must be an empty
-   directory; **a state root that already holds content is never taken over**); `secret_fingerprint_salt`
-   is generated as the hex of 32 bytes from the system random source (`getrandom`; **not displayed, not
-   logged**); the console settings are written first (below), then — last, so that its presence marks a
-   finished configuration, and never over an existing file — `<install root>\actingd.config.json`, with only the fields `schema_version`,
-   `state_root`, `bind_host` (127.0.0.1), `bind_port` (0), `secret_fingerprint_salt` and `instances`
-   (empty) — the Runtime's parser is `deny_unknown_fields`, so not one extra field is written. The
-   console settings `%APPDATA%\ActingCommand\acui.toml` get `state_root`, `actingd_config`
-   and `actingd_exe` (the format of the "Settings file" section, single-quoted literals; existing `lang` /
-   `text_size` kept verbatim). The way it writes matches `crates/acui-app/src/settings.rs`, but
-   `acui-setup` does not depend on `acui-app` and is a small duplicate writer. `instances` stays empty
-   here; the instances step fills it.
-   **Start at boot** is on the same page (optional, unchecked by default): only when checked does it write
-   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd` in the per-user startup
-   folder, whose content is
-   `start "" "<install root>\runtime\actingcommand-actingd.exe" --config "<install root>\actingd.config.json"`;
-   only when "also launch the console" is checked as well does it add one more line,
-   `start "" "<install root>\ui\acui.exe"`. acsetup does not appear in the batch file. Unchecked, it
-   writes nothing; a file of the same name already in the startup folder is left alone, and merely
-   mentioned in one sentence on the finish page.
+2. **Options**, the configuration already written. Right after the layout, on the install page and
+   inside its do-not-close span, the fresh install is configured with no question asked: the state root
+   is `<install root>\state` (it must not exist or must be an empty directory — checked on step 0,
+   before anything is fetched; **a state root that already holds content is never taken over**);
+   `secret_fingerprint_salt` is generated as the hex of 32 bytes from the system random source
+   (`getrandom`; **not displayed, not logged**); the console settings are written first (below), then
+   — last, so that its presence marks a finished configuration, and never over an existing file —
+   `<install root>\actingd.config.json`, with only the fields `schema_version`, `state_root`,
+   `bind_host` (127.0.0.1), `bind_port` (0), `secret_fingerprint_salt` and `instances` (empty) — the
+   Runtime's parser is `deny_unknown_fields`, so not one extra field is written. The console settings
+   `%APPDATA%\ActingCommand\acui.toml` get `state_root`, `actingd_config` and `actingd_exe` (the format
+   of the "Settings file" section, single-quoted literals; existing `lang` / `text_size` kept verbatim).
+   The way it writes matches `crates/acui-app/src/settings.rs`, but `acui-setup` does not depend on
+   `acui-app` and is a small duplicate writer. `instances` stays empty here; the instances step fills it.
+   The options page then offers four ticks, written together off the event loop (a failure is said on
+   the page, which can be used again):
+   - **Start at boot** (unchecked by default): only when checked does it write `ActingCommand.cmd` in
+     the per-user Startup folder (the shell's `FOLDERID_Startup`), whose content is
+     `start "" "<install root>\runtime\actingcommand-actingd.exe" --config "<install root>\actingd.config.json"`;
+     only when "also launch the console" is checked as well does it add one more line,
+     `start "" "<install root>\ui\acui.exe"`. acsetup does not appear in the batch file. Unchecked, it
+     writes nothing; a file of the same name already there is left alone, and mentioned in the log.
+   - **Start menu shortcut** (checked by default) and **desktop shortcut** (unchecked by default): an
+     `ActingCommand.lnk` to `<install root>\ui\acui.exe`, working in `ui\`, in the per-user Start
+     menu's Programs (`FOLDERID_Programs`) or on the desktop (`FOLDERID_Desktop`, so a redirected or
+     OneDrive desktop is found where Explorer finds it), written through the shell's own `IShellLink`.
+     Unchecked writes nothing; the finish page lists the shortcuts written.
 3. **Instances**, optional, looked for as soon as the page opens: "跳过 / Skip" leaves `instances`
    empty, to be filled later with the console's top-bar 实例配置 / Instance Configuration button; the
    finish page says so. Where MuMu is comes from the Runtime's own `check-config` (`mumu_root`: its path
@@ -588,13 +603,13 @@ log" below):
    status` must answer. A failure before the configuration is replaced is said on the page and in the log
    and leaves the page usable; one after it stops the run, as does any failed log write. Leaving this step
    asks again, for the summary, what `mumu_root` is and whether a Runtime answers.
-4. **Finish**: the summary — what was installed (runtime and ui commits, and the release tag or the
-   offline folder), the paths, and every note from the steps. "启动监控台 / Open console" launches
+4. **Finish**: the summary — what was installed (runtime and ui commits, and the release tag, the
+   offline folder or the carried release), the paths, and every note from the steps. "启动监控台 / Open console" launches
    `<install root>\ui\acui.exe` detached and closes the wizard; "finish" only closes. A Runtime the
    instances step started keeps running; when none runs, the console's launcher starts one.
 
 **Upgrade**, on a root that already holds an installation. The install step reads the release's `MEMBERS.json`
-first (online without saving it, offline from the folder) and compares its two commits with the ones the
+first (online without saving it, offline from the folder, the offline edition from what it carries) and compares its two commits with the ones the
 installed manifests name: the same two stop there, "already at this release's version", with nothing
 fetched. Otherwise, after verifying as above:
 
@@ -619,11 +634,21 @@ removed, and a Runtime that was running is started again on the new version: det
 root, its output in `<install root>\actingd-<unix_ms>.log`, up once its own `runtime-info.json` names
 its pid within 30 seconds. An exit before that is said with its `FATAL` line; no answer in time is said
 as possibly still starting. Either way the new version stays laid out and the version replaced in
-`previous\`. The release is installed as it is, newer
-or older: the wizard compares commits for sameness only.
+`previous\`.
+
+Newer or older is judged by publication time. Every install and upgrade keeps the release's
+`MEMBERS.json` as `<install root>\installed-members.json`. A release whose `published_at_utc` is earlier
+than the one recorded is said as "按发布时间判断，看起来是降级 / by publication time this looks like a
+downgrade"; an installation without the record, a record that does not name the two commits the
+installed manifests do (an upgrade that failed after laying out, an older wizard, a rollback by hand), or
+a time either one lacks, as "无法判断新旧 / cannot tell which is newer" — either way naming the release
+to install, with "the Runtime has no state migration and no rollback", and "确认降级 / Confirm
+downgrade" must be ticked before Install goes on; a tick given for one release is cleared for another. This holds for all three sources.
+Publication time is a heuristic (a stable line's dates may one day run against the code's age), and is
+said as one; the tick is the person's word, not the wizard's judgement.
 
 State, `actingd.config.json`, the console's `acui.toml`, the Startup launcher and `downloads\` are left as
-they are, and the configure step is skipped. The version replaced is kept whole in `previous\`, one
+they are, and the options step is skipped. The version replaced is kept whole in `previous\`, one
 version deep: the Runtime ships no state migration and no rollback of its own, so going back stays a
 person's choice.
 
@@ -636,28 +661,58 @@ or a leftover that could not be removed, a `runtime-info.json` no Runtime answer
 bar and is repeated in the summary. On failure the page shows the reason, what was left on disk (the
 staging directory removed or not; on a fresh install, which of `runtime\`, `ui\` and `tools\` this run
 laid out and must be removed before trying again) and the log path; a worker that panics stops the run
-too, with its message. While files are laid out, an upgrade swaps versions or the instances step writes, the
+too, with its message. While files are laid out and configured, an upgrade swaps versions, the options are written or the instances step writes, the
 window does not close; a lookup or a download may be closed, and a staging directory left that way is
 removed on the next run, said in the log. The first close after the instances step started a Runtime
 says that it keeps running. A root with program files but no `actingd.config.json`, or the
 configuration without program files (an interrupted upgrade), is named on step 0 and neither installed
 over nor upgraded. Apart from the installed payload, the configuration, the settings, the fetched release
-files under `downloads\`, (when checked) the start-at-boot batch file, the resources fetched into
+files under `downloads\`, `installed-members.json`, (when checked) the start-at-boot batch file and the Start menu and desktop shortcuts, the resources fetched into
 `packages\` and a bundle's packs placed under `packages\<game>\`, and the log of a Runtime it started, this is the only file the wizard writes (with
 `previous\` on an upgrade).
+
+**Offline edition**: `acsetup-full-<tag>.exe` is `acsetup.exe` byte for byte, then `SHA256SUMS` and
+every file it lists in its order — `MEMBERS.json` among them, and the resource repositories' bundles —
+then an index, then a trailer of exactly 125 bytes:
+`ACSETUP-PAYLOAD-1 <payload start, %020d> <index length, %020d> <index sha256>\n`. The index's first
+line is `acsetup-payload v1 <tag>`; each further line is `<sha256> <length> <name>` for one file, with the
+same names, order and sha256 as `SHA256SUMS` and a `SHA256SUMS` line first. Which edition runs is read
+from the executable itself before any window: the end of the PE image — the furthest raw data of any
+section, from a minimal hand-written reading of the DOS header, PE signature, COFF header, optional
+header, data directories and section table, all in checked arithmetic — against the file's effective
+end: its length, or, once signed, the certificate table's offset less at most seven NUL bytes of
+padding — a certificate table that does not end exactly at the end of the file is damage. Equal is the
+online edition; more must be a whole payload: trailer shape, payload start equal
+to the image end, index at most 1 MiB and matching its sha256, lengths adding up exactly to the effective
+end, names as the online fetch allows and also not starting with `-`, not ending in `.` or `.part`, and
+unique without regard to case, `SHA256SUMS` and `MEMBERS.json` read from the payload and matching the
+index, and a `build-r<7>-u<7>` tag matching `MEMBERS.json`'s commits. Anything else — a truncated file,
+a damaged trailer, index or header — stops the wizard on its failure page before it writes anything,
+naming what was expected and what was found, saying that nothing has been written and there is no log
+yet, and pointing at downloading it again (checked against its `.sha256`) or the online `acsetup.exe`; it
+never falls back to the network. The file stays open from that check to the extraction. The index and
+`SHA256SUMS` guard against damage, not tampering: trust comes from downloading over HTTPS from the
+Releases page and the `.sha256` beside each installer, as for the online edition. Windows SmartScreen
+and some virus scanners may warn about a new, unsigned installer with data after its image; that is
+expected, not a defect of the wizard. The umbrella release job assembles both installers and reads the
+offline one back independently.
 
 **Things it never does**: it does not install a service, does not create a scheduled task, does not change
 PATH, does not write the registry; does not modify the configuration template; does not touch a state root
 that already holds content; goes on the network only to list and fetch the umbrella release and a
-package URL given in the instances step; stops or starts the Runtime only on an upgrade and in the
+package URL given in the instances step — the offline edition's install step not at all; stops or starts the Runtime only on an upgrade and in the
 instances step, as above;
 does not unpack a sealed resource pack — the Runtime loads it (a bundle's packs are taken out whole). On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
 immediately with `acsetup v1 is Windows-only`.
 
-Four dependencies are added, each with its purpose noted in `[workspace.dependencies]`: `sha2`
+Five dependencies are added (the offline edition's reading of its own executable is hand-written and
+adds none), each with its purpose noted in `[workspace.dependencies]`: `sha2`
 (verification), `zip` (`default-features = false`, only `deflate` enabled, the same version line the
-Runtime locks), `getrandom` (the salt and `instance_id`) and `ureq` (the fetch; `default-features = false` with only `tls`:
-rustls, its `ring` provider and the compiled-in `webpki-roots`, so no system TLS library).
+Runtime locks), `getrandom` (the salt and `instance_id`), `ureq` (the fetch; `default-features = false` with only `tls`:
+rustls, its `ring` provider and the compiled-in `webpki-roots`, so no system TLS library) and, on
+Windows only, `windows` 0.62 (`Win32_Foundation`, `Win32_System_Com`, `Win32_UI_Shell`: the Startup,
+Start menu and desktop folders through `SHGetKnownFolderPath`, and shortcuts through `IShellLinkW` +
+`IPersistFile`; the version Slint already locks, so the lock gains no crate).
 
 ## Four layers, four crates
 
@@ -693,7 +748,7 @@ reads, and instance discovery — are in `acui-source` (`probe_runtime` / `reque
 
 Every background worker — the start's readiness poll and its record, request shutdown, unlock-owner, a
 save's check-config, discovery, a frame read, and every acsetup worker (release lookup, install or
-upgrade, discovery, writing instances, settling) — is started through
+upgrade, writing the options, discovery, reading resources, writing instances, settling) — is started through
 `std::thread::Builder`. A thread the system refuses is stated, with the OS error, where that action
 reports, and what the worker would have cleared (the start or unlock in flight, the save in progress,
 the frame request) is reset: never a panic on the event loop. A launched actingd whose readiness poll
@@ -701,7 +756,7 @@ cannot start keeps running, and the line says so and that pressing Start again p
 said as that, not as a kill that failed.
 
 A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
-depending only on slint, serde, sha2, zip, getrandom and ureq, and on none of the layers above; see the previous
+depending only on slint, serde, sha2, zip, getrandom, ureq and (Windows only) windows, and on none of the layers above; see the previous
 section, "Setup wizard acsetup".
 
 ## Icon

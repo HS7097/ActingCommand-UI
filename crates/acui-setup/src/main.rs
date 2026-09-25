@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! acsetup: the install wizard for ActingCommand on Windows. One window, five
-//! pages — location, install, configure, instances, finish — each showing
+//! pages — location, install, options, instances, finish — each showing
 //! where its work stands the way an installer does, the full account going to
 //! the install log. It fetches the release to install from the umbrella
-//! repository's Releases, or takes a folder a person filled by hand, checks it
+//! repository's Releases, takes a folder a person filled by hand, or — as the
+//! offline edition — extracts the release it carries (see `payload`), checks it
 //! against what the umbrella published, lays it out under a per-user install
 //! root, writes the Runtime
 //! configuration and the console's settings, optionally a Startup-folder
@@ -24,6 +25,7 @@ mod fetch;
 mod install;
 mod instance_step;
 mod log;
+mod payload;
 mod platform;
 mod runtime;
 mod upgrade;
@@ -42,9 +44,10 @@ use fetch::Release;
 use install::{Autostart, Configured, LaidOut};
 use instance_step::{Chosen, Found, Settled};
 use log::InstallLog;
+use payload::Payload;
 use slint::{Model, VecModel};
 use upgrade::{Installed, Upgraded};
-use verify::{Reporter, Step, Total};
+use verify::{Report, Reporter, Step, Total};
 
 slint::include_modules!();
 
@@ -54,14 +57,21 @@ slint::include_modules!();
 struct State {
     root: PathBuf,
     log: Option<InstallLog>,
-    /// The release the online path installs, once looked up.
+    /// The release the online path installs, once looked up, and — on an
+    /// upgrade — its `MEMBERS.json`.
     release: Option<Release>,
+    release_members: Option<String>,
+    /// The offline edition's release, checked at start: set, it is the only
+    /// source.
+    payload: Option<Payload>,
     /// What the root already holds: set, the run is an upgrade.
     installed: Option<Installed>,
     upgraded: Option<Upgraded>,
     laid_out: Option<LaidOut>,
     configured: Option<Configured>,
     autostart: Option<Autostart>,
+    /// The console's shortcuts the options wrote.
+    shortcuts: Vec<PathBuf>,
     /// The two commits laid out, and where they came from: a release tag or
     /// the offline folder.
     members: Option<(String, String)>,
@@ -89,12 +99,14 @@ struct State {
     /// A worker is past the point where stopping it midway would leave the
     /// installation or the configuration half changed: the window stays open.
     guarded: bool,
-    /// Which of `runtime\`, `ui\` and `tools\` were there before this run.
-    existed: [bool; 3],
+    /// The launcher and shortcuts the options step wrote in this run, so a
+    /// retry can take back what it no longer wants.
+    options_written: Vec<PathBuf>,
 }
 
 /// The worker phases the window must not close in: held while laying files
-/// out, upgrading, and while the instances step writes or restarts.
+/// out and configuring, upgrading, writing the options, and while the
+/// instances step writes or restarts.
 struct Held(Shared);
 
 impl Held {
@@ -165,7 +177,21 @@ fn main() -> Result<()> {
             .into(),
     );
     window.set_can_next(true);
-    refresh_preflight(&window);
+    // The edition is read before anything else: a carried release that cannot
+    // be used stops the wizard here, with nothing written.
+    match payload::detect() {
+        Ok(payload) => {
+            window.set_embedded(payload.is_some());
+            lock(&state).payload = payload;
+        }
+        Err(reason) => {
+            window.set_failed(true);
+            window.set_failure_text(
+                format!("{reason}\n\n尚未写任何文件，也没有日志 / Nothing has been written, and there is no log yet").into(),
+            );
+        }
+    }
+    refresh_preflight(&window, &state);
     install_callbacks(&window, &state);
     window.run()?;
     Ok(())
@@ -174,9 +200,10 @@ fn main() -> Result<()> {
 fn install_callbacks(window: &SetupWindow, state: &Shared) {
     {
         let weak = window.as_weak();
+        let state = Arc::clone(state);
         window.on_install_root_edited(move |_| {
             if let Some(window) = weak.upgrade() {
-                refresh_preflight(&window);
+                refresh_preflight(&window, &state);
             }
         });
     }
@@ -259,8 +286,9 @@ fn install_callbacks(window: &SetupWindow, state: &Shared) {
     });
 }
 
-/// The window's close button: refused while files are laid out, an upgrade
-/// swaps versions or the instances step writes — work half done there cannot
+/// The window's close button: refused while files are laid out and configured,
+/// an upgrade swaps versions, the options are written or the instances step
+/// writes — work half done there cannot
 /// be put back once the wizard is gone; a lookup or a download may be closed.
 /// The first time after the instances step started a Runtime, that is said.
 fn close_requested(window: &SetupWindow, state: &Shared) -> slint::CloseRequestResponse {
@@ -282,17 +310,25 @@ fn close_requested(window: &SetupWindow, state: &Shared) -> slint::CloseRequestR
     slint::CloseRequestResponse::HideWindow
 }
 
-/// The two lines under the install root: the room on its volume, and whether
-/// a Runtime is already installed there.
-fn refresh_preflight(window: &SetupWindow) {
+/// The two lines under the install root: the room on its volume — and, for the
+/// offline edition, what extracting its release takes — and whether a Runtime
+/// is already installed there.
+fn refresh_preflight(window: &SetupWindow, state: &Shared) {
     let root = PathBuf::from(window.get_install_root().as_str());
-    let free = match platform::free_space(&root) {
+    let mut free = match platform::free_space(&root) {
         Ok(bytes) => format!(
             "该卷可用空间 / Free space on this volume: {:.1} GiB",
             bytes as f64 / (1u64 << 30) as f64
         ),
         Err(reason) => format!("可用空间未知 / Free space unknown: {reason}"),
     };
+    if let Some(carried) = lock(state).payload.as_ref().map(Payload::total) {
+        free.push_str(&format!(
+            "；取出自带的发布件需 {:.1} MiB，解压另需空间 / extracting the carried release takes {:.1} MiB, unpacking it more",
+            mib(carried),
+            mib(carried)
+        ));
+    }
     window.set_free_space_text(free.into());
     let existing = match upgrade::installed(&root) {
         Ok(None) => "此处没有已安装的 Runtime / No installation here yet".to_string(),
@@ -310,7 +346,7 @@ fn next(window: &SetupWindow, state: &Shared) {
     match window.get_step() {
         0 => enter_get(window, state),
         1 => begin_install(window, state),
-        2 => run_configure(window, state),
+        2 => apply_options(window, state),
         3 => begin_apply(window, state),
         _ => {}
     }
@@ -455,10 +491,12 @@ fn enter_get(window: &SetupWindow, state: &Shared) {
         Err("安装根必须是绝对路径 / The install root must be an absolute path".to_string())
     };
     let installed = match installed {
-        Ok(Some(_)) if running_from(&root) => Err(
-            "本引导正从要升级的这份安装里运行：请把 acsetup.exe 复制到别处再运行 / This wizard runs from the installation it would upgrade: copy acsetup.exe elsewhere and run it from there"
-                .to_string(),
-        ),
+        Ok(Some(installed)) => match running_from(&root) {
+            Some((name, dir)) => Err(format!(
+                "本引导 {name} 正从要升级的这份安装的 {dir}\\ 里运行，升级要把它移开：请把 {name} 复制到别处再运行 / This wizard, {name}, runs from {dir}\\ of the installation it would upgrade, which the upgrade moves aside: copy {name} elsewhere and run it from there"
+            )),
+            None => Ok(Some(installed)),
+        },
         other => other,
     };
     let installed = match installed {
@@ -468,6 +506,21 @@ fn enter_get(window: &SetupWindow, state: &Shared) {
             return;
         }
     };
+    // A fresh install writes its state root under the root itself, and the
+    // console's settings name the root in TOML literal strings: either one
+    // that cannot be is said before anything is fetched.
+    if installed.is_none() {
+        let usable = install::state_root_usable(&root.join("state")).and_then(|()| {
+            match root.display().to_string().contains('\'') {
+                true => Err("安装位置含单引号，监控台设置无法原样写入 / The install location contains a single quote, which the console's settings cannot hold".to_string()),
+                false => Ok(()),
+            }
+        });
+        if let Err(reason) = usable {
+            window.set_note(reason.into());
+            return;
+        }
+    }
     let log = match std::fs::create_dir_all(&root)
         .and_then(|()| InstallLog::create(&root, log::unix_ms()))
     {
@@ -485,8 +538,12 @@ fn enter_get(window: &SetupWindow, state: &Shared) {
     };
     window.set_log_path(format!("日志 / Log: {}", log.path().display()).into());
     let started = format!(
-        "acsetup {} · 安装根 / install root: {}{}",
+        "acsetup {}{} · 安装根 / install root: {}{}",
         env!("CARGO_PKG_VERSION"),
+        lock(state)
+            .payload
+            .as_ref()
+            .map_or(String::new(), |payload| format!(" · 离线版 / offline edition {}", payload.tag)),
         root.display(),
         installed.as_ref().map_or(String::new(), |installed| format!(
             " · 升级 / upgrade from runtime {} · ui {}",
@@ -507,7 +564,70 @@ fn enter_get(window: &SetupWindow, state: &Shared) {
     window.set_notes(lock(state).warnings.join("\n").into());
     window.set_upgrading(lock(state).installed.is_some());
     window.set_step(1);
-    offline_toggled(window, state, window.get_offline());
+    let carried = lock(state).payload.is_some();
+    match carried {
+        true => enter_carried(window, state),
+        false => offline_toggled(window, state, window.get_offline()),
+    }
+}
+
+/// Step 1 of the offline edition: the release it carries, checked at start,
+/// is the one to install — no lookup, no folder. An upgrade to the same two
+/// commits stops here; one to an older release shows the downgrade check.
+fn enter_carried(window: &SetupWindow, state: &Shared) {
+    let (line, members_text, upgrading, current) = {
+        let state = lock(state);
+        let Some(payload) = state.payload.as_ref() else {
+            return;
+        };
+        let wanted = &payload.members;
+        let mut line = format!(
+            "本安装包自带发布件 / This installer carries release {}（runtime {} · ui {}）",
+            payload.tag,
+            short(&wanted.0),
+            short(&wanted.1)
+        );
+        let have = state.installed.as_ref().map(|installed| (installed.runtime_sha.clone(), installed.ui_sha.clone()));
+        if let Some(have) = &have {
+            line.push('\n');
+            line.push_str(&upgrade_line(have, wanted));
+        }
+        (line, payload.members_text.clone(), have.is_some(), have.as_ref() == Some(wanted))
+    };
+    if let Err(reason) = write_log(state, &line) {
+        fail(state, &window.as_weak(), reason);
+        return;
+    }
+    window.set_release_text(line.into());
+    window.set_note(if current { UP_TO_DATE } else { "" }.into());
+    window.set_can_next(!current);
+    if upgrading && !current {
+        let root = lock(state).root.clone();
+        confirm_downgrade(window, upgrade::downgrade(&root, &members_text));
+    }
+}
+
+/// Whether the release to install may go on over what is installed: `note`
+/// says why it needs the person's word, and it goes on once they tick
+/// 「确认降级」 for that very note; a different note clears the tick.
+fn confirm_downgrade(window: &SetupWindow, note: Option<String>) -> bool {
+    let note = note.unwrap_or_default();
+    if window.get_downgrade_note().as_str() != note {
+        window.set_downgrade_note(note.as_str().into());
+        window.set_downgrade_ok(false);
+    }
+    note.is_empty() || window.get_downgrade_ok()
+}
+
+/// On an upgrade, whether the downgrade check stops Install for the release
+/// whose `MEMBERS.json` is `wanted`: the check shown, and why said.
+fn downgrade_stops(window: &SetupWindow, state: &Shared, wanted: &str) -> bool {
+    let root = lock(state).root.clone();
+    if confirm_downgrade(window, upgrade::downgrade(&root, wanted)) {
+        return false;
+    }
+    window.set_note("勾选「确认降级」后再继续 / Tick Confirm downgrade to go on".into());
+    true
 }
 
 /// Staging directories a run closed midway left under the root: removed, and
@@ -538,6 +658,16 @@ fn clear_staging(state: &Shared, root: &Path) -> Result<(), String> {
 /// release, looked up once.
 fn offline_toggled(window: &SetupWindow, state: &Shared, offline: bool) {
     window.set_note("".into());
+    // A folder's release is judged when Install is pressed; the online one as
+    // looked up.
+    let online = {
+        let state = lock(state);
+        match offline {
+            true => None,
+            false => state.release_members.as_ref().and_then(|text| upgrade::downgrade(&state.root, text)),
+        }
+    };
+    confirm_downgrade(window, online);
     if offline || lock(state).release.is_some() {
         window.set_can_next(true);
     } else {
@@ -559,19 +689,24 @@ fn find_release(window: &SetupWindow, state: &Shared) {
     let (state, worker_weak) = (Arc::clone(state), weak.clone());
     let spawned = std::thread::Builder::new().name("acsetup-release".into()).spawn(move || {
         let _guard = PanicGuard::new(&state, &worker_weak);
-        let have = lock(&state)
-            .installed
-            .as_ref()
-            .map(|installed| (installed.runtime_sha.clone(), installed.ui_sha.clone()));
+        let (root, have) = {
+            let locked = lock(&state);
+            let have = locked
+                .installed
+                .as_ref()
+                .map(|installed| (installed.runtime_sha.clone(), installed.ui_sha.clone()));
+            (locked.root.clone(), have)
+        };
         // An upgrade reads the release's MEMBERS.json first: the same two
-        // commits need nothing fetched.
+        // commits need nothing fetched, an older release the person's word.
         let found = fetch::choose().and_then(|release| {
             release.folder()?;
-            let wanted = have.as_ref().map(|_| fetch::members(&release)).transpose()?;
-            Ok((release, wanted))
+            let text = have.as_ref().map(|_| fetch::members(&release)).transpose()?;
+            let wanted = text.as_deref().map(verify::members_of).transpose()?;
+            Ok((release, wanted, text))
         });
         let (line, current) = match &found {
-            Ok((release, wanted)) => {
+            Ok((release, wanted, _)) => {
                 let mut line = release_line(release);
                 if let (Some(have), Some(wanted)) = (&have, wanted) {
                     line.push('\n');
@@ -585,11 +720,18 @@ fn find_release(window: &SetupWindow, state: &Shared) {
             fail(&state, &worker_weak, reason);
             return;
         }
-        let found = found.ok().filter(|_| !current).map(|(release, _)| release);
+        let found = found.ok().filter(|_| !current).map(|(release, _, text)| (release, text));
         let ok = found.is_some();
-        lock(&state).release = found;
+        let downgrade = found.as_ref().and_then(|(_, text)| text.as_deref()).and_then(|text| upgrade::downgrade(&root, text));
+        {
+            let mut locked = lock(&state);
+            (locked.release, locked.release_members) = found.map_or((None, None), |(release, text)| (Some(release), text));
+        }
         let _ = worker_weak.upgrade_in_event_loop(move |window| {
             window.set_busy(false);
+            if !window.get_offline() {
+                confirm_downgrade(&window, downgrade);
+            }
             window.set_release_text(line.into());
             window.set_can_next(ok || window.get_offline());
             window.set_release_failed(!ok && !current);
@@ -627,14 +769,16 @@ fn short(sha: &str) -> &str {
     sha.get(..8).unwrap_or(sha)
 }
 
-/// Whether this wizard's own executable lies under `root`: its directory could
-/// not move aside while it runs.
-fn running_from(root: &Path) -> bool {
-    let exe = std::env::current_exe().and_then(|exe| exe.canonicalize());
-    match (exe, root.canonicalize()) {
-        (Ok(exe), Ok(root)) => exe.starts_with(root),
-        _ => false,
-    }
+/// This wizard's own file name and the directory of `root` it runs from, when
+/// that is one an upgrade moves aside or replaces — it could not move while
+/// the wizard runs. From the root itself or `downloads\` it upgrades as usual.
+fn running_from(root: &Path) -> Option<(String, &'static str)> {
+    let exe = std::env::current_exe().and_then(|exe| exe.canonicalize()).ok()?;
+    let name = exe.file_name()?.to_string_lossy().into_owned();
+    ["runtime", "ui", "tools", "previous"]
+        .into_iter()
+        .find(|dir| root.join(dir).canonicalize().is_ok_and(|dir| exe.starts_with(dir)))
+        .map(|dir| (name, dir))
 }
 
 fn release_line(release: &Release) -> String {
@@ -649,13 +793,31 @@ fn release_line(release: &Release) -> String {
 }
 
 /// Step 1, one worker from start to end: online, the release fetched into
-/// `<root>\downloads\<tag>\`; the folder verified into a staging directory
-/// under the root; then laid out, or the installation upgraded. On success the
-/// next page follows by itself: configure on a fresh install, finish on an
-/// upgrade.
+/// `<root>\downloads\<tag>\` — the offline edition's extracted there; the
+/// folder verified into a staging directory under the root; then laid out, or
+/// the installation upgraded. On success the next page follows by itself:
+/// configure on a fresh install, finish on an upgrade. An upgrade to a release
+/// published earlier than the one installed waits for the person's word.
 fn begin_install(window: &SetupWindow, state: &Shared) {
-    let mut fetch_release = None;
-    let download = if window.get_offline() {
+    let (mut fetch_release, mut carried) = (None, None);
+    let upgrading = lock(state).installed.is_some();
+    let copy = lock(state).payload.as_ref().map(Payload::try_clone);
+    let download = if let Some(copy) = copy {
+        let payload = match copy {
+            Ok(payload) => payload,
+            Err(reason) => {
+                fail(state, &window.as_weak(), reason);
+                return;
+            }
+        };
+        if upgrading && downgrade_stops(window, state, &payload.members_text) {
+            return;
+        }
+        let folder = lock(state).root.join("downloads").join(&payload.tag);
+        lock(state).source = format!("自带发布件 / carried release {}", payload.tag);
+        carried = Some(payload);
+        folder
+    } else if window.get_offline() {
         let download = PathBuf::from(window.get_download_dir().as_str());
         if !download.is_dir() {
             window.set_note(
@@ -674,15 +836,18 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
         let mut line = format!("发布件文件夹 / download folder: {}", download.display());
         if let Some(have) = &have {
             let members = download.join("MEMBERS.json");
-            let wanted = std::fs::read_to_string(&members)
-                .map_err(|error| format!("读取失败 / read failed: {}: {error}", members.display()))
-                .and_then(|text| verify::members_of(&text));
+            let text = std::fs::read_to_string(&members)
+                .map_err(|error| format!("读取失败 / read failed: {}: {error}", members.display()));
+            let wanted = text.as_deref().map_err(Clone::clone).and_then(verify::members_of);
             match wanted {
                 Ok(wanted) if &wanted == have => {
                     window.set_note(UP_TO_DATE.into());
                     return;
                 }
                 Ok(wanted) => {
+                    if downgrade_stops(window, state, text.as_deref().unwrap_or_default()) {
+                        return;
+                    }
                     line.push_str(" · ");
                     line.push_str(&upgrade_line(have, &wanted));
                 }
@@ -699,14 +864,17 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
         lock(state).source = format!("离线文件夹 / offline folder {}", download.display());
         download
     } else {
-        let (root, release) = {
+        let (root, release, members) = {
             let state = lock(state);
-            (state.root.clone(), state.release.clone())
+            (state.root.clone(), state.release.clone(), state.release_members.clone())
         };
         let Some(release) = release else {
             window.set_note("还没有找到可安装的发布件 / No release to install has been found".into());
             return;
         };
+        if upgrading && downgrade_stops(window, state, members.as_deref().unwrap_or_default()) {
+            return;
+        }
         let folder = match release.folder() {
             Ok(folder) => root.join("downloads").join(folder),
             Err(reason) => {
@@ -725,17 +893,17 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
     let root = lock(state).root.clone();
     let staging = root.join(format!(".staging-{}", log::unix_ms()));
     let existed = LAID.map(|name| root.join(name).exists());
-    lock(state).existed = existed;
     let weak = window.as_weak();
     let shared = Arc::clone(state);
     let (state, worker_weak) = (Arc::clone(state), weak.clone());
     let spawned = std::thread::Builder::new().name("acsetup-install".into()).spawn(move || {
         let _guard = PanicGuard::new(&state, &worker_weak);
         let mut report = PageReport::new(&state, &worker_weak);
-        let upgrading = lock(&state).installed.is_some();
-        let fetched = match &fetch_release {
-            Some(release) => fetch::fetch(release, &download, &mut report),
-            None => Ok(()),
+        let mut carried = carried;
+        let fetched = match (&fetch_release, carried.as_mut()) {
+            (Some(release), _) => fetch::fetch(release, &download, &mut report),
+            (None, Some(payload)) => payload.extract(&download, &mut report),
+            (None, None) => Ok(()),
         };
         let outcome = fetched
             .and_then(|()| verify::run(&download, &staging, &mut report))
@@ -743,24 +911,41 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
                 // From here on, stopping midway would leave files half laid out.
                 let _held = Held::new(&state);
                 let members = verified.members.clone();
-                match upgrading {
+                let done = match upgrading {
                     true => upgrade::upgrade(&root, &verified, &mut report)
-                        .map(|upgraded| (upgraded.laid_out.clone(), Some(upgraded), members)),
-                    false => install::lay_out(&root, &verified, &mut report).map(|laid_out| (laid_out, None, members)),
+                        .map(|upgraded| (upgraded.laid_out.clone(), Some(upgraded), members, None)),
+                    // A fresh install is configured at once: the state root
+                    // under the root, the salt, the console's settings.
+                    false => install::lay_out(&root, &verified, &mut report).and_then(|laid_out| {
+                        let state_root = root.join("state");
+                        install::state_root_usable(&state_root)
+                            .and_then(|()| install::configure(&root, &state_root, &laid_out, &mut report))
+                            .map(|configured| (laid_out, None, members, Some(configured)))
+                            .map_err(|reason| {
+                                format!("{reason}\n程序已铺开但没有配置；监控台设置可能已改写 / Laid out but not configured; the console settings may have been rewritten")
+                            })
+                    }),
+                }?;
+                // What the next upgrade's downgrade check reads; failing to
+                // keep it is said, and the installation stands.
+                if let Err(reason) = upgrade::record_members(&root, &download) {
+                    report.warn(&reason)?;
                 }
+                Ok(done)
             });
         match outcome {
-            Ok((laid_out, upgraded, members)) => {
+            Ok((laid_out, upgraded, members, configured)) => {
                 let mut locked = lock(&state);
                 locked.laid_out = Some(laid_out);
                 locked.upgraded = upgraded;
                 locked.members = Some(members);
+                locked.configured = configured;
                 drop(locked);
                 let _ = worker_weak.upgrade_in_event_loop(move |window| {
                     window.set_busy(false);
                     match upgrading {
                         true => finish(&window, &state),
-                        false => enter_configure(&window, &state),
+                        false => enter_options(&window, &state),
                     }
                 });
             }
@@ -818,78 +1003,95 @@ fn finish(window: &SetupWindow, state: &Shared) {
     window.set_can_next(false);
 }
 
-/// The configure page, its state root defaulted once.
-fn enter_configure(window: &SetupWindow, state: &Shared) {
-    {
-        let state = lock(state);
-        if state.configured.is_none() {
-            window.set_state_root(state.root.join("state").display().to_string().into());
-        }
-        window.set_configured(state.configured.is_some());
-    }
+/// The options page of a fresh install, its configuration already written:
+/// autostart and the console's shortcuts are the person's to choose.
+fn enter_options(window: &SetupWindow, _state: &Shared) {
     window.set_note("".into());
     window.set_step(2);
     window.set_can_next(true);
 }
 
-/// Step 2 → 3: the configuration and the console's settings, written once,
-/// then the optional launcher; the instances page follows.
-fn run_configure(window: &SetupWindow, state: &Shared) {
-    if lock(state).configured.is_none() {
-        let state_root = PathBuf::from(window.get_state_root().as_str());
-        if let Err(reason) = install::state_root_usable(&state_root) {
-            window.set_note(reason.into());
-            return;
+/// Step 2 → 3: the Startup launcher and the shortcuts asked for, written off
+/// the event loop; the instances page follows and looks for the emulator at
+/// once. A failure is said on the page, which can be used again.
+fn apply_options(window: &SetupWindow, state: &Shared) {
+    let (root, laid_out) = {
+        let state = lock(state);
+        (state.root.clone(), state.laid_out.clone())
+    };
+    let Some(laid_out) = laid_out else {
+        fail(state, &window.as_weak(), "尚未铺开 / nothing laid out".into());
+        return;
+    };
+    let (autostart, with_console) = (window.get_autostart(), window.get_autostart_console());
+    let (start_menu, desktop) = (window.get_start_menu(), window.get_desktop_shortcut());
+    let earlier = lock(state).options_written.clone();
+    window.set_note("".into());
+    window.set_busy(true);
+    let weak = window.as_weak();
+    let shared = Arc::clone(state);
+    let (state, worker_weak) = (Arc::clone(state), weak.clone());
+    let spawned = std::thread::Builder::new().name("acsetup-options".into()).spawn(move || {
+        let _guard = PanicGuard::new(&state, &worker_weak);
+        let held = Held::new(&state);
+        let mut report = PageReport::new(&state, &worker_weak);
+        let mut written = Vec::new();
+        // A retry starts from what was there before this run: whatever an
+        // earlier attempt wrote goes first, then the options as they are now.
+        let outcome = report
+            .step(Step::Phase("写入选项 / Writing the options", None))
+            .and_then(|()| take_back(&earlier, &mut report))
+            .and_then(|()| install::autostart(&root, autostart, with_console, &mut written, &mut report))
+            .and_then(|outcome| {
+                install::shortcuts(&laid_out, start_menu, desktop, &mut written, &mut report).map(|links| (outcome, links))
+            });
+        {
+            let mut locked = lock(&state);
+            locked.options_written = earlier.into_iter().filter(|path| path.exists()).chain(written).collect();
         }
-        let (root, laid_out) = {
-            let state = lock(state);
-            (state.root.clone(), state.laid_out.clone())
-        };
-        let Some(laid_out) = laid_out else {
-            fail(state, &window.as_weak(), "尚未铺开，无法配置 / nothing laid out to configure".into());
-            return;
-        };
-        let mut report = |line: &str| write_log(state, line);
-        match install::configure(&root, &state_root, &laid_out, &mut report) {
-            Ok(configured) => {
-                lock(state).configured = Some(configured);
-                window.set_configured(true);
+        let written = outcome;
+        drop(held);
+        match written {
+            Ok((outcome, links)) => {
+                {
+                    let mut locked = lock(&state);
+                    locked.autostart = Some(outcome);
+                    locked.shortcuts = links;
+                }
+                let _ = worker_weak.upgrade_in_event_loop(move |window| {
+                    window.set_busy(false);
+                    window.set_note("".into());
+                    window.set_step(3);
+                    window.set_can_next(true);
+                    // The emulator is looked for at once: nothing to press first.
+                    begin_discover(&window, &state);
+                });
             }
-            Err(reason) => {
-                let existed = lock(state).existed;
-                let laid: Vec<String> = LAID
-                    .into_iter()
-                    .zip(existed)
-                    .filter(|(_, before)| !before)
-                    .map(|(name, _)| root.join(name).display().to_string())
-                    .collect();
-                let reason = format!(
-                    "{reason}\n程序已装好但没有配置；重试前请删除这次铺开的 / Installed but not configured; remove what this run laid out before trying again: {}\n监控台设置可能已改写 / The console settings may have been rewritten",
-                    laid.join("、")
-                );
-                fail(state, &window.as_weak(), reason);
-                return;
+            Err(reason) => retryable(&state, &worker_weak, reason),
+        }
+    });
+    if let Err(error) = spawned {
+        window.set_busy(false);
+        fail(&shared, &weak, thread_failed(&error));
+    }
+}
+
+/// What an earlier options attempt of this run wrote, removed; one that
+/// cannot be is the reason to stop.
+fn take_back(paths: &[PathBuf], report: Report<'_>) -> Result<(), String> {
+    for path in paths {
+        match std::fs::remove_file(path) {
+            Ok(()) => report.line(&format!("撤回本次早先写出的 / taken back what an earlier attempt wrote: {}", path.display()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "本次早先写出的未能删除 / cannot remove what an earlier attempt wrote: {}: {error}",
+                    path.display()
+                ))
             }
         }
     }
-    let root = lock(state).root.clone();
-    let mut report = |line: &str| write_log(state, line);
-    match install::autostart(
-        &root,
-        window.get_autostart(),
-        window.get_autostart_console(),
-        &mut report,
-    ) {
-        Ok(outcome) => {
-            lock(state).autostart = Some(outcome);
-            window.set_note("".into());
-            window.set_step(3);
-            window.set_can_next(true);
-            // The emulator is looked for at once: nothing to press first.
-            begin_discover(window, state);
-        }
-        Err(reason) => fail(state, &window.as_weak(), reason),
-    }
+    Ok(())
 }
 
 /// The instances step's discovery, run on entering it and again on request:
@@ -1316,6 +1518,15 @@ fn summary(state: &Shared) -> String {
             "开机自启 / Autostart: 未启用 / not enabled".to_string()
         }
     }));
+    if fresh && state.autostart.is_some() {
+        lines.push(match state.shortcuts.as_slice() {
+            [] => "快捷方式 / Shortcuts: 未创建 / none".to_string(),
+            links => format!(
+                "快捷方式 / Shortcuts: {}",
+                links.iter().map(|link| link.display().to_string()).collect::<Vec<_>>().join("、")
+            ),
+        });
+    }
     if fresh && !state.instances.is_empty() {
         lines.push(format!(
             "实例 / Instances: {}（已写入配置并通过检查 / in the configuration, checked）",
