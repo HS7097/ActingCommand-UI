@@ -371,13 +371,15 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 `crates/acui-setup` 是一个独立的二进制 `acsetup.exe`（Slint 窗口，与监控台同一套样式与图标），把
 伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases) 里的发布件装成一份**按用户**的安装。
 它随 UI 仓的 Windows 构建产物一起发布（`acui-windows-<sha>.zip` 里多一个 `acsetup.exe`）。
-它自己去取发布件，也可以用人手工下好的文件夹。一个窗口，只有下一步（实例步可跳过），五步；每页像安装器那样只显示
+同一个程序有两种形态，人只下载其中一个：在线版 `acsetup.exe` 自己去取发布件，也可以用人手工下好的文件夹；
+离线版 `acsetup-full-<tag>.exe` 自带一整个发布件（见下文「离线版」）。一个窗口，只有下一步（实例步可跳过），五步；每页像安装器那样只显示
 进行到哪了，详情全写进安装日志（见下文「进度与安装日志」）：
 
 0. **位置**：只有安装根（可改，默认 `%LOCALAPPDATA%\Programs\ActingCommand`，不需要管理员）、该卷的
    可用空间、此处是否已有安装（看 `runtime\BUILD-MANIFEST.json`，写出它与 `ui\` 清单的提交号；已有就是
-   **升级**，见下文）。下一步时建好安装根与安装日志。引导若正从要升级的这份安装里运行，就停在这一步：
-   它自己的目录挪不开。
+   **升级**，见下文）。下一步时建好安装根与安装日志。引导若正从要升级的这份安装的 `runtime\`、`ui\`、
+   `tools\` 或 `previous\` 里运行，就停在这一步，并写出自身的文件名：那个目录挪不开；放在安装根本身或
+   `downloads\` 下则照常升级。离线版在可用空间一行后面加上取出自带发布件所需的量。
 1. **安装**（已有安装时为**升级**，见下文），一页从下载做到铺开，成功后自动进入下一页。默认联网。一进这一步就经 HTTPS 向伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases)
    要一个发布件：有正式版取最新正式版（GitHub 的 `releases/latest`），否则取最新预发布（每日构建），从不取草稿；页面与日志写明它的标签、
    名称、日期、种类与大小。点「安装」依次下载 `SHA256SUMS`、`MEMBERS.json`，再下载 `SHA256SUMS` 列出的
@@ -388,7 +390,10 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `%USERPROFILE%\Downloads`，路径直接填）。查询失败写在页面与日志里，可点「重新查询」，离线仍可选；下载失败则停下。这与
    实例步下载资源包网址是程序仅有的联网代码（`ureq`，阻塞式，rustls 加编译进去的 Mozilla 根证书）；
    Runtime 没有任何联网代码。
-   下好的（或离线的）文件夹随后在同一页校验并铺开：要求文件夹里有 `SHA256SUMS`、`MEMBERS.json`、`actingcommand-runtime-<sha>.zip`、
+   离线版没有查询，也没有「离线」勾选：页面写出它自带的发布件——标签与启动时已核对的 `MEMBERS.json` 里的
+   两个提交号——点「安装」把它取出到 `<安装根>\downloads\<标签>\`，每个文件先写 `.part`，长度与 sha256
+   都对上才改名（杀毒软件短暂占用导致的改名失败有限次重试）。
+   下好的、离线的或取出的文件夹随后在同一页校验并铺开：要求文件夹里有 `SHA256SUMS`、`MEMBERS.json`、`actingcommand-runtime-<sha>.zip`、
    `actingcommand-tools-<sha>.zip`、`acui-windows-<sha>.zip`（`<sha>` 取 `MEMBERS.json` 的
    `runtime_sha` / `ui_sha`，三个 zip 必须在 `SHA256SUMS` 里）。逐条核对 `SHA256SUMS`；解压到安装根
    下的临时目录 `.staging-<unix_ms>`；再按每个 zip 自带的 `BUILD-MANIFEST.json` 核对来源仓、提交号
@@ -437,11 +442,11 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `check-config` 检查（资源包加载不了的，写明别名、路径与加载器的原话）；通过才替换配置，随后重启 Runtime，
    `actingctl status` 必须应答。替换配置之前的失败写在页面与日志里，页面可继续用；之后的失败停下，任何一次日志
    写入失败也停下。离开这一步时再问一次 `mumu_root` 的现值与 Runtime 是否应答，写进摘要。
-4. **完成**：摘要写出装上的是什么（runtime 与 ui 的提交号，以及发布件标签或离线文件夹）、各路径，以及各步
+4. **完成**：摘要写出装上的是什么（runtime 与 ui 的提交号，以及发布件标签、离线文件夹或自带发布件）、各路径，以及各步
    留下的注意事项。「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe` 并关闭引导；「完成」只关闭。
    实例步拉起的 Runtime 继续运行；没有在运行的，由监控台的启动器拉起。
 
-**升级**：安装根里已有安装时。安装步先读发布件的 `MEMBERS.json`（联网时只读不存，离线时读文件夹里的），
+**升级**：安装根里已有安装时。安装步先读发布件的 `MEMBERS.json`（联网时只读不存，离线时读文件夹里的，离线版读自带的），
 与已装清单的两个提交号比对：两个都相同就停在这里，写「已是这个发布件的版本」，什么也不下载。否则
 在按上文校验之后：
 
@@ -459,7 +464,13 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何没能拉起）；关闭未确认的不去动它，写明。铺好之后删掉更早的 `previous\`，
 原先在运行的 Runtime 用新版本分离拉起：从安装根启动，输出写进 `<安装根>\actingd-<unix_ms>.log`，30 秒内
 它自己的 `runtime-info.json` 写出它的 pid 才算就绪。在那之前退出的，连同 `FATAL` 行一起写明；没按时就绪
-的写明可能仍在启动。无论哪种，新版本都已铺好，被替换的版本在 `previous\`。发布件按原样安装，不论新旧：向导只比对提交号是否相同。
+的写明可能仍在启动。无论哪种，新版本都已铺好，被替换的版本在 `previous\`。
+
+新旧按发布时间判断。每次安装与升级都把本次发布件的 `MEMBERS.json` 另存为 `<安装根>\installed-members.json`。
+要装的发布件 `published_at_utc` 早于这份记录时，写「按发布时间判断，看起来是降级」；没有这份记录的安装、或任一方
+缺发布时间时，写「无法判断新旧」——两种都附上「Runtime 没有状态迁移，也没有回滚」，必须勾选「确认降级」才能继续。
+在线、离线文件夹、离线版三种来源一律适用。发布时间只是启发式（将来正式版线的发布时间可能与代码新旧倒挂），
+页面也照此措辞；勾选是人的决定，不是向导的判断。
 
 状态根、`actingd.config.json`、监控台的 `acui.toml`、开机自启与 `downloads\` 都不动，选项那一步跳过。
 被替换的版本整份留在 `previous\`，只留一份：Runtime 不带状态迁移，也不带回滚，退回去仍是人的决定。
@@ -472,15 +483,31 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 重试前须删除）和日志路径；工作线程 panic 时也停下，写明 panic 信息。铺开并配置、升级换版本、写入选项、实例步写入期间窗口不关；查询或下载时
 可以关，这样留下的临时目录下次运行时删掉并写进日志。实例步拉起过 Runtime 时，第一次关闭会先说明它仍在运行。
 有程序文件却没有 `actingd.config.json`，或只有配置没有程序文件（中断的升级）的安装根，在第 0 步写明，既不在上面新装，
-也不当作升级。除安装载荷、配置、设置、`downloads\` 下取回的发布件、（勾选时的）自启批处理与开始菜单、桌面快捷方式、
+也不当作升级。除安装载荷、配置、设置、`downloads\` 下取回的发布件、`installed-members.json`、（勾选时的）自启批处理与开始菜单、桌面快捷方式、
 `packages\` 下取回的资源与放到 `packages\<game>\` 的大包资源包、引导拉起的 Runtime 的日志，以及升级时的 `previous\` 之外，引导写的文件只有这一个。
 
+**离线版**：`acsetup-full-<tag>.exe` = `acsetup.exe` 原样字节，其后是 `SHA256SUMS` 与它按行序列出的每个文件
+（含 `MEMBERS.json` 与资源仓的大包），再是索引，最后是恰好 125 字节的尾部：
+`ACSETUP-PAYLOAD-1 <载荷起点，%020d> <索引长度，%020d> <索引的 sha256>\n`。索引第一行是
+`acsetup-payload v1 <tag>`；其后每个文件一行 `<sha256> <长度> <文件名>`，名单、顺序、sha256 与 `SHA256SUMS`
+逐项相同，只在最前面多一行 `SHA256SUMS`。运行哪种形态，在开窗之前从自身 exe 读出：PE 映像末端——各节原始数据的
+最远处，由手写的最小解析读出（DOS 头、PE 签名、COFF 头、可选头、数据目录、节表，全用 checked 算术）——对比文件的
+有效末尾：文件长度；签名以后则是证书表偏移再去掉至多 7 个 NUL 填充。相等是在线版；更长就必须是完整的载荷：尾部格式、
+载荷起点等于映像末端、索引不超过 1 MiB 且 sha256 相符、各长度之和恰好到有效末尾、文件名合乎在线取件的规则且另外不以
+`-` 开头、不以 `.` 或 `.part` 结尾、不区分大小写不重复、从载荷里读出的 `SHA256SUMS` 与 `MEMBERS.json` 与索引相符、
+形如 `build-r<7>-u<7>` 的标签与 `MEMBERS.json` 的提交号相符。其他任何情况——文件被截断、尾部、索引或头部损坏——都在
+写任何东西之前进失败页：写明应为多少、实为多少，写明「尚未写任何文件，也没有日志」，并提示重新下载（可用旁边的
+`.sha256` 核对）或改用在线版 `acsetup.exe`；绝不改走联网。从这次检查到取出，自身文件一直开着同一个句柄。索引与
+`SHA256SUMS` 只防损坏，不防篡改：可信度来自从 Releases 页经 HTTPS 下载，以及每个安装器旁边的 `.sha256`，与在线版
+一样。Windows SmartScreen 与部分杀毒软件可能对新出现、未签名、映像后带数据的安装器报警，这是预期，不是向导缺陷。
+两个安装器由伞仓发布作业拼装，离线版在那里另行独立读回核对。
+
 **永远不做的事**：不装服务、不建计划任务、不改 PATH、不写注册表；不改配置模板；不碰已有内容的状态根；
-联网只为列出与下载伞仓发布件、下载实例步填的资源包网址；只在升级时与实例步按上文关闭与拉起 Runtime；
+联网只为列出与下载伞仓发布件、下载实例步填的资源包网址——离线版的安装步完全不联网；只在升级时与实例步按上文关闭与拉起 Runtime；
 不解开密封资源包——由 Runtime 加载（大包里的资源包是整个取出）。Linux 上 crate
 照常编译（CI 两条腿都跑 `--workspace`），运行即以 `acsetup v1 is Windows-only` 退出。
 
-依赖多五个，都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`
+依赖多五个（离线版读取自身 exe 是手写的，不加依赖），都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`
 （`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（salt 与
 `instance_id`）、
 `ureq`（取件；`default-features = false`，只开 `tls`：rustls、它的 `ring` 实现与编译进去的

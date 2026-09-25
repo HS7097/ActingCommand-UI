@@ -120,9 +120,9 @@ pub fn choose() -> Result<Release, String> {
         .ok_or_else(|| "伞仓还没有任何发布件 / The umbrella repository has no release yet".into())
 }
 
-/// The two commits the release's `MEMBERS.json` names, read without saving
-/// anything: what an upgrade compares with what is installed.
-pub fn members(release: &Release) -> Result<(String, String), String> {
+/// The release's `MEMBERS.json`, read without saving anything, and checked for
+/// the two commits it names: what an upgrade compares with what is installed.
+pub fn members(release: &Release) -> Result<String, String> {
     let asset = release.assets.iter().find(|asset| asset.name == "MEMBERS.json").ok_or_else(|| {
         format!("发布件 {} 缺少 / release {} lacks MEMBERS.json", release.tag_name, release.tag_name)
     })?;
@@ -135,7 +135,7 @@ pub fn members(release: &Release) -> Result<(String, String), String> {
         .map_err(|error| failed(&error))?
         .into_string()
         .map_err(|error| failed(&error))?;
-    verify::members_of(&text)
+    verify::members_of(&text).map(|_| text)
 }
 
 /// A file named by a person's `https://` URL — a resource package — fetched
