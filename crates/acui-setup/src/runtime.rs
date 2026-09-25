@@ -80,6 +80,11 @@ pub(crate) fn runtime_answers(
 /// `<actingd> check-config --config <config>`: the report is stdout; stderr
 /// is kept for the failure text.
 pub(crate) fn check_config(actingd: &Path, config: &Path) -> Result<(), String> {
+    check_config_report(actingd, config).map(|_| ())
+}
+
+/// `check_config`, returning the report it accepted.
+pub(crate) fn check_config_report(actingd: &Path, config: &Path) -> Result<Value, String> {
     let out = run(Command::new(actingd).arg("check-config").arg("--config").arg(config))?;
     let report: Value = serde_json::from_str(out.stdout.trim()).unwrap_or_default();
     let error = &report["error"];
@@ -90,7 +95,7 @@ pub(crate) fn check_config(actingd: &Path, config: &Path) -> Result<(), String> 
             out.stdout.trim(),
             out.stderr.trim()
         )),
-        (Some("ok"), _, _) if out.success => Ok(()),
+        (Some("ok"), _, _) if out.success => Ok(report.clone()),
         (Some("failed"), Some(code), Some(stage)) => {
             // Only the resource-package stage carries a detail: which
             // instance, which path, and what the package loader said.

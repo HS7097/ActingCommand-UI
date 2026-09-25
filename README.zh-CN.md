@@ -411,22 +411,27 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `start "" "<安装根>\runtime\actingcommand-actingd.exe" --config "<安装根>\actingd.config.json"`；
    再勾「同时拉起监控台」才多一行 `start "" "<安装根>\ui\acui.exe"`。批处理里不出现 acsetup。
    不勾就什么也不写；启动文件夹里已有的同名文件不动，只在完成页说一句。
-3. **实例**，可选：「跳过」让 `instances` 留空，之后点监控台顶栏的「实例配置」按钮添加；完成页也这样写。
-   可填 MuMu 安装目录（存在的文件夹的绝对路径），再点「发现实例」：目录经与下文同样的候选文件与
-   `check-config` 写成 `mumu_root`——输入框为空则把它去掉；按下文升级的方式从安装根拉起 Runtime（已应答的
-   先请它关闭再重新拉起：它还没有实例，读的是哪个目录也问不出来）；再用 `actingctl emulator discover` 从
-   MuMu 自己的实例清单列出实例——不启动、不关闭任何模拟器。发现前先清空列表；发现失败写明后页面可继续用，
-   即便目录已经写入。每个勾选的实例填别名（默认 `mumu-<序号>`）、`application_id`（「BlueArchiveJP」
-   按钮填 `com.YostarJP.BlueArchive`）和资源包：已存在文件的绝对路径，或 `https://` 网址——经 `.part`
-   文件下载到 `<安装根>\packages\<序号>\`，文件名取网址最后一段（不是普通文件名时用 `package.zip`；已有的
-   同名文件被替换并写明）；填了 sha256 就核对。「写入实例」为每个
-   勾选的实例写一项——别名、新的 `instance_id`（`instance_` + 系统随机源 32 位十六进制）、
-   `instance_index`、`application_id`、`touch_backend` 为 `adb_shell_input`、`capture_backend` 填了
-   MuMu 目录为 `nemu_ipc` 否则 `adb`、资源包的绝对路径作 `resource_package`——先写进配置旁的
-   `actingd.config.candidate-<pid>.json`，由 Runtime 的 `check-config` 检查（资源包加载不了的，写明别名、
-   路径与加载器的原话）；通过才替换配置，随后重启 Runtime，`actingctl status` 必须应答。替换配置之前的
-   失败写在页面与日志里，页面可继续用；之后的失败停下，任何一次日志写入失败也停下。点过「发现实例」的，
-   离开这一步时再问一次 `mumu_root` 的现值与 Runtime 是否应答，写进摘要。
+3. **实例**，可选，一进页面就开始查找：「跳过」让 `instances` 留空，之后点监控台顶栏的「实例配置」按钮添加；
+   完成页也这样写。MuMu 在哪由 Runtime 自己的 `check-config` 给出（`mumu_root`：路径与来源——
+   `ACTINGCOMMAND_NEMU_FOLDER`、运行中的 MuMu、
+   按用户或按机器的卸载注册表、厂商目录；见 Runtime 的 `contracts/actingd-check-config.md`），找不到时才由人填
+   目录；两者都经与下文同样的候选文件与 `check-config` 钉进配置的 `mumu_root`，免得以后另一套 MuMu 把实例接走。
+   Runtime 版本太旧、不回报 MuMu 位置时不钉，写成注意事项。随后按下文升级的方式从安装根拉起 Runtime（已应答的先请
+   它关闭再重新拉起：它还没有实例），用 `actingctl emulator discover` 从 MuMu 自己的实例清单列出实例——不启动、
+   不关闭任何模拟器；只有一个实例时替人勾上。「重新查找」再来一遍。每个勾选的实例填别名（默认 `mumu-<序号>`）。
+   资源是所有实例共用的一栏：资源仓的**大包**或**单个密封资源包**，填已存在文件的绝对路径，或 `https://` 网址
+   （经 `.part` 文件下载到 `<安装根>\packages\`）；填了 sha256 就核对；点「读取」打开它。大包里有
+   `applications.json`（各服务器的安卓包名）和 `bundle.json`（每个包的路径、包 id、服务器、sha256 与字节数，可选
+   按服务器声明的 `default_packs`）；页面写出游戏、各服务器与包名，资源包下拉框从大包自己声明的默认包开始，
+   大包恰好只声明一个默认包时才预选，否则留空由人选；写入用的就是读取时那份（改了资源栏或 sha256 要重新「读取」）；
+   MuMu 栏清空后「重新查找」会重新探测——向导不懂游戏，也不猜。单个资源包不带包名，由人填。「写入实例」先把大包的各资源包按
+   `bundle.json` 逐个核对后原样放到 `<安装根>\packages\<game>\`，再为每个勾选的实例写一项——别名、新的
+   `instance_id`（`instance_` + 系统随机源 32 位十六进制）、`instance_index`、所选资源包那个服务器的包名、
+   `touch_backend` 为 `adb_shell_input`、`capture_backend` 为 `adb`（实机确认 `nemu_ipc` 首帧前）、所选资源包的
+   绝对路径作 `resource_package`——先写进配置旁的 `actingd.config.candidate-<pid>.json`，由 Runtime 的
+   `check-config` 检查（资源包加载不了的，写明别名、路径与加载器的原话）；通过才替换配置，随后重启 Runtime，
+   `actingctl status` 必须应答。替换配置之前的失败写在页面与日志里，页面可继续用；之后的失败停下，任何一次日志
+   写入失败也停下。离开这一步时再问一次 `mumu_root` 的现值与 Runtime 是否应答，写进摘要。
 4. **完成**：摘要写出装上的是什么（runtime 与 ui 的提交号，以及发布件标签或离线文件夹）、各路径，以及各步
    留下的注意事项。「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe` 并关闭引导；「完成」只关闭。
    实例步拉起的 Runtime 继续运行；没有在运行的，由监控台的启动器拉起。
@@ -463,11 +468,11 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 可以关，这样留下的临时目录下次运行时删掉并写进日志。实例步拉起过 Runtime 时，第一次关闭会先说明它仍在运行。
 有程序文件却没有 `actingd.config.json`，或只有配置没有程序文件（中断的升级）的安装根，在第 0 步写明，既不在上面新装，
 也不当作升级。除安装载荷、配置、设置、`downloads\` 下取回的发布件、（勾选时的）自启批处理、
-`packages\` 下取回的资源包、引导拉起的 Runtime 的日志，以及升级时的 `previous\` 之外，引导写的文件只有这一个。
+`packages\` 下取回的资源与放到 `packages\<game>\` 的大包资源包、引导拉起的 Runtime 的日志，以及升级时的 `previous\` 之外，引导写的文件只有这一个。
 
 **永远不做的事**：不装服务、不建计划任务、不改 PATH、不写注册表；不改配置模板；不碰已有内容的状态根；
 联网只为列出与下载伞仓发布件、下载实例步填的资源包网址；只在升级时与实例步按上文关闭与拉起 Runtime；
-不解压资源包——由 Runtime 加载。Linux 上 crate
+不解开密封资源包——由 Runtime 加载（大包里的资源包是整个取出）。Linux 上 crate
 照常编译（CI 两条腿都跑 `--workspace`），运行即以 `acsetup v1 is Windows-only` 退出。
 
 依赖多四个，都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`

@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { Button, CheckBox, LineEdit, ListView, Palette, ProgressIndicator, TextEdit } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ListView, Palette, ProgressIndicator, TextEdit } from "std-widgets.slint";
 
-// One instance the emulator reported, and what a person fills in to use it.
+// One instance the emulator reported, and the alias a person gives it.
 export struct InstanceRow {
     picked: bool,
     index: int,
     title: string,
     detail: string,
     alias: string,
-    application: string,
-    package: string,
-    sha256: string,
 }
 
 // The same drawing as the console: the std-widgets Palette, so the wizard
@@ -146,6 +143,16 @@ export component SetupWindow inherits Window {
     in-out property <string> mumu-root;
     in-out property <[InstanceRow]> instances;
     in property <bool> discovered;
+    // Step 3: the instances' resources — a bundle or a single pack — and what
+    // they declare once read.
+    in-out property <string> resource;
+    in-out property <string> resource-sha;
+    in property <string> resource-text;
+    in property <bool> resource-ready;
+    in property <bool> resource-single;
+    in property <[string]> pack-labels;
+    in-out property <int> pack-index: -1;
+    in-out property <string> manual-application;
 
     callback next();
     callback close-wizard();
@@ -154,6 +161,7 @@ export component SetupWindow inherits Window {
     callback offline-toggled(bool);
     callback retry-release();
     callback discover();
+    callback read-resource();
     callback skip-instances();
 
     property <[string]> step-labels: [
@@ -281,18 +289,18 @@ export component SetupWindow inherits Window {
                     spacing: 8px;
                     Head { text: "实例（可选）/ Instances (optional)"; }
                     Caption {
-                        text: "从安装位置拉起 Runtime，读 MuMu 的实例清单（不启停模拟器）；勾选实例，填别名、游戏包名与资源包（本机文件或 https 网址），写入前先经 check-config 检查。\nStarts the Runtime and reads MuMu's instance list (no emulator started or stopped); tick instances and fill in an alias, the game's package and a resource package (a local file or an https URL), checked before it is written.";
+                        text: "自动找到 MuMu 并钉住，列出它的实例（不启停模拟器）；勾选实例，读取资源（资源仓大包或单个资源包），游戏包名由大包给出。写入前先经 check-config 检查。\nFinds and pins MuMu and lists its instances (no emulator started or stopped); tick instances and read the resources (a resource repository's bundle or a single pack) — the bundle gives the game's package name. Checked before it is written.";
                     }
                     HorizontalLayout {
                         spacing: 8px;
                         LineEdit {
                             text <=> root.mumu-root;
                             enabled: !root.busy;
-                            placeholder-text: "MuMu 安装目录（绝对路径，可空）/ MuMu folder (absolute, optional)";
+                            placeholder-text: "MuMu 安装目录（自动查找；找不到时再填）/ MuMu folder (found by itself; name it when it is not)";
                             horizontal-stretch: 1;
                         }
                         Button {
-                            text: "发现实例 / Discover";
+                            text: "重新查找 / Find again";
                             enabled: !root.busy;
                             clicked => {
                                 root.discover();
@@ -322,43 +330,58 @@ export component SetupWindow inherits Window {
                                 }
                             }
                             if row.picked: HorizontalLayout {
-                                spacing: 6px;
                                 LineEdit {
                                     text <=> row.alias;
                                     enabled: !root.busy;
                                     placeholder-text: "别名 / alias";
-                                    width: 140px;
+                                    width: 200px;
                                 }
-                                LineEdit {
-                                    text <=> row.application;
-                                    enabled: !root.busy;
-                                    placeholder-text: "application_id";
-                                    horizontal-stretch: 1;
-                                }
-                                Button {
-                                    text: "BlueArchiveJP";
-                                    enabled: !root.busy;
-                                    clicked => {
-                                        row.application = "com.YostarJP.BlueArchive";
-                                    }
-                                }
-                            }
-                            if row.picked: HorizontalLayout {
-                                spacing: 6px;
-                                LineEdit {
-                                    text <=> row.package;
-                                    enabled: !root.busy;
-                                    placeholder-text: "资源包：绝对路径或 https:// 网址 / resource package: absolute path or https:// URL";
-                                    horizontal-stretch: 2;
-                                }
-                                LineEdit {
-                                    text <=> row.sha256;
-                                    enabled: !root.busy;
-                                    placeholder-text: "sha256（可空 / optional）";
-                                    horizontal-stretch: 1;
-                                }
+                                Rectangle { }
                             }
                         }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        LineEdit {
+                            text <=> root.resource;
+                            enabled: !root.busy;
+                            placeholder-text: "资源：大包或单个资源包——本机路径或 https 网址 / Resources: a bundle or a single pack — local path or https URL";
+                            horizontal-stretch: 3;
+                        }
+                        LineEdit {
+                            text <=> root.resource-sha;
+                            enabled: !root.busy;
+                            placeholder-text: "sha256（可空 / optional）";
+                            horizontal-stretch: 1;
+                        }
+                        Button {
+                            text: "读取 / Read";
+                            enabled: !root.busy;
+                            clicked => {
+                                root.read-resource();
+                            }
+                        }
+                    }
+                    if root.resource-ready: Caption { text: root.resource-text; }
+                    if root.resource-ready && !root.resource-single: HorizontalLayout {
+                        spacing: 6px;
+                        // The list above takes the page's spare height, not the dropdown.
+                        vertical-stretch: 0;
+                        Caption {
+                            text: "资源包 / Resource pack";
+                            vertical-alignment: center;
+                        }
+                        ComboBox {
+                            model: root.pack-labels;
+                            current-index <=> root.pack-index;
+                            enabled: !root.busy;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                    if root.resource-ready && root.resource-single: LineEdit {
+                        text <=> root.manual-application;
+                        enabled: !root.busy;
+                        placeholder-text: "游戏包名 application_id（单个资源包需手填）/ the game's package name (a single pack needs it)";
                     }
                     if root.busy: Working {
                         stage: root.stage-text;

@@ -4,9 +4,10 @@
 //! lists the emulator's instances — it reads the MuMu manager's inventory and
 //! starts or stops none. The instances a person picks are written into the
 //! configuration as a candidate first, checked by `check-config`, and put in
-//! place; the Runtime is then restarted so it binds them. A resource package
-//! given as an `https://` URL is fetched into `<root>\packages\<index>\`
-//! first; the Runtime only ever sees a local file.
+//! place; the Runtime is then restarted so it binds them. Where MuMu is comes
+//! from the Runtime's own `check-config`, and is pinned into the configuration
+//! so a second MuMu install cannot take the instances over later. The
+//! resources come from `bundle`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,12 +19,16 @@ use crate::fetch;
 use crate::runtime::{self, ACTINGCTL, ACTINGD};
 use crate::verify::{hex, Report, Step};
 
-/// The default input and capture for a MuMu instance: `nemu_ipc` capture
-/// needs `mumu_root` in the configuration; without it, capture goes through
-/// adb.
+/// The input and capture written for a MuMu instance. Capture stays `adb`
+/// until a first frame through `nemu_ipc` without `mumu_root` has been seen on
+/// the real machine.
 const TOUCH_BACKEND: &str = "adb_shell_input";
-const CAPTURE_WITH_MUMU: &str = "nemu_ipc";
-const CAPTURE_WITHOUT_MUMU: &str = "adb";
+const CAPTURE_BACKEND: &str = "adb";
+
+/// The note a Runtime too old to say where MuMu is leaves; taken back once
+/// MuMu is pinned after all.
+pub const NOT_PINNED: &str =
+    "这个 Runtime 版本不回报 MuMu 的位置，MuMu 没有钉住 / This Runtime does not say where MuMu is; MuMu is not pinned";
 
 /// One instance the emulator reports.
 pub struct Found {
@@ -35,15 +40,11 @@ pub struct Found {
     pub android: Option<String>,
 }
 
-/// One instance a person picked, as they filled it in.
+/// One instance a person picked, and the package name its game runs under.
 pub struct Chosen {
     pub index: u16,
     pub alias: String,
     pub application_id: String,
-    /// A local path or an `https://` URL.
-    pub package: String,
-    /// Optional: the package's expected sha256.
-    pub sha256: String,
 }
 
 struct Paths {
@@ -63,18 +64,95 @@ fn paths(root: &Path) -> Result<Paths, String> {
     })
 }
 
-/// `mumu_root` made what the page says — the folder, or none — and a Runtime
-/// running that has read it: one that answers is restarted, since it has no
-/// instance yet and which folder it read cannot be asked.
-pub fn start(root: &Path, mumu_root: Option<&Path>, report: Report<'_>) -> Result<(), String> {
+/// `mumu_root` pinned — the folder a person gave, or the one the Runtime's
+/// `check-config` finds — and a Runtime running that has read it: one that
+/// answers is restarted, since it has no instance yet and which folder it read
+/// cannot be asked. Returns the folder pinned; `None` from a Runtime too old to
+/// say where MuMu is.
+pub fn start(root: &Path, mumu_root: Option<&Path>, report: Report<'_>) -> Result<Option<String>, String> {
     let paths = paths(root)?;
-    set_config(&paths, report, |document| match mumu_root {
-        Some(mumu) => document["mumu_root"] = json!(mumu.display().to_string()),
+    let pinned = match mumu_root {
+        Some(mumu) => Some((mumu.display().to_string(), "person".to_string())),
         None => {
-            document.as_object_mut().map(|object| object.remove("mumu_root"));
+            report.step(Step::Phase("查找 MuMu / Finding MuMu", None))?;
+            found_mumu(&probe_mumu(&paths)?)?
         }
-    })?;
-    ensure_running(root, &paths, true, report)
+    };
+    match &pinned {
+        Some((path, source)) if source != "config" => {
+            report.line(&format!("MuMu 位置 / MuMu is at: {path}（{source}）"))?;
+            let path = path.clone();
+            set_config(&paths, report, |document| document["mumu_root"] = json!(path))?;
+        }
+        Some((path, _)) => report.line(&format!("MuMu 位置已钉住 / MuMu is pinned at: {path}"))?,
+        None => report.warn(NOT_PINNED)?,
+    }
+    ensure_running(root, &paths, true, report)?;
+    Ok(pinned.map(|(path, _)| path))
+}
+
+/// `check-config` asked where MuMu is, with any folder pinned before set
+/// aside — an empty field finds MuMu afresh — through a probe candidate that
+/// is removed afterwards.
+fn probe_mumu(paths: &Paths) -> Result<Value, String> {
+    let mut document = read_config(paths)?;
+    if document.as_object_mut().and_then(|object| object.remove("mumu_root")).is_none() {
+        return runtime::check_config_report(&paths.actingd, &paths.config);
+    }
+    let probe = paths.config.with_file_name(format!("actingd.config.probe-{}.json", std::process::id()));
+    let text = serde_json::to_string_pretty(&document)
+        .map_err(|error| format!("配置序列化失败 / config serialization failed: {error}"))?;
+    if let Err(error) = fs::write(&probe, text) {
+        return Err(fetch::discard(&probe, format!("写入失败 / write failed: {}: {error}", probe.display())));
+    }
+    match runtime::check_config_report(&paths.actingd, &probe) {
+        Err(reason) => Err(fetch::discard(&probe, reason)),
+        Ok(report) => match fs::remove_file(&probe) {
+            Ok(()) => Ok(report),
+            Err(error) => Err(format!("探测用的候选配置未能删除 / the probe configuration was not removed: {}: {error}", probe.display())),
+        },
+    }
+}
+
+/// A Windows verbatim path as a plain one: `\\?\C:\x` → `C:\x`,
+/// `\\?\UNC\host\share` → `\\host\share`; any other form kept as it is.
+fn plain_path(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    match path.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => path.to_string(),
+    }
+}
+
+/// Where `check-config` says MuMu is: `{path, source}`, the Windows verbatim
+/// prefix taken off; an error saying why when it found none — two installs
+/// said as such; `None` when the report has no such field at all.
+fn found_mumu(report: &Value) -> Result<Option<(String, String)>, String> {
+    match report.get("mumu_root") {
+        None => Ok(None),
+        Some(Value::Null) => {
+            let why = &report["mumu_root_unresolved"];
+            let reason = why["reason"].as_str().unwrap_or("?");
+            let hint = match reason {
+                "installation_ambiguous" => "找到不止一套 MuMu：填要用的那套的安装目录后「重新查找」/ More than one MuMu install: name the one to use and find again",
+                _ => "可以填 MuMu 安装目录后「重新查找」/ Name the MuMu folder and find again",
+            };
+            Err(format!(
+                "无法确定 MuMu 的位置 / MuMu's location is not resolved（{reason}）: {}\n{hint}",
+                why["message"].as_str().unwrap_or("—")
+            ))
+        }
+        Some(found) => {
+            let path = plain_path(found["path"].as_str().unwrap_or_default());
+            let source = found["source"].as_str().unwrap_or("?").to_string();
+            match path.is_empty() {
+                true => Err(format!("check-config 报告的 MuMu 位置无法读取 / unreadable MuMu location: {found}")),
+                false => Ok(Some((path, source))),
+            }
+        }
+    }
 }
 
 /// The instances step's outcome as it stands at the end: the configured MuMu folder, and
@@ -149,15 +227,13 @@ pub fn discover(root: &Path, report: Report<'_>) -> Result<Vec<Found>, String> {
     Ok(found)
 }
 
-/// The picked instances written into the configuration — packages given as
-/// URLs fetched first — checked and put in place. On an error the
+/// The picked instances written into the configuration, each with `package`
+/// as its resource package, checked and put in place. On an error the
 /// configuration is as it was.
-pub fn write(root: &Path, chosen: &[Chosen], report: Report<'_>) -> Result<(), String> {
+pub fn write(root: &Path, chosen: &[Chosen], package: &Path, report: Report<'_>) -> Result<(), String> {
     let paths = paths(root)?;
-    let with_mumu = read_config(&paths)?["mumu_root"].is_string();
     let mut blocks = Vec::new();
     for pick in chosen {
-        let package = package_path(root, pick, report)?;
         let mut id = [0u8; 16];
         getrandom::fill(&mut id)
             .map_err(|error| format!("系统随机源不可用 / OS RNG unavailable: {error}"))?;
@@ -167,7 +243,7 @@ pub fn write(root: &Path, chosen: &[Chosen], report: Report<'_>) -> Result<(), S
             "instance_index": pick.index,
             "application_id": pick.application_id,
             "touch_backend": TOUCH_BACKEND,
-            "capture_backend": if with_mumu { CAPTURE_WITH_MUMU } else { CAPTURE_WITHOUT_MUMU },
+            "capture_backend": CAPTURE_BACKEND,
             "resource_package": package.display().to_string(),
         }));
     }
@@ -216,39 +292,6 @@ fn status_line(stdout: &str) -> String {
         })
         .collect();
     format!("{} 个实例 / instances: {}", instances.len(), instances.join("、"))
-}
-
-/// A local package as an absolute path to a file; an `https://` one fetched
-/// into `<root>\packages\<index>\`, so two instances' packages never share a
-/// name.
-fn package_path(root: &Path, pick: &Chosen, report: Report<'_>) -> Result<PathBuf, String> {
-    let given = pick.package.trim();
-    let expected = Some(pick.sha256.trim()).filter(|sha| !sha.is_empty());
-    if given.starts_with("https://") || given.starts_with("http://") {
-        report.line(&format!("下载资源包 / fetching the resource package for {}: {given}", pick.alias))?;
-        let dir = root.join("packages").join(pick.index.to_string());
-        return fetch::fetch_url(given, &dir, "package.zip", expected, report);
-    }
-    let path = PathBuf::from(given);
-    if !path.is_absolute() || !path.is_file() {
-        return Err(format!(
-            "{} 的资源包须为存在的文件的绝对路径 / the resource package of {} must be the absolute path of an existing file: {given}",
-            pick.alias, pick.alias
-        ));
-    }
-    if let Some(expected) = expected {
-        report.step(Step::Phase("核对资源包 / Checking the resource package", None))?;
-        let actual = crate::verify::sha256_file(&path)
-            .map_err(|error| format!("读取失败 / read failed: {}: {error}", path.display()))?;
-        if !expected.eq_ignore_ascii_case(&actual) {
-            return Err(format!(
-                "{}: {} sha256 应为 / expected {expected}，实为 / actual {actual}",
-                crate::verify::MISMATCH,
-                path.display()
-            ));
-        }
-    }
-    Ok(path)
 }
 
 /// The configuration edited as a candidate next to it, checked by the
