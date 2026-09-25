@@ -40,11 +40,13 @@ pub struct Found {
     pub android: Option<String>,
 }
 
-/// One instance a person picked, and the package name its game runs under.
+/// One instance a person picked, the package name its game runs under and
+/// the resource package it is given.
 pub struct Chosen {
     pub index: u16,
     pub alias: String,
     pub application_id: String,
+    pub resource_package: PathBuf,
 }
 
 struct Paths {
@@ -227,10 +229,10 @@ pub fn discover(root: &Path, report: Report<'_>) -> Result<Vec<Found>, String> {
     Ok(found)
 }
 
-/// The picked instances written into the configuration, each with `package`
-/// as its resource package, checked and put in place. On an error the
-/// configuration is as it was.
-pub fn write(root: &Path, chosen: &[Chosen], package: &Path, report: Report<'_>) -> Result<(), String> {
+/// The picked instances written into the configuration, each with its own
+/// resource package, checked and put in place. On an error the configuration
+/// is as it was.
+pub fn write(root: &Path, chosen: &[Chosen], report: Report<'_>) -> Result<(), String> {
     let paths = paths(root)?;
     let mut blocks = Vec::new();
     for pick in chosen {
@@ -244,7 +246,7 @@ pub fn write(root: &Path, chosen: &[Chosen], package: &Path, report: Report<'_>)
             "application_id": pick.application_id,
             "touch_backend": TOUCH_BACKEND,
             "capture_backend": CAPTURE_BACKEND,
-            "resource_package": package.display().to_string(),
+            "resource_package": pick.resource_package.display().to_string(),
         }));
     }
     set_config(&paths, report, |document| {

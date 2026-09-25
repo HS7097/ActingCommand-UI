@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { Button, CheckBox, ComboBox, LineEdit, ListView, Palette, ProgressIndicator, TextEdit } from "std-widgets.slint";
 
-// One instance the emulator reported, and the alias a person gives it.
+// One instance the emulator reported, the alias a person gives it and what
+// it runs: an index into `choices`, whose first entry stands for "not chosen"
+// — a ComboBox clamps its index into the model, so no index can mean "none".
 export struct InstanceRow {
     picked: bool,
     index: int,
     title: string,
     detail: string,
     alias: string,
+    choice: int,
 }
 
 // The same drawing as the console: the std-widgets Palette, so the wizard
@@ -150,16 +153,13 @@ export component SetupWindow inherits Window {
     in-out property <string> mumu-root;
     in-out property <[InstanceRow]> instances;
     in property <bool> discovered;
-    // Step 3: the instances' resources — a bundle or a single pack — and what
-    // they declare once read.
-    in-out property <string> resource;
-    in-out property <string> resource-sha;
-    in property <string> resource-text;
-    in property <bool> resource-ready;
-    in property <bool> resource-single;
-    in property <[string]> pack-labels;
-    in-out property <int> pack-index: -1;
-    in-out property <string> manual-application;
+    // Step 3: what the resource bundles support — the programs and their
+    // package names — the choices an instance picks from, and a local bundle
+    // file to add when the release carries none.
+    in property <string> supported-text;
+    // First entry: "choose what it runs"; the rest are the real choices.
+    in property <[string]> choices;
+    in-out property <string> local-bundle;
 
     callback next();
     callback close-wizard();
@@ -168,7 +168,7 @@ export component SetupWindow inherits Window {
     callback offline-toggled(bool);
     callback retry-release();
     callback discover();
-    callback read-resource();
+    callback add-bundle();
     callback skip-instances();
 
     property <[string]> step-labels: [
@@ -321,7 +321,7 @@ export component SetupWindow inherits Window {
                     spacing: 8px;
                     Head { text: "实例（可选）/ Instances (optional)"; }
                     Caption {
-                        text: "自动找到 MuMu 并钉住，列出它的实例（不启停模拟器）；勾选实例，读取资源（资源仓大包或单个资源包），游戏包名由大包给出。写入前先经 check-config 检查。\nFinds and pins MuMu and lists its instances (no emulator started or stopped); tick instances and read the resources (a resource repository's bundle or a single pack) — the bundle gives the game's package name. Checked before it is written.";
+                        text: "自动找到 MuMu 并钉住，列出它的实例（不启停模拟器）；资源取自发布件自带的大包，下面写出支持的程序与包名；勾选实例，为每个实例选它运行的程序。写入前先经 check-config 检查。\nFinds and pins MuMu and lists its instances (no emulator started or stopped); the resources are the bundles the release carries, whose programs and package names are listed below; tick instances and choose what each runs. Checked before it is written.";
                     }
                     HorizontalLayout {
                         spacing: 8px;
@@ -339,6 +339,7 @@ export component SetupWindow inherits Window {
                             }
                         }
                     }
+                    if root.supported-text != "": Body { text: root.supported-text; }
                     if root.discovered && root.instances.length == 0: Body {
                         text: "没有发现实例 / No instance found";
                     }
@@ -346,6 +347,10 @@ export component SetupWindow inherits Window {
                         vertical-stretch: 2;
                         min-height: 120px;
                         for row in root.instances: VerticalLayout {
+                            // A row is as tall as what it holds: the list hands
+                            // its spare height to whatever stretches, and the
+                            // picked row's fields would take all of it.
+                            vertical-stretch: 0;
                             padding-bottom: 8px;
                             spacing: 4px;
                             HorizontalLayout {
@@ -362,58 +367,42 @@ export component SetupWindow inherits Window {
                                 }
                             }
                             if row.picked: HorizontalLayout {
+                                spacing: 8px;
+                                // The fields stretch vertically by themselves;
+                                // in a list row that would take the list's
+                                // whole spare height.
+                                height: 34px;
                                 LineEdit {
                                     text <=> row.alias;
                                     enabled: !root.busy;
                                     placeholder-text: "别名 / alias";
                                     width: 200px;
                                 }
-                                Rectangle { }
+                                ComboBox {
+                                    model: root.choices;
+                                    current-index <=> row.choice;
+                                    enabled: !root.busy && root.choices.length > 1;
+                                    horizontal-stretch: 1;
+                                }
                             }
                         }
                     }
                     HorizontalLayout {
                         spacing: 6px;
+                        vertical-stretch: 0;
                         LineEdit {
-                            text <=> root.resource;
+                            text <=> root.local-bundle;
                             enabled: !root.busy;
-                            placeholder-text: "资源：大包或单个资源包——本机路径或 https 网址 / Resources: a bundle or a single pack — local path or https URL";
-                            horizontal-stretch: 3;
-                        }
-                        LineEdit {
-                            text <=> root.resource-sha;
-                            enabled: !root.busy;
-                            placeholder-text: "sha256（可空 / optional）";
+                            placeholder-text: "本机大包文件的路径（发布件没带大包时用）/ A local bundle file (when the release carries none)";
                             horizontal-stretch: 1;
                         }
                         Button {
-                            text: "读取 / Read";
+                            text: "加入 / Add";
                             enabled: !root.busy;
                             clicked => {
-                                root.read-resource();
+                                root.add-bundle();
                             }
                         }
-                    }
-                    if root.resource-ready: Caption { text: root.resource-text; }
-                    if root.resource-ready && !root.resource-single: HorizontalLayout {
-                        spacing: 6px;
-                        // The list above takes the page's spare height, not the dropdown.
-                        vertical-stretch: 0;
-                        Caption {
-                            text: "资源包 / Resource pack";
-                            vertical-alignment: center;
-                        }
-                        ComboBox {
-                            model: root.pack-labels;
-                            current-index <=> root.pack-index;
-                            enabled: !root.busy;
-                            horizontal-stretch: 1;
-                        }
-                    }
-                    if root.resource-ready && root.resource-single: LineEdit {
-                        text <=> root.manual-application;
-                        enabled: !root.busy;
-                        placeholder-text: "游戏包名 application_id（单个资源包需手填）/ the game's package name (a single pack needs it)";
                     }
                     if root.busy: Working {
                         stage: root.stage-text;
