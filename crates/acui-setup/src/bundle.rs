@@ -142,7 +142,7 @@ pub fn carried(download: &Path, report: Report<'_>) -> Result<(Vec<Bundle>, Vec<
         })();
         match one {
             Ok(bundle) => {
-                report.line(&format!("发布件自带的大包 / carried bundle: {} → {}", entry.asset, bundle.name()))?;
+                report.line(&format!("发布件自带的标准包 / carried bundle: {} → {}", entry.asset, bundle.name()))?;
                 bundles.push(bundle);
             }
             Err(reason) => problems.push(format!("{}: {reason}", entry.asset)),
@@ -156,7 +156,7 @@ pub fn carried(download: &Path, report: Report<'_>) -> Result<(Vec<Bundle>, Vec<
 pub fn local(given: &str) -> Result<Bundle, String> {
     let path = PathBuf::from(given);
     if !path.is_absolute() || !path.is_file() {
-        return Err(format!("大包须为存在的文件的绝对路径 / the bundle must be the absolute path of an existing file: {given}"));
+        return Err(format!("标准包须为存在的文件的绝对路径 / the bundle must be the absolute path of an existing file: {given}"));
     }
     read(&path)
 }
@@ -170,24 +170,24 @@ pub fn read(file: &Path) -> Result<Bundle, String> {
         Some(bytes) => parse(&bytes, file, "bundle.json")?,
         None => {
             return Err(format!(
-                "不是资源仓大包（根目录没有 bundle.json）/ Not a resource repository bundle (no bundle.json at its root): {}",
+                "不是资源仓标准包（根目录没有 bundle.json）/ Not a resource repository bundle (no bundle.json at its root): {}",
                 file.display()
             ))
         }
     };
     let applications: ApplicationsFile = match member(&mut archive, file, "applications.json")? {
         Some(bytes) => parse(&bytes, file, "applications.json")?,
-        None => return Err(format!("大包缺少 applications.json / the bundle lacks applications.json: {}", file.display())),
+        None => return Err(format!("标准包缺少 applications.json / the bundle lacks applications.json: {}", file.display())),
     };
     if bundle.schema_version != BUNDLE_SCHEMA || applications.schema_version != APPLICATIONS_SCHEMA {
         return Err(format!(
-            "大包的格式版本无法识别 / unknown bundle format: {} · {}（应为 / expected {BUNDLE_SCHEMA} · {APPLICATIONS_SCHEMA}）",
+            "标准包的格式版本无法识别 / unknown bundle format: {} · {}（应为 / expected {BUNDLE_SCHEMA} · {APPLICATIONS_SCHEMA}）",
             bundle.schema_version, applications.schema_version
         ));
     }
     if bundle.game != applications.game {
         return Err(format!(
-            "大包里两份声明的 game 不一致 / the bundle's two declarations name different games: {} ≠ {}",
+            "标准包里两份声明的 game 不一致 / the bundle's two declarations name different games: {} ≠ {}",
             bundle.game, applications.game
         ));
     }
@@ -198,7 +198,7 @@ pub fn read(file: &Path) -> Result<Bundle, String> {
     let mut names = BTreeSet::new();
     for pack in &bundle.packs {
         if !names.insert(pack_name(pack)?.to_ascii_lowercase()) {
-            return Err(format!("大包里有重名的包 / the bundle lists a pack name twice: {}", pack.path));
+            return Err(format!("标准包里有重名的包 / the bundle lists a pack name twice: {}", pack.path));
         }
     }
     for (server, path) in &bundle.default_packs {
@@ -229,7 +229,7 @@ impl Bundle {
         let mut archive = open(&self.file)?;
         fs::create_dir_all(dir).map_err(|error| format!("无法创建 / cannot create {}: {error}", dir.display()))?;
         report.step(Step::Phase(
-            "放置资源包 / Placing the resource packs",
+            "放置任务包 / Placing the resource packs",
             Some(Total::Items(self.packs.len() as u64)),
         ))?;
         let mut laid = BTreeMap::new();
@@ -237,7 +237,7 @@ impl Bundle {
             let mut entry = match archive.by_name(&pack.path) {
                 Ok(entry) => entry,
                 Err(zip::result::ZipError::FileNotFound) => {
-                    return Err(format!("{MISMATCH}: 大包里缺少 / the bundle lacks {}", pack.path))
+                    return Err(format!("{MISMATCH}: 标准包里缺少 / the bundle lacks {}", pack.path))
                 }
                 Err(error) => return Err(format!("{MISMATCH}: {} 读不出 / unreadable: {error}", pack.path)),
             };

@@ -242,10 +242,10 @@ export component SetupWindow inherits Window {
                         Rectangle { }
                     }
                     if !root.installing && root.embedded: Caption {
-                        text: "发布件在本安装包里，不联网取件：取出到安装位置下的 downloads\\<tag>，逐项校验后装进安装位置；详情写进日志。\nThe release is inside this installer and nothing is fetched: it is extracted into downloads\\<tag> under the install location, every file verified, then installed; the details go to the log.";
+                        text: "发布件在本安装包里，不联网 / The release is inside this installer; nothing is fetched";
                     }
                     if !root.installing && !root.embedded && !root.offline: Caption {
-                        text: "从伞仓 Releases 取件（有正式版取最新正式版，否则取最新预发布），下载、逐项校验后装进安装位置；详情写进日志。\nFetches from the umbrella Releases (the newest stable release when there is one, else the newest pre-release), verifies every file and installs it; the details go to the log.";
+                        text: "从伞仓 Releases 取最新的一件 / Fetches the newest release from the umbrella";
                     }
                     if !root.installing && !root.embedded && root.offline: LineEdit {
                         text <=> root.download-dir;
@@ -259,7 +259,7 @@ export component SetupWindow inherits Window {
                         }
                     }
                     if !root.installing && !root.embedded && root.offline: Caption {
-                        text: "同一个发布件的 SHA256SUMS、MEMBERS.json 与三个 zip 放在一个文件夹里，这里填它。\nOne release's SHA256SUMS, MEMBERS.json and three zips in one folder, named here.";
+                        text: "放着同一个发布件全部文件的文件夹 / The folder holding one release's files";
                     }
                     if !root.installing && root.downgrade-note != "": Body { text: root.downgrade-note; }
                     if !root.installing && root.downgrade-note != "": CheckBox {
@@ -282,7 +282,7 @@ export component SetupWindow inherits Window {
                     spacing: 8px;
                     Head { text: "选项 / Options"; }
                     Caption {
-                        text: "配置已自动写好：状态根在安装位置下的 state，Runtime 配置与监控台设置都已就位。下面几项按需勾选。\nThe configuration is written: the state root is state under the install location, the Runtime's configuration and the console's settings are in place. Tick what you want below.";
+                        text: "配置已自动写好；下面几项按需勾选 / The configuration is written; tick what you want below";
                     }
                     CheckBox {
                         text: "登录时启动 Runtime / Start the Runtime at sign-in";
@@ -304,9 +304,6 @@ export component SetupWindow inherits Window {
                         checked <=> root.desktop-shortcut;
                         enabled: !root.busy;
                     }
-                    Caption {
-                        text: "开机自启只写一个按用户的启动项批处理；快捷方式指向监控台。不装服务、不写注册表。\nAutostart writes one per-user Startup .cmd; the shortcuts open the console. No service, no registry.";
-                    }
                     if root.busy: Working {
                         stage: root.stage-text;
                         detail: root.detail-text;
@@ -320,9 +317,6 @@ export component SetupWindow inherits Window {
                 if !root.failed && root.step == 3: VerticalLayout {
                     spacing: 8px;
                     Head { text: "实例（可选）/ Instances (optional)"; }
-                    Caption {
-                        text: "自动找到 MuMu 并钉住，列出它的实例（不启停模拟器）；资源取自发布件自带的大包，下面写出支持的程序与包名；勾选实例，为每个实例选它运行的程序。写入前先经 check-config 检查。\nFinds and pins MuMu and lists its instances (no emulator started or stopped); the resources are the bundles the release carries, whose programs and package names are listed below; tick instances and choose what each runs. Checked before it is written.";
-                    }
                     HorizontalLayout {
                         spacing: 8px;
                         LineEdit {
@@ -393,7 +387,7 @@ export component SetupWindow inherits Window {
                         LineEdit {
                             text <=> root.local-bundle;
                             enabled: !root.busy;
-                            placeholder-text: "本机大包文件的路径（发布件没带大包时用）/ A local bundle file (when the release carries none)";
+                            placeholder-text: "本机标准包文件的路径（发布件没带标准包时用）/ A local bundle file (when the release carries none)";
                             horizontal-stretch: 1;
                         }
                         Button {
@@ -419,7 +413,7 @@ export component SetupWindow inherits Window {
                     Head { text: "完成 / Finish"; }
                     Transcript { text: root.summary; }
                     Caption {
-                        text: "「启动监控台」拉起监控台并关闭本向导；Runtime 是否在运行见上面的摘要，未在运行就由监控台拉起。\n\"Open console\" starts the console and closes this wizard; the summary says whether a Runtime runs, and the console starts one when none does.";
+                        text: "「启动监控台」拉起监控台并关闭本向导 / \"Open console\" starts the console and closes this wizard";
                     }
                     Body { text: root.note; }
                 }

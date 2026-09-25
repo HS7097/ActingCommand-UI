@@ -1175,7 +1175,7 @@ fn begin_discover(window: &SetupWindow, state: &Shared) {
                 Err(reason) => vec![reason],
             };
             for problem in &problems {
-                let line = format!("发布件自带的大包读不出 / a bundle the release carries cannot be read: {problem}");
+                let line = format!("发布件自带的标准包读不出 / a bundle the release carries cannot be read: {problem}");
                 if let Err(error) = report.warn(&line) {
                     fail(&state, &worker_weak, error);
                     return;
@@ -1264,7 +1264,7 @@ fn offer(bundles: &[Bundle], problems: &[String]) -> (Vec<Choice>, String) {
                 "{} {}{}",
                 application.label,
                 application.application_id,
-                if pack.is_some() { "" } else { "（没有默认资源包，不可选 / no default pack, not offered）" }
+                if pack.is_some() { "" } else { "（没有默认任务包，不可选 / no default pack, not offered）" }
             ));
             // `bundle::read` holds every default pack to be listed.
             if let Some(listed) = pack.and_then(|pack| bundle.packs.iter().find(|listed| &listed.path == pack)) {
@@ -1285,10 +1285,10 @@ fn offer(bundles: &[Bundle], problems: &[String]) -> (Vec<Choice>, String) {
             if bundle.carried { "发布件自带 / carried by the release" } else { "本机文件 / local file" }
         ));
     }
-    let unread = "发布件自带的大包有读不出的（见注意）/ Some bundles the release carries cannot be read (see the notes)";
+    let unread = "发布件自带的标准包有读不出的（见注意）/ Some bundles the release carries cannot be read (see the notes)";
     let text = match (lines.is_empty(), problems.is_empty()) {
-        (true, true) => "发布件没有带资源大包：可在下面加入本机的大包文件 / The release carries no resource bundle: add a local bundle file below".to_string(),
-        (true, false) => format!("{unread}；可在下面加入本机的大包文件 / add a local bundle file below"),
+        (true, true) => "发布件没有带标准包：可在下面加入本机的标准包文件 / The release carries no resource bundle: add a local bundle file below".to_string(),
+        (true, false) => format!("{unread}；可在下面加入本机的标准包文件 / add a local bundle file below"),
         (false, true) => format!("支持的程序与包名 / Supported programs and package names:\n{}", lines.join("\n")),
         (false, false) => format!("支持的程序与包名 / Supported programs and package names:\n{}\n{unread}", lines.join("\n")),
     };
@@ -1345,7 +1345,7 @@ fn show_offer(window: &SetupWindow, state: &Shared) {
 fn begin_add_bundle(window: &SetupWindow, state: &Shared) {
     let given = window.get_local_bundle().trim().to_string();
     if given.is_empty() {
-        window.set_note("先填本机大包文件的路径 / Name a local bundle file first".into());
+        window.set_note("先填本机标准包文件的路径 / Name a local bundle file first".into());
         return;
     }
     window.set_note("".into());
@@ -1357,13 +1357,13 @@ fn begin_add_bundle(window: &SetupWindow, state: &Shared) {
         let _guard = PanicGuard::new(&state, &worker_weak);
         let mut report = PageReport::new(&state, &worker_weak);
         let added = bundle::local(&given).and_then(|bundle| {
-            let line = format!("本机大包 / local bundle: {} → {}", bundle.file.display(), bundle.name());
+            let line = format!("本机标准包 / local bundle: {} → {}", bundle.file.display(), bundle.name());
             {
                 let mut locked = lock(&state);
                 // `packages\<game>\` is one folder whatever the case.
                 if let Some(twin) = locked.bundles.iter().find(|other| other.game.eq_ignore_ascii_case(&bundle.game)) {
                     return Err(format!(
-                        "已有 {} 的大包 / a bundle for {} is already offered: {}",
+                        "已有 {} 的标准包 / a bundle for {} is already offered: {}",
                         twin.name(),
                         twin.game,
                         twin.file.display()
@@ -1470,7 +1470,7 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
                         .get(&choice.bundle)
                         .and_then(|packs| packs.get(&choice.pack))
                         .cloned()
-                        .ok_or_else(|| format!("资源包没有放置 / the pack was not placed: {}", choice.pack))?;
+                        .ok_or_else(|| format!("任务包没有放置 / the pack was not placed: {}", choice.pack))?;
                     report.line(&format!(
                         "实例 / instance {alias}：{} → {} {}（sha256 {}）",
                         choice.label,
