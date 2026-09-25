@@ -522,9 +522,8 @@ log" below):
    device name. HTTPS only, redirects included; a connection quiet for a minute fails. Ticking **Offline**
    instead takes a folder that already holds one release's files (default `%USERPROFILE%\Downloads`,
    typed in). A failed lookup is stated on the page and in the log, with "重新查询 / Look up again" and
-   Offline both open; a failed fetch stops the run. This and the instances step's fetch of a package URL
-   are the program's only network code (`ureq`, blocking, rustls with the Mozilla root set compiled in);
-   the Runtime has none.
+   Offline both open; a failed fetch stops the run. This is the program's only network code (`ureq`,
+   blocking, rustls with the Mozilla root set compiled in); the Runtime has none.
    The offline edition has neither the lookup nor the Offline tick: the page names the release it
    carries — its tag and the two commits of its `MEMBERS.json`, checked at start — and "安装 / Install"
    extracts it into `<install root>\downloads\<tag>\`, each file through a `.part` file whose length and
@@ -582,22 +581,26 @@ log" below):
    root as on an upgrade below (one that answers is shut down and started again: it has no instance yet),
    and `actingctl emulator discover` lists the instances from MuMu's own inventory — no emulator is
    started or stopped; a single instance is ticked for the person. "重新查找 / Find again" repeats it.
-   Each ticked instance takes an alias (default `mumu-<index>`). The resources are one field for all of
-   them: a resource repository's **bundle** or a **single sealed pack**, as the absolute path of an
-   existing file or an `https://` URL fetched through a `.part` file into `<install root>\packages\`; a
-   sha256 given is compared; "读取 / Read" opens it. A bundle holds `applications.json` (each server's
+   An empty MuMu field finds MuMu afresh. The resources are the resource repositories' **bundles** the
+   release carries: its `MEMBERS.json` names each in `bundles[]` with its sha256, and the file is in the
+   download folder, already checked against `SHA256SUMS`; the wizard checks that sha256 once more and
+   reads them on the first discovery. **No path, URL or hash is asked of the person.** A bundle holds
+   `applications.json` (the game, its display name `label` when given, and each server's label and
    Android package name) and `bundle.json` (every pack's path, package id, server, sha256 and size, and
-   optionally `default_packs` per server); the page shows the game, its servers and package names, and a
-   pack list starting from the bundle's own default when it names exactly one, else empty for the
-   person to pick; the resources read are the ones written (changing the field or its sha256 asks for
-   another Read); an empty MuMu field finds MuMu afresh — the wizard
-   knows no game and guesses none. A single pack has no package name: the person gives it. "写入实例 /
-   Apply" lays a bundle's packs out byte for byte under `<install root>\packages\<game>\`, each checked
-   against `bundle.json` first, then writes one entry per ticked instance — alias, a new `instance_id`
-   (`instance_` + 32 hex from the OS RNG), `instance_index`, the package name of the chosen pack's
-   server, `touch_backend` `adb_shell_input`, `capture_backend` `adb` (until a first `nemu_ipc` frame
-   is confirmed on the real machine), and the chosen pack's absolute path as `resource_package` — into
-   `actingd.config.candidate-<pid>.json` next to the configuration. The Runtime's `check-config` checks
+   each server's default pack in `default_packs`). The page lists the programs and package names they
+   support — for example "蔚蓝档案 / Blue Archive：日服 com.YostarJP.BlueArchive" (the game id when a
+   bundle gives no `label`) — and whether each came with the release. Only when the release carries no
+   bundle is a local bundle file the way in: its absolute path, "加入 / Add", no hash; a second bundle for
+   a game already offered is refused. Each ticked instance takes an alias (default `mumu-<index>`) and
+   **its own choice** of "program · server · package name", one per server that names a default pack;
+   when there is only one, it is chosen for every instance. The wizard knows no game and guesses none.
+   "写入实例 / Apply" lays each bundle used out once, byte for byte, under
+   `<install root>\packages\<game>\`, each pack checked against `bundle.json` first; logs, per instance,
+   the program, the pack's package id, path and sha256; then writes one entry per ticked instance —
+   alias, a new `instance_id` (`instance_` + 32 hex from the OS RNG), `instance_index`, the chosen
+   server's package name, `touch_backend` `adb_shell_input`, `capture_backend` `adb` (until a first
+   `nemu_ipc` frame is confirmed on the real machine), and the absolute path of that server's default
+   pack as `resource_package` — into `actingd.config.candidate-<pid>.json` next to the configuration. The Runtime's `check-config` checks
    it (a package that does not load is named with its alias, path and the loader's message); only an
    accepted candidate replaces the configuration, and the Runtime is restarted on it and `actingctl
    status` must answer. A failure before the configuration is replaced is said on the page and in the log
@@ -667,8 +670,8 @@ removed on the next run, said in the log. The first close after the instances st
 says that it keeps running. A root with program files but no `actingd.config.json`, or the
 configuration without program files (an interrupted upgrade), is named on step 0 and neither installed
 over nor upgraded. Apart from the installed payload, the configuration, the settings, the fetched release
-files under `downloads\`, `installed-members.json`, (when checked) the start-at-boot batch file and the Start menu and desktop shortcuts, the resources fetched into
-`packages\` and a bundle's packs placed under `packages\<game>\`, and the log of a Runtime it started, this is the only file the wizard writes (with
+files under `downloads\`, `installed-members.json`, (when checked) the start-at-boot batch file and the Start menu and desktop shortcuts, the bundles'
+packs placed under `packages\<game>\`, and the log of a Runtime it started, this is the only file the wizard writes (with
 `previous\` on an upgrade).
 
 **Offline edition**: `acsetup-full-<tag>.exe` is `acsetup.exe` byte for byte, then `SHA256SUMS` and
@@ -699,8 +702,8 @@ offline one back independently.
 
 **Things it never does**: it does not install a service, does not create a scheduled task, does not change
 PATH, does not write the registry; does not modify the configuration template; does not touch a state root
-that already holds content; goes on the network only to list and fetch the umbrella release and a
-package URL given in the instances step — the offline edition's install step not at all; stops or starts the Runtime only on an upgrade and in the
+that already holds content; goes on the network only to list and fetch the umbrella release — the
+offline edition not at all; stops or starts the Runtime only on an upgrade and in the
 instances step, as above;
 does not unpack a sealed resource pack — the Runtime loads it (a bundle's packs are taken out whole). On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
 immediately with `acsetup v1 is Windows-only`.

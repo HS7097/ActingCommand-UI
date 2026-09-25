@@ -10,10 +10,10 @@
 //! configuration and the console's settings, optionally a Startup-folder
 //! launcher and the emulator instances (see `instance_step`), and can open the
 //! console. On a root that already holds an installation it upgrades instead:
-//! the payload replaced, state and configuration kept (see `upgrade`). Those
-//! fetches — the release and a resource package given as a URL — are its only
-//! network code; it registers no service and no scheduled task, and touches
-//! neither PATH nor the registry.
+//! the payload replaced, state and configuration kept (see `upgrade`). The
+//! fetch of the release — the resource bundles it carries among its files — is
+//! its only network code; it registers no service and no scheduled task, and
+//! touches neither PATH nor the registry.
 //!
 //! The wizard is Windows-only. Elsewhere it compiles, and the first platform
 //! question is the loud stop, before any window is opened.
@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use slint::ComponentHandle;
 
-use bundle::Resource;
+use bundle::Bundle;
 use fetch::Release;
 use install::{Autostart, Configured, LaidOut};
 use instance_step::{Chosen, Found, Settled};
@@ -80,14 +80,18 @@ struct State {
     /// finish page then asks how they stand.
     discover_tried: bool,
     settled: Option<Settled>,
-    /// The aliases the instances step wrote into the configuration, and the
-    /// resource package each got.
+    /// The aliases the instances step wrote into the configuration, and for
+    /// each what it runs and the resource package it got.
     instances: Vec<String>,
-    package: Option<PathBuf>,
-    /// The instances' resources as last read — a bundle or a single pack —
-    /// and the field and sha256 they were read from.
-    resource: Option<Resource>,
-    resource_from: (String, String),
+    assigned: Vec<String>,
+    /// The folder the release was verified from: its `MEMBERS.json` names the
+    /// resource bundles it carries.
+    download: Option<PathBuf>,
+    /// The bundles the instances step offers — the release's, read once, then
+    /// local files added — and what an instance may be given from them.
+    bundles: Vec<Bundle>,
+    bundles_read: bool,
+    choices: Vec<Choice>,
     /// The first log write that failed: nothing goes on after it.
     log_error: Option<String>,
     /// What the person must see from any step: on the page, and in the summary.
@@ -254,12 +258,12 @@ fn install_callbacks(window: &SetupWindow, state: &Shared) {
     {
         let weak = window.as_weak();
         let state = Arc::clone(state);
-        window.on_read_resource({
+        window.on_add_bundle({
             let weak = weak.clone();
             let state = Arc::clone(&state);
             move || {
                 if let Some(window) = weak.upgrade() {
-                    begin_read_resource(&window, &state);
+                    begin_add_bundle(&window, &state);
                 }
             }
         });
@@ -890,6 +894,7 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
     window.set_installing(true);
     window.set_busy(true);
     window.set_can_next(false);
+    lock(state).download = Some(download.clone());
     let root = lock(state).root.clone();
     let staging = root.join(format!(".staging-{}", log::unix_ms()));
     let existed = LAID.map(|name| root.join(name).exists());
@@ -1146,6 +1151,29 @@ fn begin_discover(window: &SetupWindow, state: &Shared) {
         }
         let found = started.and_then(|pinned| instance_step::discover(&root, &mut report).map(|found| (pinned, found)));
         drop(held);
+        // The release's bundles are read once, on the first discovery; a
+        // failure is said loudly and leaves the local-file way open.
+        let unread = {
+            let mut locked = lock(&state);
+            let unread = !locked.bundles_read;
+            locked.bundles_read = true;
+            unread.then(|| locked.download.clone()).flatten()
+        };
+        if let Some(download) = unread {
+            match bundle::carried(&download, &mut report) {
+                // Appended: the choices already offered keep their places.
+                Ok(carried) => lock(&state).bundles.extend(carried),
+                Err(reason) => {
+                    let line = format!("发布件自带的大包读不出 / the release's bundles cannot be read: {reason}");
+                    let logged = report.warn(&line);
+                    if let Err(error) = logged {
+                        fail(&state, &worker_weak, error);
+                        return;
+                    }
+                }
+            }
+        }
+        let notes = lock(&state).warnings.join("\n");
         match found {
             Ok((pinned, found)) => {
                 let mut rows: Vec<InstanceRow> = found.iter().map(instance_row).collect();
@@ -1158,11 +1186,20 @@ fn begin_discover(window: &SetupWindow, state: &Shared) {
                     }
                     window.set_instances(Rc::new(VecModel::from(rows)).into());
                     window.set_discovered(true);
+                    window.set_notes(notes.into());
+                    show_offer(&window, &state);
                     window.set_note("".into());
                     window.set_busy(false);
                 });
             }
-            Err(reason) => retryable(&state, &worker_weak, reason),
+            Err(reason) => {
+                let offered = Arc::clone(&state);
+                let _ = worker_weak.upgrade_in_event_loop(move |window| {
+                    window.set_notes(notes.into());
+                    show_offer(&window, &offered);
+                });
+                retryable(&state, &worker_weak, reason)
+            }
         }
     });
     if let Err(error) = spawned {
@@ -1182,52 +1219,122 @@ fn instance_row(found: &Found) -> InstanceRow {
         title: format!("#{} {}", found.index, found.name).into(),
         detail: detail.join(" · ").into(),
         alias: found.bound_alias.clone().unwrap_or_else(|| format!("mumu-{}", found.index)).into(),
+        choice: -1,
     }
 }
 
-/// The instances step's Read: the resources fetched, or taken from their path,
-/// and read as a bundle or a single pack; what they declare is shown for the
-/// person to pick from. A failure is said on the page.
-fn begin_read_resource(window: &SetupWindow, state: &Shared) {
-    let given = window.get_resource().trim().to_string();
+/// What an instance may be given: one server of one bundle, the package name
+/// its game runs under there and that server's default pack, with the sha256
+/// `bundle.json` gives it — no hash is asked of the person, but each is logged.
+#[derive(Clone)]
+struct Choice {
+    bundle: usize,
+    application_id: String,
+    pack: String,
+    package_id: String,
+    sha256: String,
+    label: String,
+}
+
+/// What the bundles offer the instances — each server that names a default
+/// pack — and, for the page, the programs and package names they support.
+fn offer(bundles: &[Bundle]) -> (Vec<Choice>, String) {
+    let mut choices = Vec::new();
+    let mut lines = Vec::new();
+    for (at, bundle) in bundles.iter().enumerate() {
+        let mut servers = Vec::new();
+        for (server, application) in &bundle.applications {
+            let pack = bundle.defaults.get(server);
+            servers.push(format!(
+                "{} {}{}",
+                application.label,
+                application.application_id,
+                if pack.is_some() { "" } else { "（没有默认资源包，不可选 / no default pack, not offered）" }
+            ));
+            // `bundle::read` holds every default pack to be listed.
+            if let Some(listed) = pack.and_then(|pack| bundle.packs.iter().find(|listed| &listed.path == pack)) {
+                choices.push(Choice {
+                    bundle: at,
+                    application_id: application.application_id.clone(),
+                    pack: listed.path.clone(),
+                    package_id: listed.package_id.clone(),
+                    sha256: listed.sha256.clone(),
+                    label: format!("{} · {} · {}", bundle.name(), application.label, application.application_id),
+                });
+            }
+        }
+        lines.push(format!(
+            "{}：{}（{}）",
+            bundle.name(),
+            servers.join("；"),
+            if bundle.carried { "发布件自带 / carried by the release" } else { "本机文件 / local file" }
+        ));
+    }
+    let text = match lines.is_empty() {
+        true => "发布件没有带资源大包：可在下面加入本机的大包文件 / The release carries no resource bundle: add a local bundle file below".to_string(),
+        false => format!("支持的程序与包名 / Supported programs and package names:\n{}", lines.join("\n")),
+    };
+    (choices, text)
+}
+
+/// The page's account of the bundles — what they support, and the choices
+/// each ticked instance picks from, made for it when there is only one.
+fn show_offer(window: &SetupWindow, state: &Shared) {
+    let (choices, text) = offer(&lock(state).bundles);
+    let labels: Vec<slint::SharedString> = choices.iter().map(|choice| choice.label.clone().into()).collect();
+    let single = choices.len() == 1;
+    lock(state).choices = choices;
+    window.set_choices(Rc::new(VecModel::from(labels)).into());
+    window.set_supported_text(text.into());
+    if single {
+        let rows = window.get_instances();
+        for at in 0..rows.row_count() {
+            if let Some(mut row) = rows.row_data(at).filter(|row| row.choice < 0) {
+                row.choice = 0;
+                rows.set_row_data(at, row);
+            }
+        }
+    }
+}
+
+/// A local bundle file added to what the instances step offers, read off the
+/// event loop — for a release that carries none. One for a game already
+/// offered is refused; no hash is asked.
+fn begin_add_bundle(window: &SetupWindow, state: &Shared) {
+    let given = window.get_local_bundle().trim().to_string();
     if given.is_empty() {
-        window.set_note("先填资源：大包或单个资源包 / Name the resources first: a bundle or a single pack".into());
+        window.set_note("先填本机大包文件的路径 / Name a local bundle file first".into());
         return;
     }
-    let sha256 = window.get_resource_sha().trim().to_string();
-    window.set_resource_ready(false);
     window.set_note("".into());
     window.set_busy(true);
-    let root = {
-        let mut state = lock(state);
-        state.resource = None;
-        state.root.clone()
-    };
     let weak = window.as_weak();
     let shared = Arc::clone(state);
     let (state, worker_weak) = (Arc::clone(state), weak.clone());
-    let spawned = std::thread::Builder::new().name("acsetup-resources".into()).spawn(move || {
+    let spawned = std::thread::Builder::new().name("acsetup-bundle".into()).spawn(move || {
         let _guard = PanicGuard::new(&state, &worker_weak);
         let mut report = PageReport::new(&state, &worker_weak);
-        let read = bundle::get(&root, &given, &sha256, &mut report).and_then(|file| bundle::read(&file));
-        let read = read.and_then(|resource| {
-            let described = describe(&resource);
-            report.line(&described.0).map(|()| (resource, described))
-        });
-        match read {
-            Ok((resource, (text, labels, index, single))) => {
-                {
-                    let mut locked = lock(&state);
-                    locked.resource = Some(resource);
-                    locked.resource_from = (given, sha256);
+        let added = bundle::local(&given).and_then(|bundle| {
+            let line = format!("本机大包 / local bundle: {} → {}", bundle.file.display(), bundle.name());
+            {
+                let mut locked = lock(&state);
+                if let Some(twin) = locked.bundles.iter().find(|other| other.game == bundle.game) {
+                    return Err(format!(
+                        "已有 {} 的大包 / a bundle for {} is already offered: {}",
+                        twin.name(),
+                        twin.game,
+                        twin.file.display()
+                    ));
                 }
+                locked.bundles.push(bundle);
+            }
+            report.line(&line)
+        });
+        match added {
+            Ok(()) => {
                 let _ = worker_weak.upgrade_in_event_loop(move |window| {
-                    let labels: Vec<slint::SharedString> = labels.into_iter().map(Into::into).collect();
-                    window.set_resource_text(text.into());
-                    window.set_pack_labels(Rc::new(VecModel::from(labels)).into());
-                    window.set_pack_index(index);
-                    window.set_resource_single(single);
-                    window.set_resource_ready(true);
+                    show_offer(&window, &state);
+                    window.set_local_bundle("".into());
                     window.set_note("".into());
                     window.set_busy(false);
                 });
@@ -1238,40 +1345,6 @@ fn begin_read_resource(window: &SetupWindow, state: &Shared) {
     if let Err(error) = spawned {
         window.set_busy(false);
         fail(&shared, &weak, thread_failed(&error));
-    }
-}
-
-/// What a resource declares, for the page: one line, the packs to pick from,
-/// the one preselected (a bundle's own default, never a guess) and whether the
-/// package name is the person's to give.
-fn describe(resource: &Resource) -> (String, Vec<String>, i32, bool) {
-    match resource {
-        Resource::Single(file) => (
-            format!("单个资源包 / A single pack: {}；游戏包名请手填 / the game's package name is yours to give", file.display()),
-            Vec::new(),
-            -1,
-            true,
-        ),
-        Resource::Bundle(bundle) => {
-            let servers: Vec<String> = bundle
-                .applications
-                .iter()
-                .map(|(key, app)| format!("{}（{key}）→ {}", app.label, app.application_id))
-                .collect();
-            let labels = bundle.packs.iter().map(|pack| format!("{}（{}）", pack.package_id, pack.server)).collect();
-            let defaults: Vec<&String> = bundle.defaults.values().collect();
-            let index = match defaults.as_slice() {
-                [only] => bundle.packs.iter().position(|pack| &pack.path == *only).map_or(-1, |at| at as i32),
-                _ => -1,
-            };
-            let text = format!(
-                "大包 / Bundle: {} · {} 个资源包 / packs · {}",
-                bundle.game,
-                bundle.packs.len(),
-                servers.join("、")
-            );
-            (text, labels, index, false)
-        }
     }
 }
 
@@ -1294,9 +1367,9 @@ fn retryable(state: &Shared, weak: &slint::Weak<SetupWindow>, reason: String) {
     });
 }
 
-/// Step 3 → 4: the picked instances written — each with its alias, the
-/// package name and the resource package the resources give — then the
-/// Runtime restarted on them. A bundle's packs are laid out first. A failure
+/// Step 3 → 4: the picked instances written — each with its alias and what
+/// its choice gives, the package name and the resource package — then the
+/// Runtime restarted on them. Each bundle used is laid out once, first. A failure
 /// before the configuration is replaced leaves the page usable; one after it
 /// stops the run.
 fn begin_apply(window: &SetupWindow, state: &Shared) {
@@ -1311,52 +1384,19 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
         window.set_note(format!("{}：别名未填 / the alias is empty", row.title).into());
         return;
     }
-    let current = (window.get_resource().trim().to_string(), window.get_resource_sha().trim().to_string());
-    let stale = {
+    // What each ticked instance runs, and the resource package it gets.
+    let (choices, bundles) = {
         let locked = lock(state);
-        locked.resource.is_some() && locked.resource_from != current
+        (locked.choices.clone(), locked.bundles.clone())
     };
-    if stale {
-        window.set_note("资源栏或 sha256 改过了，请重新「读取」/ The resources or their sha256 changed: Read them again".into());
-        return;
-    }
-    // Where the package comes from and the name the game runs under.
-    let (source, application_id) = match &lock(state).resource {
-        None => {
-            window.set_note("先填资源并点「读取」/ Name the resources and Read them first".into());
+    let mut picks = Vec::new();
+    for row in &picked {
+        let Some(choice) = usize::try_from(row.choice).ok().and_then(|at| choices.get(at)) else {
+            window.set_note(format!("{}：请选它运行的程序 / choose what it runs", row.title).into());
             return;
-        }
-        Some(Resource::Single(file)) => {
-            let manual = window.get_manual_application().trim().to_string();
-            if manual.is_empty() {
-                window.set_note("单个资源包：请填游戏包名 / A single pack: fill in the game's package name".into());
-                return;
-            }
-            (Ok(file.clone()), manual)
-        }
-        Some(Resource::Bundle(bundle)) => {
-            let Some(pack) = usize::try_from(window.get_pack_index()).ok().and_then(|at| bundle.packs.get(at)) else {
-                window.set_note("请选一个资源包 / Pick a resource pack".into());
-                return;
-            };
-            let Some(application) = bundle.applications.get(&pack.server) else {
-                window.set_note(
-                    format!("大包的 applications.json 里没有服务器 {} 的包名 / the bundle names no package for server {}", pack.server, pack.server)
-                        .into(),
-                );
-                return;
-            };
-            (Err((bundle.clone(), pack.path.clone())), application.application_id.clone())
-        }
-    };
-    let chosen: Vec<Chosen> = picked
-        .iter()
-        .map(|row| Chosen {
-            index: u16::try_from(row.index).unwrap_or_default(),
-            alias: row.alias.trim().to_string(),
-            application_id: application_id.clone(),
-        })
-        .collect();
+        };
+        picks.push((u16::try_from(row.index).unwrap_or_default(), row.alias.trim().to_string(), choice.clone()));
+    }
     window.set_note("".into());
     window.set_busy(true);
     let root = lock(state).root.clone();
@@ -1367,28 +1407,59 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
         let _guard = PanicGuard::new(&state, &worker_weak);
         let held = Held::new(&state);
         let mut report = PageReport::new(&state, &worker_weak);
-        let package = match source {
-            Ok(file) => Ok(file),
-            Err((bundle, path)) => bundle
-                .lay_out(&root.join("packages").join(&bundle.game), &mut report)
-                .and_then(|laid| laid.get(&path).cloned().ok_or_else(|| format!("资源包没有放置 / the pack was not placed: {path}"))),
-        };
-        let written = package.and_then(|package| {
-            instance_step::write(&root, &chosen, &package, &mut report).map(|()| package)
+        // Each bundle an instance uses is laid out once, under its game.
+        let mut laid: std::collections::BTreeMap<usize, std::collections::BTreeMap<String, PathBuf>> = Default::default();
+        let placed = picks.iter().try_for_each(|(_, _, choice)| {
+            if laid.contains_key(&choice.bundle) {
+                return Ok(());
+            }
+            let bundle = &bundles[choice.bundle];
+            let packs = bundle.lay_out(&root.join("packages").join(&bundle.game), &mut report)?;
+            laid.insert(choice.bundle, packs);
+            Ok::<(), String>(())
         });
-        let package = match written {
-            Ok(package) => package,
+        let chosen = placed.and_then(|()| {
+            picks
+                .iter()
+                .map(|(index, alias, choice)| {
+                    let package = laid
+                        .get(&choice.bundle)
+                        .and_then(|packs| packs.get(&choice.pack))
+                        .cloned()
+                        .ok_or_else(|| format!("资源包没有放置 / the pack was not placed: {}", choice.pack))?;
+                    report.line(&format!(
+                        "实例 / instance {alias}：{} → {} {}（sha256 {}）",
+                        choice.label,
+                        choice.package_id,
+                        package.display(),
+                        choice.sha256
+                    ))?;
+                    Ok(Chosen {
+                        index: *index,
+                        alias: alias.clone(),
+                        application_id: choice.application_id.clone(),
+                        resource_package: package,
+                    })
+                })
+                .collect::<Result<Vec<Chosen>, String>>()
+        });
+        let written = chosen.and_then(|chosen| instance_step::write(&root, &chosen, &mut report).map(|()| chosen));
+        let chosen = match written {
+            Ok(chosen) => chosen,
             Err(reason) => {
                 drop(held);
                 retryable(&state, &worker_weak, reason);
                 return;
             }
         };
-        let aliases = chosen.iter().map(|pick| pick.alias.clone()).collect();
         {
             let mut locked = lock(&state);
-            locked.instances = aliases;
-            locked.package = Some(package);
+            locked.instances = chosen.iter().map(|pick| pick.alias.clone()).collect();
+            locked.assigned = chosen
+                .iter()
+                .zip(&picks)
+                .map(|(pick, (_, _, choice))| format!("{}：{} → {}", pick.alias, choice.label, pick.resource_package.display()))
+                .collect();
         }
         let restarted = instance_step::restart(&root, &mut report)
             .and_then(|status| report.line(&format!("actingctl status: {status}")));
@@ -1528,11 +1599,8 @@ fn summary(state: &Shared) -> String {
         });
     }
     if fresh && !state.instances.is_empty() {
-        lines.push(format!(
-            "实例 / Instances: {}（已写入配置并通过检查 / in the configuration, checked）",
-            state.instances.join("、")
-        ));
-        lines.extend(state.package.as_ref().map(|package| format!("资源包 / Resource package: {}", package.display())));
+        lines.push("实例 / Instances（已写入配置并通过检查 / in the configuration, checked）:".to_string());
+        lines.extend(state.assigned.iter().map(|line| format!("  {line}")));
     }
     if let Some(settled) = &state.settled {
         lines.extend(settled.mumu_root.as_ref().map(|mumu| format!("MuMu 目录 / MuMu folder (mumu_root): {mumu}")));

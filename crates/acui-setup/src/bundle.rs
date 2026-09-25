@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! What the instances step is given as the instances' resources: a resource
-//! repository's bundle — one zip holding `applications.json` (the game, and
+//! The instances step's resources: resource repositories' bundles — each one
+//! zip holding `applications.json` (the game, its display name when given, and
 //! each server's Android package name), `bundle.json` (every pack's path,
-//! package id, server, sha256 and size) and the sealed packs under `packs/` —
-//! or a single sealed pack. A bundle's packs are laid out under
-//! `<root>\packages\<game>\` byte for byte, each checked against `bundle.json`
-//! first; the Runtime only ever sees one of them, a local file. The wizard
-//! knows no game: the package names come from the bundle.
+//! package id, server, sha256 and size, and each server's default pack) and the
+//! sealed packs under `packs/`. The release carries them: its `MEMBERS.json`
+//! names each in `bundles[]` with its sha256, and the file sits beside it in
+//! the download folder, already checked against `SHA256SUMS`. A local bundle
+//! file may be added when the release carries none; no hash is asked of the
+//! person. A bundle's packs are laid out under `<root>\packages\<game>\` byte
+//! for byte, each checked against `bundle.json` first; the Runtime only ever
+//! sees one of them per instance, a local file. The wizard knows no game: the
+//! display names and package names come from the bundles.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -24,21 +28,19 @@ const BUNDLE_SCHEMA: &str = "actingcommand.bundle.v1";
 /// The most a bundle's two declarations may inflate to.
 const DECLARATION_LIMIT: u64 = 16 << 20;
 
-pub enum Resource {
-    Bundle(Bundle),
-    /// A sealed pack on its own: its package name is the person's to give.
-    Single(PathBuf),
-}
-
 #[derive(Clone)]
 pub struct Bundle {
     pub file: PathBuf,
     pub game: String,
+    /// The game's name for people, when `applications.json` gives one.
+    pub label: Option<String>,
     pub packs: Vec<Pack>,
     /// Each server's Android package name.
     pub applications: BTreeMap<String, Application>,
     /// A server's default pack, when the bundle names one.
     pub defaults: BTreeMap<String, String>,
+    /// Carried by the release, or a local file the person added.
+    pub carried: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -69,45 +71,78 @@ struct BundleFile {
 struct ApplicationsFile {
     schema_version: String,
     game: String,
+    #[serde(default)]
+    label: Option<String>,
     servers: BTreeMap<String, Application>,
 }
 
-/// The file a person named: an `https://` URL fetched into
-/// `<root>\packages\` first, else the absolute path of an existing file;
-/// compared with `sha256` when one is given.
-pub fn get(root: &Path, given: &str, sha256: &str, report: Report<'_>) -> Result<PathBuf, String> {
-    let expected = Some(sha256.trim()).filter(|sha| !sha.is_empty());
-    if given.starts_with("https://") || given.starts_with("http://") {
-        report.line(&format!("下载资源 / fetching the resources: {given}"))?;
-        return fetch::fetch_url(given, &root.join("packages"), "resources.zip", expected, report);
-    }
-    let path = PathBuf::from(given);
-    if !path.is_absolute() || !path.is_file() {
-        return Err(format!(
-            "资源须为存在的文件的绝对路径或 https 网址 / the resources must be the absolute path of an existing file or an https URL: {given}"
-        ));
-    }
-    if let Some(expected) = expected {
-        report.step(Step::Phase("核对资源 / Checking the resources", None))?;
-        let actual = crate::verify::sha256_file(&path)
-            .map_err(|error| format!("读取失败 / read failed: {}: {error}", path.display()))?;
-        if !expected.eq_ignore_ascii_case(&actual) {
-            return Err(format!("{MISMATCH}: {} sha256 应为 / expected {expected}，实为 / actual {actual}", path.display()));
-        }
-    }
-    Ok(path)
+/// What `MEMBERS.json` says of the bundles its release carries.
+#[derive(Deserialize)]
+struct Members {
+    #[serde(default)]
+    bundles: Vec<Carried>,
 }
 
-/// A bundle when the zip holds `bundle.json`, a single sealed pack when it
-/// holds `control.json`; anything else is said to be neither.
-pub fn read(file: &Path) -> Result<Resource, String> {
+#[derive(Deserialize)]
+struct Carried {
+    asset: String,
+    sha256: String,
+}
+
+/// The bundles the release in `download` carries, in the order its
+/// `MEMBERS.json` names them: each present beside it, its sha256 the one named,
+/// and readable as a bundle. A release that names none carries none.
+pub fn carried(download: &Path, report: Report<'_>) -> Result<Vec<Bundle>, String> {
+    let path = download.join("MEMBERS.json");
+    let text = fs::read_to_string(&path).map_err(|error| format!("读取失败 / read failed: {}: {error}", path.display()))?;
+    let members: Members = serde_json::from_str(&text)
+        .map_err(|error| format!("MEMBERS.json 的 bundles 无法解析 / MEMBERS.json bundles do not parse: {error}"))?;
+    let mut bundles: Vec<Bundle> = Vec::new();
+    for entry in members.bundles {
+        if !fetch::plain(&entry.asset) {
+            return Err(format!("MEMBERS.json 列出的大包文件名不能使用 / a bundle name MEMBERS.json lists cannot be used: {}", entry.asset));
+        }
+        let file = download.join(&entry.asset);
+        let actual = crate::verify::sha256_file(&file)
+            .map_err(|error| format!("读取失败 / read failed: {}: {error}", file.display()))?;
+        if !entry.sha256.eq_ignore_ascii_case(&actual) {
+            return Err(format!("{MISMATCH}: {} sha256 应为 / expected {}，实为 / actual {actual}", entry.asset, entry.sha256));
+        }
+        let mut bundle = read(&file)?;
+        bundle.carried = true;
+        if let Some(twin) = bundles.iter().find(|other| other.game == bundle.game) {
+            return Err(format!(
+                "发布件带了同一游戏的两个大包 / the release carries two bundles for one game: {} · {}",
+                twin.file.display(),
+                file.display()
+            ));
+        }
+        report.line(&format!("发布件自带的大包 / carried bundle: {} → {}", entry.asset, bundle.name()))?;
+        bundles.push(bundle);
+    }
+    Ok(bundles)
+}
+
+/// A local bundle file the person added: the absolute path of an existing
+/// file, read as a bundle.
+pub fn local(given: &str) -> Result<Bundle, String> {
+    let path = PathBuf::from(given);
+    if !path.is_absolute() || !path.is_file() {
+        return Err(format!("大包须为存在的文件的绝对路径 / the bundle must be the absolute path of an existing file: {given}"));
+    }
+    read(&path)
+}
+
+/// A zip read as a bundle: both declarations present, their formats known,
+/// naming the same game, every pack name usable and unique, every default pack
+/// listed.
+pub fn read(file: &Path) -> Result<Bundle, String> {
     let mut archive = open(file)?;
     let bundle: BundleFile = match member(&mut archive, file, "bundle.json")? {
         Some(bytes) => parse(&bytes, file, "bundle.json")?,
-        None if archive.by_name("control.json").is_ok() => return Ok(Resource::Single(file.to_path_buf())),
         None => {
             return Err(format!(
-                "既不是资源仓大包（根目录没有 bundle.json），也不是单个资源包（根目录没有 control.json）/ Neither a bundle (no bundle.json at its root) nor a single pack (no control.json at its root): {}",
+                "不是资源仓大包（根目录没有 bundle.json）/ Not a resource repository bundle (no bundle.json at its root): {}",
                 file.display()
             ))
         }
@@ -143,16 +178,23 @@ pub fn read(file: &Path) -> Result<Resource, String> {
             return Err(format!("默认包不在包列表里 / a default pack is not listed: {server} → {path}"));
         }
     }
-    Ok(Resource::Bundle(Bundle {
+    Ok(Bundle {
         file: file.to_path_buf(),
         game: bundle.game,
+        label: applications.label.map(|label| label.trim().to_string()).filter(|label| !label.is_empty()),
         packs: bundle.packs,
         applications: applications.servers,
         defaults: bundle.default_packs,
-    }))
+        carried: false,
+    })
 }
 
 impl Bundle {
+    /// The game as people know it: the bundle's display name, else its id.
+    pub fn name(&self) -> String {
+        self.label.clone().unwrap_or_else(|| self.game.clone())
+    }
+
     /// Every pack laid out under `dir` byte for byte, once its size and sha256
     /// match `bundle.json`; returns where each landed, by its path in the zip.
     pub fn lay_out(&self, dir: &Path, report: Report<'_>) -> Result<BTreeMap<String, PathBuf>, String> {
