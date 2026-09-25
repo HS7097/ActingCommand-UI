@@ -496,17 +496,20 @@ console) that installs the release files from the umbrella repository's
 [Releases](https://github.com/HS7097/ActingCommand/releases) into a **per-user** installation. It ships
 together with the UI repository's Windows build artifact (`acui-windows-<sha>.zip` gains one more file,
 `acsetup.exe`). It fetches the release itself, or takes a folder a person filled by hand. One window,
-next only (step 4 can also be skipped), six steps:
+next only (the instances step can also be skipped), five steps; each page shows where its work stands
+the way an installer does, and the full account goes to the install log (see "Progress and the install
+log" below):
 
 0. **Location**: the install root only (changeable, default `%LOCALAPPDATA%\Programs\ActingCommand`, no
    administrator needed), the free space on that volume, and whether an installation is already here
    (looking at `runtime\BUILD-MANIFEST.json`, whose commit and `ui\`'s are shown; if there is one, the
    run is an **upgrade**, see below). Next creates the root and the install log. A wizard running from
    inside the installation it would upgrade stops here: its own directory could not move aside.
-1. **Get**: by default online. On entering, the umbrella
+1. **Install** (**Upgrade** on an installed root, see below), one page from the download to the
+   layout; on success the next page follows by itself. By default online. On entering, the umbrella
    [Releases](https://github.com/HS7097/ActingCommand/releases) are asked over HTTPS for one release: the
    newest stable release when there is one (GitHub's `releases/latest`), else the newest pre-release (the
-   daily builds); never a draft. Its tag, name, date, kind and size are shown and logged. Next fetches `SHA256SUMS`,
+   daily builds); never a draft. Its tag, name, date, kind and size are shown and logged. "安装 / Install" fetches `SHA256SUMS`,
    `MEMBERS.json` and then every other file `SHA256SUMS` lists — nothing else — into
    `<install root>\downloads\<tag>\`, each through a `.part` file renamed once its length is the length
    the release states, with a progress line per tenth for a file of a MiB or more; a file already there is
@@ -514,11 +517,11 @@ next only (step 4 can also be skipped), six steps:
    are used only if they are letters, digits, `.`, `-` and `_`, do not start with a dot and are no Windows
    device name. HTTPS only, redirects included; a connection quiet for a minute fails. Ticking **Offline**
    instead takes a folder that already holds one release's files (default `%USERPROFILE%\Downloads`,
-   typed in). A failed lookup is stated on the page and in the log and leaves Offline open (ticking and
-   unticking it looks up again); a failed fetch stops the run. This and step 4's fetch of a package URL
+   typed in). A failed lookup is stated on the page and in the log, with "重新查询 / Look up again" and
+   Offline both open; a failed fetch stops the run. This and the instances step's fetch of a package URL
    are the program's only network code (`ureq`, blocking, rustls with the Mozilla root set compiled in);
    the Runtime has none.
-2. **Verify and lay out**, one step: the folder is required to hold `SHA256SUMS`, `MEMBERS.json`,
+   The folder — fetched or offline — is then verified and laid out on the same page. It must hold `SHA256SUMS`, `MEMBERS.json`,
    `actingcommand-runtime-<sha>.zip`, `actingcommand-tools-<sha>.zip` and `acui-windows-<sha>.zip`
    (`<sha>` taken from `MEMBERS.json`'s `runtime_sha` / `ui_sha`; the three zips must appear in
    `SHA256SUMS`). `SHA256SUMS` is checked entry by entry; the archives are extracted into the temporary
@@ -532,17 +535,18 @@ next only (step 4 can also be skipped), six steps:
    byte-for-byte verbatim), `ui\` (the console payload + manifest), `tools\` (**only** `actinglab.exe`,
    `actingledger.exe` and `ac_fastdeploy_ppocr.dll`; the other two exes in the tools pack are neither
    installed nor shown). The temporary directory is deleted afterwards.
-3. **Configure**: the state root defaults to `<install root>\state` (it must not exist or must be an empty
+2. **Configure**: the state root defaults to `<install root>\state` (it must not exist or must be an empty
    directory; **a state root that already holds content is never taken over**); `secret_fingerprint_salt`
    is generated as the hex of 32 bytes from the system random source (`getrandom`; **not displayed, not
-   logged**); `<install root>\actingd.config.json` is written, with only the fields `schema_version`,
+   logged**); the console settings are written first (below), then — last, so that its presence marks a
+   finished configuration, and never over an existing file — `<install root>\actingd.config.json`, with only the fields `schema_version`,
    `state_root`, `bind_host` (127.0.0.1), `bind_port` (0), `secret_fingerprint_salt` and `instances`
-   (empty) — the Runtime's parser is `deny_unknown_fields`, so not one extra field is written. Then the
-   console settings `%APPDATA%\ActingCommand\acui.toml` are written with `state_root`, `actingd_config`
+   (empty) — the Runtime's parser is `deny_unknown_fields`, so not one extra field is written. The
+   console settings `%APPDATA%\ActingCommand\acui.toml` get `state_root`, `actingd_config`
    and `actingd_exe` (the format of the "Settings file" section, single-quoted literals; existing `lang` /
    `text_size` kept verbatim). The way it writes matches `crates/acui-app/src/settings.rs`, but
    `acui-setup` does not depend on `acui-app` and is a small duplicate writer. `instances` stays empty
-   here; step 4 fills it.
+   here; the instances step fills it.
    **Start at boot** is on the same page (optional, unchecked by default): only when checked does it write
    `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ActingCommand.cmd` in the per-user startup
    folder, whose content is
@@ -551,7 +555,7 @@ next only (step 4 can also be skipped), six steps:
    `start "" "<install root>\ui\acui.exe"`. acsetup does not appear in the batch file. Unchecked, it
    writes nothing; a file of the same name already in the startup folder is left alone, and merely
    mentioned in one sentence on the finish page.
-4. **Instances**, optional: "跳过 / Skip" leaves `instances` empty, to be filled later with the
+3. **Instances**, optional: "跳过 / Skip" leaves `instances` empty, to be filled later with the
    console's top-bar 实例配置 / Instance Configuration button; the finish page says so. An optional MuMu
    folder (an existing absolute folder) and "发现实例 / Discover": the folder is written as `mumu_root` —
    an empty field takes it out — through the same candidate and `check-config` as below; a Runtime is
@@ -571,16 +575,17 @@ next only (step 4 can also be skipped), six steps:
    alias, path and the loader's message); only an accepted candidate replaces the configuration, and the
    Runtime is restarted on it and `actingctl status` must answer. A failure before the configuration is
    replaced is said on the page and in the log and leaves the page usable; one after it stops the run, as
-   does any failed log write. Leaving step 4 after a Discover asks again, for the summary, what
+   does any failed log write. Leaving this step after a Discover asks again, for the summary, what
    `mumu_root` is and whether a Runtime answers.
-5. **Finish**: "启动监控台 / Open console" launches `<install root>\ui\acui.exe` detached and closes the
-   wizard; "finish" only closes. A Runtime step 4 started keeps running; when none runs, the console's
-   launcher starts one.
+4. **Finish**: the summary — what was installed (runtime and ui commits, and the release tag or the
+   offline folder), the paths, and every note from the steps. "启动监控台 / Open console" launches
+   `<install root>\ui\acui.exe` detached and closes the wizard; "finish" only closes. A Runtime the
+   instances step started keeps running; when none runs, the console's launcher starts one.
 
-**Upgrade**, on a root that already holds an installation. Step 1 reads the release's `MEMBERS.json`
+**Upgrade**, on a root that already holds an installation. The install step reads the release's `MEMBERS.json`
 first (online without saving it, offline from the folder) and compares its two commits with the ones the
 installed manifests name: the same two stop there, "already at this release's version", with nothing
-fetched. Otherwise step 2, after verifying as above:
+fetched. Otherwise, after verifying as above:
 
 1. the new Runtime runs `check-config` on the existing `actingd.config.json` (its `state_root` must be
    absolute); refused, nothing is changed;
@@ -611,9 +616,21 @@ they are, and the configure step is skipped. The version replaced is kept whole 
 version deep: the Runtime ships no state migration and no rollback of its own, so going back stays a
 person's choice.
 
-**Install log**: from leaving step 0 onward every step appends a plain-language line to
-`<install root>\acsetup-<unix_ms>.log`; on failure the last line states the reason, and the window shows
-the log path. Apart from the installed payload, the configuration, the settings, the fetched release
+**Progress and the install log**: from leaving step 0 onward every line of work goes to
+`<install root>\acsetup-<unix_ms>.log`, and a log write that fails stops the run. The pages show only the
+phase (for example "下载 / Downloading · 41.2/74.0 MiB" or "安装文件 / Installing files · 118/260"), a
+progress bar — moving without a size where none is known, such as while the Runtime shuts down — and
+the latest log line as the one thing being done now. What the person must see — an older `previous\`
+or a leftover that could not be removed, a `runtime-info.json` no Runtime answers for — stays under the
+bar and is repeated in the summary. On failure the page shows the reason, what was left on disk (the
+staging directory removed or not; on a fresh install, which of `runtime\`, `ui\` and `tools\` this run
+laid out and must be removed before trying again) and the log path; a worker that panics stops the run
+too, with its message. While files are laid out, an upgrade swaps versions or the instances step writes, the
+window does not close; a lookup or a download may be closed, and a staging directory left that way is
+removed on the next run, said in the log. The first close after the instances step started a Runtime
+says that it keeps running. A root with program files but no `actingd.config.json`, or the
+configuration without program files (an interrupted upgrade), is named on step 0 and neither installed
+over nor upgraded. Apart from the installed payload, the configuration, the settings, the fetched release
 files under `downloads\`, (when checked) the start-at-boot batch file, the packages fetched into
 `packages\`, and the log of a Runtime it started, this is the only file the wizard writes (with
 `previous\` on an upgrade).
@@ -621,7 +638,8 @@ files under `downloads\`, (when checked) the start-at-boot batch file, the packa
 **Things it never does**: it does not install a service, does not create a scheduled task, does not change
 PATH, does not write the registry; does not modify the configuration template; does not touch a state root
 that already holds content; goes on the network only to list and fetch the umbrella release and a
-package URL given in step 4; stops or starts the Runtime only on an upgrade and in step 4, as above;
+package URL given in the instances step; stops or starts the Runtime only on an upgrade and in the
+instances step, as above;
 does not unpack resource packages — the Runtime loads them. On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
 immediately with `acsetup v1 is Windows-only`.
 
@@ -663,7 +681,8 @@ reads, and instance discovery — are in `acui-source` (`probe_runtime` / `reque
 `record_start` / `instance_facts` / `discover_instances`).
 
 Every background worker — the start's readiness poll and its record, request shutdown, unlock-owner, a
-save's check-config, discovery, a frame read, and acsetup's verify and layout steps — is started through
+save's check-config, discovery, a frame read, and every acsetup worker (release lookup, install or
+upgrade, discovery, writing instances, settling) — is started through
 `std::thread::Builder`. A thread the system refuses is stated, with the OS error, where that action
 reports, and what the worker would have cleared (the start or unlock in flight, the save in progress,
 the frame request) is reset: never a panic on the event loop. A launched actingd whose readiness poll

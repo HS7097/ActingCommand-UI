@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! acsetup: the install wizard for ActingCommand on Windows. One window, six
-//! pages — location, get, verify and lay out, configure, instances, finish. It
-//! fetches the release to install from the umbrella repository's Releases, or
-//! takes a folder a person filled by hand, checks it against what the umbrella
-//! published, lays it out under a per-user install root, writes the Runtime
+//! acsetup: the install wizard for ActingCommand on Windows. One window, five
+//! pages — location, install, configure, instances, finish — each showing
+//! where its work stands the way an installer does, the full account going to
+//! the install log. It fetches the release to install from the umbrella
+//! repository's Releases, or takes a folder a person filled by hand, checks it
+//! against what the umbrella published, lays it out under a per-user install
+//! root, writes the Runtime
 //! configuration and the console's settings, optionally a Startup-folder
 //! launcher and the emulator instances (see `instance_step`), and can open the
 //! console. On a root that already holds an installation it upgrades instead:
@@ -29,6 +31,7 @@ mod verify;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use slint::ComponentHandle;
@@ -39,6 +42,7 @@ use instance_step::{Chosen, Found, Settled};
 use log::InstallLog;
 use slint::{Model, VecModel};
 use upgrade::{Installed, Upgraded};
+use verify::{Reporter, Step, Total};
 
 slint::include_modules!();
 
@@ -47,7 +51,6 @@ slint::include_modules!();
 #[derive(Default)]
 struct State {
     root: PathBuf,
-    download: PathBuf,
     log: Option<InstallLog>,
     /// The release the online path installs, once looked up.
     release: Option<Release>,
@@ -57,14 +60,79 @@ struct State {
     laid_out: Option<LaidOut>,
     configured: Option<Configured>,
     autostart: Option<Autostart>,
-    /// Step 4 touched the configuration and the Runtime: the finish page then
-    /// asks how they stand.
+    /// The two commits laid out, and where they came from: a release tag or
+    /// the offline folder.
+    members: Option<(String, String)>,
+    source: String,
+    /// The instances step touched the configuration and the Runtime: the
+    /// finish page then asks how they stand.
     discover_tried: bool,
     settled: Option<Settled>,
-    /// The aliases step 4 wrote into the configuration.
+    /// The aliases the instances step wrote into the configuration.
     instances: Vec<String>,
     /// The first log write that failed: nothing goes on after it.
     log_error: Option<String>,
+    /// What the person must see from any step: on the page, and in the summary.
+    warnings: Vec<String>,
+    /// Closing was asked once while a Runtime the wizard started runs.
+    close_warned: bool,
+    /// The instances step started a Runtime, which outlives the wizard.
+    runtime_started: bool,
+    /// A worker is past the point where stopping it midway would leave the
+    /// installation or the configuration half changed: the window stays open.
+    guarded: bool,
+    /// Which of `runtime\`, `ui\` and `tools\` were there before this run.
+    existed: [bool; 3],
+}
+
+/// The worker phases the window must not close in: held while laying files
+/// out, upgrading, and while the instances step writes or restarts.
+struct Held(Shared);
+
+impl Held {
+    fn new(state: &Shared) -> Self {
+        lock(state).guarded = true;
+        Held(Arc::clone(state))
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        lock(&self.0).guarded = false;
+    }
+}
+
+/// The last panic's message, for the worker that ended with it.
+static LAST_PANIC: Mutex<Option<String>> = Mutex::new(None);
+
+/// A worker that panics stops the run loudly, instead of leaving the page busy
+/// for good.
+struct PanicGuard {
+    state: Shared,
+    weak: slint::Weak<SetupWindow>,
+}
+
+impl PanicGuard {
+    fn new(state: &Shared, weak: &slint::Weak<SetupWindow>) -> Self {
+        PanicGuard { state: Arc::clone(state), weak: weak.clone() }
+    }
+}
+
+impl Drop for PanicGuard {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            let message = LAST_PANIC
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+                .unwrap_or_default();
+            fail(
+                &self.state,
+                &self.weak,
+                format!("工作线程异常终止 / A worker thread ended abnormally: {message}"),
+            );
+        }
+    }
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -74,6 +142,9 @@ fn lock(state: &Shared) -> MutexGuard<'_, State> {
 }
 
 fn main() -> Result<()> {
+    std::panic::set_hook(Box::new(|info| {
+        *LAST_PANIC.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(info.to_string());
+    }));
     let root = platform::default_install_root().map_err(anyhow::Error::msg)?;
     let download = platform::default_download_dir();
     let state: Shared = Arc::new(Mutex::new(State::default()));
@@ -122,6 +193,23 @@ fn install_callbacks(window: &SetupWindow, state: &Shared) {
     {
         let weak = window.as_weak();
         let state = Arc::clone(state);
+        window.on_retry_release(move || {
+            if let Some(window) = weak.upgrade() {
+                find_release(&window, &state);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let state = Arc::clone(state);
+        window.window().on_close_requested(move || match weak.upgrade() {
+            Some(window) => close_requested(&window, &state),
+            None => slint::CloseRequestResponse::HideWindow,
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let state = Arc::clone(state);
         window.on_open_console(move || {
             if let Some(window) = weak.upgrade() {
                 open_console(&window, &state);
@@ -154,6 +242,29 @@ fn install_callbacks(window: &SetupWindow, state: &Shared) {
     });
 }
 
+/// The window's close button: refused while files are laid out, an upgrade
+/// swaps versions or the instances step writes — work half done there cannot
+/// be put back once the wizard is gone; a lookup or a download may be closed.
+/// The first time after the instances step started a Runtime, that is said.
+fn close_requested(window: &SetupWindow, state: &Shared) -> slint::CloseRequestResponse {
+    let mut state = lock(state);
+    if state.guarded {
+        window.set_note(
+            "正在写入，请等它完成再关闭 / Files are being written: wait for it to finish before closing".into(),
+        );
+        return slint::CloseRequestResponse::KeepWindowShown;
+    }
+    if state.runtime_started && state.settled.is_none() && !state.close_warned && !window.get_failed() {
+        state.close_warned = true;
+        window.set_note(
+            "实例步拉起过 Runtime，它在向导关闭后可能仍在后台运行，监控台会接上它；再点一次关闭即退出 / The instances step started a Runtime, which may keep running after this wizard closes, and the console attaches to it; close again to exit"
+                .into(),
+        );
+        return slint::CloseRequestResponse::KeepWindowShown;
+    }
+    slint::CloseRequestResponse::HideWindow
+}
+
 /// The two lines under the install root: the room on its volume, and whether
 /// a Runtime is already installed there.
 fn refresh_preflight(window: &SetupWindow) {
@@ -181,31 +292,106 @@ fn refresh_preflight(window: &SetupWindow) {
 fn next(window: &SetupWindow, state: &Shared) {
     match window.get_step() {
         0 => enter_get(window, state),
-        1 => begin_get(window, state),
-        2 if lock(state).upgraded.is_some() => finish(window, state),
-        2 => enter_configure(window, state),
-        3 => run_configure(window, state),
-        4 => begin_apply(window, state),
+        1 => begin_install(window, state),
+        2 => run_configure(window, state),
+        3 => begin_apply(window, state),
         _ => {}
     }
 }
 
-/// A line for the log and the page. A log write failing fails the run: the
-/// log is the record the person is told to read.
-fn reporter(state: &Shared, weak: &slint::Weak<SetupWindow>) -> impl FnMut(&str) -> Result<(), String> {
-    let state = Arc::clone(state);
-    let weak = weak.clone();
-    move |line: &str| {
-        write_log(&state, line)?;
-        let line = line.to_string();
-        let _ = weak.upgrade_in_event_loop(move |window| {
-            let mut progress = window.get_progress().to_string();
-            progress.push_str(&line);
-            progress.push('\n');
-            window.set_progress(progress.into());
+/// A worker's reporter. Every line goes into the log — a log write failing
+/// fails the run, the log being the record the person is told to read. The
+/// page shows only where the work stands: the phase, a bar, and the latest
+/// line as the one thing being done now; warnings stay on it.
+struct PageReport {
+    state: Shared,
+    weak: slint::Weak<SetupWindow>,
+    phase: String,
+    total: Option<Total>,
+    shown: Option<Instant>,
+}
+
+impl PageReport {
+    /// A new worker's reporter; what the one before left on the page is cleared.
+    fn new(state: &Shared, weak: &slint::Weak<SetupWindow>) -> Self {
+        let _ = weak.upgrade_in_event_loop(|window| {
+            window.set_stage_text("".into());
+            window.set_detail_text("".into());
+            window.set_fraction(0.0);
+            window.set_indeterminate(true);
         });
+        PageReport { state: Arc::clone(state), weak: weak.clone(), phase: String::new(), total: None, shown: None }
+    }
+
+    fn show(&self, done: u64) {
+        let (stage, fraction) = match self.total {
+            None => (format!("{}…", self.phase), 0.0),
+            Some(Total::Items(total)) => (format!("{} · {done}/{total}", self.phase), ratio(done, total)),
+            Some(Total::Bytes(total)) => (
+                format!("{} · {:.1}/{:.1} MiB", self.phase, mib(done), mib(total)),
+                ratio(done, total),
+            ),
+        };
+        let indeterminate = self.total.is_none();
+        let _ = self.weak.upgrade_in_event_loop(move |window| {
+            window.set_stage_text(stage.into());
+            window.set_fraction(fraction);
+            window.set_indeterminate(indeterminate);
+        });
+    }
+}
+
+impl Reporter for PageReport {
+    fn line(&mut self, line: &str) -> Result<(), String> {
+        write_log(&self.state, line)?;
+        let detail = line.lines().next().unwrap_or_default().trim().to_string();
+        let _ = self.weak.upgrade_in_event_loop(move |window| window.set_detail_text(detail.into()));
         Ok(())
     }
+
+    fn step(&mut self, step: Step<'_>) -> Result<(), String> {
+        match step {
+            // The page only: a marker for the eye never stands in the way of
+            // the work, the log carrying the work's own lines.
+            Step::Phase(name, total) => {
+                self.phase = name.to_string();
+                self.total = total;
+                self.shown = Some(Instant::now());
+                self.show(0);
+                let _ = self.weak.upgrade_in_event_loop(|window| window.set_detail_text("".into()));
+            }
+            Step::Done(done) => {
+                // The bar moves at most ten times a second, and always to its end.
+                let end = matches!(self.total, Some(Total::Items(total) | Total::Bytes(total)) if done >= total);
+                if end || self.shown.is_none_or(|at| at.elapsed() >= Duration::from_millis(100)) {
+                    self.shown = Some(Instant::now());
+                    self.show(done);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn warn(&mut self, line: &str) -> Result<(), String> {
+        write_log(&self.state, &format!("注意 / NOTE: {line}"))?;
+        let notes = {
+            let mut state = lock(&self.state);
+            if !state.warnings.iter().any(|kept| kept == line) {
+                state.warnings.push(line.to_string());
+            }
+            state.warnings.join("\n")
+        };
+        let _ = self.weak.upgrade_in_event_loop(move |window| window.set_notes(notes.into()));
+        Ok(())
+    }
+}
+
+fn ratio(done: u64, total: u64) -> f32 {
+    (done as f64 / total.max(1) as f64).min(1.0) as f32
+}
+
+fn mib(bytes: u64) -> f64 {
+    bytes as f64 / (1u64 << 20) as f64
 }
 
 fn write_log(state: &Shared, line: &str) -> Result<(), String> {
@@ -296,17 +482,42 @@ fn enter_get(window: &SetupWindow, state: &Shared) {
         state.log = Some(log);
         state.installed = installed;
     }
-    if let Err(reason) = write_log(state, &started) {
+    if let Err(reason) = write_log(state, &started).and_then(|()| clear_staging(state, &root)) {
         fail(state, &window.as_weak(), reason);
         return;
     }
     window.set_note("".into());
-    window.set_progress("".into());
+    window.set_notes(lock(state).warnings.join("\n").into());
+    window.set_upgrading(lock(state).installed.is_some());
     window.set_step(1);
     offline_toggled(window, state, window.get_offline());
 }
 
-/// Step 1's choice: a folder is taken as it is; the online path needs a
+/// Staging directories a run closed midway left under the root: removed, and
+/// said so; one that cannot be removed is kept as a note for the summary.
+fn clear_staging(state: &Shared, root: &Path) -> Result<(), String> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let stale = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(".staging-"));
+        if !stale || !path.is_dir() {
+            continue;
+        }
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => write_log(state, &format!("已删除上次留下的临时目录 / leftover staging removed: {}", path.display()))?,
+            Err(error) => {
+                let line = format!("上次留下的临时目录未能删除 / leftover staging not removed: {}: {error}", path.display());
+                write_log(state, &line)?;
+                lock(state).warnings.push(line);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The install step's choice: a folder is taken as it is; the online path needs a
 /// release, looked up once.
 fn offline_toggled(window: &SetupWindow, state: &Shared, offline: bool) {
     window.set_note("".into());
@@ -322,12 +533,15 @@ fn offline_toggled(window: &SetupWindow, state: &Shared, offline: bool) {
 /// failing stops the run.
 fn find_release(window: &SetupWindow, state: &Shared) {
     window.set_release_text("正在查询伞仓发布件… / Looking up the umbrella releases…".into());
+    window.set_release_failed(false);
+    window.set_note("".into());
     window.set_busy(true);
     window.set_can_next(false);
     let weak = window.as_weak();
     let shared = Arc::clone(state);
     let (state, worker_weak) = (Arc::clone(state), weak.clone());
     let spawned = std::thread::Builder::new().name("acsetup-release".into()).spawn(move || {
+        let _guard = PanicGuard::new(&state, &worker_weak);
         let have = lock(&state)
             .installed
             .as_ref()
@@ -361,11 +575,13 @@ fn find_release(window: &SetupWindow, state: &Shared) {
             window.set_busy(false);
             window.set_release_text(line.into());
             window.set_can_next(ok || window.get_offline());
+            window.set_release_failed(!ok && !current);
+            window.set_note("".into());
             if current {
                 window.set_note(UP_TO_DATE.into());
             } else if !ok {
                 window.set_note(
-                    "可勾选「离线」改用已下载的发布件文件夹；勾上再取消即重新查询 / Tick Offline to use a folder of downloaded release files; tick and untick it to look up again"
+                    "可以「重新查询」，或勾选「离线」改用已下载的发布件文件夹 / Look up again, or tick Offline to use a folder of downloaded release files"
                         .into(),
                 );
             }
@@ -415,10 +631,14 @@ fn release_line(release: &Release) -> String {
     )
 }
 
-/// Step 1 → 2: offline, the folder is checked; online, the release is fetched
-/// into `<root>\downloads\<tag>\` first. Then step 2 starts.
-fn begin_get(window: &SetupWindow, state: &Shared) {
-    if window.get_offline() {
+/// Step 1, one worker from start to end: online, the release fetched into
+/// `<root>\downloads\<tag>\`; the folder verified into a staging directory
+/// under the root; then laid out, or the installation upgraded. On success the
+/// next page follows by itself: configure on a fresh install, finish on an
+/// upgrade.
+fn begin_install(window: &SetupWindow, state: &Shared) {
+    let mut fetch_release = None;
+    let download = if window.get_offline() {
         let download = PathBuf::from(window.get_download_dir().as_str());
         if !download.is_dir() {
             window.set_note(
@@ -459,46 +679,111 @@ fn begin_get(window: &SetupWindow, state: &Shared) {
             fail(state, &window.as_weak(), reason);
             return;
         }
-        lock(state).download = download;
-        begin_verify(window, state);
-        return;
-    }
-    let (root, release) = {
-        let state = lock(state);
-        (state.root.clone(), state.release.clone())
-    };
-    let Some(release) = release else {
-        window.set_note("还没有找到可安装的发布件 / No release to install has been found".into());
-        return;
-    };
-    let folder = match release.folder() {
-        Ok(folder) => root.join("downloads").join(folder),
-        Err(reason) => {
-            window.set_note(reason.into());
+        lock(state).source = format!("离线文件夹 / offline folder {}", download.display());
+        download
+    } else {
+        let (root, release) = {
+            let state = lock(state);
+            (state.root.clone(), state.release.clone())
+        };
+        let Some(release) = release else {
+            window.set_note("还没有找到可安装的发布件 / No release to install has been found".into());
             return;
-        }
+        };
+        let folder = match release.folder() {
+            Ok(folder) => root.join("downloads").join(folder),
+            Err(reason) => {
+                window.set_note(reason.into());
+                return;
+            }
+        };
+        lock(state).source = release.tag_name.clone();
+        fetch_release = Some(release);
+        folder
     };
     window.set_note("".into());
-    window.set_progress("".into());
+    window.set_installing(true);
     window.set_busy(true);
     window.set_can_next(false);
+    let root = lock(state).root.clone();
+    let staging = root.join(format!(".staging-{}", log::unix_ms()));
+    let existed = LAID.map(|name| root.join(name).exists());
+    lock(state).existed = existed;
     let weak = window.as_weak();
     let shared = Arc::clone(state);
     let (state, worker_weak) = (Arc::clone(state), weak.clone());
-    let spawned = std::thread::Builder::new().name("acsetup-fetch".into()).spawn(move || {
-        let mut report = reporter(&state, &worker_weak);
-        match fetch::fetch(&release, &folder, &mut report) {
-            Ok(()) => {
-                lock(&state).download = folder;
-                let _ = worker_weak.upgrade_in_event_loop(move |window| begin_verify(&window, &state));
+    let spawned = std::thread::Builder::new().name("acsetup-install".into()).spawn(move || {
+        let _guard = PanicGuard::new(&state, &worker_weak);
+        let mut report = PageReport::new(&state, &worker_weak);
+        let upgrading = lock(&state).installed.is_some();
+        let fetched = match &fetch_release {
+            Some(release) => fetch::fetch(release, &download, &mut report),
+            None => Ok(()),
+        };
+        let outcome = fetched
+            .and_then(|()| verify::run(&download, &staging, &mut report))
+            .and_then(|verified| {
+                // From here on, stopping midway would leave files half laid out.
+                let _held = Held::new(&state);
+                let members = verified.members.clone();
+                match upgrading {
+                    true => upgrade::upgrade(&root, &verified, &mut report)
+                        .map(|upgraded| (upgraded.laid_out.clone(), Some(upgraded), members)),
+                    false => install::lay_out(&root, &verified, &mut report).map(|laid_out| (laid_out, None, members)),
+                }
+            });
+        match outcome {
+            Ok((laid_out, upgraded, members)) => {
+                let mut locked = lock(&state);
+                locked.laid_out = Some(laid_out);
+                locked.upgraded = upgraded;
+                locked.members = Some(members);
+                drop(locked);
+                let _ = worker_weak.upgrade_in_event_loop(move |window| {
+                    window.set_busy(false);
+                    match upgrading {
+                        true => finish(&window, &state),
+                        false => enter_configure(&window, &state),
+                    }
+                });
             }
-            Err(reason) => fail(&state, &worker_weak, reason),
+            Err(reason) => fail(&state, &worker_weak, left_behind(reason, &root, &staging, upgrading, existed)),
         }
     });
-    // Nothing was fetched: the step fails, said so.
+    // Nothing was fetched or verified, and staging was never made: the step
+    // fails, said so.
     if let Err(error) = spawned {
         fail(&shared, &weak, thread_failed(&error));
     }
+}
+
+/// The directories an install lays out under the root.
+const LAID: [&str; 3] = ["runtime", "ui", "tools"];
+
+/// A failed install's reason, with what it left on disk: staging removed (or
+/// why it could not be), and — on a fresh install, which has nothing to put
+/// back — whichever of `runtime\`, `ui\` and `tools\` this run laid out.
+fn left_behind(mut reason: String, root: &Path, staging: &Path, upgrading: bool, existed: [bool; 3]) -> String {
+    if staging.exists() {
+        reason.push('\n');
+        reason.push_str(&match std::fs::remove_dir_all(staging) {
+            Ok(()) => format!("已删除临时目录 / staging removed: {}", staging.display()),
+            Err(error) => format!("临时目录未能删除 / staging not removed: {}: {error}", staging.display()),
+        });
+    }
+    let laid: Vec<String> = LAID
+        .into_iter()
+        .zip(existed)
+        .filter(|(name, before)| !upgrading && !before && root.join(name).exists())
+        .map(|(name, _)| root.join(name).display().to_string())
+        .collect();
+    if !laid.is_empty() {
+        reason.push_str(&format!(
+            "\n这次已铺开一部分，重试前请删除 / Partly laid out this time; remove before trying again: {}",
+            laid.join("、")
+        ));
+    }
+    reason
 }
 
 /// A worker the system refused to start, as the wizard says it.
@@ -506,75 +791,17 @@ fn thread_failed(error: &std::io::Error) -> String {
     format!("无法启动工作线程 / The worker thread could not start: {error}")
 }
 
-/// Step 2: the folder verified into a staging directory under the root, then
-/// laid out. Staging holds nothing that was not in the zips: on a failure it is
-/// removed, and said so.
-fn begin_verify(window: &SetupWindow, state: &Shared) {
-    window.set_note("".into());
-    window.set_progress("".into());
-    window.set_step(2);
-    window.set_busy(true);
-    window.set_can_next(false);
-    let (root, download) = {
-        let state = lock(state);
-        (state.root.clone(), state.download.clone())
-    };
-    let staging = root.join(format!(".staging-{}", log::unix_ms()));
-    let weak = window.as_weak();
-    let shared = Arc::clone(state);
-    let (state, worker_weak) = (Arc::clone(state), weak.clone());
-    let spawned = std::thread::Builder::new().name("acsetup-verify".into()).spawn(move || {
-        let (state, weak) = (state, worker_weak);
-        let mut report = reporter(&state, &weak);
-        let upgrading = lock(&state).installed.is_some();
-        let outcome = verify::run(&download, &staging, &mut report).and_then(|verified| {
-            match upgrading {
-                true => upgrade::upgrade(&root, &verified, &mut report)
-                    .map(|upgraded| (upgraded.laid_out.clone(), Some(upgraded))),
-                false => install::lay_out(&root, &verified, &mut report).map(|laid_out| (laid_out, None)),
-            }
-        });
-        match outcome {
-            Ok((laid_out, upgraded)) => {
-                let mut locked = lock(&state);
-                locked.laid_out = Some(laid_out);
-                locked.upgraded = upgraded;
-                drop(locked);
-                let _ = weak.upgrade_in_event_loop(|window| {
-                    window.set_busy(false);
-                    window.set_can_next(true);
-                });
-            }
-            Err(reason) => {
-                if staging.exists() {
-                    let _ = report(&match std::fs::remove_dir_all(&staging) {
-                        Ok(()) => format!("已删除临时目录 / staging removed: {}", staging.display()),
-                        Err(error) => format!(
-                            "临时目录未能删除 / staging not removed: {}: {error}",
-                            staging.display()
-                        ),
-                    });
-                }
-                fail(&state, &weak, reason);
-            }
-        }
-    });
-    // Nothing was verified and staging was never made: the step fails, said so.
-    if let Err(error) = spawned {
-        fail(&shared, &weak, thread_failed(&error));
-    }
-}
-
-/// The finish page: from step 2 on an upgrade — configuration, settings and
-/// the Startup launcher as they were — or from step 4 on a fresh install.
+/// The finish page: from the install step on an upgrade — configuration,
+/// settings and the Startup launcher as they were — or from the instances
+/// step on a fresh install.
 fn finish(window: &SetupWindow, state: &Shared) {
     window.set_summary(summary(state).into());
     window.set_note("".into());
-    window.set_step(5);
+    window.set_step(4);
     window.set_can_next(false);
 }
 
-/// Step 2 → 3: the configure page, its state root defaulted once.
+/// The configure page, its state root defaulted once.
 fn enter_configure(window: &SetupWindow, state: &Shared) {
     {
         let state = lock(state);
@@ -584,11 +811,11 @@ fn enter_configure(window: &SetupWindow, state: &Shared) {
         window.set_configured(state.configured.is_some());
     }
     window.set_note("".into());
-    window.set_step(3);
+    window.set_step(2);
     window.set_can_next(true);
 }
 
-/// Step 3 → 4: the configuration and the console's settings, written once,
+/// Step 2 → 3: the configuration and the console's settings, written once,
 /// then the optional launcher; the instances page follows.
 fn run_configure(window: &SetupWindow, state: &Shared) {
     if lock(state).configured.is_none() {
@@ -612,6 +839,17 @@ fn run_configure(window: &SetupWindow, state: &Shared) {
                 window.set_configured(true);
             }
             Err(reason) => {
+                let existed = lock(state).existed;
+                let laid: Vec<String> = LAID
+                    .into_iter()
+                    .zip(existed)
+                    .filter(|(_, before)| !before)
+                    .map(|(name, _)| root.join(name).display().to_string())
+                    .collect();
+                let reason = format!(
+                    "{reason}\n程序已装好但没有配置；重试前请删除这次铺开的 / Installed but not configured; remove what this run laid out before trying again: {}\n监控台设置可能已改写 / The console settings may have been rewritten",
+                    laid.join("、")
+                );
                 fail(state, &window.as_weak(), reason);
                 return;
             }
@@ -628,15 +866,14 @@ fn run_configure(window: &SetupWindow, state: &Shared) {
         Ok(outcome) => {
             lock(state).autostart = Some(outcome);
             window.set_note("".into());
-            window.set_progress("".into());
-            window.set_step(4);
+            window.set_step(3);
             window.set_can_next(true);
         }
         Err(reason) => fail(state, &window.as_weak(), reason),
     }
 }
 
-/// Step 4's Discover: the MuMu folder written when given, a Runtime running,
+/// The instances step's Discover: the MuMu folder written when given, a Runtime running,
 /// and the instances it lists shown for picking. A failure is said on the page
 /// and in the log; the person may correct the folder, try again, or skip. An
 /// empty folder field takes `mumu_root` out of the configuration.
@@ -653,7 +890,6 @@ fn begin_discover(window: &SetupWindow, state: &Shared) {
     window.set_instances(Rc::new(VecModel::<InstanceRow>::default()).into());
     window.set_discovered(false);
     window.set_note("".into());
-    window.set_progress("".into());
     window.set_busy(true);
     let root = {
         let mut state = lock(state);
@@ -664,14 +900,22 @@ fn begin_discover(window: &SetupWindow, state: &Shared) {
     let shared = Arc::clone(state);
     let (state, worker_weak) = (Arc::clone(state), weak.clone());
     let spawned = std::thread::Builder::new().name("acsetup-discover".into()).spawn(move || {
-        let mut report = reporter(&state, &worker_weak);
+        let _guard = PanicGuard::new(&state, &worker_weak);
+        let held = Held::new(&state);
+        let mut report = PageReport::new(&state, &worker_weak);
         let started = instance_step::start(&root, mumu.as_deref(), &mut report);
-        match started.and_then(|()| instance_step::discover(&root, &mut report)) {
+        if started.is_ok() {
+            lock(&state).runtime_started = true;
+        }
+        let found = started.and_then(|()| instance_step::discover(&root, &mut report));
+        drop(held);
+        match found {
             Ok(found) => {
                 let rows: Vec<InstanceRow> = found.iter().map(instance_row).collect();
                 let _ = worker_weak.upgrade_in_event_loop(move |window| {
                     window.set_instances(Rc::new(VecModel::from(rows)).into());
                     window.set_discovered(true);
+                    window.set_note("".into());
                     window.set_busy(false);
                 });
             }
@@ -701,7 +945,7 @@ fn instance_row(found: &Found) -> InstanceRow {
     }
 }
 
-/// A step-4 failure the page can be used again after: logged, and said on the
+/// An instances-step failure the page can be used again after: logged, and said on the
 /// page. Any log write that failed, then or before, stops the run instead.
 fn retryable(state: &Shared, weak: &slint::Weak<SetupWindow>, reason: String) {
     let broken = lock(state).log_error.clone();
@@ -720,7 +964,7 @@ fn retryable(state: &Shared, weak: &slint::Weak<SetupWindow>, reason: String) {
     });
 }
 
-/// Step 4 → 5: the picked instances written — each with an alias, an
+/// Step 3 → 4: the picked instances written — each with an alias, an
 /// application_id and a resource package — then the Runtime restarted on them.
 /// A failure before the configuration is replaced leaves the page usable; one
 /// after it stops the run.
@@ -754,22 +998,26 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
         });
     }
     window.set_note("".into());
-    window.set_progress("".into());
     window.set_busy(true);
     let root = lock(state).root.clone();
     let weak = window.as_weak();
     let shared = Arc::clone(state);
     let (state, worker_weak) = (Arc::clone(state), weak.clone());
     let spawned = std::thread::Builder::new().name("acsetup-instances".into()).spawn(move || {
-        let mut report = reporter(&state, &worker_weak);
+        let _guard = PanicGuard::new(&state, &worker_weak);
+        let held = Held::new(&state);
+        let mut report = PageReport::new(&state, &worker_weak);
         if let Err(reason) = instance_step::write(&root, &chosen, &mut report) {
+            drop(held);
             retryable(&state, &worker_weak, reason);
             return;
         }
         let aliases = chosen.iter().map(|pick| pick.alias.clone()).collect();
         lock(&state).instances = aliases;
         let restarted = instance_step::restart(&root, &mut report)
-            .and_then(|status| report(&format!("actingctl status: {status}")));
+            .and_then(|status| report.line(&format!("actingctl status: {status}")));
+        lock(&state).runtime_started |= restarted.is_ok();
+        drop(held);
         match restarted {
             Ok(()) => {
                 let _ = worker_weak.upgrade_in_event_loop(move |window| settle_and_finish(&window, &state));
@@ -789,7 +1037,7 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
     }
 }
 
-/// Step 4 → 5. When step 4 touched the configuration and the Runtime, the
+/// Step 3 → 4. When the instances step touched the configuration and the Runtime, the
 /// configured MuMu folder and whether a Runtime answers are asked now, so the
 /// summary says how they stand rather than how they were meant to.
 fn settle_and_finish(window: &SetupWindow, state: &Shared) {
@@ -803,13 +1051,20 @@ fn settle_and_finish(window: &SetupWindow, state: &Shared) {
     let shared = Arc::clone(state);
     let (state, worker_weak) = (Arc::clone(state), weak.clone());
     let spawned = std::thread::Builder::new().name("acsetup-settle".into()).spawn(move || {
-        let mut report = reporter(&state, &worker_weak);
+        let _guard = PanicGuard::new(&state, &worker_weak);
+        let mut report = PageReport::new(&state, &worker_weak);
         let settled = instance_step::settle(&root, &mut report);
         let broken = lock(&state).log_error.clone();
         match (settled, broken) {
             (Err(reason), _) | (Ok(_), Some(reason)) => fail(&state, &worker_weak, reason),
             (Ok(settled), None) => {
-                lock(&state).settled = Some(settled);
+                let mut locked = lock(&state);
+                // An earlier "runtime-info.json but no answer" no longer holds.
+                if matches!(settled.running, Ok(true)) {
+                    locked.warnings.retain(|line| !line.contains("runtime-info.json"));
+                }
+                locked.settled = Some(settled);
+                drop(locked);
                 let _ = worker_weak.upgrade_in_event_loop(move |window| {
                     window.set_busy(false);
                     finish(&window, &state);
@@ -826,6 +1081,14 @@ fn settle_and_finish(window: &SetupWindow, state: &Shared) {
 fn summary(state: &Shared) -> String {
     let state = lock(state);
     let mut lines = vec![format!("安装根 / Install root: {}", state.root.display())];
+    if let Some((runtime, ui)) = &state.members {
+        lines.push(format!(
+            "已安装 / Installed: runtime {} · ui {}（{}）",
+            short(runtime),
+            short(ui),
+            state.source
+        ));
+    }
     if let (Some(installed), Some(upgraded)) = (&state.installed, &state.upgraded) {
         lines.push(format!(
             "已升级 / Upgraded from runtime {} · ui {}",
@@ -888,13 +1151,18 @@ fn summary(state: &Shared) -> String {
     if let Some(settled) = &state.settled {
         lines.extend(settled.mumu_root.as_ref().map(|mumu| format!("MuMu 目录 / MuMu folder (mumu_root): {mumu}")));
         lines.push(match &settled.running {
-            Ok(true) => "Runtime 在运行（第 4 步拉起）/ The Runtime is running (started in step 4)".to_string(),
+            Ok(true) => "Runtime 在运行（实例步拉起）/ The Runtime is running (started in the instances step)".to_string(),
             Ok(false) => "Runtime 未在运行 / The Runtime is not running".to_string(),
             Err(reason) => format!("Runtime 是否在运行未能确认 / Whether the Runtime runs is not confirmed: {reason}"),
         });
     }
     if let Some(log) = &state.log {
         lines.push(format!("日志 / Log: {}", log.path().display()));
+    }
+    if !state.warnings.is_empty() {
+        lines.push(String::new());
+        lines.push("注意 / Note:".to_string());
+        lines.extend(state.warnings.iter().cloned());
     }
     if fresh && state.instances.is_empty() {
         lines.push(String::new());
@@ -910,7 +1178,7 @@ fn summary(state: &Shared) -> String {
     lines.join("\n")
 }
 
-/// Step 5: the console, detached, and the wizard closed.
+/// The finish page: the console, detached, and the wizard closed.
 fn open_console(window: &SetupWindow, state: &Shared) {
     let console = lock(state)
         .laid_out
@@ -921,13 +1189,18 @@ fn open_console(window: &SetupWindow, state: &Shared) {
         return;
     };
     match install::open_console(&exe, &dir) {
-        Ok(()) => {
-            let _ = write_log(state, &format!("已拉起监控台 / console started: {}", exe.display()));
-            let _ = slint::quit_event_loop();
-        }
+        Ok(()) => match write_log(state, &format!("已拉起监控台 / console started: {}", exe.display())) {
+            Ok(()) => {
+                let _ = slint::quit_event_loop();
+            }
+            Err(unlogged) => window.set_note(format!("已拉起监控台 / console started\n{unlogged}").into()),
+        },
         Err(reason) => {
-            let _ = write_log(state, &reason);
-            window.set_note(reason.into());
+            let text = match write_log(state, &reason) {
+                Ok(()) => reason,
+                Err(unlogged) => format!("{reason}\n{unlogged}"),
+            };
+            window.set_note(text.into());
         }
     }
 }

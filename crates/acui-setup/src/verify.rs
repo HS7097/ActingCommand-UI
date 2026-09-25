@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Step 2: the release assets in the download folder, checked against what
+//! The install step: the release assets in the download folder, checked against what
 //! the umbrella published — SHA256SUMS over the zips and MEMBERS.json, then
 //! each zip's own BUILD-MANIFEST.json over every file inside it — and
 //! unpacked into a staging directory under the install root.
@@ -31,11 +31,47 @@ const RUNTIME_REQUIRED: &[&str] = &["actingcommand-actingd.exe"];
 const UI_REQUIRED: &[&str] = &["acui.exe"];
 pub const TOOLS_INSTALLED: &[&str] = &["actinglab.exe", "actingledger.exe", "ac_fastdeploy_ppocr.dll"];
 
-/// One line for the log and the page; an error stops the run.
-pub type Report<'a> = &'a mut dyn FnMut(&str) -> Result<(), String>;
+/// Where a step's account goes: every line into the install log, and — for
+/// the page — where the work stands and what the person must see. An error
+/// (a log write that failed) stops the run.
+pub trait Reporter {
+    fn line(&mut self, line: &str) -> Result<(), String>;
+    /// Where the work stands: the page only, never the log.
+    fn step(&mut self, _step: Step<'_>) -> Result<(), String> {
+        Ok(())
+    }
+    /// A line the person must see: logged, and kept on the page and in the
+    /// summary.
+    fn warn(&mut self, line: &str) -> Result<(), String> {
+        self.line(line)
+    }
+}
+
+impl<F: FnMut(&str) -> Result<(), String>> Reporter for F {
+    fn line(&mut self, line: &str) -> Result<(), String> {
+        self(line)
+    }
+}
+
+pub type Report<'a> = &'a mut dyn Reporter;
+
+/// A phase of the work begins — with its size when it is known — or so much
+/// of the current phase is done.
+pub enum Step<'a> {
+    Phase(&'a str, Option<Total>),
+    Done(u64),
+}
+
+#[derive(Clone, Copy)]
+pub enum Total {
+    Bytes(u64),
+    Items(u64),
+}
 
 pub struct Verified {
     pub staging: PathBuf,
+    /// The two commits `MEMBERS.json` names: runtime, then ui.
+    pub members: (String, String),
     pub runtime: Staged,
     pub ui: Staged,
     pub tools: Staged,
@@ -89,6 +125,10 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
         return Err("SHA256SUMS 没有条目 / SHA256SUMS lists nothing".into());
     }
     let mut listed = BTreeSet::new();
+    report.step(Step::Phase(
+        "核对下载的文件 / Checking the downloaded files",
+        Some(Total::Items(entries.len() as u64)),
+    ))?;
     for (expected, name) in &entries {
         let path = download.join(name);
         if !path.is_file() {
@@ -104,8 +144,9 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
                 "{MISMATCH}: {name} sha256 应为 / expected {expected}，实为 / actual {actual}"
             ));
         }
-        report(&format!("SHA256SUMS 已核对 / ok: {name}"))?;
+        report.line(&format!("SHA256SUMS 已核对 / ok: {name}"))?;
         listed.insert(name.clone());
+        report.step(Step::Done(listed.len() as u64))?;
     }
 
     // MEMBERS.json names the two commits, and so the three zips.
@@ -114,7 +155,7 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
         .map_err(|error| format!("读取失败 / read failed: {}: {error}", members_path.display()))?;
     let (runtime_sha, ui_sha) = members_of(&members_text)?;
     let members = Members { runtime_sha, ui_sha };
-    report(&format!(
+    report.line(&format!(
         "MEMBERS.json: runtime {} · ui {}",
         members.runtime_sha, members.ui_sha
     ))?;
@@ -123,7 +164,8 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
     fs::create_dir_all(staging).map_err(|error| {
         format!("无法创建临时目录 / cannot create staging: {}: {error}", staging.display())
     })?;
-    report(&format!("临时目录 / staging: {}", staging.display()))?;
+    report.line(&format!("临时目录 / staging: {}", staging.display()))?;
+    report.step(Step::Phase("解压并核对内容 / Unpacking and checking", Some(Total::Items(3))))?;
     let runtime = stage(
         download,
         staging,
@@ -137,6 +179,7 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
         },
         report,
     )?;
+    report.step(Step::Done(1))?;
     let ui = stage(
         download,
         staging,
@@ -150,6 +193,7 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
         },
         report,
     )?;
+    report.step(Step::Done(2))?;
     let tools = stage(
         download,
         staging,
@@ -163,9 +207,11 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
         },
         report,
     )?;
-    report("校验通过 / verified")?;
+    report.step(Step::Done(3))?;
+    report.line("校验通过 / verified")?;
     Ok(Verified {
         staging: staging.to_path_buf(),
+        members: (members.runtime_sha, members.ui_sha),
         runtime,
         ui,
         tools,
@@ -235,8 +281,9 @@ fn stage(
         return Err(format!("SHA256SUMS 未列出 / not listed in SHA256SUMS: {name}"));
     }
     let dir = staging.join(name.trim_end_matches(".zip"));
+    report.line(&format!("正在解压 / unpacking: {name}"))?;
     let count = extract(&download.join(name), name, &dir)?;
-    report(&format!("已解压 / unpacked: {name}（{count} 个文件 / files）"))?;
+    report.line(&format!("已解压 / unpacked: {name}（{count} 个文件 / files）"))?;
     check_manifest(&dir, expect, report)
 }
 
@@ -338,7 +385,7 @@ fn check_manifest(dir: &Path, expect: &Expect<'_>, report: Report<'_>) -> Result
                 entry.path, entry.sha256
             ));
         }
-        report(&format!("{zip}: {} 已核对 / ok（{size} 字节 / bytes）", entry.path))?;
+        report.line(&format!("{zip}: {} 已核对 / ok（{size} 字节 / bytes）", entry.path))?;
         files.push(entry.path.clone());
     }
     let mut present = BTreeSet::new();

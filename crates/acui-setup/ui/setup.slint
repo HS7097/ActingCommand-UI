@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { Button, CheckBox, LineEdit, ListView, Palette, TextEdit } from "std-widgets.slint";
+import { Button, CheckBox, LineEdit, ListView, Palette, ProgressIndicator, TextEdit } from "std-widgets.slint";
 
 // One instance the emulator reported, and what a person fills in to use it.
 export struct InstanceRow {
@@ -41,12 +41,39 @@ component Caption inherits Text {
     wrap: word-wrap;
 }
 
-// A read-only, selectable block: a transcript or a summary a person may copy
-// a path out of.
+// A read-only, selectable block: a failure or a summary a person may copy a
+// path out of.
 component Transcript inherits TextEdit {
     read-only: true;
     wrap: word-wrap;
     font-size: 12px;
+}
+
+// Where a worker stands, as an installer shows it: the phase, a bar, and the
+// one thing it is doing now. The full account is the install log.
+component Working inherits VerticalLayout {
+    in property <string> stage;
+    in property <string> detail;
+    in property <float> fraction;
+    in property <bool> indeterminate;
+    spacing: 6px;
+    Body { text: stage; }
+    ProgressIndicator {
+        progress: fraction;
+        indeterminate: indeterminate;
+    }
+    Caption {
+        text: detail;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+}
+
+// What the person must see from the steps so far; it stays whether or not a
+// worker runs.
+component Notes inherits Body {
+    in property <string> notes;
+    text: "注意 / Note:\n" + notes;
 }
 
 component StepTag inherits Rectangle {
@@ -82,20 +109,29 @@ export component SetupWindow inherits Window {
     // Which page is shown, whether a worker is running, and whether the run
     // has stopped for good.
     in property <int> step;
-    in property <bool> busy;
+    in-out property <bool> busy;
     in property <bool> failed;
     in property <string> failure-text;
     in property <string> log-path;
     in property <bool> can-next;
     // The line under a page's inputs: why Next did nothing, or what went
     // wrong short of stopping.
-    in property <string> note;
-    // The running lines of the fetch, verify and layout workers.
-    in property <string> progress;
+    in-out property <string> note;
+    // Where the running worker stands (see Working).
+    in property <string> stage-text;
+    in property <string> detail-text;
+    in property <float> fraction;
+    in property <bool> indeterminate;
+    // What the person must see from any step so far.
+    in property <string> notes;
     in property <string> free-space-text;
     in property <string> existing-text;
-    // The release the online path would install, or why none was found.
+    // Step 1: whether it upgrades, the release it would install or why none
+    // was found, and whether its worker has started.
+    in property <bool> upgrading;
     in property <string> release-text;
+    in property <bool> release-failed;
+    in property <bool> installing;
     // Set once the configuration is written: the state root is then fixed.
     in property <bool> configured;
     in property <string> summary;
@@ -106,7 +142,7 @@ export component SetupWindow inherits Window {
     in-out property <string> state-root;
     in-out property <bool> autostart;
     in-out property <bool> autostart-console;
-    // Step 4: the MuMu folder, and the instances discovery listed.
+    // Step 3: the MuMu folder, and the instances discovery listed.
     in-out property <string> mumu-root;
     in-out property <[InstanceRow]> instances;
     in property <bool> discovered;
@@ -116,16 +152,16 @@ export component SetupWindow inherits Window {
     callback open-console();
     callback install-root-edited(string);
     callback offline-toggled(bool);
+    callback retry-release();
     callback discover();
     callback skip-instances();
 
     property <[string]> step-labels: [
         "0 位置 / Location",
-        "1 取件 / Get",
-        "2 校验与铺开 / Verify & lay out",
-        "3 配置 / Configure",
-        "4 实例（可选）/ Instances (optional)",
-        "5 完成 / Finish",
+        root.upgrading ? "1 升级 / Upgrade" : "1 安装 / Install",
+        "2 配置 / Configure",
+        "3 实例（可选）/ Instances (optional)",
+        "4 完成 / Finish",
     ];
 
     VerticalLayout {
@@ -170,8 +206,8 @@ export component SetupWindow inherits Window {
 
                 if !root.failed && root.step == 1: VerticalLayout {
                     spacing: 8px;
-                    Head { text: "取件 / Get the release"; }
-                    CheckBox {
+                    Head { text: root.upgrading ? "升级 / Upgrade" : "安装 / Install"; }
+                    if !root.installing: CheckBox {
                         text: "离线：用已下载的发布件文件夹 / Offline: use a folder of downloaded release files";
                         checked <=> root.offline;
                         enabled: !root.busy;
@@ -179,31 +215,40 @@ export component SetupWindow inherits Window {
                             root.offline-toggled(self.checked);
                         }
                     }
-                    if !root.offline: Body { text: root.release-text; }
-                    if !root.offline: Caption {
-                        text: "从伞仓 Releases（github.com/HS7097/ActingCommand/releases）取发布件：有正式版取最新正式版，否则取最新预发布（每日构建）。只下载 SHA256SUMS、MEMBERS.json 和 SHA256SUMS 列出的文件，存到 <安装根>\\downloads\\<标签>\\；下一步按同样的规则校验。它与第 4 步下载资源包网址是本程序仅有的联网代码。\nFrom the umbrella Releases: the newest stable release when there is one, else the newest pre-release (a daily build). Only SHA256SUMS, MEMBERS.json and what SHA256SUMS lists are fetched, into <install root>\\downloads\\<tag>\\, and verified next exactly like a folder filled by hand. This and step 4's fetch of a resource package URL are the program's only network code.";
+                    if !root.installing && !root.offline: Body { text: root.release-text; }
+                    if !root.installing && !root.offline && root.release-failed: HorizontalLayout {
+                        Button {
+                            text: "重新查询 / Look up again";
+                            enabled: !root.busy;
+                            clicked => {
+                                root.retry-release();
+                            }
+                        }
+                        Rectangle { }
                     }
-                    if root.offline: LineEdit {
+                    if !root.installing && !root.offline: Caption {
+                        text: "从伞仓 Releases 取件（有正式版取最新正式版，否则取最新预发布），下载、逐项校验后装进安装位置；详情写进日志。\nFetches from the umbrella Releases (the newest stable release when there is one, else the newest pre-release), verifies every file and installs it; the details go to the log.";
+                    }
+                    if !root.installing && root.offline: LineEdit {
                         text <=> root.download-dir;
+                        enabled: !root.busy;
                         placeholder-text: "例如 / e.g. C:\\Users\\<you>\\Downloads\\ActingCommand";
                     }
-                    if root.offline: Body {
-                        text: "把同一个伞仓发布件的 SHA256SUMS、MEMBERS.json 与 actingcommand-runtime-<sha>.zip、actingcommand-tools-<sha>.zip、acui-windows-<sha>.zip 放在同一个文件夹，这里填它。\nPut SHA256SUMS, MEMBERS.json and the three zips of one umbrella release in one folder and name it here.";
+                    if !root.installing && root.offline: Caption {
+                        text: "同一个发布件的 SHA256SUMS、MEMBERS.json 与三个 zip 放在一个文件夹里，这里填它。\nOne release's SHA256SUMS, MEMBERS.json and three zips in one folder, named here.";
                     }
-                    Transcript { text: root.progress; }
+                    if root.installing: Working {
+                        stage: root.stage-text;
+                        detail: root.detail-text;
+                        fraction: root.fraction;
+                        indeterminate: root.indeterminate;
+                    }
+                    if root.notes != "": Notes { notes: root.notes; }
                     Body { text: root.note; }
+                    Rectangle { }
                 }
 
                 if !root.failed && root.step == 2: VerticalLayout {
-                    spacing: 8px;
-                    Head { text: "校验与铺开 / Verify and lay out"; }
-                    Caption {
-                        text: "逐条核对 SHA256SUMS；解压到安装根下的临时目录；按每个 zip 自带的 BUILD-MANIFEST.json 核对来源仓、提交号与 files[] 每一项的大小、sha256，期间不运行 zip 里的任何东西。然后铺开：runtime\\（Runtime 全部载荷与清单，配置模板逐字节原样）、ui\\（监控台载荷与清单）、tools\\（只有 actinglab.exe、actingledger.exe、ac_fastdeploy_ppocr.dll），再删除临时目录。不改 PATH、不写注册表、不装服务。\nEvery SHA256SUMS entry; unpack under the install root; every file in every zip against its BUILD-MANIFEST.json, nothing from the zips run. Then runtime\\, ui\\ and tools\\ (only the three named tools) are laid out and staging is removed. No PATH, no registry, no service.\n已有安装时是升级：先用新 Runtime 检查现有配置；Runtime 应答时请它关闭并等它退出；再移开 ui\\、tools\\、runtime\\（监控台开着就停下），铺开新版本——铺好之前任何失败都把移开的放回，关掉的 Runtime 用原版本重新拉起；铺好后原先在运行的 Runtime 用新版本重新拉起。被替换的版本留在 previous\\；状态根、配置与设置不动。\nOn an installed root this upgrades: the new Runtime checks the configuration first; a Runtime that answers is asked to shut down and awaited; ui\\, tools\\ and runtime\\ move aside (an open console stops it) and the new version is laid out — until then any failure puts everything back and starts a stopped Runtime again on the version still installed; once laid out, a Runtime that was running starts again on the new one. The version replaced stays in previous\\; state, configuration and settings are kept.";
-                    }
-                    Transcript { text: root.progress; }
-                }
-
-                if !root.failed && root.step == 3: VerticalLayout {
                     spacing: 8px;
                     Head { text: "配置 / Configure"; }
                     Caption {
@@ -213,8 +258,8 @@ export component SetupWindow inherits Window {
                         text <=> root.state-root;
                         enabled: !root.configured;
                     }
-                    Body {
-                        text: "写 <安装根>\\actingd.config.json：schema_version、state_root、bind_host 127.0.0.1、bind_port 0、secret_fingerprint_salt（本机随机源生成的 32 字节，十六进制；不显示、不写日志）、instances 为空——别的字段一个不加。再写监控台设置 %APPDATA%\\ActingCommand\\acui.toml 的 state_root、actingd_config、actingd_exe（已有的 lang / text_size 保留）。\nWrites <root>\\actingd.config.json with exactly those six fields (the salt: 32 bytes from the OS RNG, hex; never shown, never logged) and the console's acui.toml (state_root, actingd_config, actingd_exe; lang / text_size kept).";
+                    Caption {
+                        text: "写 Runtime 配置 actingd.config.json 与监控台设置 acui.toml；密钥盐由本机随机源生成，不显示、不写日志。\nWrites the Runtime configuration and the console settings; the salt comes from the OS RNG and is never shown or logged.";
                     }
                     CheckBox {
                         text: "登录时启动 Runtime（可选，默认不勾）/ Start the Runtime at sign-in (optional, off by default)";
@@ -226,20 +271,17 @@ export component SetupWindow inherits Window {
                         enabled: root.autostart;
                     }
                     Caption {
-                        text: "勾选后只写一个按用户的启动文件夹批处理 %APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\ActingCommand.cmd；不装服务、不建计划任务、不写注册表；不勾就什么也不写。\nWhen checked, one per-user Startup-folder .cmd is written and nothing else; unchecked writes nothing.";
-                    }
-                    Body {
-                        text: "实例（模拟器 / 设备）在下一步配置，可以跳过：跳过时 instances 留空，之后点监控台顶栏的「实例配置」按钮添加。\nInstances (emulators / devices) come next and may be skipped: then instances stays empty, to be added with the Instance Configuration button in the console's top bar.";
+                        text: "只写一个按用户的启动项批处理；不装服务、不写注册表。下一步配置模拟器实例，可以跳过。\nOne per-user Startup .cmd, no service, no registry. Emulator instances come next; they may be skipped.";
                     }
                     Body { text: root.note; }
                     Rectangle { }
                 }
 
-                if !root.failed && root.step == 4: VerticalLayout {
+                if !root.failed && root.step == 3: VerticalLayout {
                     spacing: 8px;
                     Head { text: "实例（可选）/ Instances (optional)"; }
                     Caption {
-                        text: "从安装根拉起 Runtime，用 actingctl emulator discover 读 MuMu 的实例清单——不启动、不关闭任何模拟器。勾选要用的实例并填别名、application_id（游戏包名）、资源包（本机文件的绝对路径，或 https:// 网址：下载到 <安装根>\\packages\\<序号>\\；填了 sha256 就核对）。候选配置先经 check-config 检查，通过才替换，再重启 Runtime 绑定实例。输入用 adb_shell_input；抓图在填了 MuMu 目录时用 nemu_ipc，否则用 adb。不配置就点「跳过」。\nThe Runtime is started from the install root and actingctl emulator discover reads MuMu's instance list — no emulator is started or stopped. Tick the instances to use and fill in an alias, the application_id (the game's package) and a resource package (a local file's absolute path, or an https:// URL fetched into <install root>\\packages\\<index>\\, checked against the sha256 when one is given). The candidate configuration is checked by check-config before it replaces the configuration, then the Runtime restarts to bind the instances. Input: adb_shell_input; capture: nemu_ipc with the MuMu folder, else adb. Skip to configure none.";
+                        text: "从安装位置拉起 Runtime，读 MuMu 的实例清单（不启停模拟器）；勾选实例，填别名、游戏包名与资源包（本机文件或 https 网址），写入前先经 check-config 检查。\nStarts the Runtime and reads MuMu's instance list (no emulator started or stopped); tick instances and fill in an alias, the game's package and a resource package (a local file or an https URL), checked before it is written.";
                     }
                     HorizontalLayout {
                         spacing: 8px;
@@ -318,20 +360,22 @@ export component SetupWindow inherits Window {
                             }
                         }
                     }
-                    Transcript {
-                        text: root.progress;
-                        vertical-stretch: 1;
-                        min-height: 60px;
+                    if root.busy: Working {
+                        stage: root.stage-text;
+                        detail: root.detail-text;
+                        fraction: root.fraction;
+                        indeterminate: root.indeterminate;
                     }
+                    if root.notes != "": Notes { notes: root.notes; }
                     Body { text: root.note; }
                 }
 
-                if !root.failed && root.step == 5: VerticalLayout {
+                if !root.failed && root.step == 4: VerticalLayout {
                     spacing: 8px;
                     Head { text: "完成 / Finish"; }
                     Transcript { text: root.summary; }
                     Caption {
-                        text: "「启动监控台」分离拉起 ui\\acui.exe 并关闭本引导。新装时 Runtime 是否在运行见上面的摘要，未在运行就由监控台的启动器拉起；升级时，原先在运行的 Runtime 已用新版本重新拉起。\n\"Open console\" starts ui\\acui.exe detached and closes this wizard. After a fresh install the summary above says whether a Runtime runs; if none does, the console's launcher starts one. After an upgrade, a Runtime that was running has been started again on the new version.";
+                        text: "「启动监控台」拉起监控台并关闭本向导；Runtime 是否在运行见上面的摘要，未在运行就由监控台拉起。\n\"Open console\" starts the console and closes this wizard; the summary says whether a Runtime runs, and the console starts one when none does.";
                     }
                     Body { text: root.note; }
                 }
@@ -355,29 +399,29 @@ export component SetupWindow inherits Window {
                     root.close-wizard();
                 }
             }
-            if !root.failed && root.step == 4: Button {
+            if !root.failed && root.step == 3: Button {
                 text: "跳过 / Skip";
                 enabled: !root.busy;
                 clicked => {
                     root.skip-instances();
                 }
             }
-            if !root.failed && root.step < 5: Button {
-                text: root.step == 4 ? "写入实例 / Apply" : "下一步 / Next";
+            if !root.failed && root.step < 4: Button {
+                text: root.step == 1 ? (root.upgrading ? "升级 / Upgrade" : "安装 / Install") : root.step == 3 ? "写入实例 / Apply" : "下一步 / Next";
                 primary: true;
                 enabled: root.can-next && !root.busy;
                 clicked => {
                     root.next();
                 }
             }
-            if !root.failed && root.step == 5: Button {
+            if !root.failed && root.step == 4: Button {
                 text: "启动监控台 / Open console";
                 primary: true;
                 clicked => {
                     root.open-console();
                 }
             }
-            if !root.failed && root.step == 5: Button {
+            if !root.failed && root.step == 4: Button {
                 text: "完成 / Done";
                 clicked => {
                     root.close-wizard();
