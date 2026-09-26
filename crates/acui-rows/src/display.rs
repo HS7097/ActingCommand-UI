@@ -5,7 +5,7 @@
 //! spelling is shown next to the name either way.
 
 /// `(wire, 中文, English)` for every `EventType` the contract declares.
-const EVENT_TYPES: [(&str, &str, &str); 120] = [
+const EVENT_TYPES: [(&str, &str, &str); 121] = [
     ("provider.startup_observed", "厂商启动已观察", "Provider Startup Observed"),
     ("runtime.started", "运行时已启动", "Runtime Started"),
     ("runtime.takeover", "运行时已接管", "Runtime Takeover"),
@@ -108,6 +108,7 @@ const EVENT_TYPES: [(&str, &str, &str); 120] = [
     ("resource.promote_failed", "资源发布失败", "Resource Promote Failed"),
     ("ui.action", "界面操作", "UI Action"),
     ("client.action", "客户端操作", "Client Action"),
+    ("governance.identity_declared", "治理身份已声明", "Governance Identity Declared"),
     ("cli.command", "命令行命令", "CLI Command"),
     ("lab.request", "Lab 请求", "Lab Request"),
     ("state.migrated", "状态已迁移", "State Migrated"),
