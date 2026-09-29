@@ -2,7 +2,7 @@
 
 # ActingCommand Console
 
-**⚠️ This program is still iterating rapidly; expect it to be complete within 2–5 weeks.**
+**⚠️ The main-line features are complete and have run end to end on a real emulator instance; multi-day validation and clean-up are still under way, and interfaces may still change.**
 
 This is ActingCommand's **human console**, a read-only native program. On one Runtime state root it opens
 the ledger's **official read face**, and renders the view pages the ledger itself hands out into a
@@ -14,9 +14,10 @@ It is not part of the Runtime; it is the Runtime's **external, detachable client
 
 The program accepts only one argument: the state root. **All file IO for reading ledger data belongs to
 the read face**; the console never assembles paths inside the state root itself, never opens `ledger/`,
-`artifacts/` or `runtime-state.sqlite`, and never launches a CLI to read data. The only processes it
-starts are actingd itself (**Start**, see "Launcher") and `actingd check-config` when an
-instance-configuration save is checked (see "Instance configuration").
+`artifacts/` or `runtime-state.sqlite`, and never launches a CLI to read data. It starts three
+kinds of process, all of them named in "Launcher" and "Instance configuration": actingd itself (**Start**),
+the twice-confirmed `actingd unlock-owner` (the unlock, see "Launcher"), and `actingd check-config`
+when an instance-configuration save is checked (see "Instance configuration").
 
 There are two read faces, with the same query, page and cursor semantics; they differ only in where the
 answers come from:
@@ -61,7 +62,7 @@ answers come from:
   (PID, owner epoch, start time, all out of its own `runtime-info.json`).
 - Right after the pin, one `status()` and one `runtime_fact_snapshot()` on the same connection give the
   instance card its "runtime instances" lines. Status is read again only on a person's jump to the
-  latest; while following, the task facts alone are read again whenever the pin moves. The first two
+  latest; while following, every poll reads the task facts again, whether or not the pin moved. The first two
   lines state the sequence each read was taken at; both may be past the pinned snapshot, so this is state
   as last read, not state at the pin. By contract the Runtime records the status read itself as one
   observation event (`command.validated`), after the pin and so outside this session's snapshot. Then,
@@ -100,7 +101,7 @@ as usual.
 Dependencies are pinned to the Runtime's **main** (`Cargo.toml`):
 
 ```
-rev = "a1e40e091f400d7cde038c777756aac473cffa75"
+rev = "b77da659eaea427d1734d884c77416f849f7f684"
 ```
 
 The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
@@ -255,7 +256,7 @@ On the frame, beside the event's own geometry:
 
 - **The page label** above the frame, beside its title: the page the recognition on this frame matched,
   or that it matched none. On the frame it would cover the page's own header targets.
-- **The tap mark**: a ringed dot centred on each point of the step's effect intent (`action.x, y`; a
+- **The tap mark**: a white-ringed dot centred on each point of the step's effect intent (`action.x, y`; a
   swipe or drag has one per point). It replaces the event's own `action` geometry, which would draw the
   same input twice.
 - **One sentence** under the frame, per input meant on it: "Step 0 notice_close: recognized
@@ -300,7 +301,7 @@ made:
 Two-layer labels: the upper layer is the name for a person to read, and the grey lower layer is the
 verbatim form used in the program — the raw `event_type`, module names, ids of every kind,
 `payload_schema` and sha256 are never translated. The dictionary is in `crates/acui-rows/src/display.rs`
-and covers all 120 `event_type`s and 20 `origin.module`s in the contract; **anything not in the table is
+and covers all 121 `event_type`s and 20 `origin.module`s in the contract; **anything not in the table is
 displayed verbatim, not guessed**.
 
 ### Settings file
@@ -393,8 +394,9 @@ last Start or Request shutdown press, or why the instance-configuration window d
   line on stderr is shown **verbatim** — an argument error, or an actingd too old to know the command. A
   spawn failure, a timeout, output that does not parse or does not match the contract, and an `ok` with
   a non-zero exit code each have their own line, and none retries the start. After any outcome but an
-  unlock the entry is back at its first step; a new start withdraws it, and Start is refused while the
-  unlock runs. The console records no client action for it: there is no running Runtime to record
+  unlock the entry is back at its first step; a new start withdraws it. Start is refused while the
+  unlock runs, and pressing it again while the previous start is still polling for readiness is
+  refused outright — "The Previous Start Is Still Waiting for Readiness" — launching nothing. The console records no client action for it: there is no running Runtime to record
   through, and `unlock-owner` appends its own `cli.command` fact (action `owner.unlock`). It never
   deletes `owner.lock` (Runtime `contracts/actingd-unlock-owner.md`).
 - **Request shutdown**: only through the typed client, never killing a process. It opens a new connection
@@ -419,7 +421,7 @@ last Start or Request shutdown press, or why the instance-configuration window d
   `kill`, no blocking `wait`, no job object attached; the handle is dropped once the readiness decision
   ends, and the daemon outlives the console.
 
-Pause/resume, start-at-boot, the installer and network downloads are all outside this slice.
+Pause/resume is outside this slice. Start-at-boot, the installer and the network fetch have since been built; see "Setup wizard acsetup".
 
 ## Instance configuration
 
@@ -505,7 +507,7 @@ log" below):
 0. **Location**: the install root only (changeable, default `%LOCALAPPDATA%\Programs\ActingCommand`, no
    administrator needed), the free space on that volume, and whether an installation is already here
    (looking at `runtime\BUILD-MANIFEST.json`, whose commit and `ui\`'s are shown; if there is one, the
-   run is an **upgrade**, see below). Next creates the root and the install log. A wizard running from
+   run is an **upgrade**, see below). Next creates the root and the install log. On a fresh install this step also requires a usable state root and an install root free of single quotes (the console's settings hold those paths as TOML literal strings), and stops here otherwise. A wizard running from
    `runtime\`, `ui\`, `tools\` or `previous\` of the installation it would upgrade stops here, naming its
    own file: that directory could not move aside; from the root itself or `downloads\` it upgrades as
    usual. The offline edition adds to the free-space line what extracting its release takes.
@@ -559,11 +561,13 @@ log" below):
    The options page then offers four ticks, written together off the event loop (a failure is said on
    the page, which can be used again):
    - **Start at boot** (unchecked by default): only when checked does it write `ActingCommand.cmd` in
-     the per-user Startup folder (the shell's `FOLDERID_Startup`), whose content is
+     the per-user Startup folder (the shell's `FOLDERID_Startup`), whose content is `@echo off` followed by
      `start "" "<install root>\runtime\actingcommand-actingd.exe" --config "<install root>\actingd.config.json"`;
      only when "also launch the console" is checked as well does it add one more line,
      `start "" "<install root>\ui\acui.exe"`. acsetup does not appear in the batch file. Unchecked, it
-     writes nothing; a file of the same name already there is left alone, and mentioned in the log.
+     writes nothing; a file of the same name already there is left alone, and mentioned in the log. An
+     install root containing `%` cannot be quoted verbatim in a .cmd, so with the tick on this step
+     fails and says so; the page stays usable.
    - **Start menu shortcut** (checked by default) and **desktop shortcut** (unchecked by default): an
      `ActingCommand.lnk` to `<install root>\ui\acui.exe`, working in `ui\`, in the per-user Start
      menu's Programs (`FOLDERID_Programs`) or on the desktop (`FOLDERID_Desktop`, so a redirected or
@@ -586,16 +590,18 @@ log" below):
    download folder, already checked against `SHA256SUMS`; on the first discovery the wizard holds each
    to be listed in `SHA256SUMS` under that same sha256, checks the file's sha256 once more and reads it.
    A bundle that fails any of this is named in the notes and not offered; the others still are.
-   **No path, URL or hash is asked of the person.** A bundle holds
+   **No URL is asked for, and no hash is typed by hand.** A bundle holds
    `applications.json` (the game, its display name `label` when given, and each server's label and
    Android package name) and `bundle.json` (every pack's path, package id, server, sha256 and size, and
    each server's default pack in `default_packs`). The page lists the programs and package names they
    support — for example "蔚蓝档案 / Blue Archive：日服 com.YostarJP.BlueArchive" (the game id when a
-   bundle gives no `label`) — whether each came with the release, and a server that names a default
-   pack but no package name as not offered. A local bundle file can be added — the way in while the
-   release carries none: its absolute path, "加入 / Add", no hash; a second bundle for a game already
+   bundle gives no `label`) — whether each came with the release, and two kinds of server as not offered:
+   one that names a default pack but no package name, and one with a package name but no default pack.
+   A local bundle file can be added at any time — it is the way in while the release carries none: its
+   absolute path, "加入 / Add", no hash; a second bundle for a game already
    offered (whatever the case of its name) is refused. Each ticked instance takes an alias (default `mumu-<index>`) and
-   **its own choice** of "program · server · package name", one per server that names a default pack;
+   **its own choice** of "program · server · package name", one per server that has both a package
+   name and a default pack;
    when there is only one, it is chosen for every instance. The wizard knows no game and guesses none.
    "写入实例 / Apply" lays each bundle used out once, byte for byte, under
    `<install root>\packages\<game>\`, each pack checked against `bundle.json` first; logs, per instance,
@@ -762,7 +768,7 @@ cannot start keeps running, and the line says so and that pressing Start again p
 said as that, not as a kill that failed.
 
 A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
-depending only on slint, serde, sha2, zip, getrandom, ureq and (Windows only) windows, and on none of the layers above; see the previous
+depending only on slint, serde, serde_json, anyhow, sha2, zip, getrandom, ureq and (Windows only) windows, and on none of the layers above; see the previous
 section, "Setup wizard acsetup".
 
 ## Icon
@@ -799,13 +805,13 @@ pinned rev.
   with the 8 MiB frame limit and a 30-second deadline (no Runtime caller of it sets one yet; the
   contract's 4-second `RUNTIME_MATERIAL_READ_BUDGET_MS` bounds a single range read, not a whole
   object). Online, the typed client's `RuntimeClient::read_material_complete`
-  (`crates/runtime-client/src/client.rs:2089`) gives the same result shape over verified ranges, and the
+  (`crates/runtime-client/src/client.rs:2167`) gives the same result shape over verified ranges, and the
   console calls it with the same limit and deadline; the Runtime still verifies the whole material for
   every range (a 3.6 MB frame is 19 ranges of 192 KiB).
 - **Instance facts: resolved on both faces, at different positions**. Online, the fact store is read
-  through `RuntimeClient::runtime_fact_snapshot()` (`crates/runtime-client/src/client.rs:848`), which
+  through `RuntimeClient::runtime_fact_snapshot()` (`crates/runtime-client/src/client.rs:849`), which
   answers at the Runtime's latest position, past the pin. Offline, `runtime_facts_at`
-  (`crates/ledger-forensics/src/runtime_facts.rs:61`) replays the store at the pinned position itself,
+  (`crates/ledger-forensics/src/runtime_facts.rs:62`) replays the store at the pinned position itself,
   under the Runtime's own replay rules; the console never folds `runtime.fact_*` events itself. Lease
   state comes only from the online status read, so offline has none.
 - **Geometry and frames cannot be brought together on these two roots**. In the 0828 and v5 roots, the
@@ -814,8 +820,8 @@ pinned rev.
   five on v5), whose payload is a single tap coordinate and whose `links` hold **no** `frame_id`. The
   ledger gives no relation joining the two, so the console does not join them — the real frame is drawn as
   it is, and the overlay is empty. At the pin, `task.effect_intent` can state the frame extent its
-  coordinates are in (`frame_extent`, `crates/actingcommand-contract/src/event/payload.rs:3315`) and
-  `task.geometry_observed` its frame's extent (`:3041`); the overlay canvas uses that extent when an event
+  coordinates are in (`frame_extent`, `crates/actingcommand-contract/src/event/payload.rs:3392`) and
+  `task.geometry_observed` its frame's extent (`TaskGeometryFrame::extent`, `:3093`); the overlay canvas uses that extent when an event
   states one. The effect intents on these two roots state none, so their size stays "not recorded".
 - **Neither root holds artifact eviction facts**, so the eviction placeholder does not appear on these two
   roots; the code path is written to the contract.

@@ -2,7 +2,7 @@
 
 # ActingCommand 监控台
 
-**⚠️ 本程序仍在快速迭代，预计 2–5 星期内完成。**
+**⚠️ 主线功能已完成，并已在真实模拟器实例上端到端跑通；多日长跑验证与收尾仍在进行，接口仍可能调整。**
 
 这是 ActingCommand 的**人类监控台**，一个只读的原生程序。它在一个 Runtime 状态根上打开
 账本的**正式读面**，把账本自己给出的视图页渲染成三栏界面：实例卡、时间线、详情。
@@ -13,7 +13,8 @@
 
 程序只认一个参数：状态根。**读账本数据的文件 IO 都归读面**，监控台自己从不拼接状态根里的路径，
 不打开 `ledger/`、`artifacts/` 或 `runtime-state.sqlite`，也不为读数据拉起任何 CLI。它拉起的
-进程只有两种：actingd 本身（「启动」，见「启动器」一节），和保存实例配置时用来校验的
+进程只有三种，都在「启动器」与「实例配置」两节里写明：actingd 本身（「启动」），经两次确认的
+`actingd unlock-owner`（解锁，见「启动器」一节），以及保存实例配置时用来校验的
 `actingd check-config`（见「实例配置」一节）。
 
 读面有两张，同一套查询、页、游标语义，只是答案从哪来不同：
@@ -46,7 +47,7 @@
   的位置（契约规定序号从 1 起无缺口，所以某位置上的条数就是该位置），「写入进程」写的是所连的
   Runtime 本身（PID、owner epoch、启动时间，均出自它自己的 `runtime-info.json`）。
 - 钉住之后，立刻在同一条连接上读一次 `status()` 和一次 `runtime_fact_snapshot()`，给实例卡
-  「运行时实例」几行。状态只在人按「跳到最新」时重读；跟随时钉点每移动一次，只重读任务事实。
+  「运行时实例」几行。状态只在人按「跳到最新」时重读；跟随时每一次轮询都只重读任务事实，与钉点是否移动无关。
   头两行写两次读各自所在的序号；两者都可能晚于钉住的快照，所以这是最近一次读到的状态，不是钉点上
   的状态。按契约，Runtime 会把这次状态读取本身记
   成一条观察事件（`command.validated`），落在钉点之后，不在本会话的快照内。随后对状态里登记的每个
@@ -76,7 +77,7 @@
 依赖钉在 Runtime **main** 上（`Cargo.toml`）：
 
 ```
-rev = "a1e40e091f400d7cde038c777756aac473cffa75"
+rev = "b77da659eaea427d1734d884c77416f849f7f684"
 ```
 
 四个 crate（contract / ledger / ledger-forensics / runtime-client）共用这一个 rev。
@@ -222,7 +223,7 @@ DPI；程序自己不设缩放。
 
 两层标签：上层是给人看的名字，下层灰色的是程序里的原样写法——原始 `event_type`、模块名、
 各种 id、`payload_schema`、sha256 一律不翻译。字典在 `crates/acui-rows/src/display.rs`，覆盖
-契约里全部 120 个 `event_type` 与 20 个 `origin.module`；**表里没有的一律照原样显示，不猜**。
+契约里全部 121 个 `event_type` 与 20 个 `origin.module`；**表里没有的一律照原样显示，不猜**。
 
 ### 设置文件
 
@@ -297,7 +298,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   `true`：解锁已落盘，下次启动会接管那个 epoch，但账本里缺它那条事实）。没有 JSON 时，**原样**写
   stderr 里最后一行 `FATAL actingd:`——参数错误，或装的 actingd 太旧、不认识这条命令。拉起失败、
   超时、输出无法解析或不合约定、`ok` 却退出码非 0，各有各的结果行，都不重试启动。除解锁成功外，
-  任何结果之后入口回到第一步；新的一次启动收起它，解锁进行中「启动」被拒。监控台不为它记
+  任何结果之后入口回到第一步；新的一次启动收起它。解锁进行中「启动」被拒；上一次「启动」的就绪轮询还没结束时再按，也直接拒回，写「上一次启动仍在等待就绪」，什么也不拉。监控台不为它记
   `client_action`：没有运行中的 Runtime 可经手，`unlock-owner` 自己追加 `cli.command` 事实（action
   `owner.unlock`）。它从不删除 `owner.lock`（Runtime `contracts/actingd-unlock-owner.md`）。
 - **请求关闭**：只走类型化客户端，从不杀进程。新开一条身份为 actor `user`、source `ui` 的连接
@@ -314,7 +315,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 - **永不杀**：`Child` 句柄只用来 `try_wait()` 看有没有早退，不 `kill`、不阻塞 `wait`、不挂
   job object；就绪判定结束就丢掉句柄，守护进程活得比监控台久。
 
-暂停/恢复、开机自启、安装器、联网下载都不在这一片里。
+暂停/恢复不在这一片里。开机自启、安装器与联网取件此后已经做出来，见「安装引导程序 acsetup」一节。
 
 ## 实例配置
 
@@ -377,7 +378,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 
 0. **位置**：只有安装根（可改，默认 `%LOCALAPPDATA%\Programs\ActingCommand`，不需要管理员）、该卷的
    可用空间、此处是否已有安装（看 `runtime\BUILD-MANIFEST.json`，写出它与 `ui\` 清单的提交号；已有就是
-   **升级**，见下文）。下一步时建好安装根与安装日志。引导若正从要升级的这份安装的 `runtime\`、`ui\`、
+   **升级**，见下文）。下一步时建好安装根与安装日志。新装时这一步还要求状态根可用、安装位置不含单引号（监控台设置把路径写成 TOML 字面量字符串，单引号写不进去），否则停在这一步。引导若正从要升级的这份安装的 `runtime\`、`ui\`、
    `tools\` 或 `previous\` 里运行，就停在这一步，并写出自身的文件名：那个目录挪不开；放在安装根本身或
    `downloads\` 下则照常升级。离线版在可用空间一行后面加上取出自带发布件所需的量。
 1. **安装**（已有安装时为**升级**，见下文），一页从下载做到铺开，成功后自动进入下一页。默认联网。一进这一步就经 HTTPS 向伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases)
@@ -413,9 +414,9 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `crates/acui-app/src/settings.rs` 一致，但 `acui-setup` 不依赖 `acui-app`，是一份小的重复写入器。这里
    `instances` 留空，由实例步填。随后的选项页有四个勾选，在工作线程里一起写（失败写在页面上，页面可继续用）：
    - **开机自启**（默认不勾）：勾了才在按用户的启动文件夹（系统的 `FOLDERID_Startup`）写 `ActingCommand.cmd`，
-     内容是 `start "" "<安装根>\runtime\actingcommand-actingd.exe" --config "<安装根>\actingd.config.json"`；
+     内容是 `@echo off` 加一行 `start "" "<安装根>\runtime\actingcommand-actingd.exe" --config "<安装根>\actingd.config.json"`；
      再勾「同时拉起监控台」才多一行 `start "" "<安装根>\ui\acui.exe"`。批处理里不出现 acsetup。不勾就什么也不写；
-     已有的同名文件不动，写进日志。
+     已有的同名文件不动，写进日志。安装位置含 `%` 时批处理无法原样引用，勾了开机自启就在这一步报错，页面可继续用。
    - **开始菜单快捷方式**（默认勾）与**桌面快捷方式**（默认不勾）：指向 `<安装根>\ui\acui.exe`、工作目录 `ui\`
      的 `ActingCommand.lnk`，放在按用户的开始菜单「程序」（`FOLDERID_Programs`）或桌面（`FOLDERID_Desktop`，
      桌面被重定向或在 OneDrive 里也照资源管理器的位置找），经系统自己的 `IShellLink` 写出。不勾就什么也不写；
@@ -430,17 +431,17 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    不关闭任何模拟器；只有一个实例时替人勾上。「重新查找」再来一遍；MuMu 栏清空后「重新查找」会重新探测。
    资源是发布件自带的资源仓**标准包**：`MEMBERS.json` 的 `bundles[]` 写明每个标准包与它的 sha256，文件就在下载文件夹里，
    安装时已按 `SHA256SUMS` 核过；第一次查找时，向导要求每个标准包以同一个 sha256 列在 `SHA256SUMS` 里，再核一次文件的
-   sha256 后读取。哪一项不过，就在注意事项里写明那个标准包，不提供它，其余照常提供。**不要人填路径、网址或哈希。**标准包里有
+   sha256 后读取。哪一项不过，就在注意事项里写明那个标准包，不提供它，其余照常提供。**不问网址，也不要人填哈希。**标准包里有
    `applications.json`（游戏、给了就有的显示名 `label`、各服务器的标签与安卓包名）和 `bundle.json`（每个包的路径、
-   包 id、服务器、sha256 与字节数，以及 `default_packs` 里各服务器的默认包）。页面写出它们支持的程序与包名——例如
+   包 id、服务器、sha256 与字节数，以及 `default_packs` 里各服务器的默认任务包）。页面写出它们支持的程序与包名——例如
    「蔚蓝档案 / Blue Archive：日服 com.YostarJP.BlueArchive」（标准包没给 `label` 时写 game id）——写明是否发布件自带，
-   声明了默认包却没有包名的服务器写明不可选。本机标准包文件可以随时加入，主要用在发布件没带标准包时：填绝对路径，点「加入」，
+   两类服务器写明不可选：声明了默认任务包却没有包名的，以及有包名却没有默认任务包的。本机标准包文件可以随时加入，主要用在发布件没带标准包时：填绝对路径，点「加入」，
    不要哈希；已有同一游戏（不分大小写）的标准包时拒收。每个勾选的实例
-   填别名（默认 `mumu-<序号>`），并**各自选**「程序 · 服务器 · 包名」，每个声明了默认包的服务器一项；只有一项时替每个
+   填别名（默认 `mumu-<序号>`），并**各自选**「程序 · 服务器 · 包名」，每个同时有包名与默认任务包的服务器一项；只有一项时替每个
    实例选上。向导不懂游戏，也不猜。「写入实例」把用到的每个标准包只放一次：各任务包按 `bundle.json` 逐个核对后原样放到
    `<安装根>\packages\<game>\`；日志按实例写明程序、任务包的包 id、路径与 sha256；再为每个勾选的实例写一项——别名、新的
    `instance_id`（`instance_` + 系统随机源 32 位十六进制）、`instance_index`、所选服务器的包名、
-   `touch_backend` 为 `adb_shell_input`、`capture_backend` 为 `adb`（实机确认 `nemu_ipc` 首帧前）、该服务器默认包的
+   `touch_backend` 为 `adb_shell_input`、`capture_backend` 为 `adb`（实机确认 `nemu_ipc` 首帧前）、该服务器默认任务包的
    绝对路径作 `resource_package`——先写进配置旁的 `actingd.config.candidate-<pid>.json`，由 Runtime 的
    `check-config` 检查（任务包加载不了的，写明别名、路径与加载器的原话）；通过才替换配置，随后重启 Runtime，
    `actingctl status` 必须应答。替换配置之前的失败写在页面与日志里，页面可继续用；之后的失败停下，任何一次日志
@@ -551,7 +552,7 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 绝不在事件循环里 panic。已拉起的 actingd 若等不到就绪线程，照样在跑，结果行直说，并提示再按一次「启动」即可探测。子进程终止了但
 回收失败时照实写，不说成终止失败。
 
-第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、sha2、
+第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、serde_json、anyhow、sha2、
 zip、getrandom、ureq 与（仅 Windows 的）windows，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
 
 ## 图标
@@ -582,11 +583,11 @@ zip、getrandom、ureq 与（仅 Windows 的）windows，不依赖上面任何�
   reader、整份哈希一次，受 `max_material_bytes` 与期限约束。离线读面以 8 MiB 帧上限和 30 秒
   期限调用它（Runtime 里还没有它的调用方定下期限；契约的 4 秒 `RUNTIME_MATERIAL_READ_BUDGET_MS`
   约束的是单段读，不是整份对象）。在线由类型化客户端的 `RuntimeClient::read_material_complete`
-  （`crates/runtime-client/src/client.rs:2089`）在校验过的分段上给出同样形状的结果，监控台以同样
+  （`crates/runtime-client/src/client.rs:2167`）在校验过的分段上给出同样形状的结果，监控台以同样
   的上限与期限调用它；Runtime 仍对每一段校验整份素材（一张 3.6 MB 的帧是 19 段 192 KiB）。
 - **实例事实：两张读面都已解决，位置不同**。在线经 `RuntimeClient::runtime_fact_snapshot()`
-  （`crates/runtime-client/src/client.rs:848`）读，它答的是 Runtime 最新位置上的状态，晚于钉点。离线由
-  `runtime_facts_at`（`crates/ledger-forensics/src/runtime_facts.rs:61`）按 Runtime 自己的重放规则，在
+  （`crates/runtime-client/src/client.rs:849`）读，它答的是 Runtime 最新位置上的状态，晚于钉点。离线由
+  `runtime_facts_at`（`crates/ledger-forensics/src/runtime_facts.rs:62`）按 Runtime 自己的重放规则，在
   钉住的位置本身重放事实库；监控台从不自己折叠 `runtime.fact_*` 事件。租约只来自在线的状态读取，离线
   没有。
 - **几何与帧在这两个根上凑不到一起**。0828 与 v5 两个根里，带 `capture.frame` 产物的事件
@@ -594,8 +595,8 @@ zip、getrandom、ureq 与（仅 Windows 的）windows，不依赖上面任何�
   `task.effect_intent`（0828 六条、v5 五条），payload 里是一个 tap 坐标，`links` 里**没有**
   `frame_id`。账本没有给出把这两者连起来的关系，监控台就不连——真实帧照画，叠加为空。
   钉住的 rev 上，`task.effect_intent` 可以给出坐标所在的画面范围（`frame_extent`，
-  `crates/actingcommand-contract/src/event/payload.rs:3315`），`task.geometry_observed` 可以给出其
-  画面的范围（`:3041`）；事件给了，叠加画布就用它。这两个根上的 effect intent 都没给，尺寸仍是
+  `crates/actingcommand-contract/src/event/payload.rs:3392`），`task.geometry_observed` 可以给出其
+  画面的范围（`TaskGeometryFrame::extent`，`:3093`）；事件给了，叠加画布就用它。这两个根上的 effect intent 都没给，尺寸仍是
   「未记录」。
 - **两个根里都没有产物淘汰事实**，所以淘汰占位在这两个根上不会出现；代码路径按契约写好。
 
