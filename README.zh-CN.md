@@ -77,7 +77,7 @@
 依赖钉在 Runtime **main** 上（`Cargo.toml`）：
 
 ```
-rev = "2b4dcb96c8edef3194798c6d9f9c753919a5de3d"
+rev = "825813119a02b708541353118e061e0c895940ff"
 ```
 
 四个 crate（contract / ledger / ledger-forensics / runtime-client）共用这一个 rev。
@@ -583,7 +583,7 @@ zip、getrandom、ureq 与（仅 Windows 的）windows，不依赖上面任何�
   reader、整份哈希一次，受 `max_material_bytes` 与期限约束。离线读面以 8 MiB 帧上限和 30 秒
   期限调用它（Runtime 里还没有它的调用方定下期限；契约的 4 秒 `RUNTIME_MATERIAL_READ_BUDGET_MS`
   约束的是单段读，不是整份对象）。在线由类型化客户端的 `RuntimeClient::read_material_complete`
-  （`crates/runtime-client/src/client.rs:2167`）在校验过的分段上给出同样形状的结果，监控台以同样
+  （`crates/runtime-client/src/client.rs:2192`）在校验过的分段上给出同样形状的结果，监控台以同样
   的上限与期限调用它；Runtime 仍对每一段校验整份素材（一张 3.6 MB 的帧是 19 段 192 KiB）。
 - **实例事实：两张读面都已解决，位置不同**。在线经 `RuntimeClient::runtime_fact_snapshot()`
   （`crates/runtime-client/src/client.rs:849`）读，它答的是 Runtime 最新位置上的状态，晚于钉点。离线由
