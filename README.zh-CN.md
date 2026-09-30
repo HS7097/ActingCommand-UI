@@ -84,9 +84,9 @@ rev = "825813119a02b708541353118e061e0c895940ff"
 `Cargo.lock` 入库，CI 在 windows-latest 与 ubuntu-latest 上跑
 `cargo build --locked --release --workspace`；闭包里含 `rusqlite`（bundled），两边都要 C 编译器。
 CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译。发版只按需：Actions → release → Run workflow
-（或 `gh workflow run release.yml -f bump=patch|minor|major [-f version=X.Y.Z] [-f source_sha=<sha>] [-f dry_run=true]`）
+（或 `gh workflow run release.yml -f bump=patch|minor|major [-f version=X.Y.Z] [-f source_sha=<sha>] [-f prerelease=true] [-f dry_run=true]`）
 编译选定的 `main` 提交，把 `acui-windows-<sha>.zip` 连同 `SHA256SUMS` 发布为本仓 Release `vX.Y.Z`，tag 建在该提交上；
-版本号只存在于 tag。
+勾选 `prerelease`（`-rc.N` 版本总是如此）时发为预发布，不标为 Latest；版本号只存在于 tag。
 
 ## 变了什么
 

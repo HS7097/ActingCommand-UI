@@ -109,9 +109,10 @@ The four crates (contract / ledger / ledger-forensics / runtime-client) share th
 ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compiler. CI builds pull
 requests and pushes to branches other than `main`; a push to `main` builds nothing. A release is on
 demand only: Actions → release → Run workflow (or `gh workflow run release.yml -f bump=patch|minor|major
-[-f version=X.Y.Z] [-f source_sha=<sha>] [-f dry_run=true]`) builds the chosen `main` commit and publishes
+[-f version=X.Y.Z] [-f source_sha=<sha>] [-f prerelease=true] [-f dry_run=true]`) builds the chosen `main` commit and publishes
 `acui-windows-<sha>.zip` with `SHA256SUMS` as this repository's Release `vX.Y.Z`, its tag on that exact
-commit; the version exists only in the tag.
+commit; with `prerelease` (always for an `-rc.N` version) it is a pre-release, never marked Latest; the
+version exists only in the tag.
 
 ## What changed
 
