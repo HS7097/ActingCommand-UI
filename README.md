@@ -106,7 +106,12 @@ rev = "825813119a02b708541353118e061e0c895940ff"
 
 The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
 `Cargo.lock` is checked in; CI runs `cargo build --locked --release --workspace` on windows-latest and
-ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compiler.
+ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compiler. CI builds pull
+requests and pushes to branches other than `main`; a push to `main` builds nothing. A release is on
+demand only: Actions → release → Run workflow (or `gh workflow run release.yml -f bump=patch|minor|major
+[-f version=X.Y.Z] [-f source_sha=<sha>] [-f dry_run=true]`) builds the chosen `main` commit and publishes
+`acui-windows-<sha>.zip` with `SHA256SUMS` as this repository's Release `vX.Y.Z`, its tag on that exact
+commit; the version exists only in the tag.
 
 ## What changed
 
@@ -496,8 +501,8 @@ list.
 `crates/acui-setup` is a standalone binary `acsetup.exe` (a Slint window, the same styling and icon as the
 console) that installs the release files from the umbrella repository's
 [Releases](https://github.com/HS7097/ActingCommand/releases) into a **per-user** installation. It ships
-together with the UI repository's Windows build artifact (`acui-windows-<sha>.zip` gains one more file,
-`acsetup.exe`). The same program comes in two editions, and a person downloads only one of them: the
+together with the UI repository's Windows build (`acui-windows-<sha>.zip`, an Actions artifact of a
+branch or pull-request build or an asset of a UI Release `vX.Y.Z`, gains one more file, `acsetup.exe`). The same program comes in two editions, and a person downloads only one of them: the
 online `acsetup.exe`, which fetches the release itself or takes a folder a person filled by hand, and
 the offline `acsetup-full-<tag>.exe`, which carries one whole release (see "Offline edition" below). One window,
 next only (the instances step can also be skipped), five steps; each page shows where its work stands
@@ -515,7 +520,7 @@ log" below):
    layout; on success the next page follows by itself. By default online. On entering, the umbrella
    [Releases](https://github.com/HS7097/ActingCommand/releases) are asked over HTTPS for one release: the
    newest stable release when there is one (GitHub's `releases/latest`), else the newest pre-release (the
-   daily builds); never a draft. Its tag, name, date, kind and size are shown and logged. "安装 / Install" fetches `SHA256SUMS`,
+   `build-*` pre-releases; the daily publish is paused); never a draft. Its tag, name, date, kind and size are shown and logged. "安装 / Install" fetches `SHA256SUMS`,
    `MEMBERS.json` and then every other file `SHA256SUMS` lists — nothing else — into
    `<install root>\downloads\<tag>\`, each through a `.part` file renamed once its length is the length
    the release states, with a progress line per tenth for a file of a MiB or more; a file already there is
