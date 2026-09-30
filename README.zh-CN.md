@@ -83,6 +83,10 @@ rev = "825813119a02b708541353118e061e0c895940ff"
 四个 crate（contract / ledger / ledger-forensics / runtime-client）共用这一个 rev。
 `Cargo.lock` 入库，CI 在 windows-latest 与 ubuntu-latest 上跑
 `cargo build --locked --release --workspace`；闭包里含 `rusqlite`（bundled），两边都要 C 编译器。
+CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译。发版只按需：Actions → release → Run workflow
+（或 `gh workflow run release.yml -f bump=patch|minor|major [-f version=X.Y.Z] [-f source_sha=<sha>] [-f prerelease=true] [-f dry_run=true]`）
+编译选定的 `main` 提交，把 `acui-windows-<sha>.zip` 连同 `SHA256SUMS` 发布为本仓 Release `vX.Y.Z`，tag 建在该提交上；
+勾选 `prerelease`（`-rc.N` 版本总是如此）时发为预发布，不标为 Latest；版本号只存在于 tag。
 
 ## 变了什么
 
@@ -371,7 +375,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 
 `crates/acui-setup` 是一个独立的二进制 `acsetup.exe`（Slint 窗口，与监控台同一套样式与图标），把
 伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases) 里的发布件装成一份**按用户**的安装。
-它随 UI 仓的 Windows 构建产物一起发布（`acui-windows-<sha>.zip` 里多一个 `acsetup.exe`）。
+它随 UI 仓的 Windows 构建一起发布（`acui-windows-<sha>.zip`——分支或 PR 构建的 Actions 产物，或 UI Release `vX.Y.Z` 的资产——里多一个 `acsetup.exe`）。
 同一个程序有两种形态，人只下载其中一个：在线版 `acsetup.exe` 自己去取发布件，也可以用人手工下好的文件夹；
 离线版 `acsetup-full-<tag>.exe` 自带一整个发布件（见下文「离线版」）。一个窗口，只有下一步（实例步可跳过），五步；每页像安装器那样只显示
 进行到哪了，详情全写进安装日志（见下文「进度与安装日志」）：
@@ -382,7 +386,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `tools\` 或 `previous\` 里运行，就停在这一步，并写出自身的文件名：那个目录挪不开；放在安装根本身或
    `downloads\` 下则照常升级。离线版在可用空间一行后面加上取出自带发布件所需的量。
 1. **安装**（已有安装时为**升级**，见下文），一页从下载做到铺开，成功后自动进入下一页。默认联网。一进这一步就经 HTTPS 向伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases)
-   要一个发布件：有正式版取最新正式版（GitHub 的 `releases/latest`），否则取最新预发布（每日构建），从不取草稿；页面与日志写明它的标签、
+   要一个发布件：有正式版取最新正式版（GitHub 的 `releases/latest`），否则取最新预发布（`build-*` 预发布；每日发布已暂停），从不取草稿；页面与日志写明它的标签、
    名称、日期、种类与大小。点「安装」依次下载 `SHA256SUMS`、`MEMBERS.json`，再下载 `SHA256SUMS` 列出的
    其余文件——别的一个不下——存到 `<安装根>\downloads\<标签>\`；每个文件先写 `.part`，长度等于发布件
    声明的长度才改名，1 MiB 以上的文件每满十分之一写一行进度；目录里已有的同名文件重新下载，从不直接采信，
