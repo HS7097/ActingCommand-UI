@@ -101,7 +101,7 @@ as usual.
 Dependencies are pinned to the Runtime's **main** (`Cargo.toml`):
 
 ```
-rev = "2b4dcb96c8edef3194798c6d9f9c753919a5de3d"
+rev = "825813119a02b708541353118e061e0c895940ff"
 ```
 
 The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
@@ -805,7 +805,7 @@ pinned rev.
   with the 8 MiB frame limit and a 30-second deadline (no Runtime caller of it sets one yet; the
   contract's 4-second `RUNTIME_MATERIAL_READ_BUDGET_MS` bounds a single range read, not a whole
   object). Online, the typed client's `RuntimeClient::read_material_complete`
-  (`crates/runtime-client/src/client.rs:2167`) gives the same result shape over verified ranges, and the
+  (`crates/runtime-client/src/client.rs:2192`) gives the same result shape over verified ranges, and the
   console calls it with the same limit and deadline; the Runtime still verifies the whole material for
   every range (a 3.6 MB frame is 19 ranges of 192 KiB).
 - **Instance facts: resolved on both faces, at different positions**. Online, the fact store is read
