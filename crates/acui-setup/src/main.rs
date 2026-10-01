@@ -30,6 +30,8 @@ mod platform;
 mod runtime;
 mod upgrade;
 mod verify;
+#[cfg(test)]
+mod one_off_a3;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
