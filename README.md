@@ -599,7 +599,11 @@ log" below):
    **No URL is asked for, and no hash is typed by hand.** A bundle holds
    `applications.json` (the game, its display name `label` when given, and each server's label and
    Android package name) and `bundle.json` (every pack's path, package id, server, sha256 and size, and
-   each server's default pack in `default_packs`). The page lists the programs and package names they
+   each server's default pack in `default_packs`). A bundle whose `bundle.json` is
+   `actingcommand.bundle.v2` (the contract's `BundleIndexV2`, Workflow #288) maps each package id to a
+   content directory `packs/<digest>/` named by its `content-directory.v1` digest, and a server's
+   default pack is the one `applications.json` names in `servers.<server>.default_package_id`; v1 is
+   read as before. The page lists the programs and package names they
    support — for example "蔚蓝档案 / Blue Archive：日服 com.YostarJP.BlueArchive" (the game id when a
    bundle gives no `label`) — whether each came with the release, and two kinds of server as not offered:
    one that names a default pack but no package name, and one with a package name but no default pack.
@@ -610,12 +614,19 @@ log" below):
    name and a default pack;
    when there is only one, it is chosen for every instance. The wizard knows no game and guesses none.
    "写入实例 / Apply" lays each bundle used out once, byte for byte, under
-   `<install root>\packages\<game>\`, each pack checked against `bundle.json` first; logs, per instance,
+   `<install root>\packages\<game>\`, each pack checked against `bundle.json` first. A v2 pack is
+   streamed file by file into `<digest>.part\`, each file hashed as it is written, and renamed to
+   `<digest>\` only once the files, bytes and `content-directory.v1` digest are the index's; a
+   `<digest>\` already there is read whole and reused when its digest matches, and otherwise renamed
+   `<digest>.broken-<unix>` (kept, said in the notes) and unpacked again; a failed unpack is kept under
+   that name too. Older directories and zips are left in place, and neither declaration is written into
+   the install root. Logs, per instance,
    the program, the pack's package id, path and sha256; then writes one entry per ticked instance —
    alias, a new `instance_id` (`instance_` + 32 hex from the OS RNG), `instance_index`, the chosen
    server's package name, `touch_backend` `adb_shell_input`, `capture_backend` `adb` (until a first
    `nemu_ipc` frame is confirmed on the real machine), and the absolute path of that server's default
-   pack as `resource_package` — into `actingd.config.candidate-<pid>.json` next to the configuration. The Runtime's `check-config` checks
+   pack (for v2 its `<digest>\` directory, which a Runtime with content-directory support admits in
+   full) as `resource_package` — into `actingd.config.candidate-<pid>.json` next to the configuration. The Runtime's `check-config` checks
    it (a package that does not load is named with its alias, path and the loader's message); only an
    accepted candidate replaces the configuration, and the Runtime is restarted on it and `actingctl
    status` must answer. A failure before the configuration is replaced is said on the page and in the log
@@ -720,11 +731,13 @@ PATH, does not write the registry; does not modify the configuration template; d
 that already holds content; goes on the network only to list and fetch the umbrella release — the
 offline edition not at all; stops or starts the Runtime only on an upgrade and in the
 instances step, as above;
-does not unpack a sealed resource pack — the Runtime loads it (a bundle's packs are taken out whole). On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
+does not unpack a sealed resource pack — the Runtime loads it (a v1 bundle's packs are taken out whole; a v2 bundle's packs are content directories, laid out file by file as above). On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
 immediately with `acsetup v1 is Windows-only`.
 
-Five dependencies are added (the offline edition's reading of its own executable is hand-written and
-adds none), each with its purpose noted in `[workspace.dependencies]`: `sha2`
+Six dependencies are added (the offline edition's reading of its own executable is hand-written and
+adds none), each with its purpose noted in `[workspace.dependencies]`: `actingcommand-contract` (bundle
+index v2 and the `content-directory.v1` digest, one implementation; the console's rev, and it brings only
+`serde`, `serde_json` and `sha2`), `sha2`
 (verification), `zip` (`default-features = false`, only `deflate` enabled, the same version line the
 Runtime locks), `getrandom` (the salt and `instance_id`), `ureq` (the fetch; `default-features = false` with only `tls`:
 rustls, its `ring` provider and the compiled-in `webpki-roots`, so no system TLS library) and, on
@@ -774,7 +787,7 @@ cannot start keeps running, and the line says so and that pressing Start again p
 said as that, not as a kill that failed.
 
 A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
-depending only on slint, serde, serde_json, anyhow, sha2, zip, getrandom, ureq and (Windows only) windows, and on none of the layers above; see the previous
+depending only on slint, serde, serde_json, anyhow, sha2, zip, getrandom, ureq, actingcommand-contract and (Windows only) windows, and on none of the layers above; see the previous
 section, "Setup wizard acsetup".
 
 ## Icon

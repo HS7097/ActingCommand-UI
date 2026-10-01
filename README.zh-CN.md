@@ -437,16 +437,22 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    安装时已按 `SHA256SUMS` 核过；第一次查找时，向导要求每个标准包以同一个 sha256 列在 `SHA256SUMS` 里，再核一次文件的
    sha256 后读取。哪一项不过，就在注意事项里写明那个标准包，不提供它，其余照常提供。**不问网址，也不要人填哈希。**标准包里有
    `applications.json`（游戏、给了就有的显示名 `label`、各服务器的标签与安卓包名）和 `bundle.json`（每个包的路径、
-   包 id、服务器、sha256 与字节数，以及 `default_packs` 里各服务器的默认任务包）。页面写出它们支持的程序与包名——例如
+   包 id、服务器、sha256 与字节数，以及 `default_packs` 里各服务器的默认任务包）。`bundle.json` 为
+   `actingcommand.bundle.v2`（契约的 `BundleIndexV2`，Workflow #288）的标准包，把每个包 id 映射到以
+   `content-directory.v1` 摘要命名的内容目录 `packs/<digest>/`，各服务器的默认任务包取 `applications.json` 的
+   `servers.<server>.default_package_id`；v1 照旧读取。页面写出它们支持的程序与包名——例如
    「蔚蓝档案 / Blue Archive：日服 com.YostarJP.BlueArchive」（标准包没给 `label` 时写 game id）——写明是否发布件自带，
    两类服务器写明不可选：声明了默认任务包却没有包名的，以及有包名却没有默认任务包的。本机标准包文件可以随时加入，主要用在发布件没带标准包时：填绝对路径，点「加入」，
    不要哈希；已有同一游戏（不分大小写）的标准包时拒收。每个勾选的实例
    填别名（默认 `mumu-<序号>`），并**各自选**「程序 · 服务器 · 包名」，每个同时有包名与默认任务包的服务器一项；只有一项时替每个
    实例选上。向导不懂游戏，也不猜。「写入实例」把用到的每个标准包只放一次：各任务包按 `bundle.json` 逐个核对后原样放到
-   `<安装根>\packages\<game>\`；日志按实例写明程序、任务包的包 id、路径与 sha256；再为每个勾选的实例写一项——别名、新的
+   `<安装根>\packages\<game>\`。v2 任务包逐个文件流式解到 `<digest>.part\`，边写边算每个文件的哈希，文件数、字节数与
+   `content-directory.v1` 摘要都与索引一致才改名为 `<digest>\`；已有的 `<digest>\` 整个读一遍，摘要一致就复用，不一致就改名
+   `<digest>.broken-<unix>` 保留（写进注意事项）后重新解包；解包失败的也按这个名字保留。旧目录与旧 zip 原样留着，两份声明不落到
+   安装根。日志按实例写明程序、任务包的包 id、路径与 sha256；再为每个勾选的实例写一项——别名、新的
    `instance_id`（`instance_` + 系统随机源 32 位十六进制）、`instance_index`、所选服务器的包名、
    `touch_backend` 为 `adb_shell_input`、`capture_backend` 为 `adb`（实机确认 `nemu_ipc` 首帧前）、该服务器默认任务包的
-   绝对路径作 `resource_package`——先写进配置旁的 `actingd.config.candidate-<pid>.json`，由 Runtime 的
+   绝对路径（v2 为它的 `<digest>\` 目录，支持内容目录的 Runtime 会完整准入）作 `resource_package`——先写进配置旁的 `actingd.config.candidate-<pid>.json`，由 Runtime 的
    `check-config` 检查（任务包加载不了的，写明别名、路径与加载器的原话）；通过才替换配置，随后重启 Runtime，
    `actingctl status` 必须应答。替换配置之前的失败写在页面与日志里，页面可继续用；之后的失败停下，任何一次日志
    写入失败也停下。离开这一步时再问一次 `mumu_root` 的现值与 Runtime 是否应答，写进摘要。
@@ -514,10 +520,12 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 
 **永远不做的事**：不装服务、不建计划任务、不改 PATH、不写注册表；不改配置模板；不碰已有内容的状态根；
 联网只为列出与下载伞仓发布件——离线版完全不联网；只在升级时与实例步按上文关闭与拉起 Runtime；
-不解开密封任务包——由 Runtime 加载（标准包里的任务包是整个取出）。Linux 上 crate
+不解开密封任务包——由 Runtime 加载（v1 标准包里的任务包是整个取出；v2 标准包里的任务包本就是内容目录，按上文逐个文件放置）。Linux 上 crate
 照常编译（CI 两条腿都跑 `--workspace`），运行即以 `acsetup v1 is Windows-only` 退出。
 
-依赖多五个（离线版读取自身 exe 是手写的，不加依赖），都在 `[workspace.dependencies]` 里注明用途：`sha2`（校验）、`zip`
+依赖多六个（离线版读取自身 exe 是手写的，不加依赖），都在 `[workspace.dependencies]` 里注明用途：
+`actingcommand-contract`（标准包索引 v2 与 `content-directory.v1` 摘要，只此一份实现；与监控台同一 rev，只带来
+`serde`、`serde_json` 与 `sha2`）、`sha2`（校验）、`zip`
 （`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（salt 与
 `instance_id`）、
 `ureq`（取件；`default-features = false`，只开 `tls`：rustls、它的 `ring` 实现与编译进去的
@@ -557,7 +565,7 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 回收失败时照实写，不说成终止失败。
 
 第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、serde_json、anyhow、sha2、
-zip、getrandom、ureq 与（仅 Windows 的）windows，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
+zip、getrandom、ureq、actingcommand-contract 与（仅 Windows 的）windows，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
 
 ## 图标
 

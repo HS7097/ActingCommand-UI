@@ -260,6 +260,7 @@ dependencies = [
 name = "acui-setup"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-contract",
  "anyhow",
  "getrandom 0.4.3",
  "serde",
