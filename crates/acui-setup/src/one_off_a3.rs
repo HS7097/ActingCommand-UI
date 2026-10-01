@@ -370,7 +370,7 @@ fn one_off_a3_bundle_v2_install_and_v1_unchanged() {
         "state_root": state_root,
         "bind_host": "127.0.0.1",
         "bind_port": 0,
-        "secret_fingerprint_salt": "one-off-a3-salt",
+        "secret_fingerprint_salt": "one-off-a3-fixture-salt",
         "instances": [{
             "alias": "one-off",
             "instance_id": format!("instance_{}", "0".repeat(31) + "1"),
