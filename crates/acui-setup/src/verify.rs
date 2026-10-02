@@ -25,11 +25,25 @@ const UI_REPOSITORY: &str = "HS7097/ActingCommand-UI";
 const RUNTIME_LAYOUT: &str = "distribution-v1";
 
 /// What the runtime zip must hold for anything to be configured, what the
-/// console zip must hold to be opened, and the three tools that are
-/// installed — the other two in that zip are neither installed nor shown.
+/// console zip must hold to be opened, and what of the tools zip is
+/// installed: three tools — the other two at its root are neither installed
+/// nor shown — and the five files of the official Android platform-tools
+/// under `platform-tools/`, the adb the Runtime uses by default (Workflow
+/// #337). A tools zip without any one of them is refused.
 const RUNTIME_REQUIRED: &[&str] = &["actingcommand-actingd.exe"];
 const UI_REQUIRED: &[&str] = &["acui.exe"];
-pub const TOOLS_INSTALLED: &[&str] = &["actinglab.exe", "actingledger.exe", "ac_fastdeploy_ppocr.dll"];
+pub const TOOLS_INSTALLED: &[&str] = &[
+    "actinglab.exe",
+    "actingledger.exe",
+    "ac_fastdeploy_ppocr.dll",
+    "platform-tools/adb.exe",
+    "platform-tools/AdbWinApi.dll",
+    "platform-tools/AdbWinUsbApi.dll",
+    "platform-tools/NOTICE.txt",
+    "platform-tools/source.properties",
+];
+/// The directory of `tools\` the platform-tools files are in.
+pub const PLATFORM_TOOLS: &str = "platform-tools";
 
 /// Where a step's account goes: every line into the install log, and — for
 /// the page — where the work stands and what the person must see. An error
@@ -106,9 +120,12 @@ struct ManifestFile {
     sha256: String,
 }
 
-/// What one zip must be.
+/// What one zip must be, and the directory of staging it is unpacked into.
 struct Expect<'a> {
     name: String,
+    /// `runtime`, `ui` or `tools`, as under the install root: an actingd run
+    /// from `<staging>\runtime\` finds the staged adb in `<staging>\tools\`.
+    dir: &'static str,
     repository: &'a str,
     sha: &'a str,
     required: &'a [&'a str],
@@ -172,6 +189,7 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
         &listed,
         &Expect {
             name: format!("actingcommand-runtime-{}.zip", members.runtime_sha),
+            dir: "runtime",
             repository: RUNTIME_REPOSITORY,
             sha: &members.runtime_sha,
             required: RUNTIME_REQUIRED,
@@ -186,6 +204,7 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
         &listed,
         &Expect {
             name: format!("acui-windows-{}.zip", members.ui_sha),
+            dir: "ui",
             repository: UI_REPOSITORY,
             sha: &members.ui_sha,
             required: UI_REQUIRED,
@@ -200,6 +219,7 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
         &listed,
         &Expect {
             name: format!("actingcommand-tools-{}.zip", members.runtime_sha),
+            dir: "tools",
             repository: RUNTIME_REPOSITORY,
             sha: &members.runtime_sha,
             required: TOOLS_INSTALLED,
@@ -268,7 +288,8 @@ pub fn parse_sha256sums(text: &str) -> Result<Vec<(String, String)>, String> {
 }
 
 /// One zip: listed in SHA256SUMS (so already hashed), unpacked into its own
-/// directory under staging, then checked against its manifest.
+/// directory under staging — `runtime`, `ui` or `tools` — then checked
+/// against its manifest.
 fn stage(
     download: &Path,
     staging: &Path,
@@ -280,8 +301,8 @@ fn stage(
     if !listed.contains(name) {
         return Err(format!("SHA256SUMS 未列出 / not listed in SHA256SUMS: {name}"));
     }
-    let dir = staging.join(name.trim_end_matches(".zip"));
-    report.line(&format!("正在解压 / unpacking: {name}"))?;
+    let dir = staging.join(expect.dir);
+    report.line(&format!("正在解压 / unpacking: {name} → {}", dir.display()))?;
     let count = extract(&download.join(name), name, &dir)?;
     report.line(&format!("已解压 / unpacked: {name}（{count} 个文件 / files）"))?;
     check_manifest(&dir, expect, report)

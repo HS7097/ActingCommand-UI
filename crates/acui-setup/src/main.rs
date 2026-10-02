@@ -10,7 +10,8 @@
 //! configuration and the console's settings, optionally a Startup-folder
 //! launcher and the emulator instances (see `instance_step`), and can open the
 //! console. On a root that already holds an installation it upgrades instead:
-//! the payload replaced, state and configuration kept (see `upgrade`). The
+//! the payload replaced, state and configuration kept, then the ADB server
+//! checked with the adb just laid out (see `upgrade` and `adb_server`). The
 //! fetch of the release — the resource bundles it carries among its files — is
 //! its only network code; it registers no service and no scheduled task, and
 //! touches neither PATH nor the registry.
@@ -20,6 +21,7 @@
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod adb_server;
 mod bundle;
 mod fetch;
 mod install;
@@ -46,6 +48,7 @@ use instance_step::{Chosen, Found, Settled};
 use log::InstallLog;
 use payload::Payload;
 use slint::{Model, VecModel};
+use adb_server::AdbServer;
 use upgrade::{Installed, Upgraded};
 use verify::{Report, Reporter, Step, Total};
 
@@ -597,12 +600,13 @@ fn enter_carried(window: &SetupWindow, state: &Shared) {
             short(&wanted.0),
             short(&wanted.1)
         );
-        let have = state.installed.as_ref().map(|installed| (installed.runtime_sha.clone(), installed.ui_sha.clone()));
-        if let Some(have) = &have {
+        let installed = state.installed.as_ref();
+        if let Some(installed) = installed {
             line.push('\n');
-            line.push_str(&upgrade_line(have, wanted));
+            line.push_str(&upgrade_line(installed, wanted));
         }
-        (line, payload.members_text.clone(), have.is_some(), have.as_ref() == Some(wanted))
+        let current = installed.is_some_and(|installed| installed.current(wanted));
+        (line, payload.members_text.clone(), installed.is_some(), current)
     };
     if let Err(reason) = write_log(state, &line) {
         fail(state, &window.as_weak(), reason);
@@ -699,30 +703,28 @@ fn find_release(window: &SetupWindow, state: &Shared) {
     let (state, worker_weak) = (Arc::clone(state), weak.clone());
     let spawned = std::thread::Builder::new().name("acsetup-release".into()).spawn(move || {
         let _guard = PanicGuard::new(&state, &worker_weak);
-        let (root, have) = {
+        let (root, installed) = {
             let locked = lock(&state);
-            let have = locked
-                .installed
-                .as_ref()
-                .map(|installed| (installed.runtime_sha.clone(), installed.ui_sha.clone()));
-            (locked.root.clone(), have)
+            (locked.root.clone(), locked.installed.clone())
         };
         // An upgrade reads the release's MEMBERS.json first: the same two
-        // commits need nothing fetched, an older release the person's word.
+        // commits with AC's adb in place need nothing fetched, an older
+        // release the person's word.
         let found = fetch::choose().and_then(|release| {
             release.folder()?;
-            let text = have.as_ref().map(|_| fetch::members(&release)).transpose()?;
+            let text = installed.as_ref().map(|_| fetch::members(&release)).transpose()?;
             let wanted = text.as_deref().map(verify::members_of).transpose()?;
             Ok((release, wanted, text))
         });
         let (line, current) = match &found {
             Ok((release, wanted, _)) => {
                 let mut line = release_line(release);
-                if let (Some(have), Some(wanted)) = (&have, wanted) {
+                if let (Some(installed), Some(wanted)) = (&installed, wanted) {
                     line.push('\n');
-                    line.push_str(&upgrade_line(have, wanted));
+                    line.push_str(&upgrade_line(installed, wanted));
                 }
-                (line, wanted.is_some() && wanted.as_ref() == have.as_ref())
+                let current = matches!((&installed, wanted), (Some(installed), Some(wanted)) if installed.current(wanted));
+                (line, current)
             }
             Err(reason) => (reason.clone(), false),
         };
@@ -764,15 +766,20 @@ fn find_release(window: &SetupWindow, state: &Shared) {
 
 const UP_TO_DATE: &str = "已是这个发布件的版本，无需升级 / Already at this release's version: nothing to upgrade";
 
-/// What an upgrade replaces with what.
-fn upgrade_line(have: &(String, String), wanted: &(String, String)) -> String {
-    format!(
+/// What an upgrade replaces with what — and, at the very release
+/// installed, that AC's adb is missing, so it is laid out again.
+fn upgrade_line(installed: &Installed, wanted: &(String, String)) -> String {
+    let mut line = format!(
         "升级 / Upgrade: runtime {} → {} · ui {} → {}",
-        short(&have.0),
+        short(&installed.runtime_sha),
         short(&wanted.0),
-        short(&have.1),
+        short(&installed.ui_sha),
         short(&wanted.1)
-    )
+    );
+    if !installed.adb && installed.runtime_sha == wanted.0 && installed.ui_sha == wanted.1 {
+        line.push_str("\n已是这个发布件的版本，但缺少 tools\\platform-tools\\adb.exe：按升级的方式重新铺开 / Already at this release's version, but tools\\platform-tools\\adb.exe is missing: it is laid out again the way an upgrade is");
+    }
+    line
 }
 
 fn short(sha: &str) -> &str {
@@ -839,18 +846,15 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
             );
             return;
         }
-        let have = lock(state)
-            .installed
-            .as_ref()
-            .map(|installed| (installed.runtime_sha.clone(), installed.ui_sha.clone()));
+        let installed = lock(state).installed.clone();
         let mut line = format!("发布件文件夹 / download folder: {}", download.display());
-        if let Some(have) = &have {
+        if let Some(installed) = &installed {
             let members = download.join("MEMBERS.json");
             let text = std::fs::read_to_string(&members)
                 .map_err(|error| format!("读取失败 / read failed: {}: {error}", members.display()));
             let wanted = text.as_deref().map_err(Clone::clone).and_then(verify::members_of);
             match wanted {
-                Ok(wanted) if &wanted == have => {
+                Ok(wanted) if installed.current(&wanted) => {
                     window.set_note(UP_TO_DATE.into());
                     return;
                 }
@@ -859,7 +863,7 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
                         return;
                     }
                     line.push_str(" · ");
-                    line.push_str(&upgrade_line(have, &wanted));
+                    line.push_str(&upgrade_line(installed, &wanted));
                 }
                 Err(reason) => {
                     window.set_note(reason.into());
@@ -1587,6 +1591,15 @@ fn summary(state: &Shared) -> String {
             short(&installed.ui_sha)
         ));
         lines.push(format!("被替换的版本 / Version replaced, kept in: {}", upgraded.previous.display()));
+        lines.push(match &upgraded.adb_server {
+            AdbServer::Ready(how) => {
+                format!("ADB 服务 / ADB server (127.0.0.1:{}): 就绪 / ready — {how}", adb_server::PORT)
+            }
+            AdbServer::NotReady(_) => format!(
+                "ADB 服务 / ADB server (127.0.0.1:{}): 未就绪，原因见下方「注意」/ NOT ready, why is under Note below",
+                adb_server::PORT
+            ),
+        });
         lines.push(match &upgraded.restarted {
             Some(log) => format!("Runtime 已用新版本重新拉起 / restarted on the new version; 日志 / log: {}", log.display()),
             None => "Runtime 升级前未在运行，未拉起 / was not running, not started".to_string(),
@@ -1597,9 +1610,10 @@ fn summary(state: &Shared) -> String {
         lines.push(format!("Runtime: {}", laid_out.actingd_exe.display()));
         lines.push(format!("监控台 / Console: {}", laid_out.acui_exe.display()));
         lines.push(format!(
-            "工具 / Tools: {}（{}）",
+            "工具 / Tools: {}（{}、{}）",
             laid_out.tools_dir.display(),
-            verify::TOOLS_INSTALLED.join("、")
+            verify::TOOLS_INSTALLED.iter().filter(|name| !name.contains('/')).copied().collect::<Vec<_>>().join("、"),
+            platform_tools(&laid_out.tools_dir)
         ));
     }
     if let Some(configured) = &state.configured {
@@ -1674,6 +1688,20 @@ fn summary(state: &Shared) -> String {
         );
     }
     lines.join("\n")
+}
+
+/// `platform-tools` with the revision its own `source.properties` names, as
+/// laid out (a file the tools manifest binds, so never guessed).
+fn platform_tools(tools_dir: &Path) -> String {
+    let properties = tools_dir.join(verify::PLATFORM_TOOLS).join("source.properties");
+    let revision = std::fs::read_to_string(properties).ok().and_then(|text| {
+        text.lines()
+            .find_map(|line| line.trim().strip_prefix("Pkg.Revision=").map(|value| value.trim().to_string()))
+    });
+    match revision {
+        Some(revision) => format!("{}（adb {revision}）", verify::PLATFORM_TOOLS),
+        None => verify::PLATFORM_TOOLS.to_string(),
+    }
 }
 
 /// The finish page: the console, detached, and the wizard closed.
