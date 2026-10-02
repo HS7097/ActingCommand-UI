@@ -19,7 +19,7 @@
 //! The wizard is Windows-only. Elsewhere it compiles, and the first platform
 //! question is the loud stop, before any window is opened.
 
-#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod adb_server;
 mod bundle;
@@ -32,9 +32,6 @@ mod platform;
 mod runtime;
 mod upgrade;
 mod verify;
-// TEMPORARY one-off for Workflow #337 U1: reverted right after its run.
-#[cfg(all(test, windows))]
-mod oneoff;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
