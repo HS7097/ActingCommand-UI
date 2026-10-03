@@ -28,13 +28,13 @@ pub struct LaidOut {
 }
 
 /// `<root>\runtime` and `<root>\ui` get every manifest-bound file plus the
-/// manifest; `<root>\tools` gets only the three installed tools. Staging is
-/// removed afterwards.
+/// manifest; `<root>\tools` gets only what is installed of it — the three
+/// tools and `platform-tools\`. Staging is removed afterwards.
 pub fn lay_out(root: &Path, verified: &Verified, report: Report<'_>) -> Result<LaidOut, String> {
     let runtime_dir = root.join("runtime");
     let ui_dir = root.join("ui");
     let tools_dir = root.join("tools");
-    // Every manifest-bound file and the two manifests, then the three tools.
+    // Every manifest-bound file and the two manifests, then the tools.
     let total = verified.runtime.files.len() + verified.ui.files.len() + 2 + TOOLS_INSTALLED.len();
     report.step(Step::Phase("安装文件 / Installing files", Some(Total::Items(total as u64))))?;
     let mut done = 0;
@@ -76,8 +76,11 @@ fn copy_named(
     fs::create_dir_all(dest)
         .map_err(|error| format!("无法创建目录 / cannot create: {}: {error}", dest.display()))?;
     for name in names {
-        let from = staged.dir.join(name);
-        let to = dest.join(name);
+        // A manifest path is `/`-separated: joined segment by segment, so
+        // every path said in the log uses the one separator.
+        let relative: PathBuf = name.split('/').collect();
+        let from = staged.dir.join(&relative);
+        let to = dest.join(&relative);
         if let Some(parent) = to.parent() {
             fs::create_dir_all(parent).map_err(|error| {
                 format!("无法创建目录 / cannot create: {}: {error}", parent.display())

@@ -428,10 +428,10 @@ fn read_form(labels: &Labels, config: &ConfigWindow) -> Result<Form, String> {
             ("port", number("port", config.get_form_port(), u16_max)?),
         ]),
     }
-    // Only a MuMu binding has discovery to report adb; an explicit address
-    // has nothing else to find it by.
-    let adb = config.get_form_adb();
-    let adb = if kind == 2 { required("adb_path", adb)? } else { optional(adb) };
+    // Optional with every binding: left empty, the Runtime uses AC's own adb,
+    // `<install root>\tools\platform-tools\adb.exe`, its sha256 checked
+    // (Workflow #337 A4).
+    let adb = optional(config.get_form_adb());
     let nemu = config.get_form_nemu();
     let nemu =
         if nemu.trim().is_empty() { None } else { number("nemu_app_index", nemu, u32::MAX)? };

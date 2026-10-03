@@ -349,9 +349,13 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   的哪种绑定都表示不了的项——配置了 `fixture_backend`、设了 `serial`、一个绑定键都没写——照样列
   出，但点它会写明原因、不能保存。没有删除。`alias` 必填；新实例的 `instance_id` 是 `instance_`
   加系统随机源的 32 位小写十六进制，所有 `instance_id` 都只读显示；绑定恰好一种——`instance_index`
-  （MuMu 序号）、`instance_name`（MuMu 名称），或 `host` + `port`（显式 ADB 地址）。`adb_path` 在
-  `host` + `port` 下必填，在 MuMu 绑定下选填（由 MuMu 发现报告 adb）；`nemu_app_index` 是选填的整
-  数。`application_id`、`capture_backend`、`touch_backend` 表单不检查，要不要填、取值是否有效都由
+  （MuMu 序号）、`instance_name`（MuMu 名称），或 `host` + `port`（显式 ADB 地址）。`adb_path` 三种
+  绑定下都选填：留空则 Runtime 用 AC 自带的 adb（`<安装根>\tools\platform-tools\adb.exe`，Runtime 核它的
+  sha256，缺失或不符就拒绝启动）；MuMu 绑定下若填写，只能是 MuMu 自带的 adb 或 AC 自带的 adb。留空的
+  框不写这个键，编辑已有项时清空它会删掉这个键。这要配 v0.10 及以上的 Runtime；回退到 v0.9.0 之前，要给
+  没写 `adb_path` 的显式实例补上一个回退后仍在的 adb（不能是 AC 自带的那份），否则 v0.9.0 以
+  `instance_config_invalid` 拒绝。不要让 ALAS、MAA 等别的工具指向 AC 自带的这份 adb：升级时它会随
+  `tools\` 移开；想统一版本就另放一份字节相同的副本。`nemu_app_index` 是选填的整数。`application_id`、`capture_backend`、`touch_backend` 表单不检查，要不要填、取值是否有效都由
   check-config 判定，`nemu_app_index` 的配对也由它查。只有要靠 MuMu 发现结果的几项到 Runtime 启动
   时才查：`MuMuManager` 版本与能力、发现结果恰好匹配一个、声明的 `adb_path`、`host`、`port` 与发现值
   不冲突、ADB 端点（Runtime `contracts/actingd-check-config.md`，`3d5398d6` 起）。文本去掉首尾空白，
@@ -400,13 +404,17 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    下好的、离线的或取出的文件夹随后在同一页校验并铺开：要求文件夹里有 `SHA256SUMS`、`MEMBERS.json`、`actingcommand-runtime-<sha>.zip`、
    `actingcommand-tools-<sha>.zip`、`acui-windows-<sha>.zip`（`<sha>` 取 `MEMBERS.json` 的
    `runtime_sha` / `ui_sha`，三个 zip 必须在 `SHA256SUMS` 里）。逐条核对 `SHA256SUMS`；解压到安装根
-   下的临时目录 `.staging-<unix_ms>`；再按每个 zip 自带的 `BUILD-MANIFEST.json` 核对来源仓、提交号
+   下的临时目录 `.staging-<unix_ms>`，其下与安装根一样分 `runtime\`、`ui\`、`tools\`（升级时暂存的 Runtime
+   跑 `check-config`，认出的是暂存的 adb）；再按每个 zip 自带的 `BUILD-MANIFEST.json` 核对来源仓、提交号
    （等于 MEMBERS 的 sha）、Runtime 的 `runtime_payload_layout`（`distribution-v1`），以及 `files[]`
    每一项的大小与 sha256；zip 里多出清单没列的文件也算不一致。任何不一致都停下，措辞是
    「内容与创建时不一致」——这是完整性陈述，不是授权口吻。校验期间不运行 zip 里的任何东西。随后铺开：
    `runtime\`（Runtime 全部载荷 + 清单，`actingd.config.example.json` 逐字节原样）、
    `ui\`（监控台载荷 + 清单）、`tools\`（**只有** `actinglab.exe`、`actingledger.exe`、
-   `ac_fastdeploy_ppocr.dll`；tools 包里另外两个 exe 不装、不显示）。之后删除临时目录。
+   `ac_fastdeploy_ppocr.dll`，以及 `platform-tools\` 下 Google 官方 platform-tools 37.0.1 的五个文件
+   `adb.exe`、`AdbWinApi.dll`、`AdbWinUsbApi.dll`、`NOTICE.txt`、`source.properties`——Runtime 默认用的就是这份
+   adb；tools 包缺其中任何一个都按「缺少文件」停下，所以新向导装不了 v0.9.0 的发布件；tools 包根目录另外两个 exe
+   不装、不显示）。之后删除临时目录。完成页的「工具」一行写出 `source.properties` 里的版本。
 2. **选项**，配置已自动写好。铺开之后，在安装页、同一个不许关窗的区段里，新装不问任何问题就配置好：状态根为
    `<安装根>\state`（必须不存在或为空目录——在第 0 步、下载之前就检查；**已有内容的状态根一律不接管**）；
    生成 `secret_fingerprint_salt` = 系统随机源 32 字节的十六进制（`getrandom`；**不显示、不写日志**）；
@@ -461,8 +469,9 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    实例步拉起的 Runtime 继续运行；没有在运行的，由监控台的启动器拉起。
 
 **升级**：安装根里已有安装时。安装步先读发布件的 `MEMBERS.json`（联网时只读不存，离线时读文件夹里的，离线版读自带的），
-与已装清单的两个提交号比对：两个都相同就停在这里，写「已是这个发布件的版本」，什么也不下载。否则
-在按上文校验之后：
+与已装清单的两个提交号比对：两个都相同、且 `tools\platform-tools\adb.exe` 在，就停在这里，写「已是这个发布件的版本」，
+什么也不下载。两个提交号相同却缺这个 adb（例如用 v0.9.0 的向导装了带 platform-tools 的发布件）时不停，页面写明缺它，
+照下面的升级流程把同一个发布件重铺一遍。否则在按上文校验之后：
 
 1. 用新 Runtime 对现有 `actingd.config.json` 跑 `check-config`（其中 `state_root` 必须是绝对路径）；
    不接受就什么都不改；
@@ -472,13 +481,38 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    `actingctl request-shutdown --state-root <状态根> --wait 60` 请 Runtime 关闭，并等到所有权记录闭合、
    进程退出——放在最前，因为监控台拉起的 Runtime 以 `ui\` 为工作目录。没正常关闭就结束的 Runtime 留下的
    文件、没有应答的，写明并按未运行处理；
-4. 移开 `ui\`、`tools\`、`runtime\`——监控台开着会让第一个失败——按新装的方式铺开已校验的载荷。
+4. 移开 `ui\`、`tools\`、`runtime\`——监控台开着会让第一个失败——按新装的方式铺开已校验的载荷。`tools\` 照旧
+   整目录移开：正在运行的 adb 服务的映像不挡改名，随目录到 `previous\tools\platform-tools\` 照常运行。`ui\`
+   因为有进程以它为工作目录而整体移不开（Windows 共享冲突 32）时，先以写方式打开再立即关闭
+   `ui\acui.exe` 和 `runtime\actingcommand-actingd.exe`（不截断、不新建、不写入；运行中的 exe 这样打开会以 32
+   失败）：监控台在运行，照旧报「请先关闭监控台」并撤回；Runtime 在运行（没有 `runtime-info.json` 或不应答、
+   向导没认出的那种），报「Runtime 仍在运行，未能确认它已关闭：请先结束它再升级」并撤回；别的错误原样写出
+   路径与错误并撤回。两个都没在运行，占着 `ui\` 的就是别的进程——多半是监控台拉起的 Runtime 所起的 adb
+   服务——于是把 `ui\` 里的各项逐个移进 `previous\ui\`，目录留在原处，新版本照样铺进去，日志写一行说明；
+5. 铺好之后、重新拉起 Runtime 之前，检查 ADB 服务：用刚铺好的 `tools\platform-tools\adb.exe` 从安装根运行
+   `start-server`（每次至多 20 秒；它拉起的服务以安装根为工作目录，不会再占住 `ui\`）。能复用就复用；版本不同
+   由 adb 自己重启；有服务却在限时内不应答，或检查失败时，直接结束监听 127.0.0.1:5037 的进程（不问；日志写明
+   PID 与映像路径），再运行一次 `start-server`。第二次仍失败，就在页面与摘要的注意事项里写明「ADB 服务未就绪」
+   及原因——升级已完成，不回滚。摘要另有一行写 ADB 服务的结果。这是向导唯一运行 adb 的地方：升级之前和升级
+   过程中都不碰 ADB 服务。
 
-载荷铺好之前，任何失败都会删掉铺了一半的、把移开的目录和更早的 `previous\` 都放回去；被请求关闭且已退出的
+载荷铺好之前，任何失败都会删掉铺了一半的、把移开的目录和更早的 `previous\` 都放回去（逐项移开的 `ui\`：只在
+各项都已移走时，删掉这次铺进去的顶层项，再逐项按逆序放回，删掉空的 `previous\ui\`）；被请求关闭且已退出的
 Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何没能拉起）；关闭未确认的不去动它，写明。铺好之后删掉更早的 `previous\`，
 原先在运行的 Runtime 用新版本分离拉起：从安装根启动，输出写进 `<安装根>\actingd-<unix_ms>.log`，30 秒内
 它自己的 `runtime-info.json` 写出它的 pid 才算就绪。在那之前退出的，连同 `FATAL` 行一起写明；没按时就绪
-的写明可能仍在启动。无论哪种，新版本都已铺好，被替换的版本在 `previous\`。
+的写明可能仍在启动。无论哪种，新版本都已铺好，被替换的版本在 `previous\`。更早的 `previous\` 或残留目录删不掉时
+（服务一直从里面运行，`adb.exe` / `AdbWinApi.dll` 就删不掉），写进注意事项，不停下，下次升级再删。
+
+有人 cd 进 `tools\`（含子目录）或 `runtime\` 后手动运行 adb 或 actingd，拉起的服务以那里为工作目录，升级会按
+现有提示停下并撤回；不要这样运行。
+
+**回退到 v0.9.0**（手工把 `previous\` 搬回来，或用 v0.9.0 的向导勾选降级；本向导不装 v0.9.0，它的 tools 包没有
+platform-tools）：之前先给每个没写 `adb_path` 的显式实例补上一个回退后仍在的 adb（MuMu 自带的，或另放的同版本副本，
+不能是 AC 自带的那份），并删掉发现实例里写成 AC 自带 adb 的 `adb_path`；忘了补，v0.9.0 的 `check-config` 与启动都以
+`instance_config_invalid` 拒绝，不会静默运行。v0.9.0 的向导没有逐项移开：回退那一刻 `ui\` 若正被 adb 服务占作工作目录，
+它会误报「请先关闭监控台」并撤回——这时停掉 adb 服务后重试（会断开 ALAS/MAA），或改为手工回退（`ui\` 改名失败就
+逐项移开、逐项移回）。
 
 新旧按发布时间判断。每次安装与升级都把本次发布件的 `MEMBERS.json` 另存为 `<安装根>\installed-members.json`。
 要装的发布件 `published_at_utc` 早于这份记录时，写「按发布时间判断，看起来是降级」；没有这份记录的安装、记录的两个
@@ -494,7 +528,7 @@ Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何
 **进度与安装日志**：离开第 0 步起，每一行工作都写进 `<安装根>\acsetup-<unix_ms>.log`，日志写失败即停下。
 页面只显示阶段（例如「下载 / Downloading · 41.2/74.0 MiB」「安装文件 / Installing files · 118/260」）、
 一条进度条（不知道总量时——比如等 Runtime 关闭——只走动不计量）和最新一行日志作为「正在做什么」。
-人必须看到的——更早的 `previous\` 或残留目录没删掉、有 `runtime-info.json` 却没有 Runtime 应答——留在进度条下方，
+人必须看到的——更早的 `previous\` 或残留目录没删掉、有 `runtime-info.json` 却没有 Runtime 应答、升级后 ADB 服务未就绪——留在进度条下方，
 并写进摘要。失败时页面写原因、磁盘上留下了什么（临时目录删没删；新装时这次铺开了 `runtime\`、`ui\`、`tools\` 中哪些、
 重试前须删除）和日志路径；工作线程 panic 时也停下，写明 panic 信息。铺开并配置、升级换版本、写入选项、实例步写入期间窗口不关；查询或下载时
 可以关，这样留下的临时目录下次运行时删掉并写进日志。实例步拉起过 Runtime 时，第一次关闭会先说明它仍在运行。

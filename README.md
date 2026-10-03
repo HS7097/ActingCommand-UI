@@ -468,8 +468,15 @@ list.
   be saved. There is no delete. `alias` is required; a new entry's `instance_id` is `instance_` + 32
   lowercase hex characters from the OS RNG, and every `instance_id` is shown read-only; the binding is
   exactly one of `instance_index` (MuMu index), `instance_name` (MuMu name), or `host` + `port` (an
-  explicit ADB address). `adb_path` is required with `host` + `port` and optional with a MuMu binding,
-  whose discovery reports adb; `nemu_app_index` is an optional whole number. The form does not check
+  explicit ADB address). `adb_path` is optional with every binding: left empty, the Runtime uses AC's own
+  adb (`<install root>\tools\platform-tools\adb.exe`, whose sha256 the Runtime checks, refusing to start
+  when it is missing or differs); given with a MuMu binding, it may only be MuMu's own adb or AC's own
+  adb. An empty box writes no key, and emptying it on an existing entry removes the key. This needs a
+  Runtime of v0.10 or later; before going back to v0.9.0, give every explicit instance without
+  `adb_path` an adb that is still there afterwards (not AC's own), or v0.9.0 refuses it with
+  `instance_config_invalid`. Do not point ALAS, MAA or any other tool at AC's own adb: an upgrade moves it
+  aside with `tools\`; for the same version, keep a byte-identical copy elsewhere. `nemu_app_index` is an
+  optional whole number. The form does not check
   `application_id`, `capture_backend` or `touch_backend`: whether they are needed and valid is decided by
   check-config, which also checks the `nemu_app_index` pairing. Only what needs the MuMu discovery
   result waits until the Runtime starts: the `MuMuManager` version and capabilities, exactly one
@@ -540,7 +547,9 @@ log" below):
    `actingcommand-runtime-<sha>.zip`, `actingcommand-tools-<sha>.zip` and `acui-windows-<sha>.zip`
    (`<sha>` taken from `MEMBERS.json`'s `runtime_sha` / `ui_sha`; the three zips must appear in
    `SHA256SUMS`). `SHA256SUMS` is checked entry by entry; the archives are extracted into the temporary
-   directory `.staging-<unix_ms>` under the install root; then, against the `BUILD-MANIFEST.json` each zip
+   directory `.staging-<unix_ms>` under the install root, split like the install root into `runtime\`,
+   `ui\` and `tools\` (so the staged Runtime's `check-config` on an upgrade finds the staged adb); then,
+   against the `BUILD-MANIFEST.json` each zip
    carries, the source repository, the commit id (equal to the MEMBERS sha), the Runtime's
    `runtime_payload_layout` (`distribution-v1`) and the size and sha256 of every entry in `files[]` are
    checked; a file in the zip that the manifest does not list also counts as a mismatch. Any mismatch
@@ -548,8 +557,12 @@ log" below):
    statement, not an authorization tone. Nothing inside the zips is run during verification. Then the
    layout: `runtime\` (the Runtime's entire payload + manifest, with `actingd.config.example.json`
    byte-for-byte verbatim), `ui\` (the console payload + manifest), `tools\` (**only** `actinglab.exe`,
-   `actingledger.exe` and `ac_fastdeploy_ppocr.dll`; the other two exes in the tools pack are neither
-   installed nor shown). The temporary directory is deleted afterwards.
+   `actingledger.exe` and `ac_fastdeploy_ppocr.dll`, and under `platform-tools\` the five files of
+   Google's official platform-tools 37.0.1 — `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt`
+   and `source.properties` — the adb the Runtime uses by default; a tools pack without any one of them
+   stops it as a missing file, so this wizard does not install a v0.9.0 release; the other two exes at
+   the tools pack's root are neither installed nor shown). The temporary directory is deleted afterwards.
+   The finish page's Tools line names the version in `source.properties`.
 2. **Options**, the configuration already written. Right after the layout, on the install page and
    inside its do-not-close span, the fresh install is configured with no question asked: the state root
    is `<install root>\state` (it must not exist or must be an empty directory — checked on step 0,
@@ -639,8 +652,10 @@ log" below):
 
 **Upgrade**, on a root that already holds an installation. The install step reads the release's `MEMBERS.json`
 first (online without saving it, offline from the folder, the offline edition from what it carries) and compares its two commits with the ones the
-installed manifests name: the same two stop there, "already at this release's version", with nothing
-fetched. Otherwise, after verifying as above:
+installed manifests name: the same two, with `tools\platform-tools\adb.exe` in place, stop there,
+"already at this release's version", with nothing fetched. The same two without that adb (say, a release
+with platform-tools installed by the v0.9.0 wizard) do not stop: the page says it is missing, and the same
+release is laid out again the way an upgrade is, below. Otherwise, after verifying as above:
 
 1. the new Runtime runs `check-config` on the existing `actingd.config.json` (its `state_root` must be
    absolute); refused, nothing is changed;
@@ -653,17 +668,55 @@ fetched. Otherwise, after verifying as above:
    console started works in `ui\`. A file left by a Runtime that ended without shutting down, with no
    answer, is said and taken as not running;
 4. `ui\`, `tools\` and `runtime\` move aside — an open console makes the first fail — and the verified
-   payload is laid out as on a fresh install.
+   payload is laid out as on a fresh install. `tools\` moves whole as before: the image of a running adb
+   server does not keep it from moving, and goes on running from `previous\tools\platform-tools\`. When
+   `ui\` cannot move as a whole because some process works in it (Windows sharing violation 32),
+   `ui\acui.exe` and `runtime\actingcommand-actingd.exe` are opened for writing and closed at once
+   (nothing truncated, created or written; a running exe opened that way fails with 32): a running
+   console stops it as before, "close the console first", and everything goes back; a running Runtime
+   the wizard did not recognise (no `runtime-info.json`, or one that did not answer) stops it with "the
+   Runtime still runs and its shutdown could not be confirmed: end it first, then upgrade"; any other
+   error is said with its path. With neither running, what works in `ui\` is some other process — most
+   likely an adb server a Runtime started from the console — so the entries of `ui\` move into
+   `previous\ui\` one by one, the directory stays, the new version is laid out into it, and the log says
+   so in one line;
+5. once laid out, before a Runtime starts again, the ADB server is checked: the `tools\platform-tools\adb.exe`
+   just laid out runs `start-server` from the install root (at most 20 seconds each time; a server it
+   starts works in the install root, never in `ui\`). A server that answers is reused; one of another
+   version adb restarts itself; when a server is there but does not answer within the time, or the check
+   fails, every process listening on 127.0.0.1:5037 is ended without a question (its PID and image path
+   in the log) and `start-server` runs once more. A second failure is said in the page's and the
+   summary's notes as "the ADB server is not ready", with why — the upgrade stays in place. The summary
+   has a line on the ADB server either way. This is the only adb the wizard runs: before and during the
+   upgrade the ADB server is left alone.
 
 Until the payload is laid out, any failure removes what was half laid out, puts every moved directory
-and the older `previous\` back, and starts a Runtime that was asked to shut down — and is gone — again
+and the older `previous\` back (a `ui\` emptied entry by entry: only once every entry had left, the names
+laid into it are removed, then each entry moves back, the last first, and the empty `previous\ui\` is
+removed), and starts a Runtime that was asked to shut down — and is gone — again
 on the version still installed (said, with its log, or why it could not be); one whose shutdown was not
 confirmed is left alone, and said so. Once laid out, the older `previous\` is
 removed, and a Runtime that was running is started again on the new version: detached, from the install
 root, its output in `<install root>\actingd-<unix_ms>.log`, up once its own `runtime-info.json` names
 its pid within 30 seconds. An exit before that is said with its `FATAL` line; no answer in time is said
 as possibly still starting. Either way the new version stays laid out and the version replaced in
-`previous\`.
+`previous\`. An older `previous\` or leftover that cannot be removed (a server still running from it keeps
+`adb.exe` and `AdbWinApi.dll` there) goes into the notes without stopping anything, and the next upgrade
+retries.
+
+A server started by running adb or actingd by hand after a `cd` into `tools\` (or below it) or `runtime\`
+works there, and an upgrade stops on it with the existing hints and puts everything back; do not run them
+that way.
+
+**Going back to v0.9.0** (moving `previous\` back by hand, or the v0.9.0 wizard with Confirm downgrade;
+this wizard does not install v0.9.0, whose tools pack has no platform-tools): first give every explicit
+instance without `adb_path` an adb that is still there afterwards (MuMu's own, or a copy of the same
+version kept elsewhere — not AC's own), and remove an `adb_path` naming AC's own adb from a discovered
+instance; forgotten, v0.9.0's `check-config` and start refuse with `instance_config_invalid`, never
+silently. The v0.9.0 wizard has no entry-by-entry move: if `ui\` is an adb server's working directory at
+that moment, it says "close the console first" although the console is closed, and puts everything back
+— then stop the adb server and try again (ALAS/MAA lose their connection), or go back by hand (a `ui\`
+that cannot be renamed is emptied and refilled entry by entry).
 
 Newer or older is judged by publication time. Every install and upgrade keeps the release's
 `MEMBERS.json` as `<install root>\installed-members.json`. A release whose `published_at_utc` is earlier
@@ -686,7 +739,8 @@ person's choice.
 phase (for example "下载 / Downloading · 41.2/74.0 MiB" or "安装文件 / Installing files · 118/260"), a
 progress bar — moving without a size where none is known, such as while the Runtime shuts down — and
 the latest log line as the one thing being done now. What the person must see — an older `previous\`
-or a leftover that could not be removed, a `runtime-info.json` no Runtime answers for — stays under the
+or a leftover that could not be removed, a `runtime-info.json` no Runtime answers for, an ADB server not
+ready after an upgrade — stays under the
 bar and is repeated in the summary. On failure the page shows the reason, what was left on disk (the
 staging directory removed or not; on a fresh install, which of `runtime\`, `ui\` and `tools\` this run
 laid out and must be removed before trying again) and the log path; a worker that panics stops the run

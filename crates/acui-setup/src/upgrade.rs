@@ -3,33 +3,65 @@
 //! Runtime first checks the configuration as it is. A Runtime that answers is
 //! asked to shut down and awaited with the new `actingctl` — one started from
 //! the console holds `ui\` as its working directory — then the console's, the
-//! tools' and the Runtime's directories move aside. The verified payload is
-//! laid out in their place and a Runtime that was running starts again on it.
-//! Until the new version is laid out, any failure puts every moved directory
+//! tools' and the Runtime's directories move aside. A `ui\` that cannot move
+//! because some other process works in it — most likely an adb server that
+//! Runtime started — has its entries moved aside one by one instead, once
+//! neither the console nor the Runtime is found running; the ADB server
+//! itself is never looked at before or during the upgrade. The verified
+//! payload is laid out in their place, the ADB server is checked with AC's
+//! own adb (see `adb_server`), and a Runtime that was running starts again on
+//! it. Until the new version is laid out, any failure puts everything moved
 //! back, and a Runtime stopped for it starts again on the version still in
 //! place. State, the configuration, the console's settings and the downloads
 //! stay as they are. The version replaced is kept whole in `previous\`, one
 //! version deep: the Runtime ships no state migration and no rollback of its
 //! own, so going back stays a person's choice.
 
+use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::adb_server::{self, AdbServer};
 use crate::install::{self, LaidOut};
 use crate::runtime::{
     check_config, request_shutdown, restart, runtime_answers, state_root, ACTINGCTL, ACTINGD,
 };
-use crate::verify::{Report, Step, Verified, MANIFEST};
+use crate::verify::{Report, Step, Verified, MANIFEST, PLATFORM_TOOLS};
 
 const UNCONFIRMED_NOTE: &str = "Runtime 的关闭未确认，它可能仍在运行或正在退出，未重新拉起：稍后在监控台确认 / The Runtime's shutdown was not confirmed; it may still run or be exiting, and was not started again: check in the console later";
 const STOPPED_NOTE: &str = "Runtime 已被请求关闭，可能已停止，未重新拉起：请在监控台点「启动」 / The Runtime was asked to shut down and may have stopped; it was not started again: press Start in the console";
+const STILL_RUNS: &str = "Runtime 仍在运行，未能确认它已关闭：请先结束它再升级 / The Runtime still runs and its shutdown could not be confirmed: end it first, then upgrade";
+/// Said with an older version that could not be removed.
+const ADB_HELD: &str = "其中若有 adb.exe / AdbWinApi.dll，多半是仍在运行的 adb 服务占用（它可能也在为 ALAS/MAA 服务）；服务停止后，下次升级会删掉 / If adb.exe or AdbWinApi.dll is among them, most likely an adb server still running holds it (it may also serve ALAS/MAA); once it stops, the next upgrade removes it";
+/// Windows' ERROR_SHARING_VIOLATION: a directory some process works in, or
+/// an exe that runs, opened for writing.
+const SHARING_VIOLATION: i32 = 32;
 
-/// What is installed: the commits the two manifests name.
+/// What is installed: the commits the two manifests name, and whether AC's
+/// own adb is in place.
+#[derive(Clone)]
 pub struct Installed {
     pub runtime_sha: String,
     pub ui_sha: String,
+    /// Whether `tools\platform-tools\adb.exe` is there: without it, even the
+    /// very release installed is laid out again (Workflow #337 §4.3).
+    pub adb: bool,
+}
+
+impl Installed {
+    /// Whether installing the release whose two commits are `wanted` would
+    /// change nothing: the same two commits, and AC's adb in place.
+    pub fn current(&self, wanted: &(String, String)) -> bool {
+        self.adb && self.runtime_sha == wanted.0 && self.ui_sha == wanted.1
+    }
+}
+
+/// AC's own adb under `root`: `tools\platform-tools\adb.exe`.
+pub fn ac_adb(root: &Path) -> PathBuf {
+    root.join("tools").join(PLATFORM_TOOLS).join("adb.exe")
 }
 
 #[derive(Deserialize)]
@@ -84,6 +116,7 @@ pub fn installed(root: &Path) -> Result<Option<Installed>, String> {
     Ok(Some(Installed {
         runtime_sha: commit(runtime)?,
         ui_sha: commit(root.join("ui").join(MANIFEST))?,
+        adb: ac_adb(root).is_file(),
     }))
 }
 
@@ -180,6 +213,8 @@ pub struct Upgraded {
     pub previous: PathBuf,
     /// The log of the Runtime started again, when it was running before.
     pub restarted: Option<PathBuf>,
+    /// How the ADB server stands after the check.
+    pub adb_server: AdbServer,
 }
 
 pub fn upgrade(root: &Path, verified: &Verified, report: Report<'_>) -> Result<Upgraded, String> {
@@ -199,6 +234,9 @@ pub fn upgrade(root: &Path, verified: &Verified, report: Report<'_>) -> Result<U
         confirmed: false,
         made_previous: false,
         unanswered: None,
+        ui_entries: None,
+        ui_emptied: false,
+        ui_names: top_names(&verified.ui.files),
     };
     let laid_out = match swap.lay(verified, &state_root, report) {
         Ok(laid_out) => laid_out,
@@ -240,6 +278,9 @@ pub fn upgrade(root: &Path, verified: &Verified, report: Report<'_>) -> Result<U
         "新版本已铺开；被替换的版本在 / The new version is laid out; the version replaced is in: {}",
         swap.previous.display()
     );
+    // Before a Runtime starts again: the ADB server it is going to use.
+    let adb_server = adb_server::ensure(&ac_adb(root), root, adb_server::PORT, report)
+        .map_err(|reason| format!("{reason}\n{laid}"))?;
     let restarted = match swap.stopped {
         true => {
             report
@@ -253,7 +294,21 @@ pub fn upgrade(root: &Path, verified: &Verified, report: Report<'_>) -> Result<U
         false => None,
     };
     swap.drop_older(report).map_err(|reason| format!("{reason}\n{laid}"))?;
-    Ok(Upgraded { laid_out, previous: swap.previous, restarted })
+    Ok(Upgraded { laid_out, previous: swap.previous, restarted, adb_server })
+}
+
+/// The names `lay_out` puts at the top of `ui\`: each file's first segment,
+/// and the manifest.
+fn top_names(files: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = files
+        .iter()
+        .filter_map(|file| file.split('/').next())
+        .map(str::to_string)
+        .chain(std::iter::once(MANIFEST.to_string()))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// The directories an upgrade has moved, so a failure can put them back.
@@ -272,6 +327,14 @@ struct Swap<'a> {
     made_previous: bool,
     /// Why a `runtime-info.json` that is there was taken as no Runtime.
     unanswered: Option<String>,
+    /// When `ui\` could not move as a whole: the names of its entries moved
+    /// into `previous\ui\` one by one, in order, and whether every one of
+    /// them was.
+    ui_entries: Option<Vec<OsString>>,
+    ui_emptied: bool,
+    /// The names `lay_out` puts at the top of `ui\`: all an undo removes from
+    /// a `ui\` that stayed in place.
+    ui_names: Vec<String>,
 }
 
 impl Swap<'_> {
@@ -313,16 +376,117 @@ impl Swap<'_> {
         if !from.exists() {
             return Ok(());
         }
-        fs::rename(&from, self.previous.join(name)).map_err(|error| {
-            let mut reason = format!("无法移开 / cannot move {}: {error}\n{hint}", from.display());
-            if let Some(unanswered) = &self.unanswered {
-                reason.push('\n');
-                reason.push_str(unanswered);
+        match fs::rename(&from, self.previous.join(name)) {
+            Ok(()) => {}
+            Err(error) if name == "ui" && error.raw_os_error() == Some(SHARING_VIOLATION) => {
+                return self.empty_ui(&from, &error, hint, report);
             }
-            reason
-        })?;
+            Err(error) => {
+                return Err(self.said(format!("无法移开 / cannot move {}: {error}\n{hint}", from.display())));
+            }
+        }
         self.moved.push(name);
         report.line(&format!("已移开旧版本 / moved aside: {}", from.display()))
+    }
+
+    /// `reason`, with why a `runtime-info.json` was taken as no Runtime, when
+    /// one was.
+    fn said(&self, mut reason: String) -> String {
+        if let Some(unanswered) = &self.unanswered {
+            reason.push('\n');
+            reason.push_str(unanswered);
+        }
+        reason
+    }
+
+    /// `ui\` some process works in, which keeps it from moving. A running exe
+    /// cannot be opened for writing, so `ui\acui.exe` and
+    /// `runtime\actingcommand-actingd.exe` are opened that way — nothing
+    /// truncated, created or written — and closed at once: either one
+    /// running stops the upgrade as before. With neither running, what works
+    /// in `ui\` is some other process — most likely an adb server a Runtime
+    /// started from the console — and the entries of `ui\` move into
+    /// `previous\ui\` one by one, each recorded as it goes; the directory
+    /// itself stays, and the new version is laid out into it.
+    fn empty_ui(&mut self, ui: &Path, error: &io::Error, hint: &str, report: Report<'_>) -> Result<(), String> {
+        let cannot = format!("无法移开 / cannot move {}: {error}", ui.display());
+        let console = ui.join("acui.exe");
+        let runtime = self.root.join("runtime").join(ACTINGD);
+        for (exe, running) in [(&console, hint), (&runtime, STILL_RUNS)] {
+            match fs::OpenOptions::new().write(true).open(exe) {
+                Ok(_) => {}
+                Err(probe) if probe.raw_os_error() == Some(SHARING_VIOLATION) => {
+                    return Err(self.said(format!("{cannot}\n{running}")));
+                }
+                Err(probe) => {
+                    return Err(self.said(format!(
+                        "{cannot}\n未能确认它是否在运行 / cannot tell whether it runs: {}: {probe}",
+                        exe.display()
+                    )));
+                }
+            }
+        }
+        // Recorded before anything moves, so an undo always looks.
+        self.moved.push("ui");
+        self.ui_entries = Some(Vec::new());
+        let aside = self.previous.join("ui");
+        fs::create_dir(&aside)
+            .map_err(|error| self.said(format!("无法创建 / cannot create {}: {error}", aside.display())))?;
+        let names = fs::read_dir(ui)
+            .and_then(|entries| entries.map(|entry| entry.map(|entry| entry.file_name())).collect::<io::Result<Vec<_>>>())
+            .map_err(|error| self.said(format!("读取目录失败 / read_dir failed: {}: {error}", ui.display())))?;
+        for name in names {
+            let from = ui.join(&name);
+            if let Err(error) = fs::rename(&from, aside.join(&name)) {
+                return Err(self.said(format!("无法移开 / cannot move {}: {error}\n{hint}", from.display())));
+            }
+            if let Some(moved) = self.ui_entries.as_mut() {
+                moved.push(name);
+            }
+        }
+        self.ui_emptied = true;
+        report.line(&format!(
+            "{} 被另一个进程用作工作目录（多半是 Runtime 拉起的 adb 服务）；监控台与 Runtime 均未运行，逐项移开，目录留在原处 / {} is another process's working directory (most likely an adb server a Runtime started); neither the console nor the Runtime runs, so its entries were moved aside one by one and the directory stays",
+            ui.display(),
+            ui.display()
+        ))
+    }
+
+    /// A `ui\` that stayed in place, put back as it was: what this upgrade
+    /// laid into it removed — only once every old entry had left, and only
+    /// the names `lay_out` puts there — then each entry moved back, the last
+    /// first, and the emptied `previous\ui\` removed. What does not go back
+    /// is said in `reason`.
+    fn put_ui_back(&self, ui: &Path, entries: &[OsString], reason: &mut String) {
+        if self.ui_emptied {
+            for name in &self.ui_names {
+                let laid = ui.join(name);
+                let removed = match fs::symlink_metadata(&laid) {
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => Err(error),
+                    Ok(meta) if meta.is_dir() => fs::remove_dir_all(&laid),
+                    Ok(_) => fs::remove_file(&laid),
+                };
+                if let Err(error) = removed {
+                    reason.push_str(&format!(
+                        "\n未能删除铺了一半的 / half-laid-out not removed: {}: {error}",
+                        laid.display()
+                    ));
+                }
+            }
+        }
+        let aside = self.previous.join("ui");
+        for name in entries.iter().rev() {
+            let (from, to) = (aside.join(name), ui.join(name));
+            if let Err(error) = fs::rename(&from, &to) {
+                reason.push_str(&format!("\n未能放回 / not put back: {} → {}: {error}", from.display(), to.display()));
+            }
+        }
+        if aside.exists() {
+            if let Err(error) = fs::remove_dir(&aside) {
+                reason.push_str(&format!("\n未能删除 / not removed: {}: {error}", aside.display()));
+            }
+        }
     }
 
     /// Puts everything moved back where it was, the version kept from before
@@ -332,6 +496,10 @@ impl Swap<'_> {
         let mut reason = reason;
         for name in self.moved.iter().rev() {
             let placed = self.root.join(name);
+            if let (&"ui", Some(entries)) = (name, &self.ui_entries) {
+                self.put_ui_back(&placed, entries, &mut reason);
+                continue;
+            }
             if placed.exists() {
                 if let Err(error) = fs::remove_dir_all(&placed) {
                     reason.push_str(&format!(
@@ -374,7 +542,7 @@ impl Swap<'_> {
             Some(older) => match fs::remove_dir_all(older) {
                 Ok(()) => report.line(&format!("已删除更早的旧版本 / older version removed: {}", older.display())),
                 Err(error) => report.warn(&format!(
-                    "更早的旧版本未能删除，下次升级再删 / older version not removed, the next upgrade retries: {}: {error}",
+                    "更早的旧版本未能删除，下次升级再删 / older version not removed, the next upgrade retries: {}: {error}\n{ADB_HELD}",
                     older.display()
                 )),
             },
@@ -396,7 +564,7 @@ impl Swap<'_> {
                 match fs::remove_dir_all(&path) {
                     Ok(()) => report.line(&format!("已删除残留的旧版本 / leftover removed: {}", path.display())),
                     Err(error) => report.warn(&format!(
-                        "残留的旧版本仍未能删除 / leftover still not removed: {}: {error}",
+                        "残留的旧版本仍未能删除 / leftover still not removed: {}: {error}\n{ADB_HELD}",
                         path.display()
                     )),
                 }?;
