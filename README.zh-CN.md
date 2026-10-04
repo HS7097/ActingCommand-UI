@@ -77,7 +77,7 @@
 依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`）：
 
 ```
-rev = "e13537612748f4d18eacad5462a2a3f7bc71f63f"
+rev = "e8b74123127949e626c9905e354411c294d37c33"
 ```
 
 四个 crate（contract / ledger / ledger-forensics / runtime-client）共用这一个 rev。
@@ -85,7 +85,10 @@ rev = "e13537612748f4d18eacad5462a2a3f7bc71f63f"
 reader 支持完整 failure 与 `ResourceQuiescence` 记录中的该分组。未含该字段的历史记录按原语义读取，
 严格校验和显式读取错误保持。
 UI 仍使用 `ProjectionProfile::Ui`：已提供的 failure 分组按原隐私规则显示，observed 阶段的分组
-由完整事件/Forensic 读取，UI 投影不含该分组。发布时 producer、Tools 与 UI 须配套使用这一契约。
+由完整事件/Forensic 读取，UI 投影不含该分组。
+内嵌 ledger reader 同时使用共享恢复生命周期契约：准备触发关联其准备事件，任务触发保留真实 task/run
+关联；`environment_ready` 与资源包 `recovered` 分别表示各自结果。这些细节属于完整生命周期记录，
+公开 UI 投影及页内 `run_recovery` 分组保持既有形状。发布时 producer、Tools 与 UI 须配套使用这一契约。
 `Cargo.lock` 入库，CI 在 windows-latest 与 ubuntu-latest 上跑
 `cargo build --locked --release --workspace`；闭包里含 `rusqlite`（bundled），两边都要 C 编译器。
 CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译。发版只按需：Actions → release → Run workflow
