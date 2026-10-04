@@ -74,13 +74,18 @@
 不写：列表写账本未打开，不留一片空白；页签、过滤框、编号框和时间滑块都停用；模块框、端口框与帧区写「账本未打开」。不向账本发
 任何查询，不读任何素材。启动器照常可用。
 
-依赖钉在 Runtime **main** 上（`Cargo.toml`）：
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`）：
 
 ```
-rev = "885947c90dd6561d6e5c9b7bae3fe736ec36f7c8"
+rev = "e13537612748f4d18eacad5462a2a3f7bc71f63f"
 ```
 
 四个 crate（contract / ledger / ledger-forensics / runtime-client）共用这一个 rev。
+内嵌 typed client 读取在线 lifecycle-failure 页中的可选 `resource_dispositions` 分组；离线 ledger
+reader 支持完整 failure 与 `ResourceQuiescence` 记录中的该分组。未含该字段的历史记录按原语义读取，
+严格校验和显式读取错误保持。
+UI 仍使用 `ProjectionProfile::Ui`：已提供的 failure 分组按原隐私规则显示，observed 阶段的分组
+由完整事件/Forensic 读取，UI 投影不含该分组。发布时 producer、Tools 与 UI 须配套使用这一契约。
 `Cargo.lock` 入库，CI 在 windows-latest 与 ubuntu-latest 上跑
 `cargo build --locked --release --workspace`；闭包里含 `rusqlite`（bundled），两边都要 C 编译器。
 CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译。发版只按需：Actions → release → Run workflow
