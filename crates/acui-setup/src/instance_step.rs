@@ -15,7 +15,7 @@ use std::process::Command;
 
 use serde_json::{json, Value};
 
-use crate::fetch;
+use crate::{fetch, maintenance};
 use crate::runtime::{self, ACTINGCTL, ACTINGD};
 use crate::verify::{hex, Report, Step};
 
@@ -229,11 +229,10 @@ pub fn discover(root: &Path, report: Report<'_>) -> Result<Vec<Found>, String> {
     Ok(found)
 }
 
-/// The picked instances written into the configuration, each with its own
-/// resource package, checked and put in place. On an error the configuration
-/// is as it was.
-pub fn write(root: &Path, chosen: &[Chosen], report: Report<'_>) -> Result<(), String> {
-    let paths = paths(root)?;
+/// The picked instances added to an in-memory plan, each with its own resource
+/// package. The caller merges maintenance, checks and commits the transaction.
+pub fn plan(root: &Path, chosen: &[Chosen]) -> Result<maintenance::Transaction, String> {
+    let mut transaction = maintenance::Transaction::read(root)?;
     let mut blocks = Vec::new();
     for pick in chosen {
         let mut id = [0u8; 16];
@@ -249,12 +248,24 @@ pub fn write(root: &Path, chosen: &[Chosen], report: Report<'_>) -> Result<(), S
             "resource_package": pick.resource_package.display().to_string(),
         }));
     }
-    set_config(&paths, report, |document| {
-        document["instances"] = Value::Array(blocks);
-    })
+    transaction.document["instances"] = Value::Array(blocks);
+    Ok(transaction)
 }
 
-/// The Runtime restarted on the configuration `write` put in place, so it
+/// Confirm shutdown before installed resource material or bindings change.
+pub fn stop(root: &Path, state_root: &Path, report: Report<'_>) -> Result<(), String> {
+    let actingctl = root.join("runtime").join(ACTINGCTL);
+    match runtime::runtime_answers(&actingctl, state_root, report)? {
+        Ok(()) => {
+            report.step(Step::Phase("关闭 Runtime / Shutting the Runtime down", None))?;
+            runtime::request_shutdown(&actingctl, state_root)
+        }
+        Err(None) => Ok(()),
+        Err(Some(reason)) => Err(format!("Runtime 关闭状态未确认 / Runtime shutdown unconfirmed: {reason}")),
+    }
+}
+
+/// The Runtime restarted on the configuration the transaction put in place, so it
 /// binds the instances. Returns what `actingctl status` then says of them.
 pub fn restart(root: &Path, report: Report<'_>) -> Result<String, String> {
     let paths = paths(root)?;
@@ -299,32 +310,10 @@ fn status_line(stdout: &str) -> String {
 /// The configuration edited as a candidate next to it, checked by the
 /// installed Runtime's `check-config`, and put in place only when accepted.
 fn set_config(paths: &Paths, report: Report<'_>, edit: impl FnOnce(&mut Value)) -> Result<(), String> {
-    let mut document = read_config(paths)?;
-    report.step(Step::Phase("检查并写入配置 / Checking and writing the configuration", None))?;
-    edit(&mut document);
-    let mut candidate_text = serde_json::to_string_pretty(&document)
-        .map_err(|error| format!("配置序列化失败 / config serialization failed: {error}"))?;
-    candidate_text.push('\n');
-    let candidate = paths
-        .config
-        .with_file_name(format!("actingd.config.candidate-{}.json", std::process::id()));
-    fs::write(&candidate, candidate_text).map_err(|error| {
-        fetch::discard(&candidate, format!("写入失败 / write failed: {}: {error}", candidate.display()))
-    })?;
-    if let Err(reason) = runtime::check_config(&paths.actingd, &candidate) {
-        let reason = format!("{reason}\n配置未改动 / the configuration was not changed");
-        return Err(fetch::discard(&candidate, reason));
-    }
-    if let Err(error) = fs::rename(&candidate, &paths.config) {
-        let reason = format!(
-            "无法写入配置，配置未改动 / cannot put the configuration in place, it was not changed: {}: {error}",
-            paths.config.display()
-        );
-        return Err(fetch::discard(&candidate, reason));
-    }
-    let path = paths.config.display();
-    report.line(&format!("配置已更新并通过检查 / configuration updated and checked: {path}"))
-        .map_err(|error| format!("{error}\n配置已替换为新内容 / the configuration was replaced: {path}"))
+    let root = paths.config.parent().ok_or("Configuration has no parent")?;
+    let mut transaction = maintenance::Transaction::read(root)?;
+    edit(&mut transaction.document);
+    transaction.commit(&paths.actingd, false, report)
 }
 
 fn read_config(paths: &Paths) -> Result<Value, String> {

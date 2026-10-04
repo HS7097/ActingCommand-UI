@@ -2,12 +2,12 @@
 //! The instances step's resources: resource repositories' bundles — each one
 //! zip holding `applications.json` (the game, its display name when given, and
 //! each server's Android package name), `bundle.json` and the packs under
-//! `packs/`. Two bundle formats are read, told apart by `bundle.json`'s
+//! `packs/`. Bundle formats are told apart by `bundle.json`'s
 //! `schema_version`:
 //! - `actingcommand.bundle.v1` lists every sealed pack's path, package id,
 //!   server, sha256 and size, and each server's default pack. Each pack zip is
-//!   laid out under `<root>\packages\<game>\` byte for byte, checked against
-//!   `bundle.json` first.
+//!   laid out byte for byte, checked against `bundle.json` first. The planner
+//!   gives each ZIP bundle its own hash directory to preserve older packs.
 //! - `actingcommand.bundle.v2` (the contract's `BundleIndexV2`, Workflow #288)
 //!   maps each package id to a content directory `packs/<digest>/`, named by
 //!   its `content-directory.v1` digest; a server's default package is the one
@@ -15,6 +15,9 @@
 //!   is laid out as `<root>\packages\<game>\<digest>\` only once what was
 //!   written has that digest; one already there is reused when it verifies,
 //!   and otherwise set aside as `<digest>.broken-<unix>` and kept.
+//! - `actingcommand.bundle.v3` shares the v2 pack layout and requires the
+//!   contract's maintenance declaration. Setup admits every indexed pack and
+//!   validates the declaration through execution-kernel before using bindings.
 //!
 //! The release carries them: its `MEMBERS.json`
 //! names each in `bundles[]` with its sha256, and the file sits beside it in
@@ -32,7 +35,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use actingcommand_contract::{content_directory_digest, safe_source_path, BundleIndexV2};
+use actingcommand_contract::{content_directory_digest, safe_source_path, BundleIndex, BundleIndexV3};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -43,6 +46,7 @@ const APPLICATIONS_SCHEMA: &str = "actingcommand.applications.v1";
 const BUNDLE_SCHEMA: &str = "actingcommand.bundle.v1";
 /// The wire spelling of the contract's `BundleIndexVersion::V2`.
 const BUNDLE_SCHEMA_V2: &str = "actingcommand.bundle.v2";
+const BUNDLE_SCHEMA_V3: &str = "actingcommand.bundle.v3";
 /// The most a bundle's two declarations may inflate to.
 const DECLARATION_LIMIT: u64 = 16 << 20;
 
@@ -59,8 +63,10 @@ pub struct Bundle {
     pub defaults: BTreeMap<String, String>,
     /// Carried by the release, or a local file the person added.
     pub carried: bool,
-    /// Bundle v2: the packs are content directories, not sealed zips.
+    /// Bundle v2/v3: the packs are content directories, not sealed zips.
     directories: bool,
+    /// Strictly decoded declaration; material qualification happens after staging.
+    pub maintenance: Option<BundleIndexV3>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -210,8 +216,11 @@ pub fn read(file: &Path) -> Result<Bundle, String> {
             ))
         }
     };
-    if parse::<Versioned>(&index, file, "bundle.json")?.schema_version == BUNDLE_SCHEMA_V2 {
-        return read_v2(&mut archive, file, &index);
+    let version = parse::<Versioned>(&index, file, "bundle.json")?.schema_version;
+    match version.as_str() {
+        BUNDLE_SCHEMA_V2 | BUNDLE_SCHEMA_V3 => return read_directories(&mut archive, file, &index),
+        BUNDLE_SCHEMA => {}
+        _ => return Err(format!("标准包版本无法识别 / unknown bundle format: {version}")),
     }
     let bundle: BundleFile = parse(&index, file, "bundle.json")?;
     let applications = read_applications(&mut archive, file)?;
@@ -251,6 +260,7 @@ pub fn read(file: &Path) -> Result<Bundle, String> {
         defaults: bundle.default_packs,
         carried: false,
         directories: false,
+        maintenance: None,
     })
 }
 
@@ -262,15 +272,19 @@ fn read_applications(archive: &mut zip::ZipArchive<File>, file: &Path) -> Result
     }
 }
 
-/// A bundle v2: the index as the contract decodes and validates it (packs
+/// A bundle v2/v3: the index as the contract decodes and validates it (packs
 /// present, package ids and digests unique, every path `packs/<digest>`), the
 /// same game in both declarations, and each server's `default_package_id`,
 /// where one is given, naming a pack of that server.
-fn read_v2(archive: &mut zip::ZipArchive<File>, file: &Path, index: &[u8]) -> Result<Bundle, String> {
-    let index: BundleIndexV2 = parse(index, file, "bundle.json")?;
+fn read_directories(archive: &mut zip::ZipArchive<File>, file: &Path, index: &[u8]) -> Result<Bundle, String> {
+    let index: BundleIndex = parse(index, file, "bundle.json")?;
     index.validate().map_err(|error| {
         format!("{} 内 bundle.json 无效 / invalid bundle.json: {}", file.display(), error.code())
     })?;
+    let (game, listed_packs, maintenance) = match index {
+        BundleIndex::V2(index) => (index.game, index.packs, None),
+        BundleIndex::V3(index) => (index.game.clone(), index.packs.clone(), Some(index)),
+    };
     let applications = read_applications(archive, file)?;
     if applications.schema_version != APPLICATIONS_SCHEMA {
         return Err(format!(
@@ -278,17 +292,16 @@ fn read_v2(archive: &mut zip::ZipArchive<File>, file: &Path, index: &[u8]) -> Re
             applications.schema_version
         ));
     }
-    if index.game != applications.game {
+    if game != applications.game {
         return Err(format!(
             "标准包里两份声明的 game 不一致 / the bundle's two declarations name different games: {} ≠ {}",
-            index.game, applications.game
+            game, applications.game
         ));
     }
-    if !fetch::plain(&index.game) {
-        return Err(format!("game 不能用作目录名 / the game cannot name a folder: {}", index.game));
+    if !fetch::plain(&game) {
+        return Err(format!("game 不能用作目录名 / the game cannot name a folder: {game}"));
     }
-    let packs: Vec<Pack> = index
-        .packs
+    let packs: Vec<Pack> = listed_packs
         .into_iter()
         .map(|pack| Pack {
             path: pack.path,
@@ -312,17 +325,22 @@ fn read_v2(archive: &mut zip::ZipArchive<File>, file: &Path, index: &[u8]) -> Re
     }
     Ok(Bundle {
         file: file.to_path_buf(),
-        game: index.game,
+        game,
         label: applications.label.map(|label| label.trim().to_string()).filter(|label| !label.is_empty()),
         packs,
         applications: applications.servers,
         defaults,
         carried: false,
         directories: true,
+        maintenance,
     })
 }
 
 impl Bundle {
+    pub fn content_directories(&self) -> bool {
+        self.directories
+    }
+
     /// The game as people know it: the bundle's display name, else its id.
     pub fn name(&self) -> String {
         self.label.clone().unwrap_or_else(|| self.game.clone())

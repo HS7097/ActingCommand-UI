@@ -9,9 +9,9 @@ name = "acsetup"
 path = "src/main.rs"
 
 [dependencies]
-# Bundle index v2 and the content-directory digest: one implementation, the
-# contract's (it brings only serde, serde_json and sha2, already here).
+# Shared bundle declarations and hash-admitted offline qualifications.
 actingcommand-contract = { workspace = true }
+actingcommand-execution-kernel = { workspace = true }
 anyhow = { workspace = true }
 getrandom = { workspace = true }
 serde = { workspace = true }
