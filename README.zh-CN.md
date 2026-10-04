@@ -451,25 +451,35 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    不关闭任何模拟器；只有一个实例时替人勾上。「重新查找」再来一遍；MuMu 栏清空后「重新查找」会重新探测。
    资源是发布件自带的资源仓**标准包**：`MEMBERS.json` 的 `bundles[]` 写明每个标准包与它的 sha256，文件就在下载文件夹里，
    安装时已按 `SHA256SUMS` 核过；第一次查找时，向导要求每个标准包以同一个 sha256 列在 `SHA256SUMS` 里，再核一次文件的
-   sha256 后读取。哪一项不过，就在注意事项里写明那个标准包，不提供它，其余照常提供。**不问网址，也不要人填哈希。**标准包里有
+   sha256 后读取。哪一项不过，就在注意事项里写明；发布件必需标准包读不出时不能提交配置计划。**不问网址，也不要人填哈希。**标准包里有
    `applications.json`（游戏、给了就有的显示名 `label`、各服务器的标签与安卓包名）和 `bundle.json`（每个包的路径、
    包 id、服务器、sha256 与字节数，以及 `default_packs` 里各服务器的默认任务包）。`bundle.json` 为
    `actingcommand.bundle.v2`（契约的 `BundleIndexV2`，Workflow #288）的标准包，把每个包 id 映射到以
    `content-directory.v1` 摘要命名的内容目录 `packs/<digest>/`，各服务器的默认任务包取 `applications.json` 的
-   `servers.<server>.default_package_id`；v1 照旧读取。页面写出它们支持的程序与包名——例如
+   `servers.<server>.default_package_id`；v1 照旧读取。`actingcommand.bundle.v3` 增加必需的 `maintenance` 数组，
+   每项为 `package_id`、`server`、`uses`（`startup`、`prerequisite`、`return_home`）。共享契约严格解码及校验 v2/v3；
+   v3 索引全体实际包经 hash/Containment、`PreparedContainedTask::describe_path` 后，再交共享
+   `validate_bundle_maintenance` 核身份、用途资格及包内完整链。离线准入有 120 秒期限，不执行任务或 provider。
+   未知版本、字段、用途、坏引用及不合格材料明确失败。页面写出它们支持的程序与包名——例如
    「蔚蓝档案 / Blue Archive：日服 com.YostarJP.BlueArchive」（标准包没给 `label` 时写 game id）——写明是否发布件自带，
    两类服务器写明不可选：声明了默认任务包却没有包名的，以及有包名却没有默认任务包的。本机标准包文件可以随时加入，主要用在发布件没带标准包时：填绝对路径，点「加入」，
    不要哈希；已有同一游戏（不分大小写）的标准包时拒收。每个勾选的实例
    填别名（默认 `mumu-<序号>`），并**各自选**「程序 · 服务器 · 包名」，每个同时有包名与默认任务包的服务器一项；只有一项时替每个
-   实例选上。向导不懂游戏，也不猜。「写入实例」把用到的每个标准包只放一次：各任务包按 `bundle.json` 逐个核对后原样放到
-   `<安装根>\packages\<game>\`。v2 任务包逐个文件流式解到 `<digest>.part\`，边写边算每个文件的哈希，文件数、字节数与
+   实例选上。向导不懂游戏，也不猜。「写入实例」先暂存及验证标准包，形成配置计划并解决冲突，确认 Runtime 关闭后才铺到
+   `<安装根>\packages\<game>\`。ZIP 标准包放在其下的 `bundles\<标准包-sha256>\`，同名旧包保留。
+   v2/v3 任务包逐个文件流式解到 `<digest>.part\`，边写边算每个文件的哈希，文件数、字节数与
    `content-directory.v1` 摘要都与索引一致才改名为 `<digest>\`；已有的 `<digest>\` 整个读一遍，摘要一致就复用，不一致就改名
    `<digest>.broken-<unix>` 保留（写进注意事项）后重新解包；解包失败的也按这个名字保留。旧目录与旧 zip 原样留着，两份声明不落到
    安装根。日志按实例写明程序、任务包的包 id、路径与 sha256；再为每个勾选的实例写一项——别名、新的
    `instance_id`（`instance_` + 系统随机源 32 位十六进制）、`instance_index`、所选服务器的包名、
    `touch_backend` 为 `adb_shell_input`、`capture_backend` 为 `adb`（实机确认 `nemu_ipc` 首帧前）、该服务器默认任务包的
-   绝对路径（v2 为它的 `<digest>\` 目录，支持内容目录的 Runtime 会完整准入）作 `resource_package`——先写进配置旁的 `actingd.config.candidate-<pid>.json`，由 Runtime 的
-   `check-config` 检查（任务包加载不了的，写明别名、路径与加载器的原话）；通过才替换配置，随后重启 Runtime，
+   绝对路径（v2/v3 为它的 `<digest>\` 目录，支持内容目录的 Runtime 会完整准入）作 `resource_package`。
+   所选游戏/服务器的维护用途生成现有 `startup_package`、`prerequisite_packages`、`return_home_packages`；回主页用途同时注册前置引用。
+   不替业务 control 增加字段或触发器。完整键值相同就复用；冲突显示旧值、新值及来源，由人明确保留或采用，取消即停止本次计划，
+   选择页面等待期限 30 分钟。清单缺项不会删除旧绑定。实际合并后保留的旧引用与新引用全部经实物准入、descriptor 资格及
+   `PrerequisiteChain` 核完整链；材料无法核定则拒绝。候选写在配置旁，保持相对路径语义，由 Runtime 的
+   `check-config` 检查（任务包加载不了的，写明别名、路径与加载器的原话）；原文件精确字节仍与计划基准一致才备份并原子替换。
+   内容相同复用原文件。启动前失败恢复原配置并保持 Runtime 停止；恢复不完整则停止引导。提交后重启 Runtime，
    `actingctl status` 必须应答。替换配置之前的失败写在页面与日志里，页面可继续用；之后的失败停下，任何一次日志
    写入失败也停下。离开这一步时再问一次 `mumu_root` 的现值与 Runtime 是否应答，写进摘要。
 4. **完成**：摘要写出装上的是什么（runtime 与 ui 的提交号，以及发布件标签、离线文件夹或自带发布件）、各路径，以及各步
@@ -477,18 +487,17 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    实例步拉起的 Runtime 继续运行；没有在运行的，由监控台的启动器拉起。
 
 **升级**：安装根里已有安装时。安装步先读发布件的 `MEMBERS.json`（联网时只读不存，离线时读文件夹里的，离线版读自带的），
-与已装清单的两个提交号比对：两个都相同、且 `tools\platform-tools\adb.exe` 在，就停在这里，写「已是这个发布件的版本」，
-什么也不下载。两个提交号相同却缺这个 adb（例如用 v0.9.0 的向导装了带 platform-tools 的发布件）时不停，页面写明缺它，
-照下面的升级流程把同一个发布件重铺一遍。否则在按上文校验之后：
+与已装清单的两个提交号比对。程序版本相同时仍可继续检查资源与维护配置；页面可选填本机标准包文件。按上文校验之后：
 
-1. 用新 Runtime 对现有 `actingd.config.json` 跑 `check-config`（其中 `state_root` 必须是绝对路径）；
-   不接受就什么都不改；
+1. 保留配置精确字节基准，暂存并校验标准包；旧实例从实际准入的 resource_package 取得游戏/服务器，与本次标准包关联。
+   已验证且没有对应新包的实例保留绑定；多义时选择声明来源。归属未知或引用无法验证时显示原因，要求明确选择游戏/服务器，
+   此选择把该实例的业务资源替换为所选默认包，实例 ID、backend 等其它字段保留。维护冲突与新装共用保留/采用交互。
+   提交前用新 Runtime 检查实际候选；`state_root` 必须是绝对路径；
 2. 上次升级留下的 `previous\` 先改名为 `previous.older-<unix_ms>\` 暂存（更早没删掉的这类目录先删），
    再新建 `<安装根>\previous\`；
 3. `<状态根>\runtime-info.json` 存在、且新的 `actingctl status` 有应答时，用新的
    `actingctl request-shutdown --state-root <状态根> --wait 60` 请 Runtime 关闭，并等到所有权记录闭合、
-   进程退出——放在最前，因为监控台拉起的 Runtime 以 `ui\` 为工作目录。没正常关闭就结束的 Runtime 留下的
-   文件、没有应答的，写明并按未运行处理；
+   进程退出——放在最前，因为监控台拉起的 Runtime 以 `ui\` 为工作目录。所有权记录存在却不应答时，关闭状态未确认，事务停止；
 4. 移开 `ui\`、`tools\`、`runtime\`——监控台开着会让第一个失败——按新装的方式铺开已校验的载荷。`tools\` 照旧
    整目录移开：正在运行的 adb 服务的映像不挡改名，随目录到 `previous\tools\platform-tools\` 照常运行。`ui\`
    因为有进程以它为工作目录而整体移不开（Windows 共享冲突 32）时，先以写方式打开再立即关闭
@@ -497,16 +506,18 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    向导没认出的那种），报「Runtime 仍在运行，未能确认它已关闭：请先结束它再升级」并撤回；别的错误原样写出
    路径与错误并撤回。两个都没在运行，占着 `ui\` 的就是别的进程——多半是监控台拉起的 Runtime 所起的 adb
    服务——于是把 `ui\` 里的各项逐个移进 `previous\ui\`，目录留在原处，新版本照样铺进去，日志写一行说明；
-5. 铺好之后、重新拉起 Runtime 之前，检查 ADB 服务：用刚铺好的 `tools\platform-tools\adb.exe` 从安装根运行
+5. 铺设已验证资源，实际合并配置经共享完整链及 `check-config` 检查，确认原文件仍等于基准后备份并原子提交。
+   重新拉起 Runtime 之前检查 ADB 服务：用刚铺好的 `tools\platform-tools\adb.exe` 从安装根运行
    `start-server`（每次至多 20 秒；它拉起的服务以安装根为工作目录，不会再占住 `ui\`）。能复用就复用；版本不同
    由 adb 自己重启；有服务却在限时内不应答，或检查失败时，直接结束监听 127.0.0.1:5037 的进程（不问；日志写明
    PID 与映像路径），再运行一次 `start-server`。第二次仍失败，就在页面与摘要的注意事项里写明「ADB 服务未就绪」
    及原因——升级已完成，不回滚。摘要另有一行写 ADB 服务的结果。这是向导唯一运行 adb 的地方：升级之前和升级
    过程中都不碰 ADB 服务。
 
-载荷铺好之前，任何失败都会删掉铺了一半的、把移开的目录和更早的 `previous\` 都放回去（逐项移开的 `ui\`：只在
+首次新 Runtime 启动尝试之前，失败会恢复原配置、删掉铺了一半的程序，把移开的目录和更早的 `previous\` 都放回去（逐项移开的 `ui\`：只在
 各项都已移走时，删掉这次铺进去的顶层项，再逐项按逆序放回，删掉空的 `previous\ui\`）；被请求关闭且已退出的
-Runtime 用仍在原处的版本重新拉起（写明结果与日志，或为何没能拉起）；关闭未确认的不去动它，写明。铺好之后删掉更早的 `previous\`，
+Runtime 只在配置和程序均已恢复时用原版本重新拉起（写明结果与日志，或为何没能拉起）；恢复不完整保持停止，关闭未确认的不再启动第二个。
+已验证但未绑定的新资源保留，旧资源保留。
 原先在运行的 Runtime 用新版本分离拉起：从安装根启动，输出写进 `<安装根>\actingd-<unix_ms>.log`，30 秒内
 它自己的 `runtime-info.json` 写出它的 pid 才算就绪。在那之前退出的，连同 `FATAL` 行一起写明；没按时就绪
 的写明可能仍在启动。无论哪种，新版本都已铺好，被替换的版本在 `previous\`。更早的 `previous\` 或残留目录删不掉时
@@ -530,7 +541,8 @@ platform-tools）：之前先给每个没写 `adb_path` 的显式实例补上一
 在线、离线文件夹、离线版三种来源一律适用。发布时间只是启发式（将来正式版线的发布时间可能与代码新旧倒挂），
 页面也照此措辞；勾选是人的决定，不是向导的判断。
 
-状态根、`actingd.config.json`、监控台的 `acui.toml`、开机自启与 `downloads\` 都不动，选项那一步跳过。
+状态根、监控台的 `acui.toml`、开机自启与 `downloads\` 保留，选项那一步跳过；配置按接受的维护计划处理。
+首次新 Runtime 启动尝试后不自动撤销配置或状态；原先没有 Runtime 在运行时，更早保留的版本留待下次升级清理。
 被替换的版本整份留在 `previous\`，只留一份：Runtime 不带状态迁移，也不带回滚，退回去仍是人的决定。
 
 **进度与安装日志**：离开第 0 步起，每一行工作都写进 `<安装根>\acsetup-<unix_ms>.log`，日志写失败即停下。

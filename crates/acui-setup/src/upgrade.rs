@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The install step on a root that already holds an installation: the upgrade. The new
-//! Runtime first checks the configuration as it is. A Runtime that answers is
+//! The install step on a root that already holds an installation: the upgrade.
+//! Setup first forms the resource/configuration plan. A Runtime that answers is
 //! asked to shut down and awaited with the new `actingctl` — one started from
 //! the console holds `ui\` as its working directory — then the console's, the
 //! tools' and the Runtime's directories move aside. A `ui\` that cannot move
@@ -8,12 +8,12 @@
 //! Runtime started — has its entries moved aside one by one instead, once
 //! neither the console nor the Runtime is found running; the ADB server
 //! itself is never looked at before or during the upgrade. The verified
-//! payload is laid out in their place, the ADB server is checked with AC's
-//! own adb (see `adb_server`), and a Runtime that was running starts again on
-//! it. Until the new version is laid out, any failure puts everything moved
-//! back, and a Runtime stopped for it starts again on the version still in
-//! place. State, the configuration, the console's settings and the downloads
-//! stay as they are. The version replaced is kept whole in `previous\`, one
+//! payload and verified resources are laid out in their place. The maintenance
+//! plan preserves existing instance identity and resolves binding conflicts in
+//! the wizard. Its checked configuration is committed before the ADB check and
+//! first new Runtime start. A failure before that start restores configuration
+//! and programs; the old Runtime restarts only after complete restoration.
+//! State, the console's settings and downloads stay. The version replaced is kept in `previous\`, one
 //! version deep: the Runtime ships no state migration and no rollback of its
 //! own, so going back stays a person's choice.
 
@@ -26,8 +26,9 @@ use serde::Deserialize;
 
 use crate::adb_server::{self, AdbServer};
 use crate::install::{self, LaidOut};
+use crate::{bundle::Bundle, maintenance};
 use crate::runtime::{
-    check_config, request_shutdown, restart, runtime_answers, state_root, ACTINGCTL, ACTINGD,
+    request_shutdown, restart, runtime_answers, ACTINGCTL, ACTINGD,
 };
 use crate::verify::{Report, Step, Verified, MANIFEST, PLATFORM_TOOLS};
 
@@ -215,21 +216,24 @@ pub struct Upgraded {
     pub restarted: Option<PathBuf>,
     /// How the ADB server stands after the check.
     pub adb_server: AdbServer,
+    pub configuration_changed: bool,
 }
 
-pub fn upgrade(root: &Path, verified: &Verified, report: Report<'_>) -> Result<Upgraded, String> {
+pub fn upgrade(root: &Path, verified: &Verified, bundles: &[Bundle], choose: maintenance::Choose<'_>, report: Report<'_>) -> Result<Upgraded, String> {
     let config = root.join("actingd.config.json");
-    let state_root = state_root(&config)?;
-    report.step(Step::Phase("检查现有配置 / Checking the configuration", None))?;
-    check_config(&verified.runtime.dir.join(ACTINGD), &config)
-        .map_err(|reason| format!("{reason}\n新版本未装，未做任何改动 / the new version is not installed, nothing was changed"))?;
-    report.line("新 Runtime 接受现有配置 / the new Runtime accepts the configuration as it is")?;
+    let mut transaction = maintenance::Transaction::read(root)?;
+    let state_root = transaction.state_root()?;
+    let prepared = maintenance::prepare(bundles, &verified.staging.join("resource-packages"), report)?;
+    let selected = maintenance::upgrade_selections(&mut transaction.document, root, &prepared, choose, report)?;
+    let qualify = maintenance::augment(&mut transaction.document, root, &prepared, &selected, choose)?;
+    report.line("配置计划已形成，提交前检查全部实际绑定 / Configuration plan formed; all actual bindings are checked before commit")?;
 
     let mut swap = Swap {
         root,
         previous: root.join("previous"),
         older: None,
         moved: Vec::new(),
+        created: Vec::new(),
         stopped: false,
         confirmed: false,
         made_previous: false,
@@ -238,10 +242,25 @@ pub fn upgrade(root: &Path, verified: &Verified, report: Report<'_>) -> Result<U
         ui_emptied: false,
         ui_names: top_names(&verified.ui.files),
     };
-    let laid_out = match swap.lay(verified, &state_root, report) {
-        Ok(laid_out) => laid_out,
+    transaction.unchanged()?;
+    let ready = swap.lay(verified, &state_root, report).and_then(|laid_out| {
+        maintenance::place(&prepared, root, report)?;
+        transaction.commit(&laid_out.actingd_exe, qualify, report)?;
+        let adb_server = adb_server::ensure(&ac_adb(root), root, adb_server::PORT, report)?;
+        // A failed phase notification still precedes the first new Runtime start.
+        if swap.stopped {
+            report.step(Step::Phase("用新版本重新拉起 Runtime / Starting the Runtime again on the new version", None))?;
+        }
+        Ok((laid_out, adb_server))
+    });
+    let (laid_out, adb_server) = match ready {
+        Ok(ready) => ready,
         Err(reason) => {
-            let (mut reason, clean) = swap.undo(reason);
+            let restored = transaction.restore();
+            let (mut reason, binaries_restored) = swap.undo(reason);
+            let clean = binaries_restored && restored.is_ok();
+            if let Err(error) = restored { reason.push_str(&format!("\n{error}")); }
+            reason.push_str("\n已放置的资源保留 / Placed resources are retained");
             if swap.stopped {
                 reason.push('\n');
                 if !swap.confirmed {
@@ -272,20 +291,14 @@ pub fn upgrade(root: &Path, verified: &Verified, report: Report<'_>) -> Result<U
             return Err(reason);
         }
     };
-    // The new version is in place: from here nothing is put back, since a
-    // Runtime started on it may already have touched state.
+    // From the first restart attempt onward, a new Runtime may have written
+    // state even when readiness fails. Configuration and binaries then stay.
     let laid = format!(
         "新版本已铺开；被替换的版本在 / The new version is laid out; the version replaced is in: {}",
         swap.previous.display()
     );
-    // Before a Runtime starts again: the ADB server it is going to use.
-    let adb_server = adb_server::ensure(&ac_adb(root), root, adb_server::PORT, report)
-        .map_err(|reason| format!("{reason}\n{laid}"))?;
     let restarted = match swap.stopped {
         true => {
-            report
-                .step(Step::Phase("用新版本重新拉起 Runtime / Starting the Runtime again on the new version", None))
-                .map_err(|reason| format!("{reason}\n{laid}"))?;
             Some(
                 restart(root, &laid_out.actingd_exe, &config, &state_root, report)
                     .map_err(|reason| format!("{reason}\n{laid}"))?,
@@ -293,8 +306,12 @@ pub fn upgrade(root: &Path, verified: &Verified, report: Report<'_>) -> Result<U
         }
         false => None,
     };
-    swap.drop_older(report).map_err(|reason| format!("{reason}\n{laid}"))?;
-    Ok(Upgraded { laid_out, previous: swap.previous, restarted, adb_server })
+    // With no new start, finish at the reversible transaction boundary. An
+    // older retained directory is handled by the next upgrade's usual cleanup.
+    if swap.stopped {
+        swap.drop_older(report).map_err(|reason| format!("{reason}\n{laid}"))?;
+    }
+    Ok(Upgraded { laid_out, previous: swap.previous, restarted, adb_server, configuration_changed: transaction.changed() })
 }
 
 /// The names `lay_out` puts at the top of `ui\`: each file's first segment,
@@ -319,6 +336,8 @@ struct Swap<'a> {
     /// is laid out.
     older: Option<PathBuf>,
     moved: Vec<&'static str>,
+    /// Program directories absent before layout, removed on pre-start rollback.
+    created: Vec<&'static str>,
     /// Whether the Runtime was asked to shut down, and whether its shutdown
     /// was confirmed.
     stopped: bool,
@@ -362,12 +381,16 @@ impl Swap<'_> {
                 self.confirmed = true;
                 report.line("Runtime 已关闭 / the Runtime has shut down")?;
             }
-            Err(unanswered) => self.unanswered = unanswered,
+            Err(Some(reason)) => return Err(format!("{UNCONFIRMED_NOTE}\n{reason}")),
+            Err(None) => {}
         }
         report.step(Step::Phase("移开旧版本 / Moving the old version aside", None))?;
         self.move_aside("ui", "请先关闭监控台 / close the console first", report)?;
         self.move_aside("tools", "多半有程序正从这里运行 / most likely a program runs from it", report)?;
         self.move_aside("runtime", "多半有程序正从这里运行 / most likely a program runs from it", report)?;
+        for name in ["ui", "tools", "runtime"] {
+            if !self.moved.contains(&name) && !self.root.join(name).exists() { self.created.push(name); }
+        }
         install::lay_out(self.root, verified, report)
     }
 
@@ -494,6 +517,14 @@ impl Swap<'_> {
     fn undo(&mut self, reason: String) -> (String, bool) {
         let first = reason.len();
         let mut reason = reason;
+        for name in &self.created {
+            let path = self.root.join(name);
+            if path.exists() {
+                if let Err(error) = fs::remove_dir_all(&path) {
+                    reason.push_str(&format!("\n新程序目录未能移除 / New program directory not removed: {}: {error}", path.display()));
+                }
+            }
+        }
         for name in self.moved.iter().rev() {
             let placed = self.root.join(name);
             if let (&"ui", Some(entries)) = (name, &self.ui_entries) {

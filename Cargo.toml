@@ -25,11 +25,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The formal ledger read face (offline) and the typed IPC client (online),
 # pinned to one exact Runtime source. One rev for every Runtime crate the console reads
-# through; the setup wizard reads bundle index v2 through the same contract.
-actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "e8b74123127949e626c9905e354411c294d37c33" }
-actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "e8b74123127949e626c9905e354411c294d37c33" }
-actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "e8b74123127949e626c9905e354411c294d37c33" }
-actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "e8b74123127949e626c9905e354411c294d37c33" }
+# through; setup shares the bundle contract and offline package qualifications.
+actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "0d3e804e24d409bd4e0f3e724586771f180c51ae" }
+actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "0d3e804e24d409bd4e0f3e724586771f180c51ae" }
+actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "0d3e804e24d409bd4e0f3e724586771f180c51ae" }
+actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "0d3e804e24d409bd4e0f3e724586771f180c51ae" }
+actingcommand-execution-kernel = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "0d3e804e24d409bd4e0f3e724586771f180c51ae" }
 # Only what the console needs: the trim drops the renderers and backends this
 # program never uses (software renderer, testing backend, Linux system tray).
 # It does not drop image decoding, and the console does decode: the capture

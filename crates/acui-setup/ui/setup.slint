@@ -160,6 +160,10 @@ export component SetupWindow inherits Window {
     // First entry: "choose what it runs"; the rest are the real choices.
     in property <[string]> choices;
     in-out property <string> local-bundle;
+    in property <string> decision-text;
+    in property <[string]> decision-options;
+    in-out property <int> decision-choice;
+    in property <int> decision-return-step;
 
     callback next();
     callback close-wizard();
@@ -170,6 +174,7 @@ export component SetupWindow inherits Window {
     callback discover();
     callback add-bundle();
     callback skip-instances();
+    callback decide(bool);
 
     property <[string]> step-labels: [
         "0 位置 / Location",
@@ -262,6 +267,11 @@ export component SetupWindow inherits Window {
                         text: "放着同一个发布件全部文件的文件夹 / The folder holding one release's files";
                     }
                     if !root.installing && root.downgrade-note != "": Body { text: root.downgrade-note; }
+                    if !root.installing && root.upgrading: LineEdit {
+                        text <=> root.local-bundle;
+                        enabled: !root.busy;
+                        placeholder-text: "可选：本机标准包文件 / Optional: local resource bundle file";
+                    }
                     if !root.installing && root.downgrade-note != "": CheckBox {
                         text: "确认降级 / Confirm downgrade";
                         checked <=> root.downgrade-ok;
@@ -416,6 +426,28 @@ export component SetupWindow inherits Window {
                         text: "「启动监控台」拉起监控台并关闭本向导 / \"Open console\" starts the console and closes this wizard";
                     }
                     Body { text: root.note; }
+                }
+
+                if !root.failed && root.step == 5: VerticalLayout {
+                    spacing: 8px;
+                    Head { text: "资源与维护配置 / Resource and maintenance configuration"; }
+                    Transcript { text: root.decision-text; }
+                    ComboBox {
+                        model: root.decision-options;
+                        current-index <=> root.decision-choice;
+                    }
+                    Caption { text: "请选择后继续，或取消本次配置计划。等待期限 30 分钟。/ Choose to continue, or cancel this configuration plan. This page waits up to 30 minutes."; }
+                    HorizontalLayout {
+                        Button {
+                            text: "取消 / Cancel";
+                            clicked => { root.decide(false); }
+                        }
+                        Button {
+                            text: "确认选择 / Confirm choice";
+                            enabled: root.decision-choice > 0;
+                            clicked => { root.decide(true); }
+                        }
+                    }
                 }
             }
         }

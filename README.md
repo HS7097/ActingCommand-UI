@@ -618,7 +618,8 @@ log" below):
    release carries: its `MEMBERS.json` names each in `bundles[]` with its sha256, and the file is in the
    download folder, already checked against `SHA256SUMS`; on the first discovery the wizard holds each
    to be listed in `SHA256SUMS` under that same sha256, checks the file's sha256 once more and reads it.
-   A bundle that fails any of this is named in the notes and not offered; the others still are.
+   A bundle that fails any of this is named in the notes; the configuration plan cannot be
+   submitted while a required release bundle is unreadable.
    **No URL is asked for, and no hash is typed by hand.** A bundle holds
    `applications.json` (the game, its display name `label` when given, and each server's label and
    Android package name) and `bundle.json` (every pack's path, package id, server, sha256 and size, and
@@ -626,7 +627,13 @@ log" below):
    `actingcommand.bundle.v2` (the contract's `BundleIndexV2`, Workflow #288) maps each package id to a
    content directory `packs/<digest>/` named by its `content-directory.v1` digest, and a server's
    default pack is the one `applications.json` names in `servers.<server>.default_package_id`; v1 is
-   read as before. The page lists the programs and package names they
+   read as before. `actingcommand.bundle.v3` adds the required `maintenance` array, with
+   `package_id`, `server` and `uses` (`startup`, `prerequisite`, `return_home`) per entry.
+   The shared contract strictly decodes and validates v2/v3. Every actual v3 pack passes
+   hash/Containment and `PreparedContainedTask::describe_path`, then the shared
+   `validate_bundle_maintenance` checks identity, use qualifications and the bundle's chains.
+   Admission has a 120-second deadline and runs no task or provider. Unknown versions, fields,
+   uses, references and invalid qualifications fail explicitly. The page lists the programs and package names they
    support — for example "蔚蓝档案 / Blue Archive：日服 com.YostarJP.BlueArchive" (the game id when a
    bundle gives no `label`) — whether each came with the release, and two kinds of server as not offered:
    one that names a default pack but no package name, and one with a package name but no default pack.
@@ -636,8 +643,10 @@ log" below):
    **its own choice** of "program · server · package name", one per server that has both a package
    name and a default pack;
    when there is only one, it is chosen for every instance. The wizard knows no game and guesses none.
-   "写入实例 / Apply" lays each bundle used out once, byte for byte, under
-   `<install root>\packages\<game>\`, each pack checked against `bundle.json` first. A v2 pack is
+   "写入实例 / Apply" first stages and verifies the bundles, builds the configuration plan and
+   resolves conflicts, then confirms Runtime shutdown before placing installed material under
+   `<install root>\packages\<game>\`. ZIP bundles go under `bundles\<bundle-sha256>\`, retaining
+   older files even when their pack names are reused. A v2/v3 pack is
    streamed file by file into `<digest>.part\`, each file hashed as it is written, and renamed to
    `<digest>\` only once the files, bytes and `content-directory.v1` digest are the index's; a
    `<digest>\` already there is read whole and reused when its digest matches, and otherwise renamed
@@ -649,9 +658,20 @@ log" below):
    server's package name, `touch_backend` `adb_shell_input`, `capture_backend` `adb` (until a first
    `nemu_ipc` frame is confirmed on the real machine), and the absolute path of that server's default
    pack (for v2 its `<digest>\` directory, which a Runtime with content-directory support admits in
-   full) as `resource_package` — into `actingd.config.candidate-<pid>.json` next to the configuration. The Runtime's `check-config` checks
+   full) as `resource_package`. The selected game/server's maintenance uses supply the existing
+   `startup_package`, `prerequisite_packages` and `return_home_packages`; a return-home use also
+   registers its prerequisite reference. No business control or trigger is added. Equal complete
+   bindings reuse the current value. Conflicts show current/proposed values and their sources for
+   an explicit Keep/Use choice; Cancel stops the plan, and an unanswered choice expires after
+   30 minutes. Missing declarations do not delete existing bindings. The merged candidate's actual
+   old and new references are admitted again and checked through descriptor qualifications and
+   `PrerequisiteChain`, including every retained binding; unresolved material rejects the plan.
+   The candidate is written next to the configuration, preserving relative-path meaning. The Runtime's `check-config` checks
    it (a package that does not load is named with its alias, path and the loader's message); only an
-   accepted candidate replaces the configuration, and the Runtime is restarted on it and `actingctl
+   accepted candidate replaces the configuration after an exact baseline-byte comparison and an
+   adjacent backup. An unchanged document reuses the original file. A pre-start failure restores
+   the original configuration and leaves Runtime stopped; incomplete restoration stops setup.
+   Once committed, Runtime is restarted on it and `actingctl
    status` must answer. A failure before the configuration is replaced is said on the page and in the log
    and leaves the page usable; one after it stops the run, as does any failed log write. Leaving this step
    asks again, for the summary, what `mumu_root` is and whether a Runtime answers.
@@ -662,21 +682,24 @@ log" below):
 
 **Upgrade**, on a root that already holds an installation. The install step reads the release's `MEMBERS.json`
 first (online without saving it, offline from the folder, the offline edition from what it carries) and compares its two commits with the ones the
-installed manifests name: the same two, with `tools\platform-tools\adb.exe` in place, stop there,
-"already at this release's version", with nothing fetched. The same two without that adb (say, a release
-with platform-tools installed by the v0.9.0 wizard) do not stop: the page says it is missing, and the same
-release is laid out again the way an upgrade is, below. Otherwise, after verifying as above:
+installed manifests name. Matching program commits still allow the resource/configuration plan
+to run. An optional local bundle can be supplied on this page. After verifying as above:
 
-1. the new Runtime runs `check-config` on the existing `actingd.config.json` (its `state_root` must be
-   absolute); refused, nothing is changed;
+1. setup retains the exact configuration baseline, stages and validates the complete bundles, then
+   associates existing instances from their admitted resource package's actual game/server. Verified
+   identities with no incoming bundle retain their bindings. Multiple matches require a source
+   choice. Unknown or unverifiable identity shows its reason and requires an explicit game/server
+   selection that replaces that instance's business resource with the selected default pack. IDs,
+   backends and other fields stay. Maintenance conflicts use the same Keep/Use interaction as a
+   fresh install. The actual candidate is checked with the new Runtime before configuration replacement;
 2. a `previous\` kept from the upgrade before is set aside as `previous.older-<unix_ms>\` (any such
    directory an earlier upgrade could not remove goes first), and a new `<install root>\previous\` is
    made;
 3. when `<state root>\runtime-info.json` exists and the new `actingctl status` is answered, the new
    `actingctl request-shutdown --state-root <state root> --wait 60` asks the Runtime to shut down and
    waits until its ownership record is closed and the process gone — first, because a Runtime the
-   console started works in `ui\`. A file left by a Runtime that ended without shutting down, with no
-   answer, is said and taken as not running;
+   console started works in `ui\`. A present ownership record without a Runtime answer leaves
+   shutdown unconfirmed and stops the transaction;
 4. `ui\`, `tools\` and `runtime\` move aside — an open console makes the first fail — and the verified
    payload is laid out as on a fresh install. `tools\` moves whole as before: the image of a running adb
    server does not keep it from moving, and goes on running from `previous\tools\platform-tools\`. When
@@ -690,7 +713,9 @@ release is laid out again the way an upgrade is, below. Otherwise, after verifyi
    likely an adb server a Runtime started from the console — so the entries of `ui\` move into
    `previous\ui\` one by one, the directory stays, the new version is laid out into it, and the log says
    so in one line;
-5. once laid out, before a Runtime starts again, the ADB server is checked: the `tools\platform-tools\adb.exe`
+5. verified resources are placed; the actual merged configuration's full shared qualification and
+   `check-config` pass, the baseline still matches, and an adjacent backup and atomic replacement
+   commit it. Before a Runtime starts again, the ADB server is checked: the `tools\platform-tools\adb.exe`
    just laid out runs `start-server` from the install root (at most 20 seconds each time; a server it
    starts works in the install root, never in `ui\`). A server that answers is reused; one of another
    version adb restarts itself; when a server is there but does not answer within the time, or the check
@@ -700,13 +725,15 @@ release is laid out again the way an upgrade is, below. Otherwise, after verifyi
    has a line on the ADB server either way. This is the only adb the wizard runs: before and during the
    upgrade the ADB server is left alone.
 
-Until the payload is laid out, any failure removes what was half laid out, puts every moved directory
+Until the first new Runtime start attempt, any failure restores the original configuration,
+removes what was half laid out, puts every moved directory
 and the older `previous\` back (a `ui\` emptied entry by entry: only once every entry had left, the names
 laid into it are removed, then each entry moves back, the last first, and the empty `previous\ui\` is
 removed), and starts a Runtime that was asked to shut down — and is gone — again
-on the version still installed (said, with its log, or why it could not be); one whose shutdown was not
-confirmed is left alone, and said so. Once laid out, the older `previous\` is
-removed, and a Runtime that was running is started again on the new version: detached, from the install
+on the version still installed only when configuration and programs are both restored (said, with
+its log, or why it could not be). Incomplete restoration keeps Runtime stopped; unconfirmed shutdown
+never starts a second Runtime. Verified unbound resources remain on disk and old resources remain.
+A Runtime that was running is started again on the new version: detached, from the install
 root, its output in `<install root>\actingd-<unix_ms>.log`, up once its own `runtime-info.json` names
 its pid within 30 seconds. An exit before that is said with its `FATAL` line; no answer in time is said
 as possibly still starting. Either way the new version stays laid out and the version replaced in
@@ -739,8 +766,10 @@ downgrade" must be ticked before Install goes on; a tick given for one release i
 Publication time is a heuristic (a stable line's dates may one day run against the code's age), and is
 said as one; the tick is the person's word, not the wizard's judgement.
 
-State, `actingd.config.json`, the console's `acui.toml`, the Startup launcher and `downloads\` are left as
-they are, and the options step is skipped. The version replaced is kept whole in `previous\`, one
+State, the console's `acui.toml`, the Startup launcher and `downloads\` are preserved, and the options
+step is skipped. Configuration reflects the accepted maintenance plan. After a new Runtime start
+attempt there is no automatic state/configuration rollback. When no Runtime was running, an older
+retained version is cleaned up by the next upgrade. The version replaced is kept whole in `previous\`, one
 version deep: the Runtime ships no state migration and no rollback of its own, so going back stays a
 person's choice.
 

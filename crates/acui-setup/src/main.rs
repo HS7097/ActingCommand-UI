@@ -10,7 +10,7 @@
 //! configuration and the console's settings, optionally a Startup-folder
 //! launcher and the emulator instances (see `instance_step`), and can open the
 //! console. On a root that already holds an installation it upgrades instead:
-//! the payload replaced, state and configuration kept, then the ADB server
+//! the payload replaced, maintenance bindings planned with the user, then the ADB server
 //! checked with the adb just laid out (see `upgrade` and `adb_server`). The
 //! fetch of the release — the resource bundles it carries among its files — is
 //! its only network code; it registers no service and no scheduled task, and
@@ -27,6 +27,7 @@ mod fetch;
 mod install;
 mod instance_step;
 mod log;
+mod maintenance;
 mod payload;
 mod platform;
 mod runtime;
@@ -111,6 +112,8 @@ struct State {
     /// The launcher and shortcuts the options step wrote in this run, so a
     /// retry can take back what it no longer wants.
     options_written: Vec<PathBuf>,
+    /// One explicit resource association or binding conflict, answered on the UI thread.
+    decision: Option<std::sync::mpsc::SyncSender<Result<usize, String>>>,
 }
 
 /// The worker phases the window must not close in: held while laying files
@@ -209,6 +212,26 @@ fn main() -> Result<()> {
 }
 
 fn install_callbacks(window: &SetupWindow, state: &Shared) {
+    {
+        let weak = window.as_weak();
+        let state = Arc::clone(state);
+        window.on_decide(move |accepted| {
+            if let Some(window) = weak.upgrade() {
+                let selected = window.get_decision_choice();
+                if accepted && selected < 1 { return; }
+                let answer = if accepted { Ok((selected - 1) as usize) }
+                    else { Err("用户取消配置计划 / Configuration plan cancelled by the user".into()) };
+                let sender = lock(&state).decision.take();
+                window.set_step(window.get_decision_return_step());
+                window.set_busy(true);
+                if let Some(sender) = sender {
+                    if sender.send(answer).is_err() {
+                        fail(&state, &window.as_weak(), "配置选择已过期 / Configuration choice expired".into());
+                    }
+                }
+            }
+        });
+    }
     {
         let weak = window.as_weak();
         let state = Arc::clone(state);
@@ -346,7 +369,7 @@ fn refresh_preflight(window: &SetupWindow, state: &Shared) {
     let existing = match upgrade::installed(&root) {
         Ok(None) => "此处没有已安装的 Runtime / No installation here yet".to_string(),
         Ok(Some(installed)) => format!(
-            "此处已有安装：runtime {} · ui {}；下一步将升级，保留 state、配置与设置 / Installed here: the next steps upgrade it, keeping state, configuration and settings",
+            "此处已有安装：runtime {} · ui {}；下一步将升级并检查维护配置 / Installed here: the next steps upgrade it and check maintenance configuration",
             short(&installed.runtime_sha),
             short(&installed.ui_sha)
         ),
@@ -363,6 +386,36 @@ fn next(window: &SetupWindow, state: &Shared) {
         3 => begin_apply(window, state),
         _ => {}
     }
+}
+
+/// Worker/UI rendezvous for the installer's normal explicit choices. The worker
+/// holds no State lock while waiting; Cancel follows its existing error/rollback path.
+fn ask(state: &Shared, weak: &slint::Weak<SetupWindow>, text: String, choices: Vec<String>) -> Result<usize, String> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    {
+        let mut state = lock(state);
+        if state.decision.is_some() { return Err("Another configuration choice is pending".into()); }
+        state.decision = Some(sender);
+    }
+    let shown = weak.upgrade_in_event_loop(move |window| {
+        window.set_decision_return_step(window.get_step());
+        window.set_decision_text(text.into());
+        let labels: Vec<slint::SharedString> = std::iter::once("请选择 / Choose".to_string()).chain(choices).map(Into::into).collect();
+        window.set_decision_options(Rc::new(VecModel::from(labels)).into());
+        window.set_decision_choice(0);
+        window.set_step(5);
+    });
+    if let Err(error) = shown {
+        lock(state).decision = None;
+        return Err(format!("Cannot show configuration choice: {error}"));
+    }
+    let result = receiver.recv_timeout(Duration::from_secs(30 * 60))
+        .map_err(|error| format!("配置选择未完成（30 分钟期限）/ Configuration choice not completed (30-minute limit): {error}"));
+    lock(state).decision = None;
+    let _ = weak.upgrade_in_event_loop(|window| {
+        if window.get_step() == 5 { window.set_step(window.get_decision_return_step()); }
+    });
+    result?
 }
 
 /// A worker's reporter. Every line goes into the log — a log write failing
@@ -585,8 +638,8 @@ fn enter_get(window: &SetupWindow, state: &Shared) {
 }
 
 /// Step 1 of the offline edition: the release it carries, checked at start,
-/// is the one to install — no lookup, no folder. An upgrade to the same two
-/// commits stops here; one to an older release shows the downgrade check.
+/// is the one to install — no lookup, no folder. The resource plan is checked
+/// even at the same program commits; an older release shows the downgrade check.
 fn enter_carried(window: &SetupWindow, state: &Shared) {
     let (line, members_text, upgrading, current) = {
         let state = lock(state);
@@ -614,8 +667,8 @@ fn enter_carried(window: &SetupWindow, state: &Shared) {
     }
     window.set_release_text(line.into());
     window.set_note(if current { UP_TO_DATE } else { "" }.into());
-    window.set_can_next(!current);
-    if upgrading && !current {
+    window.set_can_next(true);
+    if upgrading {
         let root = lock(state).root.clone();
         confirm_downgrade(window, upgrade::downgrade(&root, &members_text));
     }
@@ -707,9 +760,8 @@ fn find_release(window: &SetupWindow, state: &Shared) {
             let locked = lock(&state);
             (locked.root.clone(), locked.installed.clone())
         };
-        // An upgrade reads the release's MEMBERS.json first: the same two
-        // commits with AC's adb in place need nothing fetched, an older
-        // release the person's word.
+        // An upgrade reads MEMBERS.json for program identity and the downgrade
+        // choice. Matching program commits still need a resource/configuration plan.
         let found = fetch::choose().and_then(|release| {
             release.folder()?;
             let text = installed.as_ref().map(|_| fetch::members(&release)).transpose()?;
@@ -732,7 +784,7 @@ fn find_release(window: &SetupWindow, state: &Shared) {
             fail(&state, &worker_weak, reason);
             return;
         }
-        let found = found.ok().filter(|_| !current).map(|(release, _, text)| (release, text));
+        let found = found.ok().map(|(release, _, text)| (release, text));
         let ok = found.is_some();
         let downgrade = found.as_ref().and_then(|(_, text)| text.as_deref()).and_then(|text| upgrade::downgrade(&root, text));
         {
@@ -764,7 +816,7 @@ fn find_release(window: &SetupWindow, state: &Shared) {
     }
 }
 
-const UP_TO_DATE: &str = "已是这个发布件的版本，无需升级 / Already at this release's version: nothing to upgrade";
+const UP_TO_DATE: &str = "程序版本相同，继续检查资源与维护配置 / Program versions match; continue to check resources and maintenance configuration";
 
 /// What an upgrade replaces with what — and, at the very release
 /// installed, that AC's adb is missing, so it is laid out again.
@@ -816,6 +868,7 @@ fn release_line(release: &Release) -> String {
 /// configure on a fresh install, finish on an upgrade. An upgrade to a release
 /// published earlier than the one installed waits for the person's word.
 fn begin_install(window: &SetupWindow, state: &Shared) {
+    let local_bundle = window.get_local_bundle().trim().to_string();
     let (mut fetch_release, mut carried) = (None, None);
     let upgrading = lock(state).installed.is_some();
     let copy = lock(state).payload.as_ref().map(Payload::try_clone);
@@ -854,10 +907,6 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
                 .map_err(|error| format!("读取失败 / read failed: {}: {error}", members.display()));
             let wanted = text.as_deref().map_err(Clone::clone).and_then(verify::members_of);
             match wanted {
-                Ok(wanted) if installed.current(&wanted) => {
-                    window.set_note(UP_TO_DATE.into());
-                    return;
-                }
                 Ok(wanted) => {
                     if downgrade_stops(window, state, text.as_deref().unwrap_or_default()) {
                         return;
@@ -927,8 +976,16 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
                 let _held = Held::new(&state);
                 let members = verified.members.clone();
                 let done = match upgrading {
-                    true => upgrade::upgrade(&root, &verified, &mut report)
-                        .map(|upgraded| (upgraded.laid_out.clone(), Some(upgraded), members, None)),
+                    true => {
+                        let (mut bundles, problems) = bundle::carried(&download, &mut report)?;
+                        if !problems.is_empty() {
+                            return Err(format!("发布件资源读取失败 / Release resources could not be read:\n{}", problems.join("\n")));
+                        }
+                        if !local_bundle.is_empty() { bundles.push(bundle::local(&local_bundle)?); }
+                        let mut choose = |text, choices| ask(&state, &worker_weak, text, choices);
+                        upgrade::upgrade(&root, &verified, &bundles, &mut choose, &mut report)
+                            .map(|upgraded| (upgraded.laid_out.clone(), Some(upgraded), members, None))
+                    }
                     // A fresh install is configured at once: the state root
                     // under the root, the salt, the console's settings.
                     false => install::lay_out(&root, &verified, &mut report).and_then(|laid_out| {
@@ -1008,8 +1065,7 @@ fn thread_failed(error: &std::io::Error) -> String {
     format!("无法启动工作线程 / The worker thread could not start: {error}")
 }
 
-/// The finish page: from the install step on an upgrade — configuration,
-/// settings and the Startup launcher as they were — or from the instances
+/// The finish page: from the completed upgrade transaction or the instances
 /// step on a fresh install.
 fn finish(window: &SetupWindow, state: &Shared) {
     window.set_summary(summary(state).into());
@@ -1243,6 +1299,7 @@ fn instance_row(found: &Found) -> InstanceRow {
 #[derive(Clone)]
 struct Choice {
     bundle: usize,
+    server: String,
     application_id: String,
     pack: String,
     package_id: String,
@@ -1274,6 +1331,7 @@ fn offer(bundles: &[Bundle], problems: &[String]) -> (Vec<Choice>, String) {
             if let Some(listed) = pack.and_then(|pack| bundle.packs.iter().find(|listed| &listed.path == pack)) {
                 choices.push(Choice {
                     bundle: at,
+                    server: server.clone(),
                     application_id: application.application_id.clone(),
                     pack: listed.path.clone(),
                     package_id: listed.package_id.clone(),
@@ -1420,6 +1478,10 @@ fn retryable(state: &Shared, weak: &slint::Weak<SetupWindow>, reason: String) {
 /// before the configuration is replaced leaves the page usable; one after it
 /// stops the run.
 fn begin_apply(window: &SetupWindow, state: &Shared) {
+    if !lock(state).bundle_problems.is_empty() {
+        window.set_note("发布件标准包读取失败，配置计划不能提交；请使用完整有效的发布件 / A release bundle failed to read; the configuration plan cannot be committed. Use a complete valid release".into());
+        return;
+    }
     let picked: Vec<InstanceRow> = window.get_instances().iter().filter(|row| row.picked).collect();
     if picked.is_empty() {
         window.set_note(
@@ -1455,26 +1517,17 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
         let _guard = PanicGuard::new(&state, &worker_weak);
         let held = Held::new(&state);
         let mut report = PageReport::new(&state, &worker_weak);
-        // Each bundle an instance uses is laid out once, under its game.
-        let mut laid: std::collections::BTreeMap<usize, std::collections::BTreeMap<String, PathBuf>> = Default::default();
-        let placed = picks.iter().try_for_each(|(_, _, choice)| {
-            if laid.contains_key(&choice.bundle) {
-                return Ok(());
-            }
-            let bundle = &bundles[choice.bundle];
-            let packs = bundle.lay_out(&root.join("packages").join(&bundle.game), &mut report)?;
-            laid.insert(choice.bundle, packs);
-            Ok::<(), String>(())
-        });
-        let chosen = placed.and_then(|()| {
+        // Stage and qualify before touching the installed material. The selected
+        // bundle indices remain stable for the plan and the conflict page.
+        let staging = root.join(format!(".staging-resources-{}", log::unix_ms()));
+        let prepared = maintenance::prepare(&bundles, &staging, &mut report);
+        let mut restoration_failed = false;
+        let written = prepared.and_then(|prepared| {
+            let chosen =
             picks
                 .iter()
                 .map(|(index, alias, choice)| {
-                    let package = laid
-                        .get(&choice.bundle)
-                        .and_then(|packs| packs.get(&choice.pack))
-                        .cloned()
-                        .ok_or_else(|| format!("任务包没有放置 / the pack was not placed: {}", choice.pack))?;
+                    let package = maintenance::installed_path(&root, &prepared[choice.bundle], &choice.pack)?;
                     report.line(&format!(
                         "实例 / instance {alias}：{} → {} {}（sha256 {}）",
                         choice.label,
@@ -1489,14 +1542,35 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
                         resource_package: package,
                     })
                 })
-                .collect::<Result<Vec<Chosen>, String>>()
+                .collect::<Result<Vec<Chosen>, String>>()?;
+            let mut transaction = instance_step::plan(&root, &chosen)?;
+            let selections: Vec<_> = picks.iter().enumerate().map(|(at, (_, _, choice))| maintenance::Selection {
+                instance: at, bundle: choice.bundle, server: choice.server.clone(),
+            }).collect();
+            let mut choose = |text, choices| ask(&state, &worker_weak, text, choices);
+            let qualify = maintenance::augment(&mut transaction.document, &root, &prepared, &selections, &mut choose)?;
+            let planned_state_root = transaction.state_root()?;
+            transaction.unchanged()?;
+            instance_step::stop(&root, &planned_state_root, &mut report)?;
+            let committed = maintenance::place(&prepared, &root, &mut report)
+                .and_then(|()| transaction.commit(&root.join("runtime").join(runtime::ACTINGD), qualify, &mut report));
+            if let Err(reason) = committed {
+                return Err(match transaction.restore() {
+                    Ok(()) => format!("{reason}\n原配置保留；Runtime 保持停止；已放置资源保留 / Original configuration retained; Runtime remains stopped; placed resources retained"),
+                    Err(restore) => {
+                        restoration_failed = true;
+                        format!("{reason}\n{restore}\nRuntime 保持停止 / Runtime remains stopped")
+                    }
+                });
+            }
+            Ok(chosen)
         });
-        let written = chosen.and_then(|chosen| instance_step::write(&root, &chosen, &mut report).map(|()| chosen));
         let chosen = match written {
             Ok(chosen) => chosen,
             Err(reason) => {
                 drop(held);
-                retryable(&state, &worker_weak, reason);
+                if restoration_failed { fail(&state, &worker_weak, reason); }
+                else { retryable(&state, &worker_weak, reason); }
                 return;
             }
         };
@@ -1604,7 +1678,12 @@ fn summary(state: &Shared) -> String {
             Some(log) => format!("Runtime 已用新版本重新拉起 / restarted on the new version; 日志 / log: {}", log.display()),
             None => "Runtime 升级前未在运行，未拉起 / was not running, not started".to_string(),
         });
-        lines.push("状态根、配置、监控台设置与开机自启保持不变 / State, configuration, console settings and autostart are unchanged".to_string());
+        lines.push(if upgraded.configuration_changed {
+            "配置按所选计划更新 / Configuration updated from the selected plan".to_string()
+        } else {
+            "配置内容相同，保留原文件 / Configuration unchanged; original file retained".to_string()
+        });
+        lines.push("状态根、监控台设置与开机自启保留 / State root, console settings and autostart preserved".to_string());
     }
     if let Some(laid_out) = &state.laid_out {
         lines.push(format!("Runtime: {}", laid_out.actingd_exe.display()));
