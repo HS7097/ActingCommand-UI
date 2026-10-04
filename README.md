@@ -101,7 +101,7 @@ as usual.
 Dependencies are pinned to one exact Runtime source (`Cargo.toml`):
 
 ```
-rev = "e13537612748f4d18eacad5462a2a3f7bc71f63f"
+rev = "e8b74123127949e626c9905e354411c294d37c33"
 ```
 
 The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
@@ -110,6 +110,10 @@ pages; the offline ledger reader accepts them in full failure and `ResourceQuies
 Historical records without the field keep their meaning. Strict validation and explicit read errors
 remain. The UI still uses `ProjectionProfile::Ui`: supplied failure groups remain visible under its privacy rules;
 observed-phase groups are available through full events/Forensic, not the UI projection.
+The embedded ledger reader also uses the shared recovery lifecycle contract: preparation triggers
+link their preparation event, and task triggers retain their task/run links. `environment_ready`
+and package `recovered` remain distinct outcomes. These details belong to full lifecycle records;
+the public UI projection and the page's `run_recovery` groups keep their existing shapes.
 Producer, Tools and UI releases must use this contract together.
 `Cargo.lock` is checked in; CI runs `cargo build --locked --release --workspace` on windows-latest and
 ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compiler. CI builds pull
