@@ -98,13 +98,19 @@ tabs, the filter boxes, the id box and the time slider are off; the module and p
 pane say "ledger not opened". Nothing is asked of the ledger and no material is read. The launcher works
 as usual.
 
-Dependencies are pinned to the Runtime's **main** (`Cargo.toml`):
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`):
 
 ```
-rev = "885947c90dd6561d6e5c9b7bae3fe736ec36f7c8"
+rev = "e13537612748f4d18eacad5462a2a3f7bc71f63f"
 ```
 
 The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
+The embedded typed client reads optional `resource_dispositions` groups in online lifecycle-failure
+pages; the offline ledger reader accepts them in full failure and `ResourceQuiescence` records.
+Historical records without the field keep their meaning. Strict validation and explicit read errors
+remain. The UI still uses `ProjectionProfile::Ui`: supplied failure groups remain visible under its privacy rules;
+observed-phase groups are available through full events/Forensic, not the UI projection.
+Producer, Tools and UI releases must use this contract together.
 `Cargo.lock` is checked in; CI runs `cargo build --locked --release --workspace` on windows-latest and
 ubuntu-latest. The closure contains `rusqlite` (bundled), so both need a C compiler. CI builds pull
 requests and pushes to branches other than `main`; a push to `main` builds nothing. A release is on
