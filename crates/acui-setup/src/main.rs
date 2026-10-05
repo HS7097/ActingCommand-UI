@@ -21,17 +21,19 @@
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-mod adb_server;
 mod bundle;
 mod fetch;
 mod generations;
 mod install;
+mod lifecycle;
 mod instance_step;
 mod log;
 mod maintenance;
+mod migration;
 mod payload;
 mod platform;
 mod runtime;
+mod slots;
 mod upgrade;
 mod verify;
 
@@ -50,7 +52,6 @@ use instance_step::{Chosen, Found, Settled};
 use log::InstallLog;
 use payload::Payload;
 use slint::{Model, VecModel};
-use adb_server::AdbServer;
 use upgrade::{Installed, Upgraded};
 use verify::{Report, Reporter, Step, Total};
 
@@ -175,16 +176,40 @@ fn lock(state: &Shared) -> MutexGuard<'_, State> {
 }
 
 fn main() -> Result<()> {
-    if std::env::args_os().nth(1).is_some_and(|argument| argument == "--commit-config") {
+    acui_installation::process_slot_lock()
+        .map_err(|error| anyhow::Error::msg(error.to_string()))?;
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|argument| argument == "--commit-config")
+    {
         return generations::commit_from_stdin().map_err(anyhow::Error::msg);
     }
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|argument| argument == "--rollback")
+    {
+        return upgrade::rollback_from_entry().map_err(anyhow::Error::msg);
+    }
+    if std::env::args_os().nth(1).is_some_and(|argument| argument == "--replace-manager") {
+        return install::replace_manager_from_entry().map_err(anyhow::Error::msg);
+    }
     std::panic::set_hook(Box::new(|info| {
-        *LAST_PANIC.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(info.to_string());
+        *LAST_PANIC
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(info.to_string());
     }));
     let installation = acui_installation::Snapshot::inherited().map_err(anyhow::Error::msg)?;
-    let root = match &installation {
-        Some(snapshot) => snapshot.root.clone(),
-        None => platform::default_install_root().map_err(anyhow::Error::msg)?,
+    let manager_root = acui_installation::current_manager_root().map_err(anyhow::Error::msg)?;
+    let root = match (&manager_root, &installation) {
+        (Some(root), Some(snapshot))
+            if !acui_installation::same_install_root(root, &snapshot.root)
+                .map_err(anyhow::Error::msg)? =>
+        {
+            anyhow::bail!("Management entry and inherited installation root disagree")
+        }
+        (Some(root), _) => root.clone(),
+        (None, Some(snapshot)) => snapshot.root.clone(),
+        (None, None) => platform::default_install_root().map_err(anyhow::Error::msg)?,
     };
     let download = platform::default_download_dir();
     let state: Shared = Arc::new(Mutex::new(State::default()));
@@ -850,11 +875,25 @@ fn short(sha: &str) -> &str {
 /// that is one an upgrade moves aside or replaces — it could not move while
 /// the wizard runs. From the root itself or `downloads\` it upgrades as usual.
 fn running_from(root: &Path) -> Option<(String, &'static str)> {
-    let exe = std::env::current_exe().and_then(|exe| exe.canonicalize()).ok()?;
+    let exe = std::env::current_exe()
+        .and_then(|exe| exe.canonicalize())
+        .ok()?;
     let name = exe.file_name()?.to_string_lossy().into_owned();
-    ["runtime", "ui", "tools", "previous"]
+    if root.join(acui_installation::MANAGER_DIRECTORY).is_dir()
+        && root
+            .join("ui/acsetup.exe")
+            .canonicalize()
+            .is_ok_and(|manager| manager == exe)
+    {
+        return None;
+    }
+    ["runtime", "ui", "tools", "A", "B", "previous"]
         .into_iter()
-        .find(|dir| root.join(dir).canonicalize().is_ok_and(|dir| exe.starts_with(dir)))
+        .find(|dir| {
+            root.join(dir)
+                .canonicalize()
+                .is_ok_and(|dir| exe.starts_with(dir))
+        })
         .map(|dir| (name, dir))
 }
 
@@ -1035,29 +1074,12 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
 /// The directories an install lays out under the root.
 const LAID: [&str; 3] = ["runtime", "ui", "tools"];
 
-/// A failed install's reason, with what it left on disk: staging removed (or
-/// why it could not be), and — on a fresh install, which has nothing to put
-/// back — whichever of `runtime\`, `ui\` and `tools\` this run laid out.
-fn left_behind(mut reason: String, root: &Path, staging: &Path, upgrading: bool, existed: [bool; 3]) -> String {
-    if staging.exists() {
-        reason.push('\n');
-        reason.push_str(&match std::fs::remove_dir_all(staging) {
-            Ok(()) => format!("已删除临时目录 / staging removed: {}", staging.display()),
-            Err(error) => format!("临时目录未能删除 / staging not removed: {}: {error}", staging.display()),
-        });
-    }
-    let laid: Vec<String> = LAID
-        .into_iter()
-        .zip(existed)
-        .filter(|(name, before)| !upgrading && !before && root.join(name).exists())
-        .map(|(name, _)| root.join(name).display().to_string())
-        .collect();
-    if !laid.is_empty() {
-        reason.push_str(&format!(
-            "\n这次已铺开一部分，重试前请删除 / Partly laid out this time; remove before trying again: {}",
-            laid.join("、")
-        ));
-    }
+/// Preserve failed preparation and report the selected installation's recovery boundary.
+fn left_behind(mut reason: String, root: &Path, staging: &Path, _upgrading: bool, _existed: [bool; 3]) -> String {
+    reason.push_str(&format!(
+        "\n安装材料与备份保留 / Installation materials and backups retained: {}; staging {}. 当前选择以 install/active.json 为准，启动结果未知时先核实际 owner / Consult the active selection and actual owner before recovery",
+        root.display(), staging.display()
+    ));
     reason
 }
 
@@ -1483,10 +1505,15 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
         window.set_note("发布件标准包读取失败，配置计划不能提交；请使用完整有效的发布件 / A release bundle failed to read; the configuration plan cannot be committed. Use a complete valid release".into());
         return;
     }
-    let picked: Vec<InstanceRow> = window.get_instances().iter().filter(|row| row.picked).collect();
+    let picked: Vec<InstanceRow> = window
+        .get_instances()
+        .iter()
+        .filter(|row| row.picked)
+        .collect();
     if picked.is_empty() {
         window.set_note(
-            "没有勾选实例：不配置实例就点「跳过」/ No instance is ticked: Skip to configure none".into(),
+            "没有勾选实例：不配置实例就点「跳过」/ No instance is ticked: Skip to configure none"
+                .into(),
         );
         return;
     }
@@ -1502,11 +1529,19 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
     let mut picks = Vec::new();
     for row in &picked {
         // Index 0 is CHOOSE: nothing has been chosen for this instance.
-        let Some(choice) = usize::try_from(row.choice - 1).ok().and_then(|at| choices.get(at)) else {
-            window.set_note(format!("{}：请选它运行的程序 / choose what it runs", row.title).into());
+        let Some(choice) = usize::try_from(row.choice - 1)
+            .ok()
+            .and_then(|at| choices.get(at))
+        else {
+            window
+                .set_note(format!("{}：请选它运行的程序 / choose what it runs", row.title).into());
             return;
         };
-        picks.push((u16::try_from(row.index).unwrap_or_default(), row.alias.trim().to_string(), choice.clone()));
+        picks.push((
+            u16::try_from(row.index).unwrap_or_default(),
+            row.alias.trim().to_string(),
+            choice.clone(),
+        ));
     }
     window.set_note("".into());
     window.set_busy(true);
@@ -1552,7 +1587,7 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
             let qualify = maintenance::augment(&mut transaction.document, &root, &prepared, &selections, &mut choose)?;
             let planned_state_root = transaction.state_root()?;
             transaction.unchanged()?;
-            instance_step::stop(&root, &planned_state_root, &mut report)?;
+            let closed = instance_step::stop(&root, &planned_state_root, &mut report)?;
             let committed = maintenance::place(&prepared, &root, &mut report)
                 .and_then(|()| transaction.commit(&root.join("runtime").join(runtime::ACTINGD), qualify, &mut report));
             if let Err(reason) = committed {
@@ -1564,10 +1599,10 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
                     }
                 });
             }
-            Ok(chosen)
+            Ok((chosen, closed))
         });
-        let chosen = match written {
-            Ok(chosen) => chosen,
+        let (chosen, closed) = match written {
+            Ok(done) => done,
             Err(reason) => {
                 drop(held);
                 if restoration_failed { fail(&state, &worker_weak, reason); }
@@ -1584,7 +1619,7 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
                 .map(|(pick, (_, _, choice))| format!("{}：{} → {}", pick.alias, choice.label, pick.resource_package.display()))
                 .collect();
         }
-        let restarted = instance_step::restart(&root, &mut report)
+        let restarted = instance_step::restart(&root, closed, &mut report)
             .and_then(|status| report.line(&format!("actingctl status: {status}")));
         lock(&state).runtime_started |= restarted.is_ok();
         drop(held);
@@ -1665,25 +1700,22 @@ fn summary(state: &Shared) -> String {
             short(&installed.runtime_sha),
             short(&installed.ui_sha)
         ));
-        lines.push(format!("被替换的版本 / Version replaced, kept in: {}", upgraded.previous.display()));
-        lines.push(match &upgraded.adb_server {
-            AdbServer::Ready(how) => {
-                format!("ADB 服务 / ADB server (127.0.0.1:{}): 就绪 / ready — {how}", adb_server::PORT)
-            }
-            AdbServer::NotReady(_) => format!(
-                "ADB 服务 / ADB server (127.0.0.1:{}): 未就绪，原因见下方「注意」/ NOT ready, why is under Note below",
-                adb_server::PORT
-            ),
-        });
+        lines.push(format!(
+            "被替换的版本 / Version replaced, kept in: {}",
+            upgraded.previous.display()
+        ));
+        lines.push(format!(
+            "选中配置代际 / Selected configuration generation: {}",
+            upgraded.generation
+        ));
         lines.push(match &upgraded.restarted {
-            Some(log) => format!("Runtime 已用新版本重新拉起 / restarted on the new version; 日志 / log: {}", log.display()),
+            Some(log) => format!(
+                "Runtime 已用新版本重新拉起 / restarted on the new version; 日志 / log: {}",
+                log.display()
+            ),
             None => "Runtime 升级前未在运行，未拉起 / was not running, not started".to_string(),
         });
-        lines.push(if upgraded.configuration_changed {
-            "配置按所选计划更新 / Configuration updated from the selected plan".to_string()
-        } else {
-            "配置内容相同，保留原文件 / Configuration unchanged; original file retained".to_string()
-        });
+        lines.push("私有配置按所选计划生成，原代际保留 / Private configuration generated from the selected plan; prior generations retained".into());
         lines.push("状态根、监控台设置与开机自启保留 / State root, console settings and autostart preserved".to_string());
     }
     if let Some(laid_out) = &state.laid_out {
@@ -1692,13 +1724,24 @@ fn summary(state: &Shared) -> String {
         lines.push(format!(
             "工具 / Tools: {}（{}、{}）",
             laid_out.tools_dir.display(),
-            verify::TOOLS_INSTALLED.iter().filter(|name| !name.contains('/')).copied().collect::<Vec<_>>().join("、"),
+            verify::TOOLS_INSTALLED
+                .iter()
+                .filter(|name| !name.contains('/'))
+                .copied()
+                .collect::<Vec<_>>()
+                .join("、"),
             platform_tools(&laid_out.tools_dir)
         ));
     }
     if let Some(configured) = &state.configured {
-        lines.push(format!("Runtime 配置 / Config: {}", configured.config_path.display()));
-        lines.push(format!("状态根 / State root: {}", configured.state_root.display()));
+        lines.push(format!(
+            "Runtime 配置 / Config: {}",
+            configured.config_path.display()
+        ));
+        lines.push(format!(
+            "状态根 / State root: {}",
+            configured.state_root.display()
+        ));
         lines.push(format!(
             "监控台设置 / Console settings: {}",
             configured.settings_path.display()
@@ -1732,16 +1775,27 @@ fn summary(state: &Shared) -> String {
             [] => "快捷方式 / Shortcuts: 未创建 / none".to_string(),
             links => format!(
                 "快捷方式 / Shortcuts: {}",
-                links.iter().map(|link| link.display().to_string()).collect::<Vec<_>>().join("、")
+                links
+                    .iter()
+                    .map(|link| link.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join("、")
             ),
         });
     }
     if fresh && !state.instances.is_empty() {
-        lines.push("实例 / Instances（已写入配置并通过检查 / in the configuration, checked）:".to_string());
+        lines.push(
+            "实例 / Instances（已写入配置并通过检查 / in the configuration, checked）:".to_string(),
+        );
         lines.extend(state.assigned.iter().map(|line| format!("  {line}")));
     }
     if let Some(settled) = &state.settled {
-        lines.extend(settled.mumu_root.as_ref().map(|mumu| format!("MuMu 目录 / MuMu folder (mumu_root): {mumu}")));
+        lines.extend(
+            settled
+                .mumu_root
+                .as_ref()
+                .map(|mumu| format!("MuMu 目录 / MuMu folder (mumu_root): {mumu}")),
+        );
         lines.push(match &settled.running {
             Ok(true) => "Runtime 在运行（实例步拉起）/ The Runtime is running (started in the instances step)".to_string(),
             Ok(false) => "Runtime 未在运行 / The Runtime is not running".to_string(),

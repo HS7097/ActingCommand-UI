@@ -503,7 +503,7 @@ fn apply(entry: &mut Value, form: &Form) {
 fn commit_via_setup(snapshot: &Snapshot, document: &Value) -> Result<InstallSelection, String> {
     let bytes = serde_json::to_vec(document).map_err(|error| error.to_string())?;
     if bytes.len() > MAX_CONFIG_BYTES { return Err("Configuration exceeds 1 MiB".into()); }
-    let exe = snapshot.slot_root().join("ui").join("acsetup.exe");
+    let exe = acui_installation::manager_program(&snapshot.root)?;
     let mut command = Command::new(&exe);
     snapshot.apply_to(&mut command)?;
     command.arg("--commit-config").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());

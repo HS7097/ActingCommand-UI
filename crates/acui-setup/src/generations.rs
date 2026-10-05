@@ -29,6 +29,9 @@ pub struct Plan {
 }
 
 impl Writer {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
     pub fn acquire(root: &Path) -> Result<Self, String> {
         if !root.is_absolute() {
             return Err("Installation root must be absolute".into());
@@ -46,7 +49,8 @@ impl Writer {
         lock.try_lock()
             .map_err(|error| format!("Installation/configuration writer is occupied: {error}"))?;
         Ok(Self {
-            root: root.to_path_buf(),
+            root: fs::canonicalize(root)
+                .map_err(|error| format!("Cannot resolve installation root: {error}"))?,
             _lock: lock,
         })
     }
@@ -64,6 +68,9 @@ impl Writer {
         report: Report<'_>,
     ) -> Result<Plan, String> {
         self.check_baseline(baseline.as_ref())?;
+        let slot_guard =
+            actingcommand_contract::installation::InstallSlotLock::try_shared(&self.root, slot)
+                .map_err(|error| error.to_string())?;
         let source_root = source_config
             .parent()
             .ok_or("Configuration has no parent")?;
@@ -73,9 +80,13 @@ impl Writer {
                 .as_str()
                 .ok_or("Missing state_root")?,
         );
+        let state_location = fs::canonicalize(state_root)
+            .map_err(|error| format!("Cannot resolve shared state root: {error}"))?;
+        let install_location = fs::canonicalize(&self.root)
+            .map_err(|error| format!("Cannot resolve installation root: {error}"))?;
         if !state_root.is_absolute()
-            || state_root.starts_with(self.root.join("A"))
-            || state_root.starts_with(self.root.join("B"))
+            || state_location.starts_with(install_location.join("A"))
+            || state_location.starts_with(install_location.join("B"))
         {
             return Err("The shared state root must be absolute and outside both slots".into());
         }
@@ -117,10 +128,6 @@ impl Writer {
             return Err("Configuration exceeds 1 MiB".into());
         }
         write_new(&config_path, &config_bytes)?;
-        crate::runtime::check_config(
-            &programs.join("runtime").join(crate::runtime::ACTINGD),
-            &config_path,
-        )?;
         let members_path = format!("{}/MEMBERS.json", slot.as_str());
         let members_bytes = read_bounded(&self.root.join(&members_path), MAX_MATERIAL_BYTES)?;
         let selection = InstallSelection {
@@ -140,6 +147,11 @@ impl Writer {
         let mut bytes = serde_json::to_vec_pretty(&selection).map_err(|error| error.to_string())?;
         bytes.push(b'\n');
         let snapshot = Snapshot::from_bytes(&self.root, bytes.clone())?;
+        slot_guard.release().map_err(|error| error.to_string())?;
+        crate::runtime::check_config(
+            &programs.join("runtime").join(crate::runtime::ACTINGD),
+            &config_path,
+        )?;
         let candidate = directory.join("selection.json");
         write_new(&candidate, &bytes)?;
         self.check_baseline(baseline.as_ref())?;
@@ -189,10 +201,19 @@ impl Writer {
             return self.check_baseline(plan.baseline.as_ref());
         }
         plan.snapshot.unchanged()?;
-        let previous = plan
-            .baseline
-            .as_ref()
-            .ok_or("A first installation has no previous selection to restore")?;
+        let Some(previous) = plan.baseline.as_ref() else {
+            let retained = plan.candidate.with_file_name("retained-active.json");
+            if retained.try_exists().map_err(|error| error.to_string())? {
+                return Err("Retained first selection already exists".into());
+            }
+            fs::rename(self.root.join(INSTALL_SELECTION_PATH), &retained).map_err(|error| {
+                format!(
+                    "Cannot retain first selection before restoring the original layout: {error}"
+                )
+            })?;
+            plan.committed = false;
+            return self.check_baseline(None);
+        };
         Snapshot::from_bytes(&self.root, previous.selection_bytes.clone())?;
         let temporary = self.root.join(format!(
             "install/restore-{}.json",
@@ -240,8 +261,18 @@ pub fn commit_from_stdin() -> Result<(), String> {
             "--commit-config takes its input through stdin and the installation snapshot".into(),
         );
     }
-    let baseline =
-        Snapshot::inherited()?.ok_or("Configuration editing requires an installation snapshot")?;
+    let root = acui_installation::current_manager_root()?
+        .ok_or("Configuration editing requires the fixed acsetup management entry")?;
+    let baseline = match Snapshot::inherited()? {
+        Some(snapshot) if acui_installation::same_install_root(&snapshot.root, &root)? => snapshot,
+        Some(_) => {
+            return Err(
+                "Management entry and configuration proposal belong to different installations"
+                    .into(),
+            );
+        }
+        None => Snapshot::read(&root)?,
+    };
     let writer = Writer::acquire(&baseline.root)?;
     baseline.unchanged()?;
     let mut bytes = Vec::new();
@@ -384,7 +415,17 @@ fn prepare_provider(
             absolute_field(artifacts, &format!("/{key}"), source_root)?;
             if let Some(path) = artifacts.get(key).and_then(Value::as_str) {
                 let path = Path::new(path);
-                if path.starts_with(root.join("A")) || path.starts_with(root.join("B")) {
+                let actual = fs::canonicalize(path).map_err(|error| {
+                    format!(
+                        "Existing provider model is unavailable: {}: {error}",
+                        path.display()
+                    )
+                })?;
+                let install = fs::canonicalize(root).map_err(|error| error.to_string())?;
+                if !actual.is_file()
+                    || actual.starts_with(install.join("A"))
+                    || actual.starts_with(install.join("B"))
+                {
                     return Err(format!(
                         "Shared provider models must be outside program slots: {}",
                         path.display()
@@ -448,7 +489,14 @@ fn rebind_library(
     } else {
         source_root.join(path)
     };
-    let relative = path.strip_prefix(previous).map_err(|_| {
+    let path = fs::canonicalize(&path).map_err(|error| {
+        format!(
+            "Provider library is unavailable: {}: {error}",
+            path.display()
+        )
+    })?;
+    let previous = fs::canonicalize(previous).map_err(|error| error.to_string())?;
+    let relative = path.strip_prefix(&previous).map_err(|_| {
         format!(
             "Provider library cannot be rebound from outside its program root: {}",
             path.display()

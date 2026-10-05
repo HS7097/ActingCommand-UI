@@ -108,6 +108,7 @@ jobs:
             rust_toolchain = $rustc
             target = 'x86_64-pc-windows-msvc'
             configuration = 'release'
+            installation_selection_schema = 'actingcommand.install-selection.v1'
             workflow_run_id = [uint64]$env:GITHUB_RUN_ID
             workflow_run_attempt = [uint32]$env:GITHUB_RUN_ATTEMPT
             source_artifact_name = $name

@@ -7,19 +7,24 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub use actingcommand_contract::installation::{
-    InstallFileReference, InstallSelection, InstallSlot, INSTALL_ROOT_ENV, INSTALL_SELECTION_ENV,
-    INSTALL_SELECTION_PATH, INSTALL_SELECTION_SCHEMA, MAX_INSTALL_SELECTION_BYTES,
+    process_slot_lock, InstallFileReference, InstallSelection, InstallSlot, InstalledProcess,
+    INSTALL_ROOT_ENV, INSTALL_SELECTION_ENV, INSTALL_SELECTION_PATH, INSTALL_SELECTION_SCHEMA,
+    MAX_INSTALL_SELECTION_BYTES,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 pub const MAX_MATERIAL_BYTES: usize = 16 * 1024 * 1024;
+pub const MANAGER_DIRECTORY: &str = "install/manager";
+pub const OBSERVER_UI_ENV: &str = "ACTINGCOMMAND_OBSERVER_UI";
 
 /// Byte identity is kept as well as the shared DTO: a configuration plan compares
 /// the original selection and inputs again before committing its successor.
 #[derive(Clone)]
 pub struct Snapshot {
+    // Clones retain the shared reader's one native slot occupancy.
+    process: InstalledProcess,
     pub root: PathBuf,
     pub selection: InstallSelection,
     pub selection_bytes: Vec<u8>,
@@ -29,25 +34,42 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn read(root: &Path) -> Result<Self, String> {
-        let bytes = read_bounded(
-            &root.join(INSTALL_SELECTION_PATH),
-            MAX_INSTALL_SELECTION_BYTES,
-        )?;
-        Self::from_bytes(root, bytes)
+        let process = InstalledProcess::read_active(root)
+            .map_err(|error| error.to_string())?
+            .ok_or("Installation selection is missing")?;
+        Self::from_process(process)
     }
 
     pub fn from_bytes(root: &Path, selection_bytes: Vec<u8>) -> Result<Self, String> {
-        if !root.is_absolute() {
-            return Err("Installation root must be absolute".into());
-        }
-        let selection =
-            InstallSelection::from_json(&selection_bytes).map_err(|error| error.to_string())?;
-        read_reference(root, &selection.members, MAX_MATERIAL_BYTES)?;
-        let config_bytes = read_reference(root, &selection.config, MAX_CONFIG_BYTES)?;
+        let process = InstalledProcess::from_selection_bytes(root, &selection_bytes)
+            .map_err(|error| error.to_string())?;
+        Self::from_process(process)
+    }
+
+    pub fn for_launch(root: &Path) -> Result<Self, String> {
+        let process = InstalledProcess::read(root)
+            .map_err(|error| error.to_string())?
+            .ok_or("Installation selection is missing")?;
+        Self::from_process(process)
+    }
+
+    pub fn for_current_process() -> Result<Option<Self>, String> {
+        actingcommand_contract::installation::process_installation()
+            .map_err(|error| error.to_string())?
+            .cloned()
+            .map(Self::from_process)
+            .transpose()
+    }
+
+    fn from_process(process: InstalledProcess) -> Result<Self, String> {
+        let root = process.root();
+        let selection = process.selection().clone();
+        let selection_bytes = process.selection_json().as_bytes().to_vec();
+        let config_bytes = process.config_bytes().map_err(|error| error.to_string())?;
         let provider_bytes = selection
             .provider
             .as_ref()
-            .map(|reference| read_reference(root, reference, MAX_MATERIAL_BYTES))
+            .map(|reference| read_bounded(&root.join(&reference.path), MAX_CONFIG_BYTES))
             .transpose()?;
         let config: Value = serde_json::from_slice(&config_bytes)
             .map_err(|error| format!("Selected configuration is unreadable: {error}"))?;
@@ -58,7 +80,7 @@ impl Snapshot {
             (None, None) => {}
             (Some(reference), Some(Value::String(configured))) => {
                 let configured = Path::new(configured);
-                let config_path = reference_path(root, &selection.config)?;
+                let config_path = process.config_path();
                 let configured = if configured.is_absolute() {
                     configured.to_path_buf()
                 } else {
@@ -67,7 +89,14 @@ impl Snapshot {
                         .ok_or("Configuration has no parent")?
                         .join(configured)
                 };
-                if configured != reference_path(root, reference)? {
+                if configured
+                    .canonicalize()
+                    .map_err(|error| error.to_string())?
+                    != root
+                        .join(&reference.path)
+                        .canonicalize()
+                        .map_err(|error| error.to_string())?
+                {
                     return Err("Selected provider does not match the configuration input".into());
                 }
             }
@@ -75,6 +104,7 @@ impl Snapshot {
         }
         Ok(Self {
             root: root.to_path_buf(),
+            process,
             selection,
             selection_bytes,
             config_bytes,
@@ -90,22 +120,31 @@ impl Snapshot {
             std::env::var_os(INSTALL_SELECTION_ENV),
         ) {
             (None, None) => Ok(None),
-            (Some(root), Some(selection)) => {
-                let selection = selection
-                    .into_string()
-                    .map_err(|_| "Inherited installation selection is not UTF-8")?;
-                Self::from_bytes(Path::new(&root), selection.into_bytes()).map(Some)
-            }
+            (Some(root), Some(_)) => Self::for_launch(Path::new(&root)).map(Some),
             _ => Err("Installation root and selection must be inherited together".into()),
         }
     }
 
     pub fn config_path(&self) -> Result<PathBuf, String> {
-        reference_path(&self.root, &self.selection.config)
+        Ok(self.process.config_path())
     }
 
     pub fn slot_root(&self) -> PathBuf {
-        self.root.join(self.selection.slot.as_str())
+        self.process.program_root()
+    }
+
+    pub fn members_bytes(&self) -> Result<Vec<u8>, String> {
+        read_bounded(
+            &self.root.join(&self.selection.members.path),
+            MAX_MATERIAL_BYTES,
+        )
+    }
+
+    pub fn ui_supports_configuration(&self) -> Result<bool, String> {
+        let members = self.members_bytes()?;
+        let ui = self.slot_root().join("ui");
+        let manifest = read_bounded(&ui.join("BUILD-MANIFEST.json"), MAX_MATERIAL_BYTES)?;
+        verify_ui_program(&members, &manifest, &ui.join("acui.exe"), "acui.exe")
     }
 
     pub fn state_root(&self) -> Result<PathBuf, String> {
@@ -116,10 +155,13 @@ impl Snapshot {
                 .as_str()
                 .ok_or("Missing state_root")?,
         );
-        if !path.is_absolute()
-            || path.starts_with(self.root.join("A"))
-            || path.starts_with(self.root.join("B"))
-        {
+        if !path.is_absolute() {
+            return Err("Shared state root must be absolute".into());
+        }
+        let location = path
+            .canonicalize()
+            .map_err(|error| format!("Shared state root is unavailable: {error}"))?;
+        if location.starts_with(self.root.join("A")) || location.starts_with(self.root.join("B")) {
             return Err(
                 "The shared state root must be absolute and outside both program slots".into(),
             );
@@ -151,26 +193,6 @@ impl Snapshot {
     }
 }
 
-pub fn reference_path(root: &Path, reference: &InstallFileReference) -> Result<PathBuf, String> {
-    reference.resolve(root).map_err(|error| error.to_string())
-}
-
-pub fn read_reference(
-    root: &Path,
-    reference: &InstallFileReference,
-    limit: usize,
-) -> Result<Vec<u8>, String> {
-    let path = reference_path(root, reference)?;
-    let bytes = read_bounded(&path, limit)?;
-    if sha256(&bytes) != reference.sha256 {
-        return Err(format!(
-            "Installation input hash mismatch: {}",
-            path.display()
-        ));
-    }
-    Ok(bytes)
-}
-
 pub fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     let file =
         File::open(path).map_err(|error| format!("Cannot read {}: {error}", path.display()))?;
@@ -189,4 +211,140 @@ pub fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
 
 pub fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+pub fn same_install_root(left: &Path, right: &Path) -> Result<bool, String> {
+    if left == right {
+        return Ok(true);
+    }
+    Ok(left.canonicalize().map_err(|error| {
+        format!(
+            "Cannot resolve installation root {}: {error}",
+            left.display()
+        )
+    })? == right.canonicalize().map_err(|error| {
+        format!(
+            "Cannot resolve installation root {}: {error}",
+            right.display()
+        )
+    })?)
+}
+
+/// Management identity is independent of the selected business slot. Its
+/// original build manifest and MEMBERS remain beside the installation inputs.
+pub fn verify_manager_material(members: &[u8], manifest: &[u8], program: &Path) -> Result<(), String> {
+    if verify_ui_program(members, manifest, program, "acsetup.exe")? {
+        Ok(())
+    } else {
+        Err("Management program does not declare the installation selection schema".into())
+    }
+}
+
+pub fn manager_program(root: &Path) -> Result<PathBuf, String> {
+    let evidence = root.join(MANAGER_DIRECTORY);
+    let members = read_bounded(&evidence.join("MEMBERS.json"), MAX_MATERIAL_BYTES)?;
+    let manifest = read_bounded(&evidence.join("BUILD-MANIFEST.json"), MAX_MATERIAL_BYTES)?;
+    let program = root.join("ui/acsetup.exe");
+    if !verify_ui_program(&members, &manifest, &program, "acsetup.exe")? {
+        return Err(
+            "The fixed acsetup does not support this installation selection contract".into(),
+        );
+    }
+    Ok(program)
+}
+
+pub fn current_manager_root() -> Result<Option<PathBuf>, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let Some(directory) = executable
+        .parent()
+        .filter(|path| path.file_name().is_some_and(|name| name == "ui"))
+    else {
+        return Ok(None);
+    };
+    let root = directory
+        .parent()
+        .ok_or("Management executable has no installation root")?;
+    if !root
+        .join(MANAGER_DIRECTORY)
+        .try_exists()
+        .map_err(|error| error.to_string())?
+    {
+        return Ok(None);
+    }
+    let expected = manager_program(root)?;
+    if executable
+        .canonicalize()
+        .map_err(|error| error.to_string())?
+        != expected.canonicalize().map_err(|error| error.to_string())?
+    {
+        return Err("Configuration writes must use the fixed acsetup management entry".into());
+    }
+    Ok(Some(root.to_path_buf()))
+}
+
+fn verify_ui_program(
+    members: &[u8],
+    manifest: &[u8],
+    program: &Path,
+    name: &str,
+) -> Result<bool, String> {
+    let members: Value = serde_json::from_slice(members)
+        .map_err(|error| format!("UI source MEMBERS is unreadable: {error}"))?;
+    let manifest: Value = serde_json::from_slice(manifest)
+        .map_err(|error| format!("UI build manifest is unreadable: {error}"))?;
+    let commit = members["ui_sha"]
+        .as_str()
+        .ok_or("MEMBERS has no UI source")?;
+    if commit.len() != 40
+        || !commit
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || manifest["repository"] != "HS7097/ActingCommand-UI"
+        || manifest["commit_sha"] != commit
+    {
+        return Err("UI build manifest does not match its source MEMBERS".into());
+    }
+    let files = manifest["files"]
+        .as_array()
+        .ok_or("UI manifest has no files")?;
+    let matching: Vec<_> = files.iter().filter(|file| file["path"] == name).collect();
+    let [file] = matching.as_slice() else {
+        return Err(format!("UI manifest must identify exactly one {name}"));
+    };
+    let size = file["size_bytes"]
+        .as_u64()
+        .ok_or("UI program size is missing")?;
+    if size == 0 || size > 512 * 1024 * 1024 {
+        return Err("UI program size is outside 1 byte..=512 MiB".into());
+    }
+    let expected_hash = file["sha256"]
+        .as_str()
+        .ok_or("UI program hash is missing")?;
+    let mut input = File::open(program)
+        .map_err(|error| format!("Cannot open {}: {error}", program.display()))?
+        .take(size.saturating_add(1));
+    let mut hash = Sha256::new();
+    let mut count = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .map_err(|error| format!("Cannot verify {}: {error}", program.display()))?;
+        if read == 0 {
+            break;
+        }
+        hash.update(&buffer[..read]);
+        count += read as u64;
+    }
+    if count != size || format!("{:x}", hash.finalize()) != expected_hash {
+        return Err(format!(
+            "UI program differs from its build identity: {}",
+            program.display()
+        ));
+    }
+    match manifest.get("installation_selection_schema") {
+        None => Ok(false),
+        Some(Value::String(schema)) if schema == INSTALL_SELECTION_SCHEMA => Ok(true),
+        Some(_) => Err("UI installation selection schema is unsupported".into()),
+    }
 }

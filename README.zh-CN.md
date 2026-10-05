@@ -358,45 +358,33 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   出，但点它会写明原因、不能保存。没有删除。`alias` 必填；新实例的 `instance_id` 是 `instance_`
   加系统随机源的 32 位小写十六进制，所有 `instance_id` 都只读显示；绑定恰好一种——`instance_index`
   （MuMu 序号）、`instance_name`（MuMu 名称），或 `host` + `port`（显式 ADB 地址）。`adb_path` 三种
-  绑定下都选填：留空则 Runtime 用 AC 自带的 adb（`<安装根>\tools\platform-tools\adb.exe`，Runtime 核它的
+  绑定下都选填：留空则 Runtime 用 AC 自带的 adb（`<选中槽>/tools/platform-tools/adb.exe`，Runtime 核它的
   sha256，缺失或不符就拒绝启动）；MuMu 绑定下若填写，只能是 MuMu 自带的 adb 或 AC 自带的 adb。留空的
-  框不写这个键，编辑已有项时清空它会删掉这个键。这要配 v0.10 及以上的 Runtime；回退到 v0.9.0 之前，要给
-  没写 `adb_path` 的显式实例补上一个回退后仍在的 adb（不能是 AC 自带的那份），否则 v0.9.0 以
-  `instance_config_invalid` 拒绝。不要让 ALAS、MAA 等别的工具指向 AC 自带的这份 adb：升级时它会随
-  `tools\` 移开；想统一版本就另放一份字节相同的副本。`nemu_app_index` 是选填的整数。`application_id`、`capture_backend`、`touch_backend` 表单不检查，要不要填、取值是否有效都由
+  框不写这个键，编辑已有项时清空它会删掉这个键。这使用当前槽的路径契约；AC 自带 adb 属于该程序槽，其它工具使用各自配置的 adb。`nemu_app_index` 是选填的整数。`application_id`、`capture_backend`、`touch_backend` 表单不检查，要不要填、取值是否有效都由
   check-config 判定，`nemu_app_index` 的配对也由它查。只有要靠 MuMu 发现结果的几项到 Runtime 启动
   时才查：`MuMuManager` 版本与能力、发现结果恰好匹配一个、声明的 `adb_path`、`host`、`port` 与发现值
   不冲突、ADB 端点（Runtime `contracts/actingd-check-config.md`，`3d5398d6` 起）。文本去掉首尾空白，
   留空的框不写这个键；必填项为空、数字解析不了，都在写任何东西之前直说。
-- **保存**：重新把文件当普通 JSON 读——`actingd_config` 没配或不是绝对路径、文件不存在或读不出、
-  JSON 解析失败、没有 `instances` 数组、某一项不是对象，各自直说。新实例追加进去；已有的按
-  `instance_id` 重新找到（文件里已经没有了，或已被改成表单存不了的样子，就停下并写明原因），只改
-  表单管的键，换了绑定种类就删掉别的种类的键。这一项和整个文件里其余的键一概原样、次序不变。结果
-  写到同目录的 `<配置文件名>.candidate-<pid>`（里面的相对路径按这个目录解析），在事件循环之外跑
-  `<actingd_exe> check-config --config <临时文件>`（30 秒上限，不弹控制台窗口，stdout 整段按一份
-  `actingcommand.actingd.check-config.v1` 报告解析）。只有 `status: ok` 且退出码成功才改名覆盖原
-  文件；否则删掉临时文件、原文件不动，窗口写明原因：原样写出 `error.code` 与 `stage`，或是
-  `actingd_exe` 没配或非绝对、写临时文件失败、拉起失败、读输出的线程起不来、读子进程状态失败、
-  超时（这三种还写明 check-config 能否终止、终止后能否回收）、输出读不出或无法识别、报 ok 但退出码非零、改名失败
-  中的哪一种。
-- **生效**：没有热加载，保存的实例在 Runtime 重启后生效。保存之后在事件循环之外探测一次，写明现在
-  有没有 Runtime 在跑，并指向启动器自己的按钮：先「请求关闭」，停下后再「启动」——没在跑就直接
-  「启动」。窗口本身不重启任何东西。
+- **保存**：已安装监控台读取本进程固定的私有配置代际，只修改表单管理的键，
+  经 stdin 把 JSON 提案与原完整选择交给已核的固定 acsetup。只有 acsetup 做资源资格、私有后继代际准备、
+  配置检查及准确 generation/字节基线比较后的提交。冲突和材料不足明确失败，原代际保留。
+  客户端最多等 240 秒；答复丢失或超时表示结果未知，监控台不结束管理进程、不重复提交。
+- **生效**：返回选择核验通过才报告保存。重新打开监控台以取得后继代际，再重启 Runtime；
+  原监控台及其子调用保持原代际，编辑器本身不重启 Runtime。
 
 ## 安装引导程序 acsetup
 
 `crates/acui-setup` 是一个独立的二进制 `acsetup.exe`（Slint 窗口，与监控台同一套样式与图标），把
 伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases) 里的发布件装成一份**按用户**的安装。
-它随 UI 仓的 Windows 构建一起发布（`acui-windows-<sha>.zip`——分支或 PR 构建的 Actions 产物，或 UI Release `vX.Y.Z` 的资产——里多一个 `acsetup.exe`）。
+它随 UI 仓的 Windows 构建一起发布（`acui-windows-<sha>.zip`——分支或 PR 构建的 Actions 产物，或 UI Release `vX.Y.Z` 的资产——包含 `acui.exe`、`acsetup.exe` 及固定入口 `acforward.exe`）。
 同一个程序有两种形态，人只下载其中一个：在线版 `acsetup.exe` 自己去取发布件，也可以用人手工下好的文件夹；
 离线版 `acsetup-full-<tag>.exe` 自带一整个发布件（见下文「离线版」）。一个窗口，只有下一步（实例步可跳过），五步；每页像安装器那样只显示
 进行到哪了，详情全写进安装日志（见下文「进度与安装日志」）：
 
 0. **位置**：只有安装根（可改，默认 `%LOCALAPPDATA%\Programs\ActingCommand`，不需要管理员）、该卷的
-   可用空间、此处是否已有安装（看 `runtime\BUILD-MANIFEST.json`，写出它与 `ui\` 清单的提交号；已有就是
-   **升级**，见下文）。下一步时建好安装根与安装日志。新装时这一步还要求状态根可用、安装位置不含单引号（监控台设置把路径写成 TOML 字面量字符串，单引号写不进去），否则停在这一步。引导若正从要升级的这份安装的 `runtime\`、`ui\`、
-   `tools\` 或 `previous\` 里运行，就停在这一步，并写出自身的文件名：那个目录挪不开；放在安装根本身或
-   `downloads\` 下则照常升级。离线版在可用空间一行后面加上取出自带发布件所需的量。
+   可用空间、此处是否已有安装（读取选中 MEMBERS，首次迁移前读取原根清单；已有就是
+   **升级**，见下文）。下一步时建好安装根与安装日志。新装时这一步还要求状态根可用、安装位置不含单引号（监控台设置把路径写成 TOML 字面量字符串，单引号写不进去），否则停在这一步。引导从业务槽或原程序目录运行时停止；已核的固定管理入口
+   `<安装根>/ui/acsetup.exe` 可直接升级业务槽。离线版在可用空间一行后面加上取出自带发布件所需的量。
 1. **安装**（已有安装时为**升级**，见下文），一页从下载做到铺开，成功后自动进入下一页。默认联网。一进这一步就经 HTTPS 向伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases)
    要一个发布件：有正式版取最新正式版（GitHub 的 `releases/latest`），否则取最新预发布（`build-*` 预发布；每日发布已暂停），从不取草稿；页面与日志写明它的标签、
    名称、日期、种类与大小。点「安装」依次下载 `SHA256SUMS`、`MEMBERS.json`，再下载 `SHA256SUMS` 列出的
@@ -416,21 +404,16 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    跑 `check-config`，认出的是暂存的 adb）；再按每个 zip 自带的 `BUILD-MANIFEST.json` 核对来源仓、提交号
    （等于 MEMBERS 的 sha）、Runtime 的 `runtime_payload_layout`（`distribution-v1`），以及 `files[]`
    每一项的大小与 sha256；zip 里多出清单没列的文件也算不一致。任何不一致都停下，措辞是
-   「内容与创建时不一致」——这是完整性陈述，不是授权口吻。校验期间不运行 zip 里的任何东西。随后铺开：
-   `runtime\`（Runtime 全部载荷 + 清单，`actingd.config.example.json` 逐字节原样）、
-   `ui\`（监控台载荷 + 清单）、`tools\`（**只有** `actinglab.exe`、`actingledger.exe`、
-   `ac_fastdeploy_ppocr.dll`，以及 `platform-tools\` 下 Google 官方 platform-tools 37.0.1 的五个文件
-   `adb.exe`、`AdbWinApi.dll`、`AdbWinUsbApi.dll`、`NOTICE.txt`、`source.properties`——Runtime 默认用的就是这份
-   adb；tools 包缺其中任何一个都按「缺少文件」停下，所以新向导装不了 v0.9.0 的发布件；tools 包根目录另外两个 exe
-   不装、不显示）。之后删除临时目录。完成页的「工具」一行写出 `source.properties` 里的版本。
+   「内容与创建时不一致」——这是完整性陈述，不是授权口吻。校验期间不运行 zip 里的任何东西。随后将完整载荷（包括清单绑定的全部 Tools 文件）准备到新安装 A 槽或备用槽，
+   各槽原始清单及 MEMBERS 保留；候选及下载材料保留。完成页从槽内的 `platform-tools/source.properties` 读取工具版本。
 2. **选项**，配置已自动写好。铺开之后，在安装页、同一个不许关窗的区段里，新装不问任何问题就配置好：状态根为
    `<安装根>\state`（必须不存在或为空目录——在第 0 步、下载之前就检查；**已有内容的状态根一律不接管**）；
    生成 `secret_fingerprint_salt` = 系统随机源 32 字节的十六进制（`getrandom`；**不显示、不写日志**）；
-   先写监控台设置（见下），最后才写——它在就代表配置完成，且从不覆盖已有文件——`<安装根>\actingd.config.json`，
-   字段只有 `schema_version`、`state_root`、`bind_host`（127.0.0.1）、`bind_port`（0）、
+   私有 `install/generations/<generation>/actingd.config.json` 通过检查后，原子提交 `install/active.json`。
+   私有配置的字段只有 `schema_version`、`state_root`、`bind_host`（127.0.0.1）、`bind_port`（0）、
    `secret_fingerprint_salt`、`instances`（空）——Runtime 的解析器 `deny_unknown_fields`，多一个字段都不写。
    监控台设置 `%APPDATA%\ActingCommand\acui.toml` 写 `state_root`、`actingd_config`、`actingd_exe`（同
-   「设置文件」一节的格式，单引号字面量；已有的 `lang` / `text_size` 原样保留）。写法与
+   「设置文件」一节的格式，单引号字面量；已有的 `lang` / `text_size` 原样保留）。配置和 Runtime 路径指向固定根参数别名与程序入口。写法与
    `crates/acui-app/src/settings.rs` 一致，但 `acui-setup` 不依赖 `acui-app`，是一份小的重复写入器。这里
    `instances` 留空，由实例步填。随后的选项页有四个勾选，在工作线程里一起写（失败写在页面上，页面可继续用）：
    - **开机自启**（默认不勾）：勾了才在按用户的启动文件夹（系统的 `FOLDERID_Startup`）写 `ActingCommand.cmd`，
@@ -477,84 +460,65 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    所选游戏/服务器的维护用途生成现有 `startup_package`、`prerequisite_packages`、`return_home_packages`；回主页用途同时注册前置引用。
    不替业务 control 增加字段或触发器。完整键值相同就复用；冲突显示旧值、新值及来源，由人明确保留或采用，取消即停止本次计划，
    选择页面等待期限 30 分钟。清单缺项不会删除旧绑定。实际合并后保留的旧引用与新引用全部经实物准入、descriptor 资格及
-   `PrerequisiteChain` 核完整链；材料无法核定则拒绝。候选写在配置旁，保持相对路径语义，由 Runtime 的
-   `check-config` 检查（任务包加载不了的，写明别名、路径与加载器的原话）；原文件精确字节仍与计划基准一致才备份并原子替换。
-   内容相同复用原文件。启动前失败恢复原配置并保持 Runtime 停止；恢复不完整则停止引导。提交后重启 Runtime，
+   `PrerequisiteChain` 核完整链；材料无法核定则拒绝。acsetup 准备私有后继代际并保持相对路径语义，目标 `check-config` 检查后，
+   当前 generation 与精确字节基线仍一致才原子提交安装选择，原代际保留。启动前失败恢复原配置并保持 Runtime 停止；恢复不完整则停止引导。提交后重启 Runtime，
    `actingctl status` 必须应答。替换配置之前的失败写在页面与日志里，页面可继续用；之后的失败停下，任何一次日志
    写入失败也停下。离开这一步时再问一次 `mumu_root` 的现值与 Runtime 是否应答，写进摘要。
 4. **完成**：摘要写出装上的是什么（runtime 与 ui 的提交号，以及发布件标签、离线文件夹或自带发布件）、各路径，以及各步
    留下的注意事项。「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe` 并关闭引导；「完成」只关闭。
    实例步拉起的 Runtime 继续运行；没有在运行的，由监控台的启动器拉起。
 
-**升级**：安装根里已有安装时。安装步先读发布件的 `MEMBERS.json`（联网时只读不存，离线时读文件夹里的，离线版读自带的），
-与已装清单的两个提交号比对。程序版本相同时仍可继续检查资源与维护配置；页面可选填本机标准包文件。按上文校验之后：
+**A/B 安装与升级**：`<安装根>/A`、`B` 各保留完整 Runtime、UI、Tools 载荷、原始构建清单及准确 MEMBERS。
+状态根、内容哈希资源、模型、下载、日志和私有配置代际位于槽外。acsetup 唯一写 `install/active.json`，
+一次原子提交槽、generation、MEMBERS 身份及带哈希的配置/provider 输入。配置编辑也经其单写者锁及准确代际/字节基线比较。
 
-1. 保留配置精确字节基准，暂存并校验标准包；旧实例从实际准入的 resource_package 取得游戏/服务器，与本次标准包关联。
-   已验证且没有对应新包的实例保留绑定；多义时选择声明来源。归属未知或引用无法验证时显示原因，要求明确选择游戏/服务器，
-   此选择把该实例的业务资源替换为所选默认包，实例 ID、backend 等其它字段保留。维护冲突与新装共用保留/采用交互。
-   提交前用新 Runtime 检查实际候选；`state_root` 必须是绝对路径；
-2. 上次升级留下的 `previous\` 先改名为 `previous.older-<unix_ms>\` 暂存（更早没删掉的这类目录先删），
-   再新建 `<安装根>\previous\`；
-3. `<状态根>\runtime-info.json` 存在、且新的 `actingctl status` 有应答时，用新的
-   `actingctl request-shutdown --state-root <状态根> --wait 60` 请 Runtime 关闭，并等到所有权记录闭合、
-   进程退出——放在最前，因为监控台拉起的 Runtime 以 `ui\` 为工作目录。所有权记录存在却不应答时，关闭状态未确认，事务停止；
-4. 移开 `ui\`、`tools\`、`runtime\`——监控台开着会让第一个失败——按新装的方式铺开已校验的载荷。`tools\` 照旧
-   整目录移开：正在运行的 adb 服务的映像不挡改名，随目录到 `previous\tools\platform-tools\` 照常运行。`ui\`
-   因为有进程以它为工作目录而整体移不开（Windows 共享冲突 32）时，先以写方式打开再立即关闭
-   `ui\acui.exe` 和 `runtime\actingcommand-actingd.exe`（不截断、不新建、不写入；运行中的 exe 这样打开会以 32
-   失败）：监控台在运行，照旧报「请先关闭监控台」并撤回；Runtime 在运行（没有 `runtime-info.json` 或不应答、
-   向导没认出的那种），报「Runtime 仍在运行，未能确认它已关闭：请先结束它再升级」并撤回；别的错误原样写出
-   路径与错误并撤回。两个都没在运行，占着 `ui\` 的就是别的进程——多半是监控台拉起的 Runtime 所起的 adb
-   服务——于是把 `ui\` 里的各项逐个移进 `previous\ui\`，目录留在原处，新版本照样铺进去，日志写一行说明；
-5. 铺设已验证资源，实际合并配置经共享完整链及 `check-config` 检查，确认原文件仍等于基准后备份并原子提交。
-   重新拉起 Runtime 之前检查 ADB 服务：用刚铺好的 `tools\platform-tools\adb.exe` 从安装根运行
-   `start-server`（每次至多 20 秒；它拉起的服务以安装根为工作目录，不会再占住 `ui\`）。能复用就复用；版本不同
-   由 adb 自己重启；有服务却在限时内不应答，或检查失败时，直接结束监听 127.0.0.1:5037 的进程（不问；日志写明
-   PID 与映像路径），再运行一次 `start-server`。第二次仍失败，就在页面与摘要的注意事项里写明「ADB 服务未就绪」
-   及原因——升级已完成，不回滚。摘要另有一行写 ADB 服务的结果。这是向导唯一运行 adb 的地方：升级之前和升级
-   过程中都不碰 ADB 服务。
+下载、完整核验、备用槽物化、资源准入和配置规划均在关闭前完成。原实例身份及业务设置保留；
+关联和维护冲突沿实例页的明确选择处理。私有代际保持相对路径语义，provider 库重绑目标槽，模型留在共享位置，
+目标程序的 `check-config` 检查准确未选中候选。
 
-首次新 Runtime 启动尝试之前，失败会恢复原配置、删掉铺了一半的程序，把移开的目录和更早的 `previous\` 都放回去（逐项移开的 `ui\`：只在
-各项都已移走时，删掉这次铺进去的顶层项，再逐项按逆序放回，删掉空的 `previous\ui\`）；被请求关闭且已退出的
-Runtime 只在配置和程序均已恢复时用原版本重新拉起（写明结果与日志，或为何没能拉起）；恢复不完整保持停止，关闭未确认的不再启动第二个。
-已验证但未绑定的新资源保留，旧资源保留。
-原先在运行的 Runtime 用新版本分离拉起：从安装根启动，输出写进 `<安装根>\actingd-<unix_ms>.log`，30 秒内
-它自己的 `runtime-info.json` 写出它的 pid 才算就绪。在那之前退出的，连同 `FATAL` 行一起写明；没按时就绪
-的写明可能仍在启动。无论哪种，新版本都已铺好，被替换的版本在 `previous\`。更早的 `previous\` 或残留目录删不掉时
-（服务一直从里面运行，`adb.exe` / `AdbWinApi.dll` 就删不掉），写进注意事项，不停下，下次升级再删。
+永久空文件 `install/slot-A.lock`、`slot-B.lock` 仅定位原生占用锁。消费者持共享锁，物化须取得排他锁，
+并排除旧 MCP/Tools/ADB 等进程的原生占用。备用槽被占用时阻断物化，下载和当前选择保留；
+不为清槽结束共享 ADB 服务。被替换的备用材料保存在 `install/retained-<槽>-<时间>`。
 
-有人 cd 进 `tools\`（含子目录）或 `runtime\` 后手动运行 adb 或 actingd，拉起的服务以那里为工作目录，升级会按
-现有提示停下并撤回；不要这样运行。
+Host 在同一生命周期准入下自然排空并提交正式原子关闭。acsetup 必须确认准确接受 owner、已关闭的 owner journal
+及进程退出，才能切选择。status 失败本身不证明停机；已停机安装仍须通过正式冷态 owner/writer 门。
+每次切换也对当前静止数据执行目标程序的 `ledger-maintenance verify`；它会更新 owner.lock epoch/revision，
+材料或预算不足时兼容门未证明。
 
-**回退到 v0.9.0**（手工把 `previous\` 搬回来，或用 v0.9.0 的向导勾选降级；本向导不装 v0.9.0，它的 tools 包没有
-platform-tools）：之前先给每个没写 `adb_path` 的显式实例补上一个回退后仍在的 adb（MuMu 自带的，或另放的同版本副本，
-不能是 AC 自带的那份），并删掉发现实例里写成 AC 自带 adb 的 `adb_path`；忘了补，v0.9.0 的 `check-config` 与启动都以
-`instance_config_invalid` 拒绝，不会静默运行。v0.9.0 的向导没有逐项移开：回退那一刻 `ui\` 若正被 adb 服务占作工作目录，
-它会误报「请先关闭监控台」并撤回——这时停掉 adb 服务后重试（会断开 ALAS/MAA），或改为手工回退（`ui\` 改名失败就
-逐项移开、逐项移回）。
+原 Runtime 在运行时，acsetup 启动新槽至 Provider 前的 held，核准确票据及进程后经同一 Host 放行。
+排空、held、放行各用 60 秒 Host 期限；控制客户端最多等 75 秒，冷态验证客户端最多等 150 秒且 Runtime 自身限额仍有效。
+提交结果未知时查询原 transition，不重新提交；关闭不明确就停止切换，不结束结果未知的控制/维护进程。
+Host 的 released 结果才表示准备及本次原用户暂停恢复完成。原先停机的安装保持停机。
 
-新旧按发布时间判断。每次安装与升级都把本次发布件的 `MEMBERS.json` 另存为 `<安装根>\installed-members.json`。
-要装的发布件 `published_at_utc` 早于这份记录时，写「按发布时间判断，看起来是降级」；没有这份记录的安装、记录的两个
-提交号与已装清单不符（铺开后才失败的升级、旧版向导、手工回退）、或任一方缺发布时间时，写「无法判断新旧」——两种都写明
-要装的是哪个发布件，附上「Runtime 没有状态迁移，也没有回滚」，必须勾选「确认降级」才能继续；为一个发布件给的勾选，
-换成另一个发布件就清掉。
-在线、离线文件夹、离线版三种来源一律适用。发布时间只是启发式（将来正式版线的发布时间可能与代码新旧倒挂），
-页面也照此措辞；勾选是人的决定，不是向导的判断。
+首次迁移核正式 v0.11.0 Runtime/UI 来源，先备好 A 槽，再使用旧 Runtime 的原子空闲关闭；Busy 则不提交切换。
+原根程序、配置和监控台设置完整保留在 `install/initial-backup-<generation>`。
+固定根入口由 `acforward.exe` 固定一份完整选择、继承 stdio 并返回实际退出码。
+根级 `actingd.config.json` 是选中私有输入的参数别名，此处没有可写配置文件。开机项、快捷方式及 MCP 保留固定根路径。
+MCP 获得明确 root/state-root 参数，位置冲突即拒绝。
 
-状态根、监控台的 `acui.toml`、开机自启与 `downloads\` 保留，选项那一步跳过；配置按接受的维护计划处理。
-首次新 Runtime 启动尝试后不自动撤销配置或状态；原先没有 Runtime 在运行时，更早保留的版本留待下次升级清理。
-被替换的版本整份留在 `previous\`，只留一份：Runtime 不带状态迁移，也不带回滚，退回去仍是人的决定。
+运行中的 UI/MCP/Tools 固定自己的代际及材料，重新打开进程才取得后继代际。
+v0.11.0 UI 是明确绑定共享状态根的观察入口；设置只保存根级 Runtime 入口与配置别名，
+其旧编辑器读取不存在的别名时明确失败。有效编辑交给固定 acsetup；旧 Runtime 由 acsetup 按真实冷态启动能力控制。
 
-**进度与安装日志**：离开第 0 步起，每一行工作都写进 `<安装根>\acsetup-<unix_ms>.log`，日志写失败即停下。
-页面只显示阶段（例如「下载 / Downloading · 41.2/74.0 MiB」「安装文件 / Installing files · 118/260」）、
-一条进度条（不知道总量时——比如等 Runtime 关闭——只走动不计量）和最新一行日志作为「正在做什么」。
-人必须看到的——更早的 `previous\` 或残留目录没删掉、有 `runtime-info.json` 却没有 Runtime 应答、升级后 ADB 服务未就绪——留在进度条下方，
-并写进摘要。失败时页面写原因、磁盘上留下了什么（临时目录删没删；新装时这次铺开了 `runtime\`、`ui\`、`tools\` 中哪些、
-重试前须删除）和日志路径；工作线程 panic 时也停下，写明 panic 信息。铺开并配置、升级换版本、写入选项、实例步写入期间窗口不关；查询或下载时
-可以关，这样留下的临时目录下次运行时删掉并写进日志。实例步拉起过 Runtime 时，第一次关闭会先说明它仍在运行。
-有程序文件却没有 `actingd.config.json`，或只有配置没有程序文件（中断的升级）的安装根，在第 0 步写明，既不在上面新装，
-也不当作升级。除安装载荷、配置、设置、`downloads\` 下取回的发布件、`installed-members.json`、（勾选时的）自启批处理与开始菜单、桌面快捷方式、
-放到 `packages\<game>\` 的任务包、引导拉起的 Runtime 的日志，以及升级时的 `previous\` 之外，引导写的文件只有这一个。
+**显式回退**：运行 `<安装根>/ui/acsetup.exe --rollback`，重新核备用槽全部清单，
+从当前业务设置重规划候选。原 owner 关闭后，目标程序的 `check-config` 及对最新数据的
+`ledger-maintenance verify` 均须通过。这些门不证明 Provider/设备就绪。
+正常安装页也可提供更早发布件并确认提示；发布时间只用于顺序提示，冷态门仍必需。正式 v0.11.0 Runtime 按冷态路线启动。
+
+首次新 Runtime 启动尝试前，只有完整原事务可恢复已提交选择；首次迁移还须恢复原根程序、配置和设置。
+恢复不完整则保留材料并保持 Runtime 停止。首次启动尝试之后保留当前选择及完整账本，
+后续显式回退须重新验证最新数据。关闭未确认时不启动第二个 Runtime。
+
+**固定管理入口**：`<安装根>/ui/acsetup.exe` 的独立原始构建清单及 MEMBERS 在 `install/manager`；
+业务槽回退保留该管理程序。替换时先退出固定管理进程，从安装根外运行已核发布件的未改动 acsetup：
+`acsetup.exe --replace-manager <安装根绝对路径> <发布件目录绝对路径>`。
+目录须有正常发布文件及 SHA256SUMS；原生占用须证明旧管理进程退出，外部程序须与已核 UI 载荷一致。
+旧管理材料及身份保留，各槽的 acsetup 原件完整保留。
+
+**进度与安装日志**：有限安装操作记录于 `<安装根>/acsetup-<时间>.log`；Runtime 结果来自正式 Host/CLI 与
+GlobalLedger，拉起进程的日志保留启动及致命错误末言。日志失败即停止。页面展示阶段、进度和明确错误；
+失败材料、历史代际、程序备份及哈希资源保留。安装/配置提交期间不可关闭向导。
+预准备用于减少停机，冷态验证和启动实际耗时需实测。
 
 **离线版**：`acsetup-full-<tag>.exe` = `acsetup.exe` 原样字节，其后是 `SHA256SUMS` 与它按行序列出的每个文件
 （含 `MEMBERS.json` 与资源仓的标准包），再是索引，最后是恰好 125 字节的尾部：
@@ -618,8 +582,10 @@ platform-tools）：之前先给每个没写 `adb_path` 的显式实例补上一
 绝不在事件循环里 panic。已拉起的 actingd 若等不到就绪线程，照样在跑，结果行直说，并提示再按一次「启动」即可探测。子进程终止了但
 回收失败时照实写，不说成终止失败。
 
-第五个 crate `acui-setup`（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、serde_json、anyhow、sha2、
+`acui-setup` crate（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、serde_json、anyhow、sha2、
 zip、getrandom、ureq、actingcommand-contract 与（仅 Windows 的）windows，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
+
+`acui-installation` 为监控台和 acsetup 提供共享安装选择消费者，并生成稳定入口 `acforward`。
 
 ## 图标
 

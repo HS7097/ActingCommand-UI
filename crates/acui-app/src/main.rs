@@ -197,7 +197,7 @@ fn main() -> Result<()> {
         println!("{}", labels.usage);
         return Ok(());
     }
-    let installation = acui_installation::Snapshot::inherited().map_err(anyhow::Error::msg)?;
+    let installation = acui_installation::Snapshot::for_current_process().map_err(anyhow::Error::msg)?;
     if let Some(snapshot) = &installation {
         let state_root = snapshot.state_root().map_err(anyhow::Error::msg)?;
         if args.state_root.as_ref().is_some_and(|requested| requested != &state_root) {

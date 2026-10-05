@@ -188,7 +188,7 @@ fn start(window: &AppWindow, app: &Rc<App>) {
             return;
         }
     };
-    let child = match spawn(exe, config, &log) {
+    let child = match spawn(exe, config, &log, app.installation.as_ref()) {
         Ok(child) => child,
         Err(error) => {
             window.set_launcher_line(
@@ -402,10 +402,11 @@ fn log_path(labels: &Labels) -> Result<PathBuf, String> {
 /// Exactly `actingcommand-actingd --config <actingd_config>`, detached, with
 /// both output streams in the log file. Nothing is inherited from the console
 /// but the environment.
-fn spawn(exe: &Path, config: &Path, log: &Path) -> std::io::Result<Child> {
+fn spawn(exe: &Path, config: &Path, log: &Path, installation: Option<&acui_installation::Snapshot>) -> std::io::Result<Child> {
     let stdout = File::create(log)?;
     let stderr = stdout.try_clone()?;
     let mut command = Command::new(exe);
+    if let Some(snapshot) = installation { snapshot.apply_to(&mut command).map_err(std::io::Error::other)?; }
     command
         .arg("--config")
         .arg(config)
@@ -437,9 +438,10 @@ fn unlock(window: &AppWindow, app: &Rc<App>) {
     window.set_unlock_offered(false);
     window.set_unlock_line(fill(labels.unlock_running, &[UNLOCK_ACTOR]).into());
     let unlocking = Arc::clone(&launcher.unlocking);
+    let installation = app.installation.clone();
     let weak = window.as_weak();
     let ran = spawn_worker("acui-unlock", move || {
-        let (line, unlocked) = unlock_outcome(labels, &exe, &config);
+        let (line, unlocked) = unlock_outcome(labels, &exe, &config, installation.as_ref());
         let _ = slint::invoke_from_event_loop(move || {
             unlocking.store(false, Ordering::SeqCst);
             let Some(window) = weak.upgrade() else {
@@ -464,8 +466,8 @@ fn unlock(window: &AppWindow, app: &Rc<App>) {
 
 /// The line unlock-owner's answer comes to, and whether it unlocked: only an
 /// `ok` report with exit code 0 did.
-fn unlock_outcome(labels: &Labels, exe: &Path, config: &Path) -> (String, bool) {
-    let (status, stdout, stderr) = match run_unlock(labels, exe, config) {
+fn unlock_outcome(labels: &Labels, exe: &Path, config: &Path, installation: Option<&acui_installation::Snapshot>) -> (String, bool) {
+    let (status, stdout, stderr) = match run_unlock(labels, exe, config, installation) {
         Ok(output) => output,
         Err(text) => return (text, false),
     };
@@ -547,8 +549,10 @@ fn run_unlock(
     labels: &Labels,
     exe: &Path,
     config: &Path,
+    installation: Option<&acui_installation::Snapshot>,
 ) -> Result<(ExitStatus, Vec<u8>, Vec<u8>), String> {
     let mut command = Command::new(exe);
+    if let Some(snapshot) = installation { snapshot.apply_to(&mut command)?; }
     command
         .arg("unlock-owner")
         .arg("--config")

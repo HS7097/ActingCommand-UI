@@ -611,10 +611,6 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    pub fn changed(&self) -> bool {
-        self.committed.is_some()
-    }
-
     pub fn read(root: &Path) -> Result<Self, String> {
         if root.join(acui_installation::INSTALL_SELECTION_PATH).try_exists()
             .map_err(|error| format!("Cannot inspect installation selection: {error}"))? {

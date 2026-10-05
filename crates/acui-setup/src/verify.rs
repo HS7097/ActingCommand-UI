@@ -269,6 +269,85 @@ pub fn prepared_programs(root: &Path, verified: &Verified, report: Report<'_>) -
     Ok(())
 }
 
+/// A retained full slot is requalified through the same manifest checker used
+/// for release preparation; the caller holds its shared installation lock.
+pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<Verified, String> {
+    let members_document = read_identity(&root.join("MEMBERS.json"))?;
+    let members =
+        members_of(std::str::from_utf8(&members_document).map_err(|error| error.to_string())?)?;
+    let mut check = |dir, repository, sha: &str, required, runtime_layout| {
+        check_manifest(
+            &root.join(dir),
+            &Expect {
+                name: format!("retained {dir}"),
+                dir,
+                repository,
+                sha,
+                required,
+                runtime_layout,
+            },
+            report,
+        )
+    };
+    let runtime = check(
+        "runtime",
+        RUNTIME_REPOSITORY,
+        &members.0,
+        RUNTIME_REQUIRED,
+        true,
+    )?;
+    let ui = check("ui", UI_REPOSITORY, &members.1, UI_REQUIRED, false)?;
+    let tools = check(
+        "tools",
+        RUNTIME_REPOSITORY,
+        &members.0,
+        TOOLS_INSTALLED,
+        false,
+    )?;
+    Ok(Verified {
+        staging: root.to_path_buf(),
+        members,
+        members_document,
+        runtime,
+        ui,
+        tools,
+    })
+}
+
+pub fn initial_programs(root: &Path, report: Report<'_>) -> Result<(), String> {
+    for (dir, repository, sha, required, runtime_layout) in [
+        (
+            "runtime",
+            RUNTIME_REPOSITORY,
+            crate::lifecycle::COLD_RUNTIME,
+            RUNTIME_REQUIRED,
+            true,
+        ),
+        (
+            "ui",
+            UI_REPOSITORY,
+            "b0d70e606e3df6ccb5c351b2519e240cb5db4f03",
+            UI_REQUIRED,
+            false,
+        ),
+    ] {
+        check_manifest(
+            &root.join(dir),
+            &Expect {
+                name: format!("initial {dir}"),
+                dir,
+                repository,
+                sha,
+                required,
+                runtime_layout,
+            },
+            report,
+        )?;
+    }
+    Ok(())
+}
+
+
 /// The two commits a `MEMBERS.json` names, each 40 lowercase hex characters.
 pub fn members_of(text: &str) -> Result<(String, String), String> {
     let members: Members = serde_json::from_str(text)
