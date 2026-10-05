@@ -606,26 +606,36 @@ pub struct Transaction {
     baseline: Vec<u8>,
     pub document: Value,
     committed: Option<Vec<u8>>,
+    installation: Option<acui_installation::Snapshot>,
+    selection_plan: Option<crate::generations::Plan>,
 }
 
 impl Transaction {
-    pub fn changed(&self) -> bool {
-        self.committed.is_some()
+    pub fn read(root: &Path) -> Result<Self, String> {
+        if root.join(acui_installation::INSTALL_SELECTION_PATH).try_exists()
+            .map_err(|error| format!("Cannot inspect installation selection: {error}"))? {
+            let snapshot = acui_installation::Snapshot::read(root)?;
+            let mut transaction = Self::read_config(&snapshot.config_path()?)?;
+            transaction.installation = Some(snapshot);
+            return Ok(transaction);
+        }
+        Self::read_config(&root.join("actingd.config.json"))
     }
 
-    pub fn read(root: &Path) -> Result<Self, String> {
-        let config = root.join("actingd.config.json");
-        let baseline = read(&config)?;
+    pub fn read_config(config: &Path) -> Result<Self, String> {
+        let baseline = read(config)?;
         let document: Value = serde_json::from_slice(&baseline)
             .map_err(|error| format!("Configuration unreadable: {error}"))?;
         if !document.is_object() {
             return Err("Configuration must be an object".into());
         }
         Ok(Self {
-            config,
+            config: config.to_path_buf(),
             baseline,
             document,
             committed: None,
+            installation: None,
+            selection_plan: None,
         })
     }
 
@@ -656,6 +666,18 @@ impl Transaction {
         qualify: bool,
         report: Report<'_>,
     ) -> Result<(), String> {
+        if let Some(snapshot) = &self.installation {
+            self.unchanged()?;
+            let writer = crate::generations::Writer::acquire(&snapshot.root)?;
+            let mut plan = writer.prepare(
+                Some(snapshot.clone()), snapshot.selection.slot, &self.config,
+                &snapshot.slot_root(), self.document.clone(), qualify, report,
+            )?;
+            writer.commit(&mut plan)?;
+            self.committed = Some(plan.snapshot.config_bytes.clone());
+            self.selection_plan = Some(plan);
+            return report.line("私有配置代际已提交 / Private configuration generation committed");
+        }
         let root = self.config.parent().ok_or("Configuration has no parent")?;
         report.step(Step::Phase(
             "检查并提交配置 / Checking and committing configuration",
@@ -722,6 +744,12 @@ impl Transaction {
     }
 
     pub fn restore(&mut self) -> Result<(), String> {
+        if let Some(plan) = &mut self.selection_plan {
+            let writer = crate::generations::Writer::acquire(&plan.snapshot.root)?;
+            writer.restore_before_start(plan)?;
+            self.committed = None;
+            return Ok(());
+        }
         let Some(committed) = &self.committed else {
             return if read(&self.config)? == self.baseline {
                 Ok(())

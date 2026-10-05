@@ -3,19 +3,22 @@
 //! the Runtime's configuration and the console's settings, the optional
 //! per-user Startup launcher, and start the console.
 //!
-//! Nothing here touches PATH, the registry, services or scheduled tasks; the
-//! configuration template is copied byte for byte and never edited; a state
-//! root that already has content is never taken over; no instance is
-//! configured — that is the console's, later.
+//! Program slots and private configuration inputs are prepared before the
+//! installation selection is committed. The shared state root stays outside
+//! the slots; an existing state root is never taken over by a fresh install.
 
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use acui_installation::InstallSlot;
 use serde::Serialize;
 
 use crate::platform;
-use crate::verify::{hex, Report, Staged, Step, Total, Verified, MANIFEST, MISMATCH, TOOLS_INSTALLED};
+use crate::verify::{
+    MANIFEST, MISMATCH, Report, Staged, Step, Total, Verified, hex,
+};
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 
@@ -27,36 +30,63 @@ pub struct LaidOut {
     pub acui_exe: PathBuf,
 }
 
-/// `<root>\runtime` and `<root>\ui` get every manifest-bound file plus the
-/// manifest; `<root>\tools` gets only what is installed of it — the three
-/// tools and `platform-tools\`. Staging is removed afterwards.
-pub fn lay_out(root: &Path, verified: &Verified, report: Report<'_>) -> Result<LaidOut, String> {
-    let runtime_dir = root.join("runtime");
-    let ui_dir = root.join("ui");
-    let tools_dir = root.join("tools");
-    // Every manifest-bound file and the two manifests, then the tools.
-    let total = verified.runtime.files.len() + verified.ui.files.len() + 2 + TOOLS_INSTALLED.len();
-    report.step(Step::Phase("安装文件 / Installing files", Some(Total::Items(total as u64))))?;
-    let mut done = 0;
-    copy_all(&verified.runtime, &runtime_dir, &mut done, report)?;
-    copy_all(&verified.ui, &ui_dir, &mut done, report)?;
-    copy_named(&verified.tools, &tools_dir, TOOLS_INSTALLED, &mut done, report)?;
-    fs::remove_dir_all(&verified.staging).map_err(|error| {
+/// Prepares all manifest-bound programs in a new directory outside the selected slot.
+/// Failed preparation leaves its files for inspection; no installed tree is overwritten.
+pub fn prepare_programs(
+    dir: &Path,
+    verified: &Verified,
+    report: Report<'_>,
+) -> Result<LaidOut, String> {
+    fs::create_dir(dir).map_err(|error| {
         format!(
-            "临时目录未能删除 / staging not removed: {}: {error}",
-            verified.staging.display()
+            "Cannot create fresh program candidate {}: {error}",
+            dir.display()
         )
     })?;
-    report.line(&format!("已删除临时目录 / staging removed: {}", verified.staging.display()))?;
+    let total =
+        verified.runtime.files.len() + verified.ui.files.len() + verified.tools.files.len() + 4;
+    report.step(Step::Phase(
+        "准备候选程序 / Preparing candidate programs",
+        Some(Total::Items(total as u64)),
+    ))?;
+    let mut done = 0;
+    for (name, staged) in [
+        ("runtime", &verified.runtime),
+        ("ui", &verified.ui),
+        ("tools", &verified.tools),
+    ] {
+        copy_all(staged, &dir.join(name), &mut done, report)?;
+    }
+    let members = dir.join("MEMBERS.json");
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&members)
+        .map_err(|error| format!("Cannot create {}: {error}", members.display()))?;
+    file.write_all(&verified.members_document)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("Cannot write {}: {error}", members.display()))?;
+    drop(file);
+    report.step(Step::Done((done + 1) as u64))?;
+    crate::verify::prepared_programs(dir, verified, report)?;
+    report.line(&format!(
+        "候选程序已核验 / Candidate programs verified: {}",
+        dir.display()
+    ))?;
     Ok(LaidOut {
-        actingd_exe: runtime_dir.join("actingcommand-actingd.exe"),
-        acui_exe: ui_dir.join("acui.exe"),
-        ui_dir,
-        tools_dir,
+        ui_dir: dir.join("ui"),
+        tools_dir: dir.join("tools"),
+        actingd_exe: dir.join("runtime").join(crate::runtime::ACTINGD),
+        acui_exe: dir.join("ui").join("acui.exe"),
     })
 }
 
-fn copy_all(staged: &Staged, dest: &Path, done: &mut u64, report: Report<'_>) -> Result<(), String> {
+fn copy_all(
+    staged: &Staged,
+    dest: &Path,
+    done: &mut u64,
+    report: Report<'_>,
+) -> Result<(), String> {
     let names: Vec<&str> = staged
         .files
         .iter()
@@ -83,14 +113,21 @@ fn copy_named(
         let to = dest.join(&relative);
         if let Some(parent) = to.parent() {
             fs::create_dir_all(parent).map_err(|error| {
-                format!("无法创建目录 / cannot create: {}: {error}", parent.display())
+                format!(
+                    "无法创建目录 / cannot create: {}: {error}",
+                    parent.display()
+                )
             })?;
         }
         let expected = fs::metadata(&from)
             .map(|meta| meta.len())
             .map_err(|error| format!("读取失败 / read failed: {}: {error}", from.display()))?;
         let copied = fs::copy(&from, &to).map_err(|error| {
-            format!("复制失败 / copy failed: {} → {}: {error}", from.display(), to.display())
+            format!(
+                "复制失败 / copy failed: {} → {}: {error}",
+                from.display(),
+                to.display()
+            )
         })?;
         if copied != expected {
             return Err(format!(
@@ -98,7 +135,7 @@ fn copy_named(
                 to.display()
             ));
         }
-        report.line(&format!("已安装 / installed: {}", to.display()))?;
+        report.line(&format!("已复制 / copied: {}", to.display()))?;
         *done += 1;
         report.step(Step::Done(*done))?;
     }
@@ -110,6 +147,210 @@ pub struct Configured {
     pub state_root: PathBuf,
     pub config_path: PathBuf,
     pub settings_path: PathBuf,
+}
+
+/// A first selection has no running installation to drain. Program verification
+/// and the checked private generation still precede its atomic publication.
+pub fn fresh(
+    root: &Path,
+    verified: &Verified,
+    report: Report<'_>,
+) -> Result<(LaidOut, Configured), String> {
+    let writer = crate::generations::Writer::acquire(root)?;
+    let state_root = root.join("state");
+    state_root_usable(&state_root)?;
+    crate::slots::initialize(&writer)?;
+    let programs = crate::slots::materialize(&writer, InstallSlot::A, verified, report)?;
+    let forward = programs.ui_dir.join("acforward.exe");
+    if !forward.is_file() {
+        return Err(
+            "The UI release does not contain its stable product entry acforward.exe".into(),
+        );
+    }
+    fs::create_dir_all(&state_root)
+        .map_err(|error| format!("Cannot create shared state root: {error}"))?;
+    let mut salt = [0u8; 32];
+    getrandom::fill(&mut salt).map_err(|error| format!("OS RNG unavailable: {error}"))?;
+    let document = serde_json::to_value(ActingdConfig {
+        schema_version: CONFIG_SCHEMA_VERSION,
+        state_root: &state_root.to_string_lossy(),
+        bind_host: "127.0.0.1",
+        bind_port: 0,
+        secret_fingerprint_salt: &hex(&salt),
+        instances: Vec::new(),
+    })
+    .map_err(|error| error.to_string())?;
+    let mut plan = writer.prepare(
+        None,
+        InstallSlot::A,
+        &root.join("actingd.config.json"),
+        root,
+        document,
+        false,
+        report,
+    )?;
+    let laid_out = stable_entries(root, &forward, &programs.tools_dir, report)?;
+    install_manager(root, verified, report)?;
+    let config_path = plan.snapshot.config_path()?;
+    let settings_path = platform::console_settings_path()?;
+    write_console_settings(
+        &settings_path,
+        &state_root,
+        &root.join("actingd.config.json"),
+        &laid_out.actingd_exe,
+    )?;
+    writer.commit(&mut plan)?;
+    report.line("A 槽及私有配置已选中 / Slot A and its private configuration are selected")?;
+    Ok((
+        laid_out,
+        Configured {
+            state_root,
+            config_path,
+            settings_path,
+        },
+    ))
+}
+
+/// One implementation is installed under the fixed product filenames. Each
+/// invocation derives its route from that filename and retains one selection.
+pub fn stable_entries(
+    root: &Path,
+    forward: &Path,
+    tools_dir: &Path,
+    report: Report<'_>,
+) -> Result<LaidOut, String> {
+    let bytes = acui_installation::read_bounded(forward, 64 * 1024 * 1024)?;
+    for (component, names) in [
+        (
+            "runtime",
+            &["actingcommand-actingd.exe", "actingctl.exe"][..],
+        ),
+        (
+            "tools",
+            &[
+                "actinglab.exe",
+                "actingledger.exe",
+                "actingcommand-vision-provider-check.exe",
+                "actingcommand-device-test.exe",
+            ][..],
+        ),
+        ("ui", &["acui.exe"][..]),
+    ] {
+        let directory = root.join(component);
+        fs::create_dir(&directory).map_err(|error| {
+            format!(
+                "Cannot create fresh stable entry directory {}: {error}",
+                directory.display()
+            )
+        })?;
+        for name in names {
+            crate::generations::write_new(&directory.join(name), &bytes)?;
+        }
+    }
+    report.line("固定产品入口已创建 / Stable product entries created")?;
+    Ok(LaidOut {
+        ui_dir: root.join("ui"),
+        tools_dir: tools_dir.to_path_buf(),
+        actingd_exe: root.join("runtime").join(crate::runtime::ACTINGD),
+        acui_exe: root.join("ui/acui.exe"),
+    })
+}
+
+/// The fixed installation manager retains its own source identity across
+/// business-slot changes. An existing manager is verified and kept in place.
+pub fn install_manager(root: &Path, verified: &Verified, report: Report<'_>) -> Result<(), String> {
+    let evidence = root.join(acui_installation::MANAGER_DIRECTORY);
+    if evidence
+        .try_exists()
+        .map_err(|error| format!("Cannot inspect management identity: {error}"))?
+    {
+        acui_installation::manager_program(root)?;
+        return report.line(
+            "固定安装管理程序已核验并保留 / Fixed installation manager verified and retained",
+        );
+    }
+    let manifest = acui_installation::read_bounded(
+        &verified.ui.dir.join(MANIFEST),
+        acui_installation::MAX_MATERIAL_BYTES,
+    )?;
+    acui_installation::verify_manager_material(&verified.members_document, &manifest, &verified.ui.dir.join("acsetup.exe"))?;
+    fs::create_dir(&evidence)
+        .map_err(|error| format!("Cannot create management identity directory: {error}"))?;
+    crate::generations::write_new(&evidence.join("MEMBERS.json"), &verified.members_document)?;
+    crate::generations::write_new(&evidence.join(MANIFEST), &manifest)?;
+    let source = verified.ui.dir.join("acsetup.exe");
+    let mut input = fs::File::open(&source).map_err(|error| {
+        format!(
+            "Cannot read management program {}: {error}",
+            source.display()
+        )
+    })?;
+    let target = root.join("ui/acsetup.exe");
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .map_err(|error| {
+            format!(
+                "Cannot create fixed management program {}: {error}",
+                target.display()
+            )
+        })?;
+    io::copy(&mut input, &mut output)
+        .and_then(|_| output.sync_all())
+        .map_err(|error| format!("Cannot install fixed management program: {error}"))?;
+    drop(output);
+    acui_installation::manager_program(root)?;
+    report.line(
+        "固定安装管理程序及来源已核验 / Fixed installation manager and source identity verified",
+    )
+}
+
+/// An explicit management update runs from the verified release outside this
+/// installation. Native occupancy must prove the fixed manager has exited.
+pub fn replace_manager_from_entry() -> Result<(), String> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.len() != 3 { return Err("Usage: acsetup --replace-manager <absolute-install-root> <absolute-release-directory>".into()); }
+    let root = PathBuf::from(&args[1]);
+    let download = PathBuf::from(&args[2]);
+    if !root.is_absolute() || !download.is_absolute() { return Err("Management replacement requires absolute paths".into()); }
+    let root = root.canonicalize().map_err(|error| error.to_string())?;
+    let exe = std::env::current_exe().and_then(fs::canonicalize).map_err(|error| error.to_string())?;
+    if exe.starts_with(&root) { return Err("Management replacement must run from outside this installation after its fixed manager exits".into()); }
+    let writer = crate::generations::Writer::acquire(&root)?;
+    let previous = acui_installation::manager_program(writer.root())?;
+    let stamp = crate::log::unix_ms();
+    let mut log = crate::log::InstallLog::create(&root, stamp).map_err(|error| error.to_string())?;
+    let mut report = |line: &str| log.line(line).map_err(|error| format!("Management update log failed: {error}"));
+    let staging = root.join(format!("install/manager-source-{stamp}"));
+    let verified = crate::verify::run(&download, &staging, &mut report)?;
+    let manifest = acui_installation::read_bounded(&verified.ui.dir.join(MANIFEST), acui_installation::MAX_MATERIAL_BYTES)?;
+    let candidate = verified.ui.dir.join("acsetup.exe");
+    acui_installation::verify_manager_material(&verified.members_document, &manifest, &candidate)?;
+    if crate::verify::sha256_file(&exe).map_err(|error| error.to_string())? != crate::verify::sha256_file(&candidate).map_err(|error| error.to_string())? {
+        return Err("External installer is not the exact management program in the verified release".into());
+    }
+    let occupancy = crate::slots::NativeOccupancy::files(std::slice::from_ref(&previous))?;
+    let backup = root.join(format!("install/manager-backup-{stamp}"));
+    fs::create_dir(&backup).map_err(|error| error.to_string())?;
+    fs::rename(&previous, backup.join("acsetup.exe")).map_err(|error| format!("Cannot retain previous manager: {error}"))?;
+    let identity = root.join(acui_installation::MANAGER_DIRECTORY);
+    if let Err(error) = fs::rename(&identity, backup.join("identity")) {
+        let restore = fs::rename(backup.join("acsetup.exe"), &previous);
+        return Err(format!("Cannot retain management identity: {error}; program restore: {restore:?}"));
+    }
+    let installed = install_manager(&root, &verified, &mut report);
+    if let Err(error) = installed {
+        let restore = (|| {
+            if previous.try_exists().map_err(|error| error.to_string())? { fs::rename(&previous, backup.join("retained-candidate.exe")).map_err(|error| error.to_string())?; }
+            if identity.try_exists().map_err(|error| error.to_string())? { fs::rename(&identity, backup.join("retained-identity")).map_err(|error| error.to_string())?; }
+            fs::rename(backup.join("identity"), &identity).map_err(|error| error.to_string())?;
+            fs::rename(backup.join("acsetup.exe"), &previous).map_err(|error| error.to_string())
+        })();
+        return Err(format!("Management replacement failed: {error}; original manager restoration: {restore:?}"));
+    }
+    drop(occupancy);
+    report(&format!("Fixed management entry replaced; previous source retained at {}", backup.display()))
 }
 
 /// Exactly the fields the wizard sets, in this order; the Runtime's parser
@@ -158,75 +399,12 @@ pub fn state_root_usable(state_root: &Path) -> Result<(), String> {
     }
 }
 
-/// The state root created, the console's settings written, then — last, so
-/// that its presence means a finished configuration — the Runtime's
-/// configuration with a fresh salt from the OS RNG (never shown, never
-/// logged), never over one already there. `state_root` has passed
-/// `state_root_usable`.
-pub fn configure(
-    root: &Path,
-    state_root: &Path,
-    laid_out: &LaidOut,
-    report: Report<'_>,
-) -> Result<Configured, String> {
-    fs::create_dir_all(state_root).map_err(|error| {
-        format!("无法创建状态根 / cannot create the state root: {}: {error}", state_root.display())
-    })?;
-    report.line(&format!("状态根已就绪 / state root ready: {}", state_root.display()))?;
-
-    let mut salt = [0u8; 32];
-    getrandom::fill(&mut salt)
-        .map_err(|error| format!("系统随机源不可用 / OS RNG unavailable: {error}"))?;
-    let salt_hex = hex(&salt);
-    let state_root_text = state_root.display().to_string();
-    let config = ActingdConfig {
-        schema_version: CONFIG_SCHEMA_VERSION,
-        state_root: &state_root_text,
-        bind_host: "127.0.0.1",
-        bind_port: 0,
-        secret_fingerprint_salt: &salt_hex,
-        instances: Vec::new(),
-    };
-    let mut json = serde_json::to_string_pretty(&config)
-        .map_err(|error| format!("配置序列化失败 / config serialization failed: {error}"))?;
-    json.push('\n');
-    let config_path = root.join("actingd.config.json");
-
-    let settings_path = platform::console_settings_path()?;
-    write_console_settings(&settings_path, state_root, &config_path, &laid_out.actingd_exe)?;
-    report.line(&format!(
-        "已写监控台设置 / console settings written: {}",
-        settings_path.display()
-    ))?;
-
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&config_path)
-        .map_err(|error| format!("无法新建（不覆盖已有的）/ cannot create, never over an existing one: {}: {error}", config_path.display()))?;
-    // A file written halfway would read as a finished configuration: it goes.
-    if let Err(error) = std::io::Write::write_all(&mut file, json.as_bytes()).and_then(|()| file.sync_all()) {
-        drop(file);
-        let reason = format!("写入失败 / write failed: {}: {error}", config_path.display());
-        return Err(crate::fetch::discard(&config_path, reason));
-    }
-    report.line(&format!(
-        "已写 Runtime 配置 / config written: {}（salt 已生成，不记录 / salt generated, not recorded）",
-        config_path.display()
-    ))?;
-    Ok(Configured {
-        state_root: state_root.to_path_buf(),
-        config_path,
-        settings_path,
-    })
-}
-
 /// The console's own file in the console's own format
 /// (`crates/acui-app/src/settings.rs`): `lang` and `text_size` as the file
 /// has them, then the three paths as TOML literal strings in single quotes.
 /// Nothing else the file may hold is carried over, exactly as the console's
 /// own writer does.
-fn write_console_settings(
+pub fn write_console_settings(
     path: &Path,
     state_root: &Path,
     config: &Path,
@@ -236,7 +414,10 @@ fn write_console_settings(
         Ok(text) => text,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
         Err(error) => {
-            return Err(format!("读取失败 / read failed: {}: {error}", path.display()));
+            return Err(format!(
+                "读取失败 / read failed: {}: {error}",
+                path.display()
+            ));
         }
     };
     let mut body = String::from("# ActingCommand 监控台 / ActingCommand Console\n");
@@ -262,8 +443,12 @@ fn write_console_settings(
         body.push_str(&format!("{key} = '{text}'\n"));
     }
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("无法创建目录 / cannot create: {}: {error}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "无法创建目录 / cannot create: {}: {error}",
+                parent.display()
+            )
+        })?;
     }
     fs::write(path, body)
         .map_err(|error| format!("写入失败 / write failed: {}: {error}", path.display()))
@@ -272,8 +457,13 @@ fn write_console_settings(
 pub enum Autostart {
     /// Not asked for; `existing` names a launcher already in the Startup
     /// folder, left as it was.
-    NotWanted { existing: Option<PathBuf> },
-    Written { path: PathBuf, with_console: bool },
+    NotWanted {
+        existing: Option<PathBuf>,
+    },
+    Written {
+        path: PathBuf,
+        with_console: bool,
+    },
 }
 
 /// The per-user Startup-folder launcher, only when asked for: `start ""` of
@@ -315,7 +505,9 @@ pub fn autostart(
     }
     let mut body = format!(
         "@echo off\r\nstart \"\" \"{}\" --config \"{}\"\r\n",
-        root.join("runtime").join("actingcommand-actingd.exe").display(),
+        root.join("runtime")
+            .join("actingcommand-actingd.exe")
+            .display(),
         root.join("actingd.config.json").display()
     );
     if with_console {
@@ -325,8 +517,12 @@ pub fn autostart(
         ));
     }
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("无法创建目录 / cannot create: {}: {error}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "无法创建目录 / cannot create: {}: {error}",
+                parent.display()
+            )
+        })?;
     }
     fs::write(&path, body)
         .map_err(|error| format!("写入失败 / write failed: {}: {error}", path.display()))?;
@@ -358,7 +554,11 @@ pub fn shortcuts(
     report: Report<'_>,
 ) -> Result<Vec<PathBuf>, String> {
     let places: [(bool, &str, Locate); 2] = [
-        (start_menu, "开始菜单 / Start menu", platform::start_menu_shortcut_path),
+        (
+            start_menu,
+            "开始菜单 / Start menu",
+            platform::start_menu_shortcut_path,
+        ),
         (desktop, "桌面 / desktop", platform::desktop_shortcut_path),
     ];
     let mut made = Vec::new();
@@ -373,9 +573,17 @@ pub fn shortcuts(
             continue;
         }
         let path = locate()?;
-        platform::create_shortcut(&path, &laid_out.acui_exe, &laid_out.ui_dir, "ActingCommand 监控台 / console")?;
+        platform::create_shortcut(
+            &path,
+            &laid_out.acui_exe,
+            &laid_out.ui_dir,
+            "ActingCommand 监控台 / console",
+        )?;
         written.push(path.clone());
-        report.line(&format!("已建快捷方式 / shortcut written: {}", path.display()))?;
+        report.line(&format!(
+            "已建快捷方式 / shortcut written: {}",
+            path.display()
+        ))?;
         made.push(path);
     }
     Ok(made)
@@ -384,7 +592,9 @@ pub fn shortcuts(
 /// The console, detached; never actingd — the console's launcher starts the
 /// Runtime.
 pub fn open_console(acui_exe: &Path, ui_dir: &Path) -> Result<(), String> {
-    platform::spawn_detached(acui_exe, ui_dir).map_err(|error| {
+    let root = ui_dir.parent().ok_or("Console entry has no installation root")?;
+    let snapshot = acui_installation::Snapshot::read(root)?;
+    platform::spawn_detached(acui_exe, ui_dir, &snapshot).map_err(|error| {
         format!(
             "拉起监控台失败 / cannot start the console: {}: {error}",
             acui_exe.display()

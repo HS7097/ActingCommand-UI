@@ -101,6 +101,8 @@ fn parse_args() -> Result<Args> {
 /// One state root (its read face open or unopened), its view model when open,
 /// the chosen language, and the frame read in flight.
 struct App {
+    /// The installation inputs of this process, retained across all UI actions.
+    installation: Option<acui_installation::Snapshot>,
     source: Session,
     /// `None` while the read face is unopened: there is no page to model.
     model: Option<RefCell<ViewModel>>,
@@ -188,12 +190,22 @@ struct FrameRequest {
 
 fn main() -> Result<()> {
     let args = parse_args()?;
-    let stored = settings::load();
+    let mut stored = settings::load();
     let language = args.language.unwrap_or(stored.language);
     let labels = language.labels();
     if args.help {
         println!("{}", labels.usage);
         return Ok(());
+    }
+    let installation = acui_installation::Snapshot::for_current_process().map_err(anyhow::Error::msg)?;
+    if let Some(snapshot) = &installation {
+        let state_root = snapshot.state_root().map_err(anyhow::Error::msg)?;
+        if args.state_root.as_ref().is_some_and(|requested| requested != &state_root) {
+            bail!("--state-root differs from this installation's selected configuration");
+        }
+        stored.state_root = Some(state_root);
+        stored.actingd_config = Some(snapshot.config_path().map_err(anyhow::Error::msg)?);
+        stored.actingd_exe = Some(snapshot.slot_root().join("runtime").join("actingcommand-actingd.exe"));
     }
     // `--state-root` is this run's; the file's `state_root` stands in for it.
     // Neither is a silent default: with both missing the usage is the answer.
@@ -232,6 +244,7 @@ fn main() -> Result<()> {
     };
     let (port_options, port_choices) = port_options(labels, &port_map);
     let app = Rc::new(App {
+        installation,
         source,
         model,
         labels,

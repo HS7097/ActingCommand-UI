@@ -479,13 +479,11 @@ list.
   lowercase hex characters from the OS RNG, and every `instance_id` is shown read-only; the binding is
   exactly one of `instance_index` (MuMu index), `instance_name` (MuMu name), or `host` + `port` (an
   explicit ADB address). `adb_path` is optional with every binding: left empty, the Runtime uses AC's own
-  adb (`<install root>\tools\platform-tools\adb.exe`, whose sha256 the Runtime checks, refusing to start
+  adb (`<selected slot>/tools/platform-tools/adb.exe`, whose sha256 the Runtime checks, refusing to start
   when it is missing or differs); given with a MuMu binding, it may only be MuMu's own adb or AC's own
   adb. An empty box writes no key, and emptying it on an existing entry removes the key. This needs a
-  Runtime of v0.10 or later; before going back to v0.9.0, give every explicit instance without
-  `adb_path` an adb that is still there afterwards (not AC's own), or v0.9.0 refuses it with
-  `instance_config_invalid`. Do not point ALAS, MAA or any other tool at AC's own adb: an upgrade moves it
-  aside with `tools\`; for the same version, keep a byte-identical copy elsewhere. `nemu_app_index` is an
+  Runtime with the installed slot's path contract. AC's bundled adb belongs to that slot;
+  other tools should use their own configured adb. `nemu_app_index` is an
   optional whole number. The form does not check
   `application_id`, `capture_backend` or `touch_backend`: whether they are needed and valid is decided by
   check-config, which also checks the `nemu_app_index` pairing. Only what needs the MuMu discovery
@@ -494,25 +492,16 @@ list.
   endpoint (Runtime `contracts/actingd-check-config.md`, from `3d5398d6`). Text is trimmed and an empty
   box writes no key; a missing required value or a number that does not parse is stated before anything
   is written.
-- **Save**: the file is read again as plain JSON — a missing or relative `actingd_config`, a missing or
-  unreadable file, JSON that does not parse, no `instances` array, or an entry that is not an object is
-  each stated as such. A new entry is appended; an existing one is found again by its `instance_id`
-  (gone from the file, or changed there into one the form cannot save, the save stops and says why) and
-  only the keys the form manages change, a changed binding kind removing the other kinds' keys. Every
-  other key of the entry and of the file is kept, in its order. The result goes to
-  `<config name>.candidate-<pid>` beside it (relative paths inside resolve against that directory) and
-  `<actingd_exe> check-config --config <candidate>` runs off the event loop (30 s bound, no console
-  window, stdout parsed whole as one `actingcommand.actingd.check-config.v1` report). Only `status: ok`
-  with a successful exit renames it over the file; otherwise the candidate is removed, the file stays as
-  it was, and the window says why: `error.code` and `stage` verbatim, or a missing or relative
-  `actingd_exe`, writing the candidate failing, a spawn failure, no output reader thread, reading the
-  child's status failing, the timeout (these three also say whether check-config could be terminated
-  and then reaped),
-  unreadable or unrecognized output, ok with a non-zero exit, or the rename failing.
-- **Effect**: there is no hot reload; a saved entry takes effect when the Runtime restarts. After a save,
-  one probe off the event loop says whether a Runtime is running now and points at the launcher's own
-  buttons: Request Shutdown, then Start once it has stopped — or, with none running, just Start. The
-  window restarts nothing itself.
+- **Save**: the installed console reads its fixed private configuration generation and applies only
+  the form's keys. It sends the JSON proposal over stdin to the verified fixed acsetup manager,
+  with its complete original selection. acsetup alone qualifies resources, prepares the private
+  successor, checks its configuration and commits after an exact active-generation/byte comparison.
+  Conflicts and missing material fail visibly; prior generations remain intact. The request has a
+  240-second client bound. A lost response or timeout leaves the result unknown; the console does
+  not kill the manager or submit again.
+- **Effect**: the returned selection is verified before save is reported. Reopen the console to
+  acquire that generation before restarting Runtime. The running console and its children retain
+  their original generation, and the editor never restarts Runtime itself.
 
 ## Setup wizard acsetup
 
@@ -520,7 +509,7 @@ list.
 console) that installs the release files from the umbrella repository's
 [Releases](https://github.com/HS7097/ActingCommand/releases) into a **per-user** installation. It ships
 together with the UI repository's Windows build (`acui-windows-<sha>.zip`, an Actions artifact of a
-branch or pull-request build or an asset of a UI Release `vX.Y.Z`, gains one more file, `acsetup.exe`). The same program comes in two editions, and a person downloads only one of them: the
+branch or pull-request build or an asset of a UI Release `vX.Y.Z`, contains `acui.exe`, `acsetup.exe` and the stable entry `acforward.exe`). The same program comes in two editions, and a person downloads only one of them: the
 online `acsetup.exe`, which fetches the release itself or takes a folder a person filled by hand, and
 the offline `acsetup-full-<tag>.exe`, which carries one whole release (see "Offline edition" below). One window,
 next only (the instances step can also be skipped), five steps; each page shows where its work stands
@@ -529,11 +518,9 @@ log" below):
 
 0. **Location**: the install root only (changeable, default `%LOCALAPPDATA%\Programs\ActingCommand`, no
    administrator needed), the free space on that volume, and whether an installation is already here
-   (looking at `runtime\BUILD-MANIFEST.json`, whose commit and `ui\`'s are shown; if there is one, the
-   run is an **upgrade**, see below). Next creates the root and the install log. On a fresh install this step also requires a usable state root and an install root free of single quotes (the console's settings hold those paths as TOML literal strings), and stops here otherwise. A wizard running from
-   `runtime\`, `ui\`, `tools\` or `previous\` of the installation it would upgrade stops here, naming its
-   own file: that directory could not move aside; from the root itself or `downloads\` it upgrades as
-   usual. The offline edition adds to the free-space line what extracting its release takes.
+   (reading selected MEMBERS or the original root manifests before migration; if there is one, the
+   run is an **upgrade**, see below). Next creates the root and the install log. On a fresh install this step also requires a usable state root and an install root free of single quotes (the console's settings hold those paths as TOML literal strings), and stops here otherwise. A wizard running from a business slot or an original program directory stops here. The verified fixed
+   management entry at `<root>/ui/acsetup.exe` can upgrade the business slots. The offline edition adds to the free-space line what extracting its release takes.
 1. **Install** (**Upgrade** on an installed root, see below), one page from the download to the
    layout; on success the next page follows by itself. By default online. On entering, the umbrella
    [Releases](https://github.com/HS7097/ActingCommand/releases) are asked over HTTPS for one release: the
@@ -564,27 +551,22 @@ log" below):
    `runtime_payload_layout` (`distribution-v1`) and the size and sha256 of every entry in `files[]` are
    checked; a file in the zip that the manifest does not list also counts as a mismatch. Any mismatch
    stops it, worded as "the content differs from what it was at creation" — this is an integrity
-   statement, not an authorization tone. Nothing inside the zips is run during verification. Then the
-   layout: `runtime\` (the Runtime's entire payload + manifest, with `actingd.config.example.json`
-   byte-for-byte verbatim), `ui\` (the console payload + manifest), `tools\` (**only** `actinglab.exe`,
-   `actingledger.exe` and `ac_fastdeploy_ppocr.dll`, and under `platform-tools\` the five files of
-   Google's official platform-tools 37.0.1 — `adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt`
-   and `source.properties` — the adb the Runtime uses by default; a tools pack without any one of them
-   stops it as a missing file, so this wizard does not install a v0.9.0 release; the other two exes at
-   the tools pack's root are neither installed nor shown). The temporary directory is deleted afterwards.
-   The finish page's Tools line names the version in `source.properties`.
+   statement, not an authorization tone. Nothing inside the zips is run during verification. The complete payloads, including all manifest-bound Tools files, are prepared in the fresh A slot
+   or the spare slot. Each slot retains its original manifests and MEMBERS; candidate and download
+   materials remain available. The finish page reads the slot's `platform-tools/source.properties`.
 2. **Options**, the configuration already written. Right after the layout, on the install page and
    inside its do-not-close span, the fresh install is configured with no question asked: the state root
    is `<install root>\state` (it must not exist or must be an empty directory — checked on step 0,
    before anything is fetched; **a state root that already holds content is never taken over**);
    `secret_fingerprint_salt` is generated as the hex of 32 bytes from the system random source
-   (`getrandom`; **not displayed, not logged**); the console settings are written first (below), then
-   — last, so that its presence marks a finished configuration, and never over an existing file —
-   `<install root>\actingd.config.json`, with only the fields `schema_version`, `state_root`,
+   (`getrandom`; **not displayed, not logged**). The private configuration under
+   `install/generations/<generation>/actingd.config.json` is qualified, console settings are written,
+   and `install/active.json` is committed atomically. The configuration contains only `schema_version`, `state_root`,
    `bind_host` (127.0.0.1), `bind_port` (0), `secret_fingerprint_salt` and `instances` (empty) — the
    Runtime's parser is `deny_unknown_fields`, so not one extra field is written. The console settings
    `%APPDATA%\ActingCommand\acui.toml` get `state_root`, `actingd_config` and `actingd_exe` (the format
    of the "Settings file" section, single-quoted literals; existing `lang` / `text_size` kept verbatim).
+   Configuration and Runtime settings name the fixed root argument alias and executable entry.
    The way it writes matches `crates/acui-app/src/settings.rs`, but `acui-setup` does not depend on
    `acui-app` and is a small duplicate writer. `instances` stays empty here; the instances step fills it.
    The options page then offers four ticks, written together off the event loop (a failure is said on
@@ -666,10 +648,9 @@ log" below):
    30 minutes. Missing declarations do not delete existing bindings. The merged candidate's actual
    old and new references are admitted again and checked through descriptor qualifications and
    `PrerequisiteChain`, including every retained binding; unresolved material rejects the plan.
-   The candidate is written next to the configuration, preserving relative-path meaning. The Runtime's `check-config` checks
-   it (a package that does not load is named with its alias, path and the loader's message); only an
-   accepted candidate replaces the configuration after an exact baseline-byte comparison and an
-   adjacent backup. An unchanged document reuses the original file. A pre-start failure restores
+   acsetup prepares a private successor generation and preserves relative-path meaning. The target's
+   `check-config` checks it; current generation and exact baseline bytes must match before atomic
+   selection commit. Prior generations remain intact. A pre-start failure restores
    the original configuration and leaves Runtime stopped; incomplete restoration stops setup.
    Once committed, Runtime is restarted on it and `actingctl
    status` must answer. A failure before the configuration is replaced is said on the page and in the log
@@ -680,118 +661,82 @@ log" below):
    `<install root>\ui\acui.exe` detached and closes the wizard; "finish" only closes. A Runtime the
    instances step started keeps running; when none runs, the console's launcher starts one.
 
-**Upgrade**, on a root that already holds an installation. The install step reads the release's `MEMBERS.json`
-first (online without saving it, offline from the folder, the offline edition from what it carries) and compares its two commits with the ones the
-installed manifests name. Matching program commits still allow the resource/configuration plan
-to run. An optional local bundle can be supplied on this page. After verifying as above:
+**A/B installation and upgrade**: each slot, `<root>/A` and `<root>/B`, keeps complete Runtime,
+UI and Tools payloads, original build manifests and exact MEMBERS. State, content-addressed
+resources, models, downloads, logs and private configuration generations stay outside the slots.
+acsetup owns the sole `install/active.json` selection: slot, generation, MEMBERS identity and
+hash-bound config/provider inputs are committed together. Configuration edits also use its
+writer lock and an exact active-generation/byte comparison.
 
-1. setup retains the exact configuration baseline, stages and validates the complete bundles, then
-   associates existing instances from their admitted resource package's actual game/server. Verified
-   identities with no incoming bundle retain their bindings. Multiple matches require a source
-   choice. Unknown or unverifiable identity shows its reason and requires an explicit game/server
-   selection that replaces that instance's business resource with the selected default pack. IDs,
-   backends and other fields stay. Maintenance conflicts use the same Keep/Use interaction as a
-   fresh install. The actual candidate is checked with the new Runtime before configuration replacement;
-2. a `previous\` kept from the upgrade before is set aside as `previous.older-<unix_ms>\` (any such
-   directory an earlier upgrade could not remove goes first), and a new `<install root>\previous\` is
-   made;
-3. when `<state root>\runtime-info.json` exists and the new `actingctl status` is answered, the new
-   `actingctl request-shutdown --state-root <state root> --wait 60` asks the Runtime to shut down and
-   waits until its ownership record is closed and the process gone — first, because a Runtime the
-   console started works in `ui\`. A present ownership record without a Runtime answer leaves
-   shutdown unconfirmed and stops the transaction;
-4. `ui\`, `tools\` and `runtime\` move aside — an open console makes the first fail — and the verified
-   payload is laid out as on a fresh install. `tools\` moves whole as before: the image of a running adb
-   server does not keep it from moving, and goes on running from `previous\tools\platform-tools\`. When
-   `ui\` cannot move as a whole because some process works in it (Windows sharing violation 32),
-   `ui\acui.exe` and `runtime\actingcommand-actingd.exe` are opened for writing and closed at once
-   (nothing truncated, created or written; a running exe opened that way fails with 32): a running
-   console stops it as before, "close the console first", and everything goes back; a running Runtime
-   the wizard did not recognise (no `runtime-info.json`, or one that did not answer) stops it with "the
-   Runtime still runs and its shutdown could not be confirmed: end it first, then upgrade"; any other
-   error is said with its path. With neither running, what works in `ui\` is some other process — most
-   likely an adb server a Runtime started from the console — so the entries of `ui\` move into
-   `previous\ui\` one by one, the directory stays, the new version is laid out into it, and the log says
-   so in one line;
-5. verified resources are placed; the actual merged configuration's full shared qualification and
-   `check-config` pass, the baseline still matches, and an adjacent backup and atomic replacement
-   commit it. Before a Runtime starts again, the ADB server is checked: the `tools\platform-tools\adb.exe`
-   just laid out runs `start-server` from the install root (at most 20 seconds each time; a server it
-   starts works in the install root, never in `ui\`). A server that answers is reused; one of another
-   version adb restarts itself; when a server is there but does not answer within the time, or the check
-   fails, every process listening on 127.0.0.1:5037 is ended without a question (its PID and image path
-   in the log) and `start-server` runs once more. A second failure is said in the page's and the
-   summary's notes as "the ADB server is not ready", with why — the upgrade stays in place. The summary
-   has a line on the ADB server either way. This is the only adb the wizard runs: before and during the
-   upgrade the ADB server is left alone.
+Downloads, full verification, spare-slot materialization, resource admission and configuration
+planning precede shutdown. Existing instances retain their identities and business settings;
+associations and maintenance conflicts use the same explicit choices as the instances page.
+Private generations preserve relative-path meaning, rebind provider libraries to the target slot
+and retain shared model paths. The target's own `check-config` checks the unselected candidate.
 
-Until the first new Runtime start attempt, any failure restores the original configuration,
-removes what was half laid out, puts every moved directory
-and the older `previous\` back (a `ui\` emptied entry by entry: only once every entry had left, the names
-laid into it are removed, then each entry moves back, the last first, and the empty `previous\ui\` is
-removed), and starts a Runtime that was asked to shut down — and is gone — again
-on the version still installed only when configuration and programs are both restored (said, with
-its log, or why it could not be). Incomplete restoration keeps Runtime stopped; unconfirmed shutdown
-never starts a second Runtime. Verified unbound resources remain on disk and old resources remain.
-A Runtime that was running is started again on the new version: detached, from the install
-root, its output in `<install root>\actingd-<unix_ms>.log`, up once its own `runtime-info.json` names
-its pid within 30 seconds. An exit before that is said with its `FATAL` line; no answer in time is said
-as possibly still starting. Either way the new version stays laid out and the version replaced in
-`previous\`. An older `previous\` or leftover that cannot be removed (a server still running from it keeps
-`adb.exe` and `AdbWinApi.dll` there) goes into the notes without stopping anything, and the next upgrade
-retries.
+Permanent empty `install/slot-A.lock` and `slot-B.lock` files locate shared OS occupancy.
+Consumers hold shared locks; materialization requires exclusive occupancy and native exclusion
+of older MCP/Tools/ADB consumers. An occupied spare slot stops materialization while downloads
+and the current selection remain available. Shared ADB services are not ended to free a slot.
+Replaced spare material is retained under `install/retained-<slot>-<time>`.
 
-A server started by running adb or actingd by hand after a `cd` into `tools\` (or below it) or `runtime\`
-works there, and an upgrade stops on it with the existing hints and puts everything back; do not run them
-that way.
+The Host performs natural drain under its lifecycle admission and commits formal atomic shutdown.
+acsetup requires the exact accepted owner, closed owner journal and process exit before changing
+selection. Failed status alone does not prove closure: a stopped installation must pass the
+formal cold owner/writer gate. Each switch also runs the target's `ledger-maintenance verify`
+against current quiescent data. This updates owner.lock epoch/revision; material or budget
+failures leave compatibility unproved.
 
-**Going back to v0.9.0** (moving `previous\` back by hand, or the v0.9.0 wizard with Confirm downgrade;
-this wizard does not install v0.9.0, whose tools pack has no platform-tools): first give every explicit
-instance without `adb_path` an adb that is still there afterwards (MuMu's own, or a copy of the same
-version kept elsewhere — not AC's own), and remove an `adb_path` naming AC's own adb from a discovered
-instance; forgotten, v0.9.0's `check-config` and start refuse with `instance_config_invalid`, never
-silently. The v0.9.0 wizard has no entry-by-entry move: if `ui\` is an adb server's working directory at
-that moment, it says "close the console first" although the console is closed, and puts everything back
-— then stop the adb server and try again (ALAS/MAA lose their connection), or go back by hand (a `ui\`
-that cannot be renamed is emptied and refilled entry by entry).
+When Runtime was running, acsetup starts the new slot held before Provider, verifies its exact
+ticket/process, then releases it through the same Host. Drain, held and release each use a
+60-second Host deadline. Controls have a 75-second client limit; cold verification has 150
+seconds around the Runtime's existing limits. Unknown submissions are not repeated: acsetup
+queries the original transition. Unresolved closure stops the switch. It does not kill an
+unresolved control/maintenance process. The Host's released result confirms preparation and
+this transition's original user-pause restoration. A previously stopped Runtime stays stopped.
 
-Newer or older is judged by publication time. Every install and upgrade keeps the release's
-`MEMBERS.json` as `<install root>\installed-members.json`. A release whose `published_at_utc` is earlier
-than the one recorded is said as "按发布时间判断，看起来是降级 / by publication time this looks like a
-downgrade"; an installation without the record, a record that does not name the two commits the
-installed manifests do (an upgrade that failed after laying out, an older wizard, a rollback by hand), or
-a time either one lacks, as "无法判断新旧 / cannot tell which is newer" — either way naming the release
-to install, with "the Runtime has no state migration and no rollback", and "确认降级 / Confirm
-downgrade" must be ticked before Install goes on; a tick given for one release is cleared for another. This holds for all three sources.
-Publication time is a heuristic (a stable line's dates may one day run against the code's age), and is
-said as one; the tick is the person's word, not the wizard's judgement.
+The first migration qualifies the formal v0.11.0 Runtime/UI sources, prepares A and uses the
+old Runtime's atomic idle shutdown; Busy leaves the switch uncommitted. Original root programs,
+configuration and console settings are retained under `install/initial-backup-<generation>`.
+Fixed root entries use `acforward.exe` to pin a complete selection, inherit stdio and return the
+actual exit code. Root `actingd.config.json` is an argument alias for the selected private input,
+with no writable file at that path. Boot entries, shortcuts and MCP retain fixed root paths.
+MCP gets explicit root/state-root arguments; conflicting locations are rejected.
 
-State, the console's `acui.toml`, the Startup launcher and `downloads\` are preserved, and the options
-step is skipped. Configuration reflects the accepted maintenance plan. After a new Runtime start
-attempt there is no automatic state/configuration rollback. When no Runtime was running, an older
-retained version is cleaned up by the next upgrade. The version replaced is kept whole in `previous\`, one
-version deep: the Runtime ships no state migration and no rollback of its own, so going back stays a
-person's choice.
+Running UI/MCP/Tools processes retain their own generations and materials. Reopen the process to
+use a successor. The v0.11.0 UI is an observation entry explicitly bound to shared state. Its
+settings contain the root Runtime entry and config alias; reading the absent alias in its old
+editor fails visibly. Effective editing belongs to the fixed acsetup manager. acsetup controls
+the v0.11.0 Runtime through its actual cold startup behavior.
 
-**Progress and the install log**: from leaving step 0 onward every line of work goes to
-`<install root>\acsetup-<unix_ms>.log`, and a log write that fails stops the run. The pages show only the
-phase (for example "下载 / Downloading · 41.2/74.0 MiB" or "安装文件 / Installing files · 118/260"), a
-progress bar — moving without a size where none is known, such as while the Runtime shuts down — and
-the latest log line as the one thing being done now. What the person must see — an older `previous\`
-or a leftover that could not be removed, a `runtime-info.json` no Runtime answers for, an ADB server not
-ready after an upgrade — stays under the
-bar and is repeated in the summary. On failure the page shows the reason, what was left on disk (the
-staging directory removed or not; on a fresh install, which of `runtime\`, `ui\` and `tools\` this run
-laid out and must be removed before trying again) and the log path; a worker that panics stops the run
-too, with its message. While files are laid out and configured, an upgrade swaps versions, the options are written or the instances step writes, the
-window does not close; a lookup or a download may be closed, and a staging directory left that way is
-removed on the next run, said in the log. The first close after the instances step started a Runtime
-says that it keeps running. A root with program files but no `actingd.config.json`, or the
-configuration without program files (an interrupted upgrade), is named on step 0 and neither installed
-over nor upgraded. Apart from the installed payload, the configuration, the settings, the fetched release
-files under `downloads\`, `installed-members.json`, (when checked) the start-at-boot batch file and the Start menu and desktop shortcuts, the bundles'
-packs placed under `packages\<game>\`, and the log of a Runtime it started, this is the only file the wizard writes (with
-`previous\` on an upgrade).
+**Explicit rollback**: run `<root>/ui/acsetup.exe --rollback` to select the retained other slot.
+Its complete manifests are rechecked, and candidate inputs are replanned from current business
+settings. After confirmed owner closure, its `check-config` and `ledger-maintenance verify`
+must pass against the latest data. These gates do not prove Provider/device readiness. An earlier
+release can also be provided through the normal installer with the page's confirmation.
+Publication time is only a prompt heuristic; the cold gate remains mandatory. The formal v0.11.0
+Runtime uses cold startup.
+
+Before a new Runtime start attempt, only the complete original transaction can restore a
+committed selection. First-migration recovery also restores root programs/configuration/settings.
+Incomplete restoration retains recovery materials and leaves Runtime stopped. After the first
+start attempt, the selected generation and entire ledger remain in place. Any explicit later
+rollback rechecks the latest data. Unconfirmed closure never starts a second Runtime.
+
+**Fixed management entry**: `<root>/ui/acsetup.exe` retains its own original build manifest and
+MEMBERS in `install/manager`; business-slot rollback keeps it. To replace it, exit the fixed
+manager and run the exact unmodified acsetup from a verified release outside the installation:
+`acsetup.exe --replace-manager <absolute-install-root> <absolute-release-directory>`.
+The directory contains normal release files and SHA256SUMS. Native occupancy must prove the old
+manager exited; the external executable must match the verified UI payload. Prior management
+material and identity are retained. Slot-contained acsetup originals remain intact.
+
+**Progress and installation log**: bounded installation operations go to `<root>/acsetup-<time>.log`.
+Runtime results come from formal Host/CLI and GlobalLedger; spawned Runtime process logs retain
+startup/fatal lines. Log failures stop the operation. Pages show phase, progress and explicit
+errors; failure materials, generations, program backups and hashed resources remain available.
+The wizard cannot close while committing installation/configuration inputs. Preparation aims to
+reduce downtime; cold verification and startup duration require actual measurement.
 
 **Offline edition**: `acsetup-full-<tag>.exe` is `acsetup.exe` byte for byte, then `SHA256SUMS` and
 every file it lists in its order — `MEMBERS.json` among them, and the resource repositories' bundles —
@@ -879,8 +824,9 @@ the frame request) is reset: never a panic on the event loop. A launched actingd
 cannot start keeps running, and the line says so and that pressing Start again probes it. A child that was killed but could not be reaped is
 said as that, not as a kill that failed.
 
-A fifth crate, `acui-setup` (binary `acsetup`), sits outside these four layers: the setup wizard,
-depending only on slint, serde, serde_json, anyhow, sha2, zip, getrandom, ureq, actingcommand-contract and (Windows only) windows, and on none of the layers above; see the previous
+The `acui-setup` crate (binary `acsetup`), sits outside these four layers: the setup wizard,
+using the shared contract and execution-kernel's offline package qualifications. `acui-installation`
+provides the shared selection consumer and `acforward` binary for setup and the console; see the previous
 section, "Setup wizard acsetup".
 
 ## Icon

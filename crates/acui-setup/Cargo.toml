@@ -9,6 +9,7 @@ name = "acsetup"
 path = "src/main.rs"
 
 [dependencies]
+acui-installation = { workspace = true }
 # Shared bundle declarations and hash-admitted offline qualifications.
 actingcommand-contract = { workspace = true }
 actingcommand-execution-kernel = { workspace = true }

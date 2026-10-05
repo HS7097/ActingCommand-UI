@@ -11,11 +11,10 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde_json::{json, Value};
 
-use crate::{fetch, maintenance};
+use crate::{fetch, lifecycle, maintenance};
 use crate::runtime::{self, ACTINGCTL, ACTINGD};
 use crate::verify::{hex, Report, Step};
 
@@ -50,6 +49,7 @@ pub struct Chosen {
 }
 
 struct Paths {
+    snapshot: acui_installation::Snapshot,
     config: PathBuf,
     state_root: PathBuf,
     actingd: PathBuf,
@@ -57,11 +57,13 @@ struct Paths {
 }
 
 fn paths(root: &Path) -> Result<Paths, String> {
-    let config = root.join("actingd.config.json");
+    let snapshot = acui_installation::Snapshot::read(root)?;
+    let config = snapshot.config_path()?;
     Ok(Paths {
-        state_root: runtime::state_root(&config)?,
-        actingd: root.join("runtime").join(ACTINGD),
-        actingctl: root.join("runtime").join(ACTINGCTL),
+        state_root: snapshot.state_root()?,
+        actingd: snapshot.slot_root().join("runtime").join(ACTINGD),
+        actingctl: snapshot.slot_root().join("runtime").join(ACTINGCTL),
+        snapshot,
         config,
     })
 }
@@ -71,7 +73,11 @@ fn paths(root: &Path) -> Result<Paths, String> {
 /// answers is restarted, since it has no instance yet and which folder it read
 /// cannot be asked. Returns the folder pinned; `None` from a Runtime too old to
 /// say where MuMu is.
-pub fn start(root: &Path, mumu_root: Option<&Path>, report: Report<'_>) -> Result<Option<String>, String> {
+pub fn start(
+    root: &Path,
+    mumu_root: Option<&Path>,
+    report: Report<'_>,
+) -> Result<Option<String>, String> {
     let paths = paths(root)?;
     let pinned = match mumu_root {
         Some(mumu) => Some((mumu.display().to_string(), "person".to_string())),
@@ -84,12 +90,14 @@ pub fn start(root: &Path, mumu_root: Option<&Path>, report: Report<'_>) -> Resul
         Some((path, source)) if source != "config" => {
             report.line(&format!("MuMu 位置 / MuMu is at: {path}（{source}）"))?;
             let path = path.clone();
-            set_config(&paths, report, |document| document["mumu_root"] = json!(path))?;
+            set_config(&paths, report, |document| {
+                document["mumu_root"] = json!(path)
+            })?;
         }
         Some((path, _)) => report.line(&format!("MuMu 位置已钉住 / MuMu is pinned at: {path}"))?,
         None => report.warn(NOT_PINNED)?,
     }
-    ensure_running(root, &paths, true, report)?;
+    ensure_running(&self::paths(root)?, report)?;
     Ok(pinned.map(|(path, _)| path))
 }
 
@@ -166,15 +174,20 @@ pub struct Settled {
 
 pub fn settle(root: &Path, report: Report<'_>) -> Result<Settled, String> {
     let paths = paths(root)?;
-    report.step(Step::Phase("确认 Runtime 状态 / Checking whether the Runtime runs", None))?;
-    let mumu_root = read_config(&paths)?["mumu_root"].as_str().map(str::to_string);
+    report.step(Step::Phase(
+        "确认 Runtime 状态 / Checking whether the Runtime runs",
+        None,
+    ))?;
+    let mumu_root = read_config(&paths)?["mumu_root"]
+        .as_str()
+        .map(str::to_string);
     // `runtime-info.json` there without an answer may be a Runtime still
     // starting or stuck: not confirmed, rather than not running — which the
     // summary says itself, so here it is a log line, not a second note.
     let mut quiet = |line: &str| report.line(line);
-    let running = match runtime::runtime_answers(&paths.actingctl, &paths.state_root, &mut quiet) {
+    let running = match runtime::runtime_answers(&paths.actingctl, &paths.state_root, &paths.snapshot, &mut quiet) {
         Ok(Ok(())) => Ok(true),
-        Ok(Err(None)) => Ok(false),
+        Ok(Err(None)) => Err("Runtime IPC discovery is absent; closure is unconfirmed".into()),
         Ok(Err(Some(reason))) | Err(reason) => Err(reason),
     };
     Ok(Settled { mumu_root, running })
@@ -183,10 +196,13 @@ pub fn settle(root: &Path, report: Report<'_>) -> Result<Settled, String> {
 /// The emulator's instances, as the running Runtime lists them.
 pub fn discover(root: &Path, report: Report<'_>) -> Result<Vec<Found>, String> {
     let paths = paths(root)?;
-    report.step(Step::Phase("查找模拟器实例 / Finding the emulator's instances", None))?;
+    report.step(Step::Phase(
+        "查找模拟器实例 / Finding the emulator's instances",
+        None,
+    ))?;
     report.line("发现模拟器实例 / discovering emulator instances")?;
     let out = runtime::run(
-        Command::new(&paths.actingctl)
+        lifecycle::command(&paths.actingctl, Some(&paths.snapshot))?
             .arg("emulator")
             .arg("discover")
             .arg("--state-root")
@@ -201,16 +217,25 @@ pub fn discover(root: &Path, report: Report<'_>) -> Result<Vec<Found>, String> {
         ));
     }
     let document: Value = serde_json::from_str(out.stdout.trim()).map_err(|error| {
-        format!("发现结果无法解析 / discovery output unreadable: {error}: {}", out.stdout.trim())
+        format!(
+            "发现结果无法解析 / discovery output unreadable: {error}: {}",
+            out.stdout.trim()
+        )
     })?;
     let listed = document["instances"].as_array().ok_or_else(|| {
-        format!("发现结果里没有 instances / no instances in: {}", out.stdout.trim())
+        format!(
+            "发现结果里没有 instances / no instances in: {}",
+            out.stdout.trim()
+        )
     })?;
     let found = listed
         .iter()
         .map(|item| {
-            let index = item["instance_index"].as_u64().and_then(|index| u16::try_from(index).ok());
-            let index = index.ok_or_else(|| format!("实例序号无法读取 / instance index unreadable: {item}"))?;
+            let index = item["instance_index"]
+                .as_u64()
+                .and_then(|index| u16::try_from(index).ok());
+            let index = index
+                .ok_or_else(|| format!("实例序号无法读取 / instance index unreadable: {item}"))?;
             let text = |key: &str| item[key].as_str().map(str::to_string);
             Ok(Found {
                 index,
@@ -225,7 +250,11 @@ pub fn discover(root: &Path, report: Report<'_>) -> Result<Vec<Found>, String> {
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    report.line(&format!("发现 {} 个实例 / {} instances found", found.len(), found.len()))?;
+    report.line(&format!(
+        "发现 {} 个实例 / {} instances found",
+        found.len(),
+        found.len()
+    ))?;
     Ok(found)
 }
 
@@ -253,24 +282,25 @@ pub fn plan(root: &Path, chosen: &[Chosen]) -> Result<maintenance::Transaction, 
 }
 
 /// Confirm shutdown before installed resource material or bindings change.
-pub fn stop(root: &Path, state_root: &Path, report: Report<'_>) -> Result<(), String> {
-    let actingctl = root.join("runtime").join(ACTINGCTL);
-    match runtime::runtime_answers(&actingctl, state_root, report)? {
-        Ok(()) => {
-            report.step(Step::Phase("关闭 Runtime / Shutting the Runtime down", None))?;
-            runtime::request_shutdown(&actingctl, state_root)
-        }
-        Err(None) => Ok(()),
-        Err(Some(reason)) => Err(format!("Runtime 关闭状态未确认 / Runtime shutdown unconfirmed: {reason}")),
-    }
+pub fn stop(root: &Path, state_root: &Path, report: Report<'_>) -> Result<lifecycle::Closed, String> {
+    let paths = paths(root)?;
+    if paths.state_root != state_root { return Err("Instance plan and active state root disagree".into()); }
+    lifecycle::close(&paths.snapshot.slot_root(), &paths.config, &paths.state_root, Some(&paths.snapshot), &runtime_sha(&paths)?, report)
 }
 
 /// The Runtime restarted on the configuration the transaction put in place, so it
 /// binds the instances. Returns what `actingctl status` then says of them.
-pub fn restart(root: &Path, report: Report<'_>) -> Result<String, String> {
+pub fn restart(root: &Path, mut closed: lifecycle::Closed, report: Report<'_>) -> Result<String, String> {
     let paths = paths(root)?;
-    ensure_running(root, &paths, true, report)?;
-    let out = runtime::run(Command::new(&paths.actingctl).arg("status").arg("--state-root").arg(&paths.state_root))?;
+    closed.was_running = true; // Applying instances explicitly requests a start.
+    paths.snapshot.unchanged()?;
+    lifecycle::start(&paths.snapshot, closed, &runtime_sha(&paths)?, report)?;
+    let out = runtime::run(
+        lifecycle::command(&paths.actingctl, Some(&paths.snapshot))?
+            .arg("status")
+            .arg("--state-root")
+            .arg(&paths.state_root),
+    )?;
     match out.success {
         true => {
             report.line("Runtime 已按新配置运行 / the Runtime runs with the new configuration")?;
@@ -310,8 +340,8 @@ fn status_line(stdout: &str) -> String {
 /// The configuration edited as a candidate next to it, checked by the
 /// installed Runtime's `check-config`, and put in place only when accepted.
 fn set_config(paths: &Paths, report: Report<'_>, edit: impl FnOnce(&mut Value)) -> Result<(), String> {
-    let root = paths.config.parent().ok_or("Configuration has no parent")?;
-    let mut transaction = maintenance::Transaction::read(root)?;
+    paths.snapshot.unchanged()?;
+    let mut transaction = maintenance::Transaction::read(&paths.snapshot.root)?;
     edit(&mut transaction.document);
     transaction.commit(&paths.actingd, false, report)
 }
@@ -324,17 +354,20 @@ fn read_config(paths: &Paths) -> Result<Value, String> {
 
 /// A Runtime running on the configuration as it now is: started when none
 /// answers, and — when `restart` — one that answers is shut down first.
-fn ensure_running(root: &Path, paths: &Paths, restart: bool, report: Report<'_>) -> Result<(), String> {
-    match runtime::runtime_answers(&paths.actingctl, &paths.state_root, report)? {
-        Ok(()) if !restart => return Ok(()),
-        Ok(()) => {
-            report.step(Step::Phase("关闭 Runtime / Shutting the Runtime down", None))?;
-            report.line("请求 Runtime 关闭，以便按新配置重启 / asking the Runtime to shut down, to restart it on the new configuration")?;
-            runtime::request_shutdown(&paths.actingctl, &paths.state_root)?;
-        }
-        Err(_) => {}
-    }
-    report.step(Step::Phase("拉起 Runtime / Starting the Runtime", None))?;
-    report.line("拉起 Runtime / starting the Runtime")?;
-    runtime::restart(root, &paths.actingd, &paths.config, &paths.state_root, report).map(|_| ())
+fn ensure_running(paths: &Paths, report: Report<'_>) -> Result<(), String> {
+    let mut entries = fs::read_dir(&paths.state_root).map_err(|error| format!("Cannot inspect initial state root: {error}"))?;
+    let empty = entries.next().transpose().map_err(|error| error.to_string())?.is_none();
+    let runtime_sha = runtime_sha(paths)?;
+    let mut closed = if empty {
+        lifecycle::Closed { was_running: true, previous: None }
+    } else {
+        lifecycle::close(&paths.snapshot.slot_root(), &paths.config, &paths.state_root, Some(&paths.snapshot), &runtime_sha, report)?
+    };
+    closed.was_running = true; // The fresh-install instances page explicitly starts Runtime.
+    paths.snapshot.unchanged()?;
+    lifecycle::start(&paths.snapshot, closed, &runtime_sha, report).map(|_| ())
+}
+
+fn runtime_sha(paths: &Paths) -> Result<String, String> {
+    crate::verify::members_of(std::str::from_utf8(&paths.snapshot.members_bytes()?).map_err(|error| error.to_string())?).map(|members| members.0)
 }

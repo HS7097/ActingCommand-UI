@@ -9,6 +9,7 @@ name = "acui"
 path = "src/main.rs"
 
 [dependencies]
+acui-installation = { workspace = true }
 acui-model = { workspace = true }
 acui-rows = { workspace = true }
 acui-source = { workspace = true }
