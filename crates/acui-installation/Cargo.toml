@@ -1,0 +1,14 @@
+[package]
+name = "acui-installation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "acforward"
+path = "src/main.rs"
+
+[dependencies]
+actingcommand-contract = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }

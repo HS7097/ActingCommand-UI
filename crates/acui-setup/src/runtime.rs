@@ -30,26 +30,6 @@ pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(windows)]
 pub(crate) const DETACHED_PROCESS: u32 = 0x0000_0008;
 
-/// `state_root` from the configuration. The wizard writes an absolute one; a
-/// relative one would depend on the Runtime's working directory, so it stops.
-pub(crate) fn state_root(config: &Path) -> Result<PathBuf, String> {
-    let text = fs::read_to_string(config)
-        .map_err(|error| format!("读取失败 / read failed: {}: {error}", config.display()))?;
-    let document: Value = serde_json::from_str(&text)
-        .map_err(|error| format!("配置无法解析 / config unreadable: {}: {error}", config.display()))?;
-    let root = document["state_root"].as_str().map(PathBuf::from).ok_or_else(|| {
-        format!("配置里没有 state_root / no state_root in {}", config.display())
-    })?;
-    match root.is_absolute() {
-        true => Ok(root),
-        false => Err(format!(
-            "配置的 state_root 不是绝对路径，向导无法确定它 / state_root in {} is not absolute: {}",
-            config.display(),
-            root.display()
-        )),
-    }
-}
-
 /// Whether a Runtime runs on the state root: `runtime-info.json` there and
 /// the new `actingctl status` answered by it (`Ok`). Otherwise `Err`, with the
 /// reason when the file is there but no Runtime answered — one that ended

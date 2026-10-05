@@ -50,6 +50,7 @@ pub struct Chosen {
 }
 
 struct Paths {
+    snapshot: acui_installation::Snapshot,
     config: PathBuf,
     state_root: PathBuf,
     actingd: PathBuf,
@@ -57,11 +58,13 @@ struct Paths {
 }
 
 fn paths(root: &Path) -> Result<Paths, String> {
-    let config = root.join("actingd.config.json");
+    let snapshot = acui_installation::Snapshot::read(root)?;
+    let config = snapshot.config_path()?;
     Ok(Paths {
-        state_root: runtime::state_root(&config)?,
-        actingd: root.join("runtime").join(ACTINGD),
-        actingctl: root.join("runtime").join(ACTINGCTL),
+        state_root: snapshot.state_root()?,
+        actingd: snapshot.slot_root().join("runtime").join(ACTINGD),
+        actingctl: snapshot.slot_root().join("runtime").join(ACTINGCTL),
+        snapshot,
         config,
     })
 }
@@ -89,7 +92,7 @@ pub fn start(root: &Path, mumu_root: Option<&Path>, report: Report<'_>) -> Resul
         Some((path, _)) => report.line(&format!("MuMu 位置已钉住 / MuMu is pinned at: {path}"))?,
         None => report.warn(NOT_PINNED)?,
     }
-    ensure_running(root, &paths, true, report)?;
+    ensure_running(root, &self::paths(root)?, true, report)?;
     Ok(pinned.map(|(path, _)| path))
 }
 
@@ -310,8 +313,8 @@ fn status_line(stdout: &str) -> String {
 /// The configuration edited as a candidate next to it, checked by the
 /// installed Runtime's `check-config`, and put in place only when accepted.
 fn set_config(paths: &Paths, report: Report<'_>, edit: impl FnOnce(&mut Value)) -> Result<(), String> {
-    let root = paths.config.parent().ok_or("Configuration has no parent")?;
-    let mut transaction = maintenance::Transaction::read(root)?;
+    paths.snapshot.unchanged()?;
+    let mut transaction = maintenance::Transaction::read(&paths.snapshot.root)?;
     edit(&mut transaction.document);
     transaction.commit(&paths.actingd, false, report)
 }

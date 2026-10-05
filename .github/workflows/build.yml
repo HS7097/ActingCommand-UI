@@ -67,7 +67,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --locked --release --workspace
 
-      # Windows only: stage acui.exe and acsetup.exe with a build manifest in the
+      # Windows only: stage the console, setup and stable entry with a build manifest in the
       # same shape as the Runtime's exact-SHA artifacts, so the umbrella can fetch
       # and verify them by commit SHA. Nothing below changes the build itself.
       - name: Stage Windows artifact with build manifest
@@ -82,9 +82,10 @@ jobs:
           $name = "acui-windows-$sha"
           $dir = Join-Path $env:RUNNER_TEMP $name
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
-          $payload = @('acui.exe', 'acsetup.exe', 'LICENSE', 'README.md')
+          $payload = @('acui.exe', 'acsetup.exe', 'acforward.exe', 'LICENSE', 'README.md')
           Copy-Item -LiteralPath 'target\release\acui.exe' -Destination (Join-Path $dir 'acui.exe')
           Copy-Item -LiteralPath 'target\release\acsetup.exe' -Destination (Join-Path $dir 'acsetup.exe')
+          Copy-Item -LiteralPath 'target\release\acforward.exe' -Destination (Join-Path $dir 'acforward.exe')
           Copy-Item -LiteralPath 'LICENSE' -Destination (Join-Path $dir 'LICENSE')
           Copy-Item -LiteralPath 'README.md' -Destination (Join-Path $dir 'README.md')
           $files = foreach ($f in $payload) {

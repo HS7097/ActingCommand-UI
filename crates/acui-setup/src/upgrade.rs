@@ -77,6 +77,14 @@ struct Manifest {
 /// files aside before laying the new ones out — neither half is installed
 /// over, and neither is upgraded.
 pub fn installed(root: &Path) -> Result<Option<Installed>, String> {
+    if root.join(acui_installation::INSTALL_SELECTION_PATH).try_exists()
+        .map_err(|error| format!("Cannot inspect installation selection: {error}"))? {
+        let snapshot = acui_installation::Snapshot::read(root)?;
+        let members = acui_installation::read_reference(root, &snapshot.selection.members, acui_installation::MAX_MATERIAL_BYTES)?;
+        let text = std::str::from_utf8(&members).map_err(|error| error.to_string())?;
+        let (runtime_sha, ui_sha) = crate::verify::members_of(text)?;
+        return Ok(Some(Installed { runtime_sha, ui_sha, adb: ac_adb(&snapshot.slot_root()).is_file() }));
+    }
     let runtime = root.join("runtime").join(MANIFEST);
     let config = root.join("actingd.config.json");
     match (runtime.is_file(), config.is_file()) {

@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 pub const MISMATCH: &str = "内容与创建时不一致";
 
 pub const MANIFEST: &str = "BUILD-MANIFEST.json";
+const IDENTITY_LIMIT: u64 = 16 << 20;
 const RUNTIME_REPOSITORY: &str = "HS7097/ActingCommand-Runtime";
 const UI_REPOSITORY: &str = "HS7097/ActingCommand-UI";
 const RUNTIME_LAYOUT: &str = "distribution-v1";
@@ -86,6 +87,8 @@ pub struct Verified {
     pub staging: PathBuf,
     /// The two commits `MEMBERS.json` names: runtime, then ui.
     pub members: (String, String),
+    /// The exact hash-verified installation input retained with each program slot.
+    pub members_document: Vec<u8>,
     pub runtime: Staged,
     pub ui: Staged,
     pub tools: Staged,
@@ -96,6 +99,7 @@ pub struct Verified {
 pub struct Staged {
     pub dir: PathBuf,
     pub files: Vec<String>,
+    manifest_sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -168,9 +172,14 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
 
     // MEMBERS.json names the two commits, and so the three zips.
     let members_path = download.join("MEMBERS.json");
-    let members_text = fs::read_to_string(&members_path)
-        .map_err(|error| format!("读取失败 / read failed: {}: {error}", members_path.display()))?;
-    let (runtime_sha, ui_sha) = members_of(&members_text)?;
+    let members_document = read_identity(&members_path)?;
+    let members_digest = hex(&Sha256::digest(&members_document));
+    if !entries.iter().any(|(digest, name)| name == "MEMBERS.json" && *digest == members_digest) {
+        return Err(format!("{MISMATCH}: MEMBERS.json is not bound by the verified SHA256SUMS"));
+    }
+    let members_text = std::str::from_utf8(&members_document)
+        .map_err(|error| format!("MEMBERS.json is not UTF-8: {error}"))?;
+    let (runtime_sha, ui_sha) = members_of(members_text)?;
     let members = Members { runtime_sha, ui_sha };
     report.line(&format!(
         "MEMBERS.json: runtime {} · ui {}",
@@ -232,10 +241,32 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
     Ok(Verified {
         staging: staging.to_path_buf(),
         members: (members.runtime_sha, members.ui_sha),
+        members_document,
         runtime,
         ui,
         tools,
     })
+}
+
+/// Rechecks a complete prepared program tree against the identities verified at download.
+/// The installation selection is not read or changed here.
+pub fn prepared_programs(root: &Path, verified: &Verified, report: Report<'_>) -> Result<(), String> {
+    if read_identity(&root.join("MEMBERS.json"))? != verified.members_document {
+        return Err(format!("{MISMATCH}: prepared MEMBERS.json differs from the verified release"));
+    }
+    for (dir, original, repository, sha, required, runtime_layout) in [
+        ("runtime", &verified.runtime, RUNTIME_REPOSITORY, verified.members.0.as_str(), RUNTIME_REQUIRED, true),
+        ("ui", &verified.ui, UI_REPOSITORY, verified.members.1.as_str(), UI_REQUIRED, false),
+        ("tools", &verified.tools, RUNTIME_REPOSITORY, verified.members.0.as_str(), TOOLS_INSTALLED, false),
+    ] {
+        let checked = check_manifest(&root.join(dir), &Expect {
+            name: format!("prepared {dir}"), dir, repository, sha, required, runtime_layout,
+        }, report)?;
+        if checked.manifest_sha256 != original.manifest_sha256 {
+            return Err(format!("{MISMATCH}: prepared {dir}/{MANIFEST} differs from the verified release"));
+        }
+    }
+    Ok(())
 }
 
 /// The two commits a `MEMBERS.json` names, each 40 lowercase hex characters.
@@ -361,7 +392,10 @@ fn extract(zip_path: &Path, name: &str, dir: &Path) -> Result<usize, String> {
 /// wizard needs must be among the bound ones.
 fn check_manifest(dir: &Path, expect: &Expect<'_>, report: Report<'_>) -> Result<Staged, String> {
     let zip = &expect.name;
-    let manifest: Manifest = read_json(&dir.join(MANIFEST))?;
+    let manifest_path = dir.join(MANIFEST);
+    let manifest_bytes = read_identity(&manifest_path)?;
+    let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| format!("{} does not parse: {error}", manifest_path.display()))?;
     if manifest.repository != expect.repository {
         return Err(format!(
             "{MISMATCH}: {zip} 的 {MANIFEST} repository 应为 / expected {}，实为 / actual {}",
@@ -428,6 +462,7 @@ fn check_manifest(dir: &Path, expect: &Expect<'_>, report: Report<'_>) -> Result
     Ok(Staged {
         dir: dir.to_path_buf(),
         files,
+        manifest_sha256: hex(&Sha256::digest(&manifest_bytes)),
     })
 }
 
@@ -470,11 +505,15 @@ fn walk(base: &Path, dir: &Path, present: &mut BTreeSet<String>) -> Result<(), S
     Ok(())
 }
 
-fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
-    let bytes = fs::read(path)
-        .map_err(|error| format!("缺少文件 / missing: {}: {error}", path.display()))?;
-    serde_json::from_slice(&bytes)
-        .map_err(|error| format!("{} 解析失败 / does not parse: {error}", path.display()))
+fn read_identity(path: &Path) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .and_then(|file| file.take(IDENTITY_LIMIT + 1).read_to_end(&mut bytes))
+        .map_err(|error| format!("Cannot read {}: {error}", path.display()))?;
+    if bytes.len() as u64 > IDENTITY_LIMIT {
+        return Err(format!("Installation identity exceeds 16 MiB: {}", path.display()));
+    }
+    Ok(bytes)
 }
 
 /// Lowercase hex sha256 of a whole file, streamed.

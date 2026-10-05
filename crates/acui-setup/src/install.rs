@@ -3,16 +3,17 @@
 //! the Runtime's configuration and the console's settings, the optional
 //! per-user Startup launcher, and start the console.
 //!
-//! Nothing here touches PATH, the registry, services or scheduled tasks; the
-//! configuration template is copied byte for byte and never edited; a state
-//! root that already has content is never taken over; no instance is
-//! configured — that is the console's, later.
+//! Program slots and private configuration inputs are prepared before the
+//! installation selection is committed. The shared state root stays outside
+//! the slots; an existing state root is never taken over by a fresh install.
 
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+use acui_installation::InstallSlot;
 
 use crate::platform;
 use crate::verify::{hex, Report, Staged, Step, Total, Verified, MANIFEST, MISMATCH, TOOLS_INSTALLED};
@@ -25,6 +26,34 @@ pub struct LaidOut {
     pub tools_dir: PathBuf,
     pub actingd_exe: PathBuf,
     pub acui_exe: PathBuf,
+}
+
+/// Prepares all manifest-bound programs in a new directory outside the selected slot.
+/// Failed preparation leaves its files for inspection; no installed tree is overwritten.
+pub fn prepare_programs(dir: &Path, verified: &Verified, report: Report<'_>) -> Result<LaidOut, String> {
+    fs::create_dir(dir)
+        .map_err(|error| format!("Cannot create fresh program candidate {}: {error}", dir.display()))?;
+    let total = verified.runtime.files.len() + verified.ui.files.len() + verified.tools.files.len() + 4;
+    report.step(Step::Phase("准备候选程序 / Preparing candidate programs", Some(Total::Items(total as u64))))?;
+    let mut done = 0;
+    for (name, staged) in [("runtime", &verified.runtime), ("ui", &verified.ui), ("tools", &verified.tools)] {
+        copy_all(staged, &dir.join(name), &mut done, report)?;
+    }
+    let members = dir.join("MEMBERS.json");
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&members)
+        .map_err(|error| format!("Cannot create {}: {error}", members.display()))?;
+    file.write_all(&verified.members_document).and_then(|()| file.sync_all())
+        .map_err(|error| format!("Cannot write {}: {error}", members.display()))?;
+    drop(file);
+    report.step(Step::Done((done + 1) as u64))?;
+    crate::verify::prepared_programs(dir, verified, report)?;
+    report.line(&format!("候选程序已核验 / Candidate programs verified: {}", dir.display()))?;
+    Ok(LaidOut {
+        ui_dir: dir.join("ui"),
+        tools_dir: dir.join("tools"),
+        actingd_exe: dir.join("runtime").join(crate::runtime::ACTINGD),
+        acui_exe: dir.join("ui").join("acui.exe"),
+    })
 }
 
 /// `<root>\runtime` and `<root>\ui` get every manifest-bound file plus the
@@ -98,7 +127,7 @@ fn copy_named(
                 to.display()
             ));
         }
-        report.line(&format!("已安装 / installed: {}", to.display()))?;
+        report.line(&format!("已复制 / copied: {}", to.display()))?;
         *done += 1;
         report.step(Step::Done(*done))?;
     }
@@ -110,6 +139,53 @@ pub struct Configured {
     pub state_root: PathBuf,
     pub config_path: PathBuf,
     pub settings_path: PathBuf,
+}
+
+/// A first selection has no running installation to drain. Program verification
+/// and the checked private generation still precede its atomic publication.
+pub fn fresh(root: &Path, verified: &Verified, report: Report<'_>) -> Result<(LaidOut, Configured), String> {
+    let writer = crate::generations::Writer::acquire(root)?;
+    let state_root = root.join("state");
+    state_root_usable(&state_root)?;
+    let programs = prepare_programs(&root.join("A"), verified, report)?;
+    let forward = programs.ui_dir.join("acforward.exe");
+    if !forward.is_file() { return Err("The UI release does not contain its stable product entry acforward.exe".into()); }
+    fs::create_dir_all(&state_root).map_err(|error| format!("Cannot create shared state root: {error}"))?;
+    let mut salt = [0u8; 32];
+    getrandom::fill(&mut salt).map_err(|error| format!("OS RNG unavailable: {error}"))?;
+    let document = serde_json::to_value(ActingdConfig {
+        schema_version: CONFIG_SCHEMA_VERSION, state_root: &state_root.to_string_lossy(),
+        bind_host: "127.0.0.1", bind_port: 0, secret_fingerprint_salt: &hex(&salt), instances: Vec::new(),
+    }).map_err(|error| error.to_string())?;
+    let mut plan = writer.prepare(None, InstallSlot::A, &root.join("actingd.config.json"), root, document, false, report)?;
+    let laid_out = stable_entries(root, &forward, &programs.tools_dir, report)?;
+    let config_path = plan.snapshot.config_path()?;
+    let settings_path = platform::console_settings_path()?;
+    write_console_settings(&settings_path, &state_root, &config_path, &laid_out.actingd_exe)?;
+    writer.commit(&mut plan)?;
+    report.line("A 槽及私有配置已选中 / Slot A and its private configuration are selected")?;
+    Ok((laid_out, Configured { state_root, config_path, settings_path }))
+}
+
+/// One implementation is installed under the fixed product filenames. Each
+/// invocation derives its route from that filename and retains one selection.
+pub fn stable_entries(root: &Path, forward: &Path, tools_dir: &Path, report: Report<'_>) -> Result<LaidOut, String> {
+    let bytes = acui_installation::read_bounded(forward, 64 * 1024 * 1024)?;
+    for (component, names) in [
+        ("runtime", &["actingcommand-actingd.exe", "actingctl.exe"][..]),
+        ("tools", &["actinglab.exe", "actingledger.exe", "actingcommand-vision-provider-check.exe", "actingcommand-device-test.exe"][..]),
+        ("ui", &["acui.exe", "acsetup.exe"][..]),
+    ] {
+        let directory = root.join(component);
+        fs::create_dir(&directory).map_err(|error| format!("Cannot create fresh stable entry directory {}: {error}", directory.display()))?;
+        for name in names { crate::generations::write_new(&directory.join(name), &bytes)?; }
+    }
+    report.line("固定产品入口已创建 / Stable product entries created")?;
+    Ok(LaidOut {
+        ui_dir: root.join("ui"), tools_dir: tools_dir.to_path_buf(),
+        actingd_exe: root.join("runtime").join(crate::runtime::ACTINGD),
+        acui_exe: root.join("ui/acui.exe"),
+    })
 }
 
 /// Exactly the fields the wizard sets, in this order; the Runtime's parser
@@ -156,69 +232,6 @@ pub fn state_root_usable(state_root: &Path) -> Result<(), String> {
             Ok(())
         }
     }
-}
-
-/// The state root created, the console's settings written, then — last, so
-/// that its presence means a finished configuration — the Runtime's
-/// configuration with a fresh salt from the OS RNG (never shown, never
-/// logged), never over one already there. `state_root` has passed
-/// `state_root_usable`.
-pub fn configure(
-    root: &Path,
-    state_root: &Path,
-    laid_out: &LaidOut,
-    report: Report<'_>,
-) -> Result<Configured, String> {
-    fs::create_dir_all(state_root).map_err(|error| {
-        format!("无法创建状态根 / cannot create the state root: {}: {error}", state_root.display())
-    })?;
-    report.line(&format!("状态根已就绪 / state root ready: {}", state_root.display()))?;
-
-    let mut salt = [0u8; 32];
-    getrandom::fill(&mut salt)
-        .map_err(|error| format!("系统随机源不可用 / OS RNG unavailable: {error}"))?;
-    let salt_hex = hex(&salt);
-    let state_root_text = state_root.display().to_string();
-    let config = ActingdConfig {
-        schema_version: CONFIG_SCHEMA_VERSION,
-        state_root: &state_root_text,
-        bind_host: "127.0.0.1",
-        bind_port: 0,
-        secret_fingerprint_salt: &salt_hex,
-        instances: Vec::new(),
-    };
-    let mut json = serde_json::to_string_pretty(&config)
-        .map_err(|error| format!("配置序列化失败 / config serialization failed: {error}"))?;
-    json.push('\n');
-    let config_path = root.join("actingd.config.json");
-
-    let settings_path = platform::console_settings_path()?;
-    write_console_settings(&settings_path, state_root, &config_path, &laid_out.actingd_exe)?;
-    report.line(&format!(
-        "已写监控台设置 / console settings written: {}",
-        settings_path.display()
-    ))?;
-
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&config_path)
-        .map_err(|error| format!("无法新建（不覆盖已有的）/ cannot create, never over an existing one: {}: {error}", config_path.display()))?;
-    // A file written halfway would read as a finished configuration: it goes.
-    if let Err(error) = std::io::Write::write_all(&mut file, json.as_bytes()).and_then(|()| file.sync_all()) {
-        drop(file);
-        let reason = format!("写入失败 / write failed: {}: {error}", config_path.display());
-        return Err(crate::fetch::discard(&config_path, reason));
-    }
-    report.line(&format!(
-        "已写 Runtime 配置 / config written: {}（salt 已生成，不记录 / salt generated, not recorded）",
-        config_path.display()
-    ))?;
-    Ok(Configured {
-        state_root: state_root.to_path_buf(),
-        config_path,
-        settings_path,
-    })
 }
 
 /// The console's own file in the console's own format

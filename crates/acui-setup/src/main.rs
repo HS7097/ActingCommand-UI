@@ -24,6 +24,7 @@
 mod adb_server;
 mod bundle;
 mod fetch;
+mod generations;
 mod install;
 mod instance_step;
 mod log;
@@ -174,10 +175,17 @@ fn lock(state: &Shared) -> MutexGuard<'_, State> {
 }
 
 fn main() -> Result<()> {
+    if std::env::args_os().nth(1).is_some_and(|argument| argument == "--commit-config") {
+        return generations::commit_from_stdin().map_err(anyhow::Error::msg);
+    }
     std::panic::set_hook(Box::new(|info| {
         *LAST_PANIC.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(info.to_string());
     }));
-    let root = platform::default_install_root().map_err(anyhow::Error::msg)?;
+    let installation = acui_installation::Snapshot::inherited().map_err(anyhow::Error::msg)?;
+    let root = match &installation {
+        Some(snapshot) => snapshot.root.clone(),
+        None => platform::default_install_root().map_err(anyhow::Error::msg)?,
+    };
     let download = platform::default_download_dir();
     let state: Shared = Arc::new(Mutex::new(State::default()));
     let window = SetupWindow::new()?;
@@ -988,15 +996,8 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
                     }
                     // A fresh install is configured at once: the state root
                     // under the root, the salt, the console's settings.
-                    false => install::lay_out(&root, &verified, &mut report).and_then(|laid_out| {
-                        let state_root = root.join("state");
-                        install::state_root_usable(&state_root)
-                            .and_then(|()| install::configure(&root, &state_root, &laid_out, &mut report))
-                            .map(|configured| (laid_out, None, members, Some(configured)))
-                            .map_err(|reason| {
-                                format!("{reason}\n程序已铺开但没有配置；监控台设置可能已改写 / Laid out but not configured; the console settings may have been rewritten")
-                            })
-                    }),
+                    false => install::fresh(&root, &verified, &mut report)
+                        .map(|(laid_out, configured)| (laid_out, None, members, Some(configured))),
                 }?;
                 // What the next upgrade's downgrade check reads; failing to
                 // keep it is said, and the installation stands.

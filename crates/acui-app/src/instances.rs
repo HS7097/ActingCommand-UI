@@ -4,21 +4,21 @@
 //!
 //! The file is plain JSON here. Only `instances` changes, and in an entry only
 //! the keys the form manages; the Runtime's config struct is not mirrored. A
-//! save re-reads the file, writes a candidate beside it (relative paths inside
-//! resolve against that directory), runs `<actingd_exe> check-config` on it off
-//! the event loop, and renames it over the file only on a parsed `ok` with a
-//! successful exit. Discovery asks the running Runtime which MuMu instances its
+//! save sends the edited document and this process's pinned selection to
+//! acsetup, which validates and atomically selects a private successor. Discovery
+//! asks the running Runtime which MuMu instances its
 //! provider reports; picking an unbound one starts an entry bound by its index.
 
 use std::cell::RefCell;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use acui_rows::{code, InstanceId};
+use acui_installation::{InstallSelection, Snapshot, MAX_CONFIG_BYTES};
 use acui_source::{discover_instances, probe_runtime, DiscoveredInstance};
 use serde_json::{json, Value};
 use slint::{ComponentHandle, SharedString};
@@ -29,8 +29,7 @@ use crate::{
     models, shared, App, AppWindow, ConfigStrings, ConfigWindow, InstanceRow, PortMap, Scale,
 };
 
-const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
-const CHECK_SCHEMA: &str = "actingcommand.actingd.check-config.v1";
+const COMMIT_TIMEOUT: Duration = Duration::from_secs(240);
 
 /// Windows `CREATE_NO_WINDOW`: no console window flashes up per save.
 #[cfg(windows)]
@@ -363,15 +362,18 @@ fn save(editor: &Editor, config: &ConfigWindow) {
     let Some(editing) = editor.editing.borrow().clone() else {
         return;
     };
+    let Some(snapshot) = editor.app.installation.clone() else {
+        set_outcome(config, true, "配置编辑需要从安装的稳定入口打开监控台 / Open the console through its installed stable entry to edit configuration");
+        return;
+    };
     // The very file and executable Start uses, as this run resolved them.
     let launcher = &editor.app.launcher;
-    let (form, path, exe) = match (
+    let (form, path) = match (
         read_form(labels, config),
         configured(labels, "actingd_config", &launcher.actingd_config),
-        configured(labels, "actingd_exe", &launcher.actingd_exe),
     ) {
-        (Ok(form), Ok(path), Ok(exe)) => (form, path.to_path_buf(), exe.to_path_buf()),
-        (Err(text), _, _) | (_, Err(text), _) | (_, _, Err(text)) => {
+        (Ok(form), Ok(path)) => (form, path.to_path_buf()),
+        (Err(text), _) | (_, Err(text)) => {
             set_outcome(config, true, format!("{text}{}", labels.config_unchanged));
             return;
         }
@@ -380,15 +382,15 @@ fn save(editor: &Editor, config: &ConfigWindow) {
     set_outcome(config, false, labels.checking);
     let (root, weak) = (launcher.state_root.clone(), config.as_weak());
     let saved = spawn_worker("acui-save", move || {
-        let (failed, text) = match commit(labels, &path, &exe, &editing, &form) {
-            Err(text) => (true, format!("{text}{}", labels.config_unchanged)),
+        let (failed, text) = match commit(labels, &path, &snapshot, &editing, &form) {
+            Err(text) => (true, text),
             // One probe says whether a Runtime runs now, to point at the
             // launcher's own buttons; nothing here restarts one.
-            Ok(()) => {
+            Ok(selection) => {
                 let probe = probe_runtime(&root);
                 let next = if probe.is_ok() { labels.saved_running } else { labels.saved_stopped };
-                let saved = fill(labels.saved, &[&path.display().to_string()]);
-                (false, format!("{saved} · {}", fill(next, &[&status_text(labels, &probe)])))
+                let saved = fill(labels.saved, &[&snapshot.root.join(&selection.config.path).display().to_string()]);
+                (false, format!("{saved} · {} · 请重新打开监控台以使用新配置 / Reopen the console to use the new configuration", fill(next, &[&status_text(labels, &probe)])))
             }
         };
         let _ = weak.upgrade_in_event_loop(move |config| {
@@ -445,15 +447,16 @@ fn read_form(labels: &Labels, config: &ConfigWindow) -> Result<Form, String> {
     Ok(Form { kind, fields })
 }
 
-/// Applies the form to the file as it is now, not as it was listed, and puts
-/// the candidate in place only when check-config accepts it.
+/// Applies the form to this process's immutable generation. acsetup rejects
+/// the proposal if a successor has already become active.
 fn commit(
     labels: &Labels,
     path: &Path,
-    exe: &Path,
+    snapshot: &Snapshot,
     editing: &Editing,
     form: &Form,
-) -> Result<(), String> {
+) -> Result<InstallSelection, String> {
+    if path != snapshot.config_path()? { return Err("Editor configuration differs from the process's installation selection".into()); }
     let (mut document, mut entries) = load(labels, path)?;
     let id = editing.instance_id.as_str();
     let index = match entries.iter().position(|entry| id_of(entry) == Some(id)) {
@@ -470,27 +473,7 @@ fn commit(
     };
     apply(&mut entries[index], form);
     document["instances"] = Value::Array(entries);
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".candidate-{}", std::process::id()));
-    let candidate = path.with_file_name(name);
-    let shown = candidate.display().to_string();
-    std::fs::write(&candidate, format!("{document:#}\n"))
-        .map_err(|error| fill(labels.candidate_failed, &[&shown, &error.to_string()]))
-        .and_then(|()| check(labels, exe, &candidate))
-        .and_then(|()| {
-            std::fs::rename(&candidate, path).map_err(|error| {
-                fill(labels.replace_failed, &[&path.display().to_string(), &error.to_string()])
-            })
-        })
-        .map_err(|mut text| {
-            match std::fs::remove_file(&candidate) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    text.push_str(&fill(labels.candidate_left, &[&shown, &error.to_string()]))
-                }
-                _ => {}
-            }
-            text
-        })
+    commit_via_setup(snapshot, &document)
 }
 
 /// Writes the form's keys into one entry and leaves every other key as it
@@ -515,78 +498,59 @@ fn apply(entry: &mut Value, form: &Form) {
     }
 }
 
-/// `<actingd_exe> check-config --config <candidate>`, bounded. Stdout is read
-/// whole on its own thread, so a long report can never fill the pipe and stall
-/// the child until the timeout.
-fn check(labels: &Labels, exe: &Path, candidate: &Path) -> Result<(), String> {
-    let mut command = Command::new(exe);
-    command.arg("check-config").arg("--config").arg(candidate);
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+/// The bounded acsetup request. A timeout or lost response leaves its outcome
+/// unknown: the client does not terminate or submit the transaction again.
+fn commit_via_setup(snapshot: &Snapshot, document: &Value) -> Result<InstallSelection, String> {
+    let bytes = serde_json::to_vec(document).map_err(|error| error.to_string())?;
+    if bytes.len() > MAX_CONFIG_BYTES { return Err("Configuration exceeds 1 MiB".into()); }
+    let exe = snapshot.slot_root().join("ui").join("acsetup.exe");
+    let mut command = Command::new(&exe);
+    snapshot.apply_to(&mut command)?;
+    command.arg("--commit-config").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let mut child = command.spawn().map_err(|error| {
-        fill(labels.spawn_failed, &[&exe.display().to_string(), &error.to_string()])
-    })?;
-    let reader = child.stdout.take().map(|mut stdout| {
-        std::thread::Builder::new().spawn(move || {
-            let mut text = String::new();
-            stdout.read_to_string(&mut text).map(|_| text)
-        })
-    });
-    let reader = reader.transpose().map_err(|error| {
-        fill(labels.reader_failed, &[&error.to_string()]) + &stop(labels, &mut child)
-    })?;
-    let deadline = Instant::now() + CHECK_TIMEOUT;
+    let mut child = command.spawn().map_err(|error| format!("Cannot run acsetup: {error}"))?;
+    let mut stdin = child.stdin.take().ok_or("acsetup input pipe is missing; commit outcome unknown")?;
+    let input = std::thread::Builder::new().name("acui-config-input".into()).spawn(move || stdin.write_all(&bytes))
+        .map_err(|error| format!("Cannot send configuration; commit outcome unknown: {error}"))?;
+    let stdout = read_setup_output(child.stdout.take())?;
+    let stderr = read_setup_output(child.stderr.take())?;
+    let deadline = Instant::now() + COMMIT_TIMEOUT;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
-            waited => {
-                let failure = match waited {
-                    Err(error) => fill(labels.child_status_failed, &[&error.to_string()]),
-                    _ => fill(labels.check_timeout, &[&CHECK_TIMEOUT.as_secs().to_string()]),
-                };
-                return Err(failure + &stop(labels, &mut child));
-            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            Ok(None) => return Err("acsetup has not finished within 240 seconds; commit outcome unknown. Reopen the console to inspect the active configuration before editing again".into()),
+            Err(error) => return Err(format!("acsetup status unavailable; commit outcome unknown: {error}")),
         }
     };
-    let exit = status.code().map_or_else(|| labels.none.to_string(), |code| code.to_string());
-    // stdout is piped above, so a missing reader is only ever a panicked one.
-    let text = match reader.map(std::thread::JoinHandle::join) {
-        Some(Ok(Ok(text))) => text,
-        Some(Ok(Err(error))) => {
-            return Err(fill(labels.check_read_failed, &[&exit, &error.to_string()]))
-        }
-        _ => return Err(fill(labels.check_reader_lost, &[&exit])),
-    };
-    let report: Value = serde_json::from_str(text.trim()).unwrap_or_default();
-    let unparsed = || fill(labels.check_unparsed, &[&exit, text.trim()]);
-    let error = &report["error"];
-    match (report["status"].as_str(), error["code"].as_str(), error["stage"].as_str()) {
-        _ if report["schema_version"] != CHECK_SCHEMA => Err(unparsed()),
-        (Some("ok"), _, _) if status.success() => Ok(()),
-        (Some("ok"), _, _) => Err(fill(labels.check_ok_nonzero, &[&exit])),
-        (Some("failed"), Some(code), Some(stage)) => Err(fill(labels.check_failed, &[code, stage])),
-        _ => Err(unparsed()),
+    let stdout = stdout.join().map_err(|_| "acsetup response reader failed; commit outcome unknown")??;
+    let stderr = stderr.join().map_err(|_| "acsetup error reader failed; commit outcome unknown")??;
+    if !status.success() {
+        return Err(format!("acsetup {status}: {}", String::from_utf8_lossy(&stderr).trim()));
     }
+    input.join().map_err(|_| "Configuration input writer failed; commit outcome unknown")?
+        .map_err(|error| format!("Configuration input failed; commit outcome unknown: {error}"))?;
+    let committed = Snapshot::from_bytes(&snapshot.root, stdout)
+        .map_err(|error| format!("acsetup response could not be verified; commit outcome unknown: {error}"))?;
+    if committed.selection.slot != snapshot.selection.slot || committed.selection.generation <= snapshot.selection.generation {
+        return Err("acsetup did not return a successor of this configuration; commit outcome unknown".into());
+    }
+    Ok(committed.selection)
 }
 
-/// Kills and reaps the child. One the kill fails on is not waited on: it may
-/// never exit. A wait that fails after a kill is said as that, not as a kill
-/// that failed.
-fn stop(labels: &Labels, child: &mut Child) -> String {
-    match child.kill() {
-        Err(error) => fill(labels.check_unstoppable, &[&error.to_string()]),
-        Ok(()) => match child.wait() {
-            Ok(_) => labels.check_stopped.to_string(),
-            Err(error) => fill(labels.check_unreaped, &[&error.to_string()]),
-        },
-    }
+fn read_setup_output(pipe: Option<impl Read + Send + 'static>) -> Result<std::thread::JoinHandle<Result<Vec<u8>, String>>, String> {
+    let pipe = pipe.ok_or("acsetup output pipe is missing; commit outcome unknown")?;
+    std::thread::Builder::new().name("acui-config-output".into()).spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.take(65537).read_to_end(&mut bytes).map_err(|error| format!("acsetup output failed: {error}"))?;
+        if bytes.len() > 65536 { return Err("acsetup output exceeded 64 KiB; commit outcome unknown".into()); }
+        Ok(bytes)
+    }).map_err(|error| format!("Cannot read acsetup output; commit outcome unknown: {error}"))
 }
-
 /// The file as JSON, and its `instances` taken out — each an object, the one
 /// shape the form edits in place. The key stays where it was, holding null.
 fn load(labels: &Labels, path: &Path) -> Result<(Value, Vec<Value>), String> {
