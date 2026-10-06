@@ -62,7 +62,6 @@ impl Writer {
         baseline: Option<Snapshot>,
         slot: InstallSlot,
         source_config: &Path,
-        previous_programs: &Path,
         mut document: Value,
         qualify: bool,
         report: Report<'_>,
@@ -75,6 +74,14 @@ impl Writer {
             .parent()
             .ok_or("Configuration has no parent")?;
         rebase_config(&mut document, source_root)?;
+        // The v0.3 provider manifest is retired (#360): `vision_migration` turns it
+        // into model folders and a `vision` section before a generation is written.
+        if document
+            .get("vision_provider_manifest")
+            .is_some_and(|value| !value.is_null())
+        {
+            return Err("配置仍引用 vision_provider_manifest，须先迁移到视觉模型文件夹 / The configuration still names a vision_provider_manifest; it must be migrated to the vision model folders first".into());
+        }
         let state_root = Path::new(
             document["state_root"]
                 .as_str()
@@ -110,14 +117,6 @@ impl Writer {
             )
         })?;
         let programs = self.root.join(slot.as_str());
-        let provider = prepare_provider(
-            &self.root,
-            &relative,
-            &mut document,
-            previous_programs,
-            &programs,
-            report,
-        )?;
         let config_path = directory.join("actingd.config.json");
         if qualify {
             crate::maintenance::validate(&document, &directory, report)?;
@@ -143,7 +142,8 @@ impl Writer {
                 path: format!("{relative}/actingd.config.json"),
                 sha256: sha256(&config_bytes),
             },
-            provider,
+            // No generation carries a provider manifest any more (#360 §10).
+            provider: None,
         };
         let mut bytes = serde_json::to_vec_pretty(&selection).map_err(|error| error.to_string())?;
         bytes.push(b'\n');
@@ -298,13 +298,11 @@ pub fn commit_from_stdin() -> Result<(), String> {
             .map_err(|error| format!("Configuration transaction log failed: {error}"))
     };
     let config = baseline.config_path()?;
-    let programs = baseline.slot_root();
     let slot = baseline.selection.slot;
     let mut plan = writer.prepare(
         Some(baseline),
         slot,
         &config,
-        &programs,
         document,
         true,
         &mut report,
@@ -410,211 +408,5 @@ pub fn rebase_config(document: &mut Value, source_root: &Path) -> Result<(), Str
     for key in ["tasks", "pools", "activity", "timeline"] {
         absolute_field(document, &format!("/policy/catalog/{key}"), source_root)?;
     }
-    Ok(())
-}
-
-/// A provider runtime library stays outside both program slots. One a manual
-/// copy left inside a slot is re-pointed to the identical file at the same place
-/// under the installation root; without one, the plan stops and says what to move.
-fn shared_library(
-    value: &mut Value,
-    source_root: &Path,
-    root: &Path,
-    report: Report<'_>,
-) -> Result<(), String> {
-    let text = value
-        .as_str()
-        .ok_or("Provider runtime library path is not a string")?;
-    let path = Path::new(text);
-    let path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        source_root.join(path)
-    };
-    let actual = fs::canonicalize(&path).map_err(|error| {
-        format!(
-            "Provider runtime library is unavailable: {}: {error}",
-            path.display()
-        )
-    })?;
-    if !actual.is_file() {
-        return Err(format!(
-            "Provider runtime library is not a file: {}",
-            path.display()
-        ));
-    }
-    let install = fs::canonicalize(root).map_err(|error| error.to_string())?;
-    let inside = [InstallSlot::A, InstallSlot::B]
-        .into_iter()
-        .find_map(|slot| actual.strip_prefix(install.join(slot.as_str())).ok());
-    let written = match inside {
-        None => plain(&path),
-        Some(relative) => {
-            let shared = install.join(relative);
-            let hash = |file: &Path| {
-                crate::verify::sha256_file(file)
-                    .map_err(|error| format!("Cannot hash {}: {error}", file.display()))
-            };
-            if !shared.is_file() || hash(shared.as_path())? != hash(actual.as_path())? {
-                return Err(format!(
-                    "ONNX Runtime 位于程序槽内 / ONNX Runtime lies inside a program slot: {}; 请复制到 / copy it to {} and run again",
-                    plain(&actual).display(),
-                    plain(&shared).display()
-                ));
-            }
-            report.line(&format!(
-                "程序槽内的 ONNX Runtime 改指安装根下的同一文件 / ONNX Runtime inside a program slot re-pointed to the identical file under the installation root: {}",
-                plain(&shared).display()
-            ))?;
-            plain(&shared)
-        }
-    };
-    *value = Value::from(written.to_string_lossy().into_owned());
-    Ok(())
-}
-
-fn prepare_provider(
-    root: &Path,
-    relative: &str,
-    document: &mut Value,
-    previous: &Path,
-    programs: &Path,
-    report: Report<'_>,
-) -> Result<Option<InstallFileReference>, String> {
-    let Some(value) = document
-        .get("vision_provider_manifest")
-        .filter(|value| !value.is_null())
-    else {
-        return Ok(None);
-    };
-    let path = PathBuf::from(
-        value
-            .as_str()
-            .ok_or("vision_provider_manifest is not a path")?,
-    );
-    let source_root = path.parent().ok_or("Provider manifest has no parent")?;
-    let mut provider: Value = serde_json::from_slice(&read_bounded(&path, MAX_MATERIAL_BYTES)?)
-        .map_err(|error| format!("Provider manifest is unreadable: {error}"))?;
-    for name in ["fastdeploy_ppocr", "onnxruntime"] {
-        let Some(artifacts) = provider.get_mut(name).filter(|value| !value.is_null()) else {
-            continue;
-        };
-        for key in [
-            "detector_model_path",
-            "recognizer_model_path",
-            "dictionary_path",
-            "classifier_model_path",
-            "model_path",
-            "labels_path",
-        ] {
-            absolute_field(artifacts, &format!("/{key}"), source_root)?;
-            if let Some(path) = artifacts.get(key).and_then(Value::as_str) {
-                let path = Path::new(path);
-                let actual = fs::canonicalize(path).map_err(|error| {
-                    format!(
-                        "Existing provider model is unavailable: {}: {error}",
-                        path.display()
-                    )
-                })?;
-                let install = fs::canonicalize(root).map_err(|error| error.to_string())?;
-                if !actual.is_file()
-                    || actual.starts_with(install.join("A"))
-                    || actual.starts_with(install.join("B"))
-                {
-                    return Err(format!(
-                        "Shared provider models must be outside program slots: {}",
-                        path.display()
-                    ));
-                }
-            }
-        }
-        // Only the OCR adapter, built with the Runtime and bound to its interface,
-        // follows the selected program slot (Workflow #359).
-        if let Some(value) = artifacts
-            .get_mut("provider_library_path")
-            .filter(|value| !value.is_null())
-        {
-            rebind_library(value, source_root, previous, programs)?;
-            let path = PathBuf::from(
-                value
-                    .as_str()
-                    .ok_or("Provider library path is not a string")?,
-            );
-            if artifacts
-                .get("provider_library_sha256")
-                .is_some_and(|value| !value.is_null())
-            {
-                artifacts["provider_library_sha256"] = Value::from(
-                    crate::verify::sha256_file(&path)
-                        .map_err(|error| format!("Cannot hash provider library: {error}"))?,
-                );
-            }
-        }
-        // ONNX Runtime is a private deployment input under the installation root:
-        // it stays where it is and never enters a slot.
-        if let Some(value) = artifacts
-            .get_mut("runtime_library_path")
-            .filter(|value| !value.is_null())
-        {
-            shared_library(value, source_root, root, report)?;
-        }
-        if let Some(paths) = artifacts
-            .get_mut("runtime_library_paths")
-            .and_then(Value::as_array_mut)
-        {
-            for path in paths {
-                shared_library(path, source_root, root, report)?;
-            }
-        }
-    }
-    let mut bytes = serde_json::to_vec_pretty(&provider).map_err(|error| error.to_string())?;
-    bytes.push(b'\n');
-    let relative = format!("{relative}/vision-provider.json");
-    let destination = root.join(&relative);
-    write_new(&destination, &bytes)?;
-    document["vision_provider_manifest"] =
-        Value::from(plain(&destination).to_string_lossy().into_owned());
-    Ok(Some(InstallFileReference {
-        path: relative,
-        sha256: sha256(&bytes),
-    }))
-}
-
-fn rebind_library(
-    value: &mut Value,
-    source_root: &Path,
-    previous: &Path,
-    programs: &Path,
-) -> Result<(), String> {
-    let text = value
-        .as_str()
-        .ok_or("Provider library path is not a string")?;
-    let path = Path::new(text);
-    let path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        source_root.join(path)
-    };
-    let path = fs::canonicalize(&path).map_err(|error| {
-        format!(
-            "Provider library is unavailable: {}: {error}",
-            path.display()
-        )
-    })?;
-    let previous = fs::canonicalize(previous).map_err(|error| error.to_string())?;
-    let relative = path.strip_prefix(&previous).map_err(|_| {
-        format!(
-            "Provider library cannot be rebound from outside its program root: {}",
-            path.display()
-        )
-    })?;
-    let target = programs.join(relative);
-    if !target.is_file() {
-        return Err(format!(
-            "Target slot provider library is missing: {}",
-            target.display()
-        ));
-    }
-    *value = Value::from(plain(&target).to_string_lossy().into_owned());
     Ok(())
 }

@@ -176,7 +176,6 @@ pub fn fresh(
         None,
         InstallSlot::A,
         &root.join("actingd.config.json"),
-        root,
         document,
         false,
         report,

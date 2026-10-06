@@ -12,7 +12,7 @@ use crate::bundle::Bundle;
 use crate::generations::{Plan, Writer};
 use crate::install::LaidOut;
 use crate::verify::{Report, Verified, MANIFEST, PLATFORM_TOOLS};
-use crate::{lifecycle, maintenance, migration, root_tools, slots};
+use crate::{lifecycle, maintenance, migration, root_tools, slots, vision_migration};
 
 #[derive(Clone)]
 pub struct Installed {
@@ -190,15 +190,20 @@ pub fn upgrade(
         resolve,
         report,
     )?;
+    let vision = vision_migration::plan(root, &planned.document)?;
     slots::materialize(&writer, target, verified, report)?;
     maintenance::place(&planned.prepared, root, report)?;
+    let mut document = planned.document;
+    if let Some(vision) = &vision {
+        vision.apply(report)?;
+        vision.rewrite(&mut document)?;
+    }
     let tools = root_tools::plan(root, verified)?;
     let mut plan = writer.prepare(
         Some(baseline.clone()),
         target,
         &source_config,
-        &previous,
-        planned.document,
+        document,
         planned.qualify,
         report,
     )?;
@@ -381,7 +386,6 @@ pub fn rollback(root: &Path, report: Report<'_>) -> Result<Upgraded, String> {
         Some(baseline.clone()),
         target,
         &config,
-        &programs,
         document,
         true,
         report,

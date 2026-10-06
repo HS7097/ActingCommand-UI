@@ -38,6 +38,7 @@ mod runtime;
 mod slots;
 mod upgrade;
 mod verify;
+mod vision_migration;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;

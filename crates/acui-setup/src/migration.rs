@@ -12,7 +12,7 @@ use acui_installation::InstallSlot;
 use crate::bundle::Bundle;
 use crate::generations::Writer;
 use crate::verify::{Report, Verified};
-use crate::{generations, install, lifecycle, maintenance, root_tools, slots, upgrade};
+use crate::{generations, install, lifecycle, maintenance, root_tools, slots, upgrade, vision_migration};
 
 pub fn upgrade(
     writer: &Writer,
@@ -41,15 +41,20 @@ pub fn upgrade(
         resolve,
         report,
     )?;
+    let vision = vision_migration::plan(root, &planned.document)?;
     let programs = slots::materialize(writer, InstallSlot::A, verified, report)?;
     maintenance::place(&planned.prepared, root, report)?;
+    let mut document = planned.document;
+    if let Some(vision) = &vision {
+        vision.apply(report)?;
+        vision.rewrite(&mut document)?;
+    }
     let tools = root_tools::plan(root, verified)?;
     let mut plan = writer.prepare(
         None,
         InstallSlot::A,
         &config,
-        root,
-        planned.document,
+        document,
         planned.qualify,
         report,
     )?;

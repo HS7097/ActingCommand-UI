@@ -20,7 +20,7 @@ use crate::maintenance::{self, Association, Conflict, Side};
 use crate::payload::{self, Payload};
 use crate::upgrade::{self, Installed};
 use crate::verify::{self, Reporter, Step};
-use crate::{bundle, install, lifecycle, platform, root_tools, runtime};
+use crate::{bundle, install, lifecycle, platform, root_tools, runtime, vision_migration};
 use crate::{lock, write_log, Shared, State};
 
 pub const DONE: i32 = 0;
@@ -829,6 +829,10 @@ fn plan_logged(
             report,
         )?;
         maintenance::list(&planned.conflicts, report)?;
+        match vision_migration::plan(&canonical, &planned.document)? {
+            Some(vision) => vision.describe(report)?,
+            None => report.line("视觉：配置未引用 v0.3 清单，不迁移 / Vision: the configuration names no v0.3 manifest; nothing to migrate")?,
+        }
         if !planned.conflicts.is_empty() {
             match args.conflicts {
                 Some(Side::New) => report.line(

@@ -1046,7 +1046,7 @@ impl Transaction {
             let writer = crate::generations::Writer::acquire(&snapshot.root)?;
             let mut plan = writer.prepare(
                 Some(snapshot.clone()), snapshot.selection.slot, &self.config,
-                &snapshot.slot_root(), self.document.clone(), qualify, report,
+                self.document.clone(), qualify, report,
             )?;
             writer.commit(&mut plan)?;
             self.committed = Some(plan.snapshot.config_bytes.clone());
