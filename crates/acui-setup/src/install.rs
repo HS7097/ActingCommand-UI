@@ -303,7 +303,9 @@ pub fn replace_manager_from_entry() -> Result<(), String> {
     if !root.is_absolute() || !download.is_absolute() { return Err("Management replacement requires absolute paths".into()); }
     let root = root.canonicalize().map_err(|error| error.to_string())?;
     let exe = std::env::current_exe().and_then(fs::canonicalize).map_err(|error| error.to_string())?;
-    if exe.starts_with(&root) { return Err("Management replacement must run from outside this installation after its fixed manager exits".into()); }
+    // Any copy of the release's acsetup but the fixed manager itself may replace
+    // it, the new slot's `ui\acsetup.exe` included (review R2-1).
+    if fs::canonicalize(root.join("ui/acsetup.exe")).ok().as_deref() == Some(exe.as_path()) { return Err("Management replacement must run from the release's acsetup or a slot's ui\\acsetup.exe, not from the fixed manager it replaces".into()); }
     let writer = crate::generations::Writer::acquire(&root)?;
     let previous = acui_installation::manager_program(writer.root())?;
     let stamp = crate::log::unix_ms();
@@ -323,9 +325,16 @@ pub fn replace_manager_from_entry() -> Result<(), String> {
 
 /// After an A/B upgrade the fixed manager becomes this release's acsetup
 /// (review R-F2): an older one cannot switch to this layout's slots. Nothing
-/// happens when it already is; the program running this upgrade cannot replace
-/// itself, and a running manager blocks (both said loudly).
-pub fn refresh_manager(root: &Path, verified: &Verified, report: Report<'_>) -> Result<(), String> {
+/// happens when it already is. When the fixed manager is the program running
+/// this upgrade it cannot replace itself: the upgrade stands and the returned
+/// notice gives the exact command to run (review R2-1). Any other running
+/// manager, or a failed replacement, is an error.
+pub fn refresh_manager(
+    root: &Path,
+    verified: &Verified,
+    slot_root: &Path,
+    report: Report<'_>,
+) -> Result<Option<String>, String> {
     let current = acui_installation::manager_program(root)?;
     let candidate = verified.ui.dir.join("acsetup.exe");
     let hash = |path: &Path| {
@@ -333,15 +342,22 @@ pub fn refresh_manager(root: &Path, verified: &Verified, report: Report<'_>) -> 
             .map_err(|error| format!("Cannot hash {}: {error}", path.display()))
     };
     if hash(current.as_path())? == hash(candidate.as_path())? {
-        return report.line("固定管理程序已是本发布件的 acsetup / The fixed manager is already this release's acsetup");
+        report.line("固定管理程序已是本发布件的 acsetup / The fixed manager is already this release's acsetup")?;
+        return Ok(None);
     }
     let running = std::env::current_exe()
         .and_then(fs::canonicalize)
         .map_err(|error| error.to_string())?;
     if fs::canonicalize(&current).map_err(|error| error.to_string())? == running {
-        return Err("固定管理程序正是本次运行的程序，不能替换自己；之后请从发布件运行 acsetup --replace-manager <安装根> <发布件文件夹> / The fixed manager is the program running this upgrade and cannot replace itself; afterwards run acsetup --replace-manager <root> <release folder> from the release".into());
+        let plain = crate::generations::plain;
+        return Ok(Some(format!(
+            "固定管理器仍是旧版，未替换 / fixed manager not replaced (running): run \"{}\" --replace-manager \"{}\" \"{}\"",
+            plain(&slot_root.join("ui").join("acsetup.exe")).display(),
+            plain(root).display(),
+            plain(&verified.download).display()
+        )));
     }
-    replace_manager(root, verified, report).map(|_| ())
+    replace_manager(root, verified, report).map(|_| None)
 }
 
 /// The fixed manager replaced by `verified`'s acsetup. The previous program and

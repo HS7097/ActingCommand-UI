@@ -150,6 +150,9 @@ pub struct Upgraded {
     pub previous: PathBuf,
     pub restarted: Option<PathBuf>,
     pub generation: u64,
+    /// What the person must still do although the upgrade stands: the fixed
+    /// manager could not be replaced because it runs this upgrade (review R2-1).
+    pub notice: Option<String>,
 }
 
 pub fn upgrade(
@@ -223,7 +226,7 @@ pub fn upgrade(
         &runtime_sha,
         report,
     )?;
-    let upgraded = complete(
+    let mut upgraded = complete(
         &writer,
         &mut plan,
         closed,
@@ -233,9 +236,21 @@ pub fn upgrade(
         report,
     )?;
     // An older fixed manager cannot switch to this layout's slots (review R-F2).
-    crate::install::refresh_manager(root, verified, report).map_err(|error| {
+    // The fixed manager running this upgrade stays, and the upgrade stands with
+    // a notice (review R2-1); any other failure is an error.
+    let notice = crate::install::refresh_manager(
+        root,
+        verified,
+        &root.join(target.as_str()),
+        report,
+    )
+    .map_err(|error| {
         format!("升级已提交并完成，但固定管理程序未替换 / The upgrade is committed and complete, but the fixed manager was not replaced: {error}")
     })?;
+    if let Some(notice) = &notice {
+        report.warn(notice)?;
+    }
+    upgraded.notice = notice;
     Ok(upgraded)
 }
 
@@ -374,6 +389,7 @@ pub fn outcome(snapshot: &Snapshot, previous: PathBuf, restarted: Option<PathBuf
         previous,
         restarted,
         generation: snapshot.selection.generation,
+        notice: None,
     }
 }
 

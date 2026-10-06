@@ -96,6 +96,8 @@ pub enum Total {
 }
 
 pub struct Verified {
+    /// The release folder verified: `--replace-manager` reads it again.
+    pub download: PathBuf,
     pub staging: PathBuf,
     /// The two commits `MEMBERS.json` names: runtime, then ui.
     pub members: (String, String),
@@ -251,6 +253,7 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
     report.step(Step::Done(3))?;
     report.line("校验通过 / verified")?;
     Ok(Verified {
+        download: download.to_path_buf(),
         staging: staging.to_path_buf(),
         members: (members.runtime_sha, members.ui_sha),
         members_document,

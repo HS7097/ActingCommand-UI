@@ -1847,6 +1847,9 @@ fn summary(state: &Shared) -> String {
         ));
     }
     if let (Some(installed), Some(upgraded)) = (&state.installed, &state.upgraded) {
+        if let Some(notice) = &upgraded.notice {
+            lines.push(format!("！！ 注意 / ATTENTION: {notice}"));
+        }
         lines.push(format!(
             "已升级 / Upgraded from runtime {} · ui {}",
             short(&installed.runtime_sha),
