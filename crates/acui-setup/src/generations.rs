@@ -74,13 +74,26 @@ impl Writer {
             .parent()
             .ok_or("Configuration has no parent")?;
         rebase_config(&mut document, source_root)?;
-        // The v0.3 provider manifest is retired (#360): `vision_migration` turns it
-        // into model folders and a `vision` section before a generation is written.
-        if document
+        // A generation is written in the shape its slot's Runtime reads (#360). A
+        // later slot reads a `vision` section: the v0.3 provider manifest is
+        // retired there, and `vision_migration` converts it first. A v0.11.1 slot
+        // (still selected after a switch back) reads the manifest and no `vision`;
+        // its generation keeps a provider reference as v0.11.1 wrote it (review
+        // V2-2).
+        let predates_vision =
+            crate::verify::slot_predates_vision(&self.root.join(slot.as_str()))?;
+        let names_manifest = document
             .get("vision_provider_manifest")
-            .is_some_and(|value| !value.is_null())
-        {
+            .is_some_and(|value| !value.is_null());
+        if names_manifest && !predates_vision {
             return Err("配置仍引用 vision_provider_manifest，须先迁移到视觉模型文件夹 / The configuration still names a vision_provider_manifest; it must be migrated to the vision model folders first".into());
+        }
+        if predates_vision && document.get("vision").is_some_and(|value| !value.is_null()) {
+            return Err(format!(
+                "槽 {} 的 Runtime 早于视觉模型文件夹，读不了 vision 段 / Slot {}'s Runtime predates the vision model folders and cannot read a vision section",
+                slot.as_str(),
+                slot.as_str()
+            ));
         }
         let state_root = Path::new(
             document["state_root"]
@@ -117,6 +130,11 @@ impl Writer {
             )
         })?;
         let programs = self.root.join(slot.as_str());
+        let provider = if names_manifest {
+            carry_provider(&self.root, &relative, &mut document, &programs)?
+        } else {
+            None
+        };
         let config_path = directory.join("actingd.config.json");
         if qualify {
             crate::maintenance::validate(&document, &directory, report)?;
@@ -142,8 +160,8 @@ impl Writer {
                 path: format!("{relative}/actingd.config.json"),
                 sha256: sha256(&config_bytes),
             },
-            // No generation carries a provider manifest any more (#360 §10).
-            provider: None,
+            // Only a v0.11.1 slot's generation carries a provider manifest (#360 §10).
+            provider,
         };
         let mut bytes = serde_json::to_vec_pretty(&selection).map_err(|error| error.to_string())?;
         bytes.push(b'\n');
@@ -429,6 +447,86 @@ pub fn plain(path: &Path) -> PathBuf {
         plain.push(component.as_os_str());
     }
     plain
+}
+
+/// A v0.11.1 slot's generation keeps its v0.3 provider manifest, as v0.11.1
+/// wrote it: a copy in the generation, every path absolute, the configuration
+/// naming the copy and the selection referencing it. The OCR adapter it names
+/// must be the target slot's own (a v0.11.1 Runtime requires that).
+fn carry_provider(
+    root: &Path,
+    relative: &str,
+    document: &mut Value,
+    programs: &Path,
+) -> Result<Option<InstallFileReference>, String> {
+    let Some(value) = document
+        .get("vision_provider_manifest")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(
+        value
+            .as_str()
+            .ok_or("vision_provider_manifest is not a path")?,
+    );
+    let source_root = path.parent().ok_or("Provider manifest has no parent")?;
+    let mut provider: Value = serde_json::from_slice(&read_bounded(&path, MAX_MATERIAL_BYTES)?)
+        .map_err(|error| format!("Provider manifest is unreadable: {error}"))?;
+    let tools = fs::canonicalize(programs.join("tools")).map_err(|error| {
+        format!(
+            "Cannot resolve {}: {error}",
+            programs.join("tools").display()
+        )
+    })?;
+    for name in ["fastdeploy_ppocr", "onnxruntime"] {
+        let Some(artifacts) = provider.get_mut(name).filter(|value| !value.is_null()) else {
+            continue;
+        };
+        for key in [
+            "detector_model_path",
+            "recognizer_model_path",
+            "dictionary_path",
+            "classifier_model_path",
+            "model_path",
+            "labels_path",
+            "provider_library_path",
+            "runtime_library_path",
+        ] {
+            absolute_field(artifacts, &format!("/{key}"), source_root)?;
+        }
+        let count = artifacts
+            .get("runtime_library_paths")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        for at in 0..count {
+            absolute_field(artifacts, &format!("/runtime_library_paths/{at}"), source_root)?;
+        }
+        if let Some(library) = artifacts
+            .get("provider_library_path")
+            .and_then(Value::as_str)
+        {
+            let actual = fs::canonicalize(library).map_err(|error| {
+                format!("Provider library is unavailable: {library}: {error}")
+            })?;
+            if !actual.starts_with(&tools) {
+                return Err(format!(
+                    "提供者库不在目标槽的 tools 里 / The provider library is not in the target slot's tools: {library}"
+                ));
+            }
+        }
+    }
+    let mut bytes = serde_json::to_vec_pretty(&provider).map_err(|error| error.to_string())?;
+    bytes.push(b'\n');
+    let relative = format!("{relative}/vision-provider.json");
+    let destination = root.join(&relative);
+    write_new(&destination, &bytes)?;
+    document["vision_provider_manifest"] =
+        Value::from(plain(&destination).to_string_lossy().into_owned());
+    Ok(Some(InstallFileReference {
+        path: relative,
+        sha256: sha256(&bytes),
+    }))
 }
 
 fn absolute_field(document: &mut Value, pointer: &str, root: &Path) -> Result<(), String> {

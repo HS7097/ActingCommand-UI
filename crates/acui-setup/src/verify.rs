@@ -321,10 +321,7 @@ pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<((String, Strin
     check("ui", UI_REPOSITORY, &members.1, UI_REQUIRED, false)?;
     // A v0.11.1 slot still holds the whole tools zip, OCR adapter included,
     // and stays a valid rollback target; a later slot holds no tools\.
-    let tools = root
-        .join("tools")
-        .try_exists()
-        .map_err(|error| format!("Cannot inspect retained tools: {error}"))?;
+    let tools = slot_predates_vision(root)?;
     if tools {
         check(
             "tools",
@@ -335,6 +332,16 @@ pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<((String, Strin
         )?;
     }
     Ok((members, tools))
+}
+
+/// Whether a slot's Runtime predates the vision model folders (#360): a
+/// v0.11.1 slot, which still holds its own `tools\` (OCR adapter included).
+/// Such a Runtime reads a v0.3 provider manifest and no `vision` section.
+pub fn slot_predates_vision(slot: &Path) -> Result<bool, String> {
+    let tools = slot.join("tools");
+    tools
+        .try_exists()
+        .map_err(|error| format!("Cannot inspect {}: {error}", tools.display()))
 }
 
 /// The old layout's programs, one of `OLD_LAYOUT_RELEASES`, each checked against
