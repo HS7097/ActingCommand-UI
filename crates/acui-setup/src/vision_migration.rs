@@ -538,6 +538,34 @@ impl Plan {
     }
 }
 
+impl Plan {
+    /// The folders a real run writes new files into, each once; empty when
+    /// everything it needs is already in place.
+    pub fn written_folders(&self) -> Vec<PathBuf> {
+        let mut folders: Vec<PathBuf> = Vec::new();
+        let written = self
+            .files
+            .iter()
+            .chain(&self.ort)
+            .filter(|placement| !placement.present)
+            .map(|placement| placement.to.as_path())
+            .chain(
+                self.descriptions
+                    .iter()
+                    .filter(|(_, present)| !*present)
+                    .map(|(description, _)| description.as_path()),
+            );
+        for path in written {
+            if let Some(parent) = path.parent() {
+                if !folders.iter().any(|known| known == parent) {
+                    folders.push(parent.to_path_buf());
+                }
+            }
+        }
+        folders
+    }
+}
+
 fn with_new(path: &Path) -> PathBuf {
     let mut name = path
         .file_name()

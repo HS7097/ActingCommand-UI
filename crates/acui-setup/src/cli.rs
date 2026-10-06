@@ -745,6 +745,7 @@ fn plan_logged(
         .try_exists()
         .map_err(|error| format!("Cannot inspect installation selection: {error}"))?;
     let mut slots = None;
+    let mut vision_writes: Option<Vec<PathBuf>> = None;
     if installed.is_none() {
         report.line(&format!(
             "全新安装 / Fresh install: 程序进槽 A / programs into slot A; 状态根 / state root {}; 不建快捷方式、开机自启与实例 / no shortcut, autostart or instance",
@@ -846,7 +847,10 @@ fn plan_logged(
             ));
         }
         match vision_migration::plan(&canonical, &planned.document)? {
-            Some(vision) => vision.describe(report)?,
+            Some(vision) => {
+                vision.describe(report)?;
+                vision_writes = Some(vision.written_folders());
+            }
             None => report.line("视觉：配置未引用 v0.3 清单，不迁移 / Vision: the configuration names no v0.3 manifest; nothing to migrate")?,
         }
         match (planned.conflicts.is_empty(), args.conflicts) {
@@ -864,7 +868,13 @@ fn plan_logged(
         }
     }
     tools.describe(report)?;
-    leftovers(root, installed.is_some() && !active, slots, report)?;
+    leftovers(
+        root,
+        installed.is_some() && !active,
+        slots,
+        vision_writes.as_deref(),
+        report,
+    )?;
     // --yes, then the associations, then everything else.
     needed.sort_by_key(|flag| match flag.as_str() {
         "--yes" => 0,
@@ -882,6 +892,7 @@ fn leftovers(
     root: &Path,
     migration: bool,
     slots: Option<(InstallSlot, InstallSlot)>,
+    vision: Option<&[PathBuf]>,
     report: &mut ConsoleReport,
 ) -> Result<(), String> {
     let list = |dir: &Path| -> Result<Vec<String>, String> {
@@ -914,6 +925,21 @@ fn leftovers(
             }
             "runtime" | "ui" => "固定入口，不动 / stable entries, untouched".to_string(),
             "tools" => "按根工具规则更新（见上）/ updated by the root-tool rule above".to_string(),
+            // The vision migration only adds files (review V2-4).
+            "vision" => match vision {
+                Some(folders) if !folders.is_empty() => {
+                    let folders = folders
+                        .iter()
+                        .map(|folder| crate::generations::plain(folder).display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "视觉迁移只往 {folders} 写入新文件，已有文件一概不改 / the vision migration only writes new files, into {folders}; nothing existing is changed"
+                    )
+                }
+                Some(_) => "视觉迁移需要的文件都已就位，不写 / every file the vision migration needs is already in place; nothing is written".to_string(),
+                None => "不动 / left as is".to_string(),
+            },
             "A" if migration => {
                 "整体保留为 install\\retained-A-<ms>，再放入新程序 / retained whole as install\\retained-A-<ms>, then the new programs go in".to_string()
             }
