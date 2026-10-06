@@ -317,7 +317,45 @@ pub fn replace_manager_from_entry() -> Result<(), String> {
     if crate::verify::sha256_file(&exe).map_err(|error| error.to_string())? != crate::verify::sha256_file(&candidate).map_err(|error| error.to_string())? {
         return Err("External installer is not the exact management program in the verified release".into());
     }
-    let occupancy = crate::slots::NativeOccupancy::files(std::slice::from_ref(&previous))?;
+    drop(previous);
+    replace_manager(&root, &verified, &mut report).map(|_| ())
+}
+
+/// After an A/B upgrade the fixed manager becomes this release's acsetup
+/// (review R-F2): an older one cannot switch to this layout's slots. Nothing
+/// happens when it already is; the program running this upgrade cannot replace
+/// itself, and a running manager blocks (both said loudly).
+pub fn refresh_manager(root: &Path, verified: &Verified, report: Report<'_>) -> Result<(), String> {
+    let current = acui_installation::manager_program(root)?;
+    let candidate = verified.ui.dir.join("acsetup.exe");
+    let hash = |path: &Path| {
+        crate::verify::sha256_file(path)
+            .map_err(|error| format!("Cannot hash {}: {error}", path.display()))
+    };
+    if hash(current.as_path())? == hash(candidate.as_path())? {
+        return report.line("固定管理程序已是本发布件的 acsetup / The fixed manager is already this release's acsetup");
+    }
+    let running = std::env::current_exe()
+        .and_then(fs::canonicalize)
+        .map_err(|error| error.to_string())?;
+    if fs::canonicalize(&current).map_err(|error| error.to_string())? == running {
+        return Err("固定管理程序正是本次运行的程序，不能替换自己；之后请从发布件运行 acsetup --replace-manager <安装根> <发布件文件夹> / The fixed manager is the program running this upgrade and cannot replace itself; afterwards run acsetup --replace-manager <root> <release folder> from the release".into());
+    }
+    replace_manager(root, verified, report).map(|_| ())
+}
+
+/// The fixed manager replaced by `verified`'s acsetup. The previous program and
+/// its identity are kept under `install/manager-backup-<stamp>` and put back on
+/// failure; a running manager blocks (native occupancy). Returns the backup.
+pub fn replace_manager(root: &Path, verified: &Verified, report: Report<'_>) -> Result<PathBuf, String> {
+    let previous = acui_installation::manager_program(root)?;
+    let manifest = acui_installation::read_bounded(&verified.ui.dir.join(MANIFEST), acui_installation::MAX_MATERIAL_BYTES)?;
+    let candidate = verified.ui.dir.join("acsetup.exe");
+    acui_installation::verify_manager_material(&verified.members_document, &manifest, &candidate)?;
+    let occupancy = crate::slots::NativeOccupancy::files(std::slice::from_ref(&previous)).map_err(|error| {
+        format!("固定管理程序正在使用 / The fixed manager is in use: {error}")
+    })?;
+    let stamp = crate::log::unix_ms();
     let backup = root.join(format!("install/manager-backup-{stamp}"));
     fs::create_dir(&backup).map_err(|error| error.to_string())?;
     fs::rename(&previous, backup.join("acsetup.exe")).map_err(|error| format!("Cannot retain previous manager: {error}"))?;
@@ -326,7 +364,7 @@ pub fn replace_manager_from_entry() -> Result<(), String> {
         let restore = fs::rename(backup.join("acsetup.exe"), &previous);
         return Err(format!("Cannot retain management identity: {error}; program restore: {restore:?}"));
     }
-    let installed = install_manager(&root, &verified, &mut report);
+    let installed = install_manager(root, verified, report);
     if let Err(error) = installed {
         let restore = (|| {
             if previous.try_exists().map_err(|error| error.to_string())? { fs::rename(&previous, backup.join("retained-candidate.exe")).map_err(|error| error.to_string())?; }
@@ -337,7 +375,8 @@ pub fn replace_manager_from_entry() -> Result<(), String> {
         return Err(format!("Management replacement failed: {error}; original manager restoration: {restore:?}"));
     }
     drop(occupancy);
-    report(&format!("Fixed management entry replaced; previous source retained at {}", backup.display()))
+    report.line(&format!("固定管理程序已替换，旧程序保留于 / Fixed management entry replaced; previous source retained at {}", backup.display()))?;
+    Ok(backup)
 }
 
 /// Exactly the fields the wizard sets, in this order; the Runtime's parser

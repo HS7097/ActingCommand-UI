@@ -223,7 +223,7 @@ pub fn upgrade(
         &runtime_sha,
         report,
     )?;
-    complete(
+    let upgraded = complete(
         &writer,
         &mut plan,
         closed,
@@ -231,7 +231,12 @@ pub fn upgrade(
         previous,
         Some(&tools),
         report,
-    )
+    )?;
+    // An older fixed manager cannot switch to this layout's slots (review R-F2).
+    crate::install::refresh_manager(root, verified, report).map_err(|error| {
+        format!("升级已提交并完成，但固定管理程序未替换 / The upgrade is committed and complete, but the fixed manager was not replaced: {error}")
+    })?;
+    Ok(upgraded)
 }
 
 pub fn other(slot: InstallSlot) -> InstallSlot {
