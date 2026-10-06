@@ -199,9 +199,13 @@ fn main() -> Result<()> {
         .nth(1)
         .is_some_and(|argument| argument == "--rollback")
     {
+        // Attached to the caller's console, a switch is not ended by Ctrl+C
+        // midway (review CLI-F2), as the command line's guarded span.
+        let _guard = platform::InterruptGuard::start();
         return upgrade::rollback_from_entry().map_err(anyhow::Error::msg);
     }
     if std::env::args_os().nth(1).is_some_and(|argument| argument == "--replace-manager") {
+        let _guard = platform::InterruptGuard::start();
         return install::replace_manager_from_entry().map_err(anyhow::Error::msg);
     }
     if std::env::args_os().nth(1).is_some() {
