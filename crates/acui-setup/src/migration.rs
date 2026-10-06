@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! First cold migration retains original programs and root configuration as an
 //! intact backup, then establishes the fixed management and forwarding entries.
+//! The root's `tools\` stays where it is: only files whose content changed are
+//! replaced, and the replaced ones join the backup (Workflow #359).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,7 +12,7 @@ use acui_installation::InstallSlot;
 use crate::bundle::Bundle;
 use crate::generations::Writer;
 use crate::verify::{Report, Verified};
-use crate::{generations, install, lifecycle, maintenance, slots, upgrade};
+use crate::{generations, install, lifecycle, maintenance, root_tools, slots, upgrade};
 
 pub fn upgrade(
     writer: &Writer,
@@ -20,7 +22,8 @@ pub fn upgrade(
     report: Report<'_>,
 ) -> Result<upgrade::Upgraded, String> {
     let root = writer.root();
-    crate::verify::initial_programs(root, report)?;
+    // v0.11.0 or v0.11.1 programs in the old layout; only v0.11.0 closes cold.
+    let (runtime_sha, _) = crate::verify::initial_programs(root, report)?;
     let config = root.join("actingd.config.json");
     let transaction = maintenance::Transaction::read_config(&config)?;
     let original_config =
@@ -36,6 +39,7 @@ pub fn upgrade(
         choose,
         report,
     )?;
+    let tools = root_tools::plan(root, verified)?;
     let mut plan = writer.prepare(
         None,
         InstallSlot::A,
@@ -51,7 +55,7 @@ pub fn upgrade(
         &config,
         &state_root,
         None,
-        lifecycle::COLD_RUNTIME,
+        &runtime_sha,
         report,
     )?;
     lifecycle::verify_ledger(
@@ -84,16 +88,18 @@ pub fn upgrade(
         settings_before,
         settings_written: None,
         manager_created: false,
+        tools: None,
     };
-    // Native exclusion covers all original files while their directories move.
-    // Occupied UI/MCP/ADB files stop only this migration, with the old layout intact.
+    // Native exclusion covers all original program files while their directories
+    // move; the root tools that change are held by `root_tools`. Occupied UI/MCP
+    // files stop only this migration, with the old layout intact.
     let mut occupancy = Vec::new();
-    for name in ["runtime", "ui", "tools"] {
+    for name in ["runtime", "ui"] {
         occupancy.push(slots::NativeOccupancy::acquire(&root.join(name))?);
     }
     let changed = (|| {
         transaction.unchanged()?;
-        for name in ["runtime", "ui", "tools", "actingd.config.json"] {
+        for name in ["runtime", "ui", "actingd.config.json"] {
             fs::rename(root.join(name), migration.backup.join(name))
                 .map_err(|error| format!("Cannot retain original {name}: {error}"))?;
             migration.moved.push(name);
@@ -105,12 +111,9 @@ pub fn upgrade(
         {
             return Err("Original configuration changed during migration".into());
         }
-        install::stable_entries(
-            root,
-            &programs.ui_dir.join("acforward.exe"),
-            &programs.tools_dir,
-            report,
-        )?;
+        let backup_tools = migration.backup.join("tools");
+        migration.tools = Some(tools.apply(root, &backup_tools, report)?);
+        install::stable_entries(root, &programs.ui_dir.join("acforward.exe"), report)?;
         if root
             .join(acui_installation::MANAGER_DIRECTORY)
             .try_exists()
@@ -186,11 +189,18 @@ struct Migration<'a> {
     settings_before: Option<Vec<u8>>,
     settings_written: Option<Vec<u8>>,
     manager_created: bool,
+    /// The root-tool changes, put back before the original programs return.
+    tools: Option<root_tools::Applied>,
 }
 
 impl Migration<'_> {
     fn restore(&self) -> Result<(), String> {
         let mut failures = Vec::new();
+        if let Some(tools) = &self.tools {
+            if let Err(error) = tools.undo() {
+                failures.push(format!("Cannot restore the root tools: {error}"));
+            }
+        }
         if self.manager_created {
             let manager = self.root.join(acui_installation::MANAGER_DIRECTORY);
             match manager.try_exists() {

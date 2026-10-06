@@ -12,7 +12,7 @@ use crate::bundle::Bundle;
 use crate::generations::{Plan, Writer};
 use crate::install::LaidOut;
 use crate::verify::{Report, Verified, MANIFEST, PLATFORM_TOOLS};
-use crate::{lifecycle, maintenance, migration, slots};
+use crate::{lifecycle, maintenance, migration, root_tools, slots};
 
 #[derive(Clone)]
 pub struct Installed {
@@ -44,10 +44,11 @@ pub fn installed(root: &Path) -> Result<Option<Installed>, String> {
     {
         let snapshot = Snapshot::read(root)?;
         let (runtime_sha, ui_sha) = members(&snapshot)?;
+        // AC's adb is the root's own (Workflow #359), not a slot's.
         return Ok(Some(Installed {
             runtime_sha,
             ui_sha,
-            adb: ac_adb(&snapshot.slot_root()).is_file(),
+            adb: ac_adb(root).is_file(),
         }));
     }
     let runtime = root.join("runtime").join(MANIFEST);
@@ -187,6 +188,7 @@ pub fn upgrade(
         choose,
         report,
     )?;
+    let tools = root_tools::plan(root, verified)?;
     let mut plan = writer.prepare(
         Some(baseline.clone()),
         target,
@@ -211,6 +213,7 @@ pub fn upgrade(
         closed,
         &verified.members.0,
         previous,
+        Some(&tools),
         report,
     )
 }
@@ -245,12 +248,14 @@ pub fn configuration(
     Ok((document, qualify))
 }
 
+/// `tools`: an upgrade's root-tool update; a switch (rollback) never touches the root.
 fn complete(
     writer: &Writer,
     plan: &mut Plan,
     closed: lifecycle::Closed,
     runtime_sha: &str,
     previous: PathBuf,
+    tools: Option<&root_tools::Plan>,
     report: Report<'_>,
 ) -> Result<Upgraded, String> {
     // The same gate also covers explicit rollback. It is evaluated on this
@@ -260,14 +265,34 @@ fn complete(
         &plan.snapshot.config_path()?,
         report,
     )?;
+    let applied = match tools {
+        Some(tools) => Some(
+            tools
+                .apply(
+                    writer.root(),
+                    &writer.root().join(format!(
+                        "install/root-tools-{}",
+                        plan.snapshot.selection.generation
+                    )),
+                    report,
+                )
+                .map_err(|error| format!("{error}; selection unchanged; Runtime remains stopped"))?,
+        ),
+        None => None,
+    };
     let committed = writer.commit(plan).and_then(|()| {
         report.line("安装选择已原子提交 / Installation selection committed atomically")
     });
     if let Err(error) = committed {
+        let tools = match applied.as_ref().map(root_tools::Applied::undo) {
+            None => String::new(),
+            Some(Ok(())) => "; 根工具已复原 / root tools restored".to_string(),
+            Some(Err(undo)) => format!("; 根工具复原未完成 / root tools restoration incomplete: {undo}"),
+        };
         return Err(match writer.restore_before_start(plan) {
-            Ok(()) => format!("{error}; original selection restored; Runtime remains stopped"),
+            Ok(()) => format!("{error}{tools}; original selection restored; Runtime remains stopped"),
             Err(restore) => {
-                format!("{error}; selection restoration failed: {restore}; Runtime remains stopped")
+                format!("{error}{tools}; selection restoration failed: {restore}; Runtime remains stopped")
             }
         });
     }
@@ -282,7 +307,7 @@ pub fn outcome(snapshot: &Snapshot, previous: PathBuf, restarted: Option<PathBuf
     Upgraded {
         laid_out: LaidOut {
             ui_dir: snapshot.root.join("ui"),
-            tools_dir: snapshot.slot_root().join("tools"),
+            tools_dir: snapshot.root.join("tools"),
             actingd_exe: snapshot.root.join("runtime").join(crate::runtime::ACTINGD),
             acui_exe: snapshot.root.join("ui/acui.exe"),
         },
@@ -334,6 +359,7 @@ pub fn rollback(root: &Path, report: Report<'_>) -> Result<Upgraded, String> {
         closed,
         &verified.members.0,
         programs,
+        None,
         report,
     )
 }

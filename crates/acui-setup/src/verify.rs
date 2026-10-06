@@ -45,6 +45,23 @@ pub const TOOLS_INSTALLED: &[&str] = &[
 ];
 /// The directory of `tools\` the platform-tools files are in.
 pub const PLATFORM_TOOLS: &str = "platform-tools";
+/// The one file of the tools zip a program slot holds, in its `tools\` beside
+/// that zip's manifest: the OCR adapter built with the Runtime and bound to its
+/// interface (Workflow #359). Every other tools file lives under the
+/// installation root's own `tools\`, which a slot switch never touches.
+pub const SLOT_TOOL: &str = "ac_fastdeploy_ppocr.dll";
+/// The old-layout programs a first migration accepts, `(runtime, ui)`: v0.11.0
+/// and v0.11.1. Only v0.11.0 answers through the cold protocol.
+const OLD_LAYOUT_RELEASES: &[(&str, &str)] = &[
+    (
+        crate::lifecycle::COLD_RUNTIME,
+        "b0d70e606e3df6ccb5c351b2519e240cb5db4f03",
+    ),
+    (
+        "732a546fb0e1c60538e53c5e52763c4e3e43c66e",
+        "c47bab660b343639bbd67bd5b3a19e8f27fcafdb",
+    ),
+];
 
 /// Where a step's account goes: every line into the install log, and — for
 /// the page — where the work stands and what the person must see. An error
@@ -257,7 +274,6 @@ pub fn prepared_programs(root: &Path, verified: &Verified, report: Report<'_>) -
     for (dir, original, repository, sha, required, runtime_layout) in [
         ("runtime", &verified.runtime, RUNTIME_REPOSITORY, verified.members.0.as_str(), RUNTIME_REQUIRED, true),
         ("ui", &verified.ui, UI_REPOSITORY, verified.members.1.as_str(), UI_REQUIRED, false),
-        ("tools", &verified.tools, RUNTIME_REPOSITORY, verified.members.0.as_str(), TOOLS_INSTALLED, false),
     ] {
         let checked = check_manifest(&root.join(dir), &Expect {
             name: format!("prepared {dir}"), dir, repository, sha, required, runtime_layout,
@@ -266,7 +282,58 @@ pub fn prepared_programs(root: &Path, verified: &Verified, report: Report<'_>) -
             return Err(format!("{MISMATCH}: prepared {dir}/{MANIFEST} differs from the verified release"));
         }
     }
+    let tools = check_slot_tools(&root.join("tools"), "prepared tools", &verified.members.0, report)?;
+    if tools.manifest_sha256 != verified.tools.manifest_sha256 {
+        return Err(format!("{MISMATCH}: prepared tools/{MANIFEST} differs from the verified release"));
+    }
     Ok(())
+}
+
+/// A slot's `tools\`: exactly the OCR adapter and the tools manifest it is bound
+/// by, the adapter's size and sha256 as that manifest states them.
+fn check_slot_tools(dir: &Path, name: &str, sha: &str, report: Report<'_>) -> Result<Staged, String> {
+    let manifest_path = dir.join(MANIFEST);
+    let manifest_bytes = read_identity(&manifest_path)?;
+    let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| format!("{} does not parse: {error}", manifest_path.display()))?;
+    if manifest.repository != RUNTIME_REPOSITORY || manifest.commit_sha != sha {
+        return Err(format!(
+            "{MISMATCH}: {name} 的 {MANIFEST} 应为 / should be {RUNTIME_REPOSITORY} {sha}，实为 / is {} {}",
+            manifest.repository, manifest.commit_sha
+        ));
+    }
+    let entry = manifest
+        .files
+        .iter()
+        .find(|entry| entry.path == SLOT_TOOL)
+        .ok_or_else(|| format!("缺少文件 / missing: {name} 的清单未列出 / manifest does not list {SLOT_TOOL}"))?;
+    let path = dir.join(SLOT_TOOL);
+    let size = fs::metadata(&path)
+        .map(|meta| meta.len())
+        .map_err(|_| format!("{MISMATCH}: {name} 缺少 / lacks {SLOT_TOOL}"))?;
+    let actual = sha256_file(&path)
+        .map_err(|error| format!("读取失败 / read failed: {}: {error}", path.display()))?;
+    if size != entry.size_bytes || actual != entry.sha256.to_ascii_lowercase() {
+        return Err(format!(
+            "{MISMATCH}: {name} 内 {SLOT_TOOL} 应为 / should be {} 字节 / bytes sha256 {}，实为 / is {size} sha256 {actual}",
+            entry.size_bytes, entry.sha256
+        ));
+    }
+    report.line(&format!("{name}: {SLOT_TOOL} 已核对 / ok（{size} 字节 / bytes）"))?;
+    let mut present = BTreeSet::new();
+    walk(dir, dir, &mut present)?;
+    let expected = BTreeSet::from([MANIFEST.to_string(), SLOT_TOOL.to_string()]);
+    if present != expected {
+        return Err(format!(
+            "{MISMATCH}: {name} 只应含 / must hold only {MANIFEST} and {SLOT_TOOL}: {}",
+            present.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    Ok(Staged {
+        dir: dir.to_path_buf(),
+        files: vec![SLOT_TOOL.to_string()],
+        manifest_sha256: hex(&Sha256::digest(&manifest_bytes)),
+    })
 }
 
 /// A retained full slot is requalified through the same manifest checker used
@@ -297,13 +364,24 @@ pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<Verified, Strin
         true,
     )?;
     let ui = check("ui", UI_REPOSITORY, &members.1, UI_REQUIRED, false)?;
-    let tools = check(
-        "tools",
-        RUNTIME_REPOSITORY,
-        &members.0,
-        TOOLS_INSTALLED,
-        false,
-    )?;
+    // A v0.11.1 slot still holds the whole tools zip; a later one only the
+    // OCR adapter (Workflow #359). Either is a valid rollback target.
+    let whole = root
+        .join("tools")
+        .join(PLATFORM_TOOLS)
+        .try_exists()
+        .map_err(|error| format!("Cannot inspect retained tools: {error}"))?;
+    let tools = if whole {
+        check(
+            "tools",
+            RUNTIME_REPOSITORY,
+            &members.0,
+            TOOLS_INSTALLED,
+            false,
+        )?
+    } else {
+        check_slot_tools(&root.join("tools"), "retained tools", &members.0, report)?
+    };
     Ok(Verified {
         staging: root.to_path_buf(),
         members,
@@ -314,22 +392,29 @@ pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<Verified, Strin
     })
 }
 
-pub fn initial_programs(root: &Path, report: Report<'_>) -> Result<(), String> {
+/// The old layout's programs, one of `OLD_LAYOUT_RELEASES`, each checked against
+/// its own manifest; returns the pair found, `(runtime, ui)`.
+pub fn initial_programs(root: &Path, report: Report<'_>) -> Result<(String, String), String> {
+    let commit = |dir: &str| -> Result<String, String> {
+        let path = root.join(dir).join(MANIFEST);
+        let bytes = read_identity(&path)?;
+        serde_json::from_slice::<Manifest>(&bytes)
+            .map(|manifest| manifest.commit_sha)
+            .map_err(|error| format!("{} does not parse: {error}", path.display()))
+    };
+    let found = (commit("runtime")?, commit("ui")?);
+    let Some(&(runtime, ui)) = OLD_LAYOUT_RELEASES
+        .iter()
+        .find(|(runtime, ui)| *runtime == found.0 && *ui == found.1)
+    else {
+        return Err(format!(
+            "旧布局的程序不是可迁移的发布件（v0.11.0 或 v0.11.1）/ The old-layout programs are not a release a first migration accepts (v0.11.0 or v0.11.1): runtime {} · ui {}",
+            found.0, found.1
+        ));
+    };
     for (dir, repository, sha, required, runtime_layout) in [
-        (
-            "runtime",
-            RUNTIME_REPOSITORY,
-            crate::lifecycle::COLD_RUNTIME,
-            RUNTIME_REQUIRED,
-            true,
-        ),
-        (
-            "ui",
-            UI_REPOSITORY,
-            "b0d70e606e3df6ccb5c351b2519e240cb5db4f03",
-            UI_REQUIRED,
-            false,
-        ),
+        ("runtime", RUNTIME_REPOSITORY, runtime, RUNTIME_REQUIRED, true),
+        ("ui", UI_REPOSITORY, ui, UI_REQUIRED, false),
     ] {
         check_manifest(
             &root.join(dir),
@@ -344,7 +429,7 @@ pub fn initial_programs(root: &Path, report: Report<'_>) -> Result<(), String> {
             report,
         )?;
     }
-    Ok(())
+    Ok(found)
 }
 
 

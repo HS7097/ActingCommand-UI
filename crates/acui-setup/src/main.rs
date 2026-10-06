@@ -32,6 +32,7 @@ mod maintenance;
 mod migration;
 mod payload;
 mod platform;
+mod root_tools;
 mod runtime;
 mod slots;
 mod upgrade;
@@ -1726,7 +1727,7 @@ fn summary(state: &Shared) -> String {
             laid_out.tools_dir.display(),
             verify::TOOLS_INSTALLED
                 .iter()
-                .filter(|name| !name.contains('/'))
+                .filter(|name| !name.contains('/') && **name != verify::SLOT_TOOL)
                 .copied()
                 .collect::<Vec<_>>()
                 .join("、"),

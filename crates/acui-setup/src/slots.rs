@@ -127,7 +127,8 @@ pub fn materialize(
         drop(occupancy);
         Ok(LaidOut {
             ui_dir: target.join("ui"),
-            tools_dir: target.join("tools"),
+            // The tools are the root's own (Workflow #359); the slot holds only the OCR adapter.
+            tools_dir: root.join("tools"),
             actingd_exe: target.join("runtime").join(crate::runtime::ACTINGD),
             acui_exe: target.join("ui/acui.exe"),
         })

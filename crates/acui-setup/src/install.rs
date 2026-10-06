@@ -30,33 +30,37 @@ pub struct LaidOut {
     pub acui_exe: PathBuf,
 }
 
-/// Prepares all manifest-bound programs in a new directory outside the selected slot.
+/// Prepares the program core in a new directory outside the selected slot: the
+/// whole runtime and ui zips, and of the tools zip only the OCR adapter with the
+/// manifest that binds it (Workflow #359); the other tools live under the root.
 /// Failed preparation leaves its files for inspection; no installed tree is overwritten.
 pub fn prepare_programs(
     dir: &Path,
     verified: &Verified,
     report: Report<'_>,
-) -> Result<LaidOut, String> {
+) -> Result<(), String> {
     fs::create_dir(dir).map_err(|error| {
         format!(
             "Cannot create fresh program candidate {}: {error}",
             dir.display()
         )
     })?;
-    let total =
-        verified.runtime.files.len() + verified.ui.files.len() + verified.tools.files.len() + 4;
+    let total = verified.runtime.files.len() + verified.ui.files.len() + 5;
     report.step(Step::Phase(
         "准备候选程序 / Preparing candidate programs",
         Some(Total::Items(total as u64)),
     ))?;
     let mut done = 0;
-    for (name, staged) in [
-        ("runtime", &verified.runtime),
-        ("ui", &verified.ui),
-        ("tools", &verified.tools),
-    ] {
+    for (name, staged) in [("runtime", &verified.runtime), ("ui", &verified.ui)] {
         copy_all(staged, &dir.join(name), &mut done, report)?;
     }
+    copy_named(
+        &verified.tools,
+        &dir.join("tools"),
+        &[crate::verify::SLOT_TOOL, MANIFEST],
+        &mut done,
+        report,
+    )?;
     let members = dir.join("MEMBERS.json");
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -72,13 +76,7 @@ pub fn prepare_programs(
     report.line(&format!(
         "候选程序已核验 / Candidate programs verified: {}",
         dir.display()
-    ))?;
-    Ok(LaidOut {
-        ui_dir: dir.join("ui"),
-        tools_dir: dir.join("tools"),
-        actingd_exe: dir.join("runtime").join(crate::runtime::ACTINGD),
-        acui_exe: dir.join("ui").join("acui.exe"),
-    })
+    ))
 }
 
 fn copy_all(
@@ -167,6 +165,7 @@ pub fn fresh(
             "The UI release does not contain its stable product entry acforward.exe".into(),
         );
     }
+    let tools = crate::root_tools::plan(root, verified)?;
     fs::create_dir_all(&state_root)
         .map_err(|error| format!("Cannot create shared state root: {error}"))?;
     let mut salt = [0u8; 32];
@@ -189,7 +188,15 @@ pub fn fresh(
         false,
         report,
     )?;
-    let laid_out = stable_entries(root, &forward, &programs.tools_dir, report)?;
+    tools.apply(
+        root,
+        &root.join(format!(
+            "install/root-tools-{}",
+            plan.snapshot.selection.generation
+        )),
+        report,
+    )?;
+    let laid_out = stable_entries(root, &forward, report)?;
     install_manager(root, verified, report)?;
     let config_path = plan.snapshot.config_path()?;
     let settings_path = platform::console_settings_path()?;
@@ -213,26 +220,13 @@ pub fn fresh(
 
 /// One implementation is installed under the fixed product filenames. Each
 /// invocation derives its route from that filename and retains one selection.
-pub fn stable_entries(
-    root: &Path,
-    forward: &Path,
-    tools_dir: &Path,
-    report: Report<'_>,
-) -> Result<LaidOut, String> {
+/// The root's `tools\` holds the real tools, not entries (`root_tools`).
+pub fn stable_entries(root: &Path, forward: &Path, report: Report<'_>) -> Result<LaidOut, String> {
     let bytes = acui_installation::read_bounded(forward, 64 * 1024 * 1024)?;
     for (component, names) in [
         (
             "runtime",
             &["actingcommand-actingd.exe", "actingctl.exe"][..],
-        ),
-        (
-            "tools",
-            &[
-                "actinglab.exe",
-                "actingledger.exe",
-                "actingcommand-vision-provider-check.exe",
-                "actingcommand-device-test.exe",
-            ][..],
         ),
         ("ui", &["acui.exe"][..]),
     ] {
@@ -250,7 +244,7 @@ pub fn stable_entries(
     report.line("固定产品入口已创建 / Stable product entries created")?;
     Ok(LaidOut {
         ui_dir: root.join("ui"),
-        tools_dir: tools_dir.to_path_buf(),
+        tools_dir: root.join("tools"),
         actingd_exe: root.join("runtime").join(crate::runtime::ACTINGD),
         acui_exe: root.join("ui/acui.exe"),
     })
