@@ -25,6 +25,10 @@ pub(crate) const CHILD_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(windows)]
 pub(crate) const DETACHED_PROCESS: u32 = 0x0000_0008;
+/// Windows `CREATE_BREAKAWAY_FROM_JOB`: the Runtime leaves the job object a
+/// caller may have put acsetup in, so waiting on that job ends with acsetup.
+#[cfg(windows)]
+pub(crate) const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
 /// Whether a Runtime runs on the state root: `runtime-info.json` there and
 /// the new `actingctl status` answered by it (`Ok`). Otherwise `Err`, with the

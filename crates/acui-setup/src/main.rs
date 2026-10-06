@@ -188,6 +188,7 @@ fn main() -> Result<()> {
     if std::env::args_os().nth(1).is_some() {
         platform::attach_console();
     }
+    platform::private_std_handles();
     if std::env::args_os()
         .nth(1)
         .is_some_and(|argument| argument == "--commit-config")

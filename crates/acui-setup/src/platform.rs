@@ -337,13 +337,16 @@ mod imp {
         fn GetStdHandle(which: u32) -> *mut std::ffi::c_void;
         fn SetStdHandle(which: u32, handle: *mut std::ffi::c_void) -> i32;
         fn GetFileType(handle: *mut std::ffi::c_void) -> u32;
+        fn SetHandleInformation(handle: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
         fn SetConsoleCtrlHandler(
             handler: Option<unsafe extern "system" fn(u32) -> i32>,
             add: i32,
         ) -> i32;
     }
 
+    const STD_INPUT_HANDLE: u32 = -10i32 as u32;
     const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+    const HANDLE_FLAG_INHERIT: u32 = 1;
     const STD_ERROR_HANDLE: u32 = -12i32 as u32;
     const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
     const FILE_TYPE_DISK: u32 = 1;
@@ -396,6 +399,23 @@ mod imp {
         if !out {
             use std::io::Write;
             let _ = writeln!(std::io::stdout());
+        }
+    }
+
+    /// This process's standard handles are never inherited by its children. A
+    /// Runtime started here outlives acsetup and would otherwise keep a caller's
+    /// pipe (Git Bash, `$(...)`) open; every child acsetup waits for gets its own
+    /// explicit pipes or files.
+    pub fn private_std_handles() {
+        for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            // SAFETY: only this process's own standard handles are queried and,
+            // when valid, marked not inheritable.
+            unsafe {
+                let handle = GetStdHandle(which);
+                if !handle.is_null() && handle as isize != -1 {
+                    SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+                }
+            }
         }
     }
 
@@ -485,6 +505,8 @@ mod imp {
     }
 
     pub fn attach_console() {}
+
+    pub fn private_std_handles() {}
 
     pub fn guard_interrupts(_on: bool) {}
 }
