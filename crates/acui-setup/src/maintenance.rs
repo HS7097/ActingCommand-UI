@@ -22,8 +22,64 @@ use crate::verify::{Report, Step};
 const READ_LIMIT: u64 = 16 << 20;
 const ADMISSION_BUDGET: Duration = Duration::from_secs(120);
 
-/// A worker asks on the wizard's resource/confirmation page. No choice is implicit.
-pub type Choose<'a> = &'a mut dyn FnMut(String, Vec<String>) -> Result<usize, String>;
+/// One instance whose resource association needs a person: the wizard asks
+/// on its resource page, the command line takes `--associate <alias>=<bundle>/<server>`.
+pub struct Association {
+    pub alias: String,
+    pub question: String,
+    pub options: Vec<AssociationOption>,
+}
+
+/// One answer an association offers: its label for people, and the bundle (its
+/// game id) and server the command line names it by.
+pub struct AssociationOption {
+    pub label: String,
+    pub bundle: String,
+    pub server: String,
+}
+
+impl AssociationOption {
+    /// `<bundle>/<server>`, as `--associate` names this option.
+    pub fn flag_value(&self) -> String {
+        format!("{}/{}", self.bundle, self.server)
+    }
+}
+
+/// The index of the option taken. No choice is implicit: `None` (only a plan
+/// gives it) leaves the instance unassociated in that plan.
+pub type Choose<'a> = &'a mut dyn FnMut(&Association) -> Result<Option<usize>, String>;
+
+/// Asks one association and logs the question and the answer.
+fn associate(
+    association: &Association,
+    choose: Choose<'_>,
+    report: Report<'_>,
+) -> Result<Option<usize>, String> {
+    report.line(&format!(
+        "资源关联 / Resource association: {}\n{}",
+        association.alias, association.question
+    ))?;
+    let picked = choose(association)?;
+    match picked {
+        Some(at) => {
+            let option = association
+                .options
+                .get(at)
+                .ok_or("Invalid resource association")?;
+            report.line(&format!(
+                "资源关联 / Resource association: {} → {} ({})",
+                association.alias,
+                option.flag_value(),
+                option.label
+            ))?;
+        }
+        None => report.line(&format!(
+            "资源关联未决定 / Resource association left open: {}",
+            association.alias
+        ))?,
+    }
+    Ok(picked)
+}
 
 pub struct Prepared {
     pub bundle: Bundle,
@@ -194,17 +250,25 @@ pub fn upgrade_selections(
             continue;
         }
         if identity.is_ok() {
-            let options = matches
-                .iter()
-                .map(|(bundle, server)| {
-                    format!(
-                        "{} / {server} — {}",
-                        prepared[*bundle].bundle.name(),
-                        prepared[*bundle].bundle.file.display()
-                    )
-                })
-                .collect();
-            let picked = choose(format!("实例 / Instance {}：多个标准包匹配已验证的游戏/服务器。请选择维护声明来源；业务资源保持。/ Multiple bundles match the verified game/server. Choose the maintenance source; the business resource stays unchanged.", instance["alias"]), options)?;
+            let association = Association {
+                alias: alias_of(instance, at),
+                question: format!("实例 / Instance {}：多个标准包匹配已验证的游戏/服务器。请选择维护声明来源；业务资源保持。/ Multiple bundles match the verified game/server. Choose the maintenance source; the business resource stays unchanged.", instance["alias"]),
+                options: matches
+                    .iter()
+                    .map(|(bundle, server)| AssociationOption {
+                        label: format!(
+                            "{} / {server} — {}",
+                            prepared[*bundle].bundle.name(),
+                            prepared[*bundle].bundle.file.display()
+                        ),
+                        bundle: prepared[*bundle].bundle.game.clone(),
+                        server: server.clone(),
+                    })
+                    .collect(),
+            };
+            let Some(picked) = associate(&association, choose, report)? else {
+                continue;
+            };
             let (bundle, server) = matches.get(picked).ok_or("Invalid bundle association")?;
             selected.push(Selection {
                 instance: at,
@@ -231,21 +295,32 @@ pub fn upgrade_selections(
         let mut targets = Vec::new();
         for (bundle, item) in prepared.iter().enumerate() {
             for (server, pack) in &item.bundle.defaults {
-                options.push(format!(
-                    "{} / {server} — {}",
-                    item.bundle.name(),
-                    item.bundle.file.display()
-                ));
+                options.push(AssociationOption {
+                    label: format!(
+                        "{} / {server} — {}",
+                        item.bundle.name(),
+                        item.bundle.file.display()
+                    ),
+                    bundle: item.bundle.game.clone(),
+                    server: server.clone(),
+                });
                 targets.push((bundle, server.clone(), pack.clone()));
             }
         }
         if options.is_empty() {
             return Err(format!("{reason}\n没有可明确关联的标准包 / No bundle is available for an explicit association"));
         }
-        let picked = choose(format!(
-            "实例 / Instance {}\n{reason}\n请选择游戏/服务器。此选择将把该实例的 resource_package 替换为所选默认包；其它实例字段保留。/ Select its game/server. This replaces this instance's resource package with the selected default pack and preserves its other fields.\n原值 / Current: {}",
-            instance["alias"], instance["resource_package"]
-        ), options)?;
+        let association = Association {
+            alias: alias_of(instance, at),
+            question: format!(
+                "实例 / Instance {}\n{reason}\n请选择游戏/服务器。此选择将把该实例的 resource_package 替换为所选默认包；其它实例字段保留。/ Select its game/server. This replaces this instance's resource package with the selected default pack and preserves its other fields.\n原值 / Current: {}",
+                instance["alias"], instance["resource_package"]
+            ),
+            options,
+        };
+        let Some(picked) = associate(&association, choose, report)? else {
+            continue;
+        };
         let (bundle, server, pack) = targets.get(picked).ok_or("Invalid resource selection")?;
         instance["resource_package"] = json!(installed_path(root, &prepared[*bundle], pack)?);
         selected.push(Selection {

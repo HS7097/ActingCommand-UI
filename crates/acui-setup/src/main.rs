@@ -22,6 +22,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod bundle;
+mod cli;
 mod fetch;
 mod generations;
 mod install;
@@ -181,6 +182,11 @@ fn lock(state: &Shared) -> MutexGuard<'_, State> {
 fn main() -> Result<()> {
     acui_installation::process_slot_lock()
         .map_err(|error| anyhow::Error::msg(error.to_string()))?;
+    // Any argument means a run without the wizard's window: its output and its
+    // failure reach the calling console or script (Workflow #359).
+    if std::env::args_os().nth(1).is_some() {
+        platform::attach_console();
+    }
     if std::env::args_os()
         .nth(1)
         .is_some_and(|argument| argument == "--commit-config")
@@ -195,6 +201,9 @@ fn main() -> Result<()> {
     }
     if std::env::args_os().nth(1).is_some_and(|argument| argument == "--replace-manager") {
         return install::replace_manager_from_entry().map_err(anyhow::Error::msg);
+    }
+    if std::env::args_os().nth(1).is_some() {
+        std::process::exit(cli::run());
     }
     std::panic::set_hook(Box::new(|info| {
         *LAST_PANIC
@@ -1160,7 +1169,10 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
                             return Err(format!("发布件资源读取失败 / Release resources could not be read:\n{}", problems.join("\n")));
                         }
                         if !local_bundle.is_empty() { bundles.push(bundle::local(&local_bundle)?); }
-                        let mut choose = |text, choices| ask(&state, &worker_weak, text, choices);
+                        let mut choose = |association: &maintenance::Association| {
+                            let labels = association.options.iter().map(|option| option.label.clone()).collect();
+                            ask(&state, &worker_weak, association.question.clone(), labels).map(Some)
+                        };
                         let mut resolve = |conflicts: &[maintenance::Conflict]| resolve_page(&state, &worker_weak, conflicts);
                         upgrade::upgrade(&root, &verified, &bundles, &mut choose, &mut resolve, &mut report)
                             .map(|upgraded| (upgraded.laid_out.clone(), Some(upgraded), members, None))
@@ -1209,8 +1221,8 @@ const LAID: [&str; 3] = ["runtime", "ui", "tools"];
 /// Preserve failed preparation and report the selected installation's recovery boundary.
 fn left_behind(mut reason: String, root: &Path, staging: &Path, _upgrading: bool, _existed: [bool; 3]) -> String {
     reason.push_str(&format!(
-        "\n安装材料与备份保留 / Installation materials and backups retained: {}; staging {}. 当前选择以 install/active.json 为准，启动结果未知时先核实际 owner / Consult the active selection and actual owner before recovery",
-        root.display(), staging.display()
+        "\n安装材料与备份保留 / Installation materials and backups retained: {}; 临时目录 {} 会在下次运行开始时删除并记入日志 / the staging directory {} is removed, and logged, when the next run starts. 当前选择以 install/active.json 为准，启动结果未知时先核实际 owner / Consult the active selection and actual owner before recovery",
+        root.display(), staging.display(), staging.display()
     ));
     reason
 }
