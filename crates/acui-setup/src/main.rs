@@ -1872,7 +1872,7 @@ fn summary(state: &Shared) -> String {
             laid_out.tools_dir.display(),
             verify::TOOLS_INSTALLED
                 .iter()
-                .filter(|name| !name.contains('/') && **name != verify::SLOT_TOOL)
+                .filter(|name| !name.contains('/'))
                 .copied()
                 .collect::<Vec<_>>()
                 .join("、"),

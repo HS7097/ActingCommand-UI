@@ -4,14 +4,18 @@
 //! slot switch never touches them. An installation or upgrade replaces only a
 //! file whose content changed — an unchanged adb, which a running ADB server
 //! may be using, is not even opened — and keeps every file it replaces or
-//! retires; nothing is deleted. A slot holds only the OCR adapter
-//! (`verify::SLOT_TOOL`).
+//! retires; nothing is deleted. A slot holds no tools at all.
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::verify::{sha256_file, Report, Verified, MISMATCH, SLOT_TOOL};
+use crate::verify::{sha256_file, Report, Verified, MISMATCH};
+
+/// Installer files the root no longer holds: the OCR adapter the old layout
+/// kept in `tools\`, now linked into actingd (#360). Never placed; retired
+/// into the backup when present.
+const RETIRED: &[&str] = &["ac_fastdeploy_ppocr.dll"];
 
 /// What an installation does to `<root>\tools\`, by `/`-separated path.
 pub struct Plan {
@@ -19,8 +23,7 @@ pub struct Plan {
     pub unchanged: Vec<String>,
     pub replace: Vec<String>,
     pub add: Vec<String>,
-    /// Installer files the root no longer holds: only the OCR adapter, which
-    /// the old layout kept here.
+    /// Installer files the root no longer holds (`RETIRED`).
     pub retire: Vec<String>,
     /// Files this release does not know: left exactly as they are.
     pub foreign: Vec<String>,
@@ -74,8 +77,8 @@ fn hash(path: &Path) -> Result<String, String> {
     sha256_file(path).map_err(|error| format!("Cannot hash {}: {error}", path.display()))
 }
 
-/// The root's tools against the verified tools zip: every bound file but the
-/// OCR adapter belongs under `<root>\tools\`.
+/// The root's tools against the verified tools zip: every bound file belongs
+/// under `<root>\tools\`.
 pub fn plan(root: &Path, verified: &Verified) -> Result<Plan, String> {
     let tools = root.join("tools");
     match fs::symlink_metadata(&tools) {
@@ -103,7 +106,7 @@ pub fn plan(root: &Path, verified: &Verified) -> Result<Plan, String> {
         .files
         .iter()
         .map(String::as_str)
-        .filter(|name| *name != SLOT_TOOL)
+        .filter(|name| !RETIRED.contains(name))
         .collect();
     for name in &wanted {
         let installed = tools.join(relative(name));
@@ -115,8 +118,10 @@ pub fn plan(root: &Path, verified: &Verified) -> Result<Plan, String> {
             plan.replace.push(name.to_string());
         }
     }
-    if regular(&tools.join(SLOT_TOOL))? {
-        plan.retire.push(SLOT_TOOL.to_string());
+    for name in RETIRED {
+        if regular(&tools.join(name))? {
+            plan.retire.push(name.to_string());
+        }
     }
     let mut present = Vec::new();
     if tools.is_dir() {
@@ -124,7 +129,7 @@ pub fn plan(root: &Path, verified: &Verified) -> Result<Plan, String> {
     }
     plan.foreign = present
         .into_iter()
-        .filter(|name| !wanted.contains(name.as_str()) && name.as_str() != SLOT_TOOL)
+        .filter(|name| !wanted.contains(name.as_str()) && !RETIRED.contains(&name.as_str()))
         .collect();
     Ok(plan)
 }

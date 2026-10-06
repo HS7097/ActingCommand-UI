@@ -370,7 +370,7 @@ pub fn rollback(root: &Path, report: Report<'_>) -> Result<Upgraded, String> {
     let guard =
         actingcommand_contract::installation::InstallSlotLock::try_shared(writer.root(), target)
             .map_err(|error| error.to_string())?;
-    let verified = crate::verify::installed_slot(&writer.root().join(target.as_str()), report)?;
+    let retained = crate::verify::installed_slot(&writer.root().join(target.as_str()), report)?;
     let config = baseline.config_path()?;
     let programs = baseline.slot_root();
     let state_root = baseline.state_root()?;
@@ -400,7 +400,7 @@ pub fn rollback(root: &Path, report: Report<'_>) -> Result<Upgraded, String> {
         &writer,
         &mut plan,
         closed,
-        &verified.members.0,
+        &retained.0,
         programs,
         None,
         report,

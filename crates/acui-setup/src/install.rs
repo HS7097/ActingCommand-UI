@@ -31,8 +31,8 @@ pub struct LaidOut {
 }
 
 /// Prepares the program core in a new directory outside the selected slot: the
-/// whole runtime and ui zips, and of the tools zip only the OCR adapter with the
-/// manifest that binds it (Workflow #359); the other tools live under the root.
+/// whole runtime and ui zips (Workflow #359, #360). The tools live under the
+/// installation root (`root_tools`).
 /// Failed preparation leaves its files for inspection; no installed tree is overwritten.
 pub fn prepare_programs(
     dir: &Path,
@@ -45,7 +45,7 @@ pub fn prepare_programs(
             dir.display()
         )
     })?;
-    let total = verified.runtime.files.len() + verified.ui.files.len() + 5;
+    let total = verified.runtime.files.len() + verified.ui.files.len() + 3;
     report.step(Step::Phase(
         "准备候选程序 / Preparing candidate programs",
         Some(Total::Items(total as u64)),
@@ -54,13 +54,6 @@ pub fn prepare_programs(
     for (name, staged) in [("runtime", &verified.runtime), ("ui", &verified.ui)] {
         copy_all(staged, &dir.join(name), &mut done, report)?;
     }
-    copy_named(
-        &verified.tools,
-        &dir.join("tools"),
-        &[crate::verify::SLOT_TOOL, MANIFEST],
-        &mut done,
-        report,
-    )?;
     let members = dir.join("MEMBERS.json");
     let mut file = fs::OpenOptions::new()
         .write(true)

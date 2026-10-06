@@ -26,17 +26,17 @@ const UI_REPOSITORY: &str = "HS7097/ActingCommand-UI";
 const RUNTIME_LAYOUT: &str = "distribution-v1";
 
 /// What the runtime zip must hold for anything to be configured, what the
-/// console zip must hold to be opened, and what of the tools zip is
-/// installed: three tools — the other two at its root are neither installed
-/// nor shown — and the five files of the official Android platform-tools
-/// under `platform-tools/`, the adb the Runtime uses by default (Workflow
-/// #337). A tools zip without any one of them is refused.
+/// console zip must hold to be opened, and what the tools zip must hold: the
+/// two tools named in the summary and the five files of the official Android
+/// platform-tools under `platform-tools/`, the adb the Runtime uses by default
+/// (Workflow #337). A tools zip without any one of them is refused. Every file
+/// the tools zip binds goes to the installation root's `tools\`; since the OCR
+/// engine is linked into actingd (#360) no tools file belongs to a slot.
 const RUNTIME_REQUIRED: &[&str] = &["actingcommand-actingd.exe"];
 const UI_REQUIRED: &[&str] = &["acui.exe"];
 pub const TOOLS_INSTALLED: &[&str] = &[
     "actinglab.exe",
     "actingledger.exe",
-    "ac_fastdeploy_ppocr.dll",
     "platform-tools/adb.exe",
     "platform-tools/AdbWinApi.dll",
     "platform-tools/AdbWinUsbApi.dll",
@@ -45,11 +45,6 @@ pub const TOOLS_INSTALLED: &[&str] = &[
 ];
 /// The directory of `tools\` the platform-tools files are in.
 pub const PLATFORM_TOOLS: &str = "platform-tools";
-/// The one file of the tools zip a program slot holds, in its `tools\` beside
-/// that zip's manifest: the OCR adapter built with the Runtime and bound to its
-/// interface (Workflow #359). Every other tools file lives under the
-/// installation root's own `tools\`, which a slot switch never touches.
-pub const SLOT_TOOL: &str = "ac_fastdeploy_ppocr.dll";
 /// The old-layout programs a first migration accepts, `(runtime, ui)`: v0.11.0
 /// and v0.11.1. Only v0.11.0 answers through the cold protocol.
 const OLD_LAYOUT_RELEASES: &[(&str, &str)] = &[
@@ -282,63 +277,21 @@ pub fn prepared_programs(root: &Path, verified: &Verified, report: Report<'_>) -
             return Err(format!("{MISMATCH}: prepared {dir}/{MANIFEST} differs from the verified release"));
         }
     }
-    let tools = check_slot_tools(&root.join("tools"), "prepared tools", &verified.members.0, report)?;
-    if tools.manifest_sha256 != verified.tools.manifest_sha256 {
-        return Err(format!("{MISMATCH}: prepared tools/{MANIFEST} differs from the verified release"));
+    // A slot is the program core only (Workflow #359, #360): runtime\ and ui\.
+    if root
+        .join("tools")
+        .try_exists()
+        .map_err(|error| format!("Cannot inspect prepared tools: {error}"))?
+    {
+        return Err(format!("{MISMATCH}: a prepared program slot holds no tools\\"));
     }
     Ok(())
 }
 
-/// A slot's `tools\`: exactly the OCR adapter and the tools manifest it is bound
-/// by, the adapter's size and sha256 as that manifest states them.
-fn check_slot_tools(dir: &Path, name: &str, sha: &str, report: Report<'_>) -> Result<Staged, String> {
-    let manifest_path = dir.join(MANIFEST);
-    let manifest_bytes = read_identity(&manifest_path)?;
-    let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
-        .map_err(|error| format!("{} does not parse: {error}", manifest_path.display()))?;
-    if manifest.repository != RUNTIME_REPOSITORY || manifest.commit_sha != sha {
-        return Err(format!(
-            "{MISMATCH}: {name} 的 {MANIFEST} 应为 / should be {RUNTIME_REPOSITORY} {sha}，实为 / is {} {}",
-            manifest.repository, manifest.commit_sha
-        ));
-    }
-    let entry = manifest
-        .files
-        .iter()
-        .find(|entry| entry.path == SLOT_TOOL)
-        .ok_or_else(|| format!("缺少文件 / missing: {name} 的清单未列出 / manifest does not list {SLOT_TOOL}"))?;
-    let path = dir.join(SLOT_TOOL);
-    let size = fs::metadata(&path)
-        .map(|meta| meta.len())
-        .map_err(|_| format!("{MISMATCH}: {name} 缺少 / lacks {SLOT_TOOL}"))?;
-    let actual = sha256_file(&path)
-        .map_err(|error| format!("读取失败 / read failed: {}: {error}", path.display()))?;
-    if size != entry.size_bytes || actual != entry.sha256.to_ascii_lowercase() {
-        return Err(format!(
-            "{MISMATCH}: {name} 内 {SLOT_TOOL} 应为 / should be {} 字节 / bytes sha256 {}，实为 / is {size} sha256 {actual}",
-            entry.size_bytes, entry.sha256
-        ));
-    }
-    report.line(&format!("{name}: {SLOT_TOOL} 已核对 / ok（{size} 字节 / bytes）"))?;
-    let mut present = BTreeSet::new();
-    walk(dir, dir, &mut present)?;
-    let expected = BTreeSet::from([MANIFEST.to_string(), SLOT_TOOL.to_string()]);
-    if present != expected {
-        return Err(format!(
-            "{MISMATCH}: {name} 只应含 / must hold only {MANIFEST} and {SLOT_TOOL}: {}",
-            present.into_iter().collect::<Vec<_>>().join(", ")
-        ));
-    }
-    Ok(Staged {
-        dir: dir.to_path_buf(),
-        files: vec![SLOT_TOOL.to_string()],
-        manifest_sha256: hex(&Sha256::digest(&manifest_bytes)),
-    })
-}
-
 /// A retained full slot is requalified through the same manifest checker used
 /// for release preparation; the caller holds its shared installation lock.
-pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<Verified, String> {
+/// Returns the slot's two commits, `(runtime, ui)`.
+pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<(String, String), String> {
     let members_document = read_identity(&root.join("MEMBERS.json"))?;
     let members =
         members_of(std::str::from_utf8(&members_document).map_err(|error| error.to_string())?)?;
@@ -356,40 +309,30 @@ pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<Verified, Strin
             report,
         )
     };
-    let runtime = check(
+    check(
         "runtime",
         RUNTIME_REPOSITORY,
         &members.0,
         RUNTIME_REQUIRED,
         true,
     )?;
-    let ui = check("ui", UI_REPOSITORY, &members.1, UI_REQUIRED, false)?;
-    // A v0.11.1 slot still holds the whole tools zip; a later one only the
-    // OCR adapter (Workflow #359). Either is a valid rollback target.
-    let whole = root
+    check("ui", UI_REPOSITORY, &members.1, UI_REQUIRED, false)?;
+    // A v0.11.1 slot still holds the whole tools zip, OCR adapter included,
+    // and stays a valid rollback target; a later slot holds no tools\.
+    let tools = root
         .join("tools")
-        .join(PLATFORM_TOOLS)
         .try_exists()
         .map_err(|error| format!("Cannot inspect retained tools: {error}"))?;
-    let tools = if whole {
+    if tools {
         check(
             "tools",
             RUNTIME_REPOSITORY,
             &members.0,
             TOOLS_INSTALLED,
             false,
-        )?
-    } else {
-        check_slot_tools(&root.join("tools"), "retained tools", &members.0, report)?
-    };
-    Ok(Verified {
-        staging: root.to_path_buf(),
-        members,
-        members_document,
-        runtime,
-        ui,
-        tools,
-    })
+        )?;
+    }
+    Ok(members)
 }
 
 /// The old layout's programs, one of `OLD_LAYOUT_RELEASES`, each checked against
