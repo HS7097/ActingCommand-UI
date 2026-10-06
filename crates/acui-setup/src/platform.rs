@@ -267,16 +267,36 @@ mod imp {
                     &mut reboot,
                 )
             };
-            if listed.0 != 0 || reboot != 0 || count as usize > processes.len() {
+            if listed.0 != 0 || count as usize > processes.len() {
                 return Err(format!(
                     "Slot occupancy is unconfirmed: RmGetList {}, required {needed}, reboot reasons {reboot}",
                     listed.0
                 ));
             }
-            let occupied: Vec<_> = processes[..count as usize]
+            let affected = &processes[..count as usize];
+            let own = std::process::id();
+            // RmRebootReasonDetectedSelf: this process holds the deny-sharing
+            // handles itself. It is the one reason ignored, and only while this
+            // process is in fact listed; every other reason still blocks.
+            const DETECTED_SELF: u32 = 0x10;
+            let self_listed = affected
                 .iter()
-                .filter(|process| process.Process.dwProcessId != std::process::id())
-                .map(|process| process.Process.dwProcessId.to_string())
+                .any(|process| process.Process.dwProcessId == own);
+            if reboot & !DETECTED_SELF != 0 || (reboot & DETECTED_SELF != 0 && !self_listed) {
+                return Err(format!(
+                    "Slot occupancy is unconfirmed: RmGetList 0, required {needed}, reboot reasons {reboot}"
+                ));
+            }
+            let occupied: Vec<_> = affected
+                .iter()
+                .filter(|process| process.Process.dwProcessId != own)
+                .map(|process| {
+                    format!(
+                        "{} ({})",
+                        process.Process.dwProcessId,
+                        app_name(&process.strAppName)
+                    )
+                })
                 .collect();
             if !occupied.is_empty() {
                 return Err(format!(
@@ -301,7 +321,11 @@ mod imp {
         result
     }
 
-
+    /// The application name Restart Manager reports, up to its terminating NUL.
+    fn app_name(name: &[u16]) -> String {
+        let end = name.iter().position(|unit| *unit == 0).unwrap_or(name.len());
+        String::from_utf16_lossy(&name[..end])
+    }
 }
 
 #[cfg(not(windows))]
