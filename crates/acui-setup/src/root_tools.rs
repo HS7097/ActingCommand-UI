@@ -195,10 +195,26 @@ impl Plan {
         Ok(())
     }
 
-    /// Replaces, adds and retires as planned. The files that move are held
-    /// against other users first (`slots::NativeOccupancy`); each replaced or
-    /// retired file is kept under `retained`. On failure everything done here is
-    /// put back before the error is returned.
+    /// Places the files the root does not hold yet. It runs before any new
+    /// generation is checked, because a new slot's check-config already looks for
+    /// the root's adb (review R-F1). New files cannot disturb the running core,
+    /// which uses its own programs; they are not taken back on a later failure,
+    /// and the next run finds them in place, unchanged.
+    pub fn add(&self, root: &Path, report: Report<'_>) -> Result<(), String> {
+        self.describe(report)?;
+        let tools = root.join("tools");
+        for name in &self.add {
+            copy_in(&self.source, &tools, name)?;
+            report.line(&format!("根工具已加入 / Root tool added: {name}"))?;
+        }
+        Ok(())
+    }
+
+    /// Replaces and retires as planned, after the Runtime owner has closed (the
+    /// additions came first, `add`). The files that move are held against
+    /// other users first (`slots::NativeOccupancy`); each replaced or retired
+    /// file is kept under `retained`. On failure everything done here is put
+    /// back before the error is returned.
     pub fn apply(
         &self,
         root: &Path,
@@ -206,7 +222,6 @@ impl Plan {
         report: Report<'_>,
     ) -> Result<Applied, String> {
         let tools = root.join("tools");
-        self.describe(report)?;
         let moving: Vec<PathBuf> = self
             .replace
             .iter()
@@ -225,9 +240,6 @@ impl Plan {
             }
             for name in &self.replace {
                 applied.retain(name)?;
-                applied.place(name, &self.source)?;
-            }
-            for name in &self.add {
                 applied.place(name, &self.source)?;
             }
             Ok(())
@@ -279,43 +291,7 @@ impl Applied {
     }
 
     fn place(&mut self, name: &str, source: &Path) -> Result<(), String> {
-        let from = source.join(relative(name));
-        let to = self.tools.join(relative(name));
-        if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("Cannot create {}: {error}", parent.display()))?;
-        }
-        let mut part_name = to
-            .file_name()
-            .map(|name| name.to_os_string())
-            .unwrap_or_default();
-        part_name.push(".acsetup-new");
-        let part = to.with_file_name(part_name);
-        if part
-            .try_exists()
-            .map_err(|error| format!("Cannot inspect {}: {error}", part.display()))?
-        {
-            return Err(format!(
-                "Unfinished root tool copy is in the way: {}",
-                part.display()
-            ));
-        }
-        fs::copy(&from, &part).map_err(|error| {
-            format!(
-                "复制失败 / copy failed: {} → {}: {error}",
-                from.display(),
-                part.display()
-            )
-        })?;
-        let (expected, actual) = (hash(&from)?, hash(&part)?);
-        if expected != actual {
-            return Err(format!(
-                "{MISMATCH}: {} sha256 应为 / expected {expected}，实为 / actual {actual}",
-                part.display()
-            ));
-        }
-        fs::rename(&part, &to)
-            .map_err(|error| format!("Cannot place root tool {}: {error}", to.display()))?;
+        copy_in(source, &self.tools, name)?;
         self.steps.push(Change::Placed(name.to_string()));
         Ok(())
     }
@@ -349,4 +325,47 @@ impl Applied {
             Err(failures.join("; "))
         }
     }
+}
+
+/// One tools file copied in through `<name>.acsetup-new`, its sha256 checked
+/// against the verified source, then renamed into place.
+fn copy_in(source: &Path, tools: &Path, name: &str) -> Result<(), String> {
+    let from = source.join(relative(name));
+    let to = tools.join(relative(name));
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Cannot create {}: {error}", parent.display()))?;
+    }
+    let mut part_name = to
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
+    part_name.push(".acsetup-new");
+    let part = to.with_file_name(part_name);
+    if part
+        .try_exists()
+        .map_err(|error| format!("Cannot inspect {}: {error}", part.display()))?
+    {
+        return Err(format!(
+            "Unfinished root tool copy is in the way: {}",
+            part.display()
+        ));
+    }
+    fs::copy(&from, &part).map_err(|error| {
+        format!(
+            "复制失败 / copy failed: {} → {}: {error}",
+            from.display(),
+            part.display()
+        )
+    })?;
+    let (expected, actual) = (hash(&from)?, hash(&part)?);
+    if expected != actual {
+        return Err(format!(
+            "{MISMATCH}: {} sha256 应为 / expected {expected}，实为 / actual {actual}",
+            part.display()
+        ));
+    }
+    fs::rename(&part, &to)
+        .map_err(|error| format!("Cannot place root tool {}: {error}", to.display()))?;
+    Ok(())
 }

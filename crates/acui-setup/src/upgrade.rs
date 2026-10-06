@@ -199,6 +199,9 @@ pub fn upgrade(
         vision.rewrite(&mut document)?;
     }
     let tools = root_tools::plan(root, verified)?;
+    // New root tools (platform-tools above all) before the new slot's check-config
+    // (review R-F1); replacements wait until the Runtime owner has closed.
+    tools.add(root, report)?;
     let mut plan = writer.prepare(
         Some(baseline.clone()),
         target,

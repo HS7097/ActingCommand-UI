@@ -159,6 +159,7 @@ pub fn fresh(
         );
     }
     let tools = crate::root_tools::plan(root, verified)?;
+    tools.add(root, report)?;
     fs::create_dir_all(&state_root)
         .map_err(|error| format!("Cannot create shared state root: {error}"))?;
     let mut salt = [0u8; 32];
