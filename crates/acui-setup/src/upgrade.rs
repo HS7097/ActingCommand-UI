@@ -208,6 +208,10 @@ pub fn upgrade(
         report,
     )?;
     baseline.unchanged()?;
+    // A tool still running from what the root-tool update moves stops the run
+    // here, before the Runtime is closed.
+    let owner: Vec<u32> = lifecycle::owner_pid(&state_root).into_iter().collect();
+    slots::precheck(&[], &tools.moving(root), &owner)?;
     let closed = lifecycle::close(
         &previous,
         &source_config,

@@ -218,8 +218,9 @@ mod imp {
 
     /// Native resource occupancy includes loaded images and consumers whose
     /// launcher has exited. This session queries only; it never shuts down or
-    /// restarts a process. The caller keeps deny-sharing file handles throughout.
-    pub fn slot_files_unused(paths: &[PathBuf]) -> Result<(), String> {
+    /// restarts a process. `allowed` names processes the caller will close
+    /// itself (the Runtime owner, in a pre-check); every other user blocks.
+    pub fn slot_files_unused(paths: &[PathBuf], allowed: &[u32]) -> Result<(), String> {
         use std::os::windows::ffi::OsStrExt;
         use windows::Win32::System::RestartManager::{
             CCH_RM_SESSION_KEY, RM_PROCESS_INFO, RmEndSession, RmGetList, RmRegisterResources,
@@ -289,7 +290,10 @@ mod imp {
             }
             let occupied: Vec<_> = affected
                 .iter()
-                .filter(|process| process.Process.dwProcessId != own)
+                .filter(|process| {
+                    process.Process.dwProcessId != own
+                        && !allowed.contains(&process.Process.dwProcessId)
+                })
                 .map(|process| {
                     format!(
                         "{} ({})",
@@ -476,7 +480,7 @@ mod imp {
         Err(io::Error::other(WINDOWS_ONLY))
     }
 
-    pub fn slot_files_unused(_paths: &[PathBuf]) -> Result<(), String> {
+    pub fn slot_files_unused(_paths: &[PathBuf], _allowed: &[u32]) -> Result<(), String> {
         Err(WINDOWS_ONLY.into())
     }
 

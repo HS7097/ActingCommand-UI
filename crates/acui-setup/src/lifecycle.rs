@@ -28,6 +28,16 @@ pub struct Closed {
     pub previous: Option<InstallTransitionTicket>,
 }
 
+/// The pid the Runtime's discovery file names, when there is one: the owner a
+/// transaction is about to close, which may use its own programs in a pre-check.
+pub fn owner_pid(state_root: &Path) -> Option<u32> {
+    let bytes =
+        acui_installation::read_bounded(&state_root.join("runtime-info.json"), 1024 * 1024)
+            .ok()?;
+    let info: Value = serde_json::from_slice(&bytes).ok()?;
+    info["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok())
+}
+
 /// Only the named v0.11.0 source uses cold startup. Other releases must answer
 /// the current protocol; an unsupported control call is a visible failure.
 pub fn cold(runtime_sha: &str) -> bool {

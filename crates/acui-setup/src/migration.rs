@@ -59,6 +59,14 @@ pub fn upgrade(
         report,
     )?;
     transaction.unchanged()?;
+    // A console, an MCP client or a tool using what will move stops the run here,
+    // before the Runtime is closed.
+    let owner: Vec<u32> = lifecycle::owner_pid(&state_root).into_iter().collect();
+    slots::precheck(
+        &[root.join("runtime"), root.join("ui")],
+        &tools.moving(root),
+        &owner,
+    )?;
     let closed = lifecycle::close(
         root,
         &config,
@@ -99,17 +107,21 @@ pub fn upgrade(
         manager_created: false,
         tools: None,
     };
-    // Native exclusion covers all original program files while their directories
-    // move; the root tools that change are held by `root_tools`. Occupied UI/MCP
-    // files stop only this migration, with the old layout intact.
-    let mut occupancy = Vec::new();
-    for name in ["runtime", "ui"] {
-        occupancy.push(slots::NativeOccupancy::acquire(&root.join(name))?);
-    }
     let changed = (|| {
         transaction.unchanged()?;
+        // Native exclusion covers every original program file for the Restart
+        // Manager answer. NTFS refuses to rename a directory with a file beneath
+        // it open, so the handles go just before the moves; a user that appears in
+        // between makes a move fail as occupied, and the restore below says the
+        // Runtime remains stopped. The root tools that change are held by
+        // `root_tools`.
+        let mut occupancy = Vec::new();
+        for name in ["runtime", "ui"] {
+            occupancy.push(slots::NativeOccupancy::acquire(&root.join(name))?);
+        }
+        drop(occupancy);
         for name in ["runtime", "ui", "actingd.config.json"] {
-            fs::rename(root.join(name), migration.backup.join(name))
+            slots::rename_unoccupied(&root.join(name), &migration.backup.join(name))
                 .map_err(|error| format!("Cannot retain original {name}: {error}"))?;
             migration.moved.push(name);
         }
@@ -168,7 +180,6 @@ pub fn upgrade(
             ),
         });
     }
-    drop(occupancy);
     if closed.was_running {
         plan.mark_start_attempt()?;
     }

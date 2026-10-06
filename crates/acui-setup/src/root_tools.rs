@@ -160,6 +160,16 @@ fn walk(base: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) -> Result<
 }
 
 impl Plan {
+    /// The root files a replacement or retirement moves, for a pre-check.
+    pub fn moving(&self, root: &Path) -> Vec<PathBuf> {
+        let tools = root.join("tools");
+        self.replace
+            .iter()
+            .chain(&self.retire)
+            .map(|name| tools.join(relative(name)))
+            .collect()
+    }
+
     /// One line per kind of change, each naming its files.
     pub fn describe(&self, report: Report<'_>) -> Result<(), String> {
         for (label, names) in [
