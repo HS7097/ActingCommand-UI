@@ -257,16 +257,174 @@ pub fn upgrade_selections(
     Ok(selected)
 }
 
-/// Merge declarations in source order. Equal complete bindings are reused; a
-/// different value always presents both values and their source before choosing.
+/// One maintenance binding whose configured value differs from the one the
+/// release proposes. Nothing is chosen for it: the caller presents the whole
+/// list once and `apply` writes the answers (Workflow #359).
+pub struct Conflict {
+    pub key: String,
+    /// The binding as people read it.
+    pub item: String,
+    pub old: Value,
+    pub old_source: String,
+    pub new: Value,
+    pub new_source: String,
+    target: Target,
+}
+
+enum Target {
+    Prerequisite(String),
+    Startup(usize),
+    ReturnHome(String, String),
+}
+
+impl Target {
+    fn rank(&self) -> u8 {
+        match self {
+            Target::Prerequisite(_) => 0,
+            Target::Startup(_) => 1,
+            Target::ReturnHome(..) => 2,
+        }
+    }
+}
+
+/// Which value a conflicting binding keeps.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Old,
+    New,
+}
+
+/// All conflicts at once, answered row by row in the same order.
+pub type Resolve<'a> = &'a mut dyn FnMut(&[Conflict]) -> Result<Vec<Side>, String>;
+
+impl Conflict {
+    pub fn old_text(&self) -> String {
+        brief(&self.old)
+    }
+
+    pub fn new_text(&self) -> String {
+        brief(&self.new)
+    }
+}
+
+/// A binding in one line: its plain path and the first twelve digits of its
+/// digest, or its package id.
+fn brief(value: &Value) -> String {
+    let path = value
+        .get("package")
+        .or_else(|| value.get("package_path"))
+        .and_then(Value::as_str);
+    let digest = value
+        .get("expected_sha256")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value.get("package_digest").and_then(|digest| {
+                digest
+                    .as_str()
+                    .or_else(|| digest.get("sha256").and_then(Value::as_str))
+            })
+        })
+        .map(|digest| {
+            digest
+                .strip_prefix("sha256:")
+                .unwrap_or(digest)
+                .chars()
+                .take(12)
+                .collect::<String>()
+        });
+    let plain = |path: &str| {
+        crate::generations::plain(Path::new(path))
+            .display()
+            .to_string()
+    };
+    match (path, digest) {
+        (Some(path), Some(digest)) => format!("{} · sha256 {digest}", plain(path)),
+        (Some(path), None) => plain(path),
+        _ => match value.get("package_id").and_then(Value::as_str) {
+            Some(id) => format!("package_id {id}"),
+            None => value.to_string(),
+        },
+    }
+}
+
+/// An instance's alias, or its place when it has none.
+pub fn alias_of(instance: &Value, at: usize) -> String {
+    instance["alias"]
+        .as_str()
+        .map_or_else(|| format!("instances[{at}]"), str::to_owned)
+}
+
+/// What one run's release proposes, and which proposals differ from the
+/// configuration.
+struct Merge<'a> {
+    root: &'a Path,
+    old_source: &'a str,
+    proposed: BTreeMap<String, (Value, String)>,
+    conflicts: Vec<Conflict>,
+}
+
+impl Merge<'_> {
+    /// An empty binding takes the proposal; an equal one stays as it is spelled
+    /// (only a verbatim-prefixed path loses that prefix); a different one is a
+    /// conflict and stays untouched until `apply`. Two bundles proposing
+    /// different values for one binding is a release defect.
+    fn propose(
+        &mut self,
+        slot: &mut Value,
+        new: Value,
+        key: String,
+        item: String,
+        target: Target,
+        source: &str,
+    ) -> Result<(), String> {
+        if let Some((earlier, earlier_source)) = self.proposed.get(&key) {
+            if normalized(earlier, self.root) == normalized(&new, self.root) {
+                return Ok(());
+            }
+            return Err(format!(
+                "两个标准包对同一维护绑定给出不同的值 / Two bundles propose different values for one maintenance binding: {key}: {earlier_source}; {source}"
+            ));
+        }
+        self.proposed
+            .insert(key.clone(), (new.clone(), source.to_owned()));
+        if slot.is_null() {
+            *slot = new;
+            return Ok(());
+        }
+        if normalized(slot, self.root) == normalized(&new, self.root) {
+            plain_paths(slot);
+            return Ok(());
+        }
+        self.conflicts.push(Conflict {
+            key,
+            item,
+            old: slot.clone(),
+            old_source: self.old_source.to_owned(),
+            new,
+            new_source: source.to_owned(),
+            target,
+        });
+        Ok(())
+    }
+}
+
+/// Merge declarations in source order. Equal complete bindings are reused;
+/// every different value is returned as a `Conflict`, sorted by kind and key,
+/// for one decision over the whole list. `old_source` names the configuration
+/// the current values come from.
 pub fn augment(
     document: &mut Value,
     root: &Path,
     prepared: &[Prepared],
     selections: &[Selection],
-    choose: Choose<'_>,
-) -> Result<bool, String> {
-    let mut sources = BTreeMap::new();
+    old_source: &str,
+) -> Result<(bool, Vec<Conflict>), String> {
+    let mut merge = Merge {
+        root,
+        old_source,
+        proposed: BTreeMap::new(),
+        conflicts: Vec::new(),
+    };
     let mut registered = BTreeSet::new();
     let mut registered_home = BTreeSet::new();
     let mut active = false;
@@ -276,7 +434,13 @@ pub fn augment(
             continue;
         };
         active = true;
-        let source = item.bundle.file.display().to_string();
+        let file = item
+            .bundle
+            .file
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| item.bundle.file.display().to_string());
+        let source = format!("{file} ({})", item.bundle.game);
         for entry in index
             .maintenance
             .iter()
@@ -292,9 +456,18 @@ pub fn augment(
                 match purpose {
                     MaintenanceUse::Startup => {
                         let key = format!("instances[{}].startup_package", selected.instance);
+                        let alias =
+                            alias_of(&document["instances"][selected.instance], selected.instance);
                         let value = json!({"package": path, "expected_sha256": pack.digest});
                         let slot = &mut document["instances"][selected.instance]["startup_package"];
-                        merge(slot, value, &key, &source, root, &mut sources, choose)?;
+                        merge.propose(
+                            slot,
+                            value,
+                            key,
+                            format!("实例 / Instance {alias} 启动包 / startup package"),
+                            Target::Startup(selected.instance),
+                            &source,
+                        )?;
                     }
                     MaintenanceUse::Prerequisite | MaintenanceUse::ReturnHome => {
                         if registered.insert((selected.bundle, pack.package_id.clone())) {
@@ -306,7 +479,14 @@ pub fn augment(
                                 "prerequisite_packages",
                                 &[("package_id", &pack.package_id)],
                             )?;
-                            merge(slot, value, &key, &source, root, &mut sources, choose)?;
+                            merge.propose(
+                                slot,
+                                value,
+                                key,
+                                format!("前置包 / Prerequisite {}", pack.package_id),
+                                Target::Prerequisite(pack.package_id.clone()),
+                                &source,
+                            )?;
                         }
                         if *purpose == MaintenanceUse::ReturnHome
                             && registered_home.insert((selected.bundle, entry.server.clone()))
@@ -319,14 +499,128 @@ pub fn augment(
                                 "return_home_packages",
                                 &[("game", &index.game), ("server", &entry.server)],
                             )?;
-                            merge(slot, value, &key, &source, root, &mut sources, choose)?;
+                            merge.propose(
+                                slot,
+                                value,
+                                key,
+                                format!("回主页包 / Return-home {}/{}", index.game, entry.server),
+                                Target::ReturnHome(index.game.clone(), entry.server.clone()),
+                                &source,
+                            )?;
                         }
                     }
                 }
             }
         }
     }
-    Ok(active)
+    let mut conflicts = merge.conflicts;
+    conflicts.sort_by(|left, right| {
+        (left.target.rank(), &left.key).cmp(&(right.target.rank(), &right.key))
+    });
+    Ok((active, conflicts))
+}
+
+/// Counts by kind, and what is not a difference.
+pub fn summary(conflicts: &[Conflict]) -> String {
+    let count = |rank: u8| {
+        conflicts
+            .iter()
+            .filter(|conflict| conflict.target.rank() == rank)
+            .count()
+    };
+    format!(
+        "前置包 / prerequisite {} · 启动包 / startup {} · 回主页包 / return-home {}；仅路径写法不同（带不带 \\\\?\\ 前缀、分隔符或大小写）不算差异，不列出 / a difference in path spelling alone (the \\\\?\\ prefix, separators or case) is not a difference and is not listed",
+        count(0),
+        count(1),
+        count(2)
+    )
+}
+
+/// Every conflict into the log (and the console): item, both values with
+/// their sources, and both values whole.
+pub fn list(conflicts: &[Conflict], report: Report<'_>) -> Result<(), String> {
+    if conflicts.is_empty() {
+        return report.line("维护绑定没有差异 / No maintenance binding differs");
+    }
+    report.line(&format!(
+        "维护绑定差异 / Maintenance binding differences: {}（{}）",
+        conflicts.len(),
+        summary(conflicts)
+    ))?;
+    for (at, conflict) in conflicts.iter().enumerate() {
+        report.line(&format!(
+            "  {}. {} [{}]\n     旧值 / current ({}): {}\n     新值 / proposed ({}): {}\n     旧值全文 / current value: {}\n     新值全文 / proposed value: {}",
+            at + 1,
+            conflict.item,
+            conflict.key,
+            conflict.old_source,
+            conflict.old_text(),
+            conflict.new_source,
+            conflict.new_text(),
+            conflict.old,
+            conflict.new
+        ))?;
+    }
+    Ok(())
+}
+
+/// Writes each answer: `New` replaces the binding, `Old` keeps it (a
+/// verbatim-prefixed path loses that prefix).
+pub fn apply(document: &mut Value, conflicts: &[Conflict], sides: &[Side]) -> Result<(), String> {
+    if sides.len() != conflicts.len() {
+        return Err("维护绑定的答复与差异数目不符 / The answers do not match the maintenance binding differences".into());
+    }
+    for (conflict, side) in conflicts.iter().zip(sides) {
+        let slot = match &conflict.target {
+            Target::Startup(at) => &mut document["instances"][*at]["startup_package"],
+            Target::Prerequisite(id) => {
+                array_slot(document, "prerequisite_packages", &[("package_id", id.as_str())])?
+            }
+            Target::ReturnHome(game, server) => array_slot(
+                document,
+                "return_home_packages",
+                &[("game", game.as_str()), ("server", server.as_str())],
+            )?,
+        };
+        match side {
+            Side::New => *slot = conflict.new.clone(),
+            Side::Old => plain_paths(slot),
+        }
+    }
+    Ok(())
+}
+
+/// The whole list logged, one decision over it, the answers logged and written.
+pub fn decide(
+    document: &mut Value,
+    conflicts: &[Conflict],
+    resolve: Resolve<'_>,
+    report: Report<'_>,
+) -> Result<(), String> {
+    list(conflicts, report)?;
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+    let sides = resolve(conflicts)?;
+    let how = if sides.iter().all(|side| *side == Side::New) {
+        "全部采用新值 / all proposed"
+    } else if sides.iter().all(|side| *side == Side::Old) {
+        "全部保留旧值 / all current"
+    } else {
+        "逐项决定 / decided each"
+    };
+    report.line(&format!("维护绑定的处理 / Resolution: {how}"))?;
+    for (conflict, side) in conflicts.iter().zip(&sides) {
+        report.line(&format!(
+            "  {} → {}",
+            conflict.key,
+            match side {
+                Side::New => "新值 / proposed",
+                Side::Old => "旧值 / current",
+            }
+        ))?;
+    }
+    apply(document, conflicts, &sides)
 }
 
 fn array_slot<'a>(
@@ -406,38 +700,6 @@ fn normalized(value: &Value, root: &Path) -> Value {
         value["package_digest"] = json!(hash);
     }
     value
-}
-
-fn merge(
-    slot: &mut Value,
-    new: Value,
-    key: &str,
-    source: &str,
-    root: &Path,
-    sources: &mut BTreeMap<String, String>,
-    choose: Choose<'_>,
-) -> Result<(), String> {
-    if !slot.is_null() && normalized(slot, root) != normalized(&new, root) {
-        let old_source = sources
-            .get(key)
-            .map(String::as_str)
-            .unwrap_or("actingd.config.json");
-        let answer = choose(format!("维护绑定冲突 / Maintenance binding conflict: {key}\n旧值 / Current ({old_source}):\n{slot}\n新值 / Proposed ({source}):\n{new}"), vec!["保留旧值 / Keep current".into(), "采用新值 / Use proposed".into()])?;
-        match answer {
-            0 => {
-                plain_paths(slot);
-                return Ok(());
-            }
-            1 => {}
-            _ => return Err("Invalid conflict selection".into()),
-        }
-    } else if !slot.is_null() {
-        plain_paths(slot);
-        return Ok(());
-    }
-    *slot = new;
-    sources.insert(key.to_owned(), source.to_owned());
-    Ok(())
 }
 
 fn resolve(root: &Path, path: &str) -> PathBuf {
@@ -670,6 +932,11 @@ impl Transaction {
             installation: None,
             selection_plan: None,
         })
+    }
+
+    /// The configuration file this plan was read from.
+    pub fn config_path(&self) -> &Path {
+        &self.config
     }
 
     pub fn unchanged(&self) -> Result<(), String> {

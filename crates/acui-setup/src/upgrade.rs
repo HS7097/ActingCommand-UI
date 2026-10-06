@@ -157,6 +157,7 @@ pub fn upgrade(
     verified: &Verified,
     bundles: &[Bundle],
     choose: maintenance::Choose<'_>,
+    resolve: maintenance::Resolve<'_>,
     report: Report<'_>,
 ) -> Result<Upgraded, String> {
     let writer = Writer::acquire(root)?;
@@ -167,7 +168,7 @@ pub fn upgrade(
         .try_exists()
         .map_err(|error| error.to_string())?
     {
-        return migration::upgrade(&writer, verified, bundles, choose, report);
+        return migration::upgrade(&writer, verified, bundles, choose, resolve, report);
     }
     acui_installation::manager_program(root)?;
     let baseline = Snapshot::read(root)?;
@@ -176,26 +177,29 @@ pub fn upgrade(
     let state_root = baseline.state_root()?;
     let (runtime_sha, _) = members(&baseline)?;
     let target = other(baseline.selection.slot);
-    slots::materialize(&writer, target, verified, report)?;
     let document =
         serde_json::from_slice(&baseline.config_bytes).map_err(|error| error.to_string())?;
-    let (document, qualify) = configuration(
+    // Every decision is taken before any installation material changes.
+    let planned = configuration(
         root,
         &source_config,
         document,
         verified,
         bundles,
         choose,
+        resolve,
         report,
     )?;
+    slots::materialize(&writer, target, verified, report)?;
+    maintenance::place(&planned.prepared, root, report)?;
     let tools = root_tools::plan(root, verified)?;
     let mut plan = writer.prepare(
         Some(baseline.clone()),
         target,
         &source_config,
         &previous,
-        document,
-        qualify,
+        planned.document,
+        planned.qualify,
         report,
     )?;
     baseline.unchanged()?;
@@ -225,7 +229,19 @@ pub fn other(slot: InstallSlot) -> InstallSlot {
     }
 }
 
-pub fn configuration(
+/// A configuration plan: the successor document, whether its maintenance
+/// chains need full qualification, the staged bundles still to be placed, and
+/// the maintenance bindings that differ from the current configuration.
+pub struct Planned {
+    pub document: serde_json::Value,
+    pub qualify: bool,
+    pub prepared: Vec<maintenance::Prepared>,
+    pub conflicts: Vec<maintenance::Conflict>,
+}
+
+/// Everything an upgrade decides, computed from staging alone: nothing under
+/// the installation changes here, and the conflicts are left unanswered.
+pub fn plan_configuration(
     root: &Path,
     source_config: &Path,
     mut document: serde_json::Value,
@@ -233,7 +249,7 @@ pub fn configuration(
     bundles: &[Bundle],
     choose: maintenance::Choose<'_>,
     report: Report<'_>,
-) -> Result<(serde_json::Value, bool), String> {
+) -> Result<Planned, String> {
     crate::generations::rebase_config(
         &mut document,
         source_config
@@ -243,9 +259,36 @@ pub fn configuration(
     let prepared =
         maintenance::prepare(bundles, &verified.staging.join("resource-packages"), report)?;
     let selected = maintenance::upgrade_selections(&mut document, root, &prepared, choose, report)?;
-    let qualify = maintenance::augment(&mut document, root, &prepared, &selected, choose)?;
-    maintenance::place(&prepared, root, report)?;
-    Ok((document, qualify))
+    let old_source = crate::generations::plain(source_config)
+        .display()
+        .to_string();
+    let (qualify, conflicts) =
+        maintenance::augment(&mut document, root, &prepared, &selected, &old_source)?;
+    Ok(Planned {
+        document,
+        qualify,
+        prepared,
+        conflicts,
+    })
+}
+
+/// `plan_configuration`, then one decision over all its conflicts, written
+/// into the document. The caller places `prepared` once the slot is laid out.
+#[allow(clippy::too_many_arguments)]
+pub fn configuration(
+    root: &Path,
+    source_config: &Path,
+    document: serde_json::Value,
+    verified: &Verified,
+    bundles: &[Bundle],
+    choose: maintenance::Choose<'_>,
+    resolve: maintenance::Resolve<'_>,
+    report: Report<'_>,
+) -> Result<Planned, String> {
+    let mut planned =
+        plan_configuration(root, source_config, document, verified, bundles, choose, report)?;
+    maintenance::decide(&mut planned.document, &planned.conflicts, resolve, report)?;
+    Ok(planned)
 }
 
 /// `tools`: an upgrade's root-tool update; a switch (rollback) never touches the root.

@@ -115,8 +115,10 @@ struct State {
     /// The launcher and shortcuts the options step wrote in this run, so a
     /// retry can take back what it no longer wants.
     options_written: Vec<PathBuf>,
-    /// One explicit resource association or binding conflict, answered on the UI thread.
+    /// One explicit resource association, answered on the UI thread.
     decision: Option<std::sync::mpsc::SyncSender<Result<usize, String>>>,
+    /// The maintenance binding conflicts, all answered at once on one page.
+    conflict_decision: Option<std::sync::mpsc::SyncSender<Result<Vec<maintenance::Side>, String>>>,
 }
 
 /// The worker phases the window must not close in: held while laying files
@@ -263,6 +265,30 @@ fn install_callbacks(window: &SetupWindow, state: &Shared) {
                         fail(&state, &window.as_weak(), "配置选择已过期 / Configuration choice expired".into());
                     }
                 }
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let state = Arc::clone(state);
+        window.on_conflicts_decide(move |how| {
+            if let Some(window) = weak.upgrade() {
+                decide_conflicts(&window, &state, how);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_conflict_choice_changed(move |row, choice| {
+            if let Some(window) = weak.upgrade() {
+                let rows = window.get_conflicts();
+                if let Some(mut data) = usize::try_from(row).ok().and_then(|at| rows.row_data(at)) {
+                    if data.choice != choice {
+                        data.choice = choice;
+                        rows.set_row_data(row as usize, data);
+                    }
+                }
+                refresh_conflict_tally(&window);
             }
         });
     }
@@ -450,6 +476,110 @@ fn ask(state: &Shared, weak: &slint::Weak<SetupWindow>, text: String, choices: V
         if window.get_step() == 5 { window.set_step(window.get_decision_return_step()); }
     });
     result?
+}
+
+/// All maintenance binding conflicts on one page (Workflow #359): every row
+/// with its old and new value and their sources; the person takes all new, all
+/// old, or decides each row and confirms once. The worker holds no State lock
+/// while waiting; Cancel follows its existing error/rollback path.
+fn resolve_page(
+    state: &Shared,
+    weak: &slint::Weak<SetupWindow>,
+    conflicts: &[maintenance::Conflict],
+) -> Result<Vec<maintenance::Side>, String> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    {
+        let mut state = lock(state);
+        if state.decision.is_some() || state.conflict_decision.is_some() {
+            return Err("Another configuration choice is pending".into());
+        }
+        state.conflict_decision = Some(sender);
+    }
+    let rows: Vec<ConflictRow> = conflicts
+        .iter()
+        .map(|conflict| ConflictRow {
+            item: conflict.item.clone().into(),
+            current: conflict.old_text().into(),
+            current_source: conflict.old_source.clone().into(),
+            proposed: conflict.new_text().into(),
+            proposed_source: conflict.new_source.clone().into(),
+            choice: 0,
+        })
+        .collect();
+    let heading = format!(
+        "维护绑定差异 / Maintenance binding differences: {}",
+        conflicts.len()
+    );
+    let summary = maintenance::summary(conflicts);
+    let shown = weak.upgrade_in_event_loop(move |window| {
+        window.set_decision_return_step(window.get_step());
+        window.set_conflicts(Rc::new(VecModel::from(rows)).into());
+        window.set_conflicts_per_row(false);
+        window.set_conflicts_heading(heading.into());
+        window.set_conflicts_summary(summary.into());
+        refresh_conflict_tally(&window);
+        window.set_step(6);
+    });
+    if let Err(error) = shown {
+        lock(state).conflict_decision = None;
+        return Err(format!("Cannot show the maintenance binding differences: {error}"));
+    }
+    let result = receiver.recv_timeout(Duration::from_secs(30 * 60))
+        .map_err(|error| format!("配置选择未完成（30 分钟期限）/ Configuration choice not completed (30-minute limit): {error}"));
+    lock(state).conflict_decision = None;
+    let _ = weak.upgrade_in_event_loop(|window| {
+        if window.get_step() == 6 { window.set_step(window.get_decision_return_step()); }
+    });
+    result?
+}
+
+/// The conflict page's answer: 1 all new, 2 all old, 3 the rows as decided
+/// (only when every row is decided), anything else cancels the plan.
+fn decide_conflicts(window: &SetupWindow, state: &Shared, how: i32) {
+    let rows = window.get_conflicts();
+    let answer = match how {
+        1 => Ok(vec![maintenance::Side::New; rows.row_count()]),
+        2 => Ok(vec![maintenance::Side::Old; rows.row_count()]),
+        3 => {
+            let sides: Option<Vec<_>> = rows
+                .iter()
+                .map(|row| match row.choice {
+                    1 => Some(maintenance::Side::Old),
+                    2 => Some(maintenance::Side::New),
+                    _ => None,
+                })
+                .collect();
+            match sides {
+                Some(sides) => Ok(sides),
+                None => return,
+            }
+        }
+        _ => Err("用户取消配置计划 / Configuration plan cancelled by the user".to_string()),
+    };
+    let sender = lock(state).conflict_decision.take();
+    window.set_step(window.get_decision_return_step());
+    window.set_busy(true);
+    if let Some(sender) = sender {
+        if sender.send(answer).is_err() {
+            fail(state, &window.as_weak(), "配置选择已过期 / Configuration choice expired".into());
+        }
+    }
+}
+
+/// How many rows are decided each way, and whether all are.
+fn refresh_conflict_tally(window: &SetupWindow) {
+    let (mut old, mut new, mut open) = (0, 0, 0);
+    for row in window.get_conflicts().iter() {
+        match row.choice {
+            1 => old += 1,
+            2 => new += 1,
+            _ => open += 1,
+        }
+    }
+    window.set_conflicts_tally(
+        format!("新值 / proposed {new} · 旧值 / current {old} · 未选 / undecided {open}").into(),
+    );
+    window.set_conflicts_complete(open == 0);
 }
 
 /// A worker's reporter. Every line goes into the log — a log write failing
@@ -1031,7 +1161,8 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
                         }
                         if !local_bundle.is_empty() { bundles.push(bundle::local(&local_bundle)?); }
                         let mut choose = |text, choices| ask(&state, &worker_weak, text, choices);
-                        upgrade::upgrade(&root, &verified, &bundles, &mut choose, &mut report)
+                        let mut resolve = |conflicts: &[maintenance::Conflict]| resolve_page(&state, &worker_weak, conflicts);
+                        upgrade::upgrade(&root, &verified, &bundles, &mut choose, &mut resolve, &mut report)
                             .map(|upgraded| (upgraded.laid_out.clone(), Some(upgraded), members, None))
                     }
                     // A fresh install is configured at once: the state root
@@ -1584,8 +1715,10 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
             let selections: Vec<_> = picks.iter().enumerate().map(|(at, (_, _, choice))| maintenance::Selection {
                 instance: at, bundle: choice.bundle, server: choice.server.clone(),
             }).collect();
-            let mut choose = |text, choices| ask(&state, &worker_weak, text, choices);
-            let qualify = maintenance::augment(&mut transaction.document, &root, &prepared, &selections, &mut choose)?;
+            let old_source = transaction.config_path().display().to_string();
+            let (qualify, conflicts) = maintenance::augment(&mut transaction.document, &root, &prepared, &selections, &old_source)?;
+            let mut resolve = |conflicts: &[maintenance::Conflict]| resolve_page(&state, &worker_weak, conflicts);
+            maintenance::decide(&mut transaction.document, &conflicts, &mut resolve, &mut report)?;
             let planned_state_root = transaction.state_root()?;
             transaction.unchanged()?;
             let closed = instance_step::stop(&root, &planned_state_root, &mut report)?;

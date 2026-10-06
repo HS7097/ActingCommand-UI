@@ -19,6 +19,7 @@ pub fn upgrade(
     verified: &Verified,
     bundles: &[Bundle],
     choose: maintenance::Choose<'_>,
+    resolve: maintenance::Resolve<'_>,
     report: Report<'_>,
 ) -> Result<upgrade::Upgraded, String> {
     let root = writer.root();
@@ -29,24 +30,27 @@ pub fn upgrade(
     let original_config =
         acui_installation::read_bounded(&config, acui_installation::MAX_CONFIG_BYTES)?;
     let state_root = transaction.state_root()?;
-    let programs = slots::materialize(writer, InstallSlot::A, verified, report)?;
-    let (document, qualify) = upgrade::configuration(
+    // Every decision is taken before any installation material changes.
+    let planned = upgrade::configuration(
         root,
         &config,
         transaction.document.clone(),
         verified,
         bundles,
         choose,
+        resolve,
         report,
     )?;
+    let programs = slots::materialize(writer, InstallSlot::A, verified, report)?;
+    maintenance::place(&planned.prepared, root, report)?;
     let tools = root_tools::plan(root, verified)?;
     let mut plan = writer.prepare(
         None,
         InstallSlot::A,
         &config,
         root,
-        document,
-        qualify,
+        planned.document,
+        planned.qualify,
         report,
     )?;
     transaction.unchanged()?;
