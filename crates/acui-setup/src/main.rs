@@ -363,13 +363,41 @@ fn install_callbacks(window: &SetupWindow, state: &Shared) {
     }
     {
         let weak = window.as_weak();
-        window.on_conflict_choice_changed(move |row, choice| {
+        window.on_conflict_toggle(move |row, side| {
             if let Some(window) = weak.upgrade() {
+                // One box per side: checking one clears the other; checking a
+                // checked box leaves the row unchosen.
                 let rows = window.get_conflicts();
-                if let Some(mut data) = usize::try_from(row).ok().and_then(|at| rows.row_data(at)) {
-                    if data.choice != choice {
-                        data.choice = choice;
-                        rows.set_row_data(row as usize, data);
+                if let Some(at) = usize::try_from(row).ok() {
+                    if let Some(mut data) = rows.row_data(at) {
+                        data.choice = if data.choice == side { 0 } else { side };
+                        rows.set_row_data(at, data);
+                    }
+                }
+                refresh_conflict_tally(&window);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_conflict_header_toggle(move |side| {
+            if let Some(window) = weak.upgrade() {
+                // A checked header (every row on that side) clears that side on
+                // every row; an unchecked or indeterminate one sets it on every row
+                // and so clears the other column.
+                let rows = window.get_conflicts();
+                let count = rows.row_count();
+                let all = count > 0 && rows.iter().all(|row| row.choice == side);
+                for at in 0..count {
+                    if let Some(mut data) = rows.row_data(at) {
+                        let choice = match all {
+                            true => 0,
+                            false => side,
+                        };
+                        if data.choice != choice {
+                            data.choice = choice;
+                            rows.set_row_data(at, data);
+                        }
                     }
                 }
                 refresh_conflict_tally(&window);
@@ -598,7 +626,6 @@ fn resolve_page(
     let shown = weak.upgrade_in_event_loop(move |window| {
         window.set_decision_return_step(window.get_step());
         window.set_conflicts(Rc::new(VecModel::from(rows)).into());
-        window.set_conflicts_per_row(false);
         window.set_conflicts_heading(heading.into());
         window.set_conflicts_summary(summary.into());
         refresh_conflict_tally(&window);
@@ -617,13 +644,11 @@ fn resolve_page(
     result?
 }
 
-/// The conflict page's answer: 1 all new, 2 all old, 3 the rows as decided
-/// (only when every row is decided), anything else cancels the plan.
+/// The conflict page's answer: 3 the rows as checked (only when every row has
+/// exactly one side), anything else cancels the plan.
 fn decide_conflicts(window: &SetupWindow, state: &Shared, how: i32) {
     let rows = window.get_conflicts();
     let answer = match how {
-        1 => Ok(vec![maintenance::Side::New; rows.row_count()]),
-        2 => Ok(vec![maintenance::Side::Old; rows.row_count()]),
         3 => {
             let sides: Option<Vec<_>> = rows
                 .iter()
@@ -650,7 +675,8 @@ fn decide_conflicts(window: &SetupWindow, state: &Shared, how: i32) {
     }
 }
 
-/// How many rows are decided each way, and whether all are.
+/// How many rows are decided each way, whether all are, and each header box:
+/// checked when every row has its side, unchecked when none, else the square.
 fn refresh_conflict_tally(window: &SetupWindow) {
     let (mut old, mut new, mut open) = (0, 0, 0);
     for row in window.get_conflicts().iter() {
@@ -660,6 +686,14 @@ fn refresh_conflict_tally(window: &SetupWindow) {
             _ => open += 1,
         }
     }
+    let total = old + new + open;
+    let header = |count: i32| match count {
+        0 => 0,
+        count if count == total => 1,
+        _ => 2,
+    };
+    window.set_conflicts_header_current(header(old));
+    window.set_conflicts_header_proposed(header(new));
     window.set_conflicts_tally(
         format!("新值 / proposed {new} · 旧值 / current {old} · 未选 / undecided {open}").into(),
     );

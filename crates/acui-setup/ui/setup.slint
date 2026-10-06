@@ -15,8 +15,7 @@ export struct InstanceRow {
 
 // One maintenance binding whose configured value differs from the release's:
 // what it is, the current and the proposed value with where each comes from,
-// and — when the person decides each row — 0 not decided, 1 keep current,
-// 2 use proposed.
+// and the row's choice: 0 none yet, 1 keep current, 2 use proposed.
 export struct ConflictRow {
     item: string,
     current: string,
@@ -109,6 +108,83 @@ component StepTag inherits Rectangle {
     }
 }
 
+// A checkbox that can also show "some" (the conflict table's select-all
+// headers, and its rows): state 0 unchecked, 1 checked, 2 indeterminate (a
+// filled square). Drawn like the std-widgets CheckBox with the Palette, so it
+// follows light and dark; it takes keyboard focus and Space toggles it. Only
+// `toggled` changes anything: the state comes from the caller.
+component TriStateBox {
+    in property <int> state;
+    in property <string> label;
+    callback toggled();
+    width: 18px;
+    height: 18px;
+    accessible-role: checkbox;
+    accessible-checkable: true;
+    accessible-checked: root.state == 1;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.toggled();
+    }
+    forward-focus: focus-scope;
+
+    Rectangle {
+        border-radius: 2px;
+        background: root.state == 1 ? Palette.accent-background : Palette.control-background;
+        border-width: root.state == 1 ? 0px : 1px;
+        border-color: touch-area.has-hover ? Palette.accent-background : Palette.border;
+    }
+
+    if root.state == 1: Path {
+        width: 18px;
+        height: 18px;
+        viewbox-width: 18;
+        viewbox-height: 18;
+        commands: "M 4 9.5 L 7.5 13 L 14 5.5";
+        stroke: Palette.accent-foreground;
+        stroke-width: 2px;
+        fill: transparent;
+    }
+
+    if root.state == 2: Rectangle {
+        x: 5px;
+        y: 5px;
+        width: 8px;
+        height: 8px;
+        border-radius: 1px;
+        background: Palette.accent-background;
+    }
+
+    touch-area := TouchArea {
+        clicked => {
+            focus-scope.focus();
+            root.toggled();
+        }
+    }
+
+    focus-scope := FocusScope {
+        x: 0;
+        width: 0;
+        key-pressed(event) => {
+            if (event.text == " ") {
+                root.toggled();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    if focus-scope.has-focus: Rectangle {
+        x: -3px;
+        y: -3px;
+        width: root.width + 6px;
+        height: root.height + 6px;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: Palette.foreground;
+    }
+}
+
 export component SetupWindow inherits Window {
     title: "ActingCommand 安装引导 / Setup";
     icon: @image-url("../../acui-app/assets/acui-256.png");
@@ -177,9 +253,11 @@ export component SetupWindow inherits Window {
     in property <[string]> decision-options;
     in-out property <int> decision-choice;
     in property <int> decision-return-step;
-    // Step 6: every maintenance binding conflict on one page (Workflow #359).
+    // Step 6: every maintenance binding conflict on one page (Workflow #359):
+    // each header box is 0 unchecked, 1 checked, 2 indeterminate.
     in property <[ConflictRow]> conflicts;
-    in-out property <bool> conflicts-per-row;
+    in property <int> conflicts-header-current;
+    in property <int> conflicts-header-proposed;
     in property <string> conflicts-heading;
     in property <string> conflicts-summary;
     in property <string> conflicts-tally;
@@ -195,9 +273,11 @@ export component SetupWindow inherits Window {
     callback add-bundle();
     callback skip-instances();
     callback decide(bool);
-    // 0 cancel, 1 use all proposed, 2 keep all current, 3 the rows as decided.
+    // 0 cancel, 3 confirm the rows as decided.
     callback conflicts-decide(int);
-    callback conflict-choice-changed(int, int);
+    // A row's box (row, side 1 keep current / 2 use proposed), and a header's.
+    callback conflict-toggle(int, int);
+    callback conflict-header-toggle(int);
 
     property <[string]> step-labels: [
         "0 位置 / Location",
@@ -451,65 +531,127 @@ export component SetupWindow inherits Window {
                     Body { text: root.note; }
                 }
 
+                // Step 6: the conflict table (Workflow #359 item 4). Two checkbox
+                // columns lead every row, at fixed widths, so each header's
+                // select-all box sits exactly above its column's boxes, one row
+                // higher, whatever the list's scroll bar takes on the right.
                 if !root.failed && root.step == 6: VerticalLayout {
                     spacing: 8px;
                     Head { text: root.conflicts-heading; }
                     Caption { text: root.conflicts-summary; }
                     HorizontalLayout {
-                        spacing: 6px;
+                        spacing: 8px;
                         vertical-stretch: 0;
-                        Button {
-                            text: "全部采用新值 / Use all proposed";
-                            clicked => { root.conflicts-decide(1); }
+                        HorizontalLayout {
+                            width: 112px;
+                            spacing: 6px;
+                            alignment: start;
+                            VerticalLayout {
+                                alignment: center;
+                                TriStateBox {
+                                    state: root.conflicts-header-current;
+                                    label: "保留旧值（全部）/ Keep current (all)";
+                                    toggled => { root.conflict-header-toggle(1); }
+                                }
+                            }
+                            Body {
+                                text: "保留旧值 / Keep current";
+                                font-weight: 700;
+                                horizontal-stretch: 1;
+                            }
                         }
-                        Button {
-                            text: "全部保留旧值 / Keep all current";
-                            clicked => { root.conflicts-decide(2); }
+                        HorizontalLayout {
+                            width: 112px;
+                            spacing: 6px;
+                            alignment: start;
+                            VerticalLayout {
+                                alignment: center;
+                                TriStateBox {
+                                    state: root.conflicts-header-proposed;
+                                    label: "采用新值（全部）/ Use proposed (all)";
+                                    toggled => { root.conflict-header-toggle(2); }
+                                }
+                            }
+                            Body {
+                                text: "采用新值 / Use proposed";
+                                font-weight: 700;
+                                horizontal-stretch: 1;
+                            }
                         }
-                        Button {
-                            text: "逐项决定 / Decide each";
-                            enabled: !root.conflicts-per-row;
-                            clicked => { root.conflicts-per-row = true; }
+                        Body {
+                            text: "项目 / Item";
+                            font-weight: 700;
+                            horizontal-stretch: 2;
+                            vertical-alignment: center;
                         }
-                        Rectangle { }
+                        Body {
+                            text: "旧值（来源）/ Current (source)";
+                            font-weight: 700;
+                            horizontal-stretch: 3;
+                            vertical-alignment: center;
+                        }
+                        Body {
+                            text: "新值（来源）/ Proposed (source)";
+                            font-weight: 700;
+                            horizontal-stretch: 3;
+                            vertical-alignment: center;
+                        }
                     }
                     // Only the rows in view are instantiated, so fifty rows scroll
-                    // as easily as five.
+                    // as easily as five; the header above stays in view.
                     ListView {
                         vertical-stretch: 1;
                         min-height: 220px;
-                        for row[index] in root.conflicts: VerticalLayout {
+                        for row[index] in root.conflicts: HorizontalLayout {
                             vertical-stretch: 0;
-                            padding-bottom: 8px;
-                            spacing: 2px;
-                            Body {
-                                text: row.item;
-                                font-weight: 700;
-                            }
+                            spacing: 8px;
+                            padding-top: 4px;
+                            padding-bottom: 4px;
                             HorizontalLayout {
-                                spacing: 8px;
+                                width: 112px;
+                                alignment: start;
                                 VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    Caption { text: "旧值 / Current · " + row.current-source; }
-                                    Caption { text: row.current; }
-                                }
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    Caption { text: "新值 / Proposed · " + row.proposed-source; }
-                                    Caption { text: row.proposed; }
-                                }
-                                if root.conflicts-per-row: ComboBox {
-                                    width: 190px;
-                                    model: ["请选择 / Choose", "保留旧值 / Keep current", "采用新值 / Use proposed"];
-                                    current-index <=> row.choice;
-                                    selected(value) => {
-                                        root.conflict-choice-changed(index, self.current-index);
+                                    alignment: start;
+                                    TriStateBox {
+                                        state: row.choice == 1 ? 1 : 0;
+                                        label: "保留旧值 / Keep current: " + row.item;
+                                        toggled => { root.conflict-toggle(index, 1); }
                                     }
                                 }
                             }
+                            HorizontalLayout {
+                                width: 112px;
+                                alignment: start;
+                                VerticalLayout {
+                                    alignment: start;
+                                    TriStateBox {
+                                        state: row.choice == 2 ? 1 : 0;
+                                        label: "采用新值 / Use proposed: " + row.item;
+                                        toggled => { root.conflict-toggle(index, 2); }
+                                    }
+                                }
+                            }
+                            Body {
+                                text: row.item;
+                                font-weight: 700;
+                                horizontal-stretch: 2;
+                                vertical-alignment: top;
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 3;
+                                alignment: start;
+                                Caption { text: row.current-source; }
+                                Caption { text: row.current; }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 3;
+                                alignment: start;
+                                Caption { text: row.proposed-source; }
+                                Caption { text: row.proposed; }
+                            }
                         }
                     }
-                    if root.conflicts-per-row: HorizontalLayout {
+                    HorizontalLayout {
                         spacing: 8px;
                         vertical-stretch: 0;
                         Caption {
@@ -518,7 +660,7 @@ export component SetupWindow inherits Window {
                             horizontal-stretch: 1;
                         }
                         Button {
-                            text: "确认这些选择 / Confirm these choices";
+                            text: "确认 / Confirm";
                             primary: true;
                             enabled: root.conflicts-complete;
                             clicked => { root.conflicts-decide(3); }
