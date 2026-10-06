@@ -168,18 +168,20 @@ impl Writer {
         })
     }
 
-    /// A slot whose Runtime predates the vision model folders (#360 §10.3), a
-    /// v0.11.1 slot that still holds its own `tools\`, cannot read a later
-    /// configuration. Switching back to it selects again, byte for byte, the
-    /// newest generation prepared for that slot's exact programs, after its
-    /// inputs are verified and its own actingd accepts its configuration.
-    /// Settings changed after that generation are not carried back.
+    /// Selects again, byte for byte, the newest generation prepared for `slot`'s
+    /// exact programs (matched by slot and MEMBERS sha256), after its inputs are
+    /// verified and that slot's own actingd accepts its configuration; `None`
+    /// when there is none. Used when the active configuration and the target
+    /// slot are on different sides of the vision model folders (#360 §10.3): a
+    /// v0.11.1 slot cannot read a later configuration, and a later slot cannot
+    /// take a v0.11.1 one. Settings changed after that generation are not
+    /// carried back.
     pub fn reselect(
         &self,
         baseline: Snapshot,
         slot: InstallSlot,
         report: Report<'_>,
-    ) -> Result<Plan, String> {
+    ) -> Result<Option<Plan>, String> {
         self.check_baseline(Some(&baseline))?;
         let members = read_bounded(
             &self.root.join(format!("{}/MEMBERS.json", slot.as_str())),
@@ -217,11 +219,7 @@ impl Writer {
             }
         }
         let Some((generation, candidate)) = newest else {
-            return Err(format!(
-                "槽 {} 没有为其程序准备过的配置代际，无法切回 / No configuration generation was prepared for slot {}'s programs; it cannot be switched back to",
-                slot.as_str(),
-                slot.as_str()
-            ));
+            return Ok(None);
         };
         let bytes = read_bounded(&candidate, MAX_INSTALL_SELECTION_BYTES)?;
         let snapshot = Snapshot::from_bytes(&self.root, bytes)?;
@@ -235,17 +233,17 @@ impl Writer {
         )?;
         self.check_baseline(Some(&baseline))?;
         report.line(&format!(
-            "槽 {} 的程序早于视觉模型文件夹：重新选中它自己的配置代际 {generation}，其后改动的设置不带回 / Slot {}'s programs predate the vision model folders: its own configuration generation {generation} is selected again; settings changed after it are not carried back",
+            "重新选中槽 {} 自己的配置代际 {generation}，其后改动的设置不带回 / Slot {}'s own configuration generation {generation} is selected again; settings changed after it are not carried back",
             slot.as_str(),
             slot.as_str()
         ))?;
-        Ok(Plan {
+        Ok(Some(Plan {
             snapshot,
             baseline: Some(baseline),
             candidate,
             committed: false,
             start_attempted: false,
-        })
+        }))
     }
 
     pub fn commit(&self, plan: &mut Plan) -> Result<(), String> {

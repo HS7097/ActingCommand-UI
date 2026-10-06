@@ -395,9 +395,48 @@ pub fn rollback(root: &Path, report: Report<'_>) -> Result<Upgraded, String> {
     let programs = baseline.slot_root();
     let state_root = baseline.state_root()?;
     let (runtime_sha, _) = members(&baseline)?;
+    let active: serde_json::Value =
+        serde_json::from_slice(&baseline.config_bytes).map_err(|error| error.to_string())?;
+    let active_predates_vision = active
+        .get("vision_provider_manifest")
+        .is_some_and(|value| !value.is_null());
     let mut plan = if predates_vision {
         // Its Runtime cannot read this configuration (#360 §10.3).
-        writer.reselect(baseline.clone(), target, report)?
+        writer
+            .reselect(baseline.clone(), target, report)?
+            .ok_or_else(|| {
+                format!(
+                    "槽 {} 没有为其程序准备过的配置代际，无法切回 / No configuration generation was prepared for slot {}'s programs; it cannot be switched back to",
+                    target.as_str(),
+                    target.as_str()
+                )
+            })?
+    } else if active_predates_vision {
+        // The active generation is a v0.11.1 one, selected again earlier: the
+        // target slot's own newest generation comes back (review V2-1); without
+        // one, the active configuration is migrated like an upgrade's.
+        match writer.reselect(baseline.clone(), target, report)? {
+            Some(plan) => plan,
+            None => {
+                let mut document = active;
+                crate::generations::rebase_config(
+                    &mut document,
+                    config.parent().ok_or("Configuration has no parent")?,
+                )?;
+                if let Some(vision) = vision_migration::plan(writer.root(), &document)? {
+                    vision.apply(report)?;
+                    vision.rewrite(&mut document)?;
+                }
+                writer.prepare(
+                    Some(baseline.clone()),
+                    target,
+                    &config,
+                    document,
+                    true,
+                    report,
+                )?
+            }
+        }
     } else {
         let document =
             serde_json::from_slice(&baseline.config_bytes).map_err(|error| error.to_string())?;
