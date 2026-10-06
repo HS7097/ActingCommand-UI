@@ -183,11 +183,9 @@ fn lock(state: &Shared) -> MutexGuard<'_, State> {
 fn main() -> Result<()> {
     acui_installation::process_slot_lock()
         .map_err(|error| anyhow::Error::msg(error.to_string()))?;
-    // Any argument means a run without the wizard's window: its output and its
-    // failure reach the calling console or script (Workflow #359).
-    if std::env::args_os().nth(1).is_some() {
-        platform::attach_console();
-    }
+    // The internal entries below write only to the handles a caller redirected
+    // (a pipe or a file): they never attach to an interactive console, whose
+    // window could be closed while a switch runs (review CLI-F2-close).
     platform::private_std_handles();
     if std::env::args_os()
         .nth(1)
@@ -199,8 +197,8 @@ fn main() -> Result<()> {
         .nth(1)
         .is_some_and(|argument| argument == "--rollback")
     {
-        // Attached to the caller's console, a switch is not ended by Ctrl+C
-        // midway (review CLI-F2), as the command line's guarded span.
+        // A switch is not ended by Ctrl+C midway (review CLI-F2), as the command
+        // line's guarded span.
         let _guard = platform::InterruptGuard::start();
         return upgrade::rollback_from_entry().map_err(anyhow::Error::msg);
     }
@@ -208,7 +206,10 @@ fn main() -> Result<()> {
         let _guard = platform::InterruptGuard::start();
         return install::replace_manager_from_entry().map_err(anyhow::Error::msg);
     }
+    // Any other argument means the command line: its output and its failure
+    // reach the calling console or script (Workflow #359).
     if std::env::args_os().nth(1).is_some() {
+        platform::attach_console();
         std::process::exit(cli::run());
     }
     std::panic::set_hook(Box::new(|info| {
