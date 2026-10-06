@@ -721,7 +721,15 @@ acsetup is a windowed program, so a console prompt returns at once when `--rollb
 `--replace-manager` is typed directly. The work runs without the console (closing the window does
 not stop it), and when it ends its result line (or `失败 / FAILED: …`) and the log path appear in
 that console. Every run writes its result as the last line of `<root>/acsetup-<time>.log`. To wait
-for the result and get the exit code (0 success, 1 failure), start it like the command line:
+for the result and see the exit code (0 success, 1 failure) in an interactive PowerShell window:
+
+```powershell
+$p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
+$null = $p.Handle; $p.WaitForExit(); "exit code: $($p.ExitCode)"
+```
+
+In a script, pass the exit code on instead (do not paste this into an interactive window: `exit`
+closes it, and the result line with it):
 
 ```powershell
 $p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow

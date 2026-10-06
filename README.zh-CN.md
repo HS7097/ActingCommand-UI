@@ -507,7 +507,14 @@ v0.11.0 UI 是明确绑定共享状态根的观察入口；设置只保存根级
 
 acsetup 是窗口程序：在控制台直接输入 `--rollback` 或 `--replace-manager` 时提示符会立即返回。
 工作不挂在该控制台上（关闭窗口不会中断它），结束时结果行（或 `失败 / FAILED: …`）和日志路径会显示在那个控制台里；
-每次运行都把结果写成 `<安装根>/acsetup-<时间>.log` 的最后一行。要等待结果并取得退出码（0 成功、1 失败），像命令行模式一样启动：
+每次运行都把结果写成 `<安装根>/acsetup-<时间>.log` 的最后一行。在交互式 PowerShell 窗口里等待结果并查看退出码（0 成功、1 失败）：
+
+```powershell
+$p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
+$null = $p.Handle; $p.WaitForExit(); "exit code: $($p.ExitCode)"
+```
+
+脚本里则把退出码传下去（不要贴进交互式窗口：`exit` 会关掉窗口，结果行也随之消失）：
 
 ```powershell
 $p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
