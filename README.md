@@ -717,6 +717,17 @@ release can also be provided through the normal installer with the page's confir
 Publication time is only a prompt heuristic; the cold gate remains mandatory. The formal v0.11.0
 Runtime uses cold startup.
 
+acsetup is a windowed program, so a console prompt returns at once when `--rollback` or
+`--replace-manager` is typed directly. The work runs without the console (closing the window does
+not stop it), and when it ends its result line (or `失败 / FAILED: …`) and the log path appear in
+that console. Every run writes its result as the last line of `<root>/acsetup-<time>.log`. To wait
+for the result and get the exit code (0 success, 1 failure), start it like the command line:
+
+```powershell
+$p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
+$null = $p.Handle; $p.WaitForExit(); exit $p.ExitCode
+```
+
 Before a new Runtime start attempt, only the complete original transaction can restore a
 committed selection. First-migration recovery also restores root programs/configuration/settings.
 Incomplete restoration retains recovery materials and leaves Runtime stopped. After the first

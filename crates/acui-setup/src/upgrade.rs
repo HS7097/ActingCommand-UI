@@ -486,7 +486,9 @@ pub fn rollback(root: &Path, report: Report<'_>) -> Result<Upgraded, String> {
     )
 }
 
-pub fn rollback_from_entry() -> Result<(), String> {
+/// `--rollback` through the fixed management entry. The caller owns the log
+/// (`main::internal_entry`); the returned line is the result to show.
+pub fn rollback_from_entry(report: Report<'_>) -> Result<String, String> {
     if std::env::args_os().count() != 2 {
         return Err(
             "--rollback takes no arguments; it uses the fixed management entry's installation"
@@ -495,13 +497,9 @@ pub fn rollback_from_entry() -> Result<(), String> {
     }
     let root = acui_installation::current_manager_root()?
         .ok_or("Rollback requires the fixed acsetup management entry")?;
-    let mut log = crate::log::InstallLog::create(&root, crate::log::unix_ms())
-        .map_err(|error| error.to_string())?;
-    let mut report = |line: &str| {
-        log.line(line)
-            .map_err(|error| format!("Rollback log failed: {error}"))
-    };
-    let done = rollback(&root, &mut report)?;
-    println!("Selected installation generation {}", done.generation);
-    Ok(())
+    let done = rollback(&root, report)?;
+    Ok(format!(
+        "已选中安装代际 / Selected installation generation {}",
+        done.generation
+    ))
 }

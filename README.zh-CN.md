@@ -505,6 +505,15 @@ v0.11.0 UI 是明确绑定共享状态根的观察入口；设置只保存根级
 `ledger-maintenance verify` 均须通过。这些门不证明 Provider/设备就绪。
 正常安装页也可提供更早发布件并确认提示；发布时间只用于顺序提示，冷态门仍必需。正式 v0.11.0 Runtime 按冷态路线启动。
 
+acsetup 是窗口程序：在控制台直接输入 `--rollback` 或 `--replace-manager` 时提示符会立即返回。
+工作不挂在该控制台上（关闭窗口不会中断它），结束时结果行（或 `失败 / FAILED: …`）和日志路径会显示在那个控制台里；
+每次运行都把结果写成 `<安装根>/acsetup-<时间>.log` 的最后一行。要等待结果并取得退出码（0 成功、1 失败），像命令行模式一样启动：
+
+```powershell
+$p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
+$null = $p.Handle; $p.WaitForExit(); exit $p.ExitCode
+```
+
 首次新 Runtime 启动尝试前，只有完整原事务可恢复已提交选择；首次迁移还须恢复原根程序、配置和设置。
 恢复不完整则保留材料并保持 Runtime 停止。首次启动尝试之后保留当前选择及完整账本，
 后续显式回退须重新验证最新数据。关闭未确认时不启动第二个 Runtime。

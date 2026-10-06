@@ -183,9 +183,10 @@ fn lock(state: &Shared) -> MutexGuard<'_, State> {
 fn main() -> Result<()> {
     acui_installation::process_slot_lock()
         .map_err(|error| anyhow::Error::msg(error.to_string()))?;
-    // The internal entries below write only to the handles a caller redirected
-    // (a pipe or a file): they never attach to an interactive console, whose
-    // window could be closed while a switch runs (review CLI-F2-close).
+    // The internal entries below never attach to an interactive console while
+    // they work, because its window could be closed midway (review
+    // CLI-F2-close); `--rollback` and `--replace-manager` show their result
+    // there once the work has ended (`internal_entry`, review R3-1).
     platform::private_std_handles();
     if std::env::args_os()
         .nth(1)
@@ -197,14 +198,10 @@ fn main() -> Result<()> {
         .nth(1)
         .is_some_and(|argument| argument == "--rollback")
     {
-        // A switch is not ended by Ctrl+C midway (review CLI-F2), as the command
-        // line's guarded span.
-        let _guard = platform::InterruptGuard::start();
-        return upgrade::rollback_from_entry().map_err(anyhow::Error::msg);
+        std::process::exit(internal_entry(true));
     }
     if std::env::args_os().nth(1).is_some_and(|argument| argument == "--replace-manager") {
-        let _guard = platform::InterruptGuard::start();
-        return install::replace_manager_from_entry().map_err(anyhow::Error::msg);
+        std::process::exit(internal_entry(false));
     }
     // Any other argument means the command line: its output and its failure
     // reach the calling console or script (Workflow #359).
@@ -261,6 +258,77 @@ fn main() -> Result<()> {
     install_callbacks(&window, &state);
     window.run()?;
     Ok(())
+}
+
+/// The installation root an internal entry logs into, known before anything
+/// can fail: for `--rollback` the root of the running fixed manager
+/// (`<root>\ui\acsetup.exe`), for `--replace-manager` its first argument.
+fn entry_root(rollback: bool) -> Option<PathBuf> {
+    if rollback {
+        let exe = std::env::current_exe().ok()?;
+        let ui = exe.parent()?;
+        if ui.file_name()? != "ui" {
+            return None;
+        }
+        ui.parent().map(Path::to_path_buf)
+    } else {
+        let root = PathBuf::from(std::env::args_os().nth(2)?);
+        (root.is_absolute() && root.is_dir()).then_some(root)
+    }
+}
+
+/// `--rollback` and `--replace-manager` (review R3-1). The log is created before
+/// anything that can fail and ends with the result or `失败 / FAILED: …`. The
+/// work runs attached to no console (CLI-F2-close), with Ctrl+C refused, so
+/// closing a window cannot end it midway. Once it has ended, the result and the
+/// log path go to the caller's console, attached only now, or to the handles it
+/// redirected. The exit code is 0 or 1.
+fn internal_entry(rollback: bool) -> i32 {
+    use std::io::Write as _;
+    let guard = platform::InterruptGuard::start();
+    let root = entry_root(rollback);
+    let (mut log, mut notes) = match root.as_deref().map(|root| InstallLog::create(root, log::unix_ms())) {
+        Some(Ok(log)) => (Some(log), Vec::new()),
+        Some(Err(error)) => (None, vec![format!("日志未能创建 / The log could not be created: {error}")]),
+        None => (None, vec!["没有日志：安装根未知 / No log: the installation root is unknown".to_string()]),
+    };
+    let outcome = {
+        let mut report = |line: &str| -> Result<(), String> {
+            match log.as_mut() {
+                Some(log) => log
+                    .line(line)
+                    .map_err(|error| format!("日志写入失败 / Log write failed: {error}")),
+                None => Ok(()),
+            }
+        };
+        if rollback {
+            upgrade::rollback_from_entry(&mut report)
+        } else {
+            install::replace_manager_from_entry(&mut report)
+        }
+    };
+    drop(guard);
+    let (code, text) = match outcome {
+        Ok(line) => (0, line),
+        Err(error) => (1, format!("失败 / FAILED: {error}")),
+    };
+    if let Some(log) = log.as_mut() {
+        match log.line(&text) {
+            Ok(()) => notes.push(format!("日志 / Log: {}", log.path().display())),
+            Err(error) => notes.push(format!(
+                "日志写入失败 / Log write failed: {}: {error}",
+                log.path().display()
+            )),
+        }
+    }
+    platform::attach_console();
+    let shown = std::iter::once(text).chain(notes).collect::<Vec<_>>().join("\n");
+    if code == 0 {
+        let _ = writeln!(std::io::stdout(), "{shown}");
+    } else {
+        let _ = writeln!(std::io::stderr(), "{shown}");
+    }
+    code
 }
 
 fn install_callbacks(window: &SetupWindow, state: &Shared) {

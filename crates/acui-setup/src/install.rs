@@ -295,7 +295,9 @@ pub fn install_manager(root: &Path, verified: &Verified, report: Report<'_>) -> 
 
 /// An explicit management update runs from the verified release outside this
 /// installation. Native occupancy must prove the fixed manager has exited.
-pub fn replace_manager_from_entry() -> Result<(), String> {
+/// `--replace-manager <root> <release folder>`. The caller owns the log
+/// (`main::internal_entry`); the returned line is the result to show.
+pub fn replace_manager_from_entry(report: Report<'_>) -> Result<String, String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() != 3 { return Err("Usage: acsetup --replace-manager <absolute-install-root> <absolute-release-directory>".into()); }
     let root = PathBuf::from(&args[1]);
@@ -309,10 +311,8 @@ pub fn replace_manager_from_entry() -> Result<(), String> {
     let writer = crate::generations::Writer::acquire(&root)?;
     let previous = acui_installation::manager_program(writer.root())?;
     let stamp = crate::log::unix_ms();
-    let mut log = crate::log::InstallLog::create(&root, stamp).map_err(|error| error.to_string())?;
-    let mut report = |line: &str| log.line(line).map_err(|error| format!("Management update log failed: {error}"));
     let staging = root.join(format!("install/manager-source-{stamp}"));
-    let verified = crate::verify::run(&download, &staging, &mut report)?;
+    let verified = crate::verify::run(&download, &staging, report)?;
     let manifest = acui_installation::read_bounded(&verified.ui.dir.join(MANIFEST), acui_installation::MAX_MATERIAL_BYTES)?;
     let candidate = verified.ui.dir.join("acsetup.exe");
     acui_installation::verify_manager_material(&verified.members_document, &manifest, &candidate)?;
@@ -320,7 +320,11 @@ pub fn replace_manager_from_entry() -> Result<(), String> {
         return Err("External installer is not the exact management program in the verified release".into());
     }
     drop(previous);
-    replace_manager(&root, &verified, &mut report).map(|_| ())
+    let backup = replace_manager(&root, &verified, report)?;
+    Ok(format!(
+        "固定管理程序已替换，旧程序保留于 / Fixed management entry replaced; previous source retained at {}",
+        backup.display()
+    ))
 }
 
 /// After an A/B upgrade the fixed manager becomes this release's acsetup
