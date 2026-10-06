@@ -22,8 +22,64 @@ use crate::verify::{Report, Step};
 const READ_LIMIT: u64 = 16 << 20;
 const ADMISSION_BUDGET: Duration = Duration::from_secs(120);
 
-/// A worker asks on the wizard's resource/confirmation page. No choice is implicit.
-pub type Choose<'a> = &'a mut dyn FnMut(String, Vec<String>) -> Result<usize, String>;
+/// One instance whose resource association needs a person: the wizard asks
+/// on its resource page, the command line takes `--associate <alias>=<bundle>/<server>`.
+pub struct Association {
+    pub alias: String,
+    pub question: String,
+    pub options: Vec<AssociationOption>,
+}
+
+/// One answer an association offers: its label for people, and the bundle (its
+/// game id) and server the command line names it by.
+pub struct AssociationOption {
+    pub label: String,
+    pub bundle: String,
+    pub server: String,
+}
+
+impl AssociationOption {
+    /// `<bundle>/<server>`, as `--associate` names this option.
+    pub fn flag_value(&self) -> String {
+        format!("{}/{}", self.bundle, self.server)
+    }
+}
+
+/// The index of the option taken. No choice is implicit: `None` (only a plan
+/// gives it) leaves the instance unassociated in that plan.
+pub type Choose<'a> = &'a mut dyn FnMut(&Association) -> Result<Option<usize>, String>;
+
+/// Asks one association and logs the question and the answer.
+fn associate(
+    association: &Association,
+    choose: Choose<'_>,
+    report: Report<'_>,
+) -> Result<Option<usize>, String> {
+    report.line(&format!(
+        "资源关联 / Resource association: {}\n{}",
+        association.alias, association.question
+    ))?;
+    let picked = choose(association)?;
+    match picked {
+        Some(at) => {
+            let option = association
+                .options
+                .get(at)
+                .ok_or("Invalid resource association")?;
+            report.line(&format!(
+                "资源关联 / Resource association: {} → {} ({})",
+                association.alias,
+                option.flag_value(),
+                option.label
+            ))?;
+        }
+        None => report.line(&format!(
+            "资源关联未决定 / Resource association left open: {}",
+            association.alias
+        ))?,
+    }
+    Ok(picked)
+}
 
 pub struct Prepared {
     pub bundle: Bundle,
@@ -125,7 +181,8 @@ pub fn installed_path(root: &Path, item: &Prepared, pack: &str) -> Result<PathBu
     let name = staged
         .file_name()
         .ok_or_else(|| format!("Package path has no file name: {}", staged.display()))?;
-    Ok(package_dir(root, item).join(name))
+    // Written into the configuration: never the canonical root's `\\?\` spelling.
+    Ok(crate::generations::plain(&package_dir(root, item).join(name)))
 }
 
 fn package_dir(root: &Path, item: &Prepared) -> PathBuf {
@@ -193,17 +250,25 @@ pub fn upgrade_selections(
             continue;
         }
         if identity.is_ok() {
-            let options = matches
-                .iter()
-                .map(|(bundle, server)| {
-                    format!(
-                        "{} / {server} — {}",
-                        prepared[*bundle].bundle.name(),
-                        prepared[*bundle].bundle.file.display()
-                    )
-                })
-                .collect();
-            let picked = choose(format!("实例 / Instance {}：多个标准包匹配已验证的游戏/服务器。请选择维护声明来源；业务资源保持。/ Multiple bundles match the verified game/server. Choose the maintenance source; the business resource stays unchanged.", instance["alias"]), options)?;
+            let association = Association {
+                alias: alias_of(instance, at),
+                question: format!("实例 / Instance {}：多个标准包匹配已验证的游戏/服务器。请选择维护声明来源；业务资源保持。/ Multiple bundles match the verified game/server. Choose the maintenance source; the business resource stays unchanged.", instance["alias"]),
+                options: matches
+                    .iter()
+                    .map(|(bundle, server)| AssociationOption {
+                        label: format!(
+                            "{} / {server} — {}",
+                            prepared[*bundle].bundle.name(),
+                            prepared[*bundle].bundle.file.display()
+                        ),
+                        bundle: prepared[*bundle].bundle.game.clone(),
+                        server: server.clone(),
+                    })
+                    .collect(),
+            };
+            let Some(picked) = associate(&association, choose, report)? else {
+                continue;
+            };
             let (bundle, server) = matches.get(picked).ok_or("Invalid bundle association")?;
             selected.push(Selection {
                 instance: at,
@@ -230,21 +295,32 @@ pub fn upgrade_selections(
         let mut targets = Vec::new();
         for (bundle, item) in prepared.iter().enumerate() {
             for (server, pack) in &item.bundle.defaults {
-                options.push(format!(
-                    "{} / {server} — {}",
-                    item.bundle.name(),
-                    item.bundle.file.display()
-                ));
+                options.push(AssociationOption {
+                    label: format!(
+                        "{} / {server} — {}",
+                        item.bundle.name(),
+                        item.bundle.file.display()
+                    ),
+                    bundle: item.bundle.game.clone(),
+                    server: server.clone(),
+                });
                 targets.push((bundle, server.clone(), pack.clone()));
             }
         }
         if options.is_empty() {
             return Err(format!("{reason}\n没有可明确关联的标准包 / No bundle is available for an explicit association"));
         }
-        let picked = choose(format!(
-            "实例 / Instance {}\n{reason}\n请选择游戏/服务器。此选择将把该实例的 resource_package 替换为所选默认包；其它实例字段保留。/ Select its game/server. This replaces this instance's resource package with the selected default pack and preserves its other fields.\n原值 / Current: {}",
-            instance["alias"], instance["resource_package"]
-        ), options)?;
+        let association = Association {
+            alias: alias_of(instance, at),
+            question: format!(
+                "实例 / Instance {}\n{reason}\n请选择游戏/服务器。此选择将把该实例的 resource_package 替换为所选默认包；其它实例字段保留。/ Select its game/server. This replaces this instance's resource package with the selected default pack and preserves its other fields.\n原值 / Current: {}",
+                instance["alias"], instance["resource_package"]
+            ),
+            options,
+        };
+        let Some(picked) = associate(&association, choose, report)? else {
+            continue;
+        };
         let (bundle, server, pack) = targets.get(picked).ok_or("Invalid resource selection")?;
         instance["resource_package"] = json!(installed_path(root, &prepared[*bundle], pack)?);
         selected.push(Selection {
@@ -256,16 +332,174 @@ pub fn upgrade_selections(
     Ok(selected)
 }
 
-/// Merge declarations in source order. Equal complete bindings are reused; a
-/// different value always presents both values and their source before choosing.
+/// One maintenance binding whose configured value differs from the one the
+/// release proposes. Nothing is chosen for it: the caller presents the whole
+/// list once and `apply` writes the answers (Workflow #359).
+pub struct Conflict {
+    pub key: String,
+    /// The binding as people read it.
+    pub item: String,
+    pub old: Value,
+    pub old_source: String,
+    pub new: Value,
+    pub new_source: String,
+    target: Target,
+}
+
+enum Target {
+    Prerequisite(String),
+    Startup(usize),
+    ReturnHome(String, String),
+}
+
+impl Target {
+    fn rank(&self) -> u8 {
+        match self {
+            Target::Prerequisite(_) => 0,
+            Target::Startup(_) => 1,
+            Target::ReturnHome(..) => 2,
+        }
+    }
+}
+
+/// Which value a conflicting binding keeps.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Old,
+    New,
+}
+
+/// All conflicts at once, answered row by row in the same order.
+pub type Resolve<'a> = &'a mut dyn FnMut(&[Conflict]) -> Result<Vec<Side>, String>;
+
+impl Conflict {
+    pub fn old_text(&self) -> String {
+        brief(&self.old)
+    }
+
+    pub fn new_text(&self) -> String {
+        brief(&self.new)
+    }
+}
+
+/// A binding in one line: its plain path and the first twelve digits of its
+/// digest, or its package id.
+fn brief(value: &Value) -> String {
+    let path = value
+        .get("package")
+        .or_else(|| value.get("package_path"))
+        .and_then(Value::as_str);
+    let digest = value
+        .get("expected_sha256")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value.get("package_digest").and_then(|digest| {
+                digest
+                    .as_str()
+                    .or_else(|| digest.get("sha256").and_then(Value::as_str))
+            })
+        })
+        .map(|digest| {
+            digest
+                .strip_prefix("sha256:")
+                .unwrap_or(digest)
+                .chars()
+                .take(12)
+                .collect::<String>()
+        });
+    let plain = |path: &str| {
+        crate::generations::plain(Path::new(path))
+            .display()
+            .to_string()
+    };
+    match (path, digest) {
+        (Some(path), Some(digest)) => format!("{} · sha256 {digest}", plain(path)),
+        (Some(path), None) => plain(path),
+        _ => match value.get("package_id").and_then(Value::as_str) {
+            Some(id) => format!("package_id {id}"),
+            None => value.to_string(),
+        },
+    }
+}
+
+/// An instance's alias, or its place when it has none.
+pub fn alias_of(instance: &Value, at: usize) -> String {
+    instance["alias"]
+        .as_str()
+        .map_or_else(|| format!("instances[{at}]"), str::to_owned)
+}
+
+/// What one run's release proposes, and which proposals differ from the
+/// configuration.
+struct Merge<'a> {
+    root: &'a Path,
+    old_source: &'a str,
+    proposed: BTreeMap<String, (Value, String)>,
+    conflicts: Vec<Conflict>,
+}
+
+impl Merge<'_> {
+    /// An empty binding takes the proposal; an equal one stays as it is spelled
+    /// (only a verbatim-prefixed path loses that prefix); a different one is a
+    /// conflict and stays untouched until `apply`. Two bundles proposing
+    /// different values for one binding is a release defect.
+    fn propose(
+        &mut self,
+        slot: &mut Value,
+        new: Value,
+        key: String,
+        item: String,
+        target: Target,
+        source: &str,
+    ) -> Result<(), String> {
+        if let Some((earlier, earlier_source)) = self.proposed.get(&key) {
+            if normalized(earlier, self.root) == normalized(&new, self.root) {
+                return Ok(());
+            }
+            return Err(format!(
+                "两个标准包对同一维护绑定给出不同的值 / Two bundles propose different values for one maintenance binding: {key}: {earlier_source}; {source}"
+            ));
+        }
+        self.proposed
+            .insert(key.clone(), (new.clone(), source.to_owned()));
+        if slot.is_null() {
+            *slot = new;
+            return Ok(());
+        }
+        if normalized(slot, self.root) == normalized(&new, self.root) {
+            plain_paths(slot);
+            return Ok(());
+        }
+        self.conflicts.push(Conflict {
+            key,
+            item,
+            old: slot.clone(),
+            old_source: self.old_source.to_owned(),
+            new,
+            new_source: source.to_owned(),
+            target,
+        });
+        Ok(())
+    }
+}
+
+/// Merge declarations in source order. Equal complete bindings are reused;
+/// every different value is returned as a `Conflict`, sorted by kind and key,
+/// for one decision over the whole list. `old_source` names the configuration
+/// the current values come from.
 pub fn augment(
     document: &mut Value,
     root: &Path,
     prepared: &[Prepared],
     selections: &[Selection],
-    choose: Choose<'_>,
-) -> Result<bool, String> {
-    let mut sources = BTreeMap::new();
+    old_source: &str,
+) -> Result<(bool, Vec<Conflict>), String> {
+    let mut merge = Merge {
+        root,
+        old_source,
+        proposed: BTreeMap::new(),
+        conflicts: Vec::new(),
+    };
     let mut registered = BTreeSet::new();
     let mut registered_home = BTreeSet::new();
     let mut active = false;
@@ -275,7 +509,13 @@ pub fn augment(
             continue;
         };
         active = true;
-        let source = item.bundle.file.display().to_string();
+        let file = item
+            .bundle
+            .file
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| item.bundle.file.display().to_string());
+        let source = format!("{file} ({})", item.bundle.game);
         for entry in index
             .maintenance
             .iter()
@@ -291,9 +531,18 @@ pub fn augment(
                 match purpose {
                     MaintenanceUse::Startup => {
                         let key = format!("instances[{}].startup_package", selected.instance);
+                        let alias =
+                            alias_of(&document["instances"][selected.instance], selected.instance);
                         let value = json!({"package": path, "expected_sha256": pack.digest});
                         let slot = &mut document["instances"][selected.instance]["startup_package"];
-                        merge(slot, value, &key, &source, root, &mut sources, choose)?;
+                        merge.propose(
+                            slot,
+                            value,
+                            key,
+                            format!("实例 / Instance {alias} 启动包 / startup package"),
+                            Target::Startup(selected.instance),
+                            &source,
+                        )?;
                     }
                     MaintenanceUse::Prerequisite | MaintenanceUse::ReturnHome => {
                         if registered.insert((selected.bundle, pack.package_id.clone())) {
@@ -305,7 +554,14 @@ pub fn augment(
                                 "prerequisite_packages",
                                 &[("package_id", &pack.package_id)],
                             )?;
-                            merge(slot, value, &key, &source, root, &mut sources, choose)?;
+                            merge.propose(
+                                slot,
+                                value,
+                                key,
+                                format!("前置包 / Prerequisite {}", pack.package_id),
+                                Target::Prerequisite(pack.package_id.clone()),
+                                &source,
+                            )?;
                         }
                         if *purpose == MaintenanceUse::ReturnHome
                             && registered_home.insert((selected.bundle, entry.server.clone()))
@@ -318,14 +574,128 @@ pub fn augment(
                                 "return_home_packages",
                                 &[("game", &index.game), ("server", &entry.server)],
                             )?;
-                            merge(slot, value, &key, &source, root, &mut sources, choose)?;
+                            merge.propose(
+                                slot,
+                                value,
+                                key,
+                                format!("回主页包 / Return-home {}/{}", index.game, entry.server),
+                                Target::ReturnHome(index.game.clone(), entry.server.clone()),
+                                &source,
+                            )?;
                         }
                     }
                 }
             }
         }
     }
-    Ok(active)
+    let mut conflicts = merge.conflicts;
+    conflicts.sort_by(|left, right| {
+        (left.target.rank(), &left.key).cmp(&(right.target.rank(), &right.key))
+    });
+    Ok((active, conflicts))
+}
+
+/// Counts by kind, and what is not a difference.
+pub fn summary(conflicts: &[Conflict]) -> String {
+    let count = |rank: u8| {
+        conflicts
+            .iter()
+            .filter(|conflict| conflict.target.rank() == rank)
+            .count()
+    };
+    format!(
+        "前置包 / prerequisite {} · 启动包 / startup {} · 回主页包 / return-home {}；仅路径写法不同（带不带 \\\\?\\ 前缀、分隔符或大小写）不算差异，不列出 / a difference in path spelling alone (the \\\\?\\ prefix, separators or case) is not a difference and is not listed",
+        count(0),
+        count(1),
+        count(2)
+    )
+}
+
+/// Every conflict into the log (and the console): item, both values with
+/// their sources, and both values whole.
+pub fn list(conflicts: &[Conflict], report: Report<'_>) -> Result<(), String> {
+    if conflicts.is_empty() {
+        return report.line("维护绑定没有差异 / No maintenance binding differs");
+    }
+    report.line(&format!(
+        "维护绑定差异 / Maintenance binding differences: {}（{}）",
+        conflicts.len(),
+        summary(conflicts)
+    ))?;
+    for (at, conflict) in conflicts.iter().enumerate() {
+        report.line(&format!(
+            "  {}. {} [{}]\n     旧值 / current ({}): {}\n     新值 / proposed ({}): {}\n     旧值全文 / current value: {}\n     新值全文 / proposed value: {}",
+            at + 1,
+            conflict.item,
+            conflict.key,
+            conflict.old_source,
+            conflict.old_text(),
+            conflict.new_source,
+            conflict.new_text(),
+            conflict.old,
+            conflict.new
+        ))?;
+    }
+    Ok(())
+}
+
+/// Writes each answer: `New` replaces the binding, `Old` keeps it (a
+/// verbatim-prefixed path loses that prefix).
+pub fn apply(document: &mut Value, conflicts: &[Conflict], sides: &[Side]) -> Result<(), String> {
+    if sides.len() != conflicts.len() {
+        return Err("维护绑定的答复与差异数目不符 / The answers do not match the maintenance binding differences".into());
+    }
+    for (conflict, side) in conflicts.iter().zip(sides) {
+        let slot = match &conflict.target {
+            Target::Startup(at) => &mut document["instances"][*at]["startup_package"],
+            Target::Prerequisite(id) => {
+                array_slot(document, "prerequisite_packages", &[("package_id", id.as_str())])?
+            }
+            Target::ReturnHome(game, server) => array_slot(
+                document,
+                "return_home_packages",
+                &[("game", game.as_str()), ("server", server.as_str())],
+            )?,
+        };
+        match side {
+            Side::New => *slot = conflict.new.clone(),
+            Side::Old => plain_paths(slot),
+        }
+    }
+    Ok(())
+}
+
+/// The whole list logged, one decision over it, the answers logged and written.
+pub fn decide(
+    document: &mut Value,
+    conflicts: &[Conflict],
+    resolve: Resolve<'_>,
+    report: Report<'_>,
+) -> Result<(), String> {
+    list(conflicts, report)?;
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+    let sides = resolve(conflicts)?;
+    let how = if sides.iter().all(|side| *side == Side::New) {
+        "全部采用新值 / all proposed"
+    } else if sides.iter().all(|side| *side == Side::Old) {
+        "全部保留旧值 / all current"
+    } else {
+        "逐项决定 / decided each"
+    };
+    report.line(&format!("维护绑定的处理 / Resolution: {how}"))?;
+    for (conflict, side) in conflicts.iter().zip(&sides) {
+        report.line(&format!(
+            "  {} → {}",
+            conflict.key,
+            match side {
+                Side::New => "新值 / proposed",
+                Side::Old => "旧值 / current",
+            }
+        ))?;
+    }
+    apply(document, conflicts, &sides)
 }
 
 fn array_slot<'a>(
@@ -363,11 +733,39 @@ fn array_slot<'a>(
     Ok(&mut array[at])
 }
 
+/// One location however it is spelled: with or without the `\\?\` prefix, with
+/// either separator, and in any ASCII case (NTFS compares names that way).
+fn comparable(path: &Path) -> String {
+    crate::generations::plain(path)
+        .to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+/// A kept value's own path fields lose the `\\?\` prefix; nothing else changes.
+fn plain_paths(value: &mut Value) {
+    for key in ["package", "package_path"] {
+        let plain = value
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|path| path.starts_with(r"\\?\"))
+            .map(|path| {
+                crate::generations::plain(Path::new(path))
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        if let Some(plain) = plain {
+            value[key] = json!(plain);
+        }
+    }
+}
+
 fn normalized(value: &Value, root: &Path) -> Value {
     let mut value = value.clone();
     for key in ["package", "package_path"] {
         if let Some(path) = value[key].as_str() {
-            value[key] = json!(resolve(root, path));
+            value[key] = json!(comparable(&resolve(root, path)));
         }
     }
     if let Some(hash) = value["package_digest"]
@@ -377,34 +775,6 @@ fn normalized(value: &Value, root: &Path) -> Value {
         value["package_digest"] = json!(hash);
     }
     value
-}
-
-fn merge(
-    slot: &mut Value,
-    new: Value,
-    key: &str,
-    source: &str,
-    root: &Path,
-    sources: &mut BTreeMap<String, String>,
-    choose: Choose<'_>,
-) -> Result<(), String> {
-    if !slot.is_null() && normalized(slot, root) != normalized(&new, root) {
-        let old_source = sources
-            .get(key)
-            .map(String::as_str)
-            .unwrap_or("actingd.config.json");
-        let answer = choose(format!("维护绑定冲突 / Maintenance binding conflict: {key}\n旧值 / Current ({old_source}):\n{slot}\n新值 / Proposed ({source}):\n{new}"), vec!["保留旧值 / Keep current".into(), "采用新值 / Use proposed".into()])?;
-        match answer {
-            0 => return Ok(()),
-            1 => {}
-            _ => return Err("Invalid conflict selection".into()),
-        }
-    } else if !slot.is_null() {
-        return Ok(());
-    }
-    *slot = new;
-    sources.insert(key.to_owned(), source.to_owned());
-    Ok(())
 }
 
 fn resolve(root: &Path, path: &str) -> PathBuf {
@@ -639,6 +1009,11 @@ impl Transaction {
         })
     }
 
+    /// The configuration file this plan was read from.
+    pub fn config_path(&self) -> &Path {
+        &self.config
+    }
+
     pub fn unchanged(&self) -> Result<(), String> {
         if read(&self.config)? == self.baseline {
             Ok(())
@@ -671,7 +1046,7 @@ impl Transaction {
             let writer = crate::generations::Writer::acquire(&snapshot.root)?;
             let mut plan = writer.prepare(
                 Some(snapshot.clone()), snapshot.selection.slot, &self.config,
-                &snapshot.slot_root(), self.document.clone(), qualify, report,
+                self.document.clone(), qualify, report,
             )?;
             writer.commit(&mut plan)?;
             self.committed = Some(plan.snapshot.config_bytes.clone());

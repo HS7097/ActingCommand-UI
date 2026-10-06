@@ -83,6 +83,11 @@ pub fn materialize(
             crate::log::unix_ms()
         ));
         crate::install::prepare_programs(&candidate, verified, report)?;
+        // NTFS refuses to rename a directory while any file beneath it is open,
+        // whatever the share mode. The handles carried the Restart Manager answer;
+        // they are released just before the move, and a user that appears in
+        // between makes the rename fail as occupied, with nothing moved.
+        drop(occupancy);
         let retained = if target
             .try_exists()
             .map_err(|error| format!("Cannot inspect target slot: {error}"))?
@@ -95,8 +100,12 @@ pub fn materialize(
             if retained.try_exists().map_err(|error| error.to_string())? {
                 return Err("Retained slot destination already exists".into());
             }
-            fs::rename(&target, &retained)
-                .map_err(|error| format!("Cannot retain previous spare slot: {error}"))?;
+            rename_unoccupied(&target, &retained).map_err(|error| {
+                format!(
+                    "Cannot retain previous spare slot: {error}; candidate retained at {}",
+                    candidate.display()
+                )
+            })?;
             Some(retained)
         } else {
             None
@@ -124,10 +133,10 @@ pub fn materialize(
                 retained.display()
             ))?;
         }
-        drop(occupancy);
         Ok(LaidOut {
             ui_dir: target.join("ui"),
-            tools_dir: target.join("tools"),
+            // The tools are the root's own (Workflow #359); the slot holds only the OCR adapter.
+            tools_dir: root.join("tools"),
             actingd_exe: target.join("runtime").join(crate::runtime::ACTINGD),
             acui_exe: target.join("ui/acui.exe"),
         })
@@ -169,9 +178,45 @@ impl NativeOccupancy {
             regular(path, &metadata)?;
             files.push(open_native(path)?);
         }
-        crate::platform::slot_files_unused(paths)?;
+        crate::platform::slot_files_unused(paths, &[])?;
         Ok(Self { _files: files })
     }
+}
+
+/// Restart Manager alone, no handles: whether anything but this process and
+/// `allowed` (the Runtime owner the transaction is about to close) uses these
+/// directories' files or these files. Run before the Runtime is closed, so a
+/// console, an MCP client or a tool still running stops the run with the
+/// Runtime untouched.
+pub fn precheck(
+    directories: &[PathBuf],
+    files: &[PathBuf],
+    allowed: &[u32],
+) -> Result<(), String> {
+    let mut paths = files.to_vec();
+    for directory in directories {
+        if directory
+            .try_exists()
+            .map_err(|error| format!("Cannot inspect {}: {error}", directory.display()))?
+        {
+            collect(directory, 0, &mut 0, &mut paths)?;
+        }
+    }
+    crate::platform::slot_files_unused(&paths, allowed).map_err(|error| {
+        format!("{error}; 请先关闭它们再运行，Runtime 未被触动 / close them and run again; the Runtime was not touched")
+    })
+}
+
+/// A directory (or file) moved in one rename. Access denied or a sharing
+/// violation means something holds a file beneath it: reported as occupied.
+pub fn rename_unoccupied(from: &Path, to: &Path) -> Result<(), String> {
+    fs::rename(from, to).map_err(|error| match error.raw_os_error() {
+        Some(5 | 32) => format!(
+            "Program slot is occupied or unavailable; materialization blocked at {}: {error}",
+            from.display()
+        ),
+        _ => format!("Cannot move {} to {}: {error}", from.display(), to.display()),
+    })
 }
 
 #[cfg(windows)]

@@ -26,17 +26,17 @@ const UI_REPOSITORY: &str = "HS7097/ActingCommand-UI";
 const RUNTIME_LAYOUT: &str = "distribution-v1";
 
 /// What the runtime zip must hold for anything to be configured, what the
-/// console zip must hold to be opened, and what of the tools zip is
-/// installed: three tools — the other two at its root are neither installed
-/// nor shown — and the five files of the official Android platform-tools
-/// under `platform-tools/`, the adb the Runtime uses by default (Workflow
-/// #337). A tools zip without any one of them is refused.
+/// console zip must hold to be opened, and what the tools zip must hold: the
+/// two tools named in the summary and the five files of the official Android
+/// platform-tools under `platform-tools/`, the adb the Runtime uses by default
+/// (Workflow #337). A tools zip without any one of them is refused. Every file
+/// the tools zip binds goes to the installation root's `tools\`; since the OCR
+/// engine is linked into actingd (#360) no tools file belongs to a slot.
 const RUNTIME_REQUIRED: &[&str] = &["actingcommand-actingd.exe"];
 const UI_REQUIRED: &[&str] = &["acui.exe"];
 pub const TOOLS_INSTALLED: &[&str] = &[
     "actinglab.exe",
     "actingledger.exe",
-    "ac_fastdeploy_ppocr.dll",
     "platform-tools/adb.exe",
     "platform-tools/AdbWinApi.dll",
     "platform-tools/AdbWinUsbApi.dll",
@@ -45,6 +45,18 @@ pub const TOOLS_INSTALLED: &[&str] = &[
 ];
 /// The directory of `tools\` the platform-tools files are in.
 pub const PLATFORM_TOOLS: &str = "platform-tools";
+/// The old-layout programs a first migration accepts, `(runtime, ui)`: v0.11.0
+/// and v0.11.1. Only v0.11.0 answers through the cold protocol.
+const OLD_LAYOUT_RELEASES: &[(&str, &str)] = &[
+    (
+        crate::lifecycle::COLD_RUNTIME,
+        "b0d70e606e3df6ccb5c351b2519e240cb5db4f03",
+    ),
+    (
+        "732a546fb0e1c60538e53c5e52763c4e3e43c66e",
+        "c47bab660b343639bbd67bd5b3a19e8f27fcafdb",
+    ),
+];
 
 /// Where a step's account goes: every line into the install log, and — for
 /// the page — where the work stands and what the person must see. An error
@@ -84,6 +96,8 @@ pub enum Total {
 }
 
 pub struct Verified {
+    /// The release folder verified: `--replace-manager` reads it again.
+    pub download: PathBuf,
     pub staging: PathBuf,
     /// The two commits `MEMBERS.json` names: runtime, then ui.
     pub members: (String, String),
@@ -239,6 +253,7 @@ pub fn run(download: &Path, staging: &Path, report: Report<'_>) -> Result<Verifi
     report.step(Step::Done(3))?;
     report.line("校验通过 / verified")?;
     Ok(Verified {
+        download: download.to_path_buf(),
         staging: staging.to_path_buf(),
         members: (members.runtime_sha, members.ui_sha),
         members_document,
@@ -257,7 +272,6 @@ pub fn prepared_programs(root: &Path, verified: &Verified, report: Report<'_>) -
     for (dir, original, repository, sha, required, runtime_layout) in [
         ("runtime", &verified.runtime, RUNTIME_REPOSITORY, verified.members.0.as_str(), RUNTIME_REQUIRED, true),
         ("ui", &verified.ui, UI_REPOSITORY, verified.members.1.as_str(), UI_REQUIRED, false),
-        ("tools", &verified.tools, RUNTIME_REPOSITORY, verified.members.0.as_str(), TOOLS_INSTALLED, false),
     ] {
         let checked = check_manifest(&root.join(dir), &Expect {
             name: format!("prepared {dir}"), dir, repository, sha, required, runtime_layout,
@@ -266,12 +280,23 @@ pub fn prepared_programs(root: &Path, verified: &Verified, report: Report<'_>) -
             return Err(format!("{MISMATCH}: prepared {dir}/{MANIFEST} differs from the verified release"));
         }
     }
+    // A slot is the program core only (Workflow #359, #360): runtime\ and ui\.
+    if root
+        .join("tools")
+        .try_exists()
+        .map_err(|error| format!("Cannot inspect prepared tools: {error}"))?
+    {
+        return Err(format!("{MISMATCH}: a prepared program slot holds no tools\\"));
+    }
     Ok(())
 }
 
 /// A retained full slot is requalified through the same manifest checker used
 /// for release preparation; the caller holds its shared installation lock.
-pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<Verified, String> {
+/// Returns the slot's two commits, `(runtime, ui)`, and whether it is a slot
+/// whose Runtime predates the vision model folders (a v0.11.1 slot, which still
+/// holds its own `tools\`).
+pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<((String, String), bool), String> {
     let members_document = read_identity(&root.join("MEMBERS.json"))?;
     let members =
         members_of(std::str::from_utf8(&members_document).map_err(|error| error.to_string())?)?;
@@ -289,47 +314,62 @@ pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<Verified, Strin
             report,
         )
     };
-    let runtime = check(
+    check(
         "runtime",
         RUNTIME_REPOSITORY,
         &members.0,
         RUNTIME_REQUIRED,
         true,
     )?;
-    let ui = check("ui", UI_REPOSITORY, &members.1, UI_REQUIRED, false)?;
-    let tools = check(
-        "tools",
-        RUNTIME_REPOSITORY,
-        &members.0,
-        TOOLS_INSTALLED,
-        false,
-    )?;
-    Ok(Verified {
-        staging: root.to_path_buf(),
-        members,
-        members_document,
-        runtime,
-        ui,
-        tools,
-    })
+    check("ui", UI_REPOSITORY, &members.1, UI_REQUIRED, false)?;
+    // A v0.11.1 slot still holds the whole tools zip, OCR adapter included,
+    // and stays a valid rollback target; a later slot holds no tools\.
+    let tools = slot_predates_vision(root)?;
+    if tools {
+        check(
+            "tools",
+            RUNTIME_REPOSITORY,
+            &members.0,
+            TOOLS_INSTALLED,
+            false,
+        )?;
+    }
+    Ok((members, tools))
 }
 
-pub fn initial_programs(root: &Path, report: Report<'_>) -> Result<(), String> {
+/// Whether a slot's Runtime predates the vision model folders (#360): a
+/// v0.11.1 slot, which still holds its own `tools\` (OCR adapter included).
+/// Such a Runtime reads a v0.3 provider manifest and no `vision` section.
+pub fn slot_predates_vision(slot: &Path) -> Result<bool, String> {
+    let tools = slot.join("tools");
+    tools
+        .try_exists()
+        .map_err(|error| format!("Cannot inspect {}: {error}", tools.display()))
+}
+
+/// The old layout's programs, one of `OLD_LAYOUT_RELEASES`, each checked against
+/// its own manifest; returns the pair found, `(runtime, ui)`.
+pub fn initial_programs(root: &Path, report: Report<'_>) -> Result<(String, String), String> {
+    let commit = |dir: &str| -> Result<String, String> {
+        let path = root.join(dir).join(MANIFEST);
+        let bytes = read_identity(&path)?;
+        serde_json::from_slice::<Manifest>(&bytes)
+            .map(|manifest| manifest.commit_sha)
+            .map_err(|error| format!("{} does not parse: {error}", path.display()))
+    };
+    let found = (commit("runtime")?, commit("ui")?);
+    let Some(&(runtime, ui)) = OLD_LAYOUT_RELEASES
+        .iter()
+        .find(|(runtime, ui)| *runtime == found.0 && *ui == found.1)
+    else {
+        return Err(format!(
+            "旧布局的程序不是可迁移的发布件（v0.11.0 或 v0.11.1）/ The old-layout programs are not a release a first migration accepts (v0.11.0 or v0.11.1): runtime {} · ui {}",
+            found.0, found.1
+        ));
+    };
     for (dir, repository, sha, required, runtime_layout) in [
-        (
-            "runtime",
-            RUNTIME_REPOSITORY,
-            crate::lifecycle::COLD_RUNTIME,
-            RUNTIME_REQUIRED,
-            true,
-        ),
-        (
-            "ui",
-            UI_REPOSITORY,
-            "b0d70e606e3df6ccb5c351b2519e240cb5db4f03",
-            UI_REQUIRED,
-            false,
-        ),
+        ("runtime", RUNTIME_REPOSITORY, runtime, RUNTIME_REQUIRED, true),
+        ("ui", UI_REPOSITORY, ui, UI_REQUIRED, false),
     ] {
         check_manifest(
             &root.join(dir),
@@ -344,7 +384,7 @@ pub fn initial_programs(root: &Path, report: Report<'_>) -> Result<(), String> {
             report,
         )?;
     }
-    Ok(())
+    Ok(found)
 }
 
 

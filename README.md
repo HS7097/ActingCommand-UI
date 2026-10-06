@@ -717,6 +717,25 @@ release can also be provided through the normal installer with the page's confir
 Publication time is only a prompt heuristic; the cold gate remains mandatory. The formal v0.11.0
 Runtime uses cold startup.
 
+acsetup is a windowed program, so a console prompt returns at once when `--rollback` or
+`--replace-manager` is typed directly. The work runs without the console (closing the window does
+not stop it), and when it ends its result line (or `失败 / FAILED: …`) and the log path appear in
+that console. Every run writes its result as the last line of `<root>/acsetup-<time>.log`. To wait
+for the result and see the exit code (0 success, 1 failure) in an interactive PowerShell window:
+
+```powershell
+$p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
+$null = $p.Handle; $p.WaitForExit(); "exit code: $($p.ExitCode)"
+```
+
+In a script, pass the exit code on instead (do not paste this into an interactive window: `exit`
+closes it, and the result line with it):
+
+```powershell
+$p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
+$null = $p.Handle; $p.WaitForExit(); exit $p.ExitCode
+```
+
 Before a new Runtime start attempt, only the complete original transaction can restore a
 committed selection. First-migration recovery also restores root programs/configuration/settings.
 Incomplete restoration retains recovery materials and leaves Runtime stopped. After the first
@@ -724,11 +743,15 @@ start attempt, the selected generation and entire ledger remain in place. Any ex
 rollback rechecks the latest data. Unconfirmed closure never starts a second Runtime.
 
 **Fixed management entry**: `<root>/ui/acsetup.exe` retains its own original build manifest and
-MEMBERS in `install/manager`; business-slot rollback keeps it. To replace it, exit the fixed
-manager and run the exact unmodified acsetup from a verified release outside the installation:
-`acsetup.exe --replace-manager <absolute-install-root> <absolute-release-directory>`.
+MEMBERS in `install/manager`; business-slot rollback keeps it. To replace it, close the fixed
+manager (every `<root>/ui/acsetup.exe` window) and run any verified, unmodified copy of the
+release's acsetup except the fixed manager itself, for example the new slot's
+`<root>/<slot>/ui/acsetup.exe` or the release's own acsetup:
+`& "<root>\<slot>\ui\acsetup.exe" --replace-manager "<absolute-install-root>" "<absolute-release-directory>"`
+(in PowerShell a quoted program path needs `&`). An A/B upgrade replaces an older fixed manager
+by itself; when it was started from the fixed manager, its summary gives this exact command.
 The directory contains normal release files and SHA256SUMS. Native occupancy must prove the old
-manager exited; the external executable must match the verified UI payload. Prior management
+manager exited; the running executable must match the verified UI payload. Prior management
 material and identity are retained. Slot-contained acsetup originals remain intact.
 
 **Progress and installation log**: bounded installation operations go to `<root>/acsetup-<time>.log`.

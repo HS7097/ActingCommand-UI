@@ -28,6 +28,16 @@ pub struct Closed {
     pub previous: Option<InstallTransitionTicket>,
 }
 
+/// The pid the Runtime's discovery file names, when there is one: the owner a
+/// transaction is about to close, which may use its own programs in a pre-check.
+pub fn owner_pid(state_root: &Path) -> Option<u32> {
+    let bytes =
+        acui_installation::read_bounded(&state_root.join("runtime-info.json"), 1024 * 1024)
+            .ok()?;
+    let info: Value = serde_json::from_slice(&bytes).ok()?;
+    info["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok())
+}
+
 /// Only the named v0.11.0 source uses cold startup. Other releases must answer
 /// the current protocol; an unsupported control call is a visible failure.
 pub fn cold(runtime_sha: &str) -> bool {
@@ -334,12 +344,27 @@ pub fn start(
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr);
+    // The Runtime outlives acsetup: it leaves the caller's job object when the
+    // job allows that (review CLI-F1), and it inherits none of acsetup's own
+    // standard handles (`platform::private_std_handles`), so neither a job wait
+    // nor a caller's pipe waits on it.
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(runtime::DETACHED_PROCESS);
+        command.creation_flags(runtime::DETACHED_PROCESS | runtime::CREATE_BREAKAWAY_FROM_JOB);
     }
-    let mut child = command.spawn().map_err(|error| {
+    let spawned = command.spawn();
+    #[cfg(windows)]
+    let spawned = match spawned {
+        Err(error) if error.raw_os_error() == Some(5) => {
+            report.line("调用者的作业对象不允许脱离：Runtime 在其中分离启动，等待该作业会等到 Runtime 退出 / The caller's job object forbids breakaway: the Runtime starts detached inside it, and waiting on that job waits for the Runtime")?;
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(runtime::DETACHED_PROCESS);
+            command.spawn()
+        }
+        other => other,
+    };
+    let mut child = spawned.map_err(|error| {
         format!("Runtime start attempt failed: {error}; selected generation retained")
     })?;
     let deadline = Instant::now() + Duration::from_millis(HOST_TIMEOUT_MS);

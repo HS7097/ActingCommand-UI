@@ -12,7 +12,7 @@ use crate::bundle::Bundle;
 use crate::generations::{Plan, Writer};
 use crate::install::LaidOut;
 use crate::verify::{Report, Verified, MANIFEST, PLATFORM_TOOLS};
-use crate::{lifecycle, maintenance, migration, slots};
+use crate::{lifecycle, maintenance, migration, root_tools, slots, vision_migration};
 
 #[derive(Clone)]
 pub struct Installed {
@@ -44,10 +44,11 @@ pub fn installed(root: &Path) -> Result<Option<Installed>, String> {
     {
         let snapshot = Snapshot::read(root)?;
         let (runtime_sha, ui_sha) = members(&snapshot)?;
+        // AC's adb is the root's own (Workflow #359), not a slot's.
         return Ok(Some(Installed {
             runtime_sha,
             ui_sha,
-            adb: ac_adb(&snapshot.slot_root()).is_file(),
+            adb: ac_adb(root).is_file(),
         }));
     }
     let runtime = root.join("runtime").join(MANIFEST);
@@ -149,6 +150,9 @@ pub struct Upgraded {
     pub previous: PathBuf,
     pub restarted: Option<PathBuf>,
     pub generation: u64,
+    /// What the person must still do although the upgrade stands: the fixed
+    /// manager could not be replaced because it runs this upgrade (review R2-1).
+    pub notice: Option<String>,
 }
 
 pub fn upgrade(
@@ -156,6 +160,7 @@ pub fn upgrade(
     verified: &Verified,
     bundles: &[Bundle],
     choose: maintenance::Choose<'_>,
+    resolve: maintenance::Resolve<'_>,
     report: Report<'_>,
 ) -> Result<Upgraded, String> {
     let writer = Writer::acquire(root)?;
@@ -166,7 +171,7 @@ pub fn upgrade(
         .try_exists()
         .map_err(|error| error.to_string())?
     {
-        return migration::upgrade(&writer, verified, bundles, choose, report);
+        return migration::upgrade(&writer, verified, bundles, choose, resolve, report);
     }
     acui_installation::manager_program(root)?;
     let baseline = Snapshot::read(root)?;
@@ -175,28 +180,44 @@ pub fn upgrade(
     let state_root = baseline.state_root()?;
     let (runtime_sha, _) = members(&baseline)?;
     let target = other(baseline.selection.slot);
-    slots::materialize(&writer, target, verified, report)?;
     let document =
         serde_json::from_slice(&baseline.config_bytes).map_err(|error| error.to_string())?;
-    let (document, qualify) = configuration(
+    // Every decision is taken before any installation material changes.
+    let planned = configuration(
         root,
         &source_config,
         document,
         verified,
         bundles,
         choose,
+        resolve,
         report,
     )?;
+    let vision = vision_migration::plan(root, &planned.document)?;
+    slots::materialize(&writer, target, verified, report)?;
+    maintenance::place(&planned.prepared, root, report)?;
+    let mut document = planned.document;
+    if let Some(vision) = &vision {
+        vision.apply(report)?;
+        vision.rewrite(&mut document)?;
+    }
+    let tools = root_tools::plan(root, verified)?;
+    // New root tools (platform-tools above all) before the new slot's check-config
+    // (review R-F1); replacements wait until the Runtime owner has closed.
+    tools.add(root, report)?;
     let mut plan = writer.prepare(
         Some(baseline.clone()),
         target,
         &source_config,
-        &previous,
         document,
-        qualify,
+        planned.qualify,
         report,
     )?;
     baseline.unchanged()?;
+    // A tool still running from what the root-tool update moves stops the run
+    // here, before the Runtime is closed.
+    let owner: Vec<u32> = lifecycle::owner_pid(&state_root).into_iter().collect();
+    slots::precheck(&[], &tools.moving(root), &owner)?;
     let closed = lifecycle::close(
         &previous,
         &source_config,
@@ -205,14 +226,32 @@ pub fn upgrade(
         &runtime_sha,
         report,
     )?;
-    complete(
+    let mut upgraded = complete(
         &writer,
         &mut plan,
         closed,
         &verified.members.0,
         previous,
+        Some(&tools),
+        report,
+    )?;
+    // An older fixed manager cannot switch to this layout's slots (review R-F2).
+    // The fixed manager running this upgrade stays, and the upgrade stands with
+    // a notice (review R2-1); any other failure is an error.
+    let notice = crate::install::refresh_manager(
+        root,
+        verified,
+        &root.join(target.as_str()),
         report,
     )
+    .map_err(|error| {
+        format!("升级已提交并完成，但固定管理程序未替换 / The upgrade is committed and complete, but the fixed manager was not replaced: {error}")
+    })?;
+    if let Some(notice) = &notice {
+        report.warn(notice)?;
+    }
+    upgraded.notice = notice;
+    Ok(upgraded)
 }
 
 pub fn other(slot: InstallSlot) -> InstallSlot {
@@ -222,7 +261,19 @@ pub fn other(slot: InstallSlot) -> InstallSlot {
     }
 }
 
-pub fn configuration(
+/// A configuration plan: the successor document, whether its maintenance
+/// chains need full qualification, the staged bundles still to be placed, and
+/// the maintenance bindings that differ from the current configuration.
+pub struct Planned {
+    pub document: serde_json::Value,
+    pub qualify: bool,
+    pub prepared: Vec<maintenance::Prepared>,
+    pub conflicts: Vec<maintenance::Conflict>,
+}
+
+/// Everything an upgrade decides, computed from staging alone: nothing under
+/// the installation changes here, and the conflicts are left unanswered.
+pub fn plan_configuration(
     root: &Path,
     source_config: &Path,
     mut document: serde_json::Value,
@@ -230,7 +281,7 @@ pub fn configuration(
     bundles: &[Bundle],
     choose: maintenance::Choose<'_>,
     report: Report<'_>,
-) -> Result<(serde_json::Value, bool), String> {
+) -> Result<Planned, String> {
     crate::generations::rebase_config(
         &mut document,
         source_config
@@ -240,17 +291,46 @@ pub fn configuration(
     let prepared =
         maintenance::prepare(bundles, &verified.staging.join("resource-packages"), report)?;
     let selected = maintenance::upgrade_selections(&mut document, root, &prepared, choose, report)?;
-    let qualify = maintenance::augment(&mut document, root, &prepared, &selected, choose)?;
-    maintenance::place(&prepared, root, report)?;
-    Ok((document, qualify))
+    let old_source = crate::generations::plain(source_config)
+        .display()
+        .to_string();
+    let (qualify, conflicts) =
+        maintenance::augment(&mut document, root, &prepared, &selected, &old_source)?;
+    Ok(Planned {
+        document,
+        qualify,
+        prepared,
+        conflicts,
+    })
 }
 
+/// `plan_configuration`, then one decision over all its conflicts, written
+/// into the document. The caller places `prepared` once the slot is laid out.
+#[allow(clippy::too_many_arguments)]
+pub fn configuration(
+    root: &Path,
+    source_config: &Path,
+    document: serde_json::Value,
+    verified: &Verified,
+    bundles: &[Bundle],
+    choose: maintenance::Choose<'_>,
+    resolve: maintenance::Resolve<'_>,
+    report: Report<'_>,
+) -> Result<Planned, String> {
+    let mut planned =
+        plan_configuration(root, source_config, document, verified, bundles, choose, report)?;
+    maintenance::decide(&mut planned.document, &planned.conflicts, resolve, report)?;
+    Ok(planned)
+}
+
+/// `tools`: an upgrade's root-tool update; a switch (rollback) never touches the root.
 fn complete(
     writer: &Writer,
     plan: &mut Plan,
     closed: lifecycle::Closed,
     runtime_sha: &str,
     previous: PathBuf,
+    tools: Option<&root_tools::Plan>,
     report: Report<'_>,
 ) -> Result<Upgraded, String> {
     // The same gate also covers explicit rollback. It is evaluated on this
@@ -260,14 +340,34 @@ fn complete(
         &plan.snapshot.config_path()?,
         report,
     )?;
+    let applied = match tools {
+        Some(tools) => Some(
+            tools
+                .apply(
+                    writer.root(),
+                    &writer.root().join(format!(
+                        "install/root-tools-{}",
+                        plan.snapshot.selection.generation
+                    )),
+                    report,
+                )
+                .map_err(|error| format!("{error}; selection unchanged; Runtime remains stopped"))?,
+        ),
+        None => None,
+    };
     let committed = writer.commit(plan).and_then(|()| {
         report.line("安装选择已原子提交 / Installation selection committed atomically")
     });
     if let Err(error) = committed {
+        let tools = match applied.as_ref().map(root_tools::Applied::undo) {
+            None => String::new(),
+            Some(Ok(())) => "; 根工具已复原 / root tools restored".to_string(),
+            Some(Err(undo)) => format!("; 根工具复原未完成 / root tools restoration incomplete: {undo}"),
+        };
         return Err(match writer.restore_before_start(plan) {
-            Ok(()) => format!("{error}; original selection restored; Runtime remains stopped"),
+            Ok(()) => format!("{error}{tools}; original selection restored; Runtime remains stopped"),
             Err(restore) => {
-                format!("{error}; selection restoration failed: {restore}; Runtime remains stopped")
+                format!("{error}{tools}; selection restoration failed: {restore}; Runtime remains stopped")
             }
         });
     }
@@ -282,18 +382,21 @@ pub fn outcome(snapshot: &Snapshot, previous: PathBuf, restarted: Option<PathBuf
     Upgraded {
         laid_out: LaidOut {
             ui_dir: snapshot.root.join("ui"),
-            tools_dir: snapshot.slot_root().join("tools"),
+            tools_dir: snapshot.root.join("tools"),
             actingd_exe: snapshot.root.join("runtime").join(crate::runtime::ACTINGD),
             acui_exe: snapshot.root.join("ui/acui.exe"),
         },
         previous,
         restarted,
         generation: snapshot.selection.generation,
+        notice: None,
     }
 }
 
-/// Explicit management entry for a retained spare slot. It keeps current
-/// business settings and replans all program/provider references for the target.
+/// Explicit management entry for a retained spare slot. A slot of this layout
+/// keeps current business settings in a new generation for the target; a slot
+/// whose Runtime predates the vision model folders gets its own last generation
+/// back (`Writer::reselect`).
 pub fn rollback(root: &Path, report: Report<'_>) -> Result<Upgraded, String> {
     let writer = Writer::acquire(root)?;
     acui_installation::manager_program(writer.root())?;
@@ -302,22 +405,66 @@ pub fn rollback(root: &Path, report: Report<'_>) -> Result<Upgraded, String> {
     let guard =
         actingcommand_contract::installation::InstallSlotLock::try_shared(writer.root(), target)
             .map_err(|error| error.to_string())?;
-    let verified = crate::verify::installed_slot(&writer.root().join(target.as_str()), report)?;
+    let (retained, predates_vision) =
+        crate::verify::installed_slot(&writer.root().join(target.as_str()), report)?;
     let config = baseline.config_path()?;
     let programs = baseline.slot_root();
     let state_root = baseline.state_root()?;
     let (runtime_sha, _) = members(&baseline)?;
-    let document =
+    let active: serde_json::Value =
         serde_json::from_slice(&baseline.config_bytes).map_err(|error| error.to_string())?;
-    let mut plan = writer.prepare(
-        Some(baseline.clone()),
-        target,
-        &config,
-        &programs,
-        document,
-        true,
-        report,
-    )?;
+    let active_predates_vision = active
+        .get("vision_provider_manifest")
+        .is_some_and(|value| !value.is_null());
+    let mut plan = if predates_vision {
+        // Its Runtime cannot read this configuration (#360 §10.3).
+        writer
+            .reselect(baseline.clone(), target, report)?
+            .ok_or_else(|| {
+                format!(
+                    "槽 {} 没有为其程序准备过的配置代际，无法切回 / No configuration generation was prepared for slot {}'s programs; it cannot be switched back to",
+                    target.as_str(),
+                    target.as_str()
+                )
+            })?
+    } else if active_predates_vision {
+        // The active generation is a v0.11.1 one, selected again earlier: the
+        // target slot's own newest generation comes back (review V2-1); without
+        // one, the active configuration is migrated like an upgrade's.
+        match writer.reselect(baseline.clone(), target, report)? {
+            Some(plan) => plan,
+            None => {
+                let mut document = active;
+                crate::generations::rebase_config(
+                    &mut document,
+                    config.parent().ok_or("Configuration has no parent")?,
+                )?;
+                if let Some(vision) = vision_migration::plan(writer.root(), &document)? {
+                    vision.apply(report)?;
+                    vision.rewrite(&mut document)?;
+                }
+                writer.prepare(
+                    Some(baseline.clone()),
+                    target,
+                    &config,
+                    document,
+                    true,
+                    report,
+                )?
+            }
+        }
+    } else {
+        let document =
+            serde_json::from_slice(&baseline.config_bytes).map_err(|error| error.to_string())?;
+        writer.prepare(
+            Some(baseline.clone()),
+            target,
+            &config,
+            document,
+            true,
+            report,
+        )?
+    };
     guard.release().map_err(|error| error.to_string())?;
     baseline.unchanged()?;
     let closed = lifecycle::close(
@@ -332,13 +479,16 @@ pub fn rollback(root: &Path, report: Report<'_>) -> Result<Upgraded, String> {
         &writer,
         &mut plan,
         closed,
-        &verified.members.0,
+        &retained.0,
         programs,
+        None,
         report,
     )
 }
 
-pub fn rollback_from_entry() -> Result<(), String> {
+/// `--rollback` through the fixed management entry. The caller owns the log
+/// (`main::internal_entry`); the returned line is the result to show.
+pub fn rollback_from_entry(report: Report<'_>) -> Result<String, String> {
     if std::env::args_os().count() != 2 {
         return Err(
             "--rollback takes no arguments; it uses the fixed management entry's installation"
@@ -347,13 +497,9 @@ pub fn rollback_from_entry() -> Result<(), String> {
     }
     let root = acui_installation::current_manager_root()?
         .ok_or("Rollback requires the fixed acsetup management entry")?;
-    let mut log = crate::log::InstallLog::create(&root, crate::log::unix_ms())
-        .map_err(|error| error.to_string())?;
-    let mut report = |line: &str| {
-        log.line(line)
-            .map_err(|error| format!("Rollback log failed: {error}"))
-    };
-    let done = rollback(&root, &mut report)?;
-    println!("Selected installation generation {}", done.generation);
-    Ok(())
+    let done = rollback(&root, report)?;
+    Ok(format!(
+        "已选中安装代际 / Selected installation generation {}",
+        done.generation
+    ))
 }

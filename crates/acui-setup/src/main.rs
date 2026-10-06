@@ -22,6 +22,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod bundle;
+mod cli;
 mod fetch;
 mod generations;
 mod install;
@@ -32,10 +33,12 @@ mod maintenance;
 mod migration;
 mod payload;
 mod platform;
+mod root_tools;
 mod runtime;
 mod slots;
 mod upgrade;
 mod verify;
+mod vision_migration;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -114,8 +117,10 @@ struct State {
     /// The launcher and shortcuts the options step wrote in this run, so a
     /// retry can take back what it no longer wants.
     options_written: Vec<PathBuf>,
-    /// One explicit resource association or binding conflict, answered on the UI thread.
+    /// One explicit resource association, answered on the UI thread.
     decision: Option<std::sync::mpsc::SyncSender<Result<usize, String>>>,
+    /// The maintenance binding conflicts, all answered at once on one page.
+    conflict_decision: Option<std::sync::mpsc::SyncSender<Result<Vec<maintenance::Side>, String>>>,
 }
 
 /// The worker phases the window must not close in: held while laying files
@@ -178,6 +183,11 @@ fn lock(state: &Shared) -> MutexGuard<'_, State> {
 fn main() -> Result<()> {
     acui_installation::process_slot_lock()
         .map_err(|error| anyhow::Error::msg(error.to_string()))?;
+    // The internal entries below never attach to an interactive console while
+    // they work, because its window could be closed midway (review
+    // CLI-F2-close); `--rollback` and `--replace-manager` show their result
+    // there once the work has ended (`internal_entry`, review R3-1).
+    platform::private_std_handles();
     if std::env::args_os()
         .nth(1)
         .is_some_and(|argument| argument == "--commit-config")
@@ -188,10 +198,16 @@ fn main() -> Result<()> {
         .nth(1)
         .is_some_and(|argument| argument == "--rollback")
     {
-        return upgrade::rollback_from_entry().map_err(anyhow::Error::msg);
+        std::process::exit(internal_entry(true));
     }
     if std::env::args_os().nth(1).is_some_and(|argument| argument == "--replace-manager") {
-        return install::replace_manager_from_entry().map_err(anyhow::Error::msg);
+        std::process::exit(internal_entry(false));
+    }
+    // Any other argument means the command line: its output and its failure
+    // reach the calling console or script (Workflow #359).
+    if std::env::args_os().nth(1).is_some() {
+        platform::attach_console();
+        std::process::exit(cli::run());
     }
     std::panic::set_hook(Box::new(|info| {
         *LAST_PANIC
@@ -244,6 +260,77 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// The installation root an internal entry logs into, known before anything
+/// can fail: for `--rollback` the root of the running fixed manager
+/// (`<root>\ui\acsetup.exe`), for `--replace-manager` its first argument.
+fn entry_root(rollback: bool) -> Option<PathBuf> {
+    if rollback {
+        let exe = std::env::current_exe().ok()?;
+        let ui = exe.parent()?;
+        if ui.file_name()? != "ui" {
+            return None;
+        }
+        ui.parent().map(Path::to_path_buf)
+    } else {
+        let root = PathBuf::from(std::env::args_os().nth(2)?);
+        (root.is_absolute() && root.is_dir()).then_some(root)
+    }
+}
+
+/// `--rollback` and `--replace-manager` (review R3-1). The log is created before
+/// anything that can fail and ends with the result or `失败 / FAILED: …`. The
+/// work runs attached to no console (CLI-F2-close), with Ctrl+C refused, so
+/// closing a window cannot end it midway. Once it has ended, the result and the
+/// log path go to the caller's console, attached only now, or to the handles it
+/// redirected. The exit code is 0 or 1.
+fn internal_entry(rollback: bool) -> i32 {
+    use std::io::Write as _;
+    let guard = platform::InterruptGuard::start();
+    let root = entry_root(rollback);
+    let (mut log, mut notes) = match root.as_deref().map(|root| InstallLog::create(root, log::unix_ms())) {
+        Some(Ok(log)) => (Some(log), Vec::new()),
+        Some(Err(error)) => (None, vec![format!("日志未能创建 / The log could not be created: {error}")]),
+        None => (None, vec!["没有日志：安装根未知 / No log: the installation root is unknown".to_string()]),
+    };
+    let outcome = {
+        let mut report = |line: &str| -> Result<(), String> {
+            match log.as_mut() {
+                Some(log) => log
+                    .line(line)
+                    .map_err(|error| format!("日志写入失败 / Log write failed: {error}")),
+                None => Ok(()),
+            }
+        };
+        if rollback {
+            upgrade::rollback_from_entry(&mut report)
+        } else {
+            install::replace_manager_from_entry(&mut report)
+        }
+    };
+    drop(guard);
+    let (code, text) = match outcome {
+        Ok(line) => (0, line),
+        Err(error) => (1, format!("失败 / FAILED: {error}")),
+    };
+    if let Some(log) = log.as_mut() {
+        match log.line(&text) {
+            Ok(()) => notes.push(format!("日志 / Log: {}", log.path().display())),
+            Err(error) => notes.push(format!(
+                "日志写入失败 / Log write failed: {}: {error}",
+                log.path().display()
+            )),
+        }
+    }
+    platform::attach_console();
+    let shown = std::iter::once(text).chain(notes).collect::<Vec<_>>().join("\n");
+    if code == 0 {
+        let _ = writeln!(std::io::stdout(), "{shown}");
+    } else {
+        let _ = writeln!(std::io::stderr(), "{shown}");
+    }
+    code
+}
+
 fn install_callbacks(window: &SetupWindow, state: &Shared) {
     {
         let weak = window.as_weak();
@@ -262,6 +349,58 @@ fn install_callbacks(window: &SetupWindow, state: &Shared) {
                         fail(&state, &window.as_weak(), "配置选择已过期 / Configuration choice expired".into());
                     }
                 }
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let state = Arc::clone(state);
+        window.on_conflicts_decide(move |how| {
+            if let Some(window) = weak.upgrade() {
+                decide_conflicts(&window, &state, how);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_conflict_toggle(move |row, side| {
+            if let Some(window) = weak.upgrade() {
+                // One box per side: checking one clears the other; checking a
+                // checked box leaves the row unchosen.
+                let rows = window.get_conflicts();
+                if let Some(at) = usize::try_from(row).ok() {
+                    if let Some(mut data) = rows.row_data(at) {
+                        data.choice = if data.choice == side { 0 } else { side };
+                        rows.set_row_data(at, data);
+                    }
+                }
+                refresh_conflict_tally(&window);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_conflict_header_toggle(move |side| {
+            if let Some(window) = weak.upgrade() {
+                // A checked header (every row on that side) clears that side on
+                // every row; an unchecked or indeterminate one sets it on every row
+                // and so clears the other column.
+                let rows = window.get_conflicts();
+                let count = rows.row_count();
+                let all = count > 0 && rows.iter().all(|row| row.choice == side);
+                for at in 0..count {
+                    if let Some(mut data) = rows.row_data(at) {
+                        let choice = match all {
+                            true => 0,
+                            false => side,
+                        };
+                        if data.choice != choice {
+                            data.choice = choice;
+                            rows.set_row_data(at, data);
+                        }
+                    }
+                }
+                refresh_conflict_tally(&window);
             }
         });
     }
@@ -449,6 +588,116 @@ fn ask(state: &Shared, weak: &slint::Weak<SetupWindow>, text: String, choices: V
         if window.get_step() == 5 { window.set_step(window.get_decision_return_step()); }
     });
     result?
+}
+
+/// All maintenance binding conflicts on one page (Workflow #359): every row
+/// with its old and new value and their sources; the person takes all new, all
+/// old, or decides each row and confirms once. The worker holds no State lock
+/// while waiting; Cancel follows its existing error/rollback path.
+fn resolve_page(
+    state: &Shared,
+    weak: &slint::Weak<SetupWindow>,
+    conflicts: &[maintenance::Conflict],
+) -> Result<Vec<maintenance::Side>, String> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    {
+        let mut state = lock(state);
+        if state.decision.is_some() || state.conflict_decision.is_some() {
+            return Err("Another configuration choice is pending".into());
+        }
+        state.conflict_decision = Some(sender);
+    }
+    let rows: Vec<ConflictRow> = conflicts
+        .iter()
+        .map(|conflict| ConflictRow {
+            item: conflict.item.clone().into(),
+            current: conflict.old_text().into(),
+            current_source: conflict.old_source.clone().into(),
+            proposed: conflict.new_text().into(),
+            proposed_source: conflict.new_source.clone().into(),
+            choice: 0,
+        })
+        .collect();
+    let heading = format!(
+        "维护绑定差异 / Maintenance binding differences: {}",
+        conflicts.len()
+    );
+    let summary = maintenance::summary(conflicts);
+    let shown = weak.upgrade_in_event_loop(move |window| {
+        window.set_decision_return_step(window.get_step());
+        window.set_conflicts(Rc::new(VecModel::from(rows)).into());
+        window.set_conflicts_heading(heading.into());
+        window.set_conflicts_summary(summary.into());
+        refresh_conflict_tally(&window);
+        window.set_step(6);
+    });
+    if let Err(error) = shown {
+        lock(state).conflict_decision = None;
+        return Err(format!("Cannot show the maintenance binding differences: {error}"));
+    }
+    let result = receiver.recv_timeout(Duration::from_secs(30 * 60))
+        .map_err(|error| format!("配置选择未完成（30 分钟期限）/ Configuration choice not completed (30-minute limit): {error}"));
+    lock(state).conflict_decision = None;
+    let _ = weak.upgrade_in_event_loop(|window| {
+        if window.get_step() == 6 { window.set_step(window.get_decision_return_step()); }
+    });
+    result?
+}
+
+/// The conflict page's answer: 3 the rows as checked (only when every row has
+/// exactly one side), anything else cancels the plan.
+fn decide_conflicts(window: &SetupWindow, state: &Shared, how: i32) {
+    let rows = window.get_conflicts();
+    let answer = match how {
+        3 => {
+            let sides: Option<Vec<_>> = rows
+                .iter()
+                .map(|row| match row.choice {
+                    1 => Some(maintenance::Side::Old),
+                    2 => Some(maintenance::Side::New),
+                    _ => None,
+                })
+                .collect();
+            match sides {
+                Some(sides) => Ok(sides),
+                None => return,
+            }
+        }
+        _ => Err("用户取消配置计划 / Configuration plan cancelled by the user".to_string()),
+    };
+    let sender = lock(state).conflict_decision.take();
+    window.set_step(window.get_decision_return_step());
+    window.set_busy(true);
+    if let Some(sender) = sender {
+        if sender.send(answer).is_err() {
+            fail(state, &window.as_weak(), "配置选择已过期 / Configuration choice expired".into());
+        }
+    }
+}
+
+/// How many rows are decided each way, whether all are, and each header box:
+/// checked when every row has its side, unchecked when none, else the square.
+fn refresh_conflict_tally(window: &SetupWindow) {
+    let (mut old, mut new, mut open) = (0, 0, 0);
+    for row in window.get_conflicts().iter() {
+        match row.choice {
+            1 => old += 1,
+            2 => new += 1,
+            _ => open += 1,
+        }
+    }
+    let total = old + new + open;
+    let header = |count: i32| match count {
+        0 => 0,
+        count if count == total => 1,
+        _ => 2,
+    };
+    window.set_conflicts_header_current(header(old));
+    window.set_conflicts_header_proposed(header(new));
+    window.set_conflicts_tally(
+        format!("新值 / proposed {new} · 旧值 / current {old} · 未选 / undecided {open}").into(),
+    );
+    window.set_conflicts_complete(open == 0);
 }
 
 /// A worker's reporter. Every line goes into the log — a log write failing
@@ -1029,8 +1278,12 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
                             return Err(format!("发布件资源读取失败 / Release resources could not be read:\n{}", problems.join("\n")));
                         }
                         if !local_bundle.is_empty() { bundles.push(bundle::local(&local_bundle)?); }
-                        let mut choose = |text, choices| ask(&state, &worker_weak, text, choices);
-                        upgrade::upgrade(&root, &verified, &bundles, &mut choose, &mut report)
+                        let mut choose = |association: &maintenance::Association| {
+                            let labels = association.options.iter().map(|option| option.label.clone()).collect();
+                            ask(&state, &worker_weak, association.question.clone(), labels).map(Some)
+                        };
+                        let mut resolve = |conflicts: &[maintenance::Conflict]| resolve_page(&state, &worker_weak, conflicts);
+                        upgrade::upgrade(&root, &verified, &bundles, &mut choose, &mut resolve, &mut report)
                             .map(|upgraded| (upgraded.laid_out.clone(), Some(upgraded), members, None))
                     }
                     // A fresh install is configured at once: the state root
@@ -1077,8 +1330,8 @@ const LAID: [&str; 3] = ["runtime", "ui", "tools"];
 /// Preserve failed preparation and report the selected installation's recovery boundary.
 fn left_behind(mut reason: String, root: &Path, staging: &Path, _upgrading: bool, _existed: [bool; 3]) -> String {
     reason.push_str(&format!(
-        "\n安装材料与备份保留 / Installation materials and backups retained: {}; staging {}. 当前选择以 install/active.json 为准，启动结果未知时先核实际 owner / Consult the active selection and actual owner before recovery",
-        root.display(), staging.display()
+        "\n安装材料与备份保留 / Installation materials and backups retained: {}; 临时目录 {} 会在下次运行开始时删除并记入日志 / the staging directory {} is removed, and logged, when the next run starts. 当前选择以 install/active.json 为准，启动结果未知时先核实际 owner / Consult the active selection and actual owner before recovery",
+        root.display(), staging.display(), staging.display()
     ));
     reason
 }
@@ -1583,8 +1836,10 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
             let selections: Vec<_> = picks.iter().enumerate().map(|(at, (_, _, choice))| maintenance::Selection {
                 instance: at, bundle: choice.bundle, server: choice.server.clone(),
             }).collect();
-            let mut choose = |text, choices| ask(&state, &worker_weak, text, choices);
-            let qualify = maintenance::augment(&mut transaction.document, &root, &prepared, &selections, &mut choose)?;
+            let old_source = transaction.config_path().display().to_string();
+            let (qualify, conflicts) = maintenance::augment(&mut transaction.document, &root, &prepared, &selections, &old_source)?;
+            let mut resolve = |conflicts: &[maintenance::Conflict]| resolve_page(&state, &worker_weak, conflicts);
+            maintenance::decide(&mut transaction.document, &conflicts, &mut resolve, &mut report)?;
             let planned_state_root = transaction.state_root()?;
             transaction.unchanged()?;
             let closed = instance_step::stop(&root, &planned_state_root, &mut report)?;
@@ -1695,6 +1950,9 @@ fn summary(state: &Shared) -> String {
         ));
     }
     if let (Some(installed), Some(upgraded)) = (&state.installed, &state.upgraded) {
+        if let Some(notice) = &upgraded.notice {
+            lines.push(format!("！！ 注意 / ATTENTION: {notice}"));
+        }
         lines.push(format!(
             "已升级 / Upgraded from runtime {} · ui {}",
             short(&installed.runtime_sha),

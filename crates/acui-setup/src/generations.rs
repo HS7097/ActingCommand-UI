@@ -62,7 +62,6 @@ impl Writer {
         baseline: Option<Snapshot>,
         slot: InstallSlot,
         source_config: &Path,
-        previous_programs: &Path,
         mut document: Value,
         qualify: bool,
         report: Report<'_>,
@@ -75,6 +74,27 @@ impl Writer {
             .parent()
             .ok_or("Configuration has no parent")?;
         rebase_config(&mut document, source_root)?;
+        // A generation is written in the shape its slot's Runtime reads (#360). A
+        // later slot reads a `vision` section: the v0.3 provider manifest is
+        // retired there, and `vision_migration` converts it first. A v0.11.1 slot
+        // (still selected after a switch back) reads the manifest and no `vision`;
+        // its generation keeps a provider reference as v0.11.1 wrote it (review
+        // V2-2).
+        let predates_vision =
+            crate::verify::slot_predates_vision(&self.root.join(slot.as_str()))?;
+        let names_manifest = document
+            .get("vision_provider_manifest")
+            .is_some_and(|value| !value.is_null());
+        if names_manifest && !predates_vision {
+            return Err("配置仍引用 vision_provider_manifest，须先迁移到视觉模型文件夹 / The configuration still names a vision_provider_manifest; it must be migrated to the vision model folders first".into());
+        }
+        if predates_vision && document.get("vision").is_some_and(|value| !value.is_null()) {
+            return Err(format!(
+                "槽 {} 的 Runtime 早于视觉模型文件夹，读不了 vision 段 / Slot {}'s Runtime predates the vision model folders and cannot read a vision section",
+                slot.as_str(),
+                slot.as_str()
+            ));
+        }
         let state_root = Path::new(
             document["state_root"]
                 .as_str()
@@ -110,13 +130,11 @@ impl Writer {
             )
         })?;
         let programs = self.root.join(slot.as_str());
-        let provider = prepare_provider(
-            &self.root,
-            &relative,
-            &mut document,
-            previous_programs,
-            &programs,
-        )?;
+        let provider = if names_manifest {
+            carry_provider(&self.root, &relative, &mut document, &programs)?
+        } else {
+            None
+        };
         let config_path = directory.join("actingd.config.json");
         if qualify {
             crate::maintenance::validate(&document, &directory, report)?;
@@ -142,6 +160,7 @@ impl Writer {
                 path: format!("{relative}/actingd.config.json"),
                 sha256: sha256(&config_bytes),
             },
+            // Only a v0.11.1 slot's generation carries a provider manifest (#360 §10).
             provider,
         };
         let mut bytes = serde_json::to_vec_pretty(&selection).map_err(|error| error.to_string())?;
@@ -165,6 +184,84 @@ impl Writer {
             committed: false,
             start_attempted: false,
         })
+    }
+
+    /// Selects again, byte for byte, the newest generation prepared for `slot`'s
+    /// exact programs (matched by slot and MEMBERS sha256), after its inputs are
+    /// verified and that slot's own actingd accepts its configuration; `None`
+    /// when there is none. Used when the active configuration and the target
+    /// slot are on different sides of the vision model folders (#360 §10.3): a
+    /// v0.11.1 slot cannot read a later configuration, and a later slot cannot
+    /// take a v0.11.1 one. Settings changed after that generation are not
+    /// carried back.
+    pub fn reselect(
+        &self,
+        baseline: Snapshot,
+        slot: InstallSlot,
+        report: Report<'_>,
+    ) -> Result<Option<Plan>, String> {
+        self.check_baseline(Some(&baseline))?;
+        let members = read_bounded(
+            &self.root.join(format!("{}/MEMBERS.json", slot.as_str())),
+            MAX_MATERIAL_BYTES,
+        )?;
+        let members_sha256 = sha256(&members);
+        let directory = self.root.join("install/generations");
+        let unreadable =
+            |error: std::io::Error| format!("Cannot read {}: {error}", directory.display());
+        let mut newest: Option<(u64, PathBuf)> = None;
+        for entry in fs::read_dir(&directory).map_err(unreadable)? {
+            let entry = entry.map_err(unreadable)?;
+            let Some(generation) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            let candidate = entry.path().join("selection.json");
+            if !candidate
+                .try_exists()
+                .map_err(|error| format!("Cannot inspect {}: {error}", candidate.display()))?
+            {
+                continue;
+            }
+            let selection =
+                InstallSelection::from_json(&read_bounded(&candidate, MAX_INSTALL_SELECTION_BYTES)?)
+                    .map_err(|error| format!("{}: {error}", candidate.display()))?;
+            if selection.slot == slot
+                && selection.members.sha256 == members_sha256
+                && newest.as_ref().map_or(true, |(best, _)| generation > *best)
+            {
+                newest = Some((generation, candidate));
+            }
+        }
+        let Some((generation, candidate)) = newest else {
+            return Ok(None);
+        };
+        let bytes = read_bounded(&candidate, MAX_INSTALL_SELECTION_BYTES)?;
+        let snapshot = Snapshot::from_bytes(&self.root, bytes)?;
+        crate::runtime::check_config(
+            &self
+                .root
+                .join(slot.as_str())
+                .join("runtime")
+                .join(crate::runtime::ACTINGD),
+            &snapshot.config_path()?,
+        )?;
+        self.check_baseline(Some(&baseline))?;
+        report.line(&format!(
+            "重新选中槽 {} 自己的配置代际 {generation}，其后改动的设置不带回 / Slot {}'s own configuration generation {generation} is selected again; settings changed after it are not carried back",
+            slot.as_str(),
+            slot.as_str()
+        ))?;
+        Ok(Some(Plan {
+            snapshot,
+            baseline: Some(baseline),
+            candidate,
+            committed: false,
+            start_attempted: false,
+        }))
     }
 
     pub fn commit(&self, plan: &mut Plan) -> Result<(), String> {
@@ -297,13 +394,11 @@ pub fn commit_from_stdin() -> Result<(), String> {
             .map_err(|error| format!("Configuration transaction log failed: {error}"))
     };
     let config = baseline.config_path()?;
-    let programs = baseline.slot_root();
     let slot = baseline.selection.slot;
     let mut plan = writer.prepare(
         Some(baseline),
         slot,
         &config,
-        &programs,
         document,
         true,
         &mut report,
@@ -327,6 +422,113 @@ pub fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .map_err(|error| format!("Cannot write {}: {error}", path.display()))
 }
 
+/// The plain spelling of a path: `\\?\X:\…` as `X:\…` and `\\?\UNC\server\share\…`
+/// as `\\server\share\…`; any other path unchanged. The writer's root is canonical
+/// (verbatim on Windows), but no installation input ever carries that prefix
+/// (Workflow #359): every path acsetup writes into a configuration, a provider
+/// manifest or the console's settings goes through here.
+pub fn plain(path: &Path) -> PathBuf {
+    use std::path::{Component, Prefix};
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return path.to_path_buf();
+    };
+    let head = match prefix.kind() {
+        Prefix::VerbatimDisk(disk) => format!("{}:", disk as char),
+        Prefix::VerbatimUNC(server, share) => format!(
+            r"\\{}\{}",
+            server.to_string_lossy(),
+            share.to_string_lossy()
+        ),
+        _ => return path.to_path_buf(),
+    };
+    let mut plain = PathBuf::from(head);
+    for component in components {
+        plain.push(component.as_os_str());
+    }
+    plain
+}
+
+/// A v0.11.1 slot's generation keeps its v0.3 provider manifest, as v0.11.1
+/// wrote it: a copy in the generation, every path absolute, the configuration
+/// naming the copy and the selection referencing it. The OCR adapter it names
+/// must be the target slot's own (a v0.11.1 Runtime requires that).
+fn carry_provider(
+    root: &Path,
+    relative: &str,
+    document: &mut Value,
+    programs: &Path,
+) -> Result<Option<InstallFileReference>, String> {
+    let Some(value) = document
+        .get("vision_provider_manifest")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(
+        value
+            .as_str()
+            .ok_or("vision_provider_manifest is not a path")?,
+    );
+    let source_root = path.parent().ok_or("Provider manifest has no parent")?;
+    let mut provider: Value = serde_json::from_slice(&read_bounded(&path, MAX_MATERIAL_BYTES)?)
+        .map_err(|error| format!("Provider manifest is unreadable: {error}"))?;
+    let tools = fs::canonicalize(programs.join("tools")).map_err(|error| {
+        format!(
+            "Cannot resolve {}: {error}",
+            programs.join("tools").display()
+        )
+    })?;
+    for name in ["fastdeploy_ppocr", "onnxruntime"] {
+        let Some(artifacts) = provider.get_mut(name).filter(|value| !value.is_null()) else {
+            continue;
+        };
+        for key in [
+            "detector_model_path",
+            "recognizer_model_path",
+            "dictionary_path",
+            "classifier_model_path",
+            "model_path",
+            "labels_path",
+            "provider_library_path",
+            "runtime_library_path",
+        ] {
+            absolute_field(artifacts, &format!("/{key}"), source_root)?;
+        }
+        let count = artifacts
+            .get("runtime_library_paths")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        for at in 0..count {
+            absolute_field(artifacts, &format!("/runtime_library_paths/{at}"), source_root)?;
+        }
+        if let Some(library) = artifacts
+            .get("provider_library_path")
+            .and_then(Value::as_str)
+        {
+            let actual = fs::canonicalize(library).map_err(|error| {
+                format!("Provider library is unavailable: {library}: {error}")
+            })?;
+            if !actual.starts_with(&tools) {
+                return Err(format!(
+                    "提供者库不在目标槽的 tools 里 / The provider library is not in the target slot's tools: {library}"
+                ));
+            }
+        }
+    }
+    let mut bytes = serde_json::to_vec_pretty(&provider).map_err(|error| error.to_string())?;
+    bytes.push(b'\n');
+    let relative = format!("{relative}/vision-provider.json");
+    let destination = root.join(&relative);
+    write_new(&destination, &bytes)?;
+    document["vision_provider_manifest"] =
+        Value::from(plain(&destination).to_string_lossy().into_owned());
+    Ok(Some(InstallFileReference {
+        path: relative,
+        sha256: sha256(&bytes),
+    }))
+}
+
 fn absolute_field(document: &mut Value, pointer: &str, root: &Path) -> Result<(), String> {
     let Some(value) = document.pointer_mut(pointer) else {
         return Ok(());
@@ -338,8 +540,14 @@ fn absolute_field(document: &mut Value, pointer: &str, root: &Path) -> Result<()
         .as_str()
         .ok_or_else(|| format!("Configuration path is not a string: {pointer}"))?;
     let path = Path::new(text);
-    if !path.is_absolute() {
-        *value = Value::from(root.join(path).to_string_lossy().into_owned());
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    let written = plain(&absolute).to_string_lossy().into_owned();
+    if written != text {
+        *value = Value::from(written);
     }
     Ok(())
 }
@@ -376,139 +584,5 @@ pub fn rebase_config(document: &mut Value, source_root: &Path) -> Result<(), Str
     for key in ["tasks", "pools", "activity", "timeline"] {
         absolute_field(document, &format!("/policy/catalog/{key}"), source_root)?;
     }
-    Ok(())
-}
-
-fn prepare_provider(
-    root: &Path,
-    relative: &str,
-    document: &mut Value,
-    previous: &Path,
-    programs: &Path,
-) -> Result<Option<InstallFileReference>, String> {
-    let Some(value) = document
-        .get("vision_provider_manifest")
-        .filter(|value| !value.is_null())
-    else {
-        return Ok(None);
-    };
-    let path = PathBuf::from(
-        value
-            .as_str()
-            .ok_or("vision_provider_manifest is not a path")?,
-    );
-    let source_root = path.parent().ok_or("Provider manifest has no parent")?;
-    let mut provider: Value = serde_json::from_slice(&read_bounded(&path, MAX_MATERIAL_BYTES)?)
-        .map_err(|error| format!("Provider manifest is unreadable: {error}"))?;
-    for name in ["fastdeploy_ppocr", "onnxruntime"] {
-        let Some(artifacts) = provider.get_mut(name).filter(|value| !value.is_null()) else {
-            continue;
-        };
-        for key in [
-            "detector_model_path",
-            "recognizer_model_path",
-            "dictionary_path",
-            "classifier_model_path",
-            "model_path",
-            "labels_path",
-        ] {
-            absolute_field(artifacts, &format!("/{key}"), source_root)?;
-            if let Some(path) = artifacts.get(key).and_then(Value::as_str) {
-                let path = Path::new(path);
-                let actual = fs::canonicalize(path).map_err(|error| {
-                    format!(
-                        "Existing provider model is unavailable: {}: {error}",
-                        path.display()
-                    )
-                })?;
-                let install = fs::canonicalize(root).map_err(|error| error.to_string())?;
-                if !actual.is_file()
-                    || actual.starts_with(install.join("A"))
-                    || actual.starts_with(install.join("B"))
-                {
-                    return Err(format!(
-                        "Shared provider models must be outside program slots: {}",
-                        path.display()
-                    ));
-                }
-            }
-        }
-        for key in ["provider_library_path", "runtime_library_path"] {
-            if let Some(value) = artifacts.get_mut(key).filter(|value| !value.is_null()) {
-                rebind_library(value, source_root, previous, programs)?;
-                let path = PathBuf::from(
-                    value
-                        .as_str()
-                        .ok_or("Provider library path is not a string")?,
-                );
-                let hash_key = key.replace("_path", "_sha256");
-                if artifacts
-                    .get(&hash_key)
-                    .is_some_and(|value| !value.is_null())
-                {
-                    artifacts[&hash_key] = Value::from(
-                        crate::verify::sha256_file(&path)
-                            .map_err(|error| format!("Cannot hash provider library: {error}"))?,
-                    );
-                }
-            }
-        }
-        if let Some(paths) = artifacts
-            .get_mut("runtime_library_paths")
-            .and_then(Value::as_array_mut)
-        {
-            for path in paths {
-                rebind_library(path, source_root, previous, programs)?;
-            }
-        }
-    }
-    let mut bytes = serde_json::to_vec_pretty(&provider).map_err(|error| error.to_string())?;
-    bytes.push(b'\n');
-    let relative = format!("{relative}/vision-provider.json");
-    let destination = root.join(&relative);
-    write_new(&destination, &bytes)?;
-    document["vision_provider_manifest"] = Value::from(destination.to_string_lossy().into_owned());
-    Ok(Some(InstallFileReference {
-        path: relative,
-        sha256: sha256(&bytes),
-    }))
-}
-
-fn rebind_library(
-    value: &mut Value,
-    source_root: &Path,
-    previous: &Path,
-    programs: &Path,
-) -> Result<(), String> {
-    let text = value
-        .as_str()
-        .ok_or("Provider library path is not a string")?;
-    let path = Path::new(text);
-    let path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        source_root.join(path)
-    };
-    let path = fs::canonicalize(&path).map_err(|error| {
-        format!(
-            "Provider library is unavailable: {}: {error}",
-            path.display()
-        )
-    })?;
-    let previous = fs::canonicalize(previous).map_err(|error| error.to_string())?;
-    let relative = path.strip_prefix(&previous).map_err(|_| {
-        format!(
-            "Provider library cannot be rebound from outside its program root: {}",
-            path.display()
-        )
-    })?;
-    let target = programs.join(relative);
-    if !target.is_file() {
-        return Err(format!(
-            "Target slot provider library is missing: {}",
-            target.display()
-        ));
-    }
-    *value = Value::from(target.to_string_lossy().into_owned());
     Ok(())
 }

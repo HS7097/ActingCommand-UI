@@ -218,8 +218,9 @@ mod imp {
 
     /// Native resource occupancy includes loaded images and consumers whose
     /// launcher has exited. This session queries only; it never shuts down or
-    /// restarts a process. The caller keeps deny-sharing file handles throughout.
-    pub fn slot_files_unused(paths: &[PathBuf]) -> Result<(), String> {
+    /// restarts a process. `allowed` names processes the caller will close
+    /// itself (the Runtime owner, in a pre-check); every other user blocks.
+    pub fn slot_files_unused(paths: &[PathBuf], allowed: &[u32]) -> Result<(), String> {
         use std::os::windows::ffi::OsStrExt;
         use windows::Win32::System::RestartManager::{
             CCH_RM_SESSION_KEY, RM_PROCESS_INFO, RmEndSession, RmGetList, RmRegisterResources,
@@ -267,16 +268,39 @@ mod imp {
                     &mut reboot,
                 )
             };
-            if listed.0 != 0 || reboot != 0 || count as usize > processes.len() {
+            if listed.0 != 0 || count as usize > processes.len() {
                 return Err(format!(
                     "Slot occupancy is unconfirmed: RmGetList {}, required {needed}, reboot reasons {reboot}",
                     listed.0
                 ));
             }
-            let occupied: Vec<_> = processes[..count as usize]
+            let affected = &processes[..count as usize];
+            let own = std::process::id();
+            // RmRebootReasonDetectedSelf: this process holds the deny-sharing
+            // handles itself. It is the one reason ignored, and only while this
+            // process is in fact listed; every other reason still blocks.
+            const DETECTED_SELF: u32 = 0x10;
+            let self_listed = affected
                 .iter()
-                .filter(|process| process.Process.dwProcessId != std::process::id())
-                .map(|process| process.Process.dwProcessId.to_string())
+                .any(|process| process.Process.dwProcessId == own);
+            if reboot & !DETECTED_SELF != 0 || (reboot & DETECTED_SELF != 0 && !self_listed) {
+                return Err(format!(
+                    "Slot occupancy is unconfirmed: RmGetList 0, required {needed}, reboot reasons {reboot}"
+                ));
+            }
+            let occupied: Vec<_> = affected
+                .iter()
+                .filter(|process| {
+                    process.Process.dwProcessId != own
+                        && !allowed.contains(&process.Process.dwProcessId)
+                })
+                .map(|process| {
+                    format!(
+                        "{} ({})",
+                        process.Process.dwProcessId,
+                        app_name(&process.strAppName)
+                    )
+                })
                 .collect();
             if !occupied.is_empty() {
                 return Err(format!(
@@ -301,7 +325,130 @@ mod imp {
         result
     }
 
+    /// The application name Restart Manager reports, up to its terminating NUL.
+    fn app_name(name: &[u16]) -> String {
+        let end = name.iter().position(|unit| *unit == 0).unwrap_or(name.len());
+        String::from_utf16_lossy(&name[..end])
+    }
 
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn AttachConsole(process: u32) -> i32;
+        fn GetStdHandle(which: u32) -> *mut std::ffi::c_void;
+        fn SetStdHandle(which: u32, handle: *mut std::ffi::c_void) -> i32;
+        fn GetFileType(handle: *mut std::ffi::c_void) -> u32;
+        fn SetHandleInformation(handle: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
+        fn SetConsoleCtrlHandler(
+            handler: Option<unsafe extern "system" fn(u32) -> i32>,
+            add: i32,
+        ) -> i32;
+    }
+
+    const STD_INPUT_HANDLE: u32 = -10i32 as u32;
+    const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+    const HANDLE_FLAG_INHERIT: u32 = 1;
+    const STD_ERROR_HANDLE: u32 = -12i32 as u32;
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    const FILE_TYPE_DISK: u32 = 1;
+    const FILE_TYPE_PIPE: u32 = 3;
+
+    /// acsetup is a GUI-subsystem program; run from a console or a script it
+    /// still writes there. Output the caller redirected (a pipe or a file, as Git
+    /// Bash and `Start-Process -Redirect…` give) is kept; otherwise the parent's
+    /// console is attached and `CONOUT$` becomes stdout/stderr. With neither,
+    /// output reaches only the log; the exit code is set either way.
+    pub fn attach_console() {
+        // SAFETY: plain queries of this process's own standard handles.
+        let redirected = |which: u32| unsafe {
+            let handle = GetStdHandle(which);
+            !handle.is_null()
+                && handle as isize != -1
+                && matches!(GetFileType(handle), FILE_TYPE_DISK | FILE_TYPE_PIPE)
+        };
+        let (out, err) = (redirected(STD_OUTPUT_HANDLE), redirected(STD_ERROR_HANDLE));
+        if out && err {
+            return;
+        }
+        // SAFETY: attaching to the parent's console changes nothing else here.
+        if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) } == 0 {
+            return;
+        }
+        // Read access too: Rust writes UTF-16 to a console only when it can ask
+        // the console's mode.
+        let Ok(console) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("CONOUT$")
+        else {
+            return;
+        };
+        use std::os::windows::io::IntoRawHandle;
+        // The console handle stays open for the life of the process.
+        let handle = console.into_raw_handle();
+        // SAFETY: `handle` is a valid console handle this process owns.
+        unsafe {
+            if !out {
+                SetStdHandle(STD_OUTPUT_HANDLE, handle);
+            }
+            if !err {
+                SetStdHandle(STD_ERROR_HANDLE, handle);
+            }
+        }
+        // The prompt the caller's shell printed stays on its own line; a
+        // redirected stdout (a caller's pipe) is never written to here.
+        if !out {
+            use std::io::Write;
+            let _ = writeln!(std::io::stdout());
+        }
+    }
+
+    /// This process's standard handles are never inherited by its children. A
+    /// Runtime started here outlives acsetup and would otherwise keep a caller's
+    /// pipe (Git Bash, `$(...)`) open; every child acsetup waits for gets its own
+    /// explicit pipes or files.
+    pub fn private_std_handles() {
+        for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            // SAFETY: only this process's own standard handles are queried and,
+            // when valid, marked not inheritable.
+            unsafe {
+                let handle = GetStdHandle(which);
+                if !handle.is_null() && handle as isize != -1 {
+                    SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+                }
+            }
+        }
+    }
+
+    static GUARDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static HANDLER: std::sync::Once = std::sync::Once::new();
+
+    unsafe extern "system" fn interrupted(kind: u32) -> i32 {
+        // CTRL_C_EVENT 0 and CTRL_BREAK_EVENT 1, while files are being written.
+        if kind <= 1 && GUARDED.load(std::sync::atomic::Ordering::SeqCst) {
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr(),
+                "正在写入，不能中断 / Writing; this cannot be interrupted now"
+            );
+            return 1;
+        }
+        0
+    }
+
+    /// While `on`, Ctrl+C and Ctrl+Break are refused, as the wizard refuses to
+    /// close while it writes. Closing the console window cannot be refused.
+    pub fn guard_interrupts(on: bool) {
+        GUARDED.store(on, std::sync::atomic::Ordering::SeqCst);
+        HANDLER.call_once(|| {
+            // SAFETY: registers a handler that only reads an atomic and writes stderr.
+            unsafe {
+                SetConsoleCtrlHandler(
+                    Some(interrupted as unsafe extern "system" fn(u32) -> i32),
+                    1,
+                );
+            }
+        });
+    }
 }
 
 #[cfg(not(windows))]
@@ -353,10 +500,31 @@ mod imp {
         Err(io::Error::other(WINDOWS_ONLY))
     }
 
-    pub fn slot_files_unused(_paths: &[PathBuf]) -> Result<(), String> {
+    pub fn slot_files_unused(_paths: &[PathBuf], _allowed: &[u32]) -> Result<(), String> {
         Err(WINDOWS_ONLY.into())
     }
 
+    pub fn attach_console() {}
+
+    pub fn private_std_handles() {}
+
+    pub fn guard_interrupts(_on: bool) {}
 }
 
 pub use imp::*;
+
+/// Ctrl+C refused for as long as this lives (`guard_interrupts`).
+pub struct InterruptGuard;
+
+impl InterruptGuard {
+    pub fn start() -> Self {
+        guard_interrupts(true);
+        InterruptGuard
+    }
+}
+
+impl Drop for InterruptGuard {
+    fn drop(&mut self) {
+        guard_interrupts(false);
+    }
+}

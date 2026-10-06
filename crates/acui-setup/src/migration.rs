@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! First cold migration retains original programs and root configuration as an
 //! intact backup, then establishes the fixed management and forwarding entries.
+//! The root's `tools\` stays where it is: only files whose content changed are
+//! replaced, and the replaced ones join the backup (Workflow #359).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,48 +12,69 @@ use acui_installation::InstallSlot;
 use crate::bundle::Bundle;
 use crate::generations::Writer;
 use crate::verify::{Report, Verified};
-use crate::{generations, install, lifecycle, maintenance, slots, upgrade};
+use crate::{generations, install, lifecycle, maintenance, root_tools, slots, upgrade, vision_migration};
 
 pub fn upgrade(
     writer: &Writer,
     verified: &Verified,
     bundles: &[Bundle],
     choose: maintenance::Choose<'_>,
+    resolve: maintenance::Resolve<'_>,
     report: Report<'_>,
 ) -> Result<upgrade::Upgraded, String> {
     let root = writer.root();
-    crate::verify::initial_programs(root, report)?;
+    // v0.11.0 or v0.11.1 programs in the old layout; only v0.11.0 closes cold.
+    let (runtime_sha, _) = crate::verify::initial_programs(root, report)?;
     let config = root.join("actingd.config.json");
     let transaction = maintenance::Transaction::read_config(&config)?;
     let original_config =
         acui_installation::read_bounded(&config, acui_installation::MAX_CONFIG_BYTES)?;
     let state_root = transaction.state_root()?;
-    let programs = slots::materialize(writer, InstallSlot::A, verified, report)?;
-    let (document, qualify) = upgrade::configuration(
+    // Every decision is taken before any installation material changes.
+    let planned = upgrade::configuration(
         root,
         &config,
         transaction.document.clone(),
         verified,
         bundles,
         choose,
+        resolve,
         report,
     )?;
+    let vision = vision_migration::plan(root, &planned.document)?;
+    let programs = slots::materialize(writer, InstallSlot::A, verified, report)?;
+    maintenance::place(&planned.prepared, root, report)?;
+    let mut document = planned.document;
+    if let Some(vision) = &vision {
+        vision.apply(report)?;
+        vision.rewrite(&mut document)?;
+    }
+    let tools = root_tools::plan(root, verified)?;
+    // New root tools (platform-tools above all) before the new slot's check-config.
+    tools.add(root, report)?;
     let mut plan = writer.prepare(
         None,
         InstallSlot::A,
         &config,
-        root,
         document,
-        qualify,
+        planned.qualify,
         report,
     )?;
     transaction.unchanged()?;
+    // A console, an MCP client or a tool using what will move stops the run here,
+    // before the Runtime is closed.
+    let owner: Vec<u32> = lifecycle::owner_pid(&state_root).into_iter().collect();
+    slots::precheck(
+        &[root.join("runtime"), root.join("ui")],
+        &tools.moving(root),
+        &owner,
+    )?;
     let closed = lifecycle::close(
         root,
         &config,
         &state_root,
         None,
-        lifecycle::COLD_RUNTIME,
+        &runtime_sha,
         report,
     )?;
     lifecycle::verify_ledger(
@@ -84,17 +107,23 @@ pub fn upgrade(
         settings_before,
         settings_written: None,
         manager_created: false,
+        tools: None,
     };
-    // Native exclusion covers all original files while their directories move.
-    // Occupied UI/MCP/ADB files stop only this migration, with the old layout intact.
-    let mut occupancy = Vec::new();
-    for name in ["runtime", "ui", "tools"] {
-        occupancy.push(slots::NativeOccupancy::acquire(&root.join(name))?);
-    }
     let changed = (|| {
         transaction.unchanged()?;
-        for name in ["runtime", "ui", "tools", "actingd.config.json"] {
-            fs::rename(root.join(name), migration.backup.join(name))
+        // Native exclusion covers every original program file for the Restart
+        // Manager answer. NTFS refuses to rename a directory with a file beneath
+        // it open, so the handles go just before the moves; a user that appears in
+        // between makes a move fail as occupied, and the restore below says the
+        // Runtime remains stopped. The root tools that change are held by
+        // `root_tools`.
+        let mut occupancy = Vec::new();
+        for name in ["runtime", "ui"] {
+            occupancy.push(slots::NativeOccupancy::acquire(&root.join(name))?);
+        }
+        drop(occupancy);
+        for name in ["runtime", "ui", "actingd.config.json"] {
+            slots::rename_unoccupied(&root.join(name), &migration.backup.join(name))
                 .map_err(|error| format!("Cannot retain original {name}: {error}"))?;
             migration.moved.push(name);
         }
@@ -105,12 +134,9 @@ pub fn upgrade(
         {
             return Err("Original configuration changed during migration".into());
         }
-        install::stable_entries(
-            root,
-            &programs.ui_dir.join("acforward.exe"),
-            &programs.tools_dir,
-            report,
-        )?;
+        let backup_tools = migration.backup.join("tools");
+        migration.tools = Some(tools.apply(root, &backup_tools, report)?);
+        install::stable_entries(root, &programs.ui_dir.join("acforward.exe"), report)?;
         if root
             .join(acui_installation::MANAGER_DIRECTORY)
             .try_exists()
@@ -128,8 +154,8 @@ pub fn upgrade(
         install::write_console_settings(
             &migration.settings,
             &state_root,
-            &config,
-            &root.join("runtime").join(crate::runtime::ACTINGD),
+            &generations::plain(&config),
+            &generations::plain(&root.join("runtime").join(crate::runtime::ACTINGD)),
         )?;
         migration.settings_written = Some(acui_installation::read_bounded(
             &migration.settings,
@@ -156,7 +182,6 @@ pub fn upgrade(
             ),
         });
     }
-    drop(occupancy);
     if closed.was_running {
         plan.mark_start_attempt()?;
     }
@@ -186,11 +211,18 @@ struct Migration<'a> {
     settings_before: Option<Vec<u8>>,
     settings_written: Option<Vec<u8>>,
     manager_created: bool,
+    /// The root-tool changes, put back before the original programs return.
+    tools: Option<root_tools::Applied>,
 }
 
 impl Migration<'_> {
     fn restore(&self) -> Result<(), String> {
         let mut failures = Vec::new();
+        if let Some(tools) = &self.tools {
+            if let Err(error) = tools.undo() {
+                failures.push(format!("Cannot restore the root tools: {error}"));
+            }
+        }
         if self.manager_created {
             let manager = self.root.join(acui_installation::MANAGER_DIRECTORY);
             match manager.try_exists() {

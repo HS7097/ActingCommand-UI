@@ -505,14 +505,32 @@ v0.11.0 UI 是明确绑定共享状态根的观察入口；设置只保存根级
 `ledger-maintenance verify` 均须通过。这些门不证明 Provider/设备就绪。
 正常安装页也可提供更早发布件并确认提示；发布时间只用于顺序提示，冷态门仍必需。正式 v0.11.0 Runtime 按冷态路线启动。
 
+acsetup 是窗口程序：在控制台直接输入 `--rollback` 或 `--replace-manager` 时提示符会立即返回。
+工作不挂在该控制台上（关闭窗口不会中断它），结束时结果行（或 `失败 / FAILED: …`）和日志路径会显示在那个控制台里；
+每次运行都把结果写成 `<安装根>/acsetup-<时间>.log` 的最后一行。在交互式 PowerShell 窗口里等待结果并查看退出码（0 成功、1 失败）：
+
+```powershell
+$p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
+$null = $p.Handle; $p.WaitForExit(); "exit code: $($p.ExitCode)"
+```
+
+脚本里则把退出码传下去（不要贴进交互式窗口：`exit` 会关掉窗口，结果行也随之消失）：
+
+```powershell
+$p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
+$null = $p.Handle; $p.WaitForExit(); exit $p.ExitCode
+```
+
 首次新 Runtime 启动尝试前，只有完整原事务可恢复已提交选择；首次迁移还须恢复原根程序、配置和设置。
 恢复不完整则保留材料并保持 Runtime 停止。首次启动尝试之后保留当前选择及完整账本，
 后续显式回退须重新验证最新数据。关闭未确认时不启动第二个 Runtime。
 
 **固定管理入口**：`<安装根>/ui/acsetup.exe` 的独立原始构建清单及 MEMBERS 在 `install/manager`；
-业务槽回退保留该管理程序。替换时先退出固定管理进程，从安装根外运行已核发布件的未改动 acsetup：
-`acsetup.exe --replace-manager <安装根绝对路径> <发布件目录绝对路径>`。
-目录须有正常发布文件及 SHA256SUMS；原生占用须证明旧管理进程退出，外部程序须与已核 UI 载荷一致。
+业务槽回退保留该管理程序。替换时先关闭固定管理程序（所有 `<安装根>/ui/acsetup.exe` 窗口），
+再运行该发布件任一份已核、未改动的 acsetup（固定管理程序本身除外），例如新槽的 `<安装根>/<槽>/ui/acsetup.exe` 或发布件自带的 acsetup：
+`& "<安装根>\<槽>\ui\acsetup.exe" --replace-manager "<安装根绝对路径>" "<发布件目录绝对路径>"`
+（PowerShell 里带引号的程序路径前须加 `&`）。A/B 升级会自行替换较旧的固定管理程序；从固定管理程序本身启动的升级会在摘要里给出这条确切命令。
+目录须有正常发布文件及 SHA256SUMS；原生占用须证明旧管理进程退出，运行的程序须与已核 UI 载荷一致。
 旧管理材料及身份保留，各槽的 acsetup 原件完整保留。
 
 **进度与安装日志**：有限安装操作记录于 `<安装根>/acsetup-<时间>.log`；Runtime 结果来自正式 Host/CLI 与

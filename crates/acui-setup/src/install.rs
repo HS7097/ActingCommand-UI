@@ -30,31 +30,28 @@ pub struct LaidOut {
     pub acui_exe: PathBuf,
 }
 
-/// Prepares all manifest-bound programs in a new directory outside the selected slot.
+/// Prepares the program core in a new directory outside the selected slot: the
+/// whole runtime and ui zips (Workflow #359, #360). The tools live under the
+/// installation root (`root_tools`).
 /// Failed preparation leaves its files for inspection; no installed tree is overwritten.
 pub fn prepare_programs(
     dir: &Path,
     verified: &Verified,
     report: Report<'_>,
-) -> Result<LaidOut, String> {
+) -> Result<(), String> {
     fs::create_dir(dir).map_err(|error| {
         format!(
             "Cannot create fresh program candidate {}: {error}",
             dir.display()
         )
     })?;
-    let total =
-        verified.runtime.files.len() + verified.ui.files.len() + verified.tools.files.len() + 4;
+    let total = verified.runtime.files.len() + verified.ui.files.len() + 3;
     report.step(Step::Phase(
         "准备候选程序 / Preparing candidate programs",
         Some(Total::Items(total as u64)),
     ))?;
     let mut done = 0;
-    for (name, staged) in [
-        ("runtime", &verified.runtime),
-        ("ui", &verified.ui),
-        ("tools", &verified.tools),
-    ] {
+    for (name, staged) in [("runtime", &verified.runtime), ("ui", &verified.ui)] {
         copy_all(staged, &dir.join(name), &mut done, report)?;
     }
     let members = dir.join("MEMBERS.json");
@@ -72,13 +69,7 @@ pub fn prepare_programs(
     report.line(&format!(
         "候选程序已核验 / Candidate programs verified: {}",
         dir.display()
-    ))?;
-    Ok(LaidOut {
-        ui_dir: dir.join("ui"),
-        tools_dir: dir.join("tools"),
-        actingd_exe: dir.join("runtime").join(crate::runtime::ACTINGD),
-        acui_exe: dir.join("ui").join("acui.exe"),
-    })
+    ))
 }
 
 fn copy_all(
@@ -167,6 +158,8 @@ pub fn fresh(
             "The UI release does not contain its stable product entry acforward.exe".into(),
         );
     }
+    let tools = crate::root_tools::plan(root, verified)?;
+    tools.add(root, report)?;
     fs::create_dir_all(&state_root)
         .map_err(|error| format!("Cannot create shared state root: {error}"))?;
     let mut salt = [0u8; 32];
@@ -184,12 +177,19 @@ pub fn fresh(
         None,
         InstallSlot::A,
         &root.join("actingd.config.json"),
-        root,
         document,
         false,
         report,
     )?;
-    let laid_out = stable_entries(root, &forward, &programs.tools_dir, report)?;
+    tools.apply(
+        root,
+        &root.join(format!(
+            "install/root-tools-{}",
+            plan.snapshot.selection.generation
+        )),
+        report,
+    )?;
+    let laid_out = stable_entries(root, &forward, report)?;
     install_manager(root, verified, report)?;
     let config_path = plan.snapshot.config_path()?;
     let settings_path = platform::console_settings_path()?;
@@ -213,26 +213,13 @@ pub fn fresh(
 
 /// One implementation is installed under the fixed product filenames. Each
 /// invocation derives its route from that filename and retains one selection.
-pub fn stable_entries(
-    root: &Path,
-    forward: &Path,
-    tools_dir: &Path,
-    report: Report<'_>,
-) -> Result<LaidOut, String> {
+/// The root's `tools\` holds the real tools, not entries (`root_tools`).
+pub fn stable_entries(root: &Path, forward: &Path, report: Report<'_>) -> Result<LaidOut, String> {
     let bytes = acui_installation::read_bounded(forward, 64 * 1024 * 1024)?;
     for (component, names) in [
         (
             "runtime",
             &["actingcommand-actingd.exe", "actingctl.exe"][..],
-        ),
-        (
-            "tools",
-            &[
-                "actinglab.exe",
-                "actingledger.exe",
-                "actingcommand-vision-provider-check.exe",
-                "actingcommand-device-test.exe",
-            ][..],
         ),
         ("ui", &["acui.exe"][..]),
     ] {
@@ -250,7 +237,7 @@ pub fn stable_entries(
     report.line("固定产品入口已创建 / Stable product entries created")?;
     Ok(LaidOut {
         ui_dir: root.join("ui"),
-        tools_dir: tools_dir.to_path_buf(),
+        tools_dir: root.join("tools"),
         actingd_exe: root.join("runtime").join(crate::runtime::ACTINGD),
         acui_exe: root.join("ui/acui.exe"),
     })
@@ -308,7 +295,9 @@ pub fn install_manager(root: &Path, verified: &Verified, report: Report<'_>) -> 
 
 /// An explicit management update runs from the verified release outside this
 /// installation. Native occupancy must prove the fixed manager has exited.
-pub fn replace_manager_from_entry() -> Result<(), String> {
+/// `--replace-manager <root> <release folder>`. The caller owns the log
+/// (`main::internal_entry`); the returned line is the result to show.
+pub fn replace_manager_from_entry(report: Report<'_>) -> Result<String, String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() != 3 { return Err("Usage: acsetup --replace-manager <absolute-install-root> <absolute-release-directory>".into()); }
     let root = PathBuf::from(&args[1]);
@@ -316,21 +305,77 @@ pub fn replace_manager_from_entry() -> Result<(), String> {
     if !root.is_absolute() || !download.is_absolute() { return Err("Management replacement requires absolute paths".into()); }
     let root = root.canonicalize().map_err(|error| error.to_string())?;
     let exe = std::env::current_exe().and_then(fs::canonicalize).map_err(|error| error.to_string())?;
-    if exe.starts_with(&root) { return Err("Management replacement must run from outside this installation after its fixed manager exits".into()); }
+    // Any copy of the release's acsetup but the fixed manager itself may replace
+    // it, the new slot's `ui\acsetup.exe` included (review R2-1).
+    if fs::canonicalize(root.join("ui/acsetup.exe")).ok().as_deref() == Some(exe.as_path()) { return Err("Management replacement must run from the release's acsetup or a slot's ui\\acsetup.exe, not from the fixed manager it replaces".into()); }
     let writer = crate::generations::Writer::acquire(&root)?;
     let previous = acui_installation::manager_program(writer.root())?;
     let stamp = crate::log::unix_ms();
-    let mut log = crate::log::InstallLog::create(&root, stamp).map_err(|error| error.to_string())?;
-    let mut report = |line: &str| log.line(line).map_err(|error| format!("Management update log failed: {error}"));
     let staging = root.join(format!("install/manager-source-{stamp}"));
-    let verified = crate::verify::run(&download, &staging, &mut report)?;
+    let verified = crate::verify::run(&download, &staging, report)?;
     let manifest = acui_installation::read_bounded(&verified.ui.dir.join(MANIFEST), acui_installation::MAX_MATERIAL_BYTES)?;
     let candidate = verified.ui.dir.join("acsetup.exe");
     acui_installation::verify_manager_material(&verified.members_document, &manifest, &candidate)?;
     if crate::verify::sha256_file(&exe).map_err(|error| error.to_string())? != crate::verify::sha256_file(&candidate).map_err(|error| error.to_string())? {
         return Err("External installer is not the exact management program in the verified release".into());
     }
-    let occupancy = crate::slots::NativeOccupancy::files(std::slice::from_ref(&previous))?;
+    drop(previous);
+    let backup = replace_manager(&root, &verified, report)?;
+    Ok(format!(
+        "固定管理程序已替换，旧程序保留于 / Fixed management entry replaced; previous source retained at {}",
+        backup.display()
+    ))
+}
+
+/// After an A/B upgrade the fixed manager becomes this release's acsetup
+/// (review R-F2): an older one cannot switch to this layout's slots. Nothing
+/// happens when it already is. When the fixed manager is the program running
+/// this upgrade it cannot replace itself: the upgrade stands and the returned
+/// notice gives the exact command to run (review R2-1). Any other running
+/// manager, or a failed replacement, is an error.
+pub fn refresh_manager(
+    root: &Path,
+    verified: &Verified,
+    slot_root: &Path,
+    report: Report<'_>,
+) -> Result<Option<String>, String> {
+    let current = acui_installation::manager_program(root)?;
+    let candidate = verified.ui.dir.join("acsetup.exe");
+    let hash = |path: &Path| {
+        crate::verify::sha256_file(path)
+            .map_err(|error| format!("Cannot hash {}: {error}", path.display()))
+    };
+    if hash(current.as_path())? == hash(candidate.as_path())? {
+        report.line("固定管理程序已是本发布件的 acsetup / The fixed manager is already this release's acsetup")?;
+        return Ok(None);
+    }
+    let running = std::env::current_exe()
+        .and_then(fs::canonicalize)
+        .map_err(|error| error.to_string())?;
+    if fs::canonicalize(&current).map_err(|error| error.to_string())? == running {
+        let plain = crate::generations::plain;
+        return Ok(Some(format!(
+            "固定管理器仍是旧版，未替换 / fixed manager not replaced (running). 先关闭本安装程序窗口（以及其它 ui\\acsetup.exe），再在 PowerShell 运行 / First close this installer window (and any other ui\\acsetup.exe), then run in PowerShell: & \"{}\" --replace-manager \"{}\" \"{}\"",
+            plain(&slot_root.join("ui").join("acsetup.exe")).display(),
+            plain(root).display(),
+            plain(&verified.download).display()
+        )));
+    }
+    replace_manager(root, verified, report).map(|_| None)
+}
+
+/// The fixed manager replaced by `verified`'s acsetup. The previous program and
+/// its identity are kept under `install/manager-backup-<stamp>` and put back on
+/// failure; a running manager blocks (native occupancy). Returns the backup.
+pub fn replace_manager(root: &Path, verified: &Verified, report: Report<'_>) -> Result<PathBuf, String> {
+    let previous = acui_installation::manager_program(root)?;
+    let manifest = acui_installation::read_bounded(&verified.ui.dir.join(MANIFEST), acui_installation::MAX_MATERIAL_BYTES)?;
+    let candidate = verified.ui.dir.join("acsetup.exe");
+    acui_installation::verify_manager_material(&verified.members_document, &manifest, &candidate)?;
+    let occupancy = crate::slots::NativeOccupancy::files(std::slice::from_ref(&previous)).map_err(|error| {
+        format!("固定管理程序正在使用 / The fixed manager is in use: {error}")
+    })?;
+    let stamp = crate::log::unix_ms();
     let backup = root.join(format!("install/manager-backup-{stamp}"));
     fs::create_dir(&backup).map_err(|error| error.to_string())?;
     fs::rename(&previous, backup.join("acsetup.exe")).map_err(|error| format!("Cannot retain previous manager: {error}"))?;
@@ -339,7 +384,7 @@ pub fn replace_manager_from_entry() -> Result<(), String> {
         let restore = fs::rename(backup.join("acsetup.exe"), &previous);
         return Err(format!("Cannot retain management identity: {error}; program restore: {restore:?}"));
     }
-    let installed = install_manager(&root, &verified, &mut report);
+    let installed = install_manager(root, verified, report);
     if let Err(error) = installed {
         let restore = (|| {
             if previous.try_exists().map_err(|error| error.to_string())? { fs::rename(&previous, backup.join("retained-candidate.exe")).map_err(|error| error.to_string())?; }
@@ -350,7 +395,8 @@ pub fn replace_manager_from_entry() -> Result<(), String> {
         return Err(format!("Management replacement failed: {error}; original manager restoration: {restore:?}"));
     }
     drop(occupancy);
-    report(&format!("Fixed management entry replaced; previous source retained at {}", backup.display()))
+    report.line(&format!("固定管理程序已替换，旧程序保留于 / Fixed management entry replaced; previous source retained at {}", backup.display()))?;
+    Ok(backup)
 }
 
 /// Exactly the fields the wizard sets, in this order; the Runtime's parser
