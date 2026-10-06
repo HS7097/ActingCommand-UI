@@ -327,6 +327,33 @@ pub fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .map_err(|error| format!("Cannot write {}: {error}", path.display()))
 }
 
+/// The plain spelling of a path: `\\?\X:\…` as `X:\…` and `\\?\UNC\server\share\…`
+/// as `\\server\share\…`; any other path unchanged. The writer's root is canonical
+/// (verbatim on Windows), but no installation input ever carries that prefix
+/// (Workflow #359): every path acsetup writes into a configuration, a provider
+/// manifest or the console's settings goes through here.
+pub fn plain(path: &Path) -> PathBuf {
+    use std::path::{Component, Prefix};
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return path.to_path_buf();
+    };
+    let head = match prefix.kind() {
+        Prefix::VerbatimDisk(disk) => format!("{}:", disk as char),
+        Prefix::VerbatimUNC(server, share) => format!(
+            r"\\{}\{}",
+            server.to_string_lossy(),
+            share.to_string_lossy()
+        ),
+        _ => return path.to_path_buf(),
+    };
+    let mut plain = PathBuf::from(head);
+    for component in components {
+        plain.push(component.as_os_str());
+    }
+    plain
+}
+
 fn absolute_field(document: &mut Value, pointer: &str, root: &Path) -> Result<(), String> {
     let Some(value) = document.pointer_mut(pointer) else {
         return Ok(());
@@ -338,8 +365,14 @@ fn absolute_field(document: &mut Value, pointer: &str, root: &Path) -> Result<()
         .as_str()
         .ok_or_else(|| format!("Configuration path is not a string: {pointer}"))?;
     let path = Path::new(text);
-    if !path.is_absolute() {
-        *value = Value::from(root.join(path).to_string_lossy().into_owned());
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    let written = plain(&absolute).to_string_lossy().into_owned();
+    if written != text {
+        *value = Value::from(written);
     }
     Ok(())
 }
@@ -467,7 +500,8 @@ fn prepare_provider(
     let relative = format!("{relative}/vision-provider.json");
     let destination = root.join(&relative);
     write_new(&destination, &bytes)?;
-    document["vision_provider_manifest"] = Value::from(destination.to_string_lossy().into_owned());
+    document["vision_provider_manifest"] =
+        Value::from(plain(&destination).to_string_lossy().into_owned());
     Ok(Some(InstallFileReference {
         path: relative,
         sha256: sha256(&bytes),
@@ -509,6 +543,6 @@ fn rebind_library(
             target.display()
         ));
     }
-    *value = Value::from(target.to_string_lossy().into_owned());
+    *value = Value::from(plain(&target).to_string_lossy().into_owned());
     Ok(())
 }

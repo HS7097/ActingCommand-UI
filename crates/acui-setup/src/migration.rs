@@ -128,8 +128,8 @@ pub fn upgrade(
         install::write_console_settings(
             &migration.settings,
             &state_root,
-            &config,
-            &root.join("runtime").join(crate::runtime::ACTINGD),
+            &generations::plain(&config),
+            &generations::plain(&root.join("runtime").join(crate::runtime::ACTINGD)),
         )?;
         migration.settings_written = Some(acui_installation::read_bounded(
             &migration.settings,

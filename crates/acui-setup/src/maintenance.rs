@@ -125,7 +125,8 @@ pub fn installed_path(root: &Path, item: &Prepared, pack: &str) -> Result<PathBu
     let name = staged
         .file_name()
         .ok_or_else(|| format!("Package path has no file name: {}", staged.display()))?;
-    Ok(package_dir(root, item).join(name))
+    // Written into the configuration: never the canonical root's `\\?\` spelling.
+    Ok(crate::generations::plain(&package_dir(root, item).join(name)))
 }
 
 fn package_dir(root: &Path, item: &Prepared) -> PathBuf {
@@ -363,11 +364,39 @@ fn array_slot<'a>(
     Ok(&mut array[at])
 }
 
+/// One location however it is spelled: with or without the `\\?\` prefix, with
+/// either separator, and in any ASCII case (NTFS compares names that way).
+fn comparable(path: &Path) -> String {
+    crate::generations::plain(path)
+        .to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+/// A kept value's own path fields lose the `\\?\` prefix; nothing else changes.
+fn plain_paths(value: &mut Value) {
+    for key in ["package", "package_path"] {
+        let plain = value
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|path| path.starts_with(r"\\?\"))
+            .map(|path| {
+                crate::generations::plain(Path::new(path))
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        if let Some(plain) = plain {
+            value[key] = json!(plain);
+        }
+    }
+}
+
 fn normalized(value: &Value, root: &Path) -> Value {
     let mut value = value.clone();
     for key in ["package", "package_path"] {
         if let Some(path) = value[key].as_str() {
-            value[key] = json!(resolve(root, path));
+            value[key] = json!(comparable(&resolve(root, path)));
         }
     }
     if let Some(hash) = value["package_digest"]
@@ -395,11 +424,15 @@ fn merge(
             .unwrap_or("actingd.config.json");
         let answer = choose(format!("维护绑定冲突 / Maintenance binding conflict: {key}\n旧值 / Current ({old_source}):\n{slot}\n新值 / Proposed ({source}):\n{new}"), vec!["保留旧值 / Keep current".into(), "采用新值 / Use proposed".into()])?;
         match answer {
-            0 => return Ok(()),
+            0 => {
+                plain_paths(slot);
+                return Ok(());
+            }
             1 => {}
             _ => return Err("Invalid conflict selection".into()),
         }
     } else if !slot.is_null() {
+        plain_paths(slot);
         return Ok(());
     }
     *slot = new;
