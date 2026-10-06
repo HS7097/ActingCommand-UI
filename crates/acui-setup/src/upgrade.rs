@@ -365,8 +365,10 @@ pub fn outcome(snapshot: &Snapshot, previous: PathBuf, restarted: Option<PathBuf
     }
 }
 
-/// Explicit management entry for a retained spare slot. It keeps current
-/// business settings and replans all program/provider references for the target.
+/// Explicit management entry for a retained spare slot. A slot of this layout
+/// keeps current business settings in a new generation for the target; a slot
+/// whose Runtime predates the vision model folders gets its own last generation
+/// back (`Writer::reselect`).
 pub fn rollback(root: &Path, report: Report<'_>) -> Result<Upgraded, String> {
     let writer = Writer::acquire(root)?;
     acui_installation::manager_program(writer.root())?;
@@ -375,21 +377,27 @@ pub fn rollback(root: &Path, report: Report<'_>) -> Result<Upgraded, String> {
     let guard =
         actingcommand_contract::installation::InstallSlotLock::try_shared(writer.root(), target)
             .map_err(|error| error.to_string())?;
-    let retained = crate::verify::installed_slot(&writer.root().join(target.as_str()), report)?;
+    let (retained, predates_vision) =
+        crate::verify::installed_slot(&writer.root().join(target.as_str()), report)?;
     let config = baseline.config_path()?;
     let programs = baseline.slot_root();
     let state_root = baseline.state_root()?;
     let (runtime_sha, _) = members(&baseline)?;
-    let document =
-        serde_json::from_slice(&baseline.config_bytes).map_err(|error| error.to_string())?;
-    let mut plan = writer.prepare(
-        Some(baseline.clone()),
-        target,
-        &config,
-        document,
-        true,
-        report,
-    )?;
+    let mut plan = if predates_vision {
+        // Its Runtime cannot read this configuration (#360 §10.3).
+        writer.reselect(baseline.clone(), target, report)?
+    } else {
+        let document =
+            serde_json::from_slice(&baseline.config_bytes).map_err(|error| error.to_string())?;
+        writer.prepare(
+            Some(baseline.clone()),
+            target,
+            &config,
+            document,
+            true,
+            report,
+        )?
+    };
     guard.release().map_err(|error| error.to_string())?;
     baseline.unchanged()?;
     let closed = lifecycle::close(

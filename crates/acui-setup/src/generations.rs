@@ -168,6 +168,86 @@ impl Writer {
         })
     }
 
+    /// A slot whose Runtime predates the vision model folders (#360 §10.3), a
+    /// v0.11.1 slot that still holds its own `tools\`, cannot read a later
+    /// configuration. Switching back to it selects again, byte for byte, the
+    /// newest generation prepared for that slot's exact programs, after its
+    /// inputs are verified and its own actingd accepts its configuration.
+    /// Settings changed after that generation are not carried back.
+    pub fn reselect(
+        &self,
+        baseline: Snapshot,
+        slot: InstallSlot,
+        report: Report<'_>,
+    ) -> Result<Plan, String> {
+        self.check_baseline(Some(&baseline))?;
+        let members = read_bounded(
+            &self.root.join(format!("{}/MEMBERS.json", slot.as_str())),
+            MAX_MATERIAL_BYTES,
+        )?;
+        let members_sha256 = sha256(&members);
+        let directory = self.root.join("install/generations");
+        let unreadable =
+            |error: std::io::Error| format!("Cannot read {}: {error}", directory.display());
+        let mut newest: Option<(u64, PathBuf)> = None;
+        for entry in fs::read_dir(&directory).map_err(unreadable)? {
+            let entry = entry.map_err(unreadable)?;
+            let Some(generation) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            let candidate = entry.path().join("selection.json");
+            if !candidate
+                .try_exists()
+                .map_err(|error| format!("Cannot inspect {}: {error}", candidate.display()))?
+            {
+                continue;
+            }
+            let selection =
+                InstallSelection::from_json(&read_bounded(&candidate, MAX_INSTALL_SELECTION_BYTES)?)
+                    .map_err(|error| format!("{}: {error}", candidate.display()))?;
+            if selection.slot == slot
+                && selection.members.sha256 == members_sha256
+                && newest.as_ref().map_or(true, |(best, _)| generation > *best)
+            {
+                newest = Some((generation, candidate));
+            }
+        }
+        let Some((generation, candidate)) = newest else {
+            return Err(format!(
+                "槽 {} 没有为其程序准备过的配置代际，无法切回 / No configuration generation was prepared for slot {}'s programs; it cannot be switched back to",
+                slot.as_str(),
+                slot.as_str()
+            ));
+        };
+        let bytes = read_bounded(&candidate, MAX_INSTALL_SELECTION_BYTES)?;
+        let snapshot = Snapshot::from_bytes(&self.root, bytes)?;
+        crate::runtime::check_config(
+            &self
+                .root
+                .join(slot.as_str())
+                .join("runtime")
+                .join(crate::runtime::ACTINGD),
+            &snapshot.config_path()?,
+        )?;
+        self.check_baseline(Some(&baseline))?;
+        report.line(&format!(
+            "槽 {} 的程序早于视觉模型文件夹：重新选中它自己的配置代际 {generation}，其后改动的设置不带回 / Slot {}'s programs predate the vision model folders: its own configuration generation {generation} is selected again; settings changed after it are not carried back",
+            slot.as_str(),
+            slot.as_str()
+        ))?;
+        Ok(Plan {
+            snapshot,
+            baseline: Some(baseline),
+            candidate,
+            committed: false,
+            start_attempted: false,
+        })
+    }
+
     pub fn commit(&self, plan: &mut Plan) -> Result<(), String> {
         if plan.snapshot.root != self.root || plan.committed {
             return Err("Selection plan does not belong to this uncommitted transaction".into());

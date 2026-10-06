@@ -290,8 +290,10 @@ pub fn prepared_programs(root: &Path, verified: &Verified, report: Report<'_>) -
 
 /// A retained full slot is requalified through the same manifest checker used
 /// for release preparation; the caller holds its shared installation lock.
-/// Returns the slot's two commits, `(runtime, ui)`.
-pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<(String, String), String> {
+/// Returns the slot's two commits, `(runtime, ui)`, and whether it is a slot
+/// whose Runtime predates the vision model folders (a v0.11.1 slot, which still
+/// holds its own `tools\`).
+pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<((String, String), bool), String> {
     let members_document = read_identity(&root.join("MEMBERS.json"))?;
     let members =
         members_of(std::str::from_utf8(&members_document).map_err(|error| error.to_string())?)?;
@@ -332,7 +334,7 @@ pub fn installed_slot(root: &Path, report: Report<'_>) -> Result<(String, String
             false,
         )?;
     }
-    Ok(members)
+    Ok((members, tools))
 }
 
 /// The old layout's programs, one of `OLD_LAYOUT_RELEASES`, each checked against
