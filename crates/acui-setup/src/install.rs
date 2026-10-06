@@ -355,7 +355,7 @@ pub fn refresh_manager(
     if fs::canonicalize(&current).map_err(|error| error.to_string())? == running {
         let plain = crate::generations::plain;
         return Ok(Some(format!(
-            "固定管理器仍是旧版，未替换 / fixed manager not replaced (running): run \"{}\" --replace-manager \"{}\" \"{}\"",
+            "固定管理器仍是旧版，未替换 / fixed manager not replaced (running). 先关闭本安装程序窗口（以及其它 ui\\acsetup.exe），再在 PowerShell 运行 / First close this installer window (and any other ui\\acsetup.exe), then run in PowerShell: & \"{}\" --replace-manager \"{}\" \"{}\"",
             plain(&slot_root.join("ui").join("acsetup.exe")).display(),
             plain(root).display(),
             plain(&verified.download).display()

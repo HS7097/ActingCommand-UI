@@ -519,9 +519,11 @@ $null = $p.Handle; $p.WaitForExit(); exit $p.ExitCode
 后续显式回退须重新验证最新数据。关闭未确认时不启动第二个 Runtime。
 
 **固定管理入口**：`<安装根>/ui/acsetup.exe` 的独立原始构建清单及 MEMBERS 在 `install/manager`；
-业务槽回退保留该管理程序。替换时先退出固定管理进程，从安装根外运行已核发布件的未改动 acsetup：
-`acsetup.exe --replace-manager <安装根绝对路径> <发布件目录绝对路径>`。
-目录须有正常发布文件及 SHA256SUMS；原生占用须证明旧管理进程退出，外部程序须与已核 UI 载荷一致。
+业务槽回退保留该管理程序。替换时先关闭固定管理程序（所有 `<安装根>/ui/acsetup.exe` 窗口），
+再运行该发布件任一份已核、未改动的 acsetup（固定管理程序本身除外），例如新槽的 `<安装根>/<槽>/ui/acsetup.exe` 或发布件自带的 acsetup：
+`& "<安装根>\<槽>\ui\acsetup.exe" --replace-manager "<安装根绝对路径>" "<发布件目录绝对路径>"`
+（PowerShell 里带引号的程序路径前须加 `&`）。A/B 升级会自行替换较旧的固定管理程序；从固定管理程序本身启动的升级会在摘要里给出这条确切命令。
+目录须有正常发布文件及 SHA256SUMS；原生占用须证明旧管理进程退出，运行的程序须与已核 UI 载荷一致。
 旧管理材料及身份保留，各槽的 acsetup 原件完整保留。
 
 **进度与安装日志**：有限安装操作记录于 `<安装根>/acsetup-<时间>.log`；Runtime 结果来自正式 Host/CLI 与

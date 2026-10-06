@@ -735,11 +735,15 @@ start attempt, the selected generation and entire ledger remain in place. Any ex
 rollback rechecks the latest data. Unconfirmed closure never starts a second Runtime.
 
 **Fixed management entry**: `<root>/ui/acsetup.exe` retains its own original build manifest and
-MEMBERS in `install/manager`; business-slot rollback keeps it. To replace it, exit the fixed
-manager and run the exact unmodified acsetup from a verified release outside the installation:
-`acsetup.exe --replace-manager <absolute-install-root> <absolute-release-directory>`.
+MEMBERS in `install/manager`; business-slot rollback keeps it. To replace it, close the fixed
+manager (every `<root>/ui/acsetup.exe` window) and run any verified, unmodified copy of the
+release's acsetup except the fixed manager itself, for example the new slot's
+`<root>/<slot>/ui/acsetup.exe` or the release's own acsetup:
+`& "<root>\<slot>\ui\acsetup.exe" --replace-manager "<absolute-install-root>" "<absolute-release-directory>"`
+(in PowerShell a quoted program path needs `&`). An A/B upgrade replaces an older fixed manager
+by itself; when it was started from the fixed manager, its summary gives this exact command.
 The directory contains normal release files and SHA256SUMS. Native occupancy must prove the old
-manager exited; the external executable must match the verified UI payload. Prior management
+manager exited; the running executable must match the verified UI payload. Prior management
 material and identity are retained. Slot-contained acsetup originals remain intact.
 
 **Progress and installation log**: bounded installation operations go to `<root>/acsetup-<time>.log`.
