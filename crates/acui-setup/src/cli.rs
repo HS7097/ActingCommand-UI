@@ -135,9 +135,11 @@ fn parse(arguments: &[String]) -> Result<Option<Args>, String> {
                 conflicts = Some(match value(arguments, &mut at, flag)? {
                     "new" => Side::New,
                     "old" => Side::Old,
-                    other => return Err(format!(
+                    other => {
+                        return Err(format!(
                         "--conflicts 只接受 new 或 old / --conflicts takes new or old, not {other}"
-                    )),
+                    ))
+                    }
                 });
             }
             "--allow-downgrade" => {
@@ -828,29 +830,47 @@ fn plan_logged(
             &mut choose,
             report,
         )?;
+        // Unanswered associations come first: their instances' bindings are not
+        // computed until they are answered (review CLI-F3).
+        let unanswered = open.borrow().len();
+        for text in open.borrow().iter() {
+            report.line(text)?;
+        }
         maintenance::list(&planned.conflicts, report)?;
+        if unanswered > 0 {
+            report.line(&format!(
+                "上面的差异列表不完整：{unanswered} 个实例的资源关联未回答，它们的维护绑定尚未计算 / The difference list above is incomplete: {unanswered} instance(s) have no answered association, and their maintenance bindings are not computed yet"
+            ))?;
+            needed.push(format!(
+                "--associate …（{unanswered} 个，见上 / {unanswered}, see above）"
+            ));
+        }
         match vision_migration::plan(&canonical, &planned.document)? {
             Some(vision) => vision.describe(report)?,
             None => report.line("视觉：配置未引用 v0.3 清单，不迁移 / Vision: the configuration names no v0.3 manifest; nothing to migrate")?,
         }
-        if !planned.conflicts.is_empty() {
-            match args.conflicts {
-                Some(Side::New) => report.line(
-                    "--conflicts new：真实运行全部采用新值 / a real run takes every proposed value",
-                )?,
-                Some(Side::Old) => report.line(
-                    "--conflicts old：真实运行全部保留旧值 / a real run keeps every current value",
-                )?,
-                None => needed.push("--conflicts new|old".into()),
-            }
-        }
-        for text in open.borrow().iter() {
-            report.line(text)?;
-            needed.push("--associate …（见上 / see above）".into());
+        match (planned.conflicts.is_empty(), args.conflicts) {
+            (false, Some(Side::New)) => report.line(
+                "--conflicts new：真实运行全部采用新值 / a real run takes every proposed value",
+            )?,
+            (false, Some(Side::Old)) => report.line(
+                "--conflicts old：真实运行全部保留旧值 / a real run keeps every current value",
+            )?,
+            (false, None) => needed.push("--conflicts new|old".into()),
+            (true, None) if unanswered > 0 => needed.push(
+                "（给出 --associate 后可能还需要 --conflicts new|old，请带上它们再运行一次 --plan / once the associations are given, --conflicts new|old may also be needed: run --plan again with them）".into(),
+            ),
+            (true, _) => {}
         }
     }
     tools.describe(report)?;
     leftovers(root, installed.is_some() && !active, slots, report)?;
+    // --yes, then the associations, then everything else.
+    needed.sort_by_key(|flag| match flag.as_str() {
+        "--yes" => 0,
+        flag if flag.starts_with("--associate") => 1,
+        _ => 2,
+    });
     report.line(&format!(
         "真实运行需要 / A real run needs: {}",
         needed.join(" ")
