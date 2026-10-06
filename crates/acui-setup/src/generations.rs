@@ -116,6 +116,7 @@ impl Writer {
             &mut document,
             previous_programs,
             &programs,
+            report,
         )?;
         let config_path = directory.join("actingd.config.json");
         if qualify {
@@ -412,12 +413,73 @@ pub fn rebase_config(document: &mut Value, source_root: &Path) -> Result<(), Str
     Ok(())
 }
 
+/// A provider runtime library stays outside both program slots. One a manual
+/// copy left inside a slot is re-pointed to the identical file at the same place
+/// under the installation root; without one, the plan stops and says what to move.
+fn shared_library(
+    value: &mut Value,
+    source_root: &Path,
+    root: &Path,
+    report: Report<'_>,
+) -> Result<(), String> {
+    let text = value
+        .as_str()
+        .ok_or("Provider runtime library path is not a string")?;
+    let path = Path::new(text);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        source_root.join(path)
+    };
+    let actual = fs::canonicalize(&path).map_err(|error| {
+        format!(
+            "Provider runtime library is unavailable: {}: {error}",
+            path.display()
+        )
+    })?;
+    if !actual.is_file() {
+        return Err(format!(
+            "Provider runtime library is not a file: {}",
+            path.display()
+        ));
+    }
+    let install = fs::canonicalize(root).map_err(|error| error.to_string())?;
+    let inside = [InstallSlot::A, InstallSlot::B]
+        .into_iter()
+        .find_map(|slot| actual.strip_prefix(install.join(slot.as_str())).ok());
+    let written = match inside {
+        None => plain(&path),
+        Some(relative) => {
+            let shared = install.join(relative);
+            let hash = |file: &Path| {
+                crate::verify::sha256_file(file)
+                    .map_err(|error| format!("Cannot hash {}: {error}", file.display()))
+            };
+            if !shared.is_file() || hash(shared.as_path())? != hash(actual.as_path())? {
+                return Err(format!(
+                    "ONNX Runtime 位于程序槽内 / ONNX Runtime lies inside a program slot: {}; 请复制到 / copy it to {} and run again",
+                    plain(&actual).display(),
+                    plain(&shared).display()
+                ));
+            }
+            report.line(&format!(
+                "程序槽内的 ONNX Runtime 改指安装根下的同一文件 / ONNX Runtime inside a program slot re-pointed to the identical file under the installation root: {}",
+                plain(&shared).display()
+            ))?;
+            plain(&shared)
+        }
+    };
+    *value = Value::from(written.to_string_lossy().into_owned());
+    Ok(())
+}
+
 fn prepare_provider(
     root: &Path,
     relative: &str,
     document: &mut Value,
     previous: &Path,
     programs: &Path,
+    report: Report<'_>,
 ) -> Result<Option<InstallFileReference>, String> {
     let Some(value) = document
         .get("vision_provider_manifest")
@@ -466,32 +528,42 @@ fn prepare_provider(
                 }
             }
         }
-        for key in ["provider_library_path", "runtime_library_path"] {
-            if let Some(value) = artifacts.get_mut(key).filter(|value| !value.is_null()) {
-                rebind_library(value, source_root, previous, programs)?;
-                let path = PathBuf::from(
-                    value
-                        .as_str()
-                        .ok_or("Provider library path is not a string")?,
+        // Only the OCR adapter, built with the Runtime and bound to its interface,
+        // follows the selected program slot (Workflow #359).
+        if let Some(value) = artifacts
+            .get_mut("provider_library_path")
+            .filter(|value| !value.is_null())
+        {
+            rebind_library(value, source_root, previous, programs)?;
+            let path = PathBuf::from(
+                value
+                    .as_str()
+                    .ok_or("Provider library path is not a string")?,
+            );
+            if artifacts
+                .get("provider_library_sha256")
+                .is_some_and(|value| !value.is_null())
+            {
+                artifacts["provider_library_sha256"] = Value::from(
+                    crate::verify::sha256_file(&path)
+                        .map_err(|error| format!("Cannot hash provider library: {error}"))?,
                 );
-                let hash_key = key.replace("_path", "_sha256");
-                if artifacts
-                    .get(&hash_key)
-                    .is_some_and(|value| !value.is_null())
-                {
-                    artifacts[&hash_key] = Value::from(
-                        crate::verify::sha256_file(&path)
-                            .map_err(|error| format!("Cannot hash provider library: {error}"))?,
-                    );
-                }
             }
+        }
+        // ONNX Runtime is a private deployment input under the installation root:
+        // it stays where it is and never enters a slot.
+        if let Some(value) = artifacts
+            .get_mut("runtime_library_path")
+            .filter(|value| !value.is_null())
+        {
+            shared_library(value, source_root, root, report)?;
         }
         if let Some(paths) = artifacts
             .get_mut("runtime_library_paths")
             .and_then(Value::as_array_mut)
         {
             for path in paths {
-                rebind_library(path, source_root, previous, programs)?;
+                shared_library(path, source_root, root, report)?;
             }
         }
     }
