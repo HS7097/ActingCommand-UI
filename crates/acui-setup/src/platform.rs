@@ -387,9 +387,12 @@ mod imp {
                 SetStdHandle(STD_ERROR_HANDLE, handle);
             }
         }
-        // The prompt the caller's shell printed stays on its own line.
-        use std::io::Write;
-        let _ = writeln!(std::io::stdout());
+        // The prompt the caller's shell printed stays on its own line; a
+        // redirected stdout (a caller's pipe) is never written to here.
+        if !out {
+            use std::io::Write;
+            let _ = writeln!(std::io::stdout());
+        }
     }
 
     static GUARDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
