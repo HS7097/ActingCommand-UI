@@ -358,9 +358,9 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   出，但点它会写明原因、不能保存。没有删除。`alias` 必填；新实例的 `instance_id` 是 `instance_`
   加系统随机源的 32 位小写十六进制，所有 `instance_id` 都只读显示；绑定恰好一种——`instance_index`
   （MuMu 序号）、`instance_name`（MuMu 名称），或 `host` + `port`（显式 ADB 地址）。`adb_path` 三种
-  绑定下都选填：留空则 Runtime 用 AC 自带的 adb（`<选中槽>/tools/platform-tools/adb.exe`，Runtime 核它的
+  绑定下都选填：留空则 Runtime 用 AC 自带的 adb（`<安装根>/tools/platform-tools/adb.exe`，Runtime 核它的
   sha256，缺失或不符就拒绝启动）；MuMu 绑定下若填写，只能是 MuMu 自带的 adb 或 AC 自带的 adb。留空的
-  框不写这个键，编辑已有项时清空它会删掉这个键。这使用当前槽的路径契约；AC 自带 adb 属于该程序槽，其它工具使用各自配置的 adb。`nemu_app_index` 是选填的整数。`application_id`、`capture_backend`、`touch_backend` 表单不检查，要不要填、取值是否有效都由
+  框不写这个键，编辑已有项时清空它会删掉这个键。这需要从 A/B 安装根取工具的 Runtime（Workflow #359）；AC 自带 adb 属于安装根、两个槽共用，其它工具使用各自配置的 adb。`nemu_app_index` 是选填的整数。`application_id`、`capture_backend`、`touch_backend` 表单不检查，要不要填、取值是否有效都由
   check-config 判定，`nemu_app_index` 的配对也由它查。只有要靠 MuMu 发现结果的几项到 Runtime 启动
   时才查：`MuMuManager` 版本与能力、发现结果恰好匹配一个、声明的 `adb_path`、`host`、`port` 与发现值
   不冲突、ADB 端点（Runtime `contracts/actingd-check-config.md`，`3d5398d6` 起）。文本去掉首尾空白，
@@ -400,12 +400,13 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    下好的、离线的或取出的文件夹随后在同一页校验并铺开：要求文件夹里有 `SHA256SUMS`、`MEMBERS.json`、`actingcommand-runtime-<sha>.zip`、
    `actingcommand-tools-<sha>.zip`、`acui-windows-<sha>.zip`（`<sha>` 取 `MEMBERS.json` 的
    `runtime_sha` / `ui_sha`，三个 zip 必须在 `SHA256SUMS` 里）。逐条核对 `SHA256SUMS`；解压到安装根
-   下的临时目录 `.staging-<unix_ms>`，其下与安装根一样分 `runtime\`、`ui\`、`tools\`（升级时暂存的 Runtime
-   跑 `check-config`，认出的是暂存的 adb）；再按每个 zip 自带的 `BUILD-MANIFEST.json` 核对来源仓、提交号
+   下的临时目录 `.staging-<unix_ms>`，其下分 `runtime\`、`ui\`、`tools\`，不从中运行任何程序；再按每个 zip
+   自带的 `BUILD-MANIFEST.json` 核对来源仓、提交号
    （等于 MEMBERS 的 sha）、Runtime 的 `runtime_payload_layout`（`distribution-v1`），以及 `files[]`
    每一项的大小与 sha256；zip 里多出清单没列的文件也算不一致。任何不一致都停下，措辞是
-   「内容与创建时不一致」——这是完整性陈述，不是授权口吻。校验期间不运行 zip 里的任何东西。随后将完整载荷（包括清单绑定的全部 Tools 文件）准备到新安装 A 槽或备用槽，
-   各槽原始清单及 MEMBERS 保留；候选及下载材料保留。完成页从槽内的 `platform-tools/source.properties` 读取工具版本。
+   「内容与创建时不一致」——这是完整性陈述，不是授权口吻。校验期间不运行 zip 里的任何东西。随后将程序核心（Runtime 与 UI 载荷）准备到新安装 A 槽或备用槽；
+   Tools 文件放进安装根的 `tools\`，只替换内容变了的文件。各槽原始清单及 MEMBERS 保留；候选及下载材料保留。
+   完成页从安装根的 `tools\platform-tools\source.properties` 读取工具版本。
 2. **选项**，配置已自动写好。铺开之后，在安装页、同一个不许关窗的区段里，新装不问任何问题就配置好：状态根为
    `<安装根>\state`（必须不存在或为空目录——在第 0 步、下载之前就检查；**已有内容的状态根一律不接管**）；
    生成 `secret_fingerprint_salt` = 系统随机源 32 字节的十六进制（`getrandom`；**不显示、不写日志**）；
@@ -468,12 +469,12 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    留下的注意事项。「启动监控台 / Open console」分离拉起 `<安装根>\ui\acui.exe` 并关闭引导；「完成」只关闭。
    实例步拉起的 Runtime 继续运行；没有在运行的，由监控台的启动器拉起。
 
-**A/B 安装与升级**：`<安装根>/A`、`B` 各保留完整 Runtime、UI、Tools 载荷、原始构建清单及准确 MEMBERS。
-状态根、内容哈希资源、模型、下载、日志和私有配置代际位于槽外。acsetup 唯一写 `install/active.json`，
+**A/B 安装与升级**：`<安装根>/A`、`B` 各保留程序核心：Runtime 与 UI 载荷、原始构建清单及准确 MEMBERS
+（保留下来的 v0.11.1 槽另有自己的 Tools）。Tools、状态根、内容哈希资源、模型、下载、日志和私有配置代际位于槽外。acsetup 唯一写 `install/active.json`，
 一次原子提交槽、generation、MEMBERS 身份及带哈希的配置/provider 输入。配置编辑也经其单写者锁及准确代际/字节基线比较。
 
 下载、完整核验、备用槽物化、资源准入和配置规划均在关闭前完成。原实例身份及业务设置保留；
-关联和维护冲突沿实例页的明确选择处理。私有代际保持相对路径语义，provider 库重绑目标槽，模型留在共享位置，
+关联和维护冲突沿实例页的明确选择处理。私有代际保持相对路径语义，模型留在共享位置；只有 v0.11.1 槽的代际保留绑定该槽 tools 的 provider 清单；
 目标程序的 `check-config` 检查准确未选中候选。
 
 永久空文件 `install/slot-A.lock`、`slot-B.lock` 仅定位原生占用锁。消费者持共享锁，物化须取得排他锁，
