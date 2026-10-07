@@ -285,7 +285,8 @@ pub fn plan(root: &Path, chosen: &[Chosen]) -> Result<maintenance::Transaction, 
 pub fn stop(root: &Path, state_root: &Path, report: Report<'_>) -> Result<lifecycle::Closed, String> {
     let paths = paths(root)?;
     if paths.state_root != state_root { return Err("Instance plan and active state root disagree".into()); }
-    lifecycle::close(&paths.snapshot.slot_root(), &paths.config, &paths.state_root, Some(&paths.snapshot), &runtime_sha(&paths)?, report)
+    let control = control(root, report)?;
+    lifecycle::close(&paths.snapshot.slot_root(), &paths.config, &paths.state_root, Some(&paths.snapshot), control, report)
 }
 
 /// The Runtime restarted on the configuration the transaction put in place, so it
@@ -294,7 +295,8 @@ pub fn restart(root: &Path, mut closed: lifecycle::Closed, report: Report<'_>) -
     let paths = paths(root)?;
     closed.was_running = true; // Applying instances explicitly requests a start.
     paths.snapshot.unchanged()?;
-    lifecycle::start(&paths.snapshot, closed, &runtime_sha(&paths)?, report)?;
+    let control = control(root, report)?;
+    lifecycle::start(&paths.snapshot, closed, control, report)?;
     let out = runtime::run(
         lifecycle::command(&paths.actingctl, Some(&paths.snapshot))?
             .arg("status")
@@ -357,17 +359,21 @@ fn read_config(paths: &Paths) -> Result<Value, String> {
 fn ensure_running(paths: &Paths, report: Report<'_>) -> Result<(), String> {
     let mut entries = fs::read_dir(&paths.state_root).map_err(|error| format!("Cannot inspect initial state root: {error}"))?;
     let empty = entries.next().transpose().map_err(|error| error.to_string())?.is_none();
-    let runtime_sha = runtime_sha(paths)?;
+    let control = control(&paths.snapshot.root, report)?;
     let mut closed = if empty {
         lifecycle::Closed { was_running: true, previous: None }
     } else {
-        lifecycle::close(&paths.snapshot.slot_root(), &paths.config, &paths.state_root, Some(&paths.snapshot), &runtime_sha, report)?
+        lifecycle::close(&paths.snapshot.slot_root(), &paths.config, &paths.state_root, Some(&paths.snapshot), control, report)?
     };
     closed.was_running = true; // The fresh-install instances page explicitly starts Runtime.
     paths.snapshot.unchanged()?;
-    lifecycle::start(&paths.snapshot, closed, &runtime_sha, report).map(|_| ())
+    lifecycle::start(&paths.snapshot, closed, control, report).map(|_| ())
 }
 
-fn runtime_sha(paths: &Paths) -> Result<String, String> {
-    crate::verify::members_of(std::str::from_utf8(&paths.snapshot.members_bytes()?).map_err(|error| error.to_string())?).map(|members| members.0)
+/// How the selected slot's Runtime is closed and started: the `install-control` revision it
+/// and this installer both speak (`interfaces::selected`, Workflow #364).
+fn control(root: &Path, report: Report<'_>) -> Result<lifecycle::Control, String> {
+    crate::interfaces::selected(root, &[], report)
+        .map(|agreed| agreed.start)
+        .map_err(String::from)
 }

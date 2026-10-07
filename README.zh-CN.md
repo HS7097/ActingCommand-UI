@@ -491,7 +491,22 @@ Host 在同一生命周期准入下自然排空并提交正式原子关闭。acs
 提交结果未知时查询原 transition，不重新提交；关闭不明确就停止切换，不结束结果未知的控制/维护进程。
 Host 的 released 结果才表示准备及本次原用户暂停恢复完成。原先停机的安装保持停机。
 
-首次迁移核正式 v0.11.0 Runtime/UI 来源，先备好 A 槽，再使用旧 Runtime 的原子空闲关闭；Busy 则不提交切换。
+**组件接口**（Workflow #364）：Runtime、UI、acsetup 自己和本次用到的标准包能否搭配，按各自的声明判断，不再按写死的版本对。
+构建清单的 `interfaces` 对象（标准包则是 zip 根目录下可选的 `interfaces.json`）按接口写明该组件能读的修订区间 `[min, max]`，写方写 `max`。
+词表、升版规则和两种检查见 Runtime 的 `contracts/component-interfaces.md`：一方写、他方读的数据（`ledger`、`install-selection`、`package`）
+要求写方的 `max` 落在每个读方的区间里；活的交互（`install-control`、`runtime-client`）要求两个区间相交，取最高公共修订。
+Runtime 的配置（`actingd-config`）涉及三方：acsetup 写、控制台改、Runtime 读，所以三方须有一个都能说的共同修订，两两核对不够。
+acsetup 自己的声明是 `crates/acui-setup/component-interfaces.json`，编进 acsetup，也由构建写进 UI 清单；它随本 UI 所钉的 Runtime crate 一起变。
+声明出现之前的发布件（Runtime 与 UI 的 v0.11.0 至 v0.11.2）按内置表识别，其它未声明的程序一律拒绝；没有 `interfaces.json` 的标准包按 `package` [1, 1]。
+全新安装、首次迁移和 A/B 升级在提任何问题、改任何东西之前，核对发布件的 Runtime 与 UI 彼此之间、与要接手的 Runtime 之间、与 acsetup 之间是否相容；
+放进新槽的 Runtime 还须 Tools 布局为 2（槽只含程序核心）。发布件自带的标准包、向导加入的本机标准包和实例步的标准包，
+都与将运行它们的 Runtime 及 acsetup 核对。回退也按同样方式核对保留槽。每一条不满足的边都列出（接口、双方组件及其区间），
+安装不改动即停止（命令行退出码 6，`--rollback` 为 1）。协商出的 `install-control` 修订决定 acsetup 怎样关闭与拉起 Runtime：
+0 是冷态协议，1 是 Host 安装过渡。`<安装根>\runtime\` 与 `<安装根>\ui\` 下的固定入口也读 `install/active.json`，
+所以 A/B 升级会把字节与发布件 `acforward.exe` 不同的固定入口换掉；原入口保留在 `install\entries-<代际>\`，正在运行的入口从那里继续运行。
+
+首次迁移接受接口能被驱动的旧布局程序（有声明的，或内置表里的 v0.11.0、v0.11.1），先备好 A 槽，
+再按双方都支持的 `install-control` 修订关闭旧 Runtime（v0.11.0 用冷态协议的原子空闲关闭）；Busy 则不提交切换。
 原根程序、配置和监控台设置完整保留在 `install/initial-backup-<generation>`。
 固定根入口由 `acforward.exe` 固定一份完整选择、继承 stdio 并返回实际退出码。
 根级 `actingd.config.json` 是选中私有输入的参数别名，此处没有可写配置文件。开机项、快捷方式及 MCP 保留固定根路径。
@@ -499,12 +514,12 @@ MCP 获得明确 root/state-root 参数，位置冲突即拒绝。
 
 运行中的 UI/MCP/Tools 固定自己的代际及材料，重新打开进程才取得后继代际。
 v0.11.0 UI 是明确绑定共享状态根的观察入口；设置只保存根级 Runtime 入口与配置别名，
-其旧编辑器读取不存在的别名时明确失败。有效编辑交给固定 acsetup；旧 Runtime 由 acsetup 按真实冷态启动能力控制。
+其旧编辑器读取不存在的别名时明确失败。有效编辑交给固定 acsetup；只支持 `install-control` 0 的 Runtime（v0.11.0）由 acsetup 按真实冷态启动能力控制。
 
 **显式回退**：运行 `<安装根>/ui/acsetup.exe --rollback`，重新核备用槽全部清单，
 从当前业务设置重规划候选。原 owner 关闭后，目标程序的 `check-config` 及对最新数据的
 `ledger-maintenance verify` 均须通过。这些门不证明 Provider/设备就绪。
-正常安装页也可提供更早发布件并确认提示；发布时间只用于顺序提示，冷态门仍必需。正式 v0.11.0 Runtime 按冷态路线启动。
+正常安装页也可提供更早发布件并确认提示；发布时间只用于顺序提示，冷态门仍必需。只支持 `install-control` 0 的 Runtime（v0.11.0）按冷态路线启动。
 
 acsetup 是窗口程序：在控制台直接输入 `--rollback` 或 `--replace-manager` 时提示符会立即返回。
 工作不挂在该控制台上（关闭窗口不会中断它），结束时结果行（或 `失败 / FAILED: …`）和日志路径会显示在那个控制台里；

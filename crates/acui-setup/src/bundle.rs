@@ -67,6 +67,9 @@ pub struct Bundle {
     directories: bool,
     /// Strictly decoded declaration; material qualification happens after staging.
     pub maintenance: Option<BundleIndexV3>,
+    /// The zip root's optional `interfaces.json`, as bytes: the `package` revision its packs
+    /// need (Workflow #364). `interfaces` reads it; without it a bundle is `package` [1, 1].
+    pub interfaces: Option<Vec<u8>>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -224,6 +227,7 @@ pub fn read(file: &Path) -> Result<Bundle, String> {
     }
     let bundle: BundleFile = parse(&index, file, "bundle.json")?;
     let applications = read_applications(&mut archive, file)?;
+    let interfaces = member(&mut archive, file, "interfaces.json")?;
     if bundle.schema_version != BUNDLE_SCHEMA || applications.schema_version != APPLICATIONS_SCHEMA {
         return Err(format!(
             "标准包的格式版本无法识别 / unknown bundle format: {} · {}（应为 / expected {BUNDLE_SCHEMA} 或 / or {BUNDLE_SCHEMA_V2} · {APPLICATIONS_SCHEMA}）",
@@ -261,6 +265,7 @@ pub fn read(file: &Path) -> Result<Bundle, String> {
         carried: false,
         directories: false,
         maintenance: None,
+        interfaces,
     })
 }
 
@@ -286,6 +291,7 @@ fn read_directories(archive: &mut zip::ZipArchive<File>, file: &Path, index: &[u
         BundleIndex::V3(index) => (index.game.clone(), index.packs.clone(), Some(index)),
     };
     let applications = read_applications(archive, file)?;
+    let interfaces = member(archive, file, "interfaces.json")?;
     if applications.schema_version != APPLICATIONS_SCHEMA {
         return Err(format!(
             "标准包的格式版本无法识别 / unknown bundle format: {BUNDLE_SCHEMA_V2} · {}（应为 / expected {APPLICATIONS_SCHEMA}）",
@@ -333,6 +339,7 @@ fn read_directories(archive: &mut zip::ZipArchive<File>, file: &Path, index: &[u
         carried: false,
         directories: true,
         maintenance,
+        interfaces,
     })
 }
 

@@ -18,7 +18,6 @@ use serde_json::Value;
 use crate::runtime::{self, ACTINGCTL, ACTINGD};
 use crate::verify::Report;
 
-pub const COLD_RUNTIME: &str = "b70518949c19d56085afc3a84c49274c4cc041fe";
 const HOST_TIMEOUT_MS: u64 = 60_000;
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(75);
 const POLL: Duration = Duration::from_millis(250);
@@ -38,10 +37,23 @@ pub fn owner_pid(state_root: &Path) -> Option<u32> {
     info["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok())
 }
 
-/// Only the named v0.11.0 source uses cold startup. Other releases must answer
-/// the current protocol; an unsupported control call is a visible failure.
-pub fn cold(runtime_sha: &str) -> bool {
-    runtime_sha == COLD_RUNTIME
+/// How acsetup closes and starts a Runtime: the `install-control` revision it and that Runtime
+/// both speak (`interfaces`, Workflow #364), never a commit. 0 is the cold protocol
+/// (`request-shutdown`, a start without `--install-held`), 1 the Host installation transition.
+/// An unsupported control call is a visible failure.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Control {
+    Cold,
+    Transition,
+}
+
+impl Control {
+    pub fn from_revision(revision: u32) -> Self {
+        match revision {
+            0 => Control::Cold,
+            _ => Control::Transition,
+        }
+    }
 }
 
 pub fn command(program: &Path, snapshot: Option<&Snapshot>) -> Result<Command, String> {
@@ -188,7 +200,7 @@ pub fn close(
     config: &Path,
     state_root: &Path,
     snapshot: Option<&Snapshot>,
-    runtime_sha: &str,
+    how: Control,
     report: Report<'_>,
 ) -> Result<Closed, String> {
     let mut probe = command(&programs.join("runtime").join(ACTINGCTL), snapshot)?;
@@ -202,7 +214,7 @@ pub fn close(
             previous: None,
         });
     }
-    if cold(runtime_sha) {
+    if how == Control::Cold {
         let mut shutdown = command(&programs.join("runtime").join(ACTINGCTL), snapshot)?;
         shutdown
             .arg("request-shutdown")
@@ -299,7 +311,7 @@ fn confirm_closed(value: &Value, ticket: Option<&InstallTransitionTicket>) -> Re
 pub fn start(
     snapshot: &Snapshot,
     closed: Closed,
-    runtime_sha: &str,
+    how: Control,
     report: Report<'_>,
 ) -> Result<Option<PathBuf>, String> {
     if !closed.was_running {
@@ -334,7 +346,7 @@ pub fn start(
     let stderr = stdout.try_clone().map_err(|error| error.to_string())?;
     let mut command = command(&programs.join("runtime").join(ACTINGD), Some(snapshot))?;
     command.arg("--config").arg(snapshot.config_path()?);
-    if !cold(runtime_sha) {
+    if how == Control::Transition {
         command
             .arg("--install-held")
             .arg(serde_json::to_string(&startup).map_err(|error| error.to_string())?);
@@ -406,7 +418,7 @@ pub fn start(
         }
         std::thread::sleep(POLL);
     }
-    if cold(runtime_sha) {
+    if how == Control::Cold {
         let mut probe = self::command(&programs.join("runtime").join(ACTINGCTL), Some(snapshot))?;
         probe.arg("status").arg("--state-root").arg(&state_root);
         parse(
