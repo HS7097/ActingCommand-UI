@@ -7,7 +7,9 @@
 //!
 //! A range `[min, max]` is what a component reads; a writer writes `max`. Persisted data is
 //! checked by containment (the writer's `max` lies in each reader's range), a live exchange by
-//! negotiation (the ranges intersect, and the highest common revision is used). Every unmet
+//! negotiation (the ranges intersect, and the highest common revision is used). The Runtime's
+//! configuration has three parties — this installer writes it, the console edits it, the
+//! Runtime reads it — and needs one revision all three speak; pairs are not enough there. Every unmet
 //! edge is listed, and the run stops before the installation changes. The existing gates stay:
 //! the selected slot's `check-config` and the new Runtime's `ledger-maintenance verify`.
 //!
@@ -546,6 +548,35 @@ fn negotiate(failures: &mut Vec<String>, interface: Interface, left: &Component,
     }
 }
 
+/// One document that several parties write and read in one revision: the highest revision
+/// every one of them speaks. Two pairwise negotiations could settle on different revisions, so
+/// the check is over all of them at once (review F-UI1-1).
+fn agree(failures: &mut Vec<String>, interface: Interface, parties: &[&Component]) -> Option<u32> {
+    let speaking: Vec<(&Component, Range)> = parties
+        .iter()
+        .filter_map(|party| party.speaks.get(&interface).map(|range| (*party, *range)))
+        .collect();
+    if speaking.len() < parties.len() {
+        silent(failures, interface, parties);
+        return None;
+    }
+    let low = speaking.iter().map(|(_, range)| range.min).max()?;
+    let high = speaking.iter().map(|(_, range)| range.max).min()?;
+    if low > high {
+        let ranges: Vec<String> = speaking
+            .iter()
+            .map(|(party, range)| format!("{} {range}", party.named()))
+            .collect();
+        failures.push(format!(
+            "  {}: {} = ∅，没有各方共同的修订 / no revision common to all of them",
+            interface.name(),
+            ranges.join(" ∩ ")
+        ));
+        return None;
+    }
+    Some(high)
+}
+
 /// Containment: what `writer` writes, `reader` reads.
 fn contain(failures: &mut Vec<String>, interface: Interface, writer: &Component, reader: &Component) {
     match (writer.speaks.get(&interface), reader.speaks.get(&interface)) {
@@ -584,10 +615,10 @@ fn check(parties: &Parties<'_>, report: Report<'_>) -> Result<Agreed, Stop> {
     let (installer, runtime, ui) = (parties.installer, parties.runtime, parties.ui);
     let mut failures = Vec::new();
     let failures = &mut failures;
-    // actingd-config: the installer writes the next Runtime's configuration, the console
-    // edits it, and the installer reads the current one.
-    let config = negotiate(failures, Interface::ActingdConfig, installer, runtime);
-    negotiate(failures, Interface::ActingdConfig, ui, runtime);
+    // actingd-config: one document in one revision. The installer writes the next Runtime's
+    // configuration, the console edits it, and the Runtime reads it, so the three need a
+    // revision all of them speak (review F-UI1-1). The installer also reads the current one.
+    let config = agree(failures, Interface::ActingdConfig, &[installer, ui, runtime]);
     if let Some(previous) = parties.previous {
         negotiate(failures, Interface::ActingdConfig, installer, previous);
     }
