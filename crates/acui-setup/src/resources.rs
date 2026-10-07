@@ -272,12 +272,12 @@ fn changes(base: &Value, document: &Value, root: &Path) -> Vec<String> {
     };
     keyed(
         "prerequisite_packages",
-        |item| item["package_id"].as_str().unwrap_or("?").to_string(),
+        |item: &Value| item["package_id"].as_str().unwrap_or("?").to_string(),
         &mut lines,
     );
     keyed(
         "return_home_packages",
-        |item| {
+        |item: &Value| {
             format!(
                 "{}/{}",
                 item["game"].as_str().unwrap_or("?"),
