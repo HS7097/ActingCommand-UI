@@ -350,10 +350,11 @@ fn outcome(
     })
 }
 
-/// The real run, steps 1 to 17 of the model, under the writer lock from start to end. The
-/// caller made the log and owns `staging`, which it removes afterwards.
+/// The real run, steps 2 to 17 of the model, under the writer lock from start to end. Step 1
+/// is the caller's: it takes `writer` first and clears leftover staging only while it holds the
+/// lock (review F-UI2-1), made the log, and owns `staging`, which it removes afterwards.
 pub fn run(
-    root: &Path,
+    writer: &Writer,
     zip: &Path,
     sums: Option<&Path>,
     staging: &Path,
@@ -361,8 +362,8 @@ pub fn run(
     resolve: maintenance::Resolve<'_>,
     report: Report<'_>,
 ) -> Result<Outcome, Stop> {
-    // 1. The writer lock excludes --commit-config, upgrades and a second run.
-    let writer = Writer::acquire(root)?;
+    // 1. The writer lock, taken by the caller, excludes --commit-config, upgrades and a
+    // second run.
     let root = writer.root();
     let mut checked = check(root, zip, sums, staging, choose, report)?;
     maintenance::decide(&mut checked.document, &checked.conflicts, resolve, report)?;
