@@ -12,7 +12,10 @@ use crate::bundle::Bundle;
 use crate::generations::{Plan, Writer};
 use crate::install::LaidOut;
 use crate::verify::{Report, Verified, MANIFEST, PLATFORM_TOOLS};
-use crate::{lifecycle, maintenance, migration, root_tools, slots, vision_migration};
+use crate::lifecycle::Control;
+use crate::{
+    forwarders, interfaces, lifecycle, maintenance, migration, root_tools, slots, vision_migration,
+};
 
 #[derive(Clone)]
 pub struct Installed {
@@ -155,10 +158,12 @@ pub struct Upgraded {
     pub notice: Option<String>,
 }
 
+/// `agreed`: `interfaces::release` for this very release, run right after it was verified.
 pub fn upgrade(
     root: &Path,
     verified: &Verified,
     bundles: &[Bundle],
+    agreed: &interfaces::Agreed,
     choose: maintenance::Choose<'_>,
     resolve: maintenance::Resolve<'_>,
     report: Report<'_>,
@@ -171,14 +176,15 @@ pub fn upgrade(
         .try_exists()
         .map_err(|error| error.to_string())?
     {
-        return migration::upgrade(&writer, verified, bundles, choose, resolve, report);
+        return migration::upgrade(&writer, verified, bundles, agreed, choose, resolve, report);
     }
     acui_installation::manager_program(root)?;
     let baseline = Snapshot::read(root)?;
     let previous = baseline.slot_root();
+    // The interface check saw this slot's Runtime; under the writer lock it still is.
+    agreed.confirm_previous(&previous)?;
     let source_config = baseline.config_path()?;
     let state_root = baseline.state_root()?;
-    let (runtime_sha, _) = members(&baseline)?;
     let target = other(baseline.selection.slot);
     let document =
         serde_json::from_slice(&baseline.config_bytes).map_err(|error| error.to_string())?;
@@ -223,22 +229,33 @@ pub fn upgrade(
         &source_config,
         &state_root,
         Some(&baseline),
-        &runtime_sha,
+        agreed.closing()?,
         report,
     )?;
     let mut upgraded = complete(
         &writer,
         &mut plan,
         closed,
-        &verified.members.0,
+        agreed.start,
         previous,
         Some(&tools),
         report,
     )?;
+    // The fixed entries read active.json as well: any whose bytes differ from the release's
+    // acforward is replaced by it (review M5).
+    let entries = forwarders::refresh(
+        root,
+        &root.join(target.as_str()).join("ui").join("acforward.exe"),
+        upgraded.generation,
+        report,
+    )
+    .map_err(|error| {
+        format!("升级已提交并完成，但固定入口未全部更新 / The upgrade is committed and complete, but the fixed entries were not all refreshed: {error}")
+    });
     // An older fixed manager cannot switch to this layout's slots (review R-F2).
     // The fixed manager running this upgrade stays, and the upgrade stands with
     // a notice (review R2-1); any other failure is an error.
-    let notice = crate::install::refresh_manager(
+    let manager = crate::install::refresh_manager(
         root,
         verified,
         &root.join(target.as_str()),
@@ -246,7 +263,15 @@ pub fn upgrade(
     )
     .map_err(|error| {
         format!("升级已提交并完成，但固定管理程序未替换 / The upgrade is committed and complete, but the fixed manager was not replaced: {error}")
-    })?;
+    });
+    let notice = match (entries, manager) {
+        (Ok(()), Ok(notice)) => notice,
+        (Err(entries), Ok(notice)) => {
+            return Err(notice.map_or_else(|| entries.clone(), |notice| format!("{entries}\n{notice}")))
+        }
+        (Ok(()), Err(manager)) => return Err(manager),
+        (Err(entries), Err(manager)) => return Err(format!("{entries}\n{manager}")),
+    };
     if let Some(notice) = &notice {
         report.warn(notice)?;
     }
@@ -328,7 +353,7 @@ fn complete(
     writer: &Writer,
     plan: &mut Plan,
     closed: lifecycle::Closed,
-    runtime_sha: &str,
+    control: Control,
     previous: PathBuf,
     tools: Option<&root_tools::Plan>,
     report: Report<'_>,
@@ -374,7 +399,7 @@ fn complete(
     if closed.was_running {
         plan.mark_start_attempt()?;
     }
-    let restarted = lifecycle::start(&plan.snapshot, closed, runtime_sha, report)?;
+    let restarted = lifecycle::start(&plan.snapshot, closed, control, report)?;
     Ok(outcome(&plan.snapshot, previous, restarted))
 }
 
@@ -405,12 +430,16 @@ pub fn rollback(root: &Path, report: Report<'_>) -> Result<Upgraded, String> {
     let guard =
         actingcommand_contract::installation::InstallSlotLock::try_shared(writer.root(), target)
             .map_err(|error| error.to_string())?;
-    let (retained, predates_vision) =
+    let (_, predates_vision) =
         crate::verify::installed_slot(&writer.root().join(target.as_str()), report)?;
     let config = baseline.config_path()?;
     let programs = baseline.slot_root();
     let state_root = baseline.state_root()?;
-    let (runtime_sha, _) = members(&baseline)?;
+    // The retained slot's programs against the current Runtime and this installer, before
+    // anything is planned (Workflow #364); a refusal ends `--rollback` with exit code 1.
+    let agreed =
+        interfaces::rollback(&programs, &writer.root().join(target.as_str()), report)
+            .map_err(String::from)?;
     let active: serde_json::Value =
         serde_json::from_slice(&baseline.config_bytes).map_err(|error| error.to_string())?;
     let active_predates_vision = active
@@ -472,14 +501,14 @@ pub fn rollback(root: &Path, report: Report<'_>) -> Result<Upgraded, String> {
         &config,
         &state_root,
         Some(&baseline),
-        &runtime_sha,
+        agreed.closing()?,
         report,
     )?;
     complete(
         &writer,
         &mut plan,
         closed,
-        &retained.0,
+        agreed.start,
         programs,
         None,
         report,

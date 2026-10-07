@@ -100,6 +100,24 @@ jobs:
           }
           $rustc = ((& rustc --version --verbose) -join "`n").Trim()
           if ($LASTEXITCODE -ne 0) { throw "rustc version query failed with exit code $LASTEXITCODE" }
+          # Workflow #364: this build's interface declaration, the file acsetup also compiles in
+          # (Runtime contracts/component-interfaces.md). A file that is not a valid v1
+          # declaration, or that disagrees with installation_selection_schema, stops the build.
+          $interfaces = Get-Content -LiteralPath 'crates/acui-setup/component-interfaces.json' -Raw | ConvertFrom-Json -Depth 20
+          if ($interfaces.schema_version -cne 'actingcommand.component-interfaces.v1') {
+            throw "component-interfaces.json: schema_version is not actingcommand.component-interfaces.v1: $($interfaces.schema_version)"
+          }
+          foreach ($name in @('actingd-config', 'install-selection', 'install-control', 'ledger', 'runtime-client', 'package')) {
+            $range = @($interfaces.speaks.$name)
+            if ($range.Count -ne 2 -or @($range | Where-Object { "$_" -cnotmatch '\A[0-9]+\z' }).Count -ne 0 -or
+                [int64]"$($range[0])" -gt [int64]"$($range[1])") {
+              throw "component-interfaces.json: speaks.$name is not [min, max] with 0 <= min <= max"
+            }
+          }
+          $selection = @($interfaces.speaks.'install-selection')
+          if ([int64]"$($selection[0])" -gt 1 -or [int64]"$($selection[1])" -lt 1) {
+            throw 'component-interfaces.json: install-selection must hold 1, as installation_selection_schema is actingcommand.install-selection.v1'
+          }
           $manifest = [ordered]@{
             repository = $env:GITHUB_REPOSITORY
             commit_sha = $sha
@@ -113,9 +131,15 @@ jobs:
             workflow_run_attempt = [uint32]$env:GITHUB_RUN_ATTEMPT
             source_artifact_name = $name
             files = @($files)
+            interfaces = $interfaces
           }
           $json = $manifest | ConvertTo-Json -Depth 6
           [IO.File]::WriteAllText((Join-Path $dir 'BUILD-MANIFEST.json'), "$json`n", [Text.UTF8Encoding]::new($false))
+          $written = (Get-Content -LiteralPath (Join-Path $dir 'BUILD-MANIFEST.json') -Raw | ConvertFrom-Json -Depth 20).interfaces | ConvertTo-Json -Depth 20 -Compress
+          if ($written -cne ($interfaces | ConvertTo-Json -Depth 20 -Compress)) {
+            throw "BUILD-MANIFEST.json interfaces differ from component-interfaces.json: $written"
+          }
+          Write-Host "BUILD-MANIFEST.json interfaces: $written"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "name=$name"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "dir=$dir"
 

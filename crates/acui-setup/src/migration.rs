@@ -12,19 +12,24 @@ use acui_installation::InstallSlot;
 use crate::bundle::Bundle;
 use crate::generations::Writer;
 use crate::verify::{Report, Verified};
-use crate::{generations, install, lifecycle, maintenance, root_tools, slots, upgrade, vision_migration};
+use crate::{
+    generations, install, interfaces, lifecycle, maintenance, root_tools, slots, upgrade,
+    vision_migration,
+};
 
 pub fn upgrade(
     writer: &Writer,
     verified: &Verified,
     bundles: &[Bundle],
+    agreed: &interfaces::Agreed,
     choose: maintenance::Choose<'_>,
     resolve: maintenance::Resolve<'_>,
     report: Report<'_>,
 ) -> Result<upgrade::Upgraded, String> {
     let root = writer.root();
-    // v0.11.0 or v0.11.1 programs in the old layout; only v0.11.0 closes cold.
-    let (runtime_sha, _) = crate::verify::initial_programs(root, report)?;
+    // The old-layout programs passed `interfaces::release` (their manifests checked against
+    // their own commits); they are still the ones it saw.
+    agreed.confirm_previous(root)?;
     let config = root.join("actingd.config.json");
     let transaction = maintenance::Transaction::read_config(&config)?;
     let original_config =
@@ -74,7 +79,7 @@ pub fn upgrade(
         &config,
         &state_root,
         None,
-        &runtime_sha,
+        agreed.closing()?,
         report,
     )?;
     lifecycle::verify_ledger(
@@ -185,7 +190,7 @@ pub fn upgrade(
     if closed.was_running {
         plan.mark_start_attempt()?;
     }
-    let restarted = lifecycle::start(&plan.snapshot, closed, &verified.members.0, report)?;
+    let restarted = lifecycle::start(&plan.snapshot, closed, agreed.start, report)?;
     Ok(upgrade::outcome(
         &plan.snapshot,
         migration.backup,

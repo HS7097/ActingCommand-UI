@@ -20,7 +20,7 @@ use crate::maintenance::{self, Association, Conflict, Side};
 use crate::payload::{self, Payload};
 use crate::upgrade::{self, Installed};
 use crate::verify::{self, Reporter, Step};
-use crate::{bundle, install, lifecycle, platform, root_tools, runtime, vision_migration};
+use crate::{bundle, install, interfaces, lifecycle, platform, root_tools, runtime, vision_migration};
 use crate::{lock, write_log, Shared, State};
 
 pub const DONE: i32 = 0;
@@ -29,6 +29,8 @@ pub const USAGE: i32 = 2;
 pub const CONFLICTS: i32 = 3;
 pub const DOWNGRADE: i32 = 4;
 pub const ASSOCIATION: i32 = 5;
+/// The components' interfaces do not fit (Workflow #364).
+pub const INTERFACES: i32 = 6;
 
 const HELP: &str = "acsetup — ActingCommand 安装与升级 / installation and upgrade
 
@@ -57,7 +59,9 @@ The offline full installer uses only the release it carries and takes neither --
   3 有维护绑定差异而未给 --conflicts / differences without --conflicts
   4 降级而未给 --allow-downgrade / a downgrade without --allow-downgrade
   5 资源关联需要选择而未给 --associate / an association without --associate
-  2（参数）、3、4、5 都停在安装改动之前 / 2 (arguments), 3, 4 and 5 stop before the installation changes.";
+  6 接口不兼容 / incompatible interfaces（Runtime、UI、本安装程序与标准包的接口声明不相容 / the interface
+    declarations of the Runtime, the UI, this installer and the bundles do not fit）
+  2（参数）、3、4、5、6 都停在安装改动之前 / 2 (arguments), 3, 4, 5 and 6 stop before the installation changes.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -386,6 +390,16 @@ fn answer(
     }
 }
 
+/// An interface refusal stops with exit code 6 (Workflow #364); any other failure keeps 1.
+fn refused<T>(result: Result<T, interfaces::Stop>, code: &Cell<Option<i32>>) -> Result<T, String> {
+    result.map_err(|stop| {
+        if matches!(stop, interfaces::Stop::Refused(_)) {
+            code.set(Some(INTERFACES));
+        }
+        String::from(stop)
+    })
+}
+
 /// `--yes`: the installation or upgrade, its log under the root.
 fn execute(args: &Args, payload: Option<Payload>) -> i32 {
     let root = &args.root;
@@ -566,11 +580,21 @@ fn install_or_upgrade(
                     problems.join("\n")
                 ));
             }
+            // The release, the root and this installer must fit before any question
+            // (Workflow #364, review L4).
+            let agreed = refused(interfaces::release(root, &verified, &bundles, report), code)?;
             let mut choose =
                 |association: &Association| pick(args, association, code, consulted, None);
             let mut resolve = |conflicts: &[Conflict]| answer(args, conflicts, code);
-            let upgraded =
-                upgrade::upgrade(root, &verified, &bundles, &mut choose, &mut resolve, report)?;
+            let upgraded = upgrade::upgrade(
+                root,
+                &verified,
+                &bundles,
+                &agreed,
+                &mut choose,
+                &mut resolve,
+                report,
+            )?;
             if let Err(reason) = upgrade::record_members(root, &download) {
                 report.warn(&reason)?;
             }
@@ -578,6 +602,7 @@ fn install_or_upgrade(
             locked.laid_out = Some(upgraded.laid_out.clone());
             locked.upgraded = Some(upgraded);
         } else {
+            refused(interfaces::release(root, &verified, &[], report), code)?;
             let (laid_out, configured) = install::fresh(root, &verified, report)?;
             if let Err(reason) = upgrade::record_members(root, &download) {
                 report.warn(&reason)?;
@@ -739,6 +764,22 @@ fn plan_logged(
         }
     }
     let verified = verify::run(&download, &scratch.join("staging"), report)?;
+    // The release's bundles, then whether the release, the root and this installer fit,
+    // exactly as a real run checks before its first question (Workflow #364).
+    let bundles = match &installed {
+        Some(_) => {
+            let (bundles, problems) = bundle::carried(&download, report)?;
+            if !problems.is_empty() {
+                return Err(format!(
+                    "发布件资源读取失败 / Release resources could not be read:\n{}",
+                    problems.join("\n")
+                ));
+            }
+            bundles
+        }
+        None => Vec::new(),
+    };
+    refused(interfaces::release(root, &verified, &bundles, report), code)?;
     let tools = root_tools::plan(root, &verified)?;
     let active = root
         .join(acui_installation::INSTALL_SELECTION_PATH)
@@ -780,7 +821,15 @@ fn plan_logged(
                 },
             )
         } else {
-            let (runtime_sha, ui_sha) = verify::initial_programs(root, report)?;
+            // Their manifests were checked against their own commits by the interface check.
+            let commit = |dir: &str| {
+                acui_installation::read_bounded(
+                    &root.join(dir).join(verify::MANIFEST),
+                    acui_installation::MAX_MATERIAL_BYTES,
+                )
+                .and_then(|bytes| verify::commit_of(&bytes))
+            };
+            let (runtime_sha, ui_sha) = (commit("runtime")?, commit("ui")?);
             let canonical = std::fs::canonicalize(root)
                 .map_err(|error| format!("Cannot resolve installation root: {error}"))?;
             let config = canonical.join("actingd.config.json");
@@ -813,13 +862,6 @@ fn plan_logged(
             Err(reason) => format!("Runtime 状态未能查询 / The Runtime's status could not be asked: {reason}"),
         })?;
         drop(probe);
-        let (bundles, problems) = bundle::carried(&download, report)?;
-        if !problems.is_empty() {
-            return Err(format!(
-                "发布件资源读取失败 / Release resources could not be read:\n{}",
-                problems.join("\n")
-            ));
-        }
         let mut choose =
             |association: &Association| pick(args, association, code, consulted, Some(open));
         let planned = upgrade::plan_configuration(

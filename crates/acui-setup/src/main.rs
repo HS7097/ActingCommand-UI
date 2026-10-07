@@ -24,8 +24,10 @@
 mod bundle;
 mod cli;
 mod fetch;
+mod forwarders;
 mod generations;
 mod install;
+mod interfaces;
 mod lifecycle;
 mod instance_step;
 mod log;
@@ -1259,6 +1261,14 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
     let spawned = std::thread::Builder::new().name("acsetup-install".into()).spawn(move || {
         let _guard = PanicGuard::new(&state, &worker_weak);
         let mut report = PageReport::new(&state, &worker_weak);
+        // An interface refusal changed nothing: its own text says so (Workflow #364).
+        let refused = std::cell::Cell::new(false);
+        let check = |result: Result<interfaces::Agreed, interfaces::Stop>| {
+            result.map_err(|stop| {
+                refused.set(matches!(stop, interfaces::Stop::Refused(_)));
+                String::from(stop)
+            })
+        };
         let mut carried = carried;
         let fetched = match (&fetch_release, carried.as_mut()) {
             (Some(release), _) => fetch::fetch(release, &download, &mut report),
@@ -1278,17 +1288,21 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
                             return Err(format!("发布件资源读取失败 / Release resources could not be read:\n{}", problems.join("\n")));
                         }
                         if !local_bundle.is_empty() { bundles.push(bundle::local(&local_bundle)?); }
+                        // The release, the root and this installer must fit before any question
+                        // (Workflow #364, review L4).
+                        let agreed = check(interfaces::release(&root, &verified, &bundles, &mut report))?;
                         let mut choose = |association: &maintenance::Association| {
                             let labels = association.options.iter().map(|option| option.label.clone()).collect();
                             ask(&state, &worker_weak, association.question.clone(), labels).map(Some)
                         };
                         let mut resolve = |conflicts: &[maintenance::Conflict]| resolve_page(&state, &worker_weak, conflicts);
-                        upgrade::upgrade(&root, &verified, &bundles, &mut choose, &mut resolve, &mut report)
+                        upgrade::upgrade(&root, &verified, &bundles, &agreed, &mut choose, &mut resolve, &mut report)
                             .map(|upgraded| (upgraded.laid_out.clone(), Some(upgraded), members, None))
                     }
                     // A fresh install is configured at once: the state root
                     // under the root, the salt, the console's settings.
-                    false => install::fresh(&root, &verified, &mut report)
+                    false => check(interfaces::release(&root, &verified, &[], &mut report))
+                        .and_then(|_| install::fresh(&root, &verified, &mut report))
                         .map(|(laid_out, configured)| (laid_out, None, members, Some(configured))),
                 }?;
                 // What the next upgrade's downgrade check reads; failing to
@@ -1314,6 +1328,7 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
                     }
                 });
             }
+            Err(reason) if refused.get() => fail(&state, &worker_weak, reason),
             Err(reason) => fail(&state, &worker_weak, left_behind(reason, &root, &staging, upgrading, existed)),
         }
     });
@@ -1809,7 +1824,11 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
         // Stage and qualify before touching the installed material. The selected
         // bundle indices remain stable for the plan and the conflict page.
         let staging = root.join(format!(".staging-resources-{}", log::unix_ms()));
-        let prepared = maintenance::prepare(&bundles, &staging, &mut report);
+        // Every bundle against the selected slot's Runtime and this installer before anything
+        // is staged (Workflow #364, review M2); a refusal leaves the page usable.
+        let prepared = interfaces::selected(&root, &bundles, &mut report)
+            .map_err(String::from)
+            .and_then(|_| maintenance::prepare(&bundles, &staging, &mut report));
         let mut restoration_failed = false;
         let written = prepared.and_then(|prepared| {
             let chosen =

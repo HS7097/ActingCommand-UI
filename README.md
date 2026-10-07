@@ -697,8 +697,37 @@ queries the original transition. Unresolved closure stops the switch. It does no
 unresolved control/maintenance process. The Host's released result confirms preparation and
 this transition's original user-pause restoration. A previously stopped Runtime stays stopped.
 
-The first migration qualifies the formal v0.11.0 Runtime/UI sources, prepares A and uses the
-old Runtime's atomic idle shutdown; Busy leaves the switch uncommitted. Original root programs,
+**Component interfaces** (Workflow #364): whether a Runtime, a UI, acsetup itself and the
+resource bundles of a run can work together is judged from what each declares, not from a list
+of release pairs. A build manifest's `interfaces` object (a bundle's optional zip-root
+`interfaces.json`) gives, per interface, the revisions the component reads, `[min, max]`; a
+writer writes `max`. The vocabulary, the bump rule and the two checks are the Runtime's
+`contracts/component-interfaces.md`: data one component writes and others read (`ledger`,
+`install-selection`, `package`) passes when the writer's `max` lies in each reader's range; a
+live exchange (`actingd-config`, `install-control`, `runtime-client`) passes when the two
+ranges meet, and uses the highest common revision. acsetup's own declaration is
+`crates/acui-setup/component-interfaces.json`, compiled into acsetup and written into the UI
+manifest by the build; it follows the Runtime crates this UI is built on. Releases built
+before declarations (Runtime and UI v0.11.0 to v0.11.2) are read from a built-in table, and any
+other undeclared program is refused; a bundle without `interfaces.json` counts as `package`
+[1, 1]. Before any question and before anything
+changes, a fresh install, a first migration and an A/B upgrade check the release's Runtime and
+UI against each other, against the Runtime they take over and against acsetup; a Runtime laid
+into a new slot must also have Tools layout 2 (a slot holds only the program core). The
+release's bundles, a bundle the wizard adds and the instances step's bundles are checked
+against the Runtime that will run them and against acsetup. A rollback checks the retained
+slot the same way. Every unmet edge is listed, naming the interface, both components and their
+ranges; the run stops with nothing changed (exit code 6 on the command line, 1 for
+`--rollback`). The negotiated `install-control` revision says how acsetup closes and starts a
+Runtime: 0 is the cold protocol, 1 the Host installation transition. The fixed entries in
+`<root>\runtime\` and `<root>\ui\` read `install/active.json` as well, so an A/B upgrade
+replaces every one whose bytes differ from the release's `acforward.exe`; the previous one is
+kept under `install\entries-<generation>\`, and a running entry keeps running from there.
+
+The first migration accepts old-layout programs whose interfaces it can drive (declared, or
+v0.11.0 and v0.11.1 from the built-in table), prepares A and closes the old Runtime through the
+`install-control` revision both speak — the atomic idle shutdown of the cold protocol for
+v0.11.0; Busy leaves the switch uncommitted. Original root programs,
 configuration and console settings are retained under `install/initial-backup-<generation>`.
 Fixed root entries use `acforward.exe` to pin a complete selection, inherit stdio and return the
 actual exit code. Root `actingd.config.json` is an argument alias for the selected private input,
@@ -709,15 +738,16 @@ Running UI/MCP/Tools processes retain their own generations and materials. Reope
 use a successor. The v0.11.0 UI is an observation entry explicitly bound to shared state. Its
 settings contain the root Runtime entry and config alias; reading the absent alias in its old
 editor fails visibly. Effective editing belongs to the fixed acsetup manager. acsetup controls
-the v0.11.0 Runtime through its actual cold startup behavior.
+a Runtime that speaks only `install-control` 0 (v0.11.0) through its actual cold startup
+behavior.
 
 **Explicit rollback**: run `<root>/ui/acsetup.exe --rollback` to select the retained other slot.
 Its complete manifests are rechecked, and candidate inputs are replanned from current business
 settings. After confirmed owner closure, its `check-config` and `ledger-maintenance verify`
 must pass against the latest data. These gates do not prove Provider/device readiness. An earlier
 release can also be provided through the normal installer with the page's confirmation.
-Publication time is only a prompt heuristic; the cold gate remains mandatory. The formal v0.11.0
-Runtime uses cold startup.
+Publication time is only a prompt heuristic; the cold gate remains mandatory. A Runtime that
+speaks only `install-control` 0 (v0.11.0) uses cold startup.
 
 acsetup is a windowed program, so a console prompt returns at once when `--rollback` or
 `--replace-manager` is typed directly. The work runs without the console (closing the window does

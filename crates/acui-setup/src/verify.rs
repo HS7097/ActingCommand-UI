@@ -21,8 +21,8 @@ pub const MISMATCH: &str = "内容与创建时不一致";
 
 pub const MANIFEST: &str = "BUILD-MANIFEST.json";
 const IDENTITY_LIMIT: u64 = 16 << 20;
-const RUNTIME_REPOSITORY: &str = "HS7097/ActingCommand-Runtime";
-const UI_REPOSITORY: &str = "HS7097/ActingCommand-UI";
+pub(crate) const RUNTIME_REPOSITORY: &str = "HS7097/ActingCommand-Runtime";
+pub(crate) const UI_REPOSITORY: &str = "HS7097/ActingCommand-UI";
 const RUNTIME_LAYOUT: &str = "distribution-v1";
 
 /// What the runtime zip must hold for anything to be configured, what the
@@ -45,18 +45,6 @@ pub const TOOLS_INSTALLED: &[&str] = &[
 ];
 /// The directory of `tools\` the platform-tools files are in.
 pub const PLATFORM_TOOLS: &str = "platform-tools";
-/// The old-layout programs a first migration accepts, `(runtime, ui)`: v0.11.0
-/// and v0.11.1. Only v0.11.0 answers through the cold protocol.
-const OLD_LAYOUT_RELEASES: &[(&str, &str)] = &[
-    (
-        crate::lifecycle::COLD_RUNTIME,
-        "b0d70e606e3df6ccb5c351b2519e240cb5db4f03",
-    ),
-    (
-        "732a546fb0e1c60538e53c5e52763c4e3e43c66e",
-        "c47bab660b343639bbd67bd5b3a19e8f27fcafdb",
-    ),
-];
 
 /// Where a step's account goes: every line into the install log, and — for
 /// the page — where the work stands and what the person must see. An error
@@ -113,6 +101,8 @@ pub struct Verified {
 pub struct Staged {
     pub dir: PathBuf,
     pub files: Vec<String>,
+    /// The manifest's exact bytes as checked: `interfaces` reads its declaration from them.
+    pub manifest: Vec<u8>,
     manifest_sha256: String,
 }
 
@@ -347,44 +337,41 @@ pub fn slot_predates_vision(slot: &Path) -> Result<bool, String> {
         .map_err(|error| format!("Cannot inspect {}: {error}", tools.display()))
 }
 
-/// The old layout's programs, one of `OLD_LAYOUT_RELEASES`, each checked against
-/// its own manifest; returns the pair found, `(runtime, ui)`.
-pub fn initial_programs(root: &Path, report: Report<'_>) -> Result<(String, String), String> {
-    let commit = |dir: &str| -> Result<String, String> {
-        let path = root.join(dir).join(MANIFEST);
-        let bytes = read_identity(&path)?;
-        serde_json::from_slice::<Manifest>(&bytes)
-            .map(|manifest| manifest.commit_sha)
-            .map_err(|error| format!("{} does not parse: {error}", path.display()))
-    };
-    let found = (commit("runtime")?, commit("ui")?);
-    let Some(&(runtime, ui)) = OLD_LAYOUT_RELEASES
-        .iter()
-        .find(|(runtime, ui)| *runtime == found.0 && *ui == found.1)
-    else {
-        return Err(format!(
-            "旧布局的程序不是可迁移的发布件（v0.11.0 或 v0.11.1）/ The old-layout programs are not a release a first migration accepts (v0.11.0 or v0.11.1): runtime {} · ui {}",
-            found.0, found.1
-        ));
-    };
-    for (dir, repository, sha, required, runtime_layout) in [
-        ("runtime", RUNTIME_REPOSITORY, runtime, RUNTIME_REQUIRED, true),
-        ("ui", UI_REPOSITORY, ui, UI_REQUIRED, false),
+/// The old layout's programs, each checked against its own manifest; returns the two as
+/// checked, `(runtime, ui)`. Whether a first migration may take them is the interfaces' call
+/// (`interfaces::release`, Workflow #364), not a list of release pairs.
+pub fn initial_programs(root: &Path, report: Report<'_>) -> Result<(Staged, Staged), String> {
+    let mut found = Vec::new();
+    for (dir, repository, required, runtime_layout) in [
+        ("runtime", RUNTIME_REPOSITORY, RUNTIME_REQUIRED, true),
+        ("ui", UI_REPOSITORY, UI_REQUIRED, false),
     ] {
-        check_manifest(
+        let path = root.join(dir).join(MANIFEST);
+        let sha = commit_of(&read_identity(&path)?)
+            .map_err(|error| format!("{} does not parse: {error}", path.display()))?;
+        found.push(check_manifest(
             &root.join(dir),
             &Expect {
                 name: format!("initial {dir}"),
                 dir,
                 repository,
-                sha,
+                sha: &sha,
                 required,
                 runtime_layout,
             },
             report,
-        )?;
+        )?);
     }
-    Ok(found)
+    let ui = found.pop().ok_or("initial ui missing")?;
+    let runtime = found.pop().ok_or("initial runtime missing")?;
+    Ok((runtime, ui))
+}
+
+/// A build manifest's `commit_sha`.
+pub fn commit_of(manifest: &[u8]) -> Result<String, String> {
+    serde_json::from_slice::<Manifest>(manifest)
+        .map(|manifest| manifest.commit_sha)
+        .map_err(|error| error.to_string())
 }
 
 
@@ -582,6 +569,7 @@ fn check_manifest(dir: &Path, expect: &Expect<'_>, report: Report<'_>) -> Result
         dir: dir.to_path_buf(),
         files,
         manifest_sha256: hex(&Sha256::digest(&manifest_bytes)),
+        manifest: manifest_bytes,
     })
 }
 
