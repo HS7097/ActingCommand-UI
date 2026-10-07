@@ -366,8 +366,12 @@ pub fn start(
         &log,
     )
     .map_err(|error| {
+        // An actingd that refuses at once (for example `install_process_slot_mismatch`) has
+        // ended before the launcher's child was found: its FATAL line is the reason (review
+        // F-UI2-2).
         format!(
-            "Runtime start attempt failed: {error}; log {}; selected generation retained",
+            "Runtime start attempt failed: {error}{}; log {}; selected generation retained",
+            runtime::fatal_line(&log),
             log.display()
         )
     })?;
