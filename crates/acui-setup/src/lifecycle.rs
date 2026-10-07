@@ -200,7 +200,7 @@ pub fn close(
     config: &Path,
     state_root: &Path,
     snapshot: Option<&Snapshot>,
-    control: Control,
+    how: Control,
     report: Report<'_>,
 ) -> Result<Closed, String> {
     let mut probe = command(&programs.join("runtime").join(ACTINGCTL), snapshot)?;
@@ -214,7 +214,7 @@ pub fn close(
             previous: None,
         });
     }
-    if control == Control::Cold {
+    if how == Control::Cold {
         let mut shutdown = command(&programs.join("runtime").join(ACTINGCTL), snapshot)?;
         shutdown
             .arg("request-shutdown")
@@ -311,7 +311,7 @@ fn confirm_closed(value: &Value, ticket: Option<&InstallTransitionTicket>) -> Re
 pub fn start(
     snapshot: &Snapshot,
     closed: Closed,
-    control: Control,
+    how: Control,
     report: Report<'_>,
 ) -> Result<Option<PathBuf>, String> {
     if !closed.was_running {
@@ -346,7 +346,7 @@ pub fn start(
     let stderr = stdout.try_clone().map_err(|error| error.to_string())?;
     let mut command = command(&programs.join("runtime").join(ACTINGD), Some(snapshot))?;
     command.arg("--config").arg(snapshot.config_path()?);
-    if control == Control::Transition {
+    if how == Control::Transition {
         command
             .arg("--install-held")
             .arg(serde_json::to_string(&startup).map_err(|error| error.to_string())?);
@@ -418,7 +418,7 @@ pub fn start(
         }
         std::thread::sleep(POLL);
     }
-    if control == Control::Cold {
+    if how == Control::Cold {
         let mut probe = self::command(&programs.join("runtime").join(ACTINGCTL), Some(snapshot))?;
         probe.arg("status").arg("--state-root").arg(&state_root);
         parse(
