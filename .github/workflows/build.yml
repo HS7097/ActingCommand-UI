@@ -107,11 +107,12 @@ jobs:
           if ($interfaces.schema_version -cne 'actingcommand.component-interfaces.v1') {
             throw "component-interfaces.json: schema_version is not actingcommand.component-interfaces.v1: $($interfaces.schema_version)"
           }
-          foreach ($name in @('actingd-config', 'install-selection', 'install-control', 'ledger', 'runtime-client', 'package')) {
-            $range = @($interfaces.speaks.$name)
+          # Not $name: that holds the artifact name, which the manifest and the outputs below use.
+          foreach ($interface in @('actingd-config', 'install-selection', 'install-control', 'ledger', 'runtime-client', 'package')) {
+            $range = @($interfaces.speaks.$interface)
             if ($range.Count -ne 2 -or @($range | Where-Object { "$_" -cnotmatch '\A[0-9]+\z' }).Count -ne 0 -or
                 [int64]"$($range[0])" -gt [int64]"$($range[1])") {
-              throw "component-interfaces.json: speaks.$name is not [min, max] with 0 <= min <= max"
+              throw "component-interfaces.json: speaks.$interface is not [min, max] with 0 <= min <= max"
             }
           }
           $selection = @($interfaces.speaks.'install-selection')
