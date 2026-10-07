@@ -561,6 +561,10 @@ $null = $p.Handle; $p.WaitForExit(); exit $p.ExitCode
 提交，原先在运行的再拉起。只是路径写法不同不算变化。摘要写出 zip、新放入与复用的包数、每一项改变的绑定、选中的代际（或"配置不变"）、
 Runtime 的情况以及未变的程序与槽。`--plan` 做同样的检查，安装根下不写任何东西。典型用法是
 `acsetup.exe --root <安装根> --resources <目录>\<标准包>.zip --plan`，再 `--yes --conflicts new`。
+在向导里，A/B 安装的第 0 步多一个勾选「只更新资源（程序不变）/ Update resources only (programs unchanged)」（旧布局则说明须先完整升级一次）。
+勾选后点下一步，做与升级相同的检查（安装根、不得从这份安装的程序目录运行、日志），进入第 7 步「只更新资源 / Update resources」：
+填标准包 zip 的绝对路径，可另填一个 `SHA256SUMS`，点「更新资源 / Update resources」。运行与命令行相同：先取得写者锁，再清上次留下的临时目录；关联页（第 5 步）与冲突页（第 6 步）回答它的问题；
+在这两页取消则什么都不改。运行结束前窗口不能关闭。成功后进入完成页，显示上面的摘要，「启动监控台 / Open console」经安装的固定入口打开监控台；失败页写明此时的状态。
 
 **临时目录**：每次运行在结束时（无论成败）删除自己的 `.staging-<时间>`（实例步的 `.staging-resources-<时间>`、`--replace-manager` 的
 `install\manager-source-<时间>`）并记入日志；删不掉的写进摘要的注意事项，与被中断的运行留下的一样，在下次运行开始时删除。

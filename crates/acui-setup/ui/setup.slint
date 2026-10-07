@@ -262,6 +262,12 @@ export component SetupWindow inherits Window {
     in property <string> conflicts-summary;
     in property <string> conflicts-tally;
     in property <bool> conflicts-complete;
+    // Step 0's tick for a resource-only update, offered on an A/B installation only, and step 7's
+    // bundle and optional SHA256SUMS (Workflow #364).
+    in property <bool> resources-available;
+    in-out property <bool> resources-only;
+    in-out property <string> resource-zip;
+    in-out property <string> resource-sums;
 
     callback next();
     callback close-wizard();
@@ -279,7 +285,11 @@ export component SetupWindow inherits Window {
     callback conflict-toggle(int, int);
     callback conflict-header-toggle(int);
 
-    property <[string]> step-labels: [
+    property <[string]> step-labels: root.resources-only ? [
+        "0 位置 / Location",
+        "1 只更新资源 / Update resources",
+        "2 完成 / Finish",
+    ] : [
         "0 位置 / Location",
         root.upgrading ? "1 升级 / Upgrade" : "1 安装 / Install",
         "2 选项 / Options",
@@ -296,7 +306,10 @@ export component SetupWindow inherits Window {
             vertical-stretch: 0;
             for label[index] in root.step-labels: StepTag {
                 label: label;
-                active: index == root.step;
+                // A resource-only update's tags stand for steps 0, 7 and 4.
+                active: root.resources-only
+                    ? (index == 0 && root.step == 0) || (index == 1 && root.step == 7) || (index == 2 && root.step == 4)
+                    : index == root.step;
             }
             Rectangle { }
         }
@@ -323,6 +336,43 @@ export component SetupWindow inherits Window {
                     }
                     Caption { text: root.free-space-text; }
                     Caption { text: root.existing-text; }
+                    if root.resources-available: CheckBox {
+                        text: "只更新资源（程序不变）/ Update resources only (programs unchanged)";
+                        checked <=> root.resources-only;
+                    }
+                    Body { text: root.note; }
+                    Rectangle { }
+                }
+
+                // Step 7: a resource-only update (Workflow #364). One bundle; programs and slot
+                // stay; its maintenance declaration rebinds, with the conflict page as on an
+                // upgrade.
+                if !root.failed && root.step == 7: VerticalLayout {
+                    spacing: 8px;
+                    Head { text: "只更新资源 / Update resources"; }
+                    Caption {
+                        text: "把一个资源仓标准包（bundle v2/v3）放进这份安装：放入新任务包，按它的维护声明更新绑定；绑定有变化时生成新的配置代际并重启在运行的 Runtime。程序与槽不变，已有的任务包目录不挪不删 / Puts one resource bundle (v2/v3) into this installation: its new packs placed, bindings updated from its maintenance declaration; when bindings change, a new configuration generation and a restart of a running Runtime. Programs and slot stay; no existing pack directory is moved or deleted";
+                    }
+                    LineEdit {
+                        text <=> root.resource-zip;
+                        enabled: !root.busy;
+                        placeholder-text: "标准包 zip 的绝对路径 / The bundle zip's absolute path";
+                    }
+                    Caption {
+                        text: "同一文件夹里的 SHA256SUMS 须列出它 / The SHA256SUMS in the same folder must list it";
+                    }
+                    LineEdit {
+                        text <=> root.resource-sums;
+                        enabled: !root.busy;
+                        placeholder-text: "可选：另一个 SHA256SUMS 的绝对路径 / Optional: the absolute path of another SHA256SUMS";
+                    }
+                    if root.busy: Working {
+                        stage: root.stage-text;
+                        detail: root.detail-text;
+                        fraction: root.fraction;
+                        indeterminate: root.indeterminate;
+                    }
+                    if root.notes != "": Notes { notes: root.notes; }
                     Body { text: root.note; }
                     Rectangle { }
                 }
@@ -733,6 +783,14 @@ export component SetupWindow inherits Window {
                 text: root.step == 1 ? (root.upgrading ? "升级 / Upgrade" : "安装 / Install") : root.step == 3 ? "写入实例 / Apply" : "下一步 / Next";
                 primary: true;
                 enabled: root.can-next && !root.busy && (root.step != 1 || root.downgrade-note == "" || root.downgrade-ok);
+                clicked => {
+                    root.next();
+                }
+            }
+            if !root.failed && root.step == 7: Button {
+                text: "更新资源 / Update resources";
+                primary: true;
+                enabled: root.can-next && !root.busy;
                 clicked => {
                     root.next();
                 }

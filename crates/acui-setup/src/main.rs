@@ -124,6 +124,8 @@ struct State {
     decision: Option<std::sync::mpsc::SyncSender<Result<usize, String>>>,
     /// The maintenance binding conflicts, all answered at once on one page.
     conflict_decision: Option<std::sync::mpsc::SyncSender<Result<Vec<maintenance::Side>, String>>>,
+    /// A resource-only update that completed (Workflow #364): the finish page's summary.
+    resources: Option<resources::Outcome>,
 }
 
 /// The worker phases the window must not close in: held while laying files
@@ -541,25 +543,200 @@ fn refresh_preflight(window: &SetupWindow, state: &Shared) {
         ));
     }
     window.set_free_space_text(free.into());
+    // A resource-only update needs an A/B installation (Workflow #364): only then is it offered.
+    let selection = root.join(acui_installation::INSTALL_SELECTION_PATH);
+    let ab = root.is_absolute() && selection.is_file();
     let existing = match upgrade::installed(&root) {
         Ok(None) => "此处没有已安装的 Runtime / No installation here yet".to_string(),
         Ok(Some(installed)) => format!(
-            "此处已有安装：runtime {} · ui {}；下一步将升级并检查维护配置 / Installed here: the next steps upgrade it and check maintenance configuration",
+            "此处已有安装：runtime {} · ui {}；下一步将升级并检查维护配置{} / Installed here: the next steps upgrade it and check maintenance configuration{}",
             short(&installed.runtime_sha),
-            short(&installed.ui_sha)
+            short(&installed.ui_sha),
+            if ab { "，也可勾选只更新资源" } else { "（旧布局：只更新资源须先做一次完整升级）" },
+            if ab {
+                ", or tick to update resources only"
+            } else {
+                " (old layout: a resource-only update needs a full upgrade first)"
+            }
         ),
         Err(reason) => reason,
     };
     window.set_existing_text(existing.into());
+    window.set_resources_available(ab);
+    if !ab {
+        window.set_resources_only(false);
+    }
 }
 
 fn next(window: &SetupWindow, state: &Shared) {
     match window.get_step() {
+        0 if window.get_resources_only() => enter_resources(window, state),
         0 => enter_get(window, state),
         1 => begin_install(window, state),
         2 => apply_options(window, state),
         3 => begin_apply(window, state),
+        7 => begin_resources(window, state),
         _ => {}
+    }
+}
+
+/// Step 0 → 7 (Workflow #364): a resource-only update. The checks `enter_get` makes — an
+/// absolute root, here an A/B installation, the rule against running from a program folder of
+/// it — then the log; no release is looked up. Leftover staging is cleared by the run itself,
+/// once it holds the writer lock (`begin_resources`, review F-UI2-1).
+fn enter_resources(window: &SetupWindow, state: &Shared) {
+    let root = PathBuf::from(window.get_install_root().as_str());
+    let checked = match root.is_absolute() {
+        true => resources::installation(&root),
+        false => Err("安装根必须是绝对路径 / The install root must be an absolute path".to_string()),
+    };
+    let checked = checked.and_then(|()| match running_from(&root) {
+        Some((name, dir)) => Err(format!(
+            "本引导 {name} 正从这份安装的 {dir}\\ 里运行：请把 {name} 复制到别处再运行 / This wizard, {name}, runs from {dir}\\ of this installation: copy {name} elsewhere and run it from there"
+        )),
+        None => Ok(()),
+    });
+    if let Err(text) = checked {
+        window.set_note(text.into());
+        return;
+    }
+    let log = match InstallLog::create(&root, log::unix_ms()) {
+        Ok(log) => log,
+        Err(error) => {
+            window.set_note(
+                format!(
+                    "无法创建安装日志 / Cannot create the install log: {}: {error}",
+                    root.display()
+                )
+                .into(),
+            );
+            return;
+        }
+    };
+    window.set_log_path(format!("日志 / Log: {}", log.path().display()).into());
+    let carried = lock(state).payload.as_ref().map(|payload| payload.tag.clone());
+    {
+        let mut state = lock(state);
+        state.root = root.clone();
+        state.log = Some(log);
+    }
+    let started = write_log(
+        state,
+        &format!(
+            "acsetup {} · 只更新资源 / resource-only update · 安装根 / install root: {}",
+            env!("CARGO_PKG_VERSION"),
+            root.display()
+        ),
+    )
+    .and_then(|()| match &carried {
+        Some(tag) => write_log(
+            state,
+            &format!("离线版自带的发布件 {tag} 此时不用 / The offline edition's carried release {tag} is not used"),
+        ),
+        None => Ok(()),
+    });
+    if let Err(reason) = started {
+        fail(state, &window.as_weak(), reason);
+        return;
+    }
+    window.set_note("".into());
+    window.set_notes(lock(state).warnings.join("\n").into());
+    window.set_step(7);
+    window.set_can_next(true);
+}
+
+/// Step 7, one worker from start to end (Workflow #364): the writer lock taken before leftover
+/// staging is cleared (model step 1, review F-UI2-1) and held to the end, the bundle checked,
+/// staged and admitted, its packs compared with the installed ones, its bindings planned — the
+/// association and conflict pages as for an upgrade, where Cancel changes nothing — then the
+/// new packs placed and, when bindings change, a new generation committed with the Runtime
+/// closed and started again. Success goes to the finish page.
+fn begin_resources(window: &SetupWindow, state: &Shared) {
+    let zip = PathBuf::from(window.get_resource_zip().trim());
+    if !zip.is_absolute() || !zip.is_file() {
+        window.set_note(
+            format!(
+                "标准包须为存在的文件的绝对路径 / The bundle must be the absolute path of an existing file: {}",
+                zip.display()
+            )
+            .into(),
+        );
+        return;
+    }
+    let sums = window.get_resource_sums().trim().to_string();
+    let sums = (!sums.is_empty()).then(|| PathBuf::from(sums));
+    if let Some(sums) = sums.as_ref().filter(|sums| !sums.is_absolute() || !sums.is_file()) {
+        window.set_note(
+            format!(
+                "SHA256SUMS 须为存在的文件的绝对路径 / SHA256SUMS must be the absolute path of an existing file: {}",
+                sums.display()
+            )
+            .into(),
+        );
+        return;
+    }
+    window.set_note("".into());
+    window.set_busy(true);
+    window.set_can_next(false);
+    let root = lock(state).root.clone();
+    let staging = root.join(format!(".staging-{}", log::unix_ms()));
+    let weak = window.as_weak();
+    let shared = Arc::clone(state);
+    let (state, worker_weak) = (Arc::clone(state), weak.clone());
+    let spawned = std::thread::Builder::new().name("acsetup-resources".into()).spawn(move || {
+        let _guard = PanicGuard::new(&state, &worker_weak);
+        let mut report = PageReport::new(&state, &worker_weak);
+        // The window stays open until the run has ended, its staging removed.
+        let held = Held::new(&state);
+        // 1. The writer lock before anything under the root is removed: a run that holds the
+        // lock never has its staging cleared away by this one (review F-UI2-1).
+        let writer = generations::Writer::acquire(&root).and_then(|writer| {
+            clear_staging(&state, &root)?;
+            Ok(writer)
+        });
+        let writer = match writer {
+            Ok(writer) => writer,
+            Err(reason) => {
+                drop(held);
+                fail(&state, &worker_weak, reason);
+                return;
+            }
+        };
+        let outcome = {
+            let mut choose = |association: &maintenance::Association| {
+                let labels = association.options.iter().map(|option| option.label.clone()).collect();
+                ask(&state, &worker_weak, association.question.clone(), labels).map(Some)
+            };
+            let mut resolve = |conflicts: &[maintenance::Conflict]| resolve_page(&state, &worker_weak, conflicts);
+            resources::run(&writer, &zip, sums.as_deref(), &staging, &mut choose, &mut resolve, &mut report)
+        };
+        // The run has ended: its staging goes, whatever the outcome (Workflow #364 Q5).
+        let removed = remove_staging(&staging, &mut report);
+        drop(writer);
+        drop(held);
+        if let Err(reason) = removed {
+            fail(&state, &worker_weak, reason);
+            return;
+        }
+        match outcome {
+            Ok(outcome) => {
+                {
+                    let mut locked = lock(&state);
+                    // The console opens through the installation's fixed entries (review L6).
+                    locked.laid_out = Some(outcome.laid_out.clone());
+                    locked.resources = Some(outcome);
+                }
+                let _ = worker_weak.upgrade_in_event_loop(move |window| {
+                    window.set_busy(false);
+                    finish(&window, &state);
+                });
+            }
+            Err(stop) => fail(&state, &worker_weak, String::from(stop)),
+        }
+    });
+    if let Err(error) = spawned {
+        window.set_busy(false);
+        fail(&shared, &weak, thread_failed(&error));
     }
 }
 
@@ -2004,6 +2181,19 @@ fn settle_and_finish(window: &SetupWindow, state: &Shared) {
 fn summary(state: &Shared) -> String {
     let state = lock(state);
     let mut lines = vec![format!("安装根 / Install root: {}", state.root.display())];
+    // A resource-only update (Workflow #364, model §2.2.5).
+    if let Some(outcome) = &state.resources {
+        lines.extend(resources::summary(outcome));
+        if let Some(log) = &state.log {
+            lines.push(format!("日志 / Log: {}", log.path().display()));
+        }
+        if !state.warnings.is_empty() {
+            lines.push(String::new());
+            lines.push("注意 / Note:".to_string());
+            lines.extend(state.warnings.iter().cloned());
+        }
+        return lines.join("\n");
+    }
     if let Some((runtime, ui)) = &state.members {
         lines.push(format!(
             "已安装 / Installed: runtime {} · ui {}（{}）",
