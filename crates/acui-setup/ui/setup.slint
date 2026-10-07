@@ -296,8 +296,6 @@ export component SetupWindow inherits Window {
         "3 实例（可选）/ Instances (optional)",
         "4 完成 / Finish",
     ];
-    // The step each tag stands for: a resource-only update goes 0 → 7 → 4.
-    property <[int]> step-numbers: root.resources-only ? [0, 7, 4] : [0, 1, 2, 3, 4];
 
     VerticalLayout {
         padding: 10px;
@@ -308,7 +306,10 @@ export component SetupWindow inherits Window {
             vertical-stretch: 0;
             for label[index] in root.step-labels: StepTag {
                 label: label;
-                active: root.step-numbers[index] == root.step;
+                // A resource-only update's tags stand for steps 0, 7 and 4.
+                active: root.resources-only
+                    ? (index == 0 && root.step == 0) || (index == 1 && root.step == 7) || (index == 2 && root.step == 4)
+                    : index == root.step;
             }
             Rectangle { }
         }
