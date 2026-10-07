@@ -868,4 +868,112 @@ mod tests {
             panic!("tools-layout 3 refused: {}", String::from(stop));
         }
     }
+
+    /// One-off (to be reverted): the pairing checks of UI-PIN, printed.
+    #[test]
+    fn one_off_pairing_and_rollback() {
+        let mut lines = Vec::new();
+        let mut report = |line: &str| -> Result<(), String> {
+            lines.push(line.to_string());
+            Ok(())
+        };
+        fn read(
+            repository: &str,
+            role: &str,
+            commit: &str,
+            extra: Value,
+            report: Report<'_>,
+        ) -> Component {
+            let mut manifest = json!({ "repository": repository, "commit_sha": commit });
+            if let (Some(manifest), Some(extra)) = (manifest.as_object_mut(), extra.as_object()) {
+                manifest.extend(extra.clone());
+            }
+            program(manifest.to_string().as_bytes(), role, repository, report)
+                .map_err(String::from)
+                .unwrap()
+        }
+        let r0113 = read(
+            RUNTIME_REPOSITORY,
+            "runtime v0.11.3",
+            "484bdc14fcacbb2787707a5f03e65acdb8f9ff1a",
+            json!({ "interfaces": { "schema_version": SCHEMA, "speaks": {
+                "actingd-config": [2, 3], "install-selection": [1, 1], "install-control": [0, 1],
+                "ledger": [1, 2], "runtime-client": [1, 1], "package": [1, 2] } } }),
+            &mut report,
+        );
+        let r0112 = read(
+            RUNTIME_REPOSITORY,
+            "runtime v0.11.2",
+            "14b88e04fb31e89f12614192cd38657181218dcb",
+            json!({}),
+            &mut report,
+        );
+        let u0112 = read(
+            UI_REPOSITORY,
+            "ui v0.11.2",
+            "3f08f63978877d68f20b2c86077b1bc7c5e39a83",
+            json!({ "installation_selection_schema": "actingcommand.install-selection.v1" }),
+            &mut report,
+        );
+        let this = installer().map_err(String::from).unwrap();
+        // Rollback from a v0.11.3 slot to a retained v0.11.2 slot: refused on the ledger edge.
+        let rollback = check(
+            &Parties {
+                installer: &this,
+                runtime: &r0112,
+                ui: &u0112,
+                previous: Some(&r0113),
+                manager: false,
+                new_slot: false,
+                bundles: &[],
+            },
+            &mut report,
+        );
+        match rollback {
+            Err(Stop::Refused(text)) => {
+                println!("ONE-OFF rollback v0.11.3 -> v0.11.2 refused:\n{text}");
+                assert!(text.contains("ledger:") && text.contains("写 / writes 2 ∉"));
+            }
+            Err(Stop::Failed(text)) => panic!("rollback failed, not refused: {text}"),
+            Ok(_) => panic!("rollback to v0.11.2 was admitted"),
+        }
+        // A selected slot of Runtime v0.11.3 with UI v0.11.2 (3f08f639): admitted.
+        let selected = check(
+            &Parties {
+                installer: &this,
+                runtime: &r0113,
+                ui: &u0112,
+                previous: Some(&r0113),
+                manager: false,
+                new_slot: false,
+                bundles: &[],
+            },
+            &mut report,
+        );
+        if let Err(stop) = selected {
+            panic!("Runtime v0.11.3 with UI v0.11.2 refused: {}", String::from(stop));
+        }
+        // The release pair over F:\AC's v0.11.2 Runtime, new slot, tools-layout 3: admitted.
+        let mut r0113_new = r0113.clone();
+        r0113_new.tools_layout = Some(3);
+        let upgrade = check(
+            &Parties {
+                installer: &this,
+                runtime: &r0113_new,
+                ui: &this,
+                previous: Some(&r0112),
+                manager: true,
+                new_slot: true,
+                bundles: &[],
+            },
+            &mut report,
+        );
+        if let Err(stop) = upgrade {
+            panic!("upgrade v0.11.2 -> v0.11.3 refused: {}", String::from(stop));
+        }
+        drop(report);
+        for line in lines {
+            println!("ONE-OFF {line}");
+        }
+    }
 }

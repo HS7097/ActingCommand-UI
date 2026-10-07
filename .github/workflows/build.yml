@@ -66,6 +66,9 @@ jobs:
             libxkbcommon-x11-dev
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --locked --release --workspace
+      # one-off (to be reverted): run acsetup's interface unit tests (#364 UI-PIN).
+      - name: one-off interface unit tests
+        run: cargo test --locked -p acui-setup --bin acsetup interfaces::tests -- --nocapture
 
       # Windows only: stage the console, setup and stable entry with a build manifest in the
       # same shape as the Runtime's exact-SHA artifacts, so the umbrella can fetch
