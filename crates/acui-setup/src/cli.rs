@@ -1064,6 +1064,9 @@ fn resources_logged(
         .map(|log| log.path().display().to_string())
         .unwrap_or_default();
     report.line(&format!("日志 / Log: {log_path}"))?;
+    // 1. The writer lock before anything under the root is removed: a run that holds the lock
+    // never has its staging cleared away by this one (model step 1, review F-UI2-1).
+    let writer = crate::generations::Writer::acquire(root)?;
     crate::clear_staging(state, root)?;
     let staging = root.join(format!(".staging-{}", log::unix_ms()));
     let mut choose = |association: &Association| pick(args, association, code, consulted, None);
@@ -1072,7 +1075,7 @@ fn resources_logged(
         // The whole run writes or may write: an interruption would leave it half done.
         let _guard = platform::InterruptGuard::start();
         resources::run(
-            root,
+            &writer,
             zip,
             args.sums.as_deref(),
             &staging,

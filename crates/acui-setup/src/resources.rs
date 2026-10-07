@@ -7,11 +7,11 @@
 //! `check-config` and committed, and a Runtime that was running is drained, closed and started
 //! again on it.
 //!
-//! It mirrors the coordinator's stopgap step by step — `place_bundle.py` (the zip against its
-//! SHA256SUMS line, every pack's digest, present / new / present-but-different) and `rebind.py`
-//! (bindings from the declaration, commit through the generation writer) — and adds the v3
-//! qualification the scripts lack. Nothing here deletes or moves a pack directory: one that is
-//! there but differs refuses the run. A plan (`--plan`) runs the same checks and changes nothing
+//! It follows the manual procedure it replaces step by step — placing a bundle (the zip against
+//! its SHA256SUMS line, every pack's digest, present / new / present-but-different) and
+//! rebinding (bindings from the declaration, commit through the generation writer) — and adds
+//! the v3 qualification that procedure lacked. Nothing here deletes or moves a pack directory:
+//! one that is there but differs refuses the run. A plan (`--plan`) runs the same checks and changes nothing
 //! under the root.
 
 use std::fs;
@@ -101,7 +101,7 @@ fn check(
     choose: maintenance::Choose<'_>,
     report: Report<'_>,
 ) -> Result<Checked, Stop> {
-    // 2. The zip's SHA256SUMS line (place_bundle.py:22-28); other entries are not read.
+    // 2. The zip's SHA256SUMS line; other entries are not read.
     let name = zip
         .file_name()
         .and_then(|name| name.to_str())
@@ -139,7 +139,7 @@ fn check(
         "SHA256SUMS 已核对 / ok: {name}（{}）",
         sums.display()
     ))?;
-    // 3. The bundle (place_bundle.py:29-31): content directories only.
+    // 3. The bundle: content directories only.
     let bundle = bundle::read(zip)?;
     if !bundle.content_directories() {
         return Err(Stop::Failed(format!(
@@ -155,7 +155,7 @@ fn check(
         bundle.source.as_deref().unwrap_or("—"),
         bundle.packs.len()
     ))?;
-    // 4. The selected generation (its configuration bound by active.json, rebind.py:24-28)
+    // 4. The selected generation (its configuration bound by active.json)
     // and the interfaces of its programs, this installer and the bundle.
     let baseline = Snapshot::read(root)?;
     report.line(&format!(
@@ -164,13 +164,13 @@ fn check(
         baseline.selection.generation
     ))?;
     let agreed = interfaces::selected(root, std::slice::from_ref(&bundle), report)?;
-    // 5. Every pack staged and admitted, a v3 declaration qualified (place_bundle.py:33-42).
+    // 5. Every pack staged and admitted, a v3 declaration qualified.
     let prepared = maintenance::prepare(
         std::slice::from_ref(&bundle),
         &staging.join("resource-packages"),
         report,
     )?;
-    // 6. Each pack against what the root already holds (place_bundle.py:43-50).
+    // 6. Each pack against what the root already holds.
     let (reused, new, differs) = bundle.presence(&root.join("packages").join(&bundle.game))?;
     report.line(&format!(
         "{name}: game {}，{} 个包 / packs；已有 / present {reused}，新 / new {new}，已有但不同 / present-but-different {}",
@@ -185,7 +185,7 @@ fn check(
             bundle::DIFFERS_REMEDY
         )));
     }
-    // 7. The bindings the bundle declares (rebind.py:34-76; declared bindings only, ruling Q9).
+    // 7. The bindings the bundle declares (declared bindings only, ruling Q9).
     let config = baseline.config_path()?;
     let mut base: Value = serde_json::from_slice(&baseline.config_bytes)
         .map_err(|error| format!("Selected configuration is unreadable: {error}"))?;
@@ -350,10 +350,11 @@ fn outcome(
     })
 }
 
-/// The real run, steps 1 to 17 of the model, under the writer lock from start to end. The
-/// caller made the log and owns `staging`, which it removes afterwards.
+/// The real run, steps 2 to 17 of the model, under the writer lock from start to end. Step 1
+/// is the caller's: it takes `writer` first and clears leftover staging only while it holds the
+/// lock (review F-UI2-1), made the log, and owns `staging`, which it removes afterwards.
 pub fn run(
-    root: &Path,
+    writer: &Writer,
     zip: &Path,
     sums: Option<&Path>,
     staging: &Path,
@@ -361,8 +362,8 @@ pub fn run(
     resolve: maintenance::Resolve<'_>,
     report: Report<'_>,
 ) -> Result<Outcome, Stop> {
-    // 1. The writer lock excludes --commit-config, upgrades and a second run.
-    let writer = Writer::acquire(root)?;
+    // 1. The writer lock, taken by the caller, excludes --commit-config, upgrades and a
+    // second run.
     let root = writer.root();
     let mut checked = check(root, zip, sums, staging, choose, report)?;
     maintenance::decide(&mut checked.document, &checked.conflicts, resolve, report)?;
@@ -376,7 +377,7 @@ pub fn run(
         let snapshot = checked.baseline.clone();
         return Ok(outcome(zip, &checked, changes, &snapshot, None, Runtime::Untouched)?);
     }
-    // 10. The new pack directories only, each through `<digest>.part` (place_bundle.py:51-56);
+    // 10. The new pack directories only, each through `<digest>.part`;
     // a directory that came to differ since step 6 refuses (ruling Q4).
     maintenance::place(&checked.prepared, root, OnDiffers::Refuse, report).map_err(|error| {
         format!("{error}\n已放入的新任务包目录保留，不删除；选择未变，Runtime 未触动 / The new pack directories already placed are kept, never deleted; the selection is unchanged and the Runtime untouched")
@@ -388,7 +389,7 @@ pub fn run(
         return Ok(outcome(zip, &checked, changes, &snapshot, None, Runtime::Untouched)?);
     }
     // 12. A new, unselected generation: the full chain qualified, the selected slot's
-    // check-config (rebind.py:81).
+    // check-config.
     let slot = checked.baseline.selection.slot;
     let mut plan = writer
         .prepare(
@@ -402,7 +403,7 @@ pub fn run(
         .map_err(|error| {
             format!("{error}\n新任务包目录保留；选择未变，Runtime 未触动 / The new pack directories are kept; the selection is unchanged and the Runtime untouched")
         })?;
-    // 13. Nobody changed the installation meanwhile (deploy_v9.py:43-46).
+    // 13. Nobody changed the installation meanwhile.
     checked.baseline.unchanged().map_err(|error| {
         format!(
             "{error}\n新任务包目录与未选中的配置代际 {} 保留；选择未变，Runtime 未触动 / The new pack directories and the unselected generation {} are kept; the selection is unchanged and the Runtime untouched",

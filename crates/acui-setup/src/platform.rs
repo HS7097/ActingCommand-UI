@@ -339,8 +339,8 @@ while ($true) {
 }
 "#;
 
-    /// Starts `program` with `arguments` as the coordinator's `restart_actingd.ps1` does
-    /// (Workflow #364, ruling X3): through WMI `Win32_Process.Create` with `ShowWindow = 0`,
+    /// Starts `program` with `arguments`, hidden (Workflow #364, ruling X3): through WMI
+    /// `Win32_Process.Create` with `Win32_ProcessStartup.ShowWindow = 0`,
     /// so it belongs to no app job and no caller job, shows no window that could be closed,
     /// and outlives acsetup and whatever started it. `cmd.exe` appends its standard output and
     /// error to `log` (Fail Loud). Every path must be plain (no `\\?\` prefix) and free of `%`

@@ -696,10 +696,12 @@ seconds around the Runtime's existing limits. Unknown submissions are not repeat
 queries the original transition. Unresolved closure stops the switch. It does not kill an
 unresolved control/maintenance process. The Host's released result confirms preparation and
 this transition's original user-pause restoration. A previously stopped Runtime stays stopped.
-acsetup starts every Runtime the way `restart_actingd.ps1` does (Workflow #364, ruling X3): through
-WMI `Win32_Process.Create` with a hidden window, so it belongs to no app job and not to the job of
-whatever ran acsetup, and no window can be closed under it; `cmd.exe` appends its output to
-`<root>\actingd-<time>.log`. The started actingd reads the selection just committed.
+acsetup starts every Runtime in one way (Workflow #364, ruling X3): WMI `Win32_Process.Create`,
+with `Win32_ProcessStartup.ShowWindow = 0`, starts `cmd.exe`, which runs actingd and appends its
+output to `<root>\actingd-<time>.log`. The Runtime therefore has a hidden window, belongs to no
+app job and not to the job of whatever ran acsetup, and no window can be closed under it. The
+started actingd reads the selection just committed. When it ends at once, acsetup's error
+quotes the log's FATAL line.
 
 **Component interfaces** (Workflow #364): whether a Runtime, a UI, acsetup itself and the
 resource bundles of a run can work together is judged from what each declares, not from a list
@@ -708,8 +710,10 @@ of release pairs. A build manifest's `interfaces` object (a bundle's optional zi
 writer writes `max`. The vocabulary, the bump rule and the two checks are the Runtime's
 `contracts/component-interfaces.md`: data one component writes and others read (`ledger`,
 `install-selection`, `package`) passes when the writer's `max` lies in each reader's range; a
-live exchange (`actingd-config`, `install-control`, `runtime-client`) passes when the two
-ranges meet, and uses the highest common revision. acsetup's own declaration is
+live exchange (`install-control`, `runtime-client`) passes when the two ranges meet, and uses
+the highest common revision. The Runtime's configuration (`actingd-config`) has three parties:
+acsetup writes it, the console edits it and the Runtime reads it, so the three need one
+revision they all speak; two pairwise checks are not enough. acsetup's own declaration is
 `crates/acui-setup/component-interfaces.json`, compiled into acsetup and written into the UI
 manifest by the build; it follows the Runtime crates this UI is built on. Releases built
 before declarations (Runtime and UI v0.11.0 to v0.11.2) are read from a built-in table, and any
@@ -809,8 +813,8 @@ change, it prepares a new generation, qualifies the whole chain, runs the select
 commits, and starts it again when it was running. A difference in path spelling alone is no change.
 The summary names the zip, the packs placed and reused, every binding changed, the generation (or
 "configuration unchanged"), the Runtime and the unchanged programs and slot. `--plan` runs the same
-checks and writes nothing under the root. The coordinator's flow is
-`acsetup.exe --root F:\AC --resources <dir>\<bundle>.zip --plan`, then `--yes --conflicts new`.
+checks and writes nothing under the root. A typical run is
+`acsetup.exe --root <root> --resources <dir>\<bundle>.zip --plan`, then `--yes --conflicts new`.
 In the wizard, step 0 offers the tick "只更新资源（程序不变）/ Update resources only (programs
 unchanged)" on an A/B installation (on an old layout it says a full upgrade comes first). Next then
 makes the same checks as for an upgrade (the root, the rule against running from a program folder

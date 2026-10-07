@@ -490,14 +490,15 @@ Host 在同一生命周期准入下自然排空并提交正式原子关闭。acs
 排空、held、放行各用 60 秒 Host 期限；控制客户端最多等 75 秒，冷态验证客户端最多等 150 秒且 Runtime 自身限额仍有效。
 提交结果未知时查询原 transition，不重新提交；关闭不明确就停止切换，不结束结果未知的控制/维护进程。
 Host 的 released 结果才表示准备及本次原用户暂停恢复完成。原先停机的安装保持停机。
-acsetup 拉起 Runtime 一律照 `restart_actingd.ps1` 的做法（Workflow #364 裁定 X3）：经 WMI `Win32_Process.Create`、隐藏窗口，
-因此不属于任何应用作业，也不属于运行 acsetup 者的作业，也没有能被关掉的窗口；`cmd.exe` 把它的输出追加到 `<安装根>\actingd-<时间>.log`。
-拉起的 actingd 读取刚提交的选择。
+acsetup 拉起 Runtime 一律用同一种方式（Workflow #364 裁定 X3）：由 WMI `Win32_Process.Create`（`Win32_ProcessStartup.ShowWindow = 0`）启动 `cmd.exe`，
+再由它运行 actingd，并把输出追加到 `<安装根>\actingd-<时间>.log`。因此 Runtime 窗口隐藏，不属于任何应用作业，也不属于运行 acsetup 者的作业，
+也没有能被关掉的窗口。拉起的 actingd 读取刚提交的选择；它一启动就退出时，acsetup 的报错带上日志里的 FATAL 行。
 
 **组件接口**（Workflow #364）：Runtime、UI、acsetup 自己和本次用到的标准包能否搭配，按各自的声明判断，不再按写死的版本对。
 构建清单的 `interfaces` 对象（标准包则是 zip 根目录下可选的 `interfaces.json`）按接口写明该组件能读的修订区间 `[min, max]`，写方写 `max`。
 词表、升版规则和两种检查见 Runtime 的 `contracts/component-interfaces.md`：一方写、他方读的数据（`ledger`、`install-selection`、`package`）
-要求写方的 `max` 落在每个读方的区间里；活的交互（`actingd-config`、`install-control`、`runtime-client`）要求两个区间相交，取最高公共修订。
+要求写方的 `max` 落在每个读方的区间里；活的交互（`install-control`、`runtime-client`）要求两个区间相交，取最高公共修订。
+Runtime 的配置（`actingd-config`）涉及三方：acsetup 写、控制台改、Runtime 读，所以三方须有一个都能说的共同修订，两两核对不够。
 acsetup 自己的声明是 `crates/acui-setup/component-interfaces.json`，编进 acsetup，也由构建写进 UI 清单；它随本 UI 所钉的 Runtime crate 一起变。
 声明出现之前的发布件（Runtime 与 UI 的 v0.11.0 至 v0.11.2）按内置表识别，其它未声明的程序一律拒绝；没有 `interfaces.json` 的标准包按 `package` [1, 1]。
 全新安装、首次迁移和 A/B 升级在提任何问题、改任何东西之前，核对发布件的 Runtime 与 UI 彼此之间、与要接手的 Runtime 之间、与 acsetup 之间是否相容；
@@ -558,8 +559,8 @@ $null = $p.Handle; $p.WaitForExit(); exit $p.ExitCode
 既无新包又无绑定变化就停下：无需改动。否则逐个经 `<摘要>.part` 放入新包；绑定没有变化时到此为止——不生成新代际、不重启。
 绑定有变化时，准备新的配置代际、校验整条链、跑选中槽的 `check-config`，关闭 Runtime（在运行就排空并原子关闭，不在运行就过冷态门），
 提交，原先在运行的再拉起。只是路径写法不同不算变化。摘要写出 zip、新放入与复用的包数、每一项改变的绑定、选中的代际（或"配置不变"）、
-Runtime 的情况以及未变的程序与槽。`--plan` 做同样的检查，安装根下不写任何东西。协调方的流程是
-`acsetup.exe --root F:\AC --resources <目录>\<标准包>.zip --plan`，再 `--yes --conflicts new`。
+Runtime 的情况以及未变的程序与槽。`--plan` 做同样的检查，安装根下不写任何东西。典型用法是
+`acsetup.exe --root <安装根> --resources <目录>\<标准包>.zip --plan`，再 `--yes --conflicts new`。
 在向导里，A/B 安装的第 0 步多一个勾选「只更新资源（程序不变）/ Update resources only (programs unchanged)」（旧布局则说明须先完整升级一次）。
 勾选后点下一步，做与升级相同的检查（安装根、不得从这份安装的程序目录运行、日志、上次留下的临时目录），进入第 7 步「只更新资源 / Update resources」：
 填标准包 zip 的绝对路径，可另填一个 `SHA256SUMS`，点「更新资源 / Update resources」。运行与命令行相同，关联页（第 5 步）与冲突页（第 6 步）回答它的问题；
