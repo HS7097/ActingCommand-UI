@@ -818,9 +818,10 @@ checks and writes nothing under the root. A typical run is
 In the wizard, step 0 offers the tick "只更新资源（程序不变）/ Update resources only (programs
 unchanged)" on an A/B installation (on an old layout it says a full upgrade comes first). Next then
 makes the same checks as for an upgrade (the root, the rule against running from a program folder
-of it, the log, leftover staging) and opens step 7, "只更新资源 / Update resources": the bundle zip's
-absolute path, optionally another `SHA256SUMS`, and "更新资源 / Update resources". The run is the
-command line's, with the association page (step 5) and the conflict page (step 6) answering its
+of it, the log) and opens step 7, "只更新资源 / Update resources": the bundle zip's absolute
+path, optionally another `SHA256SUMS`, and "更新资源 / Update resources". The run is the command
+line's: it takes the writer lock before it clears leftover staging, and the association page
+(step 5) and the conflict page (step 6) answer its
 questions; Cancel on either changes nothing. The window cannot be closed until the run has ended.
 Success leads to the finish page with the summary above and "启动监控台 / Open console", which
 starts the console through the installation's fixed entry; a failure page says what stands.

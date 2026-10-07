@@ -582,7 +582,8 @@ fn next(window: &SetupWindow, state: &Shared) {
 
 /// Step 0 → 7 (Workflow #364): a resource-only update. The checks `enter_get` makes — an
 /// absolute root, here an A/B installation, the rule against running from a program folder of
-/// it — then the log and leftover staging; no release is looked up.
+/// it — then the log; no release is looked up. Leftover staging is cleared by the run itself,
+/// once it holds the writer lock (`begin_resources`, review F-UI2-1).
 fn enter_resources(window: &SetupWindow, state: &Shared) {
     let root = PathBuf::from(window.get_install_root().as_str());
     let checked = match root.is_absolute() {
@@ -633,8 +634,7 @@ fn enter_resources(window: &SetupWindow, state: &Shared) {
             &format!("离线版自带的发布件 {tag} 此时不用 / The offline edition's carried release {tag} is not used"),
         ),
         None => Ok(()),
-    })
-    .and_then(|()| clear_staging(state, &root));
+    });
     if let Err(reason) = started {
         fail(state, &window.as_weak(), reason);
         return;
@@ -645,8 +645,9 @@ fn enter_resources(window: &SetupWindow, state: &Shared) {
     window.set_can_next(true);
 }
 
-/// Step 7, one worker from start to end (Workflow #364): the bundle checked, staged and
-/// admitted, its packs compared with the installed ones, its bindings planned — the
+/// Step 7, one worker from start to end (Workflow #364): the writer lock taken before leftover
+/// staging is cleared (model step 1, review F-UI2-1) and held to the end, the bundle checked,
+/// staged and admitted, its packs compared with the installed ones, its bindings planned — the
 /// association and conflict pages as for an upgrade, where Cancel changes nothing — then the
 /// new packs placed and, when bindings change, a new generation committed with the Runtime
 /// closed and started again. Success goes to the finish page.
@@ -687,16 +688,31 @@ fn begin_resources(window: &SetupWindow, state: &Shared) {
         let mut report = PageReport::new(&state, &worker_weak);
         // The window stays open until the run has ended, its staging removed.
         let held = Held::new(&state);
+        // 1. The writer lock before anything under the root is removed: a run that holds the
+        // lock never has its staging cleared away by this one (review F-UI2-1).
+        let writer = generations::Writer::acquire(&root).and_then(|writer| {
+            clear_staging(&state, &root)?;
+            Ok(writer)
+        });
+        let writer = match writer {
+            Ok(writer) => writer,
+            Err(reason) => {
+                drop(held);
+                fail(&state, &worker_weak, reason);
+                return;
+            }
+        };
         let outcome = {
             let mut choose = |association: &maintenance::Association| {
                 let labels = association.options.iter().map(|option| option.label.clone()).collect();
                 ask(&state, &worker_weak, association.question.clone(), labels).map(Some)
             };
             let mut resolve = |conflicts: &[maintenance::Conflict]| resolve_page(&state, &worker_weak, conflicts);
-            resources::run(&root, &zip, sums.as_deref(), &staging, &mut choose, &mut resolve, &mut report)
+            resources::run(&writer, &zip, sums.as_deref(), &staging, &mut choose, &mut resolve, &mut report)
         };
         // The run has ended: its staging goes, whatever the outcome (Workflow #364 Q5).
         let removed = remove_staging(&staging, &mut report);
+        drop(writer);
         drop(held);
         if let Err(reason) = removed {
             fail(&state, &worker_weak, reason);
