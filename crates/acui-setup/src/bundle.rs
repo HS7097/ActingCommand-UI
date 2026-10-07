@@ -70,7 +70,23 @@ pub struct Bundle {
     /// The zip root's optional `interfaces.json`, as bytes: the `package` revision its packs
     /// need (Workflow #364). `interfaces` reads it; without it a bundle is `package` [1, 1].
     pub interfaces: Option<Vec<u8>>,
+    /// `bundle.json`'s format, `v1`, `v2` or `v3`, as the log says it.
+    pub format: &'static str,
+    /// `bundle.json`'s `source`, `<repository>@<commit>`, when it names one.
+    pub source: Option<String>,
 }
+
+/// What laying out a content directory does with one already there that differs from its
+/// pack: an upgrade and the instances step set it aside as `<digest>.broken-<unix>`; a
+/// resource-only update refuses (Workflow #364, ruling Q4) — the Runtime may be using it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum OnDiffers {
+    SetAside,
+    Refuse,
+}
+
+/// The way out of a refused present-but-different pack directory (review L7).
+pub const DIFFERS_REMEDY: &str = "请手动把它改名移开（不要删除），或做一次完整升级（升级会把它改名保留），再运行 / Rename it aside by hand (never delete it), or run a full upgrade, which sets it aside, then run again";
 
 #[derive(Deserialize, Clone)]
 pub struct Pack {
@@ -266,6 +282,8 @@ pub fn read(file: &Path) -> Result<Bundle, String> {
         directories: false,
         maintenance: None,
         interfaces,
+        format: "v1",
+        source: None,
     })
 }
 
@@ -286,10 +304,14 @@ fn read_directories(archive: &mut zip::ZipArchive<File>, file: &Path, index: &[u
     index.validate().map_err(|error| {
         format!("{} 内 bundle.json 无效 / invalid bundle.json: {}", file.display(), error.code())
     })?;
-    let (game, listed_packs, maintenance) = match index {
-        BundleIndex::V2(index) => (index.game, index.packs, None),
-        BundleIndex::V3(index) => (index.game.clone(), index.packs.clone(), Some(index)),
+    let (game, listed_packs, maintenance, format, source) = match index {
+        BundleIndex::V2(index) => (index.game, index.packs, None, "v2", index.source),
+        BundleIndex::V3(index) => {
+            let source = index.source.clone();
+            (index.game.clone(), index.packs.clone(), Some(index), "v3", source)
+        }
     };
+    let source = source.map(|source| format!("{}@{}", source.repository, source.commit));
     let applications = read_applications(archive, file)?;
     let interfaces = member(archive, file, "interfaces.json")?;
     if applications.schema_version != APPLICATIONS_SCHEMA {
@@ -340,6 +362,8 @@ fn read_directories(archive: &mut zip::ZipArchive<File>, file: &Path, index: &[u
         directories: true,
         maintenance,
         interfaces,
+        format,
+        source,
     })
 }
 
@@ -355,10 +379,16 @@ impl Bundle {
 
     /// Every pack laid out under `dir` byte for byte, once its size and sha256
     /// match `bundle.json`; returns where each landed, by its path in the zip.
-    /// A bundle v2 lays out content directories instead (`lay_out_directories`).
-    pub fn lay_out(&self, dir: &Path, report: Report<'_>) -> Result<BTreeMap<String, PathBuf>, String> {
+    /// A bundle v2 lays out content directories instead (`lay_out_directories`),
+    /// and `on_differs` says what to do with one already there that differs.
+    pub fn lay_out(
+        &self,
+        dir: &Path,
+        on_differs: OnDiffers,
+        report: Report<'_>,
+    ) -> Result<BTreeMap<String, PathBuf>, String> {
         if self.directories {
-            return self.lay_out_directories(dir, report);
+            return self.lay_out_directories(dir, on_differs, report);
         }
         let mut archive = open(&self.file)?;
         fs::create_dir_all(dir).map_err(|error| format!("无法创建 / cannot create {}: {error}", dir.display()))?;
@@ -432,8 +462,14 @@ impl Bundle {
     /// pack is unpacked again. Each is unpacked into `<digest>.part\` and
     /// renamed only once what was written has the pack's digest; a failed one
     /// is set aside the same way and said. Other directories and zips under
-    /// `dir`, older packs among them, are left as they are.
-    fn lay_out_directories(&self, dir: &Path, report: Report<'_>) -> Result<BTreeMap<String, PathBuf>, String> {
+    /// `dir`, older packs among them, are left as they are. With `OnDiffers::Refuse` a
+    /// directory that differs stops the layout instead, untouched and named.
+    fn lay_out_directories(
+        &self,
+        dir: &Path,
+        on_differs: OnDiffers,
+        report: Report<'_>,
+    ) -> Result<BTreeMap<String, PathBuf>, String> {
         let mut archive = open(&self.file)?;
         fs::create_dir_all(dir).map_err(|error| format!("无法创建 / cannot create {}: {error}", dir.display()))?;
         report.step(Step::Phase(
@@ -453,6 +489,14 @@ impl Bundle {
                     report.step(Step::Done(done as u64 + 1))?;
                     laid.insert(pack.path.clone(), target);
                     continue;
+                }
+                Present::Differs(why) if on_differs == OnDiffers::Refuse => {
+                    return Err(format!(
+                        "{MISMATCH}: {} 已存在，但与包的摘要 {} 不符（{why}）；只更新资源不挪动它 / exists but does not match the pack's digest {} ({why}); a resource-only update does not move it. {DIFFERS_REMEDY}",
+                        target.display(),
+                        pack.sha256,
+                        pack.sha256
+                    ));
                 }
                 Present::Differs(why) => {
                     let kept = set_aside(&target, &pack.sha256)?;
@@ -483,6 +527,28 @@ impl Bundle {
             laid.insert(pack.path.clone(), target);
         }
         Ok(laid)
+    }
+}
+
+impl Bundle {
+    /// Each pack's content directory against what `dir` already holds, each read whole
+    /// (Workflow #364 resource-only step 6): how many are there and equal, how many are new,
+    /// and every one there that differs, named with why. Nothing is changed.
+    pub fn presence(&self, dir: &Path) -> Result<(usize, usize, Vec<String>), String> {
+        let (mut equal, mut absent, mut differs) = (0, 0, Vec::new());
+        for pack in &self.packs {
+            let target = dir.join(&pack.sha256);
+            match present(&target, &pack.sha256)? {
+                Present::Absent => absent += 1,
+                Present::Equal => equal += 1,
+                Present::Differs(why) => differs.push(format!(
+                    "{}（应为 / should be {}；{why}）",
+                    target.display(),
+                    pack.sha256
+                )),
+            }
+        }
+        Ok((equal, absent, differs))
     }
 }
 

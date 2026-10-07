@@ -16,7 +16,7 @@ use actingcommand_execution_kernel::{
 };
 use serde_json::{json, Value};
 
-use crate::bundle::Bundle;
+use crate::bundle::{Bundle, OnDiffers};
 use crate::verify::{Report, Step};
 
 const READ_LIMIT: u64 = 16 << 20;
@@ -129,7 +129,7 @@ pub fn prepare(
     let deadline = Instant::now() + ADMISSION_BUDGET;
     let mut prepared = Vec::new();
     for (at, bundle) in bundles.iter().enumerate() {
-        let paths = bundle.lay_out(&staging.join(at.to_string()), report)?;
+        let paths = bundle.lay_out(&staging.join(at.to_string()), OnDiffers::SetAside, report)?;
         if let Some(index) = &bundle.maintenance {
             let mut actual = Vec::new();
             for pack in &index.packs {
@@ -166,9 +166,16 @@ pub fn prepare(
     Ok(prepared)
 }
 
-pub fn place(prepared: &[Prepared], root: &Path, report: Report<'_>) -> Result<(), String> {
+/// Lays the staged bundles out under `<root>\packages\<game>\`; `on_differs` says what a
+/// present-but-different content directory gets (`bundle::OnDiffers`).
+pub fn place(
+    prepared: &[Prepared],
+    root: &Path,
+    on_differs: OnDiffers,
+    report: Report<'_>,
+) -> Result<(), String> {
     for item in prepared {
-        item.bundle.lay_out(&package_dir(root, item), report)?;
+        item.bundle.lay_out(&package_dir(root, item), on_differs, report)?;
     }
     report.line("已验证的新资源将保留；旧资源保留 / Verified new resources are retained; old resources are kept")
 }
@@ -384,7 +391,7 @@ impl Conflict {
 
 /// A binding in one line: its plain path and the first twelve digits of its
 /// digest, or its package id.
-fn brief(value: &Value) -> String {
+pub(crate) fn brief(value: &Value) -> String {
     let path = value
         .get("package")
         .or_else(|| value.get("package_path"))
@@ -759,6 +766,17 @@ fn plain_paths(value: &mut Value) {
             value[key] = json!(plain);
         }
     }
+}
+
+/// Whether two binding values are one binding however their paths are spelled: with or
+/// without the `\\?\` prefix, either separator, any ASCII case (Workflow #364, review L5). A
+/// string is a path (`resource_package`); an object is a binding.
+pub(crate) fn same_binding(left: &Value, right: &Value, root: &Path) -> bool {
+    let neutral = |value: &Value| match value.as_str() {
+        Some(path) => json!(comparable(&resolve(root, path))),
+        None => normalized(value, root),
+    };
+    neutral(left) == neutral(right)
 }
 
 fn normalized(value: &Value, root: &Path) -> Value {

@@ -696,6 +696,12 @@ seconds around the Runtime's existing limits. Unknown submissions are not repeat
 queries the original transition. Unresolved closure stops the switch. It does not kill an
 unresolved control/maintenance process. The Host's released result confirms preparation and
 this transition's original user-pause restoration. A previously stopped Runtime stays stopped.
+acsetup starts every Runtime in one way (Workflow #364, ruling X3): WMI `Win32_Process.Create`,
+with `Win32_ProcessStartup.ShowWindow = 0`, starts `cmd.exe`, which runs actingd and appends its
+output to `<root>\actingd-<time>.log`. The Runtime therefore has a hidden window, belongs to no
+app job and not to the job of whatever ran acsetup, and no window can be closed under it. The
+started actingd reads the selection just committed. When it ends at once, acsetup's error
+quotes the log's FATAL line.
 
 **Component interfaces** (Workflow #364): whether a Runtime, a UI, acsetup itself and the
 resource bundles of a run can work together is judged from what each declares, not from a list
@@ -776,6 +782,45 @@ Incomplete restoration retains recovery materials and leaves Runtime stopped. Af
 start attempt, the selected generation and entire ledger remain in place. Any explicit later
 rollback rechecks the latest data. Unconfirmed closure never starts a second Runtime.
 
+**Command line** (Workflow #359): any argument but `--commit-config`, `--rollback` and
+`--replace-manager` runs acsetup without its window. `acsetup --root <root> (--plan | --yes)
+[--conflicts new|old] [--associate <alias>=<bundle>/<server>]… [--allow-downgrade] [--online |
+--from <folder>]` installs or upgrades; every question the wizard would ask is answered by a flag,
+and a question without its flag stops before anything changes. `--plan` lists every change and
+difference and writes nothing under the root: its log and its scratch copy go to `%TEMP%`. Exit
+codes: 0 done, 1 failed, 2 usage, 3 binding differences without `--conflicts`, 4 a downgrade without
+`--allow-downgrade`, 5 an association without `--associate`, 6 incompatible interfaces (see
+"Component interfaces"); 2 to 6 stop before the installation changes. `acsetup --help` prints the
+whole list.
+
+**Resource-only update** (Workflow #364): `acsetup --root <root> --resources <bundle.zip> [--sums
+<SHA256SUMS>] (--plan | --yes) [--conflicts new|old] [--associate …]` puts one resource repository
+bundle (v2 or v3; a v1 bundle needs a full upgrade) into an existing A/B installation and changes
+neither the programs nor the slot. Neither `--online`, `--from` nor `--allow-downgrade` goes with it;
+both editions take it, and the offline edition's carried release is then not used. Under the writer
+lock it checks the zip against its line in the `SHA256SUMS` beside it (or `--sums`), reads the
+bundle, checks the interfaces of the selected slot's programs, acsetup and the bundle, stages and
+admits every pack (and qualifies a v3 maintenance declaration), and compares every pack with
+`packages\<game>\<digest>\`: present and equal is reused, absent is new, and present but different
+stops the run with nothing changed — such a directory is never moved or deleted; rename it aside by
+hand or run a full upgrade, which sets it aside. It then plans the bindings the bundle declares
+(startup, prerequisite, return-home) with the same association and conflict rules as an upgrade
+(exit codes 5 and 3 without their flags), and lists every binding that changes. With no new pack and
+no binding change it stops: nothing to do. Otherwise it places the new packs, each through
+`<digest>.part`; when no binding changes, that is all — no new generation, no restart. When bindings
+change, it prepares a new generation, qualifies the whole chain, runs the selected slot's
+`check-config`, closes the Runtime (drain and atomic shutdown when it runs, the cold gate when not),
+commits, and starts it again when it was running. A difference in path spelling alone is no change.
+The summary names the zip, the packs placed and reused, every binding changed, the generation (or
+"configuration unchanged"), the Runtime and the unchanged programs and slot. `--plan` runs the same
+checks and writes nothing under the root. A typical run is
+`acsetup.exe --root <root> --resources <dir>\<bundle>.zip --plan`, then `--yes --conflicts new`.
+
+**Temporary directories**: each run removes its own `.staging-<time>` (the instances step's
+`.staging-resources-<time>`, `--replace-manager`'s `install\manager-source-<time>`) once it has
+ended, whether it succeeded or not, and logs it; one it cannot remove is a note in the summary and
+is removed when the next run starts, as is one a killed run left behind.
+
 **Fixed management entry**: `<root>/ui/acsetup.exe` retains its own original build manifest and
 MEMBERS in `install/manager`; business-slot rollback keeps it. To replace it, close the fixed
 manager (every `<root>/ui/acsetup.exe` window) and run any verified, unmodified copy of the
@@ -824,8 +869,8 @@ offline one back independently.
 **Things it never does**: it does not install a service, does not create a scheduled task, does not change
 PATH, does not write the registry; does not modify the configuration template; does not touch a state root
 that already holds content; goes on the network only to list and fetch the umbrella release — the
-offline edition not at all; stops or starts the Runtime only on an upgrade and in the
-instances step, as above;
+offline edition not at all; stops or starts the Runtime only on an upgrade, in the
+instances step and in a resource-only update whose bindings change, as above;
 does not unpack a sealed resource pack — the Runtime loads it (a v1 bundle's packs are taken out whole; a v2 bundle's packs are content directories, laid out file by file as above). On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
 immediately with `acsetup v1 is Windows-only`.
 

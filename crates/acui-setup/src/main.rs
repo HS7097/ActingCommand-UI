@@ -35,6 +35,7 @@ mod maintenance;
 mod migration;
 mod payload;
 mod platform;
+mod resources;
 mod root_tools;
 mod runtime;
 mod slots;
@@ -1005,6 +1006,30 @@ fn clear_staging(state: &Shared, root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// A run's own staging directory, removed once the run has ended — succeeded or failed — and
+/// after its last use (Workflow #364, ruling Q5): nothing ever runs from it and nothing recovers
+/// from it. A removal that fails is a note for the summary, and the run's result stands; a run
+/// that was killed leaves it to `clear_staging` at the next start.
+fn remove_staging(staging: &Path, report: Report<'_>) -> Result<(), String> {
+    match staging.try_exists() {
+        Ok(false) => return Ok(()),
+        Ok(true) => {}
+        Err(error) => {
+            return report.warn(&format!(
+                "临时目录无法检查 / staging cannot be inspected: {}: {error}",
+                staging.display()
+            ))
+        }
+    }
+    match std::fs::remove_dir_all(staging) {
+        Ok(()) => report.line(&format!("临时目录已删除 / staging removed: {}", staging.display())),
+        Err(error) => report.warn(&format!(
+            "临时目录未能删除，下次运行开始时再删 / staging not removed; the next run removes it when it starts: {}: {error}",
+            staging.display()
+        )),
+    }
+}
+
 /// The install step's choice: a folder is taken as it is; the online path needs a
 /// release, looked up once.
 fn offline_toggled(window: &SetupWindow, state: &Shared, offline: bool) {
@@ -1312,6 +1337,11 @@ fn begin_install(window: &SetupWindow, state: &Shared) {
                 }
                 Ok(done)
             });
+        // The run has ended: its staging goes, whatever the outcome (Workflow #364 Q5).
+        if let Err(reason) = remove_staging(&staging, &mut report) {
+            fail(&state, &worker_weak, reason);
+            return;
+        }
         match outcome {
             Ok((laid_out, upgraded, members, configured)) => {
                 let mut locked = lock(&state);
@@ -1344,9 +1374,17 @@ const LAID: [&str; 3] = ["runtime", "ui", "tools"];
 
 /// Preserve failed preparation and report the selected installation's recovery boundary.
 fn left_behind(mut reason: String, root: &Path, staging: &Path, _upgrading: bool, _existed: [bool; 3]) -> String {
+    // The run removed its staging when it ended (`remove_staging`); say what came of it.
+    let staging = match staging.try_exists() {
+        Ok(false) => format!("本次的临时目录已删除 / this run's staging was removed: {}", staging.display()),
+        _ => format!(
+            "本次的临时目录未能删除，下次运行开始时删除并记入日志 / this run's staging was not removed; the next run removes it, and logs it, when it starts: {}",
+            staging.display()
+        ),
+    };
     reason.push_str(&format!(
-        "\n安装材料与备份保留 / Installation materials and backups retained: {}; 临时目录 {} 会在下次运行开始时删除并记入日志 / the staging directory {} is removed, and logged, when the next run starts. 当前选择以 install/active.json 为准，启动结果未知时先核实际 owner / Consult the active selection and actual owner before recovery",
-        root.display(), staging.display(), staging.display()
+        "\n安装材料与备份保留 / Installation materials and backups retained: {}; {staging}. 当前选择以 install/active.json 为准，启动结果未知时先核实际 owner / Consult the active selection and actual owner before recovery",
+        root.display()
     ));
     reason
 }
@@ -1862,7 +1900,7 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
             let planned_state_root = transaction.state_root()?;
             transaction.unchanged()?;
             let closed = instance_step::stop(&root, &planned_state_root, &mut report)?;
-            let committed = maintenance::place(&prepared, &root, &mut report)
+            let committed = maintenance::place(&prepared, &root, bundle::OnDiffers::SetAside, &mut report)
                 .and_then(|()| transaction.commit(&root.join("runtime").join(runtime::ACTINGD), qualify, &mut report));
             if let Err(reason) = committed {
                 return Err(match transaction.restore() {
@@ -1875,6 +1913,12 @@ fn begin_apply(window: &SetupWindow, state: &Shared) {
             }
             Ok((chosen, closed))
         });
+        // The packs are placed, or the plan stopped: staging has served (Workflow #364 Q5).
+        if let Err(reason) = remove_staging(&staging, &mut report) {
+            drop(held);
+            fail(&state, &worker_weak, reason);
+            return;
+        }
         let (chosen, closed) = match written {
             Ok(done) => done,
             Err(reason) => {

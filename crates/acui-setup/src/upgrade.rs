@@ -201,7 +201,7 @@ pub fn upgrade(
     )?;
     let vision = vision_migration::plan(root, &planned.document)?;
     slots::materialize(&writer, target, verified, report)?;
-    maintenance::place(&planned.prepared, root, report)?;
+    maintenance::place(&planned.prepared, root, crate::bundle::OnDiffers::SetAside, report)?;
     let mut document = planned.document;
     if let Some(vision) = &vision {
         vision.apply(report)?;
