@@ -20,7 +20,10 @@ use crate::maintenance::{self, Association, Conflict, Side};
 use crate::payload::{self, Payload};
 use crate::upgrade::{self, Installed};
 use crate::verify::{self, Reporter, Step};
-use crate::{bundle, install, interfaces, lifecycle, platform, root_tools, runtime, vision_migration};
+use crate::{
+    bundle, install, interfaces, lifecycle, platform, resources, root_tools, runtime,
+    vision_migration,
+};
 use crate::{lock, write_log, Shared, State};
 
 pub const DONE: i32 = 0;
@@ -36,6 +39,8 @@ const HELP: &str = "acsetup — ActingCommand 安装与升级 / installation and
 
 用法 / Usage:
   acsetup --root <安装根 / install root> (--plan | --yes) [选项 / options]
+  acsetup --root <安装根 / install root> --resources <标准包 / bundle zip> (--plan | --yes)
+          [--sums <文件 / file>] [--conflicts new|old] [--associate …]
 
   --root <路径 / path>      安装根的绝对路径（必填）/ the absolute installation root (required)
   --plan                    只列出将做的改动与全部差异，安装根下不改任何文件
@@ -49,10 +54,19 @@ const HELP: &str = "acsetup — ActingCommand 安装与升级 / installation and
                             / allow an earlier release, or one whose order cannot be proved
   --online                  在线版：从伞仓取最新的发布件 / online installer: fetch the newest umbrella release
   --from <文件夹 / folder>  在线版：用已下载的发布件文件夹 / online installer: use a folder of downloaded release files
+  --resources <zip>         只更新资源：把一个资源仓标准包（bundle v2/v3）放进已有的 A/B 安装，按它的维护声明更新绑定、
+                            生成新的配置代际；不换程序、不切槽 / resource-only update: one resource bundle (v2/v3) into an
+                            existing A/B installation, bindings updated from its maintenance declaration, a new configuration
+                            generation; programs and slot unchanged
+  --sums <文件 / file>      该标准包的 SHA256SUMS（默认取 zip 所在文件夹里的 SHA256SUMS）
+                            / its SHA256SUMS (default: the SHA256SUMS beside the zip)
   --help                    本说明 / this text
 
 离线完整版只用自带的发布件，不接受 --online 与 --from。
 The offline full installer uses only the release it carries and takes neither --online nor --from.
+--resources 不与 --online、--from、--allow-downgrade 同用；两种版本都接受它，离线版自带的发布件此时不用。
+--resources takes none of --online, --from and --allow-downgrade; both editions take it, and the offline
+edition's carried release is then not used.
 
 退出码 / Exit codes:
   0 完成 / done            1 失败 / failed          2 用法 / usage
@@ -83,6 +97,9 @@ struct Args {
     source: Source,
     /// `(alias, "<bundle>/<server>")`, one per alias.
     associate: Vec<(String, String)>,
+    /// `--resources <zip>`: a resource-only update (Workflow #364), and its `--sums`.
+    resources: Option<PathBuf>,
+    sums: Option<PathBuf>,
 }
 
 fn say(text: &str) {
@@ -116,6 +133,7 @@ fn parse(arguments: &[String]) -> Result<Option<Args>, String> {
     let (mut plan, mut yes, mut allow_downgrade, mut online) = (false, false, false, false);
     let mut conflicts: Option<Side> = None;
     let mut from: Option<PathBuf> = None;
+    let (mut resources, mut sums): (Option<PathBuf>, Option<PathBuf>) = (None, None);
     let mut associate: Vec<(String, String)> = Vec::new();
     let mut at = 0;
     while at < arguments.len() {
@@ -158,6 +176,14 @@ fn parse(arguments: &[String]) -> Result<Option<Args>, String> {
                 once(from.is_some(), flag)?;
                 from = Some(PathBuf::from(value(arguments, &mut at, flag)?));
             }
+            "--resources" => {
+                once(resources.is_some(), flag)?;
+                resources = Some(PathBuf::from(value(arguments, &mut at, flag)?));
+            }
+            "--sums" => {
+                once(sums.is_some(), flag)?;
+                sums = Some(PathBuf::from(value(arguments, &mut at, flag)?));
+            }
             "--associate" => {
                 let text = value(arguments, &mut at, flag)?;
                 let shaped = text.split_once('=').filter(|(alias, choice)| {
@@ -198,6 +224,27 @@ fn parse(arguments: &[String]) -> Result<Option<Args>, String> {
             )
         }
     };
+    match (&resources, &sums) {
+        (Some(zip), _) if !zip.is_absolute() => {
+            return Err(format!(
+                "--resources 必须是绝对路径 / --resources must be an absolute path: {}",
+                zip.display()
+            ))
+        }
+        (Some(_), _) if online || from.is_some() || allow_downgrade => {
+            return Err("--resources 不与 --online、--from、--allow-downgrade 同用 / --resources takes none of --online, --from and --allow-downgrade".into())
+        }
+        (None, Some(_)) => {
+            return Err("--sums 只与 --resources 同用 / --sums goes with --resources only".into())
+        }
+        (_, Some(file)) if !file.is_absolute() => {
+            return Err(format!(
+                "--sums 必须是绝对路径 / --sums must be an absolute path: {}",
+                file.display()
+            ))
+        }
+        _ => {}
+    }
     let source = match (online, from) {
         (false, None) => Source::Carried,
         (true, None) => Source::Online,
@@ -221,6 +268,8 @@ fn parse(arguments: &[String]) -> Result<Option<Args>, String> {
         allow_downgrade,
         source,
         associate,
+        resources,
+        sums,
     }))
 }
 
@@ -292,6 +341,14 @@ pub fn run() -> i32 {
             return FAILED;
         }
     };
+    // A resource-only update takes either edition; the carried release is not used.
+    if let Some(zip) = args.resources.clone() {
+        let carried = payload.map(|payload| payload.tag);
+        return match args.mode {
+            Mode::Plan => resources_plan(&args, &zip, carried),
+            Mode::Execute => resources_execute(&args, &zip, carried),
+        };
+    }
     match (&payload, &args.source) {
         (Some(_), Source::Carried) | (None, Source::Online) | (None, Source::From(_)) => {}
         (Some(_), _) => {
@@ -613,6 +670,9 @@ fn install_or_upgrade(
         }
         Ok(())
     })();
+    // The run has ended: its staging goes, whatever the outcome (Workflow #364 Q5);
+    // nothing runs from it and nothing recovers from it.
+    crate::remove_staging(&staging, report)?;
     if let Err(reason) = outcome {
         // A stop by a missing flag changed nothing worth recovering; anything
         // else says what was kept and where.
@@ -929,6 +989,232 @@ fn plan_logged(
     ))
 }
 
+/// `--resources <zip> --yes`: a resource-only update (Workflow #364), its log under the root.
+fn resources_execute(args: &Args, zip: &Path, carried: Option<String>) -> i32 {
+    let root = &args.root;
+    if let Err(reason) = resources::installation(root) {
+        say_error(&format!("失败 / FAILED: {reason}"));
+        return FAILED;
+    }
+    if let Some((name, dir)) = crate::running_from(root) {
+        say_error(&format!(
+            "本程序 {name} 正从这份安装的 {dir}\\ 里运行；请复制到别处再运行 / {name} runs from {dir}\\ of this installation: copy it elsewhere and run it from there"
+        ));
+        return USAGE;
+    }
+    let log = match InstallLog::create(root, log::unix_ms()) {
+        Ok(log) => log,
+        Err(error) => {
+            say_error(&format!(
+                "失败 / FAILED: 无法创建日志 / Cannot create the log: {}: {error}",
+                root.display()
+            ));
+            return FAILED;
+        }
+    };
+    let log_path = log.path().to_path_buf();
+    let state: Shared = Arc::new(Mutex::new(State::default()));
+    {
+        let mut locked = lock(&state);
+        locked.root = root.clone();
+        locked.log = Some(log);
+    }
+    let code = Cell::new(None);
+    let consulted = RefCell::new(BTreeSet::new());
+    let mut report = ConsoleReport {
+        state: Arc::clone(&state),
+        phase: String::new(),
+    };
+    match resources_logged(args, zip, carried, &state, &code, &consulted, &mut report) {
+        Ok(()) => DONE,
+        Err(reason) => {
+            let _ = write_log(&state, &format!("失败 / FAILED: {reason}"));
+            say_error(&format!(
+                "失败 / FAILED: {reason}\n日志 / Log: {}",
+                log_path.display()
+            ));
+            code.get().unwrap_or(FAILED)
+        }
+    }
+}
+
+fn resources_logged(
+    args: &Args,
+    zip: &Path,
+    carried: Option<String>,
+    state: &Shared,
+    code: &Cell<Option<i32>>,
+    consulted: &RefCell<BTreeSet<String>>,
+    report: &mut ConsoleReport,
+) -> Result<(), String> {
+    let root = &args.root;
+    report.line(&format!(
+        "acsetup {} · 命令行 / command line · 只更新资源 / resource-only update · 安装根 / install root: {}",
+        env!("CARGO_PKG_VERSION"),
+        root.display()
+    ))?;
+    if let Some(tag) = &carried {
+        report.line(&format!(
+            "离线版自带的发布件 {tag} 此时不用 / The offline edition's carried release {tag} is not used"
+        ))?;
+    }
+    let log_path = lock(state)
+        .log
+        .as_ref()
+        .map(|log| log.path().display().to_string())
+        .unwrap_or_default();
+    report.line(&format!("日志 / Log: {log_path}"))?;
+    crate::clear_staging(state, root)?;
+    let staging = root.join(format!(".staging-{}", log::unix_ms()));
+    let mut choose = |association: &Association| pick(args, association, code, consulted, None);
+    let mut resolve = |conflicts: &[Conflict]| answer(args, conflicts, code);
+    let outcome = {
+        // The whole run writes or may write: an interruption would leave it half done.
+        let _guard = platform::InterruptGuard::start();
+        resources::run(
+            root,
+            zip,
+            args.sums.as_deref(),
+            &staging,
+            &mut choose,
+            &mut resolve,
+            report,
+        )
+    };
+    // The run has ended: its staging goes, whatever the outcome (Workflow #364 Q5).
+    crate::remove_staging(&staging, report)?;
+    let outcome = refused(outcome, code)?;
+    for (alias, choice) in &args.associate {
+        if !consulted.borrow().contains(alias) {
+            report.warn(&format!(
+                "--associate {alias}={choice} 未被用到：该实例没有需要选择的资源关联 / was not used: no association question came up for that instance"
+            ))?;
+        }
+    }
+    let mut lines = vec![format!("安装根 / Install root: {}", root.display())];
+    lines.extend(resources::summary(&outcome));
+    lines.push(format!("日志 / Log: {log_path}"));
+    let warnings = lock(state).warnings.clone();
+    if !warnings.is_empty() {
+        lines.push(String::new());
+        lines.push("注意 / Note:".to_string());
+        lines.extend(warnings);
+    }
+    report.line(&lines.join("\n"))
+}
+
+/// `--resources <zip> --plan`: the resource-only update's checks and decisions, its log and
+/// staging under %TEMP%; nothing under the root is written (review M3).
+fn resources_plan(args: &Args, zip: &Path, carried: Option<String>) -> i32 {
+    let stamp = log::unix_ms();
+    let temp = std::env::temp_dir();
+    let scratch = temp.join(format!("acsetup-plan-{stamp}"));
+    let log = match InstallLog::create(&temp, stamp) {
+        Ok(log) => log,
+        Err(error) => {
+            say_error(&format!(
+                "失败 / FAILED: 无法创建计划日志 / Cannot create the plan's log in {}: {error}",
+                temp.display()
+            ));
+            return FAILED;
+        }
+    };
+    let log_path = log.path().to_path_buf();
+    let state: Shared = Arc::new(Mutex::new(State {
+        log: Some(log),
+        ..State::default()
+    }));
+    let code = Cell::new(None);
+    let consulted = RefCell::new(BTreeSet::new());
+    let open = RefCell::new(Vec::new());
+    let mut report = ConsoleReport {
+        state: Arc::clone(&state),
+        phase: String::new(),
+    };
+    let outcome = (|| -> Result<(), String> {
+        let root = &args.root;
+        report.line(&format!(
+            "acsetup {} · 计划 / plan：安装根下不改任何文件 / nothing under the install root changes · 只更新资源 / resource-only update · 安装根 / install root: {}",
+            env!("CARGO_PKG_VERSION"),
+            root.display()
+        ))?;
+        if let Some(tag) = &carried {
+            report.line(&format!(
+                "离线版自带的发布件 {tag} 此时不用 / The offline edition's carried release {tag} is not used"
+            ))?;
+        }
+        resources::installation(root)?;
+        let mut choose =
+            |association: &Association| pick(args, association, &code, &consulted, Some(&open));
+        let planned = refused(
+            resources::plan(
+                root,
+                zip,
+                args.sums.as_deref(),
+                &scratch.join("staging"),
+                &mut choose,
+                args.conflicts,
+                &mut report,
+            ),
+            &code,
+        )?;
+        let unanswered = open.borrow().len();
+        for text in open.borrow().iter() {
+            report.line(text)?;
+        }
+        let mut needed = vec!["--yes".to_string()];
+        if unanswered > 0 {
+            report.line(&format!(
+                "上面的差异列表不完整：{unanswered} 个实例的资源关联未回答，它们的维护绑定尚未计算 / The difference list above is incomplete: {unanswered} instance(s) have no answered association, and their maintenance bindings are not computed yet"
+            ))?;
+            needed.push(format!(
+                "--associate …（{unanswered} 个，见上 / {unanswered}, see above）"
+            ));
+        }
+        match (planned.conflicts, args.conflicts) {
+            (0, None) if unanswered > 0 => needed.push(
+                "（给出 --associate 后可能还需要 --conflicts new|old，请带上它们再运行一次 --plan / once the associations are given, --conflicts new|old may also be needed: run --plan again with them）".into(),
+            ),
+            (0, _) | (_, Some(_)) => {}
+            (_, None) => needed.push("--conflicts new|old".into()),
+        }
+        report.line(&format!(
+            "真实运行需要 / A real run needs: {}",
+            needed.join(" ")
+        ))
+    })();
+    if scratch.exists() {
+        match std::fs::remove_dir_all(&scratch) {
+            Ok(()) => {
+                let _ = report.line(&format!(
+                    "计划用的临时目录已删除 / The plan's scratch directory was removed: {}",
+                    scratch.display()
+                ));
+            }
+            Err(error) => {
+                let _ = report.warn(&format!(
+                    "计划用的临时目录未能删除 / The plan's scratch directory was not removed: {}: {error}",
+                    scratch.display()
+                ));
+            }
+        }
+    }
+    match outcome {
+        Ok(()) => {
+            say(&format!("日志 / Log: {}", log_path.display()));
+            DONE
+        }
+        Err(reason) => {
+            let _ = write_log(&state, &format!("失败 / FAILED: {reason}"));
+            say_error(&format!(
+                "失败 / FAILED: {reason}\n日志 / Log: {}",
+                log_path.display()
+            ));
+            code.get().unwrap_or(FAILED)
+        }
+    }
+}
+
 /// What a real run does with each entry already under the root.
 fn leftovers(
     root: &Path,
@@ -992,7 +1278,7 @@ fn leftovers(
                 "当前槽，不动 / the selected slot, untouched".to_string()
             }
             staging if staging.starts_with(".staging-") => {
-                "真实运行开始时删除并记入日志 / removed, and logged, when a real run starts".to_string()
+                "中断的运行留下的临时目录：真实运行开始时删除并记入日志 / left by an interrupted run: removed, and logged, when a real run starts".to_string()
             }
             _ => "不动 / left as is".to_string(),
         };

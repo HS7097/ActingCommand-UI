@@ -216,6 +216,227 @@ mod imp {
             .map(|_child| ())
     }
 
+    /// A program started hidden through WMI (`start_hidden`): the `cmd.exe` that keeps its
+    /// output in the log, and the program's own process, held open to see whether it exits.
+    pub struct Started {
+        pub launcher: u32,
+        pub pid: u32,
+        handle: *mut std::ffi::c_void,
+    }
+
+    impl Started {
+        /// The program's exit code once it has exited; `None` while it runs.
+        pub fn exited(&self) -> Result<Option<u32>, String> {
+            const WAIT_OBJECT_0: u32 = 0;
+            const WAIT_TIMEOUT: u32 = 0x102;
+            // SAFETY: `handle` is this struct's own open process handle.
+            match unsafe { WaitForSingleObject(self.handle, 0) } {
+                WAIT_TIMEOUT => Ok(None),
+                WAIT_OBJECT_0 => {
+                    let mut code = 0u32;
+                    // SAFETY: as above; `code` is a valid out pointer.
+                    if unsafe { GetExitCodeProcess(self.handle, &mut code) } == 0 {
+                        return Err(format!(
+                            "GetExitCodeProcess({}): {}",
+                            self.pid,
+                            io::Error::last_os_error()
+                        ));
+                    }
+                    Ok(Some(code))
+                }
+                other => Err(format!(
+                    "WaitForSingleObject({}) = {other}: {}",
+                    self.pid,
+                    io::Error::last_os_error()
+                )),
+            }
+        }
+    }
+
+    impl Drop for Started {
+        fn drop(&mut self) {
+            // SAFETY: closes this struct's own handle exactly once.
+            unsafe { CloseHandle(self.handle) };
+        }
+    }
+
+    /// `%SystemRoot%\<relative>`: a system program, never one found on PATH.
+    fn system_program(relative: &str) -> Result<PathBuf, String> {
+        let path = env_dir("SystemRoot")?.join(relative);
+        if !path.is_file() {
+            return Err(format!(
+                "缺少系统程序 / missing system program: {}",
+                path.display()
+            ));
+        }
+        Ok(path)
+    }
+
+    /// One argument as the C runtime reads it back: in quotes, each inner quote and the
+    /// backslashes before it escaped, trailing backslashes doubled.
+    fn quoted(argument: &str) -> String {
+        let mut out = String::from('"');
+        let mut backslashes = 0usize;
+        for character in argument.chars() {
+            if character == '\\' {
+                backslashes += 1;
+                continue;
+            }
+            let escaped = if character == '"' { backslashes * 2 + 1 } else { backslashes };
+            out.extend(std::iter::repeat_n('\\', escaped));
+            backslashes = 0;
+            out.push(character);
+        }
+        out.extend(std::iter::repeat_n('\\', backslashes * 2));
+        out.push('"');
+        out
+    }
+
+    fn base64(bytes: &[u8]) -> String {
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let value = (u32::from(chunk[0]) << 16)
+                | (u32::from(chunk.get(1).copied().unwrap_or(0)) << 8)
+                | u32::from(chunk.get(2).copied().unwrap_or(0));
+            for (at, shift) in [18u32, 12, 6, 0].into_iter().enumerate() {
+                out.push(match at <= chunk.len() {
+                    true => TABLE[((value >> shift) & 63) as usize] as char,
+                    false => '=',
+                });
+            }
+        }
+        out
+    }
+
+    /// Asks WMI to create the process and finds the program under its launcher. The command
+    /// line, the directory and the program's file name come in through the environment, so
+    /// nothing here is quoted twice; output is UTF-8.
+    const LAUNCH_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+    CommandLine = $env:ACSETUP_LAUNCH_COMMAND
+    CurrentDirectory = $env:ACSETUP_LAUNCH_DIRECTORY
+    ProcessStartupInformation = $startup
+}
+if ($result.ReturnValue -ne 0) { [Console]::Error.WriteLine("Win32_Process.Create returned $($result.ReturnValue)"); exit 3 }
+$launcher = [uint32]$result.ProcessId
+$deadline = (Get-Date).AddSeconds(20)
+while ($true) {
+    $children = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $launcher" |
+        Where-Object { $_.Name -ieq $env:ACSETUP_LAUNCH_NAME })
+    if ($children.Count -eq 1) { [Console]::Out.WriteLine("$launcher $($children[0].ProcessId)"); exit 0 }
+    if ($children.Count -gt 1) { [Console]::Error.WriteLine("launcher $launcher has $($children.Count) children named $env:ACSETUP_LAUNCH_NAME"); exit 4 }
+    if (-not (Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $launcher")) {
+        [Console]::Error.WriteLine("launcher $launcher ended before $env:ACSETUP_LAUNCH_NAME appeared"); exit 5
+    }
+    if ((Get-Date) -gt $deadline) { [Console]::Error.WriteLine("$env:ACSETUP_LAUNCH_NAME did not appear under launcher $launcher within 20 s"); exit 6 }
+    Start-Sleep -Milliseconds 100
+}
+"#;
+
+    /// Starts `program` with `arguments` as the coordinator's `restart_actingd.ps1` does
+    /// (Workflow #364, ruling X3): through WMI `Win32_Process.Create` with `ShowWindow = 0`,
+    /// so it belongs to no app job and no caller job, shows no window that could be closed,
+    /// and outlives acsetup and whatever started it. `cmd.exe` appends its standard output and
+    /// error to `log` (Fail Loud). Every path must be plain (no `\\?\` prefix) and free of `%`
+    /// and `"`; an argument holding a quote may hold only JSON's own characters, which `cmd`
+    /// leaves alone. Returns the program's own process, found as the launcher's child.
+    pub fn start_hidden(
+        program: &Path,
+        arguments: &[String],
+        directory: &Path,
+        log: &Path,
+    ) -> Result<Started, String> {
+        for path in [program, directory, log] {
+            let text = path.display().to_string();
+            if text.contains(['%', '"']) || text.starts_with(r"\\?\") {
+                return Err(format!(
+                    "路径不能交给 cmd.exe / the path cannot be handed to cmd.exe: {text}"
+                ));
+            }
+        }
+        for argument in arguments {
+            let plain = !argument.contains(['%', '"']);
+            let json = !argument.contains('%')
+                && argument
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_-.:,{}[]\"".contains(c));
+            if !plain && !json {
+                return Err(format!(
+                    "参数不能交给 cmd.exe / the argument cannot be handed to cmd.exe: {argument}"
+                ));
+            }
+        }
+        let name = program
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("No program file name: {}", program.display()))?;
+        let cmd = system_program(r"System32\cmd.exe")?;
+        let powershell = system_program(r"System32\WindowsPowerShell\v1.0\powershell.exe")?;
+        let mut line = format!(
+            "{} /d /s /c \"{}",
+            quoted(&cmd.display().to_string()),
+            quoted(&program.display().to_string())
+        );
+        for argument in arguments {
+            line.push(' ');
+            line.push_str(&quoted(argument));
+        }
+        line.push_str(&format!(" 1>>{} 2>&1\"", quoted(&log.display().to_string())));
+        let script: Vec<u8> = LAUNCH_SCRIPT
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let mut command = Command::new(&powershell);
+        command
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-EncodedCommand",
+            ])
+            .arg(base64(&script))
+            .env("ACSETUP_LAUNCH_COMMAND", &line)
+            .env("ACSETUP_LAUNCH_DIRECTORY", directory)
+            .env("ACSETUP_LAUNCH_NAME", name)
+            .current_dir(directory);
+        let output = crate::runtime::run_observed(&mut command, std::time::Duration::from_secs(60))?;
+        if !output.success {
+            return Err(format!(
+                "WMI 拉起失败 / the WMI start failed (exit {}): {} {}",
+                output.exit,
+                output.stdout.trim(),
+                output.stderr.trim()
+            ));
+        }
+        let pids: Vec<u32> = output
+            .stdout
+            .split_whitespace()
+            .map(str::parse)
+            .collect::<Result<_, _>>()
+            .map_err(|error| format!("WMI start output unreadable: {error}: {}", output.stdout.trim()))?;
+        let [launcher, pid] = pids[..] else {
+            return Err(format!("WMI start output unreadable: {}", output.stdout.trim()));
+        };
+        const SYNCHRONIZE: u32 = 0x0010_0000;
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        // SAFETY: a plain query for a handle to the process WMI reported; checked below.
+        let handle = unsafe { OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            return Err(format!(
+                "{name}（pid {pid}）已退出或无法观察 / has exited or cannot be observed: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(Started { launcher, pid, handle })
+    }
+
     /// Native resource occupancy includes loaded images and consumers whose
     /// launcher has exited. This session queries only; it never shuts down or
     /// restarts a process. `allowed` names processes the caller will close
@@ -342,6 +563,10 @@ mod imp {
             handler: Option<unsafe extern "system" fn(u32) -> i32>,
             add: i32,
         ) -> i32;
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
+        fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
+        fn GetExitCodeProcess(handle: *mut std::ffi::c_void, code: *mut u32) -> i32;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
     }
 
     const STD_INPUT_HANDLE: u32 = -10i32 as u32;
@@ -501,6 +726,26 @@ mod imp {
     }
 
     pub fn slot_files_unused(_paths: &[PathBuf], _allowed: &[u32]) -> Result<(), String> {
+        Err(WINDOWS_ONLY.into())
+    }
+
+    pub struct Started {
+        pub launcher: u32,
+        pub pid: u32,
+    }
+
+    impl Started {
+        pub fn exited(&self) -> Result<Option<u32>, String> {
+            Err(WINDOWS_ONLY.into())
+        }
+    }
+
+    pub fn start_hidden(
+        _program: &Path,
+        _arguments: &[String],
+        _directory: &Path,
+        _log: &Path,
+    ) -> Result<Started, String> {
         Err(WINDOWS_ONLY.into())
     }
 

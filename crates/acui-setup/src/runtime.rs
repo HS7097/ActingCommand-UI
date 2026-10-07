@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Runtime as the wizard drives it from outside, through its own programs
 //! only: `actingd check-config`, `actingctl status`, `request-shutdown` and
-//! `emulator discover`, and actingd itself started detached. Every child runs
-//! without a window, its output read whole, within a time limit.
+//! `emulator discover`, and actingd itself started hidden through WMI
+//! (`platform::start_hidden`). Every child runs without a window, its output
+//! read whole, within a time limit.
 
 use std::fs;
 use std::io::Read;
@@ -19,16 +20,10 @@ pub(crate) const ACTINGCTL: &str = "actingctl.exe";
 pub(crate) const CHECK_SCHEMA: &str = "actingcommand.actingd.check-config.v1";
 /// Checks use a bounded child lifetime. Installation controls use run_observed.
 pub(crate) const CHILD_TIMEOUT: Duration = Duration::from_secs(90);
-/// Windows `CREATE_NO_WINDOW` for the checks, `DETACHED_PROCESS` for the
-/// Runtime started again, which outlives the wizard.
+/// Windows `CREATE_NO_WINDOW` for the checks. The Runtime itself is started
+/// through WMI (ruling X3, `platform::start_hidden`), outside every job.
 #[cfg(windows)]
 pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-#[cfg(windows)]
-pub(crate) const DETACHED_PROCESS: u32 = 0x0000_0008;
-/// Windows `CREATE_BREAKAWAY_FROM_JOB`: the Runtime leaves the job object a
-/// caller may have put acsetup in, so waiting on that job ends with acsetup.
-#[cfg(windows)]
-pub(crate) const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
 /// Whether a Runtime runs on the state root: `runtime-info.json` there and
 /// the new `actingctl status` answered by it (`Ok`). Otherwise `Err`, with the

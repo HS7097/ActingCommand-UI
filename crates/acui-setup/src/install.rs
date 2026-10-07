@@ -312,15 +312,21 @@ pub fn replace_manager_from_entry(report: Report<'_>) -> Result<String, String> 
     let previous = acui_installation::manager_program(writer.root())?;
     let stamp = crate::log::unix_ms();
     let staging = root.join(format!("install/manager-source-{stamp}"));
-    let verified = crate::verify::run(&download, &staging, report)?;
-    let manifest = acui_installation::read_bounded(&verified.ui.dir.join(MANIFEST), acui_installation::MAX_MATERIAL_BYTES)?;
-    let candidate = verified.ui.dir.join("acsetup.exe");
-    acui_installation::verify_manager_material(&verified.members_document, &manifest, &candidate)?;
-    if crate::verify::sha256_file(&exe).map_err(|error| error.to_string())? != crate::verify::sha256_file(&candidate).map_err(|error| error.to_string())? {
-        return Err("External installer is not the exact management program in the verified release".into());
-    }
-    drop(previous);
-    let backup = replace_manager(&root, &verified, report)?;
+    let replaced = (|| {
+        let verified = crate::verify::run(&download, &staging, report)?;
+        let manifest = acui_installation::read_bounded(&verified.ui.dir.join(MANIFEST), acui_installation::MAX_MATERIAL_BYTES)?;
+        let candidate = verified.ui.dir.join("acsetup.exe");
+        acui_installation::verify_manager_material(&verified.members_document, &manifest, &candidate)?;
+        if crate::verify::sha256_file(&exe).map_err(|error| error.to_string())? != crate::verify::sha256_file(&candidate).map_err(|error| error.to_string())? {
+            return Err("External installer is not the exact management program in the verified release".into());
+        }
+        drop(previous);
+        replace_manager(&root, &verified, report)
+    })();
+    // The verified copy has served once the manager is replaced or the run stopped; the new
+    // manager and its identity are copies (Workflow #364, review L2).
+    crate::remove_staging(&staging, report)?;
+    let backup = replaced?;
     Ok(format!(
         "固定管理程序已替换，旧程序保留于 / Fixed management entry replaced; previous source retained at {}",
         backup.display()

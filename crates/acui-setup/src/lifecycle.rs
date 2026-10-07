@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use actingcommand_contract::{
@@ -335,58 +335,53 @@ pub fn start(
     startup.validate().map_err(|error| error.to_string())?;
     let programs = snapshot.slot_root();
     let state_root = snapshot.state_root()?;
-    let log = snapshot
-        .root
-        .join(format!("actingd-{}.log", crate::log::unix_ms()));
-    let stdout = fs::OpenOptions::new()
+    // cmd.exe and WMI take plain paths only (never the canonical `\\?\` spelling).
+    let plain = crate::generations::plain;
+    let root = plain(&snapshot.root);
+    let log = root.join(format!("actingd-{}.log", crate::log::unix_ms()));
+    // The log exists before the Runtime does; a name already taken is a visible failure.
+    fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&log)
         .map_err(|error| format!("Cannot create Runtime process log: {error}"))?;
-    let stderr = stdout.try_clone().map_err(|error| error.to_string())?;
-    let mut command = command(&programs.join("runtime").join(ACTINGD), Some(snapshot))?;
-    command.arg("--config").arg(snapshot.config_path()?);
+    let mut arguments = vec![
+        "--config".to_string(),
+        plain(&snapshot.config_path()?).display().to_string(),
+    ];
     if control == Control::Transition {
-        command
-            .arg("--install-held")
-            .arg(serde_json::to_string(&startup).map_err(|error| error.to_string())?);
+        arguments.push("--install-held".to_string());
+        arguments.push(serde_json::to_string(&startup).map_err(|error| error.to_string())?);
     }
-    command
-        .current_dir(&snapshot.root)
-        .stdin(Stdio::null())
-        .stdout(stdout)
-        .stderr(stderr);
-    // The Runtime outlives acsetup: it leaves the caller's job object when the
-    // job allows that (review CLI-F1), and it inherits none of acsetup's own
-    // standard handles (`platform::private_std_handles`), so neither a job wait
-    // nor a caller's pipe waits on it.
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(runtime::DETACHED_PROCESS | runtime::CREATE_BREAKAWAY_FROM_JOB);
-    }
-    let spawned = command.spawn();
-    #[cfg(windows)]
-    let spawned = match spawned {
-        Err(error) if error.raw_os_error() == Some(5) => {
-            report.line("调用者的作业对象不允许脱离：Runtime 在其中分离启动，等待该作业会等到 Runtime 退出 / The caller's job object forbids breakaway: the Runtime starts detached inside it, and waiting on that job waits for the Runtime")?;
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(runtime::DETACHED_PROCESS);
-            command.spawn()
-        }
-        other => other,
-    };
-    let mut child = spawned.map_err(|error| {
-        format!("Runtime start attempt failed: {error}; selected generation retained")
+    // Ruling X3 (Workflow #364): the Runtime starts as the coordinator's restart_actingd.ps1
+    // starts it — through WMI, in a hidden window, outside any app job and the caller's job —
+    // so nothing that ends acsetup or whoever ran it ends the Runtime, and no window can be
+    // closed under it; its output goes to the log. It gets no installation variable: the slot's
+    // actingd reads the selection this transaction has just committed, which the writer lock
+    // keeps in place, and checks that it is that slot's program.
+    let started = crate::platform::start_hidden(
+        &plain(&programs.join("runtime").join(ACTINGD)),
+        &arguments,
+        &root,
+        &log,
+    )
+    .map_err(|error| {
+        format!(
+            "Runtime start attempt failed: {error}; log {}; selected generation retained",
+            log.display()
+        )
     })?;
+    report.line(&format!(
+        "Runtime 已经 WMI 以隐藏窗口拉起，不属于任何作业 / Runtime started hidden through WMI, outside any job: pid {}（cmd {}）；日志 / log {}",
+        started.pid,
+        started.launcher,
+        log.display()
+    ))?;
     let deadline = Instant::now() + Duration::from_millis(HOST_TIMEOUT_MS);
     loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("Cannot observe started Runtime: {error}"))?
-        {
+        if let Some(code) = started.exited()? {
             return Err(format!(
-                "Runtime exited during startup: {status}{}; log {}; selected generation retained",
+                "Runtime exited during startup: exit code {code}{}; log {}; selected generation retained",
                 runtime::fatal_line(&log),
                 log.display()
             ));
@@ -406,13 +401,13 @@ pub fn start(
             }
             Err(error) => return Err(error),
         };
-        if info.as_ref().and_then(|info| info["pid"].as_u64()) == Some(u64::from(child.id())) {
+        if info.as_ref().and_then(|info| info["pid"].as_u64()) == Some(u64::from(started.pid)) {
             break;
         }
         if Instant::now() >= deadline {
             return Err(format!(
                 "Runtime startup observation timed out; pid {}, log {}; selected generation retained, process not terminated",
-                child.id(),
+                started.pid,
                 log.display()
             ));
         }
@@ -430,7 +425,7 @@ pub fn start(
     }
     let held = query(&programs, &state_root, Some(snapshot), &transition)?;
     if held.phase != Phase::Held
-        || held.ticket.target.pid != child.id()
+        || held.ticket.target.pid != started.pid
         || held.ticket.request_id != request_id
         || startup
             .previous
