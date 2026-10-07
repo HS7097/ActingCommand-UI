@@ -494,7 +494,8 @@ Host 的 released 结果才表示准备及本次原用户暂停恢复完成。�
 **组件接口**（Workflow #364）：Runtime、UI、acsetup 自己和本次用到的标准包能否搭配，按各自的声明判断，不再按写死的版本对。
 构建清单的 `interfaces` 对象（标准包则是 zip 根目录下可选的 `interfaces.json`）按接口写明该组件能读的修订区间 `[min, max]`，写方写 `max`。
 词表、升版规则和两种检查见 Runtime 的 `contracts/component-interfaces.md`：一方写、他方读的数据（`ledger`、`install-selection`、`package`）
-要求写方的 `max` 落在每个读方的区间里；活的交互（`actingd-config`、`install-control`、`runtime-client`）要求两个区间相交，取最高公共修订。
+要求写方的 `max` 落在每个读方的区间里；活的交互（`install-control`、`runtime-client`）要求两个区间相交，取最高公共修订。
+Runtime 的配置（`actingd-config`）涉及三方：acsetup 写、控制台改、Runtime 读，所以三方须有一个都能说的共同修订，两两核对不够。
 acsetup 自己的声明是 `crates/acui-setup/component-interfaces.json`，编进 acsetup，也由构建写进 UI 清单；它随本 UI 所钉的 Runtime crate 一起变。
 声明出现之前的发布件（Runtime 与 UI 的 v0.11.0 至 v0.11.2）按内置表识别，其它未声明的程序一律拒绝；没有 `interfaces.json` 的标准包按 `package` [1, 1]。
 全新安装、首次迁移和 A/B 升级在提任何问题、改任何东西之前，核对发布件的 Runtime 与 UI 彼此之间、与要接手的 Runtime 之间、与 acsetup 之间是否相容；

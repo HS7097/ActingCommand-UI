@@ -704,8 +704,10 @@ of release pairs. A build manifest's `interfaces` object (a bundle's optional zi
 writer writes `max`. The vocabulary, the bump rule and the two checks are the Runtime's
 `contracts/component-interfaces.md`: data one component writes and others read (`ledger`,
 `install-selection`, `package`) passes when the writer's `max` lies in each reader's range; a
-live exchange (`actingd-config`, `install-control`, `runtime-client`) passes when the two
-ranges meet, and uses the highest common revision. acsetup's own declaration is
+live exchange (`install-control`, `runtime-client`) passes when the two ranges meet, and uses
+the highest common revision. The Runtime's configuration (`actingd-config`) has three parties:
+acsetup writes it, the console edits it and the Runtime reads it, so the three need one
+revision they all speak; two pairwise checks are not enough. acsetup's own declaration is
 `crates/acui-setup/component-interfaces.json`, compiled into acsetup and written into the UI
 manifest by the build; it follows the Runtime crates this UI is built on. Releases built
 before declarations (Runtime and UI v0.11.0 to v0.11.2) are read from a built-in table, and any
