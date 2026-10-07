@@ -101,10 +101,10 @@ as usual.
 Dependencies are pinned to one exact Runtime source (`Cargo.toml`):
 
 ```
-rev = "e8b74123127949e626c9905e354411c294d37c33"
+rev = "484bdc14fcacbb2787707a5f03e65acdb8f9ff1a"
 ```
 
-The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
+The five crates (contract / ledger / ledger-forensics / runtime-client / execution-kernel) share this one rev.
 The embedded typed client reads optional `resource_dispositions` groups in online lifecycle-failure
 pages; the offline ledger reader accepts them in full failure and `ResourceQuiescence` records.
 Historical records without the field keep their meaning. Strict validation and explicit read errors
@@ -721,7 +721,7 @@ other undeclared program is refused; a bundle without `interfaces.json` counts a
 [1, 1]. Before any question and before anything
 changes, a fresh install, a first migration and an A/B upgrade check the release's Runtime and
 UI against each other, against the Runtime they take over and against acsetup; a Runtime laid
-into a new slot must also have Tools layout 2 (a slot holds only the program core). The
+into a new slot must also have Tools layout 2 or 3 (a slot holds only the program core). The
 release's bundles, a bundle the wizard adds and the instances step's bundles are checked
 against the Runtime that will run them and against acsetup. A rollback checks the retained
 slot the same way. Every unmet edge is listed, naming the interface, both components and their

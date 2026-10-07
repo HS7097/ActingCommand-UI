@@ -108,6 +108,11 @@ struct Known {
 }
 
 const R11: Option<Range> = Some(Range::of(1, 1));
+/// The known UI rows' `ledger`: a console never replays the catalog lineage that `ledger` 2
+/// adds (Runtime v0.11.3, #361 A), so every UI reads revision 2 (#364 review M3, ruling P10).
+/// The Runtime rows stay [1, 1]: a Runtime up to v0.11.2 refuses that ledger, so a rollback
+/// to it stays refused.
+const UI_LEDGER: Option<Range> = Some(Range::of(1, 2));
 
 const KNOWN: &[Known] = &[
     Known {
@@ -132,19 +137,19 @@ const KNOWN: &[Known] = &[
         repository: UI_REPOSITORY,
         commit: "b0d70e606e3df6ccb5c351b2519e240cb5db4f03",
         tag: "v0.11.0",
-        speaks: [R11, None, Some(Range::of(0, 0)), R11, R11, R11],
+        speaks: [R11, None, Some(Range::of(0, 0)), UI_LEDGER, R11, R11],
     },
     Known {
         repository: UI_REPOSITORY,
         commit: "c47bab660b343639bbd67bd5b3a19e8f27fcafdb",
         tag: "v0.11.1",
-        speaks: [R11, R11, Some(Range::of(0, 1)), R11, R11, R11],
+        speaks: [R11, R11, Some(Range::of(0, 1)), UI_LEDGER, R11, R11],
     },
     Known {
         repository: UI_REPOSITORY,
         commit: "3f08f63978877d68f20b2c86077b1bc7c5e39a83",
         tag: "v0.11.2",
-        speaks: [Some(Range::of(1, 2)), R11, Some(Range::of(0, 1)), R11, R11, R11],
+        speaks: [Some(Range::of(1, 2)), R11, Some(Range::of(0, 1)), UI_LEDGER, R11, R11],
     },
 ];
 
@@ -402,7 +407,8 @@ fn installed(programs: &Path, dir: &str, role: &str, report: Report<'_>) -> Resu
     program(&manifest, role, repository, report)
 }
 
-/// `tools-layout`, derived from a Tools manifest's `tools_payload_layout`.
+/// `tools-layout`, derived from a Tools manifest's `tools_payload_layout`; 3 is layout 2 plus
+/// `actingwatch.exe` (Runtime v0.11.3, #374).
 fn tools_layout(manifest: &[u8]) -> Result<Option<u32>, Stop> {
     let value: Value = serde_json::from_slice(manifest)
         .map_err(|error| Stop::Failed(format!("tools 的 {MANIFEST} 无法解析 / does not parse: {error}")))?;
@@ -410,6 +416,7 @@ fn tools_layout(manifest: &[u8]) -> Result<Option<u32>, Stop> {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(layout)) if layout == "platform-tools-v1" => Ok(Some(1)),
         Some(Value::String(layout)) if layout == "platform-tools-v2" => Ok(Some(2)),
+        Some(Value::String(layout)) if layout == "platform-tools-v3" => Ok(Some(3)),
         Some(other) => Err(Stop::Refused(format!(
             "本安装程序不认识 Tools 的 tools_payload_layout / this installer does not know the Tools layout {other}\n安装未改动 / The installation was not changed"
         ))),
@@ -648,9 +655,9 @@ fn check(parties: &Parties<'_>, report: Report<'_>) -> Result<Agreed, Stop> {
     }
     if parties.new_slot {
         let mut needs = Vec::new();
-        if runtime.tools_layout != Some(2) {
+        if !matches!(runtime.tools_layout, Some(2 | 3)) {
             needs.push(format!(
-                "tools-layout 2（实为 / is {}）",
+                "tools-layout 2 或 3（实为 / is {}）",
                 runtime
                     .tools_layout
                     .map_or_else(|| "—".to_string(), |layout| layout.to_string())
@@ -795,4 +802,70 @@ pub fn selected(root: &Path, bundles: &[Bundle], report: Report<'_>) -> Result<A
         },
         report,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Tools layout 3 (#374) is admitted into a new slot: Runtime v0.11.3 as it declares itself,
+    /// taking over from Runtime v0.11.2 (known table), with this build as installer and UI. A
+    /// layout this installer does not know is refused.
+    #[test]
+    fn a_new_slot_admits_tools_layout_3_and_refuses_an_unknown_layout() {
+        let layout = |name: &str| {
+            let manifest = json!({ "tools_payload_layout": name }).to_string();
+            tools_layout(manifest.as_bytes())
+        };
+        assert!(matches!(layout("platform-tools-v3"), Ok(Some(3))));
+        assert!(matches!(layout("platform-tools-v4"), Err(Stop::Refused(_))));
+
+        let mut report = |_: &str| -> Result<(), String> { Ok(()) };
+        let manifest = |commit: &str, interfaces: Value| {
+            json!({ "repository": RUNTIME_REPOSITORY, "commit_sha": commit, "interfaces": interfaces })
+                .to_string()
+        };
+        let declared = json!({
+            "schema_version": SCHEMA,
+            "speaks": {
+                "actingd-config": [2, 3],
+                "install-selection": [1, 1],
+                "install-control": [0, 1],
+                "ledger": [1, 2],
+                "runtime-client": [1, 1],
+                "package": [1, 2]
+            }
+        });
+        let runtime = manifest("484bdc14fcacbb2787707a5f03e65acdb8f9ff1a", declared);
+        let runtime = program(
+            runtime.as_bytes(),
+            "runtime",
+            RUNTIME_REPOSITORY,
+            &mut report,
+        );
+        let mut runtime = runtime.map_err(String::from).unwrap();
+        runtime.tools_layout = Some(3);
+        let previous = manifest("14b88e04fb31e89f12614192cd38657181218dcb", Value::Null);
+        let previous = program(
+            previous.as_bytes(),
+            "previous",
+            RUNTIME_REPOSITORY,
+            &mut report,
+        );
+        let previous = previous.map_err(String::from).unwrap();
+        let this = installer().map_err(String::from).unwrap();
+        let parties = Parties {
+            installer: &this,
+            runtime: &runtime,
+            ui: &this,
+            previous: Some(&previous),
+            manager: true,
+            new_slot: true,
+            bundles: &[],
+        };
+        if let Err(stop) = check(&parties, &mut report) {
+            panic!("tools-layout 3 refused: {}", String::from(stop));
+        }
+    }
 }

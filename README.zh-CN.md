@@ -77,10 +77,10 @@
 依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`）：
 
 ```
-rev = "e8b74123127949e626c9905e354411c294d37c33"
+rev = "484bdc14fcacbb2787707a5f03e65acdb8f9ff1a"
 ```
 
-四个 crate（contract / ledger / ledger-forensics / runtime-client）共用这一个 rev。
+五个 crate（contract / ledger / ledger-forensics / runtime-client / execution-kernel）共用这一个 rev。
 内嵌 typed client 读取在线 lifecycle-failure 页中的可选 `resource_dispositions` 分组；离线 ledger
 reader 支持完整 failure 与 `ResourceQuiescence` 记录中的该分组。未含该字段的历史记录按原语义读取，
 严格校验和显式读取错误保持。
@@ -502,7 +502,7 @@ Runtime 的配置（`actingd-config`）涉及三方：acsetup 写、控制台改
 acsetup 自己的声明是 `crates/acui-setup/component-interfaces.json`，编进 acsetup，也由构建写进 UI 清单；它随本 UI 所钉的 Runtime crate 一起变。
 声明出现之前的发布件（Runtime 与 UI 的 v0.11.0 至 v0.11.2）按内置表识别，其它未声明的程序一律拒绝；没有 `interfaces.json` 的标准包按 `package` [1, 1]。
 全新安装、首次迁移和 A/B 升级在提任何问题、改任何东西之前，核对发布件的 Runtime 与 UI 彼此之间、与要接手的 Runtime 之间、与 acsetup 之间是否相容；
-放进新槽的 Runtime 还须 Tools 布局为 2（槽只含程序核心）。发布件自带的标准包、向导加入的本机标准包和实例步的标准包，
+放进新槽的 Runtime 还须 Tools 布局为 2 或 3（槽只含程序核心）。发布件自带的标准包、向导加入的本机标准包和实例步的标准包，
 都与将运行它们的 Runtime 及 acsetup 核对。回退也按同样方式核对保留槽。每一条不满足的边都列出（接口、双方组件及其区间），
 安装不改动即停止（命令行退出码 6，`--rollback` 为 1）。协商出的 `install-control` 修订决定 acsetup 怎样关闭与拉起 Runtime：
 0 是冷态协议，1 是 Host 安装过渡。`<安装根>\runtime\` 与 `<安装根>\ui\` 下的固定入口也读 `install/active.json`，
