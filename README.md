@@ -101,10 +101,10 @@ as usual.
 Dependencies are pinned to one exact Runtime source (`Cargo.toml`):
 
 ```
-rev = "e8b74123127949e626c9905e354411c294d37c33"
+rev = "484bdc14fcacbb2787707a5f03e65acdb8f9ff1a"
 ```
 
-The four crates (contract / ledger / ledger-forensics / runtime-client) share this one rev.
+The five crates (contract / ledger / ledger-forensics / runtime-client / execution-kernel) share this one rev.
 The embedded typed client reads optional `resource_dispositions` groups in online lifecycle-failure
 pages; the offline ledger reader accepts them in full failure and `ResourceQuiescence` records.
 Historical records without the field keep their meaning. Strict validation and explicit read errors

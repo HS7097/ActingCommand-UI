@@ -77,10 +77,10 @@
 依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`）：
 
 ```
-rev = "e8b74123127949e626c9905e354411c294d37c33"
+rev = "484bdc14fcacbb2787707a5f03e65acdb8f9ff1a"
 ```
 
-四个 crate（contract / ledger / ledger-forensics / runtime-client）共用这一个 rev。
+五个 crate（contract / ledger / ledger-forensics / runtime-client / execution-kernel）共用这一个 rev。
 内嵌 typed client 读取在线 lifecycle-failure 页中的可选 `resource_dispositions` 分组；离线 ledger
 reader 支持完整 failure 与 `ResourceQuiescence` 记录中的该分组。未含该字段的历史记录按原语义读取，
 严格校验和显式读取错误保持。
