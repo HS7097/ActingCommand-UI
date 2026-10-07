@@ -490,9 +490,9 @@ Host 在同一生命周期准入下自然排空并提交正式原子关闭。acs
 排空、held、放行各用 60 秒 Host 期限；控制客户端最多等 75 秒，冷态验证客户端最多等 150 秒且 Runtime 自身限额仍有效。
 提交结果未知时查询原 transition，不重新提交；关闭不明确就停止切换，不结束结果未知的控制/维护进程。
 Host 的 released 结果才表示准备及本次原用户暂停恢复完成。原先停机的安装保持停机。
-acsetup 拉起 Runtime 一律照 `restart_actingd.ps1` 的做法（Workflow #364 裁定 X3）：经 WMI `Win32_Process.Create`、隐藏窗口，
-因此不属于任何应用作业，也不属于运行 acsetup 者的作业，也没有能被关掉的窗口；`cmd.exe` 把它的输出追加到 `<安装根>\actingd-<时间>.log`。
-拉起的 actingd 读取刚提交的选择。
+acsetup 拉起 Runtime 一律用同一种方式（Workflow #364 裁定 X3）：由 WMI `Win32_Process.Create`（`Win32_ProcessStartup.ShowWindow = 0`）启动 `cmd.exe`，
+再由它运行 actingd，并把输出追加到 `<安装根>\actingd-<时间>.log`。因此 Runtime 窗口隐藏，不属于任何应用作业，也不属于运行 acsetup 者的作业，
+也没有能被关掉的窗口。拉起的 actingd 读取刚提交的选择；它一启动就退出时，acsetup 的报错带上日志里的 FATAL 行。
 
 **组件接口**（Workflow #364）：Runtime、UI、acsetup 自己和本次用到的标准包能否搭配，按各自的声明判断，不再按写死的版本对。
 构建清单的 `interfaces` 对象（标准包则是 zip 根目录下可选的 `interfaces.json`）按接口写明该组件能读的修订区间 `[min, max]`，写方写 `max`。
@@ -559,8 +559,8 @@ $null = $p.Handle; $p.WaitForExit(); exit $p.ExitCode
 既无新包又无绑定变化就停下：无需改动。否则逐个经 `<摘要>.part` 放入新包；绑定没有变化时到此为止——不生成新代际、不重启。
 绑定有变化时，准备新的配置代际、校验整条链、跑选中槽的 `check-config`，关闭 Runtime（在运行就排空并原子关闭，不在运行就过冷态门），
 提交，原先在运行的再拉起。只是路径写法不同不算变化。摘要写出 zip、新放入与复用的包数、每一项改变的绑定、选中的代际（或"配置不变"）、
-Runtime 的情况以及未变的程序与槽。`--plan` 做同样的检查，安装根下不写任何东西。协调方的流程是
-`acsetup.exe --root F:\AC --resources <目录>\<标准包>.zip --plan`，再 `--yes --conflicts new`。
+Runtime 的情况以及未变的程序与槽。`--plan` 做同样的检查，安装根下不写任何东西。典型用法是
+`acsetup.exe --root <安装根> --resources <目录>\<标准包>.zip --plan`，再 `--yes --conflicts new`。
 
 **临时目录**：每次运行在结束时（无论成败）删除自己的 `.staging-<时间>`（实例步的 `.staging-resources-<时间>`、`--replace-manager` 的
 `install\manager-source-<时间>`）并记入日志；删不掉的写进摘要的注意事项，与被中断的运行留下的一样，在下次运行开始时删除。

@@ -353,12 +353,13 @@ pub fn start(
         arguments.push("--install-held".to_string());
         arguments.push(serde_json::to_string(&startup).map_err(|error| error.to_string())?);
     }
-    // Ruling X3 (Workflow #364): the Runtime starts as the coordinator's restart_actingd.ps1
-    // starts it — through WMI, in a hidden window, outside any app job and the caller's job —
-    // so nothing that ends acsetup or whoever ran it ends the Runtime, and no window can be
-    // closed under it; its output goes to the log. It gets no installation variable: the slot's
-    // actingd reads the selection this transaction has just committed, which the writer lock
-    // keeps in place, and checks that it is that slot's program.
+    // Ruling X3 (Workflow #364): the Runtime starts through WMI `Win32_Process.Create` with
+    // `Win32_ProcessStartup.ShowWindow = 0` — a hidden window, outside any app job and the
+    // caller's job — so nothing that ends acsetup or whoever ran it ends the Runtime, and no
+    // window can be closed under it; cmd.exe appends its output to the log. It gets no
+    // installation variable: the slot's actingd reads the selection this transaction has just
+    // committed, which the writer lock keeps in place, and checks that it is that slot's
+    // program.
     let started = crate::platform::start_hidden(
         &plain(&programs.join("runtime").join(ACTINGD)),
         &arguments,

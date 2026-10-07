@@ -696,10 +696,12 @@ seconds around the Runtime's existing limits. Unknown submissions are not repeat
 queries the original transition. Unresolved closure stops the switch. It does not kill an
 unresolved control/maintenance process. The Host's released result confirms preparation and
 this transition's original user-pause restoration. A previously stopped Runtime stays stopped.
-acsetup starts every Runtime the way `restart_actingd.ps1` does (Workflow #364, ruling X3): through
-WMI `Win32_Process.Create` with a hidden window, so it belongs to no app job and not to the job of
-whatever ran acsetup, and no window can be closed under it; `cmd.exe` appends its output to
-`<root>\actingd-<time>.log`. The started actingd reads the selection just committed.
+acsetup starts every Runtime in one way (Workflow #364, ruling X3): WMI `Win32_Process.Create`,
+with `Win32_ProcessStartup.ShowWindow = 0`, starts `cmd.exe`, which runs actingd and appends its
+output to `<root>\actingd-<time>.log`. The Runtime therefore has a hidden window, belongs to no
+app job and not to the job of whatever ran acsetup, and no window can be closed under it. The
+started actingd reads the selection just committed. When it ends at once, acsetup's error
+quotes the log's FATAL line.
 
 **Component interfaces** (Workflow #364): whether a Runtime, a UI, acsetup itself and the
 resource bundles of a run can work together is judged from what each declares, not from a list
@@ -811,8 +813,8 @@ change, it prepares a new generation, qualifies the whole chain, runs the select
 commits, and starts it again when it was running. A difference in path spelling alone is no change.
 The summary names the zip, the packs placed and reused, every binding changed, the generation (or
 "configuration unchanged"), the Runtime and the unchanged programs and slot. `--plan` runs the same
-checks and writes nothing under the root. The coordinator's flow is
-`acsetup.exe --root F:\AC --resources <dir>\<bundle>.zip --plan`, then `--yes --conflicts new`.
+checks and writes nothing under the root. A typical run is
+`acsetup.exe --root <root> --resources <dir>\<bundle>.zip --plan`, then `--yes --conflicts new`.
 
 **Temporary directories**: each run removes its own `.staging-<time>` (the instances step's
 `.staging-resources-<time>`, `--replace-manager`'s `install\manager-source-<time>`) once it has
