@@ -26,7 +26,7 @@ fn forward() -> Result<i32, String> {
         .ok_or("Stable entry has no UTF-8 filename")?;
     let directory = entry.parent().ok_or("Stable entry has no directory")?;
     // The tools are the installation root's own files, never forwarded
-    // (Workflow #359): a slot holds only the runtime, the ui and the OCR adapter.
+    // (Workflow #359): a slot holds only the runtime and the ui (#360).
     let (component, expected) = match filename {
         "actingcommand-actingd.exe" | "actingctl.exe" => ("runtime", filename),
         "acui.exe" => ("ui", filename),

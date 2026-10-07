@@ -479,11 +479,11 @@ list.
   lowercase hex characters from the OS RNG, and every `instance_id` is shown read-only; the binding is
   exactly one of `instance_index` (MuMu index), `instance_name` (MuMu name), or `host` + `port` (an
   explicit ADB address). `adb_path` is optional with every binding: left empty, the Runtime uses AC's own
-  adb (`<selected slot>/tools/platform-tools/adb.exe`, whose sha256 the Runtime checks, refusing to start
+  adb (`<install root>/tools/platform-tools/adb.exe`, whose sha256 the Runtime checks, refusing to start
   when it is missing or differs); given with a MuMu binding, it may only be MuMu's own adb or AC's own
   adb. An empty box writes no key, and emptying it on an existing entry removes the key. This needs a
-  Runtime with the installed slot's path contract. AC's bundled adb belongs to that slot;
-  other tools should use their own configured adb. `nemu_app_index` is an
+  Runtime that takes its tools from the A/B install root (Workflow #359). AC's bundled adb belongs to the
+  install root, shared by both slots; other tools should use their own configured adb. `nemu_app_index` is an
   optional whole number. The form does not check
   `application_id`, `capture_backend` or `touch_backend`: whether they are needed and valid is decided by
   check-config, which also checks the `nemu_app_index` pairing. Only what needs the MuMu discovery
@@ -544,16 +544,17 @@ log" below):
    `actingcommand-runtime-<sha>.zip`, `actingcommand-tools-<sha>.zip` and `acui-windows-<sha>.zip`
    (`<sha>` taken from `MEMBERS.json`'s `runtime_sha` / `ui_sha`; the three zips must appear in
    `SHA256SUMS`). `SHA256SUMS` is checked entry by entry; the archives are extracted into the temporary
-   directory `.staging-<unix_ms>` under the install root, split like the install root into `runtime\`,
-   `ui\` and `tools\` (so the staged Runtime's `check-config` on an upgrade finds the staged adb); then,
-   against the `BUILD-MANIFEST.json` each zip
+   directory `.staging-<unix_ms>` under the install root, split into `runtime\`, `ui\` and `tools\`;
+   nothing ever runs from it. Then, against the `BUILD-MANIFEST.json` each zip
    carries, the source repository, the commit id (equal to the MEMBERS sha), the Runtime's
    `runtime_payload_layout` (`distribution-v1`) and the size and sha256 of every entry in `files[]` are
    checked; a file in the zip that the manifest does not list also counts as a mismatch. Any mismatch
    stops it, worded as "the content differs from what it was at creation" — this is an integrity
-   statement, not an authorization tone. Nothing inside the zips is run during verification. The complete payloads, including all manifest-bound Tools files, are prepared in the fresh A slot
-   or the spare slot. Each slot retains its original manifests and MEMBERS; candidate and download
-   materials remain available. The finish page reads the slot's `platform-tools/source.properties`.
+   statement, not an authorization tone. Nothing inside the zips is run during verification. The program core (the Runtime and UI payloads) is prepared in the fresh A slot
+   or the spare slot; the Tools files go to the install root's `tools\`, where only files whose content
+   changed are replaced. Each slot retains its original manifests and MEMBERS; candidate and download
+   materials remain available. The finish page reads `tools\platform-tools\source.properties` at the
+   install root.
 2. **Options**, the configuration already written. Right after the layout, on the install page and
    inside its do-not-close span, the fresh install is configured with no question asked: the state root
    is `<install root>\state` (it must not exist or must be an empty directory — checked on step 0,
@@ -661,9 +662,10 @@ log" below):
    `<install root>\ui\acui.exe` detached and closes the wizard; "finish" only closes. A Runtime the
    instances step started keeps running; when none runs, the console's launcher starts one.
 
-**A/B installation and upgrade**: each slot, `<root>/A` and `<root>/B`, keeps complete Runtime,
-UI and Tools payloads, original build manifests and exact MEMBERS. State, content-addressed
-resources, models, downloads, logs and private configuration generations stay outside the slots.
+**A/B installation and upgrade**: each slot, `<root>/A` and `<root>/B`, keeps the program core:
+the Runtime and UI payloads, their original build manifests and exact MEMBERS (a retained v0.11.1
+slot also keeps its own Tools). The Tools, state, content-addressed resources, models, downloads,
+logs and private configuration generations stay outside the slots.
 acsetup owns the sole `install/active.json` selection: slot, generation, MEMBERS identity and
 hash-bound config/provider inputs are committed together. Configuration edits also use its
 writer lock and an exact active-generation/byte comparison.
@@ -671,8 +673,8 @@ writer lock and an exact active-generation/byte comparison.
 Downloads, full verification, spare-slot materialization, resource admission and configuration
 planning precede shutdown. Existing instances retain their identities and business settings;
 associations and maintenance conflicts use the same explicit choices as the instances page.
-Private generations preserve relative-path meaning, rebind provider libraries to the target slot
-and retain shared model paths. The target's own `check-config` checks the unselected candidate.
+Private generations preserve relative-path meaning and retain shared model paths; only a v0.11.1
+slot's generation keeps a provider manifest bound to that slot's tools. The target's own `check-config` checks the unselected candidate.
 
 Permanent empty `install/slot-A.lock` and `slot-B.lock` files locate shared OS occupancy.
 Consumers hold shared locks; materialization requires exclusive occupancy and native exclusion
