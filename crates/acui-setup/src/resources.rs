@@ -378,7 +378,9 @@ pub fn run(
     }
     // 10. The new pack directories only, each through `<digest>.part` (place_bundle.py:51-56);
     // a directory that came to differ since step 6 refuses (ruling Q4).
-    maintenance::place(&checked.prepared, root, OnDiffers::Refuse, report)?;
+    maintenance::place(&checked.prepared, root, OnDiffers::Refuse, report).map_err(|error| {
+        format!("{error}\n已放入的新任务包目录保留，不删除；选择未变，Runtime 未触动 / The new pack directories already placed are kept, never deleted; the selection is unchanged and the Runtime untouched")
+    })?;
     // 11. The configuration did not change: the packs are placed, nothing else.
     if changes.is_empty() {
         report.line("配置不变：未生成新代际，Runtime 未重启 / Configuration unchanged: no new generation, the Runtime was not restarted")?;
@@ -388,16 +390,26 @@ pub fn run(
     // 12. A new, unselected generation: the full chain qualified, the selected slot's
     // check-config (rebind.py:81).
     let slot = checked.baseline.selection.slot;
-    let mut plan = writer.prepare(
-        Some(checked.baseline.clone()),
-        slot,
-        &checked.config,
-        checked.document.clone(),
-        true,
-        report,
-    )?;
+    let mut plan = writer
+        .prepare(
+            Some(checked.baseline.clone()),
+            slot,
+            &checked.config,
+            checked.document.clone(),
+            true,
+            report,
+        )
+        .map_err(|error| {
+            format!("{error}\n新任务包目录保留；选择未变，Runtime 未触动 / The new pack directories are kept; the selection is unchanged and the Runtime untouched")
+        })?;
     // 13. Nobody changed the installation meanwhile (deploy_v9.py:43-46).
-    checked.baseline.unchanged()?;
+    checked.baseline.unchanged().map_err(|error| {
+        format!(
+            "{error}\n新任务包目录与未选中的配置代际 {} 保留；选择未变，Runtime 未触动 / The new pack directories and the unselected generation {} are kept; the selection is unchanged and the Runtime untouched",
+            plan.snapshot.selection.generation,
+            plan.snapshot.selection.generation
+        )
+    })?;
     // 14. Close: Host drain and commit_shutdown when it runs, the cold gate when not.
     let closed = lifecycle::close(
         &checked.baseline.slot_root(),
