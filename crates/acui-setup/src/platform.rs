@@ -315,7 +315,8 @@ mod imp {
     /// nothing here is quoted twice; output is UTF-8.
     const LAUNCH_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
 $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
 $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
     CommandLine = $env:ACSETUP_LAUNCH_COMMAND
@@ -417,6 +418,7 @@ while ($true) {
         }
         let pids: Vec<u32> = output
             .stdout
+            .trim_start_matches('\u{feff}')
             .split_whitespace()
             .map(str::parse)
             .collect::<Result<_, _>>()
