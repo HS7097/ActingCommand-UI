@@ -2,12 +2,44 @@
 
 # ActingCommand 监控台
 
-**⚠️ 主线功能已完成，并已在真实模拟器实例上端到端跑通；多日长跑验证与收尾仍在进行，接口仍可能调整。**
+**⚠️ 预发布，调试阶段：接口、配置与文件格式还会变，只支持最新版。见「开发状态」。**
 
-这是 ActingCommand 的**人类监控台**，一个只读的原生程序。它在一个 Runtime 状态根上打开
+这是 ActingCommand 的**人类监控台**（即控制台 `acui`），一个只读的原生程序。它在一个 Runtime 状态根上打开
 账本的**正式读面**，把账本自己给出的视图页渲染成三栏界面：实例卡、时间线、详情。
 
 它不是 Runtime 的一部分，是 Runtime 的**外部可拆客户端**。
+
+本仓还放着**安装向导** `acsetup`（见「安装向导 acsetup」一节）与固定入口 `acforward`——A/B 安装经它拉起
+各个程序。与 Runtime 一样，这些程序不认识任何游戏：不含游戏逻辑，也不含游戏数据。游戏经 Runtime 加载的
+资源包接入（每个游戏一个标准包）；向导只读包里声明的内容，什么也不猜。
+
+## 当前发布
+
+- **UI v0.11.3**，与此前每一版一样是预发布：本仓 [Releases](https://github.com/HS7097/ActingCommand-UI/releases)
+  上的 `acui-windows-<sha>.zip` 与 `SHA256SUMS`。zip 里有 `acui.exe`（监控台）、`acsetup.exe`（安装向导）、
+  `acforward.exe`（固定入口）、`LICENSE`、`README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。它基于
+  Runtime v0.11.3 的 Runtime crate 构建（钉点见「数据来源」一节）。
+- **v0.11.3 新增**：能否搭配按各组件声明的接口判断，不再看版本号（不相容时退出码 6，见「组件接口」）；认得 Tools
+  布局第 3 版（带看门狗启动器 `actingwatch.exe`）；账本升到修订 2 之后，拒绝回退到 Runtime v0.11.2 的槽（退出码 1、
+  不做改动）；只更新资源 `acsetup --resources <zip>`，第 0 步也可勾选；actingd 经 WMI 以隐藏窗口拉起，启动即退出时
+  报错带上日志里的 `FATAL` 行；升级时刷新字节有变化的固定入口。
+- **可与 Runtime v0.11.6 搭配**：acsetup v0.11.3 已把一份 A/B 安装升级到它。
+- **从哪里取**：伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases) 上有两个安装器，在线版
+  `acsetup.exe` 与离线版 `acsetup-full-<tag>.exe`，各带 `.sha256`。伞仓最新发布 v0.11.4 带 Runtime v0.11.4、本仓
+  UI v0.11.3 与可用的标准包。Runtime v0.11.5 与 v0.11.6 在
+  [Runtime 仓的 Releases](https://github.com/HS7097/ActingCommand-Runtime/releases) 上，还没有进伞仓发布，所以
+  目前在线向导装上的是 Runtime v0.11.4。
+
+## 开发状态
+
+- **调试阶段**：主循环是「发现问题 → 修复 → 对照预期检查 → 再改」；部署与可用性是次要的。
+- **全部是预发布**：接口、配置与文件格式还会变。**只支持最新版**，旧系列不出修复（不维护 0.11 系列）。
+- **会有破坏性变化**，随 0.12 系列到来：0.12.0 起用新账本（0.11 的状态根不带过去）、命令行输出与退出码变化、
+  MCP 档位取消、Lab 默认不装。安装与查看 Runtime 0.12.0 预计要等下一版 UI。见「计划中（未发布）」。
+- **实机现状**：自 10 月上旬起，在真实 MuMu 实例上按目录、用可用的标准包每天跑例行批次。标准包的内容覆盖还不
+  完整，多日无人值守长跑仍在验证。
+- **版本号规则**：X 重大或不兼容、Y 新特性或新覆盖面、Z 修复（含为修复服务的特性）。Runtime、UI 与各标准包
+  各自发版、只在自身有变化时发；能否搭配看各自声明的接口，不看版本号是否一致。
 
 ## 数据来源：读面，不是文件
 
@@ -74,7 +106,7 @@
 不写：列表写账本未打开，不留一片空白；页签、过滤框、编号框和时间滑块都停用；模块框、端口框与帧区写「账本未打开」。不向账本发
 任何查询，不读任何素材。启动器照常可用。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`）：
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.11.3 的提交：
 
 ```
 rev = "484bdc14fcacbb2787707a5f03e65acdb8f9ff1a"
@@ -161,7 +193,7 @@ CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译
 
 ## 帧素材：读了，但只读已校验的
 
-裁定已改：监控台**会**载入帧字节，但只走素材读面，且只在下面这条规则内：
+监控台**会**载入帧字节，但只走素材读面，且只在下面这条规则内：
 
 - 只读**选中事件所基于的那一帧**的 `capture.frame` 产物（见下文「每一行都落到帧上」），按需读，
   一次一份。
@@ -202,7 +234,7 @@ CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译
 - **点击标记**：以操作意图的每个点（`action.x, y`；滑动、拖动每个点各一个）为圆心、带白圈的
   圆点。它取代事件自己的 `action` 几何，免得同一次输入画两遍。
 - **一句说明**，在帧下面，每个在这一帧上的输入一句：「步骤 0 notice_close：识别到
-  bluearchive/news，点击 (1142, 102)」。
+  `<game>/news`，点击 (1142, 102)」。
 - **识别目标框**：这一帧上最近一次识别评估过的目标（`task.recognition_completed.targets`，取匹配页的；
   没有匹配时取第一个候选页的），各画在自己的 `region` 上：通过的画绿色实线，没通过的画琥珀色虚线，
   标上 `target_id` 和角色。纯关键字目标没有区域，不画；帧下那句说明把它们都算上（「……（目标 3/4
@@ -216,7 +248,8 @@ acui --help
 ```
 
 `--state-root` 只对这一次运行有效，覆盖设置文件里的 `state_root`；两处都没有就打印用法退出，
-不猜默认值。`--source` 选读面（见上）。`--tab` 指定启动页签（截图与复核用），取值就是视图
+不猜默认值。经 A/B 安装的固定入口 `<安装根>\ui\acui.exe` 启动时，状态根、配置与 Runtime 程序改取自安装的
+选择，`--state-root` 与之不同就拒绝。`--source` 选读面（见上）。`--tab` 指定启动页签（截图与复核用），取值就是视图
 自己的 wire 名。`--lang` 只对**这一次运行**有效，覆盖设置文件里的语言，不写回设置文件。
 
 窗口可缩放：默认 1400×900，最小 1100×700，中栏随窗口伸缩，两侧栏保持定宽。窗口跟随系统
@@ -249,9 +282,9 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml（没有就用 $HOME/.config/
 ```toml
 lang = "zh"          # zh | en
 text_size = "standard"   # standard | large | extra-large
-state_root = 'D:\ActingCommand\state'                    # 可选，绝对路径
-actingd_config = 'D:\ActingCommand\actingd.config.json'  # 可选，绝对路径
-actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对路径
+state_root = 'C:\AC\state'                                  # 可选，绝对路径
+actingd_config = 'C:\AC\actingd.config.json'                # 可选，绝对路径
+actingd_exe = 'C:\AC\runtime\actingcommand-actingd.exe'     # 可选，绝对路径
 ```
 
 开台时读一次，下拉框一改就写一次；写回时三个路径键原样保留。**这是监控台唯一自己读写的
@@ -327,7 +360,10 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 - **永不杀**：`Child` 句柄只用来 `try_wait()` 看有没有早退，不 `kill`、不阻塞 `wait`、不挂
   job object；就绪判定结束就丢掉句柄，守护进程活得比监控台久。
 
-暂停/恢复不在这一片里。开机自启、安装器与联网取件此后已经做出来，见「安装引导程序 acsetup」一节。
+监控台没有暂停与恢复的控件：用 `actingctl pause --state-root <状态根>` 暂停调度（只停一个实例时加
+`--instance <别名>`），用带同样参数的 `actingctl resume` 恢复，或用 MCP 工具 `ac_pause` / `ac_resume`（见「智能体用的 MCP」
+一节；Runtime v0.11.6 里别名含大写字母时这两个工具会以 `client_action_invalid` 失败，是已知问题，
+这时改用 `actingctl pause` / `resume`）。开机自启是安装向导的一个选项，见「安装向导 acsetup」一节。
 
 ## 实例配置
 
@@ -360,7 +396,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
   （MuMu 序号）、`instance_name`（MuMu 名称），或 `host` + `port`（显式 ADB 地址）。`adb_path` 三种
   绑定下都选填：留空则 Runtime 用 AC 自带的 adb（`<安装根>/tools/platform-tools/adb.exe`，Runtime 核它的
   sha256，缺失或不符就拒绝启动）；MuMu 绑定下若填写，只能是 MuMu 自带的 adb 或 AC 自带的 adb。留空的
-  框不写这个键，编辑已有项时清空它会删掉这个键。这需要从 A/B 安装根取工具的 Runtime（Workflow #359）；AC 自带 adb 属于安装根、两个槽共用，其它工具使用各自配置的 adb。`nemu_app_index` 是选填的整数。`application_id`、`capture_backend`、`touch_backend` 表单不检查，要不要填、取值是否有效都由
+  框不写这个键，编辑已有项时清空它会删掉这个键。这需要从 A/B 安装根取工具的 Runtime；AC 自带 adb 属于安装根、两个槽共用，其它工具使用各自配置的 adb。`nemu_app_index` 是选填的整数。`application_id`、`capture_backend`、`touch_backend` 表单不检查，要不要填、取值是否有效都由
   check-config 判定，`nemu_app_index` 的配对也由它查。只有要靠 MuMu 发现结果的几项到 Runtime 启动
   时才查：`MuMuManager` 版本与能力、发现结果恰好匹配一个、声明的 `adb_path`、`host`、`port` 与发现值
   不冲突、ADB 端点（Runtime `contracts/actingd-check-config.md`，`3d5398d6` 起）。文本去掉首尾空白，
@@ -372,7 +408,7 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
 - **生效**：返回选择核验通过才报告保存。重新打开监控台以取得后继代际，再重启 Runtime；
   原监控台及其子调用保持原代际，编辑器本身不重启 Runtime。
 
-## 安装引导程序 acsetup
+## 安装向导 acsetup
 
 `crates/acui-setup` 是一个独立的二进制 `acsetup.exe`（Slint 窗口，与监控台同一套样式与图标），把
 伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases) 里的发布件装成一份**按用户**的安装。
@@ -386,7 +422,8 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    **升级**，见下文）。下一步时建好安装根与安装日志。新装时这一步还要求状态根可用、安装位置不含单引号（监控台设置把路径写成 TOML 字面量字符串，单引号写不进去），否则停在这一步。引导从业务槽或原程序目录运行时停止；已核的固定管理入口
    `<安装根>/ui/acsetup.exe` 可直接升级业务槽。离线版在可用空间一行后面加上取出自带发布件所需的量。
 1. **安装**（已有安装时为**升级**，见下文），一页从下载做到铺开，成功后自动进入下一页。默认联网。一进这一步就经 HTTPS 向伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases)
-   要一个发布件：有正式版取最新正式版（GitHub 的 `releases/latest`），否则取最新预发布（`build-*` 预发布；每日发布已暂停），从不取草稿；页面与日志写明它的标签、
+   要一个发布件：有正式版取最新正式版（GitHub 的 `releases/latest`），否则按发布时间取最新的预发布（现在伞仓发的是
+   `vX.Y.Z` 预发布；旧的每日 `build-*` 预发布已经停用，留在页面上仅作参考），从不取草稿；页面与日志写明它的标签、
    名称、日期、种类与大小。点「安装」依次下载 `SHA256SUMS`、`MEMBERS.json`，再下载 `SHA256SUMS` 列出的
    其余文件——别的一个不下——存到 `<安装根>\downloads\<标签>\`；每个文件先写 `.part`，长度等于发布件
    声明的长度才改名，1 MiB 以上的文件每满十分之一写一行进度；目录里已有的同名文件重新下载，从不直接采信，
@@ -405,7 +442,8 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    （等于 MEMBERS 的 sha）、Runtime 的 `runtime_payload_layout`（`distribution-v1`），以及 `files[]`
    每一项的大小与 sha256；zip 里多出清单没列的文件也算不一致。任何不一致都停下，措辞是
    「内容与创建时不一致」——这是完整性陈述，不是授权口吻。校验期间不运行 zip 里的任何东西。随后将程序核心（Runtime 与 UI 载荷）准备到新安装 A 槽或备用槽；
-   Tools 文件放进安装根的 `tools\`，只替换内容变了的文件。各槽原始清单及 MEMBERS 保留；候选及下载材料保留。
+   Tools 文件放进安装根的 `tools\`，只替换内容变了的文件。被替换的文件保留，那里什么也不删；发布件不认识的文件
+   原样留着——例如 Runtime v0.11.6 起不再带的 `actingcommand-device-test.exe`，请手动移走。各槽原始清单及 MEMBERS 保留；候选及下载材料保留。
    完成页从安装根的 `tools\platform-tools\source.properties` 读取工具版本。
 2. **选项**，配置已自动写好。铺开之后，在安装页、同一个不许关窗的区段里，新装不问任何问题就配置好：状态根为
    `<安装根>\state`（必须不存在或为空目录——在第 0 步、下载之前就检查；**已有内容的状态根一律不接管**）；
@@ -438,14 +476,14 @@ actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # 可选，绝对�
    sha256 后读取。哪一项不过，就在注意事项里写明；发布件必需标准包读不出时不能提交配置计划。**不问网址，也不要人填哈希。**标准包里有
    `applications.json`（游戏、给了就有的显示名 `label`、各服务器的标签与安卓包名）和 `bundle.json`（每个包的路径、
    包 id、服务器、sha256 与字节数，以及 `default_packs` 里各服务器的默认任务包）。`bundle.json` 为
-   `actingcommand.bundle.v2`（契约的 `BundleIndexV2`，Workflow #288）的标准包，把每个包 id 映射到以
+   `actingcommand.bundle.v2`（契约的 `BundleIndexV2`）的标准包，把每个包 id 映射到以
    `content-directory.v1` 摘要命名的内容目录 `packs/<digest>/`，各服务器的默认任务包取 `applications.json` 的
    `servers.<server>.default_package_id`；v1 照旧读取。`actingcommand.bundle.v3` 增加必需的 `maintenance` 数组，
    每项为 `package_id`、`server`、`uses`（`startup`、`prerequisite`、`return_home`）。共享契约严格解码及校验 v2/v3；
    v3 索引全体实际包经 hash/Containment、`PreparedContainedTask::describe_path` 后，再交共享
    `validate_bundle_maintenance` 核身份、用途资格及包内完整链。离线准入有 120 秒期限，不执行任务或 provider。
-   未知版本、字段、用途、坏引用及不合格材料明确失败。页面写出它们支持的程序与包名——例如
-   「蔚蓝档案 / Blue Archive：日服 com.YostarJP.BlueArchive」（标准包没给 `label` 时写 game id）——写明是否发布件自带，
+   未知版本、字段、用途、坏引用及不合格材料明确失败。页面写出它们支持的程序与包名——形如
+   「`<label>`：`<服务器标签>` `<安卓包名>`」，取自标准包的 `applications.json`（标准包没给 `label` 时写 game id）——写明是否发布件自带，
    两类服务器写明不可选：声明了默认任务包却没有包名的，以及有包名却没有默认任务包的。本机标准包文件可以随时加入，主要用在发布件没带标准包时：填绝对路径，点「加入」，
    不要哈希；已有同一游戏（不分大小写）的标准包时拒收。每个勾选的实例
    填别名（默认 `mumu-<序号>`），并**各自选**「程序 · 服务器 · 包名」，每个同时有包名与默认任务包的服务器一项；只有一项时替每个
@@ -490,11 +528,11 @@ Host 在同一生命周期准入下自然排空并提交正式原子关闭。acs
 排空、held、放行各用 60 秒 Host 期限；控制客户端最多等 75 秒，冷态验证客户端最多等 150 秒且 Runtime 自身限额仍有效。
 提交结果未知时查询原 transition，不重新提交；关闭不明确就停止切换，不结束结果未知的控制/维护进程。
 Host 的 released 结果才表示准备及本次原用户暂停恢复完成。原先停机的安装保持停机。
-acsetup 拉起 Runtime 一律用同一种方式（Workflow #364 裁定 X3）：由 WMI `Win32_Process.Create`（`Win32_ProcessStartup.ShowWindow = 0`）启动 `cmd.exe`，
+acsetup 拉起 Runtime 一律用同一种方式：由 WMI `Win32_Process.Create`（`Win32_ProcessStartup.ShowWindow = 0`）启动 `cmd.exe`，
 再由它运行 actingd，并把输出追加到 `<安装根>\actingd-<时间>.log`。因此 Runtime 窗口隐藏，不属于任何应用作业，也不属于运行 acsetup 者的作业，
 也没有能被关掉的窗口。拉起的 actingd 读取刚提交的选择；它一启动就退出时，acsetup 的报错带上日志里的 FATAL 行。
 
-**组件接口**（Workflow #364）：Runtime、UI、acsetup 自己和本次用到的标准包能否搭配，按各自的声明判断，不再按写死的版本对。
+**组件接口**：Runtime、UI、acsetup 自己和本次用到的标准包能否搭配，按各自的声明判断，不再按写死的版本对。
 构建清单的 `interfaces` 对象（标准包则是 zip 根目录下可选的 `interfaces.json`）按接口写明该组件能读的修订区间 `[min, max]`，写方写 `max`。
 词表、升版规则和两种检查见 Runtime 的 `contracts/component-interfaces.md`：一方写、他方读的数据（`ledger`、`install-selection`、`package`）
 要求写方的 `max` 落在每个读方的区间里；活的交互（`install-control`、`runtime-client`）要求两个区间相交，取最高公共修订。
@@ -524,19 +562,23 @@ v0.11.0 UI 是明确绑定共享状态根的观察入口；设置只保存根级
 `ledger-maintenance verify` 均须通过。这些门不证明 Provider/设备就绪。
 正常安装页也可提供更早发布件并确认提示；发布时间只用于顺序提示，冷态门仍必需。只支持 `install-control` 0 的 Runtime（v0.11.0）按冷态路线启动。
 
+回退有限制，因为较新的 Runtime 可能单向改动状态根。Runtime v0.11.3 或更新的版本把账本写成修订 2 之后，
+带 Runtime v0.11.2 或更早版本的槽被拒绝（退出码 1、不做改动）。Runtime v0.11.6 的截图清理器跑过一次之后，
+Runtime v0.11.5 及更早版本拒绝打开该状态根。状态根很大时，从 v0.11.1–v0.11.3 升到 v0.11.4 实际上是单向的。
+
 acsetup 是窗口程序：在控制台直接输入 `--rollback` 或 `--replace-manager` 时提示符会立即返回。
 工作不挂在该控制台上（关闭窗口不会中断它），结束时结果行（或 `失败 / FAILED: …`）和日志路径会显示在那个控制台里；
 每次运行都把结果写成 `<安装根>/acsetup-<时间>.log` 的最后一行。在交互式 PowerShell 窗口里等待结果并查看退出码（0 成功、1 失败）：
 
 ```powershell
-$p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
+$p = Start-Process -FilePath '<安装根>\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
 $null = $p.Handle; $p.WaitForExit(); "exit code: $($p.ExitCode)"
 ```
 
 脚本里则把退出码传下去（不要贴进交互式窗口：`exit` 会关掉窗口，结果行也随之消失）：
 
 ```powershell
-$p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
+$p = Start-Process -FilePath '<安装根>\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
 $null = $p.Handle; $p.WaitForExit(); exit $p.ExitCode
 ```
 
@@ -544,13 +586,13 @@ $null = $p.Handle; $p.WaitForExit(); exit $p.ExitCode
 恢复不完整则保留材料并保持 Runtime 停止。首次启动尝试之后保留当前选择及完整账本，
 后续显式回退须重新验证最新数据。关闭未确认时不启动第二个 Runtime。
 
-**命令行**（Workflow #359）：除 `--commit-config`、`--rollback`、`--replace-manager` 外，带任何参数都不开窗口、走命令行。
+**命令行**：除 `--commit-config`、`--rollback`、`--replace-manager` 外，带任何参数都不开窗口、走命令行。
 `acsetup --root <安装根> (--plan | --yes) [--conflicts new|old] [--associate <别名>=<标准包>/<服务器>]… [--allow-downgrade] [--online | --from <文件夹>]`
 安装或升级；向导要问的每个问题都由参数回答，缺了参数的问题在安装改动之前停下。`--plan` 列出全部改动与差异，安装根下不写任何东西：
 日志和临时副本放在 `%TEMP%`。退出码：0 完成，1 失败，2 用法，3 有维护绑定差异而未给 `--conflicts`，4 降级而未给 `--allow-downgrade`，
 5 资源关联需要选择而未给 `--associate`，6 接口不兼容（见"组件接口"）；2 至 6 都停在安装改动之前。`acsetup --help` 列出全部。
 
-**只更新资源**（Workflow #364）：`acsetup --root <安装根> --resources <标准包.zip> [--sums <SHA256SUMS>] (--plan | --yes) [--conflicts new|old] [--associate …]`
+**只更新资源**：`acsetup --root <安装根> --resources <标准包.zip> [--sums <SHA256SUMS>] (--plan | --yes) [--conflicts new|old] [--associate …]`
 把一个资源仓标准包（v2 或 v3；v1 标准包须走完整升级）放进已有的 A/B 安装，不换程序、不切槽。它不与 `--online`、`--from`、`--allow-downgrade` 同用；
 两种版本都接受它，离线版自带的发布件此时不用。它在写者锁下：按 zip 旁边（或 `--sums` 指定）的 `SHA256SUMS` 里那一行核对 zip，读标准包，
 核对选中槽的程序、acsetup 与标准包的接口，暂存并准入每个包（v3 还校验维护声明），再把每个包与 `packages\<游戏>\<摘要>\` 比较：
@@ -591,27 +633,61 @@ GlobalLedger，拉起进程的日志保留启动及致命错误末言。日志�
 有效末尾：文件长度；签名以后则是证书表偏移再去掉至多 7 个 NUL 填充——证书表没有恰好止于文件末尾的，按损坏处理。相等是在线版；更长就必须是完整的载荷：尾部格式、
 载荷起点等于映像末端、索引不超过 1 MiB 且 sha256 相符、各长度之和恰好到有效末尾、文件名合乎在线取件的规则且另外不以
 `-` 开头、不以 `.` 或 `.part` 结尾、不区分大小写不重复、从载荷里读出的 `SHA256SUMS` 与 `MEMBERS.json` 与索引相符、
-形如 `build-r<7>-u<7>` 的标签与 `MEMBERS.json` 的提交号相符。其他任何情况——文件被截断、尾部、索引或头部损坏——都在
+标签若是旧的每日形状 `build-r<7>-u<7>`，须与 `MEMBERS.json` 的提交号相符（`vX.Y.Z` 标签不含提交号，没有可核对的）。其他任何情况——文件被截断、尾部、索引或头部损坏——都在
 写任何东西之前进失败页：写明应为多少、实为多少，写明「尚未写任何文件，也没有日志」，并提示重新下载（可用旁边的
 `.sha256` 核对）或改用在线版 `acsetup.exe`；绝不改走联网。从这次检查到取出，自身文件一直开着同一个句柄。索引与
 `SHA256SUMS` 只防损坏，不防篡改：可信度来自从 Releases 页经 HTTPS 下载，以及每个安装器旁边的 `.sha256`，与在线版
 一样。Windows SmartScreen 与部分杀毒软件可能对新出现、未签名、映像后带数据的安装器报警，这是预期，不是向导缺陷。
-两个安装器由伞仓发布作业拼装，离线版在那里另行独立读回核对。
+每次伞仓发布都拼装这两个安装器，离线版在发布前另行独立读回核对。
 
 **永远不做的事**：不装服务、不建计划任务、不改 PATH、不写注册表；不改配置模板；不碰已有内容的状态根；
 联网只为列出与下载伞仓发布件——离线版完全不联网；只在升级时、实例步和绑定有变化的只更新资源中按上文关闭与拉起 Runtime；
 不解开密封任务包——由 Runtime 加载（v1 标准包里的任务包是整个取出；v2 标准包里的任务包本就是内容目录，按上文逐个文件放置）。Linux 上 crate
 照常编译（CI 两条腿都跑 `--workspace`），运行即以 `acsetup v1 is Windows-only` 退出。
 
-依赖多六个（离线版读取自身 exe 是手写的，不加依赖），都在 `[workspace.dependencies]` 里注明用途：
-`actingcommand-contract`（标准包索引 v2 与 `content-directory.v1` 摘要，只此一份实现；与监控台同一 rev，只带来
-`serde`、`serde_json` 与 `sha2`）、`sha2`（校验）、`zip`
+Runtime 的看门狗是一个计划任务，所以 acsetup 不替人设置。要让没经正式关闭就不在了的 Runtime（崩溃、关窗、重启）
+被重新拉起，请以运行 Runtime 的那个用户、在普通（非提权）PowerShell 里运行一次
+`<安装根>\runtime\actingctl.exe watchdog install --root <安装根>`（Runtime v0.11.3 起；`watchdog status` 查看状态）。
+删除安装之前先运行 `watchdog uninstall`。它的规则见 Runtime 的 `distribution/windows/INSTALL.md`。
+
+向导多出七个依赖（离线版读取自身 exe 是手写的，不加依赖），都在 `[workspace.dependencies]` 或该 crate 的
+`Cargo.toml` 里注明用途：`actingcommand-contract`（标准包索引 v2/v3 与 `content-directory.v1` 摘要，只此一份实现；
+与监控台同一 rev，只带来 `serde`、`serde_json` 与 `sha2`）、`actingcommand-execution-kernel`（离线、按哈希准入的
+任务包资格核对，同一 rev）、`sha2`（校验）、`zip`
 （`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（salt 与
 `instance_id`）、
 `ureq`（取件；`default-features = false`，只开 `tls`：rustls、它的 `ring` 实现与编译进去的
 `webpki-roots`，不用系统 TLS 库），以及仅限 Windows 的 `windows` 0.62（`Win32_Foundation`、`Win32_System_Com`、
-`Win32_UI_Shell`：经 `SHGetKnownFolderPath` 找启动、开始菜单与桌面文件夹，经 `IShellLinkW` + `IPersistFile`
-写快捷方式；与 Slint 已锁定的同一版本，锁文件不新增 crate）。
+`Win32_System_RestartManager`、`Win32_UI_Shell`：经 `SHGetKnownFolderPath` 找启动、开始菜单与桌面文件夹，经
+`IShellLinkW` + `IPersistFile` 写快捷方式，经重启管理器（Restart Manager）找出仍占着某个槽里文件的进程；与 Slint
+已锁定的同一版本，锁文件不新增 crate）。
+
+## 智能体用的 MCP
+
+监控台自己没有 MCP 服务。MCP 服务由 Runtime 的命令行提供：`actingctl mcp-serve`（Runtime v0.11.0 起）是 stdio 上的
+本地 MCP 服务，只有工具，供 Claude Code、Codex 等智能体使用。`actingctl mcp-config` 打印给某个客户端的注册内容，
+不写任何客户端文件：
+
+```powershell
+& '<安装根>\runtime\actingctl.exe' mcp-config --client claude --tier observer
+& '<安装根>\runtime\actingctl.exe' mcp-config --client codex --tier observer,operator
+```
+
+- **Claude Code**：打印一条命令
+  `claude mcp add --scope user actingcommand -- "<安装根>\runtime\actingctl.exe" mcp-serve --tier …`，运行一次即可。
+- **Codex**：打印一段 `[mcp_servers.actingcommand]`（命令、参数、两个超时，以及注释掉的 `enabled_tools` 示例），
+  放进 Codex 的 `config.toml`。
+- 在 A/B 安装里，它打印的总是固定入口 `<安装根>\runtime\actingctl.exe`，从不打印槽内路径，所以升级或回退之后注册
+  仍然有效（Runtime v0.11.2 起）。经这个入口启动时，服务从安装的选择取状态根；与之不同的 `--root` 或
+  `--state-root` 一律拒绝。
+- **档位**（0.11 系列）：`observer`（只读；总是开着，也是默认）、`operator`（设备与调度）、`author`（Lab 录制）。
+  未开档位的工具答 `tier_not_enabled`。`actingctl mcp-serve --list-tools [--format json|markdown]` 列出全部 22 个工具。
+- 批准、actingd 配置的改动与 Runtime 的重启归人。
+- 运行中的服务保持它启动时的安装代际（见「A/B 安装与升级」）；升级后请在客户端里重启它。
+- **计划中（0.12 系列）**：取消档位；一般工具总在，Lab 工具只在装了 Lab 选项时列出。
+
+每个工具接收什么、回答什么：`actingctl mcp-serve --list-tools --format markdown`。给智能体的操作手册是
+[伞仓](https://github.com/HS7097/ActingCommand/tree/main/skills/actingcommand)里的 `skills/actingcommand/`。
 
 ## 四层四 crate
 
@@ -633,7 +709,7 @@ GlobalLedger，拉起进程的日志保留启动及致命错误末言。日志�
 `slint` 1.17.x，`default-features = false`；账本对监控台只读（监控台发出的请求——启动按钮、关闭
 请求、在线开台时的那次状态读取、实例发现查询——由 Runtime 自己记账），控制入口只有启动器的两个按钮（启动 /
 请求关闭，见上）、启动器的解锁入口（经确认的 `actingd unlock-owner`）与实例配置窗口经 check-config
-把关的保存，没有审批入口；不写测试。启动器在
+把关的保存，没有审批入口；监控台的 crate 不带测试，CI 只构建工作区、不跑测试。启动器在
 `crates/acui-app/src/launcher.rs`，实例配置窗口在 `instances.rs`，探测、请求关闭、记下启动按钮、
 在线开台时的状态与事实读取、实例发现这几个客户端操作在 `acui-source`（`probe_runtime` /
 `request_shutdown` / `record_start` / `instance_facts` / `discover_instances`）。
@@ -644,14 +720,14 @@ GlobalLedger，拉起进程的日志保留启动及致命错误末言。日志�
 绝不在事件循环里 panic。已拉起的 actingd 若等不到就绪线程，照样在跑，结果行直说，并提示再按一次「启动」即可探测。子进程终止了但
 回收失败时照实写，不说成终止失败。
 
-`acui-setup` crate（二进制 `acsetup`）在这四层之外：安装引导程序，只依赖 slint、serde、serde_json、anyhow、sha2、
-zip、getrandom、ureq、actingcommand-contract 与（仅 Windows 的）windows，不依赖上面任何一层，见上一节「安装引导程序 acsetup」。
-
-`acui-installation` 为监控台和 acsetup 提供共享安装选择消费者，并生成稳定入口 `acforward`。
+另有两个 crate 在这四层之外。`acui-setup`（二进制 `acsetup`）是安装向导，不依赖上面任何一层；除
+`acui-installation` 外，它用 Slint、`serde`、`serde_json`、`anyhow` 以及「安装向导 acsetup」一节列出的依赖，其中
+包括共享契约与 execution-kernel 的离线任务包资格核对。`acui-installation` 为监控台和向导提供共享的安装选择消费者，
+并生成二进制 `acforward`，即固定入口。
 
 ## 图标
 
-应用图标是 Alice 裁定的黑色单人「指挥官」标记，素材在 `crates/acui-app/assets/`：
+应用图标是黑色单人「指挥官」标记，素材在 `crates/acui-app/assets/`：
 `acui-256.png`（256×256 透明 PNG）与 `acui.ico`（16..256 多尺寸）。
 
 - **窗口与任务栏图标**：`app.slint` 的 `Window.icon: @image-url("../assets/acui-256.png")`。
@@ -662,40 +738,64 @@ zip、getrandom、ureq、actingcommand-contract 与（仅 Windows 的）windows�
 
 ## 读面挡住的事
 
-这些不是绕过去了，是照实显示、在此记账。行号都指钉住的 rev：
+这些不是绕过去了，是照实显示、在此记录。文件都指钉住的 rev 上的 Runtime 源码：
 
 - **事件条数与修复条数：离线都已解决，在线只有事件条数**。`GlobalLedgerMetadata`
-  （`crates/ledger/src/global/evidence.rs:257`）现在给出 `event_count()`（`:319`）与
-  `repair_count()`（`:326`），取自已认证的元数据，不校验任何素材，监控台不再需要为此去调
-  `GlobalLedger::open_evidence`（同文件 `:434`）。实例卡两项都显示，另外标出**本视图已载入**的
+  （`crates/ledger/src/global/evidence.rs`）现在给出 `event_count()` 与 `repair_count()`，取自已认证的
+  元数据，不校验任何素材，监控台不再需要为此去调 `GlobalLedger::open_evidence`（同一文件）。实例卡两项都显示，另外标出**本视图已载入**的
   条数，两者不混用。读取不完整时事件条数只计已校验的前缀，实例卡写明这一点。SQLite 介质没有
   修复日志（`None`），实例卡照写，不显示成 0；修复日志与事件快照不共用同一个序号边界。在线时
   事件条数就是钉住的位置，依据 `contracts/runtime-state-observation.md`（序号从 1 起无缺口）；页
   （`LedgerReadScope`）与 `runtime-info.json` 都不给修复条数，这一行写 Runtime 不提供。
 - **整份读素材：两张读面都已解决**。`read_material_complete`
-  （`crates/ledger-forensics/src/material.rs:74`）整份读一个对象：重开两次账本元数据、一个
+  （`crates/ledger-forensics/src/material.rs`）整份读一个对象：重开两次账本元数据、一个
   reader、整份哈希一次，受 `max_material_bytes` 与期限约束。离线读面以 8 MiB 帧上限和 30 秒
   期限调用它（Runtime 里还没有它的调用方定下期限；契约的 4 秒 `RUNTIME_MATERIAL_READ_BUDGET_MS`
   约束的是单段读，不是整份对象）。在线由类型化客户端的 `RuntimeClient::read_material_complete`
-  （`crates/runtime-client/src/client.rs:2192`）在校验过的分段上给出同样形状的结果，监控台以同样
+  （`crates/runtime-client/src/client.rs`）在校验过的分段上给出同样形状的结果，监控台以同样
   的上限与期限调用它；Runtime 仍对每一段校验整份素材（一张 3.6 MB 的帧是 19 段 192 KiB）。
 - **实例事实：两张读面都已解决，位置不同**。在线经 `RuntimeClient::runtime_fact_snapshot()`
-  （`crates/runtime-client/src/client.rs:849`）读，它答的是 Runtime 最新位置上的状态，晚于钉点。离线由
-  `runtime_facts_at`（`crates/ledger-forensics/src/runtime_facts.rs:62`）按 Runtime 自己的重放规则，在
+  （`crates/runtime-client/src/client.rs`）读，它答的是 Runtime 最新位置上的状态，晚于钉点。离线由
+  `runtime_facts_at`（`crates/ledger-forensics/src/runtime_facts.rs`）按 Runtime 自己的重放规则，在
   钉住的位置本身重放事实库；监控台从不自己折叠 `runtime.fact_*` 事件。租约只来自在线的状态读取，离线
   没有。
-- **几何与帧在这两个根上凑不到一起**。0828 与 v5 两个根里，带 `capture.frame` 产物的事件
-  只有 `artifact.created` / `artifact.verified`，payload 里没有几何；带几何的事件只有
-  `task.effect_intent`（0828 六条、v5 五条），payload 里是一个 tap 坐标，`links` 里**没有**
-  `frame_id`。账本没有给出把这两者连起来的关系，监控台就不连——真实帧照画，叠加为空。
-  钉住的 rev 上，`task.effect_intent` 可以给出坐标所在的画面范围（`frame_extent`，
-  `crates/actingcommand-contract/src/event/payload.rs:3392`），`task.geometry_observed` 可以给出其
-  画面的范围（`TaskGeometryFrame::extent`，`:3093`）；事件给了，叠加画布就用它。这两个根上的 effect intent 都没给，尺寸仍是
-  「未记录」。
-- **两个根里都没有产物淘汰事实**，所以淘汰占位在这两个根上不会出现；代码路径按契约写好。
+- **几何与帧在两个早期状态根上凑不到一起**。监控台最初核对用的两个早期实机状态根里，带 `capture.frame`
+  产物的事件只有 `artifact.created` / `artifact.verified`，payload 里没有几何；带几何的事件只有寥寥几条
+  `task.effect_intent`，payload 里是一个 tap 坐标，`links` 里**没有** `frame_id`。账本没有给出把这两者连起来的
+  关系，监控台就不连——真实帧照画，叠加为空。钉住的 rev 上，`task.effect_intent` 可以给出坐标所在的画面范围
+  （`frame_extent`，`crates/actingcommand-contract/src/event/payload.rs`），`task.geometry_observed` 可以给出其
+  画面的范围（`TaskGeometryFrame::extent`，同一文件）；事件给了，叠加画布就用它。那两个根上的 effect intent
+  都没给，尺寸仍是「未记录」。
+- **那两个根里都没有产物淘汰事实**，所以淘汰占位在它们上面不会出现；代码路径按契约写好。
+
+## 计划中（未发布）
+
+本节全部是计划，尚未发布。各项归入哪个系列仍可能调整，不写日期。
+
+**0.12 系列**
+
+- **下一版 UI**（计划随 0.12 系列，作为 UI 的新大版本）：监控台读新账本；报错按结果码解释（中英）；监控台显示
+  任务为什么没跑；安装器新增一页，给 Lab 模块两个相互独立的选项（创作；调试），默认都不装；安装器提供机读输出
+  （`--json`）。
+- **新账本**：Runtime 0.12.0 起用新的账本格式（修订 3），从空账本开始；0.11 的状态根不带过去（旧安装整体留作
+  归档，不删）。预计要等下一版 UI 才能安装它。
+- **结果码统一**：所有程序共用一张登记过的码目录，每个码有类别；每条命令输出一行结果，退出码收敛为 0/1/2。
+- **统一接口**：一道门、三个前端——命令行、MCP 与本 UI——一一对应；每次请求只记来自哪个前端，权限不再按「谁」
+  来定。MCP 档位取消。
+- **Lab 改为可拆的模块**：默认不装。安装器两个选项勾任一就装：创作（录制与制包工具，给用智能体制作资源的人）、
+  调试（直接操控 Runtime 内部动作，给高级用户）。不装时 Lab 通道在，但不可调用。
+- **Runtime 一侧**：恢复阶梯配置化（改配置文件，或经命令行、MCP、UI 的一条指令立即生效）、性能节奏、为每个没跑的
+  任务写明原因的调度规则、数据刷新、共享数据表、每实例目标、MCP 增补，以及系列末段支持今天 1280×720 基准以外的
+  分辨率。
+
+**0.13 系列**
+
+- **MaaFramework 流水线格式导入导出**（「包视图」）：我们的任务包与 MaaFramework 形状的 JSON 互转；存回时过不了
+  检包就报错、不写入。编辑界面用我们自己的 UI（节点图编辑器），不随发行带第三方编辑器。
+- **Runtime 一侧**：由通用流程件组成的战斗层，以及净室重写的通用空间组件；一切游戏内容仍只在资源包里。
 
 ## 许可
 
-`GPL-3.0-only`（Alice 2026-09-17 裁定）。仓库附 LICENSE 全文；工作区 `license` 字段与每个 `.rs` / `.slint`
-文件的 SPDX 头与之一致。界面由 [Slint](https://slint.dev) 渲染，按其 GPLv3 许可选项使用。依赖的 Runtime
-crate（contract / ledger / ledger-forensics / runtime-client）为 `AGPL-3.0-only`，两者按 GPLv3 第 13 条合并。
+`GPL-3.0-only`。仓库附 LICENSE 全文；工作区 `license` 字段与每个 `.rs` / `.slint` 文件的 SPDX 头与之一致。界面由
+[Slint](https://slint.dev) 渲染，按其 GPLv3 许可选项使用。依赖的 Runtime crate（contract / ledger /
+ledger-forensics / runtime-client / execution-kernel）为 `AGPL-3.0-only`，两者按 GPLv3 第 13 条合并。

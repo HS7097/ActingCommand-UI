@@ -2,13 +2,60 @@
 
 # ActingCommand Console
 
-**⚠️ The main-line features are complete and have run end to end on a real emulator instance; multi-day validation and clean-up are still under way, and interfaces may still change.**
+**⚠️ Pre-release, debug phase: interfaces, configuration and file formats still change, and only the newest version is supported. See "Development status".**
 
 This is ActingCommand's **human console**, a read-only native program. On one Runtime state root it opens
 the ledger's **official read face**, and renders the view pages the ledger itself hands out into a
 three-column interface: instance card, timeline, detail pane.
 
 It is not part of the Runtime; it is the Runtime's **external, detachable client**.
+
+This repository also holds the **setup wizard** `acsetup` (see "Setup wizard acsetup") and the fixed
+entry `acforward`, through which an A/B installation starts its programs. Like the Runtime, these
+programs know no game: they hold no game logic and no game data. A game is supported through the
+resource packs (one standard pack per game) the Runtime loads; the wizard reads what a pack declares
+and guesses nothing.
+
+## Current release
+
+- **UI v0.11.3**, a pre-release like every release so far: `acui-windows-<sha>.zip` with `SHA256SUMS`
+  on this repository's [Releases](https://github.com/HS7097/ActingCommand-UI/releases). The zip holds
+  `acui.exe` (the console), `acsetup.exe` (the setup wizard), `acforward.exe` (the fixed entry),
+  `LICENSE`, `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. It is built
+  against the Runtime crates of Runtime v0.11.3 (the pinned rev under "Data source").
+- **New in v0.11.3**: whether components fit together is judged from the interfaces each one declares,
+  not from version numbers (exit code 6 when they do not fit; see "Component interfaces"); Tools layout 3,
+  with the watchdog launcher `actingwatch.exe`, is recognized; once the ledger is at revision 2, a
+  rollback to a Runtime v0.11.2 slot is refused (exit code 1, nothing changed); resource-only update
+  `acsetup --resources <zip>`, also a tick on step 0; actingd is started through WMI with a hidden
+  window, and a start that exits at once is reported with the log's `FATAL` line; an upgrade refreshes
+  the fixed entries whose bytes changed.
+- **Works with Runtime v0.11.6**: acsetup v0.11.3 has upgraded an A/B installation to it.
+- **Where to get it**: the umbrella repository's
+  [Releases](https://github.com/HS7097/ActingCommand/releases) carry the two installers, the online
+  `acsetup.exe` and the offline `acsetup-full-<tag>.exe`, each with its `.sha256`. The newest umbrella
+  release, v0.11.4, carries Runtime v0.11.4, this UI v0.11.3 and the available standard packs. Runtime
+  v0.11.5 and v0.11.6 are on the
+  [Runtime repository's Releases](https://github.com/HS7097/ActingCommand-Runtime/releases) and not yet
+  in an umbrella release, so the online wizard installs Runtime v0.11.4 today.
+
+## Development status
+
+- **Debug phase**: the main loop is find a problem → fix it → check against what was expected → change
+  again. Deployment and availability come second.
+- **Every release is a pre-release**: interfaces, configuration and file formats still change. **Only the
+  newest version is supported**; older series get no fixes (the 0.11 series is not maintained).
+- **Breaking changes are coming** with the 0.12 series: a new ledger from 0.12.0 (a 0.11 state root is not
+  carried over), changed command-line output and exit codes, MCP tiers removed, the Lab not installed by
+  default. Installing and observing Runtime 0.12.0 is expected to need the next UI release. See "Planned
+  (not released)".
+- **On real devices**: since early October, routine batches run every day on real MuMu instances,
+  scheduled by catalog with the available standard packs. The standard packs' coverage is still
+  incomplete, and multi-day unattended runs are still being validated.
+- **Version numbers**: X for major or incompatible changes, Y for new features or new coverage, Z for
+  fixes (including features that serve a fix). The Runtime, the UI and each standard pack are released on
+  their own, only when they change; whether they fit together is decided by their declared interfaces,
+  not by matching version numbers.
 
 ## Data source: the read face, not files
 
@@ -98,7 +145,7 @@ tabs, the filter boxes, the id box and the time slider are off; the module and p
 pane say "ledger not opened". Nothing is asked of the ledger and no material is read. The launcher works
 as usual.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`):
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), the commit of Runtime v0.11.3:
 
 ```
 rev = "484bdc14fcacbb2787707a5f03e65acdb8f9ff1a"
@@ -220,8 +267,8 @@ version exists only in the tag.
 
 ## Frame material: read, but only what is verified
 
-The ruling has changed: the console **does** load frame bytes, but only through the material read face,
-and only within this rule:
+The console **does** load frame bytes, but only through the material read face, and only within this
+rule:
 
 - Only the `capture.frame` artifact of **the frame the selected event was taken on or acted on** is read
   (see "Every row on its frame" below), on demand, one at a time.
@@ -276,7 +323,7 @@ On the frame, beside the event's own geometry:
   swipe or drag has one per point). It replaces the event's own `action` geometry, which would draw the
   same input twice.
 - **One sentence** under the frame, per input meant on it: "Step 0 notice_close: recognized
-  bluearchive/news, tap (1142, 102)".
+  `<game>/news`, tap (1142, 102)".
 - **The recognition target boxes**: the targets the frame's latest recognition evaluated
   (`task.recognition_completed.targets`, those of the matched page or, with no match, of the first
   candidate), each in its `region`: solid green when it passed, dashed amber when it did not, labelled
@@ -291,7 +338,10 @@ acui --help
 ```
 
 `--state-root` applies to this run only and overrides `state_root` in the settings file; if neither is
-present it prints the usage and exits, guessing no default. `--source` selects the read face (see above).
+present it prints the usage and exits, guessing no default. Started through an A/B installation's fixed
+entry `<install root>\ui\acui.exe`, the console takes the state root, the configuration and the Runtime
+program from the installation's selection instead, and refuses a `--state-root` that differs from it.
+`--source` selects the read face (see above).
 `--tab` specifies the startup tab (for screenshots and review), and its values are the views' own wire
 names. `--lang` applies to **this run only**, overrides the language in the settings file, and is not
 written back to the settings file.
@@ -332,9 +382,9 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml (falls back to $HOME/.config/
 ```toml
 lang = "zh"          # zh | en
 text_size = "standard"   # standard | large | extra-large
-state_root = 'D:\ActingCommand\state'                    # optional, absolute path
-actingd_config = 'D:\ActingCommand\actingd.config.json'  # optional, absolute path
-actingd_exe = 'D:\ActingCommand\actingcommand-actingd.exe'   # optional, absolute path
+state_root = 'C:\AC\state'                                  # optional, absolute path
+actingd_config = 'C:\AC\actingd.config.json'                # optional, absolute path
+actingd_exe = 'C:\AC\runtime\actingcommand-actingd.exe'     # optional, absolute path
 ```
 
 It is read once at startup and written once on every dropdown change; on write-back the three path keys
@@ -437,7 +487,11 @@ last Start or Request shutdown press, or why the instance-configuration window d
   `kill`, no blocking `wait`, no job object attached; the handle is dropped once the readiness decision
   ends, and the daemon outlives the console.
 
-Pause/resume is outside this slice. Start-at-boot, the installer and the network fetch have since been built; see "Setup wizard acsetup".
+The console has no pause or resume control: pause scheduling with
+`actingctl pause --state-root <state root>` (add `--instance <alias>` for one instance) and lift it with
+`actingctl resume` and the same flags, or use the MCP tools `ac_pause` / `ac_resume` (see "MCP for
+agents"; in Runtime v0.11.6 these two fail with `client_action_invalid` for an alias
+containing upper-case letters, a known issue, so use `actingctl pause` / `resume` there). Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
 
 ## Instance configuration
 
@@ -482,7 +536,7 @@ list.
   adb (`<install root>/tools/platform-tools/adb.exe`, whose sha256 the Runtime checks, refusing to start
   when it is missing or differs); given with a MuMu binding, it may only be MuMu's own adb or AC's own
   adb. An empty box writes no key, and emptying it on an existing entry removes the key. This needs a
-  Runtime that takes its tools from the A/B install root (Workflow #359). AC's bundled adb belongs to the
+  Runtime that takes its tools from the A/B install root. AC's bundled adb belongs to the
   install root, shared by both slots; other tools should use their own configured adb. `nemu_app_index` is an
   optional whole number. The form does not check
   `application_id`, `capture_backend` or `touch_backend`: whether they are needed and valid is decided by
@@ -524,8 +578,9 @@ log" below):
 1. **Install** (**Upgrade** on an installed root, see below), one page from the download to the
    layout; on success the next page follows by itself. By default online. On entering, the umbrella
    [Releases](https://github.com/HS7097/ActingCommand/releases) are asked over HTTPS for one release: the
-   newest stable release when there is one (GitHub's `releases/latest`), else the newest pre-release (the
-   `build-*` pre-releases; the daily publish is paused); never a draft. Its tag, name, date, kind and size are shown and logged. "安装 / Install" fetches `SHA256SUMS`,
+   newest stable release when there is one (GitHub's `releases/latest`), else the newest pre-release by
+   publication time (today the umbrella publishes `vX.Y.Z` pre-releases; the old daily `build-*`
+   pre-releases are discontinued and stay on the page for reference only); never a draft. Its tag, name, date, kind and size are shown and logged. "安装 / Install" fetches `SHA256SUMS`,
    `MEMBERS.json` and then every other file `SHA256SUMS` lists — nothing else — into
    `<install root>\downloads\<tag>\`, each through a `.part` file renamed once its length is the length
    the release states, with a progress line per tenth for a file of a MiB or more; a file already there is
@@ -552,7 +607,9 @@ log" below):
    stops it, worded as "the content differs from what it was at creation" — this is an integrity
    statement, not an authorization tone. Nothing inside the zips is run during verification. The program core (the Runtime and UI payloads) is prepared in the fresh A slot
    or the spare slot; the Tools files go to the install root's `tools\`, where only files whose content
-   changed are replaced. Each slot retains its original manifests and MEMBERS; candidate and download
+   changed are replaced. A replaced file is kept, nothing there is deleted, and a file the release does
+   not know is left as it is — such as `actingcommand-device-test.exe`, which Runtime v0.11.6 no longer
+   ships; move it away by hand. Each slot retains its original manifests and MEMBERS; candidate and download
    materials remain available. The finish page reads `tools\platform-tools\source.properties` at the
    install root.
 2. **Options**, the configuration already written. Right after the layout, on the install page and
@@ -607,7 +664,7 @@ log" below):
    `applications.json` (the game, its display name `label` when given, and each server's label and
    Android package name) and `bundle.json` (every pack's path, package id, server, sha256 and size, and
    each server's default pack in `default_packs`). A bundle whose `bundle.json` is
-   `actingcommand.bundle.v2` (the contract's `BundleIndexV2`, Workflow #288) maps each package id to a
+   `actingcommand.bundle.v2` (the contract's `BundleIndexV2`) maps each package id to a
    content directory `packs/<digest>/` named by its `content-directory.v1` digest, and a server's
    default pack is the one `applications.json` names in `servers.<server>.default_package_id`; v1 is
    read as before. `actingcommand.bundle.v3` adds the required `maintenance` array, with
@@ -617,8 +674,8 @@ log" below):
    `validate_bundle_maintenance` checks identity, use qualifications and the bundle's chains.
    Admission has a 120-second deadline and runs no task or provider. Unknown versions, fields,
    uses, references and invalid qualifications fail explicitly. The page lists the programs and package names they
-   support — for example "蔚蓝档案 / Blue Archive：日服 com.YostarJP.BlueArchive" (the game id when a
-   bundle gives no `label`) — whether each came with the release, and two kinds of server as not offered:
+   support — in the shape "`<label>`：`<server label>` `<Android package name>`", as the bundle's
+   `applications.json` states them (the game id when a bundle gives no `label`) — whether each came with the release, and two kinds of server as not offered:
    one that names a default pack but no package name, and one with a package name but no default pack.
    A local bundle file can be added at any time — it is the way in while the release carries none: its
    absolute path, "加入 / Add", no hash; a second bundle for a game already
@@ -696,14 +753,14 @@ seconds around the Runtime's existing limits. Unknown submissions are not repeat
 queries the original transition. Unresolved closure stops the switch. It does not kill an
 unresolved control/maintenance process. The Host's released result confirms preparation and
 this transition's original user-pause restoration. A previously stopped Runtime stays stopped.
-acsetup starts every Runtime in one way (Workflow #364, ruling X3): WMI `Win32_Process.Create`,
+acsetup starts every Runtime in one way: WMI `Win32_Process.Create`,
 with `Win32_ProcessStartup.ShowWindow = 0`, starts `cmd.exe`, which runs actingd and appends its
 output to `<root>\actingd-<time>.log`. The Runtime therefore has a hidden window, belongs to no
 app job and not to the job of whatever ran acsetup, and no window can be closed under it. The
 started actingd reads the selection just committed. When it ends at once, acsetup's error
 quotes the log's FATAL line.
 
-**Component interfaces** (Workflow #364): whether a Runtime, a UI, acsetup itself and the
+**Component interfaces**: whether a Runtime, a UI, acsetup itself and the
 resource bundles of a run can work together is judged from what each declares, not from a list
 of release pairs. A build manifest's `interfaces` object (a bundle's optional zip-root
 `interfaces.json`) gives, per interface, the revisions the component reads, `[min, max]`; a
@@ -757,6 +814,12 @@ release can also be provided through the normal installer with the page's confir
 Publication time is only a prompt heuristic; the cold gate remains mandatory. A Runtime that
 speaks only `install-control` 0 (v0.11.0) uses cold startup.
 
+Rollback has limits, because a newer Runtime may change the state root for good. Once a Runtime
+v0.11.3 or later has written the ledger at revision 2, a slot with Runtime v0.11.2 or earlier is
+refused (exit code 1, nothing changed). Once Runtime v0.11.6's frame retention cleaner has run,
+Runtime v0.11.5 and earlier refuse that state root. With a large state root, an upgrade from
+v0.11.1–v0.11.3 to v0.11.4 is one-way in practice.
+
 acsetup is a windowed program, so a console prompt returns at once when `--rollback` or
 `--replace-manager` is typed directly. The work runs without the console (closing the window does
 not stop it), and when it ends its result line (or `失败 / FAILED: …`) and the log path appear in
@@ -764,7 +827,7 @@ that console. Every run writes its result as the last line of `<root>/acsetup-<t
 for the result and see the exit code (0 success, 1 failure) in an interactive PowerShell window:
 
 ```powershell
-$p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
+$p = Start-Process -FilePath '<install root>\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
 $null = $p.Handle; $p.WaitForExit(); "exit code: $($p.ExitCode)"
 ```
 
@@ -772,7 +835,7 @@ In a script, pass the exit code on instead (do not paste this into an interactiv
 closes it, and the result line with it):
 
 ```powershell
-$p = Start-Process -FilePath 'F:\AC\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
+$p = Start-Process -FilePath '<install root>\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
 $null = $p.Handle; $p.WaitForExit(); exit $p.ExitCode
 ```
 
@@ -782,7 +845,7 @@ Incomplete restoration retains recovery materials and leaves Runtime stopped. Af
 start attempt, the selected generation and entire ledger remain in place. Any explicit later
 rollback rechecks the latest data. Unconfirmed closure never starts a second Runtime.
 
-**Command line** (Workflow #359): any argument but `--commit-config`, `--rollback` and
+**Command line**: any argument but `--commit-config`, `--rollback` and
 `--replace-manager` runs acsetup without its window. `acsetup --root <root> (--plan | --yes)
 [--conflicts new|old] [--associate <alias>=<bundle>/<server>]… [--allow-downgrade] [--online |
 --from <folder>]` installs or upgrades; every question the wizard would ask is answered by a flag,
@@ -793,7 +856,7 @@ codes: 0 done, 1 failed, 2 usage, 3 binding differences without `--conflicts`, 4
 "Component interfaces"); 2 to 6 stop before the installation changes. `acsetup --help` prints the
 whole list.
 
-**Resource-only update** (Workflow #364): `acsetup --root <root> --resources <bundle.zip> [--sums
+**Resource-only update**: `acsetup --root <root> --resources <bundle.zip> [--sums
 <SHA256SUMS>] (--plan | --yes) [--conflicts new|old] [--associate …]` puts one resource repository
 bundle (v2 or v3; a v1 bundle needs a full upgrade) into an existing A/B installation and changes
 neither the programs nor the slot. Neither `--online`, `--from` nor `--allow-downgrade` goes with it;
@@ -865,7 +928,8 @@ online edition; more must be a whole payload: trailer shape, payload start equal
 to the image end, index at most 1 MiB and matching its sha256, lengths adding up exactly to the effective
 end, names as the online fetch allows and also not starting with `-`, not ending in `.` or `.part`, and
 unique without regard to case, `SHA256SUMS` and `MEMBERS.json` read from the payload and matching the
-index, and a `build-r<7>-u<7>` tag matching `MEMBERS.json`'s commits. Anything else — a truncated file,
+index, and a tag of the old daily shape `build-r<7>-u<7>` matching `MEMBERS.json`'s commits (a
+`vX.Y.Z` tag names no commit, so there is nothing to match). Anything else — a truncated file,
 a damaged trailer, index or header — stops the wizard on its failure page before it writes anything,
 naming what was expected and what was found, saying that nothing has been written and there is no log
 yet, and pointing at downloading it again (checked against its `.sha256`) or the online `acsetup.exe`; it
@@ -873,8 +937,8 @@ never falls back to the network. The file stays open from that check to the extr
 `SHA256SUMS` guard against damage, not tampering: trust comes from downloading over HTTPS from the
 Releases page and the `.sha256` beside each installer, as for the online edition. Windows SmartScreen
 and some virus scanners may warn about a new, unsigned installer with data after its image; that is
-expected, not a defect of the wizard. The umbrella release job assembles both installers and reads the
-offline one back independently.
+expected, not a defect of the wizard. Both installers are assembled for each umbrella release, and the
+offline one is read back independently before it is published.
 
 **Things it never does**: it does not install a service, does not create a scheduled task, does not change
 PATH, does not write the registry; does not modify the configuration template; does not touch a state root
@@ -884,16 +948,58 @@ instances step and in a resource-only update whose bindings change, as above;
 does not unpack a sealed resource pack — the Runtime loads it (a v1 bundle's packs are taken out whole; a v2 bundle's packs are content directories, laid out file by file as above). On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
 immediately with `acsetup v1 is Windows-only`.
 
-Six dependencies are added (the offline edition's reading of its own executable is hand-written and
-adds none), each with its purpose noted in `[workspace.dependencies]`: `actingcommand-contract` (bundle
-index v2 and the `content-directory.v1` digest, one implementation; the console's rev, and it brings only
-`serde`, `serde_json` and `sha2`), `sha2`
-(verification), `zip` (`default-features = false`, only `deflate` enabled, the same version line the
-Runtime locks), `getrandom` (the salt and `instance_id`), `ureq` (the fetch; `default-features = false` with only `tls`:
+The Runtime's watchdog is a scheduled task, so acsetup does not set it up. To have a Runtime that is
+gone without a formal close (a crash, a closed window, a reboot) started again, run
+`<install root>\runtime\actingctl.exe watchdog install --root <install root>` once from a normal (not
+elevated) PowerShell of the user the Runtime runs for (Runtime v0.11.3 and later; `watchdog status`
+shows its state). Run `watchdog uninstall` before removing an installation. Its rules are in the
+Runtime's `distribution/windows/INSTALL.md`.
+
+Seven dependencies are added for the wizard (the offline edition's reading of its own executable is
+hand-written and adds none), each with its purpose noted in `[workspace.dependencies]` or the crate's
+`Cargo.toml`: `actingcommand-contract` (bundle index v2/v3 and the `content-directory.v1` digest, one
+implementation; the console's rev, and it brings only `serde`, `serde_json` and `sha2`),
+`actingcommand-execution-kernel` (the offline, hash-admitted pack qualifications, at the same rev),
+`sha2` (verification), `zip` (`default-features = false`, only `deflate` enabled, the same version line
+the Runtime locks), `getrandom` (the salt and `instance_id`), `ureq` (the fetch; `default-features = false` with only `tls`:
 rustls, its `ring` provider and the compiled-in `webpki-roots`, so no system TLS library) and, on
-Windows only, `windows` 0.62 (`Win32_Foundation`, `Win32_System_Com`, `Win32_UI_Shell`: the Startup,
-Start menu and desktop folders through `SHGetKnownFolderPath`, and shortcuts through `IShellLinkW` +
-`IPersistFile`; the version Slint already locks, so the lock gains no crate).
+Windows only, `windows` 0.62 (`Win32_Foundation`, `Win32_System_Com`, `Win32_System_RestartManager`,
+`Win32_UI_Shell`: the Startup, Start menu and desktop folders through `SHGetKnownFolderPath`, shortcuts
+through `IShellLinkW` + `IPersistFile`, and the Restart Manager to find the processes that still hold a
+slot's files; the version Slint already locks, so the lock gains no crate).
+
+## MCP for agents
+
+The console has no MCP server of its own. The Runtime's command line serves one: `actingctl mcp-serve`
+(Runtime v0.11.0 and later) is a local MCP server over stdio, tools only, for agents such as Claude Code
+and Codex. `actingctl mcp-config` prints the registration for a client and writes no client file:
+
+```powershell
+& '<install root>\runtime\actingctl.exe' mcp-config --client claude --tier observer
+& '<install root>\runtime\actingctl.exe' mcp-config --client codex --tier observer,operator
+```
+
+- **Claude Code**: it prints one command,
+  `claude mcp add --scope user actingcommand -- "<install root>\runtime\actingctl.exe" mcp-serve --tier …`;
+  run it once.
+- **Codex**: it prints a `[mcp_servers.actingcommand]` section (the command, its arguments, two timeouts
+  and a commented `enabled_tools` example) to put into Codex's `config.toml`.
+- On an A/B installation it prints the fixed entry `<install root>\runtime\actingctl.exe`, never a slot
+  path, so the registration keeps working after an upgrade or a rollback (Runtime v0.11.2 and later).
+  Started through that entry, the server takes the installation's state root from its selection; a
+  `--root` or `--state-root` that differs from it is refused.
+- **Tiers** (0.11 series): `observer` (reading; always on, and the default), `operator` (devices and
+  scheduling), `author` (Lab recording). A tool of a tier that is not enabled answers
+  `tier_not_enabled`. `actingctl mcp-serve --list-tools [--format json|markdown]` lists all 22 tools.
+- Approvals, edits of the actingd configuration and Runtime restarts stay with the person.
+- A running server keeps the installation generation it started with (see "A/B installation and
+  upgrade"); restart it in the client after an upgrade.
+- **Planned (0.12 series)**: tiers are removed; the general tools are always there, and Lab tools are
+  listed only when the Lab option is installed.
+
+What each tool takes and answers: `actingctl mcp-serve --list-tools --format markdown`. The manual for
+agents is `skills/actingcommand/` in the
+[umbrella repository](https://github.com/HS7097/ActingCommand/tree/main/skills/actingcommand).
 
 ## Four layers, four crates
 
@@ -921,7 +1027,8 @@ records of the console's own requests — the start press, shutdown requests, th
 open, instance discovery queries — it records itself), the only control entry points are the
 launcher's two buttons (start / request shutdown, see above), its owner-unlock entry (a confirmed
 `actingd unlock-owner`), and the instance-configuration window's check-config-gated save, and there is no
-approval entry point; no tests are written. The launcher is in
+approval entry point; the console crates carry no tests, and CI builds the workspace without running
+tests. The launcher is in
 `crates/acui-app/src/launcher.rs`, the instance-configuration window in `instances.rs`, and the client
 operations — probe, request shutdown, recording the start press, the online open's status and fact
 reads, and instance discovery — are in `acui-source` (`probe_runtime` / `request_shutdown` /
@@ -936,14 +1043,16 @@ the frame request) is reset: never a panic on the event loop. A launched actingd
 cannot start keeps running, and the line says so and that pressing Start again probes it. A child that was killed but could not be reaped is
 said as that, not as a kill that failed.
 
-The `acui-setup` crate (binary `acsetup`), sits outside these four layers: the setup wizard,
-using the shared contract and execution-kernel's offline package qualifications. `acui-installation`
-provides the shared selection consumer and `acforward` binary for setup and the console; see the previous
-section, "Setup wizard acsetup".
+Two more crates sit outside these four layers. `acui-setup` (binary `acsetup`) is the setup wizard; it
+depends on none of the four layers; besides `acui-installation` it uses Slint, `serde`, `serde_json`,
+`anyhow` and the dependencies listed under "Setup wizard acsetup", the shared contract and
+execution-kernel's offline package qualifications among them.
+`acui-installation` provides the shared installation-selection consumer for the console and the wizard,
+and the binary `acforward`, the fixed entry.
 
 ## Icon
 
-The application icon is the black single-figure "commander" mark Alice ruled on; the assets are in
+The application icon is the black single-figure "commander" mark; the assets are in
 `crates/acui-app/assets/`: `acui-256.png` (256×256 transparent PNG) and `acui.ico` (multi-size, 16..256).
 
 - **Window and taskbar icon**: `Window.icon: @image-url("../assets/acui-256.png")` in `app.slint`.
@@ -955,13 +1064,13 @@ The application icon is the black single-figure "commander" mark Alice ruled on;
 
 ## What the read face blocks
 
-These are not worked around; they are displayed as they are, and booked here. Line references are at the
-pinned rev.
+These are not worked around; they are displayed as they are, and recorded here. File references are
+to the Runtime source at the pinned rev.
 
 - **Event and repair counts: resolved offline; online, the event count only**. `GlobalLedgerMetadata`
-  (`crates/ledger/src/global/evidence.rs:257`) now states `event_count()` (`:319`) and `repair_count()`
-  (`:326`) from the authenticated metadata, without verifying any material, so the console no longer
-  needs `GlobalLedger::open_evidence` (same file, `:434`) for them. The instance card shows both, and the
+  (`crates/ledger/src/global/evidence.rs`) now states `event_count()` and `repair_count()` from the
+  authenticated metadata, without verifying any material, so the console no longer needs
+  `GlobalLedger::open_evidence` (same file) for them. The instance card shows both, and the
   number of rows **loaded in this view** separately; the two are never mixed. Over an incomplete read the
   event count covers only the verified prefix, and the card says so. The SQLite medium has no repair log
   (`None`), and the card says so instead of showing 0; the repair log does not share the event snapshot's
@@ -970,36 +1079,74 @@ pinned rev.
   (`LedgerReadScope`) nor `runtime-info.json` states the repair count, so that line says the Runtime does
   not state it.
 - **Whole-material read: resolved on both faces**. `read_material_complete`
-  (`crates/ledger-forensics/src/material.rs:74`) reads one whole object: fresh ledger metadata twice, one
+  (`crates/ledger-forensics/src/material.rs`) reads one whole object: fresh ledger metadata twice, one
   reader, one whole-file hash, bounded by `max_material_bytes` and a deadline. The offline face calls it
   with the 8 MiB frame limit and a 30-second deadline (no Runtime caller of it sets one yet; the
   contract's 4-second `RUNTIME_MATERIAL_READ_BUDGET_MS` bounds a single range read, not a whole
   object). Online, the typed client's `RuntimeClient::read_material_complete`
-  (`crates/runtime-client/src/client.rs:2192`) gives the same result shape over verified ranges, and the
+  (`crates/runtime-client/src/client.rs`) gives the same result shape over verified ranges, and the
   console calls it with the same limit and deadline; the Runtime still verifies the whole material for
   every range (a 3.6 MB frame is 19 ranges of 192 KiB).
 - **Instance facts: resolved on both faces, at different positions**. Online, the fact store is read
-  through `RuntimeClient::runtime_fact_snapshot()` (`crates/runtime-client/src/client.rs:849`), which
+  through `RuntimeClient::runtime_fact_snapshot()` (`crates/runtime-client/src/client.rs`), which
   answers at the Runtime's latest position, past the pin. Offline, `runtime_facts_at`
-  (`crates/ledger-forensics/src/runtime_facts.rs:62`) replays the store at the pinned position itself,
+  (`crates/ledger-forensics/src/runtime_facts.rs`) replays the store at the pinned position itself,
   under the Runtime's own replay rules; the console never folds `runtime.fact_*` events itself. Lease
   state comes only from the online status read, so offline has none.
-- **Geometry and frames cannot be brought together on these two roots**. In the 0828 and v5 roots, the
-  only events carrying a `capture.frame` artifact are `artifact.created` / `artifact.verified`, and their
-  payloads hold no geometry; the only events carrying geometry are `task.effect_intent` (six on 0828,
-  five on v5), whose payload is a single tap coordinate and whose `links` hold **no** `frame_id`. The
-  ledger gives no relation joining the two, so the console does not join them — the real frame is drawn as
-  it is, and the overlay is empty. At the pin, `task.effect_intent` can state the frame extent its
-  coordinates are in (`frame_extent`, `crates/actingcommand-contract/src/event/payload.rs:3392`) and
-  `task.geometry_observed` its frame's extent (`TaskGeometryFrame::extent`, `:3093`); the overlay canvas uses that extent when an event
-  states one. The effect intents on these two roots state none, so their size stays "not recorded".
-- **Neither root holds artifact eviction facts**, so the eviction placeholder does not appear on these two
-  roots; the code path is written to the contract.
+- **Geometry and frames cannot be brought together on two early state roots**. In two early real-device
+  state roots the console was first checked against, the only events carrying a `capture.frame`
+  artifact are `artifact.created` / `artifact.verified`, and their payloads hold no geometry; the only
+  events carrying geometry are a handful of `task.effect_intent`, whose payload is a single tap
+  coordinate and whose `links` hold **no** `frame_id`. The ledger gives no relation joining the two, so
+  the console does not join them — the real frame is drawn as it is, and the overlay is empty. At the
+  pin, `task.effect_intent` can state the frame extent its coordinates are in (`frame_extent`,
+  `crates/actingcommand-contract/src/event/payload.rs`) and `task.geometry_observed` its frame's extent
+  (`TaskGeometryFrame::extent`, same file); the overlay canvas uses that extent when an event states
+  one. The effect intents on those two roots state none, so their size stays "not recorded".
+- **Neither of those roots holds artifact eviction facts**, so the eviction placeholder does not appear
+  on them; the code path is written to the contract.
+
+## Planned (not released)
+
+Everything in this section is planned, not shipped. The series an item targets may still change, and
+there are no dates.
+
+**0.12 series**
+
+- **Next UI release** (planned with the 0.12 series, as a new major UI version): the console reads the
+  new ledger; errors are explained by their result code, in Chinese and English; the console shows why a
+  task did not run; the installer gets a page with two independent options for the Lab module
+  (authoring; debugging), neither installed by default; the installer gets machine-readable output
+  (`--json`).
+- **New ledger**: Runtime 0.12.0 starts from a new ledger format (revision 3) and an empty ledger; a 0.11
+  state root is not carried over (the old installation stays as an archive and is not deleted).
+  Installing it is expected to need the next UI release.
+- **Unified result codes**: every program shares one registered outcome catalog, each code with a class;
+  a command prints one result line, and exit codes converge on 0/1/2.
+- **Unified interface**: one gate with three front ends — command line, MCP and this UI — matched one to
+  one; each request records only which front end it came from, and permissions no longer depend on
+  "who". MCP tiers are removed.
+- **Lab as a detachable module**: not installed by default. Either of the installer's two options installs
+  it: authoring (recording and pack-making tools, for people who make resources with an agent) or
+  debugging (direct control of the Runtime's internal actions, for advanced users). Without it the Lab
+  channel exists but cannot be called.
+- **Runtime side**: a configurable recovery ladder (changed in the configuration file, or at once by one
+  instruction from the command line, MCP or the UI), performance pacing, scheduling rules that state a
+  reason for every task that did not run, data refresh, shared data tables, per-instance goals, MCP
+  additions, and, late in the series, screen resolutions beyond today's 1280×720 base.
+
+**0.13 series**
+
+- **MaaFramework pipeline import/export** (a "package view"): our task packs converted to and from
+  MaaFramework-shaped JSON; a pack that fails the pack check on the way back is refused, not written.
+  Editing happens in our own UI (a node-graph editor); no third-party editor ships with it.
+- **Runtime side**: a battle layer of generic flow components and clean-room generic spatial components;
+  all game content stays in resource packs.
 
 ## License
 
-`GPL-3.0-only` (Alice ruled on 2026-09-17). The repository includes the full LICENSE text; the workspace
-`license` field and the SPDX header of every `.rs` / `.slint` file agree with it. The interface is
-rendered by [Slint](https://slint.dev), used under its GPLv3 licensing option. The Runtime crates depended
-on (contract / ledger / ledger-forensics / runtime-client) are `AGPL-3.0-only`, and the two combine under
-GPLv3 section 13.
+`GPL-3.0-only`. The repository includes the full LICENSE text; the workspace `license` field and the SPDX
+header of every `.rs` / `.slint` file agree with it. The interface is rendered by
+[Slint](https://slint.dev), used under its GPLv3 licensing option. The Runtime crates depended on
+(contract / ledger / ledger-forensics / runtime-client / execution-kernel) are `AGPL-3.0-only`, and the
+two combine under GPLv3 section 13.
