@@ -490,7 +490,8 @@ last Start or Request shutdown press, or why the instance-configuration window d
 The console has no pause or resume control: pause scheduling with
 `actingctl pause --state-root <state root>` (add `--instance <alias>` for one instance) and lift it with
 `actingctl resume` and the same flags, or use the MCP tools `ac_pause` / `ac_resume` (see "MCP for
-agents"). Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
+agents"; in Runtime v0.11.6 these two fail with `client_action_invalid` for an alias
+containing upper-case letters, a known issue, so use `actingctl pause` / `resume` there). Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
 
 ## Instance configuration
 

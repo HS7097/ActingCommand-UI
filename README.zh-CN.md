@@ -362,7 +362,8 @@ actingd_exe = 'C:\AC\runtime\actingcommand-actingd.exe'     # 可选，绝对路
 
 监控台没有暂停与恢复的控件：用 `actingctl pause --state-root <状态根>` 暂停调度（只停一个实例时加
 `--instance <别名>`），用带同样参数的 `actingctl resume` 恢复，或用 MCP 工具 `ac_pause` / `ac_resume`（见「智能体用的 MCP」
-一节）。开机自启是安装向导的一个选项，见「安装向导 acsetup」一节。
+一节；Runtime v0.11.6 里别名含大写字母时这两个工具会以 `client_action_invalid` 失败，是已知问题，
+这时改用 `actingctl pause` / `resume`）。开机自启是安装向导的一个选项，见「安装向导 acsetup」一节。
 
 ## 实例配置
 
