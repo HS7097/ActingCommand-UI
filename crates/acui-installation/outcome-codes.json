@@ -14,14 +14,14 @@
       "values": {
         "operation": "required"
       },
-      "review": "settled",
+      "review": "pending",
       "status": "active",
-      "since": "0.11.5",
+      "since": "1.0.0",
       "description": "The Runtime took a launcher press the console sent as a value-less button client action (operation record_client_action), but the receipt carried no terminal event, so the console cannot state the ledger position of the record. The press counts as not recorded, and a shutdown press sends no shutdown request. Whether the Runtime wrote the record is unknown.",
       "common_causes": "A Runtime whose client-action receipt does not carry the terminal event the console's pinned client expects; a console and a Runtime from releases that do not match.",
       "handling": "Press again. If it happens on every press, run the console and the Runtime from the same release."
     },
-    "console_instance_binding_malformed": {
+    "console_instance_binding_missing": {
       "category": "error",
       "owner": "ui",
       "layer": "ui",
@@ -29,9 +29,9 @@
       "values": {
         "adb_port": "required"
       },
-      "review": "settled",
+      "review": "pending",
       "status": "active",
-      "since": "0.11.5",
+      "since": "1.0.0",
       "description": "The offline read face's instance bindings at the session's snapshot list a port (adb_port) whose member instances have no latest binding fact, so the console cannot say which instance the port belongs to. The session shows no port bindings; the event pages read as before.",
       "common_causes": "A read face whose port membership and latest bindings disagree: a defect of the Runtime build the console is pinned to.",
       "handling": "Reopen the console. If it recurs, report it with the Runtime version; the events stay readable."
@@ -42,9 +42,9 @@
       "layer": "ui",
       "uncertain": false,
       "values": {},
-      "review": "settled",
+      "review": "pending",
       "status": "active",
-      "since": "0.11.5",
+      "since": "1.0.0",
       "description": "The console's own list of routine performance-monitor event types (perf.pressure_ended, perf.monitor_recovered) did not parse as event types of the pinned contract, so the console cannot ask the ledger to leave them out. Every page query fails while routine performance events are hidden.",
       "common_causes": "The pinned Runtime contract renamed or removed one of these event types, and the console's list did not follow.",
       "handling": "Turn on Show Performance Monitor to read pages without the exclusion. The console's list needs a code fix."
@@ -55,11 +55,11 @@
       "layer": "ui",
       "uncertain": false,
       "values": {},
-      "review": "settled",
+      "review": "pending",
       "status": "active",
-      "since": "0.11.5",
-      "description": "The session's ledger page connection, opened with the session or rebuilt after a timeout, reached a Runtime of another owner epoch than the session's: the Runtime restarted, or another one took the state root, after the console opened. The session's page pin was stated by the Runtime that is gone, so the page query fails and is not retried. The console detects this itself; the Runtime client's runtime_owner_epoch_changed means the same.",
-      "common_causes": "The Runtime was restarted or replaced while the console stayed open.",
+      "since": "1.0.0",
+      "description": "The session's ledger page connection reached a Runtime of another owner epoch than the session's main connection: the Runtime restarted, or another one took the state root, in between. The page connection is opened with the session and rebuilt after a failed exchange (a timeout, or another failure the client latches the connection on). At open, the online read face does not open, so the session does not open. At a rebuild, the session's page pin was stated by the Runtime that is gone, so the page query fails and is not retried. The console detects this itself; the Runtime client's runtime_owner_epoch_changed means the same.",
+      "common_causes": "The Runtime was restarted or replaced while the console was opening or open.",
       "handling": "Reopen the console to read from the Runtime that is running now."
     },
     "console_status_source_missing": {
@@ -70,9 +70,9 @@
       "values": {
         "operation": "required"
       },
-      "review": "settled",
+      "review": "pending",
       "status": "active",
-      "since": "0.11.5",
+      "since": "1.0.0",
       "description": "The Runtime answered the console's status read (operation runtime_status) without the observation source it records for that read, so the console cannot state the ledger position the instances' status was read at. The instances' live status is not shown; the event pages read as before.",
       "common_causes": "A Runtime whose status reply does not carry its observation source; a console and a Runtime from releases that do not match.",
       "handling": "Run the console and the Runtime from the same release, then reopen the console."

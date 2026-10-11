@@ -25,7 +25,7 @@ use serde_json::{Map, Value};
 
 /// The offline read face listed a port whose member instances have no latest
 /// binding fact.
-pub const CONSOLE_INSTANCE_BINDING_MALFORMED: &str = "console_instance_binding_malformed";
+pub const CONSOLE_INSTANCE_BINDING_MISSING: &str = "console_instance_binding_missing";
 /// The Runtime answered the status read without its observation source.
 pub const CONSOLE_STATUS_SOURCE_MISSING: &str = "console_status_source_missing";
 /// A launcher press's client-action receipt carried no terminal event.
@@ -41,7 +41,7 @@ pub const CONSOLE_RUNTIME_OWNER_CHANGED: &str = "console_runtime_owner_changed";
 
 /// Every code constant above: the code table must hold each of them.
 const UI_CODES: [&str; 5] = [
-    CONSOLE_INSTANCE_BINDING_MALFORMED,
+    CONSOLE_INSTANCE_BINDING_MISSING,
     CONSOLE_STATUS_SOURCE_MISSING,
     CONSOLE_CLIENT_ACTION_TERMINAL_MISSING,
     CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN,
