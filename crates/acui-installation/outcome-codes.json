@@ -14,7 +14,7 @@
       "values": {
         "operation": "required"
       },
-      "review": "settled",
+      "review": "pending",
       "status": "active",
       "since": "1.0.0",
       "description": "The Runtime took a launcher press the console sent as a value-less button client action (operation record_client_action), but the receipt carried no terminal event, so the console cannot state the ledger position of the record. The press counts as not recorded, and a shutdown press sends no shutdown request. Whether the Runtime wrote the record is unknown.",
@@ -29,7 +29,7 @@
       "values": {
         "adb_port": "required"
       },
-      "review": "settled",
+      "review": "pending",
       "status": "active",
       "since": "1.0.0",
       "description": "The offline read face's instance bindings at the session's snapshot list a port (adb_port) whose member instances have no latest binding fact, so the console cannot say which instance the port belongs to. The session shows no port bindings; the event pages read as before.",
@@ -42,7 +42,7 @@
       "layer": "ui",
       "uncertain": false,
       "values": {},
-      "review": "settled",
+      "review": "pending",
       "status": "active",
       "since": "1.0.0",
       "description": "The console's own list of routine performance-monitor event types (perf.pressure_ended, perf.monitor_recovered) did not parse as event types of the pinned contract, so the console cannot ask the ledger to leave them out. Every page query fails while routine performance events are hidden.",
@@ -55,7 +55,7 @@
       "layer": "ui",
       "uncertain": false,
       "values": {},
-      "review": "settled",
+      "review": "pending",
       "status": "active",
       "since": "1.0.0",
       "description": "The session's ledger page connection reached a Runtime of another owner epoch than the session's main connection: the Runtime restarted, or another one took the state root, in between. The page connection is opened with the session and rebuilt after a failed exchange (a timeout, or another failure the client latches the connection on). At open, the online read face does not open, so the session does not open. At a rebuild, the session's page pin was stated by the Runtime that is gone, so the page query fails and is not retried. The console detects this itself; the Runtime client's runtime_owner_epoch_changed means the same.",
@@ -70,7 +70,7 @@
       "values": {
         "operation": "required"
       },
-      "review": "settled",
+      "review": "pending",
       "status": "active",
       "since": "1.0.0",
       "description": "The Runtime answered the console's status read (operation runtime_status) without the observation source it records for that read, so the console cannot state the ledger position the instances' status was read at. The instances' live status is not shown; the event pages read as before.",
