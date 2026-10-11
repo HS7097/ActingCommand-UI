@@ -253,6 +253,7 @@ dependencies = [
 name = "acui-model"
 version = "0.1.0"
 dependencies = [
+ "acui-installation",
  "acui-rows",
  "serde",
  "serde_json",
@@ -276,6 +277,7 @@ dependencies = [
  "actingcommand-ledger",
  "actingcommand-ledger-forensics",
  "actingcommand-runtime-client",
+ "acui-installation",
  "acui-rows",
  "anyhow",
 ]

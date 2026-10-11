@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The installation inputs retained by one UI process. acsetup owns all writes.
 
+pub mod outcome;
+
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};

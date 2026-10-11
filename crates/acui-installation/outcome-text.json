@@ -1,0 +1,117 @@
+{
+  "generic": {
+    "success": {
+      "en": {
+        "sentence": "The operation completed.",
+        "short": "Done"
+      },
+      "zh-Hans": {
+        "sentence": "操作已完成。",
+        "short": "已完成"
+      }
+    },
+    "info": {
+      "en": {
+        "sentence": "This is a status notice; nothing needs to be done.",
+        "short": "Notice"
+      },
+      "zh-Hans": {
+        "sentence": "这是一条状态信息，无需处理。",
+        "short": "信息"
+      }
+    },
+    "warning": {
+      "en": {
+        "sentence": "The operation went on, but something was skipped, degraded or left uncertain. Please check it.",
+        "short": "Needs attention"
+      },
+      "zh-Hans": {
+        "sentence": "操作仍在进行或已完成，但有内容被跳过、降级或结果不确定，请留意。",
+        "short": "需要留意"
+      }
+    },
+    "error": {
+      "en": {
+        "sentence": "The operation failed. Try again later; if it keeps failing, note the code and report it.",
+        "short": "Failed"
+      },
+      "zh-Hans": {
+        "sentence": "操作失败。请稍后重试；如果反复失败，请记下错误码并反馈。",
+        "short": "操作失败"
+      }
+    },
+    "fatal": {
+      "en": {
+        "sentence": "This component cannot recover on its own. The installation, the system or another outside problem must be fixed before it can be used again.",
+        "short": "Needs an outside fix"
+      },
+      "zh-Hans": {
+        "sentence": "该组件无法自行恢复，需要先修复安装文件、系统环境或其他外部问题才能继续使用。",
+        "short": "需要外部修复"
+      }
+    }
+  },
+  "codes": {
+    "console_client_action_terminal_missing": {
+      "en": {
+        "sentence": "The Runtime's receipt did not say where in the ledger this press was recorded, so the press is not confirmed as recorded. For a shutdown press, no shutdown request was sent.",
+        "short": "Press not confirmed",
+        "handling": "Press again. If it happens every time, make sure the console and the Runtime come from the same release."
+      },
+      "zh-Hans": {
+        "sentence": "Runtime 的回执没有说明这次按键记在账本的哪个位置，按键未能确认记账；如果是请求关闭，关闭请求也没有发出。",
+        "short": "按键记账未确认",
+        "handling": "请再按一次。如果每次都这样，请确认监控台与 Runtime 来自同一版本。"
+      }
+    },
+    "console_instance_binding_malformed": {
+      "en": {
+        "sentence": "A port in the ledger lists instances that have no binding facts, so port bindings are not shown this time. The event list is not affected.",
+        "short": "Port bindings incomplete",
+        "handling": "Reopen the console. If it persists, report it together with the Runtime version."
+      },
+      "zh-Hans": {
+        "sentence": "账本里有端口列出了实例，却找不到这些实例的绑定事实，因此本次不显示端口绑定；事件列表不受影响。",
+        "short": "端口绑定不完整",
+        "handling": "请重新打开监控台。仍然出现时，请连同 Runtime 版本一起反馈。"
+      }
+    },
+    "console_routine_performance_type_unknown": {
+      "en": {
+        "sentence": "The console's built-in routine performance-monitor event types do not match the Runtime contract, so the event list cannot be read while those events are hidden.",
+        "short": "Cannot hide performance events",
+        "handling": "Turn on Show Performance Monitor to keep reading. This is a console defect; please report it."
+      },
+      "zh-Hans": {
+        "sentence": "监控台内置的性能监视例行事件类型与 Runtime 契约不符，隐藏这些事件时无法读取事件列表。",
+        "short": "无法隐藏性能事件",
+        "handling": "勾选「显示性能监视」即可继续读取。这是监控台的缺陷，请反馈。"
+      }
+    },
+    "console_runtime_owner_changed": {
+      "same_as": "runtime_owner_epoch_changed",
+      "en": {
+        "sentence": "The Runtime restarted or was replaced after the console opened, so the ledger position this session reads at no longer holds. The query was not retried.",
+        "short": "Runtime restarted",
+        "handling": "Reopen the console to connect to the Runtime that is running now."
+      },
+      "zh-Hans": {
+        "sentence": "监控台打开后 Runtime 已重新启动或被替换，本次会话依据的账本位置已失效，查询没有重试。",
+        "short": "Runtime 已重新启动",
+        "handling": "请重新打开监控台，连接当前运行的 Runtime。"
+      }
+    },
+    "console_status_source_missing": {
+      "en": {
+        "sentence": "The Runtime's instance status did not say which ledger position it was read at, so the instances' live status is not shown. The event list is not affected.",
+        "short": "Instance status lacks its source",
+        "handling": "Make sure the console and the Runtime come from the same release, then reopen the console."
+      },
+      "zh-Hans": {
+        "sentence": "Runtime 返回的实例状态没有注明读于账本哪个位置，因此不显示实例的实时状态；事件列表不受影响。",
+        "short": "实例状态缺少来源",
+        "handling": "请确认监控台与 Runtime 来自同一版本，然后重新打开监控台。"
+      }
+    }
+  }
+}

@@ -48,6 +48,220 @@ jobs:
         with:
           # Empty outside a release run: the event's own commit, as before.
           ref: ${{ inputs.source_sha }}
+      # Workflow #378 A-4: the UI's own outcome codes, locations and keys (setup_ and console_
+      # names, crates/acui-installation/outcome-codes.json) and their words (outcome-text.json)
+      # against the Runtime's merged catalog at the commit runtime-outcome-catalog.rev names. That
+      # pin is apart from the Cargo dependency's rev; edit the file to move it. Both legs run it;
+      # it is a verification step, not a test.
+      - name: Check UI outcome codes against the Runtime catalog
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $revPath = 'crates/acui-installation/runtime-outcome-catalog.rev'
+          $tablePath = 'crates/acui-installation/outcome-codes.json'
+          $textPath = 'crates/acui-installation/outcome-text.json'
+          $constPath = 'crates/acui-installation/src/outcome.rs'
+          $schema = 'actingcommand.outcome-codes.v1'
+
+          $revText = Get-Content -LiteralPath $revPath -Raw
+          if ($null -eq $revText -or $revText -cnotmatch '\A[0-9a-f]{40}\r?\n?\z') {
+            throw "outcome_catalog_rev_invalid: $revPath must hold one 40-character lowercase Runtime commit and nothing else, not '$revText'"
+          }
+          $rev = $revText.Substring(0, 40)
+          $url = "https://raw.githubusercontent.com/HS7097/ActingCommand-Runtime/$rev/contracts/outcome-codes.json"
+          $runtimeText = $null
+          foreach ($attempt in 1, 2) {
+            try {
+              $runtimeText = (Invoke-WebRequest -Uri $url -TimeoutSec 120).Content
+              if ($runtimeText -is [byte[]]) { $runtimeText = [Text.Encoding]::UTF8.GetString($runtimeText) }
+              break
+            } catch {
+              if ($attempt -eq 2) {
+                throw "outcome_catalog_unavailable: the Runtime catalog at $rev did not download in 2 attempts ($url): $($_.Exception.Message)"
+              }
+              Write-Host "Runtime catalog download attempt $attempt failed: $($_.Exception.Message); retrying in 10 s"
+              Start-Sleep -Seconds 10
+            }
+          }
+          try {
+            $runtime = $runtimeText | ConvertFrom-Json -Depth 64
+          } catch {
+            throw "outcome_catalog_unreadable: the Runtime catalog at $rev is not JSON: $($_.Exception.Message)"
+          }
+          if ($runtime.schema_version -cne $schema) {
+            throw "outcome_catalog_unreadable: the Runtime catalog at $rev has schema_version '$($runtime.schema_version)', not $schema"
+          }
+          foreach ($section in 'keys', 'domains', 'codes', 'locations') {
+            if ($runtime.$section -isnot [Management.Automation.PSCustomObject]) {
+              throw "outcome_catalog_unreadable: the Runtime catalog at $rev has no $section object"
+            }
+          }
+          try {
+            $ui = Get-Content -LiteralPath $tablePath -Raw | ConvertFrom-Json -Depth 64
+            $text = Get-Content -LiteralPath $textPath -Raw | ConvertFrom-Json -Depth 64
+          } catch {
+            throw "outcome_catalog_unreadable: a UI outcome table is not JSON: $($_.Exception.Message)"
+          }
+
+          function Get-Members($object) {
+            if ($object -is [Management.Automation.PSCustomObject]) {
+              foreach ($property in $object.PSObject.Properties) { $property.Name }
+            }
+          }
+          function New-NameSet($names) {
+            $set = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            foreach ($name in $names) { [void]$set.Add($name) }
+            , $set
+          }
+          function Test-Words($value) { $value -is [string] -and $value.Trim().Length -gt 0 }
+          function Test-UiOwned($owners) { $list = @($owners); $list.Count -eq 1 -and $list[0] -ceq 'ui' }
+
+          $problems = [Collections.Generic.List[string]]::new()
+          $namePattern = '\A(setup|console)_[a-z0-9]+(_[a-z0-9]+)+\z'
+          $keyPattern = '\A(setup|console)_[a-z0-9]+(_[a-z0-9]+)*\z'
+          $prefixPattern = '\A(setup|console)_'
+          $categories = @('success', 'info', 'warning', 'error', 'fatal')
+          $tongues = @('en', 'zh-Hans')
+          $runtimeCodes = New-NameSet (Get-Members $runtime.codes)
+          $runtimeLocations = New-NameSet (Get-Members $runtime.locations)
+          $runtimeKeys = New-NameSet (Get-Members $runtime.keys)
+          $runtimePrefixes = @(Get-Members $runtime.domains)
+
+          if ($ui.schema_version -cne $schema) { $problems.Add("$tablePath`: schema_version is not $schema") }
+          foreach ($section in 'domains', 'keys', 'codes', 'locations') {
+            if ($ui.$section -isnot [Management.Automation.PSCustomObject]) { $problems.Add("$tablePath`: $section is not an object") }
+          }
+          $uiPrefixes = @(Get-Members $ui.domains)
+          if (($uiPrefixes | Sort-Object) -join ',' -cne 'console_,setup_' -or
+              @($uiPrefixes | Where-Object { -not (Test-UiOwned $ui.domains.$_) }).Count -ne 0) {
+            $problems.Add("$tablePath`: domains must be exactly setup_ and console_, each owned by [""ui""]")
+          }
+          $uiCodes = New-NameSet (Get-Members $ui.codes)
+          $uiLocations = New-NameSet (Get-Members $ui.locations)
+          $uiKeys = New-NameSet (Get-Members $ui.keys)
+
+          # UI keys: prefixed, typed, and none of the Runtime's.
+          foreach ($key in $uiKeys) {
+            $type = $ui.keys.$key.type
+            if ($key -cnotmatch $keyPattern -or [Text.Encoding]::UTF8.GetByteCount($key) -gt 64) {
+              $problems.Add("key $key`: a UI key is setup_ or console_ plus snake_case, at most 64 bytes")
+            }
+            if (-not (Test-Words $type) -or -not (Test-Words $ui.keys.$key.description)) {
+              $problems.Add("key $key`: needs a type and a description")
+            }
+            if ($runtimeKeys.Contains($key)) {
+              $runtimeType = $runtime.keys.$key.type
+              $agreement = if ($runtimeType -ceq $type) { 'same type' } else { "key-type conflict: UI $type, Runtime $runtimeType" }
+              $problems.Add("key $key`: also a Runtime key ($agreement)")
+            }
+          }
+
+          # UI codes and locations: names, ownership by domain, entry shape.
+          foreach ($kind in 'codes', 'locations') {
+            $names = $uiCodes
+            if ($kind -ceq 'locations') { $names = $uiLocations }
+            $singular = $kind.TrimEnd('s')
+            foreach ($name in $names) {
+              $entry = $ui.$kind.$name
+              if ($name -cnotmatch $namePattern -or [Text.Encoding]::UTF8.GetByteCount($name) -gt 64) {
+                $problems.Add("$singular $name`: a UI name is setup_ or console_ plus at least two snake_case words, at most 64 bytes")
+              }
+              if ($runtimeCodes.Contains($name)) { $problems.Add("$singular $name`: also a Runtime code") }
+              if ($runtimeLocations.Contains($name)) { $problems.Add("$singular $name`: also a Runtime location") }
+              if ($kind -ceq 'codes' -and $uiLocations.Contains($name)) { $problems.Add("code $name`: also a UI location") }
+              $longest = $runtimePrefixes | Where-Object { $name.StartsWith($_, [StringComparison]::Ordinal) } |
+                Sort-Object -Property Length -Descending | Select-Object -First 1
+              if (-not $longest) {
+                $problems.Add("$singular $name`: no Runtime domain prefix covers it")
+              } elseif (-not (Test-UiOwned $runtime.domains.$longest)) {
+                $problems.Add("$singular $name`: its Runtime domain $longest belongs to [$(@($runtime.domains.$longest) -join ', ')], not [ui]")
+              }
+              if ($entry.owner -cne 'ui' -or $entry.layer -cne 'ui') { $problems.Add("$singular $name`: owner and layer must be ui") }
+              if ($entry.review -cnotin 'pending', 'settled') { $problems.Add("$singular $name`: review is neither pending nor settled") }
+              if ($entry.status -cnotin 'active', 'retired') { $problems.Add("$singular $name`: status is neither active nor retired") }
+              if ($entry.since -isnot [string] -or $entry.since -cnotmatch '\A[0-9]+\.[0-9]+\.[0-9]+\z') { $problems.Add("$singular $name`: since is not a UI release X.Y.Z") }
+              if (-not (Test-Words $entry.description)) { $problems.Add("$singular $name`: description is empty") }
+              if ($kind -cne 'codes') { continue }
+              if ($entry.category -cnotin $categories) { $problems.Add("code $name`: category is not one of $($categories -join ', ')") }
+              if ($entry.uncertain -isnot [bool]) { $problems.Add("code $name`: uncertain is not true or false") }
+              foreach ($field in 'common_causes', 'handling') {
+                if (-not (Test-Words $entry.$field) -or ($entry.review -ceq 'settled' -and $entry.$field -ceq 'TBD')) {
+                  $problems.Add("code $name`: $field is empty, or TBD on a settled code")
+                }
+              }
+              if ($entry.values -isnot [Management.Automation.PSCustomObject]) {
+                $problems.Add("code $name`: values is not an object")
+                continue
+              }
+              foreach ($key in Get-Members $entry.values) {
+                if ($entry.values.$key -cnotin 'required', 'optional') { $problems.Add("code $name`: value $key is neither required nor optional") }
+                if ($key -cmatch $prefixPattern) {
+                  if (-not $uiKeys.Contains($key)) { $problems.Add("code $name`: value $key is not a UI key") }
+                } elseif (-not $runtimeKeys.Contains($key)) {
+                  $problems.Add("code $name`: value $key is not a Runtime key")
+                } elseif ($uiKeys.Contains($key) -and $ui.keys.$key.type -cne $runtime.keys.$key.type) {
+                  $problems.Add("code $name`: value $key is typed $($ui.keys.$key.type) in the UI table and $($runtime.keys.$key.type) in the Runtime catalog")
+                }
+              }
+            }
+          }
+
+          # The other direction: the Runtime registers no UI name and gives setup_/console_ to no one else.
+          foreach ($pair in @{ code = $runtimeCodes; location = $runtimeLocations; key = $runtimeKeys }.GetEnumerator()) {
+            foreach ($name in $pair.Value) {
+              if ($name -cmatch $prefixPattern) { $problems.Add("Runtime $($pair.Key) $name`: setup_ and console_ names are the UI's") }
+            }
+          }
+          foreach ($base in 'setup_', 'console_') {
+            if ($runtimePrefixes -cnotcontains $base) { $problems.Add("Runtime domains: $base is missing") }
+          }
+          foreach ($prefix in $runtimePrefixes) {
+            if ($prefix -cmatch $prefixPattern -and -not (Test-UiOwned $runtime.domains.$prefix)) {
+              $problems.Add("Runtime domain $prefix`: belongs to [$(@($runtime.domains.$prefix) -join ', ')], not [ui]")
+            }
+          }
+
+          # The words: every category's generic sentence, every UI code's own, and nothing else.
+          foreach ($category in $categories) {
+            foreach ($tongue in $tongues) {
+              $words = $text.generic.$category.$tongue
+              foreach ($field in 'sentence', 'short') {
+                if (-not (Test-Words $words.$field)) { $problems.Add("$textPath`: generic.$category.$tongue.$field is missing or empty") }
+              }
+            }
+          }
+          foreach ($code in $uiCodes) {
+            foreach ($tongue in $tongues) {
+              $words = $text.codes.$code.$tongue
+              foreach ($field in 'sentence', 'short', 'handling') {
+                if (-not (Test-Words $words.$field)) { $problems.Add("$textPath`: codes.$code.$tongue.$field is missing or empty") }
+              }
+            }
+          }
+          foreach ($code in Get-Members $text.codes) {
+            if (-not $uiCodes.Contains($code)) { $problems.Add("$textPath`: codes.$code is not a code of $tablePath") }
+            $same = $text.codes.$code.same_as
+            if ($null -ne $same -and -not ($same -is [string] -and $runtimeCodes.Contains($same))) {
+              $problems.Add("$textPath`: codes.$code.same_as '$same' is not a Runtime code")
+            }
+          }
+
+          # The Rust constants name exactly the UI codes.
+          $constants = New-NameSet ([regex]::Matches((Get-Content -LiteralPath $constPath -Raw),
+            'pub const [A-Z][A-Z0-9_]*: &str =\s*"((?:setup|console)_[a-z0-9_]+)";') | ForEach-Object { $_.Groups[1].Value })
+          foreach ($constant in $constants) {
+            if (-not $uiCodes.Contains($constant) -and -not $uiLocations.Contains($constant)) {
+              $problems.Add("$constPath`: constant $constant is not in $tablePath")
+            }
+          }
+          foreach ($code in $uiCodes) {
+            if (-not $constants.Contains($code)) { $problems.Add("$constPath`: code $code has no constant") }
+          }
+
+          if ($problems.Count -ne 0) {
+            throw "outcome_catalog_conflict: $($problems.Count) problem(s) against Runtime ${rev}:`n- $($problems -join "`n- ")"
+          }
+          Write-Host "$($uiCodes.Count) codes / $($uiLocations.Count) locations checked against Runtime $rev"
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux'
         run: |
