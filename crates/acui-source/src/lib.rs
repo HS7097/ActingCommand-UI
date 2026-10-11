@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use acui_installation::outcome::{
-    CONSOLE_CLIENT_ACTION_TERMINAL_MISSING, CONSOLE_INSTANCE_BINDING_MALFORMED,
+    CONSOLE_CLIENT_ACTION_TERMINAL_MISSING, CONSOLE_INSTANCE_BINDING_MISSING,
     CONSOLE_RUNTIME_OWNER_CHANGED, CONSOLE_STATUS_SOURCE_MISSING,
 };
 use acui_rows::{
@@ -201,7 +201,7 @@ impl EvidenceSource {
                 .filter_map(|id| bindings.latest.get(id))
                 .max_by_key(|binding| binding.sequence)
                 .ok_or_else(|| {
-                    anyhow!("{CONSOLE_INSTANCE_BINDING_MALFORMED}: 端口 {port} 没有绑定事实")
+                    anyhow!("{CONSOLE_INSTANCE_BINDING_MISSING}: 端口 {port} 没有绑定事实")
                 })?;
             ports.push(PortEntry {
                 port: *port,

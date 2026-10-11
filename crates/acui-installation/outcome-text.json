@@ -64,7 +64,7 @@
         "handling": "请再按一次。如果每次都这样，请确认监控台与 Runtime 来自同一版本。"
       }
     },
-    "console_instance_binding_malformed": {
+    "console_instance_binding_missing": {
       "en": {
         "sentence": "A port in the ledger lists instances that have no binding facts, so port bindings are not shown this time. The event list is not affected.",
         "short": "Port bindings incomplete",
@@ -91,12 +91,12 @@
     "console_runtime_owner_changed": {
       "same_as": "runtime_owner_epoch_changed",
       "en": {
-        "sentence": "The Runtime restarted or was replaced after the console opened, so the ledger position this session reads at no longer holds. The query was not retried.",
+        "sentence": "The Runtime restarted or was replaced while the console was connecting to it or reading from it, so this read has stopped.",
         "short": "Runtime restarted",
         "handling": "Reopen the console to connect to the Runtime that is running now."
       },
       "zh-Hans": {
-        "sentence": "监控台打开后 Runtime 已重新启动或被替换，本次会话依据的账本位置已失效，查询没有重试。",
+        "sentence": "Runtime 在监控台连接或读取期间重新启动或被替换，本次读取已停止。",
         "short": "Runtime 已重新启动",
         "handling": "请重新打开监控台，连接当前运行的 Runtime。"
       }
