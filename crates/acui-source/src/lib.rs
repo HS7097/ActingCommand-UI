@@ -67,7 +67,13 @@ const FACTS_READ_DEADLINE: Duration = Duration::from_secs(30);
 /// on. The client refuses anything above 60 s at connect
 /// (`runtime_client_config_invalid`). A page query runs synchronously on the
 /// UI event loop, so the longer this is, the longer one slow page can hang the
-/// window: hence 20 s, not the 60 s cap.
+/// window: hence 20 s, not the 60 s cap. One page query can wait several
+/// times this. A rebuild of the page connection waits for its TCP connect and
+/// for its owner check's receipt, each bounded by this; a query whose last one
+/// latched the connection rebuilds it first, then asks, and on a timeout
+/// waits `LEDGER_PAGE_RETRY_BACKOFF`, rebuilds again and asks once more: at
+/// worst six times this plus the backoff, 121 s, and on loopback, where the
+/// connect is answered at once, about four times, 81 s.
 const LEDGER_PAGE_IO_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The wait before the one retry of a page exchange that timed out.
@@ -285,11 +291,15 @@ struct LedgerPages {
     /// The owner epoch of the session's first connection, the main one. A page
     /// connection, at open or rebuilt, must reach that same Runtime.
     owner_epoch: OwnerEpoch,
-    /// Set once an exchange on `client` timed out. The client latches a
-    /// connection on such a failure and fails every later exchange on it the
-    /// same way, so the next page query rebuilds the connection first rather
-    /// than let one slow page end the session's reading.
-    timed_out: Cell<bool>,
+    /// Set once an exchange on `client` failed fatally (`is_fatal`): without
+    /// the Runtime's error projection, as a timeout or a receipt body that did
+    /// not arrive whole does, or with a fatal one. The client latches a
+    /// connection on an exchange that fails so and fails every later exchange
+    /// on it the same way, so the next page query rebuilds the connection first
+    /// rather than let one slow or broken page end the session's reading. (A
+    /// fatal failure before the send latches nothing; the rebuild then costs
+    /// one connect.)
+    latched: Cell<bool>,
 }
 
 impl LedgerPages {
@@ -306,44 +316,51 @@ impl LedgerPages {
         let owner_epoch = main.runtime_info().owner_epoch();
         let client = Self::connect(root)
             .map_err(|error| anyhow!("在线读面不可用 / online source unavailable: {error}"))?;
-        let reached = client.runtime_info().owner_epoch();
-        if reached != owner_epoch {
-            let reason = owner_changed(owner_epoch, reached);
-            bail!("在线读面不可用 / online source unavailable: {reason}");
+        if client.runtime_info().owner_epoch() != owner_epoch {
+            bail!("在线读面不可用 / online source unavailable: {OWNER_EPOCH_CHANGED}");
         }
-        Ok(Self { client: RefCell::new(client), owner_epoch, timed_out: Cell::new(false) })
+        Ok(Self { client: RefCell::new(client), owner_epoch, latched: Cell::new(false) })
     }
 
     /// Replaces the page connection with a fresh one to the session's Runtime
-    /// and clears `timed_out`. When the connect fails, or reaches a Runtime of
-    /// another owner epoch, the old connection and `timed_out` stay, and the
-    /// reason comes back as text.
+    /// and clears `latched`. When the connect fails, or reaches a Runtime of
+    /// another owner epoch, the old connection and `latched` stay, and the
+    /// reason comes back as text: the client's error, or `OWNER_EPOCH_CHANGED`.
     fn reconnect(&self, root: &Path) -> Result<(), String> {
         let client = Self::connect(root).map_err(|error| error.to_string())?;
-        let reached = client.runtime_info().owner_epoch();
-        if reached != self.owner_epoch {
-            return Err(owner_changed(self.owner_epoch, reached));
+        if client.runtime_info().owner_epoch() != self.owner_epoch {
+            return Err(OWNER_EPOCH_CHANGED.to_owned());
         }
         *self.client.borrow_mut() = client;
-        self.timed_out.set(false);
+        self.latched.set(false);
         Ok(())
     }
 
+    /// Marks the page connection for a rebuild when `error` is fatal, the
+    /// failures the client latches a connection on.
+    fn note(&self, error: &RuntimeClientError) {
+        if error.is_fatal() {
+            self.latched.set(true);
+        }
+    }
+
     /// One page exchange, `call` on the page connection, rebuilt first when an
-    /// earlier exchange timed out. A page query only reads; it writes nothing
+    /// earlier exchange latched it. A page query only reads; it writes nothing
     /// into the ledger, so asking it again is safe. But the query that timed
     /// out may still be running on the Runtime's ledger writer thread, so a
     /// timeout (see `page_timed_out`) is retried once only, after
     /// `LEDGER_PAGE_RETRY_BACKOFF`, on a rebuilt connection, and not at all
     /// when the rebuilt connection reaches a Runtime of another owner epoch:
     /// the pin was stated by the one that is gone. Any other failure, and the
-    /// retry's, comes back as it is.
+    /// retry's, comes back as it is. Every failure reads `Runtime 查询失败：`
+    /// and the client's error; a timeout whose rebuild failed carries the
+    /// rebuild's reason after it.
     fn exchange<T>(
         &self,
         root: &Path,
         call: impl Fn(&RuntimeClient) -> Result<T, RuntimeClientError>,
     ) -> Result<T> {
-        if self.timed_out.get() {
+        if self.latched.get() {
             self.reconnect(root).map_err(|reason| anyhow!("Runtime 查询失败：{reason}"))?;
         }
         // Bound first: the borrow must end before a rebuild takes the cell.
@@ -352,19 +369,17 @@ impl LedgerPages {
             Ok(value) => return Ok(value),
             Err(error) => error,
         };
+        self.note(&first);
         if !page_timed_out(&first) {
             return Err(anyhow!("Runtime 查询失败：{first}"));
         }
-        self.timed_out.set(true);
         std::thread::sleep(LEDGER_PAGE_RETRY_BACKOFF);
         if let Err(reason) = self.reconnect(root) {
-            return Err(anyhow!("Runtime 查询失败：{first}；未重试：{reason}"));
+            return Err(anyhow!("Runtime 查询失败：{first}；{reason}"));
         }
         let result = call(&*self.client.borrow());
         result.map_err(|error| {
-            if page_timed_out(&error) {
-                self.timed_out.set(true);
-            }
+            self.note(&error);
             anyhow!("Runtime 查询失败：{error}")
         })
     }
@@ -383,15 +398,9 @@ fn page_timed_out(error: &RuntimeClientError) -> bool {
         })
 }
 
-/// A page connection that reached a Runtime of another owner epoch than the
-/// session's: the Runtime was replaced.
-fn owner_changed(session: OwnerEpoch, reached: OwnerEpoch) -> String {
-    format!(
-        "runtime_owner_epoch_changed（会话 {}，现 {}：Runtime 已换代）",
-        code(&session),
-        code(&reached)
-    )
-}
+/// The reason a page connection gives when it reached a Runtime of another
+/// owner epoch than the session's: the client's own spelling of that failure.
+const OWNER_EPOCH_CHANGED: &str = "runtime_owner_epoch_changed";
 
 /// The running Runtime's instances: one status read and one fact snapshot,
 /// right after the session's page pin and again on a person's jump to the
