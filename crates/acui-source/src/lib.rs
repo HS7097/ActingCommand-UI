@@ -30,6 +30,7 @@ use acui_rows::{
     RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
     RuntimeMaterialReadLimit, RuntimeMaterialReadState, WriterFacts,
 };
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     FactValue, OwnerEpoch, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
 };
@@ -78,6 +79,33 @@ const LEDGER_PAGE_IO_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The wait before the one retry of a page exchange that timed out.
 const LEDGER_PAGE_RETRY_BACKOFF: Duration = Duration::from_secs(1);
+
+/// The spelling of a client error's `code()` or `operation()`, whichever type
+/// the pinned client returns them as: `&'static str`, or the contract's
+/// registered `Code` and `Location`, whose `as_str` is that same spelling.
+/// Every comparison of a client error's code, and every `&'static str` field
+/// filled from one, reads it through here.
+trait Spelling {
+    fn spelling(self) -> &'static str;
+}
+
+impl Spelling for &'static str {
+    fn spelling(self) -> &'static str {
+        self
+    }
+}
+
+impl Spelling for Code {
+    fn spelling(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+impl Spelling for Location {
+    fn spelling(self) -> &'static str {
+        self.as_str()
+    }
+}
 
 /// One authenticated snapshot of one state root.
 pub struct EvidenceSource {
@@ -389,10 +417,9 @@ impl LedgerPages {
 /// `runtime_receipt_header_failed` (or `runtime_receipt_timeout`, which a
 /// receipt deadline gives) with the header read's io kind `TimedOut` or
 /// `WouldBlock`, as Windows and Unix spell a socket read timeout. The code is
-/// compared as its spelling, `code().to_string()`, whatever type `code()` returns.
+/// compared as its spelling (see `Spelling`).
 fn page_timed_out(error: &RuntimeClientError) -> bool {
-    let spelling = error.code().to_string();
-    matches!(spelling.as_str(), "runtime_receipt_header_failed" | "runtime_receipt_timeout")
+    matches!(error.code().spelling(), "runtime_receipt_header_failed" | "runtime_receipt_timeout")
         && error.receipt_header_io().is_some_and(|io| {
             matches!(io.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock)
         })
@@ -707,9 +734,12 @@ impl Session {
                     return OnlineSource::pin(root, client)
                         .map(|source| Self::Open(ReadSource::Online(source)))
                 }
-                Err(error) if mode == SourceMode::Auto => match error.code() {
+                Err(error) if mode == SourceMode::Auto => match error.code().spelling() {
                     "runtime_info_unavailable" => OfflineReason::RuntimeInfoAbsent,
-                    code => OfflineReason::ConnectFailed { code, operation: error.operation() },
+                    code => OfflineReason::ConnectFailed {
+                        code,
+                        operation: error.operation().spelling(),
+                    },
                 },
                 Err(error) => bail!("在线读面不可用 / online source unavailable: {error}"),
             },
@@ -862,8 +892,8 @@ pub struct ClientFailure {
 impl From<RuntimeClientError> for ClientFailure {
     fn from(error: RuntimeClientError) -> Self {
         Self {
-            code: error.code(),
-            operation: error.operation(),
+            code: error.code().spelling(),
+            operation: error.operation().spelling(),
             runtime_code: error.projection().map(|projection| code(&projection.code)),
             host: error
                 .host_failure()
