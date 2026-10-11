@@ -23,6 +23,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use acui_installation::outcome::{
+    CONSOLE_CLIENT_ACTION_TERMINAL_MISSING, CONSOLE_INSTANCE_BINDING_MALFORMED,
+    CONSOLE_RUNTIME_OWNER_CHANGED, CONSOLE_STATUS_SOURCE_MISSING,
+};
 use acui_rows::{
     code, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord, EventActor,
     EventQuery, EventSource, LedgerCount, LedgerEventPosition, LedgerView, OpenReport,
@@ -197,7 +201,7 @@ impl EvidenceSource {
                 .filter_map(|id| bindings.latest.get(id))
                 .max_by_key(|binding| binding.sequence)
                 .ok_or_else(|| {
-                    anyhow!("instance_binding_malformed: 端口 {port} 没有绑定事实")
+                    anyhow!("{CONSOLE_INSTANCE_BINDING_MALFORMED}: 端口 {port} 没有绑定事实")
                 })?;
             ports.push(PortEntry {
                 port: *port,
@@ -345,7 +349,7 @@ impl LedgerPages {
         let client = Self::connect(root)
             .map_err(|error| anyhow!("在线读面不可用 / online source unavailable: {error}"))?;
         if client.runtime_info().owner_epoch() != owner_epoch {
-            bail!("在线读面不可用 / online source unavailable: {OWNER_EPOCH_CHANGED}");
+            bail!("在线读面不可用 / online source unavailable: {CONSOLE_RUNTIME_OWNER_CHANGED}");
         }
         Ok(Self { client: RefCell::new(client), owner_epoch, latched: Cell::new(false) })
     }
@@ -353,11 +357,12 @@ impl LedgerPages {
     /// Replaces the page connection with a fresh one to the session's Runtime
     /// and clears `latched`. When the connect fails, or reaches a Runtime of
     /// another owner epoch, the old connection and `latched` stay, and the
-    /// reason comes back as text: the client's error, or `OWNER_EPOCH_CHANGED`.
+    /// reason comes back as text: the client's error, or the console's own
+    /// `CONSOLE_RUNTIME_OWNER_CHANGED`.
     fn reconnect(&self, root: &Path) -> Result<(), String> {
         let client = Self::connect(root).map_err(|error| error.to_string())?;
         if client.runtime_info().owner_epoch() != self.owner_epoch {
-            return Err(OWNER_EPOCH_CHANGED.to_owned());
+            return Err(CONSOLE_RUNTIME_OWNER_CHANGED.to_owned());
         }
         *self.client.borrow_mut() = client;
         self.latched.set(false);
@@ -424,10 +429,6 @@ fn page_timed_out(error: &RuntimeClientError) -> bool {
             matches!(io.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock)
         })
 }
-
-/// The reason a page connection gives when it reached a Runtime of another
-/// owner epoch than the session's: the client's own spelling of that failure.
-const OWNER_EPOCH_CHANGED: &str = "runtime_owner_epoch_changed";
 
 /// The running Runtime's instances: one status read and one fact snapshot,
 /// right after the session's page pin and again on a person's jump to the
@@ -913,14 +914,15 @@ pub fn probe_runtime(state_root: &Path) -> Result<RuntimeFacts, ClientFailure> {
 /// One status read, then one fact snapshot, on the session's connection; the
 /// status read is the one that leaves an observation event. Either failing
 /// fails the pair with its own error; a status without its observation
-/// source is `status_source_missing`, since the card would otherwise state a
-/// position the Runtime did not give. Only the three `task.` keys are taken.
+/// source is the console's own `CONSOLE_STATUS_SOURCE_MISSING`, since the card
+/// would otherwise state a position the Runtime did not give. Only the three
+/// `task.` keys are taken.
 fn read_instances(client: &RuntimeClient) -> Result<RuntimeInstances, ClientFailure> {
     let status = client.status()?;
     let status_sequence = status
         .source()
         .ok_or(ClientFailure {
-            code: "status_source_missing",
+            code: CONSOLE_STATUS_SOURCE_MISSING,
             operation: "runtime_status",
             runtime_code: None,
             host: None,
@@ -1118,14 +1120,17 @@ pub fn record_start(state_root: &Path, spawned: bool) -> Result<u64, ClientFailu
 /// press recorded there as a value-less button client action whose receipt
 /// must carry a terminal event: a press is a person's act, so the record says
 /// actor `user`, source `ui`. Gives back the interaction, on which a shutdown
-/// request goes out as the same person, and the record's ledger position.
+/// request goes out as the same person, and the record's ledger position. A
+/// record the contract refuses to build fails with the contract's own code; a
+/// receipt without its terminal event is the console's own
+/// `CONSOLE_CLIENT_ACTION_TERMINAL_MISSING`.
 fn record_press(state_root: &Path, control_id: &str) -> Result<(RuntimeClient, u64), ClientFailure> {
     let client = OnlineSource::connect_as_person(state_root)?;
     let interaction = client.begin_interaction()?;
     let action =
         ClientActionRecord::new("acui.launcher", control_id, ClientActionKind::Button, None, None)
-            .map_err(|_| ClientFailure {
-                code: "client_action_invalid",
+            .map_err(|error| ClientFailure {
+                code: error.code().spelling(),
                 operation: "record_client_action",
                 runtime_code: None,
                 host: None,
@@ -1134,7 +1139,7 @@ fn record_press(state_root: &Path, control_id: &str) -> Result<(RuntimeClient, u
     let sequence = recorded
         .terminal()
         .ok_or(ClientFailure {
-            code: "client_action_terminal_missing",
+            code: CONSOLE_CLIENT_ACTION_TERMINAL_MISSING,
             operation: "record_client_action",
             runtime_code: None,
             host: None,
