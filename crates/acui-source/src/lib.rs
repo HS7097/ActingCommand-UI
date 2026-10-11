@@ -30,7 +30,9 @@ use acui_rows::{
     RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
     RuntimeMaterialReadLimit, RuntimeMaterialReadState, WriterFacts,
 };
-use actingcommand_contract::{FactValue, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot};
+use actingcommand_contract::{
+    FactValue, OwnerEpoch, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
+};
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
     GlobalLedgerWriterMetadataObservation, LedgerArtifactSelection,
@@ -56,6 +58,26 @@ const MATERIAL_READ_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Bound on the offline face's one fact replay per session.
 const FACTS_READ_DEADLINE: Duration = Duration::from_secs(30);
+
+/// The io timeout of the session's ledger page connection (see `LedgerPages`):
+/// how long one page exchange waits for its receipt, and the bound of that
+/// connection's connect and owner check. The client's default, kept by the
+/// main connection, is 5 s; a page the Runtime answers from a busy host (CPU at
+/// 100 %) can take longer, and one timeout latches the connection it happened
+/// on. The client refuses anything above 60 s at connect
+/// (`runtime_client_config_invalid`). A page query runs synchronously on the
+/// UI event loop, so the longer this is, the longer one slow page can hang the
+/// window: hence 20 s, not the 60 s cap. One page query can wait several
+/// times this. A rebuild of the page connection waits for its TCP connect and
+/// for its owner check's receipt, each bounded by this; a query whose last one
+/// latched the connection rebuilds it first, then asks, and on a timeout
+/// waits `LEDGER_PAGE_RETRY_BACKOFF`, rebuilds again and asks once more: at
+/// worst six times this plus the backoff, 121 s, and on loopback, where the
+/// connect is answered at once, about four times, 81 s.
+const LEDGER_PAGE_IO_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The wait before the one retry of a page exchange that timed out.
+const LEDGER_PAGE_RETRY_BACKOFF: Duration = Duration::from_secs(1);
 
 /// One authenticated snapshot of one state root.
 pub struct EvidenceSource {
@@ -247,13 +269,138 @@ impl EvidenceSource {
 /// session the offline face gives, so both faces page and cursor alike.
 pub struct OnlineSource {
     root: PathBuf,
+    /// The session's main connection, at the client's default io timeout:
+    /// follow polls, the instances' status and facts, material reads and
+    /// `open_report`.
     client: RuntimeClient,
+    /// The connection every page, the first included, and every repin reads
+    /// through.
+    pages: LedgerPages,
     /// The pin every page reads at. `repin` moves it on a person's jump to the
     /// latest or when following is turned on; `poll` moves it while following.
     snapshot: Cell<u64>,
     read_complete: Cell<bool>,
     instances: RefCell<Result<RuntimeInstances, ClientFailure>>,
 }
+
+/// The session's own connection for ledger pages: actor `ui`, source `ui`, as
+/// the main connection, but at `LEDGER_PAGE_IO_TIMEOUT`, and apart from it, so
+/// a slow page latches neither the follow polls nor the material reads.
+struct LedgerPages {
+    client: RefCell<RuntimeClient>,
+    /// The owner epoch of the session's first connection, the main one. A page
+    /// connection, at open or rebuilt, must reach that same Runtime.
+    owner_epoch: OwnerEpoch,
+    /// Set once an exchange on `client` failed fatally (`is_fatal`): without
+    /// the Runtime's error projection, as a timeout or a receipt body that did
+    /// not arrive whole does, or with a fatal one. The client latches a
+    /// connection on an exchange that fails so and fails every later exchange
+    /// on it the same way, so the next page query rebuilds the connection first
+    /// rather than let one slow or broken page end the session's reading. (A
+    /// fatal failure before the send latches nothing; the rebuild then costs
+    /// one connect.)
+    latched: Cell<bool>,
+}
+
+impl LedgerPages {
+    fn connect(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
+        RuntimeClient::connect(
+            RuntimeClientConfig::new(root, EventActor::Ui, EventSource::Ui)
+                .with_io_timeout(LEDGER_PAGE_IO_TIMEOUT),
+        )
+    }
+
+    /// The page connection at open, to the Runtime `main` reached. A failed
+    /// connect fails the online face as its main connect does.
+    fn open(root: &Path, main: &RuntimeClient) -> Result<Self> {
+        let owner_epoch = main.runtime_info().owner_epoch();
+        let client = Self::connect(root)
+            .map_err(|error| anyhow!("在线读面不可用 / online source unavailable: {error}"))?;
+        if client.runtime_info().owner_epoch() != owner_epoch {
+            bail!("在线读面不可用 / online source unavailable: {OWNER_EPOCH_CHANGED}");
+        }
+        Ok(Self { client: RefCell::new(client), owner_epoch, latched: Cell::new(false) })
+    }
+
+    /// Replaces the page connection with a fresh one to the session's Runtime
+    /// and clears `latched`. When the connect fails, or reaches a Runtime of
+    /// another owner epoch, the old connection and `latched` stay, and the
+    /// reason comes back as text: the client's error, or `OWNER_EPOCH_CHANGED`.
+    fn reconnect(&self, root: &Path) -> Result<(), String> {
+        let client = Self::connect(root).map_err(|error| error.to_string())?;
+        if client.runtime_info().owner_epoch() != self.owner_epoch {
+            return Err(OWNER_EPOCH_CHANGED.to_owned());
+        }
+        *self.client.borrow_mut() = client;
+        self.latched.set(false);
+        Ok(())
+    }
+
+    /// Marks the page connection for a rebuild when `error` is fatal, the
+    /// failures the client latches a connection on.
+    fn note(&self, error: &RuntimeClientError) {
+        if error.is_fatal() {
+            self.latched.set(true);
+        }
+    }
+
+    /// One page exchange, `call` on the page connection, rebuilt first when an
+    /// earlier exchange latched it. A page query only reads; it writes nothing
+    /// into the ledger, so asking it again is safe. But the query that timed
+    /// out may still be running on the Runtime's ledger writer thread, so a
+    /// timeout (see `page_timed_out`) is retried once only, after
+    /// `LEDGER_PAGE_RETRY_BACKOFF`, on a rebuilt connection, and not at all
+    /// when the rebuilt connection reaches a Runtime of another owner epoch:
+    /// the pin was stated by the one that is gone. Any other failure, and the
+    /// retry's, comes back as it is. Every failure reads `Runtime 查询失败：`
+    /// and the client's error; a timeout whose rebuild failed carries the
+    /// rebuild's reason after it.
+    fn exchange<T>(
+        &self,
+        root: &Path,
+        call: impl Fn(&RuntimeClient) -> Result<T, RuntimeClientError>,
+    ) -> Result<T> {
+        if self.latched.get() {
+            self.reconnect(root).map_err(|reason| anyhow!("Runtime 查询失败：{reason}"))?;
+        }
+        // Bound first: the borrow must end before a rebuild takes the cell.
+        let result = call(&*self.client.borrow());
+        let first = match result {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        self.note(&first);
+        if !page_timed_out(&first) {
+            return Err(anyhow!("Runtime 查询失败：{first}"));
+        }
+        std::thread::sleep(LEDGER_PAGE_RETRY_BACKOFF);
+        if let Err(reason) = self.reconnect(root) {
+            return Err(anyhow!("Runtime 查询失败：{first}；{reason}"));
+        }
+        let result = call(&*self.client.borrow());
+        result.map_err(|error| {
+            self.note(&error);
+            anyhow!("Runtime 查询失败：{error}")
+        })
+    }
+}
+
+/// Whether a page exchange timed out waiting for its receipt: the client's
+/// `runtime_receipt_header_failed` (or `runtime_receipt_timeout`, which a
+/// receipt deadline gives) with the header read's io kind `TimedOut` or
+/// `WouldBlock`, as Windows and Unix spell a socket read timeout. The code is
+/// compared as its spelling, `code().to_string()`, whatever type `code()` returns.
+fn page_timed_out(error: &RuntimeClientError) -> bool {
+    let spelling = error.code().to_string();
+    matches!(spelling.as_str(), "runtime_receipt_header_failed" | "runtime_receipt_timeout")
+        && error.receipt_header_io().is_some_and(|io| {
+            matches!(io.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock)
+        })
+}
+
+/// The reason a page connection gives when it reached a Runtime of another
+/// owner epoch than the session's: the client's own spelling of that failure.
+const OWNER_EPOCH_CHANGED: &str = "runtime_owner_epoch_changed";
 
 /// The running Runtime's instances: one status read and one fact snapshot,
 /// right after the session's page pin and again on a person's jump to the
@@ -325,7 +472,8 @@ impl OnlineSource {
     /// Discovery is the client's: it reads `runtime-info.json`, takes the
     /// loopback address from it and checks the owner epoch on connect. This is
     /// the console's own connection (actor `ui`, source `ui`), for what it asks
-    /// on its own — pages, material, the status and facts read at open, probes.
+    /// on its own — material, the status and facts read at open, follow polls,
+    /// probes; pages go through the session's page connection (`LedgerPages`).
     fn connect(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
         RuntimeClient::connect(RuntimeClientConfig::new(root, EventActor::Ui, EventSource::Ui))
     }
@@ -338,14 +486,17 @@ impl OnlineSource {
         RuntimeClient::connect(RuntimeClientConfig::new(root, EventActor::User, EventSource::Ui))
     }
 
-    /// The first page, asked without a snapshot, is where the Runtime states
-    /// the position this session then reads at.
+    /// The first page, asked without a snapshot on the session's page
+    /// connection, is where the Runtime states the position this session then
+    /// reads at.
     fn pin(root: PathBuf, client: RuntimeClient) -> Result<Self> {
-        let (snapshot, read_complete) = latest(&client)?;
+        let pages = LedgerPages::open(&root, &client)?;
+        let (snapshot, read_complete) = latest(&pages, &root)?;
         let instances = read_instances(&client);
         Ok(Self {
             root,
             client,
+            pages,
             snapshot: Cell::new(snapshot),
             read_complete: Cell::new(read_complete),
             instances: RefCell::new(instances),
@@ -360,7 +511,7 @@ impl OnlineSource {
     /// states it; `Ok(true)` when it moved. Pages read after this read at the
     /// new pin. A page query writes nothing into the ledger.
     pub fn repin(&self) -> Result<bool> {
-        let (snapshot, read_complete) = latest(&self.client)?;
+        let (snapshot, read_complete) = latest(&self.pages, &self.root)?;
         let moved = snapshot != self.snapshot.get();
         self.snapshot.set(snapshot);
         self.read_complete.set(read_complete);
@@ -429,7 +580,8 @@ impl OnlineSource {
         self.snapshot.get()
     }
 
-    /// The same page request as offline, answered by the Runtime.
+    /// The same page request as offline, answered by the Runtime on the page
+    /// connection.
     pub fn query(
         &self,
         query: &EventQuery,
@@ -440,9 +592,9 @@ impl OnlineSource {
             .map_err(|error| anyhow!("页请求无效：{}", error.code()))?
             .at_snapshot(self.snapshot.get())
             .map_err(|error| anyhow!("快照位置无效：{}", error.code()))?;
-        self.client
-            .query_event_page(query.clone(), ProjectionProfile::Ui, request)
-            .map_err(|error| anyhow!("Runtime 查询失败：{error}"))
+        self.pages.exchange(&self.root, |client| {
+            client.query_event_page(query.clone(), ProjectionProfile::Ui, request.clone())
+        })
     }
 
     /// The medium, the corrupt tail, the writer record and the repair count are
@@ -471,17 +623,17 @@ impl OnlineSource {
 }
 
 /// The Runtime's latest position and whether its first page read completely:
-/// one first page, asked without a snapshot.
-fn latest(client: &RuntimeClient) -> Result<(u64, bool)> {
+/// one first page, asked without a snapshot on the page connection.
+fn latest(pages: &LedgerPages, root: &Path) -> Result<(u64, bool)> {
     let request = RuntimeEventQueryPageRequest::new(1, None)
         .map_err(|error| anyhow!("页请求无效：{}", error.code()))?;
-    let page = client
-        .query_event_page(
+    let page = pages.exchange(root, |client| {
+        client.query_event_page(
             EventQuery { view: Some(LedgerView::Events), ..EventQuery::default() },
             ProjectionProfile::Ui,
-            request,
+            request.clone(),
         )
-        .map_err(|error| anyhow!("Runtime 查询失败：{error}"))?;
+    })?;
     Ok((
         page.snapshot_ledger_position(),
         page.read_scope().is_none_or(|scope| scope.read_complete),
@@ -962,8 +1114,8 @@ fn record_press(state_root: &Path, control_id: &str) -> Result<(RuntimeClient, u
 }
 
 /// Where a material read goes. Offline it is the forensic read face over the
-/// state root; online it is the Runtime's own typed material read, on the same
-/// connection the pages come from.
+/// state root; online it is the Runtime's own typed material read, on the
+/// session's main connection, not the page connection.
 #[derive(Clone)]
 pub enum MaterialReader {
     Offline(PathBuf),
