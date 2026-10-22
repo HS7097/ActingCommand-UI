@@ -18,26 +18,35 @@ and guesses nothing.
 
 ## Current release
 
-- **UI v0.11.3**, a pre-release like every release so far: `acui-windows-<sha>.zip` with `SHA256SUMS`
+- **UI v0.11.4**, a pre-release like every release so far: `acui-windows-<sha>.zip` with `SHA256SUMS`
   on this repository's [Releases](https://github.com/HS7097/ActingCommand-UI/releases). The zip holds
   `acui.exe` (the console), `acsetup.exe` (the setup wizard), `acforward.exe` (the fixed entry),
   `LICENSE`, `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. It is built
-  against the Runtime crates of Runtime v0.11.3 (the pinned rev under "Data source").
-- **New in v0.11.3**: whether components fit together is judged from the interfaces each one declares,
+  against the Runtime crates of a Runtime commit after v0.11.6 that still speaks the 0.11 protocols
+  (the pinned rev under "Data source").
+- **New in v0.11.4**: the Runtime crates are pinned to that commit, and this README was updated. The
+  interfaces it declares are those of v0.11.3.
+- **From v0.11.3**: whether components fit together is judged from the interfaces each one declares,
   not from version numbers (exit code 6 when they do not fit; see "Component interfaces"); Tools layout 3,
   with the watchdog launcher `actingwatch.exe`, is recognized; once the ledger is at revision 2, a
   rollback to a Runtime v0.11.2 slot is refused (exit code 1, nothing changed); resource-only update
   `acsetup --resources <zip>`, also a tick on step 0; actingd is started through WMI with a hidden
   window, and a start that exits at once is reported with the log's `FATAL` line; an upgrade refreshes
   the fixed entries whose bytes changed.
-- **Works with Runtime v0.11.6**: acsetup v0.11.3 has upgraded an A/B installation to it.
+- **Works with the 0.11 Runtime**: by the interfaces it declares (`actingd-config` [1, 2], `ledger`
+  [1, 2], `runtime-client` [1, 1], `package` [1, 2]) it fits Runtime v0.11.3 to v0.11.6; acsetup v0.11.3
+  has upgraded an A/B installation to Runtime v0.11.6.
+- **Does not work with Runtime 0.12**: the Runtime's 0.12 series (newest v0.12.10) declares
+  `actingd-config` [5, 9], `ledger` [3, 4], `runtime-client` [2, 2] and `package` [3, 5]. acsetup refuses
+  such a Runtime with exit code 6 before it changes anything, and the console can neither connect to it
+  (a 0.12 Runtime refuses requests v1 to v3) nor read its ledger. There is no UI release for the 0.12
+  series.
 - **Where to get it**: the umbrella repository's
   [Releases](https://github.com/HS7097/ActingCommand/releases) carry the two installers, the online
   `acsetup.exe` and the offline `acsetup-full-<tag>.exe`, each with its `.sha256`. The newest umbrella
-  release, v0.11.4, carries Runtime v0.11.4, this UI v0.11.3 and the available standard packs. Runtime
-  v0.11.5 and v0.11.6 are on the
-  [Runtime repository's Releases](https://github.com/HS7097/ActingCommand-Runtime/releases) and not yet
-  in an umbrella release, so the online wizard installs Runtime v0.11.4 today.
+  release, v0.11.4, carries Runtime v0.11.4, UI v0.11.3 and the available standard packs. UI v0.11.4 and
+  the Runtime releases after v0.11.4 are not in an umbrella release, so the online wizard installs
+  Runtime v0.11.4 and UI v0.11.3 today.
 
 ## Development status
 
@@ -45,10 +54,9 @@ and guesses nothing.
   again. Deployment and availability come second.
 - **Every release is a pre-release**: interfaces, configuration and file formats still change. **Only the
   newest version is supported**; older series get no fixes (the 0.11 series is not maintained).
-- **Breaking changes are coming** with the 0.12 series: a new ledger from 0.12.0 (a 0.11 state root is not
-  carried over), changed command-line output and exit codes, MCP tiers removed, the Lab not installed by
-  default. Installing and observing Runtime 0.12.0 is expected to need the next UI release. See "Planned
-  (not released)".
+- **Runtime 0.12**: the Runtime's 0.12 series brought a new ledger (a 0.11 state root is not carried
+  over), new command-line output and exit codes and a new pack format. This UI does not work with it (see
+  "Current release").
 - **On real devices**: since early October, routine batches run every day on real MuMu instances,
   scheduled by catalog with the available standard packs. The standard packs' coverage is still
   incomplete, and multi-day unattended runs are still being validated.
@@ -145,10 +153,11 @@ tabs, the filter boxes, the id box and the time slider are off; the module and p
 pane say "ledger not opened". Nothing is asked of the ledger and no material is read. The launcher works
 as usual.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), the commit of Runtime v0.11.3:
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), a Runtime commit after v0.11.6 that
+still speaks the 0.11 protocols (requests v3, ledger events v2):
 
 ```
-rev = "484bdc14fcacbb2787707a5f03e65acdb8f9ff1a"
+rev = "ceef6f90fe05dd23554f7996a9dee6b59836be3a"
 ```
 
 The five crates (contract / ledger / ledger-forensics / runtime-client / execution-kernel) share this one rev.
@@ -382,9 +391,9 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml (falls back to $HOME/.config/
 ```toml
 lang = "zh"          # zh | en
 text_size = "standard"   # standard | large | extra-large
-state_root = 'C:\AC\state'                                  # optional, absolute path
-actingd_config = 'C:\AC\actingd.config.json'                # optional, absolute path
-actingd_exe = 'C:\AC\runtime\actingcommand-actingd.exe'     # optional, absolute path
+state_root = '<install root>\state'                                  # optional, absolute path
+actingd_config = '<install root>\actingd.config.json'                # optional, absolute path
+actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'     # optional, absolute path
 ```
 
 It is read once at startup and written once on every dropdown change; on write-back the three path keys
@@ -394,7 +403,7 @@ creates and, after an early exit, reads back (see those sections): it is not ins
 state root, and the state root still belongs entirely to the read face. If the file is absent, unreadable,
 or holds an unrecognized value, the defaults (Chinese, standard) are used. The parser is hand-written: one
 `key = value` per line, one matching pair of quotes stripped, no escape handling — write Windows paths in
-single quotes (TOML literal strings), not as `"D:\\…"`.
+single quotes (TOML literal strings), not in double quotes with doubled backslashes.
 
 ## Launcher
 
@@ -994,8 +1003,6 @@ and Codex. `actingctl mcp-config` prints the registration for a client and write
 - Approvals, edits of the actingd configuration and Runtime restarts stay with the person.
 - A running server keeps the installation generation it started with (see "A/B installation and
   upgrade"); restart it in the client after an upgrade.
-- **Planned (0.12 series)**: tiers are removed; the general tools are always there, and Lab tools are
-  listed only when the Lab option is installed.
 
 What each tool takes and answers: `actingctl mcp-serve --list-tools --format markdown`. The manual for
 agents is `skills/actingcommand/` in the
@@ -1105,43 +1112,6 @@ to the Runtime source at the pinned rev.
   one. The effect intents on those two roots state none, so their size stays "not recorded".
 - **Neither of those roots holds artifact eviction facts**, so the eviction placeholder does not appear
   on them; the code path is written to the contract.
-
-## Planned (not released)
-
-Everything in this section is planned, not shipped. The series an item targets may still change, and
-there are no dates.
-
-**0.12 series**
-
-- **Next UI release** (planned with the 0.12 series, as a new major UI version): the console reads the
-  new ledger; errors are explained by their result code, in Chinese and English; the console shows why a
-  task did not run; the installer gets a page with two independent options for the Lab module
-  (authoring; debugging), neither installed by default; the installer gets machine-readable output
-  (`--json`).
-- **New ledger**: Runtime 0.12.0 starts from a new ledger format (revision 3) and an empty ledger; a 0.11
-  state root is not carried over (the old installation stays as an archive and is not deleted).
-  Installing it is expected to need the next UI release.
-- **Unified result codes**: every program shares one registered outcome catalog, each code with a class;
-  a command prints one result line, and exit codes converge on 0/1/2.
-- **Unified interface**: one gate with three front ends — command line, MCP and this UI — matched one to
-  one; each request records only which front end it came from, and permissions no longer depend on
-  "who". MCP tiers are removed.
-- **Lab as a detachable module**: not installed by default. Either of the installer's two options installs
-  it: authoring (recording and pack-making tools, for people who make resources with an agent) or
-  debugging (direct control of the Runtime's internal actions, for advanced users). Without it the Lab
-  channel exists but cannot be called.
-- **Runtime side**: a configurable recovery ladder (changed in the configuration file, or at once by one
-  instruction from the command line, MCP or the UI), performance pacing, scheduling rules that state a
-  reason for every task that did not run, data refresh, shared data tables, per-instance goals, MCP
-  additions, and, late in the series, screen resolutions beyond today's 1280×720 base.
-
-**0.13 series**
-
-- **MaaFramework pipeline import/export** (a "package view"): our task packs converted to and from
-  MaaFramework-shaped JSON; a pack that fails the pack check on the way back is refused, not written.
-  Editing happens in our own UI (a node-graph editor); no third-party editor ships with it.
-- **Runtime side**: a battle layer of generic flow components and clean-room generic spatial components;
-  all game content stays in resource packs.
 
 ## License
 
