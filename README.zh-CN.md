@@ -15,27 +15,32 @@
 
 ## 当前发布
 
-- **UI v0.11.3**，与此前每一版一样是预发布：本仓 [Releases](https://github.com/HS7097/ActingCommand-UI/releases)
+- **UI v0.11.4**，与此前每一版一样是预发布：本仓 [Releases](https://github.com/HS7097/ActingCommand-UI/releases)
   上的 `acui-windows-<sha>.zip` 与 `SHA256SUMS`。zip 里有 `acui.exe`（监控台）、`acsetup.exe`（安装向导）、
   `acforward.exe`（固定入口）、`LICENSE`、`README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。它基于
-  Runtime v0.11.3 的 Runtime crate 构建（钉点见「数据来源」一节）。
-- **v0.11.3 新增**：能否搭配按各组件声明的接口判断，不再看版本号（不相容时退出码 6，见「组件接口」）；认得 Tools
+  Runtime v0.11.6 之后、仍说 0.11 协议的一个 Runtime 提交的 crate 构建（钉点见「数据来源」一节）。
+- **v0.11.4 新增**：Runtime crate 改钉到上述提交，本 README 也随之更新。声明的接口与 v0.11.3 相同。
+- **v0.11.3 起**：能否搭配按各组件声明的接口判断，不再看版本号（不相容时退出码 6，见「组件接口」）；认得 Tools
   布局第 3 版（带看门狗启动器 `actingwatch.exe`）；账本升到修订 2 之后，拒绝回退到 Runtime v0.11.2 的槽（退出码 1、
   不做改动）；只更新资源 `acsetup --resources <zip>`，第 0 步也可勾选；actingd 经 WMI 以隐藏窗口拉起，启动即退出时
   报错带上日志里的 `FATAL` 行；升级时刷新字节有变化的固定入口。
-- **可与 Runtime v0.11.6 搭配**：acsetup v0.11.3 已把一份 A/B 安装升级到它。
+- **可与 0.11 的 Runtime 搭配**：按它声明的接口（`actingd-config` [1, 2]、`ledger` [1, 2]、`runtime-client`
+  [1, 1]、`package` [1, 2]），它与 Runtime v0.11.3 到 v0.11.6 相容；acsetup v0.11.3 已把一份 A/B 安装升级到
+  Runtime v0.11.6。
+- **不能用于 Runtime 0.12**：Runtime 的 0.12 系列（最新 v0.12.10）声明的是 `actingd-config` [5, 9]、`ledger`
+  [3, 4]、`runtime-client` [2, 2] 与 `package` [3, 5]。acsetup 会在改动任何东西之前以退出码 6 拒绝这样的
+  Runtime；监控台既连不上它（0.12 的 Runtime 拒绝 v1 到 v3 的请求），也读不了它的账本。0.12 系列没有对应的 UI 版本。
 - **从哪里取**：伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases) 上有两个安装器，在线版
-  `acsetup.exe` 与离线版 `acsetup-full-<tag>.exe`，各带 `.sha256`。伞仓最新发布 v0.11.4 带 Runtime v0.11.4、本仓
-  UI v0.11.3 与可用的标准包。Runtime v0.11.5 与 v0.11.6 在
-  [Runtime 仓的 Releases](https://github.com/HS7097/ActingCommand-Runtime/releases) 上，还没有进伞仓发布，所以
-  目前在线向导装上的是 Runtime v0.11.4。
+  `acsetup.exe` 与离线版 `acsetup-full-<tag>.exe`，各带 `.sha256`。伞仓最新发布 v0.11.4 带 Runtime v0.11.4、
+  UI v0.11.3 与可用的标准包。UI v0.11.4 以及 v0.11.4 之后的 Runtime 发布都没有进伞仓发布，所以目前在线向导装上的
+  是 Runtime v0.11.4 与 UI v0.11.3。
 
 ## 开发状态
 
 - **调试阶段**：主循环是「发现问题 → 修复 → 对照预期检查 → 再改」；部署与可用性是次要的。
 - **全部是预发布**：接口、配置与文件格式还会变。**只支持最新版**，旧系列不出修复（不维护 0.11 系列）。
-- **会有破坏性变化**，随 0.12 系列到来：0.12.0 起用新账本（0.11 的状态根不带过去）、命令行输出与退出码变化、
-  MCP 档位取消、Lab 默认不装。安装与查看 Runtime 0.12.0 预计要等下一版 UI。见「计划中（未发布）」。
+- **Runtime 0.12**：Runtime 的 0.12 系列换了新账本（0.11 的状态根不带过去）、新的命令行输出与退出码和新的包格式。
+  本 UI 不能用于它（见「当前发布」）。
 - **实机现状**：自 10 月上旬起，在真实 MuMu 实例上按目录、用可用的标准包每天跑例行批次。标准包的内容覆盖还不
   完整，多日无人值守长跑仍在验证。
 - **版本号规则**：X 重大或不兼容、Y 新特性或新覆盖面、Z 修复（含为修复服务的特性）。Runtime、UI 与各标准包
@@ -106,10 +111,11 @@
 不写：列表写账本未打开，不留一片空白；页签、过滤框、编号框和时间滑块都停用；模块框、端口框与帧区写「账本未打开」。不向账本发
 任何查询，不读任何素材。启动器照常可用。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.11.3 的提交：
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.11.6 之后、仍说 0.11 协议（请求 v3、
+账本事件 v2）的一个提交：
 
 ```
-rev = "484bdc14fcacbb2787707a5f03e65acdb8f9ff1a"
+rev = "ceef6f90fe05dd23554f7996a9dee6b59836be3a"
 ```
 
 五个 crate（contract / ledger / ledger-forensics / runtime-client / execution-kernel）共用这一个 rev。
@@ -282,9 +288,9 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml（没有就用 $HOME/.config/
 ```toml
 lang = "zh"          # zh | en
 text_size = "standard"   # standard | large | extra-large
-state_root = 'C:\AC\state'                                  # 可选，绝对路径
-actingd_config = 'C:\AC\actingd.config.json'                # 可选，绝对路径
-actingd_exe = 'C:\AC\runtime\actingcommand-actingd.exe'     # 可选，绝对路径
+state_root = '<install root>\state'                                  # 可选，绝对路径
+actingd_config = '<install root>\actingd.config.json'                # 可选，绝对路径
+actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'     # 可选，绝对路径
 ```
 
 开台时读一次，下拉框一改就写一次；写回时三个路径键原样保留。**这是监控台唯一自己读写的
@@ -292,7 +298,7 @@ actingd_exe = 'C:\AC\runtime\actingcommand-actingd.exe'     # 可选，绝对路
 启动日志除外，见各自那一节）：它不在任何
 状态根里，状态根依旧全归读面。文件不存在、读不出来或取值不认识，都按默认值（中文、标准）
 来。解析器是手写的：一行一个 `key = value`，去掉一对成对的引号，不处理转义——Windows 路径
-写在单引号里（TOML 字面量字符串），不要写 `"D:\\…"`。
+写在单引号里（TOML 字面量字符串），不要写成双引号里加双反斜杠的形式。
 
 ## 启动器
 
@@ -684,7 +690,6 @@ Runtime 的看门狗是一个计划任务，所以 acsetup 不替人设置。要
   未开档位的工具答 `tier_not_enabled`。`actingctl mcp-serve --list-tools [--format json|markdown]` 列出全部 22 个工具。
 - 批准、actingd 配置的改动与 Runtime 的重启归人。
 - 运行中的服务保持它启动时的安装代际（见「A/B 安装与升级」）；升级后请在客户端里重启它。
-- **计划中（0.12 系列）**：取消档位；一般工具总在，Lab 工具只在装了 Lab 选项时列出。
 
 每个工具接收什么、回答什么：`actingctl mcp-serve --list-tools --format markdown`。给智能体的操作手册是
 [伞仓](https://github.com/HS7097/ActingCommand/tree/main/skills/actingcommand)里的 `skills/actingcommand/`。
@@ -767,32 +772,6 @@ Runtime 的看门狗是一个计划任务，所以 acsetup 不替人设置。要
   画面的范围（`TaskGeometryFrame::extent`，同一文件）；事件给了，叠加画布就用它。那两个根上的 effect intent
   都没给，尺寸仍是「未记录」。
 - **那两个根里都没有产物淘汰事实**，所以淘汰占位在它们上面不会出现；代码路径按契约写好。
-
-## 计划中（未发布）
-
-本节全部是计划，尚未发布。各项归入哪个系列仍可能调整，不写日期。
-
-**0.12 系列**
-
-- **下一版 UI**（计划随 0.12 系列，作为 UI 的新大版本）：监控台读新账本；报错按结果码解释（中英）；监控台显示
-  任务为什么没跑；安装器新增一页，给 Lab 模块两个相互独立的选项（创作；调试），默认都不装；安装器提供机读输出
-  （`--json`）。
-- **新账本**：Runtime 0.12.0 起用新的账本格式（修订 3），从空账本开始；0.11 的状态根不带过去（旧安装整体留作
-  归档，不删）。预计要等下一版 UI 才能安装它。
-- **结果码统一**：所有程序共用一张登记过的码目录，每个码有类别；每条命令输出一行结果，退出码收敛为 0/1/2。
-- **统一接口**：一道门、三个前端——命令行、MCP 与本 UI——一一对应；每次请求只记来自哪个前端，权限不再按「谁」
-  来定。MCP 档位取消。
-- **Lab 改为可拆的模块**：默认不装。安装器两个选项勾任一就装：创作（录制与制包工具，给用智能体制作资源的人）、
-  调试（直接操控 Runtime 内部动作，给高级用户）。不装时 Lab 通道在，但不可调用。
-- **Runtime 一侧**：恢复阶梯配置化（改配置文件，或经命令行、MCP、UI 的一条指令立即生效）、性能节奏、为每个没跑的
-  任务写明原因的调度规则、数据刷新、共享数据表、每实例目标、MCP 增补，以及系列末段支持今天 1280×720 基准以外的
-  分辨率。
-
-**0.13 系列**
-
-- **MaaFramework 流水线格式导入导出**（「包视图」）：我们的任务包与 MaaFramework 形状的 JSON 互转；存回时过不了
-  检包就报错、不写入。编辑界面用我们自己的 UI（节点图编辑器），不随发行带第三方编辑器。
-- **Runtime 一侧**：由通用流程件组成的战斗层，以及净室重写的通用空间组件；一切游戏内容仍只在资源包里。
 
 ## 许可
 
