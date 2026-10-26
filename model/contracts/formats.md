@@ -488,3 +488,74 @@ boolean.
 The errors are ordered by file, pointer, code and then their whole canonical text, so that the order never
 depends on which nodes the cache reused. The outputs, without `work`, are kept as
 `runs/<run id>/outputs.json` under `paths.state_root`.
+
+## Outputs: provenance, `explain` and `thresholds.json`
+
+### Provenance (`acmodel.provenance.v1`)
+
+The provenance document of one output holds what its value rests on (#424 design 6.4). It is assembled from
+what each node of the graph read while it was evaluated. So it names exactly what the value used: one branch
+of an `if`, the row a `lookup` found, every row of a set.
+
+| Member | Value |
+|---|---|
+| `schema_version` | `acmodel.provenance.v1` |
+| `model_id` | the model's id |
+| `output` | `rule:<id>`, `general_logic:<id>` or `threshold:<id>` |
+| `result` | the output as `run` shows it (a rule without its `general_logic`, which is an output of its own) |
+| `versions` | `rules`: the sha256 over `model.json`, `sources.json` and the rule files; `data`: over the data files; `tool`: the tool version. Each file counts as `[path, document]`, sorted by path. A hash is over canonical JSON: sorted keys, no whitespace, UTF-8. |
+| `nodes` | node id to node; the tree is rooted at `output` |
+
+**Nodes.**
+- Every node has `node` (what it is) and `reads`, the sorted ids of the nodes its value read. A leaf reads
+  nothing, and a node read twice is listed once.
+- Paths are relative to the model folder, with `/`.
+- A node of the general logic (`max_single_income`, from the rules and the data only) has `general:` before
+  its id and the member `general: true`.
+
+| `node` | Ids | Members |
+|---|---|---|
+| `threshold` | `threshold:<id>` | `id`, `form`, [`round`], `file` (`exports.json`), `ref`, `sha256` of its entry |
+| `rule` | `rule:<id>` (its value), `general_logic:<id>`, `offset:<id>` (`live.offset`); the flow amounts `flow:<id>:consumes:<resource>`, `flow:<id>:produces:<resource>` and `flow:<id>:moves`; `entry:<id>`, a rule consulted for its logic only (the cap of `max_single_income`, and an income whose amount needs the account state, which its store's storage cap bounds) | `kind`, `id`, `file`, `ref` (the pointer of the expression, or of a cap's `reading`; for `entry:` the rule's), `sha256` of the rule entry, and its `status` and `provenance` as written |
+| `unknown` | `member:<unknown>:<member>` | as a rule, with `member`; `ref` is the unknown's |
+| `row` | `row:<table>[<key parts joined with commas>]` | `table`, `key`, `file`, `ref`, `sha256` of the row, `status`, `provenance` (the row's, else the table's) |
+| `reading` | `reading:<fact>` | `fact`, `value`, `observed_at_unix_ms`, `source` |
+| `cleared` | `cleared:<id>` | `id`, `value` |
+| `entity` | `entity:<class>[<id>].<attribute>` | `entity_class`, `entity`, `attribute`, `value` |
+| `entities` | `entities:<class>` | `entity_class`, `entities` |
+
+The last four come from the account state, so an output whose tree holds one is per-account.
+
+### `acmodel explain <model> <output> --state <file>`
+
+It runs the model as `run` does and prints the provenance document of `<output>` in `data.provenance`, beside
+`path`, `model_id`, `state` and `output`. It writes nothing.
+- An id that is not an output of the model is `usage_invalid` (`output_unknown`).
+- A blocked output has no tree. The errors that block it are reported, with exit status 1.
+
+### `acmodel export thresholds <model> --state <file>`
+
+It runs the model, then writes into the model folder:
+1. `out/provenance/thresholds/<id>.json`: the provenance document of each threshold, as `explain` prints it;
+2. `out/thresholds.json` (`acmodel.thresholds.v1`), last.
+
+| Member of `thresholds.json` | Value |
+|---|---|
+| `schema_version` | `acmodel.thresholds.v1` |
+| `model_id`, `versions` | as in a provenance document |
+| `thresholds` | a list sorted by `id`. Each entry has `id`, `form`, `dimension` (the type of its number), `status` and `provenance` (the path of its provenance file). A `constant` adds `value`; a `fact_offset` adds `fact`, `comparison`, `reference_fact` and `offset`. `value` and `offset` are JSON integers. |
+
+**Only account-independent values are exported** (#424, ruling 66). These files are delivered with the
+resource repository. So a threshold is refused (`export_refused`, exit 5) when it is:
+- `blocked`. The errors that block it are reported too.
+- `per_account`: it read the account state. Such a value is never written into a shared output; `run` and
+  `explain` show it locally.
+- `provisional`: not confirmed. Accepting a provisional value comes with the export policy.
+- `not_integer` or `out_of_range`: its exact value is not an integer (`exports.json` can declare its `round`),
+  or lies beyond ±(2<sup>53</sup> − 1).
+
+**Writing.**
+- When any threshold is refused, nothing is written.
+- A write that fails is `export_write_failed`.
+- The files have sorted keys, a two-space indent, UTF-8 and LF line ends.
+- Nothing is deleted, not even the provenance file of a threshold that `exports.json` no longer lists.

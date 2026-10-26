@@ -143,6 +143,35 @@
       },
       "description": "The venv or a pinned package is missing, a package is not at its pin, or the interpreter (or the venv's interpreter) is not Python 3.13. setup_command is the command that creates the venv; setup never replaces a venv of another minor version."
     },
+    "export_refused": {
+      "category": "error",
+      "exit": 5,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "output": {"type": "token", "required": true},
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["blocked", "per_account", "provisional", "not_integer", "out_of_range"]
+        },
+        "value": {"type": "token", "required": false}
+      },
+      "description": "acmodel export thresholds: an output (threshold:<id>) cannot go into a shared output, so nothing is written (contracts/formats.md, Outputs). blocked: it cannot be computed; the errors that block it follow, with needed_by. per_account: it read the account state, and a per-account value never enters a shared output (#424, ruling 66); run and explain show it locally. provisional: it is not confirmed. not_integer, out_of_range: its exact value (value) is not an integer (exports.json can declare a round), or lies beyond +-(2^53-1). path is exports.json and the error's ref the threshold's entry in it."
+    },
+    "export_write_failed": {
+      "category": "error",
+      "exit": 5,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "exception_type": {"type": "name", "required": true},
+        "raw_text": {"type": "raw_text", "required": true}
+      },
+      "description": "acmodel export thresholds: a file of the export (path) or its folder could not be written. The provenance files are written before thresholds.json, so thresholds.json is left as it was when a provenance file fails; nothing is deleted."
+    },
     "expr_dimension_mismatch": {
       "category": "error",
       "exit": 1,
@@ -522,11 +551,11 @@
         "reason": {
           "type": "vocab",
           "required": true,
-          "members": ["command_missing", "command_unknown", "argument_missing", "argument_unexpected"]
+          "members": ["command_missing", "command_unknown", "argument_missing", "argument_unexpected", "output_unknown"]
         },
         "argument": {"type": "token", "required": false}
       },
-      "description": "The command line names no command, an unknown command, or an argument the command does not take, or it lacks an argument the command needs (argument is the argument's name). The usage text goes to stderr."
+      "description": "The command line names no command, an unknown command, or an argument the command does not take, or it lacks an argument the command needs (argument is the argument's name). output_unknown (acmodel explain): the output argument is not an output of the model (rule:<id>, general_logic:<id> or threshold:<id>); argument is the id given. The usage text goes to stderr."
     },
     "venv_failed": {
       "category": "error",

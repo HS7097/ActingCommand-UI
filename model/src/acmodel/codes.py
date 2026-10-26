@@ -35,10 +35,12 @@ HOST_READING_FAILED = "host_reading_failed"
 STATE_READING_MISSING = "state_reading_missing"
 STATE_ENTITY_MISSING = "state_entity_missing"
 RULING_OVERRIDES_GENERAL_LOGIC = "ruling_overrides_general_logic"  # a note (category info), never an error
+EXPORT_REFUSED = "export_refused"
+EXPORT_WRITE_FAILED = "export_write_failed"
 
 EXIT_OK = 0
 
-# 1 model or input error, 2 usage, 4 host gate (contracts/cli.md lists all of 0-6).
+# 1 model or input error, 2 usage, 4 host gate, 5 export refused (contracts/cli.md lists all of 0-6).
 EXIT_STATUS = {
     USAGE_INVALID: 2,
     CONFIG_INVALID: 1,
@@ -71,4 +73,6 @@ EXIT_STATUS = {
     STATE_READING_MISSING: 1,
     STATE_ENTITY_MISSING: 1,
     RULING_OVERRIDES_GENERAL_LOGIC: 0,
+    EXPORT_REFUSED: 5,
+    EXPORT_WRITE_FAILED: 5,
 }

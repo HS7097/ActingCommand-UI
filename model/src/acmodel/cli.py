@@ -12,7 +12,9 @@ from acmodel import TOOL, __version__, cache, config, deps, environment
 from acmodel.check import check_model
 from acmodel.codes import COMMAND_CRASHED, USAGE_INVALID
 from acmodel.core import run_model
+from acmodel.core.provenance import explain
 from acmodel.envelope import Failure, build, error, write
+from acmodel.export import export_thresholds
 from acmodel.system import System
 
 # Each command (one word, or a group and a word): the names of its positional arguments, then its options;
@@ -22,6 +24,8 @@ COMMANDS = {
     "version": ((), ()),
     "check": (("model",), ()),
     "run": (("model",), ("--state",)),
+    "explain": (("model", "output"), ("--state",)),
+    "export thresholds": (("model",), ("--state",)),
     "cache stats": ((), ()),
     "cache verify": ((), ()),
     "cache gc": ((), ()),
@@ -33,6 +37,8 @@ USAGE = (
     "usage: acmodel.py <command> [<argument>] [--<option> <value>]\n"
     "commands: setup, version, check <model folder or model.json>,\n"
     "          run <model folder or model.json> --state <state file>,\n"
+    "          explain <model folder or model.json> <output id> --state <state file>,\n"
+    "          export thresholds <model folder or model.json> --state <state file>,\n"
     "          cache stats, cache verify, cache gc [--apply]\n"
 )
 
@@ -139,6 +145,16 @@ def _cache(command: str, args: list[str], cfg: config.Config, system: System) ->
     return data, []
 
 
+def _explain(args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
+    _dependencies(system)
+    return explain(Path(args[0]), args[1], Path(args[2]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits)
+
+
+def _export_thresholds(args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
+    _dependencies(system)
+    return export_thresholds(Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits)
+
+
 def main(argv: Sequence[str], system: System) -> int:
     command = None
     errors: list[dict[str, Any]] = []
@@ -157,6 +173,10 @@ def main(argv: Sequence[str], system: System) -> int:
             data = _check(args, cfg, system)
         elif command == "run":
             data, errors, warnings = _run(args, cfg, system)
+        elif command == "explain":
+            data = _explain(args, cfg, system)
+        elif command == "export thresholds":
+            data = _export_thresholds(args, cfg, system)
         else:
             data, errors = _cache(command, args, cfg, system)
     except Failure as failure:

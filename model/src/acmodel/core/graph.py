@@ -20,9 +20,18 @@ found as the evaluation reaches them, so a node depends only on the unknowns its
 counts as provisional), any unknown (provisional), a reading (confirmed). A node that cannot be computed
 is blocked with its errors, and so is every node that reads it; the others are still computed.
 
+**Reads.** A scenario also records what its value read (`provenance` assembles the tree from them): the
+graph nodes, and these, each a tuple of strings:
+- ("row", table, *key): a data row;
+- ("entry", rule id): a rule consulted for its logic without its value (the cap of `max_single_income`,
+  and an income whose amount needs the account state, which the store's storage cap bounds instead);
+- ("reading", fact), ("cleared", id), ("entity", class, id, attribute), ("entities", class): the account
+  state.
+
 **Cache** (#424 design section 5, `acmodel.cache`). With a cache session, every node computes through
 `cached`: it is reused while its verifying trace holds, and computed again otherwise. A node's trace is
-everything its computation read, in order, each with its value hash (`depend`):
+everything its computation read, in order, each with its value hash (`depend`). It holds every item of
+the provenance record above (`_Environment.read` records both) and more:
 - the graph nodes it read (`result`);
 - leaves, each a tuple of strings and hashed from the inputs of this run (`leaf`): ("entry", id), the
   declaration (with its file, pointer and whether it is active); ("row", table, *key); ("reading", fact),
@@ -83,6 +92,7 @@ class Scenario:
     value: Value
     status: str  # confirmed or provisional
     per_account: bool  # the value read the account state
+    reads: tuple[tuple[str, ...], ...] = ()  # what the value read, in the order it was read
 
 
 @dataclass(frozen=True)
@@ -199,12 +209,14 @@ class _Environment:
         self.unknowns = unknowns
         self.status = status
         self.per_account = False
+        self.reads: dict[tuple[str, ...], None] = {}  # what the value read, once each, in order
 
     def fail(self, code: str, **detail: Any) -> None:
         raise Failure(error(code, {key: value for key, value in detail.items() if value is not None}, self.ref))
 
     def read(self, item: tuple[str, ...]) -> None:
-        """A value of the data or the account state that the value reads (the node's trace holds it)."""
+        """What the value read: the scenario's provenance record, and the node's trace."""
+        self.reads[item] = None
         self.graph.depend(item)
 
     def use(self, scenario: Scenario) -> Value:
@@ -220,6 +232,7 @@ class _Environment:
         candidates = self.consistent(self.graph.result(self.prefix + key))
         for scenario in candidates:
             if all(unknown in self.unknowns for unknown, _ in scenario.unknowns):
+                self.read(self.prefix + key)
                 return self.use(scenario)
         raise _Branch(next(u for u, _ in candidates[0].unknowns if u not in self.unknowns))
 
@@ -258,6 +271,8 @@ class _Environment:
         if ref.kind == "data":
             table = self.table(ref.target, ref.position, "reference")
             self.graph.depend(("table_keys", ref.target))
+            for key in table.rows:  # the set is every row of the table
+                self.read(("row", ref.target, *key))
             return list(table.rows)
         self.per_account = True
         self.read(("entities", ref.target))
@@ -283,6 +298,7 @@ class _Environment:
         An income that would need the account state and has no such cap is `evaluation_unsupported`
         (`found` `state`); the state is never read in its place."""
         checker, found = self.graph.checker, []
+        self.read(("entry", cap))  # which incomes it blocks
         for key in parts:
             self.graph.depend(("entry", key[1]))
             self.status = worst(self.status, RULE_STATUS[checker.entries[key[1]].doc["status"]])
@@ -292,6 +308,7 @@ class _Environment:
             except _NeedsState:
                 if bound is None:
                     raise self.state_unsupported(resource, cap) from None
+                self.read(("entry", key[1]))  # the income, which the storage cap bounds
                 found.append(bound)
                 continue
             found.append(largest if bound is None else min(largest, bound, key=_magnitude))
@@ -299,7 +316,9 @@ class _Environment:
 
     def largest(self, key: tuple[str, ...]) -> Value:
         """The largest value of node `key` over the variants this scenario leaves open."""
-        return max((self.use(s) for s in self.consistent(self.graph.result(key))), key=_magnitude)
+        scenarios = self.consistent(self.graph.result(key))
+        self.read(key)
+        return max((self.use(s) for s in scenarios), key=_magnitude)
 
     def store_bound(self, part: tuple[str, ...]) -> Value | None:
         """For a move out of a store: the largest value of the store's storage cap, from the rules and the
@@ -656,7 +675,9 @@ class Graph:
                 return Result(needs_state=True)
             except Failure as failure:
                 return self.blocked(failure.errors, owner.path)
-            scenarios.append(Scenario(tuple(sorted(unknowns)), _rounded(mode, value), env.status, env.per_account))
+            scenarios.append(
+                Scenario(tuple(sorted(unknowns)), _rounded(mode, value), env.status, env.per_account, tuple(env.reads))
+            )
         return Result(tuple(sorted(scenarios, key=lambda scenario: scenario.unknowns)))
 
     def cap_reading(self, cap: Entry, own: str) -> Result:
@@ -666,7 +687,7 @@ class Graph:
         if fact not in readings:
             failure = Failure(error(STATE_READING_MISSING, {"fact": fact}, at(cap.ref, "logic", "reading")))
             return self.blocked(failure.errors, cap.path)
-        return Result((Scenario((), Fraction(readings[fact]["value"]), own, True),))
+        return Result((Scenario((), Fraction(readings[fact]["value"]), own, True, (("reading", fact),)),))
 
     def threshold(self, threshold_id: str) -> Result:
         self.depend(("threshold_entry", threshold_id))
@@ -679,7 +700,7 @@ class Graph:
         if result.blocked:
             return result
         mode = threshold.get("round")
-        return Result(tuple(replace(s, value=_rounded(mode, s.value)) for s in result.scenarios))
+        return Result(tuple(replace(s, value=_rounded(mode, s.value), reads=(key,)) for s in result.scenarios))
 
     # The run --------------------------------------------------------------------------------------
 

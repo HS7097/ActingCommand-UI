@@ -6,8 +6,8 @@ Runtime.
 
 This folder holds the launcher, `setup`, `version`, the output envelope, the dependency check, the strict
 readers of the model files, the expression language, the static check (`check`), the derivation graph
-(`run`) and its cache with incremental recompute (`cache`). The other computation commands come in later
-slices.
+(`run`) and its cache with incremental recompute (`cache`), provenance (`explain`) and the thresholds export
+(`export thresholds`). The other computation commands come in later slices.
 
 ## Needs
 
@@ -35,6 +35,8 @@ py -3 -I -B model\acmodel.py version
 model\acmodel.cmd version
 model\acmodel.cmd check <resource repo>\ours\model
 model\acmodel.cmd run <resource repo>\ours\model --state <state snapshot>
+model\acmodel.cmd explain <resource repo>\ours\model threshold:<id> --state <state snapshot>
+model\acmodel.cmd export thresholds <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd cache stats
 model\acmodel.cmd cache verify
 model\acmodel.cmd cache gc [--apply]
@@ -54,6 +56,14 @@ model\acmodel.cmd cache gc [--apply]
   the cache, `cache verify` checks every value against its hash, and `cache gc` trims it to
   `cache.max_bytes` (a dry run without `--apply`). A corrupt value is never used: `run` warns
   (`cache_entry_corrupt`) and computes it again (`contracts/cli.md`, "Cache").
+- **`explain`** prints the provenance tree of one output (`rule:<id>`, `general_logic:<id>` or
+  `threshold:<id>`): every rule, data row, ruling and reading its value rests on, with their hashes and
+  the model's versions. It writes nothing; like `export thresholds`, it computes without the cache.
+- **`export thresholds`** writes `out/thresholds.json` and one provenance file per threshold into the
+  model folder, for delivery with the resource repository. It never commits. Only account-independent
+  values go into these shared files: a threshold that read the account state, is not confirmed, is not an
+  integer, or is blocked is refused (`export_refused`, exit 5), and then nothing is written
+  (`contracts/formats.md`, "Outputs").
 - **Re-dispatch.** The launcher re-runs itself under the venv's Python, and the exit status is passed
   through.
 - **Dependency check.** Before every command except `setup`, the launcher checks that the interpreter
@@ -122,12 +132,13 @@ requirements.txt      numpy, scipy: exact pins with sha256 hashes
 requirements-dev.txt  the above plus pytest and its dependencies, hashed
 pytest.ini            test paths; src on the import path
 contracts/            cli.md (envelope, start, configuration), codes.json (the codes),
-                      formats.md (the input files, their strict reading and the static check)
+                      formats.md (the input files, their strict reading, the static check,
+                      the run and the outputs)
 src/acmodel/          the package: model/ the strict readers, expr/ the expression language,
                       check/ the static check, ids.py the id grammars they share, core/ the
-                      run (its model checks and the derivation graph), cache/ the cache
-                      (keys, sqlite3 index and blobs, verifying traces, run ids, stats/verify/gc),
-                      host/ the host caps (priority, Job object, memory gates, quiet windows,
-                      PAUSE file)
+                      run (its model checks, the derivation graph, provenance and the versions of
+                      the inputs), cache/ the cache (keys, sqlite3 index and blobs, verifying
+                      traces, run ids, stats/verify/gc), export/ the thresholds export, host/ the
+                      host caps (priority, Job object, memory gates, quiet windows, PAUSE file)
 tests/                pytest tests with fakes
 ```

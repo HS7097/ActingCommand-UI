@@ -1,8 +1,8 @@
 """PY-9: the cache and incremental recompute (#424 design section 5) on the worked example (design section
 3.8): an incremental run equals a cold one byte for byte; only the dependents of a change recompute; a
 same-value change stops at the early cutoff; a corrupt blob is reported and recomputed; equal inputs give
-equal run ids; an evaluator bump or a library version reaches only its kinds; and the outputs do not depend
-on the string-hash seed."""
+equal run ids; an evaluator bump or a library version reaches only its kinds; the outputs do not depend
+on the string-hash seed; and the provenance record (PY-5) comes out of a warm cache unchanged."""
 
 from __future__ import annotations
 
@@ -20,8 +20,10 @@ from pathlib import Path
 import pytest
 
 from acmodel import cli, environment
-from acmodel.cache import EVALUATORS, Session, open_store
+from acmodel.cache import EVALUATORS, Session, canonical, open_store
 from acmodel.core import run_model
+from acmodel.core.provenance import assemble, outputs as output_nodes
+from acmodel.core.run import evaluate_model
 
 EXAMPLE = Path(__file__).resolve().parent / "fixtures" / "example"
 CODES = json.loads((Path(__file__).resolve().parents[1] / "contracts" / "codes.json").read_text(encoding="utf-8"))["codes"]
@@ -282,6 +284,28 @@ def test_a_library_version_change_misses_only_the_kinds_that_declare_it(example,
     assert computed(work) == {"flow": 1}
     assert work["reused"] == work["nodes"] - 1
     assert results({"data": second}, "run_id") == results({"data": first}, "run_id")
+
+
+def test_provenance_and_outputs_are_byte_identical_with_and_without_a_warm_cache(example, tmp_path):
+    """Every output's provenance document, and the run's data and errors, are the same from a run without
+    the cache and from a run that reuses every node (the value kept in the cache carries `Scenario.reads`)."""
+    apply(example, UNITS)
+    state_root = tmp_path / "state"
+    with open_store(state_root, max_bytes=2**31) as store:  # fills the cache
+        run_model(example / MODEL, example / STATE, datasets=state_root / "datasets", max_bits=127,
+                  cache=Session(store, libraries=LIBRARIES))
+    plain = evaluate_model(example / MODEL, example / STATE, datasets=state_root / "datasets", max_bits=127)
+
+    with open_store(state_root, max_bytes=2**31) as store:
+        session = Session(store, libraries=LIBRARIES)
+        warm = evaluate_model(example / MODEL, example / STATE, datasets=state_root / "datasets", max_bits=127,
+                              cache=session)
+        work = session.work()
+
+    assert work["computed"] == 0 and work["reused"] == work["nodes"] > 0
+    assert canonical([warm.data, warm.errors]) == canonical([plain.data, plain.errors])
+    for output in output_nodes(plain):
+        assert canonical(assemble(warm, output)) == canonical(assemble(plain, output)), output
 
 
 def test_run_outputs_are_byte_identical_under_two_hash_seeds(example, tmp_path, launcher):
