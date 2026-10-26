@@ -33,7 +33,8 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install the hash-pinned wheels
-        run: python -I -B -m pip install --require-hashes --only-binary=:all: --no-deps -r model/requirements-dev.txt
+        run: |
+          python -I -B -m pip install --require-hashes --only-binary=:all: --no-deps -r model/requirements-dev.txt
       - name: pytest
         working-directory: model
         run: python -I -B -m pytest -c pytest.ini -p no:cacheprovider
