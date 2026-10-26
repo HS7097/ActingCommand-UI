@@ -1,0 +1,7 @@
+{"schema_version": "example.selection.v1",
+ "terms": [
+   {"id": "base", "weight_milli": {"$model": "rule:v.whole", "scale": 1000, "round": "half_even"}},
+   {"id": "share", "weight_milli": {"$model": "rule:v.ratio", "scale": 1000, "round": "floor"}}],
+ "gates": [{"fact": "resource.a", "at_least": {"$model": "rule:v.half", "scale": 1, "round": "ceil"}}],
+ "on_unknown": "skip",
+ "tie_break": ["id"]}

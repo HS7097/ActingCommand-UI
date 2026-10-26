@@ -11,6 +11,15 @@ from pathlib import Path
 from typing import Callable, MutableMapping, Sequence, TextIO
 
 
+def run_captured(cmd: Sequence[str], *, timeout_ms: int) -> tuple[int, bytes]:
+    """Run a child to completion and return its exit code and its stdout; its stderr joins ours. Raises
+    OSError if it cannot start, and `subprocess.TimeoutExpired` (the child killed) past `timeout_ms`."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    done = subprocess.run(list(cmd), stdout=subprocess.PIPE, timeout=timeout_ms / 1000, check=False)
+    return done.returncode, done.stdout
+
+
 @dataclass
 class System:
     launcher: Path
@@ -24,6 +33,8 @@ class System:
     run: Callable[..., int]
     stdout: TextIO
     stderr: TextIO
+    # run_captured(cmd, *, timeout_ms) -> (exit code, stdout): the exports' validator (`export.validator`).
+    run_captured: Callable[..., tuple[int, bytes]] = run_captured
 
 
 def installed_version(package: str) -> str | None:
@@ -54,4 +65,5 @@ def current(launcher: Path) -> System:
         run=run_process,
         stdout=sys.stdout,
         stderr=sys.stderr,
+        run_captured=run_captured,
     )

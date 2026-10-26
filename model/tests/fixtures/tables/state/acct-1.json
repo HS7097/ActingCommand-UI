@@ -1,0 +1,10 @@
+{
+  "schema_version": "acmodel.state.v1",
+  "model_id": "tabular",
+  "label": "acct-1",
+  "readings": {
+    "resource.a": {"value": 3900, "observed_at_unix_ms": 1767225600000, "source": "fixture"}
+  },
+  "entities": {},
+  "cleared": []
+}
