@@ -1,0 +1,39 @@
+name: model
+
+# acmodel (model/): pytest on Windows and Ubuntu with Python 3.13, from the
+# hash-pinned wheels only. It runs only when model/ or this file changes, so it
+# is not a required check. build.yml is independent of it: cargo never sees
+# model/, because the workspace lists its members explicitly.
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'model/**'
+      - '.github/workflows/model.yml'
+  pull_request:
+    paths:
+      - 'model/**'
+      - '.github/workflows/model.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Install the hash-pinned wheels
+        run: python -I -B -m pip install --require-hashes --only-binary=:all: --no-deps -r model/requirements-dev.txt
+      - name: pytest
+        working-directory: model
+        run: python -I -B -m pytest -c pytest.ini -p no:cacheprovider

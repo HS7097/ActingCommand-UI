@@ -1,0 +1,11 @@
+# acmodel's packages: exact pins, wheels only, no dependency resolution.
+#   python -I -B -m pip install --require-hashes --only-binary=:all: --no-deps -r requirements.txt
+# sha256 from the PyPI JSON API (urls[].digests.sha256) for the CPython 3.13
+# wheels on win_amd64 and manylinux x86_64. src/acmodel/deps.py holds the same
+# pins for the dependency check; change both together.
+numpy==2.5.4 \
+    --hash=sha256:8b4d2fd2d34e5f8c9235ee787de5631a37a28402b15cb80814df973d2be54129 \
+    --hash=sha256:6ffa07666f8da0eef81d149934a626d0d95fbd6838432a33e66245423a9062c0
+scipy==1.18.1 \
+    --hash=sha256:559ed65f60c1af5a03f3912605a1b5114f522c7c32fb23c3376ae8f03219fe28 \
+    --hash=sha256:fdaf5ea890a6183d0565f51a61799d67081bd5b1cf03c5f4b3fd3732108625c9
