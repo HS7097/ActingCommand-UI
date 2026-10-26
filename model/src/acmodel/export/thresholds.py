@@ -4,10 +4,11 @@ provenance file per threshold, written into the model folder:
 - `out/provenance/thresholds/<id>.json`: its provenance document (`core.provenance`), as `explain` prints it.
 
 **Shared outputs carry no per-account value** (#424, ruling 66). Both files are delivered with the
-resource repository. A threshold is exported only when it is confirmed, reads nothing of the account state,
-and is an integer in the JSON-safe range. Otherwise it is refused (`export_refused`, exit 5), with the errors
-that block it, and nothing at all is written. A per-account value is never written here: `run` and
-`explain` show it locally.
+resource repository. A threshold is exported only when it is confirmed (or provisional and accepted by
+`acceptances` of exports.json, #424 design 6.6, which its provenance file then records), reads nothing of the
+account state, and is one integer in the JSON-safe range. Otherwise it is refused (`export_refused`, exit 5),
+with the errors that block it, and nothing at all is written. A per-account value is never written here: `run`
+and `explain` show it locally.
 
 Provenance files are written first and `thresholds.json` last, so that `thresholds.json` never names a
 provenance file that was not written. A write that fails is `export_write_failed`. Nothing is deleted,
@@ -25,7 +26,7 @@ from acmodel.check.walk import at
 from acmodel.codes import EXPORT_REFUSED, EXPORT_WRITE_FAILED
 from acmodel.config import Unknowns
 from acmodel.core.common import BLOCKED, CONFIRMED
-from acmodel.core.provenance import STATE_NODES, assemble
+from acmodel.core.provenance import STATE_NODES, acceptance, assemble
 from acmodel.core.run import Run, evaluate_model
 from acmodel.core.versions import versions
 from acmodel.envelope import Failure, error
@@ -58,12 +59,13 @@ def threshold_entry(run: Run, index: int, threshold: dict[str, Any], files: dict
     doc = assemble(run, output)
     if shown["per_account"] or any(node["node"] in STATE_NODES for node in doc["nodes"].values()):
         return _refusal(run, index, output, "per_account")
-    if shown["status"] != CONFIRMED:  # acceptances of provisional values come with the export policy
+    if shown["status"] != CONFIRMED and acceptance(run, output) is None:
         return _refusal(run, index, output, "provisional")
     member = "value" if form == "constant" else "offset"
     # A confirmed output that read unknowns has a value or an enclosure per scenario, all within one value at
     # export precision (the no-effect rule). They are one integer, or one of them is not an integer: an
-    # enclosure holds more than one number, and two integers differ by a whole unit.
+    # enclosure holds more than one number, and two integers differ by a whole unit. An accepted provisional
+    # output may have several values: it is refused, never one of them picked.
     shown_values = shown["variants"] if "variants" in shown else [shown]
     enclosed = next((entry["range"] for entry in shown_values if member not in entry), None)
     if enclosed is not None:
@@ -72,8 +74,8 @@ def threshold_entry(run: Run, index: int, threshold: dict[str, Any], files: dict
     odd = next((value for value in values if Fraction(value).denominator != 1), None)
     if odd is not None:
         return _refusal(run, index, output, "not_integer", value=odd)
-    if len(values) != 1:  # two integers differ by a whole unit, which is never without effect
-        raise ValueError(f"confirmed threshold {threshold['id']!r} with the values {values}")
+    if len(values) != 1:
+        return _refusal(run, index, output, "not_single", value=f"{values[0]}..{values[-1]}")
     number = Fraction(values[0])
     if abs(number) > MAX_SAFE_INTEGER:
         return _refusal(run, index, output, "out_of_range", value=values[0])

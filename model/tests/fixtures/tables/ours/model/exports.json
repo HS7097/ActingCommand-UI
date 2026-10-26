@@ -1,0 +1,30 @@
+{"schema_version": "acmodel.exports.v1",
+ "thresholds": [],
+ "tables": [
+   {"table_id": "unit_values", "game": "example", "row_key": ["unit"],
+    "columns": [
+      {"name": "unit", "type": "key"},
+      {"name": "tier", "type": "enum_string", "allowed": ["low", "high"]},
+      {"name": "value_milli", "type": "integer", "min": -1000000000, "max": 1000000000, "scale": 1000,
+       "round": "half_even", "nullable": true, "valid_until": "win.season"},
+      {"name": "usable", "type": "boolean"}],
+    "rows": [
+      {"unit": "u1", "tier": "high", "value_milli": {"$model": "rule:v.whole"}, "usable": {"$model": "rule:v.flag"}},
+      {"unit": "u2", "tier": "low", "value_milli": {"$model": "rule:v.est"}, "usable": {"$model": "rule:v.flag"}}]},
+   {"table_id": "rounding", "game": "example", "row_key": ["value"],
+    "columns": [
+      {"name": "value", "type": "key"},
+      {"name": "floor", "type": "integer", "min": -10, "max": 10, "scale": 1, "round": "floor"},
+      {"name": "ceil", "type": "integer", "min": -10, "max": 10, "scale": 1, "round": "ceil"},
+      {"name": "half_even", "type": "integer", "min": -10, "max": 10, "scale": 1, "round": "half_even"},
+      {"name": "milli_floor", "type": "integer", "min": -10000, "max": 10000, "scale": 1000, "round": "floor"}],
+    "rows": [
+      {"value": "half", "floor": {"$model": "rule:v.half"}, "ceil": {"$model": "rule:v.half"},
+       "half_even": {"$model": "rule:v.half"}, "milli_floor": {"$model": "rule:v.half"}},
+      {"value": "odd", "floor": {"$model": "rule:v.odd"}, "ceil": {"$model": "rule:v.odd"},
+       "half_even": {"$model": "rule:v.odd"}, "milli_floor": {"$model": "rule:v.odd"}},
+      {"value": "neg", "floor": {"$model": "rule:v.neg"}, "ceil": {"$model": "rule:v.neg"},
+       "half_even": {"$model": "rule:v.neg"}, "milli_floor": {"$model": "rule:v.neg"}},
+      {"value": "ratio", "floor": {"$model": "rule:v.ratio"}, "ceil": {"$model": "rule:v.ratio"},
+       "half_even": {"$model": "rule:v.ratio"}, "milli_floor": {"$model": "rule:v.ratio"}}]}],
+ "scoring": [{"id": "pick", "template": "scoring.template.json"}]}

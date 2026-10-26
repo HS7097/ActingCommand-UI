@@ -1,0 +1,28 @@
+{
+  "schema_version": "acmodel.rules.v1",
+  "entities": [
+    {"id": "res.a", "kind": "resource", "reading": "resource.a"},
+    {"id": "res.b", "kind": "resource", "reading": "resource.b"},
+    {"id": "win.season", "kind": "window", "starts_at_unix_s": 1767225600, "ends_at_unix_s": 1769904000}
+  ],
+  "rules": [
+    {"id": "v.whole", "kind": "derive", "subject": "res.a", "logic": {"value": "1200"},
+     "provenance": [{"kind": "ruling", "ref": "R-1", "where": "board #N comment E", "date": "2026-01-05"}],
+     "status": "confirmed"},
+    {"id": "v.half", "kind": "derive", "subject": "res.a", "logic": {"value": "2.5"},
+     "provenance": [{"kind": "logic", "ref": "fixture"}], "status": "confirmed"},
+    {"id": "v.odd", "kind": "derive", "subject": "res.a", "logic": {"value": "3.5"},
+     "provenance": [{"kind": "logic", "ref": "fixture"}], "status": "confirmed"},
+    {"id": "v.neg", "kind": "derive", "subject": "res.a", "logic": {"value": "-2.5"},
+     "provenance": [{"kind": "logic", "ref": "fixture"}], "status": "confirmed"},
+    {"id": "v.ratio", "kind": "derive", "subject": "res.a", "logic": {"value": "2 / 3"},
+     "provenance": [{"kind": "logic", "ref": "fixture"}], "status": "confirmed"},
+    {"id": "v.flag", "kind": "derive", "subject": "res.a", "logic": {"value": "1 < 2"},
+     "provenance": [{"kind": "logic", "ref": "fixture"}], "status": "confirmed"},
+    {"id": "v.est", "kind": "derive", "subject": "res.a", "logic": {"value": "240"},
+     "provenance": [{"kind": "pending_check", "ref": "check list item 2"}], "status": "provisional"},
+    {"id": "v.missing", "kind": "derive", "subject": "res.b", "logic": {"value": "read:resource.b"},
+     "provenance": [{"kind": "logic", "ref": "fixture"}], "status": "confirmed"}
+  ],
+  "unknowns": []
+}

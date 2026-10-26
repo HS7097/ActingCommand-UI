@@ -8,10 +8,11 @@ This folder holds the launcher, `setup`, `version`, the output envelope, the dep
 readers of the model files, the expression language, the static check (`check`), the derivation graph
 (`run`) with its unknowns and their sensitivity and its random processes (exact pity chains, Wilson bounds of
 rates from samples), its cache with incremental recompute (`cache`), provenance
-(`explain`), the thresholds export (`export thresholds`), the bindings of thresholds to the schedule
-(`bindings check`, `bindings apply`), the economy's LP and MILP (`economy`), the engine host, which runs
-engines kept outside this repository in worker processes of its own, and the generic search for teams over those
-engines (no command runs it yet). The other computation commands come in later slices.
+(`explain`), the exports (`export thresholds`, `export tables`, `export scoring`) with their export policy, the
+bindings of thresholds to the schedule (`bindings check`, `bindings apply`), the economy's LP and MILP
+(`economy`), the engine host, which runs engines kept outside this repository in worker processes of its own,
+and the generic search for teams over those engines (no command runs it yet). The other computation commands
+come in later slices.
 
 ## Needs
 
@@ -42,6 +43,8 @@ model\acmodel.cmd run <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd economy <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd explain <resource repo>\ours\model threshold:<id> --state <state snapshot>
 model\acmodel.cmd export thresholds <resource repo>\ours\model --state <state snapshot>
+model\acmodel.cmd export tables <resource repo>\ours\model --state <state snapshot> --repo <resource repo>
+model\acmodel.cmd export scoring <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd bindings check <resource repo>\ours\model --state <state snapshot> --strict
 model\acmodel.cmd bindings apply <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd cache stats
@@ -86,6 +89,19 @@ model\acmodel.cmd cache gc [--apply]
   values go into these shared files: a threshold that read the account state, is not confirmed, is not an
   integer, or is blocked is refused (`export_refused`, exit 5), and then nothing is written
   (`contracts/formats.md`, "Outputs").
+- **The export policy** decides what a delivered file takes from an output: a confirmed value as it is; a
+  provisional one only when `acceptances` of exports.json accept it (a table cell is `null` otherwise, the
+  others are refused); a blocked or per-account one never. A number is scaled and rounded as declared
+  (`floor`, `ceil`, `half_even`), and each output a file delivers gets its provenance file in the model folder,
+  equal to what `explain` prints.
+- **`export tables`** writes the tables of exports.json into the repository's `tables/` as the Runtime's shared
+  tables, in canonical JSON (keys in UTF-16 order, integers only), and runs the Runtime's own validator,
+  `actinglab --json resource validate`, on each (`paths.actinglab`). Without a validator nothing is written; when
+  it refuses a table, every file gets its previous bytes back (`export_table_invalid`, exit 5, with the
+  validator's problem and JSON pointer). It never commits.
+- **`export scoring`** fills each scoring template with the model's numbers; one placeholder it cannot fill
+  refuses the whole document. Until the place of `scoring.json` and its validator are decided, it writes nothing
+  (`export_refused`, `validator_path_unknown`).
 - **`bindings check`** compares each literal that `ours/model/bindings.json` ties to a threshold, in the
   repository's `schedule.json` or a pack file, with the value `export thresholds` would write. With
   `--strict` it also refuses every number of a `fact` predicate of `schedule.json` that is neither bound
@@ -172,6 +188,8 @@ default:
   each and improves them by local swaps. `search.node_limit` (100000) is its only budget (then `proven: false`). A
   warm start screens again only what a change touches, and every result reports the loss of the team the additive
   terms alone would pick (`contracts/formats.md`, "The search").
+- **Exports.** `paths.actinglab` (no default) is the Runtime's validator that `export tables` runs, an
+  `actinglab` from a Runtime build or release; `export.validator_timeout_ms` (120000) bounds each run of it.
 
 ## Tests
 
@@ -200,10 +218,12 @@ src/acmodel/          the package: model/ the strict readers, expr/ the expressi
                       versions of the inputs, flow.py the economy's LP and MILP, and search.py the
                       generic search for teams), cache/ the
                       cache (keys, sqlite3 index and blobs, verifying traces, run ids,
-                      stats/verify/gc), export/ the thresholds export, bindings/
+                      stats/verify/gc), export/ the exports (thresholds, tables with their JCS
+                      writer and validator call, scoring templates, the export policy), bindings/
                       the bindings check and apply with their position-tracking scanner, host/ the
                       host caps (priority, Job object, memory gates, quiet windows, PAUSE file),
                       engine/ the engine host (manifest and fingerprint, workers, guards, the cached
                       call and the verify sample)
-tests/                pytest tests with fakes; fakes/ holds the neutral fake engines
+tests/                pytest tests with fakes; fakes/ holds the neutral fake engines and the fake
+                      validator script
 ```

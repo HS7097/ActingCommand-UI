@@ -15,7 +15,7 @@ from acmodel.codes import COMMAND_CRASHED, USAGE_INVALID
 from acmodel.core import run_economy, run_model
 from acmodel.core.provenance import explain
 from acmodel.envelope import Failure, build, error, write
-from acmodel.export import export_thresholds
+from acmodel.export import Validator, export_scoring, export_tables, export_thresholds
 from acmodel.system import System
 
 # Each command (one word, or a group and a word): the names of its positional arguments, then its options;
@@ -28,6 +28,8 @@ COMMANDS = {
     "economy": (("model",), ("--state",)),
     "explain": (("model", "output"), ("--state",)),
     "export thresholds": (("model",), ("--state",)),
+    "export tables": (("model",), ("--state", "--repo")),
+    "export scoring": (("model",), ("--state",)),
     "bindings check": (("model",), ("--state",)),
     "bindings apply": (("model",), ("--state",)),
     "cache stats": ((), ()),
@@ -44,6 +46,8 @@ USAGE = (
     "          economy <model folder or model.json> --state <state file>,\n"
     "          explain <model folder or model.json> <output id> --state <state file>,\n"
     "          export thresholds <model folder or model.json> --state <state file>,\n"
+    "          export tables <model folder or model.json> --state <state file> --repo <repository>,\n"
+    "          export scoring <model folder or model.json> --state <state file>,\n"
     "          bindings check <model folder or model.json> --state <state file> [--strict],\n"
     "          bindings apply <model folder or model.json> --state <state file>,\n"
     "          cache stats, cache verify, cache gc [--apply]\n"
@@ -188,6 +192,23 @@ def _export_thresholds(args: list[str], cfg: config.Config, system: System) -> d
     )
 
 
+def _export_tables(args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
+    """The tables into the repository `--repo`, each checked by the validator `paths.actinglab`."""
+    _dependencies(system)
+    validator = Validator(cfg.actinglab, cfg.validator_timeout_ms, system.run_captured)
+    return export_tables(
+        Path(args[0]), Path(args[1]), Path(args[2]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits,
+        validator=validator, unknowns=cfg.unknowns,
+    )
+
+
+def _export_scoring(args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
+    _dependencies(system)
+    return export_scoring(
+        Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits, unknowns=cfg.unknowns
+    )
+
+
 def _bindings(command: str, args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
     """`bindings check [--strict]` compares the bound literals with their thresholds; `bindings apply`
     writes the ones that differ."""
@@ -227,6 +248,10 @@ def main(argv: Sequence[str], system: System) -> int:
             data = _bindings(command, args, cfg, system)
         elif command == "export thresholds":
             data = _export_thresholds(args, cfg, system)
+        elif command == "export tables":
+            data = _export_tables(args, cfg, system)
+        elif command == "export scoring":
+            data = _export_scoring(args, cfg, system)
         else:
             data, errors = _cache(command, args, cfg, system)
     except Failure as failure:

@@ -32,6 +32,8 @@ python3 -I -B <model>/acmodel.py <command>    (elsewhere)
 | `economy <model> --state <file>` | Runs as `run` does, then the economy's steady state and plan (`formats.md`, "The economy"): LP and MILP solved by scipy's HiGHS, every solution checked exactly. It computes only the graph nodes they read, incrementally through the cache, and writes only under `paths.state_root`. A blocked output's errors list it in `needed_by` (`economy:steady`, `economy:plan`), and the exit status is 1; the warnings `lp_dual_disagrees` and `search_budget_exhausted` never change it. | `path`, `model_id`, `state`, `run_id`, `steady`, `plan`, `work` |
 | `explain <model> <output> --state <file>` | Runs as `run` does, without the cache, and prints the provenance document of one output (`rule:<id>`, `general_logic:<id>` or `threshold:<id>`; `formats.md`, "Outputs"). It writes nothing. An id that is not an output is `usage_invalid` (`output_unknown`); a blocked output reports the errors that block it (exit 1). | `path`, `model_id`, `state`, `output`, `provenance` |
 | `export thresholds <model> --state <file>` | Runs as `run` does, without the cache, then writes `out/thresholds.json` and one provenance file per threshold into the model folder (`formats.md`, "Outputs"). Only account-independent, confirmed, integer thresholds are exported: any other is `export_refused` (exit 5), and then nothing is written. A per-account value never enters these shared files. | `path`, `model_id`, `state`, `written` (the files written) |
+| `export tables <model> --state <file> --repo <repository>` | Runs as `run` does, without the cache, then writes each table of exports.json into `<repository>/tables/<table_id>.json` as canonical JSON (`actingcommand.table.v1`), and the provenance file of each output it delivers into the model folder (`formats.md`, "`acmodel export tables`"). Each cell follows the export policy (`formats.md`, "The export policy"): a provisional output that is not accepted is `null`, a blocked or per-account one is `export_refused` (exit 5). Each table written is then checked by the validator `paths.actinglab` (`--json resource validate --repo <repository> --changed-path tables/<table_id>.json`). Without it, nothing is written (`export_validator_missing`, exit 5); on a refusal (`export_table_invalid`, exit 5), a failed write or no usable answer, every file written gets its previous bytes back. It never commits. | `path`, `model_id`, `state`, `repo`, `tables`, `written` (the files written) |
+| `export scoring <model> --state <file>` | Runs as `run` does, without the cache, and fills each scoring template of exports.json with the model's numbers by the export policy (`formats.md`, "`acmodel export scoring`"). One refused placeholder refuses its whole document (`export_refused`, exit 5). Until the place of `scoring.json` and its validator are decided, a template that fills is refused too (`validator_path_unknown`, exit 5), and nothing is written. | `path`, `model_id`, `state`, `written` |
 | `bindings check <model> --state <file> [--strict]` | Runs as `run` does, without the cache, and compares each literal that `bindings.json` binds, in `schedule.json` or a pack file, with its threshold's value as `export thresholds` would write it (`formats.md`, "Bindings"). A threshold the export refuses is refused the same way (`export_refused`, exit 5); a `fact_offset` threshold whose live offset read the account state is `binding_unsupported` (exit 5); a literal that differs, or sits where its threshold's form cannot, is `binding_mismatch` (exit 6). With `--strict`, every integer literal of a `fact` predicate of `schedule.json` that is neither bound nor fixed is `binding_unbound_literal` (exit 6). It writes nothing. | `path`, `model_id`, `state`, `repo`, `strict`, `bindings`, `fixed`, and `literals` with `--strict` |
 | `bindings apply <model> --state <file>` | Runs as `bindings check` does without `--strict`, then writes each bound literal that differs from its threshold. Only the literal's bytes change: line ends, spacing and every other byte stay. Anything else `check` refuses is refused, and then nothing is written. | `path`, `model_id`, `state`, `repo`, `changed`, `written` |
 | `cache stats` | Counts what the cache holds. It writes nothing. | `path`, `exists`, `max_bytes`, `entries`, `blobs`, `bytes`, `by_kind` (entries per node kind), `runs` |
@@ -78,7 +80,7 @@ child prints the line.
 - `ref` is a reference into the input when there is one: for `config_invalid`, the JSON pointer of the
   member, with the file in `detail.path`; for the model's codes, the JSON pointer into the file in
   `detail.path`.
-- `needed_by` lists the outputs an error blocks (`run`, `explain`, `export thresholds`, `bindings`: `rule:<id>`,
+- `needed_by` lists the outputs an error blocks (`run`, `explain`, the exports, `bindings`: `rule:<id>`,
   `general_logic:<id>`, `threshold:<id>`), sorted.
 
 Human text, one line per error and per warning and the usage text, goes to stderr.
@@ -111,6 +113,8 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | `paths.venv` | `%LOCALAPPDATA%\ActingCommand\acmodel\venv` | the venv; an absolute path |
 | `paths.state_root` | `%LOCALAPPDATA%\ActingCommand\acmodel\state` | the state root: the cache and the runs' outputs (see Cache); an absolute path, never inside a repository |
 | `paths.datasets` | `%LOCALAPPDATA%\ActingCommand\acmodel\datasets` | the local copies of external datasets, each the file named by its sha256 (`check` verifies them); an absolute path |
+| `paths.actinglab` | (none) | the Runtime's validator that `export tables` runs on every table it writes: an `actinglab` from a Runtime build or release, never compiled here; an absolute path. Without it, `export tables` is `export_validator_missing` |
+| `export.validator_timeout_ms` | 120000 | the most time one run of the validator may take; past it, it is stopped and the export is `export_validator_missing` (`timeout`) |
 | `compute.blas_threads` | 1 | the value of the BLAS thread variables; an integer of at least 1 |
 | `expr.max_bits` | 127 | the most bits a numerator or denominator may have in expression evaluation (durations in seconds); beyond it is `expr_overflow`; an integer of at least 1 |
 | `cache.max_bytes` | 2147483648 (2 GiB) | the size cap of the cache's values; above it, the least recently used entries are evicted after a run (never that run's) and by `cache gc --apply` |
@@ -258,7 +262,7 @@ stops and never computes without its cache.
 ## Host caps
 
 The host layer is `src/acmodel/host/`. The commands that compute call it before and during their work;
-`setup` and `version` do not. `run`, `economy`, `explain`, `export thresholds` and `bindings` in this version
+`setup` and `version` do not. `run`, `economy`, `explain`, the exports and `bindings` in this version
 evaluate only the derivation graph and the economy's solves, in their own process and with no workers, and do
 not call it yet.
 
