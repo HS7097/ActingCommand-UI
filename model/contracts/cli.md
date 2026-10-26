@@ -98,7 +98,73 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | `paths.datasets` | `%LOCALAPPDATA%\ActingCommand\acmodel\datasets` | the local copies of external datasets, each the file named by its sha256 (`check` verifies them); an absolute path |
 | `compute.blas_threads` | 1 | the value of the BLAS thread variables; an integer of at least 1 |
 | `expr.max_bits` | 127 | the most bits a numerator or denominator may have in expression evaluation (durations in seconds); beyond it is `expr_overflow`; an integer of at least 1 |
+| `compute.priority` | `below_normal` | the priority class of the tool and of every process it starts: `below_normal` or `idle` |
+| `compute.job.cpu_rate_milli` | 250 | the hard CPU cap of the tool's Job object, in thousandths of all logical processors together; 1 to 1000 |
+| `compute.job.worker_memory_mib` | 1024 | the memory limit of every process in the Job (the tool and its workers), in MiB; at least 1 |
+| `host.memory.start_min_mib` | 4096 | a batch starts, and a paused gate reopens, only at or above this much available host memory (MiB) |
+| `host.memory.pause_below_mib` | 2560 | inside a batch, a checkpoint pauses below this (MiB); at most `start_min_mib` |
+| `host.memory.report_plan_above_mib` | 3072 | a run whose planned memory is above this (MiB) is reported before it starts |
+| `host.cpu.pause_load_milli` | 900 | the gate holds while the host CPU load is above this (thousandths); 1 to 1000 |
+| `host.cpu.window_ms` | 5000 | the CPU load is averaged over at least this many milliseconds |
+| `host.quiet_windows` | `[]` | local-time windows without compute (see Host caps) |
+| `host.pause_file` | `<paths.state_root>\PAUSE` | while this file exists, the gate holds; an absolute path |
+| `host.pause_poll_ms` | 5000 | how often a waiting gate checks again, in milliseconds |
+
+All the numbers are integers of at least 1.
 
 ```json
 {"schema_version": "acmodel.config.v1", "paths": {"venv": "<absolute path>"}, "compute": {"blas_threads": 1}, "expr": {"max_bits": 127}}
 ```
+
+## Host caps
+
+The host layer is `src/acmodel/host/`. The commands that compute call it before and during their work;
+`setup` and `version` do not.
+
+**The caps of the tool's own process** (Windows; `host.windows`):
+1. `SetPriorityClass` to `compute.priority`, then `GetPriorityClass` must read it back. Otherwise the
+   result is `host_priority_not_applied` (exit 4). Every kernel32 function is called with typed
+   `argtypes` and `restype`.
+2. A new Job object gets the limits `compute.job.worker_memory_mib` per process and the priority class
+   (`JOBOBJECT_EXTENDED_LIMIT_INFORMATION`), and the hard CPU cap `compute.job.cpu_rate_milli`
+   (`JOBOBJECT_CPU_RATE_CONTROL_INFORMATION`).
+3. The tool joins the Job itself. It then reads the limits and its membership back
+   (`QueryInformationJobObject`, `IsProcessInJob`), and its priority once more. Any failure is
+   `host_job_not_applied` (exit 4).
+4. Every process started afterwards is in the Job from its start and inherits the priority class. One
+   such process can be checked by its process id (`verify_child`).
+
+On another platform there is no real host layer: `host_priority_not_applied` with `stage`
+`platform_unsupported`.
+
+**The gate** (`host.gate`) is checked before every batch (`start`) and at checkpoints inside one
+(`checkpoint`). Each reason that holds it is one `host_gate_paused` entry (exit 4):
+
+| Reason | Holds when |
+|---|---|
+| `memory_below_start` | before a batch, or while the gate is paused: available memory below `host.memory.start_min_mib` |
+| `memory_below_pause` | at a checkpoint inside a batch: available memory below `host.memory.pause_below_mib` |
+| `quiet_window` | the local time is inside a window of `host.quiet_windows` (`window` is its index) |
+| `pause_file` | `host.pause_file` exists |
+| `cpu_load` | the host CPU load over the last span of at least `host.cpu.window_ms` is above `host.cpu.pause_load_milli`; the first span starts when the gate is created, and until it completes there is no CPU reading |
+| `plan_above_report` | before a run: workers × (the recorded peak or the engine's estimate, at most `compute.job.worker_memory_mib`) + the main process is above `host.memory.report_plan_above_mib`; `estimate_mib` is that sum |
+
+- A one-shot command ends with exit 4 when the gate holds (`require`). A later run resumes.
+- A long-lived command waits instead (`wait`): it checks again every `host.pause_poll_ms` until no reason
+  holds.
+- A reading that fails (available memory, CPU times, the pause file other than by its absence) is
+  `host_reading_failed` (exit 4). The gate never guesses.
+
+**Quiet windows.** Each window has `start` and `end` as local `HH:MM` and exactly one of `days` (from
+`mon`, `tue`, `wed`, `thu`, `fri`, `sat`, `sun`) or `dates` (`YYYY-MM-DD`):
+- A window holds from `start` (inclusive) to `end` (exclusive) on its days.
+- An `end` at or before `start` ends the next day; that part belongs to the day the window started.
+- `start` and `end` must differ.
+
+```json
+{"host": {"quiet_windows": [{"days": ["mon", "thu"], "start": "04:40", "end": "05:40"},
+                            {"dates": ["2030-01-02"], "start": "21:20", "end": "00:00"}]}}
+```
+
+Host facts such as the restart window or a deploy evening belong in the local configuration, not in
+code. The `PAUSE` file covers one-off pauses.
