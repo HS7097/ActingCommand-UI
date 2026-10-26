@@ -1,6 +1,6 @@
 # acmodel input files and how they are read
 
-acmodel reads seven kinds of input file. Each has one strict reader in `src/acmodel/model/`:
+acmodel reads eight kinds of input file. Each has one strict reader in `src/acmodel/model/`:
 
 | File | `schema_version` | Reader |
 |---|---|---|
@@ -9,6 +9,7 @@ acmodel reads seven kinds of input file. Each has one strict reader in `src/acmo
 | `ours/model/data/<table>.json` | `acmodel.data.v1` | `read_data` |
 | `ours/model/sources.json` | `acmodel.sources.v1` | `read_sources` |
 | `ours/model/exports.json` | `acmodel.exports.v1` | `read_exports` |
+| `ours/model/bindings.json` | `acmodel.bindings.v1` | `read_bindings` |
 | an account state snapshot (local only) | `acmodel.state.v1` | `read_state` |
 | `ours/prefs/defaults.json` (the preference layer, read as it is) | `1` | `read_prefs_defaults` |
 
@@ -554,3 +555,93 @@ resource repository. So a threshold is refused (`export_refused`, exit 5) when i
 - A write that fails is `export_write_failed`.
 - The files have sorted keys, a two-space indent, UTF-8 and LF line ends.
 - Nothing is deleted, not even the provenance file of a threshold that `exports.json` no longer lists.
+
+## Bindings: `bindings.json`, `bindings check` and `bindings apply`
+
+A binding ties a literal of the resource repository to a threshold of `exports.json` (#424 design 6.3), so that
+a number in `schedule.json` or in a pack file has the threshold's provenance. `bindings.json` sits beside
+`model.json`. Its file names are relative to the repository, the folder two above the model folder
+(`<repo>/ours/model`).
+
+### `bindings.json` (`acmodel.bindings.v1`)
+
+| Member | Value |
+|---|---|
+| `bindings` | a list of `{threshold, file, path}` [`rule_id`, `note`]: `threshold` is the id of a threshold of `exports.json`, `file` the file that holds the literal and `path` its JSON pointer |
+| `fixed` | a list of `{file, path, reason, ref}` [`rule_id`, `note`]: a literal that is no quantity, with the reason and a reference (a ruling, a board item) |
+| [`note`] | |
+
+- **`file`** is relative to the repository: `/`-separated segments of `[A-Za-z0-9_-][A-Za-z0-9_.-]*`, ending
+  in `.json`.
+- **`rule_id`** is there exactly when `file` is `schedule.json` (the game root's schedule). It is the `id` of a
+  rule, and `path` is then relative to that rule. For any other file, `path` points into the whole file.
+- **One literal**, by its file, rule and pointer, is named once among the bindings and the fixed entries
+  (`model_id_duplicate`, `namespace` `literal`).
+- **A threshold** that `exports.json` does not list is `rule_reference_missing` (`expected` `threshold`).
+
+### The values
+
+`bindings check` and `bindings apply` run the model for the account state `--state`, as `run` does. They take
+each bound threshold's value exactly as `export thresholds` writes it, so a binding holds only an exported
+value:
+- **What the export refuses** is refused the same way (`export_refused`, exit 5): a threshold that is blocked
+  (with the errors that block it), provisional, a constant that read the account state (`per_account`), not an
+  integer, or out of range.
+- **A `fact_offset` threshold whose live offset read the account state** is `binding_unsupported` (exit 5),
+  with the state nodes it read. A fact reference holds one fact plus a constant (#386 CF-4), and the tool never
+  writes an account's value as a constant. The scheduler side chooses: a pack publishes the derived fact, or a
+  selection document computes it.
+
+### Reading the files
+
+- Every file an entry names is read once, as strict JSON (see "Reading JSON"). A refusal is
+  `model_file_invalid`, with `format` `json` for a pack file and `actingcommand.schedule.v1` for
+  `schedule.json`.
+- The tool needs only pointers and literals. Whether `schedule.json` is valid as a whole is the validator's
+  job (`actinglab`, resource CI).
+- Of `schedule.json` it needs `schema_version` `actingcommand.schedule.v1`, and `rules` (absent means none)
+  that are objects with distinct string `id`s.
+
+### Where a literal may sit
+
+| Threshold | Its literal |
+|---|---|
+| `constant` | any JSON integer, except the offset of a fact reference |
+| `fact_offset` | the `offset` of a fact reference `{"type": "fact", "fact_key": B, "offset": N}` that is the `value` of a `fact` predicate `{"kind": "fact", "fact_key": A, "comparison": …, "value": …}`. A must be the threshold's `fact`, and B its `reference_fact`. |
+
+The comparison is not compared: a rule may test the other side of a threshold (`less_than` where the threshold
+says `greater_than_or_equal`).
+
+### `acmodel bindings check <model> --state <file> [--strict]`
+
+- **Each bound literal** equals its threshold's value (`constant`) or offset (`fact_offset`). Otherwise it is
+  `binding_mismatch` (exit 6), with `reason`:
+  - `value`, with `expected` and `found`, at the literal;
+  - `fact_key` or `reference_fact`, with `expected` and `found`, at the fact key;
+  - `form`, at a literal that cannot hold the threshold's form;
+  - `literal_missing`, when the rule or the pointer names no integer. Fixed entries are checked for this too.
+- **`--strict`** also reads `schedule.json`. It refuses every integer literal that a `fact` predicate of one of
+  its rules compares with, when the literal is neither bound nor fixed (`binding_unbound_literal`, exit 6).
+  These literals are a typed value (`value/value`) or a fact reference's offset (`value/offset`). So no number
+  without provenance reaches the schedule.
+  - Other literals are not scanned: `max_age_ms`, counts and budgets, pools, and the pack files. They are bound
+    when a threshold covers them.
+- **It writes nothing.** Every problem is reported at once, and the exit status is the first error's.
+- **`data`** holds `path`, `model_id`, `state`, `repo` and `strict`, and:
+  - `bindings`: each with `entry` (its pointer in `bindings.json`), `threshold`, `form`, `file`, [`rule_id`],
+    `path` and `literal`;
+  - `fixed`: each with `entry`, `file`, [`rule_id`], `path`, `literal`, `reason` and `ref`;
+  - with `--strict`, `literals`: how many literals the fact predicates of `schedule.json` compare with.
+
+### `acmodel bindings apply <model> --state <file>`
+
+- **It writes each bound literal that differs from its threshold.** Only the literal's bytes change. A
+  position-tracking scanner finds them, so line ends (CRLF stays CRLF), spacing and every other byte stay as
+  they are.
+- **It refuses everything `check` refuses but a differing value**, and then writes nothing. It does not scan
+  for unbound literals; `check --strict` does that afterwards.
+- **A file that cannot be written** is `export_write_failed`. The files written before it stay written, and
+  `apply` can run again.
+- **`data`** holds `path`, `model_id`, `state`, `repo`, and:
+  - `changed`: each with `entry`, `threshold`, `file`, [`rule_id`], `path`, `from` and `to`;
+  - `written`: the files whose bytes changed.

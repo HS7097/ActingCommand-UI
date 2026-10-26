@@ -6,8 +6,8 @@ Runtime.
 
 This folder holds the launcher, `setup`, `version`, the output envelope, the dependency check, the strict
 readers of the model files, the expression language, the static check (`check`), the derivation graph
-(`run`), provenance (`explain`) and the thresholds export (`export thresholds`). The other computation
-commands come in later slices.
+(`run`), provenance (`explain`), the thresholds export (`export thresholds`) and the bindings of thresholds
+to the schedule (`bindings check`, `bindings apply`). The other computation commands come in later slices.
 
 ## Needs
 
@@ -37,6 +37,8 @@ model\acmodel.cmd check <resource repo>\ours\model
 model\acmodel.cmd run <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd explain <resource repo>\ours\model threshold:<id> --state <state snapshot>
 model\acmodel.cmd export thresholds <resource repo>\ours\model --state <state snapshot>
+model\acmodel.cmd bindings check <resource repo>\ours\model --state <state snapshot> --strict
+model\acmodel.cmd bindings apply <resource repo>\ours\model --state <state snapshot>
 ```
 
 - **`check`** reads a model (its folder or its `model.json`) and checks it without computing anything:
@@ -54,6 +56,14 @@ model\acmodel.cmd export thresholds <resource repo>\ours\model --state <state sn
   values go into these shared files: a threshold that read the account state, is not confirmed, is not an
   integer, or is blocked is refused (`export_refused`, exit 5), and then nothing is written
   (`contracts/formats.md`, "Outputs").
+- **`bindings check`** compares each literal that `ours/model/bindings.json` ties to a threshold, in the
+  repository's `schedule.json` or a pack file, with the value `export thresholds` would write. With
+  `--strict` it also refuses every number of a `fact` predicate of `schedule.json` that is neither bound
+  nor listed as fixed with a reason, so no number without provenance reaches the schedule. It writes
+  nothing.
+- **`bindings apply`** writes the bound literals that differ, and changes only their bytes: line ends
+  (CRLF files stay CRLF) and formatting are kept. It refuses what `check` refuses, other than a differing
+  value, and then writes nothing (`contracts/formats.md`, "Bindings").
 - **Re-dispatch.** The launcher re-runs itself under the venv's Python, and the exit status is passed
   through.
 - **Dependency check.** Before every command except `setup`, the launcher checks that the interpreter
@@ -124,7 +134,8 @@ contracts/            cli.md (envelope, start, configuration), codes.json (the c
 src/acmodel/          the package: model/ the strict readers, expr/ the expression language,
                       check/ the static check, ids.py the id grammars they share, core/ the
                       run (its model checks, the derivation graph and provenance), export/ the
-                      thresholds export, host/ the host caps (priority, Job object, memory gates,
-                      quiet windows, PAUSE file)
+                      thresholds export, bindings/ the bindings check and apply with their
+                      position-tracking scanner, host/ the host caps (priority, Job object, memory
+                      gates, quiet windows, PAUSE file)
 tests/                pytest tests with fakes
 ```

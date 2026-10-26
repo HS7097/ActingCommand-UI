@@ -31,11 +31,14 @@ python3 -I -B <model>/acmodel.py <command>    (elsewhere)
 | `run <model> --state <file>` | Runs the dependency check, the static check, the run's model checks and the derivation graph for the account state `<file>` (`formats.md`, "The run"). It reads and computes, never writes. A model or input that does not check is refused whole (exit 1, `data` `{}`). Otherwise every output is computed or blocked: a blocked output's error lists the outputs it blocks in `needed_by`, the other outputs are still in `data`, and the exit status is 1. Provisional outputs alone exit 0. | `path`, `model_id`, `state`, `rules`, `thresholds`, `notes` |
 | `explain <model> <output> --state <file>` | Runs as `run` does and prints the provenance document of one output (`rule:<id>`, `general_logic:<id>` or `threshold:<id>`; `formats.md`, "Outputs"). It writes nothing. An id that is not an output is `usage_invalid` (`output_unknown`); a blocked output reports the errors that block it (exit 1). | `path`, `model_id`, `state`, `output`, `provenance` |
 | `export thresholds <model> --state <file>` | Runs as `run` does, then writes `out/thresholds.json` and one provenance file per threshold into the model folder (`formats.md`, "Outputs"). Only account-independent, confirmed, integer thresholds are exported: any other is `export_refused` (exit 5), and then nothing is written. A per-account value never enters these shared files. | `path`, `model_id`, `state`, `written` (the files written) |
+| `bindings check <model> --state <file> [--strict]` | Runs as `run` does and compares each literal that `bindings.json` binds, in `schedule.json` or a pack file, with its threshold's value as `export thresholds` would write it (`formats.md`, "Bindings"). A threshold the export refuses is refused the same way (`export_refused`, exit 5); a `fact_offset` threshold whose live offset read the account state is `binding_unsupported` (exit 5); a literal that differs, or sits where its threshold's form cannot, is `binding_mismatch` (exit 6). With `--strict`, every integer literal of a `fact` predicate of `schedule.json` that is neither bound nor fixed is `binding_unbound_literal` (exit 6). It writes nothing. | `path`, `model_id`, `state`, `repo`, `strict`, `bindings`, `fixed`, and `literals` with `--strict` |
+| `bindings apply <model> --state <file>` | Runs as `bindings check` does without `--strict`, then writes each bound literal that differs from its threshold. Only the literal's bytes change: line ends, spacing and every other byte stay. Anything else `check` refuses is refused, and then nothing is written. | `path`, `model_id`, `state`, `repo`, `changed`, `written` |
 
-`export` is a group: its command is two words (`export thresholds`), and the envelope's `command` is both.
-Every argument and option a command names is required, and an option takes one value. A missing one is
-`usage_invalid` (`argument_missing`, with the argument's or option's name), and an extra or repeated one is
-`usage_invalid` (`argument_unexpected`).
+`export` and `bindings` are groups: their commands are two words (`export thresholds`, `bindings check`), and
+the envelope's `command` is both. Every argument and option a command names is required, and an option takes
+one value. A missing one is `usage_invalid` (`argument_missing`, with the argument's or option's name), and an
+extra or repeated one is `usage_invalid` (`argument_unexpected`). A flag takes no value and is optional; the
+one flag is `--strict` of `bindings check`.
 
 **Dependency check.** It runs before every command except `setup`:
 - the interpreter must be Python 3.13;
@@ -69,7 +72,7 @@ child prints the line.
 - `ref` is a reference into the input when there is one: for `config_invalid`, the JSON pointer of the
   member, with the file in `detail.path`; for the model's codes, the JSON pointer into the file in
   `detail.path`.
-- `needed_by` lists the outputs an error blocks (`run`, `explain`, `export thresholds`: `rule:<id>`,
+- `needed_by` lists the outputs an error blocks (`run`, `explain`, `export thresholds`, `bindings`: `rule:<id>`,
   `general_logic:<id>`, `threshold:<id>`), sorted.
 
 Human text, one line per error and the usage text, goes to stderr.
@@ -125,8 +128,8 @@ All the numbers are integers of at least 1.
 ## Host caps
 
 The host layer is `src/acmodel/host/`. The commands that compute call it before and during their work;
-`setup` and `version` do not. `run`, `explain` and `export thresholds` in this version evaluate only the
-derivation graph, in their own process and with no workers, and do not call it yet.
+`setup` and `version` do not. `run`, `explain`, `export thresholds` and `bindings` in this version evaluate
+only the derivation graph, in their own process and with no workers, and do not call it yet.
 
 **The caps of the tool's own process** (Windows; `host.windows`):
 1. `SetPriorityClass` to `compute.priority`, then `GetPriorityClass` must read it back. Otherwise the

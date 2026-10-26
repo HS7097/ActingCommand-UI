@@ -1,0 +1,12 @@
+{"schema_version": "acmodel.bindings.v1",
+ "bindings": [
+   {"threshold": "thr.run.trigger", "file": "schedule.json", "rule_id": "run.trigger",
+    "path": "/trigger/predicates/0/value/offset"},
+   {"threshold": "thr.daily.floor", "file": "schedule.json", "rule_id": "daily.run",
+    "path": "/trigger/predicates/0/value/value"},
+   {"threshold": "thr.daily.floor", "file": "packs/p.daily/resources/operations/p.daily/policies/floor.json",
+    "path": "/threshold"}],
+ "fixed": [
+   {"file": "schedule.json", "rule_id": "x.single", "path": "/trigger/predicates/1/value/value",
+    "reason": "'at least one attempt left' is the predicate's meaning, not a quantity",
+    "ref": "#425 A item 10"}]}

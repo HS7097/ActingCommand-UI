@@ -1,0 +1,16 @@
+{"schema_version": "actingcommand.schedule.v1",
+ "requires": ["fact_reference"],
+ "rules": [
+   {"id": "run.trigger", "package_id": "example.run",
+    "trigger": {"kind": "all", "predicates": [
+      {"kind": "fact", "fact_key": "resource.a", "comparison": "greater_than_or_equal",
+       "value": {"type": "fact", "fact_key": "resource.a_capacity", "offset": -250}, "max_age_ms": 3600000}]}},
+   {"id": "daily.run", "package_id": "example.daily",
+    "trigger": {"kind": "all", "predicates": [
+      {"kind": "fact", "fact_key": "resource.a", "comparison": "greater_than_or_equal",
+       "value": {"type": "integer", "value": 215}, "max_age_ms": 3600000}]}},
+   {"id": "x.single", "package_id": "example.single",
+    "trigger": {"kind": "all", "predicates": [
+      {"kind": "timeline_active", "event_id": "x.window"},
+      {"kind": "fact", "fact_key": "resource.x_remaining", "comparison": "greater_than_or_equal",
+       "value": {"type": "integer", "value": 1}, "max_age_ms": 60000}]}}]}

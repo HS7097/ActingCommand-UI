@@ -45,9 +45,10 @@ def _refusal(run: Run, index: int, output: str, reason: str, **values: Any) -> d
     return error(EXPORT_REFUSED, detail, at("", "thresholds", index))
 
 
-def _entry(run: Run, index: int, threshold: dict[str, Any], files: dict[str, Any]) -> dict[str, Any]:
+def threshold_entry(run: Run, index: int, threshold: dict[str, Any], files: dict[str, Any]) -> dict[str, Any]:
     """The thresholds.json entry of one threshold, its provenance document added to `files`; or the
-    `export_refused` error."""
+    `export_refused` error. `bindings check|apply` take their values from here too, so they bind only what
+    this export writes."""
     output, form = "threshold:" + threshold["id"], threshold["form"]
     shown = run.data["thresholds"][threshold["id"]]
     if shown["status"] == BLOCKED:
@@ -91,7 +92,7 @@ def export_thresholds(
     files: dict[str, Any] = {}
     entries, refusals = [], []
     for index, threshold in sorted(enumerate(run.exports.doc["thresholds"]), key=lambda pair: pair[1]["id"]):
-        entry = _entry(run, index, threshold, files)
+        entry = threshold_entry(run, index, threshold, files)
         (refusals if entry.get("code") == EXPORT_REFUSED else entries).append(entry)
     if refusals:
         blocked = {entry["detail"]["output"] for entry in refusals if entry["detail"]["reason"] == "blocked"}
