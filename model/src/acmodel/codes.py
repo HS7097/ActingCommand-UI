@@ -37,10 +37,14 @@ STATE_ENTITY_MISSING = "state_entity_missing"
 RULING_OVERRIDES_GENERAL_LOGIC = "ruling_overrides_general_logic"  # a note (category info), never an error
 EXPORT_REFUSED = "export_refused"
 EXPORT_WRITE_FAILED = "export_write_failed"
+BINDING_MISMATCH = "binding_mismatch"
+BINDING_UNBOUND_LITERAL = "binding_unbound_literal"
+BINDING_UNSUPPORTED = "binding_unsupported"
 
 EXIT_OK = 0
 
-# 1 model or input error, 2 usage, 4 host gate, 5 export refused (contracts/cli.md lists all of 0-6).
+# 1 model or input error, 2 usage, 4 host gate, 5 export refused, 6 binding mismatch (contracts/cli.md lists
+# all of 0-6).
 EXIT_STATUS = {
     USAGE_INVALID: 2,
     CONFIG_INVALID: 1,
@@ -75,4 +79,7 @@ EXIT_STATUS = {
     RULING_OVERRIDES_GENERAL_LOGIC: 0,
     EXPORT_REFUSED: 5,
     EXPORT_WRITE_FAILED: 5,
+    BINDING_MISMATCH: 6,
+    BINDING_UNBOUND_LITERAL: 6,
+    BINDING_UNSUPPORTED: 5,
 }

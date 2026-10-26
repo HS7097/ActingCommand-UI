@@ -10,6 +10,51 @@
     "6": "regression or binding mismatch"
   },
   "codes": {
+    "binding_mismatch": {
+      "category": "error",
+      "exit": 6,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "entry": {"type": "token", "required": true},
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["value", "fact_key", "reference_fact", "form", "literal_missing"]
+        },
+        "threshold": {"type": "token", "required": false},
+        "rule_id": {"type": "token", "required": false},
+        "expected": {"type": "token", "required": false},
+        "found": {"type": "token", "required": false}
+      },
+      "description": "acmodel bindings check|apply: a literal that bindings.json names (entry, its pointer there: /bindings/<index> or /fixed/<index>) does not agree with its threshold, or is not there. path is the file that holds it (schedule.json or a pack file), rule_id its schedule.json rule, and the error's ref the literal's JSON pointer in the file (/rules/<index>/... in schedule.json; /rules when no rule has rule_id). value: the literal (found) is not the threshold's exported value, or its offset in the fact_offset form (expected); check reports it, apply writes the expected value. fact_key, reference_fact (fact_offset form): the fact key of the fact predicate, or of its fact reference (found), is not the threshold's fact or reference_fact (expected). The comparison is not compared: a rule may test the opposite side of a threshold. form: a fact_offset threshold is bound to something other than the offset of a fact reference {\"type\": \"fact\", \"fact_key\", \"offset\"} in a fact predicate, or a constant threshold to such an offset. literal_missing: the file has no rule rule_id, or the pointer names nothing or no integer (found is the JSON type there)."
+    },
+    "binding_unbound_literal": {
+      "category": "error",
+      "exit": 6,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "rule_id": {"type": "token", "required": true},
+        "pointer": {"type": "token", "required": true},
+        "literal": {"type": "token", "required": true}
+      },
+      "description": "acmodel bindings check --strict: an integer literal that a fact predicate of a schedule.json rule (rule_id) compares with, its typed value (value/value) or its fact reference's offset (value/offset), is neither bound to a threshold nor listed under fixed in bindings.json, so it is a number without provenance (#424 design 6.3). pointer is the literal's JSON pointer relative to the rule, as bindings.json writes it; path is schedule.json and the error's ref the literal's pointer in it."
+    },
+    "binding_unsupported": {
+      "category": "error",
+      "exit": 5,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "output": {"type": "token", "required": true},
+        "reads": {"type": "list:token", "required": true}
+      },
+      "description": "acmodel bindings check|apply: a bound threshold (output, threshold:<id>) of the fact_offset form whose live offset read the account state (reads: the state nodes it read, reading:<fact> and so on, sorted). Its live part is then not one fact plus a constant, which is all a fact reference holds (#386 CF-4), and the tool never writes an account's value as a constant. The scheduler side chooses: a pack publishes the derived fact, or a selection document computes it. path is exports.json and the error's ref the threshold's entry in it. A constant threshold that read the account state is export_refused (per_account), as export thresholds refuses it."
+    },
     "cache_entry_corrupt": {
       "category": "error",
       "exit": 1,
@@ -158,7 +203,7 @@
         },
         "value": {"type": "token", "required": false}
       },
-      "description": "acmodel export thresholds: an output (threshold:<id>) cannot go into a shared output, so nothing is written (contracts/formats.md, Outputs). blocked: it cannot be computed; the errors that block it follow, with needed_by. per_account: it read the account state, and a per-account value never enters a shared output (#424, ruling 66); run and explain show it locally. provisional: it is not confirmed. not_integer, out_of_range: its exact value (value) is not an integer (exports.json can declare a round), or lies beyond +-(2^53-1). path is exports.json and the error's ref the threshold's entry in it."
+      "description": "acmodel export thresholds, and acmodel bindings check|apply for a bound threshold: an output (threshold:<id>) cannot go into a shared output, so nothing is written (contracts/formats.md, Outputs; bindings take only what the export writes). blocked: it cannot be computed; the errors that block it follow, with needed_by. per_account: it read the account state, and a per-account value never enters a shared output (#424, ruling 66); run and explain show it locally. provisional: it is not confirmed. not_integer, out_of_range: its exact value (value) is not an integer (exports.json can declare a round), or lies beyond +-(2^53-1). path is exports.json and the error's ref the threshold's entry in it."
     },
     "export_write_failed": {
       "category": "error",
@@ -170,7 +215,7 @@
         "exception_type": {"type": "name", "required": true},
         "raw_text": {"type": "raw_text", "required": true}
       },
-      "description": "acmodel export thresholds: a file of the export (path) or its folder could not be written. The provenance files are written before thresholds.json, so thresholds.json is left as it was when a provenance file fails; nothing is deleted."
+      "description": "acmodel export thresholds: a file of the export (path) or its folder could not be written. The provenance files are written before thresholds.json, so thresholds.json is left as it was when a provenance file fails; nothing is deleted. acmodel bindings apply: a file whose literals it rewrites (path) could not be written; the files written before it stay written, and apply can run again."
     },
     "expr_dimension_mismatch": {
       "category": "error",
@@ -352,7 +397,7 @@
         "exception_type": {"type": "name", "required": false},
         "raw_text": {"type": "raw_text", "required": false}
       },
-      "description": "An input file of the model (model, rules, data, sources, exports, state, preference defaults) is refused by its strict reader (contracts/formats.md), or (acmodel run) a state snapshot names another model: value_invalid at /model_id, expected is the model's id. The error's ref is the JSON pointer of the value (the empty pointer for the whole file); path is the file and format the reader. JSON level: unreadable, bom_present, utf8_invalid (offset), syntax_invalid (line, column), key_duplicate (the repeated key), float_literal, constant_invalid (NaN, Infinity), integer_out_of_range (beyond +-(2^53-1)), string_invalid (a lone surrogate). Shape: type_invalid (expected types), member_unknown, member_missing, member_conflict (two of members that exclude each other; expected lists them), value_invalid (expected values), id_invalid (the id grammar). One error per problem; literal is the offending text."
+      "description": "An input file of the model (model, rules, data, sources, exports, bindings, state, preference defaults) is refused by its strict reader (contracts/formats.md), or (acmodel run) a state snapshot names another model: value_invalid at /model_id, expected is the model's id. acmodel bindings reads the files that hold bound literals as strict JSON too (format json for a pack file); of schedule.json (format actingcommand.schedule.v1) it also needs its schema_version, and rules that are objects with distinct string ids (value_invalid at the second id). The error's ref is the JSON pointer of the value (the empty pointer for the whole file); path is the file and format the reader. JSON level: unreadable, bom_present, utf8_invalid (offset), syntax_invalid (line, column), key_duplicate (the repeated key), float_literal, constant_invalid (NaN, Infinity), integer_out_of_range (beyond +-(2^53-1)), string_invalid (a lone surrogate). Shape: type_invalid (expected types), member_unknown, member_missing, member_conflict (two of members that exclude each other; expected lists them), value_invalid (expected values), id_invalid (the id grammar). One error per problem; literal is the offending text."
     },
     "model_id_duplicate": {
       "category": "error",
@@ -364,13 +409,13 @@
         "namespace": {
           "type": "vocab",
           "required": true,
-          "members": ["model", "table", "row", "source", "engine", "threshold"]
+          "members": ["model", "table", "row", "source", "engine", "threshold", "literal"]
         },
         "id": {"type": "token", "required": true},
         "first_path": {"type": "path", "required": true},
         "first_ref": {"type": "token", "required": true}
       },
-      "description": "acmodel check: an id is declared twice in one namespace. model: entities, periods, rules and unknowns share one; table: data tables; row: the keys of one table's rows (id joins the key parts with commas); source: sources.json; engine: model.json engines; threshold (acmodel run): the thresholds of exports.json. path and the error's ref are the second declaration, first_path and first_ref the first, which references resolve to."
+      "description": "acmodel check: an id is declared twice in one namespace. model: entities, periods, rules and unknowns share one; table: data tables; row: the keys of one table's rows (id joins the key parts with commas); source: sources.json; engine: model.json engines; threshold (acmodel run): the thresholds of exports.json; literal (acmodel bindings): the literals that the bindings and the fixed entries of bindings.json name, by file, rule_id and pointer (id joins them with colons). path and the error's ref are the second declaration, first_path and first_ref the first, which references resolve to."
     },
     "rule_conflict": {
       "category": "error",
@@ -464,7 +509,7 @@
         "superseded_by": {"type": "token", "required": false},
         "position": {"type": "integer", "required": false}
       },
-      "description": "acmodel check: a reference to a declaration of the model does not resolve to one of the expected kinds (an entity kind, entity, rule, rule.<kind>, unknown, unknown_member, metric, engine, source or param): nothing has that id, it is of another kind (found), or it is a superseded rule (superseded_by), which is never read. The error's ref is the JSON pointer of the referring member or expression, and position the reference's character offset in an expression. acmodel run (contracts/formats.md, The run) adds: pref, a preference key (pref:<key>, a gate's prefs) that the preference defaults do not hold; rule.derive, rule.cap, rule.limit, a rule: reference to a rule without a value; resource, store, a cap's subject; rule.flow, a cost or yield (target the activity) or max_single_income (target the cap) with no flow amount behind it; rule.derive and rule.derive.live, the from of a threshold in exports.json, which needs live in the fact_offset form."
+      "description": "acmodel check: a reference to a declaration of the model does not resolve to one of the expected kinds (an entity kind, entity, rule, rule.<kind>, unknown, unknown_member, metric, engine, source or param): nothing has that id, it is of another kind (found), or it is a superseded rule (superseded_by), which is never read. The error's ref is the JSON pointer of the referring member or expression, and position the reference's character offset in an expression. acmodel run (contracts/formats.md, The run) adds: pref, a preference key (pref:<key>, a gate's prefs) that the preference defaults do not hold; rule.derive, rule.cap, rule.limit, a rule: reference to a rule without a value; resource, store, a cap's subject; rule.flow, a cost or yield (target the activity) or max_single_income (target the cap) with no flow amount behind it; rule.derive and rule.derive.live, the from of a threshold in exports.json, which needs live in the fact_offset form. acmodel bindings adds threshold, the threshold of a binding in bindings.json that exports.json does not list (ref is the binding's threshold)."
     },
     "rule_status_invalid": {
       "category": "error",

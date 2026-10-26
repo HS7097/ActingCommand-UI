@@ -1,6 +1,7 @@
 """Strict readers of the model's input files (contracts/formats.md)."""
 
 from acmodel.model.readers import (
+    read_bindings,
     read_data,
     read_exports,
     read_model,
@@ -11,6 +12,7 @@ from acmodel.model.readers import (
 )
 
 __all__ = [
+    "read_bindings",
     "read_data",
     "read_exports",
     "read_model",

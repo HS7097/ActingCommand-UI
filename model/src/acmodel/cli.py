@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from acmodel import TOOL, __version__, cache, config, deps, environment
+from acmodel.bindings import apply_bindings, check_bindings
 from acmodel.check import check_model
 from acmodel.codes import COMMAND_CRASHED, USAGE_INVALID
 from acmodel.core import run_model
@@ -26,19 +27,23 @@ COMMANDS = {
     "run": (("model",), ("--state",)),
     "explain": (("model", "output"), ("--state",)),
     "export thresholds": (("model",), ("--state",)),
+    "bindings check": (("model",), ("--state",)),
+    "bindings apply": (("model",), ("--state",)),
     "cache stats": ((), ()),
     "cache verify": ((), ()),
     "cache gc": ((), ()),
 }
 GROUPS = {name.split(" ")[0] for name in COMMANDS if " " in name}
 # Flags: options that take no value, each optional and given at most once.
-FLAGS = {"cache gc": ("--apply",)}
+FLAGS = {"bindings check": ("--strict",), "cache gc": ("--apply",)}
 USAGE = (
     "usage: acmodel.py <command> [<argument>] [--<option> <value>]\n"
     "commands: setup, version, check <model folder or model.json>,\n"
     "          run <model folder or model.json> --state <state file>,\n"
     "          explain <model folder or model.json> <output id> --state <state file>,\n"
     "          export thresholds <model folder or model.json> --state <state file>,\n"
+    "          bindings check <model folder or model.json> --state <state file> [--strict],\n"
+    "          bindings apply <model folder or model.json> --state <state file>,\n"
     "          cache stats, cache verify, cache gc [--apply]\n"
 )
 
@@ -155,6 +160,17 @@ def _export_thresholds(args: list[str], cfg: config.Config, system: System) -> d
     return export_thresholds(Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits)
 
 
+def _bindings(command: str, args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
+    """`bindings check [--strict]` compares the bound literals with their thresholds; `bindings apply`
+    writes the ones that differ."""
+    _dependencies(system)
+    model, state = Path(args[0]), Path(args[1])
+    if command == "bindings check":
+        strict = "--strict" in args[2:]
+        return check_bindings(model, state, datasets=cfg.datasets, max_bits=cfg.expr_max_bits, strict=strict)
+    return apply_bindings(model, state, datasets=cfg.datasets, max_bits=cfg.expr_max_bits)
+
+
 def main(argv: Sequence[str], system: System) -> int:
     command = None
     errors: list[dict[str, Any]] = []
@@ -175,6 +191,8 @@ def main(argv: Sequence[str], system: System) -> int:
             data, errors, warnings = _run(args, cfg, system)
         elif command == "explain":
             data = _explain(args, cfg, system)
+        elif command in ("bindings check", "bindings apply"):
+            data = _bindings(command, args, cfg, system)
         elif command == "export thresholds":
             data = _export_thresholds(args, cfg, system)
         else:

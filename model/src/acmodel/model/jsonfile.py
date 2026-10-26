@@ -107,16 +107,26 @@ def _scan(doc: Any) -> list[tuple[str, str, dict[str, Any]]]:
     return found
 
 
+def read(path: Path, fmt: str) -> bytes:
+    """The bytes of `path`, or `Failure` (`unreadable`)."""
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        detail = {"exception_type": type(exc).__name__, "raw_text": str(exc)}
+        raise Failure(refusal("unreadable", path, fmt, "", **detail)) from exc
+
+
 def load(path: Path, fmt: str) -> Any:
     """The JSON document in `path`, or `Failure` with every problem found."""
+    return parse(read(path, fmt), path, fmt)
+
+
+def parse(raw: bytes, path: Path, fmt: str) -> Any:
+    """The JSON document in `raw`, the bytes of `path`, or `Failure` with every problem found."""
 
     def refused(reason: str, **values: Any) -> Failure:
         return Failure(refusal(reason, path, fmt, "", **values))
 
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise refused("unreadable", exception_type=type(exc).__name__, raw_text=str(exc)) from exc
     if raw.startswith(BOM):
         raise refused("bom_present")
     try:

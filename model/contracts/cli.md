@@ -31,16 +31,19 @@ python3 -I -B <model>/acmodel.py <command>    (elsewhere)
 | `run <model> --state <file>` | Runs the dependency check, the static check, the run's model checks and the derivation graph for the account state `<file>` (`formats.md`, "The run"), incrementally through the cache (see Cache). It writes only under `paths.state_root`: the cache and the run's outputs. A model or input that does not check is refused whole (exit 1, `data` `{}`). Otherwise every output is computed or blocked: a blocked output's error lists the outputs it blocks in `needed_by`, the other outputs are still in `data`, and the exit status is 1. Provisional outputs alone exit 0. A corrupt cache entry is a warning (`cache_entry_corrupt`) and the node is computed again. | `path`, `model_id`, `state`, `run_id`, `rules`, `thresholds`, `notes`, `work` |
 | `explain <model> <output> --state <file>` | Runs as `run` does, without the cache, and prints the provenance document of one output (`rule:<id>`, `general_logic:<id>` or `threshold:<id>`; `formats.md`, "Outputs"). It writes nothing. An id that is not an output is `usage_invalid` (`output_unknown`); a blocked output reports the errors that block it (exit 1). | `path`, `model_id`, `state`, `output`, `provenance` |
 | `export thresholds <model> --state <file>` | Runs as `run` does, without the cache, then writes `out/thresholds.json` and one provenance file per threshold into the model folder (`formats.md`, "Outputs"). Only account-independent, confirmed, integer thresholds are exported: any other is `export_refused` (exit 5), and then nothing is written. A per-account value never enters these shared files. | `path`, `model_id`, `state`, `written` (the files written) |
+| `bindings check <model> --state <file> [--strict]` | Runs as `run` does, without the cache, and compares each literal that `bindings.json` binds, in `schedule.json` or a pack file, with its threshold's value as `export thresholds` would write it (`formats.md`, "Bindings"). A threshold the export refuses is refused the same way (`export_refused`, exit 5); a `fact_offset` threshold whose live offset read the account state is `binding_unsupported` (exit 5); a literal that differs, or sits where its threshold's form cannot, is `binding_mismatch` (exit 6). With `--strict`, every integer literal of a `fact` predicate of `schedule.json` that is neither bound nor fixed is `binding_unbound_literal` (exit 6). It writes nothing. | `path`, `model_id`, `state`, `repo`, `strict`, `bindings`, `fixed`, and `literals` with `--strict` |
+| `bindings apply <model> --state <file>` | Runs as `bindings check` does without `--strict`, then writes each bound literal that differs from its threshold. Only the literal's bytes change: line ends, spacing and every other byte stay. Anything else `check` refuses is refused, and then nothing is written. | `path`, `model_id`, `state`, `repo`, `changed`, `written` |
 | `cache stats` | Counts what the cache holds. It writes nothing. | `path`, `exists`, `max_bytes`, `entries`, `blobs`, `bytes`, `by_kind` (entries per node kind), `runs` |
 | `cache verify` | Reads every blob the index names and checks that it hashes to its name. Each entry that does not is one `cache_entry_corrupt` error (exit 1). It writes and repairs nothing. | `path`, `exists`, `entries`, `blobs`, `problems` |
 | `cache gc [--apply]` | Plans the eviction down to `cache.max_bytes`, least recently used first, and the removal of the blob files no entry names (orphans, and temporary files of interrupted writes). Without `--apply` it only reports the plan; with it, it removes exactly that, inside the cache folder. Run it while no run is in progress. | `path`, `exists`, `apply`, `max_bytes`, `entries`, `bytes`, `entries_removed`, `blobs_removed`, `bytes_removed`, `orphans_removed`, `orphan_bytes_removed`, `other_files` |
 
-A command is one word, or a group and a word: `export` and `cache` are groups (`export thresholds`,
-`cache stats`), and the envelope's `command` is both words. Every argument and option a command names
-is required, and an option takes one value. A missing one is `usage_invalid` (`argument_missing`, with
-the argument's or option's name), and an extra or repeated one is `usage_invalid` (`argument_unexpected`).
-A flag (`--apply`) takes no value, is optional and may be given once. A state root without a cache is
-reported by the `cache` commands as `exists: false`; they create nothing.
+A command is one word, or a group and a word: `export`, `bindings` and `cache` are groups
+(`export thresholds`, `bindings check`, `cache stats`), and the envelope's `command` is both words. Every
+argument and option a command names is required, and an option takes one value. A missing one is
+`usage_invalid` (`argument_missing`, with the argument's or option's name), and an extra or repeated one is
+`usage_invalid` (`argument_unexpected`). A flag (`--strict` of `bindings check`, `--apply` of `cache gc`)
+takes no value, is optional and may be given once. A state root without a cache is reported by the `cache`
+commands as `exists: false`; they create nothing.
 
 **Dependency check.** It runs before every command except `setup`:
 - the interpreter must be Python 3.13;
@@ -74,7 +77,7 @@ child prints the line.
 - `ref` is a reference into the input when there is one: for `config_invalid`, the JSON pointer of the
   member, with the file in `detail.path`; for the model's codes, the JSON pointer into the file in
   `detail.path`.
-- `needed_by` lists the outputs an error blocks (`run`, `explain`, `export thresholds`: `rule:<id>`,
+- `needed_by` lists the outputs an error blocks (`run`, `explain`, `export thresholds`, `bindings`: `rule:<id>`,
   `general_logic:<id>`, `threshold:<id>`), sorted.
 
 Human text, one line per error and per warning and the usage text, goes to stderr.
@@ -201,8 +204,8 @@ stops and never computes without its cache.
 ## Host caps
 
 The host layer is `src/acmodel/host/`. The commands that compute call it before and during their work;
-`setup` and `version` do not. `run`, `explain` and `export thresholds` in this version evaluate only the
-derivation graph, in their own process and with no workers, and do not call it yet.
+`setup` and `version` do not. `run`, `explain`, `export thresholds` and `bindings` in this version evaluate
+only the derivation graph, in their own process and with no workers, and do not call it yet.
 
 **The caps of the tool's own process** (Windows; `host.windows`):
 1. `SetPriorityClass` to `compute.priority`, then `GetPriorityClass` must read it back. Otherwise the

@@ -411,6 +411,37 @@ EXPORTS = Format(
 )
 
 
+SCHEDULE_FILE = "schedule.json"
+# A file of the resource repository, relative to its root: `/`-separated segments, ending in `.json`.
+REPO_FILE = Text(r"([A-Za-z0-9_-][A-Za-z0-9_.-]*/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\.json")
+
+
+def _rule_id(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """`rule_id` names a rule of `schedule.json`, so it is there exactly when `file` is `schedule.json`."""
+    if value["file"] == SCHEDULE_FILE and "rule_id" not in value:
+        return ctx.refuse("member_missing", pointer(ref, "rule_id"), key="rule_id")
+    if value["file"] != SCHEDULE_FILE and "rule_id" in value:
+        return ctx.refuse("member_unknown", pointer(ref, "rule_id"), key="rule_id")
+    return True
+
+
+LITERAL = {"file": REPO_FILE, "path": POINTER}
+BINDINGS = Format(
+    "acmodel.bindings.v1",
+    "acmodel.bindings.v1",
+    Object(
+        {
+            "schema_version": ANY,
+            "bindings": ListOf(Object({"threshold": ID, **LITERAL}, {"rule_id": FACT_KEY, **NOTE}, _rule_id)),
+            "fixed": ListOf(
+                Object({**LITERAL, "reason": TEXT, "ref": TEXT}, {"rule_id": FACT_KEY, **NOTE}, _rule_id)
+            ),
+        },
+        NOTE,
+    ),
+)
+
+
 def _read(path: Path | str, fmt: Format) -> dict[str, Any]:
     path = Path(path)
     doc = load(path, fmt.name)
@@ -459,3 +490,8 @@ def read_prefs_defaults(path: Path | str) -> dict[str, Any]:
 def read_exports(path: Path | str) -> dict[str, Any]:
     """`exports.json` (`acmodel.exports.v1`): the outputs that become thresholds (tables and scoring later)."""
     return _read(path, EXPORTS)
+
+
+def read_bindings(path: Path | str) -> dict[str, Any]:
+    """`bindings.json` (`acmodel.bindings.v1`): where each threshold's literal sits, and the fixed literals."""
+    return _read(path, BINDINGS)
