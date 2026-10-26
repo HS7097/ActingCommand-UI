@@ -124,6 +124,18 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | `host.quiet_windows` | `[]` | local-time windows without compute (see Host caps) |
 | `host.pause_file` | `<paths.state_root>\PAUSE` | while this file exists, the gate holds; an absolute path |
 | `host.pause_poll_ms` | 5000 | how often a waiting gate checks again, in milliseconds |
+| `compute.workers.max` | 2 | the most engine worker processes alive at once, the verify worker included (see Engine host) |
+| `engine.hash_seed` | 0 | `PYTHONHASHSEED` of the workers; 0 to 4294967295 |
+| `engine.verify_hash_seed` | 1 | `PYTHONHASHSEED` of the verify worker; 0 to 4294967295, and not `engine.hash_seed` |
+| `engine.verify_sample_milli` | 10 | the share of an engine call's requests run again in the verify worker, in thousandths; 0 (none) to 1000 (all) |
+| `engine.reset_each_batch` | `true` | call the engine's `reset()` after every batch; a boolean |
+| `engine.worker_soft_memory_mib` | 896 | a worker whose private bytes exceed this after a batch is recycled (MiB); below `compute.job.worker_memory_mib` |
+| `engine.worker_max_requests` | 0 | a worker is recycled after this many requests; 0: never |
+| `engine.request_timeout_ms` | 600000 | the most time per request of a batch; a batch has its number of requests times this |
+| `engine.start_timeout_ms` | 120000 | the most time a worker may take to start (connect, import, `make_engine`, `describe`), and to stop before it is killed |
+| `engine.restart_budget` | 3 | how many workers that ended abnormally (a crash, a timeout, the memory limit) a pool replaces; 0 or more |
+| `engines.roots` | `{}` | where each engine's home is on this host: engine id to an absolute path (#424 design D-4) |
+
 | `sensitivity.top_n` | 5 | how many unknowns each output's `sensitivity` lists (`formats.md`, "Unknowns") |
 | `unknowns.scale` | 1000 | the export precision that the no-effect rule (on the sound range) and the impacts are measured at: a value counts as value × scale rounded half to even (1000: milli) |
 | `unknowns.samples` | 0 | the Monte Carlo samples of the distributions per output; 0, the default, samples nothing; at most 2<sup>63</sup> − 1 |
@@ -131,7 +143,8 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | `unknowns.chunk_size` | 1024 | the samples drawn per Philox call; it never changes a result |
 | `unknowns.resolution` | 1000000 | the equal cells of a draw on (0, 1); at most 2<sup>64</sup> |
 
-All the numbers are integers of at least 1, but `unknowns.samples` and `unknowns.seed`, which may be 0.
+All the numbers are integers of at least 1, unless their row says otherwise (`unknowns.samples` and
+`unknowns.seed` may be 0).
 
 ```json
 {"schema_version": "acmodel.config.v1", "paths": {"venv": "<absolute path>"}, "compute": {"blas_threads": 1}, "expr": {"max_bits": 127}}
@@ -173,6 +186,9 @@ what needed it.
   (`python` minor version, `numpy`, `scipy`; none of the derivation kinds declares one). So bumping one
   kind, or a library one kind declares, recomputes only the nodes of that kind; their dependents are reused
   when the value comes out the same.
+- An **engine call** is a node of kind `engine` (see Engine host): its spec is the engine id, the engine's
+  fingerprint (which covers the library versions), the op and the request without its `entities`; its
+  trace is the hash of each entity the result's `depends_on` names.
 - **Sampled and impacts nodes.** The Monte Carlo tallies of an output (kind `sampled`, `formats.md`,
   "Unknowns") declare `numpy` and the `python` minor version, and their spec adds the keys under `unknowns`
   and `sensitivity` but `chunk_size`, which changes no result. The impacts of the continuous unknowns of an
@@ -267,3 +283,70 @@ On another platform there is no real host layer: `host_priority_not_applied` wit
 
 Host facts such as the restart window or a deploy evening belong in the local configuration, not in
 code. The `PAUSE` file covers one-off pauses.
+
+## Engine host
+
+The engine host is `src/acmodel/engine/` (#424 design-py section 7). It runs the battle and team engines,
+which live outside this repository, in the tool's own worker processes; the main process never imports
+engine code. The manifest `engine.json` and the interface `acmodel.engine.v2` are in `formats.md`
+("Engines"). No command uses engines yet; the search (PY-13) and `watch` (PY-15) will.
+
+**Where an engine is.** `engines.roots` maps the engine id to its home, the folder with `engine.json`. An
+engine the configuration does not name is `engine_not_configured` (exit 3); the tool never guesses.
+
+**Workers.**
+- **Start.** `<python> -P -s -B <model>/src/acmodel/engine/worker.py`, where `<python>` is the base
+  interpreter of the running Python (in a venv on Windows, `Scripts\python.exe` is a launcher that runs it
+  as a child), which adds the venv's site directories itself.
+- **Environment.** Explicit; nothing else is inherited: `PYTHONHASHSEED` (`engine.hash_seed`; the verify
+  worker `engine.verify_hash_seed`), `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS` and `MKL_NUM_THREADS`
+  (`compute.blas_threads`), `ACMODEL_SCRATCH`, `TEMP`, `TMP` and `TMPDIR` inside the scratch directory, and
+  `SYSTEMROOT` where the host has it. The worker is started without `-I` and `-E`, so the seed holds.
+- **Scratch and log.** Each worker's working directory is `<scratch root>/<engine id>/<slot>`, the only place
+  it may write; its stdout and stderr go to `<log dir>/<engine id>-<slot>.log`, with the tracebacks of the
+  engine's exceptions. Slots are `w0`, `w1`, … and `v` for the verify worker.
+- **Caps.** The tool joins its Job before it starts workers (Host caps), so each worker is inside the Job and
+  below normal from its start. The host checks that for every worker before it runs engine code
+  (`verify_child`; `host_job_not_applied` or `host_priority_not_applied`, exit 4). At most
+  `compute.workers.max` workers are alive at once.
+- **Channel.** `multiprocessing.connection`: the worker listens on an address and with an authkey that are
+  new for each worker (a named pipe on Windows, an abstract Unix socket on Linux), handed over on its stdin;
+  the host connects. Frames are pickles of builtin values between the tool's own processes; results cross as
+  JSON text. Nothing an engine prints reaches the channel. stdin stays open as the worker's lifeline: a worker
+  whose tool is gone exits.
+- **Init.** The worker puts the manifest's `sys_path` first, keeps bytecode caches in its scratch directory,
+  installs the guards, imports `entry` and calls `make_engine(config, scratch_dir)` and `describe()`. An
+  entry that does not import, or a `make_engine` that raises, is `engine_import_failed` (exit 3). A
+  `describe` that disagrees with `engine.json` is `engine_protocol_error` (`describe_invalid`).
+
+**Calls.** A call's requests go to the workers in batches of `max_batch` (`search`: one at a time); the
+outcomes come back in request order. With `engine.reset_each_batch`, `reset()` follows every batch.
+- A domain failure of one request is its `engine_failed` (`adapter_error`), with the adapter's code in
+  `engine_code`.
+- An exception fails every request of the batch (`engine_failed`, `exception`, with its type), and that
+  worker is not used again. A result that is not JSON or not of its shape is that request's
+  `engine_protocol_error`. The call goes on with the other batches.
+- A batch has `engine.request_timeout_ms` per request; past it the worker is stopped and the batch's requests
+  are `engine_failed` (`timeout`). A worker out of memory at the Job's limit gives `worker_memory_limit`.
+- **Guards** (`engine_guard_violation`, exit 3; the call fails and every worker is stopped): a write outside
+  the scratch directory, a read of a file under the home that `code` and `data` do not list, a module under
+  the home that `code` does not list, and a change of `sys.argv`, the working directory, `sys.path` or
+  `os.environ` by a stage. An audit hook sees the file operations and refuses them; the module closure and
+  the global state are checked after the import and after every batch.
+
+**Restarts and recycling.** A worker that exits without answering has crashed: it is replaced and its batch
+runs again. A crash, a timeout and the memory limit each use one of `engine.restart_budget` restarts of the
+pool; past them, `engine_failed` (`restart_budget_exhausted`, exit 3), and every worker is stopped. A worker
+is recycled, without using the budget, after `engine.worker_max_requests` requests, when its private bytes
+exceed `engine.worker_soft_memory_mib` after a batch, and after an exception. The host stops only workers it
+started, by their process handle.
+
+**Cache.** An engine call goes through the cache as a node of kind `engine` (see Cache): it is reused while
+the engine's fingerprint, the op, the request without `entities`, and every entity its result's `depends_on`
+names hash the same. Errors are never kept.
+
+**Verify sample.** `engine.verify_sample_milli` of a call's requests, chosen by the sha256 of [fingerprint,
+op, request], run again with the full request, after `reset()`, in a fresh worker with
+`engine.verify_hash_seed`, cached results included. Any other outcome is `engine_nondeterministic` (exit 3):
+hash or set order, state carried between calls, or an untruthful `depends_on`. The call fails, and nothing
+of it is kept in the cache.

@@ -6,7 +6,8 @@ priority (the 10-24 lesson). Every result is checked, and every cap is read back
 
 `WindowsHost.apply` lowers the priority of the tool's own process and puts the process into a new
 Job object that caps CPU, per-process memory and priority. A process started afterwards is inside
-the Job from its start and inherits both; `verify_child` checks that for one process.
+the Job from its start and inherits both; `verify_child` checks that for one process, and
+`private_mib` reads its private bytes (the engine host does both for every worker).
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP = 0x00000004
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9  # JobObjectExtendedLimitInformation
 JOB_OBJECT_CPU_RATE_CONTROL_INFORMATION_CLASS = 15  # JobObjectCpuRateControlInformation
 PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000
+PROCESS_VM_READ = 0x00000010
 LIMIT_FLAGS = JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_PRIORITY_CLASS
 CPU_RATE_FLAGS = JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP
 
@@ -106,6 +108,27 @@ class JOBOBJECT_CPU_RATE_CONTROL_INFORMATION(ctypes.Structure):
     _fields_ = [("ControlFlags", DWORD), ("CpuRate", DWORD)]
 
 
+class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+    _fields_ = [
+        ("cb", DWORD),
+        ("PageFaultCount", DWORD),
+        *(
+            (name, SIZE_T)
+            for name in (
+                "PeakWorkingSetSize",
+                "WorkingSetSize",
+                "QuotaPeakPagedPoolUsage",
+                "QuotaPagedPoolUsage",
+                "QuotaPeakNonPagedPoolUsage",
+                "QuotaNonPagedPoolUsage",
+                "PagefileUsage",
+                "PeakPagefileUsage",
+                "PrivateUsage",
+            )
+        ),
+    ]
+
+
 _PROTOTYPES: dict[str, tuple[Any, list[Any]]] = {
     "GetCurrentProcess": (HANDLE, []),
     "SetPriorityClass": (BOOL, [HANDLE, DWORD]),
@@ -119,6 +142,7 @@ _PROTOTYPES: dict[str, tuple[Any, list[Any]]] = {
     "CloseHandle": (BOOL, [HANDLE]),
     "GlobalMemoryStatusEx": (BOOL, [ctypes.POINTER(MEMORYSTATUSEX)]),
     "GetSystemTimes": (BOOL, [ctypes.POINTER(FILETIME)] * 3),
+    "K32GetProcessMemoryInfo": (BOOL, [HANDLE, ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX), DWORD]),
 }
 
 
@@ -206,6 +230,22 @@ class WindowsHost(SystemClock):
             closed = self._k32.CloseHandle(handle)
         if not closed:
             raise self._reading_failed("process", "CloseHandle")
+
+    def private_mib(self, pid: int) -> int:
+        """The private bytes (commit charge) of a process, in MiB, rounded down."""
+        handle = self._k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, False, pid)
+        if not handle:
+            raise self._reading_failed("process", "OpenProcess")
+        counters = PROCESS_MEMORY_COUNTERS_EX()
+        counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS_EX)
+        failed: Failure | None = None
+        if not self._k32.K32GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            failed = self._reading_failed("process", "K32GetProcessMemoryInfo")  # the error before CloseHandle
+        if not self._k32.CloseHandle(handle) and failed is None:
+            failed = self._reading_failed("process", "CloseHandle")
+        if failed is not None:
+            raise failed
+        return counters.PrivateUsage // MIB
 
     def _check_priority(self, handle: int, process: str, caps: HostCaps) -> None:
         found = self._k32.GetPriorityClass(handle)

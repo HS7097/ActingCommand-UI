@@ -188,6 +188,127 @@
       },
       "description": "The venv or a pinned package is missing, a package is not at its pin, or the interpreter (or the venv's interpreter) is not Python 3.13. setup_command is the command that creates the venv; setup never replaces a venv of another minor version."
     },
+    "engine_failed": {
+      "category": "error",
+      "exit": 3,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "engine_id": {"type": "token", "required": true},
+        "op": {
+          "type": "vocab",
+          "required": true,
+          "members": ["start", "describe", "evaluate", "predict", "search", "reset"]
+        },
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["adapter_error", "exception", "timeout", "worker_memory_limit", "worker_exited", "start_failed", "restart_budget_exhausted"]
+        },
+        "request": {"type": "integer", "required": false},
+        "engine_code": {"type": "token", "required": false},
+        "engine_detail": {"type": "raw_text", "required": false},
+        "exception_type": {"type": "name", "required": false},
+        "raw_text": {"type": "raw_text", "required": false},
+        "timeout_ms": {"type": "integer", "required": false},
+        "exit_code": {"type": "integer", "required": false},
+        "restarts": {"type": "integer", "required": false},
+        "budget": {"type": "integer", "required": false},
+        "path": {"type": "path", "required": false}
+      },
+      "description": "An engine call failed (#424 design-py 7.1, 7.3). request is the request's index in the call; a failure of a batch is one entry per request of it, and the call goes on. adapter_error: the adapter answered {\"error\": {code, detail}} for this request; engine_code is its code, passed through, and engine_detail its detail as canonical JSON. exception: the op raised (op reset: the reset after it; op describe: describe at the start); exception_type and raw_text are the exception's, the traceback is in the worker's log, and the worker is not used again. timeout: the batch took longer than engine.request_timeout_ms per request (timeout_ms is the batch's), or the start longer than engine.start_timeout_ms (op start); the worker is stopped. worker_memory_limit: the worker ran out of memory, at the Job's per-process limit (compute.job.worker_memory_mib). worker_exited: the worker exited before it connected (op start, exit_code). start_failed: the scratch directory, the log or the process could not be made, or the channel did not connect (path, exception_type, raw_text). restart_budget_exhausted: a worker ended abnormally (a crash, a timeout, the memory limit) once more after engine.restart_budget restarts of this pool; the call fails and every worker is stopped (restarts, budget, and the exit_code of the last)."
+    },
+    "engine_guard_violation": {
+      "category": "error",
+      "exit": 3,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "engine_id": {"type": "token", "required": true},
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["write_outside_scratch", "unlisted_file", "unlisted_module", "global_state_changed"]
+        },
+        "stage": {
+          "type": "vocab",
+          "required": true,
+          "members": ["import", "describe", "batch", "reset"]
+        },
+        "path": {"type": "path", "required": false},
+        "module": {"type": "name", "required": false},
+        "state": {
+          "type": "vocab",
+          "required": false,
+          "members": ["argv", "cwd", "sys_path", "environ"]
+        }
+      },
+      "description": "A guard of the engine worker caught engine code (#424 design-py 7.3) during the import of the entry and make_engine (import), describe, an op (batch) or reset. write_outside_scratch: an open for writing, or a remove, rename, mkdir, rmdir, truncate, link, symlink or rmtree, of path outside the worker's scratch directory; the operation is refused. unlisted_file: a read of path under the engine's home that neither code nor data of engine.json lists; the fingerprint would miss it. unlisted_module: a module under the home that code does not list: the read of its file (path), or the module found loaded after a stage (module, path). global_state_changed: sys.argv, the working directory, sys.path or os.environ (state) differ after the stage. The call fails and every worker is stopped; an engine that catches the refusal is reported all the same."
+    },
+    "engine_import_failed": {
+      "category": "error",
+      "exit": 3,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "engine_id": {"type": "token", "required": true},
+        "entry": {"type": "token", "required": true},
+        "exception_type": {"type": "name", "required": true},
+        "raw_text": {"type": "raw_text", "required": true}
+      },
+      "description": "The entry point of engine.json (entry, module:callable) did not import in the worker, or calling it (make_engine) raised (#424 design-py 4.9). exception_type and raw_text are the exception's; the traceback is in the worker's log."
+    },
+    "engine_nondeterministic": {
+      "category": "error",
+      "exit": 3,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "engine_id": {"type": "token", "required": true},
+        "op": {
+          "type": "vocab",
+          "required": true,
+          "members": ["evaluate", "predict", "search"]
+        },
+        "request": {"type": "integer", "required": true},
+        "hash_seed": {"type": "integer", "required": true},
+        "verify_hash_seed": {"type": "integer", "required": true}
+      },
+      "description": "The verify run of a sampled request (engine.verify_sample_milli) gave another outcome than the call: the full request, after reset(), in a fresh worker whose PYTHONHASHSEED is verify_hash_seed instead of hash_seed (#424 design-py 7.3). It catches hash or set order, state carried between calls and an untruthful depends_on (a cached result reused for another request). ref is the JSON pointer of the first difference in the result (empty when the verify run failed). The call fails and nothing of it is kept in the cache."
+    },
+    "engine_not_configured": {
+      "category": "error",
+      "exit": 3,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "engine_id": {"type": "token", "required": true}
+      },
+      "description": "No engines.roots entry of the local configuration names engine_id, so its home is unknown (#424 design D-4); the tool never guesses one."
+    },
+    "engine_protocol_error": {
+      "category": "error",
+      "exit": 3,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "engine_id": {"type": "token", "required": true},
+        "op": {
+          "type": "vocab",
+          "required": true,
+          "members": ["start", "describe", "evaluate", "predict", "search", "reset"]
+        },
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["not_json", "result_invalid", "result_count", "describe_invalid", "frame_invalid"]
+        },
+        "request": {"type": "integer", "required": false},
+        "expected": {"type": "list:token", "required": false},
+        "found": {"type": "token", "required": false}
+      },
+      "description": "An engine answered outside acmodel.engine.v2 (#424 design-py 7.1); ref is the JSON pointer in that request's result, or in describe's. not_json: a value that is not a JSON value (found names it: a type such as set or tuple, float_not_finite, string_invalid, <type>_key). result_invalid: a result of the wrong shape (expected): not an object, no depends_on, a depends_on id that the request's entities lack, an evaluate result without numeric metrics or with an unknown member, a malformed error. result_count: evaluate or predict did not return a list of one result per request. These fail the requests concerned and the call goes on. describe_invalid: describe disagrees with engine.json (engine_id, version, ops, max_batch) or is malformed; frame_invalid: the worker sent a frame the host cannot read. These two fail the call."
+    },
     "export_refused": {
       "category": "error",
       "exit": 5,

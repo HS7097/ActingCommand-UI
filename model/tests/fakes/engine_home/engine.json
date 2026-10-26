@@ -1,0 +1,16 @@
+{
+  "schema_version": "acmodel.engine.v2",
+  "engine_id": "fake",
+  "version": "1",
+  "python": "3.13",
+  "entry": "fake:make_engine",
+  "sys_path": ["adapters", "extra"],
+  "code": ["adapters/*.py"],
+  "data": ["data/*.json"],
+  "external": [],
+  "ops": ["describe", "evaluate", "search"],
+  "deterministic": true,
+  "max_batch": 2,
+  "memory_mib_estimate": 64,
+  "note": "A neutral fake engine for the engine host tests. extra/ is on sys_path but not listed in code, and notes.txt is not listed at all, so that the guards have something to catch."
+}
