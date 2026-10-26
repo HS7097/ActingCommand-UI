@@ -90,20 +90,19 @@ def threshold_entry(run: Run, index: int, threshold: dict[str, Any], files: dict
     return entry
 
 
-def _write(target: Path, doc: Any) -> None:
+def _write(target: Path, data: bytes) -> None:
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(_dump(doc))
+        target.write_bytes(data)
     except OSError as exc:
         detail = {"path": str(target), "exception_type": type(exc).__name__, "raw_text": str(exc)}
         raise Failure(error(EXPORT_WRITE_FAILED, detail)) from exc
 
 
-def export_thresholds(
-    path: Path | str, state_path: Path | str, *, datasets: Path | str, max_bits: int, unknowns: Unknowns = Unknowns()
-) -> dict[str, Any]:
-    """Evaluate the model for the state, then write `thresholds.json` and the provenance files, or refuse."""
-    run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
+def build(run: Run) -> dict[str, bytes]:
+    """The files of the export for an evaluated run, by their path relative to the model folder and in the order
+    they are written (`thresholds.json` last), without writing them (`watch` stages them as a delivery candidate).
+    A refused threshold raises `Failure`, as the export does."""
     files: dict[str, Any] = {}
     entries, refusals = [], []
     for index, threshold in sorted(enumerate(run.exports.doc["thresholds"]), key=lambda pair: pair[1]["id"]):
@@ -118,9 +117,17 @@ def export_thresholds(
         "versions": versions(run.checker, run.folder),
         "thresholds": entries,
     }
+    return {name: _dump(doc) for name, doc in files.items()}
+
+
+def export_thresholds(
+    path: Path | str, state_path: Path | str, *, datasets: Path | str, max_bits: int, unknowns: Unknowns = Unknowns()
+) -> dict[str, Any]:
+    """Evaluate the model for the state, then write `thresholds.json` and the provenance files, or refuse."""
+    run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     written = []
-    for name, doc in files.items():  # thresholds.json last
+    for name, data in build(run).items():  # thresholds.json last
         target = run.folder / name
-        _write(target, doc)
+        _write(target, data)
         written.append(str(target))
     return {**run.head, "written": sorted(written)}

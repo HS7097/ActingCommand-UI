@@ -157,12 +157,18 @@ def run_model(
     run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns, cache=cache)
     if cache is None:
         return {**run.head, **run.data}, run.errors
+    return finish_run(run, cache, max_bits=max_bits, unknowns=unknowns), run.errors
+
+
+def finish_run(run: Run, cache: Session, *, max_bits: int, unknowns: Unknowns) -> dict[str, Any]:
+    """Keep a run evaluated through `cache` under `runs/<run id>/` and commit the cache (`run`, `watch`): the
+    run's `data` with `run_id` and `work`."""
     run_id = cache.run_id(
         _run_inputs(run.checker, run.graph, run.folder, run.exports, run.head, run.prefs, max_bits, unknowns)
     )
     outputs = {"schema_version": RUN_SCHEMA, "run_id": run_id, "data": {**run.head, **run.data}, "errors": run.errors}
     cache.finish(run_id, canonical(outputs))
-    return {**run.head, "run_id": run_id, **run.data, "work": cache.work()}, run.errors
+    return {**run.head, "run_id": run_id, **run.data, "work": cache.work()}
 
 
 def run_economy(

@@ -208,6 +208,25 @@ class Pool:
             for worker in list(group):
                 self._stop(worker, group)
 
+    def warm(self, count: int) -> int:
+        """Start workers ahead of the calls until `count` are alive (never more than `compute.workers.max`), and
+        wait until each is ready: the engine imported, `make_engine` and `describe` done, so that the calls find
+        its context built (`watch`, `watch.keep_workers_warm`). Returns how many it started. A failure stops every
+        worker and raises, as a call's does; a worker that crashes while starting uses the restart budget and is
+        not replaced."""
+        target = min(count, self.settings.workers_max)
+        work = _Work(op="start", requests=[], indices=[], batches=[], reset_before=False)
+        started = 0
+        try:
+            while len(self._main) < target and self._live() < self.settings.workers_max:
+                self._start(self._main, self.settings.hash_seed)
+                started += 1
+            self._run(work, self._main, self.settings.hash_seed, target)
+        except BaseException:
+            self.close()
+            raise
+        return started
+
     # Calls ------------------------------------------------------------------------------------------
 
     def call(self, op: str, requests: list[dict[str, Any]], indices: list[int] | None = None) -> list[Outcome]:

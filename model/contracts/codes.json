@@ -874,6 +874,24 @@
         "found": {"type": "path", "required": false}
       },
       "description": "Work on the venv failed. inspect: the configured path exists but holds no venv (no readable pyvenv.cfg version); it is refused, never replaced. create: python -m venv failed. install: pip failed. dispatch: the venv's Python could not be started, or a re-dispatched child still did not run in the venv (found is its prefix)."
+    },
+    "watch_failed": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "stage": {
+          "type": "vocab",
+          "required": true,
+          "members": ["scan", "import", "journal", "resume", "stage"]
+        },
+        "path": {"type": "path", "required": true},
+        "found": {"type": "token", "required": false},
+        "exception_type": {"type": "name", "required": false},
+        "raw_text": {"type": "raw_text", "required": false}
+      },
+      "description": "acmodel watch (contracts/cli.md, Automatic refresh) cannot do its own part of the work. scan: a watched folder could not be listed, or a file's size and modification time could not be read other than by its absence (path); the watch stops. A file whose bytes cannot be read is not this: it counts as changed, and the refresh that reads it reports why. import: the state snapshot (path, its source) could not be read, or its copy under the watch folder could not be written; that refresh fails (the refresh_failed event) and the watch goes on. journal: the watch folder, its event log or watch.json (path) could not be written; the watch stops. resume: watch.json (path) does not read as acmodel.watch.v1 for this model and state (found names what does not); the watch does not start, and the file is never replaced (remove it to start afresh; the cache keeps every node computed). stage: a delivery candidate could not be written under the watch folder, or the previous candidate it is compared with could not be read (path); the watch stops. exception_type and raw_text are the exception's."
     }
   }
 }
