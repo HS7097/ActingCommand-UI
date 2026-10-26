@@ -117,6 +117,101 @@
       },
       "description": "An expression does not parse (grammar in expr/syntax.py): a character outside the language, a malformed number, an unexpected token or end, an unknown reference kind, a malformed reference (or a set where a value is needed), the member key $ outside a sum or count over its set, an unknown function, a wrong number of arguments, or an argument of the wrong form. position is the character offset; token is the offending text. The error's ref is the JSON pointer of the expression."
     },
+    "host_gate_paused": {
+      "category": "error",
+      "exit": 4,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["memory_below_start", "memory_below_pause", "quiet_window", "pause_file", "cpu_load", "plan_above_report"]
+        },
+        "available_mib": {"type": "integer", "required": false},
+        "estimate_mib": {"type": "integer", "required": false},
+        "limit_mib": {"type": "integer", "required": false},
+        "load_milli": {"type": "integer", "required": false},
+        "limit_milli": {"type": "integer", "required": false},
+        "window": {"type": "integer", "required": false},
+        "path": {"type": "path", "required": false}
+      },
+      "description": "The host gate holds compute; a later run or check resumes (contracts/cli.md, Host caps). One entry per reason that holds. memory_below_start: the available host memory (available_mib) is below host.memory.start_min_mib (limit_mib) before a batch, or while the gate is paused. memory_below_pause: inside a batch it fell below host.memory.pause_below_mib (limit_mib). quiet_window: the local time is inside host.quiet_windows[window]. pause_file: the file host.pause_file (path) exists. cpu_load: the host CPU load over the last window (load_milli) is above host.cpu.pause_load_milli (limit_milli). plan_above_report: the planned memory of the run (estimate_mib) is above host.memory.report_plan_above_mib (limit_mib), so the run is reported before it starts."
+    },
+    "host_job_not_applied": {
+      "category": "error",
+      "exit": 4,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "stage": {
+          "type": "vocab",
+          "required": true,
+          "members": ["create", "set_limits", "set_cpu_rate", "assign", "verify"]
+        },
+        "limit": {
+          "type": "vocab",
+          "required": false,
+          "members": ["limit_flags", "priority_class", "process_memory", "cpu_rate_flags", "cpu_rate", "membership"]
+        },
+        "process": {
+          "type": "vocab",
+          "required": false,
+          "members": ["current", "child"]
+        },
+        "expected": {"type": "integer", "required": false},
+        "found": {"type": "integer", "required": false},
+        "os_error": {"type": "integer", "required": false}
+      },
+      "description": "The Job object that caps the tool's processes (CPU rate, memory per process, priority class) could not be created (CreateJobObjectW), configured (SetInformationJobObject: set_limits, set_cpu_rate), joined by the current process (AssignProcessToJobObject) or read back (verify: QueryInformationJobObject, IsProcessInJob). In verify, limit names the limit read back with another value than configured (expected, found), or membership when the current process or a child started afterwards is not in the Job. os_error is GetLastError when a call failed. Nothing computes without the Job."
+    },
+    "host_priority_not_applied": {
+      "category": "error",
+      "exit": 4,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "stage": {
+          "type": "vocab",
+          "required": true,
+          "members": ["set", "verify", "platform_unsupported"]
+        },
+        "process": {
+          "type": "vocab",
+          "required": true,
+          "members": ["current", "child"]
+        },
+        "priority": {
+          "type": "vocab",
+          "required": false,
+          "members": ["below_normal", "idle"]
+        },
+        "expected": {"type": "integer", "required": false},
+        "found": {"type": "integer", "required": false},
+        "os_error": {"type": "integer", "required": false},
+        "platform": {"type": "token", "required": false}
+      },
+      "description": "The priority class of compute.priority (expected is its Windows value) is not in effect. set: SetPriorityClass returned 0 (os_error). verify: GetPriorityClass of the current process, or of a child started after the caps, reads another class (found; 0 with os_error when the call itself failed). platform_unsupported: only Windows has a real host layer, so on this platform the caps cannot be applied. Nothing computes at normal priority."
+    },
+    "host_reading_failed": {
+      "category": "error",
+      "exit": 4,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "reading": {
+          "type": "vocab",
+          "required": true,
+          "members": ["memory", "cpu_times", "pause_file", "process"]
+        },
+        "call": {"type": "name", "required": false},
+        "os_error": {"type": "integer", "required": false},
+        "path": {"type": "path", "required": false},
+        "exception_type": {"type": "name", "required": false},
+        "raw_text": {"type": "raw_text", "required": false}
+      },
+      "description": "A reading of the host layer failed, so the gate or the check cannot decide and does not guess. memory: GlobalMemoryStatusEx. cpu_times: GetSystemTimes, or counters that did not advance consistently over a window. pause_file: checking whether host.pause_file exists failed other than by its absence (path, exception_type, raw_text). process: opening or closing a child process to verify it (OpenProcess, CloseHandle). call is the Win32 function and os_error its GetLastError."
+    },
     "model_file_invalid": {
       "category": "error",
       "exit": 1,
