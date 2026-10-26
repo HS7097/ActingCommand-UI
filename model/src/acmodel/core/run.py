@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from acmodel.cache.keys import RUN_SCHEMA, canonical, digest
 from acmodel.check.checker import Checker
 from acmodel.check.files import File, load
+from acmodel.config import Unknowns
 from acmodel.core import types
 from acmodel.core.graph import Graph
 from acmodel.core.versions import versions
@@ -54,10 +55,16 @@ def _read(reader: Callable[[Path], dict[str, Any]], path: Path, errors: list[dic
 
 
 def evaluate_model(
-    path: Path | str, state_path: Path | str, *, datasets: Path | str, max_bits: int, cache: Session | None = None
+    path: Path | str,
+    state_path: Path | str,
+    *,
+    datasets: Path | str,
+    max_bits: int,
+    unknowns: Unknowns = Unknowns(),
+    cache: Session | None = None,
 ) -> Run:
-    """Check the model at `path` (its folder or `model.json`) and evaluate it for the state at `state_path`,
-    through `cache` when one is given.
+    """Check the model at `path` (its folder or `model.json`) and evaluate it for the state at `state_path`
+    with the keys under `unknowns` (sensitivity and sampling), through `cache` when one is given.
 
     A model that does not check, or inputs that do not read, raise `Failure` and compute nothing.
     Otherwise every output is computed or blocked: `errors` are those of the blocked outputs.
@@ -86,7 +93,7 @@ def evaluate_model(
 
     exports_file = File(str(exports_path), exports)
     typed = types.check(checker, exports_file, load_prefs)
-    graph = Graph(checker, typed, state, exports, max_bits=max_bits, cache=cache)
+    graph = Graph(checker, typed, state, exports, max_bits=max_bits, settings=unknowns, cache=cache)
     data, blocked = graph.run()
     head = {
         "path": manifest.path,
@@ -97,11 +104,17 @@ def evaluate_model(
 
 
 def run_model(
-    path: Path | str, state_path: Path | str, *, datasets: Path | str, max_bits: int, cache: Session | None = None
+    path: Path | str,
+    state_path: Path | str,
+    *,
+    datasets: Path | str,
+    max_bits: int,
+    unknowns: Unknowns = Unknowns(),
+    cache: Session | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """`acmodel run`: the run's `data` and the errors of the blocked outputs (see `evaluate_model`). With
     `cache`, `data` also holds `run_id` and `work`, and the outputs are kept under `runs/<run id>/`."""
-    run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, cache=cache)
+    run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns, cache=cache)
     if cache is None:
         return {**run.head, **run.data}, run.errors
     model = versions(run.checker, run.folder)  # the tool version is the run id's own member
@@ -112,7 +125,7 @@ def run_model(
         "state": digest(canonical(run.graph.state)),
         "prefs": None if run.prefs is None else digest(canonical(run.prefs)),
         "engines": {},  # engine fingerprints come with the engines
-        "config": {"max_bits": max_bits},
+        "config": {"max_bits": max_bits, "unknowns": unknowns.keyed()},
         "paths": {"model": run.head["path"], "state": run.head["state"]["path"]},
     })
     outputs = {"schema_version": RUN_SCHEMA, "run_id": run_id, "data": {**run.head, **run.data}, "errors": run.errors}

@@ -324,7 +324,7 @@
         },
         "value": {"type": "token", "required": false}
       },
-      "description": "acmodel export thresholds, and acmodel bindings check|apply for a bound threshold: an output (threshold:<id>) cannot go into a shared output, so nothing is written (contracts/formats.md, Outputs; bindings take only what the export writes). blocked: it cannot be computed; the errors that block it follow, with needed_by. per_account: it read the account state, and a per-account value never enters a shared output (#424, ruling 66); run and explain show it locally. provisional: it is not confirmed. not_integer, out_of_range: its exact value (value) is not an integer (exports.json can declare a round), or lies beyond +-(2^53-1). path is exports.json and the error's ref the threshold's entry in it."
+      "description": "acmodel export thresholds, and acmodel bindings check|apply for a bound threshold: an output (threshold:<id>) cannot go into a shared output, so nothing is written (contracts/formats.md, Outputs; bindings take only what the export writes). blocked: it cannot be computed; the errors that block it follow, with needed_by. per_account: it read the account state, and a per-account value never enters a shared output (#424, ruling 66); run and explain show it locally. provisional: it is not confirmed. not_integer, out_of_range: its exact value (value) is not an integer (exports.json can declare a round), or lies beyond +-(2^53-1); a value that continuous unknowns leave open is not_integer, with value <low>..<high>. path is exports.json and the error's ref the threshold's entry in it."
     },
     "export_write_failed": {
       "category": "error",
@@ -360,7 +360,7 @@
         "reason": {
           "type": "vocab",
           "required": true,
-          "members": ["division_by_zero", "clamp_bounds_invalid", "value_invalid", "evaluation_unsupported"]
+          "members": ["division_by_zero", "clamp_bounds_invalid", "value_invalid", "evaluation_unsupported", "range_invalid"]
         },
         "operator": {"type": "token", "required": true},
         "position": {"type": "integer", "required": true},
@@ -368,7 +368,7 @@
         "found": {"type": "name", "required": false},
         "path": {"type": "path", "required": false}
       },
-      "description": "Evaluating an expression failed: a division by zero, clamp with its low bound above its high bound, or a value from the model (a reference, flow, lookup or set) that is not of the type the check gave it (expected is that type, or members for a set; found is the value's Python type). evaluation_unsupported (acmodel run): the expression reads what this version does not evaluate yet, and found names it: metric, count or pref (a reference of that kind), interval or distribution (an unknown of that kind), random (a random:<id> product), external_dataset (a row of an external table), when (a rule's condition), state (max_single_income, which never reads the account state: an income the cap blocks would need a state value, and no storage cap of a store it moves out of bounds it); operator is reference, the function or the member. Every output that needs it is blocked. The error's ref is the JSON pointer of the expression; acmodel run adds path, the file."
+      "description": "Evaluating an expression failed: a division by zero (acmodel run: or by an enclosure that holds 0), clamp with its low bound above its high bound (acmodel run: or bounds whose enclosures may cross), or a value from the model (a reference, flow, lookup or set) that is not of the type the check gave it (expected is that type, or members for a set; found is the value's Python type). evaluation_unsupported (acmodel run): the expression reads what this version does not evaluate yet, and found names it: metric, count or pref (a reference of that kind), beta_from_samples (a distribution unknown of that family, whose bounds come with the random processes), interval (a lookup key, or a bound of a distribution being sampled, that continuous unknowns leave open), random (a random:<id> product), external_dataset (a row of an external table), when (a rule's condition), state (max_single_income, which never reads the account state: an income the cap blocks would need a state value, and no storage cap of a store it moves out of bounds it); operator is reference, the function or the member. range_invalid (acmodel run): the bounds of an interval or distribution unknown, evaluated in one scenario, may be out of order: low above high, or a triangular mode outside them, for some value of the unknowns the bounds read; operator is interval, uniform or triangular, position 0, and the error's ref the unknown's range form (/unknowns/<index>/interval or /distribution). Every output that needs it is blocked. The error's ref is the JSON pointer of the expression; acmodel run adds path, the file."
     },
     "expr_overflow": {
       "category": "error",
@@ -382,7 +382,7 @@
         "position": {"type": "integer", "required": true},
         "path": {"type": "path", "required": false}
       },
-      "description": "A literal, a value read or an intermediate result of an expression has a numerator or denominator of more than max_bits bits (configuration key expr.max_bits; durations count in seconds). Nothing wraps or rounds. operator is the operator or function, literal or reference. The error's ref is the JSON pointer of the expression; acmodel run adds path, the file, and blocks every output that needs it."
+      "description": "A literal, a value read or an intermediate result of an expression has a numerator or denominator of more than max_bits bits (configuration key expr.max_bits; durations count in seconds). Nothing wraps or rounds. operator is the operator or function, literal or reference. The error's ref is the JSON pointer of the expression; acmodel run adds path, the file, and blocks every output that needs it. operator tally (acmodel run with unknowns.samples): a sampled value at export precision, the count or the total of a Monte Carlo tally would leave the int64 range (max_bits 63, bits that of the number, position 0); the output is blocked, and the error's ref is the expression the output comes from."
     },
     "expr_parse_error": {
       "category": "error",

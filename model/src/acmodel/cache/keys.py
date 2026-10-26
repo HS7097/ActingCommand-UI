@@ -46,18 +46,24 @@ class Evaluator:
 
 
 # The kinds of the derivation graph (core/graph.py). They compute with exact fractions only, so none of
-# them declares a library; the solver, Monte Carlo and screening kinds of later slices will.
+# them declares a library; the Monte Carlo tallies (`sampled`) draw from numpy's Philox, so they declare
+# numpy and the Python minor version (design-py D-P5), and the solver and screening kinds of later slices
+# will too. Version 2: unknowns are judged by their effect (PY-8), so a scenario records what it leaves
+# unresolved and the continuous unknowns it computed with, whose values are enclosures (interval arithmetic).
 # `engine` is an engine call (engine/client.py): its spec holds the engine's fingerprint, which already
 # covers the Python minor version and the library versions (design-py D-P5), so it declares none.
 EVALUATORS: dict[str, Evaluator] = {
     "engine": Evaluator(1),
-    "flow": Evaluator(1),
-    "general": Evaluator(1),
-    "general_logic": Evaluator(1),
-    "member": Evaluator(1),
-    "offset": Evaluator(1),
-    "rule": Evaluator(1),
-    "threshold": Evaluator(1),
+    "flow": Evaluator(2),
+    "general": Evaluator(2),
+    "general_logic": Evaluator(2),
+    "impacts": Evaluator(1),
+    "member": Evaluator(2),
+    "offset": Evaluator(2),
+    "point": Evaluator(1),
+    "rule": Evaluator(2),
+    "sampled": Evaluator(1, ("numpy", "python")),
+    "threshold": Evaluator(2),
 }
 
 

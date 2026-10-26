@@ -136,7 +136,15 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | `engine.restart_budget` | 3 | how many workers that ended abnormally (a crash, a timeout, the memory limit) a pool replaces; 0 or more |
 | `engines.roots` | `{}` | where each engine's home is on this host: engine id to an absolute path (#424 design D-4) |
 
-All the numbers are integers of at least 1, unless their row says otherwise.
+| `sensitivity.top_n` | 5 | how many unknowns each output's `sensitivity` lists (`formats.md`, "Unknowns") |
+| `unknowns.scale` | 1000 | the export precision that the no-effect rule (on the sound range) and the impacts are measured at: a value counts as value × scale rounded half to even (1000: milli) |
+| `unknowns.samples` | 0 | the Monte Carlo samples of the distributions per output; 0, the default, samples nothing; at most 2<sup>63</sup> − 1 |
+| `unknowns.seed` | 0 | the first word of each Philox key (the second is the unknown's stream id); 0 to 2<sup>64</sup> − 1 |
+| `unknowns.chunk_size` | 1024 | the samples drawn per Philox call; it never changes a result |
+| `unknowns.resolution` | 1000000 | the equal cells of a draw on (0, 1); at most 2<sup>64</sup> |
+
+All the numbers are integers of at least 1, unless their row says otherwise (`unknowns.samples` and
+`unknowns.seed` may be 0).
 
 ```json
 {"schema_version": "acmodel.config.v1", "paths": {"venv": "<absolute path>"}, "compute": {"blas_threads": 1}, "expr": {"max_bits": 127}}
@@ -181,6 +189,13 @@ what needed it.
 - An **engine call** is a node of kind `engine` (see Engine host): its spec is the engine id, the engine's
   fingerprint (which covers the library versions), the op and the request without its `entities`; its
   trace is the hash of each entity the result's `depends_on` names.
+- **Sampled and impacts nodes.** The Monte Carlo tallies of an output (kind `sampled`, `formats.md`,
+  "Unknowns") declare `numpy` and the `python` minor version, and their spec adds the keys under `unknowns`
+  and `sensitivity` but `chunk_size`, which changes no result. The impacts of the continuous unknowns of an
+  output that computes with more than one (kind `impacts`) add `unknowns.scale`. The trace of either is
+  everything its computations read: the output itself, and each node and leaf that the computation at the
+  samples or at the held ends reads, so a change inside a distribution that leaves its enclosure as it is still
+  computes the samples again.
 - A **node key** is the sha256 of the spec hash and the sorted (input, value hash) pairs of its trace.
 
 **Verifying traces.** A node is reused when one of its traces, the most recently used first, still holds:
@@ -195,8 +210,8 @@ it intact, so they are reused.
 inputs: the rules version (`model.json`, `sources.json` and the rule files) and the data version (the data
 files), each over [path relative to the model folder, document] sorted by path; `exports.json`; the whole
 state snapshot; the preference defaults when the model reads them; the engine fingerprints (none yet);
-`expr.max_bits`; and the paths of the model and the state, which the outputs name. Equal inputs give equal
-run ids.
+`expr.max_bits`, `sensitivity.top_n` and the keys under `unknowns` but `chunk_size`; and the paths of the model and the state,
+which the outputs name. Equal inputs give equal run ids.
 
 **Work counters** (`data.work` of `run`): `nodes` (computed plus reused), `computed`, `reused`, `cutoff`
 (computed again to the same value), `corrupt` (corrupt entries met), `evicted` (`entries`, `bytes`), and
