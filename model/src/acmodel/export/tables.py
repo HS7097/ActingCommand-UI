@@ -182,6 +182,20 @@ class _Change:
         return errors
 
 
+def build(run: Run, repo: Path) -> _Tables:
+    """The files of the export for an evaluated run: each table under `repo/tables/` and each provenance file in
+    the model folder, without writing or validating them (`watch` stages them as a delivery candidate). A table or
+    cell the export refuses raises `Failure`, as the export does."""
+    policy = Policy(run, refuse_provisional=False)
+    errors = _check(run, policy)
+    if errors:
+        raise Failure(*errors)
+    built = _build(run, policy, repo)
+    if built.refusals:
+        raise Failure(*built.refusals, *blocking(run, built.refusals))
+    return built
+
+
 def export_tables(
     path: Path | str,
     state_path: Path | str,
@@ -196,14 +210,8 @@ def export_tables(
     or refuse with nothing changed."""
     validator.require()
     run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
-    policy = Policy(run, refuse_provisional=False)
-    errors = _check(run, policy)
-    if errors:
-        raise Failure(*errors)
     repo = Path(repo)
-    built = _build(run, policy, repo)
-    if built.refusals:
-        raise Failure(*built.refusals, *blocking(run, built.refusals))
+    built = build(run, repo)
     change = _Change()
     for target, data in built.files.items():
         try:

@@ -3,7 +3,8 @@
 The file is optional and every key has a default. A file that exists is read
 strictly: UTF-8 JSON, no duplicate keys, no unknown members, typed values.
 The host caps (`compute.priority`, `compute.job.*`, `host.*`) are read by `acmodel.host.caps`, the engine
-host's keys (`compute.workers.*`, `engine.*`, `engines.*`) by `acmodel.engine.settings`; the keys under
+host's keys (`compute.workers.*`, `engine.*`, `engines.*`) by `acmodel.engine.settings`, `watch.*` by
+`acmodel.watch.settings`; the keys under
 `unknowns` (sampling, export precision, Wilson bounds), `sensitivity.top_n` and the keys under `random` are
 `Unknowns`; the economy's keys (`lp.*`, `search.milp_node_limit`, `economy.*`) are `EconomySettings`; the
 validator of the exports is `paths.actinglab` (no default: an export that needs it refuses without it) and
@@ -23,6 +24,7 @@ from acmodel.codes import CONFIG_INVALID
 from acmodel.engine import settings as engine_settings
 from acmodel.envelope import Failure, error
 from acmodel.host import caps as host_caps
+from acmodel.watch import settings as watch_settings
 
 SCHEMA_VERSION = "acmodel.config.v1"
 LOCATION_VARIABLE = "LOCALAPPDATA"
@@ -49,6 +51,7 @@ _MEMBERS = {
     "search": {"milp_node_limit"},
     "economy": {"plan_horizon"},
     "export": {"validator_timeout_ms"},
+    "watch": watch_settings.MEMBERS,
 }
 # `unknowns.drop_z`: a positive decimal string, so that no float reaches the Wilson bounds.
 DECIMAL_Z = re.compile(r"(0|[1-9][0-9]*)(\.[0-9]+)?")
@@ -154,6 +157,7 @@ class Config:
     economy: EconomySettings
     actinglab: Path | None  # `paths.actinglab`: the Runtime's validator of the exports; None when not configured
     validator_timeout_ms: int  # `export.validator_timeout_ms`
+    watch: watch_settings.WatchSettings  # the keys under `watch` (acmodel.watch.settings)
 
 
 class _DuplicateKey(ValueError):
@@ -286,4 +290,5 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         economy=EconomySettings(**economy),
         actinglab=_absolute(paths, "actinglab", None, path),
         validator_timeout_ms=timeout_ms,
+        watch=watch_settings.read(_section(doc, "watch", path), invalid),
     )

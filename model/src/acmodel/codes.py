@@ -8,6 +8,7 @@ USAGE_INVALID = "usage_invalid"
 CONFIG_INVALID = "config_invalid"
 DEPS_INVALID = "deps_invalid"
 VENV_FAILED = "venv_failed"
+WATCH_FAILED = "watch_failed"
 COMMAND_CRASHED = "command_crashed"
 CACHE_ENTRY_CORRUPT = "cache_entry_corrupt"  # acmodel run: a warning, the node recomputed
 CACHE_UNAVAILABLE = "cache_unavailable"
@@ -63,6 +64,7 @@ EXIT_STATUS = {
     CONFIG_INVALID: 1,
     DEPS_INVALID: 2,
     VENV_FAILED: 1,
+    WATCH_FAILED: 1,
     COMMAND_CRASHED: 1,
     CACHE_ENTRY_CORRUPT: 1,
     CACHE_UNAVAILABLE: 1,

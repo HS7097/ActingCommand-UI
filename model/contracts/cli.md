@@ -39,6 +39,7 @@ python3 -I -B <model>/acmodel.py <command>    (elsewhere)
 | `cache stats` | Counts what the cache holds. It writes nothing. | `path`, `exists`, `max_bytes`, `entries`, `blobs`, `bytes`, `by_kind` (entries per node kind), `runs` |
 | `cache verify` | Reads every blob the index names and checks that it hashes to its name. Each entry that does not is one `cache_entry_corrupt` error (exit 1). It writes and repairs nothing. | `path`, `exists`, `entries`, `blobs`, `problems` |
 | `cache gc [--apply]` | Plans the eviction down to `cache.max_bytes`, least recently used first, and the removal of the blob files no entry names (orphans, and temporary files of interrupted writes). Without `--apply` it only reports the plan; with it, it removes exactly that, inside the cache folder. Run it while no run is in progress. | `path`, `exists`, `apply`, `max_bytes`, `entries`, `bytes`, `entries_removed`, `blobs_removed`, `bytes_removed`, `orphans_removed`, `orphan_bytes_removed`, `other_files` |
+| `watch <model> --state <file>` | Runs until interrupted (Ctrl+C, or the scheduler that started it stopping it) and keeps the model's outputs for the state up to date (see Automatic refresh). It runs the dependency check, then takes the host caps of its process (Host caps). Every `watch.poll_interval_ms` it scans the watched files; a change opens a window of `watch.debounce_ms`, at whose end one refresh runs the model through the cache, as `run` does, and stages a delivery candidate under the state root when the export files differ from the last one's. It writes only under `paths.state_root`, never into a repository, and never commits. What the model, the state or the exports refuse is logged, and the watch goes on; its own failures, the cache's and the host's end it, with the error's exit status. An interrupt ends it with exit 0. | `path` (the model folder), `state`, `watch` (its folder), `resumed`, `polls`, `refreshes`, `staged` (the candidates staged by this run), `run_id` and `candidate` (the last refresh's run id and the last candidate, or null) |
 
 A command is one word, or a group and a word: `export`, `bindings` and `cache` are groups
 (`export thresholds`, `bindings check`, `cache stats`), and the envelope's `command` is both words. Every
@@ -140,6 +141,9 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | `engine.start_timeout_ms` | 120000 | the most time a worker may take to start (connect, import, `make_engine`, `describe`), and to stop before it is killed |
 | `engine.restart_budget` | 3 | how many workers that ended abnormally (a crash, a timeout, the memory limit) a pool replaces; 0 or more |
 | `engines.roots` | `{}` | where each engine's home is on this host: engine id to an absolute path (#424 design D-4) |
+| `watch.poll_interval_ms` | 5000 | how often `watch` scans the watched files: their sizes and modification times, and the sha256 of each file whose size or time changed |
+| `watch.debounce_ms` | 5000 | a change opens a window this long; at its end one refresh covers every change seen in it |
+| `watch.keep_workers_warm` | `true` | `watch` keeps the engine workers started between refreshes, so that an engine's context is built once and not per change; a held host gate stops them; a boolean |
 | `lp.max_denominator` | 1000000 | the largest denominator a solver's float becomes when it is converted to an exact fraction (`formats.md`, "The economy"); at least 1 |
 | `lp.grain` | 1 | the grain of every amount: the step of the economy's price re-solves, and how far below a read cap a plan's collection must start; at least 1 |
 | `search.milp_node_limit` | 100000 | the most nodes the plan's MILP may explore before it stops unproven (`search_budget_exhausted`); the only budget, never a time; 1 to 2<sup>31</sup> − 1 |
@@ -258,7 +262,8 @@ stops and never computes without its cache.
 The host layer is `src/acmodel/host/`. The commands that compute call it before and during their work;
 `setup` and `version` do not. `run`, `economy`, `explain`, the exports and `bindings` in this version
 evaluate only the derivation graph and the economy's solves, in their own process and with no workers, and do
-not call it yet.
+not call it yet. `watch` takes the caps of its process when it starts and checks the gate at every poll (see
+Automatic refresh).
 
 **The caps of the tool's own process** (Windows; `host.windows`):
 1. `SetPriorityClass` to `compute.priority`, then `GetPriorityClass` must read it back. Otherwise the
@@ -374,3 +379,93 @@ op, request], run again with the full request, after `reset()`, in a fresh worke
 `engine.verify_hash_seed`, cached results included. Any other outcome is `engine_nondeterministic` (exit 3):
 hash or set order, state carried between calls, or an untruthful `depends_on`. The call fails, and nothing
 of it is kept in the cache.
+
+## Automatic refresh (`watch`)
+
+`watch <model> --state <file>` is `src/acmodel/watch/` (#424 design 5.6, design-py 5.6). It is long-lived: start
+it from Task Scheduler or WMI, never from an agent session, and end it with an interrupt (the event `stopped`). It
+never commits, pushes or publishes anything, and never reads or writes the live Runtime.
+
+**Start.** The dependency check, then the host caps of its own process (Host caps: below-normal priority and the Job
+object, so that every engine worker it starts is inside them). On another platform than Windows that is
+`host_priority_not_applied` (`platform_unsupported`, exit 4).
+
+**What it watches:**
+- the JSON files of the model folder, but its `out/` (which the exports write);
+- the JSON files of the preference folder beside it (`<model folder>/../prefs`);
+- every file of `paths.datasets`;
+- the state snapshot `--state`, through the import hook (below).
+
+A folder that is absent holds nothing. A scan reads every file's size and modification time, and reads and hashes
+(sha256) only a file whose size or time changed. A file is changed when it is new, gone, or its bytes hash otherwise:
+a rewrite of the same bytes changes nothing. A file that cannot be read counts as changed, and the refresh that
+reads it reports why.
+
+**Each poll**, every `watch.poll_interval_ms`:
+1. **The scan.** A change opens a window of `watch.debounce_ms` (the event `changed`). The changes seen until it ends
+   join it, and at its end one refresh covers them all, so a burst of changes gives one recompute per window.
+2. **The host gate** (Host caps): the first poll as the start of a batch, every later one as a checkpoint, since the
+   watch is one long batch. While it holds (`paused`, with its `host_gate_paused` entries), every engine worker is
+   stopped, which frees its memory (`workers_stopped`), and nothing is computed; the window waits. The gate opens
+   again only at the start level (`resumed`).
+3. **The warm workers** (`watch.keep_workers_warm`). When none is alive, the workers of the engines `model.json`
+   lists are started and wait, ready, for the calls (`workers_started`): together at most `compute.workers.max`,
+   shared out in engine-id order. After every refresh, a pool whose engine is no longer listed, or whose fingerprint
+   changed, is closed and replaced, so that a worker never runs other code than its fingerprint names. An engine
+   that does not load or start is `workers_failed`, with its errors, and is tried again after the next refresh.
+4. **The refresh**, when the window has ended, and at once when a watch starts without `watch.json`:
+   - *the import hook:* the snapshot's bytes are copied once, named by their sha256, to `snapshots/<sha256>.json` of
+     the watch folder, and the run reads that copy, so a snapshot rewritten meanwhile cannot reach it half written.
+     Today the source is the file a person or an agent writes; later a read-only export of the Runtime's observer
+     interface can be one;
+   - *the run,* as `run` does, through the cache: only what the changes reach is computed again, and the outputs
+     are kept under `runs/<run id>/` (Cache);
+   - *the delivery candidate* (below).
+
+   The event `refreshed` holds `run_id`, `outputs` (the run's `outputs.json`), `work`, the `errors` of the blocked
+   outputs, the cache's `warnings`, and `exports`: `staged`, `unchanged` or `refused` (with `export_errors`), with
+   `candidate`. A model, state or snapshot that does not read is `refresh_failed`, with its errors: the watch goes
+   on, and the next change refreshes again.
+
+**Delivery candidates.** A candidate holds the files `export thresholds` and `export tables` would write for the
+run, built by the exports themselves with the same refusals: `model/<path>` relative to the model folder
+(`out/thresholds.json` and the provenance files) and `repo/tables/<table_id>.json`. The scoring documents are not
+part of it while `export scoring` writes nothing. A candidate is staged only when its files differ from the last
+one's (the event `staged`), as `candidates/<number>/` of the watch folder (six digits, one above the highest there),
+written in a temporary folder beside it and then renamed:
+
+| Path | Holds |
+|---|---|
+| `files/<name>` | each file of the candidate |
+| `diff.json` | `acmodel.watch.diff.v1`: `from` (the last candidate's number; null when there is none or its folder is gone), `to`, and `files`: each file `added`, `removed` or `changed`, with `name`, `change`, the sha256 `before` and `after` and, for a changed JSON file, the JSON `pointer` of its first difference |
+| `summary.json` | `acmodel.watch.candidate.v1`: `number`, `previous`, `staged_at` (local time), `model`, `model_id`, `state` (`source`, `imported`, `label`), `run_id`, `sha256` (over the files' names and sha256s) and `files` (each `name`, `sha256`, `bytes`) |
+
+Its tables are not validated yet: a person or an agent delivers a candidate by running the exports into the
+repository (`export tables` validates each table with the Runtime's validator) and opening the pull request.
+
+**The watch folder** is `<paths.state_root>/watch/<id>/`. The id is the first 16 hex digits of the sha256 of the
+canonical JSON `{"model": <model folder>, "state": <state file>}` (real paths), so the same command line finds it
+again.
+
+| Path | Holds |
+|---|---|
+| `events.jsonl` | the event log, only ever appended to: one line of canonical JSON per event, `acmodel.watch.event.v1` with `at` (local time, to the millisecond), `event` and its values. Each event also goes to stderr as one line |
+| `watch.json` | `acmodel.watch.v1`: `model`, `state`, `files` (each watched file as the last refresh saw it: `size`, `mtime_ns`, `sha256`), `last` (`run_id`, and the imported snapshot as `state`) and `candidate` (`number`, `sha256`); written after every refresh, as a temporary file beside it and then a rename |
+| `snapshots/<sha256>.json` | the imported snapshots |
+| `candidates/<number>/` | the delivery candidates |
+| `workers/scratch/`, `workers/logs/` | the engine workers' scratch folders and logs (Engine host) |
+
+The events: `started` (`resumed`, `run_id`, `candidate`), `changed` (`files`), `paused` (`reasons`), `resumed`,
+`workers_started` (`engines`, `workers`), `workers_stopped` (`workers`), `workers_failed` (`errors`), `refreshed`,
+`refresh_failed` (`errors`), `staged` (`candidate`, `path`, `from`, `changed`), `stopped` and `failed` (`errors`).
+
+**Resume after a restart.** A watch that finds `watch.json` resumes from it: a file whose size and time are as
+recorded is not read again, and when nothing changed meanwhile, nothing is computed and the cache is not opened.
+Otherwise the changes open a window as usual, and the refresh reuses every cached node they do not reach. A
+`watch.json` that does not read as `acmodel.watch.v1` for this model and state is `watch_failed` (`resume`, exit 1),
+and it is never replaced.
+
+**Failures.** The watch's own (`watch_failed`: `scan`, `journal`, `stage`, `resume`), the cache's
+(`cache_unavailable`) and the host's (`host_job_not_applied`, `host_priority_not_applied`, `host_reading_failed`)
+end it: the event `failed`, every worker stopped, and the envelope with the error. `watch_failed` (`import`) fails
+only that refresh.

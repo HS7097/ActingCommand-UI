@@ -16,7 +16,9 @@ from acmodel.core import run_economy, run_model
 from acmodel.core.provenance import explain
 from acmodel.envelope import Failure, build, error, write
 from acmodel.export import Validator, export_scoring, export_tables, export_thresholds
+from acmodel.host import windows
 from acmodel.system import System
+from acmodel.watch.watcher import Watcher
 
 # Each command (one word, or a group and a word): the names of its positional arguments, then its options;
 # all are required, and each option takes one value.
@@ -35,6 +37,7 @@ COMMANDS = {
     "cache stats": ((), ()),
     "cache verify": ((), ()),
     "cache gc": ((), ()),
+    "watch": (("model",), ("--state",)),
 }
 GROUPS = {name.split(" ")[0] for name in COMMANDS if " " in name}
 # Flags: options that take no value, each optional and given at most once.
@@ -50,7 +53,8 @@ USAGE = (
     "          export scoring <model folder or model.json> --state <state file>,\n"
     "          bindings check <model folder or model.json> --state <state file> [--strict],\n"
     "          bindings apply <model folder or model.json> --state <state file>,\n"
-    "          cache stats, cache verify, cache gc [--apply]\n"
+    "          cache stats, cache verify, cache gc [--apply],\n"
+    "          watch <model folder or model.json> --state <state file>\n"
 )
 
 
@@ -222,6 +226,19 @@ def _bindings(command: str, args: list[str], cfg: config.Config, system: System)
     return apply_bindings(model, state, datasets=cfg.datasets, max_bits=cfg.expr_max_bits, unknowns=cfg.unknowns)
 
 
+def _watch(args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
+    """Automatic refresh until interrupted. The tool takes its host caps first (priority and Job object), so that
+    every engine worker it starts is inside them."""
+    packages = _dependencies(system)
+    host = windows.current(system.platform)
+    host.apply(cfg.host)
+    watcher = Watcher(
+        Path(args[0]), Path(args[1]), cfg=cfg, libraries=cache.libraries(system.python_version, packages), host=host,
+        workers_os=host, stderr=system.stderr,
+    )
+    return watcher.run()
+
+
 def main(argv: Sequence[str], system: System) -> int:
     command = None
     errors: list[dict[str, Any]] = []
@@ -252,6 +269,8 @@ def main(argv: Sequence[str], system: System) -> int:
             data = _export_tables(args, cfg, system)
         elif command == "export scoring":
             data = _export_scoring(args, cfg, system)
+        elif command == "watch":
+            data = _watch(args, cfg, system)
         else:
             data, errors = _cache(command, args, cfg, system)
     except Failure as failure:

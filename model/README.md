@@ -11,7 +11,8 @@ rates from samples), its cache with incremental recompute (`cache`), provenance
 (`explain`), the exports (`export thresholds`, `export tables`, `export scoring`) with their export policy, the
 bindings of thresholds to the schedule
 (`bindings check`, `bindings apply`), the economy's LP and MILP (`economy`) and the engine host, which runs
-engines kept outside this repository in worker processes of its own. The other computation commands come in later slices.
+engines kept outside this repository in worker processes of its own, and the automatic refresh (`watch`). The other
+computation commands come in later slices.
 
 ## Needs
 
@@ -49,6 +50,7 @@ model\acmodel.cmd bindings apply <resource repo>\ours\model --state <state snaps
 model\acmodel.cmd cache stats
 model\acmodel.cmd cache verify
 model\acmodel.cmd cache gc [--apply]
+model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
 ```
 
 - **`check`** reads a model (its folder or its `model.json`) and checks it without computing anything:
@@ -109,6 +111,16 @@ model\acmodel.cmd cache gc [--apply]
 - **`bindings apply`** writes the bound literals that differ, and changes only their bytes: line ends
   (CRLF files stay CRLF) and formatting are kept. It refuses what `check` refuses, other than a differing
   value, and then writes nothing (`contracts/formats.md`, "Bindings").
+- **`watch`** keeps a model's outputs for one state up to date while it runs. It is long-lived: Task Scheduler
+  or WMI starts it, never an agent session, and an interrupt ends it. Every `watch.poll_interval_ms` it scans the
+  model, the preference layer, the datasets and the state snapshot by size and modification time, and hashes
+  what changed, so a rewrite of the same bytes changes nothing. A change opens a window of `watch.debounce_ms`;
+  at its end one refresh imports the snapshot, runs the model through the cache and, when the export files
+  differ from the last candidate's, stages them as a delivery candidate with a summary and a diff under the
+  state root. It never commits and never writes into a repository: a person or an agent delivers a candidate.
+  Engine workers stay started between refreshes (`watch.keep_workers_warm`) and are stopped while the host gate
+  holds. Each step goes to an event log, and a restart resumes from `watch.json` and the cache without computing
+  what did not change (`contracts/cli.md`, "Automatic refresh").
 - **Re-dispatch.** The launcher re-runs itself under the venv's Python, and the exit status is passed
   through.
 - **Dependency check.** Before every command except `setup`, the launcher checks that the interpreter
@@ -182,6 +194,9 @@ default:
   (7) its days.
 - **Exports.** `paths.actinglab` (no default) is the Runtime's validator that `export tables` runs, an
   `actinglab` from a Runtime build or release; `export.validator_timeout_ms` (120000) bounds each run of it.
+- **Automatic refresh.** `watch.poll_interval_ms` (5000) is how often `watch` scans, `watch.debounce_ms` (5000)
+  the window a change opens, and `watch.keep_workers_warm` (true) keeps the engine workers started between
+  refreshes.
 
 ## Tests
 
@@ -214,7 +229,8 @@ src/acmodel/          the package: model/ the strict readers, expr/ the expressi
                       the bindings check and apply with their position-tracking scanner, host/ the
                       host caps (priority, Job object, memory gates, quiet windows, PAUSE file),
                       engine/ the engine host (manifest and fingerprint, workers, guards, the cached
-                      call and the verify sample)
+                      call and the verify sample), watch/ the automatic refresh (scan, import hook,
+                      event log and watch.json, delivery candidates, warm workers)
 tests/                pytest tests with fakes; fakes/ holds the neutral fake engine and the fake
                       validator script
 ```
