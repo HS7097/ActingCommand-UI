@@ -140,6 +140,12 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | `lp.grain` | 1 | the grain of every amount: the step of the economy's price re-solves, and how far below a read cap a plan's collection must start; at least 1 |
 | `search.milp_node_limit` | 100000 | the most nodes the plan's MILP may explore before it stops unproven (`search_budget_exhausted`); the only budget, never a time; 1 to 2<sup>31</sup> − 1 |
 | `economy.plan_horizon` | 7 | the steps (days) of an account's plan; at least 1 |
+| `search.top_k` | 32 | the rows of each team, first by screen score, that the generic search evaluates first (`formats.md`, "The search") |
+| `search.exact_max` | 5000 | the search proves its result by evaluating every legal row when all teams have at most this many together; 0: never |
+| `search.node_limit` | 100000 | the most team rows one search evaluates, and the most nodes of each assignment of two or more disjoint teams; reaching it is `search_budget_exhausted` (`proven: false`); the only budget, never a time |
+| `search.screen_scale` | 1000000 | the scale at which the engine's predict terms are rounded (half to even) to the 64-bit integers of the screen |
+| `search.screen_chunk_rows` | 1048576 (2<sup>20</sup>) | the rows of a team's slot product that the screen takes per chunk; it never changes a result |
+| `search.screen_max_rows` | 8388608 (2<sup>23</sup>) | the most rows a team's slot product may have; beyond it the search is refused before it enumerates anything (`search_failed`, `space_too_large`) |
 | `sensitivity.top_n` | 5 | how many unknowns each output's `sensitivity` lists (`formats.md`, "Unknowns") |
 | `unknowns.scale` | 1000 | the export precision that the no-effect rule (on the sound range) and the impacts are measured at: a value counts as value × scale rounded half to even (1000: milli) |
 | `unknowns.samples` | 0 | the Monte Carlo samples of the distributions per output; 0, the default, samples nothing; at most 2<sup>63</sup> − 1 |
@@ -151,8 +157,8 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | `random.max_transitions` | 1000000 | the most transitions (pulls × pity counts × guarantee states) a pity chain may need; beyond it is `expr_eval_failed` (`budget_exceeded`) |
 | `random.enclosure_digits` | 12 | the decimals of the enclosure that carries a random rule's value whose numerator or denominator exceeds `expr.max_bits` (`formats.md`, "Random rules"); 1 to 30 |
 
-All the numbers are integers of at least 1, unless their row says otherwise (`unknowns.samples` and
-`unknowns.seed` may be 0).
+All the numbers are integers of at least 1, unless their row says otherwise (`unknowns.samples`,
+`unknowns.seed` and `search.exact_max` may be 0).
 
 ```json
 {"schema_version": "acmodel.config.v1", "paths": {"venv": "<absolute path>"}, "compute": {"blas_threads": 1}, "expr": {"max_bits": 127}}
@@ -309,7 +315,8 @@ code. The `PAUSE` file covers one-off pauses.
 The engine host is `src/acmodel/engine/` (#424 design-py section 7). It runs the battle and team engines,
 which live outside this repository, in the tool's own worker processes; the main process never imports
 engine code. The manifest `engine.json` and the interface `acmodel.engine.v2` are in `formats.md`
-("Engines"). No command uses engines yet; the search (PY-13) and `watch` (PY-15) will.
+("Engines"). No command uses engines yet. The generic search (`src/acmodel/core/search.py`, `formats.md` "The
+search") calls them through this host, and `watch` (PY-15) will.
 
 **Where an engine is.** `engines.roots` maps the engine id to its home, the folder with `engine.json`. An
 engine the configuration does not name is `engine_not_configured` (exit 3); the tool never guesses.

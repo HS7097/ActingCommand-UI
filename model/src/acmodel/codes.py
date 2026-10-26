@@ -50,7 +50,8 @@ LP_INFEASIBLE = "lp_infeasible"
 LP_NUMERIC_CHECK_FAILED = "lp_numeric_check_failed"
 LP_SOLVE_FAILED = "lp_solve_failed"
 LP_DUAL_DISAGREES = "lp_dual_disagrees"  # acmodel economy: a warning, the price stands
-SEARCH_BUDGET_EXHAUSTED = "search_budget_exhausted"  # acmodel economy: a warning, the plan unproven
+SEARCH_BUDGET_EXHAUSTED = "search_budget_exhausted"  # a warning: the economy's plan or the search unproven
+SEARCH_FAILED = "search_failed"
 
 EXIT_OK = 0
 
@@ -104,4 +105,5 @@ EXIT_STATUS = {
     LP_SOLVE_FAILED: 1,
     LP_DUAL_DISAGREES: 0,
     SEARCH_BUDGET_EXHAUSTED: 0,
+    SEARCH_FAILED: 1,
 }
