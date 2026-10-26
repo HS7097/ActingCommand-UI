@@ -25,7 +25,7 @@ DEFAULT_EXPR_MAX_BITS = 127
 
 _MEMBERS = {
     "schema_version": None,
-    "paths": {"venv", "state_root"},
+    "paths": {"venv", "state_root", "datasets"},
     "compute": {"blas_threads", "priority", "job"},
     "expr": {"max_bits"},
     "host": {"memory", "cpu", "quiet_windows", "pause_file", "pause_poll_ms"},
@@ -37,6 +37,7 @@ class Config:
     path: Path
     venv: Path
     state_root: Path
+    datasets: Path
     blas_threads: int
     expr_max_bits: int
     host: host_caps.HostCaps
@@ -132,6 +133,7 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         path=path,
         venv=_absolute(paths, "venv", root / "venv", path),
         state_root=state_root,
+        datasets=_absolute(paths, "datasets", root / "datasets", path),
         blas_threads=threads,
         expr_max_bits=max_bits,
         host=host_caps.read(compute, _section(doc, "host", path), state_root, invalid),

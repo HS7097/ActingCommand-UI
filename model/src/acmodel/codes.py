@@ -14,6 +14,18 @@ EXPR_PARSE_ERROR = "expr_parse_error"
 EXPR_DIMENSION_MISMATCH = "expr_dimension_mismatch"
 EXPR_OVERFLOW = "expr_overflow"
 EXPR_EVAL_FAILED = "expr_eval_failed"
+MODEL_ID_DUPLICATE = "model_id_duplicate"
+RULE_REFERENCE_MISSING = "rule_reference_missing"
+DATA_REFERENCE_MISSING = "data_reference_missing"
+STATE_REFERENCE_MISSING = "state_reference_missing"
+RULE_PROVENANCE_MISSING = "rule_provenance_missing"
+RULE_STATUS_INVALID = "rule_status_invalid"
+RULE_CONFLICT = "rule_conflict"
+RULE_CYCLE = "rule_cycle"
+RULE_PENDING_UNBOUNDED = "rule_pending_unbounded"
+RULE_PREF_MISPLACED = "rule_pref_misplaced"
+DATA_EXTERNAL_MISSING = "data_external_missing"
+DATA_EXTERNAL_HASH_MISMATCH = "data_external_hash_mismatch"
 HOST_GATE_PAUSED = "host_gate_paused"
 HOST_JOB_NOT_APPLIED = "host_job_not_applied"
 HOST_PRIORITY_NOT_APPLIED = "host_priority_not_applied"
@@ -33,6 +45,18 @@ EXIT_STATUS = {
     EXPR_DIMENSION_MISMATCH: 1,
     EXPR_OVERFLOW: 1,
     EXPR_EVAL_FAILED: 1,
+    MODEL_ID_DUPLICATE: 1,
+    RULE_REFERENCE_MISSING: 1,
+    DATA_REFERENCE_MISSING: 1,
+    STATE_REFERENCE_MISSING: 1,
+    RULE_PROVENANCE_MISSING: 1,
+    RULE_STATUS_INVALID: 1,
+    RULE_CONFLICT: 1,
+    RULE_CYCLE: 1,
+    RULE_PENDING_UNBOUNDED: 1,
+    RULE_PREF_MISPLACED: 1,
+    DATA_EXTERNAL_MISSING: 1,
+    DATA_EXTERNAL_HASH_MISMATCH: 1,
     HOST_GATE_PAUSED: 4,
     HOST_JOB_NOT_APPLIED: 4,
     HOST_PRIORITY_NOT_APPLIED: 4,

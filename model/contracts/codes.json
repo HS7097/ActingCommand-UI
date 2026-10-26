@@ -39,6 +39,53 @@
       },
       "description": "The configuration cannot be used: LOCALAPPDATA is unset or not absolute (location_invalid), or config.json cannot be read, is not UTF-8 JSON, repeats a key, has an unknown or missing member, or a value of the wrong type. The error's ref is the JSON pointer of the member."
     },
+    "data_external_hash_mismatch": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "sha256": {"type": "token", "required": true},
+        "found": {"type": "token", "required": true},
+        "dataset": {"type": "path", "required": true}
+      },
+      "description": "acmodel check: the local copy of a data table's external dataset (dataset, the file named by its sha256 under paths.datasets) does not hash to the declared sha256; found is its sha256. path is the data file; the error's ref is /external/sha256."
+    },
+    "data_external_missing": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "sha256": {"type": "token", "required": true},
+        "source": {"type": "token", "required": true},
+        "dataset": {"type": "path", "required": true},
+        "exception_type": {"type": "name", "required": false},
+        "raw_text": {"type": "raw_text", "required": false}
+      },
+      "description": "acmodel check: a data table declares an external dataset, and its local copy (dataset, the file named by its sha256 under paths.datasets) is absent or cannot be read (exception_type, raw_text). Fetching it is the data side's work; the tool only verifies. path is the data file; the error's ref is /external."
+    },
+    "data_reference_missing": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "missing": {
+          "type": "vocab",
+          "required": true,
+          "members": ["table", "column", "row"]
+        },
+        "table": {"type": "token", "required": true},
+        "column": {"type": "token", "required": false},
+        "key": {"type": "list:token", "required": false},
+        "position": {"type": "integer", "required": false}
+      },
+      "description": "acmodel check: a data reference (data:<table>[<key>].<column>, a data set, or lookup) names a table no data file of the model holds, a column the table does not declare, or a key that matches no inline row or has the wrong number of parts (row). path is the file of the expression; the error's ref is the JSON pointer of the expression and position the character offset of the reference."
+    },
     "deps_invalid": {
       "category": "error",
       "exit": 2,
@@ -113,9 +160,10 @@
           "members": ["character_invalid", "number_malformed", "token_unexpected", "end_unexpected", "reference_kind_unknown", "reference_malformed", "member_unbound", "function_unknown", "arity_invalid", "argument_invalid"]
         },
         "position": {"type": "integer", "required": true},
-        "token": {"type": "token", "required": false}
+        "token": {"type": "token", "required": false},
+        "path": {"type": "path", "required": false}
       },
-      "description": "An expression does not parse (grammar in expr/syntax.py): a character outside the language, a malformed number, an unexpected token or end, an unknown reference kind, a malformed reference (or a set where a value is needed), the member key $ outside a sum or count over its set, an unknown function, a wrong number of arguments, or an argument of the wrong form. position is the character offset; token is the offending text. The error's ref is the JSON pointer of the expression."
+      "description": "An expression does not parse (grammar in expr/syntax.py): a character outside the language, a malformed number, an unexpected token or end, an unknown reference kind, a malformed reference (or a set where a value is needed), the member key $ outside a sum or count over its set, an unknown function, a wrong number of arguments, or an argument of the wrong form. position is the character offset; token is the offending text. The error's ref is the JSON pointer of the expression; acmodel check adds path, the file that holds it."
     },
     "host_gate_paused": {
       "category": "error",
@@ -236,6 +284,149 @@
       },
       "description": "An input file of the model (model, rules, data, sources, state, preference defaults) is refused by its strict reader (contracts/formats.md). The error's ref is the JSON pointer of the value (the empty pointer for the whole file); path is the file and format the reader. JSON level: unreadable, bom_present, utf8_invalid (offset), syntax_invalid (line, column), key_duplicate (the repeated key), float_literal, constant_invalid (NaN, Infinity), integer_out_of_range (beyond +-(2^53-1)), string_invalid (a lone surrogate). Shape: type_invalid (expected types), member_unknown, member_missing, member_conflict (two of members that exclude each other; expected lists them), value_invalid (expected values), id_invalid (the id grammar). One error per problem; literal is the offending text."
     },
+    "model_id_duplicate": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "namespace": {
+          "type": "vocab",
+          "required": true,
+          "members": ["model", "table", "row", "source", "engine"]
+        },
+        "id": {"type": "token", "required": true},
+        "first_path": {"type": "path", "required": true},
+        "first_ref": {"type": "token", "required": true}
+      },
+      "description": "acmodel check: an id is declared twice in one namespace. model: entities, periods, rules and unknowns share one; table: data tables; row: the keys of one table's rows (id joins the key parts with commas); source: sources.json; engine: model.json engines. path and the error's ref are the second declaration, first_path and first_ref the first, which references resolve to."
+    },
+    "rule_conflict": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "id": {"type": "token", "required": true},
+        "conflicts_with": {"type": "token", "required": true},
+        "kind": {"type": "token", "required": true},
+        "subject": {"type": "token", "required": true},
+        "slot": {"type": "token", "required": false}
+      },
+      "description": "acmodel check: two active rules of the same kind hold the same subject and slot (contracts/formats.md lists the slot of each kind; slot is cap_kind for cap and per for limit), and neither supersedes the other. id is the later rule, conflicts_with the earlier; the error's ref is the later rule."
+    },
+    "rule_cycle": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "members": {"type": "list:token", "required": true},
+        "via": {
+          "type": "vocab",
+          "required": true,
+          "members": ["reference", "supersedes"]
+        }
+      },
+      "description": "acmodel check: rules and unknowns that depend on each other in a loop (via reference: through their expressions, flow functions and gate requirements) or that supersede each other in a loop (via supersedes). members are the loop's nodes, sorted (rule:<id>, unknown:<id> or unknown:<id>.<member>); path and the error's ref point at the first member's first link into the loop."
+    },
+    "rule_pending_unbounded": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "id": {"type": "token", "required": true},
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["no_unknown", "unknown_unbounded"]
+        },
+        "unknowns": {"type": "list:token", "required": false},
+        "position": {"type": "integer", "required": false}
+      },
+      "description": "acmodel check: a pending rule names no unknown (no_unknown; ref is its status), or only unknowns without a range form (unknown_unbounded; ref is its status), or a rule or unknown references an unknown without a range form in an expression (unknown_unbounded; ref is the expression, position the reference). Without a range, everything that needs it is blocked."
+    },
+    "rule_pref_misplaced": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "id": {"type": "token", "required": true},
+        "kind": {"type": "token", "required": true},
+        "reference": {"type": "token", "required": true},
+        "position": {"type": "integer", "required": true}
+      },
+      "description": "acmodel check: an expression reads a preference (pref:<key>) outside a gate rule or an objective's terms (#424 design D-2). id and kind are the rule or unknown (kind unknown) that holds it; the error's ref is the JSON pointer of the expression and position the character offset of the reference."
+    },
+    "rule_provenance_missing": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "entry": {
+          "type": "vocab",
+          "required": true,
+          "members": ["rule", "unknown", "row", "table"]
+        },
+        "id": {"type": "token", "required": true}
+      },
+      "description": "acmodel check: a rule, an unknown, a data row or a data table has an empty provenance list, or a data row has none and its table gives none. id is the entry's id (a row's key parts joined with commas, a table's id); the error's ref is the empty list, or the row."
+    },
+    "rule_reference_missing": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "target": {"type": "token", "required": true},
+        "expected": {"type": "list:token", "required": true},
+        "found": {"type": "token", "required": false},
+        "superseded_by": {"type": "token", "required": false},
+        "position": {"type": "integer", "required": false}
+      },
+      "description": "acmodel check: a reference to a declaration of the model does not resolve to one of the expected kinds (an entity kind, entity, rule, rule.<kind>, unknown, unknown_member, metric, engine, source or param): nothing has that id, it is of another kind (found), or it is a superseded rule (superseded_by), which is never read. The error's ref is the JSON pointer of the referring member or expression, and position the reference's character offset in an expression."
+    },
+    "rule_status_invalid": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "id": {"type": "token", "required": true},
+        "literal": {"type": "raw_text", "required": true},
+        "expected": {"type": "list:token", "required": true}
+      },
+      "description": "acmodel check: a status outside its closed set: confirmed, pending or provisional for rules and data rows; pending or provisional for unknowns. id is the entry's id; the error's ref is the status."
+    },
+    "state_reference_missing": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "missing": {
+          "type": "vocab",
+          "required": true,
+          "members": ["reading", "entity_class", "attribute"]
+        },
+        "target": {"type": "token", "required": true},
+        "entity_class": {"type": "token", "required": false},
+        "position": {"type": "integer", "required": false}
+      },
+      "description": "acmodel check: a reference into the account state does not resolve: a fact key (read:<fact>, live.fact, live.reference_fact) that no entity or active cap of the model declares as its reading, an entity class (entity:<class>) that is not an entity_class entity, or an attribute (target) that its class (entity_class) does not declare. The error's ref is the JSON pointer of the referring member or expression, and position the reference's character offset in an expression."
+    },
     "usage_invalid": {
       "category": "error",
       "exit": 2,
@@ -245,11 +436,11 @@
         "reason": {
           "type": "vocab",
           "required": true,
-          "members": ["command_missing", "command_unknown", "argument_unexpected"]
+          "members": ["command_missing", "command_unknown", "argument_missing", "argument_unexpected"]
         },
         "argument": {"type": "token", "required": false}
       },
-      "description": "The command line names no command, an unknown command, or an argument the command does not take. The usage text goes to stderr."
+      "description": "The command line names no command, an unknown command, or an argument the command does not take, or it lacks an argument the command needs (argument is the argument's name). The usage text goes to stderr."
     },
     "venv_failed": {
       "category": "error",
