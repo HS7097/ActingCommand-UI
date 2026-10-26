@@ -1,0 +1,8 @@
+{
+  "schema_version": "acmodel.model.v1",
+  "model_id": "example",
+  "files": {"rules": ["rules/a.json"], "data": ["data/costs.json"]},
+  "periods": [{"id": "day", "unit": "day", "reset_minute": 0, "utc_offset_minutes": 0}],
+  "numeraire": "res.a",
+  "engines": []
+}

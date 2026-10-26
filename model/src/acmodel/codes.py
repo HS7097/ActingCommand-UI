@@ -9,6 +9,7 @@ CONFIG_INVALID = "config_invalid"
 DEPS_INVALID = "deps_invalid"
 VENV_FAILED = "venv_failed"
 COMMAND_CRASHED = "command_crashed"
+MODEL_FILE_INVALID = "model_file_invalid"
 
 EXIT_OK = 0
 
@@ -19,4 +20,5 @@ EXIT_STATUS = {
     DEPS_INVALID: 2,
     VENV_FAILED: 1,
     COMMAND_CRASHED: 1,
+    MODEL_FILE_INVALID: 1,
 }

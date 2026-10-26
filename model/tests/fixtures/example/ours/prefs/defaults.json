@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "game": "example",
+  "schema": "ours/prefs/schema.md",
+  "note": "Neutral fixture in the shape of a resource repository's preference defaults.",
+  "defaults": {
+    "spend.real_money": "never",
+    "plan.order": "spend_first",
+    "plan.targets": []
+  },
+  "kinds": {
+    "spend.real_money": "safety",
+    "plan.order": "strategy",
+    "plan.targets": "strategy"
+  },
+  "neutral": {
+    "plan.order": "optimum",
+    "plan.targets": []
+  }
+}
