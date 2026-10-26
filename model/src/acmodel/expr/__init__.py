@@ -3,7 +3,8 @@
 Use: `parse(text, ref=...)`, then `check(expression, types)`, then
 `evaluate(checked, values, max_bits=config.expr_max_bits)`. The grammar is in `syntax`, the
 dimension rules in `dimensions`, and evaluation in `evaluate`. The model supplies references,
-sets, flows and lookups through the two environments; this package knows no model.
+sets, flows and lookups through the two environments; this package knows no model. A value that
+unknowns leave open is a sound enclosure, computed by the interval arithmetic of `interval`.
 
 Codes: `expr_parse_error`, `expr_dimension_mismatch`, `expr_overflow`, `expr_eval_failed`.
 """

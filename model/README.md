@@ -52,10 +52,12 @@ model\acmodel.cmd cache gc [--apply]
   computes its derived values and thresholds for one account state, exactly. An output that cannot be
   computed (a reading the state lacks, say) is blocked with its error; the others are still computed, and
   the exit status is 1 (`contracts/formats.md`, "The run").
-- **Unknowns.** An output that reads an unknown is computed at each of its points (each variant, the low and
-  high of an interval or distribution, each empirical value) and shows its range. It lists the unknowns with
-  the largest impact at milli, and only an unknown that changes it there makes it provisional. Distributions
-  can also be sampled (`unknowns.samples`), deterministically (`contracts/formats.md`, "Unknowns").
+- **Unknowns.** An output that reads a variants or empirical unknown is computed at each of its points; an
+  interval or a continuous distribution is computed by exact interval arithmetic. Its range is a sound
+  enclosure, never narrower than the true one: exact where a structural monotonic check proves it, and
+  marked otherwise. Only an output whose range moves at milli is provisional for its unknowns, and it lists
+  the unknowns with the largest impact. Distributions can also be sampled (`unknowns.samples`),
+  deterministically (`contracts/formats.md`, "Unknowns").
 - **Cache.** `run` keeps every computed node under the state root and computes again only what a change
   reaches: a node is reused while everything it read still hashes the same, and a node that comes out the
   same stops the change there. Each run gets a run id from its inputs, its outputs are kept under
@@ -127,9 +129,9 @@ default:
   - a pause while the host CPU load is above 90 %.
 
   `contracts/cli.md` (Host caps) has the details.
-- **Unknowns.** The keys under `unknowns`: `top_n` (5) unknowns listed per output, `scale` (1000, milli) the
-  export precision that impacts are measured at, and the Monte Carlo sampling of distributions: `samples` (0,
-  off), `seed` (0), `chunk_size` (1024) and `resolution` (1000000).
+- **Unknowns.** `sensitivity.top_n` (5) unknowns listed per output, and the keys under `unknowns`: `scale`
+  (1000, milli) the export precision of the no-effect rule and the impacts, and the Monte Carlo sampling of
+  distributions: `samples` (0, off), `seed` (0), `chunk_size` (1024) and `resolution` (1000000).
 
 ## Tests
 

@@ -124,8 +124,8 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | `host.quiet_windows` | `[]` | local-time windows without compute (see Host caps) |
 | `host.pause_file` | `<paths.state_root>\PAUSE` | while this file exists, the gate holds; an absolute path |
 | `host.pause_poll_ms` | 5000 | how often a waiting gate checks again, in milliseconds |
-| `unknowns.top_n` | 5 | how many unknowns each output's `sensitivity` lists (`formats.md`, "Unknowns") |
-| `unknowns.scale` | 1000 | the export precision that impacts, and with them the no-effect rule, are measured at: a value counts as value × scale rounded half to even (1000: milli) |
+| `sensitivity.top_n` | 5 | how many unknowns each output's `sensitivity` lists (`formats.md`, "Unknowns") |
+| `unknowns.scale` | 1000 | the export precision that the no-effect rule (on the sound range) and the impacts are measured at: a value counts as value × scale rounded half to even (1000: milli) |
 | `unknowns.samples` | 0 | the Monte Carlo samples of the distributions per output; 0, the default, samples nothing; at most 2<sup>63</sup> − 1 |
 | `unknowns.seed` | 0 | the first word of each Philox key (the second is the unknown's stream id); 0 to 2<sup>64</sup> − 1 |
 | `unknowns.chunk_size` | 1024 | the samples drawn per Philox call; it never changes a result |
@@ -173,11 +173,13 @@ what needed it.
   (`python` minor version, `numpy`, `scipy`; none of the derivation kinds declares one). So bumping one
   kind, or a library one kind declares, recomputes only the nodes of that kind; their dependents are reused
   when the value comes out the same.
-- **Sampled nodes.** The Monte Carlo tallies of an output (kind `sampled`, `formats.md`, "Unknowns") declare
-  `numpy` and the `python` minor version, and their spec adds the keys under `unknowns` but `chunk_size`, which
-  changes no result. Their trace is everything the samples read: the output itself, and each node and leaf
-  that the computation at the samples reads, so a change inside a distribution that leaves its points as they
-  are still computes them again.
+- **Sampled and impacts nodes.** The Monte Carlo tallies of an output (kind `sampled`, `formats.md`,
+  "Unknowns") declare `numpy` and the `python` minor version, and their spec adds the keys under `unknowns`
+  and `sensitivity` but `chunk_size`, which changes no result. The impacts of the continuous unknowns of an
+  output that computes with more than one (kind `impacts`) add `unknowns.scale`. The trace of either is
+  everything its computations read: the output itself, and each node and leaf that the computation at the
+  samples or at the held ends reads, so a change inside a distribution that leaves its enclosure as it is still
+  computes the samples again.
 - A **node key** is the sha256 of the spec hash and the sorted (input, value hash) pairs of its trace.
 
 **Verifying traces.** A node is reused when one of its traces, the most recently used first, still holds:
@@ -192,7 +194,7 @@ it intact, so they are reused.
 inputs: the rules version (`model.json`, `sources.json` and the rule files) and the data version (the data
 files), each over [path relative to the model folder, document] sorted by path; `exports.json`; the whole
 state snapshot; the preference defaults when the model reads them; the engine fingerprints (none yet);
-`expr.max_bits` and the keys under `unknowns` but `chunk_size`; and the paths of the model and the state,
+`expr.max_bits`, `sensitivity.top_n` and the keys under `unknowns` but `chunk_size`; and the paths of the model and the state,
 which the outputs name. Equal inputs give equal run ids.
 
 **Work counters** (`data.work` of `run`): `nodes` (computed plus reused), `computed`, `reused`, `cutoff`

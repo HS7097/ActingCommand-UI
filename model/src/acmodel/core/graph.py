@@ -8,24 +8,28 @@
 - ("flow", id, "consumes" | "produces", resource) and ("flow", id, "moves"): the amounts of a flow, which
   `cost`, `yield` and `max_single_income` read;
 - ("member", unknown id, member): a member of a variants unknown;
-- ("point", unknown id): an interval or distribution unknown at its points (`core.unknown`);
+- ("point", unknown id): an interval or distribution unknown (`core.unknown`): an empirical one per value,
+  a continuous one as its enclosure;
 - ("threshold", id): a threshold of exports.json;
 - ("general", <a rule, flow, member or point key>): that node from the rules and the data only, which
   `max_single_income` reads. It never reads the account state; a node that would need it is marked so
   (`needs_state`), and so is every such node that reads it;
+- ("impacts", <an output's key>): the impacts of the continuous unknowns of an output that computes with more
+  than one, each with the others held at their ends (`_SubGraph`);
 - ("sampled", <an output's key>): with `unknowns.samples`, the Monte Carlo tallies of an output that reads a
-  distribution (`_SampleGraph`).
+  distribution (`_SubGraph`).
 
-**Scenarios.** A node that reads an unknown has one value per point of it: each variant, or the points of
-an interval or distribution (`core.unknown`). The choices are found as the evaluation reaches them, so a
-node depends only on the unknowns its value actually reads.
+**Scenarios.** A node that reads a discrete unknown (variants, empirical) has one value per point of it. The
+choices are found as the evaluation reaches them, so a node depends only on the unknowns its value actually
+reads. A continuous unknown (interval, uniform, triangular) is one enclosure: a value it reaches is computed
+by interval arithmetic (`expr.interval`), a sound enclosure that is exact where the monotonic check proves it.
 
 **Status.** A scenario's status is the worst of what it read: a rule's or data row's status, a reading
-(confirmed). An unknown is judged by its effect instead (`core.unknown`, the no-effect rule): a scenario
-records the unknowns it chose and those it depends on without choosing them (`unresolved`: what a pending
-rule names, and the points a maximum ran over), and an output is provisional when one of them changes it at
-export precision. A node that cannot be computed is blocked with its errors, and so is every node that
-reads it; the others are still computed.
+(confirmed). An unknown is judged by its effect instead (`core.unknown`, the no-effect rule, on the sound
+range): a scenario records the discrete unknowns it chose, the continuous ones it computed with (`free`) and
+those it depends on without reading them (`unresolved`: what a pending rule names, and the points a maximum
+ran over). A node that cannot be computed is blocked with its errors, and so is every node that reads it; the
+others are still computed.
 
 **Reads.** A scenario also records what its value read (`provenance` assembles the tree from them): the
 graph nodes, and these, each a tuple of strings:
@@ -52,6 +56,7 @@ A state value is depended on before its presence is checked, so a missing one is
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import time
@@ -85,16 +90,22 @@ from acmodel.core.common import (
 )
 from acmodel.core.types import Typed
 from acmodel.core.unknown import (
+    IMPACTS_FORMAT,
+    PINS,
     SAMPLED_FORMAT,
+    Impacts,
     Sampled,
     bounds,
     check_range,
+    continuous,
     decode_tallies,
     encode_tallies,
-    family,
+    enclosure,
+    exact,
     pick,
     points,
     quantize,
+    read,
     render_sampled,
     rule_status,
     sample,
@@ -104,27 +115,33 @@ from acmodel.core.unknown import (
     tallies,
     tally,
     unsupported,
+    widths,
     words,
 )
 from acmodel.envelope import Failure, error
 from acmodel.expr import Call, Duration, Reference, Value, evaluate
+from acmodel.expr import interval
+from acmodel.expr.interval import Interval, Undecided, is_open
 from acmodel.model import readers
 
 if TYPE_CHECKING:
     from acmodel.cache.session import Session
 
 # The kinds of graph node (the first part of a node's key); every other first part names a leaf.
-NODE_KINDS = ("rule", "general_logic", "offset", "flow", "member", "point", "threshold", "general", "sampled")
+NODE_KINDS = (
+    "rule", "general_logic", "offset", "flow", "member", "point", "threshold", "general", "sampled", "impacts",
+)
 
 
 @dataclass(frozen=True)
 class Scenario:
-    unknowns: tuple[tuple[str, str], ...]  # (unknown id, point), sorted; empty when none was read
-    value: Value
+    unknowns: tuple[tuple[str, str], ...]  # (discrete unknown id, point), sorted; empty when none was read
+    value: Value  # an enclosure (`Interval`) or an undecided boolean when continuous unknowns leave it open
     status: str  # confirmed or provisional, from what the value read other than unknowns
     per_account: bool  # the value read the account state
     reads: tuple[tuple[str, ...], ...] = ()  # what the value read, in the order it was read
-    unresolved: tuple[str, ...] = ()  # unknowns the value depends on without choosing them, sorted
+    unresolved: tuple[str, ...] = ()  # unknowns the value depends on without reading them, sorted
+    free: tuple[str, ...] = ()  # the continuous unknowns the value computed with, sorted
 
 
 @dataclass(frozen=True)
@@ -152,12 +169,21 @@ def _encode_value(value: Value) -> Any:
         return value
     if type(value) is Duration:
         return {"seconds": str(value.seconds)}
+    if type(value) is Interval:
+        signs = [list(pair) for pair in value.signs]
+        return {"low": _encode_value(value.low), "high": _encode_value(value.high), "signs": signs}
+    if type(value) is Undecided:
+        return {"undecided": list(value.unknowns)}
     return str(value)
 
 
 def _decode_value(raw: Any) -> Value:
     if type(raw) is bool:
         return raw
+    if type(raw) is dict and "signs" in raw:
+        return Interval(_decode_value(raw["low"]), _decode_value(raw["high"]), _tuples(raw["signs"]))
+    if type(raw) is dict and "undecided" in raw:
+        return Undecided(tuple(raw["undecided"]))
     if type(raw) is dict:
         return Duration(Fraction(raw["seconds"]))
     return Fraction(raw)
@@ -190,23 +216,45 @@ def _magnitude(value: Value) -> Any:
     return value.seconds if type(value) is Duration else value
 
 
+_ROUNDING = {"floor": math.floor, "ceil": math.ceil, "half_even": round}
+
+
 def _rounded(mode: str | None, value: Value) -> Value:
-    if mode is None or type(value) is bool:
+    if mode is None or type(value) in (bool, Undecided):
         return value
+    if type(value) is Interval:  # rounding is non-decreasing: round both bounds
+        return interval.rounded(_ROUNDING[mode], value)
     number = _magnitude(value)
-    whole = Fraction(math.floor(number) if mode == "floor" else math.ceil(number) if mode == "ceil" else round(number))
+    whole = Fraction(_ROUNDING[mode](number))
     return Duration(whole) if type(value) is Duration else whole
 
 
 def _text(value: Value) -> str:
-    """A value as a token: an exact rational (`-250`, `7/2`; time in seconds), or `true` / `false`."""
+    """A value as a token: an exact rational (`-250`, `7/2`; time in seconds), or `true` / `false`; an
+    enclosure as `<low>..<high>`, an undecided boolean as `undecided`."""
     if type(value) is bool:
         return "true" if value else "false"
+    if type(value) is Interval:
+        return f"{_text(value.low)}..{_text(value.high)}"
+    if type(value) is Undecided:
+        return "undecided"
     return str(_magnitude(value))
 
 
 def _json(value: Value) -> Any:
+    """A single value as `run` shows it; an undecided boolean is null."""
+    if type(value) is Undecided:
+        return None
     return value if type(value) is bool else _text(value)
+
+
+def _order(value: Value) -> tuple[Any, Any]:
+    """A sort key of the values of one node: the low bound, then the high one (false 0, true 1, undecided
+    both)."""
+    if type(value) in (bool, Undecided):
+        return quantize(value, 1)
+    low, high, _ = interval.bounds(value)
+    return _magnitude(low), _magnitude(high)
 
 
 def _convert(spec: dict[str, Any], raw: Any) -> Any:
@@ -248,6 +296,7 @@ class _Environment:
         self.unknowns = unknowns
         self.status = status
         self.unresolved = set(unresolved)
+        self.free: set[str] = set()  # the continuous unknowns the value computes with
         self.per_account = False
         self.reads: dict[tuple[str, ...], None] = {}  # what the value read, once each, in order
 
@@ -268,6 +317,7 @@ class _Environment:
     def use(self, scenario: Scenario) -> Value:
         self.status = worst(self.status, scenario.status)
         self.unresolved.update(scenario.unresolved)
+        self.free.update(scenario.free)
         self.per_account = self.per_account or scenario.per_account
         return scenario.value
 
@@ -343,7 +393,7 @@ class _Environment:
         if function != "max_single_income":
             total: Value = Fraction(0)
             for key in parts:
-                total += self.node(key)
+                total = interval.add(total, self.node(key))
             return total
         return self.max_single_income(first, second, parts)
 
@@ -367,8 +417,8 @@ class _Environment:
                 self.read(("entry", key[1]))  # the income, which the storage cap bounds
                 found.append(bound)
                 continue
-            found.append(largest if bound is None else min(largest, bound, key=_magnitude))
-        return max(found, key=_magnitude)
+            found.append(largest if bound is None else interval.minimum([largest, bound]))
+        return interval.maximum(found)
 
     def largest(self, key: tuple[str, ...]) -> Value:
         """The largest value of node `key` over the points this scenario leaves open. The maximum chooses
@@ -376,7 +426,7 @@ class _Environment:
         scenarios = self.consistent(self.graph.result(key))
         self.read(key)
         self.unresolved.update(u for s in scenarios for u, _ in s.unknowns if u not in self.unknowns)
-        return max((self.use(s) for s in scenarios), key=_magnitude)
+        return interval.maximum([self.use(s) for s in scenarios])
 
     def store_bound(self, part: tuple[str, ...]) -> Value | None:
         """For a move out of a store: the largest value of the store's storage cap, from the rules and the
@@ -510,14 +560,16 @@ class Graph:
         self.thresholds = {threshold["id"]: threshold for threshold in exports["thresholds"]}
         self.max_bits = max_bits
         self.settings = settings  # the keys under `unknowns`
-        # The distribution unknowns that sampling draws, and the sample of each (`_SampleGraph` only).
+        # The distribution unknowns that sampling draws, and the sample of each (`_SubGraph` only).
         self.distributions = sorted(
             u.id for u in checker.unknowns
             if checker.entries.get(u.id) is u and u.kind == "distribution" and "distribution" in u.doc
             and unsupported(u) is None
         )
         self.words: dict[str, int] = {}
-        self.results: dict[tuple[str, ...], Result | Sampled] = {}
+        # The continuous unknowns held at one of their ends (`_SubGraph` only, for the impacts).
+        self.pins: dict[str, str] = {}
+        self.results: dict[tuple[str, ...], Result | Sampled | Impacts] = {}
         self.errors: list[dict[str, Any]] = []  # the root errors, each once
         self._seen: dict[str, int] = {}
         self.cache = cache
@@ -616,6 +668,8 @@ class Graph:
         spec_doc: dict[str, Any] = {"node": list(key), "max_bits": self.max_bits, "format": VALUE_FORMAT}
         if kind == "sampled":  # its value is its tallies, which these keys decide
             spec_doc.update(format=SAMPLED_FORMAT, unknowns=self.settings.keyed())
+        elif kind == "impacts":  # its value is in units of 1 / scale
+            spec_doc.update(format=IMPACTS_FORMAT, scale=self.settings.scale)
         spec = cache.spec(kind, spec_doc)
         hit = cache.lookup(kind, spec, self.current)
         if hit is not None:
@@ -634,20 +688,24 @@ class Graph:
         self.hashes[key] = cache.save(kind, spec, list(key), trace, blob, compute_us)
         return result
 
-    def encode(self, result: Result | Sampled) -> dict[str, Any]:
+    def encode(self, result: Result | Sampled | Impacts) -> dict[str, Any]:
         blocked = sorted((self.errors[index] for index in result.blocked_by), key=canonical_text)
         if isinstance(result, Sampled):
             return {"tallies": encode_tallies(result), "blocked": blocked}
+        if isinstance(result, Impacts):
+            return {"impacts": [list(pair) for pair in result.impacts], "blocked": blocked}
         scenarios = [
             {name: _encode_value(getattr(s, name)) if name == "value" else getattr(s, name) for name in VALUE_FORMAT["scenario"]}
             for s in result.scenarios
         ]
         return {"scenarios": scenarios, "blocked": blocked, "needs_state": result.needs_state}
 
-    def decode(self, kind: str, blob: bytes) -> Result | Sampled:
+    def decode(self, kind: str, blob: bytes) -> Result | Sampled | Impacts:
         doc = json.loads(blob)
         if kind == "sampled":
             return Sampled(decode_tallies(doc["tallies"]), self._register(doc["blocked"]))
+        if kind == "impacts":
+            return Impacts(_tuples(doc["impacts"]), self._register(doc["blocked"]))
         scenarios = tuple(
             Scenario(**{name: _decode_value(raw) if name == "value" else _tuples(raw) for name, raw in s.items()})
             for s in doc["scenarios"]
@@ -683,11 +741,13 @@ class Graph:
 
     # Nodes --------------------------------------------------------------------------------------
 
-    def compute(self, key: tuple[str, ...]) -> Result | Sampled:
+    def compute(self, key: tuple[str, ...]) -> Result | Sampled | Impacts:
         if key[0] == "threshold":
             return self.threshold(key[1])
         if key[0] == "sampled":
             return self.sampled(key[1:])
+        if key[0] == "impacts":
+            return self.impacts(key[1:])
         general = key[0] == "general"  # the same node from the rules and the data only
         if general:
             key = key[1:]
@@ -754,27 +814,32 @@ class Graph:
                 return self.blocked(failure.errors, owner.path)
             scenarios.append(Scenario(
                 tuple(sorted(unknowns)), _rounded(mode, value), env.status, env.per_account, tuple(env.reads),
-                tuple(sorted(env.unresolved)),
+                tuple(sorted(env.unresolved)), tuple(sorted(env.free)),
             ))
         return Result(tuple(sorted(scenarios, key=lambda scenario: scenario.unknowns)))
 
     def point(self, entry: Entry, general: bool) -> Result:
-        """An interval or distribution unknown at each of its points (`core.unknown`), or at its sample in a
-        `_SampleGraph`. Every bound is evaluated in each scenario and must be in order (`range_invalid`)."""
-        refs, word, empirical = bounds(entry), self.words.get(entry.id), family(entry) == "empirical"
+        """An interval or distribution unknown (`core.unknown`).
+        - An empirical one has a scenario per value; in a `_SubGraph` that samples it, the sample's value.
+        - A continuous one is its enclosure, after every bound is evaluated and found in order (`range_invalid`);
+          in a `_SubGraph`, its sample, or the end it is pinned at."""
+        refs, word, pin = bounds(entry), self.words.get(entry.id), self.pins.get(entry.id)
 
         def value_of(env: _Environment, unknowns: dict[str, str]) -> Value:
-            if word is not None:
-                name = pick(word, len(refs)) if empirical else None
-            elif entry.id not in unknowns:
-                raise _Branch(entry.id)
-            else:
-                name = unknowns[entry.id]
-            if empirical:
-                return env.evaluate(refs[name])
-            values = {bound: env.evaluate(ref) for bound, ref in refs.items()}
+            if not continuous(entry):
+                if word is not None:
+                    return env.evaluate(refs[pick(word, len(refs))])
+                if entry.id not in unknowns:
+                    raise _Branch(entry.id)
+                return env.evaluate(refs[unknowns[entry.id]])
+            env.free.add(entry.id)
+            values = {name: env.evaluate(ref) for name, ref in refs.items()}
             check_range(entry, values)
-            return values[name] if word is None else sample(entry, values, word, self.settings.resolution)
+            if word is not None:
+                if any(is_open(value) for value in values.values()):  # a sample needs single bounds
+                    raise _unsupported("sample", 0, "interval", at(entry.ref, entry.kind))
+                return sample(entry, values, word, self.settings.resolution)
+            return values[pin] if pin is not None else enclosure(entry, values)
 
         return self.expression(entry, value_of, CONFIRMED, general=general)
 
@@ -787,13 +852,21 @@ class Graph:
             return self.blocked(failure.errors, cap.path)
         return Result((Scenario((), Fraction(readings[fact]["value"]), own, True, (("reading", fact),), unresolved),))
 
-    # Sampling ---------------------------------------------------------------------------------------
+    # Impacts and sampling ---------------------------------------------------------------------------
 
-    def involves(self, result: Result | Sampled) -> bool:
+    def unknowns_read(self, result: Result | Sampled | Impacts) -> set[str]:
+        """The unknowns a computed node read, discrete and continuous; none for a blocked one."""
+        return read(result.scenarios) if isinstance(result, Result) else set()
+
+    def involves(self, result: Result | Sampled | Impacts) -> bool:
         """Whether a computed node read a distribution unknown."""
+        return bool(self.unknowns_read(result) & set(self.distributions))
+
+    def continuous_read(self, result: Result | Sampled | Impacts) -> list[str]:
+        """The continuous unknowns a computed node computed with, sorted."""
         if not isinstance(result, Result):
-            return False
-        return any(unknown in self.distributions for s in result.scenarios for unknown, _ in s.unknowns)
+            return []
+        return sorted({unknown for s in result.scenarios for unknown in s.free})
 
     def place(self, output: tuple[str, ...]) -> tuple[str, str]:
         """The file and pointer an error of an output's sampling points at: the expression it comes from."""
@@ -807,23 +880,52 @@ class Graph:
             member = ("max",) if entry.kind == "limit" else ("value",)
         return entry.path, at(entry.ref, "logic", *member)
 
+    def subgraph_base(self, pinned: set[str]) -> dict[tuple[str, ...], Result]:
+        """The computed nodes a `_SubGraph` takes over: those that read none of the `pinned` unknowns."""
+        return {
+            key: result for key, result in self.results.items()
+            if isinstance(result, Result) and not self.unknowns_read(result) & pinned
+        }
+
+    def impacts(self, output: tuple[str, ...]) -> Impacts:
+        """The impact of each continuous unknown an output computes with, when it computes with more than one:
+        the largest width of the output, at export precision, with that unknown free and each other continuous
+        one held at each of its ends (`_SubGraph`), per scenario of the discrete unknowns."""
+        if output not in self.results:
+            raise Need(output)
+        self.depend(output)
+        found, scale = [], self.settings.scale
+        free = self.continuous_read(self.results[output])
+        for unknown in free:
+            others = [other for other in free if other != unknown]
+            base, widest = self.subgraph_base(set(others)), 0
+            for ends in itertools.product(PINS, repeat=len(others)):
+                graph = _SubGraph(self, base, pins=dict(zip(others, ends)))
+                solve([output], graph.compute, graph.results)
+                result = graph.results[output]
+                if result.blocked:
+                    return Impacts(blocked_by=result.blocked_by)
+                widest = max(widest, widths(result.scenarios, unknown, scale))
+            found.append((unknown, widest))
+        return Impacts(tuple(found))
+
     def sampled(self, output: tuple[str, ...]) -> Sampled:
         """The Monte Carlo tallies of an output that reads a distribution: for each of `unknowns.samples`
-        samples, the output computed with every distribution unknown at that sample (`_SampleGraph`), and its
-        value at export precision tallied per choice of its other unknowns. A sample that cannot be computed,
+        samples, the output computed with every distribution unknown at that sample (`_SubGraph`), and its
+        value at export precision tallied per choice of its discrete unknowns. A sample that cannot be computed,
         or a tally beyond the int64 range (`expr_overflow`, operator `tally`), blocks the output."""
         if output not in self.results:
             raise Need(output)
         self.depend(output)
         settings = self.settings
         streams = {unknown: stream(unknown) for unknown in self.distributions}
-        base = {key: result for key, result in self.results.items() if isinstance(result, Result) and not self.involves(result)}
+        base = self.subgraph_base(set(self.distributions))
         found: dict[tuple[tuple[str, str], ...], list[int]] = {}
         for start in range(0, settings.samples, settings.chunk_size):
             count = min(settings.chunk_size, settings.samples - start)
             chunk = {unknown: words(settings.seed, sid, start, count) for unknown, sid in streams.items()}
             for index in range(count):
-                graph = _SampleGraph(self, base, {unknown: chunk[unknown][index] for unknown in streams})
+                graph = _SubGraph(self, base, words={unknown: chunk[unknown][index] for unknown in streams})
                 solve([output], graph.compute, graph.results)
                 result = graph.results[output]
                 if result.blocked:
@@ -837,9 +939,13 @@ class Graph:
         return Sampled(tallies(found))
 
     def blocked_by(self, key: tuple[str, ...]) -> frozenset[int]:
-        """The root errors that block an output: its own, and its sampling's."""
-        sampled = self.results.get(("sampled", *key))
-        return self.results[key].blocked_by | (sampled.blocked_by if sampled is not None else frozenset())
+        """The root errors that block an output: its own, its impacts' and its sampling's."""
+        found = self.results[key].blocked_by
+        for kind in ("impacts", "sampled"):
+            derived = self.results.get((kind, *key))
+            if derived is not None:
+                found = found | derived.blocked_by
+        return found
 
     def threshold(self, threshold_id: str) -> Result:
         self.depend(("threshold_entry", threshold_id))
@@ -868,22 +974,36 @@ class Graph:
         return found
 
     def render(self, key: tuple[str, str], name: str = "value") -> dict[str, Any]:
-        """An output as `run` shows it. Its status follows the no-effect rule (`core.unknown`); an output that
-        read an unknown lists its `sensitivity`, and a sampled one its `sampled` tallies."""
+        """An output as `run` shows it. A single value is `value` (or `offset`); an output that read a discrete
+        unknown lists its `variants`, and a number that read any unknown its `range`, a sound enclosure with
+        `exact` when the monotonic check proves it. The status follows the no-effect rule (`core.unknown`); an
+        output that read an unknown lists its `sensitivity`, and a sampled one its `sampled` tallies."""
         result, settings = self.results[key], self.settings
         if self.blocked_by(key):
             return {"status": BLOCKED, "type": self.typed.outputs[key].token}
         scenarios = result.scenarios
         out: dict[str, Any] = {"status": status(scenarios, settings.scale), "type": self.typed.outputs[key].token}
         out["per_account"] = any(s.per_account for s in scenarios)
+        numbers = all(type(s.value) not in (bool, Undecided) for s in scenarios)
+
+        def shown(value: Value) -> dict[str, Any]:
+            if type(value) is not Interval:
+                return {name: _json(value)}
+            return {"range": {"low": _json(value.low), "high": _json(value.high), "exact": value.exact}}
+
         if len(scenarios) == 1 and not scenarios[0].unknowns:
-            out[name] = _json(scenarios[0].value)
+            out.update(shown(scenarios[0].value))
         else:
-            out["variants"] = [{"unknowns": dict(s.unknowns), name: _json(s.value)} for s in scenarios]
-            if all(type(s.value) is not bool for s in scenarios):
-                values = sorted((s.value for s in scenarios), key=_magnitude)
-                out["range"] = {"low": _json(values[0]), "high": _json(values[-1])}
-        listing = sensitivity(scenarios, settings.scale, settings.top_n)
+            out["variants"] = [{"unknowns": dict(s.unknowns), **shown(s.value)} for s in scenarios]
+            if numbers:
+                low = min((interval.bounds(s.value)[0] for s in scenarios), key=_magnitude)
+                high = max((interval.bounds(s.value)[1] for s in scenarios), key=_magnitude)
+                out["range"] = {
+                    "low": _json(low), "high": _json(high), "exact": all(exact(s.value) for s in scenarios),
+                }
+        impacts = self.results.get(("impacts", *key))
+        pinned = dict(impacts.impacts) if impacts is not None else None
+        listing = sensitivity(scenarios, settings.scale, settings.top_n, pinned)
         if listing is not None:
             out["sensitivity"] = listing
         sampled = self.results.get(("sampled", *key))
@@ -900,7 +1020,7 @@ class Graph:
             value, general = self.results[("rule", rule.id)], self.results[("general_logic", rule.id)]
             if value.blocked or general.blocked:
                 continue
-            values, generals = ([_text(v) for v in sorted({s.value for s in r.scenarios}, key=_magnitude)]
+            values, generals = ([_text(v) for v in sorted({s.value for s in r.scenarios}, key=_order)]
                                 for r in (value, general))
             if values != generals:
                 detail = {"path": rule.path, "rule": rule.id, "value": values, "general_logic": generals}
@@ -912,8 +1032,10 @@ class Graph:
         outputs = self.outputs()
         compute = self.compute if self.cache is None else self.cached
         solve([key for _, key in outputs], compute, self.results)
+        derived = [("impacts", *key) for _, key in outputs if len(self.continuous_read(self.results[key])) > 1]
         if self.settings.samples:
-            solve([("sampled", *key) for _, key in outputs if self.involves(self.results[key])], compute, self.results)
+            derived += [("sampled", *key) for _, key in outputs if self.involves(self.results[key])]
+        solve(derived, compute, self.results)
         needed_by: dict[int, list[str]] = {index: [] for index in range(len(self.errors))}
         for name, key in outputs:
             for index in self.blocked_by(key):
@@ -944,23 +1066,31 @@ class Graph:
         return {"rules": rules, "thresholds": thresholds, "notes": self.notes()}, errors
 
 
-class _SampleGraph(Graph):
-    """The graph at one sample of the distributions (`Graph.sampled`): every distribution unknown is at its
-    sample, and the other unknowns at their points.
+class _SubGraph(Graph):
+    """The graph with some unknowns held: every distribution unknown at one sample (`words`, for
+    `Graph.sampled`), or some continuous unknowns at one of their ends (`pins`, for `Graph.impacts`).
 
-    The nodes that read no distribution are the main graph's, and are not computed again. This graph computes
-    without the cache, inside the computation of the main graph's sampled node: what it reads it forwards to
-    that node's trace, so the sampled node is reused exactly while everything its samples read is unchanged.
-    It registers its errors among the main graph's.
+    The nodes that read none of the held unknowns are the main graph's, and are not computed again. This graph
+    computes without the cache, inside the computation of the main graph's sampled or impacts node: what it
+    reads it forwards to that node's trace, so that node is reused exactly while everything its computations
+    read is unchanged. It registers its errors among the main graph's.
     """
 
-    def __init__(self, main: Graph, base: dict[tuple[str, ...], Result], sample: dict[str, int]) -> None:
+    def __init__(
+        self,
+        main: Graph,
+        base: dict[tuple[str, ...], Result],
+        *,
+        words: dict[str, int] | None = None,
+        pins: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(main.checker, main.typed, main.state, main.exports, max_bits=main.max_bits, settings=main.settings)
         self.main = main
         self.results = dict(base)
         self.copied = base.keys()
         self.errors, self._seen = main.errors, main._seen
-        self.words = sample
+        self.words = words or {}
+        self.pins = pins or {}
 
     def depend(self, item: tuple[str, ...]) -> None:
         if item[0] in NODE_KINDS and item not in self.copied:

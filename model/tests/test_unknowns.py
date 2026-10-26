@@ -1,7 +1,8 @@
-"""PY-8: unknowns (#424 design 3.5, 4.5 and 4.8) on the worked example (design section 3.8) and neutral
+"""PY-8: unknowns (#424 design 3.5, 4.2, 4.5 and 4.8) on the worked example (design section 3.8) and neutral
 additions to it: the range and the top unknown of `loss.collect_at_redline`; an unknown without effect at
-milli leaves its output confirmed; the exact interval cases; and sampled results that are the same for
-chunk sizes 1 and 4 and under two string-hash seeds."""
+milli leaves its output confirmed; the exact interval cases, whose ranges are sound enclosures, never
+narrower than the true range and exact where the monotonic check proves it, and the cases that refuse;
+and sampled results that are the same for chunk sizes 1 and 4 and under two string-hash seeds."""
 
 from __future__ import annotations
 
@@ -109,7 +110,7 @@ def test_the_loss_at_the_red_line_ranges_from_0_to_550_with_its_top_unknown(exam
             {"unknowns": {"unk.collect": "up_to_cap"}, "value": "550"},
             {"unknowns": {"unk.collect": "whole"}, "value": "0"},
         ],
-        "range": {"low": "0", "high": "550"},
+        "range": {"low": "0", "high": "550", "exact": True},
         "sensitivity": [{"unknown": "unk.collect", "impact": "550"}],
     }
 
@@ -122,9 +123,9 @@ def test_the_loss_at_the_red_line_ranges_from_0_to_550_with_its_top_unknown(exam
     ],
 )
 def test_an_unknown_without_effect_at_milli_leaves_its_output_confirmed(example, acmodel, high, impact, expected):
-    """The floor plus a small unknown: at milli (round half even) 215.0004 is still 215, and 215.0006 is
-    not. Rounded down, the threshold of it is 215 at both points, so it is confirmed and exported either
-    way: the rule is decided per output, by computation."""
+    """The floor plus a small unknown: its sound range [215, 215.0004] is one value at milli (round half
+    even), and [215, 215.0006] is not. Rounded down, the threshold of it is 215 throughout, so it is confirmed
+    and exported either way: the rule is decided per output, on the sound range."""
     add(
         example,
         unknowns=[unknown("unk.small", "interval", {"low": "0", "high": high})],
@@ -137,10 +138,10 @@ def test_an_unknown_without_effect_at_milli_leaves_its_output_confirmed(example,
     assert status == 0
     rule = doc["data"]["rules"]["floor.small"]
     assert rule["status"] == expected
+    assert rule["range"] == {"low": "215", "high": str(215 + Fraction(high)), "exact": True}
     assert rule["sensitivity"] == [{"unknown": "unk.small", "impact": impact}]
-    assert rule["range"] == {"low": "215", "high": str(215 + Fraction(high))}
     threshold = doc["data"]["thresholds"]["thr.small"]
-    assert (threshold["status"], threshold["range"]) == ("confirmed", {"low": "215", "high": "215"})
+    assert (threshold["status"], threshold["value"]) == ("confirmed", "215")
     assert threshold["sensitivity"] == [{"unknown": "unk.small", "impact": "0"}]
     status, exported = acmodel("export", "thresholds", example / MODEL, "--state", example / STATE)
     assert (status, exported["errors"]) == (0, [])
@@ -148,39 +149,65 @@ def test_an_unknown_without_effect_at_milli_leaves_its_output_confirmed(example,
     assert {entry["id"]: entry.get("value") for entry in written["thresholds"]}["thr.small"] == 215
 
 
-@pytest.mark.parametrize(
-    ("value", "status", "expected"),
-    [
-        pytest.param("unknown:unk.i + 0.1", "provisional", {"low": "1/5", "high": "3/10"}, id="sum"),
-        # one unknown is one value in a scenario, so it cancels exactly
-        pytest.param("unknown:unk.i - unknown:unk.i", "confirmed", {"low": "0", "high": "0"}, id="one_unknown"),
-        pytest.param("unknown:unk.j * unknown:unk.k", "provisional", {"low": "-4", "high": "8"}, id="product"),
-        pytest.param("min(unknown:unk.i, 0.15) * 3", "provisional", {"low": "3/10", "high": "9/20"}, id="min"),
-        pytest.param("floor(unknown:unk.i * 10)", "provisional", {"low": "1", "high": "2"}, id="floor"),
-        pytest.param("unknown:unk.t * 2", "provisional", {"low": "7200", "high": "14400"}, id="time_in_seconds"),
-        pytest.param("unknown:unk.u - 1", "provisional", {"low": "0", "high": "2"}, id="uniform"),
-        pytest.param("unknown:unk.tri / 8", "provisional", {"low": "0", "high": "1/2"}, id="triangular"),
-        pytest.param("unknown:unk.e * 2", "provisional", {"low": "4", "high": "18"}, id="empirical"),
-        pytest.param("unknown:unk.reversed", "blocked", None, id="low_above_high"),
-    ],
-)
-def test_exact_interval_cases(example, acmodel, value, status, expected):
+# Each case: the expression, the true range (worked by hand), and the enclosure with `exact`. The enclosure
+# must hold the true range, never be narrower than it, and equal it where it says it is exact.
+INTERVAL_CASES = [
+    pytest.param("unknown:unk.i + 0.1", ("1/5", "3/10"), ("1/5", "3/10"), True, id="sum"),
+    # the same unknown twice in the same direction: proven monotone, so exact
+    pytest.param("unknown:unk.i + unknown:unk.i", ("1/5", "2/5"), ("1/5", "2/5"), True, id="twice_one_direction"),
+    # in both directions: not proven, so the sound enclosure [-w, w], wider than the true 0
+    pytest.param("unknown:unk.i - unknown:unk.i", ("0", "0"), ("-1/10", "1/10"), False, id="both_directions"),
+    # not monotone: the ends alone (1 and 4) would miss the true low 0; the enclosure holds it
+    pytest.param("unknown:unk.j * unknown:unk.j", ("0", "4"), ("-2", "4"), False, id="square_across_zero"),
+    pytest.param("unknown:unk.i * unknown:unk.k", ("3/10", "4/5"), ("3/10", "4/5"), True, id="product_one_sign"),
+    pytest.param("unknown:unk.j * unknown:unk.k", ("-4", "8"), ("-4", "8"), False, id="product_across_zero"),
+    pytest.param("1 / unknown:unk.k", ("1/4", "1/3"), ("1/4", "1/3"), True, id="quotient"),
+    pytest.param("min(unknown:unk.i, 0.15) * 3", ("3/10", "9/20"), ("3/10", "9/20"), True, id="min"),
+    pytest.param("floor(unknown:unk.i * 10)", ("1", "2"), ("1", "2"), True, id="floor"),
+    pytest.param("if(unknown:unk.i > 0.15, 1, 0)", ("0", "1"), ("0", "1"), False, id="undecided_condition"),
+    pytest.param("unknown:unk.t * 2", ("7200", "14400"), ("7200", "14400"), True, id="time_in_seconds"),
+    pytest.param("unknown:unk.u - 1", ("0", "2"), ("0", "2"), True, id="uniform"),
+    pytest.param("unknown:unk.tri / 8", ("0", "1/2"), ("0", "1/2"), True, id="triangular"),
+    pytest.param("unknown:unk.e * 2", ("4", "18"), ("4", "18"), True, id="empirical"),
+]
+
+
+@pytest.mark.parametrize(("value", "truth", "enclosure", "exact"), INTERVAL_CASES)
+def test_exact_interval_cases(example, acmodel, value, truth, enclosure, exact):
     add(example, unknowns=INTERVALS + DISTRIBUTIONS, rules=[derive("case.x", value)])
 
-    exit_status, doc = run(acmodel, example)
+    status, doc = run(acmodel, example)
 
+    assert status == 0
     rule = doc["data"]["rules"]["case.x"]
-    assert rule["status"] == status
-    if expected is not None:
-        assert exit_status == 0
-        assert rule["range"] == expected
-        return
-    assert exit_status == 1
-    assert [(e["code"], e["ref"], e["detail"], e["needed_by"]) for e in doc["errors"]] == [(
-        "expr_eval_failed", "/unknowns/5/interval",
-        {"path": str(example / RULES), "reason": "range_invalid", "operator": "interval", "position": 0},
-        ["rule:case.x"],
-    )]
+    assert rule["range"] == {"low": enclosure[0], "high": enclosure[1], "exact": exact}
+    assert Fraction(enclosure[0]) <= Fraction(truth[0]) <= Fraction(truth[1]) <= Fraction(enclosure[1])
+    if exact:
+        assert enclosure == truth
+    assert rule["status"] == "provisional"  # every case moves at milli
+
+
+@pytest.mark.parametrize(
+    ("value", "ref", "detail"),
+    [
+        pytest.param("unknown:unk.reversed", "/unknowns/5/interval",
+                     {"reason": "range_invalid", "operator": "interval", "position": 0}, id="low_above_high"),
+        pytest.param("1 / unknown:unk.j", "/rules/13/logic/value",
+                     {"reason": "division_by_zero", "operator": "/", "position": 2}, id="divisor_holds_zero"),
+    ],
+)
+def test_an_interval_that_makes_a_value_unsound_is_refused(example, acmodel, value, ref, detail):
+    """The exact interval cases that refuse: bounds that may cross, and a division by an enclosure that holds
+    0. Nothing is guessed: the output is blocked with its error."""
+    add(example, unknowns=INTERVALS + DISTRIBUTIONS, rules=[derive("case.x", value)])
+
+    status, doc = run(acmodel, example)
+
+    assert status == 1
+    assert doc["data"]["rules"]["case.x"]["status"] == "blocked"
+    assert [(e["code"], e["ref"], e["detail"], e["needed_by"]) for e in doc["errors"]] == [
+        ("expr_eval_failed", ref, {"path": str(example / RULES), **detail}, ["rule:case.x"]),
+    ]
 
 
 def test_sampled_results_are_identical_for_chunk_sizes_1_and_4(example, acmodel, tmp_path):
@@ -196,14 +223,12 @@ def test_sampled_results_are_identical_for_chunk_sizes_1_and_4(example, acmodel,
     one, four = seen
     assert one == four
     rules = one["rules"]
-    assert [(entry["unknowns"], entry["samples"]) for entry in rules["mc.mix"]["sampled"]] == [({}, 9)]
-    assert [(entry["unknowns"], entry["samples"]) for entry in rules["mc.pair"]["sampled"]] == [
-        ({"unk.i": "high"}, 9), ({"unk.i": "low"}, 9),
-    ]
-    for name in ("mc.mix", "mc.pair"):  # every sample lies inside the exact range
+    for name in ("mc.mix", "mc.pair"):  # one tally each: the distributions are sampled, the interval stays free
+        [entry] = rules[name]["sampled"]
+        assert (entry["unknowns"], entry["samples"]) == ({}, 9)
         low, high = (Fraction(rules[name]["range"][end]) for end in ("low", "high"))
-        for entry in rules[name]["sampled"]:
-            assert low <= Fraction(entry["low"]) <= Fraction(entry["mean"]) <= Fraction(entry["high"]) <= high
+        mean = (Fraction(entry["mean"]["low"]), Fraction(entry["mean"]["high"]))
+        assert low <= Fraction(entry["low"]) <= mean[0] <= mean[1] <= Fraction(entry["high"]) <= high
 
 
 def test_sampled_results_are_identical_under_two_hash_seeds(example, tmp_path, launcher):

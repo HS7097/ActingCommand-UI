@@ -61,9 +61,14 @@ def threshold_entry(run: Run, index: int, threshold: dict[str, Any], files: dict
     if shown["status"] != CONFIRMED:  # acceptances of provisional values come with the export policy
         return _refusal(run, index, output, "provisional")
     member = "value" if form == "constant" else "offset"
-    # A confirmed output that read unknowns lists a value per scenario; they are one integer, or differ below
-    # export precision (the no-effect rule), and then one of them is not an integer.
-    values = [shown[member]] if member in shown else sorted({v[member] for v in shown["variants"]}, key=Fraction)
+    # A confirmed output that read unknowns has a value or an enclosure per scenario, all within one value at
+    # export precision (the no-effect rule). They are one integer, or one of them is not an integer: an
+    # enclosure holds more than one number, and two integers differ by a whole unit.
+    shown_values = shown["variants"] if "variants" in shown else [shown]
+    enclosed = next((entry["range"] for entry in shown_values if member not in entry), None)
+    if enclosed is not None:
+        return _refusal(run, index, output, "not_integer", value=f"{enclosed['low']}..{enclosed['high']}")
+    values = sorted({entry[member] for entry in shown_values}, key=Fraction)
     odd = next((value for value in values if Fraction(value).denominator != 1), None)
     if odd is not None:
         return _refusal(run, index, output, "not_integer", value=odd)

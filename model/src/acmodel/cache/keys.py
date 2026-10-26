@@ -49,11 +49,12 @@ class Evaluator:
 # them declares a library; the Monte Carlo tallies (`sampled`) draw from numpy's Philox, so they declare
 # numpy and the Python minor version (design-py D-P5), and the solver and screening kinds of later slices
 # will too. Version 2: unknowns are judged by their effect (PY-8), so a scenario records what it leaves
-# unresolved, and intervals and distributions have points.
+# unresolved and the continuous unknowns it computed with, whose values are enclosures (interval arithmetic).
 EVALUATORS: dict[str, Evaluator] = {
     "flow": Evaluator(2),
     "general": Evaluator(2),
     "general_logic": Evaluator(2),
+    "impacts": Evaluator(1),
     "member": Evaluator(2),
     "offset": Evaluator(2),
     "point": Evaluator(1),

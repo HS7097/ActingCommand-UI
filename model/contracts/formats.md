@@ -455,9 +455,10 @@ what it reads, without recursion.
 is blocked. The other rule kinds (regen, exchange, cooldown, gate, random, engine, objective, weight_ref) are
 type-checked but not evaluated.
 
-**Unknowns.** A node that reads an unknown is computed once per point of it, and once per point of each further
-unknown that it reads under that choice (see "Unknowns" below). Its output then lists `variants`
-(`[{"unknowns": {<id>: <point>}, "value": …}]`) and, for numbers, the `range` (`low`, `high`).
+**Unknowns.** A node that reads a discrete unknown is computed once per point of it, and once per point of each
+further one that it reads under that choice. A continuous unknown is one enclosure, and what reads it is computed
+by interval arithmetic (see "Unknowns" below). An output that read a discrete unknown lists `variants`
+(`[{"unknowns": {<id>: <point>}, "value": …}]`), and a number that read any unknown its `range`.
 
 **Status** of an output: the worst of what it read.
 
@@ -465,7 +466,7 @@ unknown that it reads under that choice (see "Unknowns" below). Its output then 
 |---|---|
 | a `confirmed` rule or data row; a reading | `confirmed` |
 | a `provisional` rule or data row | `provisional` |
-| an unknown it chose a point of; an unknown that a `pending` rule it read names; an unknown whose points a maximum ran over (`max_single_income`) | `provisional`, unless the output chose that unknown and it has no effect on it (the no-effect rule, below) |
+| an unknown it read; an unknown that a `pending` rule it read names; an unknown whose points a maximum ran over (`max_single_income`) | `provisional`, unless the output read that unknown and its sound range has one value at export precision (the no-effect rule, below) |
 | a `pending` data row (a row cannot name an unknown) | blocked: `rule_pending_unbounded` (`no_unknown`, `id` `<table>[<key>]`) |
 
 **Blocked outputs and partial runs.** An output that cannot be computed is `blocked` with its errors, and so
@@ -477,41 +478,56 @@ its `general_logic`. The value stands by its provenance, and the difference is r
 
 ### Unknowns
 
-The keys are under `unknowns` in the configuration (`contracts/cli.md`); the code is `src/acmodel/core/unknown.py`.
+The keys are under `unknowns`, and `sensitivity.top_n`, in the configuration (`contracts/cli.md`); the code is
+`src/acmodel/core/unknown.py` and `src/acmodel/expr/interval.py`.
 
-**Points.** Each unknown with a range form is evaluated at fixed points, each a scenario:
+**Discrete unknowns** are evaluated at their points, each a scenario: a `variants` unknown at each variant (by its
+id), an `empirical` distribution at each of its values (by position: `0`, `1`, …).
 
-| Unknown | Points |
-|---|---|
-| `variants` | each variant, by its id |
-| `interval`; `uniform` and `triangular` distributions | `low` and `high` |
-| `empirical` distribution | each of its values, by position: `0`, `1`, … |
+**Continuous unknowns** (`interval`, and the `uniform` and `triangular` distributions) are one enclosure each:
+from the lowest value of the low bound to the highest value of the high bound. Every bound is evaluated, and
+bounds that may be out of order (low above high, a triangular mode outside them) are `expr_eval_failed`
+(`range_invalid`) at the range form; they block what needs the unknown.
 
-- Every bound is evaluated in each scenario. Bounds out of order (low above high, or a triangular mode outside
-  them) are `expr_eval_failed` (`range_invalid`) at the range form, and block what needs the unknown.
-- An unknown is one value in a scenario, so `unknown:<id> - unknown:<id>` is exactly 0.
-- The range of an output is its lowest and highest value over its scenarios. For variants and empirical values
-  that is every value the unknown can take. For an interval or a continuous distribution it is the range
-  whenever the output is monotone in the unknown, as one-at-a-time sensitivity assumes too (#424 design 4.8).
+**Ranges are sound enclosures.** Everything a continuous unknown reaches is computed by interval arithmetic with
+exact rational bounds, so the `range` of an output is never narrower than its true range.
+- **Exact where proven.** The structural monotonic check gives each continuous unknown a direction through every
+  operator: `+`, `-` (its right side turned around), unary `-`, `min`, `max`, `clamp`, `floor`, `ceil`,
+  `round_half_even`, `sum` and the flow sums are monotone in each operand; `*` and `/` are monotone in one operand
+  when the other has one sign over its enclosure. When every unknown reaches the value only through such operators
+  and in one and the same direction, the enclosure is attained, and `range` says `exact: true`.
+- **Wider elsewhere.** Anything else is `exact: false`, and the enclosure may be wider than the true range:
+  - an unknown that reaches the value in both directions (`unknown:<id> - unknown:<id>` gives [−w, w], not 0);
+  - a product or quotient whose other operand may be of either sign (`x * x` across 0);
+  - a condition the unknowns leave undecided: a comparison that holds for some of their values only. `if` then
+    gives the enclosure of both branches, `and`, `or` and `not` stay undecided, `count` counts it as 0 or 1, and
+    a boolean output that stays undecided shows `null`.
+- **Refused, never guessed** (`expr_eval_failed`): a division by an enclosure that holds 0 (`division_by_zero`);
+  `clamp` bounds that may cross (`clamp_bounds_invalid`); a `lookup` key that the unknowns leave open
+  (`evaluation_unsupported`, `found` `interval`).
 
-**Sensitivity.** Two scenarios of an output are neighbours in an unknown when they chose different points of it,
-and the same point of every other unknown that both chose.
-- **Impact.** An unknown's impact on an output is the largest change between two of its neighbours, at export
-  precision: the value times `unknowns.scale` (1000, milli), rounded half to even. A boolean counts as 0 or 1.
-- **Listing.** An output that chose an unknown lists in `sensitivity` its `unknowns.top_n` (5) largest impacts,
-  as `{"unknown", "impact"}` sorted by impact and then by id. An impact is an exact rational in the output's
-  unit (time in seconds).
+**The no-effect rule** decides on the sound range, by computation and never by a flag. An output that read
+unknowns is provisional when its range holds more than one value at export precision: the value times
+`unknowns.scale` (1000, milli), rounded half to even; a boolean counts as 0 or 1, an undecided one as both. It is
+also provisional when it depends on an unknown it did not read (unresolved): one that a pending rule it read names
+(the pending rule is uncertain only through it), or one whose points a maximum ran over.
 
-**The no-effect rule.** An unknown makes an output provisional only when it has an effect on it. That is decided
-by computation, never by a flag:
-- an unknown the output chose makes it provisional when its impact is above zero;
-- an unknown the output depends on without choosing it is unresolved: one that a pending rule it read names (the
-  pending rule is uncertain only through it), and one whose points a maximum ran over. It makes the output
-  provisional, unless the output chose it too and its impact is zero.
+**Sensitivity.** For each unknown an output read, its impact is the largest change of the output at export
+precision while that unknown moves and the others are held at one of their points (each point of a discrete one,
+the low and the high of a continuous one).
+- **A discrete unknown:** two scenarios that chose different points of it, and the same point of every other
+  discrete unknown both chose, are neighbours in it. The change between them is the largest difference of their
+  values (of their enclosures, so the continuous unknowns count with their whole range).
+- **A continuous unknown:** the width of the output's enclosure with that unknown free. When the output computes
+  with other continuous unknowns, each of them is held at each of its ends in turn (the `impacts` node).
+- **Listing.** An output that read an unknown lists in `sensitivity` its `sensitivity.top_n` (5) largest impacts,
+  as `{"unknown", "impact"}` sorted by impact and then by id. An impact is an exact rational in the output's unit
+  (time in seconds). It ranks the unknowns; the status does not rest on it but on the sound range.
 
 **Sampling** (off by default: `unknowns.samples` is 0).
-- **What is drawn.** With `unknowns.samples` = N, every output that chose a point of a distribution is computed N
-  more times, with every distribution at one sample. The intervals and variants stay at their points.
+- **What is drawn.** With `unknowns.samples` = N, every output that read a distribution is computed N more times,
+  with every distribution at one sample. The variants stay at their points, and the intervals stay free, so a
+  sampled value can be an enclosure.
 - **Streams.** Each distribution has its own stream of `numpy.random.Philox`, keyed by `unknowns.seed` and the
   unknown's stream id (the first 8 bytes of the sha256 of `acmodel.stream.v1:<unknown id>`).
 - **Chunks.** Sample s is the block the stream gives from counter s; the chunk k of `unknowns.chunk_size` samples
@@ -522,26 +538,30 @@ by computation, never by a flag:
     multiple of 1 / resolution.
   - An `empirical` value is the one at position floor(word × n / 2<sup>64</sup>).
 
-  All of it is integer and exact, the same on every platform and under every string-hash seed.
-- **Tallies.** At export precision, per choice of the output's other unknowns, the tallies are the count, the
-  total, the lowest and the highest value, each held to the int64 range. Beyond it is `expr_overflow`
-  (`operator` `tally`, `max_bits` 63). A sample that cannot be computed blocks the output with its error.
+  All of it is integer and exact, the same on every platform and under every string-hash seed. A distribution
+  whose bounds other unknowns leave open is not sampled (`evaluation_unsupported`, `found` `interval`).
+- **Tallies.** At export precision, per choice of the output's discrete unknowns: the count, the totals of the low
+  and the high ends, the lowest low and the highest high, each held to the int64 range. Beyond it is
+  `expr_overflow` (`operator` `tally`, `max_bits` 63). A sample that cannot be computed blocks the output with its
+  error.
 
 ### Output
 
 `data` holds `path`, `model_id`, `state` (`path`, `label`), `run_id` and `work` (the run id and the work
 counters of the cache, `cli.md`, "Cache"), and:
 - `rules`: each value rule's output by id: `kind`, `status` (`confirmed`, `provisional` or `blocked`), `type`
-  and, unless blocked, `per_account` (whether it read the account state) with `value` (or `variants` and
-  `range`). An output that chose an unknown adds `sensitivity`, and a sampled one `sampled`: a list, one entry
-  per choice of its other unknowns, with `unknowns`, `samples`, and the `mean`, `low` and `high` at export
-  precision. A derive with `general_logic` holds it as `general_logic`, in the same shape.
+  and, unless blocked, `per_account` (whether it read the account state) with `value`, or `variants` and
+  `range`. A value that continuous unknowns leave open shows `range` instead of `value`, in a variant too:
+  `{"low", "high", "exact"}`. An output that read an unknown adds `sensitivity`, and a sampled one `sampled`: a
+  list, one entry per choice of its discrete unknowns, with `unknowns`, `samples`, `mean` (`low`, `high`: the
+  means of the ends), and `low` and `high`, at export precision. A derive with `general_logic` holds it as
+  `general_logic`, in the same shape.
 - `thresholds`: by id, `form` and the same members. The number of the `fact_offset` form is `offset`, beside
   `fact`, `comparison` and `reference_fact`.
 - `notes`.
 
 A number is a string holding an exact rational (`"-250"`, `"7/2"`; time in seconds); a boolean is a JSON
-boolean.
+boolean, or null when continuous unknowns leave it undecided.
 
 The errors are ordered by file, pointer, code and then their whole canonical text, so that the order never
 depends on which nodes the cache reused. The outputs, without `work`, are kept as
@@ -610,9 +630,10 @@ resource repository. So a threshold is refused (`export_refused`, exit 5) when i
   `explain` show it locally.
 - `provisional`: not confirmed. Accepting a provisional value comes with the export policy.
 - `not_integer` or `out_of_range`: its exact value is not an integer (`exports.json` can declare its `round`),
-  or lies beyond ±(2<sup>53</sup> − 1). A confirmed threshold that chose unknowns has a value per scenario:
-  one integer at every point is exported, and values that differ below export precision are refused as
-  `not_integer` with one that is not an integer.
+  or lies beyond ±(2<sup>53</sup> − 1). A confirmed threshold that read unknowns has a value or an
+  enclosure per scenario, all within one value at export precision: one integer throughout is exported, and
+  anything else is refused as `not_integer`, with a value that is not an integer, or an enclosure as
+  `<low>..<high>`.
 
 **Writing.**
 - When any threshold is refused, nothing is written.
