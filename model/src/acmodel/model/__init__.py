@@ -2,6 +2,7 @@
 
 from acmodel.model.readers import (
     read_data,
+    read_exports,
     read_model,
     read_prefs_defaults,
     read_rules,
@@ -9,4 +10,12 @@ from acmodel.model.readers import (
     read_state,
 )
 
-__all__ = ["read_data", "read_model", "read_prefs_defaults", "read_rules", "read_sources", "read_state"]
+__all__ = [
+    "read_data",
+    "read_exports",
+    "read_model",
+    "read_prefs_defaults",
+    "read_rules",
+    "read_sources",
+    "read_state",
+]

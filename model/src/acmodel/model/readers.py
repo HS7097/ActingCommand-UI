@@ -384,6 +384,33 @@ PREFS_DEFAULTS = Format(
 )
 
 
+class _Later(Spec):
+    """An entry whose members a later slice defines (tables, scoring); refused until then."""
+
+    def check(self, value: Any, ref: str, ctx: Context) -> bool:
+        return ctx.refuse("value_invalid", ref)
+
+
+EXPORTS = Format(
+    "acmodel.exports.v1",
+    "acmodel.exports.v1",
+    Object(
+        {
+            "schema_version": ANY,
+            "thresholds": ListOf(
+                Object(
+                    {"id": ID, "from": ID, "form": Choice("constant", "fact_offset")},
+                    {"round": Choice("floor", "ceil", "half_even"), **NOTE},
+                )
+            ),
+            "tables": ListOf(_Later()),
+            "scoring": ListOf(_Later()),
+        },
+        NOTE,
+    ),
+)
+
+
 def _read(path: Path | str, fmt: Format) -> dict[str, Any]:
     path = Path(path)
     doc = load(path, fmt.name)
@@ -427,3 +454,8 @@ def read_state(path: Path | str) -> dict[str, Any]:
 def read_prefs_defaults(path: Path | str) -> dict[str, Any]:
     """`ours/prefs/defaults.json` of a resource repository, read as it is (`schema_version` 1)."""
     return _read(path, PREFS_DEFAULTS)
+
+
+def read_exports(path: Path | str) -> dict[str, Any]:
+    """`exports.json` (`acmodel.exports.v1`): the outputs that become thresholds (tables and scoring later)."""
+    return _read(path, EXPORTS)

@@ -1,0 +1,5 @@
+{"schema_version": "acmodel.exports.v1",
+ "thresholds": [
+   {"id": "thr.run.trigger", "from": "redline.a", "form": "fact_offset"},
+   {"id": "thr.daily.floor", "from": "floor.daily", "form": "constant", "round": "ceil"}],
+ "tables": [], "scoring": []}

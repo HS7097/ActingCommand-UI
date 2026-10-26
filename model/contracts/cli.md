@@ -28,9 +28,11 @@ python3 -I -B <model>/acmodel.py <command>    (elsewhere)
 | `setup` | Creates the venv at `paths.venv` from the running Python 3.13 (`python -I -B -m venv <path>`) if the path is absent. Then it installs `requirements.txt` with `python -I -B -m pip install --require-hashes --only-binary=:all: --no-deps -r requirements.txt` using the venv's Python. It reuses a 3.13 venv, refuses a venv of another minor version (`deps_invalid`, `python_version`) and a path that holds no venv (`venv_failed`, `stage: inspect`), and never deletes anything. The children's output goes to stderr. | `venv`, `created`, `requirements` |
 | `version` | Runs the dependency check and reports the versions. | `tool`, `tool_version`, `python`, `packages` (name to version) |
 | `check <model>` | Runs the dependency check, then the static check of the model: `<model>` is the model folder or its `model.json` (`formats.md`, "The static check"). It reads and computes, never writes. Every problem is one error; with any, the exit status is 1. | `path`, `model_id`, `entities`, `rules`, `superseded`, `unknowns`, `tables` |
+| `run <model> --state <file>` | Runs the dependency check, the static check, the run's model checks and the derivation graph for the account state `<file>` (`formats.md`, "The run"). It reads and computes, never writes. A model or input that does not check is refused whole (exit 1, `data` `{}`). Otherwise every output is computed or blocked: a blocked output's error lists the outputs it blocks in `needed_by`, the other outputs are still in `data`, and the exit status is 1. Provisional outputs alone exit 0. | `path`, `model_id`, `state`, `rules`, `thresholds`, `notes` |
 
-Every argument a command names is required. A missing one is `usage_invalid` (`argument_missing`, with the
-argument's name), and an extra one is `usage_invalid` (`argument_unexpected`).
+Every argument and option a command names is required, and an option takes one value. A missing one is
+`usage_invalid` (`argument_missing`, with the argument's or option's name), and an extra or repeated one is
+`usage_invalid` (`argument_unexpected`).
 
 **Dependency check.** It runs before every command except `setup`:
 - the interpreter must be Python 3.13;
@@ -54,7 +56,7 @@ child prints the line.
 | `schema_version` | string | `acmodel.cli.v1` |
 | `command` | string or null | the command that ran; null when the command line is refused (`usage_invalid`) |
 | `ok` | bool | true exactly when `errors` is empty |
-| `data` | object | the command's result; `{}` when it failed |
+| `data` | object | the command's result; `{}` when it failed, except a partial `run`, which keeps its outputs |
 | `errors` | list | entries `{code, detail, ref?, needed_by?}` |
 | `warnings` | list | entries of the same shape |
 
@@ -64,7 +66,8 @@ child prints the line.
 - `ref` is a reference into the input when there is one: for `config_invalid`, the JSON pointer of the
   member, with the file in `detail.path`; for the model's codes, the JSON pointer into the file in
   `detail.path`.
-- `needed_by` (the outputs an error blocks) is reserved for later commands.
+- `needed_by` lists the outputs an error blocks (`run`: `rule:<id>`, `general_logic:<id>`,
+  `threshold:<id>`), sorted.
 
 Human text, one line per error and the usage text, goes to stderr.
 
@@ -119,7 +122,8 @@ All the numbers are integers of at least 1.
 ## Host caps
 
 The host layer is `src/acmodel/host/`. The commands that compute call it before and during their work;
-`setup` and `version` do not.
+`setup` and `version` do not. `run` in this version evaluates only the derivation graph, in its own process
+and with no workers, and does not call it yet.
 
 **The caps of the tool's own process** (Windows; `host.windows`):
 1. `SetPriorityClass` to `compute.priority`, then `GetPriorityClass` must read it back. Otherwise the

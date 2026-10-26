@@ -30,6 +30,9 @@ HOST_GATE_PAUSED = "host_gate_paused"
 HOST_JOB_NOT_APPLIED = "host_job_not_applied"
 HOST_PRIORITY_NOT_APPLIED = "host_priority_not_applied"
 HOST_READING_FAILED = "host_reading_failed"
+STATE_READING_MISSING = "state_reading_missing"
+STATE_ENTITY_MISSING = "state_entity_missing"
+RULING_OVERRIDES_GENERAL_LOGIC = "ruling_overrides_general_logic"  # a note (category info), never an error
 
 EXIT_OK = 0
 
@@ -61,4 +64,7 @@ EXIT_STATUS = {
     HOST_JOB_NOT_APPLIED: 4,
     HOST_PRIORITY_NOT_APPLIED: 4,
     HOST_READING_FAILED: 4,
+    STATE_READING_MISSING: 1,
+    STATE_ENTITY_MISSING: 1,
+    RULING_OVERRIDES_GENERAL_LOGIC: 0,
 }

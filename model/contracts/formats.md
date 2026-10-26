@@ -1,6 +1,6 @@
 # acmodel input files and how they are read
 
-acmodel reads six kinds of input file. Each has one strict reader in `src/acmodel/model/`:
+acmodel reads seven kinds of input file. Each has one strict reader in `src/acmodel/model/`:
 
 | File | `schema_version` | Reader |
 |---|---|---|
@@ -8,6 +8,7 @@ acmodel reads six kinds of input file. Each has one strict reader in `src/acmode
 | `ours/model/rules/<topic>.json` | `acmodel.rules.v1` | `read_rules` |
 | `ours/model/data/<table>.json` | `acmodel.data.v1` | `read_data` |
 | `ours/model/sources.json` | `acmodel.sources.v1` | `read_sources` |
+| `ours/model/exports.json` | `acmodel.exports.v1` | `read_exports` |
 | an account state snapshot (local only) | `acmodel.state.v1` | `read_state` |
 | `ours/prefs/defaults.json` (the preference layer, read as it is) | `1` | `read_prefs_defaults` |
 
@@ -173,6 +174,14 @@ it fails.
 `sources`: a list of `{id, title}` [`url`, `note`]. The ids mirror the guide's source list, so that one page
 has one id.
 
+## `exports.json` (`acmodel.exports.v1`)
+
+| Member | Value |
+|---|---|
+| `thresholds` | a list of `{id, from, form}` [`round`, `note`]: `id` is an id, unique among the thresholds; `from` is the id of a `derive` rule; `form` is `constant` (the rule's value) or `fact_offset` (the offset of the rule's `live`); `round` is `floor`, `ceil` or `half_even` (absent means exact) |
+| `tables`, `scoring` | lists. Their entries are defined with the table and scoring exports; until then an entry is refused (`value_invalid`). |
+| [`note`] | |
+
 ## State snapshot (`acmodel.state.v1`)
 
 | Member | Value |
@@ -271,11 +280,11 @@ state have their own codes.
 - **Entities.** In `entity:<class>[<id>].<attr>`, `<class>` is an `entity_class` entity, and `<attr>` one of its
   `attributes`.
 
-**Not checked here:**
+**Not checked here:** three checks belong to the run (see "The run" below):
 - preference keys (`pref:<key>`, a gate's `prefs`), which the run reads with the preferences;
 - the entity ids of the state (`entity:<class>[<id>]`);
 - the dimensions of expressions (`expr_dimension_mismatch`). They need the types of `read:`, `pref:` and
-  `metric:` values, which the evaluation gives.
+  `metric:` values, which the run gives.
 
 ### Pending rules and unknowns without a range
 
@@ -315,7 +324,8 @@ design D-2). Anywhere else, unknowns included, `pref:` is `rule_pref_misplaced`.
 - **Links:**
   - A node links to the rules and unknowns that its expressions name.
   - `cost(<a>, <r>)` and `yield(<a>, <r>)` link to the flow rules of activity `<a>`.
-  - `max_single_income(<r>, <cap>)` links to the cap and to the flow rules that produce `<r>` or move into it.
+  - `max_single_income(<r>, <cap>)` links to the cap, to the flow rules that produce `<r>` or move into it, and
+    to the `storage` cap of each store that such a flow moves out of.
   - A flow's `requires` links to its gates, and a `random:<id>` product to its random rule.
   - A derive's `general_logic` is only compared with its value, and nothing reads it, so it links nothing.
 - **Refusal:** a loop is `rule_cycle` with `via` `reference`. `members` are its nodes, sorted (`rule:<id>`,
@@ -328,3 +338,148 @@ design D-2). Anywhere else, unknowns included, `pref:` is `rule_pref_misplaced`.
 - **Refusals:** a copy that is absent or cannot be read is `data_external_missing`, at `/external`. A copy with
   another hash is `data_external_hash_mismatch`, at `/external/sha256`.
 - The check never fetches anything.
+
+## The run (`acmodel run`)
+
+`acmodel run <model> --state <file>` computes the model's outputs for one account state. It reads:
+- the model, and runs the static check. A model that does not check is refused with its errors, and nothing
+  is computed;
+- `exports.json` beside `model.json`, and the state snapshot, whose `model_id` must be the model's
+  (`model_file_invalid`, `value_invalid`, at `/model_id`);
+- the preference defaults `ours/prefs/defaults.json` of the same repository (`<model folder>/../prefs/`),
+  only when the model reads a preference.
+
+It then runs the model checks below, which also refuse the whole run, and evaluates the derivation graph.
+
+### Types
+
+Every number has a dimension (`amount:<resource>`, `time`, `count`, `value`, `none`), and a number literal is
+`number`, which fits any dimension but `time`. The dimension rules of the operators and functions are those
+of the expression language (`src/acmodel/expr/dimensions.py`). The references have these types:
+
+| Reference | Type |
+|---|---|
+| `amount:<r>` | `amount:<r>` |
+| `stock:<s>` | the amount of the resource the store holds |
+| `cap:<c>`, `rule:<cap>` | the amount of what the cap's subject holds: the resource itself, or a store's resource |
+| `rule:<derive>` | the type of its `value` |
+| `rule:<limit>`, `count:<limit>` | `count` |
+| `read:<fact>` | the dimension of what declares the fact key: an entity's reading is the amount it holds, a cap's reading the cap's |
+| `unknown:<id>.<member>` | the one type of the member in every variant |
+| `unknown:<id>` | the one type of its bounds (`interval`, `uniform`, `triangular`, `empirical`); `none` for `beta_from_samples` |
+| `data:<table>[…].<column>`, `entity:<class>[…].<attr>`, `lookup(…)` | an `integer` or `decimal` column has its `dimension`; a `boolean` column is a boolean |
+| `pref:<key>` | from its value in the preference defaults: an integer is `number`, a boolean a boolean |
+| `metric:<rule>.<name>` | `value` |
+| `cleared:<id>` | a boolean |
+
+### Model checks of the run
+
+Each problem is one error, with the file in `detail.path` and the JSON pointer in `ref`; all are reported
+together, with exit status 1.
+
+**Dimensions** (`expr_dimension_mismatch`):
+- **Inside each expression** of an active rule and of an unknown, by the rules of the expression language.
+- **A reference without a type**: a preference whose value is a string, array, object or null, and a column
+  or attribute of type `enum` or `id` (`operator` `reference`). So is a fact key declared with two
+  dimensions (`operator` `read`).
+- **Each member that expects a dimension**:
+
+  | Member | Expects |
+  |---|---|
+  | a rule's `when`; regen `while`; gate `requires` | a boolean |
+  | cap `value` | the cap's dimension |
+  | limit `max`; flow `batch.min`, `batch.max`; exchange `limit` | `count` |
+  | regen `amount` | the amount of what its subject holds (a resource or a store) |
+  | regen `every`, cooldown `min_interval`, objective `horizon` | `time` |
+  | flow `consumes`, `produces`; exchange `gives`, `takes` | the amount of the resource named by the key |
+  | flow `moves.amount` | the amount that `from` holds, and the amount that `to` holds |
+  | derive `general_logic` | the dimension of its `value` |
+  | derive `live.offset` | the dimension of `live.reference_fact`, which is that of `live.fact` (`operator` `live`) |
+  | derive `value` with `round` | a number that is not `time` (`operator` `round`) |
+  | the members of the variants of an unknown, the bounds of an interval or a distribution | one dimension (`operator` `variants`, `interval` or `distribution`) |
+  | each key of `lookup(<table>, …)` | its key column's type; a key column of type `id` or `enum` (or none declared) cannot be looked up |
+
+  `operator` names the member, and `operands` are the expected and the found type. The random and engine
+  members are not checked here; their slices check them.
+
+**References** (`rule_reference_missing`):
+- **Preference keys.** Every `pref:<key>` and every key of a gate's `prefs` is in the preference defaults'
+  `defaults` (`expected` `pref`).
+- **Rule values.** `rule:<id>` names a `derive`, `cap` or `limit` rule, the rules that have a value.
+- **Caps.** A cap's subject is a resource or a store (`expected` `resource`, `store`), at its `subject`.
+- **Flows.** `cost(<a>, <r>)` needs an active flow of `<a>` that consumes `<r>` or moves out of it;
+  `yield(<a>, <r>)` one that produces `<r>` or moves into it; `max_single_income(<r>, <cap>)` a flow the cap
+  blocks that brings `<r>`. Otherwise `expected` is `rule.flow`, and `target` the activity or the cap. An
+  empty sum would be a number without a rule behind it.
+- **Thresholds.** The `from` of a threshold names an active derive (`expected` `rule.derive`); in the
+  `fact_offset` form it must have `live` (`expected` `rule.derive.live`). A threshold id given twice is
+  `model_id_duplicate` (`namespace` `threshold`). A threshold of a boolean is `expr_dimension_mismatch`
+  (`operator` `threshold`).
+
+### Evaluation
+
+**Nodes.** The outputs are:
+- `rule:<id>`: the value of every active `derive` (its `value`, then its `round`), `cap` (its `value`, or its
+  reading) and `limit` (its `max`);
+- `general_logic:<id>`: a derive's `general_logic`, computed beside its value and read by nothing;
+- `threshold:<id>`: each threshold of `exports.json`. The `constant` form is the derive's value, the
+  `fact_offset` form the value of its `live.offset`; then the threshold's `round`. The `fact_offset` form
+  needs no reading.
+
+Inside the graph, the amounts of flows and the members of unknowns are nodes too. Each node is computed after
+what it reads, without recursion.
+
+**Values** are exact. References read:
+- `read:<fact>` and a cap's reading: the state's reading; `amount:<r>` and `stock:<s>`: the reading of the
+  entity. A reading the state lacks is `state_reading_missing`, and so is an entity that declares no
+  reading. There is no fallback to a constant.
+- `entity:<class>[<id>].<attr>` and the members of `entity:<class>`: the state's entities. A class, entity or
+  attribute the state lacks is `state_entity_missing`. A class in the state with no entities is an empty set.
+- `cleared:<id>`: whether the state's `cleared` lists it.
+- `data:` cells and `lookup`: the rows of the table; a cell of dimension `time` counts seconds.
+  `lookup` finds the row whose key cells equal its keys (`data_reference_missing`, `row`, when none does).
+- `cost(<a>, <r>)`: the sum of what the active flows of `<a>` consume of `<r>` and move out of it;
+  `yield(<a>, <r>)`: the sum of what they produce of `<r>` and move into it.
+- `max_single_income(<r>, <cap>)`: the largest single income that the cap blocks, over the flows it blocks
+  and over the variants the node leaves open. It is general logic: computed from the rules and the data
+  only, never from the account state, so no reading changes it. An income counts with its amount, and a move
+  out of a store with at most the store's `storage` cap (one move takes at most a full store); an income that
+  would need a state value and has no such cap blocks the output (`expr_eval_failed`,
+  `evaluation_unsupported`, `found` `state`).
+
+**Not evaluated yet** (`expr_eval_failed`, `evaluation_unsupported`; `found` names it): `metric:`, `count:` and
+`pref:` references, `interval` and `distribution` unknowns, `random:<id>` products, the rows of an external
+table, and a value rule's `when`. Every output that needs one is blocked. The other rule kinds (regen,
+exchange, cooldown, gate, random, engine, objective, weight_ref) are type-checked but not evaluated.
+
+**Variants.** A node that reads a member of a variants unknown is computed once per variant, and for each
+further variants unknown that it reads under that choice. Its output then lists `variants`
+(`[{"unknowns": {<id>: <variant>}, "value": …}]`) and, for numbers, the `range` (`low`, `high`).
+
+**Status** of an output: the worst of what it read.
+
+| Input | Counts as |
+|---|---|
+| a `confirmed` rule or data row; a reading | `confirmed` |
+| a `provisional` rule or data row; any unknown; a `pending` rule (it reads an unknown with a range) | `provisional` |
+| a `pending` data row (a row cannot name an unknown) | blocked: `rule_pending_unbounded` (`no_unknown`, `id` `<table>[<key>]`) |
+
+**Blocked outputs and partial runs.** An output that cannot be computed is `blocked` with its errors, and so
+is every output that reads it. Outputs that do not read it are still computed. Each error is reported once,
+at its own expression, with `needed_by`, the outputs it blocks; the run then exits with status 1.
+
+**Notes** (`data.notes`; never errors): `ruling_overrides_general_logic`, for a derive whose value differs from
+its `general_logic`. The value stands by its provenance, and the difference is reported.
+
+### Output
+
+`data` holds `path`, `model_id`, `state` (`path`, `label`), and:
+- `rules`: each value rule's output by id: `kind`, `status` (`confirmed`, `provisional` or `blocked`), `type`
+  and, unless blocked, `per_account` (whether it read the account state) with `value` (or `variants` and
+  `range`). A derive with `general_logic` holds it as `general_logic`, in the same shape.
+- `thresholds`: by id, `form` and the same members. The number of the `fact_offset` form is `offset`, beside
+  `fact`, `comparison` and `reference_fact`.
+- `notes`.
+
+A number is a string holding an exact rational (`"-250"`, `"7/2"`; time in seconds); a boolean is a JSON
+boolean.
