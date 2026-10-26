@@ -5,8 +5,9 @@ runs on its own: there is nothing to build, and it does not depend on the consol
 Runtime.
 
 This folder holds the launcher, `setup`, `version`, the output envelope, the dependency check, the strict
-readers of the model files, the expression language, the static check (`check`) and the derivation graph
-(`run`). The other computation commands come in later slices.
+readers of the model files, the expression language, the static check (`check`), the derivation graph
+(`run`), provenance (`explain`) and the thresholds export (`export thresholds`). The other computation
+commands come in later slices.
 
 ## Needs
 
@@ -34,6 +35,8 @@ py -3 -I -B model\acmodel.py version
 model\acmodel.cmd version
 model\acmodel.cmd check <resource repo>\ours\model
 model\acmodel.cmd run <resource repo>\ours\model --state <state snapshot>
+model\acmodel.cmd explain <resource repo>\ours\model threshold:<id> --state <state snapshot>
+model\acmodel.cmd export thresholds <resource repo>\ours\model --state <state snapshot>
 ```
 
 - **`check`** reads a model (its folder or its `model.json`) and checks it without computing anything:
@@ -43,6 +46,14 @@ model\acmodel.cmd run <resource repo>\ours\model --state <state snapshot>
   computes its derived values and thresholds for one account state, exactly. An output that cannot be
   computed (a reading the state lacks, say) is blocked with its error; the others are still computed, and
   the exit status is 1. It writes nothing (`contracts/formats.md`, "The run").
+- **`explain`** prints the provenance tree of one output (`rule:<id>`, `general_logic:<id>` or
+  `threshold:<id>`): every rule, data row, ruling and reading its value rests on, with their hashes and
+  the model's versions. It writes nothing.
+- **`export thresholds`** writes `out/thresholds.json` and one provenance file per threshold into the
+  model folder, for delivery with the resource repository. It never commits. Only account-independent
+  values go into these shared files: a threshold that read the account state, is not confirmed, is not an
+  integer, or is blocked is refused (`export_refused`, exit 5), and then nothing is written
+  (`contracts/formats.md`, "Outputs").
 - **Re-dispatch.** The launcher re-runs itself under the venv's Python, and the exit status is passed
   through.
 - **Dependency check.** Before every command except `setup`, the launcher checks that the interpreter
@@ -108,10 +119,12 @@ requirements.txt      numpy, scipy: exact pins with sha256 hashes
 requirements-dev.txt  the above plus pytest and its dependencies, hashed
 pytest.ini            test paths; src on the import path
 contracts/            cli.md (envelope, start, configuration), codes.json (the codes),
-                      formats.md (the input files, their strict reading and the static check)
+                      formats.md (the input files, their strict reading, the static check,
+                      the run and the outputs)
 src/acmodel/          the package: model/ the strict readers, expr/ the expression language,
                       check/ the static check, ids.py the id grammars they share, core/ the
-                      run (its model checks and the derivation graph), host/ the host caps
-                      (priority, Job object, memory gates, quiet windows, PAUSE file)
+                      run (its model checks, the derivation graph and provenance), export/ the
+                      thresholds export, host/ the host caps (priority, Job object, memory gates,
+                      quiet windows, PAUSE file)
 tests/                pytest tests with fakes
 ```
