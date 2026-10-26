@@ -117,6 +117,30 @@
       },
       "description": "An expression does not parse (grammar in expr/syntax.py): a character outside the language, a malformed number, an unexpected token or end, an unknown reference kind, a malformed reference (or a set where a value is needed), the member key $ outside a sum or count over its set, an unknown function, a wrong number of arguments, or an argument of the wrong form. position is the character offset; token is the offending text. The error's ref is the JSON pointer of the expression."
     },
+    "model_file_invalid": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["unreadable", "bom_present", "utf8_invalid", "syntax_invalid", "key_duplicate", "float_literal", "constant_invalid", "integer_out_of_range", "string_invalid", "type_invalid", "member_unknown", "member_missing", "member_conflict", "value_invalid", "id_invalid"]
+        },
+        "path": {"type": "path", "required": true},
+        "format": {"type": "token", "required": true},
+        "key": {"type": "name", "required": false},
+        "expected": {"type": "list:token", "required": false},
+        "literal": {"type": "raw_text", "required": false},
+        "line": {"type": "integer", "required": false},
+        "column": {"type": "integer", "required": false},
+        "offset": {"type": "integer", "required": false},
+        "exception_type": {"type": "name", "required": false},
+        "raw_text": {"type": "raw_text", "required": false}
+      },
+      "description": "An input file of the model (model, rules, data, sources, state, preference defaults) is refused by its strict reader (contracts/formats.md). The error's ref is the JSON pointer of the value (the empty pointer for the whole file); path is the file and format the reader. JSON level: unreadable, bom_present, utf8_invalid (offset), syntax_invalid (line, column), key_duplicate (the repeated key), float_literal, constant_invalid (NaN, Infinity), integer_out_of_range (beyond +-(2^53-1)), string_invalid (a lone surrogate). Shape: type_invalid (expected types), member_unknown, member_missing, member_conflict (two of members that exclude each other; expected lists them), value_invalid (expected values), id_invalid (the id grammar). One error per problem; literal is the offending text."
+    },
     "usage_invalid": {
       "category": "error",
       "exit": 2,

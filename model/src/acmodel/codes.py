@@ -9,6 +9,7 @@ CONFIG_INVALID = "config_invalid"
 DEPS_INVALID = "deps_invalid"
 VENV_FAILED = "venv_failed"
 COMMAND_CRASHED = "command_crashed"
+MODEL_FILE_INVALID = "model_file_invalid"
 EXPR_PARSE_ERROR = "expr_parse_error"
 EXPR_DIMENSION_MISMATCH = "expr_dimension_mismatch"
 EXPR_OVERFLOW = "expr_overflow"
@@ -23,6 +24,7 @@ EXIT_STATUS = {
     DEPS_INVALID: 2,
     VENV_FAILED: 1,
     COMMAND_CRASHED: 1,
+    MODEL_FILE_INVALID: 1,
     EXPR_PARSE_ERROR: 1,
     EXPR_DIMENSION_MISMATCH: 1,
     EXPR_OVERFLOW: 1,

@@ -1,0 +1,12 @@
+{
+  "schema_version": "acmodel.state.v1",
+  "model_id": "example",
+  "label": "acct-1",
+  "readings": {
+    "resource.a": {"value": 3900, "observed_at_unix_ms": 1767225600000, "source": "fixture"},
+    "resource.a_capacity": {"value": 3470, "observed_at_unix_ms": 1767225600000, "source": "fixture"},
+    "resource.s_stock": {"value": 800, "observed_at_unix_ms": 1767225600000, "source": "fixture"}
+  },
+  "entities": {},
+  "cleared": []
+}
