@@ -1,0 +1,96 @@
+{
+  "schema_version": "acmodel.codes.v1",
+  "exit_statuses": {
+    "0": "ok, possibly with provisional outputs",
+    "1": "model or input error (something blocked)",
+    "2": "usage",
+    "3": "engine failure",
+    "4": "host gate (paused or stopped; resumable)",
+    "5": "export refused",
+    "6": "regression or binding mismatch"
+  },
+  "codes": {
+    "command_crashed": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "exception_type": {"type": "name", "required": true}
+      },
+      "description": "An exception that no registered failure path covers ended the command; a defect. The traceback goes to stderr."
+    },
+    "config_invalid": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["location_invalid", "unreadable", "malformed", "key_duplicate", "member_unknown", "member_missing", "value_invalid"]
+        },
+        "variable": {"type": "name", "required": false},
+        "path": {"type": "path", "required": false},
+        "key": {"type": "name", "required": false},
+        "exception_type": {"type": "name", "required": false},
+        "raw_text": {"type": "raw_text", "required": false}
+      },
+      "description": "The configuration cannot be used: LOCALAPPDATA is unset or not absolute (location_invalid), or config.json cannot be read, is not UTF-8 JSON, repeats a key, has an unknown or missing member, or a value of the wrong type. The error's ref is the JSON pointer of the member."
+    },
+    "deps_invalid": {
+      "category": "error",
+      "exit": 2,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["missing", "version_mismatch", "python_version"]
+        },
+        "package": {"type": "name", "required": false},
+        "expected": {"type": "token", "required": false},
+        "found": {"type": "token", "required": false},
+        "path": {"type": "path", "required": false},
+        "setup_command": {"type": "list:token", "required": true}
+      },
+      "description": "The venv or a pinned package is missing, a package is not at its pin, or the interpreter (or the venv's interpreter) is not Python 3.13. setup_command is the command that creates the venv; setup never replaces a venv of another minor version."
+    },
+    "usage_invalid": {
+      "category": "error",
+      "exit": 2,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["command_missing", "command_unknown", "argument_unexpected"]
+        },
+        "argument": {"type": "token", "required": false}
+      },
+      "description": "The command line names no command, an unknown command, or an argument the command does not take. The usage text goes to stderr."
+    },
+    "venv_failed": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "stage": {
+          "type": "vocab",
+          "required": true,
+          "members": ["inspect", "create", "install", "dispatch"]
+        },
+        "path": {"type": "path", "required": true},
+        "exit_code": {"type": "integer", "required": false},
+        "exception_type": {"type": "name", "required": false},
+        "raw_text": {"type": "raw_text", "required": false},
+        "found": {"type": "path", "required": false}
+      },
+      "description": "Work on the venv failed. inspect: the configured path exists but holds no venv (no readable pyvenv.cfg version); it is refused, never replaced. create: python -m venv failed. install: pip failed. dispatch: the venv's Python could not be started, or a re-dispatched child still did not run in the venv (found is its prefix)."
+    }
+  }
+}
