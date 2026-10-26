@@ -136,8 +136,9 @@ always), `unknowns` (unknown ids), `supersedes` (rule ids), `note`]. `kind` sele
 | `objective` | `numeraire` (resource id), `terms` (list of expr), `horizon` (expr) |
 | `weight_ref` | `file`, `pointer` (a non-empty JSON pointer), `compares_to` (output id) |
 
-The members of `pity_chain`, `drop`, `outcomes` and `distribution` are this reader's reading of the design's
-outline. The slices that compute them (random processes, unknowns) may revise them.
+The members of `pity_chain`, `drop` and `outcomes` are this reader's reading of the design's outline; the slice
+that computes them (random processes) may revise them. The run computes `distribution` as written here (see
+"Unknowns" under "The run").
 
 **Unknowns:** `id` (unknown id), `kind`, `question`, `status`, `provenance` [`note`, and the range form named by
 `kind`]:
@@ -449,20 +450,22 @@ what it reads, without recursion.
   `evaluation_unsupported`, `found` `state`).
 
 **Not evaluated yet** (`expr_eval_failed`, `evaluation_unsupported`; `found` names it): `metric:`, `count:` and
-`pref:` references, `interval` and `distribution` unknowns, `random:<id>` products, the rows of an external
-table, and a value rule's `when`. Every output that needs one is blocked. The other rule kinds (regen,
-exchange, cooldown, gate, random, engine, objective, weight_ref) are type-checked but not evaluated.
+`pref:` references, `beta_from_samples` distributions (their bounds come with the random processes),
+`random:<id>` products, the rows of an external table, and a value rule's `when`. Every output that needs one
+is blocked. The other rule kinds (regen, exchange, cooldown, gate, random, engine, objective, weight_ref) are
+type-checked but not evaluated.
 
-**Variants.** A node that reads a member of a variants unknown is computed once per variant, and for each
-further variants unknown that it reads under that choice. Its output then lists `variants`
-(`[{"unknowns": {<id>: <variant>}, "value": …}]`) and, for numbers, the `range` (`low`, `high`).
+**Unknowns.** A node that reads an unknown is computed once per point of it, and once per point of each further
+unknown that it reads under that choice (see "Unknowns" below). Its output then lists `variants`
+(`[{"unknowns": {<id>: <point>}, "value": …}]`) and, for numbers, the `range` (`low`, `high`).
 
 **Status** of an output: the worst of what it read.
 
 | Input | Counts as |
 |---|---|
 | a `confirmed` rule or data row; a reading | `confirmed` |
-| a `provisional` rule or data row; any unknown; a `pending` rule (it reads an unknown with a range) | `provisional` |
+| a `provisional` rule or data row | `provisional` |
+| an unknown it chose a point of; an unknown that a `pending` rule it read names; an unknown whose points a maximum ran over (`max_single_income`) | `provisional`, unless the output chose that unknown and it has no effect on it (the no-effect rule, below) |
 | a `pending` data row (a row cannot name an unknown) | blocked: `rule_pending_unbounded` (`no_unknown`, `id` `<table>[<key>]`) |
 
 **Blocked outputs and partial runs.** An output that cannot be computed is `blocked` with its errors, and so
@@ -472,13 +475,67 @@ at its own expression, with `needed_by`, the outputs it blocks; the run then exi
 **Notes** (`data.notes`; never errors): `ruling_overrides_general_logic`, for a derive whose value differs from
 its `general_logic`. The value stands by its provenance, and the difference is reported.
 
+### Unknowns
+
+The keys are under `unknowns` in the configuration (`contracts/cli.md`); the code is `src/acmodel/core/unknown.py`.
+
+**Points.** Each unknown with a range form is evaluated at fixed points, each a scenario:
+
+| Unknown | Points |
+|---|---|
+| `variants` | each variant, by its id |
+| `interval`; `uniform` and `triangular` distributions | `low` and `high` |
+| `empirical` distribution | each of its values, by position: `0`, `1`, … |
+
+- Every bound is evaluated in each scenario. Bounds out of order (low above high, or a triangular mode outside
+  them) are `expr_eval_failed` (`range_invalid`) at the range form, and block what needs the unknown.
+- An unknown is one value in a scenario, so `unknown:<id> - unknown:<id>` is exactly 0.
+- The range of an output is its lowest and highest value over its scenarios. For variants and empirical values
+  that is every value the unknown can take. For an interval or a continuous distribution it is the range
+  whenever the output is monotone in the unknown, as one-at-a-time sensitivity assumes too (#424 design 4.8).
+
+**Sensitivity.** Two scenarios of an output are neighbours in an unknown when they chose different points of it,
+and the same point of every other unknown that both chose.
+- **Impact.** An unknown's impact on an output is the largest change between two of its neighbours, at export
+  precision: the value times `unknowns.scale` (1000, milli), rounded half to even. A boolean counts as 0 or 1.
+- **Listing.** An output that chose an unknown lists in `sensitivity` its `unknowns.top_n` (5) largest impacts,
+  as `{"unknown", "impact"}` sorted by impact and then by id. An impact is an exact rational in the output's
+  unit (time in seconds).
+
+**The no-effect rule.** An unknown makes an output provisional only when it has an effect on it. That is decided
+by computation, never by a flag:
+- an unknown the output chose makes it provisional when its impact is above zero;
+- an unknown the output depends on without choosing it is unresolved: one that a pending rule it read names (the
+  pending rule is uncertain only through it), and one whose points a maximum ran over. It makes the output
+  provisional, unless the output chose it too and its impact is zero.
+
+**Sampling** (off by default: `unknowns.samples` is 0).
+- **What is drawn.** With `unknowns.samples` = N, every output that chose a point of a distribution is computed N
+  more times, with every distribution at one sample. The intervals and variants stay at their points.
+- **Streams.** Each distribution has its own stream of `numpy.random.Philox`, keyed by `unknowns.seed` and the
+  unknown's stream id (the first 8 bytes of the sha256 of `acmodel.stream.v1:<unknown id>`).
+- **Chunks.** Sample s is the block the stream gives from counter s; the chunk k of `unknowns.chunk_size` samples
+  starts at counter k × chunk size. So the chunk size never changes a sample.
+- **Values.** A draw on (0, 1) is the middle of one of `unknowns.resolution` equal cells.
+  - A `uniform` value is low + (high − low) × draw.
+  - A `triangular` value comes from its inverse distribution function, with the square root rounded down to a
+    multiple of 1 / resolution.
+  - An `empirical` value is the one at position floor(word × n / 2<sup>64</sup>).
+
+  All of it is integer and exact, the same on every platform and under every string-hash seed.
+- **Tallies.** At export precision, per choice of the output's other unknowns, the tallies are the count, the
+  total, the lowest and the highest value, each held to the int64 range. Beyond it is `expr_overflow`
+  (`operator` `tally`, `max_bits` 63). A sample that cannot be computed blocks the output with its error.
+
 ### Output
 
 `data` holds `path`, `model_id`, `state` (`path`, `label`), `run_id` and `work` (the run id and the work
 counters of the cache, `cli.md`, "Cache"), and:
 - `rules`: each value rule's output by id: `kind`, `status` (`confirmed`, `provisional` or `blocked`), `type`
   and, unless blocked, `per_account` (whether it read the account state) with `value` (or `variants` and
-  `range`). A derive with `general_logic` holds it as `general_logic`, in the same shape.
+  `range`). An output that chose an unknown adds `sensitivity`, and a sampled one `sampled`: a list, one entry
+  per choice of its other unknowns, with `unknowns`, `samples`, and the `mean`, `low` and `high` at export
+  precision. A derive with `general_logic` holds it as `general_logic`, in the same shape.
 - `thresholds`: by id, `form` and the same members. The number of the `fact_offset` form is `offset`, beside
   `fact`, `comparison` and `reference_fact`.
 - `notes`.
@@ -518,7 +575,7 @@ of an `if`, the row a `lookup` found, every row of a set.
 |---|---|---|
 | `threshold` | `threshold:<id>` | `id`, `form`, [`round`], `file` (`exports.json`), `ref`, `sha256` of its entry |
 | `rule` | `rule:<id>` (its value), `general_logic:<id>`, `offset:<id>` (`live.offset`); the flow amounts `flow:<id>:consumes:<resource>`, `flow:<id>:produces:<resource>` and `flow:<id>:moves`; `entry:<id>`, a rule consulted for its logic only (the cap of `max_single_income`, and an income whose amount needs the account state, which its store's storage cap bounds) | `kind`, `id`, `file`, `ref` (the pointer of the expression, or of a cap's `reading`; for `entry:` the rule's), `sha256` of the rule entry, and its `status` and `provenance` as written |
-| `unknown` | `member:<unknown>:<member>` | as a rule, with `member`; `ref` is the unknown's |
+| `unknown` | `member:<unknown>:<member>`; `point:<unknown>` (an interval or a distribution) | as a rule, with `member` for a member; `ref` is the unknown's |
 | `row` | `row:<table>[<key parts joined with commas>]` | `table`, `key`, `file`, `ref`, `sha256` of the row, `status`, `provenance` (the row's, else the table's) |
 | `reading` | `reading:<fact>` | `fact`, `value`, `observed_at_unix_ms`, `source` |
 | `cleared` | `cleared:<id>` | `id`, `value` |
@@ -553,7 +610,9 @@ resource repository. So a threshold is refused (`export_refused`, exit 5) when i
   `explain` show it locally.
 - `provisional`: not confirmed. Accepting a provisional value comes with the export policy.
 - `not_integer` or `out_of_range`: its exact value is not an integer (`exports.json` can declare its `round`),
-  or lies beyond ±(2<sup>53</sup> − 1).
+  or lies beyond ±(2<sup>53</sup> − 1). A confirmed threshold that chose unknowns has a value per scenario:
+  one integer at every point is exported, and values that differ below export precision are refused as
+  `not_integer` with one that is not an integer.
 
 **Writing.**
 - When any threshold is refused, nothing is written.

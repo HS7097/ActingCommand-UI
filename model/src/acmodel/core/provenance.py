@@ -12,8 +12,9 @@ what the value rests on.
 
 Node ids:
 - a graph node: its key joined with `:`. These are `rule:<id>`, `general_logic:<id>`, `offset:<id>`,
-  `threshold:<id>`, `flow:<id>:consumes:<resource>` (or `produces`), `flow:<id>:moves` and
-  `member:<unknown>:<member>`, each with `general:` in front for the node from the rules and the data only;
+  `threshold:<id>`, `flow:<id>:consumes:<resource>` (or `produces`), `flow:<id>:moves`,
+  `member:<unknown>:<member>` and `point:<unknown>` (an interval or a distribution), each with `general:` in
+  front for the node from the rules and the data only;
 - `row:<table>[<key parts joined with commas>]`, and `entry:<rule id>` for a rule consulted for its logic;
 - the account state: `reading:<fact>`, `cleared:<id>`, `entity:<class>[<id>].<attribute>` and
   `entities:<class>`.
@@ -27,13 +28,14 @@ from typing import Any
 from acmodel.check.checker import Entry
 from acmodel.check.walk import at
 from acmodel.codes import USAGE_INVALID
+from acmodel.config import Unknowns
 from acmodel.core.run import Run, evaluate_model
 from acmodel.core.versions import relative as _relative
 from acmodel.core.versions import sha256, versions
 from acmodel.envelope import Failure, error
 
 SCHEMA_VERSION = "acmodel.provenance.v1"
-GRAPH_NODES = ("rule", "general_logic", "offset", "flow", "member", "threshold", "general")
+GRAPH_NODES = ("rule", "general_logic", "offset", "flow", "member", "point", "threshold", "general")
 STATE_NODES = ("reading", "cleared", "entity", "entities")
 
 
@@ -110,7 +112,7 @@ def _describe(run: Run, item: tuple[str, ...]) -> dict[str, Any]:
         if "round" in threshold:
             node["round"] = threshold["round"]
         return node
-    if kind in ("member", "entry"):
+    if kind in ("member", "point", "entry"):
         entry = checker.entries[item[1]]
         node = _entry(run, entry, entry.ref)
         return {**node, "member": item[2]} if kind == "member" else node
@@ -170,17 +172,23 @@ def assemble(run: Run, output: str) -> dict[str, Any]:
 
 
 def explain(
-    path: Path | str, output: str, state_path: Path | str, *, datasets: Path | str, max_bits: int
+    path: Path | str,
+    output: str,
+    state_path: Path | str,
+    *,
+    datasets: Path | str,
+    max_bits: int,
+    unknowns: Unknowns = Unknowns(),
 ) -> dict[str, Any]:
     """`acmodel explain`: the provenance document of one output for one account state.
 
     An id that is not an output of the model is `usage_invalid` (`output_unknown`). A blocked output has no
     tree: the errors that block it are raised.
     """
-    run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits)
+    run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     key = outputs(run).get(output)
     if key is None:
         raise Failure(error(USAGE_INVALID, {"reason": "output_unknown", "argument": output}))
-    if run.graph.results[key].blocked:
+    if run.graph.blocked_by(key):
         raise Failure(*(entry for entry in run.errors if output in entry["needed_by"]))
     return {**run.head, "output": output, "provenance": assemble(run, output)}

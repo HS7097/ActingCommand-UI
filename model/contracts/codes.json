@@ -239,7 +239,7 @@
         "reason": {
           "type": "vocab",
           "required": true,
-          "members": ["division_by_zero", "clamp_bounds_invalid", "value_invalid", "evaluation_unsupported"]
+          "members": ["division_by_zero", "clamp_bounds_invalid", "value_invalid", "evaluation_unsupported", "range_invalid"]
         },
         "operator": {"type": "token", "required": true},
         "position": {"type": "integer", "required": true},
@@ -247,7 +247,7 @@
         "found": {"type": "name", "required": false},
         "path": {"type": "path", "required": false}
       },
-      "description": "Evaluating an expression failed: a division by zero, clamp with its low bound above its high bound, or a value from the model (a reference, flow, lookup or set) that is not of the type the check gave it (expected is that type, or members for a set; found is the value's Python type). evaluation_unsupported (acmodel run): the expression reads what this version does not evaluate yet, and found names it: metric, count or pref (a reference of that kind), interval or distribution (an unknown of that kind), random (a random:<id> product), external_dataset (a row of an external table), when (a rule's condition), state (max_single_income, which never reads the account state: an income the cap blocks would need a state value, and no storage cap of a store it moves out of bounds it); operator is reference, the function or the member. Every output that needs it is blocked. The error's ref is the JSON pointer of the expression; acmodel run adds path, the file."
+      "description": "Evaluating an expression failed: a division by zero, clamp with its low bound above its high bound, or a value from the model (a reference, flow, lookup or set) that is not of the type the check gave it (expected is that type, or members for a set; found is the value's Python type). evaluation_unsupported (acmodel run): the expression reads what this version does not evaluate yet, and found names it: metric, count or pref (a reference of that kind), beta_from_samples (a distribution unknown of that family, whose bounds come with the random processes), random (a random:<id> product), external_dataset (a row of an external table), when (a rule's condition), state (max_single_income, which never reads the account state: an income the cap blocks would need a state value, and no storage cap of a store it moves out of bounds it); operator is reference, the function or the member. range_invalid (acmodel run): the bounds of an interval or distribution unknown, evaluated in one scenario, are out of order: low above high, or a triangular mode outside them; operator is interval, uniform or triangular, position 0, and the error's ref the unknown's range form (/unknowns/<index>/interval or /distribution). Every output that needs it is blocked. The error's ref is the JSON pointer of the expression; acmodel run adds path, the file."
     },
     "expr_overflow": {
       "category": "error",
@@ -261,7 +261,7 @@
         "position": {"type": "integer", "required": true},
         "path": {"type": "path", "required": false}
       },
-      "description": "A literal, a value read or an intermediate result of an expression has a numerator or denominator of more than max_bits bits (configuration key expr.max_bits; durations count in seconds). Nothing wraps or rounds. operator is the operator or function, literal or reference. The error's ref is the JSON pointer of the expression; acmodel run adds path, the file, and blocks every output that needs it."
+      "description": "A literal, a value read or an intermediate result of an expression has a numerator or denominator of more than max_bits bits (configuration key expr.max_bits; durations count in seconds). Nothing wraps or rounds. operator is the operator or function, literal or reference. The error's ref is the JSON pointer of the expression; acmodel run adds path, the file, and blocks every output that needs it. operator tally (acmodel run with unknowns.samples): a sampled value at export precision, the count or the total of a Monte Carlo tally would leave the int64 range (max_bits 63, bits that of the number, position 0); the output is blocked, and the error's ref is the expression the output comes from."
     },
     "expr_parse_error": {
       "category": "error",

@@ -8,17 +8,24 @@
 - ("flow", id, "consumes" | "produces", resource) and ("flow", id, "moves"): the amounts of a flow, which
   `cost`, `yield` and `max_single_income` read;
 - ("member", unknown id, member): a member of a variants unknown;
+- ("point", unknown id): an interval or distribution unknown at its points (`core.unknown`);
 - ("threshold", id): a threshold of exports.json;
-- ("general", <a rule, flow or member key>): that node from the rules and the data only, which
+- ("general", <a rule, flow, member or point key>): that node from the rules and the data only, which
   `max_single_income` reads. It never reads the account state; a node that would need it is marked so
-  (`needs_state`), and so is every such node that reads it.
+  (`needs_state`), and so is every such node that reads it;
+- ("sampled", <an output's key>): with `unknowns.samples`, the Monte Carlo tallies of an output that reads a
+  distribution (`_SampleGraph`).
 
-**Scenarios.** A node that reads a variants unknown has one value per choice of variant. The choices are
-found as the evaluation reaches them, so a node depends only on the unknowns its value actually reads.
+**Scenarios.** A node that reads an unknown has one value per point of it: each variant, or the points of
+an interval or distribution (`core.unknown`). The choices are found as the evaluation reaches them, so a
+node depends only on the unknowns its value actually reads.
 
-**Status.** A scenario's status is the worst of what it read: a rule's or data row's status (pending
-counts as provisional), any unknown (provisional), a reading (confirmed). A node that cannot be computed
-is blocked with its errors, and so is every node that reads it; the others are still computed.
+**Status.** A scenario's status is the worst of what it read: a rule's or data row's status, a reading
+(confirmed). An unknown is judged by its effect instead (`core.unknown`, the no-effect rule): a scenario
+records the unknowns it chose and those it depends on without choosing them (`unresolved`: what a pending
+rule names, and the points a maximum ran over), and an output is provisional when one of them changes it at
+export precision. A node that cannot be computed is blocked with its errors, and so is every node that
+reads it; the others are still computed.
 
 **Reads.** A scenario also records what its value read (`provenance` assembles the tree from them): the
 graph nodes, and these, each a tuple of strings:
@@ -58,14 +65,16 @@ from acmodel.check.walk import at, nodes
 from acmodel.codes import (
     DATA_REFERENCE_MISSING,
     EXPR_EVAL_FAILED,
+    EXPR_OVERFLOW,
     RULE_PENDING_UNBOUNDED,
     RULING_OVERRIDES_GENERAL_LOGIC,
     STATE_ENTITY_MISSING,
     STATE_READING_MISSING,
 )
+from acmodel.config import Unknowns
 from acmodel.core.common import (
     BLOCKED,
-    PROVISIONAL,
+    CONFIRMED,
     RULE_STATUS,
     VALUE_RULES,
     Need,
@@ -75,6 +84,28 @@ from acmodel.core.common import (
     worst,
 )
 from acmodel.core.types import Typed
+from acmodel.core.unknown import (
+    SAMPLED_FORMAT,
+    Sampled,
+    bounds,
+    check_range,
+    decode_tallies,
+    encode_tallies,
+    family,
+    pick,
+    points,
+    quantize,
+    render_sampled,
+    rule_status,
+    sample,
+    sensitivity,
+    status,
+    stream,
+    tallies,
+    tally,
+    unsupported,
+    words,
+)
 from acmodel.envelope import Failure, error
 from acmodel.expr import Call, Duration, Reference, Value, evaluate
 from acmodel.model import readers
@@ -83,16 +114,17 @@ if TYPE_CHECKING:
     from acmodel.cache.session import Session
 
 # The kinds of graph node (the first part of a node's key); every other first part names a leaf.
-NODE_KINDS = ("rule", "general_logic", "offset", "flow", "member", "threshold", "general")
+NODE_KINDS = ("rule", "general_logic", "offset", "flow", "member", "point", "threshold", "general", "sampled")
 
 
 @dataclass(frozen=True)
 class Scenario:
-    unknowns: tuple[tuple[str, str], ...]  # (unknown id, variant), sorted; empty when none was read
+    unknowns: tuple[tuple[str, str], ...]  # (unknown id, point), sorted; empty when none was read
     value: Value
-    status: str  # confirmed or provisional
+    status: str  # confirmed or provisional, from what the value read other than unknowns
     per_account: bool  # the value read the account state
     reads: tuple[tuple[str, ...], ...] = ()  # what the value read, in the order it was read
+    unresolved: tuple[str, ...] = ()  # unknowns the value depends on without choosing them, sorted
 
 
 @dataclass(frozen=True)
@@ -197,19 +229,33 @@ def _unsupported(operator: str, position: int, found: str, ref: str) -> Failure:
     return Failure(error(EXPR_EVAL_FAILED, detail, ref))
 
 
+def _at(ref: str) -> Callable[[_Environment, dict[str, str]], Value]:
+    """The value of the expression at `ref`, for `Graph.expression`."""
+    return lambda env, _: env.evaluate(ref)
+
+
 class _Environment:
     """The value environment of one node in one scenario."""
 
     prefix: tuple[str, ...] = ()  # of the nodes its references read
 
-    def __init__(self, graph: Graph, owner: Entry, ref: str, unknowns: dict[str, str], status: str) -> None:
+    def __init__(
+        self, graph: Graph, owner: Entry, unknowns: dict[str, str], status: str, unresolved: tuple[str, ...]
+    ) -> None:
         self.graph = graph
         self.owner = owner
-        self.ref = ref
+        self.ref = ""  # the pointer of the expression being evaluated (`evaluate`)
         self.unknowns = unknowns
         self.status = status
+        self.unresolved = set(unresolved)
         self.per_account = False
         self.reads: dict[tuple[str, ...], None] = {}  # what the value read, once each, in order
+
+    def evaluate(self, ref: str) -> Value:
+        """The value of the owner's expression at `ref` in this scenario."""
+        self.ref = ref
+        self.graph.depend(("typed", self.owner.path, ref))
+        return evaluate(self.graph.typed.expressions[(self.owner.path, ref)], self, max_bits=self.graph.max_bits)
 
     def fail(self, code: str, **detail: Any) -> None:
         raise Failure(error(code, {key: value for key, value in detail.items() if value is not None}, self.ref))
@@ -221,8 +267,15 @@ class _Environment:
 
     def use(self, scenario: Scenario) -> Value:
         self.status = worst(self.status, scenario.status)
+        self.unresolved.update(scenario.unresolved)
         self.per_account = self.per_account or scenario.per_account
         return scenario.value
+
+    def consult(self, rule: Entry) -> None:
+        """A rule read for its logic: its status counts, and a pending rule's unknowns stay unresolved."""
+        own, unresolved = rule_status(rule)
+        self.status = worst(self.status, own)
+        self.unresolved.update(unresolved)
 
     def consistent(self, result: Result) -> list[Scenario]:
         return [s for s in result.scenarios if all(self.unknowns.get(u, v) == v for u, v in s.unknowns)]
@@ -245,9 +298,12 @@ class _Environment:
         if kind == "unknown":
             self.graph.depend(("unknown_target", target))
             entry, member = unknown_target(checker, target)
-            if member is None:
-                raise _unsupported("reference", ref.position, entry.kind, self.ref)
-            return self.node(("member", entry.id, member))
+            if member is not None:
+                return self.node(("member", entry.id, member))
+            found = unsupported(entry)
+            if found is not None:
+                raise _unsupported("reference", ref.position, found, self.ref)
+            return self.node(("point", entry.id))
         if kind == "read":
             return self.reading(target, ref.position)
         if kind in ("amount", "stock"):
@@ -301,7 +357,7 @@ class _Environment:
         self.read(("entry", cap))  # which incomes it blocks
         for key in parts:
             self.graph.depend(("entry", key[1]))
-            self.status = worst(self.status, RULE_STATUS[checker.entries[key[1]].doc["status"]])
+            self.consult(checker.entries[key[1]])
             bound = self.store_bound(key)
             try:
                 largest = self.largest(("general",) + key)
@@ -315,9 +371,11 @@ class _Environment:
         return max(found, key=_magnitude)
 
     def largest(self, key: tuple[str, ...]) -> Value:
-        """The largest value of node `key` over the variants this scenario leaves open."""
+        """The largest value of node `key` over the points this scenario leaves open. The maximum chooses
+        none of them, so their unknowns stay unresolved."""
         scenarios = self.consistent(self.graph.result(key))
         self.read(key)
+        self.unresolved.update(u for s in scenarios for u, _ in s.unknowns if u not in self.unknowns)
         return max((self.use(s) for s in scenarios), key=_magnitude)
 
     def store_bound(self, part: tuple[str, ...]) -> Value | None:
@@ -441,15 +499,25 @@ class Graph:
         exports: dict[str, Any],
         *,
         max_bits: int,
+        settings: Unknowns = Unknowns(),
         cache: Session | None = None,
     ) -> None:
         self.checker = checker
         self.typed = typed
         self.state = state
         self.cleared = frozenset(state["cleared"])
+        self.exports = exports
         self.thresholds = {threshold["id"]: threshold for threshold in exports["thresholds"]}
         self.max_bits = max_bits
-        self.results: dict[tuple[str, ...], Result] = {}
+        self.settings = settings  # the keys under `unknowns`
+        # The distribution unknowns that sampling draws, and the sample of each (`_SampleGraph` only).
+        self.distributions = sorted(
+            u.id for u in checker.unknowns
+            if checker.entries.get(u.id) is u and u.kind == "distribution" and "distribution" in u.doc
+            and unsupported(u) is None
+        )
+        self.words: dict[str, int] = {}
+        self.results: dict[tuple[str, ...], Result | Sampled] = {}
         self.errors: list[dict[str, Any]] = []  # the root errors, each once
         self._seen: dict[str, int] = {}
         self.cache = cache
@@ -545,12 +613,15 @@ class Graph:
         """`compute` through the cache: the kept value of a trace that still holds, or the node computed
         again, its trace and value kept."""
         cache, kind = self.cache, key[0]
-        spec = cache.spec(kind, {"node": list(key), "max_bits": self.max_bits, "format": VALUE_FORMAT})
+        spec_doc: dict[str, Any] = {"node": list(key), "max_bits": self.max_bits, "format": VALUE_FORMAT}
+        if kind == "sampled":  # its value is its tallies, which these keys decide
+            spec_doc.update(format=SAMPLED_FORMAT, unknowns=self.settings.keyed())
+        spec = cache.spec(kind, spec_doc)
         hit = cache.lookup(kind, spec, self.current)
         if hit is not None:
             value, blob = hit
             self.hashes[key] = value
-            return self.decode(blob)
+            return self.decode(kind, blob)
         self._trace = {}
         started = time.perf_counter_ns()
         try:
@@ -563,16 +634,20 @@ class Graph:
         self.hashes[key] = cache.save(kind, spec, list(key), trace, blob, compute_us)
         return result
 
-    def encode(self, result: Result) -> dict[str, Any]:
+    def encode(self, result: Result | Sampled) -> dict[str, Any]:
+        blocked = sorted((self.errors[index] for index in result.blocked_by), key=canonical_text)
+        if isinstance(result, Sampled):
+            return {"tallies": encode_tallies(result), "blocked": blocked}
         scenarios = [
             {name: _encode_value(getattr(s, name)) if name == "value" else getattr(s, name) for name in VALUE_FORMAT["scenario"]}
             for s in result.scenarios
         ]
-        blocked = sorted((self.errors[index] for index in result.blocked_by), key=canonical_text)
         return {"scenarios": scenarios, "blocked": blocked, "needs_state": result.needs_state}
 
-    def decode(self, blob: bytes) -> Result:
+    def decode(self, kind: str, blob: bytes) -> Result | Sampled:
         doc = json.loads(blob)
+        if kind == "sampled":
+            return Sampled(decode_tallies(doc["tallies"]), self._register(doc["blocked"]))
         scenarios = tuple(
             Scenario(**{name: _decode_value(raw) if name == "value" else _tuples(raw) for name, raw in s.items()})
             for s in doc["scenarios"]
@@ -608,66 +683,68 @@ class Graph:
 
     # Nodes --------------------------------------------------------------------------------------
 
-    def compute(self, key: tuple[str, ...]) -> Result:
+    def compute(self, key: tuple[str, ...]) -> Result | Sampled:
         if key[0] == "threshold":
             return self.threshold(key[1])
+        if key[0] == "sampled":
+            return self.sampled(key[1:])
         general = key[0] == "general"  # the same node from the rules and the data only
         if general:
             key = key[1:]
         self.depend(("entry", key[1]))  # first: what the node is, and so what it reads next
         entry = self.checker.entries[key[1]]
         if key[0] == "member":
-            def member(unknowns: dict[str, str]) -> str:
+            def member(env: _Environment, unknowns: dict[str, str]) -> Value:
                 if entry.id not in unknowns:
                     raise _Branch(entry.id)
-                return at(entry.ref, "variants", unknowns[entry.id], key[2])
+                return env.evaluate(at(entry.ref, "variants", unknowns[entry.id], key[2]))
 
-            return self.expression(entry, member, PROVISIONAL, general=general)
-        own, logic = RULE_STATUS[entry.doc["status"]], entry.doc["logic"]
+            return self.expression(entry, member, CONFIRMED, general=general)
+        if key[0] == "point":
+            return self.point(entry, general)
+        (own, unresolved), logic = rule_status(entry), entry.doc["logic"]
         if "when" in entry.doc:  # a conditional value: evaluated by a later slice
             return self.blocked(_unsupported("when", 0, "when", at(entry.ref, "when")).errors, entry.path)
         if key[0] == "rule" and entry.kind == "cap" and "value" not in logic:
-            return Result(needs_state=True) if general else self.cap_reading(entry, own)
+            return Result(needs_state=True) if general else self.cap_reading(entry, own, unresolved)
         if key[0] == "rule":
             member = ("max",) if entry.kind == "limit" else ("value",)
-            return self.expression(
-                entry, lambda _: at(entry.ref, "logic", *member), own, logic.get("round"), general=general
-            )
+            ref = at(entry.ref, "logic", *member)
+            return self.expression(entry, _at(ref), own, logic.get("round"), general=general, unresolved=unresolved)
         if key[0] == "general_logic":
-            return self.expression(entry, lambda _: at(entry.ref, "logic", "general_logic"), own)
+            return self.expression(entry, _at(at(entry.ref, "logic", "general_logic")), own, unresolved=unresolved)
         if key[0] == "offset":
-            return self.expression(entry, lambda _: at(entry.ref, "logic", "live", "offset"), own)
+            return self.expression(entry, _at(at(entry.ref, "logic", "live", "offset")), own, unresolved=unresolved)
         ref = at(entry.ref, "logic", "moves", "amount") if key[2] == "moves" else at(entry.ref, "logic", key[2], key[3])
         self.depend(("typed", entry.path, ref))
         if (entry.path, ref) not in self.typed.expressions:  # a `random:<id>` product
             return self.blocked(_unsupported(key[2], 0, "random", ref).errors, entry.path)
-        return self.expression(entry, lambda _: ref, own, general=general)
+        return self.expression(entry, _at(ref), own, general=general, unresolved=unresolved)
 
     def expression(
         self,
         owner: Entry,
-        select: Callable[[dict[str, str]], str],
+        value_of: Callable[[_Environment, dict[str, str]], Value],
         own: str,
         mode: str | None = None,
         *,
         general: bool = False,
+        unresolved: tuple[str, ...] = (),
     ) -> Result:
-        """Evaluate the expression `select` picks, once per scenario (from the rules and the data only when
-        `general`)."""
+        """The value `value_of` computes in each scenario's environment (from the rules and the data only
+        when `general`), once per scenario."""
         scenarios = []
         todo: list[tuple[tuple[str, str], ...]] = [()]
         while todo:
             unknowns = todo.pop()
             chosen = dict(unknowns)
+            env = (_General if general else _Environment)(self, owner, chosen, own, unresolved)
             try:
-                ref = select(chosen)
-                self.depend(("typed", owner.path, ref))
-                env = (_General if general else _Environment)(self, owner, ref, chosen, own)
-                value = evaluate(self.typed.expressions[(owner.path, ref)], env, max_bits=self.max_bits)
+                value = value_of(env, chosen)
             except _Branch as branch:
                 self.depend(("entry", branch.unknown))
-                names = sorted(self.checker.entries[branch.unknown].doc["variants"], reverse=True)
-                todo.extend(unknowns + ((branch.unknown, name),) for name in names)
+                names = points(self.checker.entries[branch.unknown])
+                todo.extend(unknowns + ((branch.unknown, name),) for name in reversed(names))
                 continue
             except _Blocked as blocked:
                 return Result(blocked_by=blocked.errors)
@@ -675,19 +752,94 @@ class Graph:
                 return Result(needs_state=True)
             except Failure as failure:
                 return self.blocked(failure.errors, owner.path)
-            scenarios.append(
-                Scenario(tuple(sorted(unknowns)), _rounded(mode, value), env.status, env.per_account, tuple(env.reads))
-            )
+            scenarios.append(Scenario(
+                tuple(sorted(unknowns)), _rounded(mode, value), env.status, env.per_account, tuple(env.reads),
+                tuple(sorted(env.unresolved)),
+            ))
         return Result(tuple(sorted(scenarios, key=lambda scenario: scenario.unknowns)))
 
-    def cap_reading(self, cap: Entry, own: str) -> Result:
+    def point(self, entry: Entry, general: bool) -> Result:
+        """An interval or distribution unknown at each of its points (`core.unknown`), or at its sample in a
+        `_SampleGraph`. Every bound is evaluated in each scenario and must be in order (`range_invalid`)."""
+        refs, word, empirical = bounds(entry), self.words.get(entry.id), family(entry) == "empirical"
+
+        def value_of(env: _Environment, unknowns: dict[str, str]) -> Value:
+            if word is not None:
+                name = pick(word, len(refs)) if empirical else None
+            elif entry.id not in unknowns:
+                raise _Branch(entry.id)
+            else:
+                name = unknowns[entry.id]
+            if empirical:
+                return env.evaluate(refs[name])
+            values = {bound: env.evaluate(ref) for bound, ref in refs.items()}
+            check_range(entry, values)
+            return values[name] if word is None else sample(entry, values, word, self.settings.resolution)
+
+        return self.expression(entry, value_of, CONFIRMED, general=general)
+
+    def cap_reading(self, cap: Entry, own: str, unresolved: tuple[str, ...]) -> Result:
         fact = cap.doc["logic"]["reading"]
         self.depend(("reading", fact))
         readings = self.state["readings"]
         if fact not in readings:
             failure = Failure(error(STATE_READING_MISSING, {"fact": fact}, at(cap.ref, "logic", "reading")))
             return self.blocked(failure.errors, cap.path)
-        return Result((Scenario((), Fraction(readings[fact]["value"]), own, True, (("reading", fact),)),))
+        return Result((Scenario((), Fraction(readings[fact]["value"]), own, True, (("reading", fact),), unresolved),))
+
+    # Sampling ---------------------------------------------------------------------------------------
+
+    def involves(self, result: Result | Sampled) -> bool:
+        """Whether a computed node read a distribution unknown."""
+        if not isinstance(result, Result):
+            return False
+        return any(unknown in self.distributions for s in result.scenarios for unknown, _ in s.unknowns)
+
+    def place(self, output: tuple[str, ...]) -> tuple[str, str]:
+        """The file and pointer an error of an output's sampling points at: the expression it comes from."""
+        kind, name = output
+        if kind == "threshold":
+            threshold = self.thresholds[name]
+            kind, name = ("offset" if threshold["form"] == "fact_offset" else "rule"), threshold["from"]
+        entry = self.checker.entries[name]
+        member = {"general_logic": ("general_logic",), "offset": ("live", "offset")}.get(kind)
+        if member is None:
+            member = ("max",) if entry.kind == "limit" else ("value",)
+        return entry.path, at(entry.ref, "logic", *member)
+
+    def sampled(self, output: tuple[str, ...]) -> Sampled:
+        """The Monte Carlo tallies of an output that reads a distribution: for each of `unknowns.samples`
+        samples, the output computed with every distribution unknown at that sample (`_SampleGraph`), and its
+        value at export precision tallied per choice of its other unknowns. A sample that cannot be computed,
+        or a tally beyond the int64 range (`expr_overflow`, operator `tally`), blocks the output."""
+        if output not in self.results:
+            raise Need(output)
+        self.depend(output)
+        settings = self.settings
+        streams = {unknown: stream(unknown) for unknown in self.distributions}
+        base = {key: result for key, result in self.results.items() if isinstance(result, Result) and not self.involves(result)}
+        found: dict[tuple[tuple[str, str], ...], list[int]] = {}
+        for start in range(0, settings.samples, settings.chunk_size):
+            count = min(settings.chunk_size, settings.samples - start)
+            chunk = {unknown: words(settings.seed, sid, start, count) for unknown, sid in streams.items()}
+            for index in range(count):
+                graph = _SampleGraph(self, base, {unknown: chunk[unknown][index] for unknown in streams})
+                solve([output], graph.compute, graph.results)
+                result = graph.results[output]
+                if result.blocked:
+                    return Sampled(blocked_by=result.blocked_by)
+                for scenario in result.scenarios:
+                    over = tally(found, scenario.unknowns, quantize(scenario.value, settings.scale))
+                    if over is not None:
+                        path, ref = self.place(output)
+                        detail = {"operator": "tally", "bits": abs(over).bit_length(), "max_bits": 63, "position": 0}
+                        return Sampled(blocked_by=self.blocked([error(EXPR_OVERFLOW, detail, ref)], path).blocked_by)
+        return Sampled(tallies(found))
+
+    def blocked_by(self, key: tuple[str, ...]) -> frozenset[int]:
+        """The root errors that block an output: its own, and its sampling's."""
+        sampled = self.results.get(("sampled", *key))
+        return self.results[key].blocked_by | (sampled.blocked_by if sampled is not None else frozenset())
 
     def threshold(self, threshold_id: str) -> Result:
         self.depend(("threshold_entry", threshold_id))
@@ -716,19 +868,27 @@ class Graph:
         return found
 
     def render(self, key: tuple[str, str], name: str = "value") -> dict[str, Any]:
-        result = self.results[key]
-        out: dict[str, Any] = {"status": result.status, "type": self.typed.outputs[key].token}
-        if result.blocked:
-            return out
+        """An output as `run` shows it. Its status follows the no-effect rule (`core.unknown`); an output that
+        read an unknown lists its `sensitivity`, and a sampled one its `sampled` tallies."""
+        result, settings = self.results[key], self.settings
+        if self.blocked_by(key):
+            return {"status": BLOCKED, "type": self.typed.outputs[key].token}
         scenarios = result.scenarios
+        out: dict[str, Any] = {"status": status(scenarios, settings.scale), "type": self.typed.outputs[key].token}
         out["per_account"] = any(s.per_account for s in scenarios)
         if len(scenarios) == 1 and not scenarios[0].unknowns:
             out[name] = _json(scenarios[0].value)
-            return out
-        out["variants"] = [{"unknowns": dict(s.unknowns), name: _json(s.value)} for s in scenarios]
-        if all(type(s.value) is not bool for s in scenarios):
-            values = sorted((s.value for s in scenarios), key=_magnitude)
-            out["range"] = {"low": _json(values[0]), "high": _json(values[-1])}
+        else:
+            out["variants"] = [{"unknowns": dict(s.unknowns), name: _json(s.value)} for s in scenarios]
+            if all(type(s.value) is not bool for s in scenarios):
+                values = sorted((s.value for s in scenarios), key=_magnitude)
+                out["range"] = {"low": _json(values[0]), "high": _json(values[-1])}
+        listing = sensitivity(scenarios, settings.scale, settings.top_n)
+        if listing is not None:
+            out["sensitivity"] = listing
+        sampled = self.results.get(("sampled", *key))
+        if sampled is not None:
+            out["sampled"] = render_sampled(sampled, settings.scale)
         return out
 
     def notes(self) -> list[dict[str, Any]]:
@@ -750,10 +910,13 @@ class Graph:
     def run(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """Compute every output; return the run's `data` and its errors, each with the outputs it blocks."""
         outputs = self.outputs()
-        solve([key for _, key in outputs], self.compute if self.cache is None else self.cached, self.results)
+        compute = self.compute if self.cache is None else self.cached
+        solve([key for _, key in outputs], compute, self.results)
+        if self.settings.samples:
+            solve([("sampled", *key) for _, key in outputs if self.involves(self.results[key])], compute, self.results)
         needed_by: dict[int, list[str]] = {index: [] for index in range(len(self.errors))}
         for name, key in outputs:
-            for index in self.results[key].blocked_by:
+            for index in self.blocked_by(key):
                 needed_by[index].append(name)
         errors = [{**entry, "needed_by": sorted(needed_by[index])} for index, entry in enumerate(self.errors)]
         # Fully ordered, so the order never depends on which nodes were computed and which were reused.
@@ -779,3 +942,27 @@ class Graph:
                 **self.render(key, "offset"),
             }
         return {"rules": rules, "thresholds": thresholds, "notes": self.notes()}, errors
+
+
+class _SampleGraph(Graph):
+    """The graph at one sample of the distributions (`Graph.sampled`): every distribution unknown is at its
+    sample, and the other unknowns at their points.
+
+    The nodes that read no distribution are the main graph's, and are not computed again. This graph computes
+    without the cache, inside the computation of the main graph's sampled node: what it reads it forwards to
+    that node's trace, so the sampled node is reused exactly while everything its samples read is unchanged.
+    It registers its errors among the main graph's.
+    """
+
+    def __init__(self, main: Graph, base: dict[tuple[str, ...], Result], sample: dict[str, int]) -> None:
+        super().__init__(main.checker, main.typed, main.state, main.exports, max_bits=main.max_bits, settings=main.settings)
+        self.main = main
+        self.results = dict(base)
+        self.copied = base.keys()
+        self.errors, self._seen = main.errors, main._seen
+        self.words = sample
+
+    def depend(self, item: tuple[str, ...]) -> None:
+        if item[0] in NODE_KINDS and item not in self.copied:
+            return  # computed in this graph, which forwards what it reads as it reads it
+        self.main.depend(item)

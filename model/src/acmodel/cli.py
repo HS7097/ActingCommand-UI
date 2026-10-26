@@ -122,7 +122,8 @@ def _run(
     with cache.open_store(cfg.state_root, max_bytes=cfg.cache_max_bytes) as store:
         session = cache.Session(store, libraries=cache.libraries(system.python_version, packages))
         data, errors = run_model(
-            Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits, cache=session
+            Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits,
+            unknowns=cfg.unknowns, cache=session,
         )
     evicted = data["work"]["evicted"]
     if evicted["entries"]:
@@ -152,12 +153,17 @@ def _cache(command: str, args: list[str], cfg: config.Config, system: System) ->
 
 def _explain(args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
     _dependencies(system)
-    return explain(Path(args[0]), args[1], Path(args[2]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits)
+    return explain(
+        Path(args[0]), args[1], Path(args[2]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits,
+        unknowns=cfg.unknowns,
+    )
 
 
 def _export_thresholds(args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
     _dependencies(system)
-    return export_thresholds(Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits)
+    return export_thresholds(
+        Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits, unknowns=cfg.unknowns
+    )
 
 
 def _bindings(command: str, args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
@@ -167,8 +173,10 @@ def _bindings(command: str, args: list[str], cfg: config.Config, system: System)
     model, state = Path(args[0]), Path(args[1])
     if command == "bindings check":
         strict = "--strict" in args[2:]
-        return check_bindings(model, state, datasets=cfg.datasets, max_bits=cfg.expr_max_bits, strict=strict)
-    return apply_bindings(model, state, datasets=cfg.datasets, max_bits=cfg.expr_max_bits)
+        return check_bindings(
+            model, state, datasets=cfg.datasets, max_bits=cfg.expr_max_bits, strict=strict, unknowns=cfg.unknowns
+        )
+    return apply_bindings(model, state, datasets=cfg.datasets, max_bits=cfg.expr_max_bits, unknowns=cfg.unknowns)
 
 
 def main(argv: Sequence[str], system: System) -> int:

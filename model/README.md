@@ -6,9 +6,9 @@ Runtime.
 
 This folder holds the launcher, `setup`, `version`, the output envelope, the dependency check, the strict
 readers of the model files, the expression language, the static check (`check`), the derivation graph
-(`run`) and its cache with incremental recompute (`cache`), provenance (`explain`), the thresholds export
-(`export thresholds`) and the bindings of thresholds to the schedule (`bindings check`, `bindings apply`).
-The other computation commands come in later slices.
+(`run`) with its unknowns and their sensitivity, its cache with incremental recompute (`cache`), provenance
+(`explain`), the thresholds export (`export thresholds`) and the bindings of thresholds to the schedule
+(`bindings check`, `bindings apply`). The other computation commands come in later slices.
 
 ## Needs
 
@@ -52,6 +52,10 @@ model\acmodel.cmd cache gc [--apply]
   computes its derived values and thresholds for one account state, exactly. An output that cannot be
   computed (a reading the state lacks, say) is blocked with its error; the others are still computed, and
   the exit status is 1 (`contracts/formats.md`, "The run").
+- **Unknowns.** An output that reads an unknown is computed at each of its points (each variant, the low and
+  high of an interval or distribution, each empirical value) and shows its range. It lists the unknowns with
+  the largest impact at milli, and only an unknown that changes it there makes it provisional. Distributions
+  can also be sampled (`unknowns.samples`), deterministically (`contracts/formats.md`, "Unknowns").
 - **Cache.** `run` keeps every computed node under the state root and computes again only what a change
   reaches: a node is reused while everything it read still hashes the same, and a node that comes out the
   same stops the change there. Each run gets a run id from its inputs, its outputs are kept under
@@ -123,6 +127,9 @@ default:
   - a pause while the host CPU load is above 90 %.
 
   `contracts/cli.md` (Host caps) has the details.
+- **Unknowns.** The keys under `unknowns`: `top_n` (5) unknowns listed per output, `scale` (1000, milli) the
+  export precision that impacts are measured at, and the Monte Carlo sampling of distributions: `samples` (0,
+  off), `seed` (0), `chunk_size` (1024) and `resolution` (1000000).
 
 ## Tests
 
@@ -147,8 +154,8 @@ contracts/            cli.md (envelope, start, configuration), codes.json (the c
                       the run and the outputs)
 src/acmodel/          the package: model/ the strict readers, expr/ the expression language,
                       check/ the static check, ids.py the id grammars they share, core/ the
-                      run (its model checks, the derivation graph, provenance and the versions of
-                      the inputs), cache/ the cache (keys, sqlite3 index and blobs, verifying
+                      run (its model checks, the derivation graph, the unknowns, provenance and the
+                      versions of the inputs), cache/ the cache (keys, sqlite3 index and blobs, verifying
                       traces, run ids, stats/verify/gc), export/ the thresholds export, bindings/
                       the bindings check and apply with their position-tracking scanner, host/ the
                       host caps (priority, Job object, memory gates, quiet windows, PAUSE file)

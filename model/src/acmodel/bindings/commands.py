@@ -47,6 +47,7 @@ from acmodel.codes import (
     MODEL_ID_DUPLICATE,
     RULE_REFERENCE_MISSING,
 )
+from acmodel.config import Unknowns
 from acmodel.core.provenance import STATE_NODES, assemble
 from acmodel.core.run import Run, evaluate_model
 from acmodel.envelope import Failure, error
@@ -70,8 +71,10 @@ def _entries(bindings: File) -> Iterator[tuple[str, dict[str, Any]]]:
             yield at("", member, index), entry
 
 
-def _load(path: Path | str, state_path: Path | str, *, datasets: Path | str, max_bits: int) -> tuple[Run, File]:
-    run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits)
+def _load(
+    path: Path | str, state_path: Path | str, *, datasets: Path | str, max_bits: int, unknowns: Unknowns
+) -> tuple[Run, File]:
+    run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     bindings_path = run.folder / BINDINGS
     return run, File(str(bindings_path), read_bindings(bindings_path))
 
@@ -206,11 +209,17 @@ def _unbound(schedule: Target, bindings: File) -> tuple[int, list[dict[str, Any]
 
 
 def check_bindings(
-    path: Path | str, state_path: Path | str, *, datasets: Path | str, max_bits: int, strict: bool
+    path: Path | str,
+    state_path: Path | str,
+    *,
+    datasets: Path | str,
+    max_bits: int,
+    strict: bool,
+    unknowns: Unknowns = Unknowns(),
 ) -> dict[str, Any]:
     """`acmodel bindings check [--strict]`: every bound literal equals its exported threshold; with `strict`,
     no literal of a `fact` predicate of schedule.json is left unbound."""
-    run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits)
+    run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
     repo, targets = _targets(run, bindings, strict)
     values, errors = _values(run, bindings)
@@ -260,10 +269,12 @@ def _write(target: Target, raw: bytes) -> None:
         raise Failure(error(EXPORT_WRITE_FAILED, detail)) from exc
 
 
-def apply_bindings(path: Path | str, state_path: Path | str, *, datasets: Path | str, max_bits: int) -> dict[str, Any]:
+def apply_bindings(
+    path: Path | str, state_path: Path | str, *, datasets: Path | str, max_bits: int, unknowns: Unknowns = Unknowns()
+) -> dict[str, Any]:
     """`acmodel bindings apply`: write each bound literal that differs from its exported threshold, changing
     only its bytes. Anything else `check` refuses is refused, and then nothing is written."""
-    run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits)
+    run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
     repo, targets = _targets(run, bindings, False)
     values, errors = _values(run, bindings)
