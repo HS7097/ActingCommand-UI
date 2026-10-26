@@ -81,7 +81,8 @@ acmodel.cmd           Windows wrapper for the launcher
 requirements.txt      numpy, scipy: exact pins with sha256 hashes
 requirements-dev.txt  the above plus pytest and its dependencies, hashed
 pytest.ini            test paths; src on the import path
-contracts/            cli.md (envelope, start, configuration), codes.json (the codes)
-src/acmodel/          the package
+contracts/            cli.md (envelope, start, configuration), codes.json (the codes),
+                      formats.md (the input files and their strict reading)
+src/acmodel/          the package; model/ holds the strict readers of the input files
 tests/                pytest tests with fakes
 ```
