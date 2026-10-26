@@ -139,16 +139,18 @@ always), `unknowns` (unknown ids), `supersedes` (rule ids), `note`]. `kind` sele
 | `objective` | `numeraire` (resource id), `terms` (list of expr), `horizon` (expr) |
 | `weight_ref` | `file`, `pointer` (a non-empty JSON pointer), `compares_to` (output id) |
 
-The members of `pity_chain`, `drop` and `outcomes` are this reader's reading of the design's outline; the slice
-that computes them (random processes) may revise them. The run computes `distribution` as written here (see
-"Unknowns" under "The run").
+Absent members of `pity_chain` mean: `p_up` 1 (every top-tier pull is the target), `guarantee_after_miss` false
+and no `spark`. The run computes a `pity_chain` and a `drop` (see "Random rules" under "The run"); `outcomes`
+and `random:<id>` products are read and type-checked, and not evaluated yet. The run computes `distribution` as
+written here (see "Unknowns" under "The run").
 
 **Unknowns:** `id` (unknown id), `kind`, `question`, `status`, `provenance` [`note`, and the range form named by
 `kind`]:
 - `interval`: `{low, high}` (expr);
 - `variants`: variant id to `{member id: expr}`;
 - `distribution`: `family` selects the rest. `uniform`: `low`, `high`; `triangular`: `low`, `mode`, `high`;
-  `beta_from_samples`: `samples` ≥ 1, `successes` ≥ 0; `empirical`: `values` (a non-empty list of expr).
+  `beta_from_samples`: `samples` ≥ 1, `successes` from 0 to `samples`; `empirical`: `values` (a non-empty list
+  of expr).
 
 The range form may be absent here. An unknown without one is a missing input, and a computation that needs
 it fails.
@@ -368,6 +370,7 @@ of the expression language (`src/acmodel/expr/dimensions.py`). The references ha
 | `stock:<s>` | the amount of the resource the store holds |
 | `cap:<c>`, `rule:<cap>` | the amount of what the cap's subject holds: the resource itself, or a store's resource |
 | `rule:<derive>` | the type of its `value` |
+| `rule:<random>` | `count` for a pity chain (its expected pulls), `none` for a drop (its chance) |
 | `rule:<limit>`, `count:<limit>` | `count` |
 | `read:<fact>` | the dimension of what declares the fact key: an entity's reading is the amount it holds, a cap's reading the cap's |
 | `unknown:<id>.<member>` | the one type of the member in every variant |
@@ -400,17 +403,22 @@ together, with exit status 1.
   | flow `moves.amount` | the amount that `from` holds, and the amount that `to` holds |
   | derive `general_logic` | the dimension of its `value` |
   | derive `live.offset` | the dimension of `live.reference_fact`, which is that of `live.fact` (`operator` `live`) |
+  | random `pity_chain.rate`, `pity_chain.p_up`, `drop.rate`, an outcome's `p` | `none` (a chance) |
+  | random `pity_chain.hard_pity`, `pity_chain.spark` | `count` |
+  | random: an outcome's `then` | the amount of the resource named by the key |
   | derive `value` with `round` | a number that is not `time` (`operator` `round`) |
   | the members of the variants of an unknown, the bounds of an interval or a distribution | one dimension (`operator` `variants`, `interval` or `distribution`) |
   | each key of `lookup(<table>, …)` | its key column's type; a key column of type `id` or `enum` (or none declared) cannot be looked up |
 
-  `operator` names the member, and `operands` are the expected and the found type. The random and engine
-  members are not checked here; their slices check them.
+  `operator` names the member, and `operands` are the expected and the found type. The engine members are not
+  checked here; their slice checks them.
 
 **References** (`rule_reference_missing`):
 - **Preference keys.** Every `pref:<key>` and every key of a gate's `prefs` is in the preference defaults'
   `defaults` (`expected` `pref`).
-- **Rule values.** `rule:<id>` names a `derive`, `cap` or `limit` rule, the rules that have a value.
+- **Rule values.** `rule:<id>` names a rule that has a value: a `derive`, `cap` or `limit` rule, or a `random`
+  rule with a `pity_chain` or a `drop` (`expected` lists `rule.random.pity_chain` and `rule.random.drop`; one
+  with `outcomes` is `found` `rule.random.outcomes`).
 - **Caps.** A cap's subject is a resource or a store (`expected` `resource`, `store`), at its `subject`.
 - **Flows.** `cost(<a>, <r>)` needs an active flow of `<a>` that consumes `<r>` or moves out of it;
   `yield(<a>, <r>)` one that produces `<r>` or moves into it; `max_single_income(<r>, <cap>)` a flow the cap
@@ -425,7 +433,7 @@ together, with exit status 1.
 
 **Nodes.** The outputs are:
 - `rule:<id>`: the value of every active `derive` (its `value`, then its `round`), `cap` (its `value`, or its
-  reading) and `limit` (its `max`);
+  reading), `limit` (its `max`) and `random` rule with a `pity_chain` or a `drop` (see "Random rules");
 - `general_logic:<id>`: a derive's `general_logic`, computed beside its value and read by nothing;
 - `threshold:<id>`: each threshold of `exports.json`. The `constant` form is the derive's value, the
   `fact_offset` form the value of its `live.offset`; then the threshold's `round`. The `fact_offset` form
@@ -453,10 +461,9 @@ what it reads, without recursion.
   `evaluation_unsupported`, `found` `state`).
 
 **Not evaluated yet** (`expr_eval_failed`, `evaluation_unsupported`; `found` names it): `metric:`, `count:` and
-`pref:` references, `beta_from_samples` distributions (their bounds come with the random processes),
-`random:<id>` products, the rows of an external table, and a value rule's `when`. Every output that needs one
-is blocked. The other rule kinds (regen, exchange, cooldown, gate, random, engine, objective, weight_ref) are
-type-checked but not evaluated.
+`pref:` references, `random:<id>` products, the rows of an external table, and a value rule's `when`. Every
+output that needs one is blocked. The other rule kinds (regen, exchange, cooldown, gate, engine, objective,
+weight_ref), and random rules with `outcomes`, are type-checked but not evaluated.
 
 **Unknowns.** A node that reads a discrete unknown is computed once per point of it, and once per point of each
 further one that it reads under that choice. A continuous unknown is one enclosure, and what reads it is computed
@@ -487,10 +494,11 @@ The keys are under `unknowns`, and `sensitivity.top_n`, in the configuration (`c
 **Discrete unknowns** are evaluated at their points, each a scenario: a `variants` unknown at each variant (by its
 id), an `empirical` distribution at each of its values (by position: `0`, `1`, …).
 
-**Continuous unknowns** (`interval`, and the `uniform` and `triangular` distributions) are one enclosure each:
-from the lowest value of the low bound to the highest value of the high bound. Every bound is evaluated, and
-bounds that may be out of order (low above high, a triangular mode outside them) are `expr_eval_failed`
-(`range_invalid`) at the range form; they block what needs the unknown.
+**Continuous unknowns** (`interval`, and the `uniform`, `triangular` and `beta_from_samples` distributions) are one
+enclosure each: from the lowest value of the low bound to the highest value of the high bound. Every bound is
+evaluated, and bounds that may be out of order (low above high, a triangular mode outside them) are
+`expr_eval_failed` (`range_invalid`) at the range form; they block what needs the unknown. The bounds of a
+`beta_from_samples` rate are its Wilson bounds (see "Random rules"): it reads no expression.
 
 **Ranges are sound enclosures.** Everything a continuous unknown reaches is computed by interval arithmetic with
 exact rational bounds, so the `range` of an output is never narrower than its true range.
@@ -529,8 +537,8 @@ the low and the high of a continuous one).
 
 **Sampling** (off by default: `unknowns.samples` is 0).
 - **What is drawn.** With `unknowns.samples` = N, every output that read a distribution is computed N more times,
-  with every distribution at one sample. The variants stay at their points, and the intervals stay free, so a
-  sampled value can be an enclosure.
+  with every distribution at one sample. The variants stay at their points, and the intervals and the
+  `beta_from_samples` rates stay free, so a sampled value can be an enclosure.
 - **Streams.** Each distribution has its own stream of `numpy.random.Philox`, keyed by `unknowns.seed` and the
   unknown's stream id (the first 8 bytes of the sha256 of `acmodel.stream.v1:<unknown id>`).
 - **Chunks.** Sample s is the block the stream gives from counter s; the chunk k of `unknowns.chunk_size` samples
@@ -547,6 +555,47 @@ the low and the high of a continuous one).
   and the high ends, the lowest low and the highest high, each held to the int64 range. Beyond it is
   `expr_overflow` (`operator` `tally`, `max_bits` 63). A sample that cannot be computed blocks the output with its
   error.
+
+### Random rules
+
+The code is `src/acmodel/core/random.py`; the keys are `unknowns.drop_z`, `unknowns.wilson_digits` and
+`random.max_transitions` (`contracts/cli.md`). Everything is exact, with no float, so a value is the same on
+every platform.
+
+**A pity chain** is the pulls toward one target:
+- each pull is top-tier with chance `rate`, and surely when it is the `hard_pity`-th pull since the last top-tier
+  one;
+- a top-tier pull is the target with chance `p_up`, and surely when the last top-tier pull missed the target and
+  `guarantee_after_miss` holds;
+- with `spark`, the target is taken by exchange at pull `spark` of the chain when it has not come before;
+- the pity count (the pulls since the last top-tier pull) and the guarantee that a chain leaves for the next
+  chain, or for the next period when the target has not come, carry when `carry_over` holds; otherwise the next
+  one starts fresh. A target from a top-tier pull leaves a fresh state, one taken by exchange the state of that
+  pull. Spark points never carry.
+
+Its value (`rule:<id>`, type `count`) is the **expected pulls to the target from a fresh start**, an exact
+rational. The chances are integers over a common denominator: with `rate` = a/b and `p_up` = u/v, one pull
+multiplies every mass by an integer over b·v. Without a spark the expectation has a closed form over the cycles
+between top-tier pulls; with one, the exact DP runs to the spark. A large chain has large numerators and
+denominators: a derive that reads it is held to `expr.max_bits` like any value it reads.
+- Its members are single values (`evaluation_unsupported`, `found` `interval`, when continuous unknowns leave
+  one open) in their domains: `rate` from 0 to 1, `p_up` above 0 and at most 1, `hard_pity` and `spark` whole
+  numbers of at least 1 (`value_invalid`, `operator` the member, `expected` `probability`,
+  `positive_probability` or `positive_integer`, `found` the value).
+- Its work, pulls × pity counts × guarantee states (the closed form counting as one pull, a spark as `spark`
+  pulls; two guarantee states when a miss can be followed by the guarantee), is at most `random.max_transitions`
+  (`budget_exceeded`, `expected` the limit, `found` the work, at the `pity_chain`).
+
+**A drop** has the value (`rule:<id>`, type `none`) of its chance per run: its `rate`, which must lie in [0, 1]
+for every value its unknowns allow (`value_invalid`, `expected` `probability`), or the **Wilson bounds** of its
+`samples` and `successes`. A drop from samples counts as a continuous unknown of its own, named by the rule's
+id: it shows its `range` and is listed in `sensitivity` under that id.
+
+**Wilson bounds** of n samples with k successes at z = `unknowns.drop_z` (a decimal string, 1.959964 for 95 %):
+the centre (k + z²/2) / (n + z²) less and plus the half width z·√(k(n − k)/n + z²/4) / (n + z²). The square
+root is taken with `math.isqrt` on the bounds scaled by 10<sup>d</sup>, d = `unknowns.wilson_digits` (6): the
+low bound is rounded down and the high bound up to a multiple of 10<sup>−d</sup>, both exactly, so the bounds
+hold the true interval and are rationals, the same on every platform.
 
 ### Output
 

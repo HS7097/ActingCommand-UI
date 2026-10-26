@@ -6,7 +6,8 @@ Runtime.
 
 This folder holds the launcher, `setup`, `version`, the output envelope, the dependency check, the strict
 readers of the model files, the expression language, the static check (`check`), the derivation graph
-(`run`) with its unknowns and their sensitivity, its cache with incremental recompute (`cache`), provenance
+(`run`) with its unknowns and their sensitivity and its random processes (exact pity chains, Wilson bounds of
+rates from samples), its cache with incremental recompute (`cache`), provenance
 (`explain`), the thresholds export (`export thresholds`), the bindings of thresholds to the schedule
 (`bindings check`, `bindings apply`) and the engine host, which runs engines kept outside this repository
 in worker processes of its own. The other computation commands come in later slices.
@@ -145,6 +146,9 @@ default:
 - **Unknowns.** `sensitivity.top_n` (5) unknowns listed per output, and the keys under `unknowns`: `scale`
   (1000, milli) the export precision of the no-effect rule and the impacts, and the Monte Carlo sampling of
   distributions: `samples` (0, off), `seed` (0), `chunk_size` (1024) and `resolution` (1000000).
+- **Random processes.** The Wilson bounds of a rate from samples use `unknowns.drop_z` (`"1.959964"`, a decimal
+  string: 95 %) and `unknowns.wilson_digits` (6), the low bound rounded down and the high bound up; a pity chain
+  may need at most `random.max_transitions` (1000000) transitions (`contracts/formats.md`, "Random rules").
 
 ## Tests
 

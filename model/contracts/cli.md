@@ -142,6 +142,9 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | `unknowns.seed` | 0 | the first word of each Philox key (the second is the unknown's stream id); 0 to 2<sup>64</sup> − 1 |
 | `unknowns.chunk_size` | 1024 | the samples drawn per Philox call; it never changes a result |
 | `unknowns.resolution` | 1000000 | the equal cells of a draw on (0, 1); at most 2<sup>64</sup> |
+| `unknowns.wilson_digits` | 6 | the decimals that the Wilson bounds of a rate from samples are rounded to, the low bound down and the high bound up (`formats.md`, "Random rules"); at most 100 |
+| `unknowns.drop_z` | `"1.959964"` | the z of the Wilson bounds (95 %): a decimal string above 0, digits with an optional fraction, never a JSON number |
+| `random.max_transitions` | 1000000 | the most transitions (pulls × pity counts × guarantee states) a pity chain may need; beyond it is `expr_eval_failed` (`budget_exceeded`) |
 
 All the numbers are integers of at least 1, unless their row says otherwise (`unknowns.samples` and
 `unknowns.seed` may be 0).
@@ -196,6 +199,9 @@ what needed it.
   everything its computations read: the output itself, and each node and leaf that the computation at the
   samples or at the held ends reads, so a change inside a distribution that leaves its enclosure as it is still
   computes the samples again.
+- **Random processes** (`formats.md`, "Random rules"). A node that computes one itself adds to its spec the keys
+  it reads: `unknowns.wilson_digits` and `unknowns.drop_z` for the Wilson bounds of a `beta_from_samples` unknown
+  or of a drop from samples, `random.max_transitions` for a pity chain. They declare no library.
 - A **node key** is the sha256 of the spec hash and the sorted (input, value hash) pairs of its trace.
 
 **Verifying traces.** A node is reused when one of its traces, the most recently used first, still holds:
@@ -210,7 +216,7 @@ it intact, so they are reused.
 inputs: the rules version (`model.json`, `sources.json` and the rule files) and the data version (the data
 files), each over [path relative to the model folder, document] sorted by path; `exports.json`; the whole
 state snapshot; the preference defaults when the model reads them; the engine fingerprints (none yet);
-`expr.max_bits`, `sensitivity.top_n` and the keys under `unknowns` but `chunk_size`; and the paths of the model and the state,
+`expr.max_bits`, `sensitivity.top_n`, the keys under `unknowns` but `chunk_size`, and `random.max_transitions`; and the paths of the model and the state,
 which the outputs name. Equal inputs give equal run ids.
 
 **Work counters** (`data.work` of `run`): `nodes` (computed plus reused), `computed`, `reused`, `cutoff`

@@ -29,6 +29,7 @@ from acmodel.check.checker import Entry
 from acmodel.check.walk import at
 from acmodel.codes import USAGE_INVALID
 from acmodel.config import Unknowns
+from acmodel.core.common import value_member
 from acmodel.core.run import Run, evaluate_model
 from acmodel.core.versions import relative as _relative
 from acmodel.core.versions import sha256, versions
@@ -88,8 +89,8 @@ def _expression(entry: Entry, key: tuple[str, ...]) -> str:
         member = ("live", "offset")
     elif key[0] == "flow":
         member = ("moves", "amount") if key[2] == "moves" else key[2:4]
-    elif entry.kind == "limit":
-        member = ("max",)
+    elif entry.kind in ("limit", "random"):
+        member = value_member(entry)
     elif entry.kind == "cap" and "value" not in logic:
         member = ("reading",)
     else:

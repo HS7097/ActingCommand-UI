@@ -1,15 +1,15 @@
 """The derivation graph and its evaluation (contracts/formats.md, "The run").
 
 **Nodes.** Each is computed after the nodes it reads:
-- ("rule", id): the value of a derive (`value`, then its `round`), a cap (`value`, or its reading) or a
-  limit (`max`);
+- ("rule", id): the value of a derive (`value`, then its `round`), a cap (`value`, or its reading), a
+  limit (`max`) or a random rule (`core.random`: a pity chain's expected pulls, a drop's chance);
 - ("general_logic", id): a derive's `general_logic`, evaluated beside its value;
 - ("offset", id): a derive's `live.offset`, the offset of its fact-offset form;
 - ("flow", id, "consumes" | "produces", resource) and ("flow", id, "moves"): the amounts of a flow, which
   `cost`, `yield` and `max_single_income` read;
 - ("member", unknown id, member): a member of a variants unknown;
 - ("point", unknown id): an interval or distribution unknown (`core.unknown`): an empirical one per value,
-  a continuous one as its enclosure;
+  a continuous one as its enclosure (a `beta_from_samples` one's from its Wilson bounds);
 - ("threshold", id): a threshold of exports.json;
 - ("general", <a rule, flow, member or point key>): that node from the rules and the data only, which
   `max_single_income` reads. It never reads the account state; a node that would need it is marked so
@@ -77,15 +77,17 @@ from acmodel.codes import (
     STATE_READING_MISSING,
 )
 from acmodel.config import Unknowns
+from acmodel.core import random as chains
 from acmodel.core.common import (
     BLOCKED,
     CONFIRMED,
     RULE_STATUS,
-    VALUE_RULES,
     Need,
     flow_parts,
+    has_value,
     solve,
     unknown_target,
+    value_member,
     worst,
 )
 from acmodel.core.types import Typed
@@ -99,9 +101,11 @@ from acmodel.core.unknown import (
     check_range,
     continuous,
     decode_tallies,
+    drawn,
     encode_tallies,
     enclosure,
     exact,
+    family,
     pick,
     points,
     quantize,
@@ -114,8 +118,8 @@ from acmodel.core.unknown import (
     stream,
     tallies,
     tally,
-    unsupported,
     widths,
+    wilson_bounds,
     words,
 )
 from acmodel.envelope import Failure, error
@@ -350,9 +354,6 @@ class _Environment:
             entry, member = unknown_target(checker, target)
             if member is not None:
                 return self.node(("member", entry.id, member))
-            found = unsupported(entry)
-            if found is not None:
-                raise _unsupported("reference", ref.position, found, self.ref)
             return self.node(("point", entry.id))
         if kind == "read":
             return self.reading(target, ref.position)
@@ -563,8 +564,7 @@ class Graph:
         # The distribution unknowns that sampling draws, and the sample of each (`_SubGraph` only).
         self.distributions = sorted(
             u.id for u in checker.unknowns
-            if checker.entries.get(u.id) is u and u.kind == "distribution" and "distribution" in u.doc
-            and unsupported(u) is None
+            if checker.entries.get(u.id) is u and u.kind == "distribution" and "distribution" in u.doc and drawn(u)
         )
         self.words: dict[str, int] = {}
         # The continuous unknowns held at one of their ends (`_SubGraph` only, for the impacts).
@@ -670,6 +670,8 @@ class Graph:
             spec_doc.update(format=SAMPLED_FORMAT, unknowns=self.settings.keyed())
         elif kind == "impacts":  # its value is in units of 1 / scale
             spec_doc.update(format=IMPACTS_FORMAT, scale=self.settings.scale)
+        elif random_keys := self.random_keys(key):  # a Wilson bound or a pity chain's value: these keys decide it
+            spec_doc.update(random=random_keys)
         spec = cache.spec(kind, spec_doc)
         hit = cache.lookup(kind, spec, self.current)
         if hit is not None:
@@ -687,6 +689,23 @@ class Graph:
         compute_us = (time.perf_counter_ns() - started) // 1000
         self.hashes[key] = cache.save(kind, spec, list(key), trace, blob, compute_us)
         return result
+
+    def random_keys(self, key: tuple[str, ...]) -> dict[str, int | str]:
+        """The configuration keys that a node's own computation of a random process reads: `unknowns.drop_z` and
+        `unknowns.wilson_digits` for the Wilson bounds of a `beta_from_samples` unknown or of a drop from samples,
+        `random.max_transitions` for a pity chain; none for any other node."""
+        node = key[1:] if key[0] == "general" else key
+        if node[0] not in ("rule", "point"):
+            return {}
+        entry, settings = self.checker.entries[node[1]], self.settings
+        wilson = {"wilson_digits": settings.wilson_digits, "drop_z": settings.drop_z}
+        if node[0] == "point":
+            return wilson if family(entry) == "beta_from_samples" else {}
+        if entry.kind != "random":
+            return {}
+        if "pity_chain" in entry.doc["logic"]:
+            return {"max_transitions": settings.max_transitions}
+        return wilson if "rate" not in entry.doc["logic"]["drop"] else {}
 
     def encode(self, result: Result | Sampled | Impacts) -> dict[str, Any]:
         blocked = sorted((self.errors[index] for index in result.blocked_by), key=canonical_text)
@@ -767,6 +786,8 @@ class Graph:
             return self.blocked(_unsupported("when", 0, "when", at(entry.ref, "when")).errors, entry.path)
         if key[0] == "rule" and entry.kind == "cap" and "value" not in logic:
             return Result(needs_state=True) if general else self.cap_reading(entry, own, unresolved)
+        if key[0] == "rule" and entry.kind == "random":
+            return self.random_rule(entry, own, unresolved, general)
         if key[0] == "rule":
             member = ("max",) if entry.kind == "limit" else ("value",)
             ref = at(entry.ref, "logic", *member)
@@ -822,7 +843,8 @@ class Graph:
         """An interval or distribution unknown (`core.unknown`).
         - An empirical one has a scenario per value; in a `_SubGraph` that samples it, the sample's value.
         - A continuous one is its enclosure, after every bound is evaluated and found in order (`range_invalid`);
-          in a `_SubGraph`, its sample, or the end it is pinned at."""
+          in a `_SubGraph`, its sample, or the end it is pinned at. A `beta_from_samples` one is never drawn:
+          its bounds are its Wilson bounds."""
         refs, word, pin = bounds(entry), self.words.get(entry.id), self.pins.get(entry.id)
 
         def value_of(env: _Environment, unknowns: dict[str, str]) -> Value:
@@ -833,6 +855,9 @@ class Graph:
                     raise _Branch(entry.id)
                 return env.evaluate(refs[unknowns[entry.id]])
             env.free.add(entry.id)
+            if family(entry) == "beta_from_samples":
+                values: dict[str, Value] = dict(wilson_bounds(entry, self.settings))
+                return values[pin] if pin is not None else enclosure(entry, values)
             values = {name: env.evaluate(ref) for name, ref in refs.items()}
             check_range(entry, values)
             if word is not None:
@@ -842,6 +867,62 @@ class Graph:
             return values[pin] if pin is not None else enclosure(entry, values)
 
         return self.expression(entry, value_of, CONFIRMED, general=general)
+
+    def random_rule(self, rule: Entry, own: str, unresolved: tuple[str, ...], general: bool) -> Result:
+        """A random rule's value (`core.random`): a pity chain's expected pulls to the target from a fresh start,
+        or a drop's chance per run.
+        - A chain's members must be single values (`evaluation_unsupported`, `found` `interval`, when continuous
+          unknowns leave one open) in their domains (`value_invalid`), and its work within
+          `random.max_transitions` (`budget_exceeded`).
+        - A drop's `rate` is a chance (`value_invalid` when its enclosure leaves [0, 1]). A drop from `samples`
+          is its Wilson enclosure, a continuous unknown of its own named by the rule's id; in a `_SubGraph`, the
+          end it is pinned at."""
+        logic, settings, pin = rule.doc["logic"], self.settings, self.pins.get(rule.id)
+        form = value_member(rule)[0]
+        base = at(rule.ref, "logic", form)
+
+        def invalid(member: str, expected: str, found: Value) -> Failure:
+            detail = {"reason": "value_invalid", "operator": member, "position": 0, "expected": expected,
+                      "found": _text(found)}
+            return Failure(error(EXPR_EVAL_FAILED, detail, at(base, member)))
+
+        def drop(env: _Environment, unknowns: dict[str, str]) -> Value:
+            given = logic["drop"]
+            if "rate" not in given:
+                env.free.add(rule.id)
+                low, high = chains.wilson(given["samples"], given["successes"], Fraction(settings.drop_z),
+                                          settings.wilson_digits)
+                return {"low": low, "high": high}[pin] if pin is not None else interval.make(low, high, {rule.id: 1})
+            rate = env.evaluate(at(base, "rate"))
+            low, high, _ = interval.bounds(rate)
+            if not (0 <= low and high <= 1):
+                raise invalid("rate", "probability", rate)
+            return rate
+
+        def pity(env: _Environment, unknowns: dict[str, str]) -> Value:
+            given, values = logic["pity_chain"], {}
+            for name in ("rate", "hard_pity", "p_up", "spark"):
+                if name in given:
+                    values[name] = env.evaluate(at(base, name))
+                    if is_open(values[name]):
+                        raise _unsupported(name, 0, "interval", at(base, name))
+            try:
+                chain = chains.chain(
+                    values["rate"], values["hard_pity"], p_up=values.get("p_up", Fraction(1)),
+                    guarantee_after_miss=given.get("guarantee_after_miss", False), spark=values.get("spark"),
+                    carry_over=given["carry_over"],
+                )
+            except chains.ParameterInvalid as refused:
+                raise invalid(refused.member, refused.expected, refused.found) from None
+            needed = chains.work(chain)
+            if needed > settings.max_transitions:
+                detail = {"reason": "budget_exceeded", "operator": form, "position": 0,
+                          "expected": str(settings.max_transitions), "found": str(needed)}
+                raise Failure(error(EXPR_EVAL_FAILED, detail, base))
+            return chains.expected(chain)
+
+        value_of = pity if form == "pity_chain" else drop
+        return self.expression(rule, value_of, own, general=general, unresolved=unresolved)
 
     def cap_reading(self, cap: Entry, own: str, unresolved: tuple[str, ...]) -> Result:
         fact = cap.doc["logic"]["reading"]
@@ -877,7 +958,7 @@ class Graph:
         entry = self.checker.entries[name]
         member = {"general_logic": ("general_logic",), "offset": ("live", "offset")}.get(kind)
         if member is None:
-            member = ("max",) if entry.kind == "limit" else ("value",)
+            member = value_member(entry)
         return entry.path, at(entry.ref, "logic", *member)
 
     def subgraph_base(self, pinned: set[str]) -> dict[tuple[str, ...], Result]:
@@ -966,7 +1047,7 @@ class Graph:
         """(output id, node) of every output: the value rules, the general logic of derives, the thresholds."""
         checker, found = self.checker, []
         for rule in sorted((r for r in checker.rules if checker.active(r)), key=lambda r: r.id):
-            if rule.kind in VALUE_RULES:
+            if has_value(rule):
                 found.append(("rule:" + rule.id, ("rule", rule.id)))
                 if rule.kind == "derive" and "general_logic" in rule.doc["logic"]:
                     found.append(("general_logic:" + rule.id, ("general_logic", rule.id)))

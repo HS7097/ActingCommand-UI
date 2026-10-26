@@ -7,8 +7,9 @@ with every problem found:
 - **preference keys** (`rule_reference_missing`, `expected` `pref`): every key that an expression or a
   gate's `prefs` names is in the preference defaults;
 - **what the evaluation needs to be sound** (`rule_reference_missing`): a `rule:` reference names a
-  derive, cap or limit; a cap's subject is a resource or a store; `cost`, `yield` and
-  `max_single_income` have a flow behind them; each threshold names a derive in the form it needs.
+  derive, cap, limit, or random rule with a pity chain or a drop; a cap's subject is a resource or a store;
+  `cost`, `yield` and `max_single_income` have a flow behind them; each threshold names a derive in the form
+  it needs.
 
 The third check the static check leaves to the run, the entity ids of the state, is the evaluation's
 (`graph`).
@@ -24,6 +25,7 @@ from acmodel.check.files import File
 from acmodel.check.walk import at, expressions, nodes
 from acmodel.codes import EXPR_DIMENSION_MISMATCH, MODEL_ID_DUPLICATE, RULE_REFERENCE_MISSING
 from acmodel.core.common import (
+    RANDOM_VALUES,
     VALUE_RULES,
     Need,
     cap_dimension,
@@ -31,6 +33,7 @@ from acmodel.core.common import (
     fact_dimensions,
     fits,
     flow_parts,
+    has_value,
     held,
     solve,
     unify,
@@ -79,6 +82,11 @@ def _mismatch(operator: str, operands: list[Type | str], position: int, ref: str
 
 def _missing(target: str, expected: list[str], ref: str, **values: Any) -> Failure:
     return Failure(error(RULE_REFERENCE_MISSING, {"target": target, "expected": expected, **values}, ref))
+
+
+def _random_type(rule: Entry) -> Type:
+    """A random rule's value: a pity chain's expected pulls are a count, a drop's chance has no dimension."""
+    return COUNT if "pity_chain" in rule.doc["logic"] else NONE
 
 
 class _Environment:
@@ -279,9 +287,11 @@ class _Types:
             return self.cap(rule_id)
         if entry.kind == "limit":
             return COUNT
-        raise _missing(
-            rule_id, ["rule." + kind for kind in VALUE_RULES], source.ref, found=entry.token, position=ref.position
-        )
+        if has_value(entry):  # a random rule
+            return _random_type(entry)
+        expected = ["rule." + kind for kind in VALUE_RULES] + ["rule.random." + form for form in RANDOM_VALUES]
+        found = "rule.random.outcomes" if entry.kind == "random" else entry.token
+        raise _missing(rule_id, expected, source.ref, found=found, position=ref.position)
 
     def pref(self, key: str, ref: Reference, source: Source) -> Type:
         if key not in self.prefs:
@@ -330,6 +340,8 @@ class _Types:
         if kind == "flow" and member == ("moves", "amount"):
             ends = [held(checker, logic["moves"][end]) for end in ("from", "to")]
             return [("moves", amount(resource)) for resource in ends if resource is not None]
+        if kind == "random":
+            return self.random_expected(member)
         fixed = {
             ("flow", ("batch", "min")): ("batch", COUNT),
             ("flow", ("batch", "max")): ("batch", COUNT),
@@ -340,6 +352,18 @@ class _Types:
             ("objective", ("horizon",)): ("horizon", TIME),
         }
         return [fixed[kind, member]] if (kind, member) in fixed else []
+
+    @staticmethod
+    def random_expected(member: tuple[str, ...]) -> list[tuple[str, Type]]:
+        """A pity chain's `rate` and `p_up` and a drop's `rate` are chances (no dimension), `hard_pity` and
+        `spark` counts; an outcome's `p` is a chance, and its `then` the amount of the resource it names."""
+        if len(member) == 2 and member[0] in ("pity_chain", "drop"):
+            return [(member[1], COUNT if member[1] in ("hard_pity", "spark") else NONE)]
+        if len(member) == 3 and member[0] == "outcomes" and member[2] == "p":
+            return [("p", NONE)]
+        if len(member) == 4 and member[0] == "outcomes" and member[2] == "then":
+            return [("then", amount(member[3]))]
+        return []
 
     def derive(self, source: Source, typed: Expression) -> None:
         owner, role, found = source.owner, source.role, typed.type
@@ -425,10 +449,12 @@ class _Types:
     def outputs(self) -> dict[tuple[str, str], Type]:
         checker, found = self.checker, {}
         for rule in checker.rules:
-            if not checker.active(rule) or rule.kind not in VALUE_RULES:
+            if not checker.active(rule) or not has_value(rule):
                 continue
             if rule.kind == "limit":
                 found["rule", rule.id] = COUNT
+            elif rule.kind == "random":
+                found["rule", rule.id] = _random_type(rule)
             elif rule.kind == "cap":
                 kind = cap_dimension(checker, rule)
                 if kind is not None:
