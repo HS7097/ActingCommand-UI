@@ -8,7 +8,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Sequence
 
-from acmodel import TOOL, __version__, config, deps, environment
+from acmodel import TOOL, __version__, cache, config, deps, environment
 from acmodel.check import check_model
 from acmodel.codes import COMMAND_CRASHED, USAGE_INVALID
 from acmodel.core import run_model
@@ -26,14 +26,20 @@ COMMANDS = {
     "run": (("model",), ("--state",)),
     "explain": (("model", "output"), ("--state",)),
     "export thresholds": (("model",), ("--state",)),
+    "cache stats": ((), ()),
+    "cache verify": ((), ()),
+    "cache gc": ((), ()),
 }
 GROUPS = {name.split(" ")[0] for name in COMMANDS if " " in name}
+# Flags: options that take no value, each optional and given at most once.
+FLAGS = {"cache gc": ("--apply",)}
 USAGE = (
     "usage: acmodel.py <command> [<argument>] [--<option> <value>]\n"
     "commands: setup, version, check <model folder or model.json>,\n"
     "          run <model folder or model.json> --state <state file>,\n"
     "          explain <model folder or model.json> <output id> --state <state file>,\n"
-    "          export thresholds <model folder or model.json> --state <state file>\n"
+    "          export thresholds <model folder or model.json> --state <state file>,\n"
+    "          cache stats, cache verify, cache gc [--apply]\n"
 )
 
 
@@ -52,12 +58,17 @@ def parse(argv: Sequence[str]) -> tuple[str, list[str]]:
     if command not in COMMANDS:
         raise _usage("command_unknown", command)
     names, options = COMMANDS[command]
+    flags = FLAGS.get(command, ())
     positional: list[str] = []
     given: dict[str, str] = {}
+    set_flags: set[str] = set()
     items = iter(rest)
     for item in items:
         if not item.startswith("--"):
             positional.append(item)
+            continue
+        if item in flags and item not in set_flags:
+            set_flags.add(item)
             continue
         if item not in options or item in given:
             raise _usage("argument_unexpected", item)
@@ -72,7 +83,7 @@ def parse(argv: Sequence[str]) -> tuple[str, list[str]]:
     for option in options:
         if option not in given:
             raise _usage("argument_missing", option)
-    return command, positional + [given[option] for option in options]
+    return command, positional + [given[option] for option in options] + [flag for flag in flags if flag in set_flags]
 
 
 def _dependencies(system: System) -> dict[str, str]:
@@ -97,10 +108,41 @@ def _check(args: list[str], cfg: config.Config, system: System) -> dict[str, Any
     return check_model(Path(args[0]), datasets=cfg.datasets)
 
 
-def _run(args: list[str], cfg: config.Config, system: System) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """A run returns its outputs together with the errors of the blocked ones (a partial run)."""
+def _run(
+    args: list[str], cfg: config.Config, system: System
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """A run returns its outputs together with the errors of the blocked ones (a partial run), and the
+    warnings of the cache. It computes through the cache under `paths.state_root`."""
+    packages = _dependencies(system)
+    with cache.open_store(cfg.state_root, max_bytes=cfg.cache_max_bytes) as store:
+        session = cache.Session(store, libraries=cache.libraries(system.python_version, packages))
+        data, errors = run_model(
+            Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits, cache=session
+        )
+    evicted = data["work"]["evicted"]
+    if evicted["entries"]:
+        system.stderr.write(
+            f"acmodel: cache over cache.max_bytes: evicted {evicted['entries']} entries "
+            f"({evicted['bytes']} bytes), least recently used first\n"
+        )
+    return data, errors, session.warnings
+
+
+def _cache(command: str, args: list[str], cfg: config.Config, system: System) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """`cache stats`, `cache verify` (its errors are the corrupt entries) and `cache gc [--apply]`."""
     _dependencies(system)
-    return run_model(Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits)
+    if command == "cache stats":
+        return cache.stats(cfg.state_root, max_bytes=cfg.cache_max_bytes), []
+    if command == "cache verify":
+        return cache.verify(cfg.state_root)
+    data = cache.gc(cfg.state_root, max_bytes=cfg.cache_max_bytes, apply="--apply" in args)
+    if data["apply"]:
+        system.stderr.write(
+            f"acmodel: cache gc removed {data['entries_removed']} entries, {data['blobs_removed']} blobs "
+            f"({data['bytes_removed']} bytes) and {data['orphans_removed']} orphaned files "
+            f"({data['orphan_bytes_removed']} bytes)\n"
+        )
+    return data, []
 
 
 def _explain(args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
@@ -116,6 +158,7 @@ def _export_thresholds(args: list[str], cfg: config.Config, system: System) -> d
 def main(argv: Sequence[str], system: System) -> int:
     command = None
     errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
     try:
         command, args = parse(argv)
         cfg = config.load(system.environ)
@@ -129,11 +172,13 @@ def main(argv: Sequence[str], system: System) -> int:
         elif command == "check":
             data = _check(args, cfg, system)
         elif command == "run":
-            data, errors = _run(args, cfg, system)
+            data, errors, warnings = _run(args, cfg, system)
         elif command == "explain":
             data = _explain(args, cfg, system)
-        else:
+        elif command == "export thresholds":
             data = _export_thresholds(args, cfg, system)
+        else:
+            data, errors = _cache(command, args, cfg, system)
     except Failure as failure:
         if failure.errors[0]["code"] == USAGE_INVALID:
             system.stderr.write(USAGE)
@@ -142,4 +187,4 @@ def main(argv: Sequence[str], system: System) -> int:
         traceback.print_exc(file=system.stderr)
         crashed = error(COMMAND_CRASHED, {"exception_type": type(exc).__name__})
         return write(build(command, {}, [crashed]), system.stdout, system.stderr)
-    return write(build(command, data, errors), system.stdout, system.stderr)
+    return write(build(command, data, errors, warnings), system.stdout, system.stderr)

@@ -473,7 +473,8 @@ its `general_logic`. The value stands by its provenance, and the difference is r
 
 ### Output
 
-`data` holds `path`, `model_id`, `state` (`path`, `label`), and:
+`data` holds `path`, `model_id`, `state` (`path`, `label`), `run_id` and `work` (the run id and the work
+counters of the cache, `cli.md`, "Cache"), and:
 - `rules`: each value rule's output by id: `kind`, `status` (`confirmed`, `provisional` or `blocked`), `type`
   and, unless blocked, `per_account` (whether it read the account state) with `value` (or `variants` and
   `range`). A derive with `general_logic` holds it as `general_logic`, in the same shape.
@@ -483,6 +484,10 @@ its `general_logic`. The value stands by its provenance, and the difference is r
 
 A number is a string holding an exact rational (`"-250"`, `"7/2"`; time in seconds); a boolean is a JSON
 boolean.
+
+The errors are ordered by file, pointer, code and then their whole canonical text, so that the order never
+depends on which nodes the cache reused. The outputs, without `work`, are kept as
+`runs/<run id>/outputs.json` under `paths.state_root`.
 
 ## Outputs: provenance, `explain` and `thresholds.json`
 
