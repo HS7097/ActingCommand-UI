@@ -4,13 +4,16 @@ The file is optional and every key has a default. A file that exists is read
 strictly: UTF-8 JSON, no duplicate keys, no unknown members, typed values.
 The host caps (`compute.priority`, `compute.job.*`, `host.*`) are read by `acmodel.host.caps`, the engine
 host's keys (`compute.workers.*`, `engine.*`, `engines.*`) by `acmodel.engine.settings`; the keys under
-`unknowns` (sampling, export precision) and `sensitivity.top_n` are `Unknowns`.
+`unknowns` (sampling, export precision, Wilson bounds), `sensitivity.top_n` and the keys under `random` are
+`Unknowns`.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -36,21 +39,31 @@ _MEMBERS = {
     "host": {"memory", "cpu", "quiet_windows", "pause_file", "pause_poll_ms"},
     "engine": engine_settings.ENGINE_MEMBERS,
     "engines": engine_settings.ENGINES_MEMBERS,
-    "unknowns": {"scale", "samples", "seed", "chunk_size", "resolution"},
+    "unknowns": {"scale", "samples", "seed", "chunk_size", "resolution", "wilson_digits", "drop_z"},
     "sensitivity": {"top_n"},
+    "random": {"max_transitions", "enclosure_digits"},
 }
+# `unknowns.drop_z`: a positive decimal string, so that no float reaches the Wilson bounds.
+DECIMAL_Z = re.compile(r"(0|[1-9][0-9]*)(\.[0-9]+)?")
 
 
 @dataclass(frozen=True)
 class Unknowns:
-    """The keys under `unknowns`, and `sensitivity.top_n` (#424 design 4.5, 4.8; `core.unknown`).
+    """The keys under `unknowns`, `sensitivity.top_n` and the keys under `random` (#424 design 4.5, 4.8;
+    `core.unknown`, `core.random`).
 
     - `top_n` (`sensitivity.top_n`): how many unknowns each output's sensitivity lists;
     - `scale`: the export precision an impact is measured at (1000: milli);
     - `samples`: the Monte Carlo samples of the distributions per output, 0 for none;
     - `seed`: the first word of every Philox key (the second is the unknown's stream id);
     - `chunk_size`: the samples drawn per Philox call; it never changes a result;
-    - `resolution`: the cells of a uniform draw on (0, 1).
+    - `resolution`: the cells of a uniform draw on (0, 1);
+    - `wilson_digits`: the decimals the Wilson bounds of a rate from samples are rounded to, the low bound down
+      and the high bound up;
+    - `drop_z`: the z of the Wilson bounds, a decimal string (1.959964: 95 %);
+    - `max_transitions` (`random.max_transitions`): the most transitions a pity chain may need;
+    - `enclosure_digits` (`random.enclosure_digits`): the decimals of the enclosure that carries a random rule's
+      value when its numerator or denominator exceeds `expr.max_bits`.
     """
 
     top_n: int = 5
@@ -59,12 +72,17 @@ class Unknowns:
     seed: int = 0
     chunk_size: int = 1024
     resolution: int = 1_000_000
+    wilson_digits: int = 6
+    drop_z: str = "1.959964"
+    max_transitions: int = 1_000_000
+    enclosure_digits: int = 12
 
-    def keyed(self) -> dict[str, int]:
+    def keyed(self) -> dict[str, int | str]:
         """The keys that can change an output, for the run id and the spec of the sampled nodes: all but
         `chunk_size`."""
         return {"top_n": self.top_n, "scale": self.scale, "samples": self.samples, "seed": self.seed,
-                "resolution": self.resolution}
+                "resolution": self.resolution, "wilson_digits": self.wilson_digits, "drop_z": self.drop_z,
+                "max_transitions": self.max_transitions, "enclosure_digits": self.enclosure_digits}
 
 
 # The range of each key: (section, key) to (lowest, highest or None).
@@ -75,6 +93,9 @@ UNKNOWNS_RANGES = {
     ("unknowns", "seed"): (0, 2**64 - 1),
     ("unknowns", "chunk_size"): (1, None),
     ("unknowns", "resolution"): (1, 2**64),
+    ("unknowns", "wilson_digits"): (1, 100),
+    ("random", "max_transitions"): (1, None),
+    ("random", "enclosure_digits"): (1, 30),
 }
 
 
@@ -177,11 +198,14 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
     if type(cache_max_bytes) is not int or cache_max_bytes < 1:
         raise _invalid("value_invalid", path, _pointer("cache", "max_bytes"))
     state_root = _absolute(paths, "state_root", root / "state", path)
-    sections = {name: _section(doc, name, path) for name in ("unknowns", "sensitivity")}
+    sections = {name: _section(doc, name, path) for name in ("unknowns", "sensitivity", "random")}
     for (name, key), (low, high) in UNKNOWNS_RANGES.items():
         value = sections[name].get(key)
         if key in sections[name] and (type(value) is not int or value < low or (high is not None and value > high)):
             raise _invalid("value_invalid", path, _pointer(name, key))
+    drop_z = sections["unknowns"].get("drop_z", Unknowns.drop_z)
+    if type(drop_z) is not str or not DECIMAL_Z.fullmatch(drop_z) or not Fraction(drop_z) > 0:
+        raise _invalid("value_invalid", path, _pointer("unknowns", "drop_z"))
 
     def invalid(reason: str, parts: tuple[str, ...], **values: Any) -> Failure:
         return _invalid(reason, path, _pointer(*parts), **values)
@@ -200,5 +224,5 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         host=host,
         cache_max_bytes=cache_max_bytes,
         engine=engine,
-        unknowns=Unknowns(**sections["unknowns"], **sections["sensitivity"]),
+        unknowns=Unknowns(**sections["unknowns"], **sections["sensitivity"], **sections["random"]),
     )

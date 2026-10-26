@@ -14,8 +14,27 @@ RANK = {CONFIRMED: 0, PROVISIONAL: 1, BLOCKED: 2}
 # A pending rule is usable only through an unknown with a range (the static check makes sure it names
 # one), so it behaves as provisional.
 RULE_STATUS = {"confirmed": CONFIRMED, "provisional": PROVISIONAL, "pending": PROVISIONAL}
-# The rules that have a value, which `rule:<id>` reads: a derive's value, a cap's value, a limit's max.
+# The rules that have a value, which `rule:<id>` reads: a derive's value, a cap's value, a limit's max, and
+# a random rule's (`has_value`): a pity chain's expected pulls or a drop's chance, never `outcomes`.
 VALUE_RULES = ("derive", "cap", "limit")
+RANDOM_VALUES = ("pity_chain", "drop")
+
+
+def has_value(rule: Entry) -> bool:
+    """Whether a rule has a value that `rule:<id>` reads and the run shows."""
+    if rule.kind == "random":
+        return any(form in rule.doc["logic"] for form in RANDOM_VALUES)
+    return rule.kind in VALUE_RULES
+
+
+def value_member(rule: Entry) -> tuple[str, ...]:
+    """The member of a value rule's `logic` that its value comes from: a limit's `max`, a random rule's form,
+    or `value`."""
+    if rule.kind == "limit":
+        return ("max",)
+    if rule.kind == "random":
+        return (next(form for form in RANDOM_VALUES if form in rule.doc["logic"]),)
+    return ("value",)
 
 
 def worst(*statuses: str) -> str:
