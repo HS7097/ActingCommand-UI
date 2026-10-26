@@ -47,12 +47,16 @@ class Evaluator:
 
 # The kinds of the derivation graph (core/graph.py). They compute with exact fractions only, so none of
 # them declares a library; the Monte Carlo tallies (`sampled`) draw from numpy's Philox, so they declare
-# numpy and the Python minor version (design-py D-P5), and the solver and screening kinds of later slices
-# will too. Version 2: unknowns are judged by their effect (PY-8), so a scenario records what it leaves
-# unresolved and the continuous unknowns it computed with, whose values are enclosures (interval arithmetic).
+# numpy and the Python minor version (design-py D-P5), and the screening kinds of later slices will too.
+# Version 2: unknowns are judged by their effect (PY-8), so a scenario records what it leaves unresolved and
+# the continuous unknowns it computed with, whose values are enclosures (interval arithmetic). `regen` is a
+# regen's amount or interval (exact, like the other derivation kinds); `economy` is the economy's steady
+# state or plan (core/flow.py), solved by scipy's HiGHS on numpy arrays, so it declares numpy, scipy and the
+# Python minor version (design-py D-P5).
 # `engine` is an engine call (engine/client.py): its spec holds the engine's fingerprint, which already
 # covers the Python minor version and the library versions (design-py D-P5), so it declares none.
 EVALUATORS: dict[str, Evaluator] = {
+    "economy": Evaluator(1, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
     "flow": Evaluator(2),
     "general": Evaluator(2),
@@ -61,6 +65,7 @@ EVALUATORS: dict[str, Evaluator] = {
     "member": Evaluator(2),
     "offset": Evaluator(2),
     "point": Evaluator(1),
+    "regen": Evaluator(1),
     "rule": Evaluator(2),
     "sampled": Evaluator(1, ("numpy", "python")),
     "threshold": Evaluator(2),

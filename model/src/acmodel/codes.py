@@ -46,6 +46,11 @@ EXPORT_WRITE_FAILED = "export_write_failed"
 BINDING_MISMATCH = "binding_mismatch"
 BINDING_UNBOUND_LITERAL = "binding_unbound_literal"
 BINDING_UNSUPPORTED = "binding_unsupported"
+LP_INFEASIBLE = "lp_infeasible"
+LP_NUMERIC_CHECK_FAILED = "lp_numeric_check_failed"
+LP_SOLVE_FAILED = "lp_solve_failed"
+LP_DUAL_DISAGREES = "lp_dual_disagrees"  # acmodel economy: a warning, the price stands
+SEARCH_BUDGET_EXHAUSTED = "search_budget_exhausted"  # acmodel economy: a warning, the plan unproven
 
 EXIT_OK = 0
 
@@ -94,4 +99,9 @@ EXIT_STATUS = {
     BINDING_MISMATCH: 6,
     BINDING_UNBOUND_LITERAL: 6,
     BINDING_UNSUPPORTED: 5,
+    LP_INFEASIBLE: 1,
+    LP_NUMERIC_CHECK_FAILED: 1,
+    LP_SOLVE_FAILED: 1,
+    LP_DUAL_DISAGREES: 0,
+    SEARCH_BUDGET_EXHAUSTED: 0,
 }

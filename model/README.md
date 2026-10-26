@@ -8,8 +8,8 @@ This folder holds the launcher, `setup`, `version`, the output envelope, the dep
 readers of the model files, the expression language, the static check (`check`), the derivation graph
 (`run`) with its unknowns and their sensitivity, its cache with incremental recompute (`cache`), provenance
 (`explain`), the thresholds export (`export thresholds`), the bindings of thresholds to the schedule
-(`bindings check`, `bindings apply`) and the engine host, which runs engines kept outside this repository
-in worker processes of its own. The other computation commands come in later slices.
+(`bindings check`, `bindings apply`), the economy's LP and MILP (`economy`) and the engine host, which runs
+engines kept outside this repository in worker processes of its own. The other computation commands come in later slices.
 
 ## Needs
 
@@ -37,6 +37,7 @@ py -3 -I -B model\acmodel.py version
 model\acmodel.cmd version
 model\acmodel.cmd check <resource repo>\ours\model
 model\acmodel.cmd run <resource repo>\ours\model --state <state snapshot>
+model\acmodel.cmd economy <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd explain <resource repo>\ours\model threshold:<id> --state <state snapshot>
 model\acmodel.cmd export thresholds <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd bindings check <resource repo>\ours\model --state <state snapshot> --strict
@@ -66,6 +67,15 @@ model\acmodel.cmd cache gc [--apply]
   the cache, `cache verify` checks every value against its hash, and `cache gc` trims it to
   `cache.max_bytes` (a dry run without `--apply`). A corrupt value is never used: `run` warns
   (`cache_entry_corrupt`) and computes it again (`contracts/cli.md`, "Cache").
+- **`economy`** solves the economy with scipy's HiGHS (`contracts/formats.md`, "The economy"):
+  - **the steady state**, game-wide: an LP over one cycle (a week, or a day), with the price of every resource
+    per step and of every cap and limit, exact or an interval, by re-solves one grain up and down; the value of
+    each activity; and the least overflow and lost production;
+  - **the plan** of one account: a MILP from the state's readings over `economy.plan_horizon` days, with integer
+    counts and read caps that block collections at or above them, its final stocks priced by the steady state,
+    stopped only by `search.milp_node_limit` (then `proven: false`).
+  Every solution is made exact and checked exactly (`lp_numeric_check_failed`); contradictory rules are named
+  (`lp_infeasible`); what the programs do not model yet is refused, never approximated.
 - **`explain`** prints the provenance tree of one output (`rule:<id>`, `general_logic:<id>` or
   `threshold:<id>`): every rule, data row, ruling and reading its value rests on, with their hashes and
   the model's versions. It writes nothing; like `export thresholds`, it computes without the cache.
@@ -145,6 +155,9 @@ default:
 - **Unknowns.** `sensitivity.top_n` (5) unknowns listed per output, and the keys under `unknowns`: `scale`
   (1000, milli) the export precision of the no-effect rule and the impacts, and the Monte Carlo sampling of
   distributions: `samples` (0, off), `seed` (0), `chunk_size` (1024) and `resolution` (1000000).
+- **Economy.** `lp.max_denominator` (1000000) bounds the fractions a solver's floats become, `lp.grain` (1) is the
+  step of the price re-solves, `search.milp_node_limit` (100000) the plan's only budget, and `economy.plan_horizon`
+  (7) its days.
 
 ## Tests
 
@@ -166,12 +179,13 @@ requirements-dev.txt  the above plus pytest and its dependencies, hashed
 pytest.ini            test paths; src on the import path
 contracts/            cli.md (envelope, start, configuration), codes.json (the codes),
                       formats.md (the input files, their strict reading, the static check,
-                      the run and the outputs)
+                      the run, the economy and the outputs)
 src/acmodel/          the package: model/ the strict readers, expr/ the expression language,
                       check/ the static check, ids.py the id grammars they share, core/ the
                       run (its model checks, the derivation graph, the unknowns, provenance and the
-                      versions of the inputs), cache/ the cache (keys, sqlite3 index and blobs, verifying
-                      traces, run ids, stats/verify/gc), export/ the thresholds export, bindings/
+                      versions of the inputs, and flow.py the economy's LP and MILP), cache/ the
+                      cache (keys, sqlite3 index and blobs, verifying traces, run ids,
+                      stats/verify/gc), export/ the thresholds export, bindings/
                       the bindings check and apply with their position-tracking scanner, host/ the
                       host caps (priority, Job object, memory gates, quiet windows, PAUSE file),
                       engine/ the engine host (manifest and fingerprint, workers, guards, the cached

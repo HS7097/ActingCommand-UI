@@ -12,7 +12,7 @@ from acmodel import TOOL, __version__, cache, config, deps, environment
 from acmodel.bindings import apply_bindings, check_bindings
 from acmodel.check import check_model
 from acmodel.codes import COMMAND_CRASHED, USAGE_INVALID
-from acmodel.core import run_model
+from acmodel.core import run_economy, run_model
 from acmodel.core.provenance import explain
 from acmodel.envelope import Failure, build, error, write
 from acmodel.export import export_thresholds
@@ -25,6 +25,7 @@ COMMANDS = {
     "version": ((), ()),
     "check": (("model",), ()),
     "run": (("model",), ("--state",)),
+    "economy": (("model",), ("--state",)),
     "explain": (("model", "output"), ("--state",)),
     "export thresholds": (("model",), ("--state",)),
     "bindings check": (("model",), ("--state",)),
@@ -40,6 +41,7 @@ USAGE = (
     "usage: acmodel.py <command> [<argument>] [--<option> <value>]\n"
     "commands: setup, version, check <model folder or model.json>,\n"
     "          run <model folder or model.json> --state <state file>,\n"
+    "          economy <model folder or model.json> --state <state file>,\n"
     "          explain <model folder or model.json> <output id> --state <state file>,\n"
     "          export thresholds <model folder or model.json> --state <state file>,\n"
     "          bindings check <model folder or model.json> --state <state file> [--strict],\n"
@@ -125,13 +127,33 @@ def _run(
             Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits,
             unknowns=cfg.unknowns, cache=session,
         )
+    _report_eviction(data, system)
+    return data, errors, session.warnings
+
+
+def _economy(
+    args: list[str], cfg: config.Config, system: System
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """The economy's steady state and plan, with the errors that block them, and the warnings of the cache and
+    of the solves. It computes through the cache under `paths.state_root`, as `run` does."""
+    packages = _dependencies(system)
+    with cache.open_store(cfg.state_root, max_bytes=cfg.cache_max_bytes) as store:
+        session = cache.Session(store, libraries=cache.libraries(system.python_version, packages))
+        data, errors, warnings = run_economy(
+            Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits,
+            unknowns=cfg.unknowns, economy=cfg.economy, cache=session,
+        )
+    _report_eviction(data, system)
+    return data, errors, session.warnings + warnings
+
+
+def _report_eviction(data: dict[str, Any], system: System) -> None:
     evicted = data["work"]["evicted"]
     if evicted["entries"]:
         system.stderr.write(
             f"acmodel: cache over cache.max_bytes: evicted {evicted['entries']} entries "
             f"({evicted['bytes']} bytes), least recently used first\n"
         )
-    return data, errors, session.warnings
 
 
 def _cache(command: str, args: list[str], cfg: config.Config, system: System) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -197,6 +219,8 @@ def main(argv: Sequence[str], system: System) -> int:
             data = _check(args, cfg, system)
         elif command == "run":
             data, errors, warnings = _run(args, cfg, system)
+        elif command == "economy":
+            data, errors, warnings = _economy(args, cfg, system)
         elif command == "explain":
             data = _explain(args, cfg, system)
         elif command in ("bindings check", "bindings apply"):

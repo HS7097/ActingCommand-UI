@@ -17,7 +17,9 @@
 - ("impacts", <an output's key>): the impacts of the continuous unknowns of an output that computes with more
   than one, each with the others held at their ends (`_SubGraph`);
 - ("sampled", <an output's key>): with `unknowns.samples`, the Monte Carlo tallies of an output that reads a
-  distribution (`_SubGraph`).
+  distribution (`_SubGraph`);
+- ("regen", id, "amount" | "every"): a regen's amount and interval, which the economy reads;
+- ("economy", "steady" | "plan"): the economy's two solves (`core.flow`), computed only when asked for.
 
 **Scenarios.** A node that reads a discrete unknown (variants, empirical) has one value per point of it. The
 choices are found as the evaluation reaches them, so a node depends only on the unknowns its value actually
@@ -50,7 +52,8 @@ the provenance record above (`_Environment.read` records both) and more:
   ("entity", class, id, attribute); ("entities", class), the ids of the class; and what the evaluation
   consults about the model's structure: ("typed", file, pointer), the typed expression; ("threshold_entry",
   id); ("table", id), its file, key, columns and form; ("table_keys", id), its rows' key cells in order;
-  ("flow_parts", function, first, second); ("storage_cap", store); ("unknown_target", target).
+  ("flow_parts", function, first, second); ("storage_cap", store); ("unknown_target", target); and for the
+  economy ("economy_model",), the structure of the model it reads (`core.flow.model_leaf`).
 A state value is depended on before its presence is checked, so a missing one is part of the trace too.
 """
 
@@ -76,7 +79,8 @@ from acmodel.codes import (
     STATE_ENTITY_MISSING,
     STATE_READING_MISSING,
 )
-from acmodel.config import Unknowns
+from acmodel.config import EconomySettings, Unknowns
+from acmodel.core import flow
 from acmodel.core.common import (
     BLOCKED,
     CONFIRMED,
@@ -130,6 +134,7 @@ if TYPE_CHECKING:
 # The kinds of graph node (the first part of a node's key); every other first part names a leaf.
 NODE_KINDS = (
     "rule", "general_logic", "offset", "flow", "member", "point", "threshold", "general", "sampled", "impacts",
+    "regen", "economy",
 )
 
 
@@ -550,6 +555,7 @@ class Graph:
         *,
         max_bits: int,
         settings: Unknowns = Unknowns(),
+        economy: EconomySettings = EconomySettings(),
         cache: Session | None = None,
     ) -> None:
         self.checker = checker
@@ -560,6 +566,7 @@ class Graph:
         self.thresholds = {threshold["id"]: threshold for threshold in exports["thresholds"]}
         self.max_bits = max_bits
         self.settings = settings  # the keys under `unknowns`
+        self.economy = economy  # the keys under `lp`, `search` and `economy` (`core.flow`)
         # The distribution unknowns that sampling draws, and the sample of each (`_SubGraph` only).
         self.distributions = sorted(
             u.id for u in checker.unknowns
@@ -651,6 +658,8 @@ class Graph:
         if kind == "unknown_target":
             entry, member = unknown_target(checker, args[0])
             return [entry.id, entry.kind, member]
+        if kind == "economy_model":
+            return flow.model_leaf(checker)
         raise ValueError(f"no leaf of kind {kind!r}")
 
     def current(self, item: tuple[str, ...]) -> str:
@@ -670,6 +679,8 @@ class Graph:
             spec_doc.update(format=SAMPLED_FORMAT, unknowns=self.settings.keyed())
         elif kind == "impacts":  # its value is in units of 1 / scale
             spec_doc.update(format=IMPACTS_FORMAT, scale=self.settings.scale)
+        elif kind == "economy":  # its value is the solves', which these keys decide
+            spec_doc.update(format=flow.FORMAT, economy=flow.spec_keys(self.economy, key[1]))
         spec = cache.spec(kind, spec_doc)
         hit = cache.lookup(kind, spec, self.current)
         if hit is not None:
@@ -688,8 +699,10 @@ class Graph:
         self.hashes[key] = cache.save(kind, spec, list(key), trace, blob, compute_us)
         return result
 
-    def encode(self, result: Result | Sampled | Impacts) -> dict[str, Any]:
+    def encode(self, result: Result | Sampled | Impacts | flow.Economy) -> dict[str, Any]:
         blocked = sorted((self.errors[index] for index in result.blocked_by), key=canonical_text)
+        if isinstance(result, flow.Economy):
+            return flow.encode(result, blocked)
         if isinstance(result, Sampled):
             return {"tallies": encode_tallies(result), "blocked": blocked}
         if isinstance(result, Impacts):
@@ -700,8 +713,10 @@ class Graph:
         ]
         return {"scenarios": scenarios, "blocked": blocked, "needs_state": result.needs_state}
 
-    def decode(self, kind: str, blob: bytes) -> Result | Sampled | Impacts:
+    def decode(self, kind: str, blob: bytes) -> Result | Sampled | Impacts | flow.Economy:
         doc = json.loads(blob)
+        if kind == "economy":
+            return flow.decode(doc, self._register)
         if kind == "sampled":
             return Sampled(decode_tallies(doc["tallies"]), self._register(doc["blocked"]))
         if kind == "impacts":
@@ -728,6 +743,10 @@ class Graph:
     def blocked(self, errors: list[dict[str, Any]], path: str) -> Result:
         return Result(blocked_by=self._register([{**entry, "detail": {"path": path, **entry["detail"]}} for entry in errors]))
 
+    def register(self, errors: list[dict[str, Any]]) -> frozenset[int]:
+        """Keep errors among the run's root errors (each once); their indices block what returns them."""
+        return self._register(errors)
+
     def _register(self, errors: list[dict[str, Any]]) -> frozenset[int]:
         """The indices of `errors` among the run's root errors, each kept once."""
         indices = set()
@@ -741,7 +760,9 @@ class Graph:
 
     # Nodes --------------------------------------------------------------------------------------
 
-    def compute(self, key: tuple[str, ...]) -> Result | Sampled | Impacts:
+    def compute(self, key: tuple[str, ...]) -> Result | Sampled | Impacts | flow.Economy:
+        if key[0] == "economy":
+            return flow.compute(self, key[1])
         if key[0] == "threshold":
             return self.threshold(key[1])
         if key[0] == "sampled":
@@ -775,6 +796,9 @@ class Graph:
             return self.expression(entry, _at(at(entry.ref, "logic", "general_logic")), own, unresolved=unresolved)
         if key[0] == "offset":
             return self.expression(entry, _at(at(entry.ref, "logic", "live", "offset")), own, unresolved=unresolved)
+        if key[0] == "regen":
+            ref = at(entry.ref, "logic", key[2])
+            return self.expression(entry, _at(ref), own, general=general, unresolved=unresolved)
         ref = at(entry.ref, "logic", "moves", "amount") if key[2] == "moves" else at(entry.ref, "logic", key[2], key[3])
         self.depend(("typed", entry.path, ref))
         if (entry.path, ref) not in self.typed.expressions:  # a `random:<id>` product
