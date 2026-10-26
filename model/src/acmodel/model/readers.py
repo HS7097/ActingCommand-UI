@@ -93,6 +93,13 @@ ENTITY = Tagged(
 )
 
 
+def _at_most_samples(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """`successes` at most `samples`."""
+    if value["successes"] > value["samples"]:
+        return ctx.refuse("value_invalid", pointer(ref, "successes"), literal=str(value["successes"]))
+    return True
+
+
 def _drop(value: dict[str, Any], ref: str, ctx: Context) -> bool:
     """`rate`, or `samples` with `successes` (at most `samples`)."""
     if "rate" in value:
@@ -103,9 +110,7 @@ def _drop(value: dict[str, Any], ref: str, ctx: Context) -> bool:
     for name in ("samples", "successes"):
         if name not in value:
             return ctx.refuse("member_missing", pointer(ref, name), key=name, expected=["rate", "samples"])
-    if value["successes"] > value["samples"]:
-        return ctx.refuse("value_invalid", pointer(ref, "successes"), literal=str(value["successes"]))
-    return True
+    return _at_most_samples(value, ref, ctx)
 
 
 AMOUNTS = MapOf(ID, EXPR)
@@ -212,7 +217,9 @@ UNKNOWN = Tagged(
                 {
                     "uniform": Object({"low": EXPR, "high": EXPR}),
                     "triangular": Object({"low": EXPR, "mode": EXPR, "high": EXPR}),
-                    "beta_from_samples": Object({"samples": Integer(1, MAX), "successes": Integer(0, MAX)}),
+                    "beta_from_samples": Object(
+                        {"samples": Integer(1, MAX), "successes": Integer(0, MAX)}, {}, _at_most_samples
+                    ),
                     "empirical": Object({"values": ListOf(EXPR, min_items=1)}),
                 },
             ),

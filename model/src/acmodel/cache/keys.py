@@ -55,19 +55,23 @@ class Evaluator:
 # Python minor version (design-py D-P5).
 # `engine` is an engine call (engine/client.py): its spec holds the engine's fingerprint, which already
 # covers the Python minor version and the library versions (design-py D-P5), so it declares none.
+# Version 3 (2 for `impacts`, `point` and `sampled`): the random processes (PY-11). A `beta_from_samples`
+# unknown, which any expression may read, is its Wilson enclosure instead of a refusal, and a random rule has a
+# value (`core.random`: the exact pity chain and the Wilson bounds compute with integers and fractions only, so
+# they declare no library).
 EVALUATORS: dict[str, Evaluator] = {
     "economy": Evaluator(1, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
-    "flow": Evaluator(2),
-    "general": Evaluator(2),
-    "general_logic": Evaluator(2),
-    "impacts": Evaluator(1),
-    "member": Evaluator(2),
-    "offset": Evaluator(2),
-    "point": Evaluator(1),
+    "flow": Evaluator(3),
+    "general": Evaluator(3),
+    "general_logic": Evaluator(3),
+    "impacts": Evaluator(2),
+    "member": Evaluator(3),
+    "offset": Evaluator(3),
+    "point": Evaluator(2),
     "regen": Evaluator(1),
-    "rule": Evaluator(2),
-    "sampled": Evaluator(1, ("numpy", "python")),
+    "rule": Evaluator(3),
+    "sampled": Evaluator(2, ("numpy", "python")),
     "threshold": Evaluator(2),
 }
 

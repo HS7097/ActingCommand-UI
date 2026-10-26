@@ -6,13 +6,13 @@ distributions. The keys are `config.Unknowns`.
 scenario), and once per point of every further one it reads under that choice. The points of `variants` are its
 variants, those of an `empirical` distribution its values by position (`0`, `1`, ...).
 
-**Continuous unknowns** (`interval`, and the `uniform` and `triangular` distributions) are one enclosure each,
-[low, high], and every node that reads one is computed by interval arithmetic (`expr.interval`). So the range of
-every output is a sound enclosure: never narrower than the true range. It is exact where the structural
-monotonic check proves it (each unknown reaches the value only through operators monotone in one and the same
-direction), and may be wider elsewhere. Bounds that may be out of order (low above high, a triangular mode
-outside them) are `range_invalid`. `beta_from_samples` is not evaluated yet: its bounds come with the random
-processes (Wilson), so reading it is `evaluation_unsupported`.
+**Continuous unknowns** (`interval`, and the `uniform`, `triangular` and `beta_from_samples` distributions) are one
+enclosure each, [low, high], and every node that reads one is computed by interval arithmetic (`expr.interval`).
+So the range of every output is a sound enclosure: never narrower than the true range. It is exact where the
+structural monotonic check proves it (each unknown reaches the value only through operators monotone in one and
+the same direction), and may be wider elsewhere. Bounds that may be out of order (low above high, a triangular
+mode outside them) are `range_invalid`. A `beta_from_samples` rate is its Wilson bounds (`core.random.wilson`,
+at `unknowns.drop_z` and `unknowns.wilson_digits`), the low bound rounded down and the high bound up.
 
 **The no-effect rule** decides on the sound range. An output that read unknowns is provisional when its range
 holds more than one value at export precision (value x `unknowns.scale`, 1000: milli, round half even; a
@@ -28,10 +28,10 @@ enclosure with that unknown free: from the run itself when the output reads no o
 otherwise from a `pinned` computation per choice of ends of the others (the `impacts` node). Each output lists
 its `sensitivity.top_n` largest impacts, ties by id.
 
-**Sampling** (`unknowns.samples`, none by default). Every distribution unknown has its own stream, keyed by
-(`unknowns.seed`, its stream id). Sample s is one block of `numpy.random.Philox` at counter s, so the chunk k of
-`unknowns.chunk_size` samples starts at counter k x chunk_size, and no chunking changes a sample. A draw on
-(0, 1) is the middle of one of `unknowns.resolution` cells. A uniform value is low + (high - low) x draw; a
+**Sampling** (`unknowns.samples`, none by default). Every distribution unknown but a `beta_from_samples` one,
+which stays free as its Wilson enclosure, has its own stream, keyed by (`unknowns.seed`, its stream id). Sample s
+is one block of `numpy.random.Philox` at counter s, so the chunk k of `unknowns.chunk_size` samples starts at
+counter k x chunk_size, and no chunking changes a sample. A draw on (0, 1) is the middle of one of `unknowns.resolution` cells. A uniform value is low + (high - low) x draw; a
 triangular one comes from its inverse distribution function, the square root rounded down to a multiple of
 1 / resolution; an empirical one is the value at position floor(word x n / 2**64). All of it is integer and
 exact, so a sample is the same on every platform and under every string-hash seed. The intervals stay free, so a
@@ -49,7 +49,9 @@ from typing import Any, Iterable, Protocol
 from acmodel.check.checker import Entry
 from acmodel.check.walk import at
 from acmodel.codes import EXPR_EVAL_FAILED
+from acmodel.config import Unknowns
 from acmodel.core.common import CONFIRMED, PROVISIONAL, RULE_STATUS, worst
+from acmodel.core.random import wilson
 from acmodel.envelope import Failure, error
 from acmodel.expr import Duration, Value
 from acmodel.expr.interval import Interval, Undecided, bounds as value_bounds, combine, magnitude, make
@@ -84,13 +86,22 @@ def family(entry: Entry) -> str:
 
 
 def continuous(entry: Entry) -> bool:
-    """An interval, uniform or triangular unknown: one enclosure, computed by interval arithmetic."""
-    return family(entry) in ("interval", "uniform", "triangular")
+    """An interval, uniform, triangular or beta_from_samples unknown: one enclosure, computed by interval
+    arithmetic."""
+    return family(entry) in ("interval", "uniform", "triangular", "beta_from_samples")
 
 
-def unsupported(entry: Entry) -> str | None:
-    """What reading this unknown cannot evaluate yet (`beta_from_samples`), or None."""
-    return "beta_from_samples" if family(entry) == "beta_from_samples" else None
+def drawn(entry: Entry) -> bool:
+    """A distribution that sampling draws: all but `beta_from_samples`, which stays free as its enclosure."""
+    return entry.kind == "distribution" and family(entry) != "beta_from_samples"
+
+
+def wilson_bounds(entry: Entry, settings: Unknowns) -> dict[str, Fraction]:
+    """The bounds of a `beta_from_samples` unknown: its Wilson bounds at `unknowns.drop_z`, the low bound rounded
+    down and the high bound up to `unknowns.wilson_digits` decimals."""
+    form = entry.doc["distribution"]
+    low, high = wilson(form["samples"], form["successes"], Fraction(settings.drop_z), settings.wilson_digits)
+    return {"low": low, "high": high}
 
 
 def points(entry: Entry) -> list[str]:
@@ -102,7 +113,7 @@ def points(entry: Entry) -> list[str]:
 
 def bounds(entry: Entry) -> dict[str, str]:
     """The JSON pointer of each expression of an interval or distribution: `low`, `mode` and `high` in that
-    order, or the values of an empirical one by position."""
+    order, or the values of an empirical one by position (none for `beta_from_samples`)."""
     if entry.kind == "interval":
         return {name: at(entry.ref, "interval", name) for name in ("low", "high")}
     form = entry.doc["distribution"]
