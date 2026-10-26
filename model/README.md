@@ -7,8 +7,9 @@ Runtime.
 This folder holds the launcher, `setup`, `version`, the output envelope, the dependency check, the strict
 readers of the model files, the expression language, the static check (`check`), the derivation graph
 (`run`) and its cache with incremental recompute (`cache`), provenance (`explain`), the thresholds export
-(`export thresholds`) and the bindings of thresholds to the schedule (`bindings check`, `bindings apply`).
-The other computation commands come in later slices.
+(`export thresholds`), the bindings of thresholds to the schedule (`bindings check`, `bindings apply`) and
+the engine host, which runs engines kept outside this repository in worker processes of its own. The other
+computation commands come in later slices.
 
 ## Needs
 
@@ -123,6 +124,18 @@ default:
   - a pause while the host CPU load is above 90 %.
 
   `contracts/cli.md` (Host caps) has the details.
+- **Engines.** An engine is Python code in its own home outside this repository, with a manifest
+  `engine.json` (`contracts/formats.md`, "Engines"). `engines.roots` maps each engine id to its home on this
+  host; nothing in this repository names one. The engine host runs an engine only in worker processes of the
+  tool, which inherit the Job and the priority:
+  - at most `compute.workers.max` (default 2) at once;
+  - with an explicit environment and a fixed hash seed (`engine.hash_seed`);
+  - with guards against writes outside their scratch directory, files and modules the manifest does not
+    list, and changes of `sys.argv`, the working directory, `sys.path` or the environment;
+  - with timeouts, a restart budget, recycling, and a verify sample run again under another hash seed.
+
+  Engine results are cached by the engine's fingerprint (its manifest, its files and the library versions).
+  The keys are under `engine` and `engines`; `contracts/cli.md` (Engine host) has the details.
 
 ## Tests
 
@@ -151,6 +164,8 @@ src/acmodel/          the package: model/ the strict readers, expr/ the expressi
                       the inputs), cache/ the cache (keys, sqlite3 index and blobs, verifying
                       traces, run ids, stats/verify/gc), export/ the thresholds export, bindings/
                       the bindings check and apply with their position-tracking scanner, host/ the
-                      host caps (priority, Job object, memory gates, quiet windows, PAUSE file)
-tests/                pytest tests with fakes
+                      host caps (priority, Job object, memory gates, quiet windows, PAUSE file),
+                      engine/ the engine host (manifest and fingerprint, workers, guards, the cached
+                      call and the verify sample)
+tests/                pytest tests with fakes; fakes/ holds the neutral fake engine
 ```

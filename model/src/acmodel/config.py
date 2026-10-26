@@ -2,7 +2,8 @@
 
 The file is optional and every key has a default. A file that exists is read
 strictly: UTF-8 JSON, no duplicate keys, no unknown members, typed values.
-The host caps (`compute.priority`, `compute.job.*`, `host.*`) are read by `acmodel.host.caps`.
+The host caps (`compute.priority`, `compute.job.*`, `host.*`) are read by `acmodel.host.caps`, the engine
+host's keys (`compute.workers.*`, `engine.*`, `engines.*`) by `acmodel.engine.settings`.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from acmodel.codes import CONFIG_INVALID
+from acmodel.engine import settings as engine_settings
 from acmodel.envelope import Failure, error
 from acmodel.host import caps as host_caps
 
@@ -27,10 +29,12 @@ DEFAULT_CACHE_MAX_BYTES = 2 * 1024**3
 _MEMBERS = {
     "schema_version": None,
     "paths": {"venv", "state_root", "datasets"},
-    "compute": {"blas_threads", "priority", "job"},
+    "compute": {"blas_threads", "priority", "job", "workers"},
     "expr": {"max_bits"},
     "cache": {"max_bytes"},
     "host": {"memory", "cpu", "quiet_windows", "pause_file", "pause_poll_ms"},
+    "engine": engine_settings.ENGINE_MEMBERS,
+    "engines": engine_settings.ENGINES_MEMBERS,
 }
 
 
@@ -44,6 +48,7 @@ class Config:
     expr_max_bits: int
     host: host_caps.HostCaps
     cache_max_bytes: int
+    engine: engine_settings.EngineSettings
 
 
 class _DuplicateKey(ValueError):
@@ -135,6 +140,10 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
     def invalid(reason: str, parts: tuple[str, ...], **values: Any) -> Failure:
         return _invalid(reason, path, _pointer(*parts), **values)
 
+    host = host_caps.read(compute, _section(doc, "host", path), state_root, invalid)
+    engine = engine_settings.read(
+        compute, _section(doc, "engine", path), _section(doc, "engines", path), host.worker_memory_mib, invalid
+    )
     return Config(
         path=path,
         venv=_absolute(paths, "venv", root / "venv", path),
@@ -142,6 +151,7 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         datasets=_absolute(paths, "datasets", root / "datasets", path),
         blas_threads=threads,
         expr_max_bits=max_bits,
-        host=host_caps.read(compute, _section(doc, "host", path), state_root, invalid),
+        host=host,
         cache_max_bytes=cache_max_bytes,
+        engine=engine,
     )

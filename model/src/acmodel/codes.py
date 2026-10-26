@@ -28,6 +28,12 @@ RULE_PENDING_UNBOUNDED = "rule_pending_unbounded"
 RULE_PREF_MISPLACED = "rule_pref_misplaced"
 DATA_EXTERNAL_MISSING = "data_external_missing"
 DATA_EXTERNAL_HASH_MISMATCH = "data_external_hash_mismatch"
+ENGINE_FAILED = "engine_failed"
+ENGINE_GUARD_VIOLATION = "engine_guard_violation"
+ENGINE_IMPORT_FAILED = "engine_import_failed"
+ENGINE_NONDETERMINISTIC = "engine_nondeterministic"
+ENGINE_NOT_CONFIGURED = "engine_not_configured"
+ENGINE_PROTOCOL_ERROR = "engine_protocol_error"
 HOST_GATE_PAUSED = "host_gate_paused"
 HOST_JOB_NOT_APPLIED = "host_job_not_applied"
 HOST_PRIORITY_NOT_APPLIED = "host_priority_not_applied"
@@ -43,8 +49,8 @@ BINDING_UNSUPPORTED = "binding_unsupported"
 
 EXIT_OK = 0
 
-# 1 model or input error, 2 usage, 4 host gate, 5 export refused, 6 binding mismatch (contracts/cli.md lists
-# all of 0-6).
+# 1 model or input error, 2 usage, 3 engine failure, 4 host gate, 5 export refused, 6 binding mismatch
+# (contracts/cli.md lists all of 0-6).
 EXIT_STATUS = {
     USAGE_INVALID: 2,
     CONFIG_INVALID: 1,
@@ -70,6 +76,12 @@ EXIT_STATUS = {
     RULE_PREF_MISPLACED: 1,
     DATA_EXTERNAL_MISSING: 1,
     DATA_EXTERNAL_HASH_MISMATCH: 1,
+    ENGINE_FAILED: 3,
+    ENGINE_GUARD_VIOLATION: 3,
+    ENGINE_IMPORT_FAILED: 3,
+    ENGINE_NONDETERMINISTIC: 3,
+    ENGINE_NOT_CONFIGURED: 3,
+    ENGINE_PROTOCOL_ERROR: 3,
     HOST_GATE_PAUSED: 4,
     HOST_JOB_NOT_APPLIED: 4,
     HOST_PRIORITY_NOT_APPLIED: 4,

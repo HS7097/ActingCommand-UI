@@ -47,7 +47,10 @@ class Evaluator:
 
 # The kinds of the derivation graph (core/graph.py). They compute with exact fractions only, so none of
 # them declares a library; the solver, Monte Carlo and screening kinds of later slices will.
+# `engine` is an engine call (engine/client.py): its spec holds the engine's fingerprint, which already
+# covers the Python minor version and the library versions (design-py D-P5), so it declares none.
 EVALUATORS: dict[str, Evaluator] = {
+    "engine": Evaluator(1),
     "flow": Evaluator(1),
     "general": Evaluator(1),
     "general_logic": Evaluator(1),

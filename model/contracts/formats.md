@@ -13,6 +13,9 @@ acmodel reads eight kinds of input file. Each has one strict reader in `src/acmo
 | an account state snapshot (local only) | `acmodel.state.v1` | `read_state` |
 | `ours/prefs/defaults.json` (the preference layer, read as it is) | `1` | `read_prefs_defaults` |
 
+The engine host also reads each engine's `engine.json` (`acmodel.engine.v2`), in the engine's home outside
+any repository, with the same rules (see "Engines" at the end).
+
 A reader returns the file's JSON document only after checking all of it. Otherwise it fails with one
 `model_file_invalid` error per problem (`codes.json`):
 - `ref` is the JSON pointer (RFC 6901) of the value; the empty pointer means the whole file;
@@ -650,3 +653,72 @@ says `greater_than_or_equal`).
 - **`data`** holds `path`, `model_id`, `state`, `repo`, and:
   - `changed`: each with `entry`, `threshold`, `file`, [`rule_id`], `path`, `from` and `to`;
   - `written`: the files whose bytes changed.
+
+## Engines: `engine.json` and the interface `acmodel.engine.v2`
+
+An engine is Python code in an engine's home outside this repository: an adapter, and the calculator code
+and data it uses (#424 design-py section 7). `engines.roots` of the local configuration says where each home
+is. The engine host (`src/acmodel/engine/`, `cli.md` "Engine host") runs engines only in its own worker
+processes.
+
+### `engine.json` (`acmodel.engine.v2`)
+
+It sits in the home and is read strictly, as the files above are (`detail.format` is `acmodel.engine.v2`).
+
+| Member | Value |
+|---|---|
+| `schema_version` | `acmodel.engine.v2` |
+| `engine_id` | an id: the one `model.json` and `engines.roots` name |
+| `version` | digits separated by dots |
+| `python` | the Python minor version it runs on; another than the running one (`3.13`) is refused |
+| `entry` | `module:callable`, the function the worker calls: `make_engine(config, scratch_dir)` |
+| `sys_path` | folders of the home that the worker puts first on `sys.path` (`.` is the home); each must exist |
+| `code` | glob patterns (`*`, `?`, `**`) of the engine's Python files; at least one |
+| `data` | glob patterns of the other files the engine reads |
+| `external` | `{source, sha256}` datasets, verified as a data file's are (`data_external_missing`, `data_external_hash_mismatch`); their local paths reach `make_engine` |
+| `ops` | from `describe`, `evaluate`, `predict`, `search`: `describe` among them, none twice |
+| `deterministic` | `true` |
+| `max_batch` | the most requests per `evaluate` or `predict` call; at least 1 |
+| `memory_mib_estimate` | the expected memory of one worker, in MiB, for the planned-memory report |
+| `config` (optional) | any JSON value, for the adapter |
+| `note` (optional) | text |
+
+- **Paths and patterns** are relative to the home, with `/`, and have no `.` or `..` segment. Every pattern
+  must match at least one file.
+- **The listed files** are those that `code` or `data` match. They are everything under the home the
+  engine may read (besides `engine.json`), and every module of the engine must be one of the `code` files.
+- **The fingerprint** is the sha256 over canonical JSON of: the sha256 of `engine.json`'s bytes; every listed
+  file as [path, sha256 of its bytes], sorted by path; the external datasets as [source, sha256]; and the
+  library versions (the Python minor version, numpy, scipy). The tool computes it; `engine.json` never
+  supplies it. Any changed byte of a listed file, of `engine.json` or of a library version is a new
+  fingerprint, so every cached result of the engine is computed again.
+
+### The interface
+
+```text
+make_engine(config, scratch_dir) -> engine     config: {"root", "manifest", "external"}
+engine.describe() -> {engine_id, version, ops, metrics, entity_classes, max_batch}
+engine.evaluate(requests) -> [result, ...]     one per request, in order
+engine.predict(requests) -> [result, ...]      one per request, in order
+engine.search(request) -> result
+engine.reset() -> None                         drops derived caches, never prepared inputs
+```
+
+- **Values.** Requests and results are JSON values only: dict with string keys, list, str, int, finite
+  float, bool and None, exactly those types. A tuple, a set, a subclass or NaN in a result is
+  `engine_protocol_error` (`not_json`), with `ref` the pointer of the value in that request's result.
+- **A request** is an object. Its member `entities`, if present, maps opaque entity ids to what the engine
+  may read about each; every other member is read whole.
+- **A result** holds `depends_on`, the ids of the request's `entities` that the result read, each once. An
+  `evaluate` result also holds `metrics` (metric name to number) and optionally `flags`, `unmodelled` and
+  `pending_readings_used` (lists of strings), and nothing else. A `predict` or `search` result's other
+  members are the engine's. A result of another shape is `engine_protocol_error` (`result_invalid`).
+- **A domain failure** of one request is the result `{"error": {"code": <string>, "detail": <JSON value>}}`:
+  that request's `engine_failed` (`adapter_error`), with `engine_code` the code and `engine_detail` the
+  detail as canonical JSON.
+- **`describe`** agrees with `engine.json` on `engine_id`, `version`, `max_batch` and the set of `ops`;
+  `metrics` and `entity_classes` are lists of strings. Otherwise `engine_protocol_error`
+  (`describe_invalid`).
+- **What an engine must not do** is in `cli.md` ("Engine host", Guards): write outside its scratch
+  directory, read unlisted files or modules of its home, or change `sys.argv`, the working directory,
+  `sys.path` or `os.environ`.
