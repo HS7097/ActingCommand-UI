@@ -27,6 +27,10 @@ python3 -I -B <model>/acmodel.py <command>    (elsewhere)
 |---|---|---|
 | `setup` | Creates the venv at `paths.venv` from the running Python 3.13 (`python -I -B -m venv <path>`) if the path is absent. Then it installs `requirements.txt` with `python -I -B -m pip install --require-hashes --only-binary=:all: --no-deps -r requirements.txt` using the venv's Python. It reuses a 3.13 venv, refuses a venv of another minor version (`deps_invalid`, `python_version`) and a path that holds no venv (`venv_failed`, `stage: inspect`), and never deletes anything. The children's output goes to stderr. | `venv`, `created`, `requirements` |
 | `version` | Runs the dependency check and reports the versions. | `tool`, `tool_version`, `python`, `packages` (name to version) |
+| `check <model>` | Runs the dependency check, then the static check of the model: `<model>` is the model folder or its `model.json` (`formats.md`, "The static check"). It reads and computes, never writes. Every problem is one error; with any, the exit status is 1. | `path`, `model_id`, `entities`, `rules`, `superseded`, `unknowns`, `tables` |
+
+Every argument a command names is required. A missing one is `usage_invalid` (`argument_missing`, with the
+argument's name), and an extra one is `usage_invalid` (`argument_unexpected`).
 
 **Dependency check.** It runs before every command except `setup`:
 - the interpreter must be Python 3.13;
@@ -48,7 +52,7 @@ child prints the line.
 | Member | Type | Meaning |
 |---|---|---|
 | `schema_version` | string | `acmodel.cli.v1` |
-| `command` | string or null | the command that ran; null when the command line names no known command |
+| `command` | string or null | the command that ran; null when the command line is refused (`usage_invalid`) |
 | `ok` | bool | true exactly when `errors` is empty |
 | `data` | object | the command's result; `{}` when it failed |
 | `errors` | list | entries `{code, detail, ref?, needed_by?}` |
@@ -58,7 +62,8 @@ child prints the line.
 - `code` is a code registered in `codes.json`.
 - `detail` holds that code's typed values only, never prose.
 - `ref` is a reference into the input when there is one: for `config_invalid`, the JSON pointer of the
-  member, with the file in `detail.path`.
+  member, with the file in `detail.path`; for the model's codes, the JSON pointer into the file in
+  `detail.path`.
 - `needed_by` (the outputs an error blocks) is reserved for later commands.
 
 Human text, one line per error and the usage text, goes to stderr.
@@ -90,6 +95,7 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | `schema_version` | (required in a file) | `acmodel.config.v1` |
 | `paths.venv` | `%LOCALAPPDATA%\ActingCommand\acmodel\venv` | the venv; an absolute path |
 | `paths.state_root` | `%LOCALAPPDATA%\ActingCommand\acmodel\state` | the state root (used by later commands); an absolute path |
+| `paths.datasets` | `%LOCALAPPDATA%\ActingCommand\acmodel\datasets` | the local copies of external datasets, each the file named by its sha256 (`check` verifies them); an absolute path |
 | `compute.blas_threads` | 1 | the value of the BLAS thread variables; an integer of at least 1 |
 | `expr.max_bits` | 127 | the most bits a numerator or denominator may have in expression evaluation (durations in seconds); beyond it is `expr_overflow`; an integer of at least 1 |
 

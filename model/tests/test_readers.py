@@ -1,6 +1,7 @@
 """PY-2: the strict readers read the worked example (design section 3.8) and refuse,
 each with a JSON pointer, a repeated key, a float, NaN or Infinity, an integer
-beyond +-(2**53 - 1), a BOM, an unknown member and an id outside the grammar."""
+beyond +-(2**53 - 1), a BOM, an unknown member and an id outside the grammar.
+PY-3 adds the refusal of a lone surrogate."""
 
 from __future__ import annotations
 
@@ -155,3 +156,9 @@ def test_an_id_outside_the_grammar_is_refused(tmp_path, check_envelope, old, new
     path = variant(tmp_path, RULES, old, new)
 
     assert refusals(read_rules, path, check_envelope) == [("id_invalid", ref, {"literal": literal})]
+
+
+def test_a_lone_surrogate_is_refused_with_its_pointer(tmp_path, check_envelope):
+    path = variant(tmp_path, STATE, '"label": "acct-1",', '"label": "\\ud800",')
+
+    assert refusals(read_state, path, check_envelope) == [("string_invalid", "/label", {})]

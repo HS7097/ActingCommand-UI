@@ -20,6 +20,8 @@ Tokens:
   and `entity:<class>` name a set, which only `sum` and `count` take.
 - An id is `[a-z][a-z0-9_.-]{0,95}` and runs to the first other character, so a `-` right after a
   reference belongs to it: write `amount:a - 1`, not `amount:a-1`.
+- The target of `read:` is a fact key, `[a-z0-9][a-z0-9._:-]{0,127}`, which may also hold `:`.
+  Both grammars are the readers' own (`acmodel.ids`).
 - In the body of `sum(<set>: ...)` and `count(<set>: ...)`, the key `$` names the current member of
   that set: `sum(entity:u: entity:u[$].level)`.
 
@@ -40,6 +42,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any
 
+from acmodel import ids
 from acmodel.codes import EXPR_PARSE_ERROR
 from acmodel.expr.values import Duration, Type, Value, failure
 
@@ -57,7 +60,7 @@ FUNCTIONS = (
     "ceil", "clamp", "cost", "count", "floor", "if", "lookup",
     "max", "max_single_income", "min", "round_half_even", "sum", "yield",
 )
-ID_MAX = 96
+ID_MAX = ids.ID_MAX
 
 # (fewest, most) arguments; None is no upper bound. sum and count have their own form.
 _ARITY = {
@@ -66,7 +69,8 @@ _ARITY = {
     "round_half_even": (1, 1), "yield": (2, 2),
 }
 _LEADING_IDS = {"cost": 2, "yield": 2, "max_single_income": 2, "lookup": 2}
-_WORD = re.compile(r"[a-z][a-z0-9_.-]*")
+_WORD = re.compile(ids.ID_RUN)
+_FACT_KEY = re.compile(ids.FACT_KEY_RUN)
 _KEY = re.compile(r"\$|[a-z0-9][a-z0-9_.-]*")
 _NUMBER = re.compile(r"(0|[1-9][0-9]*)(?:\.([0-9]+))?")
 _NUMBER_RUN = re.compile(r"[a-z0-9_.]*")
@@ -222,7 +226,10 @@ class _Lexer:
             return _Token("word", word, pos), end
         if word not in REFERENCE_KINDS:
             _refuse(self.ref, "reference_kind_unknown", pos, word)
-        target, end = self.ident(end + 1, pos)
+        if word == "read":
+            target, end = self.ident(end + 1, pos, _FACT_KEY, ids.FACT_KEY_MAX)
+        else:
+            target, end = self.ident(end + 1, pos)
         key = attr = None
         if self.text.startswith("[", end):
             if word not in SET_KINDS:
@@ -245,9 +252,9 @@ class _Lexer:
         reference = Reference(word, target, key, attr, pos)
         return _Token("reference", self.text[pos:end], pos, reference), end
 
-    def ident(self, pos: int, start: int) -> tuple[str, int]:
-        match = _WORD.match(self.text, pos)
-        if match is None or len(match.group()) > ID_MAX:
+    def ident(self, pos: int, start: int, run: re.Pattern[str] = _WORD, most: int = ID_MAX) -> tuple[str, int]:
+        match = run.match(self.text, pos)
+        if match is None or len(match.group()) > most:
             _refuse(self.ref, "reference_malformed", start, self.text[start:pos])
         return match.group(), match.end()
 

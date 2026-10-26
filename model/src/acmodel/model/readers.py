@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from acmodel import ids
 from acmodel.envelope import Failure
 from acmodel.model.jsonfile import MAX_SAFE_INTEGER, load, pointer
 from acmodel.model.shape import (
@@ -35,10 +36,10 @@ from acmodel.model.shape import (
 
 MAX = MAX_SAFE_INTEGER
 
-# Grammars (formats.md, "Ids").
-ID = Text(r"[a-z][a-z0-9_.-]{0,95}", "id_invalid")
-UNKNOWN_ID = Text(r"unk\.[a-z0-9_.-]{1,92}", "id_invalid")
-FACT_KEY = Text(r"[a-z0-9][a-z0-9._:-]{0,127}", "id_invalid")
+# Grammars (formats.md, "Ids"), shared with the expression lexer.
+ID = Text(ids.ID, "id_invalid")
+UNKNOWN_ID = Text(ids.UNKNOWN_ID, "id_invalid")
+FACT_KEY = Text(ids.FACT_KEY, "id_invalid")
 TEXT = Text()
 EXPR = Text()  # parsed by the expression language, not here
 DATE = Date()
@@ -47,7 +48,7 @@ BOOLEAN = Boolean()
 SHA256 = Text(r"[0-9a-f]{64}")
 VERSION = Text(r"[0-9]+(\.[0-9]+)*")
 POINTER = Text(r"(/([^~/]|~[01])*)+")
-DIMENSION = Text(r"none|time|count|value|amount:[a-z][a-z0-9_.-]{0,95}")
+DIMENSION = Text(r"none|time|count|value|amount:" + ids.ID)
 INTEGER_TEXT = Text(r"-?(0|[1-9][0-9]*)")
 DECIMAL_TEXT = Text(r"-?(0|[1-9][0-9]*)(\.[0-9]+)?")
 SEGMENTS = r"([a-z0-9][a-z0-9_.-]*/)*[a-z0-9][a-z0-9_.-]*\.json"

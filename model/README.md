@@ -4,8 +4,9 @@
 runs on its own: there is nothing to build, and it does not depend on the console, the MCP server or the
 Runtime.
 
-This folder holds the skeleton: the launcher, `setup`, `version`, the output envelope and the dependency
-check. The computation commands come in later slices.
+This folder holds the launcher, `setup`, `version`, the output envelope, the dependency check, the strict
+readers of the model files, the expression language and the static check (`check`). The computation
+commands come in later slices.
 
 ## Needs
 
@@ -31,8 +32,12 @@ py -3.13 -I -B model\acmodel.py setup
 ```text
 py -3 -I -B model\acmodel.py version
 model\acmodel.cmd version
+model\acmodel.cmd check <resource repo>\ours\model
 ```
 
+- **`check`** reads a model (its folder or its `model.json`) and checks it without computing anything:
+  references, duplicate ids, statuses, provenance, `supersedes` and conflicts, pending rules, where
+  `pref:` may appear, loops, and the hashes of external datasets (`contracts/formats.md`).
 - **Re-dispatch.** The launcher re-runs itself under the venv's Python, and the exit status is passed
   through.
 - **Dependency check.** Before every command except `setup`, the launcher checks that the interpreter
@@ -54,7 +59,7 @@ default:
 ```json
 {
   "schema_version": "acmodel.config.v1",
-  "paths": {"venv": "<absolute path>", "state_root": "<absolute path>"},
+  "paths": {"venv": "<absolute path>", "state_root": "<absolute path>", "datasets": "<absolute path>"},
   "compute": {"blas_threads": 1},
   "expr": {"max_bits": 127}
 }
@@ -63,6 +68,9 @@ default:
 - **Strict reading.** Unknown members, duplicate keys and values of the wrong type are refused
   (`config_invalid`), never ignored.
 - **State root.** The default for `paths.state_root` is `%LOCALAPPDATA%\ActingCommand\acmodel\state`.
+- **External datasets.** `paths.datasets` (default `%LOCALAPPDATA%\ActingCommand\acmodel\datasets`) holds
+  the local copies of large datasets, each the file named by its sha256. `check` verifies them and never
+  fetches.
 - **Exact arithmetic.** Expressions compute with exact fractions. `expr.max_bits` (default 127) bounds
   every numerator and denominator; a larger one is `expr_overflow`, never wrapped or rounded.
 
@@ -85,7 +93,8 @@ requirements.txt      numpy, scipy: exact pins with sha256 hashes
 requirements-dev.txt  the above plus pytest and its dependencies, hashed
 pytest.ini            test paths; src on the import path
 contracts/            cli.md (envelope, start, configuration), codes.json (the codes),
-                      formats.md (the input files and their strict reading)
-src/acmodel/          the package; model/ holds the strict readers of the input files
+                      formats.md (the input files, their strict reading and the static check)
+src/acmodel/          the package: model/ the strict readers, expr/ the expression language,
+                      check/ the static check, ids.py the id grammars they share
 tests/                pytest tests with fakes
 ```

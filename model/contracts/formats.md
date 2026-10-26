@@ -19,8 +19,8 @@ A reader returns the file's JSON document only after checking all of it. Otherwi
 
 **What the readers check:** the JSON level, `schema_version`, every member's type, the id grammar, and that
 no member is unknown or missing. **What they do not check:** meaning across members and files, which is the
-static check's (`acmodel check`, a later slice). That covers references that resolve, duplicate ids, status
-values, non-empty provenance, conflicts and the expressions themselves.
+static check's (`acmodel check`, see "The static check" below). That covers references that resolve,
+duplicate ids, status values, non-empty provenance, conflicts and the expressions themselves.
 
 ## Reading JSON
 
@@ -59,9 +59,13 @@ An optional member that is absent has exactly the meaning given here. Where none
 | **unknown id**: `unk.` followed by `[a-z0-9_.-]{1,92}` | unknowns |
 | **fact key**: `[a-z0-9][a-z0-9._:-]{0,127}`, the Runtime's identifier grammar | readings (`reading`, `live.fact`, `live.reference_fact`, the state's `readings`) |
 
+The expression language uses the same grammars (`src/acmodel/ids.py`): the target of `read:` is a fact key,
+every other reference target is an id.
+
 ### Common values
 
-- **expr**: a non-empty string in the expression language (#424 design §3.4). The reader does not parse it.
+- **expr**: a non-empty string in the expression language (#424 design §3.4). The reader does not parse it;
+  the static check does.
 - **date**: `YYYY-MM-DD`, a real calendar date.
 - **dimension**: `none`, `time`, `count`, `value` or `amount:<id>`.
 - **note**: a non-empty string, never read by the tool.
@@ -119,7 +123,7 @@ always), `unknowns` (unknown ids), `supersedes` (rule ids), `note`]. `kind` sele
 |---|---|
 | `cap` | `cap_kind` selects the rest. `hard` and `storage`: `on_reach` and exactly one of `value` (expr) and `reading` (fact key). `soft_read`: `reading` and `on_reach`. `on_reach` is `block_all_income`, `stop_production`, `discard`, `void_at_reset` or `{"block_income_from": [activity ids], "other_income": "notice_only"}`. |
 | `regen` | `amount`, `every` [`while` (absent means always)], all expr |
-| `flow` | [`consumes`, `produces` (resource id to expr), `moves` (`from`, `to`, `amount`), `counts_on` (`success` or `attempt`), `batch` (`min`, `max`), `requires` (gate rule ids)] |
+| `flow` | [`consumes`, `produces` (resource id to expr; a product may instead be `random:<id>`, naming a `random` rule), `moves` (`from`, `to`, `amount`), `counts_on` (`success` or `attempt`), `batch` (`min`, `max`), `requires` (gate rule ids)] |
 | `exchange` | `gives`, `takes` (resource id to expr) [`limit` (expr)] |
 | `limit` | `max` (expr), `per` (period id) [`shared_with` (activity ids; absent means not shared)] |
 | `cooldown` | `min_interval` (expr) |
@@ -189,3 +193,138 @@ The preference layer's own file, read as it is:
 
 Every key in `defaults` has a kind and every kind has a default (`member_missing`). Exactly the `strategy`
 keys have a neutral value: a missing one is `member_missing`, and one for any other key is `member_unknown`.
+
+## The static check (`acmodel check`)
+
+`acmodel check <model>` takes the model folder or its `model.json`. It reads `model.json`, `sources.json` in the
+same folder, and every file that `model.json` lists. If a reader refuses a file, the check reads the remaining
+files, reports every reader's errors and stops. Otherwise it checks the rules below.
+- It computes nothing, and it reports every problem at once, with exit status 1.
+- Each error holds the file in `detail.path` and the JSON pointer in `ref`. In an expression, `position` is the
+  character offset of the reference.
+- On success `data` holds `path`, `model_id` and these counts: `entities` (periods included), `rules` (the
+  active ones), `superseded`, `unknowns` and `tables`.
+
+### Duplicate ids
+
+- **One namespace for the model:** the entities, periods, rules and unknowns of all files share one, so every
+  id names one thing.
+- **Separate namespaces:** tables, the row keys of each table, sources and engines each have their own.
+- A second declaration is `model_id_duplicate`, with the `namespace` and the first declaration's place.
+  References resolve to the first declaration.
+
+### Status and provenance
+
+| Entry | `status` | `provenance` |
+|---|---|---|
+| rule | `confirmed`, `pending` or `provisional` | a non-empty list |
+| unknown | `pending` or `provisional` | a non-empty list |
+| data row | `confirmed`, `pending` or `provisional` | its own non-empty list, or else the table's |
+| data table | (none) | when present, a non-empty list |
+
+- **Refusals:** another status is `rule_status_invalid`; an empty or absent provenance is
+  `rule_provenance_missing`.
+- **Sources:** every `source` that a provenance entry cites is in `sources.json` (`rule_reference_missing`, with
+  `expected` `source`). So is the `source` of an external dataset.
+
+### `supersedes`
+
+- **A superseded rule** is one that any rule lists in `supersedes`. It stays in its file for history and is
+  never read. The check reads only its `status`, `provenance` and `supersedes`.
+- **References to it:** a reference to a superseded rule is `rule_reference_missing`, with `superseded_by`.
+- **The target** of `supersedes` must be a rule.
+- **Loops:** rules that supersede each other in a loop are `rule_cycle` with `via` `supersedes`.
+
+### References
+
+A reference that does not resolve to something of the expected kind is `rule_reference_missing`, with
+`expected`, and `found` when the id names something of another kind. References to the data and to the account
+state have their own codes.
+
+| Where | Must name |
+|---|---|
+| a rule's `subject`; `cleared:<id>` | an entity of any kind (periods included) |
+| a store's `holds`; the keys of `consumes`, `produces`, `gives`, `takes` and an outcome's `then`; `numeraire` (model and objective); `amount:<id>`; the `amount:<id>` dimension of a column or an attribute | a `resource` |
+| `stock:<id>` | a `store` |
+| `moves.from`, `moves.to` | a `resource` or a `store` |
+| `block_income_from`, `shared_with` | `activity` entities |
+| `limit.per` | a period |
+| `rule:<id>`; `weight_ref.compares_to` | an active rule |
+| `cap:<id>`; `count:<id>`; flow `requires`; a `random:<id>` product | an active `cap`, `limit`, `gate` or `random` rule |
+| `metric:<rule>.<name>` | an active `engine` rule and one of its `metrics`; the longest rule id that leaves a metric name is taken |
+| `cost(<a>, <r>)`, `yield(<a>, <r>)`; `max_single_income(<r>, <cap>)` | an `activity` and a `resource`; a `resource` and an active `cap` rule |
+| `unknown:<id>`; `unknown:<id>.<member>` | an `interval` or `distribution` unknown; a member that every variant of a `variants` unknown has. The longest unknown id that the target begins with is taken. |
+| an engine rule's `engine` | an engine of `model.json` |
+| a rule's `unknowns` | unknowns |
+| `param:<id>` | nothing yet: the format declares no parameters, so a `param:` reference is always refused |
+
+**Data references** (`data_reference_missing`, with `missing` `table`, `column` or `row`):
+- `data:<table>[<key>,…].<column>`, a set `data:<table>`, and `lookup(<table>, <column>, …)` name a table of
+  the model and a column it declares.
+- The key has as many parts as the table's key, and for inline rows it matches a row. The key `$` in a `sum` or
+  `count` matches every row.
+
+**State references** (`state_reference_missing`, with `missing` `reading`, `entity_class` or `attribute`):
+- **Fact keys.** A fact key is declared as the `reading` of an entity or of an active `cap` rule. `read:<fact>`,
+  `live.fact` and `live.reference_fact` name a declared fact key. A mistyped key is found here, before a run
+  looks for it in a state snapshot.
+- **Entities.** In `entity:<class>[<id>].<attr>`, `<class>` is an `entity_class` entity, and `<attr>` one of its
+  `attributes`.
+
+**Not checked here:**
+- preference keys (`pref:<key>`, a gate's `prefs`), which the run reads with the preferences;
+- the entity ids of the state (`entity:<class>[<id>]`);
+- the dimensions of expressions (`expr_dimension_mismatch`). They need the types of `read:`, `pref:` and
+  `metric:` values, which the evaluation gives.
+
+### Pending rules and unknowns without a range
+
+- **A pending rule** is usable only through an unknown with a range. So it lists in `unknowns` at least one
+  unknown that has its range form (`interval`, `variants` or `distribution`).
+  - If it lists none, that is `rule_pending_unbounded` with `reason` `no_unknown`.
+  - If it lists only unknowns without one, that is `reason` `unknown_unbounded`.
+  - Both are reported at the rule's `status`.
+- **An expression** that references an unknown without its range form is `rule_pending_unbounded`
+  (`unknown_unbounded`), at the expression.
+
+### Where `pref:` may appear
+
+A preference is read only in the expressions of a `gate` rule and in the `terms` of an `objective` rule (#424
+design D-2). Anywhere else, unknowns included, `pref:` is `rule_pref_misplaced`.
+
+### Conflicts
+
+- **The rule.** Two active rules of the same kind hold the same subject and slot. That is `rule_conflict`,
+  reported at the later rule.
+- **`supersedes`.** When one rule lists the other in `supersedes`, the superseded one is not active, so they do
+  not conflict.
+- **`when`.** A `when` does not separate two rules. A value that changes with a condition is one rule with
+  `if(…)`.
+
+| Kind | Slot |
+|---|---|
+| `cap` | `cap_kind` |
+| `limit` | `per` |
+| `regen`, `flow`, `exchange`, `cooldown`, `random`, `objective` | the subject alone |
+| `gate`, `derive`, `engine`, `weight_ref` | none: their rules never conflict |
+
+### Loops
+
+- **Nodes:** every active rule, every `interval` or `distribution` unknown, and every member of a `variants`
+  unknown.
+- **Links:**
+  - A node links to the rules and unknowns that its expressions name.
+  - `cost(<a>, <r>)` and `yield(<a>, <r>)` link to the flow rules of activity `<a>`.
+  - `max_single_income(<r>, <cap>)` links to the cap and to the flow rules that produce `<r>` or move into it.
+  - A flow's `requires` links to its gates, and a `random:<id>` product to its random rule.
+  - A derive's `general_logic` is only compared with its value, and nothing reads it, so it links nothing.
+- **Refusal:** a loop is `rule_cycle` with `via` `reference`. `members` are its nodes, sorted (`rule:<id>`,
+  `unknown:<id>` or `unknown:<id>.<member>`). The error points at the first member's first link into the loop.
+
+### External datasets
+
+- **The local copy** of an external dataset is the file named by its `sha256` in the folder `paths.datasets`.
+  That folder is set in the configuration (`contracts/cli.md`).
+- **Refusals:** a copy that is absent or cannot be read is `data_external_missing`, at `/external`. A copy with
+  another hash is `data_external_hash_mismatch`, at `/external/sha256`.
+- The check never fetches anything.
