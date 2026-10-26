@@ -5,7 +5,9 @@ strictly: UTF-8 JSON, no duplicate keys, no unknown members, typed values.
 The host caps (`compute.priority`, `compute.job.*`, `host.*`) are read by `acmodel.host.caps`, the engine
 host's keys (`compute.workers.*`, `engine.*`, `engines.*`) by `acmodel.engine.settings`; the keys under
 `unknowns` (sampling, export precision, Wilson bounds), `sensitivity.top_n` and the keys under `random` are
-`Unknowns`; the economy's keys (`lp.*`, `search.milp_node_limit`, `economy.*`) are `EconomySettings`.
+`Unknowns`; the economy's keys (`lp.*`, `search.milp_node_limit`, `economy.*`) are `EconomySettings`; the
+validator of the exports is `paths.actinglab` (no default: an export that needs it refuses without it) and
+`export.validator_timeout_ms`.
 """
 
 from __future__ import annotations
@@ -29,10 +31,11 @@ DEFAULT_BLAS_THREADS = 1
 # The i128 range of the first (Rust) draft: numerators and denominators of at most 127 bits.
 DEFAULT_EXPR_MAX_BITS = 127
 DEFAULT_CACHE_MAX_BYTES = 2 * 1024**3
+DEFAULT_VALIDATOR_TIMEOUT_MS = 120_000
 
 _MEMBERS = {
     "schema_version": None,
-    "paths": {"venv", "state_root", "datasets"},
+    "paths": {"venv", "state_root", "datasets", "actinglab"},
     "compute": {"blas_threads", "priority", "job", "workers"},
     "expr": {"max_bits"},
     "cache": {"max_bytes"},
@@ -45,6 +48,7 @@ _MEMBERS = {
     "lp": {"max_denominator", "grain"},
     "search": {"milp_node_limit"},
     "economy": {"plan_horizon"},
+    "export": {"validator_timeout_ms"},
 }
 # `unknowns.drop_z`: a positive decimal string, so that no float reaches the Wilson bounds.
 DECIMAL_Z = re.compile(r"(0|[1-9][0-9]*)(\.[0-9]+)?")
@@ -148,6 +152,8 @@ class Config:
     engine: engine_settings.EngineSettings
     unknowns: Unknowns
     economy: EconomySettings
+    actinglab: Path | None  # `paths.actinglab`: the Runtime's validator of the exports; None when not configured
+    validator_timeout_ms: int  # `export.validator_timeout_ms`
 
 
 class _DuplicateKey(ValueError):
@@ -204,7 +210,8 @@ def _section(doc: dict[str, Any], name: str, path: Path) -> dict[str, Any]:
     return section
 
 
-def _absolute(section: dict[str, Any], key: str, default: Path, path: Path) -> Path:
+def _absolute(section: dict[str, Any], key: str, default: Any, path: Path) -> Any:
+    """`paths.<key>`: an absolute path, or `default` (a path, or None for a key without one)."""
     if key not in section:
         return default
     value = section[key]
@@ -254,6 +261,10 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
             raise _invalid("value_invalid", path, _pointer(name, key))
         economy[field] = value
 
+    timeout_ms = _section(doc, "export", path).get("validator_timeout_ms", DEFAULT_VALIDATOR_TIMEOUT_MS)
+    if type(timeout_ms) is not int or timeout_ms < 1:
+        raise _invalid("value_invalid", path, _pointer("export", "validator_timeout_ms"))
+
     def invalid(reason: str, parts: tuple[str, ...], **values: Any) -> Failure:
         return _invalid(reason, path, _pointer(*parts), **values)
 
@@ -273,4 +284,6 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         engine=engine,
         unknowns=Unknowns(**sections["unknowns"], **sections["sensitivity"], **sections["random"]),
         economy=EconomySettings(**economy),
+        actinglab=_absolute(paths, "actinglab", None, path),
+        validator_timeout_ms=timeout_ms,
     )

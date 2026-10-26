@@ -391,12 +391,48 @@ PREFS_DEFAULTS = Format(
 )
 
 
-class _Later(Spec):
-    """An entry whose members a later slice defines (tables, scoring); refused until then."""
+ROUND = Choice("floor", "ceil", "half_even")
+# An output of the run: `rule:<id>`, `general_logic:<id>` or `threshold:<id>`.
+OUTPUT_ID = Text(r"(rule|general_logic|threshold):" + ids.ID, "id_invalid")
+# Where a delivered value comes from: `{"$model": "<output id>"}`. A table's column declares how a number is
+# scaled and rounded; a scoring template's placeholder declares it itself (`export.scoring`).
+MODEL_CELL = Object({"$model": OUTPUT_ID})
+# The columns whose cells the model fills; the cells of the others are literal strings (identities, not quantities).
+FILLED_COLUMNS = ("integer", "boolean")
+_COLUMN_OPTIONS = {"nullable": BOOLEAN, "valid_until": ID, **NOTE}
+EXPORT_COLUMN = Tagged(
+    "type",
+    {
+        "key": Object({"name": ID}, NOTE),
+        "enum_string": Object({"name": ID, "allowed": ListOf(TEXT)}, _COLUMN_OPTIONS),
+        "integer": Object(
+            {"name": ID, "min": Integer(-MAX, MAX), "max": Integer(-MAX, MAX), "scale": Integer(1, MAX), "round": ROUND},
+            _COLUMN_OPTIONS,
+        ),
+        "boolean": Object({"name": ID}, _COLUMN_OPTIONS),
+    },
+)
 
-    def check(self, value: Any, ref: str, ctx: Context) -> bool:
-        return ctx.refuse("value_invalid", ref)
 
+def _export_rows(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """Each column name once; each row holds exactly the columns, a `$model` cell in a column the model fills
+    and a literal string in the others."""
+    ok, seen = True, set()
+    for index, column in enumerate(value["columns"]):
+        if column["name"] in seen:
+            ok = ctx.refuse("value_invalid", f"{ref}/columns/{index}/name", literal=column["name"])
+        seen.add(column["name"])
+    if not ok:
+        return False
+    cells = {column["name"]: MODEL_CELL if column["type"] in FILLED_COLUMNS else TEXT for column in value["columns"]}
+    return ListOf(Object(cells)).check(value["rows"], pointer(ref, "rows"), ctx)
+
+
+EXPORT_TABLE = Object(
+    {"table_id": ID, "game": TEXT, "row_key": ListOf(ID), "columns": ListOf(EXPORT_COLUMN), "rows": ListOf(ANY)},
+    NOTE,
+    _export_rows,
+)
 
 EXPORTS = Format(
     "acmodel.exports.v1",
@@ -407,13 +443,18 @@ EXPORTS = Format(
             "thresholds": ListOf(
                 Object(
                     {"id": ID, "from": ID, "form": Choice("constant", "fact_offset")},
-                    {"round": Choice("floor", "ceil", "half_even"), **NOTE},
+                    {"round": ROUND, **NOTE},
                 )
             ),
-            "tables": ListOf(_Later()),
-            "scoring": ListOf(_Later()),
+            "tables": ListOf(EXPORT_TABLE),
+            "scoring": ListOf(Object({"id": ID, "template": Text(SEGMENTS)}, NOTE)),
         },
-        NOTE,
+        {
+            "acceptances": ListOf(
+                Object({"output": OUTPUT_ID, "accept_provisional": Object({"ref": TEXT, "until": TEXT})}, NOTE)
+            ),
+            **NOTE,
+        },
     ),
 )
 
@@ -495,7 +536,8 @@ def read_prefs_defaults(path: Path | str) -> dict[str, Any]:
 
 
 def read_exports(path: Path | str) -> dict[str, Any]:
-    """`exports.json` (`acmodel.exports.v1`): the outputs that become thresholds (tables and scoring later)."""
+    """`exports.json` (`acmodel.exports.v1`): the thresholds, the tables and the scoring templates the model
+    delivers, and the acceptances of provisional outputs."""
     return _read(path, EXPORTS)
 
 

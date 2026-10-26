@@ -42,6 +42,8 @@ STATE_READING_MISSING = "state_reading_missing"
 STATE_ENTITY_MISSING = "state_entity_missing"
 RULING_OVERRIDES_GENERAL_LOGIC = "ruling_overrides_general_logic"  # a note (category info), never an error
 EXPORT_REFUSED = "export_refused"
+EXPORT_TABLE_INVALID = "export_table_invalid"
+EXPORT_VALIDATOR_MISSING = "export_validator_missing"
 EXPORT_WRITE_FAILED = "export_write_failed"
 BINDING_MISMATCH = "binding_mismatch"
 BINDING_UNBOUND_LITERAL = "binding_unbound_literal"
@@ -95,6 +97,8 @@ EXIT_STATUS = {
     STATE_ENTITY_MISSING: 1,
     RULING_OVERRIDES_GENERAL_LOGIC: 0,
     EXPORT_REFUSED: 5,
+    EXPORT_TABLE_INVALID: 5,
+    EXPORT_VALIDATOR_MISSING: 5,
     EXPORT_WRITE_FAILED: 5,
     BINDING_MISMATCH: 6,
     BINDING_UNBOUND_LITERAL: 6,

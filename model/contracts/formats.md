@@ -186,8 +186,29 @@ has one id.
 | Member | Value |
 |---|---|
 | `thresholds` | a list of `{id, from, form}` [`round`, `note`]: `id` is an id, unique among the thresholds; `from` is the id of a `derive` rule; `form` is `constant` (the rule's value) or `fact_offset` (the offset of the rule's `live`); `round` is `floor`, `ceil` or `half_even` (absent means exact) |
-| `tables`, `scoring` | lists. Their entries are defined with the table and scoring exports; until then an entry is refused (`value_invalid`). |
+| `tables` | a list of tables, each `{table_id, game, row_key, columns, rows}` [`note`] (below) |
+| `scoring` | a list of `{id, template}` [`note`]: `id` is an id; `template` a file relative to the model folder, `/`-separated segments `[a-z0-9][a-z0-9_.-]*` ending in `.json` |
+| [`acceptances`] | a list of `{output, accept_provisional: {ref, until}}` [`note`]: `output` is an output id (`rule:<id>`, `general_logic:<id>`, `threshold:<id>`); `ref` names the ruling or board comment, `until` the pending check. Absent means none. |
 | [`note`] | |
+
+**A table** becomes the Runtime's shared table `tables/<table_id>.json` (`actingcommand.table.v1`) of the
+resource repository; see "`acmodel export tables`" below.
+- `table_id` and every column `name` are ids; `game` is the table's game identifier and `row_key` a list of
+  column names, both passed through to the table.
+- `columns`: a list of columns, each with `name` and `type`; `type` selects the other members:
+
+  | `type` | Members | Its cells in `rows` |
+  |---|---|---|
+  | `key` | none | a string |
+  | `enum_string` | `allowed` (strings) [`nullable`, `valid_until`] | a string |
+  | `integer` | `min`, `max` (integers), `scale` (an integer ≥ 1), `round` (`floor`, `ceil` or `half_even`) [`nullable`, `valid_until`] | `{"$model": "<output id>"}` |
+  | `boolean` | [`nullable`, `valid_until`] | `{"$model": "<output id>"}` |
+
+  `nullable` is a boolean, `valid_until` the id of a `window` entity (each column may add `note`). The scale
+  and the rounding of a number are declared, never implicit.
+- `rows`: a list of objects, each with exactly one member per column (by its name).
+- A column name used twice is `value_invalid`. Nothing else of the Runtime's table rules is checked here: the
+  Runtime's own validator checks the written table (the tool keeps no copy of its limits).
 
 ## State snapshot (`acmodel.state.v1`)
 
@@ -749,7 +770,7 @@ two has `status` and `per_account`; a blocked one has only `status`.
 A number is a string holding an exact rational. The errors name the outputs they block in `needed_by`:
 `economy:steady` and `economy:plan`. The warnings are those of the solves.
 
-## Outputs: provenance, `explain` and `thresholds.json`
+## Outputs: provenance, `explain`, `thresholds.json`, the tables and the scoring documents
 
 ### Provenance (`acmodel.provenance.v1`)
 
@@ -765,6 +786,10 @@ of an `if`, the row a `lookup` found, every row of a set.
 | `result` | the output as `run` shows it (a rule without its `general_logic`, which is an output of its own) |
 | `versions` | `rules`: the sha256 over `model.json`, `sources.json` and the rule files; `data`: over the data files; `tool`: the tool version. Each file counts as `[path, document]`, sorted by path. A hash is over canonical JSON: sorted keys, no whitespace, UTF-8. |
 | `nodes` | node id to node; the tree is rooted at `output` |
+| [`acceptance`] | only for a provisional output that `acceptances` of exports.json accepts: `file` (`exports.json`), `ref` (its entry, `/acceptances/<index>`), `sha256` of the entry and its `accept_provisional` |
+
+An acceptance that names no output of the model is `rule_reference_missing` (`expected` `output`), and a second
+one of the same output `model_id_duplicate` (`namespace` `acceptance`): `explain` and every export refuse them.
 
 **Nodes.**
 - Every node has `node` (what it is) and `reads`, the sorted ids of the nodes its value read. A leaf reads
@@ -810,18 +835,100 @@ resource repository. So a threshold is refused (`export_refused`, exit 5) when i
 - `blocked`. The errors that block it are reported too.
 - `per_account`: it read the account state. Such a value is never written into a shared output; `run` and
   `explain` show it locally.
-- `provisional`: not confirmed. Accepting a provisional value comes with the export policy.
+- `provisional`: not confirmed, and not accepted (see "The export policy"). An accepted provisional threshold is
+  written with its `status` `provisional`, and its provenance file records the acceptance.
 - `not_integer` or `out_of_range`: its exact value is not an integer (`exports.json` can declare its `round`),
   or lies beyond ±(2<sup>53</sup> − 1). A confirmed threshold that read unknowns has a value or an
   enclosure per scenario, all within one value at export precision: one integer throughout is exported, and
   anything else is refused as `not_integer`, with a value that is not an integer, or an enclosure as
   `<low>..<high>`.
+- `not_single`: an accepted provisional threshold whose scenarios are several integers (`<lowest>..<highest>`);
+  none of them is picked.
 
 **Writing.**
 - When any threshold is refused, nothing is written.
 - A write that fails is `export_write_failed`.
 - The files have sorted keys, a two-space indent, UTF-8 and LF line ends.
 - Nothing is deleted, not even the provenance file of a threshold that `exports.json` no longer lists.
+
+### The export policy
+
+What a delivered file takes from an output (#424 design 6.6; `src/acmodel/export/policy.py`):
+
+| Output | Threshold | Table cell | Scoring placeholder |
+|---|---|---|---|
+| confirmed | its value | its value | its value |
+| provisional | refused unless accepted | `null` (an unresolved estimate) unless accepted | refused unless accepted |
+| blocked | refused | refused | refused |
+| per-account (it read the account state) | refused | refused | refused |
+
+- **Acceptances.** An entry of `acceptances` in exports.json accepts one provisional output (for example a value
+  marked as provisional until a device check): it is delivered, and its provenance file records the acceptance.
+- **Numbers of the tables and the scoring documents.** The output's exact value times the declared `scale`,
+  rounded by the declared `round`: `floor`, `ceil` or `half_even` (to the nearest, a tie to the even integer).
+  Every scenario of the output, each variant and both ends of an enclosure, must give the same integer, and then
+  the true value gives it too (rounding never decreases). Otherwise the value is refused (`not_single`, with
+  `<lowest>..<highest>`); an integer beyond ±(2<sup>53</sup> − 1) is `out_of_range`.
+- **Booleans** must be one value in every scenario; an undecided one is `not_single` (`false..true`).
+- **Provenance files.** Each output a file delivers has its provenance document, as `explain` prints it, in
+  `out/provenance/<kind>/<id>.json` of the model folder: `rules/` for `rule:<id>`, `general_logic/` and
+  `thresholds/`.
+
+A refusal is `export_refused` at the threshold, cell or placeholder, with the errors that block a blocked
+output; the export then writes nothing.
+
+### `acmodel export tables <model> --state <file> --repo <repository>`
+
+It writes the tables of exports.json into the working tree of the resource repository `--repo`, and the
+Runtime's own validator checks each of them (#424 design 6.1, design-py 6.1; `src/acmodel/export/tables.py`).
+1. **The validator.** `paths.actinglab` (`contracts/cli.md`) must name it; otherwise the export is
+   `export_validator_missing` (`not_configured`, exit 5), and nothing is computed or written.
+2. **The run.** The model is evaluated for the state as `run` does, without the cache. A table id given twice
+   (`model_id_duplicate`, `namespace` `export_table`), a `valid_until` that names no window
+   (`rule_reference_missing`, `expected` `window`), a cell that names no output (`expected` `output`) or an
+   output of the wrong type for its column (`expr_dimension_mismatch`, `operator` `table`) refuse the export.
+3. **The cells** follow the export policy. A refused cell refuses the whole export, and nothing is written.
+4. **The files.**
+   - `<repository>/tables/<table_id>.json`: `{schema_version: "actingcommand.table.v1", game, table_id,
+     row_key, columns, rows}`. Each column keeps `name`, `type`, `min`, `max`, `allowed` and `nullable` as
+     declared, and a `valid_until` becomes `valid_until_unix_s`, the end of its window. Each row is the list of
+     its cells in the order of the columns.
+   - The provenance file of each output a cell delivers (not of a `null`).
+
+   A table is canonical JSON (JCS, `src/acmodel/export/jcs.py`): object keys sorted by their UTF-16 code units
+   (not by code point: the two differ above U+FFFF), no whitespace, minimal escapes, UTF-8, no final newline;
+   numbers only as integers within ±(2<sup>53</sup> − 1), never a float.
+5. **Validation.** For each table written:
+   `<paths.actinglab> --json resource validate --repo <repository> --changed-path tables/<table_id>.json`. It
+   passes with exit 0 and the answer's entry for the file `valid`. A refusal is `export_table_invalid`, with
+   the validator's `standard_pack_problem` in `problem` and its JSON pointer in the table as the error's `ref`.
+   A validator that cannot be started, runs past `export.validator_timeout_ms` or answers otherwise is
+   `export_validator_missing` (`start_failed`, `timeout`, `answer_invalid`).
+
+**One change.** When a write fails (`export_write_failed`) or a table is not accepted, every file the export
+wrote gets its previous bytes back: a file that was not there is removed again, and so is a folder the export
+created. The export never commits, and deletes nothing else, not even a table that exports.json no longer lists.
+
+**`data`** holds `path`, `model_id`, `state`, `repo`, `tables` (each `table_id`, `file`, `nulled`: the cells
+written as `null`, each `{row, column, output}`, and `accepted`: the outputs delivered under an acceptance) and
+`written`, every file written.
+
+### `acmodel export scoring <model> --state <file>`
+
+It fills the scoring templates of exports.json (#424 design 6.2; `src/acmodel/export/scoring.py`).
+- **A template** (`scoring.template.json`, say) is the resource side's: gates, terms, `on_unknown`, tie-breaks.
+  Each number the model gives it is a placeholder, `{"$model": "<output id>", "scale": <integer ≥ 1>,
+  "round": "floor" | "ceil" | "half_even"}`; nothing else of the template changes.
+- **Reading.** A template is strict JSON ("Reading JSON"), and a placeholder holds exactly those members
+  (`model_file_invalid`, `format` `scoring.template`). A scoring id given twice is `model_id_duplicate`
+  (`namespace` `scoring`); a placeholder that names no output, or a boolean one, is `rule_reference_missing`
+  (`expected` `output`) or `expr_dimension_mismatch` (`operator` `scoring`).
+- **Filling.** Each placeholder becomes its output's number by the export policy. One refused placeholder
+  (`export_refused` at the placeholder: blocked, per-account, provisional and not accepted, `not_single`,
+  `out_of_range`) refuses the whole document: a scoring document is never partly filled.
+- **Writing.** Where `scoring.json` lives and which validator family reads it are not decided yet (367-D1). Until
+  they are, a template that fills is refused as `export_refused` (`validator_path_unknown`, `output`
+  `scoring:<id>`), and nothing is written (exit 5).
 
 ## Bindings: `bindings.json`, `bindings check` and `bindings apply`
 

@@ -18,6 +18,9 @@ Node ids:
 - `row:<table>[<key parts joined with commas>]`, and `entry:<rule id>` for a rule consulted for its logic;
 - the account state: `reading:<fact>`, `cleared:<id>`, `entity:<class>[<id>].<attribute>` and
   `entities:<class>`.
+
+A provisional output that `exports.json` accepts (#424 design 6.6) records its acceptance in `acceptance`, so
+that every file the exports write says why a provisional value was delivered.
 """
 
 from __future__ import annotations
@@ -27,9 +30,9 @@ from typing import Any
 
 from acmodel.check.checker import Entry
 from acmodel.check.walk import at
-from acmodel.codes import USAGE_INVALID
+from acmodel.codes import MODEL_ID_DUPLICATE, RULE_REFERENCE_MISSING, USAGE_INVALID
 from acmodel.config import Unknowns
-from acmodel.core.common import value_member
+from acmodel.core.common import PROVISIONAL, value_member
 from acmodel.core.run import Run, evaluate_model
 from acmodel.core.versions import relative as _relative
 from acmodel.core.versions import sha256, versions
@@ -151,7 +154,7 @@ def _exact_values(run: Run, item: tuple[str, ...]) -> dict[str, Any]:
     return {"exact_values": found} if found else {}
 
 
-def _result(run: Run, output: str) -> dict[str, Any]:
+def output_result(run: Run, output: str) -> dict[str, Any]:
     """The output as `run` shows it (a rule without its general logic, which is an output of its own)."""
     kind, name = output.split(":", 1)
     if kind == "threshold":
@@ -160,6 +163,44 @@ def _result(run: Run, output: str) -> dict[str, Any]:
     if kind == "general_logic":
         return rule["general_logic"]
     return {key: value for key, value in rule.items() if key != "general_logic"}
+
+
+def acceptances(run: Run) -> dict[str, int]:
+    """Each output that `acceptances` of exports.json accepts while provisional, and the index of its entry.
+
+    An entry that names no output of the model is `rule_reference_missing` (`expected` `output`), and a second
+    entry of one output `model_id_duplicate` (`namespace` `acceptance`); both refuse whatever reads them.
+    """
+    path, known = run.exports.path, outputs(run)
+    found: dict[str, int] = {}
+    errors = []
+    for index, entry in enumerate(run.exports.doc.get("acceptances", [])):
+        ref, output = at("", "acceptances", index, "output"), entry["output"]
+        if output in found:
+            detail = {"path": path, "namespace": "acceptance", "id": output, "first_path": path,
+                      "first_ref": at("", "acceptances", found[output], "output")}
+            errors.append(error(MODEL_ID_DUPLICATE, detail, ref))
+        elif output not in known:
+            detail = {"path": path, "target": output, "expected": ["output"]}
+            errors.append(error(RULE_REFERENCE_MISSING, detail, ref))
+        else:
+            found[output] = index
+    if errors:
+        raise Failure(*errors)
+    return found
+
+
+def acceptance(run: Run, output: str) -> dict[str, Any] | None:
+    """The acceptance that a provisional `output` is delivered under: where it is in exports.json, its hash and
+    its `accept_provisional`; None when the output is not provisional or not accepted."""
+    index = acceptances(run).get(output)
+    if index is None or output_result(run, output)["status"] != PROVISIONAL:
+        return None
+    entry = run.exports.doc["acceptances"][index]
+    return {
+        "file": relative(run, run.exports.path), "ref": at("", "acceptances", index), "sha256": sha256(entry),
+        "accept_provisional": entry["accept_provisional"],
+    }
 
 
 def assemble(run: Run, output: str) -> dict[str, Any]:
@@ -174,14 +215,18 @@ def assemble(run: Run, output: str) -> dict[str, Any]:
         found = _reads(run, item)
         nodes[name] = {**_describe(run, item), "reads": [node_id(read) for read in found]}
         todo.extend(found)
-    return {
+    doc = {
         "schema_version": SCHEMA_VERSION,
         "model_id": run.head["model_id"],
         "output": output,
-        "result": _result(run, output),
+        "result": output_result(run, output),
         "versions": versions(run.checker, run.folder),
         "nodes": dict(sorted(nodes.items())),
     }
+    accepted = acceptance(run, output)
+    if accepted is not None:
+        doc["acceptance"] = accepted
+    return doc
 
 
 def explain(
