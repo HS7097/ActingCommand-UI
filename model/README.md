@@ -9,10 +9,10 @@ readers of the model files, the expression language, the static check (`check`),
 (`run`) with its unknowns and their sensitivity and its random processes (exact pity chains, Wilson bounds of
 rates from samples), its cache with incremental recompute (`cache`), provenance
 (`explain`), the exports (`export thresholds`, `export tables`, `export scoring`) with their export policy, the
-bindings of thresholds to the schedule
-(`bindings check`, `bindings apply`), the economy's LP and MILP (`economy`) and the engine host, which runs
-engines kept outside this repository in worker processes of its own, and the automatic refresh (`watch`). The other
-computation commands come in later slices.
+bindings of thresholds to the schedule (`bindings check`, `bindings apply`), the economy's LP and MILP
+(`economy`), the engine host, which runs engines kept outside this repository in worker processes of its own,
+the generic search for teams over those engines (no command runs it yet) and the automatic refresh (`watch`).
+The other computation commands come in later slices.
 
 ## Needs
 
@@ -192,6 +192,13 @@ default:
 - **Economy.** `lp.max_denominator` (1000000) bounds the fractions a solver's floats become, `lp.grain` (1) is the
   step of the price re-solves, `search.milp_node_limit` (100000) the plan's only budget, and `economy.plan_horizon`
   (7) its days.
+- **Search.** The generic search fills disjoint teams from a roster: it screens every legal team with numpy (the
+  engine's predict terms at `search.screen_scale`, 1000000, in chunks of `search.screen_chunk_rows`, 2<sup>20</sup>,
+  up to `search.screen_max_rows`, 2<sup>23</sup>, per team), evaluates every team when all have at most
+  `search.exact_max` (5000) together and proves the result, and otherwise evaluates the `search.top_k` (32) best of
+  each and improves them by local swaps. `search.node_limit` (100000) is its only budget (then `proven: false`). A
+  warm start screens again only what a change touches, and every result reports the loss of the team the additive
+  terms alone would pick (`contracts/formats.md`, "The search").
 - **Exports.** `paths.actinglab` (no default) is the Runtime's validator that `export tables` runs, an
   `actinglab` from a Runtime build or release; `export.validator_timeout_ms` (120000) bounds each run of it.
 - **Automatic refresh.** `watch.poll_interval_ms` (5000) is how often `watch` scans, `watch.debounce_ms` (5000)
@@ -222,7 +229,8 @@ contracts/            cli.md (envelope, start, configuration), codes.json (the c
 src/acmodel/          the package: model/ the strict readers, expr/ the expression language,
                       check/ the static check, ids.py the id grammars they share, core/ the
                       run (its model checks, the derivation graph, the unknowns, provenance and the
-                      versions of the inputs, and flow.py the economy's LP and MILP), cache/ the
+                      versions of the inputs, flow.py the economy's LP and MILP, and search.py the
+                      generic search for teams), cache/ the
                       cache (keys, sqlite3 index and blobs, verifying traces, run ids,
                       stats/verify/gc), export/ the exports (thresholds, tables with their JCS
                       writer and validator call, scoring templates, the export policy), bindings/
@@ -231,6 +239,6 @@ src/acmodel/          the package: model/ the strict readers, expr/ the expressi
                       engine/ the engine host (manifest and fingerprint, workers, guards, the cached
                       call and the verify sample), watch/ the automatic refresh (scan, import hook,
                       event log and watch.json, delivery candidates, warm workers)
-tests/                pytest tests with fakes; fakes/ holds the neutral fake engine and the fake
+tests/                pytest tests with fakes; fakes/ holds the neutral fake engines and the fake
                       validator script
 ```
