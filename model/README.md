@@ -5,8 +5,8 @@ runs on its own: there is nothing to build, and it does not depend on the consol
 Runtime.
 
 This folder holds the launcher, `setup`, `version`, the output envelope, the dependency check, the strict
-readers of the model files, the expression language and the static check (`check`). The computation
-commands come in later slices.
+readers of the model files, the expression language, the static check (`check`) and the derivation graph
+(`run`). The other computation commands come in later slices.
 
 ## Needs
 
@@ -33,11 +33,16 @@ py -3.13 -I -B model\acmodel.py setup
 py -3 -I -B model\acmodel.py version
 model\acmodel.cmd version
 model\acmodel.cmd check <resource repo>\ours\model
+model\acmodel.cmd run <resource repo>\ours\model --state <state snapshot>
 ```
 
 - **`check`** reads a model (its folder or its `model.json`) and checks it without computing anything:
   references, duplicate ids, statuses, provenance, `supersedes` and conflicts, pending rules, where
   `pref:` may appear, loops, and the hashes of external datasets (`contracts/formats.md`).
+- **`run`** checks the model, then the dimensions of its expressions and its preference keys, and
+  computes its derived values and thresholds for one account state, exactly. An output that cannot be
+  computed (a reading the state lacks, say) is blocked with its error; the others are still computed, and
+  the exit status is 1. It writes nothing (`contracts/formats.md`, "The run").
 - **Re-dispatch.** The launcher re-runs itself under the venv's Python, and the exit status is passed
   through.
 - **Dependency check.** Before every command except `setup`, the launcher checks that the interpreter
@@ -105,7 +110,8 @@ pytest.ini            test paths; src on the import path
 contracts/            cli.md (envelope, start, configuration), codes.json (the codes),
                       formats.md (the input files, their strict reading and the static check)
 src/acmodel/          the package: model/ the strict readers, expr/ the expression language,
-                      check/ the static check, ids.py the id grammars they share, host/ the
-                      host caps (priority, Job object, memory gates, quiet windows, PAUSE file)
+                      check/ the static check, ids.py the id grammars they share, core/ the
+                      run (its model checks and the derivation graph), host/ the host caps
+                      (priority, Job object, memory gates, quiet windows, PAUSE file)
 tests/                pytest tests with fakes
 ```

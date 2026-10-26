@@ -113,9 +113,10 @@
       "values": {
         "operator": {"type": "token", "required": true},
         "operands": {"type": "list:token", "required": true},
-        "position": {"type": "integer", "required": true}
+        "position": {"type": "integer", "required": true},
+        "path": {"type": "path", "required": false}
       },
-      "description": "An operator or function of an expression gets operands whose types do not fit: an amount of one resource with another, an amount with a time, a bare number with a time, a boolean where a number is needed or the reverse (expr/dimensions.py lists the rules). operands are the operands' types (amount:<resource>, time, count, value, none, number, bool); position is the character offset of the operator. The error's ref is the JSON pointer of the expression."
+      "description": "An operator or function of an expression gets operands whose types do not fit: an amount of one resource with another, an amount with a time, a bare number with a time, a boolean where a number is needed or the reverse (expr/dimensions.py lists the rules). operands are the operands' types (amount:<resource>, time, count, value, none, number, bool); position is the character offset of the operator. The error's ref is the JSON pointer of the expression. acmodel run (contracts/formats.md, The run) adds path, the file, and also refuses: an expression whose type does not fit what its member expects (operator is the member, e.g. when, value, max, every, consumes, moves, general_logic, offset; operands are the expected and the found type; position is the expression's top operator); a reference whose value has no type in the language (operator reference; operands is a preference's JSON type string, array, object or null, or a column's type enum or id); a fact key declared with two dimensions (operator read); a lookup key that does not fit its key column (operator lookup); the variants of a member or the bounds of a range that do not fit each other (operator variants, interval or distribution); a threshold of a boolean (operator threshold, ref in exports.json)."
     },
     "expr_eval_failed": {
       "category": "error",
@@ -126,14 +127,15 @@
         "reason": {
           "type": "vocab",
           "required": true,
-          "members": ["division_by_zero", "clamp_bounds_invalid", "value_invalid"]
+          "members": ["division_by_zero", "clamp_bounds_invalid", "value_invalid", "evaluation_unsupported"]
         },
         "operator": {"type": "token", "required": true},
         "position": {"type": "integer", "required": true},
         "expected": {"type": "token", "required": false},
-        "found": {"type": "name", "required": false}
+        "found": {"type": "name", "required": false},
+        "path": {"type": "path", "required": false}
       },
-      "description": "Evaluating an expression failed: a division by zero, clamp with its low bound above its high bound, or a value from the model (a reference, flow, lookup or set) that is not of the type the check gave it (expected is that type, or members for a set; found is the value's Python type). The error's ref is the JSON pointer of the expression."
+      "description": "Evaluating an expression failed: a division by zero, clamp with its low bound above its high bound, or a value from the model (a reference, flow, lookup or set) that is not of the type the check gave it (expected is that type, or members for a set; found is the value's Python type). evaluation_unsupported (acmodel run): the expression reads what this version does not evaluate yet, and found names it: metric, count or pref (a reference of that kind), interval or distribution (an unknown of that kind), random (a random:<id> product), external_dataset (a row of an external table), when (a rule's condition); operator is reference, the function or the member. Every output that needs it is blocked. The error's ref is the JSON pointer of the expression; acmodel run adds path, the file."
     },
     "expr_overflow": {
       "category": "error",
@@ -144,9 +146,10 @@
         "operator": {"type": "token", "required": true},
         "bits": {"type": "integer", "required": true},
         "max_bits": {"type": "integer", "required": true},
-        "position": {"type": "integer", "required": true}
+        "position": {"type": "integer", "required": true},
+        "path": {"type": "path", "required": false}
       },
-      "description": "A literal, a value read or an intermediate result of an expression has a numerator or denominator of more than max_bits bits (configuration key expr.max_bits; durations count in seconds). Nothing wraps or rounds. operator is the operator or function, literal or reference. The error's ref is the JSON pointer of the expression."
+      "description": "A literal, a value read or an intermediate result of an expression has a numerator or denominator of more than max_bits bits (configuration key expr.max_bits; durations count in seconds). Nothing wraps or rounds. operator is the operator or function, literal or reference. The error's ref is the JSON pointer of the expression; acmodel run adds path, the file, and blocks every output that needs it."
     },
     "expr_parse_error": {
       "category": "error",
@@ -282,7 +285,7 @@
         "exception_type": {"type": "name", "required": false},
         "raw_text": {"type": "raw_text", "required": false}
       },
-      "description": "An input file of the model (model, rules, data, sources, state, preference defaults) is refused by its strict reader (contracts/formats.md). The error's ref is the JSON pointer of the value (the empty pointer for the whole file); path is the file and format the reader. JSON level: unreadable, bom_present, utf8_invalid (offset), syntax_invalid (line, column), key_duplicate (the repeated key), float_literal, constant_invalid (NaN, Infinity), integer_out_of_range (beyond +-(2^53-1)), string_invalid (a lone surrogate). Shape: type_invalid (expected types), member_unknown, member_missing, member_conflict (two of members that exclude each other; expected lists them), value_invalid (expected values), id_invalid (the id grammar). One error per problem; literal is the offending text."
+      "description": "An input file of the model (model, rules, data, sources, exports, state, preference defaults) is refused by its strict reader (contracts/formats.md), or (acmodel run) a state snapshot names another model: value_invalid at /model_id, expected is the model's id. The error's ref is the JSON pointer of the value (the empty pointer for the whole file); path is the file and format the reader. JSON level: unreadable, bom_present, utf8_invalid (offset), syntax_invalid (line, column), key_duplicate (the repeated key), float_literal, constant_invalid (NaN, Infinity), integer_out_of_range (beyond +-(2^53-1)), string_invalid (a lone surrogate). Shape: type_invalid (expected types), member_unknown, member_missing, member_conflict (two of members that exclude each other; expected lists them), value_invalid (expected values), id_invalid (the id grammar). One error per problem; literal is the offending text."
     },
     "model_id_duplicate": {
       "category": "error",
@@ -294,13 +297,13 @@
         "namespace": {
           "type": "vocab",
           "required": true,
-          "members": ["model", "table", "row", "source", "engine"]
+          "members": ["model", "table", "row", "source", "engine", "threshold"]
         },
         "id": {"type": "token", "required": true},
         "first_path": {"type": "path", "required": true},
         "first_ref": {"type": "token", "required": true}
       },
-      "description": "acmodel check: an id is declared twice in one namespace. model: entities, periods, rules and unknowns share one; table: data tables; row: the keys of one table's rows (id joins the key parts with commas); source: sources.json; engine: model.json engines. path and the error's ref are the second declaration, first_path and first_ref the first, which references resolve to."
+      "description": "acmodel check: an id is declared twice in one namespace. model: entities, periods, rules and unknowns share one; table: data tables; row: the keys of one table's rows (id joins the key parts with commas); source: sources.json; engine: model.json engines; threshold (acmodel run): the thresholds of exports.json. path and the error's ref are the second declaration, first_path and first_ref the first, which references resolve to."
     },
     "rule_conflict": {
       "category": "error",
@@ -349,7 +352,7 @@
         "unknowns": {"type": "list:token", "required": false},
         "position": {"type": "integer", "required": false}
       },
-      "description": "acmodel check: a pending rule names no unknown (no_unknown; ref is its status), or only unknowns without a range form (unknown_unbounded; ref is its status), or a rule or unknown references an unknown without a range form in an expression (unknown_unbounded; ref is the expression, position the reference). Without a range, everything that needs it is blocked."
+      "description": "acmodel check: a pending rule names no unknown (no_unknown; ref is its status), or only unknowns without a range form (unknown_unbounded; ref is its status), or a rule or unknown references an unknown without a range form in an expression (unknown_unbounded; ref is the expression, position the reference). acmodel run: an expression reads a pending data row, which cannot name an unknown (no_unknown; id is <table>[<key parts joined with commas>]; path and ref are the expression's). Without a range, everything that needs it is blocked."
     },
     "rule_pref_misplaced": {
       "category": "error",
@@ -394,7 +397,7 @@
         "superseded_by": {"type": "token", "required": false},
         "position": {"type": "integer", "required": false}
       },
-      "description": "acmodel check: a reference to a declaration of the model does not resolve to one of the expected kinds (an entity kind, entity, rule, rule.<kind>, unknown, unknown_member, metric, engine, source or param): nothing has that id, it is of another kind (found), or it is a superseded rule (superseded_by), which is never read. The error's ref is the JSON pointer of the referring member or expression, and position the reference's character offset in an expression."
+      "description": "acmodel check: a reference to a declaration of the model does not resolve to one of the expected kinds (an entity kind, entity, rule, rule.<kind>, unknown, unknown_member, metric, engine, source or param): nothing has that id, it is of another kind (found), or it is a superseded rule (superseded_by), which is never read. The error's ref is the JSON pointer of the referring member or expression, and position the reference's character offset in an expression. acmodel run (contracts/formats.md, The run) adds: pref, a preference key (pref:<key>, a gate's prefs) that the preference defaults do not hold; rule.derive, rule.cap, rule.limit, a rule: reference to a rule without a value; resource, store, a cap's subject; rule.flow, a cost or yield (target the activity) or max_single_income (target the cap) with no flow amount behind it; rule.derive and rule.derive.live, the from of a threshold in exports.json, which needs live in the fact_offset form."
     },
     "rule_status_invalid": {
       "category": "error",
@@ -408,6 +411,51 @@
         "expected": {"type": "list:token", "required": true}
       },
       "description": "acmodel check: a status outside its closed set: confirmed, pending or provisional for rules and data rows; pending or provisional for unknowns. id is the entry's id; the error's ref is the status."
+    },
+    "ruling_overrides_general_logic": {
+      "category": "info",
+      "exit": 0,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "rule": {"type": "token", "required": true},
+        "value": {"type": "list:token", "required": true},
+        "general_logic": {"type": "list:token", "required": true}
+      },
+      "description": "A note of acmodel run (data.notes, never an error): a derive's value differs from its general_logic, the #425 general rule's value. The value stands, by its provenance (a ruling, say); the difference is reported, never hidden. value and general_logic are their distinct exact values, sorted (one each without variants). path and the note's ref are the general_logic expression."
+    },
+    "state_entity_missing": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "missing": {
+          "type": "vocab",
+          "required": true,
+          "members": ["entity_class", "entity", "attribute"]
+        },
+        "entity_class": {"type": "token", "required": true},
+        "entity": {"type": "token", "required": false},
+        "attribute": {"type": "token", "required": false},
+        "position": {"type": "integer", "required": false}
+      },
+      "description": "acmodel run: an expression reads an entity of the account state that the state snapshot does not hold: its class (entity_class, absent from the state's entities), the entity (entity:<class>[<id>]), or the entity's attribute. Every output that needs it is blocked; the others are computed. path and the error's ref are the expression, position the reference."
+    },
+    "state_reading_missing": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "fact": {"type": "token", "required": false},
+        "entity": {"type": "token", "required": false},
+        "position": {"type": "integer", "required": false}
+      },
+      "description": "acmodel run: a reading of the account state is needed and the state snapshot does not hold it: the fact key fact (read:<fact>, a cap's reading, or the reading of an entity that amount:<id> or stock:<id> reads), or entity, a resource or store that declares no reading. There is no fallback to a constant. Every output that needs it is blocked; the others are computed. path and the error's ref are the expression (or a cap's reading), position the reference."
     },
     "state_reference_missing": {
       "category": "error",
