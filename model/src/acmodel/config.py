@@ -22,12 +22,14 @@ APP_DIR = ("ActingCommand", "acmodel")
 DEFAULT_BLAS_THREADS = 1
 # The i128 range of the first (Rust) draft: numerators and denominators of at most 127 bits.
 DEFAULT_EXPR_MAX_BITS = 127
+DEFAULT_CACHE_MAX_BYTES = 2 * 1024**3
 
 _MEMBERS = {
     "schema_version": None,
     "paths": {"venv", "state_root", "datasets"},
     "compute": {"blas_threads", "priority", "job"},
     "expr": {"max_bits"},
+    "cache": {"max_bytes"},
     "host": {"memory", "cpu", "quiet_windows", "pause_file", "pause_poll_ms"},
 }
 
@@ -41,6 +43,7 @@ class Config:
     blas_threads: int
     expr_max_bits: int
     host: host_caps.HostCaps
+    cache_max_bytes: int
 
 
 class _DuplicateKey(ValueError):
@@ -124,6 +127,9 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
     max_bits = _section(doc, "expr", path).get("max_bits", DEFAULT_EXPR_MAX_BITS)
     if type(max_bits) is not int or max_bits < 1:
         raise _invalid("value_invalid", path, _pointer("expr", "max_bits"))
+    cache_max_bytes = _section(doc, "cache", path).get("max_bytes", DEFAULT_CACHE_MAX_BYTES)
+    if type(cache_max_bytes) is not int or cache_max_bytes < 1:
+        raise _invalid("value_invalid", path, _pointer("cache", "max_bytes"))
     state_root = _absolute(paths, "state_root", root / "state", path)
 
     def invalid(reason: str, parts: tuple[str, ...], **values: Any) -> Failure:
@@ -137,4 +143,5 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         blas_threads=threads,
         expr_max_bits=max_bits,
         host=host_caps.read(compute, _section(doc, "host", path), state_root, invalid),
+        cache_max_bytes=cache_max_bytes,
     )

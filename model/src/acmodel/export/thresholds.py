@@ -24,8 +24,9 @@ from typing import Any
 from acmodel.check.walk import at
 from acmodel.codes import EXPORT_REFUSED, EXPORT_WRITE_FAILED
 from acmodel.core.common import BLOCKED, CONFIRMED
-from acmodel.core.provenance import STATE_NODES, assemble, versions
+from acmodel.core.provenance import STATE_NODES, assemble
 from acmodel.core.run import Run, evaluate_model
+from acmodel.core.versions import versions
 from acmodel.envelope import Failure, error
 from acmodel.model.jsonfile import MAX_SAFE_INTEGER
 
@@ -100,7 +101,7 @@ def export_thresholds(
     files[THRESHOLDS] = {
         "schema_version": SCHEMA_VERSION,
         "model_id": run.head["model_id"],
-        "versions": versions(run),
+        "versions": versions(run.checker, run.folder),
         "thresholds": entries,
     }
     written = []

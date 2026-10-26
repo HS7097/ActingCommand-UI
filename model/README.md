@@ -6,8 +6,9 @@ Runtime.
 
 This folder holds the launcher, `setup`, `version`, the output envelope, the dependency check, the strict
 readers of the model files, the expression language, the static check (`check`), the derivation graph
-(`run`), provenance (`explain`), the thresholds export (`export thresholds`) and the bindings of thresholds
-to the schedule (`bindings check`, `bindings apply`). The other computation commands come in later slices.
+(`run`) and its cache with incremental recompute (`cache`), provenance (`explain`), the thresholds export
+(`export thresholds`) and the bindings of thresholds to the schedule (`bindings check`, `bindings apply`).
+The other computation commands come in later slices.
 
 ## Needs
 
@@ -39,6 +40,9 @@ model\acmodel.cmd explain <resource repo>\ours\model threshold:<id> --state <sta
 model\acmodel.cmd export thresholds <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd bindings check <resource repo>\ours\model --state <state snapshot> --strict
 model\acmodel.cmd bindings apply <resource repo>\ours\model --state <state snapshot>
+model\acmodel.cmd cache stats
+model\acmodel.cmd cache verify
+model\acmodel.cmd cache gc [--apply]
 ```
 
 - **`check`** reads a model (its folder or its `model.json`) and checks it without computing anything:
@@ -47,10 +51,17 @@ model\acmodel.cmd bindings apply <resource repo>\ours\model --state <state snaps
 - **`run`** checks the model, then the dimensions of its expressions and its preference keys, and
   computes its derived values and thresholds for one account state, exactly. An output that cannot be
   computed (a reading the state lacks, say) is blocked with its error; the others are still computed, and
-  the exit status is 1. It writes nothing (`contracts/formats.md`, "The run").
+  the exit status is 1 (`contracts/formats.md`, "The run").
+- **Cache.** `run` keeps every computed node under the state root and computes again only what a change
+  reaches: a node is reused while everything it read still hashes the same, and a node that comes out the
+  same stops the change there. Each run gets a run id from its inputs, its outputs are kept under
+  `runs/<run id>/`, and `data.work` counts what was computed and what was reused. `cache stats` counts
+  the cache, `cache verify` checks every value against its hash, and `cache gc` trims it to
+  `cache.max_bytes` (a dry run without `--apply`). A corrupt value is never used: `run` warns
+  (`cache_entry_corrupt`) and computes it again (`contracts/cli.md`, "Cache").
 - **`explain`** prints the provenance tree of one output (`rule:<id>`, `general_logic:<id>` or
   `threshold:<id>`): every rule, data row, ruling and reading its value rests on, with their hashes and
-  the model's versions. It writes nothing.
+  the model's versions. It writes nothing; like `export thresholds`, it computes without the cache.
 - **`export thresholds`** writes `out/thresholds.json` and one provenance file per threshold into the
   model folder, for delivery with the resource repository. It never commits. Only account-independent
   values go into these shared files: a threshold that read the account state, is not confirmed, is not an
@@ -93,7 +104,10 @@ default:
 
 - **Strict reading.** Unknown members, duplicate keys and values of the wrong type are refused
   (`config_invalid`), never ignored.
-- **State root.** The default for `paths.state_root` is `%LOCALAPPDATA%\ActingCommand\acmodel\state`.
+- **State root.** The default for `paths.state_root` is `%LOCALAPPDATA%\ActingCommand\acmodel\state`. It
+  holds the cache (`cache/`) and the runs' outputs (`runs/`), never inside a repository.
+- **Cache size.** `cache.max_bytes` (default 2 GiB) caps the cache; the least recently used entries are
+  evicted after a run.
 - **External datasets.** `paths.datasets` (default `%LOCALAPPDATA%\ActingCommand\acmodel\datasets`) holds
   the local copies of large datasets, each the file named by its sha256. `check` verifies them and never
   fetches.
@@ -133,9 +147,10 @@ contracts/            cli.md (envelope, start, configuration), codes.json (the c
                       the run and the outputs)
 src/acmodel/          the package: model/ the strict readers, expr/ the expression language,
                       check/ the static check, ids.py the id grammars they share, core/ the
-                      run (its model checks, the derivation graph and provenance), export/ the
-                      thresholds export, bindings/ the bindings check and apply with their
-                      position-tracking scanner, host/ the host caps (priority, Job object, memory
-                      gates, quiet windows, PAUSE file)
+                      run (its model checks, the derivation graph, provenance and the versions of
+                      the inputs), cache/ the cache (keys, sqlite3 index and blobs, verifying
+                      traces, run ids, stats/verify/gc), export/ the thresholds export, bindings/
+                      the bindings check and apply with their position-tracking scanner, host/ the
+                      host caps (priority, Job object, memory gates, quiet windows, PAUSE file)
 tests/                pytest tests with fakes
 ```

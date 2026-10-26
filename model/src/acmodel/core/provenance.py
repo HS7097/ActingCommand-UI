@@ -21,17 +21,15 @@ Node ids:
 
 from __future__ import annotations
 
-import hashlib
-import json
 from pathlib import Path
 from typing import Any
 
-from acmodel import __version__
 from acmodel.check.checker import Entry
-from acmodel.check.files import File
 from acmodel.check.walk import at
 from acmodel.codes import USAGE_INVALID
 from acmodel.core.run import Run, evaluate_model
+from acmodel.core.versions import relative as _relative
+from acmodel.core.versions import sha256, versions
 from acmodel.envelope import Failure, error
 
 SCHEMA_VERSION = "acmodel.provenance.v1"
@@ -39,30 +37,8 @@ GRAPH_NODES = ("rule", "general_logic", "offset", "flow", "member", "threshold",
 STATE_NODES = ("reading", "cleared", "entity", "entities")
 
 
-def sha256(doc: Any) -> str:
-    """The sha256 of a document's canonical JSON: sorted keys, no whitespace, UTF-8."""
-    text = json.dumps(doc, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
 def relative(run: Run, path: str) -> str:
-    return Path(path).relative_to(run.folder).as_posix()
-
-
-def versions(run: Run) -> dict[str, str]:
-    """`rules`: the sha256 over `model.json`, `sources.json` and the rule files; `data`: over the data files.
-    Each file counts as [its path relative to the model folder, its document], sorted by path. `tool`: the
-    tool version."""
-    model = run.checker.model
-
-    def digest(files: list[File]) -> str:
-        return sha256(sorted([relative(run, file.path), file.doc] for file in files))
-
-    return {
-        "rules": digest([model.manifest, model.sources, *model.rules]),
-        "data": digest(list(model.data)),
-        "tool": __version__,
-    }
+    return _relative(run.folder, path)
 
 
 def node_id(item: tuple[str, ...]) -> str:
@@ -188,7 +164,7 @@ def assemble(run: Run, output: str) -> dict[str, Any]:
         "model_id": run.head["model_id"],
         "output": output,
         "result": _result(run, output),
-        "versions": versions(run),
+        "versions": versions(run.checker, run.folder),
         "nodes": dict(sorted(nodes.items())),
     }
 

@@ -31,14 +31,20 @@ class Failure(Exception):
         self.errors = list(errors)
 
 
-def build(command: str | None, data: dict[str, Any], errors: list[dict[str, Any]]) -> dict[str, Any]:
+def build(
+    command: str | None,
+    data: dict[str, Any],
+    errors: list[dict[str, Any]],
+    warnings: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The envelope. Warnings are problems the command recovered from; they never change the exit status."""
     return {
         "schema_version": SCHEMA_VERSION,
         "command": command,
         "ok": not errors,
         "data": data,
         "errors": errors,
-        "warnings": [],
+        "warnings": list(warnings or []),
     }
 
 
@@ -49,11 +55,12 @@ def exit_status(envelope: dict[str, Any]) -> int:
 
 
 def write(envelope: dict[str, Any], stdout: TextIO, stderr: TextIO) -> int:
-    """Print one line per error to stderr, then the envelope to stdout; return the exit status."""
-    for entry in envelope["errors"]:
-        values = " ".join(f"{key}={json.dumps(value)}" for key, value in entry["detail"].items())
-        ref = f" ref={entry['ref']}" if "ref" in entry else ""
-        stderr.write(f"acmodel: {entry['code']} {values}{ref}\n")
+    """Print one line per error and per warning to stderr, then the envelope to stdout; return the exit status."""
+    for label, entries in (("", envelope["errors"]), ("warning ", envelope["warnings"])):
+        for entry in entries:
+            values = " ".join(f"{key}={json.dumps(value)}" for key, value in entry["detail"].items())
+            ref = f" ref={entry['ref']}" if "ref" in entry else ""
+            stderr.write(f"acmodel: {label}{entry['code']} {values}{ref}\n")
     stderr.flush()
     # ASCII only, so the line survives any console or pipe encoding.
     stdout.write(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")) + "\n")
