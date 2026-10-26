@@ -463,7 +463,8 @@ what it reads, without recursion.
 **Not evaluated yet** (`expr_eval_failed`, `evaluation_unsupported`; `found` names it): `metric:`, `count:` and
 `pref:` references, `random:<id>` products, the rows of an external table, and a value rule's `when`. Every
 output that needs one is blocked. The other rule kinds (regen, exchange, cooldown, gate, engine, objective,
-weight_ref), and random rules with `outcomes`, are type-checked but not evaluated.
+weight_ref), and random rules with `outcomes`, are type-checked but not evaluated. `acmodel economy` reads the flow,
+regen, cap, limit and gate rules (see "The economy").
 
 **Unknowns.** A node that reads a discrete unknown is computed once per point of it, and once per point of each
 further one that it reads under that choice. A continuous unknown is one enclosure, and what reads it is computed
@@ -624,6 +625,129 @@ boolean, or null when continuous unknowns leave it undecided.
 The errors are ordered by file, pointer, code and then their whole canonical text, so that the order never
 depends on which nodes the cache reused. The outputs, without `work`, are kept as
 `runs/<run id>/outputs.json` under `paths.state_root`.
+
+## The economy (`acmodel economy`)
+
+`acmodel economy <model> --state <file>` checks and reads the model as `run` does, then solves the economy (#424
+design 4.3 and 4.4, design-py 4.3; `src/acmodel/core/flow.py`): two linear programs generated from the rules,
+solved by scipy's HiGHS and checked exactly. It computes only the graph nodes they read, through the cache as `run`
+does. The configuration keys are under `lp`, `search` and `economy` (`contracts/cli.md`).
+
+### What the programs model
+
+- **Time.** One step is one day. The steady state's cycle is one week when the model declares a period of unit
+  `week`, else one day. A period of unit `month` is refused (`month`): a month has no fixed number of days. Reset
+  minutes and offsets are not read: the steady state looks the same from every step, and a plan starts at a reset of
+  every period.
+- **Stocks.** Each resource and store has a stock at every step boundary, never below 0. A store's stock is apart
+  from the stock of the resource it holds.
+- **Activities.** Each activity that is the subject of a flow has a count per step. One execution performs all its
+  flows: what they consume and produce, and their moves. `counts_on` and `batch` are not read: in the programs every
+  execution succeeds, and a batch is that many executions.
+- **Moves.** A move whose amount comes from the rules and the data moves that amount per execution. A move whose
+  amount needs the account state, such as a collection of what the store holds (`stock:<store>`), moves a variable
+  amount, at most its store's storage cap per execution; its store must have a storage cap with a value (`state`).
+- **Regens.** A regen with an `every` of a day or less brings its amount times a day over `every` in each step. A
+  longer `every` must be a whole number of days, and its amount comes whole in the first step and every that many
+  steps after; in the steady state it must divide the cycle (`every`). An `every` that is not positive is
+  `value_invalid`. A store's regen is its production. A `while` is read only when it says what the store's storage
+  cap does (`stock:<store> < cap:<its storage cap>`); any other is refused (`while`).
+- **Caps:**
+  - `hard` on a resource, with `block_all_income` or `discard`: its stock stays at or below the cap at every step
+    boundary. What the cap blocks overflows: at most the step's income, never stock already held.
+  - `storage` on a store, with `stop_production`, `discard` or `block_all_income`: its stock stays at or below the
+    cap, and production beyond it is lost (at most the step's production).
+  - `soft_read` on a resource, with `block_income_from`: the plan reads it (see below). The steady state reads no
+    account value, so it does not.
+  - Any other subject or `on_reach` is refused, with `found` the subject's kind or the `on_reach`.
+- **Limits.** Each window of the limit's period (one step for a day, seven for a week) counts the executions of its
+  subject and of its `shared_with` activities: at most `max`.
+- **Gates.** A flow behind a gate of origin `person` (real payment) takes its activity out of both programs; the
+  activity is listed in `excluded` (#424 design 4.7). A gate with no `requires`, no `prefs` and not irreversible lets
+  the flow run. Any other gate is refused (`gate`).
+- **Not modelled yet**, each refused: `exchange`, `cooldown` and `objective` rules (an objective's terms read
+  metrics, which come with the search); a `random:` product; a `when`; and an amount, cap or limit that reads an
+  unknown (`unknown`), because each program solves single values.
+
+Every refusal is `expr_eval_failed` (`evaluation_unsupported`, operator `economy`, `found` as named above) at the
+rule, member or period, and blocks the output; nothing is approximated.
+
+**Status** of each output: the worst of the rules, rows and readings it read. It is provisional when it depends on
+an unknown it does not read: one that a pending rule it read names.
+
+### The steady state (`steady`)
+
+- **Game-wide.** It reads the rules and the data only, never the account state. An amount, cap or limit that needs
+  the account state is refused (`state`).
+- **Its objective** is the numeraire's gain over one cycle, maximised. Every other stock ends the cycle with at least
+  the stock it began with, and a stock with a hard or storage cap with exactly that stock, so the cycle can repeat.
+- **Prices.** A resource's price in a step is the change of the optimum per grain (`lp.grain`, 1) when that step
+  brings one grain more, and when it brings one grain less.
+  - When the two agree, the price is exact (`"1/10"`).
+  - Otherwise it is the interval `{"low", "high"}` (a degenerate basis); `high` is null when one grain less is
+    infeasible.
+  - The same holds for each cap with a value and each limit (`rule_prices`), re-solved with its value one grain
+    higher and one lower. The numeraire's price is 1.
+- **Activity values** per step: what one execution produces less what it consumes, at that step's prices, in the
+  numeraire. Where a price is an interval, so is the value, and an unbounded end is null. An activity that moves out
+  of or into a store has no value (null): what it moves depends on what the store holds.
+- **Losses** over one cycle: per resource with a hard cap its `overflow`, and per store with a storage cap its
+  `lost_production`. They are the least among the optimal solutions, from a second solve at the optimum.
+- **Marginals.** HiGHS's marginals of the same rows are kept in `marginals`, as a cross-check only. A marginal outside
+  its price's interval is the warning `lp_dual_disagrees`; the price stands. A storage cap's marginal also counts the
+  moves it bounds, whose coefficient it is.
+
+### The plan (`plan`)
+
+- **One account.** Each resource and store opens at its reading in the state. One that declares no reading needs
+  none when nothing can lower or cap its stock: it opens at 0 and is listed in `unread`. Otherwise a missing reading
+  is `state_reading_missing`.
+- **Its horizon** is `economy.plan_horizon` steps (7). It starts at a reset of every period and in the first step of
+  every regen with a longer `every`. A limit's first window is whole, because the state holds no counts yet.
+- **Counts are integers**; moved amounts and stocks need not be.
+- **Read caps.** A `soft_read` cap blocks, in each step, the collections (moves that take what a store holds) of the
+  activities it lists, unless the step opens at least one grain below the cap's reading. So a collection is blocked at
+  or above the read cap.
+  - An indicator per step does this; the hard cap of the resource bounds it, and a resource without one is refused
+    (`unbounded_stock`).
+  - Any other income of the listed activities is refused (`income`).
+- **Its objective** is the value of what the stocks gain over the horizon, maximised. Each resource counts at the
+  steady state's price for the step the plan ends in: the low end of an interval, the value of one more unit. A store's
+  stock counts nothing at the end.
+- **The MILP** is solved within `search.milp_node_limit` nodes and a relative gap of 0, and never against a time limit.
+  - A plan that the limit stops before it is proven optimal is shown with `proven: false`, with the warning
+    `search_budget_exhausted`.
+  - With no feasible plan at all, the plan is blocked (`lp_solve_failed`, `no_solution`).
+- **It needs the steady state.** What blocks the steady state blocks the plan.
+
+### Exactness and failures
+
+- **Exact solutions.** Every solution is made exact before it is used.
+  - The variables HiGHS leaves at a bound, and the integer ones rounded, are fixed. The rows they leave tight are
+    solved exactly for the others.
+  - When those rows do not determine them, each value is converted with `limit_denominator(lp.max_denominator)`
+    instead.
+  - The result is checked exactly against every bound, integrality and row; what breaks one is
+    `lp_numeric_check_failed`. Objectives, prices and losses come only from these fractions.
+- **Infeasible.** An infeasible program is `lp_infeasible`. It names a minimal set of conflicting groups: each regen,
+  cap, limit and read cap is a group, and in a plan each opening stock. They are dropped in turn, in id order, and
+  each stays dropped while the rest is still infeasible. A group whose check cannot be decided is kept and listed in
+  `unchecked`.
+- **Other failures.** An unbounded program, or another status HiGHS ends with after a second try without presolve, is
+  `lp_solve_failed`.
+
+### Output
+
+`data` holds `path`, `model_id`, `state`, `run_id` and `work`, as `run` does, and `steady` and `plan`. Each of the
+two has `status` and `per_account`; a blocked one has only `status`.
+- **`steady`:** `cycle` (`steps`, `step_seconds`), `objective`, `prices` (resource to its price per step),
+  `rule_prices`, `activity_values` (activity to its value per step, or null), `losses` (`overflow`,
+  `lost_production`), `marginals` (`prices`, `rule_prices`) and `excluded`.
+- **`plan`:** `steps`, `proven`, `objective`, `counts` (activity to its count per step), `moved` (collection to its
+  amount per step), `end` (the final stocks), `unread` and `excluded`.
+
+A number is a string holding an exact rational. The errors name the outputs they block in `needed_by`:
+`economy:steady` and `economy:plan`. The warnings are those of the solves.
 
 ## Outputs: provenance, `explain` and `thresholds.json`
 

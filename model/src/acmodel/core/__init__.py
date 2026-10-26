@@ -7,8 +7,10 @@ PY-8: `unknown` evaluates the unknowns (discrete ones at their points, continuou
 `expr.interval`), and gives each output's sensitivity, the no-effect rule on the sound range, and the Monte
 Carlo sampling of distributions.
 PY-9: with a cache session (`acmodel.cache`), the graph computes incrementally (`Graph.cached`).
+PY-10: `flow` is the economy (`economy`): the steady state's values and an account's plan, LP and MILP solved
+by scipy's HiGHS and checked exactly (`run_economy`).
 """
 
-from acmodel.core.run import run_model
+from acmodel.core.run import run_economy, run_model
 
-__all__ = ["run_model"]
+__all__ = ["run_economy", "run_model"]

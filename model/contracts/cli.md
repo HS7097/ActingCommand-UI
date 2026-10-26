@@ -29,6 +29,7 @@ python3 -I -B <model>/acmodel.py <command>    (elsewhere)
 | `version` | Runs the dependency check and reports the versions. | `tool`, `tool_version`, `python`, `packages` (name to version) |
 | `check <model>` | Runs the dependency check, then the static check of the model: `<model>` is the model folder or its `model.json` (`formats.md`, "The static check"). It reads and computes, never writes. Every problem is one error; with any, the exit status is 1. | `path`, `model_id`, `entities`, `rules`, `superseded`, `unknowns`, `tables` |
 | `run <model> --state <file>` | Runs the dependency check, the static check, the run's model checks and the derivation graph for the account state `<file>` (`formats.md`, "The run"), incrementally through the cache (see Cache). It writes only under `paths.state_root`: the cache and the run's outputs. A model or input that does not check is refused whole (exit 1, `data` `{}`). Otherwise every output is computed or blocked: a blocked output's error lists the outputs it blocks in `needed_by`, the other outputs are still in `data`, and the exit status is 1. Provisional outputs alone exit 0. A corrupt cache entry is a warning (`cache_entry_corrupt`) and the node is computed again. | `path`, `model_id`, `state`, `run_id`, `rules`, `thresholds`, `notes`, `work` |
+| `economy <model> --state <file>` | Runs as `run` does, then the economy's steady state and plan (`formats.md`, "The economy"): LP and MILP solved by scipy's HiGHS, every solution checked exactly. It computes only the graph nodes they read, incrementally through the cache, and writes only under `paths.state_root`. A blocked output's errors list it in `needed_by` (`economy:steady`, `economy:plan`), and the exit status is 1; the warnings `lp_dual_disagrees` and `search_budget_exhausted` never change it. | `path`, `model_id`, `state`, `run_id`, `steady`, `plan`, `work` |
 | `explain <model> <output> --state <file>` | Runs as `run` does, without the cache, and prints the provenance document of one output (`rule:<id>`, `general_logic:<id>` or `threshold:<id>`; `formats.md`, "Outputs"). It writes nothing. An id that is not an output is `usage_invalid` (`output_unknown`); a blocked output reports the errors that block it (exit 1). | `path`, `model_id`, `state`, `output`, `provenance` |
 | `export thresholds <model> --state <file>` | Runs as `run` does, without the cache, then writes `out/thresholds.json` and one provenance file per threshold into the model folder (`formats.md`, "Outputs"). Only account-independent, confirmed, integer thresholds are exported: any other is `export_refused` (exit 5), and then nothing is written. A per-account value never enters these shared files. | `path`, `model_id`, `state`, `written` (the files written) |
 | `bindings check <model> --state <file> [--strict]` | Runs as `run` does, without the cache, and compares each literal that `bindings.json` binds, in `schedule.json` or a pack file, with its threshold's value as `export thresholds` would write it (`formats.md`, "Bindings"). A threshold the export refuses is refused the same way (`export_refused`, exit 5); a `fact_offset` threshold whose live offset read the account state is `binding_unsupported` (exit 5); a literal that differs, or sits where its threshold's form cannot, is `binding_mismatch` (exit 6). With `--strict`, every integer literal of a `fact` predicate of `schedule.json` that is neither bound nor fixed is `binding_unbound_literal` (exit 6). It writes nothing. | `path`, `model_id`, `state`, `repo`, `strict`, `bindings`, `fixed`, and `literals` with `--strict` |
@@ -135,6 +136,10 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | `engine.start_timeout_ms` | 120000 | the most time a worker may take to start (connect, import, `make_engine`, `describe`), and to stop before it is killed |
 | `engine.restart_budget` | 3 | how many workers that ended abnormally (a crash, a timeout, the memory limit) a pool replaces; 0 or more |
 | `engines.roots` | `{}` | where each engine's home is on this host: engine id to an absolute path (#424 design D-4) |
+| `lp.max_denominator` | 1000000 | the largest denominator a solver's float becomes when it is converted to an exact fraction (`formats.md`, "The economy"); at least 1 |
+| `lp.grain` | 1 | the grain of every amount: the step of the economy's price re-solves, and how far below a read cap a plan's collection must start; at least 1 |
+| `search.milp_node_limit` | 100000 | the most nodes the plan's MILP may explore before it stops unproven (`search_budget_exhausted`); the only budget, never a time; 1 to 2<sup>31</sup> − 1 |
+| `economy.plan_horizon` | 7 | the steps (days) of an account's plan; at least 1 |
 | `sensitivity.top_n` | 5 | how many unknowns each output's `sensitivity` lists (`formats.md`, "Unknowns") |
 | `unknowns.scale` | 1000 | the export precision that the no-effect rule (on the sound range) and the impacts are measured at: a value counts as value × scale rounded half to even (1000: milli) |
 | `unknowns.samples` | 0 | the Monte Carlo samples of the distributions per output; 0, the default, samples nothing; at most 2<sup>63</sup> − 1 |
@@ -192,6 +197,13 @@ what needed it.
 - An **engine call** is a node of kind `engine` (see Engine host): its spec is the engine id, the engine's
   fingerprint (which covers the library versions), the op and the request without its `entities`; its
   trace is the hash of each entity the result's `depends_on` names.
+- **Economy nodes.** The steady state and the plan are nodes of kind `economy` (`formats.md`, "The economy"):
+  they declare `numpy`, `scipy` and the `python` minor version, and their spec adds `lp.max_denominator` and
+  `lp.grain`, and for the plan `search.milp_node_limit` and `economy.plan_horizon`. Their trace is the model's
+  structure that the economy reads (its periods, numeraire, entities and the rules of the kinds it reads), each
+  amount, cap and limit node, and for the plan the steady state and the opening readings; so a change of the
+  account state solves only the plan again. A regen's amount and interval are nodes of kind `regen`. The run id of
+  `economy` adds the command and those keys to `run`'s inputs, and its `outputs.json` adds the warnings.
 - **Sampled and impacts nodes.** The Monte Carlo tallies of an output (kind `sampled`, `formats.md`,
   "Unknowns") declare `numpy` and the `python` minor version, and their spec adds the keys under `unknowns`
   and `sensitivity` but `chunk_size`, which changes no result. The impacts of the continuous unknowns of an
@@ -240,8 +252,9 @@ stops and never computes without its cache.
 ## Host caps
 
 The host layer is `src/acmodel/host/`. The commands that compute call it before and during their work;
-`setup` and `version` do not. `run`, `explain`, `export thresholds` and `bindings` in this version evaluate
-only the derivation graph, in their own process and with no workers, and do not call it yet.
+`setup` and `version` do not. `run`, `economy`, `explain`, `export thresholds` and `bindings` in this version
+evaluate only the derivation graph and the economy's solves, in their own process and with no workers, and do
+not call it yet.
 
 **The caps of the tool's own process** (Windows; `host.windows`):
 1. `SetPriorityClass` to `compute.priority`, then `GetPriorityClass` must read it back. Otherwise the

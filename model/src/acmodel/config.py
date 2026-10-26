@@ -5,7 +5,7 @@ strictly: UTF-8 JSON, no duplicate keys, no unknown members, typed values.
 The host caps (`compute.priority`, `compute.job.*`, `host.*`) are read by `acmodel.host.caps`, the engine
 host's keys (`compute.workers.*`, `engine.*`, `engines.*`) by `acmodel.engine.settings`; the keys under
 `unknowns` (sampling, export precision, Wilson bounds), `sensitivity.top_n` and the keys under `random` are
-`Unknowns`.
+`Unknowns`; the economy's keys (`lp.*`, `search.milp_node_limit`, `economy.*`) are `EconomySettings`.
 """
 
 from __future__ import annotations
@@ -42,6 +42,9 @@ _MEMBERS = {
     "unknowns": {"scale", "samples", "seed", "chunk_size", "resolution", "wilson_digits", "drop_z"},
     "sensitivity": {"top_n"},
     "random": {"max_transitions", "enclosure_digits"},
+    "lp": {"max_denominator", "grain"},
+    "search": {"milp_node_limit"},
+    "economy": {"plan_horizon"},
 }
 # `unknowns.drop_z`: a positive decimal string, so that no float reaches the Wilson bounds.
 DECIMAL_Z = re.compile(r"(0|[1-9][0-9]*)(\.[0-9]+)?")
@@ -100,6 +103,39 @@ UNKNOWNS_RANGES = {
 
 
 @dataclass(frozen=True)
+class EconomySettings:
+    """The economy's keys (#424 design 4.3 and 4.4, design-py 4.3; `core.flow`).
+
+    - `max_denominator` (`lp.max_denominator`): the largest denominator a solver's float becomes as an exact
+      fraction before the exact check;
+    - `grain` (`lp.grain`): the grain of every amount, one unit: the step of the price re-solves, and how far
+      below a read cap a collection must start;
+    - `node_limit` (`search.milp_node_limit`): the most nodes a MILP may explore; the only budget, never a time;
+    - `plan_horizon` (`economy.plan_horizon`): the steps (days) of an account's plan.
+    """
+
+    max_denominator: int = 1_000_000
+    grain: int = 1
+    node_limit: int = 100_000
+    plan_horizon: int = 7
+
+    def keyed(self) -> dict[str, int]:
+        """Every key, for the run id of `economy`."""
+        return {"max_denominator": self.max_denominator, "grain": self.grain, "node_limit": self.node_limit,
+                "plan_horizon": self.plan_horizon}
+
+
+# The range of each economy key: (section, key) to (field, lowest, highest or None). HiGHS counts nodes in a
+# 32-bit integer.
+ECONOMY_RANGES = {
+    ("lp", "max_denominator"): ("max_denominator", 1, None),
+    ("lp", "grain"): ("grain", 1, None),
+    ("search", "milp_node_limit"): ("node_limit", 1, 2**31 - 1),
+    ("economy", "plan_horizon"): ("plan_horizon", 1, None),
+}
+
+
+@dataclass(frozen=True)
 class Config:
     path: Path
     venv: Path
@@ -111,6 +147,7 @@ class Config:
     cache_max_bytes: int
     engine: engine_settings.EngineSettings
     unknowns: Unknowns
+    economy: EconomySettings
 
 
 class _DuplicateKey(ValueError):
@@ -207,6 +244,16 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
     if type(drop_z) is not str or not DECIMAL_Z.fullmatch(drop_z) or not Fraction(drop_z) > 0:
         raise _invalid("value_invalid", path, _pointer("unknowns", "drop_z"))
 
+    economy_sections = {name: _section(doc, name, path) for name in ("lp", "search", "economy")}
+    economy: dict[str, int] = {}
+    for (name, key), (field, low, high) in ECONOMY_RANGES.items():
+        if key not in economy_sections[name]:
+            continue
+        value = economy_sections[name][key]
+        if type(value) is not int or value < low or (high is not None and value > high):
+            raise _invalid("value_invalid", path, _pointer(name, key))
+        economy[field] = value
+
     def invalid(reason: str, parts: tuple[str, ...], **values: Any) -> Failure:
         return _invalid(reason, path, _pointer(*parts), **values)
 
@@ -225,4 +272,5 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         cache_max_bytes=cache_max_bytes,
         engine=engine,
         unknowns=Unknowns(**sections["unknowns"], **sections["sensitivity"], **sections["random"]),
+        economy=EconomySettings(**economy),
     )
