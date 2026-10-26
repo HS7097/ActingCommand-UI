@@ -8,7 +8,10 @@
 - ("flow", id, "consumes" | "produces", resource) and ("flow", id, "moves"): the amounts of a flow, which
   `cost`, `yield` and `max_single_income` read;
 - ("member", unknown id, member): a member of a variants unknown;
-- ("threshold", id): a threshold of exports.json.
+- ("threshold", id): a threshold of exports.json;
+- ("general", <a rule, flow or member key>): that node from the rules and the data only, which
+  `max_single_income` reads. It never reads the account state; a node that would need it is marked so
+  (`needs_state`), and so is every such node that reads it.
 
 **Scenarios.** A node that reads a variants unknown has one value per choice of variant. The choices are
 found as the evaluation reaches them, so a node depends only on the unknowns its value actually reads.
@@ -27,7 +30,7 @@ from fractions import Fraction
 from typing import Any, Callable
 
 from acmodel.check.checker import Checker, Entry
-from acmodel.check.walk import at
+from acmodel.check.walk import at, nodes
 from acmodel.codes import (
     DATA_REFERENCE_MISSING,
     EXPR_EVAL_FAILED,
@@ -49,7 +52,7 @@ from acmodel.core.common import (
 )
 from acmodel.core.types import Typed
 from acmodel.envelope import Failure, error
-from acmodel.expr import Duration, Reference, Value, evaluate
+from acmodel.expr import Call, Duration, Reference, Value, evaluate
 from acmodel.model import readers
 
 
@@ -65,6 +68,7 @@ class Scenario:
 class Result:
     scenarios: tuple[Scenario, ...] = ()
     blocked_by: frozenset[int] = frozenset()  # the root errors that block it; empty when it is computed
+    needs_state: bool = False  # a ("general", …) node that the rules and the data alone do not give
 
     @property
     def blocked(self) -> bool:
@@ -87,6 +91,10 @@ class _Blocked(Exception):
     def __init__(self, errors: frozenset[int]) -> None:
         super().__init__(sorted(errors))
         self.errors = errors
+
+
+class _NeedsState(Exception):
+    """A ("general", …) node reached a value of the account state, which it never reads."""
 
 
 def _magnitude(value: Value) -> Any:
@@ -135,6 +143,8 @@ def _unsupported(operator: str, position: int, found: str, ref: str) -> Failure:
 class _Environment:
     """The value environment of one node in one scenario."""
 
+    prefix: tuple[str, ...] = ()  # of the nodes its references read
+
     def __init__(self, graph: Graph, owner: Entry, ref: str, unknowns: dict[str, str], status: str) -> None:
         self.graph = graph
         self.owner = owner
@@ -156,7 +166,7 @@ class _Environment:
 
     def node(self, key: tuple[str, ...]) -> Value:
         """The value of node `key` in this scenario; a choice it needs and this scenario lacks branches it."""
-        candidates = self.consistent(self.graph.result(key))
+        candidates = self.consistent(self.graph.result(self.prefix + key))
         for scenario in candidates:
             if all(unknown in self.unknowns for unknown, _ in scenario.unknowns):
                 return self.use(scenario)
@@ -207,8 +217,54 @@ class _Environment:
             for key in parts:
                 total += self.node(key)
             return total
-        # The largest single income: over the flows, and over the variants this scenario leaves open.
-        return max((self.use(s) for key in parts for s in self.consistent(self.graph.result(key))), key=_magnitude)
+        return self.max_single_income(first, second, parts)
+
+    def max_single_income(self, resource: str, cap: str, parts: list[tuple[str, ...]]) -> Value:
+        """The largest single income the cap blocks, from the rules and the data only, in every environment:
+        over the incomes and over the variants this scenario leaves open. An income counts with its amount,
+        and a move out of a store with at most the store's storage cap (one move takes at most a full store).
+        An income that would need the account state and has no such cap is `evaluation_unsupported`
+        (`found` `state`); the state is never read in its place."""
+        checker, found = self.graph.checker, []
+        for key in parts:
+            self.status = worst(self.status, RULE_STATUS[checker.entries[key[1]].doc["status"]])
+            bound = self.store_bound(key)
+            try:
+                largest = self.largest(("general",) + key)
+            except _NeedsState:
+                if bound is None:
+                    raise self.state_unsupported(resource, cap) from None
+                found.append(bound)
+                continue
+            found.append(largest if bound is None else min(largest, bound, key=_magnitude))
+        return max(found, key=_magnitude)
+
+    def largest(self, key: tuple[str, ...]) -> Value:
+        """The largest value of node `key` over the variants this scenario leaves open."""
+        return max((self.use(s) for s in self.consistent(self.graph.result(key))), key=_magnitude)
+
+    def store_bound(self, part: tuple[str, ...]) -> Value | None:
+        """For a move out of a store: the largest value of the store's storage cap, from the rules and the
+        data only; None for any other income, or when that cap is a reading."""
+        if part[2] != "moves":
+            return None
+        checker = self.graph.checker
+        store = checker.entries.get(checker.entries[part[1]].doc["logic"]["moves"]["from"])
+        cap = checker.storage_cap(store.id) if store is not None and store.kind == "store" else None
+        if cap is None:
+            return None
+        try:
+            return self.largest(("general", "rule", cap.id))
+        except _NeedsState:
+            return None
+
+    def state_unsupported(self, resource: str, cap: str) -> Failure:
+        expression = self.graph.typed.expressions[(self.owner.path, self.ref)]
+        position = next(
+            item.position for item in nodes(expression.root)
+            if isinstance(item, Call) and item.function == "max_single_income" and item.args == (resource, cap)
+        )
+        return _unsupported("max_single_income", position, "state", self.ref)
 
     def lookup(self, table_id: str, column: str, keys: tuple[Value, ...]) -> Value:
         position = self.graph.typed.lookups[(self.owner.path, self.ref)][(table_id, column)]
@@ -268,6 +324,25 @@ class _Environment:
         return _convert(table.file.doc["columns"][column], row[column])
 
 
+class _General(_Environment):
+    """The environment of a ("general", …) node: the rules and the data only. Its references read
+    ("general", …) nodes, and a value of the account state ends the node (`_NeedsState`) instead of
+    being read."""
+
+    prefix = ("general",)
+    STATE = ("read", "amount", "stock", "cleared", "entity")
+
+    def reference(self, ref: Reference) -> Value:
+        if ref.kind in self.STATE:
+            raise _NeedsState()
+        return super().reference(ref)
+
+    def members(self, ref: Reference) -> list[tuple[str, ...]]:
+        if ref.kind != "data":  # the entities of a class are the account's
+            raise _NeedsState()
+        return super().members(ref)
+
+
 class Graph:
     """One run's graph over the model `checker` accepted, typed by `typed`, for one account state."""
 
@@ -296,6 +371,8 @@ class Graph:
         result = self.results[key]
         if result.blocked:
             raise _Blocked(result.blocked_by)
+        if result.needs_state:
+            raise _NeedsState()
         return result
 
     def blocked(self, errors: list[dict[str, Any]], path: str) -> Result:
@@ -314,6 +391,9 @@ class Graph:
     def compute(self, key: tuple[str, ...]) -> Result:
         if key[0] == "threshold":
             return self.threshold(key[1])
+        general = key[0] == "general"  # the same node from the rules and the data only
+        if general:
+            key = key[1:]
         entry = self.checker.entries[key[1]]
         if key[0] == "member":
             def member(unknowns: dict[str, str]) -> str:
@@ -321,15 +401,17 @@ class Graph:
                     raise _Branch(entry.id)
                 return at(entry.ref, "variants", unknowns[entry.id], key[2])
 
-            return self.expression(entry, member, PROVISIONAL)
+            return self.expression(entry, member, PROVISIONAL, general=general)
         own, logic = RULE_STATUS[entry.doc["status"]], entry.doc["logic"]
         if "when" in entry.doc:  # a conditional value: evaluated by a later slice
             return self.blocked(_unsupported("when", 0, "when", at(entry.ref, "when")).errors, entry.path)
         if key[0] == "rule" and entry.kind == "cap" and "value" not in logic:
-            return self.cap_reading(entry, own)
+            return Result(needs_state=True) if general else self.cap_reading(entry, own)
         if key[0] == "rule":
             member = ("max",) if entry.kind == "limit" else ("value",)
-            return self.expression(entry, lambda _: at(entry.ref, "logic", *member), own, logic.get("round"))
+            return self.expression(
+                entry, lambda _: at(entry.ref, "logic", *member), own, logic.get("round"), general=general
+            )
         if key[0] == "general_logic":
             return self.expression(entry, lambda _: at(entry.ref, "logic", "general_logic"), own)
         if key[0] == "offset":
@@ -337,12 +419,19 @@ class Graph:
         ref = at(entry.ref, "logic", "moves", "amount") if key[2] == "moves" else at(entry.ref, "logic", key[2], key[3])
         if (entry.path, ref) not in self.typed.expressions:  # a `random:<id>` product
             return self.blocked(_unsupported(key[2], 0, "random", ref).errors, entry.path)
-        return self.expression(entry, lambda _: ref, own)
+        return self.expression(entry, lambda _: ref, own, general=general)
 
     def expression(
-        self, owner: Entry, select: Callable[[dict[str, str]], str], own: str, mode: str | None = None
+        self,
+        owner: Entry,
+        select: Callable[[dict[str, str]], str],
+        own: str,
+        mode: str | None = None,
+        *,
+        general: bool = False,
     ) -> Result:
-        """Evaluate the expression `select` picks, once per scenario."""
+        """Evaluate the expression `select` picks, once per scenario (from the rules and the data only when
+        `general`)."""
         scenarios = []
         todo: list[tuple[tuple[str, str], ...]] = [()]
         while todo:
@@ -350,7 +439,7 @@ class Graph:
             chosen = dict(unknowns)
             try:
                 ref = select(chosen)
-                env = _Environment(self, owner, ref, chosen, own)
+                env = (_General if general else _Environment)(self, owner, ref, chosen, own)
                 value = evaluate(self.typed.expressions[(owner.path, ref)], env, max_bits=self.max_bits)
             except _Branch as branch:
                 names = sorted(self.checker.entries[branch.unknown].doc["variants"], reverse=True)
@@ -358,6 +447,8 @@ class Graph:
                 continue
             except _Blocked as blocked:
                 return Result(blocked_by=blocked.errors)
+            except _NeedsState:
+                return Result(needs_state=True)
             except Failure as failure:
                 return self.blocked(failure.errors, owner.path)
             scenarios.append(Scenario(tuple(sorted(unknowns)), _rounded(mode, value), env.status, env.per_account))

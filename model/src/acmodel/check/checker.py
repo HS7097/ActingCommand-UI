@@ -164,6 +164,16 @@ class Checker:
         """The first declaration of its id, and not superseded: what the tool reads."""
         return self.entries.get(entry.id) is entry and entry.id not in self.superseded
 
+    def storage_cap(self, store: str) -> Entry | None:
+        """The active `storage` cap of a store (two are a conflict), which bounds what one move takes out."""
+        for rule in self.rules:
+            if (
+                self.active(rule) and rule.kind == "cap" and rule.doc["subject"] == store
+                and rule.doc["logic"]["cap_kind"] == "storage"
+            ):
+                return rule
+        return None
+
     # Declarations ----------------------------------------------------------------------------
 
     def add(self, entry: Entry) -> None:
@@ -566,13 +576,21 @@ class Checker:
             self.problem(DATA_REFERENCE_MISSING, path, ref, missing="row", table=name, position=position)
 
     def flow_function(self, owner: Entry, node: str | None, ref: str, item: Call) -> None:
-        """`cost(a, r)` and `yield(a, r)` read the flows of a; `max_single_income(r, cap)` the cap and the flows into r."""
+        """`cost(a, r)` and `yield(a, r)` read the flows of a; `max_single_income(r, cap)` the cap, the flows
+        into r, and the storage cap of each store such a flow moves out of."""
         path, position = owner.path, item.position
         first, second = item.args[0], item.args[1]
         if item.function == "max_single_income":
             resource = self.need(path, ref, first, ("resource",), position=position)
             cap = self.need(path, ref, second, ("rule.cap",), position=position)
-            targets = ([cap.id] if cap is not None else []) + (self.flows_into.get(first, []) if resource else [])
+            flows = self.flows_into.get(first, []) if resource else []
+            targets = ([cap.id] if cap is not None else []) + flows
+            for flow in flows:
+                moves = self.entries[flow].doc["logic"].get("moves", {})
+                source = self.entries.get(moves["from"]) if moves.get("to") == first else None
+                bound = self.storage_cap(source.id) if source is not None and source.kind == "store" else None
+                if bound is not None and bound.id not in targets:
+                    targets.append(bound.id)
         else:
             activity = self.need(path, ref, first, ("activity",), position=position)
             self.need(path, ref, second, ("resource",), position=position)

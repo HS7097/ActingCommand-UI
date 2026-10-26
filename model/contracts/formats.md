@@ -324,7 +324,8 @@ design D-2). Anywhere else, unknowns included, `pref:` is `rule_pref_misplaced`.
 - **Links:**
   - A node links to the rules and unknowns that its expressions name.
   - `cost(<a>, <r>)` and `yield(<a>, <r>)` link to the flow rules of activity `<a>`.
-  - `max_single_income(<r>, <cap>)` links to the cap and to the flow rules that produce `<r>` or move into it.
+  - `max_single_income(<r>, <cap>)` links to the cap, to the flow rules that produce `<r>` or move into it, and
+    to the `storage` cap of each store that such a flow moves out of.
   - A flow's `requires` links to its gates, and a `random:<id>` product to its random rule.
   - A derive's `general_logic` is only compared with its value, and nothing reads it, so it links nothing.
 - **Refusal:** a loop is `rule_cycle` with `via` `reference`. `members` are its nodes, sorted (`rule:<id>`,
@@ -440,7 +441,11 @@ what it reads, without recursion.
 - `cost(<a>, <r>)`: the sum of what the active flows of `<a>` consume of `<r>` and move out of it;
   `yield(<a>, <r>)`: the sum of what they produce of `<r>` and move into it.
 - `max_single_income(<r>, <cap>)`: the largest single income that the cap blocks, over the flows it blocks
-  and over the variants the node leaves open. It is evaluated in the given state.
+  and over the variants the node leaves open. It is general logic: computed from the rules and the data
+  only, never from the account state, so no reading changes it. An income counts with its amount, and a move
+  out of a store with at most the store's `storage` cap (one move takes at most a full store); an income that
+  would need a state value and has no such cap blocks the output (`expr_eval_failed`,
+  `evaluation_unsupported`, `found` `state`).
 
 **Not evaluated yet** (`expr_eval_failed`, `evaluation_unsupported`; `found` names it): `metric:`, `count:` and
 `pref:` references, `interval` and `distribution` unknowns, `random:<id>` products, the rows of an external

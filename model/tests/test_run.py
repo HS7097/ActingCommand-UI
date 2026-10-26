@@ -116,6 +116,24 @@ def test_the_ruling_that_overrides_the_general_logic_is_noted(example, run):
     assert set(note["detail"]) == set(spec["values"])
 
 
+@pytest.mark.parametrize("stock", [500, 900])
+def test_the_general_logic_does_not_change_with_the_account_state(example, run, stock):
+    """`max_single_income` reads the rules and the data only, never a reading: another stock reading gives
+    the same general logic (the largest collect is a full store, its storage cap 800) and the same note."""
+    edit(example, STATE, '"resource.s_stock": {"value": 800,', f'"resource.s_stock": {{"value": {stock},')
+
+    status, doc = run(example)
+
+    assert status == 0
+    general = doc["data"]["rules"]["margin.a"]["general_logic"]
+    assert (general["value"], general["per_account"]) == ("800", False)
+    assert doc["data"]["notes"] == [{
+        "code": "ruling_overrides_general_logic",
+        "detail": {"path": str(example / RULES), "rule": "margin.a", "value": ["250"], "general_logic": ["800"]},
+        "ref": "/rules/8/logic/general_logic",
+    }]
+
+
 # The checks the static check leaves to the run: (edits of the example, then the one error: code, file,
 # ref, other values). Each refuses before anything is computed (data is empty), or blocks what needs it.
 GATE = (
