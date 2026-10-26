@@ -146,6 +146,7 @@ class Scenario:
     reads: tuple[tuple[str, ...], ...] = ()  # what the value read, in the order it was read
     unresolved: tuple[str, ...] = ()  # unknowns the value depends on without reading them, sorted
     free: tuple[str, ...] = ()  # the continuous unknowns the value computed with, sorted
+    exact_value: str | None = None  # a random rule's exact value that `value` encloses (`Graph.carried`)
 
 
 @dataclass(frozen=True)
@@ -303,6 +304,7 @@ class _Environment:
         self.free: set[str] = set()  # the continuous unknowns the value computes with
         self.per_account = False
         self.reads: dict[tuple[str, ...], None] = {}  # what the value read, once each, in order
+        self.exact_value: str | None = None  # a random rule's exact value, when the value is its enclosure
 
     def evaluate(self, ref: str) -> Value:
         """The value of the owner's expression at `ref` in this scenario."""
@@ -693,7 +695,8 @@ class Graph:
     def random_keys(self, key: tuple[str, ...]) -> dict[str, int | str]:
         """The configuration keys that a node's own computation of a random process reads: `unknowns.drop_z` and
         `unknowns.wilson_digits` for the Wilson bounds of a `beta_from_samples` unknown or of a drop from samples,
-        `random.max_transitions` for a pity chain; none for any other node."""
+        `random.max_transitions` for a pity chain, and `random.enclosure_digits` for both random rules; none for
+        any other node."""
         node = key[1:] if key[0] == "general" else key
         if node[0] not in ("rule", "point"):
             return {}
@@ -703,9 +706,10 @@ class Graph:
             return wilson if family(entry) == "beta_from_samples" else {}
         if entry.kind != "random":
             return {}
+        carried = {"enclosure_digits": settings.enclosure_digits}
         if "pity_chain" in entry.doc["logic"]:
-            return {"max_transitions": settings.max_transitions}
-        return wilson if "rate" not in entry.doc["logic"]["drop"] else {}
+            return {"max_transitions": settings.max_transitions, **carried}
+        return {**wilson, **carried} if "rate" not in entry.doc["logic"]["drop"] else {}
 
     def encode(self, result: Result | Sampled | Impacts) -> dict[str, Any]:
         blocked = sorted((self.errors[index] for index in result.blocked_by), key=canonical_text)
@@ -835,7 +839,7 @@ class Graph:
                 return self.blocked(failure.errors, owner.path)
             scenarios.append(Scenario(
                 tuple(sorted(unknowns)), _rounded(mode, value), env.status, env.per_account, tuple(env.reads),
-                tuple(sorted(env.unresolved)), tuple(sorted(env.free)),
+                tuple(sorted(env.unresolved)), tuple(sorted(env.free)), env.exact_value,
             ))
         return Result(tuple(sorted(scenarios, key=lambda scenario: scenario.unknowns)))
 
@@ -876,7 +880,8 @@ class Graph:
           `random.max_transitions` (`budget_exceeded`).
         - A drop's `rate` is a chance (`value_invalid` when its enclosure leaves [0, 1]). A drop from `samples`
           is its Wilson enclosure, a continuous unknown of its own named by the rule's id; in a `_SubGraph`, the
-          end it is pinned at."""
+          end it is pinned at.
+        - A value whose numerator or denominator exceeds `expr.max_bits` is carried as its enclosure (`carried`)."""
         logic, settings, pin = rule.doc["logic"], self.settings, self.pins.get(rule.id)
         form = value_member(rule)[0]
         base = at(rule.ref, "logic", form)
@@ -892,7 +897,8 @@ class Graph:
                 env.free.add(rule.id)
                 low, high = chains.wilson(given["samples"], given["successes"], Fraction(settings.drop_z),
                                           settings.wilson_digits)
-                return {"low": low, "high": high}[pin] if pin is not None else interval.make(low, high, {rule.id: 1})
+                found = {"low": low, "high": high}[pin] if pin is not None else interval.make(low, high, {rule.id: 1})
+                return self.carried(env, rule, found)
             rate = env.evaluate(at(base, "rate"))
             low, high, _ = interval.bounds(rate)
             if not (0 <= low and high <= 1):
@@ -919,10 +925,26 @@ class Graph:
                 detail = {"reason": "budget_exceeded", "operator": form, "position": 0,
                           "expected": str(settings.max_transitions), "found": str(needed)}
                 raise Failure(error(EXPR_EVAL_FAILED, detail, base))
-            return chains.expected(chain)
+            return self.carried(env, rule, chains.expected(chain))
 
         value_of = pity if form == "pity_chain" else drop
         return self.expression(rule, value_of, own, general=general, unresolved=unresolved)
+
+    def carried(self, env: _Environment, rule: Entry, value: Value) -> Value:
+        """A random rule's value as the run carries it. A value whose numerators and denominators fit
+        `expr.max_bits` stays as it is. Otherwise it is carried as its sound enclosure: the low end rounded down and
+        the high end up to `random.enclosure_digits` decimals, not proven exact (direction 0 under the rule's id),
+        so it computes like any enclosure; the exact value is kept for provenance (`exact_value`)."""
+        low, high, signs = interval.bounds(value)
+        if all(max(abs(end.numerator).bit_length(), end.denominator.bit_length()) <= self.max_bits for end in (low, high)):
+            return value
+        scale = 10**self.settings.enclosure_digits
+        found = interval.make(
+            Fraction(math.floor(low * scale), scale), Fraction(math.ceil(high * scale), scale), {**signs, rule.id: 0}
+        )
+        if is_open(found):
+            env.exact_value = _text(value)
+        return found
 
     def cap_reading(self, cap: Entry, own: str, unresolved: tuple[str, ...]) -> Result:
         fact = cap.doc["logic"]["reading"]

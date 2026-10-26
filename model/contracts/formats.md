@@ -576,8 +576,7 @@ every platform.
 Its value (`rule:<id>`, type `count`) is the **expected pulls to the target from a fresh start**, an exact
 rational. The chances are integers over a common denominator: with `rate` = a/b and `p_up` = u/v, one pull
 multiplies every mass by an integer over b·v. Without a spark the expectation has a closed form over the cycles
-between top-tier pulls; with one, the exact DP runs to the spark. A large chain has large numerators and
-denominators: a derive that reads it is held to `expr.max_bits` like any value it reads.
+between top-tier pulls; with one, the exact DP runs to the spark.
 - Its members are single values (`evaluation_unsupported`, `found` `interval`, when continuous unknowns leave
   one open) in their domains: `rate` from 0 to 1, `p_up` above 0 and at most 1, `hard_pity` and `spark` whole
   numbers of at least 1 (`value_invalid`, `operator` the member, `expected` `probability`,
@@ -590,6 +589,13 @@ denominators: a derive that reads it is held to `expr.max_bits` like any value i
 for every value its unknowns allow (`value_invalid`, `expected` `probability`), or the **Wilson bounds** of its
 `samples` and `successes`. A drop from samples counts as a continuous unknown of its own, named by the rule's
 id: it shows its `range` and is listed in `sensitivity` under that id.
+
+**A value too large to carry exactly.** A random rule's value whose numerator or denominator has more than
+`expr.max_bits` bits (a long chain's expected pulls, say) is carried as its sound enclosure: the low end rounded
+down and the high end up to `random.enclosure_digits` (12) decimal digits, with `exact: false`. So it is never
+rounded silently: it shows a `range`, flows through the interval arithmetic and the no-effect rule like any
+enclosure, and what reads it computes with bounds that fit. The exact value stays in the rule's provenance node
+(`exact_values`, and so in `explain`). A value that fits stays exact.
 
 **Wilson bounds** of n samples with k successes at z = `unknowns.drop_z` (a decimal string, 1.959964 for 95 %):
 the centre (k + z²/2) / (n + z²) less and plus the half width z·√(k(n − k)/n + z²/4) / (n + z²). The square
@@ -646,7 +652,7 @@ of an `if`, the row a `lookup` found, every row of a set.
 | `node` | Ids | Members |
 |---|---|---|
 | `threshold` | `threshold:<id>` | `id`, `form`, [`round`], `file` (`exports.json`), `ref`, `sha256` of its entry |
-| `rule` | `rule:<id>` (its value), `general_logic:<id>`, `offset:<id>` (`live.offset`); the flow amounts `flow:<id>:consumes:<resource>`, `flow:<id>:produces:<resource>` and `flow:<id>:moves`; `entry:<id>`, a rule consulted for its logic only (the cap of `max_single_income`, and an income whose amount needs the account state, which its store's storage cap bounds) | `kind`, `id`, `file`, `ref` (the pointer of the expression, or of a cap's `reading`; for `entry:` the rule's), `sha256` of the rule entry, and its `status` and `provenance` as written |
+| `rule` | `rule:<id>` (its value), `general_logic:<id>`, `offset:<id>` (`live.offset`); the flow amounts `flow:<id>:consumes:<resource>`, `flow:<id>:produces:<resource>` and `flow:<id>:moves`; `entry:<id>`, a rule consulted for its logic only (the cap of `max_single_income`, and an income whose amount needs the account state, which its store's storage cap bounds) | `kind`, `id`, `file`, `ref` (the pointer of the expression, or of a cap's `reading`, or a random rule's form; for `entry:` the rule's), `sha256` of the rule entry, and its `status` and `provenance` as written; a random rule whose value the run carries as its enclosure adds `exact_values`, `[{"unknowns", "value"}]`, the exact value per scenario |
 | `unknown` | `member:<unknown>:<member>`; `point:<unknown>` (an interval or a distribution) | as a rule, with `member` for a member; `ref` is the unknown's |
 | `row` | `row:<table>[<key parts joined with commas>]` | `table`, `key`, `file`, `ref`, `sha256` of the row, `status`, `provenance` (the row's, else the table's) |
 | `reading` | `reading:<fact>` | `fact`, `value`, `observed_at_unix_ms`, `source` |

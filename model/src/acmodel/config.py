@@ -4,7 +4,7 @@ The file is optional and every key has a default. A file that exists is read
 strictly: UTF-8 JSON, no duplicate keys, no unknown members, typed values.
 The host caps (`compute.priority`, `compute.job.*`, `host.*`) are read by `acmodel.host.caps`, the engine
 host's keys (`compute.workers.*`, `engine.*`, `engines.*`) by `acmodel.engine.settings`; the keys under
-`unknowns` (sampling, export precision, Wilson bounds), `sensitivity.top_n` and `random.max_transitions` are
+`unknowns` (sampling, export precision, Wilson bounds), `sensitivity.top_n` and the keys under `random` are
 `Unknowns`.
 """
 
@@ -41,7 +41,7 @@ _MEMBERS = {
     "engines": engine_settings.ENGINES_MEMBERS,
     "unknowns": {"scale", "samples", "seed", "chunk_size", "resolution", "wilson_digits", "drop_z"},
     "sensitivity": {"top_n"},
-    "random": {"max_transitions"},
+    "random": {"max_transitions", "enclosure_digits"},
 }
 # `unknowns.drop_z`: a positive decimal string, so that no float reaches the Wilson bounds.
 DECIMAL_Z = re.compile(r"(0|[1-9][0-9]*)(\.[0-9]+)?")
@@ -49,7 +49,7 @@ DECIMAL_Z = re.compile(r"(0|[1-9][0-9]*)(\.[0-9]+)?")
 
 @dataclass(frozen=True)
 class Unknowns:
-    """The keys under `unknowns`, `sensitivity.top_n` and `random.max_transitions` (#424 design 4.5, 4.8;
+    """The keys under `unknowns`, `sensitivity.top_n` and the keys under `random` (#424 design 4.5, 4.8;
     `core.unknown`, `core.random`).
 
     - `top_n` (`sensitivity.top_n`): how many unknowns each output's sensitivity lists;
@@ -61,7 +61,9 @@ class Unknowns:
     - `wilson_digits`: the decimals the Wilson bounds of a rate from samples are rounded to, the low bound down
       and the high bound up;
     - `drop_z`: the z of the Wilson bounds, a decimal string (1.959964: 95 %);
-    - `max_transitions` (`random.max_transitions`): the most transitions a pity chain may need.
+    - `max_transitions` (`random.max_transitions`): the most transitions a pity chain may need;
+    - `enclosure_digits` (`random.enclosure_digits`): the decimals of the enclosure that carries a random rule's
+      value when its numerator or denominator exceeds `expr.max_bits`.
     """
 
     top_n: int = 5
@@ -73,13 +75,14 @@ class Unknowns:
     wilson_digits: int = 6
     drop_z: str = "1.959964"
     max_transitions: int = 1_000_000
+    enclosure_digits: int = 12
 
     def keyed(self) -> dict[str, int | str]:
         """The keys that can change an output, for the run id and the spec of the sampled nodes: all but
         `chunk_size`."""
         return {"top_n": self.top_n, "scale": self.scale, "samples": self.samples, "seed": self.seed,
                 "resolution": self.resolution, "wilson_digits": self.wilson_digits, "drop_z": self.drop_z,
-                "max_transitions": self.max_transitions}
+                "max_transitions": self.max_transitions, "enclosure_digits": self.enclosure_digits}
 
 
 # The range of each key: (section, key) to (lowest, highest or None).
@@ -92,6 +95,7 @@ UNKNOWNS_RANGES = {
     ("unknowns", "resolution"): (1, 2**64),
     ("unknowns", "wilson_digits"): (1, 100),
     ("random", "max_transitions"): (1, None),
+    ("random", "enclosure_digits"): (1, 30),
 }
 
 

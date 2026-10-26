@@ -1,11 +1,13 @@
 """PY-11: random processes (#424 design 4.5, design-py 4.5). The exact pity chain on the closed-form cases (hard
 pity 2 and 3), its carry-over transitions and its spark; the expected pulls as exact rationals, also as a random
-rule's value in a run; and the Wilson bounds of a rate from samples, equal to hand-computed rationals for given
-(n, k, z), from the function and in a run (a `beta_from_samples` unknown and a drop from samples)."""
+rule's value in a run, and carried as its enclosure when it exceeds `expr.max_bits`; and the Wilson bounds of a
+rate from samples, equal to hand-computed rationals for given (n, k, z), from the function and in a run (a
+`beta_from_samples` unknown and a drop from samples)."""
 
 from __future__ import annotations
 
 import json
+import math
 import shutil
 from fractions import Fraction as F
 from pathlib import Path
@@ -85,6 +87,39 @@ def test_expected_pulls_are_exact_rationals(tmp_path, make_system, app_dir, writ
     }
 
 
+def test_a_value_beyond_max_bits_is_carried_as_its_enclosure(
+    tmp_path, make_system, app_dir, write_config, check_envelope
+):
+    # The 80-pity chain at rate 6/1000, 50/50 with a guarantee: 3/2 of a cycle of sum(0.994**i, i < 80) pulls.
+    exact = F(3, 2) * (1 - F(994, 1000) ** 80) / F(6, 1000)
+    assert exact.denominator.bit_length() > 127  # beyond the default expr.max_bits
+    scale = 10**12  # random.enclosure_digits
+    low, high = F(math.floor(exact * scale), scale), F(math.ceil(exact * scale), scale)
+    assert low < exact < high
+
+    folder = model(tmp_path, entities=["act.pull"], rules=[
+        rule("pity.long", "act.pull", {"pity_chain": {
+            "rate": "0.006", "hard_pity": "80", "p_up": "1 / 2", "guarantee_after_miss": True, "carry_over": True,
+        }}),
+        derive("pulls.two", "rule:pity.long * 2"),
+    ])
+    status, doc = run(folder, {}, make_system, app_dir, write_config, check_envelope)
+
+    assert status == 0
+    rules = doc["data"]["rules"]
+    assert rules["pity.long"] == {
+        "kind": "random", "status": "confirmed", "type": "count", "per_account": False,
+        "range": {"low": str(low), "high": str(high), "exact": False},
+    }
+    assert rules["pulls.two"] == {  # computed from the enclosure, not refused as expr_overflow
+        "kind": "derive", "status": "confirmed", "type": "count", "per_account": False,
+        "range": {"low": str(2 * low), "high": str(2 * high), "exact": False},
+    }
+    status, doc = run(folder, {}, make_system, app_dir, write_config, check_envelope, output="rule:pity.long")
+    assert status == 0
+    assert doc["data"]["provenance"]["nodes"]["rule:pity.long"]["exact_values"] == [{"unknowns": {}, "value": str(exact)}]
+
+
 @pytest.mark.parametrize(
     ("samples", "successes", "z", "digits", "low", "high"),
     [
@@ -154,12 +189,15 @@ def model(tmp_path: Path, *, entities=(), rules=(), unknowns=()) -> Path:
     return folder
 
 
-def run(folder: Path, unknowns: dict[str, Any], make_system, app_dir, write_config, check_envelope):
+def run(folder: Path, unknowns: dict[str, Any], make_system, app_dir, write_config, check_envelope, output=None):
+    """`acmodel run` on the model, or `explain` of `output`."""
     write_config({
         "schema_version": "acmodel.config.v1", "paths": {"state_root": str(folder.parent / "state")},
         "unknowns": unknowns,
     })
     system = make_system(prefix=app_dir / "venv")
-    argv = ["run", str(folder / "ours" / "model"), "--state", str(folder / "state" / "acct-1.json")]
+    command = ["run"] if output is None else ["explain"]
+    argv = [*command, str(folder / "ours" / "model"), *([output] if output else []), "--state",
+            str(folder / "state" / "acct-1.json")]
     status = cli.main(argv, system)
     return status, check_envelope(system.stdout.getvalue(), status)

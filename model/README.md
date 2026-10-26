@@ -148,7 +148,9 @@ default:
   distributions: `samples` (0, off), `seed` (0), `chunk_size` (1024) and `resolution` (1000000).
 - **Random processes.** The Wilson bounds of a rate from samples use `unknowns.drop_z` (`"1.959964"`, a decimal
   string: 95 %) and `unknowns.wilson_digits` (6), the low bound rounded down and the high bound up; a pity chain
-  may need at most `random.max_transitions` (1000000) transitions (`contracts/formats.md`, "Random rules").
+  may need at most `random.max_transitions` (1000000) transitions; a random rule's value beyond `expr.max_bits`
+  is carried as its enclosure to `random.enclosure_digits` (12) decimals (`contracts/formats.md`, "Random
+  rules").
 
 ## Tests
 

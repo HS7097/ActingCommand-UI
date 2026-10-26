@@ -101,7 +101,8 @@ def _expression(entry: Entry, key: tuple[str, ...]) -> str:
 def _describe(run: Run, item: tuple[str, ...]) -> dict[str, Any]:
     kind, checker, graph = item[0], run.checker, run.graph
     if kind == "general":
-        return {**_describe(run, item[1:]), "general": True}
+        node = {key: value for key, value in _describe(run, item[1:]).items() if key != "exact_values"}
+        return {**node, "general": True, **_exact_values(run, item)}
     if kind == "threshold":
         index, threshold = next(
             (index, entry) for index, entry in enumerate(run.exports.doc["thresholds"]) if entry["id"] == item[1]
@@ -136,7 +137,18 @@ def _describe(run: Run, item: tuple[str, ...]) -> dict[str, Any]:
     if kind == "entities":
         return {"node": "entities", "entity_class": item[1], "entities": sorted(graph.state["entities"][item[1]])}
     entry = checker.entries[item[1]]  # rule, general_logic, offset, flow
-    return _entry(run, entry, _expression(entry, item))
+    return {**_entry(run, entry, _expression(entry, item)), **_exact_values(run, item)}
+
+
+def _exact_values(run: Run, item: tuple[str, ...]) -> dict[str, Any]:
+    """`exact_values` of a random rule whose value the run carries as its enclosure: per scenario, the exact
+    value it encloses."""
+    result = run.graph.results.get(item)
+    found = [
+        {"unknowns": dict(scenario.unknowns), "value": scenario.exact_value}
+        for scenario in (result.scenarios if result is not None else ()) if scenario.exact_value is not None
+    ]
+    return {"exact_values": found} if found else {}
 
 
 def _result(run: Run, output: str) -> dict[str, Any]:
