@@ -5,8 +5,9 @@ runs on its own: there is nothing to build, and it does not depend on the consol
 Runtime.
 
 This folder holds the launcher, `setup`, `version`, the output envelope, the dependency check, the strict
-readers of the model files, the expression language, the static check (`check`) and the derivation graph
-(`run`). The other computation commands come in later slices.
+readers of the model files, the expression language, the static check (`check`), the derivation graph
+(`run`) and its cache with incremental recompute (`cache`). The other computation commands come in later
+slices.
 
 ## Needs
 
@@ -34,6 +35,9 @@ py -3 -I -B model\acmodel.py version
 model\acmodel.cmd version
 model\acmodel.cmd check <resource repo>\ours\model
 model\acmodel.cmd run <resource repo>\ours\model --state <state snapshot>
+model\acmodel.cmd cache stats
+model\acmodel.cmd cache verify
+model\acmodel.cmd cache gc [--apply]
 ```
 
 - **`check`** reads a model (its folder or its `model.json`) and checks it without computing anything:
@@ -42,7 +46,14 @@ model\acmodel.cmd run <resource repo>\ours\model --state <state snapshot>
 - **`run`** checks the model, then the dimensions of its expressions and its preference keys, and
   computes its derived values and thresholds for one account state, exactly. An output that cannot be
   computed (a reading the state lacks, say) is blocked with its error; the others are still computed, and
-  the exit status is 1. It writes nothing (`contracts/formats.md`, "The run").
+  the exit status is 1 (`contracts/formats.md`, "The run").
+- **Cache.** `run` keeps every computed node under the state root and computes again only what a change
+  reaches: a node is reused while everything it read still hashes the same, and a node that comes out the
+  same stops the change there. Each run gets a run id from its inputs, its outputs are kept under
+  `runs/<run id>/`, and `data.work` counts what was computed and what was reused. `cache stats` counts
+  the cache, `cache verify` checks every value against its hash, and `cache gc` trims it to
+  `cache.max_bytes` (a dry run without `--apply`). A corrupt value is never used: `run` warns
+  (`cache_entry_corrupt`) and computes it again (`contracts/cli.md`, "Cache").
 - **Re-dispatch.** The launcher re-runs itself under the venv's Python, and the exit status is passed
   through.
 - **Dependency check.** Before every command except `setup`, the launcher checks that the interpreter
@@ -72,7 +83,10 @@ default:
 
 - **Strict reading.** Unknown members, duplicate keys and values of the wrong type are refused
   (`config_invalid`), never ignored.
-- **State root.** The default for `paths.state_root` is `%LOCALAPPDATA%\ActingCommand\acmodel\state`.
+- **State root.** The default for `paths.state_root` is `%LOCALAPPDATA%\ActingCommand\acmodel\state`. It
+  holds the cache (`cache/`) and the runs' outputs (`runs/`), never inside a repository.
+- **Cache size.** `cache.max_bytes` (default 2 GiB) caps the cache; the least recently used entries are
+  evicted after a run.
 - **External datasets.** `paths.datasets` (default `%LOCALAPPDATA%\ActingCommand\acmodel\datasets`) holds
   the local copies of large datasets, each the file named by its sha256. `check` verifies them and never
   fetches.
@@ -111,7 +125,9 @@ contracts/            cli.md (envelope, start, configuration), codes.json (the c
                       formats.md (the input files, their strict reading and the static check)
 src/acmodel/          the package: model/ the strict readers, expr/ the expression language,
                       check/ the static check, ids.py the id grammars they share, core/ the
-                      run (its model checks and the derivation graph), host/ the host caps
-                      (priority, Job object, memory gates, quiet windows, PAUSE file)
+                      run (its model checks and the derivation graph), cache/ the cache
+                      (keys, sqlite3 index and blobs, verifying traces, run ids, stats/verify/gc),
+                      host/ the host caps (priority, Job object, memory gates, quiet windows,
+                      PAUSE file)
 tests/                pytest tests with fakes
 ```

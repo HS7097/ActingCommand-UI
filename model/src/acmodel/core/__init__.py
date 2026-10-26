@@ -2,6 +2,7 @@
 
 PY-4: `run_model` (`run`) runs the static check, the run's model checks (`types`: dimensions,
 preference keys, what the evaluation needs) and the derivation graph (`graph`) for one account state.
+PY-9: with a cache session (`acmodel.cache`), the graph computes incrementally (`Graph.cached`).
 """
 
 from acmodel.core.run import run_model

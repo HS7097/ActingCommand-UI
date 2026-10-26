@@ -10,6 +10,44 @@
     "6": "regression or binding mismatch"
   },
   "codes": {
+    "cache_entry_corrupt": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["hash_mismatch", "blob_missing", "blob_unreadable", "index_invalid", "run_outputs_mismatch"]
+        },
+        "path": {"type": "path", "required": true},
+        "key": {"type": "token", "required": false},
+        "kind": {"type": "token", "required": false},
+        "found": {"type": "token", "required": false},
+        "exception_type": {"type": "name", "required": false},
+        "raw_text": {"type": "raw_text", "required": false}
+      },
+      "description": "An entry of the cache under paths.state_root (contracts/cli.md, Cache) does not hold what its index names: its value blob (path) hashes to found instead of the value hash it is named by (hash_mismatch), is absent (blob_missing) or cannot be read (blob_unreadable, with exception_type and raw_text), or its index row's value hash or reads do not read (index_invalid; path is the index). key is the node key and kind the node kind. A corrupt entry is never served. acmodel run reports it among the warnings, computes the node again and keeps the new value, so the run's outputs and exit status are those of a run without it; acmodel cache verify reports each such entry as an error and repairs nothing. run_outputs_mismatch (acmodel run, a warning): runs/<run id>/outputs.json (path) held other bytes than this run's outputs for the same run id, which is never expected; the file is replaced."
+    },
+    "cache_unavailable": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "stage": {
+          "type": "vocab",
+          "required": true,
+          "members": ["open", "read", "write", "evict"]
+        },
+        "path": {"type": "path", "required": true},
+        "found": {"type": "token", "required": false},
+        "exception_type": {"type": "name", "required": false},
+        "raw_text": {"type": "raw_text", "required": false}
+      },
+      "description": "The cache under paths.state_root cannot be used, so the command stops; it never computes without it. open: the cache folder or its index (path) cannot be created or opened, the index does not take the WAL journal mode, or its schema is not acmodel.cache.v1 (found is the journal mode or the schema found). read and write: reading or writing the index, a blob or a run's outputs failed (found is used when the index's use counter does not read). evict: removing evicted entries or files failed. exception_type and raw_text are the exception's."
+    },
     "command_crashed": {
       "category": "error",
       "exit": 1,
