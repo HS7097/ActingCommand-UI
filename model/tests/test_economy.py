@@ -399,12 +399,36 @@ def _weights(count: int, resources: int) -> list[list[int]]:
     return found
 
 
-def test_the_node_limit_gives_search_budget_exhausted_unproven(tmp_path, economy):
+def test_the_node_limit_gives_search_budget_exhausted_unproven(tmp_path, economy, monkeypatch):
     """A one-day plan that is a knapsack with four resources: 30 activities, each at most once a week, each
     using some of every resource for some v. The steady state has all the resources it needs (each comes at a
-    seventh of the week's need, and more), so they are worth 0 there and the plan's final stocks of them count
-    nothing. The plan has only about half of each: choosing the activities is a multi-dimensional knapsack,
-    which a node limit of one cannot prove optimal."""
+    seventh of the week's need, and more), so they are worth 0 there at every step and v is worth 1: the plan's
+    objective is the v it gains. The plan has about half of each resource, and starts with the reading plus one
+    day's income: half the total need, rounded down.
+
+    The node limit is reached through a seam, not through the fixture. Real HiGHS proves this knapsack optimal
+    at its root (CI, scipy 1.18.1), so a node limit of one is never reached. No fixture can be shown to stay
+    open at the root for every HiGHS version. Presolve scales an integer row to coprime coefficients and rounds
+    its right-hand side, and the mod-k separator cuts parity, so a Jeroslow-type parity closes at once. What
+    else closes a root (cuts, root heuristics, restarts) changes from one version to the next.
+
+    So scipy's HiGHS wrapper still solves the plan's MILP, with the options the economy gives it, and the
+    incumbent is HiGHS's own. Only its model status is replaced, by the one HiGHS sets once `mip_max_nodes`
+    nodes are explored: kSolutionLimit (16, from `HighsMipSolverData::checkLimits`). HiGHS's message for it and
+    a node count of 1 go with it. scipy's `milp` then converts it as it converts a real stop at the node limit.
+    scipy 1.18.1 does not map kSolutionLimit, so that is its status 4, with `x`."""
+    import scipy.optimize._highspy._core as highs
+    import scipy.optimize._milp as scipy_milp
+
+    solve, stop = scipy_milp._highs_wrapper, highs.HighsModelStatus.kSolutionLimit
+    calls: list[tuple[dict[str, Any], dict[str, Any]]] = []
+
+    def stopped_at_the_node_limit(*args: Any) -> dict[str, Any]:
+        found = solve(*args)
+        calls.append((dict(args[-1]), found))
+        return {**found, "status": stop, "message": highs._Highs().modelStatusToString(stop), "mip_node_count": 1}
+
+    monkeypatch.setattr(scipy_milp, "_highs_wrapper", stopped_at_the_node_limit)
     count, kinds = 30, 4
     weights = _weights(count, kinds)
     resources = [f"res.r{index}" for index in range(kinds)]
@@ -426,10 +450,32 @@ def test_the_node_limit_gives_search_budget_exhausted_unproven(tmp_path, economy
 
     status, doc = economy(folder, economy={"plan_horizon": 1}, search={"milp_node_limit": 1})
 
+    # One MILP, the plan's: within the node limit, with a relative gap of 0 and no time limit. It stopped with
+    # an incumbent, so it is not tried again.
+    [(options, found)] = calls
+    assert (options["mip_max_nodes"], options["mip_rel_gap"], "time_limit" in options) == (1, 0.0, False)
+    assert found["x"] is not None
     assert (status, doc["errors"]) == (0, [])
-    [warning] = doc["warnings"]
-    assert warning["code"] == "search_budget_exhausted"
-    assert {key: warning["detail"][key] for key in ("solve", "node_limit")} == {"solve": "plan", "node_limit": 1}
-    assert steady(doc)["prices"]["res.r0"] == ["0"] * 7
+    assert doc["warnings"] == [{
+        "code": "search_budget_exhausted",
+        "detail": {
+            "path": str(folder / "ours" / "model" / "model.json"), "solve": "plan", "node_limit": 1, "nodes": 1,
+            "status": 4,
+        },
+    }]
+    assert steady(doc)["prices"] == {"res.v": SEVEN, **{r: ["0"] * 7 for r in resources}}
     plan = doc["data"]["plan"]
-    assert (plan["status"], plan["steps"], plan["proven"]) == ("confirmed", 1, False)
+    assert (plan["status"], plan["per_account"], plan["steps"], plan["proven"]) == ("confirmed", True, 1, False)
+    # The plan is feasible: each activity runs once or not at all, and no stock ends below 0.
+    runs = []
+    for number in range(count):
+        [executions] = plan["counts"][f"act.k{number:02d}"]
+        assert executions in ("0", "1")
+        runs.append(int(executions))
+    for index, total in enumerate(totals):
+        left = total // 2 - sum(row[index] * ran for row, ran in zip(weights, runs))
+        assert left >= 0
+        assert plan["end"][resources[index]] == str(left)
+    gained = sum(row[kinds] * ran for row, ran in zip(weights, runs))
+    assert plan["end"]["res.v"] == plan["objective"] == str(gained)
+    assert (plan["moved"], plan["unread"], plan["excluded"]) == ({}, [], [])
