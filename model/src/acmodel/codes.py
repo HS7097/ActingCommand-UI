@@ -14,10 +14,14 @@ EXPR_PARSE_ERROR = "expr_parse_error"
 EXPR_DIMENSION_MISMATCH = "expr_dimension_mismatch"
 EXPR_OVERFLOW = "expr_overflow"
 EXPR_EVAL_FAILED = "expr_eval_failed"
+HOST_GATE_PAUSED = "host_gate_paused"
+HOST_JOB_NOT_APPLIED = "host_job_not_applied"
+HOST_PRIORITY_NOT_APPLIED = "host_priority_not_applied"
+HOST_READING_FAILED = "host_reading_failed"
 
 EXIT_OK = 0
 
-# 1 model or input error, 2 usage (contracts/cli.md lists all of 0-6).
+# 1 model or input error, 2 usage, 4 host gate (contracts/cli.md lists all of 0-6).
 EXIT_STATUS = {
     USAGE_INVALID: 2,
     CONFIG_INVALID: 1,
@@ -29,4 +33,8 @@ EXIT_STATUS = {
     EXPR_DIMENSION_MISMATCH: 1,
     EXPR_OVERFLOW: 1,
     EXPR_EVAL_FAILED: 1,
+    HOST_GATE_PAUSED: 4,
+    HOST_JOB_NOT_APPLIED: 4,
+    HOST_PRIORITY_NOT_APPLIED: 4,
+    HOST_READING_FAILED: 4,
 }

@@ -65,6 +65,16 @@ default:
 - **State root.** The default for `paths.state_root` is `%LOCALAPPDATA%\ActingCommand\acmodel\state`.
 - **Exact arithmetic.** Expressions compute with exact fractions. `expr.max_bits` (default 127) bounds
   every numerator and denominator; a larger one is `expr_overflow`, never wrapped or rounded.
+- **Host caps.** The keys under `compute` (`priority`, `job`) and `host` (`memory`, `cpu`,
+  `quiet_windows`, `pause_file`, `pause_poll_ms`) cap the tool on the host. Their defaults:
+  - below-normal priority, set and read back;
+  - a Job object with 1024 MiB per process and a 25 % CPU cap;
+  - a batch starts at 4096 MiB of available memory or more, pauses below 2560 MiB and resumes at 4096 MiB;
+  - a run planned above 3072 MiB is reported first (exit 4);
+  - no compute in a quiet window or while the `PAUSE` file exists (default `<state root>\PAUSE`);
+  - a pause while the host CPU load is above 90 %.
+
+  `contracts/cli.md` (Host caps) has the details.
 
 ## Tests
 
@@ -86,6 +96,7 @@ requirements-dev.txt  the above plus pytest and its dependencies, hashed
 pytest.ini            test paths; src on the import path
 contracts/            cli.md (envelope, start, configuration), codes.json (the codes),
                       formats.md (the input files and their strict reading)
-src/acmodel/          the package; model/ holds the strict readers of the input files
+src/acmodel/          the package; model/ holds the strict readers of the input files, host/ the
+                      host caps (priority, Job object, memory gates, quiet windows, PAUSE file)
 tests/                pytest tests with fakes
 ```

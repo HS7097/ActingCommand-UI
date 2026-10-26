@@ -2,6 +2,7 @@
 
 The file is optional and every key has a default. A file that exists is read
 strictly: UTF-8 JSON, no duplicate keys, no unknown members, typed values.
+The host caps (`compute.priority`, `compute.job.*`, `host.*`) are read by `acmodel.host.caps`.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from typing import Any, Mapping
 
 from acmodel.codes import CONFIG_INVALID
 from acmodel.envelope import Failure, error
+from acmodel.host import caps as host_caps
 
 SCHEMA_VERSION = "acmodel.config.v1"
 LOCATION_VARIABLE = "LOCALAPPDATA"
@@ -24,8 +26,9 @@ DEFAULT_EXPR_MAX_BITS = 127
 _MEMBERS = {
     "schema_version": None,
     "paths": {"venv", "state_root"},
-    "compute": {"blas_threads"},
+    "compute": {"blas_threads", "priority", "job"},
     "expr": {"max_bits"},
+    "host": {"memory", "cpu", "quiet_windows", "pause_file", "pause_poll_ms"},
 }
 
 
@@ -36,6 +39,7 @@ class Config:
     state_root: Path
     blas_threads: int
     expr_max_bits: int
+    host: host_caps.HostCaps
 
 
 class _DuplicateKey(ValueError):
@@ -119,10 +123,16 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
     max_bits = _section(doc, "expr", path).get("max_bits", DEFAULT_EXPR_MAX_BITS)
     if type(max_bits) is not int or max_bits < 1:
         raise _invalid("value_invalid", path, _pointer("expr", "max_bits"))
+    state_root = _absolute(paths, "state_root", root / "state", path)
+
+    def invalid(reason: str, parts: tuple[str, ...], **values: Any) -> Failure:
+        return _invalid(reason, path, _pointer(*parts), **values)
+
     return Config(
         path=path,
         venv=_absolute(paths, "venv", root / "venv", path),
-        state_root=_absolute(paths, "state_root", root / "state", path),
+        state_root=state_root,
         blas_threads=threads,
         expr_max_bits=max_bits,
+        host=host_caps.read(compute, _section(doc, "host", path), state_root, invalid),
     )
