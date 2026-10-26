@@ -145,6 +145,9 @@ class Worker:
             if reset_before:
                 checks.stage = "reset"
                 self.engine.reset()
+                checks.active = False
+                before = self.after_stage(before)
+                checks.active = True
             checks.stage = stage = "batch"
             if op == "search":
                 results = [self.engine.search(request) for request in requests]
@@ -153,6 +156,7 @@ class Worker:
             checks.active = False
             items = self.encode(results, len(requests))
             if self.reset_after:
+                before = self.after_stage(before)
                 checks.active = True
                 checks.stage = stage = "reset"
                 self.engine.reset()
@@ -173,6 +177,13 @@ class Worker:
         if failure is not None:
             return (protocol.FAILED, failure)
         return (protocol.RESULT, items)
+
+    def after_stage(self, before: dict[str, Any]) -> dict[str, Any]:
+        """The checks after one stage (module closure, global state against `before`), recorded under that
+        stage; the state the next stage starts from."""
+        self.guards.check_modules()
+        self.guards.check_state(before)
+        return guards.snapshot()
 
     @staticmethod
     def encode(results: Any, count: int) -> list[Any] | dict[str, Any]:

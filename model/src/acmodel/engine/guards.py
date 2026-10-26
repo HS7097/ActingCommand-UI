@@ -101,7 +101,9 @@ class Guards:
 
     def _record(self, reason: str, **values: Any) -> dict[str, Any]:
         entry = {"reason": reason, "stage": self.stage, **values}
-        mark = tuple(sorted(entry.items()))
+        # One violation is recorded once, under the first stage that found it (a module loaded by the op
+        # is still loaded after the reset that follows).
+        mark = tuple(sorted((key, value) for key, value in entry.items() if key != "stage"))
         if mark not in self._seen:
             self._seen.add(mark)
             self.violations.append(entry)
