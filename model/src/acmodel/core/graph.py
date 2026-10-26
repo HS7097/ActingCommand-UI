@@ -19,6 +19,14 @@ found as the evaluation reaches them, so a node depends only on the unknowns its
 **Status.** A scenario's status is the worst of what it read: a rule's or data row's status (pending
 counts as provisional), any unknown (provisional), a reading (confirmed). A node that cannot be computed
 is blocked with its errors, and so is every node that reads it; the others are still computed.
+
+**Reads.** A scenario also records what its value read (`provenance` assembles the tree from them): the
+graph nodes, and these, each a tuple of strings:
+- ("row", table, *key): a data row;
+- ("entry", rule id): a rule consulted for its logic without its value (the cap of `max_single_income`,
+  and an income whose amount needs the account state, which the store's storage cap bounds instead);
+- ("reading", fact), ("cleared", id), ("entity", class, id, attribute), ("entities", class): the account
+  state.
 """
 
 from __future__ import annotations
@@ -62,6 +70,7 @@ class Scenario:
     value: Value
     status: str  # confirmed or provisional
     per_account: bool  # the value read the account state
+    reads: tuple[tuple[str, ...], ...] = ()  # what the value read, in the order it was read
 
 
 @dataclass(frozen=True)
@@ -152,9 +161,13 @@ class _Environment:
         self.unknowns = unknowns
         self.status = status
         self.per_account = False
+        self.reads: dict[tuple[str, ...], None] = {}  # what the value read, once each, in order
 
     def fail(self, code: str, **detail: Any) -> None:
         raise Failure(error(code, {key: value for key, value in detail.items() if value is not None}, self.ref))
+
+    def read(self, item: tuple[str, ...]) -> None:
+        self.reads[item] = None
 
     def use(self, scenario: Scenario) -> Value:
         self.status = worst(self.status, scenario.status)
@@ -169,6 +182,7 @@ class _Environment:
         candidates = self.consistent(self.graph.result(self.prefix + key))
         for scenario in candidates:
             if all(unknown in self.unknowns for unknown, _ in scenario.unknowns):
+                self.read(self.prefix + key)
                 return self.use(scenario)
         raise _Branch(next(u for u, _ in candidates[0].unknowns if u not in self.unknowns))
 
@@ -193,6 +207,7 @@ class _Environment:
             return self.reading(fact, ref.position)
         if kind == "cleared":
             self.per_account = True
+            self.read(("cleared", target))
             return target in self.graph.cleared
         if kind == "entity":
             return self.attribute(ref)
@@ -203,11 +218,14 @@ class _Environment:
     def members(self, ref: Reference) -> list[tuple[str, ...]]:
         if ref.kind == "data":
             table = self.table(ref.target, ref.position, "reference")
+            for key in table.rows:  # the set is every row of the table
+                self.read(("row", ref.target, *key))
             return list(table.rows)
         self.per_account = True
         entities = self.graph.state["entities"]
         if ref.target not in entities:
             self.fail(STATE_ENTITY_MISSING, missing="entity_class", entity_class=ref.target, position=ref.position)
+        self.read(("entities", ref.target))
         return [(entity,) for entity in sorted(entities[ref.target])]
 
     def flow(self, function: str, first: str, second: str) -> Value:
@@ -226,6 +244,7 @@ class _Environment:
         An income that would need the account state and has no such cap is `evaluation_unsupported`
         (`found` `state`); the state is never read in its place."""
         checker, found = self.graph.checker, []
+        self.read(("entry", cap))  # which incomes it blocks
         for key in parts:
             self.status = worst(self.status, RULE_STATUS[checker.entries[key[1]].doc["status"]])
             bound = self.store_bound(key)
@@ -234,6 +253,7 @@ class _Environment:
             except _NeedsState:
                 if bound is None:
                     raise self.state_unsupported(resource, cap) from None
+                self.read(("entry", key[1]))  # the income, which the storage cap bounds
                 found.append(bound)
                 continue
             found.append(largest if bound is None else min(largest, bound, key=_magnitude))
@@ -241,7 +261,9 @@ class _Environment:
 
     def largest(self, key: tuple[str, ...]) -> Value:
         """The largest value of node `key` over the variants this scenario leaves open."""
-        return max((self.use(s) for s in self.consistent(self.graph.result(key))), key=_magnitude)
+        scenarios = self.consistent(self.graph.result(key))
+        self.read(key)
+        return max((self.use(s) for s in scenarios), key=_magnitude)
 
     def store_bound(self, part: tuple[str, ...]) -> Value | None:
         """For a move out of a store: the largest value of the store's storage cap, from the rules and the
@@ -285,6 +307,7 @@ class _Environment:
         readings = self.graph.state["readings"]
         if fact not in readings:
             self.fail(STATE_READING_MISSING, fact=fact, position=position)
+        self.read(("reading", fact))
         return Fraction(readings[fact]["value"])
 
     def attribute(self, ref: Reference) -> Any:
@@ -301,6 +324,7 @@ class _Environment:
                 STATE_ENTITY_MISSING, missing="attribute", entity_class=entity_class, entity=entity,
                 attribute=name, position=ref.position,
             )
+        self.read(("entity", entity_class, entity, name))
         spec = self.graph.checker.entries[entity_class].doc["attributes"][name]
         return _convert(spec, attributes[name])
 
@@ -320,6 +344,7 @@ class _Environment:
             self.fail(
                 RULE_PENDING_UNBOUNDED, id=f"{table_id}[{','.join(key)}]", reason="no_unknown", position=position
             )
+        self.read(("row", table_id, *key))
         self.status = worst(self.status, RULE_STATUS[row["status"]])
         return _convert(table.file.doc["columns"][column], row[column])
 
@@ -451,7 +476,9 @@ class Graph:
                 return Result(needs_state=True)
             except Failure as failure:
                 return self.blocked(failure.errors, owner.path)
-            scenarios.append(Scenario(tuple(sorted(unknowns)), _rounded(mode, value), env.status, env.per_account))
+            scenarios.append(
+                Scenario(tuple(sorted(unknowns)), _rounded(mode, value), env.status, env.per_account, tuple(env.reads))
+            )
         return Result(tuple(sorted(scenarios, key=lambda scenario: scenario.unknowns)))
 
     def cap_reading(self, cap: Entry, own: str) -> Result:
@@ -460,7 +487,7 @@ class Graph:
         if fact not in readings:
             failure = Failure(error(STATE_READING_MISSING, {"fact": fact}, at(cap.ref, "logic", "reading")))
             return self.blocked(failure.errors, cap.path)
-        return Result((Scenario((), Fraction(readings[fact]["value"]), own, True),))
+        return Result((Scenario((), Fraction(readings[fact]["value"]), own, True, (("reading", fact),)),))
 
     def threshold(self, threshold_id: str) -> Result:
         threshold = self.thresholds[threshold_id]
@@ -471,7 +498,7 @@ class Graph:
         if result.blocked:
             return result
         mode = threshold.get("round")
-        return Result(tuple(replace(s, value=_rounded(mode, s.value)) for s in result.scenarios))
+        return Result(tuple(replace(s, value=_rounded(mode, s.value), reads=(key,)) for s in result.scenarios))
 
     # The run --------------------------------------------------------------------------------------
 

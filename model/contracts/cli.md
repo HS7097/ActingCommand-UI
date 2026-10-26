@@ -29,7 +29,10 @@ python3 -I -B <model>/acmodel.py <command>    (elsewhere)
 | `version` | Runs the dependency check and reports the versions. | `tool`, `tool_version`, `python`, `packages` (name to version) |
 | `check <model>` | Runs the dependency check, then the static check of the model: `<model>` is the model folder or its `model.json` (`formats.md`, "The static check"). It reads and computes, never writes. Every problem is one error; with any, the exit status is 1. | `path`, `model_id`, `entities`, `rules`, `superseded`, `unknowns`, `tables` |
 | `run <model> --state <file>` | Runs the dependency check, the static check, the run's model checks and the derivation graph for the account state `<file>` (`formats.md`, "The run"). It reads and computes, never writes. A model or input that does not check is refused whole (exit 1, `data` `{}`). Otherwise every output is computed or blocked: a blocked output's error lists the outputs it blocks in `needed_by`, the other outputs are still in `data`, and the exit status is 1. Provisional outputs alone exit 0. | `path`, `model_id`, `state`, `rules`, `thresholds`, `notes` |
+| `explain <model> <output> --state <file>` | Runs as `run` does and prints the provenance document of one output (`rule:<id>`, `general_logic:<id>` or `threshold:<id>`; `formats.md`, "Outputs"). It writes nothing. An id that is not an output is `usage_invalid` (`output_unknown`); a blocked output reports the errors that block it (exit 1). | `path`, `model_id`, `state`, `output`, `provenance` |
+| `export thresholds <model> --state <file>` | Runs as `run` does, then writes `out/thresholds.json` and one provenance file per threshold into the model folder (`formats.md`, "Outputs"). Only account-independent, confirmed, integer thresholds are exported: any other is `export_refused` (exit 5), and then nothing is written. A per-account value never enters these shared files. | `path`, `model_id`, `state`, `written` (the files written) |
 
+`export` is a group: its command is two words (`export thresholds`), and the envelope's `command` is both.
 Every argument and option a command names is required, and an option takes one value. A missing one is
 `usage_invalid` (`argument_missing`, with the argument's or option's name), and an extra or repeated one is
 `usage_invalid` (`argument_unexpected`).
@@ -66,8 +69,8 @@ child prints the line.
 - `ref` is a reference into the input when there is one: for `config_invalid`, the JSON pointer of the
   member, with the file in `detail.path`; for the model's codes, the JSON pointer into the file in
   `detail.path`.
-- `needed_by` lists the outputs an error blocks (`run`: `rule:<id>`, `general_logic:<id>`,
-  `threshold:<id>`), sorted.
+- `needed_by` lists the outputs an error blocks (`run`, `explain`, `export thresholds`: `rule:<id>`,
+  `general_logic:<id>`, `threshold:<id>`), sorted.
 
 Human text, one line per error and the usage text, goes to stderr.
 
@@ -122,8 +125,8 @@ All the numbers are integers of at least 1.
 ## Host caps
 
 The host layer is `src/acmodel/host/`. The commands that compute call it before and during their work;
-`setup` and `version` do not. `run` in this version evaluates only the derivation graph, in its own process
-and with no workers, and does not call it yet.
+`setup` and `version` do not. `run`, `explain` and `export thresholds` in this version evaluate only the
+derivation graph, in their own process and with no workers, and do not call it yet.
 
 **The caps of the tool's own process** (Windows; `host.windows`):
 1. `SetPriorityClass` to `compute.priority`, then `GetPriorityClass` must read it back. Otherwise the
