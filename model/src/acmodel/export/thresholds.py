@@ -23,6 +23,7 @@ from typing import Any
 
 from acmodel.check.walk import at
 from acmodel.codes import EXPORT_REFUSED, EXPORT_WRITE_FAILED
+from acmodel.config import Unknowns
 from acmodel.core.common import BLOCKED, CONFIRMED
 from acmodel.core.provenance import STATE_NODES, assemble
 from acmodel.core.run import Run, evaluate_model
@@ -60,11 +61,22 @@ def threshold_entry(run: Run, index: int, threshold: dict[str, Any], files: dict
     if shown["status"] != CONFIRMED:  # acceptances of provisional values come with the export policy
         return _refusal(run, index, output, "provisional")
     member = "value" if form == "constant" else "offset"
-    number = Fraction(shown[member])
-    if number.denominator != 1:
-        return _refusal(run, index, output, "not_integer", value=shown[member])
+    # A confirmed output that read unknowns has a value or an enclosure per scenario, all within one value at
+    # export precision (the no-effect rule). They are one integer, or one of them is not an integer: an
+    # enclosure holds more than one number, and two integers differ by a whole unit.
+    shown_values = shown["variants"] if "variants" in shown else [shown]
+    enclosed = next((entry["range"] for entry in shown_values if member not in entry), None)
+    if enclosed is not None:
+        return _refusal(run, index, output, "not_integer", value=f"{enclosed['low']}..{enclosed['high']}")
+    values = sorted({entry[member] for entry in shown_values}, key=Fraction)
+    odd = next((value for value in values if Fraction(value).denominator != 1), None)
+    if odd is not None:
+        return _refusal(run, index, output, "not_integer", value=odd)
+    if len(values) != 1:  # two integers differ by a whole unit, which is never without effect
+        raise ValueError(f"confirmed threshold {threshold['id']!r} with the values {values}")
+    number = Fraction(values[0])
     if abs(number) > MAX_SAFE_INTEGER:
-        return _refusal(run, index, output, "out_of_range", value=shown[member])
+        return _refusal(run, index, output, "out_of_range", value=values[0])
     name = f"{PROVENANCE}/{threshold['id']}.json"
     files[name] = doc
     entry = {
@@ -86,10 +98,10 @@ def _write(target: Path, doc: Any) -> None:
 
 
 def export_thresholds(
-    path: Path | str, state_path: Path | str, *, datasets: Path | str, max_bits: int
+    path: Path | str, state_path: Path | str, *, datasets: Path | str, max_bits: int, unknowns: Unknowns = Unknowns()
 ) -> dict[str, Any]:
     """Evaluate the model for the state, then write `thresholds.json` and the provenance files, or refuse."""
-    run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits)
+    run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     files: dict[str, Any] = {}
     entries, refusals = [], []
     for index, threshold in sorted(enumerate(run.exports.doc["thresholds"]), key=lambda pair: pair[1]["id"]):

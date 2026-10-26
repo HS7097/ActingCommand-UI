@@ -7,6 +7,11 @@
 - Division by zero and `clamp` with low above high are `expr_eval_failed`.
 - `and`, `or` and `if` evaluate only what decides the result. `sum` and `count` visit the members of
   their set in sorted order.
+- A value that continuous unknowns leave open is an enclosure (`Interval`) or an undecided boolean
+  (`Undecided`), and every operator then computes by interval arithmetic (`expr.interval`): a division by
+  an enclosure that holds 0 is `division_by_zero`, `clamp` bounds that may cross are `clamp_bounds_invalid`,
+  an undecided condition gives both branches, and a `lookup` key that is left open is
+  `evaluation_unsupported` (`found` `interval`).
 """
 
 from __future__ import annotations
@@ -31,6 +36,8 @@ from acmodel.expr.syntax import (
     Reference,
     Unary,
 )
+from acmodel.expr import interval
+from acmodel.expr.interval import Interval, IntervalRefused, Undecided, is_open
 from acmodel.expr.values import BOOL, TIME, Duration, Value, failure
 
 
@@ -103,22 +110,27 @@ class _Evaluator:
         raise failure(code, self.ref, position=node.position, **detail)
 
     def fit(self, value: Value, op: str, node: Node) -> Value:
-        if type(value) is bool:
+        if type(value) in (bool, Undecided):
             return value
-        number = _magnitude(value)
-        bits = max(abs(number.numerator).bit_length(), number.denominator.bit_length())
-        if bits > self.max_bits:
-            self.fail(EXPR_OVERFLOW, node, operator=op, bits=bits, max_bits=self.max_bits)
+        for number in (value.low, value.high) if type(value) is Interval else (value,):
+            number = _magnitude(number)
+            bits = max(abs(number.numerator).bit_length(), number.denominator.bit_length())
+            if bits > self.max_bits:
+                self.fail(EXPR_OVERFLOW, node, operator=op, bits=bits, max_bits=self.max_bits)
         return value
 
     def admit(self, value: object, node: Node, op: str) -> Value:
         expected = bool if node.type == BOOL else Duration if node.type == TIME else Fraction
-        if type(value) is not expected:
+        found = bool if type(value) is Undecided else type(value.low) if type(value) is Interval else type(value)
+        if found is not expected:
             self.fail(
                 EXPR_EVAL_FAILED, node, reason="value_invalid", operator=op,
                 expected=node.type.token, found=type(value).__name__,
             )
         return self.fit(value, op, node)
+
+    def refused(self, refusal: IntervalRefused, node: Node, op: str) -> None:
+        self.fail(EXPR_EVAL_FAILED, node, reason=refusal.reason, operator=op)
 
     def value(self, node: Node, bound: dict[tuple[str, str], tuple[str, ...]]) -> Value:
         if isinstance(node, Literal):
@@ -128,7 +140,9 @@ class _Evaluator:
             return self.admit(self.env.reference(ref), node, "reference")
         if isinstance(node, Unary):
             operand = self.value(node.operand, bound)
-            return (not operand) if node.op == "not" else self.fit(_negate(operand), "-", node)
+            if node.op == "not":
+                return operand if type(operand) is Undecided else not operand
+            return self.fit(interval.negate(operand) if is_open(operand) else _negate(operand), "-", node)
         if isinstance(node, Binary):
             return self.binary(node, bound)
         if isinstance(node, Aggregate):
@@ -138,11 +152,25 @@ class _Evaluator:
     def binary(self, node: Binary, bound: dict[tuple[str, str], tuple[str, ...]]) -> Value:
         op = node.op
         left = self.value(node.left, bound)
-        if op == "and":
-            return left and self.value(node.right, bound)
-        if op == "or":
-            return left or self.value(node.right, bound)
+        if op in ("and", "or"):
+            decisive = op == "or"  # what decides the result without the right operand
+            if type(left) is bool and left is decisive:
+                return left
+            right = self.value(node.right, bound)
+            if type(left) is bool:
+                return right
+            if type(right) is bool and right is decisive:
+                return right
+            return Undecided(tuple(sorted(set(left.unknowns) | set(interval.unknowns(right)))))
         right = self.value(node.right, bound)
+        if is_open(left) or is_open(right):
+            try:
+                if op in COMPARISONS:
+                    return interval.compare(op, left, right)
+                arithmetic = {"+": interval.add, "-": interval.subtract, "*": interval.multiply, "/": interval.divide}
+                return self.fit(arithmetic[op](left, right), op, node)
+            except IntervalRefused as refusal:
+                self.refused(refusal, node, op)
         if op in COMPARISONS:
             return _COMPARE[op](_magnitude(left), _magnitude(right))
         if op == "/" and _magnitude(right) == 0:
@@ -158,9 +186,8 @@ class _Evaluator:
         for member in sorted(members):
             item = self.value(node.body, {**bound, (node.over.kind, node.over.target): member})
             if node.function == "count":
-                total = total + 1 if item else total
-            else:
-                total = _add(total, item)
+                item = interval.open_count(item) if type(item) is Undecided else Fraction(1 if item else 0)
+            total = interval.add(total, item) if is_open(total) or is_open(item) else _add(total, item)
             total = self.fit(total, node.function, node)
         return total
 
@@ -170,11 +197,25 @@ class _Evaluator:
             return self.admit(self.env.flow(name, node.args[0], node.args[1]), node, name)
         if name == "lookup":
             keys = tuple(self.value(key, bound) for key in node.args[2:])
+            if any(is_open(key) for key in keys):
+                self.fail(EXPR_EVAL_FAILED, node, reason="evaluation_unsupported", operator=name, found="interval")
             return self.admit(self.env.lookup(node.args[0], node.args[1], keys), node, name)
         if name == "if":
-            chosen = node.args[1] if self.value(node.args[0], bound) else node.args[2]
-            return self.value(chosen, bound)
+            condition = self.value(node.args[0], bound)
+            if type(condition) is Undecided:
+                values = [self.value(arg, bound) for arg in node.args[1:]]
+                return self.fit(interval.hull(values[0], values[1], condition), name, node)
+            return self.value(node.args[1] if condition else node.args[2], bound)
         values = [self.value(arg, bound) for arg in node.args]
+        if any(is_open(value) for value in values):
+            try:
+                if name in ("min", "max"):
+                    return (interval.minimum if name == "min" else interval.maximum)(values)
+                if name == "clamp":
+                    return interval.clamp(*values)
+                return self.fit(interval.rounded(_ROUNDING[name], values[0]), name, node)
+            except IntervalRefused as refusal:
+                self.refused(refusal, node, name)
         if name == "min":
             return min(values, key=_magnitude)
         if name == "max":

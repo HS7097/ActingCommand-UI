@@ -2,7 +2,8 @@
 
 The file is optional and every key has a default. A file that exists is read
 strictly: UTF-8 JSON, no duplicate keys, no unknown members, typed values.
-The host caps (`compute.priority`, `compute.job.*`, `host.*`) are read by `acmodel.host.caps`.
+The host caps (`compute.priority`, `compute.job.*`, `host.*`) are read by `acmodel.host.caps`; the keys
+under `unknowns` (sampling, export precision) and `sensitivity.top_n` are `Unknowns`.
 """
 
 from __future__ import annotations
@@ -31,6 +32,45 @@ _MEMBERS = {
     "expr": {"max_bits"},
     "cache": {"max_bytes"},
     "host": {"memory", "cpu", "quiet_windows", "pause_file", "pause_poll_ms"},
+    "unknowns": {"scale", "samples", "seed", "chunk_size", "resolution"},
+    "sensitivity": {"top_n"},
+}
+
+
+@dataclass(frozen=True)
+class Unknowns:
+    """The keys under `unknowns`, and `sensitivity.top_n` (#424 design 4.5, 4.8; `core.unknown`).
+
+    - `top_n` (`sensitivity.top_n`): how many unknowns each output's sensitivity lists;
+    - `scale`: the export precision an impact is measured at (1000: milli);
+    - `samples`: the Monte Carlo samples of the distributions per output, 0 for none;
+    - `seed`: the first word of every Philox key (the second is the unknown's stream id);
+    - `chunk_size`: the samples drawn per Philox call; it never changes a result;
+    - `resolution`: the cells of a uniform draw on (0, 1).
+    """
+
+    top_n: int = 5
+    scale: int = 1000
+    samples: int = 0
+    seed: int = 0
+    chunk_size: int = 1024
+    resolution: int = 1_000_000
+
+    def keyed(self) -> dict[str, int]:
+        """The keys that can change an output, for the run id and the spec of the sampled nodes: all but
+        `chunk_size`."""
+        return {"top_n": self.top_n, "scale": self.scale, "samples": self.samples, "seed": self.seed,
+                "resolution": self.resolution}
+
+
+# The range of each key: (section, key) to (lowest, highest or None).
+UNKNOWNS_RANGES = {
+    ("sensitivity", "top_n"): (1, None),
+    ("unknowns", "scale"): (1, None),
+    ("unknowns", "samples"): (0, 2**63 - 1),
+    ("unknowns", "seed"): (0, 2**64 - 1),
+    ("unknowns", "chunk_size"): (1, None),
+    ("unknowns", "resolution"): (1, 2**64),
 }
 
 
@@ -44,6 +84,7 @@ class Config:
     expr_max_bits: int
     host: host_caps.HostCaps
     cache_max_bytes: int
+    unknowns: Unknowns
 
 
 class _DuplicateKey(ValueError):
@@ -131,6 +172,11 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
     if type(cache_max_bytes) is not int or cache_max_bytes < 1:
         raise _invalid("value_invalid", path, _pointer("cache", "max_bytes"))
     state_root = _absolute(paths, "state_root", root / "state", path)
+    sections = {name: _section(doc, name, path) for name in ("unknowns", "sensitivity")}
+    for (name, key), (low, high) in UNKNOWNS_RANGES.items():
+        value = sections[name].get(key)
+        if key in sections[name] and (type(value) is not int or value < low or (high is not None and value > high)):
+            raise _invalid("value_invalid", path, _pointer(name, key))
 
     def invalid(reason: str, parts: tuple[str, ...], **values: Any) -> Failure:
         return _invalid(reason, path, _pointer(*parts), **values)
@@ -144,4 +190,5 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         expr_max_bits=max_bits,
         host=host_caps.read(compute, _section(doc, "host", path), state_root, invalid),
         cache_max_bytes=cache_max_bytes,
+        unknowns=Unknowns(**sections["unknowns"], **sections["sensitivity"]),
     )
