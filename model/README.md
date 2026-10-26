@@ -55,13 +55,16 @@ default:
 {
   "schema_version": "acmodel.config.v1",
   "paths": {"venv": "<absolute path>", "state_root": "<absolute path>"},
-  "compute": {"blas_threads": 1}
+  "compute": {"blas_threads": 1},
+  "expr": {"max_bits": 127}
 }
 ```
 
 - **Strict reading.** Unknown members, duplicate keys and values of the wrong type are refused
   (`config_invalid`), never ignored.
 - **State root.** The default for `paths.state_root` is `%LOCALAPPDATA%\ActingCommand\acmodel\state`.
+- **Exact arithmetic.** Expressions compute with exact fractions. `expr.max_bits` (default 127) bounds
+  every numerator and denominator; a larger one is `expr_overflow`, never wrapped or rounded.
 
 ## Tests
 

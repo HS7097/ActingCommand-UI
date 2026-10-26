@@ -18,8 +18,15 @@ SCHEMA_VERSION = "acmodel.config.v1"
 LOCATION_VARIABLE = "LOCALAPPDATA"
 APP_DIR = ("ActingCommand", "acmodel")
 DEFAULT_BLAS_THREADS = 1
+# The i128 range of the first (Rust) draft: numerators and denominators of at most 127 bits.
+DEFAULT_EXPR_MAX_BITS = 127
 
-_MEMBERS = {"schema_version": None, "paths": {"venv", "state_root"}, "compute": {"blas_threads"}}
+_MEMBERS = {
+    "schema_version": None,
+    "paths": {"venv", "state_root"},
+    "compute": {"blas_threads"},
+    "expr": {"max_bits"},
+}
 
 
 @dataclass(frozen=True)
@@ -28,6 +35,7 @@ class Config:
     venv: Path
     state_root: Path
     blas_threads: int
+    expr_max_bits: int
 
 
 class _DuplicateKey(ValueError):
@@ -108,9 +116,13 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
     threads = compute.get("blas_threads", DEFAULT_BLAS_THREADS)
     if type(threads) is not int or threads < 1:
         raise _invalid("value_invalid", path, _pointer("compute", "blas_threads"))
+    max_bits = _section(doc, "expr", path).get("max_bits", DEFAULT_EXPR_MAX_BITS)
+    if type(max_bits) is not int or max_bits < 1:
+        raise _invalid("value_invalid", path, _pointer("expr", "max_bits"))
     return Config(
         path=path,
         venv=_absolute(paths, "venv", root / "venv", path),
         state_root=_absolute(paths, "state_root", root / "state", path),
         blas_threads=threads,
+        expr_max_bits=max_bits,
     )

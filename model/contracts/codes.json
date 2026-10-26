@@ -58,6 +58,65 @@
       },
       "description": "The venv or a pinned package is missing, a package is not at its pin, or the interpreter (or the venv's interpreter) is not Python 3.13. setup_command is the command that creates the venv; setup never replaces a venv of another minor version."
     },
+    "expr_dimension_mismatch": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "operator": {"type": "token", "required": true},
+        "operands": {"type": "list:token", "required": true},
+        "position": {"type": "integer", "required": true}
+      },
+      "description": "An operator or function of an expression gets operands whose types do not fit: an amount of one resource with another, an amount with a time, a bare number with a time, a boolean where a number is needed or the reverse (expr/dimensions.py lists the rules). operands are the operands' types (amount:<resource>, time, count, value, none, number, bool); position is the character offset of the operator. The error's ref is the JSON pointer of the expression."
+    },
+    "expr_eval_failed": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["division_by_zero", "clamp_bounds_invalid", "value_invalid"]
+        },
+        "operator": {"type": "token", "required": true},
+        "position": {"type": "integer", "required": true},
+        "expected": {"type": "token", "required": false},
+        "found": {"type": "name", "required": false}
+      },
+      "description": "Evaluating an expression failed: a division by zero, clamp with its low bound above its high bound, or a value from the model (a reference, flow, lookup or set) that is not of the type the check gave it (expected is that type, or members for a set; found is the value's Python type). The error's ref is the JSON pointer of the expression."
+    },
+    "expr_overflow": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "operator": {"type": "token", "required": true},
+        "bits": {"type": "integer", "required": true},
+        "max_bits": {"type": "integer", "required": true},
+        "position": {"type": "integer", "required": true}
+      },
+      "description": "A literal, a value read or an intermediate result of an expression has a numerator or denominator of more than max_bits bits (configuration key expr.max_bits; durations count in seconds). Nothing wraps or rounds. operator is the operator or function, literal or reference. The error's ref is the JSON pointer of the expression."
+    },
+    "expr_parse_error": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["character_invalid", "number_malformed", "token_unexpected", "end_unexpected", "reference_kind_unknown", "reference_malformed", "member_unbound", "function_unknown", "arity_invalid", "argument_invalid"]
+        },
+        "position": {"type": "integer", "required": true},
+        "token": {"type": "token", "required": false}
+      },
+      "description": "An expression does not parse (grammar in expr/syntax.py): a character outside the language, a malformed number, an unexpected token or end, an unknown reference kind, a malformed reference (or a set where a value is needed), the member key $ outside a sum or count over its set, an unknown function, a wrong number of arguments, or an argument of the wrong form. position is the character offset; token is the offending text. The error's ref is the JSON pointer of the expression."
+    },
     "usage_invalid": {
       "category": "error",
       "exit": 2,

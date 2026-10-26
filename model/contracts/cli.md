@@ -91,7 +91,8 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | `paths.venv` | `%LOCALAPPDATA%\ActingCommand\acmodel\venv` | the venv; an absolute path |
 | `paths.state_root` | `%LOCALAPPDATA%\ActingCommand\acmodel\state` | the state root (used by later commands); an absolute path |
 | `compute.blas_threads` | 1 | the value of the BLAS thread variables; an integer of at least 1 |
+| `expr.max_bits` | 127 | the most bits a numerator or denominator may have in expression evaluation (durations in seconds); beyond it is `expr_overflow`; an integer of at least 1 |
 
 ```json
-{"schema_version": "acmodel.config.v1", "paths": {"venv": "<absolute path>"}, "compute": {"blas_threads": 1}}
+{"schema_version": "acmodel.config.v1", "paths": {"venv": "<absolute path>"}, "compute": {"blas_threads": 1}, "expr": {"max_bits": 127}}
 ```
