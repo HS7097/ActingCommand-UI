@@ -5,9 +5,9 @@ strictly: UTF-8 JSON, no duplicate keys, no unknown members, typed values.
 The host caps (`compute.priority`, `compute.job.*`, `host.*`) are read by `acmodel.host.caps`, the engine
 host's keys (`compute.workers.*`, `engine.*`, `engines.*`) by `acmodel.engine.settings`; the keys under
 `unknowns` (sampling, export precision, Wilson bounds), `sensitivity.top_n` and the keys under `random` are
-`Unknowns`; the economy's keys (`lp.*`, `search.milp_node_limit`, `economy.*`) are `EconomySettings`; the
-validator of the exports is `paths.actinglab` (no default: an export that needs it refuses without it) and
-`export.validator_timeout_ms`.
+`Unknowns`; the economy's keys (`lp.*`, `search.milp_node_limit`, `economy.*`) are `EconomySettings`, the
+generic search's (the other keys under `search`) are `SearchSettings`, and the validator of the exports is
+`paths.actinglab` (no default: an export that needs it refuses without it) and `export.validator_timeout_ms`.
 """
 
 from __future__ import annotations
@@ -46,7 +46,9 @@ _MEMBERS = {
     "sensitivity": {"top_n"},
     "random": {"max_transitions", "enclosure_digits"},
     "lp": {"max_denominator", "grain"},
-    "search": {"milp_node_limit"},
+    "search": {
+        "milp_node_limit", "top_k", "exact_max", "node_limit", "screen_scale", "screen_chunk_rows", "screen_max_rows",
+    },
     "economy": {"plan_horizon"},
     "export": {"validator_timeout_ms"},
 }
@@ -140,6 +142,40 @@ ECONOMY_RANGES = {
 
 
 @dataclass(frozen=True)
+class SearchSettings:
+    """The generic search's keys (#424 design 4.6, design-py 4.6; `core.search`).
+
+    - `top_k` (`search.top_k`): the rows of each team, best by screen score, that are evaluated first;
+    - `exact_max` (`search.exact_max`): the proof mode evaluates every legal row when all teams have at most this
+      many together; 0: never;
+    - `node_limit` (`search.node_limit`): the most team rows one search evaluates, and the most nodes of each
+      assignment of two or more disjoint teams; the only budget, never a time;
+    - `screen_scale` (`search.screen_scale`): the scale at which the engine's predict terms become 64-bit integers;
+    - `screen_chunk_rows` (`search.screen_chunk_rows`): the rows of a team's slot product screened per chunk; it
+      never changes a result;
+    - `screen_max_rows` (`search.screen_max_rows`): the most rows a team's slot product may have.
+    """
+
+    top_k: int = 32
+    exact_max: int = 5000
+    node_limit: int = 100_000
+    screen_scale: int = 1_000_000
+    screen_chunk_rows: int = 2**20
+    screen_max_rows: int = 2**23
+
+
+# The range of each search key: key to (lowest, highest).
+SEARCH_RANGES = {
+    "top_k": (1, 2**53 - 1),
+    "exact_max": (0, 2**53 - 1),
+    "node_limit": (1, 2**53 - 1),
+    "screen_scale": (1, 2**53 - 1),
+    "screen_chunk_rows": (1, 2**53 - 1),
+    "screen_max_rows": (1, 2**53 - 1),
+}
+
+
+@dataclass(frozen=True)
 class Config:
     path: Path
     venv: Path
@@ -152,6 +188,7 @@ class Config:
     engine: engine_settings.EngineSettings
     unknowns: Unknowns
     economy: EconomySettings
+    search: SearchSettings
     actinglab: Path | None  # `paths.actinglab`: the Runtime's validator of the exports; None when not configured
     validator_timeout_ms: int  # `export.validator_timeout_ms`
 
@@ -260,6 +297,14 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         if type(value) is not int or value < low or (high is not None and value > high):
             raise _invalid("value_invalid", path, _pointer(name, key))
         economy[field] = value
+    search: dict[str, int] = {}
+    for key, (low, high) in SEARCH_RANGES.items():
+        if key not in economy_sections["search"]:
+            continue
+        value = economy_sections["search"][key]
+        if type(value) is not int or not low <= value <= high:
+            raise _invalid("value_invalid", path, _pointer("search", key))
+        search[key] = value
 
     timeout_ms = _section(doc, "export", path).get("validator_timeout_ms", DEFAULT_VALIDATOR_TIMEOUT_MS)
     if type(timeout_ms) is not int or timeout_ms < 1:
@@ -284,6 +329,7 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         engine=engine,
         unknowns=Unknowns(**sections["unknowns"], **sections["sensitivity"], **sections["random"]),
         economy=EconomySettings(**economy),
+        search=SearchSettings(**search),
         actinglab=_absolute(paths, "actinglab", None, path),
         validator_timeout_ms=timeout_ms,
     )

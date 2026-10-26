@@ -1,0 +1,16 @@
+{
+  "schema_version": "acmodel.engine.v2",
+  "engine_id": "team",
+  "version": "1",
+  "python": "3.13",
+  "entry": "team:make_engine",
+  "sys_path": ["adapters"],
+  "code": ["adapters/*.py"],
+  "data": [],
+  "external": [],
+  "ops": ["describe", "evaluate", "predict"],
+  "deterministic": true,
+  "max_batch": 8,
+  "memory_mib_estimate": 64,
+  "note": "A neutral fake team engine for the search tests: invented units with a power and a kind."
+}

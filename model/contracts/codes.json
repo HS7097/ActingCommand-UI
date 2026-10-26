@@ -759,13 +759,37 @@
       "review": "pending",
       "since": "0.1.0",
       "values": {
-        "path": {"type": "path", "required": true},
-        "solve": {"type": "vocab", "required": true, "members": ["plan"]},
+        "path": {"type": "path", "required": false},
+        "solve": {"type": "vocab", "required": true, "members": ["plan", "search"]},
         "node_limit": {"type": "integer", "required": true},
         "nodes": {"type": "integer", "required": true},
-        "status": {"type": "integer", "required": true}
+        "status": {"type": "integer", "required": false},
+        "phase": {"type": "vocab", "required": false, "members": ["evaluate", "assign"]}
       },
-      "description": "acmodel economy (a warning): the plan's MILP stopped before it proved its plan optimal, as at its node limit search.milp_node_limit (node_limit; nodes explored, status scipy's), with a feasible plan that passed the exact check. The plan is shown with proven: false: it is a plan, not necessarily the best one. There is no time limit, so the same inputs stop at the same plan. path is model.json."
+      "description": "A warning: a budget stopped a solve before it proved its result, which is shown with proven: false: a result, not necessarily the best one. There is no time limit, so the same inputs stop at the same result. plan (acmodel economy): the plan's MILP stopped before it proved its plan optimal, as at its node limit search.milp_node_limit (node_limit; nodes explored, status scipy's), with a feasible plan that passed the exact check; path is model.json. search (the generic search, core/search.py): it reached search.node_limit (node_limit, nodes) while it evaluated team rows (phase evaluate) or while it searched an assignment of two or more disjoint teams (phase assign); its result is the best assignment it found."
+    },
+    "search_failed": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["no_legal_assignment", "op_missing", "space_too_large", "screen_overflow", "budget_exhausted"]
+        },
+        "team": {"type": "token", "required": false},
+        "engine_id": {"type": "token", "required": false},
+        "op": {"type": "vocab", "required": false, "members": ["evaluate", "predict"]},
+        "space": {"type": "integer", "required": false},
+        "exact_max": {"type": "integer", "required": false},
+        "rows": {"type": "integer", "required": false},
+        "screen_max_rows": {"type": "integer", "required": false},
+        "node_limit": {"type": "integer", "required": false},
+        "phase": {"type": "vocab", "required": false, "members": ["evaluate", "assign"]}
+      },
+      "description": "The generic search (core/search.py; contracts/formats.md, The search) has no result. no_legal_assignment: a team has no legal row (team), or the disjoint teams have no assignment that fills them all (no team). op_missing: the engine (engine_id) lacks evaluate (op), or lacks predict (op) while all teams have more legal rows (space) than search.exact_max (exact_max), so there is nothing to screen with. space_too_large: the product of a team's slot combinations has more rows (rows) than search.screen_max_rows (screen_max_rows); nothing is enumerated. screen_overflow: a team's predict terms, rounded at search.screen_scale, could sum beyond the 64-bit integers of the screen (team). budget_exhausted: search.node_limit (node_limit) was reached (phase) before any assignment of all the teams was evaluated."
     },
     "state_entity_missing": {
       "category": "error",

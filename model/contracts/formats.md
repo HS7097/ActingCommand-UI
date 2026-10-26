@@ -1020,6 +1020,108 @@ says `greater_than_or_equal`).
   - `changed`: each with `entry`, `threshold`, `file`, [`rule_id`], `path`, `from` and `to`;
   - `written`: the files whose bytes changed.
 
+## The search
+
+The generic search (`src/acmodel/core/search.py`; #424 design 4.6, design-py 4.6) fills teams from a roster of
+entities, with an engine through the engine host (see "Engines" below). No command runs it yet: a command builds
+its problem and calls it. Its configuration keys are under `search` (`contracts/cli.md`).
+
+### The problem
+
+- **Entities:** opaque ids, each with tags, which only the legality rules read, and data (a JSON object), which
+  only the engine reads.
+- **Teams**, in order, each with a `context` (a JSON object for the engine), and:
+  - **slots**, in order: a slot takes `count` distinct entities, each with every tag of its `requires` and none of
+    its `excludes`;
+  - **quotas:** at least `low` and at most `high` (if given) of the team's members have the quota's tag.
+- **Disjoint:** an entity is a member of at most one team.
+- **The metric:** the `evaluate` metric to maximise. A team's value is that metric of its members, exact (the exact
+  value of the number, never rounded); an assignment's value is the sum of its teams' values.
+
+A team's **row** is its members slot by slot, each slot's members in id order. A problem is built by the core, so a
+malformed one is a defect of the tool, not an input.
+
+### What the search asks the engine
+
+| Op | Requests | Result |
+|---|---|---|
+| `predict` (optional) | one per team: `team`, `context`, `slots` (each `slot`, `count`, and `eligible`: the ids that may fill it) and `entities` (every eligible entity) | `additive` (every entity of the request to a number), `pairwise` (optional: an id to an object of later ids, in id order, to a number; an absent pair is 0) and `depends_on`, and nothing else |
+| `evaluate` | one per team row: `team`, `context`, `slots` (each `slot` and its `members`) and `entities` (the members) | an `evaluate` result whose `metrics` hold the metric |
+
+Another predict result, or an evaluate result without the metric, is `engine_protocol_error` (`result_invalid`, op
+`predict` or `evaluate`, `request` its index in the call), with `ref` the pointer of the problem. The engine host's
+errors pass through. Any of them ends the search.
+
+### Steps
+
+1. **Screen.** Every legal row of each team is enumerated with numpy: the product of the slots' combinations, in
+   chunks of `search.screen_chunk_rows` rows, less the rows that repeat an entity or break a quota. Each row is
+   scored with the predict terms, each rounded half to even at `search.screen_scale` to a 64-bit integer: the sum of
+   its members' additive terms and of its pairs' pairwise terms. The screen only decides which rows are evaluated
+   first; every value shown comes from `evaluate`.
+2. **Proof mode** (`method` `exact`). When all teams have at most `search.exact_max` legal rows together, every row
+   is evaluated, and the best assignment is proven (`proven: true`).
+3. **Otherwise** (`method` `heuristic`, `proven: false`; the engine must have `predict`):
+   - the first `search.top_k` rows of each team by screen score are evaluated;
+   - the best assignment of the evaluated rows is taken. The rows that its local swaps give (a member replaced by an
+     entity no team uses; two members of two slots, or of two teams, exchanged) and that are legal and not evaluated
+     yet are evaluated, and the best assignment is taken again, until its swaps give no new row;
+   - while the evaluated rows hold no assignment of all the teams, the next `search.top_k` rows of each team are
+     evaluated.
+
+The **best assignment** of one team is its best evaluated row; of two or more, a depth-first search over their
+evaluated rows, best first, bounded by the best values of the teams left.
+
+**Ties** break by id, then index. Of two rows or assignments of equal value, the first is the one whose members,
+team by team and each team's in id order, come first in id order (ids compare by code point: `a10` before `a9`);
+then the one whose members, slot by slot, come first. The screen orders equal scores the same way. So no result
+depends on the enumeration, the chunks or the number of workers.
+
+**Budget.** `search.node_limit` bounds the team rows one search evaluates, and the nodes of each assignment of two
+or more teams; never a time. A search that reaches it ends with the best assignment it found, `proven: false`, and
+the warning `search_budget_exhausted` (`solve` `search`, `phase` `evaluate` or `assign`).
+
+### Warm start
+
+A search leaves a state: the roster, the rounded predict terms, and every screened row with its scores. A later
+search of the same teams (the same slots and quotas, and the same `search.screen_scale`), given that state, screens
+only the rows that hold an entity that is new or gone, or whose tags or terms changed; a changed pairwise term
+changes both its entities. The other rows keep their scores. Its result is the cold search's: the same rows with the
+same scores, evaluated alike. `start` is `warm`, and `work.screened` counts only the rows it screened.
+
+### The approximation loss
+
+The additive pick is what the additive terms alone would choose: each team in order takes its legal row with the
+largest sum of additive terms among the entities the earlier teams left (ties as above). Its rows are evaluated
+first. The loss is the best value less the pick's value, and `relative` is the loss over the best value, when that
+is above 0. The loss is `exact` when the search is proven; otherwise the optimum may be higher, and the loss is a
+lower bound.
+
+### Output
+
+- `method`, `proven`, `start` (`cold` or `warm`);
+- `value`: the best assignment's value;
+- `teams`: for each team, `team`, `slots` (each `slot` and its `members`) and `value`;
+- `space`: the legal rows of all teams;
+- `approximation`: null when the engine has no `predict`. Otherwise `additive` (as `teams`; a team's `value` is null
+  when the budget left it unevaluated), `value`, `loss`, `relative` and `exact`; all but `exact` are null when the
+  additive pick cannot fill every team;
+- `work`: `screened` (the rows this search screened) and `evaluated` (the team rows it evaluated).
+
+A value is a string holding an exact rational.
+
+### Failures
+
+`search_failed` (exit 1), by `reason`:
+- `no_legal_assignment`: a team has no legal row (`team`), or the disjoint teams have no assignment that fills them
+  all;
+- `op_missing`: the engine has no `evaluate`, or no `predict` while the legal rows (`space`) are more than
+  `search.exact_max`;
+- `space_too_large`: the product of a team's slot combinations has more rows (`rows`) than `search.screen_max_rows`;
+  nothing is enumerated;
+- `screen_overflow`: a team's rounded predict terms could sum beyond the 64-bit integers of the screen;
+- `budget_exhausted`: `search.node_limit` was reached (`phase`) before any assignment of all the teams was evaluated.
+
 ## Engines: `engine.json` and the interface `acmodel.engine.v2`
 
 An engine is Python code in an engine's home outside this repository: an adapter, and the calculator code
