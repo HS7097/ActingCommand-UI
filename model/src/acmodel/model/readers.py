@@ -464,13 +464,20 @@ SCHEDULE_FILE = "schedule.json"
 REPO_FILE = Text(r"([A-Za-z0-9_-][A-Za-z0-9_.-]*/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\.json")
 
 
-def _rule_id(value: dict[str, Any], ref: str, ctx: Context) -> bool:
-    """`rule_id` names a rule of `schedule.json`, so it is there exactly when `file` is `schedule.json`."""
-    if value["file"] == SCHEDULE_FILE and "rule_id" not in value:
-        return ctx.refuse("member_missing", pointer(ref, "rule_id"), key="rule_id")
-    if value["file"] != SCHEDULE_FILE and "rule_id" in value:
-        return ctx.refuse("member_unknown", pointer(ref, "rule_id"), key="rule_id")
-    return True
+# The members of a literal that name a rule or a pool of `schedule.json`.
+SCHEDULE_ITEMS = {"rule_id": FACT_KEY, "pool_id": FACT_KEY}
+
+
+def _schedule_item(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """`rule_id` names a rule and `pool_id` a pool of `schedule.json`: exactly one of them is there when `file`
+    is `schedule.json`, and neither otherwise."""
+    names = list(SCHEDULE_ITEMS)
+    if value["file"] == SCHEDULE_FILE:
+        return exactly_one(*names)(value, ref, ctx)
+    present = [name for name in names if name in value]
+    for name in present:
+        ctx.refuse("member_unknown", pointer(ref, name), key=name)
+    return not present
 
 
 LITERAL = {"file": REPO_FILE, "path": POINTER}
@@ -480,9 +487,9 @@ BINDINGS = Format(
     Object(
         {
             "schema_version": ANY,
-            "bindings": ListOf(Object({"threshold": ID, **LITERAL}, {"rule_id": FACT_KEY, **NOTE}, _rule_id)),
+            "bindings": ListOf(Object({"threshold": ID, **LITERAL}, {**SCHEDULE_ITEMS, **NOTE}, _schedule_item)),
             "fixed": ListOf(
-                Object({**LITERAL, "reason": TEXT, "ref": TEXT}, {"rule_id": FACT_KEY, **NOTE}, _rule_id)
+                Object({**LITERAL, "reason": TEXT, "ref": TEXT}, {**SCHEDULE_ITEMS, **NOTE}, _schedule_item)
             ),
         },
         NOTE,
