@@ -3,6 +3,9 @@
 The example binds `thr.run.trigger` (offset -250) to the fact reference of rule `run.trigger` in
 `schedule.json`, and `thr.daily.floor` (215) to the typed value of rule `daily.run` and to the pack policy file;
 the literal 1 of rule `x.single` is fixed, with its reason.
+
+P80 (#424 6457254776), the tests after the CRLF one: `--strict` also counts the operands of `resource_projection`
+predicates, and a binding names a pool of `schedule.json` by `pool_id` and a pointer into the pool.
 """
 
 from __future__ import annotations
@@ -226,3 +229,138 @@ def test_apply_on_a_crlf_file_changes_exactly_the_literal_bytes(example, acmodel
     ]
     assert doc["data"]["written"] == sorted([str(example / SCHEDULE), str(example / POLICY)])
     assert bindings(acmodel, example, "check", "--strict")[0] == 0
+
+
+# A rule whose trigger tests a pool: a written amount (215), and the read capacity less a margin (#386 CF-5).
+PROJECTION_RULE = {"id": "pool.run", "package_id": "example.pool", "trigger": {"kind": "all", "predicates": [
+    {"kind": "resource_projection", "pool_id": "pool.a", "comparison": "greater_than_or_equal", "value": 215},
+    {"kind": "resource_projection", "pool_id": "pool.a", "comparison": "less_than",
+     "value": {"type": "fact", "fact_key": "resource.a_capacity", "offset": -250}}]}}
+PROJECTION = "/rules/3"  # PROJECTION_RULE, appended to the example's three rules
+AMOUNT, MARGIN = "/trigger/predicates/0/value", "/trigger/predicates/1/value/offset"  # relative to the rule
+# The margin as a constant threshold: 0 - rule:margin.a = -250.
+MARGIN_RULE = {"id": "margin.pool", "kind": "derive", "subject": "res.a", "logic": {"value": "0 - rule:margin.a"},
+               "provenance": [{"kind": "logic", "ref": "fixture"}], "status": "confirmed"}
+# A pool of schedule.json that regains 20 every 30 minutes, where the model says every hour.
+POOL = {"id": "pool.s", "capacity": 800, "projection": {"amount": 20, "per_ms": 1800000},
+        "observation": {"kind": "fact", "fact_key": "resource.s_stock"},
+        "value_source": {"kind": "ledger_fact", "minimum_confidence_milli": 1}, "group_delay": None}
+PERIOD_RULE = {"id": "period.s", "kind": "derive", "subject": "fac.s", "logic": {"value": "3600000"},
+               "provenance": [{"kind": "logic", "ref": "fixture"}], "status": "confirmed"}
+
+
+def add_threshold(model: Path, rule: dict, threshold: str) -> None:
+    """A derive rule of the example model and a constant threshold of it."""
+    edit(model / "rules" / "a.json", lambda doc: doc["rules"].append(rule))
+    edit(model / "exports.json",
+         lambda doc: doc["thresholds"].append({"id": threshold, "from": rule["id"], "form": "constant"}))
+
+
+def test_strict_also_counts_the_operands_of_a_resource_projection(example, acmodel):
+    edit(example / SCHEDULE, lambda doc: doc["rules"].append(PROJECTION_RULE))
+
+    assert bindings(acmodel, example, "check")[0] == 0
+    status, doc = bindings(acmodel, example, "check", "--strict")
+
+    assert status == 6
+    assert errors(doc) == [
+        ("binding_unbound_literal", PROJECTION + pointer, {
+            "path": str(example / SCHEDULE), "rule_id": "pool.run", "pointer": pointer, "literal": literal})
+        for pointer, literal in ((AMOUNT, "215"), (MARGIN, "-250"))
+    ]
+
+
+def test_the_operands_of_a_resource_projection_bind_to_constant_thresholds(example, acmodel):
+    """The amount takes thr.daily.floor (215). The margin is the offset of a fact reference, but not in a `fact`
+    predicate, so a constant threshold binds it."""
+    model = example / MODEL
+    add_threshold(model, MARGIN_RULE, "thr.pool.margin")
+    edit(example / SCHEDULE, lambda doc: doc["rules"].append(PROJECTION_RULE))
+    edit(model / "bindings.json", lambda doc: doc["bindings"].extend([
+        {"threshold": "thr.daily.floor", "file": SCHEDULE, "rule_id": "pool.run", "path": AMOUNT},
+        {"threshold": "thr.pool.margin", "file": SCHEDULE, "rule_id": "pool.run", "path": MARGIN}]))
+
+    status, doc = bindings(acmodel, example, "check", "--strict")
+
+    assert (status, doc["errors"]) == (0, [])
+    assert doc["data"]["literals"] == 5
+    assert doc["data"]["bindings"][3:] == [
+        {"entry": "/bindings/3", "threshold": "thr.daily.floor", "form": "constant", "file": SCHEDULE,
+         "rule_id": "pool.run", "path": AMOUNT, "literal": 215},
+        {"entry": "/bindings/4", "threshold": "thr.pool.margin", "form": "constant", "file": SCHEDULE,
+         "rule_id": "pool.run", "path": MARGIN, "literal": -250},
+    ]
+
+
+def test_a_constant_at_the_offset_of_a_fact_predicate_is_still_the_wrong_form(example, acmodel):
+    edit(example / MODEL / "bindings.json", lambda doc: doc["bindings"][0].update(threshold="thr.daily.floor"))
+
+    status, doc = bindings(acmodel, example, "check")
+
+    assert status == 6
+    assert errors(doc) == [("binding_mismatch", TRIGGER + "/value/offset", {
+        "path": str(example / SCHEDULE), "entry": "/bindings/0", "reason": "form", "threshold": "thr.daily.floor",
+        "rule_id": "run.trigger"})]
+
+
+def test_a_binding_names_a_pool_by_its_id_and_a_pointer_into_it(example, acmodel):
+    model = example / MODEL
+    add_threshold(model, PERIOD_RULE, "thr.pool.period")
+    edit(example / SCHEDULE, lambda doc: doc.update(pools=[POOL]))
+    edit(model / "bindings.json", lambda doc: doc["bindings"].append(
+        {"threshold": "thr.pool.period", "file": SCHEDULE, "pool_id": "pool.s", "path": "/projection/per_ms"}))
+    entry = {"entry": "/bindings/3", "threshold": "thr.pool.period", "file": SCHEDULE, "pool_id": "pool.s",
+             "path": "/projection/per_ms"}
+
+    status, doc = bindings(acmodel, example, "check")
+
+    assert status == 6
+    assert errors(doc) == [("binding_mismatch", "/pools/0/projection/per_ms", {
+        "path": str(example / SCHEDULE), "entry": "/bindings/3", "reason": "value", "threshold": "thr.pool.period",
+        "pool_id": "pool.s", "expected": "3600000", "found": "1800000"})]
+
+    status, doc = bindings(acmodel, example, "apply")
+
+    assert (status, doc["errors"]) == (0, [])
+    assert doc["data"]["changed"] == [{**entry, "from": 1800000, "to": 3600000}]
+    assert json.loads((example / SCHEDULE).read_text(encoding="utf-8"))["pools"] == [
+        {**POOL, "projection": {"amount": 20, "per_ms": 3600000}}]
+
+    status, doc = bindings(acmodel, example, "check", "--strict")
+
+    assert (status, doc["errors"]) == (0, [])
+    assert doc["data"]["bindings"][3] == {**entry, "form": "constant", "literal": 3600000}
+    assert doc["data"]["literals"] == 3  # the literals of the pools are not scanned
+
+
+def bindings_refusal(folder: Path, reason: str, ref: str, **values: object) -> tuple:
+    detail = {"reason": reason, "path": str(folder / MODEL / "bindings.json"), "format": "acmodel.bindings.v1"}
+    return "model_file_invalid", "/bindings/3/" + ref, {**detail, **values}
+
+
+@pytest.mark.parametrize(
+    ("binding", "status", "expected"),
+    [
+        ({"file": SCHEDULE, "pool_id": "pool.s", "path": "/capacity"}, 6, lambda folder: (
+            "binding_mismatch", "/pools", {
+                "path": str(folder / SCHEDULE), "entry": "/bindings/3", "reason": "literal_missing",
+                "threshold": "thr.daily.floor", "pool_id": "pool.s"})),
+        ({"file": SCHEDULE, "rule_id": "daily.run", "pool_id": "pool.s", "path": "/capacity"}, 1,
+         lambda folder: bindings_refusal(folder, "member_conflict", "pool_id", key="pool_id",
+                                         expected=["rule_id", "pool_id"])),
+        ({"file": SCHEDULE, "path": "/capacity"}, 1,
+         lambda folder: bindings_refusal(folder, "member_missing", "rule_id", key="rule_id",
+                                         expected=["rule_id", "pool_id"])),
+        ({"file": POLICY, "pool_id": "pool.s", "path": "/threshold"}, 1,
+         lambda folder: bindings_refusal(folder, "member_unknown", "pool_id", key="pool_id")),
+    ],
+    ids=["no_pool_of_that_id", "rule_id_and_pool_id", "neither_in_schedule_json", "pool_id_in_a_pack_file"],
+)
+def test_a_schedule_json_binding_names_exactly_one_rule_or_pool(example, acmodel, binding, status, expected):
+    edit(example / MODEL / "bindings.json",
+         lambda doc: doc["bindings"].append({"threshold": "thr.daily.floor", **binding}))
+
+    result, doc = bindings(acmodel, example, "check")
+
+    assert result == status
+    assert errors(doc) == [expected(example)]

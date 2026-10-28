@@ -1,10 +1,10 @@
 """`acmodel bindings check` and `acmodel bindings apply` (#424 design 6.3; design-py 6.3).
 
 `bindings.json` (`acmodel.bindings.v1`, beside `model.json`) ties literals of the resource repository to
-thresholds of `exports.json`: a literal of a `schedule.json` rule (by its `rule_id` and a pointer into the
-rule) or of a pack file (by a pointer into the file). Its `fixed` entries are literals that are no quantity,
-each with a reason and a reference. File names are relative to the repository, the folder two above the model
-folder (`<repo>/ours/model`, #424 design 3.1).
+thresholds of `exports.json`: a literal of a `schedule.json` rule or pool (by its `rule_id` or `pool_id` and a
+pointer into the rule or the pool) or of a pack file (by a pointer into the file). Its `fixed` entries are
+literals that are no quantity, each with a reason and a reference. File names are relative to the repository,
+the folder two above the model folder (`<repo>/ours/model`, #424 design 3.1).
 
 The values come from one run of the model for an account state, exactly as `export thresholds` computes
 them (`export.thresholds.threshold_entry`), so a binding holds only what the export writes:
@@ -15,9 +15,9 @@ them (`export.thresholds.threshold_entry`), so a binding holds only what the exp
   constant.
 
 `check` compares every bound literal with its threshold (`binding_mismatch`), and with `--strict` refuses
-every integer literal of a `fact` predicate of `schedule.json` that is neither bound nor fixed
-(`binding_unbound_literal`). `apply` writes each bound literal that differs, changing only the literal's
-bytes; it refuses everything `check` refuses but a differing value, and then writes nothing.
+every integer literal of a `fact` or `resource_projection` predicate of a `schedule.json` rule that is neither
+bound nor fixed (`binding_unbound_literal`). `apply` writes each bound literal that differs, changing only the
+literal's bytes; it refuses everything `check` refuses but a differing value, and then writes nothing.
 """
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ def _references(run: Run, bindings: File) -> list[dict[str, Any]]:
         if "threshold" in entry and entry["threshold"] not in thresholds:
             detail = {"path": bindings.path, "target": entry["threshold"], "expected": ["threshold"]}
             errors.append(error(RULE_REFERENCE_MISSING, detail, at(ref, "threshold")))
-        key = (entry["file"], entry.get("rule_id"), entry["path"])
+        key = (entry["file"], entry.get("rule_id"), entry.get("pool_id"), entry["path"])
         if key in seen:
             name = ":".join(part for part in key if part is not None)
             detail = {"path": bindings.path, "namespace": "literal", "id": name, "first_path": bindings.path,
@@ -146,20 +146,25 @@ class _Literal:
     def __init__(self, targets: dict[str, Target], ref: str, entry: dict[str, Any]) -> None:
         self.entry_ref, self.entry = ref, entry
         self.target = target = targets[entry["file"]]
-        if target.rules is None:
+        self.holder = ""  # schedule.json: the list that holds the entry's rule or pool
+        if target.rules is None or target.pools is None:
             self.ref: str | None = entry["path"]
-        elif entry["rule_id"] in target.rules:
-            self.ref = at("", "rules", target.rules[entry["rule_id"]]) + entry["path"]
         else:
-            self.ref = None  # no rule of that id
+            # The reader lets exactly one of rule_id and pool_id name a rule or a pool of schedule.json.
+            self.holder, items, item = (
+                ("rules", target.rules, entry["rule_id"]) if "rule_id" in entry
+                else ("pools", target.pools, entry["pool_id"])
+            )
+            self.ref = at("", self.holder, items[item]) + entry["path"] if item in items else None
         self.value = MISSING if self.ref is None else resolve(target.doc, self.ref)
 
     def mismatch(self, reason: str, ref: str | None = None, **values: Any) -> dict[str, Any]:
-        """`binding_mismatch` at `ref`, by default the literal's pointer (or /rules, without the rule)."""
+        """`binding_mismatch` at `ref`, by default the literal's pointer (or /rules or /pools, without the rule
+        or the pool)."""
         detail = {"path": str(self.target.path), "entry": self.entry_ref, "reason": reason}
-        detail.update({key: self.entry[key] for key in ("threshold", "rule_id") if key in self.entry})
+        detail.update({key: self.entry[key] for key in ("threshold", "rule_id", "pool_id") if key in self.entry})
         if ref is None:
-            ref = "/rules" if self.ref is None else self.ref
+            ref = at("", self.holder) if self.ref is None else self.ref
         return error(BINDING_MISMATCH, {**detail, **values}, ref)
 
     def missing(self) -> dict[str, Any] | None:
@@ -171,13 +176,16 @@ class _Literal:
     def compare(self, value: dict[str, Any]) -> tuple[list[dict[str, Any]], int | None]:
         """The problems of a bound literal other than its value, and the value it must hold (None when the
         form is wrong). A `fact_offset` literal is the offset of a fact reference in a `fact` predicate whose
-        two fact keys are the threshold's; a constant is any integer literal but such an offset."""
+        two fact keys are the threshold's; a constant is any integer literal but such an offset (the offset of
+        a fact reference elsewhere, in a `resource_projection` predicate or a pool's capacity, is one)."""
         doc, ref = self.target.doc, self.ref
-        at_offset = tokens(ref)[-2:] == ["value", "offset"] and fact_reference(resolve(doc, parent(ref)))
+        at_offset = (
+            tokens(ref)[-2:] == ["value", "offset"] and fact_reference(resolve(doc, parent(ref)))
+            and fact_predicate(resolve(doc, parent(ref, 2)))
+        )
         if value["form"] == "constant":
             return ([self.mismatch("form")], None) if at_offset else ([], value["value"])
-        predicate = resolve(doc, parent(ref, 2))
-        if not (at_offset and fact_predicate(predicate)):
+        if not at_offset:
             return [self.mismatch("form")], None
         problems = []
         keys = (("fact_key", "fact", parent(ref, 2)), ("reference_fact", "reference_fact", parent(ref)))
@@ -190,14 +198,18 @@ class _Literal:
 
     def describe(self) -> dict[str, Any]:
         out = {"entry": self.entry_ref}
-        out.update({key: self.entry[key] for key in ("threshold", "file", "rule_id", "path") if key in self.entry})
+        keys = ("threshold", "file", "rule_id", "pool_id", "path")
+        out.update({key: self.entry[key] for key in keys if key in self.entry})
         return out
 
 
 def _unbound(schedule: Target, bindings: File) -> tuple[int, list[dict[str, Any]]]:
-    """How many literals the `fact` predicates of schedule.json compare with, and an error for each that is
-    neither bound nor fixed."""
-    named = {(entry["rule_id"], entry["path"]) for _, entry in _entries(bindings) if entry["file"] == SCHEDULE_FILE}
+    """How many literals the `fact` and `resource_projection` predicates of the rules of schedule.json compare
+    with, and an error for each that is neither bound nor fixed. A pool's literals are not scanned."""
+    named = {
+        (entry["rule_id"], entry["path"]) for _, entry in _entries(bindings)
+        if entry["file"] == SCHEDULE_FILE and "rule_id" in entry
+    }
     count, errors = 0, []
     for rule_id, index in schedule.rules.items():
         for ref, literal in predicate_literals(schedule.doc["rules"][index]):
@@ -218,7 +230,7 @@ def check_bindings(
     unknowns: Unknowns = Unknowns(),
 ) -> dict[str, Any]:
     """`acmodel bindings check [--strict]`: every bound literal equals its exported threshold; with `strict`,
-    no literal of a `fact` predicate of schedule.json is left unbound."""
+    no literal of a `fact` or `resource_projection` predicate of a schedule.json rule is left unbound."""
     run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
     repo, targets = _targets(run, bindings, strict)

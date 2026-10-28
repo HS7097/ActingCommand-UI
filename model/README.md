@@ -103,11 +103,11 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
 - **`export scoring`** fills each scoring template with the model's numbers; one placeholder it cannot fill
   refuses the whole document. Until the place of `scoring.json` and its validator are decided, it writes nothing
   (`export_refused`, `validator_path_unknown`).
-- **`bindings check`** compares each literal that `ours/model/bindings.json` ties to a threshold, in the
-  repository's `schedule.json` or a pack file, with the value `export thresholds` would write. With
-  `--strict` it also refuses every number of a `fact` predicate of `schedule.json` that is neither bound
-  nor listed as fixed with a reason, so no number without provenance reaches the schedule. It writes
-  nothing.
+- **`bindings check`** compares each literal that `ours/model/bindings.json` ties to a threshold, in a rule
+  or a pool of the repository's `schedule.json` or in a pack file, with the value `export thresholds` would
+  write. With `--strict` it also refuses every number of a `fact` or `resource_projection` predicate of
+  `schedule.json` that is neither bound nor listed as fixed with a reason, so no number without provenance
+  reaches the schedule. It writes nothing.
 - **`bindings apply`** writes the bound literals that differ, and changes only their bytes: line ends
   (CRLF files stay CRLF) and formatting are kept. It refuses what `check` refuses, other than a differing
   value, and then writes nothing (`contracts/formats.md`, "Bindings").

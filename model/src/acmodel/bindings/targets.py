@@ -3,8 +3,8 @@
 Each is read once with the tool's strict JSON reader (`model.jsonfile`), and the same bytes are what `apply`
 splices. The tool needs only JSON pointers and the literals: whether `schedule.json` is valid as a whole is
 the validator's job (`actinglab`, resource CI). What it does need of `schedule.json` it checks: an object of
-`schema_version` `actingcommand.schedule.v1` whose `rules` (absent means none) are objects with distinct
-string `id`s, since a binding names its rule by id.
+`schema_version` `actingcommand.schedule.v1` whose `rules` and `pools` (each absent means none) are objects
+with distinct string `id`s, since a binding names its rule or its pool by id.
 """
 
 from __future__ import annotations
@@ -30,33 +30,44 @@ class Target:
     raw: bytes
     doc: Any
     rules: dict[str, int] | None  # schedule.json: the index of each rule by its id
+    pools: dict[str, int] | None  # schedule.json: the index of each pool by its id
 
 
-def _rules(doc: Any, path: Path) -> dict[str, int]:
-    ctx = Context(path, SCHEDULE_FORMAT)
+def _items(doc: dict[str, Any], member: str, ctx: Context) -> dict[str, int]:
+    """The index of each item of the list `member` of schedule.json (absent means none) by its id."""
     found: dict[str, int] = {}
+    if not isinstance(doc.get(member, []), list):
+        ctx.refuse("type_invalid", at("", member), expected=["array"])
+        return found
+    for index, item in enumerate(doc.get(member, [])):
+        ref = at("", member, index)
+        if not isinstance(item, dict):
+            ctx.refuse("type_invalid", ref, expected=["object"])
+        elif "id" not in item:
+            ctx.refuse("member_missing", at(ref, "id"), key="id")
+        elif not isinstance(item["id"], str):
+            ctx.refuse("type_invalid", at(ref, "id"), expected=["string"])
+        elif item["id"] in found:
+            ctx.refuse("value_invalid", at(ref, "id"), literal=item["id"])
+        else:
+            found[item["id"]] = index
+    return found
+
+
+def _schedule(doc: Any, path: Path) -> tuple[dict[str, int], dict[str, int]]:
+    """The index of each rule and of each pool of schedule.json by its id."""
+    ctx = Context(path, SCHEDULE_FORMAT)
+    rules: dict[str, int] = {}
+    pools: dict[str, int] = {}
     if not isinstance(doc, dict):
         ctx.refuse("type_invalid", "", expected=["object"])
     elif doc.get("schema_version") != SCHEDULE_FORMAT:
         ctx.refuse("value_invalid", "/schema_version", expected=[SCHEDULE_FORMAT])
-    elif not isinstance(doc.get("rules", []), list):
-        ctx.refuse("type_invalid", "/rules", expected=["array"])
     else:
-        for index, rule in enumerate(doc.get("rules", [])):
-            ref = at("", "rules", index)
-            if not isinstance(rule, dict):
-                ctx.refuse("type_invalid", ref, expected=["object"])
-            elif "id" not in rule:
-                ctx.refuse("member_missing", at(ref, "id"), key="id")
-            elif not isinstance(rule["id"], str):
-                ctx.refuse("type_invalid", at(ref, "id"), expected=["string"])
-            elif rule["id"] in found:
-                ctx.refuse("value_invalid", at(ref, "id"), literal=rule["id"])
-            else:
-                found[rule["id"]] = index
+        rules, pools = _items(doc, "rules", ctx), _items(doc, "pools", ctx)
     if ctx.errors:
         raise Failure(*ctx.errors)
-    return found
+    return rules, pools
 
 
 def read_target(repo: Path, name: str) -> Target:
@@ -65,7 +76,8 @@ def read_target(repo: Path, name: str) -> Target:
     fmt = SCHEDULE_FORMAT if name == SCHEDULE_FILE else POLICY_FORMAT
     raw = jsonfile.read(path, fmt)
     doc = jsonfile.parse(raw, path, fmt)
-    return Target(name, path, raw, doc, _rules(doc, path) if name == SCHEDULE_FILE else None)
+    rules, pools = _schedule(doc, path) if name == SCHEDULE_FILE else (None, None)
+    return Target(name, path, raw, doc, rules, pools)
 
 
 def integer(value: Any) -> bool:
@@ -91,10 +103,20 @@ def fact_reference(value: Any) -> bool:
     return isinstance(value, dict) and value.get("type") == "fact"
 
 
+def projection_predicate(value: Any) -> bool:
+    """A `resource_projection` predicate of the scheduling format: `{"kind": "resource_projection", "pool_id",
+    "comparison", "value": N}`, whose `value` may also be a fact reference (#386 CF-5)."""
+    return (
+        isinstance(value, dict) and value.get("kind") == "resource_projection" and "comparison" in value
+        and "value" in value
+    )
+
+
 def predicate_literals(rule: dict[str, Any]) -> Iterator[tuple[str, int]]:
-    """(pointer relative to the rule, integer) of each integer literal that a `fact` predicate of the rule
-    compares with: its typed value's `value/value`, or its fact reference's `value/offset`. In document
-    order, at any depth (under `all`, `any`, `not` and any member that holds predicates)."""
+    """(pointer relative to the rule, integer) of each integer literal that a predicate of the rule compares
+    with: of a `fact` predicate, its typed value's `value/value` or its fact reference's `value/offset`; of a
+    `resource_projection` predicate, its `value` or its fact reference's `value/offset`. In document order, at
+    any depth (under `all`, `any`, `not` and any member that holds predicates)."""
     stack: list[tuple[Any, str]] = [(rule, "")]
     while stack:
         value, ref = stack.pop()
@@ -102,6 +124,12 @@ def predicate_literals(rule: dict[str, Any]) -> Iterator[tuple[str, int]]:
             member = "offset" if fact_reference(value["value"]) else "value"
             if integer(value["value"].get(member)):
                 yield at(ref, "value", member), value["value"][member]
+        elif projection_predicate(value):
+            operand = value["value"]
+            if integer(operand):
+                yield at(ref, "value"), operand
+            elif fact_reference(operand) and integer(operand.get("offset")):
+                yield at(ref, "value", "offset"), operand["offset"]
         if isinstance(value, dict):
             stack.extend(reversed([(child, at(ref, key)) for key, child in value.items()]))
         elif isinstance(value, list):
