@@ -65,6 +65,14 @@ const MATERIAL_READ_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Bound on the offline face's one fact replay per session.
 const FACTS_READ_DEADLINE: Duration = Duration::from_secs(30);
+/// The offline face's own opening of the ledger. That opening reads and
+/// authenticates the whole ledger in memory (a bounded offline opening is
+/// tracked on the Runtime side, Workflow #422), so a production-size ledger
+/// would exhaust the host. Past this budget the ledger refuses with
+/// `ledger_read_budget_exceeded` and the session stays unopened, loudly.
+const OFFLINE_OPEN_BYTES: u64 = 1 << 30;
+const OFFLINE_OPEN_EVENTS: usize = 300_000;
+const OFFLINE_OPEN_DEADLINE: Duration = Duration::from_secs(60);
 
 /// The io timeout of the session's ledger page connection (see `LedgerPages`):
 /// how long one page exchange waits for its receipt, and the bound of that
@@ -147,7 +155,12 @@ impl From<GlobalLedgerError> for LedgerOpenFailure {
 impl EvidenceSource {
     pub fn open(state_root: impl Into<PathBuf>) -> Result<Self, LedgerOpenFailure> {
         let root = state_root.into();
-        let snapshot = GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig::new(&root))?;
+        let config = GlobalLedgerEvidenceConfig::new(&root).with_budget(
+            OFFLINE_OPEN_BYTES,
+            OFFLINE_OPEN_EVENTS,
+            Instant::now() + OFFLINE_OPEN_DEADLINE,
+        );
+        let snapshot = GlobalLedger::open_metadata(config)?;
         Ok(Self { root, snapshot })
     }
 

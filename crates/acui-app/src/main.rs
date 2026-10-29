@@ -1595,6 +1595,10 @@ fn source_text(labels: &Labels, source: &Session) -> String {
             text.push_str(" · ");
             text.push_str(labels.source_unopened_hint);
         }
+        if failure.code == "ledger_read_budget_exceeded" {
+            text.push_str(" · ");
+            text.push_str(labels.source_unopened_budget_hint);
+        }
     }
     text
 }
