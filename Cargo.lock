@@ -129,7 +129,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-artifact-store"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=3557afe20eb4abb341e339d3a11bd9ecbf96375f#3557afe20eb4abb341e339d3a11bd9ecbf96375f"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=239db17770140fc55c6d60468856aaaa99e5ef53#239db17770140fc55c6d60468856aaaa99e5ef53"
 dependencies = [
  "actingcommand-contract",
  "serde",
@@ -141,7 +141,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-contract"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=3557afe20eb4abb341e339d3a11bd9ecbf96375f#3557afe20eb4abb341e339d3a11bd9ecbf96375f"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=239db17770140fc55c6d60468856aaaa99e5ef53#239db17770140fc55c6d60468856aaaa99e5ef53"
 dependencies = [
  "serde",
  "serde_json",
@@ -151,7 +151,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-ledger"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=3557afe20eb4abb341e339d3a11bd9ecbf96375f#3557afe20eb4abb341e339d3a11bd9ecbf96375f"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=239db17770140fc55c6d60468856aaaa99e5ef53#239db17770140fc55c6d60468856aaaa99e5ef53"
 dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
@@ -166,7 +166,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-ledger-forensics"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=3557afe20eb4abb341e339d3a11bd9ecbf96375f#3557afe20eb4abb341e339d3a11bd9ecbf96375f"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=239db17770140fc55c6d60468856aaaa99e5ef53#239db17770140fc55c6d60468856aaaa99e5ef53"
 dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
@@ -178,7 +178,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-policy"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=3557afe20eb4abb341e339d3a11bd9ecbf96375f#3557afe20eb4abb341e339d3a11bd9ecbf96375f"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=239db17770140fc55c6d60468856aaaa99e5ef53#239db17770140fc55c6d60468856aaaa99e5ef53"
 dependencies = [
  "actingcommand-contract",
  "actingcommand-selection-policy",
@@ -190,7 +190,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-runtime-client"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=3557afe20eb4abb341e339d3a11bd9ecbf96375f#3557afe20eb4abb341e339d3a11bd9ecbf96375f"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=239db17770140fc55c6d60468856aaaa99e5ef53#239db17770140fc55c6d60468856aaaa99e5ef53"
 dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
@@ -203,7 +203,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-runtime-database"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=3557afe20eb4abb341e339d3a11bd9ecbf96375f#3557afe20eb4abb341e339d3a11bd9ecbf96375f"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=239db17770140fc55c6d60468856aaaa99e5ef53#239db17770140fc55c6d60468856aaaa99e5ef53"
 dependencies = [
  "actingcommand-contract",
  "rusqlite",
@@ -215,7 +215,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-selection-policy"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=3557afe20eb4abb341e339d3a11bd9ecbf96375f#3557afe20eb4abb341e339d3a11bd9ecbf96375f"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=239db17770140fc55c6d60468856aaaa99e5ef53#239db17770140fc55c6d60468856aaaa99e5ef53"
 dependencies = [
  "actingcommand-contract",
  "serde",
@@ -4943,7 +4943,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.52.0",

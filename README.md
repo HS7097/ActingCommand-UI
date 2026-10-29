@@ -158,7 +158,7 @@ v0.12.29 (Workflow #429 R-0, R-15a and R-0c merged) that speaks the 0.12 protoco
 revision 3, ledger revision 4):
 
 ```
-rev = "3557afe20eb4abb341e339d3a11bd9ecbf96375f"
+rev = "239db17770140fc55c6d60468856aaaa99e5ef53"
 ```
 
 The five crates (contract / ledger / ledger-forensics / runtime-client / execution-kernel) share this one rev.

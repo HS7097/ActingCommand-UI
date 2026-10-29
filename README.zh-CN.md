@@ -115,7 +115,7 @@
 Workflow #429 R-0、R-15a、R-0c 的一个提交，说 0.12 协议（`runtime-client` 修订 3、账本修订 4）：
 
 ```
-rev = "3557afe20eb4abb341e339d3a11bd9ecbf96375f"
+rev = "239db17770140fc55c6d60468856aaaa99e5ef53"
 ```
 
 五个 crate（contract / ledger / ledger-forensics / runtime-client / execution-kernel）共用这一个 rev。
