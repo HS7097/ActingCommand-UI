@@ -67,9 +67,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --locked --release --workspace
 
-      # Windows only: stage the console, setup and stable entry with a build manifest in the
+      # Windows only: stage the console and the stable entry with a build manifest in the
       # same shape as the Runtime's exact-SHA artifacts, so the umbrella can fetch
-      # and verify them by commit SHA. Nothing below changes the build itself.
+      # and verify them by commit SHA. Nothing below changes the build itself. acsetup is
+      # out of the workspace from UI-0a until UI-2a (Workflow #429 v5 F), so it is not staged.
       - name: Stage Windows artifact with build manifest
         if: runner.os == 'Windows'
         id: stage
@@ -82,9 +83,8 @@ jobs:
           $name = "acui-windows-$sha"
           $dir = Join-Path $env:RUNNER_TEMP $name
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
-          $payload = @('acui.exe', 'acsetup.exe', 'acforward.exe', 'LICENSE', 'README.md')
+          $payload = @('acui.exe', 'acforward.exe', 'LICENSE', 'README.md')
           Copy-Item -LiteralPath 'target\release\acui.exe' -Destination (Join-Path $dir 'acui.exe')
-          Copy-Item -LiteralPath 'target\release\acsetup.exe' -Destination (Join-Path $dir 'acsetup.exe')
           Copy-Item -LiteralPath 'target\release\acforward.exe' -Destination (Join-Path $dir 'acforward.exe')
           Copy-Item -LiteralPath 'LICENSE' -Destination (Join-Path $dir 'LICENSE')
           Copy-Item -LiteralPath 'README.md' -Destination (Join-Path $dir 'README.md')
@@ -100,7 +100,7 @@ jobs:
           }
           $rustc = ((& rustc --version --verbose) -join "`n").Trim()
           if ($LASTEXITCODE -ne 0) { throw "rustc version query failed with exit code $LASTEXITCODE" }
-          # Workflow #364: this build's interface declaration, the file acsetup also compiles in
+          # Workflow #364: this build's interface declaration, the file acsetup compiles in once it is back (UI-2a)
           # (Runtime contracts/component-interfaces.md). A file that is not a valid v1
           # declaration, or that disagrees with installation_selection_schema, stops the build.
           $interfaces = Get-Content -LiteralPath 'crates/acui-setup/component-interfaces.json' -Raw | ConvertFrom-Json -Depth 20

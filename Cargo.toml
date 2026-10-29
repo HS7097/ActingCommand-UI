@@ -4,7 +4,10 @@ members = [
     "crates/acui-source",
     "crates/acui-model",
     "crates/acui-app",
-    "crates/acui-setup",
+    # crates/acui-setup (acsetup) is out of the workspace from UI-0a until UI-2a
+    # (Workflow #429 v5 F, C.1): its bundle and maintenance code predates bundle
+    # v4 and option 丙, so no compile-only fix keeps its behaviour. Its
+    # component-interfaces.json stays where it is: build.yml reads it there.
     "crates/acui-installation",
 ]
 resolver = "2"
