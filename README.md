@@ -10,6 +10,8 @@ three-column interface: instance card, timeline, detail pane.
 
 It is not part of the Runtime; it is the Runtime's **external, detachable client**.
 
+> **acsetup is not shipped with the builds for now; UI-2a brings it back. Until then, install with `actingctl install`.**
+
 This repository also holds the **setup wizard** `acsetup` (see "Setup wizard acsetup") and the fixed
 entry `acforward`, through which an A/B installation starts its programs. Like the Runtime, these
 programs know no game: they hold no game logic and no game data. A game is supported through the
@@ -576,6 +578,8 @@ list.
   their original generation, and the editor never restarts Runtime itself.
 
 ## Setup wizard acsetup
+
+> **acsetup is not shipped with the builds for now; UI-2a brings it back. Until then, install with `actingctl install`.**
 
 `crates/acui-setup` is a standalone binary `acsetup.exe` (a Slint window, the same styling and icon as the
 console) that installs the release files from the umbrella repository's

@@ -9,6 +9,8 @@
 
 它不是 Runtime 的一部分，是 Runtime 的**外部可拆客户端**。
 
+> **acsetup 暂未随构建发布，UI-2a 接回；在此之前用 `actingctl install` 安装。**
+
 本仓还放着**安装向导** `acsetup`（见「安装向导 acsetup」一节）与固定入口 `acforward`——A/B 安装经它拉起
 各个程序。与 Runtime 一样，这些程序不认识任何游戏：不含游戏逻辑，也不含游戏数据。游戏经 Runtime 加载的
 资源包接入（每个游戏一个标准包）；向导只读包里声明的内容，什么也不猜。
@@ -423,6 +425,8 @@ actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'     # 可选，
   原监控台及其子调用保持原代际，编辑器本身不重启 Runtime。
 
 ## 安装向导 acsetup
+
+> **acsetup 暂未随构建发布，UI-2a 接回；在此之前用 `actingctl install` 安装。**
 
 `crates/acui-setup` 是一个独立的二进制 `acsetup.exe`（Slint 窗口，与监控台同一套样式与图标），把
 伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases) 里的发布件装成一份**按用户**的安装。
