@@ -96,8 +96,8 @@ pub struct Labels {
     pub columns: [&'static str; 7],
     /// The #109 view names, in `LedgerView::ALL` order.
     pub tabs: [&'static str; 6],
-    /// debug, info, warning, error, fatal.
-    pub levels: [&'static str; 5],
+    /// debug, success, info, warning, error, fatal.
+    pub levels: [&'static str; 6],
     /// public, internal, sensitive, secret.
     pub sensitivities: [&'static str; 4],
     /// `EventSource`, in the contract's declaration order.
@@ -140,6 +140,8 @@ pub struct Labels {
     /// detail; the hint only follows `ledger_io` with io kind `not_found`.
     pub source_unopened: &'static str,
     pub source_unopened_hint: &'static str,
+    /// Follows `ledger_read_budget_exceeded`: the offline opening's own budget.
+    pub source_unopened_budget_hint: &'static str,
     /// The ledger's io kind; appended to the unopened line.
     pub io_kind_text: &'static str,
     /// Unopened: the top bar and the two boxes, then the list and the frame pane.
@@ -206,8 +208,8 @@ pub struct Labels {
     pub child_status_failed: &'static str,
     /// pid, attempt, attempts, log path.
     pub start_waiting: &'static str,
-    /// exit code, the log's last `FATAL actingd:` line or why there is none,
-    /// log path.
+    /// exit code, the developer line of the log's terminal outcome (its last
+    /// `OUTCOME actingd:` envelope) or why there is none, log path.
     pub start_exited: &'static str,
     /// pid, owner epoch.
     pub start_ready: &'static str,
@@ -220,10 +222,10 @@ pub struct Labels {
     pub start_record_refused: &'static str,
     /// client error code, client operation.
     pub start_record_failed: &'static str,
-    pub log_no_fatal: &'static str,
+    pub log_no_outcome: &'static str,
     /// error.
     pub log_unreadable: &'static str,
-    /// The unlock entry, offered after a start whose fatal line names
+    /// The unlock entry, offered after a start whose terminal outcome is
     /// `owner_resource_unconfirmed`: its button, the statement the second
     /// press makes, and the button that makes it.
     pub unlock_owner: &'static str,
@@ -236,10 +238,10 @@ pub struct Labels {
     pub unlock_ok: &'static str,
     /// exit code, owner epoch, previous resource disposition, revision.
     pub unlock_ok_nonzero: &'static str,
-    /// error code, stage, journal_appended, exit code.
+    /// outcome code, stage, journal_appended, exit code.
     pub unlock_failed: &'static str,
-    /// exit code, the `FATAL actingd:` line.
-    pub unlock_fatal: &'static str,
+    /// exit code, the line `last_stderr_line` found on stderr.
+    pub unlock_stderr: &'static str,
     /// why, exit code.
     pub unlock_unparseable: &'static str,
     /// JSON pointer.
@@ -345,7 +347,7 @@ pub struct Labels {
     /// The discovery box's first item, which picks nothing.
     pub discover_pick: &'static str,
     pub discovering: &'static str,
-    /// Instance count, provider version, observation sequence.
+    /// Instance count, provider version, the ledger's committed head at the sample.
     pub discovered: &'static str,
     /// Runtime code, client code, operation; client code, operation.
     pub discover_refused: &'static str,
@@ -423,7 +425,7 @@ pub const ZH: Labels = Labels {
         "端口",
     ],
     tabs: ["事件流", "观察与操作", "变更", "错误", "运行状况", "Lab"],
-    levels: ["调试", "信息", "警告", "错误", "致命"],
+    levels: ["调试", "成功", "信息", "警告", "错误", "致命"],
     sensitivities: ["公开", "内部", "敏感", "机密"],
     sources: [
         ("runtime", "运行时"),
@@ -536,6 +538,7 @@ pub const ZH: Labels = Labels {
     source_offline_failed: "离线 · 自动：连接 Runtime 失败 {}（{}）",
     source_unopened: "账本未能打开：{}（{}）· {}",
     source_unopened_hint: "状态根里还没有账本，多半是 Runtime 从未在这里启动过；可用启动器的「启动」",
+    source_unopened_budget_hint: "账本超出离线读取预算（1 GiB、30 万条、60 秒）：这么大的账本暂时只能在线读，离线要等 Runtime 侧修好",
     io_kind_text: " · IO 类别 {}",
     ledger_unopened: "账本未打开",
     list_unopened: "账本未打开：没有读取任何事件，原因见实例卡",
@@ -600,7 +603,7 @@ pub const ZH: Labels = Labels {
     start_recorded: "动作已记账 #{}",
     start_record_refused: "动作记账被拒：{} · 客户端 {}（{}）",
     start_record_failed: "动作记账失败：{}（{}）",
-    log_no_fatal: "日志里没有 FATAL actingd: 行",
+    log_no_outcome: "日志里没有 OUTCOME actingd: 结果行",
     log_unreadable: "读取日志失败：{}",
     unlock_owner: "解锁 owner…",
     unlock_statement: "确认：上一个 Runtime 的设备资源已经释放",
@@ -608,12 +611,12 @@ pub const ZH: Labels = Labels {
     unlock_busy: "解锁仍在进行",
     unlock_running: "正在运行 actingd unlock-owner --actor {} --confirm-resources-released…",
     unlock_ok: "已解锁 owner epoch {} · 解锁前处置 {} · owner.lock 修订 {} · 已自动重试启动一次（结果见上一行）",
-    unlock_ok_nonzero: "unlock-owner 报 ok 却以退出码 {} 结束：不算解锁成功，未重试启动 · owner epoch {} · 解锁前处置 {} · owner.lock 修订 {}",
+    unlock_ok_nonzero: "unlock-owner 报 unlock_owner_completed 却以退出码 {} 结束：不算解锁成功，未重试启动 · owner epoch {} · 解锁前处置 {} · owner.lock 修订 {}",
     unlock_failed: "解锁失败：{}（阶段 {}）· journal_appended={} · 退出码 {}",
-    unlock_fatal: "unlock-owner 退出码 {} · {}",
+    unlock_stderr: "unlock-owner 退出码 {} · {}",
     unlock_unparseable: "unlock-owner 输出无法解析：{} · 退出码 {}",
     unlock_field_invalid: "字段 {} 缺失或不合约定",
-    unlock_no_output: "stdout 没有 JSON，stderr 没有 FATAL actingd: 行",
+    unlock_no_output: "stdout 没有 JSON，stderr 也没有输出",
     unlock_timeout: "unlock-owner {} 秒内未结束，结果未知",
     unlock_killed: "已终止并回收",
     unlock_kill_failed: "终止失败：{}",
@@ -751,7 +754,7 @@ pub const EN: Labels = Labels {
         "Port",
     ],
     tabs: ["Event Stream", "Observe and Act", "Changes", "Errors", "Health", "Lab"],
-    levels: ["Debug", "Info", "Warning", "Error", "Fatal"],
+    levels: ["Debug", "Success", "Info", "Warning", "Error", "Fatal"],
     sensitivities: ["Public", "Internal", "Sensitive", "Secret"],
     sources: [
         ("runtime", "Runtime"),
@@ -864,6 +867,7 @@ pub const EN: Labels = Labels {
     source_offline_failed: "Offline · auto: connecting to the Runtime failed with {} ({})",
     source_unopened: "ledger could not be opened: {} ({}) · {}",
     source_unopened_hint: "the state root has no ledger yet, most likely because the Runtime has never been started here; use Start in the launcher",
+    source_unopened_budget_hint: "the ledger exceeds the offline read budget (1 GiB, 300,000 events, 60 s): read a ledger this large online for now; offline waits for the Runtime-side fix",
     io_kind_text: " · io kind {}",
     ledger_unopened: "Ledger Not Opened",
     list_unopened: "Ledger not opened: no events were read; the instance card says why",
@@ -928,7 +932,7 @@ pub const EN: Labels = Labels {
     start_recorded: "Action Recorded at #{}",
     start_record_refused: "Action Record Refused: {} · Client {} ({})",
     start_record_failed: "Action Record Failed: {} ({})",
-    log_no_fatal: "No FATAL actingd: Line in the Log",
+    log_no_outcome: "No OUTCOME actingd: Line in the Log",
     log_unreadable: "Reading the Log Failed: {}",
     unlock_owner: "Unlock Owner…",
     unlock_statement: "Confirm: the Device Resources of the Last Runtime Are Released",
@@ -936,12 +940,12 @@ pub const EN: Labels = Labels {
     unlock_busy: "The Unlock Is Still Running",
     unlock_running: "Running actingd unlock-owner --actor {} --confirm-resources-released…",
     unlock_ok: "Unlocked Owner Epoch {} · Disposition Before {} · owner.lock Revision {} · Start Retried Once (See the Line Above)",
-    unlock_ok_nonzero: "unlock-owner Said ok but Exited with Code {}: Not Taken as Unlocked, Start Not Retried · Owner Epoch {} · Disposition Before {} · owner.lock Revision {}",
+    unlock_ok_nonzero: "unlock-owner Said unlock_owner_completed but Exited with Code {}: Not Taken as Unlocked, Start Not Retried · Owner Epoch {} · Disposition Before {} · owner.lock Revision {}",
     unlock_failed: "Unlock Failed: {} (Stage {}) · journal_appended={} · Exit Code {}",
-    unlock_fatal: "unlock-owner Exited with Code {} · {}",
+    unlock_stderr: "unlock-owner Exited with Code {} · {}",
     unlock_unparseable: "unlock-owner Output Unparseable: {} · Exit Code {}",
     unlock_field_invalid: "Field {} Missing or Off-Contract",
-    unlock_no_output: "No JSON on stdout, No FATAL actingd: Line on stderr",
+    unlock_no_output: "No JSON on stdout, No Output on stderr",
     unlock_timeout: "unlock-owner Not Finished Within {} s, Outcome Unknown",
     unlock_killed: "Killed and Reaped",
     unlock_kill_failed: "Killing It Failed: {}",

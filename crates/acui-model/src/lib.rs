@@ -20,10 +20,10 @@ pub use overlay::{extract_frame_size, extract_overlays, Overlay};
 pub use tabs::{tab_from_name, tab_name, ALL_TABS};
 
 use acui_rows::{
-    code, payload_value, ArtifactEvictionObservation, ArtifactKind, EventQuery, EventSeverity,
-    InstanceId, LedgerCount, LedgerEventPosition, LedgerRecoveryGap, LedgerRecoveryState,
-    LedgerRunRecovery, LedgerView, OpenReport, OriginModule, PortBindings, PortEntry,
-    ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, PublicEventPayload,
+    code, page_source_complete, payload_value, ArtifactEvictionObservation, ArtifactKind,
+    EventQuery, EventSeverity, InstanceId, LedgerCount, LedgerEventPosition, LedgerRecoveryGap,
+    LedgerRecoveryState, LedgerRunRecovery, LedgerView, OpenReport, OriginModule, PortBindings,
+    PortEntry, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, PublicEventPayload,
     RuntimeEventQueryPage, TaskSemanticFact, WriterFacts, MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 
@@ -445,7 +445,7 @@ impl ViewModel {
                     events.push(event.clone());
                 }
             }
-            complete &= page.read_scope().is_none_or(|scope| scope.read_complete);
+            complete &= page_source_complete(page);
             for group in page.run_recovery() {
                 self.absorb_recovery(group);
             }
@@ -575,6 +575,7 @@ impl ViewModel {
         let mut severity_counts = Vec::new();
         for severity in [
             EventSeverity::Debug,
+            EventSeverity::Success,
             EventSeverity::Info,
             EventSeverity::Warning,
             EventSeverity::Error,

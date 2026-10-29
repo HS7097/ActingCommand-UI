@@ -9,6 +9,8 @@
 
 它不是 Runtime 的一部分，是 Runtime 的**外部可拆客户端**。
 
+> **acsetup 暂未随构建发布，UI-2a 接回；在此之前用 `actingctl install` 安装。**
+
 本仓还放着**安装向导** `acsetup`（见「安装向导 acsetup」一节）与固定入口 `acforward`——A/B 安装经它拉起
 各个程序。与 Runtime 一样，这些程序不认识任何游戏：不含游戏逻辑，也不含游戏数据。游戏经 Runtime 加载的
 资源包接入（每个游戏一个标准包）；向导只读包里声明的内容，什么也不猜。
@@ -86,8 +88,8 @@
 - 钉住之后，立刻在同一条连接上读一次 `status()` 和一次 `runtime_fact_snapshot()`，给实例卡
   「运行时实例」几行。状态只在人按「跳到最新」时重读；跟随时每一次轮询都只重读任务事实，与钉点是否移动无关。
   头两行写两次读各自所在的序号；两者都可能晚于钉住的快照，所以这是最近一次读到的状态，不是钉点上
-  的状态。按契约，Runtime 会把这次状态读取本身记
-  成一条观察事件（`command.validated`），落在钉点之后，不在本会话的快照内。随后对状态里登记的每个
+  的状态。按契约，状态读取只读 Runtime 的内存，不追加账本记录（AO-4q）；它所在的位置是取样时
+  账本的已提交位置。随后对状态里登记的每个
   实例写：别名（灰字是实例编号）、端口、租约（占用中 / 接管冷却中 / 空闲，有排队请求时加上排队
   数），以及实例事实 `task.game`、`task.server`、`task.page`（最近一次识别匹配到的页面标签）原样，
   没有就写「未记录」。快照里有事实、状态却没登记的编号，单独一行写明未登记。任一次读失败，就分行
@@ -111,11 +113,11 @@
 不写：列表写账本未打开，不留一片空白；页签、过滤框、编号框和时间滑块都停用；模块框、端口框与帧区写「账本未打开」。不向账本发
 任何查询，不读任何素材。启动器照常可用。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.11.6 之后、仍说 0.11 协议（请求 v3、
-账本事件 v2）的一个提交：
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.29 之后 main 上、已合入
+Workflow #429 R-0、R-15a、R-0c 的一个提交，说 0.12 协议（`runtime-client` 修订 3、账本修订 4）：
 
 ```
-rev = "ceef6f90fe05dd23554f7996a9dee6b59836be3a"
+rev = "239db17770140fc55c6d60468856aaaa99e5ef53"
 ```
 
 五个 crate（contract / ledger / ledger-forensics / runtime-client / execution-kernel）共用这一个 rev。
@@ -165,9 +167,10 @@ CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译
   都在 Runtime 的账本写线程上做（Runtime `71db072d` 起只复核头部、边界与新增尾部，一万条时一页约
   15 ms；此前要把整本账读一遍、校验一遍），所以一次填充至少读一窗，多出 256 行、读到位置 1、读满 16 窗或已过 1 秒之后，就不再开始新的一窗。行按**最新在上**排列；底部
   的「读更早」接着往下读。顶栏常驻已读窗口覆盖
-  的位置（「已读序号 A–B」），有窗口的页说读取不完整时追加「源不完整」。
+  的位置（「已读序号 A–B」），有窗口的页说读取不完整时追加「源不完整」——只因 Runtime 的读预算停下的
+  页不算（#411 A51）：它的游标接着往下读，窗口会跟着读完。
 - **跳到最新、跟随最新（只在在线读面）**：「跳到最新」用一张新的第一页把钉点移到 Runtime 的最新位置，
-  重读状态与事实（状态读取会在账本留一条观察事件），去掉时间上界，从新钉点重新读起。「跟随最新」先
+  重读状态与事实（状态读取不追加账本记录），去掉时间上界，从新钉点重新读起。「跟随最新」先
   同样对齐但不读状态，之后每 5 秒读一次 Runtime 的事实快照——它在内存里的事实库，位置就是账本的最新
   位置，不读账本也不写账本。只有这个位置动了，钉点才移过去，并用页查询把新旧钉点之间的窗口读到视图
   顶部；已载入的行、选中项和正在读的帧都保留，任务事实直接取自同一张快照。跟随中设了时间上界会停止
@@ -191,7 +194,8 @@ CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译
 - **时间上界**：滑块的起始位置就是它代表的状态——最右端即「全部」，第一次拖动是收窄。设了上界时，
   读取只往下走，所以起点必须高于所有匹配的事件：先按已提交的时间跨度、假设事件在时间上均匀来估
   上界的位置，再多留两窗余量，然后用视图自己的查询做一次探测，问起点之上第一条匹配的事件。没有：
-  就从这里读起。有：起点移到它之上，步长每次加倍，在一秒预算内最多探测三次，仍不行就退回钉点。实际显示什么仍
+  就从这里读起——除非这一页在判定出任何一行之前就被 Runtime 的读预算停下（#411 A51），那它什么也没
+  判定，退回钉点。有：起点移到它之上，步长每次加倍，在一秒预算内最多探测三次，仍不行就退回钉点。实际显示什么仍
   由查询自己的时间上界决定，顶栏写明实际读了哪些位置。上界与标签随手柄即时变化；手柄停住 0.4 秒后
   视图才重新读取（其间切页签或点「读更早」会先应用新上界）。
 - **行类型不再镜像**：`acui-rows` 直接再导出契约类型，只额外提供本地时间、id 缩写、
@@ -317,11 +321,14 @@ actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'     # 可选，
   `$HOME/.local/state` 下同名路径），目录由监控台建，**永不在状态根里**。Windows 下用
   `DETACHED_PROCESS` 拉起：守护进程不继承监控台的控制台，收不到它的 Ctrl+C。
 - **就绪判定**：最多 60 次、每次 500 ms。每次先 `try_wait()`：子进程已退出就停下，写退出码、
-  该日志里最后一行以 `FATAL actingd:` 开头的**原文**（日志读不了就写读取错误，没有这样的行就照直
-  说没有）与日志路径；没退出就再 `connect` 一次，连上即就绪，写 PID 与 owner epoch，随后记下这次按钮
+  该日志里 actingd 的终态结果——最后一行带 `actingcommand.outcome.v1` 信封且有码的 `OUTCOME actingd:`
+  行（runtime-outcomes 1），显示与它同次写入、紧挨在前的开发者行的**原文**，没有就显示这行结果行
+  本身（日志读不了就写读取错误，没有这样的行就照直说没有）——与日志路径；没退出就再 `connect` 一次，
+  连上即就绪，写 PID 与 owner epoch，随后记下这次按钮
   （见下）；本台若按离线读（含离线读面未打开），追加一句「要在线读请带 `--source online` 重启」——
   **不会在会话中途悄悄换读面**。60 次都没连上，写「仍未就绪」和最后一次客户端错误码。就绪**从不看
-  守护进程的输出**：只在早退之后读回日志、只取那一行，其中只认它是否带 `owner_resource_unconfirmed`（见下）。
+  守护进程的输出**：只在早退之后读回日志、只取那一条终态结果，其中只认它的码是不是
+  `owner_resource_unconfirmed`（见下）。
 - **记下启动按钮**：Runtime 存在之后才记得下，所以顺序是探测 →（需要时）拉起 → 就绪判定 → 记账。
   按按钮是人的动作，所以记账新开一条身份为 actor `user`、source `ui` 的连接（控制台自己发起的读用
   `ui` / `ui`），`begin_interaction()` 开一个交互，用 `record_client_action_receipt` 记一条
@@ -333,8 +340,8 @@ actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'     # 可选，
   宿主失败时再写宿主码与操作——Runtime
   仍照写已就绪 / 运行中。就绪判定
   失败时没有连接，**什么也不记**，失败只写在结果行上——这是启动器里可能生效却不落账的两种动作之一，
-  另一种是在 `ledger` 阶段失败或被终止（超时或读取子进程状态失败）的解锁（见下）。
-- **解锁 owner**：只在上一次启动的 FATAL 行带 `owner_resource_unconfirmed` 时出现——actingd 拒绝了
+  另一种是在 `unlock_owner_ledger` 阶段失败或被终止（超时或读取子进程状态失败）的解锁（见下）。
+- **解锁 owner**：只在上一次启动的终态结果码是 `owner_resource_unconfirmed` 时出现——actingd 拒绝了
   这个状态根，因为它上一个 Runtime owner 退出时设备资源仍在用或未确认。此时结果行下面多一行「解锁
   owner…」按钮。第一下什么也不运行，只亮出声明「上一个 Runtime 的设备资源已经释放」和「确认并解锁」
   按钮；第二下才按 `actingd_exe`（同启动一样须是绝对路径）运行，命令行就这一条：
@@ -343,12 +350,14 @@ actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'     # 可选，
   最多 180 秒——远高于 Runtime 自己给账本阶段的 120 秒预算，不会截断本来能完成的解锁；
   超时就终止并回收，结果行写结果未知。actor 是 `acui`，指这个监控台而不是某个人：不会把
   操作系统用户名写进账本。stdout 去掉首尾空白后必须整体是一个 JSON 对象，`schema_version` 为
-  `actingcommand.actingd.unlock-owner.v1`。`ok` 且退出码 0：写被解锁的 owner epoch、解锁前处置
-  （`in_use` / `unconfirmed`）与 `owner.lock` 修订号，收起解锁入口，再按同一条路径自动启动一次。
-  `failed`：**原样**写 `error.code`、`error.stage` 与 `journal_appended`（只有阶段 `ledger` 才是
-  `true`：解锁已落盘，下次启动会接管那个 epoch，但账本里缺它那条事实）。没有 JSON 时，**原样**写
-  stderr 里最后一行 `FATAL actingd:`——参数错误，或装的 actingd 太旧、不认识这条命令。拉起失败、
-  超时、输出无法解析或不合约定、`ok` 却退出码非 0，各有各的结果行，都不重试启动。除解锁成功外，
+  `actingcommand.actingd.unlock-owner.v2`，按 `outcome.code` 判断。`unlock_owner_completed` 且退出码
+  0：写被解锁的 owner epoch、解锁前处置（`in_use` / `unconfirmed`）与 `owner.lock` 修订号，收起解锁
+  入口，再按同一条路径自动启动一次。其他码都是失败：**原样**写这个码、结果里的 `stage` 值与
+  `journal_appended`（只有阶段 `unlock_owner_ledger` 才是 `true`：解锁已落盘，下次启动会接管那个
+  epoch，但账本里缺它那条事实）；在解锁本身之前就被拒的失败（用法、选项、安装环境检查）不带这两项，
+  就各写一个破折号。没有 JSON 时，**原样**写 stderr 里最后一行开发者行
+  （`<LEVEL> actingd: <code> <text>`），没有就写最后一行非空行。拉起失败、超时、输出无法解析或不合约定、
+  `unlock_owner_completed` 却退出码非 0，各有各的结果行，都不重试启动。除解锁成功外，
   任何结果之后入口回到第一步；新的一次启动收起它。解锁进行中「启动」被拒；上一次「启动」的就绪轮询还没结束时再按，也直接拒回，写「上一次启动仍在等待就绪」，什么也不拉。监控台不为它记
   `client_action`：没有运行中的 Runtime 可经手，`unlock-owner` 自己追加 `cli.command` 事实（action
   `owner.unlock`）。它从不删除 `owner.lock`（Runtime `contracts/actingd-unlock-owner.md`）。
@@ -386,10 +395,11 @@ actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'     # 可选，
 - **发现**：「发现实例」在工作线程上经类型化客户端（`discover_instances()`）请正在运行的 Runtime 重跑
   一次其提供者的 MuMu 实例发现；Runtime 会在宿主上运行 `MuMuManager`，客户端最多等 25 秒。契约只接受
   控制台前的人或操作员 CLI 发起这个查询，所以它单独开一条连接，身份是 actor `user`、source `ui`（枚举
-  值，不是系统用户名），与启动器的按钮相同。它不绑定任何东西，也不碰设备；按契约，Runtime 把答复了
-  的查询记成一条观察事件（`command.validated`），把拒绝记成 `command.rejected` 加 `runtime.failed`。旁边的框随后列出报告的
+  值，不是系统用户名），与启动器的按钮相同。它不绑定任何东西，也不碰设备；按契约，答复了的查询
+  不追加账本记录（AO-4q），拒绝记成 `command.rejected` 加 `runtime.failed`。旁边的框随后列出报告的
   每个实例：MuMu 序号、是否在运行、运行中的 Runtime 给它绑定的别名（若有）、ADB 地址、Android 版本，
-  名称放最后；那一行写出个数、提供者版本和这次查询的序号。在框里选只是选中，点「采用所选」才生效：
+  名称放最后；那一行写出个数、提供者版本和 Runtime 取样这次答复时账本的已提交位置。在框里选只是选中，
+  点「采用所选」才生效：
   配置文件里没有指向它的项（`instance_index` 等于其序号、`instance_name` 等于其名称，或 `port` 等于其
   ADB 端口）、运行中的 Runtime 也没绑定它时，就以这个序号为绑定起一个新项（别名等照填；地址留给启动
   时的发现）；已被绑定的只指明是哪一项，什么也不改。没有 Runtime 在跑，或
@@ -415,6 +425,8 @@ actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'     # 可选，
   原监控台及其子调用保持原代际，编辑器本身不重启 Runtime。
 
 ## 安装向导 acsetup
+
+> **acsetup 暂未随构建发布，UI-2a 接回；在此之前用 `actingctl install` 安装。**
 
 `crates/acui-setup` 是一个独立的二进制 `acsetup.exe`（Slint 窗口，与监控台同一套样式与图标），把
 伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases) 里的发布件装成一份**按用户**的安装。
@@ -712,7 +724,7 @@ Runtime 的看门狗是一个计划任务，所以 acsetup 不替人设置。要
   `strings.rs`，设置文件的读写在 `settings.rs`。
 
 `slint` 1.17.x，`default-features = false`；账本对监控台只读（监控台发出的请求——启动按钮、关闭
-请求、在线开台时的那次状态读取、实例发现查询——由 Runtime 自己记账），控制入口只有启动器的两个按钮（启动 /
+请求、被拒的实例发现查询——由 Runtime 自己记账；状态读取和答复了的实例发现查询不留账本记录），控制入口只有启动器的两个按钮（启动 /
 请求关闭，见上）、启动器的解锁入口（经确认的 `actingd unlock-owner`）与实例配置窗口经 check-config
 把关的保存，没有审批入口；监控台的 crate 不带测试，CI 只构建工作区、不跑测试。启动器在
 `crates/acui-app/src/launcher.rs`，实例配置窗口在 `instances.rs`，探测、请求关闭、记下启动按钮、

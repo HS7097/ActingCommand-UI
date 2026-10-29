@@ -15,12 +15,15 @@
 //! but only once a Runtime takes a connection: a start that never got ready
 //! records nothing.
 //!
-//! After an early exit the log is read back once, for its last `FATAL actingd:`
-//! line, shown as written. When that line names `owner_resource_unconfirmed`
-//! the block offers `actingd unlock-owner`, run only on a second, confirming
-//! press: no console window, output captured, killed and reaped if it outlives
-//! its timeout. It appends its own ledger fact, so no client action is recorded
-//! for it; an `ok` with exit code 0 presses start once more.
+//! After an early exit the log is read back once, for actingd's terminal
+//! outcome: its last `OUTCOME actingd:` line that holds an outcome envelope
+//! (runtime-outcomes 1), shown as the developer line written with it. When
+//! that outcome's code is `owner_resource_unconfirmed` the block offers
+//! `actingd unlock-owner`, run only on a second, confirming press: no console
+//! window, output captured, killed and reaped if it outlives its timeout. It
+//! appends its own ledger fact, so no client action is recorded for it; a v2
+//! report whose outcome is `unlock_owner_completed`, with exit code 0, presses
+//! start once more.
 
 use std::fs::File;
 use std::io::{self, Read};
@@ -55,12 +58,21 @@ const DETACHED_PROCESS: u32 = 0x0000_0008;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-const FATAL_PREFIX: &str = "FATAL actingd:";
-/// The one code in a fatal line the block answers, with the unlock entry.
+/// actingd's outcome line (runtime-outcomes 1, Runtime contracts/runtime-outcomes.md):
+/// `OUTCOME actingd: <envelope>`, written in one write with its developer line
+/// just before it.
+const OUTCOME_PREFIX: &str = "OUTCOME actingd: ";
+const OUTCOME_SCHEMA: &str = "actingcommand.outcome.v1";
+/// The developer line's levels: `<LEVEL> actingd: <code> <text>`.
+const DEVELOPER_PREFIXES: [&str; 4] =
+    ["INFO actingd:", "WARN actingd:", "ERROR actingd:", "FATAL actingd:"];
+/// The one terminal outcome code the block answers, with the unlock entry.
 const OWNER_RESOURCE_UNCONFIRMED: &str = "owner_resource_unconfirmed";
 /// Names the surface, not a person: no user name goes into the ledger.
 const UNLOCK_ACTOR: &str = "acui";
-const UNLOCK_SCHEMA: &str = "actingcommand.actingd.unlock-owner.v1";
+const UNLOCK_SCHEMA: &str = "actingcommand.actingd.unlock-owner.v2";
+/// The outcome code of a report whose unlock took effect.
+const UNLOCK_COMPLETED: &str = "unlock_owner_completed";
 /// After its journal append the command opens the ledger and recovers the
 /// exited owner's writer within the Runtime's own 120 s maintenance budget;
 /// killing it inside that window would leave the journal record without its
@@ -234,14 +246,12 @@ fn start(window: &AppWindow, app: &Rc<App>) {
                         .code()
                         .map(|code| code.to_string())
                         .unwrap_or_else(|| labels.none.to_string());
-                    let said = match std::fs::read(&log).map(|bytes| last_fatal(&bytes)) {
-                        Ok(Some(line)) => {
-                            offer_unlock = line
-                                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                                .any(|word| word == OWNER_RESOURCE_UNCONFIRMED);
+                    let said = match std::fs::read(&log).map(|bytes| last_outcome(&bytes)) {
+                        Ok(Some((line, code))) => {
+                            offer_unlock = code == OWNER_RESOURCE_UNCONFIRMED;
                             line
                         }
-                        Ok(None) => labels.log_no_fatal.to_owned(),
+                        Ok(None) => labels.log_no_outcome.to_owned(),
                         Err(error) => fill(labels.log_unreadable, &[&error.to_string()]),
                     };
                     outcome = Some((None, fill(labels.start_exited, &[&exit, &said, &log_text])));
@@ -337,12 +347,46 @@ fn actingd_paths<'a>(
     ))
 }
 
-/// The last line of `output` that starts with `FATAL actingd:`.
-fn last_fatal(output: &[u8]) -> Option<String> {
-    String::from_utf8_lossy(output)
-        .lines()
+/// actingd's terminal outcome in `output`: its last `OUTCOME actingd:` line that
+/// holds an `actingcommand.outcome.v1` envelope with a code (a line that does
+/// not is passed over for an earlier one). Gives the line to show — the
+/// developer line written just before it, else the outcome line as written —
+/// and the outcome's code.
+fn last_outcome(output: &[u8]) -> Option<(String, String)> {
+    let text = String::from_utf8_lossy(output);
+    let lines: Vec<&str> = text.lines().collect();
+    for index in (0..lines.len()).rev() {
+        let Some(envelope) = lines[index].strip_prefix(OUTCOME_PREFIX) else {
+            continue;
+        };
+        let Ok(envelope) = serde_json::from_str::<Value>(envelope) else {
+            continue;
+        };
+        if envelope.pointer("/schema_version").and_then(Value::as_str) != Some(OUTCOME_SCHEMA) {
+            continue;
+        }
+        let Some(code) = envelope.pointer("/code").and_then(Value::as_str) else {
+            continue;
+        };
+        let developer = index
+            .checked_sub(1)
+            .map(|before| lines[before])
+            .filter(|before| DEVELOPER_PREFIXES.iter().any(|level| before.starts_with(*level)));
+        return Some((developer.unwrap_or(lines[index]).to_owned(), code.to_owned()));
+    }
+    None
+}
+
+/// The line to show from a subcommand's stderr when its stdout holds no report.
+/// A subcommand writes no `OUTCOME actingd:` line, only its developer line
+/// (`<LEVEL> actingd: <code> <text>`, Runtime contracts/actingd-unlock-owner.md):
+/// the last of those, else the last line that is not blank, so a panic still shows.
+fn last_stderr_line(output: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(output);
+    text.lines()
         .rev()
-        .find(|line| line.starts_with(FATAL_PREFIX))
+        .find(|line| DEVELOPER_PREFIXES.iter().any(|level| line.starts_with(*level)))
+        .or_else(|| text.lines().rev().find(|line| !line.trim().is_empty()))
         .map(str::to_owned)
 }
 
@@ -465,7 +509,7 @@ fn unlock(window: &AppWindow, app: &Rc<App>) {
 }
 
 /// The line unlock-owner's answer comes to, and whether it unlocked: only an
-/// `ok` report with exit code 0 did.
+/// `unlock_owner_completed` report with exit code 0 did.
 fn unlock_outcome(labels: &Labels, exe: &Path, config: &Path, installation: Option<&acui_installation::Snapshot>) -> (String, bool) {
     let (status, stdout, stderr) = match run_unlock(labels, exe, config, installation) {
         Ok(output) => output,
@@ -474,8 +518,8 @@ fn unlock_outcome(labels: &Labels, exe: &Path, config: &Path, installation: Opti
     let exit = exit_text(labels, status);
     let stdout = stdout.trim_ascii();
     if stdout.is_empty() {
-        let text = match last_fatal(&stderr) {
-            Some(line) => fill(labels.unlock_fatal, &[&exit, &line]),
+        let text = match last_stderr_line(&stderr) {
+            Some(line) => fill(labels.unlock_stderr, &[&exit, &line]),
             None => fill(labels.unlock_unparseable, &[labels.unlock_no_output, &exit]),
         };
         return (text, false);
@@ -487,8 +531,10 @@ fn unlock_outcome(labels: &Labels, exe: &Path, config: &Path, installation: Opti
     }
 }
 
-/// The v1 report read field by field; `Err` names the first field that is
-/// missing or not as the contract states.
+/// The v2 report read field by field (`outcome` is the full
+/// `actingcommand.outcome.v1` envelope); `Err` names the first field that is
+/// missing or not as the contract states. A failure's stage and
+/// `journal_appended` may be absent and are not such a field.
 fn unlock_report(
     labels: &Labels,
     report: &Value,
@@ -505,41 +551,37 @@ fn unlock_report(
     if text("/schema_version")? != UNLOCK_SCHEMA {
         return Err(invalid("/schema_version"));
     }
-    match text("/status")? {
-        "ok" => {
-            let epoch = text("/owner_epoch")?;
-            let disposition = text("/previous_resource_disposition")?;
-            let revision = report
-                .pointer("/revision")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| invalid("/revision"))?
-                .to_string();
-            Ok(if success {
-                (
-                    fill(labels.unlock_ok, &[epoch, disposition, &revision]),
-                    true,
-                )
-            } else {
-                (
-                    fill(
-                        labels.unlock_ok_nonzero,
-                        &[exit, epoch, disposition, &revision],
-                    ),
-                    false,
-                )
-            })
-        }
-        "failed" => {
-            let appended = report
-                .pointer("/journal_appended")
-                .and_then(Value::as_bool)
-                .ok_or_else(|| invalid("/journal_appended"))?
-                .to_string();
-            let values = [text("/error/code")?, text("/error/stage")?, &appended, exit];
-            Ok((fill(labels.unlock_failed, &values), false))
-        }
-        _ => Err(invalid("/status")),
+    let code = text("/outcome/code")?;
+    if code == UNLOCK_COMPLETED {
+        let epoch = text("/owner_epoch")?;
+        let disposition = text("/previous_resource_disposition")?;
+        let revision = report
+            .pointer("/revision")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| invalid("/revision"))?
+            .to_string();
+        return Ok(if success {
+            (fill(labels.unlock_ok, &[epoch, disposition, &revision]), true)
+        } else {
+            (
+                fill(labels.unlock_ok_nonzero, &[exit, epoch, disposition, &revision]),
+                false,
+            )
+        });
     }
+    // A failure refused before the unlock itself (usage, options, the
+    // installation check, a report that could not be encoded) carries neither
+    // a stage nor `journal_appended`: those show as none, beside its own code.
+    let stage = report
+        .pointer("/outcome/values/stage")
+        .and_then(Value::as_str)
+        .unwrap_or(labels.none);
+    let appended = report
+        .pointer("/journal_appended")
+        .and_then(Value::as_bool)
+        .map_or_else(|| labels.none.to_string(), |appended| appended.to_string());
+    let values = [code, stage, &appended, exit];
+    Ok((fill(labels.unlock_failed, &values), false))
 }
 
 /// Exactly `<actingd_exe> unlock-owner --config <actingd_config> --actor acui

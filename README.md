@@ -10,6 +10,8 @@ three-column interface: instance card, timeline, detail pane.
 
 It is not part of the Runtime; it is the Runtime's **external, detachable client**.
 
+> **acsetup is not shipped with the builds for now; UI-2a brings it back. Until then, install with `actingctl install`.**
+
 This repository also holds the **setup wizard** `acsetup` (see "Setup wizard acsetup") and the fixed
 entry `acforward`, through which an A/B installation starts its programs. Like the Runtime, these
 programs know no game: they hold no game logic and no game data. A game is supported through the
@@ -119,8 +121,8 @@ answers come from:
   instance card its "runtime instances" lines. Status is read again only on a person's jump to the
   latest; while following, every poll reads the task facts again, whether or not the pin moved. The first two
   lines state the sequence each read was taken at; both may be past the pinned snapshot, so this is state
-  as last read, not state at the pin. By contract the Runtime records the status read itself as one
-  observation event (`command.validated`), after the pin and so outside this session's snapshot. Then,
+  as last read, not state at the pin. By contract the status read takes the Runtime's memory only and
+  appends no ledger record (AO-4q); its position is the ledger's committed head when it was sampled. Then,
   per instance the status registers: its alias (the instance id in grey), port, lease (leased / takeover
   cooldown / idle, plus the queued request count when there is one), and the instance facts
   `task.game`, `task.server` and `task.page` (the page label the last recognition matched) verbatim, or
@@ -153,11 +155,12 @@ tabs, the filter boxes, the id box and the time slider are off; the module and p
 pane say "ledger not opened". Nothing is asked of the ledger and no material is read. The launcher works
 as usual.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), a Runtime commit after v0.11.6 that
-still speaks the 0.11 protocols (requests v3, ledger events v2):
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), a commit on the Runtime's main after
+v0.12.29 (Workflow #429 R-0, R-15a and R-0c merged) that speaks the 0.12 protocols (`runtime-client`
+revision 3, ledger revision 4):
 
 ```
-rev = "ceef6f90fe05dd23554f7996a9dee6b59836be3a"
+rev = "239db17770140fc55c6d60468856aaaa99e5ef53"
 ```
 
 The five crates (contract / ledger / ledger-forensics / runtime-client / execution-kernel) share this one rev.
@@ -228,10 +231,11 @@ version exists only in the tag.
   run for one second. Rows are listed
   **newest first**; "read earlier" at the bottom continues below what is loaded. The top bar permanently
   states the positions the loaded windows cover ("read positions A–B"), with "source incomplete" appended
-  when a window's page said its read was incomplete.
+  when a window's page said its read was incomplete — except a page that only the Runtime's read budget
+  stopped (#411 A51): its cursor goes on, and the window follows it.
 - **Jump to latest, follow latest (online only)**: "jump to latest" moves the pin to the Runtime's latest
-  position (one fresh first page), reads status and facts again (the status read leaves one observation
-  event in the ledger), drops any time bound and starts the view over from the new pin. "Follow latest"
+  position (one fresh first page), reads status and facts again (the status read appends no ledger
+  record), drops any time bound and starts the view over from the new pin. "Follow latest"
   first catches up the same way without the status read, then every 5 seconds reads the Runtime's fact
   snapshot — its in-memory fact store, stated at the ledger's latest position, which costs no ledger read
   and writes nothing. Only when that position has moved does the pin move to it and are the windows
@@ -268,7 +272,8 @@ version exists only in the tag.
   first). Reading only goes down, so with a bound set it must start above every matching event: the
   start is estimated from the committed time span, as if events were even in time, plus two windows of
   slack, and one probe with the view's own query asks for the first matching event above it. None:
-  reading starts there. One found: the start moves above it, the step doubling each time, for at most
+  reading starts there — unless the Runtime's read budget stopped that page before it decided a row
+  (#411 A51), which decides nothing, so the pin. One found: the start moves above it, the step doubling each time, for at most
   three probes within the one-second budget, and otherwise falls back to the pin. The query's own time bound still decides what
   shows; the top bar states the positions actually read.
 - **Row types are no longer mirrored**: `acui-rows` re-exports the contract types directly, and only adds
@@ -425,15 +430,17 @@ last Start or Request shutdown press, or why the instance-configuration window d
   inside the state root**. On Windows it is launched with `DETACHED_PROCESS`: the daemon does not inherit
   the console program's console, and does not receive its Ctrl+C.
 - **Readiness decision**: at most 60 attempts, 500 ms each. Each attempt does `try_wait()` first: if the
-  child process has exited it stops and states the exit code, the last line of that log starting with
-  `FATAL actingd:` **verbatim** — or that the log could not be read, with the error, or holds no such
-  line — and the log path; if it has not exited it
+  child process has exited it stops and states the exit code, actingd's terminal outcome in that log —
+  its last `OUTCOME actingd:` line holding an `actingcommand.outcome.v1` envelope with a code
+  (runtime-outcomes 1), shown as the developer line written just before it **verbatim**, else as that
+  outcome line — or that the log could not be read, with the error, or holds no such line — and the log
+  path; if it has not exited it
   does one more `connect`, and a connection means ready, stating the PID and owner epoch, and then the
   press is recorded (see below). If this console is reading offline, or its offline face is unopened, it
   appends the sentence "to read online, restart with `--source online`" — it **never quietly switches
   read face mid-session**. If all 60 attempts fail to connect, it says "still not ready" and the last
   client error code. Readiness is **never read from the daemon's output**: the log is read back only
-  after an early exit, for that one line, and nothing in it is interpreted but whether it names
+  after an early exit, for that one outcome, and nothing in it is interpreted but whether its code is
   `owner_resource_unconfirmed` (below).
 - **Recording the start press**: the press can only be recorded once a Runtime exists, so the order is
   probe → (if needed) launch → readiness decision → record. A press is a person's act, so recording
@@ -448,9 +455,10 @@ last Start or Request shutdown press, or why the instance-configuration window d
   and the host code and operation when the refusal names one
   — the Runtime is still reported ready / running. If readiness fails there is no connection and **nothing is
   recorded**; the failure is shown only on the line — one of the two launcher actions that can take
-  effect without being recorded; the other is an unlock that fails at stage `ledger` or is killed (on
-  timeout, or when reading its status fails; below).
-- **Unlock owner**: offered only when the fatal line of the last start names `owner_resource_unconfirmed`
+  effect without being recorded; the other is an unlock that fails at stage `unlock_owner_ledger` or is
+  killed (on timeout, or when reading its status fails; below).
+- **Unlock owner**: offered only when the terminal outcome of the last start has the code
+  `owner_resource_unconfirmed`
   — actingd refused the state root because its last Runtime owner exited with device resources in use or
   unconfirmed. A line below the result line then shows an "Unlock Owner…" button. The first press runs
   nothing: it only shows the statement "the device resources of the last Runtime are released" and a
@@ -461,14 +469,17 @@ last Start or Request shutdown press, or why the instance-configuration window d
   so a run that would finish is never cut off; past that it is killed and reaped and the line says the
   outcome is unknown. The actor `acui` names the console, never a person: no OS user name reaches the ledger.
   The whole trimmed stdout must be one JSON object with `schema_version`
-  `actingcommand.actingd.unlock-owner.v1`. `ok` with exit code 0 states the unlocked owner epoch, the
-  disposition before (`in_use` / `unconfirmed`) and the `owner.lock` revision, withdraws the entry and
-  presses Start once more, through the same path. `failed` states `error.code`, `error.stage` and
-  `journal_appended` **verbatim** (`true` only at stage `ledger`: the unlock is durable and the next
-  start takes the epoch over, but its ledger fact is missing). With no JSON, the last `FATAL actingd:`
-  line on stderr is shown **verbatim** — an argument error, or an actingd too old to know the command. A
-  spawn failure, a timeout, output that does not parse or does not match the contract, and an `ok` with
-  a non-zero exit code each have their own line, and none retries the start. After any outcome but an
+  `actingcommand.actingd.unlock-owner.v2`, judged by its `outcome.code`. `unlock_owner_completed` with
+  exit code 0 states the unlocked owner epoch, the disposition before (`in_use` / `unconfirmed`) and the
+  `owner.lock` revision, withdraws the entry and presses Start once more, through the same path. Any
+  other code is a failure: it states the code, the outcome's `stage` value and `journal_appended`
+  **verbatim** (`true` only at stage `unlock_owner_ledger`: the unlock is durable and the next start
+  takes the epoch over, but its ledger fact is missing), with a dash for either one a failure refused
+  before the unlock itself (usage, options, the installation check) does not carry. With no JSON, the
+  last developer line (`<LEVEL> actingd: <code> <text>`) on stderr, else its last non-blank line, is
+  shown **verbatim**. A spawn failure, a timeout, output that does not parse or does not match the
+  contract, and an `unlock_owner_completed` with a non-zero exit code each have their own line, and none
+  retries the start. After any outcome but an
   unlock the entry is back at its first step; a new start withdraws it. Start is refused while the
   unlock runs, and pressing it again while the previous start is still polling for readiness is
   refused outright — "The Previous Start Is Still Waiting for Readiness" — launching nothing. The console records no client action for it: there is no running Runtime to record
@@ -522,12 +533,12 @@ list.
   Runtime runs `MuMuManager` on the host, and the client waits up to 25 seconds. The contract admits
   this query only from a person at the console or an operator's CLI, so it goes out on its own
   connection as actor `user`, source `ui` (the enum, not an OS user name), like the launcher's
-  presses. It binds nothing and touches no device; by contract the Runtime records an answered query as
-  one observation event
-  (`command.validated`), and a refusal as `command.rejected` plus `runtime.failed`. The box beside it then
+  presses. It binds nothing and touches no device; by contract an answered query appends no ledger
+  record (AO-4q), and a refusal is recorded as `command.rejected` plus `runtime.failed`. The box beside it then
   lists every instance reported: its MuMu index, whether it runs, the alias the running Runtime binds
   to it (if any), its ADB address, the Android version, and its name last; the line states how many,
-  the provider version and the query's sequence. Choosing in the box only selects; Use Selected applies:
+  the provider version and the ledger's committed head when the Runtime sampled the answer. Choosing in
+  the box only selects; Use Selected applies:
   an instance neither the file (an entry with its index as `instance_index`, its name as
   `instance_name`, or its ADB port as `port`) nor the running Runtime binds starts a new entry bound by
   that index (the alias and the rest still to fill; its address is left to discovery at startup), while
@@ -567,6 +578,8 @@ list.
   their original generation, and the editor never restarts Runtime itself.
 
 ## Setup wizard acsetup
+
+> **acsetup is not shipped with the builds for now; UI-2a brings it back. Until then, install with `actingctl install`.**
 
 `crates/acui-setup` is a standalone binary `acsetup.exe` (a Slint window, the same styling and icon as the
 console) that installs the release files from the umbrella repository's
@@ -1030,8 +1043,9 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`.
 
 `slint` 1.17.x, `default-features = false`; the ledger is read-only to the console (what the Runtime
-records of the console's own requests — the start press, shutdown requests, the status read at an online
-open, instance discovery queries — it records itself), the only control entry points are the
+records of the console's own requests — the start press, shutdown requests, a refused instance discovery
+query — it records itself; the status read and an answered discovery query append nothing), the only
+control entry points are the
 launcher's two buttons (start / request shutdown, see above), its owner-unlock entry (a confirmed
 `actingd unlock-owner`), and the instance-configuration window's check-config-gated save, and there is no
 approval entry point; the console crates carry no tests, and CI builds the workspace without running
