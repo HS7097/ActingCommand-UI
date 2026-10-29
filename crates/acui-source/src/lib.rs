@@ -73,6 +73,13 @@ const FACTS_READ_DEADLINE: Duration = Duration::from_secs(30);
 const OFFLINE_OPEN_BYTES: u64 = 1 << 30;
 const OFFLINE_OPEN_EVENTS: usize = 300_000;
 const OFFLINE_OPEN_DEADLINE: Duration = Duration::from_secs(60);
+/// Bound on each later read of the offline snapshot: one page, or the port
+/// map's binding read. The snapshot keeps the deadline it was opened under and
+/// the ledger checks it on every page, so each read sets its own first
+/// (`set_read_deadline`); the opening's byte and event limits stay. 30 s, as
+/// the facts replay and a material read, each of which opens the ledger anew
+/// within that same bound.
+const OFFLINE_READ_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The io timeout of the session's ledger page connection (see `LedgerPages`):
 /// how long one page exchange waits for its receipt, and the bound of that
@@ -125,7 +132,9 @@ impl Spelling for Location {
 /// One authenticated snapshot of one state root.
 pub struct EvidenceSource {
     root: PathBuf,
-    snapshot: GlobalLedgerMetadata,
+    /// In a cell because each read resets its deadline (see `snapshot_for_read`)
+    /// while the session reads through `&self`, on the event loop only.
+    snapshot: RefCell<GlobalLedgerMetadata>,
 }
 
 /// The ledger's refusal to open a state root: its own code, operation and
@@ -161,7 +170,7 @@ impl EvidenceSource {
             Instant::now() + OFFLINE_OPEN_DEADLINE,
         );
         let snapshot = GlobalLedger::open_metadata(config)?;
-        Ok(Self { root, snapshot })
+        Ok(Self { root, snapshot: RefCell::new(snapshot) })
     }
 
     pub fn state_root(&self) -> &Path {
@@ -170,7 +179,17 @@ impl EvidenceSource {
 
     /// The committed position this whole session reads at.
     pub fn snapshot_position(&self) -> u64 {
-        self.snapshot.latest_sequence()
+        self.snapshot.borrow().latest_sequence()
+    }
+
+    /// The snapshot for one read, its deadline first set to
+    /// `OFFLINE_READ_DEADLINE` from now, so a read is not refused by the
+    /// deadline the snapshot was opened under.
+    fn snapshot_for_read(&self) -> Ref<'_, GlobalLedgerMetadata> {
+        self.snapshot
+            .borrow_mut()
+            .set_read_deadline(Instant::now() + OFFLINE_READ_DEADLINE);
+        self.snapshot.borrow()
     }
 
     /// One formal page: events, their view membership, read scope, cursor,
@@ -186,7 +205,7 @@ impl EvidenceSource {
             .at_snapshot(self.snapshot_position())
             .map_err(|error| anyhow!("快照位置无效：{}", error.code()))?;
         actingcommand_ledger_forensics::query_view_page(
-            &self.snapshot,
+            &self.snapshot_for_read(),
             query,
             ProjectionProfile::Ui,
             &request,
@@ -202,7 +221,7 @@ impl EvidenceSource {
     /// back with its code as the outermost context.
     pub fn instance_bindings(&self) -> Result<PortBindings> {
         let bindings = actingcommand_ledger_forensics::instance_bindings(
-            &self.snapshot,
+            &self.snapshot_for_read(),
             self.snapshot_position(),
         )
         .map_err(|error| {
@@ -278,28 +297,29 @@ impl EvidenceSource {
     }
 
     pub fn open_report(&self) -> OpenReport {
-        let event_count = self.snapshot.event_count() as u64;
-        let complete = self.snapshot.read_complete() && self.snapshot.corrupt_tail().is_none();
+        let snapshot = self.snapshot.borrow();
+        let event_count = snapshot.event_count() as u64;
+        let complete = snapshot.read_complete() && snapshot.corrupt_tail().is_none();
         OpenReport {
-            backend: self.snapshot.backend().to_string(),
-            latest_sequence: self.snapshot.latest_sequence(),
+            backend: snapshot.backend().to_string(),
+            latest_sequence: snapshot.latest_sequence(),
             event_count: if complete {
                 LedgerCount::Counted(event_count)
             } else {
                 LedgerCount::VerifiedPrefix(event_count)
             },
-            read_complete: self.snapshot.read_complete(),
-            corrupt_tail: self.snapshot.corrupt_tail().map(|tail| {
+            read_complete: snapshot.read_complete(),
+            corrupt_tail: snapshot.corrupt_tail().map(|tail| {
                 format!(
                     "{} 段{} 偏移{} 悬挂{}字节",
                     tail.code, tail.segment_index, tail.byte_offset, tail.dangling_byte_count
                 )
             }),
-            repair_count: match self.snapshot.repair_count() {
+            repair_count: match snapshot.repair_count() {
                 Some(count) => LedgerCount::Counted(count as u64),
                 None => LedgerCount::NoRepairLog,
             },
-            writer: match self.snapshot.writer_metadata() {
+            writer: match snapshot.writer_metadata() {
                 GlobalLedgerWriterMetadataObservation::Absent => WriterFacts::Absent,
                 GlobalLedgerWriterMetadataObservation::Locked { byte_count } => {
                     WriterFacts::Locked { byte_count: *byte_count }
