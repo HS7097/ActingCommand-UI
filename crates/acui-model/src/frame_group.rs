@@ -144,6 +144,7 @@ pub fn frame_group<'a>(
                 frame_width,
                 frame_height,
                 targets,
+                ..
             }) => {
                 group.recognition = Some((matched_page.clone(), candidate_pages.len()));
                 group.extent = Some((*frame_width as f32, *frame_height as f32));

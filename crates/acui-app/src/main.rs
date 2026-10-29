@@ -24,9 +24,9 @@ use acui_model::{
 };
 use acui_rows::{
     code, event_type_names, format_bytes, format_clock, format_full, links_named, module_names,
-    seconds_since, short_id, ArtifactEvictionObservation, EventQuery, EventSeverity, LedgerCount,
-    LedgerView, OriginModule, PortBindings, PortEntry, ProjectedEvent, RuntimeEventQueryPage,
-    Sensitivity, WriterFacts, MAX_RUNTIME_EVENT_QUERY_EVENTS,
+    page_source_complete, seconds_since, short_id, ArtifactEvictionObservation, EventQuery,
+    EventSeverity, LedgerCount, LedgerView, OriginModule, PortBindings, PortEntry, ProjectedEvent,
+    RuntimeEventQueryPage, Sensitivity, WriterFacts, MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 use acui_source::{
     InstanceFacts, MaterialOutcome, OfflineFacts, OfflineReason, ReadSource, RuntimeInstance,
@@ -696,9 +696,8 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
 const FOLLOW_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A person's jump to the latest: the pin moves to the Runtime's latest
-/// position, status and facts are read again — the status read leaves one
-/// observation event in the ledger — and the view starts over from the new
-/// pin, with no time bound.
+/// position, status and facts are read again — neither read appends a ledger
+/// record — and the view starts over from the new pin, with no time bound.
 fn jump_latest(window: &AppWindow, app: &Rc<App>) {
     let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
         return;
@@ -1483,8 +1482,8 @@ fn eviction_text(labels: &Labels, eviction: &ArtifactEvictionObservation) -> Str
                 .unwrap_or_else(|| labels.none.to_string()),
             &eviction.intent.sequence.to_string(),
             &eviction
-                .outcome
-                .map(|outcome| format!(" → #{}", outcome.sequence))
+                .terminal_event
+                .map(|terminal| format!(" → #{}", terminal.sequence))
                 .unwrap_or_default(),
             &eviction.through_sequence.to_string(),
         ],
@@ -1677,17 +1676,18 @@ fn stamp(labels: &Labels, timestamp_unix_ms: Option<u64>) -> String {
 const fn severity_index(severity: EventSeverity) -> usize {
     match severity {
         EventSeverity::Debug => 0,
-        EventSeverity::Info => 1,
-        EventSeverity::Warning => 2,
-        EventSeverity::Error => 3,
-        EventSeverity::Fatal => 4,
+        EventSeverity::Success => 1,
+        EventSeverity::Info => 2,
+        EventSeverity::Warning => 3,
+        EventSeverity::Error => 4,
+        EventSeverity::Fatal => 5,
     }
 }
 
 const fn severity_tone(severity: EventSeverity) -> i32 {
     match severity {
         EventSeverity::Debug => 0,
-        EventSeverity::Info => 1,
+        EventSeverity::Success | EventSeverity::Info => 1,
         EventSeverity::Warning => 2,
         EventSeverity::Error | EventSeverity::Fatal => 3,
     }
@@ -1738,7 +1738,7 @@ fn frame_view(app: &App, source: &ReadSource, model: &ViewModel) -> Option<Frame
         };
         // A read the page says is incomplete cannot say the capture is absent.
         let read = read_window(source, &query).map_err(|error| error.to_string()).and_then(|pages| {
-            match pages.iter().all(|page| page.read_scope().is_none_or(|scope| scope.read_complete)) {
+            match pages.iter().all(|page| page_source_complete(page)) {
                 true => Ok(pages.iter().flat_map(|page| page.events().iter().cloned()).collect()),
                 false => Err(app.labels.source_incomplete.to_string()),
             }
@@ -1940,7 +1940,12 @@ fn offline_instance_lines(labels: &Labels, facts: &OfflineFacts) -> Vec<FieldLin
             let unread = labels.instances_unread.to_string();
             let mut lines = vec![
                 field(labels, "instance_facts", unread, position.to_string()),
-                field(labels, "facts_error", code.to_string(), *operation),
+                field(
+                    labels,
+                    "facts_error",
+                    code.clone(),
+                    operation.as_deref().unwrap_or(labels.none),
+                ),
             ];
             if let Some(kind) = io_kind {
                 lines.push(field(labels, "io_kind", kind.clone(), ""));

@@ -17,15 +17,21 @@
 //! questions — is a Runtime running here, and will it accept a shutdown
 //! request — are asked through that same typed client, and its start press is
 //! recorded through it, at the end of this file.
+//! Every connection a session keeps is rebuilt after the client latched it
+//! (see `Rebuilding`); what a person does goes out on a fresh connection each
+//! time.
 
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use acui_rows::{
-    code, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord, EventActor,
-    EventQuery, EventSource, LedgerCount, LedgerEventPosition, LedgerView, OpenReport,
+    code, page_source_complete, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord,
+    EventActor, EventQuery, EventSource, LedgerCount, LedgerEventPosition, LedgerView, OpenReport,
     PortBindings, PortEntry, ProjectedArtifactReference, ProjectionProfile,
     RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
     RuntimeMaterialReadLimit, RuntimeMaterialReadState, WriterFacts,
@@ -40,8 +46,8 @@ use actingcommand_ledger::{
 };
 use actingcommand_ledger_forensics::{ForensicMaterialCompleteResult, ForensicRuntimeFactsResult};
 use actingcommand_runtime_client::{
-    RuntimeClient, RuntimeClientConfig, RuntimeClientError, RuntimeMaterialCompleteResult,
-    RuntimeMaterialSelection,
+    RuntimeChannel, RuntimeClient, RuntimeClientConfig, RuntimeClientError,
+    RuntimeMaterialCompleteResult, RuntimeMaterialSelection,
 };
 use anyhow::{anyhow, bail, Result};
 
@@ -69,12 +75,13 @@ const FACTS_READ_DEADLINE: Duration = Duration::from_secs(30);
 /// (`runtime_client_config_invalid`). A page query runs synchronously on the
 /// UI event loop, so the longer this is, the longer one slow page can hang the
 /// window: hence 20 s, not the 60 s cap. One page query can wait several
-/// times this. A rebuild of the page connection waits for its TCP connect and
-/// for its owner check's receipt, each bounded by this; a query whose last one
-/// latched the connection rebuilds it first, then asks, and on a timeout
-/// waits `LEDGER_PAGE_RETRY_BACKOFF`, rebuilds again and asks once more: at
-/// worst six times this plus the backoff, 121 s, and on loopback, where the
-/// connect is answered at once, about four times, 81 s.
+/// times this. A rebuild of the page connection waits for its TCP connect, for
+/// its owner check's receipt (`Health`) and for its channel binding's receipt
+/// (`BindChannel`), each bounded by this; a query whose last one latched the
+/// connection rebuilds it first, then asks, and on a timeout waits
+/// `LEDGER_PAGE_RETRY_BACKOFF`, rebuilds again and asks once more: at worst
+/// eight times this plus the backoff, 161 s, and on loopback, where the connect
+/// is answered at once, about six times, 121 s.
 const LEDGER_PAGE_IO_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The wait before the one retry of a page exchange that timed out.
@@ -245,8 +252,13 @@ impl EvidenceSource {
             ForensicRuntimeFactsResult::NotAvailable { position, latest_sequence, reason } => {
                 OfflineFacts::NotAvailable { position, latest_sequence, reason: code(&reason) }
             }
-            ForensicRuntimeFactsResult::Failed { position, code, operation, detail, io_kind } => {
+            ForensicRuntimeFactsResult::Failed { position, outcome, detail, io_kind } => {
                 let io_kind = io_kind.map(|kind| acui_rows::code(&kind));
+                let operation = outcome
+                    .value("operation")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned);
+                let code = outcome.code().as_str().to_owned();
                 OfflineFacts::Failed { position, code, operation, detail, io_kind }
             }
         }
@@ -299,8 +311,8 @@ pub struct OnlineSource {
     root: PathBuf,
     /// The session's main connection, at the client's default io timeout:
     /// follow polls, the instances' status and facts, material reads and
-    /// `open_report`.
-    client: RuntimeClient,
+    /// `open_report`. Rebuilt after the client latched it (see `Rebuilding`).
+    main: Rebuilding,
     /// The connection every page, the first included, and every repin reads
     /// through.
     pages: LedgerPages,
@@ -311,65 +323,143 @@ pub struct OnlineSource {
     instances: RefCell<Result<RuntimeInstances, ClientFailure>>,
 }
 
-/// The session's own connection for ledger pages: actor `ui`, source `ui`, as
-/// the main connection, but at `LEDGER_PAGE_IO_TIMEOUT`, and apart from it, so
-/// a slow page latches neither the follow polls nor the material reads.
-struct LedgerPages {
-    client: RefCell<RuntimeClient>,
-    /// The owner epoch of the session's first connection, the main one. A page
-    /// connection, at open or rebuilt, must reach that same Runtime.
+/// How a kept connection is made again: `OnlineSource::connect` for the main
+/// connection, `LedgerPages::connect` for the page one.
+type Connect = fn(&Path) -> Result<RuntimeClient, RuntimeClientError>;
+
+/// A connection the session keeps — the main one or the page one — rebuilt
+/// after the client latched it. R-0c (Runtime contracts/runtime-interface.md,
+/// the client methods): a receipt timeout, and any exchange that fails fatally
+/// (`is_fatal`: without the Runtime's error projection, or with a fatal one),
+/// latches the connection, and every later exchange on it or on a clone of it
+/// fails the same way; the Runtime is asked again only on a new connection. So
+/// the first exchange after such a failure connects anew, to the session's
+/// owner epoch, and goes out there. Nothing is sent again here: a failed
+/// exchange comes back as it failed. A rebuild waits for its TCP connect,
+/// `Health` and `BindChannel`, each within the connection's io timeout. (A fatal
+/// failure before the send latches nothing; the rebuild then costs one connect.)
+struct Rebuilding {
+    connect: Connect,
+    connection: RefCell<RuntimeClient>,
+    /// The session's owner epoch, of its first connection: a rebuilt connection
+    /// must reach that same Runtime, since every pin was stated by it.
     owner_epoch: OwnerEpoch,
-    /// Set once an exchange on `client` failed fatally (`is_fatal`): without
-    /// the Runtime's error projection, as a timeout or a receipt body that did
-    /// not arrive whole does, or with a fatal one. The client latches a
-    /// connection on an exchange that fails so and fails every later exchange
-    /// on it the same way, so the next page query rebuilds the connection first
-    /// rather than let one slow or broken page end the session's reading. (A
-    /// fatal failure before the send latches nothing; the rebuild then costs
-    /// one connect.)
-    latched: Cell<bool>,
+    /// Set once an exchange on the connection, or on a clone of it, failed
+    /// fatally; a material read on the frame worker sets it there (see
+    /// `MaterialReader::Online`). Cleared by a rebuild.
+    latched: Arc<AtomicBool>,
+}
+
+/// Why a rebuild left the latched connection in place.
+enum RebuildFailed {
+    Connect(RuntimeClientError),
+    /// The new connection reached a Runtime of another owner epoch.
+    OwnerEpochChanged,
+}
+
+impl fmt::Display for RebuildFailed {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Connect(error) => write!(formatter, "{error}"),
+            Self::OwnerEpochChanged => formatter.write_str(OWNER_EPOCH_CHANGED),
+        }
+    }
+}
+
+impl RebuildFailed {
+    /// As the card shows a client failure: the client's own error, or
+    /// `runtime_owner_epoch_changed` at the client's connect operation.
+    fn into_failure(self) -> ClientFailure {
+        match self {
+            Self::Connect(error) => ClientFailure::from(error),
+            Self::OwnerEpochChanged => ClientFailure {
+                code: OWNER_EPOCH_CHANGED,
+                operation: CONNECT_RUNTIME,
+                runtime_code: None,
+                host: None,
+            },
+        }
+    }
+}
+
+impl Rebuilding {
+    fn new(connect: Connect, client: RuntimeClient, owner_epoch: OwnerEpoch) -> Self {
+        Self {
+            connect,
+            connection: RefCell::new(client),
+            owner_epoch,
+            latched: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Replaces the connection with a fresh one to the session's Runtime and
+    /// clears `latched`. When the connect fails, or reaches a Runtime of another
+    /// owner epoch, the old connection and `latched` stay.
+    fn reconnect(&self, root: &Path) -> Result<(), RebuildFailed> {
+        let client = (self.connect)(root).map_err(RebuildFailed::Connect)?;
+        if client.runtime_info().owner_epoch() != self.owner_epoch {
+            return Err(RebuildFailed::OwnerEpochChanged);
+        }
+        *self.connection.borrow_mut() = client;
+        self.latched.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// The connection to ask on: rebuilt first when an earlier exchange latched it.
+    fn client(&self, root: &Path) -> Result<RuntimeClient, RebuildFailed> {
+        if self.latched.load(Ordering::SeqCst) {
+            self.reconnect(root)?;
+        }
+        Ok(self.current())
+    }
+
+    /// The connection as it stands, latched or not.
+    fn current(&self) -> RuntimeClient {
+        self.connection.borrow().clone()
+    }
+
+    /// Marks the connection for a rebuild when `error` is fatal, the failures
+    /// the client latches a connection on.
+    fn note(&self, error: &RuntimeClientError) {
+        if error.is_fatal() {
+            self.latched.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// `note`, then the error as the card shows it.
+    fn failure(&self, error: RuntimeClientError) -> ClientFailure {
+        self.note(&error);
+        ClientFailure::from(error)
+    }
+}
+
+/// The session's own connection for ledger pages: actor `ui`, source `ui`,
+/// channel `ui`, as the main connection, but at `LEDGER_PAGE_IO_TIMEOUT`, and
+/// apart from it, so a slow page latches neither the follow polls nor the
+/// material reads. Rebuilt after the client latched it, as the main connection
+/// is (see `Rebuilding`).
+struct LedgerPages {
+    connection: Rebuilding,
 }
 
 impl LedgerPages {
     fn connect(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
         RuntimeClient::connect(
-            RuntimeClientConfig::new(root, EventActor::Ui, EventSource::Ui)
+            RuntimeClientConfig::new(root, RuntimeChannel::Ui, EventActor::Ui, EventSource::Ui)
                 .with_io_timeout(LEDGER_PAGE_IO_TIMEOUT),
         )
     }
 
-    /// The page connection at open, to the Runtime `main` reached. A failed
-    /// connect fails the online face as its main connect does.
-    fn open(root: &Path, main: &RuntimeClient) -> Result<Self> {
-        let owner_epoch = main.runtime_info().owner_epoch();
+    /// The page connection at open, to the Runtime of the session's owner
+    /// epoch, the one the main connection reached. A failed connect fails the
+    /// online face as its main connect does.
+    fn open(root: &Path, owner_epoch: OwnerEpoch) -> Result<Self> {
         let client = Self::connect(root)
             .map_err(|error| anyhow!("在线读面不可用 / online source unavailable: {error}"))?;
         if client.runtime_info().owner_epoch() != owner_epoch {
             bail!("在线读面不可用 / online source unavailable: {OWNER_EPOCH_CHANGED}");
         }
-        Ok(Self { client: RefCell::new(client), owner_epoch, latched: Cell::new(false) })
-    }
-
-    /// Replaces the page connection with a fresh one to the session's Runtime
-    /// and clears `latched`. When the connect fails, or reaches a Runtime of
-    /// another owner epoch, the old connection and `latched` stay, and the
-    /// reason comes back as text: the client's error, or `OWNER_EPOCH_CHANGED`.
-    fn reconnect(&self, root: &Path) -> Result<(), String> {
-        let client = Self::connect(root).map_err(|error| error.to_string())?;
-        if client.runtime_info().owner_epoch() != self.owner_epoch {
-            return Err(OWNER_EPOCH_CHANGED.to_owned());
-        }
-        *self.client.borrow_mut() = client;
-        self.latched.set(false);
-        Ok(())
-    }
-
-    /// Marks the page connection for a rebuild when `error` is fatal, the
-    /// failures the client latches a connection on.
-    fn note(&self, error: &RuntimeClientError) {
-        if error.is_fatal() {
-            self.latched.set(true);
-        }
+        Ok(Self { connection: Rebuilding::new(Self::connect, client, owner_epoch) })
     }
 
     /// One page exchange, `call` on the page connection, rebuilt first when an
@@ -388,26 +478,26 @@ impl LedgerPages {
         root: &Path,
         call: impl Fn(&RuntimeClient) -> Result<T, RuntimeClientError>,
     ) -> Result<T> {
-        if self.latched.get() {
-            self.reconnect(root).map_err(|reason| anyhow!("Runtime 查询失败：{reason}"))?;
-        }
-        // Bound first: the borrow must end before a rebuild takes the cell.
-        let result = call(&*self.client.borrow());
-        let first = match result {
+        let client = self
+            .connection
+            .client(root)
+            .map_err(|reason| anyhow!("Runtime 查询失败：{reason}"))?;
+        let first = match call(&client) {
             Ok(value) => return Ok(value),
             Err(error) => error,
         };
-        self.note(&first);
+        drop(client);
+        self.connection.note(&first);
         if !page_timed_out(&first) {
             return Err(anyhow!("Runtime 查询失败：{first}"));
         }
         std::thread::sleep(LEDGER_PAGE_RETRY_BACKOFF);
-        if let Err(reason) = self.reconnect(root) {
+        if let Err(reason) = self.connection.reconnect(root) {
             return Err(anyhow!("Runtime 查询失败：{first}；{reason}"));
         }
-        let result = call(&*self.client.borrow());
-        result.map_err(|error| {
-            self.note(&error);
+        let client = self.connection.current();
+        call(&client).map_err(|error| {
+            self.connection.note(&error);
             anyhow!("Runtime 查询失败：{error}")
         })
     }
@@ -429,17 +519,19 @@ fn page_timed_out(error: &RuntimeClientError) -> bool {
 /// owner epoch than the session's: the client's own spelling of that failure.
 const OWNER_EPOCH_CHANGED: &str = "runtime_owner_epoch_changed";
 
+/// The client's own spelling of its connect operation (`ClientLocation::ConnectRuntime`).
+const CONNECT_RUNTIME: &str = "connect_runtime";
+
 /// The running Runtime's instances: one status read and one fact snapshot,
 /// right after the session's page pin and again on a person's jump to the
 /// latest; while following, each poll's fact snapshot refreshes the task facts
 /// alone. Each read is at the ledger position the Runtime stated for it, which
 /// may be past the pin: state as last read, not state at the pinned snapshot,
-/// and the card says so. By contract
-/// the Runtime records the status read as one observation event
-/// (`command.validated`), after the pin and so outside this session's snapshot.
+/// and the card says so. Neither read appends a ledger record (AO-4q).
 #[derive(Debug, Clone)]
 pub struct RuntimeInstances {
-    /// The sequence of the status read's own committed observation.
+    /// The ledger's committed head when the Runtime sampled the status
+    /// (`ledger_committed_head`; 0 for an empty ledger).
     pub status_sequence: u64,
     /// The ledger position the fact snapshot is sealed at.
     pub facts_position: u64,
@@ -468,10 +560,13 @@ pub enum OfflineFacts {
     Available { position: u64, instances: Vec<RuntimeInstance> },
     /// `reason` as the read face spells it (`ledger_empty`, `position_beyond_snapshot`).
     NotAvailable { position: u64, latest_sequence: u64, reason: String },
+    /// The read face's failure as its outcome states it (ledger revision 3):
+    /// the relayed code, and its `operation` value when the catalog lists that
+    /// spelling (`None` otherwise).
     Failed {
         position: u64,
-        code: &'static str,
-        operation: &'static str,
+        code: String,
+        operation: Option<String>,
         detail: String,
         /// The io error's kind, when the failure came from one.
         io_kind: Option<String>,
@@ -502,27 +597,45 @@ impl OnlineSource {
     /// on its own — material, the status and facts read at open, follow polls,
     /// probes; pages go through the session's page connection (`LedgerPages`).
     fn connect(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
-        RuntimeClient::connect(RuntimeClientConfig::new(root, EventActor::Ui, EventSource::Ui))
+        RuntimeClient::connect(RuntimeClientConfig::new(
+            root,
+            RuntimeChannel::Ui,
+            EventActor::Ui,
+            EventSource::Ui,
+        ))
     }
 
     /// A connection for what a person does at the console — a button press, a
     /// shutdown request, a discovery query: actor `user`, source `ui`. The
     /// Runtime admits a shutdown request and an instance discovery only from
     /// this origin or an operator's CLI.
+    ///
+    /// Both console connections bind channel `ui` (Runtime
+    /// contracts/runtime-interface.md, #389 U-2). Every press takes a fresh one
+    /// and drops it after: a connection the client latched (R-0c: a receipt
+    /// timeout, or any fatal failure) is never asked again, and nothing written
+    /// is sent twice. The console keeps no write connection.
     fn connect_as_person(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
-        RuntimeClient::connect(RuntimeClientConfig::new(root, EventActor::User, EventSource::Ui))
+        RuntimeClient::connect(RuntimeClientConfig::new(
+            root,
+            RuntimeChannel::Ui,
+            EventActor::User,
+            EventSource::Ui,
+        ))
     }
 
     /// The first page, asked without a snapshot on the session's page
     /// connection, is where the Runtime states the position this session then
     /// reads at.
     fn pin(root: PathBuf, client: RuntimeClient) -> Result<Self> {
-        let pages = LedgerPages::open(&root, &client)?;
+        let owner_epoch = client.runtime_info().owner_epoch();
+        let main = Rebuilding::new(Self::connect, client, owner_epoch);
+        let pages = LedgerPages::open(&root, owner_epoch)?;
         let (snapshot, read_complete) = latest(&pages, &root)?;
-        let instances = read_instances(&client);
+        let instances = read_instances(&main, &root);
         Ok(Self {
             root,
-            client,
+            main,
             pages,
             snapshot: Cell::new(snapshot),
             read_complete: Cell::new(read_complete),
@@ -549,13 +662,17 @@ impl OnlineSource {
     /// store in memory and states it at the ledger's latest position, so this
     /// reads no ledger and writes nothing. When that position is past the pin,
     /// the pin moves to it (`Ok(true)`); the task facts are taken from the same
-    /// snapshot, each instance keeping its status as last read — a status read
-    /// is recorded in the ledger, and following never repeats it.
+    /// snapshot, each instance keeping its status as last read — following
+    /// reads no status; a person's jump to the latest does.
     pub fn poll(&self) -> Result<bool> {
-        let snapshot = self
-            .client
-            .runtime_fact_snapshot()
-            .map_err(|error| anyhow!("Runtime 事实快照读取失败：{error}"))?;
+        let client = self
+            .main
+            .client(&self.root)
+            .map_err(|reason| anyhow!("Runtime 事实快照读取失败：{reason}"))?;
+        let snapshot = client.runtime_fact_snapshot().map_err(|error| {
+            self.main.note(&error);
+            anyhow!("Runtime 事实快照读取失败：{error}")
+        })?;
         let moved = snapshot.ledger_position > self.snapshot.get();
         if moved {
             self.snapshot.set(snapshot.ledger_position);
@@ -592,10 +709,9 @@ impl OnlineSource {
         *self.instances.borrow_mut() = Ok(refolded);
     }
 
-    /// Re-reads status and facts, as at open: for a person's jump to the
-    /// latest, which may leave one status observation event in the ledger.
+    /// Re-reads status and facts, as at open: for a person's jump to the latest.
     pub fn refresh_instances(&self) {
-        let refreshed = read_instances(&self.client);
+        let refreshed = read_instances(&self.main, &self.root);
         *self.instances.borrow_mut() = refreshed;
     }
 
@@ -632,7 +748,8 @@ impl OnlineSource {
     /// the contract states sequences are gap-free from 1, so the count at a
     /// position is that position (`runtime-state-observation.md`).
     pub fn open_report(&self) -> OpenReport {
-        let info = self.client.runtime_info();
+        let client = self.main.current();
+        let info = client.runtime_info();
         OpenReport {
             backend: "runtime".to_string(),
             latest_sequence: self.snapshot.get(),
@@ -645,6 +762,18 @@ impl OnlineSource {
                 owner_epoch: code(&info.owner_epoch()),
                 started_at_unix_ms: info.started_at_unix_ms(),
             },
+        }
+    }
+
+    /// The material handle on the main connection, rebuilt first when an
+    /// earlier exchange latched it; when that rebuild fails, a handle whose
+    /// read says why.
+    fn material_reader(&self) -> MaterialReader {
+        match self.main.client(&self.root) {
+            Ok(client) => {
+                MaterialReader::Online { client, latched: Arc::clone(&self.main.latched) }
+            }
+            Err(reason) => MaterialReader::Unavailable(reason.to_string()),
         }
     }
 }
@@ -661,10 +790,7 @@ fn latest(pages: &LedgerPages, root: &Path) -> Result<(u64, bool)> {
             request.clone(),
         )
     })?;
-    Ok((
-        page.snapshot_ledger_position(),
-        page.read_scope().is_none_or(|scope| scope.read_complete),
-    ))
+    Ok((page.snapshot_ledger_position(), page_source_complete(&page)))
 }
 
 /// Which read face `--source` asks for.
@@ -863,7 +989,7 @@ impl ReadSource {
     pub fn material_reader(&self) -> MaterialReader {
         match self {
             Self::Offline { source, .. } => MaterialReader::Offline(source.root.clone()),
-            Self::Online(source) => MaterialReader::Online(source.client.clone()),
+            Self::Online(source) => source.material_reader(),
         }
     }
 }
@@ -910,13 +1036,15 @@ pub fn probe_runtime(state_root: &Path) -> Result<RuntimeFacts, ClientFailure> {
     Ok(RuntimeFacts { pid: info.pid(), owner_epoch: code(&info.owner_epoch()) })
 }
 
-/// One status read, then one fact snapshot, on the session's connection; the
-/// status read is the one that leaves an observation event. Either failing
-/// fails the pair with its own error; a status without its observation
-/// source is `status_source_missing`, since the card would otherwise state a
-/// position the Runtime did not give. Only the three `task.` keys are taken.
-fn read_instances(client: &RuntimeClient) -> Result<RuntimeInstances, ClientFailure> {
-    let status = client.status()?;
+/// One status read, then one fact snapshot, on the session's main connection,
+/// rebuilt first when an earlier exchange latched it. Neither appends a ledger
+/// record (Runtime contracts/runtime-state-observation.md, AO-4q). Either
+/// failing fails the pair with its own error; a status without its source is
+/// `status_source_missing`, since the card would otherwise state a position the
+/// Runtime did not give. Only the three `task.` keys are taken.
+fn read_instances(main: &Rebuilding, root: &Path) -> Result<RuntimeInstances, ClientFailure> {
+    let client = main.client(root).map_err(RebuildFailed::into_failure)?;
+    let status = client.status().map_err(|error| main.failure(error))?;
     let status_sequence = status
         .source()
         .ok_or(ClientFailure {
@@ -925,8 +1053,8 @@ fn read_instances(client: &RuntimeClient) -> Result<RuntimeInstances, ClientFail
             runtime_code: None,
             host: None,
         })?
-        .sequence;
-    let snapshot = client.runtime_fact_snapshot()?;
+        .ledger_committed_head;
+    let snapshot = client.runtime_fact_snapshot().map_err(|error| main.failure(error))?;
     let mut instances: Vec<RuntimeInstance> = status
         .instances()
         .iter()
@@ -988,8 +1116,9 @@ fn fold_task_facts(records: &[RuntimeFactRecord], instances: &mut Vec<RuntimeIns
 }
 
 /// One instance discovery query as the Runtime answered it: the provider's
-/// version, the sequence of its committed observation, and every instance the
-/// provider reported, in index order.
+/// version, the ledger's committed head when the Runtime sampled the answer
+/// (`ledger_committed_head`), and every instance the provider reported, in
+/// index order.
 #[derive(Debug, Clone)]
 pub struct Discovery {
     pub provider_version: String,
@@ -1012,11 +1141,9 @@ pub struct DiscoveredInstance {
 
 /// Asks the running Runtime to re-run its provider's instance discovery: one
 /// fresh person's connection (see `OnlineSource::connect_as_person`), one
-/// `discover_instances()`. It binds nothing and touches no device; by contract the
-/// Runtime records an answered query as one observation event
-/// (`command.validated`), and a refusal as `command.rejected` plus
-/// `runtime.failed`. A refusal carries the Runtime's code and, when the
-/// provider's tool failed, the host failure.
+/// `discover_instances()`. It binds nothing and touches no device; an answered
+/// query appends no ledger record (AO-4q). A refusal carries the Runtime's
+/// code and, when the provider's tool failed, the host failure.
 pub fn discover_instances(state_root: &Path) -> Result<Discovery, ClientFailure> {
     let client = OnlineSource::connect_as_person(state_root)?;
     let discovery = client.discover_instances()?;
@@ -1035,7 +1162,7 @@ pub fn discover_instances(state_root: &Path) -> Result<Discovery, ClientFailure>
         .collect();
     Ok(Discovery {
         provider_version: discovery.provider_version().to_string(),
-        sequence: discovery.source().sequence,
+        sequence: discovery.source().ledger_committed_head,
         instances,
     })
 }
@@ -1082,7 +1209,7 @@ pub fn request_shutdown(state_root: &Path, mut retrying: impl FnMut(u32)) -> Shu
         };
     let mut attempts = 1;
     let result = loop {
-        let failure = match interaction.request_shutdown() {
+        let error = match interaction.request_shutdown() {
             Ok(receipt) => {
                 break Ok(ShutdownAccepted {
                     receipt_state: code(&receipt.state()),
@@ -1090,10 +1217,16 @@ pub fn request_shutdown(state_root: &Path, mut retrying: impl FnMut(u32)) -> Shu
                     action_sequence,
                 })
             }
-            Err(error) => ClientFailure::from(error),
+            Err(error) => error,
         };
+        // A fatal failure latched this person's connection, and one whose
+        // receipt did not come back leaves the request unconfirmed: neither is
+        // sent again (R-0c). The press's last probe reads the Runtime on a fresh
+        // connection.
+        let fatal = error.is_fatal();
+        let failure = ClientFailure::from(error);
         let busy = failure.runtime_code.as_deref() == Some("runtime_busy");
-        if !busy || attempts == SHUTDOWN_ATTEMPTS {
+        if fatal || !busy || attempts == SHUTDOWN_ATTEMPTS {
             break Err(failure);
         }
         attempts += 1;
@@ -1149,7 +1282,13 @@ fn record_press(state_root: &Path, control_id: &str) -> Result<(RuntimeClient, u
 #[derive(Clone)]
 pub enum MaterialReader {
     Offline(PathBuf),
-    Online(RuntimeClient),
+    /// The main connection as last rebuilt, with its latch: a read that fails
+    /// fatally sets it, so the session's next exchange on the main connection
+    /// connects anew (see `Rebuilding`).
+    Online { client: RuntimeClient, latched: Arc<AtomicBool> },
+    /// The main connection was latched and its rebuild failed: the read fails
+    /// with why.
+    Unavailable(String),
 }
 
 impl MaterialReader {
@@ -1167,8 +1306,19 @@ impl MaterialReader {
             Self::Offline(root) => {
                 read_material(root, event, artifact, snapshot_position, still_wanted)
             }
-            Self::Online(client) => {
-                Ok(read_material_online(client, event, artifact, snapshot_position, still_wanted))
+            Self::Online { client, latched } => Ok(read_material_online(
+                client,
+                latched,
+                event,
+                artifact,
+                snapshot_position,
+                still_wanted,
+            )),
+            Self::Unavailable(reason) => {
+                if !still_wanted() {
+                    return Ok(None);
+                }
+                Err(anyhow!("Runtime 材料读取失败：{reason}"))
             }
         }
     }
@@ -1253,12 +1403,13 @@ pub fn read_material(
 }
 
 /// The online counterpart of [`read_material`]: `RuntimeClient::read_material_complete`
-/// on the session's connection, under the same byte cap and deadline. The
+/// on the session's main connection, under the same byte cap and deadline. The
 /// client asks `still_wanted` between ranges and drops an unfinished assembly
 /// itself; a read stopped that way is superseded, and nothing is shown. A client error is kept whole (code, operation,
 /// the Runtime's refusal and host failure), not reduced to its code.
 fn read_material_online(
     client: &RuntimeClient,
+    latched: &AtomicBool,
     event: LedgerEventPosition,
     artifact: &ProjectedArtifactReference,
     snapshot_position: u64,
@@ -1284,6 +1435,17 @@ fn read_material_online(
         Instant::now() + MATERIAL_READ_DEADLINE,
         still_wanted,
     );
+    // A fatal client error latched the main connection this clone shares; the
+    // session's next exchange on it connects anew (see `Rebuilding`). Marked
+    // even for a read no longer wanted.
+    let fatal = match &result {
+        RuntimeMaterialCompleteResult::NotProvided { error: Some(error), .. }
+        | RuntimeMaterialCompleteResult::Failed { error, .. } => error.is_fatal(),
+        _ => false,
+    };
+    if fatal {
+        latched.store(true, Ordering::SeqCst);
+    }
     if !still_wanted() {
         return None;
     }

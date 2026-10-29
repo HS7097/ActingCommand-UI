@@ -5,7 +5,7 @@
 //! spelling is shown next to the name either way.
 
 /// `(wire, 中文, English)` for every `EventType` the contract declares.
-const EVENT_TYPES: [(&str, &str, &str); 121] = [
+const EVENT_TYPES: [(&str, &str, &str); 134] = [
     ("provider.startup_observed", "厂商启动已观察", "Provider Startup Observed"),
     ("runtime.started", "运行时已启动", "Runtime Started"),
     ("runtime.takeover", "运行时已接管", "Runtime Takeover"),
@@ -28,6 +28,9 @@ const EVENT_TYPES: [(&str, &str, &str); 121] = [
     ("perf.monitor_degraded", "性能监视已降级", "Performance Monitor Degraded"),
     ("perf.monitor_recovered", "性能监视已恢复", "Performance Monitor Recovered"),
     ("perf.balance_changed", "性能取舍已调整", "Performance Balance Changed"),
+    ("perf.pacing_changed", "性能节奏已调整", "Performance Pacing Changed"),
+    ("perf.dispatch_share_changed", "派发份额已调整", "Dispatch Share Changed"),
+    ("perf.run_hold", "运行按节奏挂起或恢复", "Performance Run Hold"),
     ("fact.published", "事实已发布", "Fact Published"),
     ("fact.invalidated", "事实已作废", "Fact Invalidated"),
     ("approval.decision", "审批裁定", "Approval Decision"),
@@ -44,6 +47,9 @@ const EVENT_TYPES: [(&str, &str, &str); 121] = [
     ("policy.dispatch_completed", "策略派发已完成", "Policy Dispatch Completed"),
     ("policy.execution_recorded", "策略执行已记录", "Policy Execution Recorded"),
     ("policy.planning_signal_observed", "策略规划信号已观察", "Policy Planning Signal Observed"),
+    ("policy.control_state_recorded", "策略控制状态已记录", "Policy Control State Recorded"),
+    ("policy.activity_state_recorded", "策略活动状态已记录", "Policy Activity State Recorded"),
+    ("policy.fact_refresh_transition", "事实刷新状态转换", "Policy Fact Refresh Transition"),
     ("catalog.transition_intent", "目录切换意图", "Catalog Transition Intent"),
     ("catalog.activated", "目录已启用", "Catalog Activated"),
     ("catalog.rolled_back", "目录已回滚", "Catalog Rolled Back"),
@@ -64,8 +70,11 @@ const EVENT_TYPES: [(&str, &str, &str); 121] = [
     ("task.recognition_started", "识别已开始", "Task Recognition Started"),
     ("task.recognition_completed", "识别已完成", "Task Recognition Completed"),
     ("task.entry_preflight", "入口预检", "Task Entry Preflight"),
+    ("task.selection_evaluated", "任务选择已评估", "Task Selection Evaluated"),
     ("task.effect_intent", "准备执行操作", "Effect Intent"),
     ("task.effect_completed", "操作已完成", "Effect Completed"),
+    ("task.effect_refused", "操作判为未完成", "Effect Refused"),
+    ("task.operation_capped", "操作已达单次运行上限", "Operation Capped"),
     ("task.step_finished", "步骤已结束", "Task Step Finished"),
     ("task.completed", "任务已完成", "Task Completed"),
     ("task.failed", "任务失败", "Task Failed"),
@@ -123,7 +132,11 @@ const EVENT_TYPES: [(&str, &str, &str); 121] = [
     ("agent.response_recorded", "代理回复已记录", "Agent Response Recorded"),
     ("agent.session_completed", "代理会话已完成", "Agent Session Completed"),
     ("agent.session_escalated", "代理会话已上报", "Agent Session Escalated"),
+    ("agent.wake_obligation_recorded", "代理唤醒义务已记录", "Agent Wake Obligation Recorded"),
     ("ledger.recovered", "账本已恢复", "Ledger Recovered"),
+    ("ledger.gap_recorded", "账本缺口已记录", "Ledger Gap Recorded"),
+    ("ledger.health_observed", "账本健康已观察", "Ledger Health Observed"),
+    ("ledger.dump_imported", "账本转储已导入", "Ledger Dump Imported"),
     ("signature.registered", "特征已登记", "Signature Registered"),
     ("signature.matched", "特征已匹配", "Signature Matched"),
     ("signature.retired", "特征已退役", "Signature Retired"),

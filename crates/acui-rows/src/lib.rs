@@ -22,12 +22,27 @@ pub use actingcommand_contract::{
     RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit, RuntimeMaterialReadState, Sensitivity,
     TaskSemanticFact,
 };
+use actingcommand_contract::LedgerPageLimit;
 
 use std::collections::BTreeMap;
 
 use chrono::{Local, TimeZone, Utc};
 use serde::Serialize;
 use serde_json::Value;
+
+/// Whether a page read its source whole as far as it got: its read scope says
+/// so, or the one thing that stopped it is the Runtime's read budget (#411 A51,
+/// `read_budget`). A budget-stopped page is not complete, but its cursor goes on
+/// from where the read stopped, at the same snapshot, so a read that follows the
+/// cursor to its end decides every row; only `source_incomplete` says the source
+/// itself is not whole. A page without a read scope is whole, as before.
+pub fn page_source_complete(page: &RuntimeEventQueryPage) -> bool {
+    page.read_scope().is_none_or(|scope| {
+        scope.read_complete
+            || (scope.limits.contains(&LedgerPageLimit::ReadBudget)
+                && !scope.limits.contains(&LedgerPageLimit::SourceIncomplete))
+    })
+}
 
 /// What the ledger states about the opened source. Plain fields so both
 /// `acui-source` (which fills it) and `acui-model` (which shows it) can name it.
