@@ -108,7 +108,7 @@ jobs:
             throw "component-interfaces.json: schema_version is not actingcommand.component-interfaces.v1: $($interfaces.schema_version)"
           }
           # Not $name: that holds the artifact name, which the manifest and the outputs below use.
-          foreach ($interface in @('actingd-config', 'install-selection', 'install-control', 'ledger', 'runtime-client', 'package')) {
+          foreach ($interface in @('actingd-config', 'install-selection', 'install-control', 'ledger', 'runtime-client', 'package', 'runtime-outcomes')) {
             $range = @($interfaces.speaks.$interface)
             if ($range.Count -ne 2 -or @($range | Where-Object { "$_" -cnotmatch '\A[0-9]+\z' }).Count -ne 0 -or
                 [int64]"$($range[0])" -gt [int64]"$($range[1])") {
