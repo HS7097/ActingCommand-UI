@@ -377,6 +377,19 @@ fn last_outcome(output: &[u8]) -> Option<(String, String)> {
     None
 }
 
+/// The line to show from a subcommand's stderr when its stdout holds no report.
+/// A subcommand writes no `OUTCOME actingd:` line, only its developer line
+/// (`<LEVEL> actingd: <code> <text>`, Runtime contracts/actingd-unlock-owner.md):
+/// the last of those, else the last line that is not blank, so a panic still shows.
+fn last_stderr_line(output: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(output);
+    text.lines()
+        .rev()
+        .find(|line| DEVELOPER_PREFIXES.iter().any(|level| line.starts_with(*level)))
+        .or_else(|| text.lines().rev().find(|line| !line.trim().is_empty()))
+        .map(str::to_owned)
+}
+
 /// A configured key, checked to be an absolute path; the text to show otherwise.
 pub fn configured<'a>(
     labels: &Labels,
@@ -505,8 +518,8 @@ fn unlock_outcome(labels: &Labels, exe: &Path, config: &Path, installation: Opti
     let exit = exit_text(labels, status);
     let stdout = stdout.trim_ascii();
     if stdout.is_empty() {
-        let text = match last_outcome(&stderr) {
-            Some((line, _)) => fill(labels.unlock_stderr, &[&exit, &line]),
+        let text = match last_stderr_line(&stderr) {
+            Some(line) => fill(labels.unlock_stderr, &[&exit, &line]),
             None => fill(labels.unlock_unparseable, &[labels.unlock_no_output, &exit]),
         };
         return (text, false);
@@ -520,7 +533,8 @@ fn unlock_outcome(labels: &Labels, exe: &Path, config: &Path, installation: Opti
 
 /// The v2 report read field by field (`outcome` is the full
 /// `actingcommand.outcome.v1` envelope); `Err` names the first field that is
-/// missing or not as the contract states.
+/// missing or not as the contract states. A failure's stage and
+/// `journal_appended` may be absent and are not such a field.
 fn unlock_report(
     labels: &Labels,
     report: &Value,
@@ -555,12 +569,18 @@ fn unlock_report(
             )
         });
     }
+    // A failure refused before the unlock itself (usage, options, the
+    // installation check, a report that could not be encoded) carries neither
+    // a stage nor `journal_appended`: those show as none, beside its own code.
+    let stage = report
+        .pointer("/outcome/values/stage")
+        .and_then(Value::as_str)
+        .unwrap_or(labels.none);
     let appended = report
         .pointer("/journal_appended")
         .and_then(Value::as_bool)
-        .ok_or_else(|| invalid("/journal_appended"))?
-        .to_string();
-    let values = [code, text("/outcome/values/stage")?, &appended, exit];
+        .map_or_else(|| labels.none.to_string(), |appended| appended.to_string());
+    let values = [code, stage, &appended, exit];
     Ok((fill(labels.unlock_failed, &values), false))
 }
 

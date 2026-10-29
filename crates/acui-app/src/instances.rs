@@ -240,8 +240,9 @@ fn show_form(config: &ConfigWindow, id: Option<&str>, entry: &Value) {
 }
 
 /// Asks the running Runtime for its provider's instance discovery, off the
-/// event loop, and fills the discovery box with what it reported. The Runtime
-/// records the query itself; nothing is bound and no device is touched.
+/// event loop, and fills the discovery box with what it reported. An answered
+/// query appends no ledger record (AO-4q); nothing is bound and no device is
+/// touched.
 fn discover(editor: &Editor, config: &ConfigWindow) {
     let labels = editor.app.labels;
     config.set_discovering(true);

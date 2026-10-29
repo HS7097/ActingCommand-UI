@@ -238,7 +238,7 @@ pub struct Labels {
     pub unlock_ok_nonzero: &'static str,
     /// outcome code, stage, journal_appended, exit code.
     pub unlock_failed: &'static str,
-    /// exit code, the line `last_outcome` found on stderr.
+    /// exit code, the line `last_stderr_line` found on stderr.
     pub unlock_stderr: &'static str,
     /// why, exit code.
     pub unlock_unparseable: &'static str,
@@ -613,7 +613,7 @@ pub const ZH: Labels = Labels {
     unlock_stderr: "unlock-owner 退出码 {} · {}",
     unlock_unparseable: "unlock-owner 输出无法解析：{} · 退出码 {}",
     unlock_field_invalid: "字段 {} 缺失或不合约定",
-    unlock_no_output: "stdout 没有 JSON，stderr 没有 OUTCOME actingd: 行",
+    unlock_no_output: "stdout 没有 JSON，stderr 也没有输出",
     unlock_timeout: "unlock-owner {} 秒内未结束，结果未知",
     unlock_killed: "已终止并回收",
     unlock_kill_failed: "终止失败：{}",
@@ -941,7 +941,7 @@ pub const EN: Labels = Labels {
     unlock_stderr: "unlock-owner Exited with Code {} · {}",
     unlock_unparseable: "unlock-owner Output Unparseable: {} · Exit Code {}",
     unlock_field_invalid: "Field {} Missing or Off-Contract",
-    unlock_no_output: "No JSON on stdout, No OUTCOME actingd: Line on stderr",
+    unlock_no_output: "No JSON on stdout, No Output on stderr",
     unlock_timeout: "unlock-owner Not Finished Within {} s, Outcome Unknown",
     unlock_killed: "Killed and Reaped",
     unlock_kill_failed: "Killing It Failed: {}",

@@ -358,15 +358,25 @@ fn port_options(labels: &Labels, port_map: &PortMap) -> (Vec<SharedString>, Vec<
 }
 
 /// The time of the first event at or after `from` in the snapshot; `None`
-/// when there is none.
+/// when there is none. A page the read budget stopped may hold no row and
+/// still go on (#411 A51), so the read follows the cursor until a row or its end.
 fn event_time(source: &ReadSource, from: Option<u64>) -> Result<Option<u64>> {
     let query = EventQuery {
         view: Some(LedgerView::Events),
         from_sequence: from,
         ..EventQuery::default()
     };
-    let page = source.query(&query, 1, None)?;
-    Ok(page.events().first().map(|event| event.timestamp_unix_ms))
+    let mut cursor = None;
+    loop {
+        let page = source.query(&query, 1, cursor)?;
+        if let Some(event) = page.events().first() {
+            return Ok(Some(event.timestamp_unix_ms));
+        }
+        cursor = page.next_cursor().cloned();
+        if cursor.is_none() {
+            return Ok(None);
+        }
+    }
 }
 
 /// The committed time span, read as the first and the last event of the snapshot.
@@ -488,7 +498,9 @@ fn upper_for_time(span: Option<(u64, u64)>, snapshot: u64, bound: u64) -> u64 {
 /// first matching event above the start. None: nothing above could show, and
 /// reading starts there. One found: the start moves above it by a step that
 /// doubles each time, for at most `TIME_PROBES` probes and within the fill
-/// budget; past either, the pin, which is always safe.
+/// budget; past either, the pin, which is always safe. A page the read budget
+/// stopped may hold no row and still go on (#411 A51): it decides nothing
+/// above the start, so that is the pin too.
 fn checked_upper(
     source: &ReadSource,
     model: &ViewModel,
@@ -509,7 +521,7 @@ fn checked_upper(
             .query(&query, 1, None)
             .map_err(|error| QueryError::ReadFailed(error.to_string()))?;
         let Some(found) = page.events().first() else {
-            return Ok(upper);
+            return Ok(if page.next_cursor().is_some() { snapshot } else { upper });
         };
         upper = found.sequence + step;
         step *= 2;
