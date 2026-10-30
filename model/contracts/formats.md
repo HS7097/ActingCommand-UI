@@ -84,10 +84,30 @@ optional ones in brackets.
 |---|---|
 | `source` | `source` (id from `sources.json`), `locator` [`revision`, `quote`] |
 | `ruling` | `ref`, `where`, `date` |
-| `measurement` | `ref`, `date` [`by`, `evidence`] |
-| `guide` | `ref` |
+| `measurement` | `ref`, `date` [`by`, `evidence`, `role` and its members] |
+| `guide` | `ref` [`source` (id from `sources.json`), or `role` and its members] |
 | `logic` | `ref` |
 | `pending_check` | `ref` [`by`] |
+
+**Roles** (#424 ACM-PROV). A measurement, and a guide row that is a live reading, says what it is for with `role`:
+
+| `role` | Meaning | Its members |
+|---|---|---|
+| `supplement` | a neutral constant that no public source gives, supplemented from observation | `searched` (a list of ids from `sources.json`: the sources checked that have no value) [`samples` ≥ 1 and `successes` ≤ `samples`, together] |
+| `behaviour` | a confirmation of how the game behaves; never the provenance of a number | none |
+
+- **A drop rate**: in the provenance of a `random` rule whose `drop` is a `rate`, every `supplement` carries
+  `samples` and `successes` (`member_missing`). A drop from `samples` holds them already.
+- **Refusals** (`model_file_invalid`): another `role` is `value_invalid`; a `supplement` without `searched`, or
+  with only one of `samples` and `successes`, is `member_missing`; `searched`, `samples` or `successes` beside
+  `behaviour`, or beside a guide row's `source`, is `member_unknown`, and without any `role` `member_missing`
+  (`role`). A guide row names `source` or `role`, not both (`member_conflict`).
+- **`role` may be absent for now:** the static check warns of a measurement without it (see "Provenance classes"
+  below).
+- **`by`** names a role, such as the team that measured, never an instance, a device or an account.
+- **Account data has no kind here.** Inventories, levels, formations, what an account farms and its ledger income
+  are account state, never a rule or a data row; an output that reads the account state is per-account and is
+  refused from every shared output (`per_account`).
 
 ## `model.json` (`acmodel.model.v1`)
 
@@ -178,8 +198,12 @@ it fails.
 
 ## `sources.json` (`acmodel.sources.v1`)
 
-`sources`: a list of `{id, title}` [`url`, `note`]. The ids mirror the guide's source list, so that one page
-has one id.
+`sources`: a list of `{id, title}` [`url`, `class`, `note`]. The ids mirror the guide's source list, so that one
+page has one id.
+
+`class` (#424 ACM-PROV) is what the source is: `wiki`, `drop_stats` (a drop statistics site), `datamine` (data
+read from the game's files) or `official` (the publisher's own). Another value is `value_invalid`. It may be
+absent for now: the static check warns of a source without it (see "Provenance classes" below).
 
 ## `exports.json` (`acmodel.exports.v1`)
 
@@ -233,14 +257,17 @@ keys have a neutral value: a missing one is `member_missing`, and one for any ot
 
 ## The static check (`acmodel check`)
 
-`acmodel check <model>` takes the model folder or its `model.json`. It reads `model.json`, `sources.json` in the
-same folder, and every file that `model.json` lists. If a reader refuses a file, the check reads the remaining
-files, reports every reader's errors and stops. Otherwise it checks the rules below.
+`acmodel check <model> [--strict-provenance] [--report-supplements]` takes the model folder or its `model.json`.
+It reads `model.json`, `sources.json` in the same folder, and every file that `model.json` lists. If a reader
+refuses a file, the check reads the remaining files, reports every reader's errors and stops. Otherwise it checks
+the rules below.
 - It computes nothing, and it reports every problem at once, with exit status 1.
 - Each error holds the file in `detail.path` and the JSON pointer in `ref`. In an expression, `position` is the
   character offset of the reference.
+- The provenance classes are warnings, and errors only with `--strict-provenance` (see "Provenance classes"
+  below). The warnings are reported with the errors, if there are any.
 - On success `data` holds `path`, `model_id` and these counts: `entities` (periods included), `rules` (the
-  active ones), `superseded`, `unknowns` and `tables`.
+  active ones), `superseded`, `unknowns` and `tables`. With `--report-supplements` it also holds `supplements`.
 
 ### Duplicate ids
 
@@ -261,8 +288,41 @@ files, reports every reader's errors and stops. Otherwise it checks the rules be
 
 - **Refusals:** another status is `rule_status_invalid`; an empty or absent provenance is
   `rule_provenance_missing`.
-- **Sources:** every `source` that a provenance entry cites is in `sources.json` (`rule_reference_missing`, with
-  `expected` `source`). So is the `source` of an external dataset.
+- **Sources:** every `source` that a provenance entry cites (a guide row's too), and every id of a `searched`, is
+  in `sources.json` (`rule_reference_missing`, with `expected` `source`). So is the `source` of an external
+  dataset.
+
+### Provenance classes
+
+The modelling data comes from public sources: a wiki, a drop statistics site, the game's data, the publisher. A
+neutral constant that none of them gives may be supplemented from observation, marked as such; account data
+never enters the model (#424 ACM-PROV). So the check tells these apart:
+
+- **Every number of a confirmed rule or data row** has at least one provenance entry that can be a number's:
+  - a `source`;
+  - a `measurement` of `role` `supplement` with a non-empty `searched`;
+  - a `ruling` or a `logic` entry (a design value, such as a floor);
+  - a `guide` row counts as what it names underneath it: on a `source`, as a source; with a `role`, as a
+    measurement of that role.
+
+  A rule's numbers are the numbers and durations of its expressions (its `general_logic` and `when` too) and a
+  drop's `samples` and `successes`; a row's are its cells of `integer` and `decimal` columns that are not key
+  columns. A rule or row with only `behaviour` confirmations, pending checks, measurements without a role or
+  guide rows without a class is `rule_provenance_unsourced` (`number_unsourced`, `found` its entries), at its
+  provenance list (at the row, when the table's provenance is the row's). An empty provenance list is
+  `rule_provenance_missing` already. Pending and provisional entries, unknowns and superseded rules are not
+  checked: their values are not confirmed, or never read.
+- **The classes are named:** a measurement without `role` is `rule_provenance_unsourced` (`role_missing`), a
+  source of `sources.json` without `class` is `class_missing` (`entry` `source`), and a guide row that names
+  neither a `source` nor a `role` is `guide_class_missing`, each at its entry.
+- **Warnings for now.** Today's rule files were written before the classes, so each of these is a warning, which
+  never changes the exit status. With `--strict-provenance` they are errors (exit 1). `bindings check --strict`
+  and every command that runs the model do not read them: they never stop a binding, a run or an export.
+- **`--report-supplements`** lists every supplemented value, so that it can be replaced when a public source
+  appears: `data.supplements` holds, for each provenance entry of `role` `supplement` (a superseded rule's
+  excepted), `path`, `ref` (the entry), `entry` (`rule`, `unknown`, `row` or `table`), `id`, and the entry
+  itself as `provenance`. They are in the order the check reads them: the rules of the rule files, then their
+  unknowns, then the data files.
 
 ### `supersedes`
 
@@ -1001,20 +1061,27 @@ says `greater_than_or_equal`).
   - `literal_missing`, when the rule, the pool or the pointer names no integer. Fixed entries are checked for
     this too.
 - **`--strict`** also reads `schedule.json`. It refuses every integer literal that a `fact` or
-  `resource_projection` predicate of one of its rules compares with, when the literal is neither bound nor
-  fixed (`binding_unbound_literal`, exit 6). So no number without provenance reaches the schedule.
+  `resource_projection` predicate of one of its rules compares with, and every quantity of one of its pools,
+  when the literal is neither bound nor fixed (`binding_unbound_literal`, exit 6, with `rule_id` or `pool_id`).
+  So no number without provenance reaches the schedule.
   - These literals are, of a `fact` predicate, its typed value (`value/value`) or its fact reference's offset
     (`value/offset`); of a `resource_projection` predicate, its `value` or its fact reference's offset
     (`value/offset`, #386 CF-5).
-  - Other literals are not scanned: `max_age_ms`, counts and budgets, the pools, and the pack files. They are
-    bound when a threshold covers them (a pool's by `pool_id`).
+  - The quantities of a pool (#424 ACM-POOL) are its `capacity`, or its fact reference's offset
+    (`capacity/offset`, #386 CF-5), and its projection's `projection/amount` and `projection/per_ms` (a
+    projection of kind `none` has neither). A binding or a fixed entry names them by `pool_id`.
+  - Other literals are not scanned: `max_age_ms`, counts and budgets, a pool's `value_source`, `group_delay` and
+    `valuation`, and the pack files. They are bound when a threshold covers them.
+  - The errors come in document order, the rules' before the pools'.
 - **It writes nothing.** Every problem is reported at once, and the exit status is the first error's.
 - **`data`** holds `path`, `model_id`, `state`, `repo` and `strict`, and:
   - `bindings`: each with `entry` (its pointer in `bindings.json`), `threshold`, `form`, `file`, [`rule_id` or
     `pool_id`], `path` and `literal`;
   - `fixed`: each with `entry`, `file`, [`rule_id` or `pool_id`], `path`, `literal`, `reason` and `ref`;
-  - with `--strict`, `literals`: how many literals the `fact` and `resource_projection` predicates of the rules
-    of `schedule.json` compare with.
+  - with `--strict`, `literals`: how many literals it scanned, those of the rules' predicates and the pools'
+    quantities.
+- **The provenance classes** of `acmodel check` (warnings, or errors under `check --strict-provenance`) are not
+  read here: `--strict` concerns the literals of the schedule only.
 
 ### `acmodel bindings apply <model> --state <file>`
 

@@ -15,9 +15,10 @@ them (`export.thresholds.threshold_entry`), so a binding holds only what the exp
   constant.
 
 `check` compares every bound literal with its threshold (`binding_mismatch`), and with `--strict` refuses
-every integer literal of a `fact` or `resource_projection` predicate of a `schedule.json` rule that is neither
-bound nor fixed (`binding_unbound_literal`). `apply` writes each bound literal that differs, changing only the
-literal's bytes; it refuses everything `check` refuses but a differing value, and then writes nothing.
+every integer literal of a `fact` or `resource_projection` predicate of a `schedule.json` rule, and every
+quantity of a `schedule.json` pool (#424 ACM-POOL), that is neither bound nor fixed (`binding_unbound_literal`).
+`apply` writes each bound literal that differs, changing only the literal's bytes; it refuses everything `check`
+refuses but a differing value, and then writes nothing.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from acmodel.bindings.targets import (
     fact_predicate,
     fact_reference,
     integer,
+    pool_literals,
     predicate_literals,
     read_target,
     shown,
@@ -204,19 +206,24 @@ class _Literal:
 
 
 def _unbound(schedule: Target, bindings: File) -> tuple[int, list[dict[str, Any]]]:
-    """How many literals the `fact` and `resource_projection` predicates of the rules of schedule.json compare
-    with, and an error for each that is neither bound nor fixed. A pool's literals are not scanned."""
+    """How many literals `--strict` scans in schedule.json, and an error for each that is neither bound nor fixed:
+    those the `fact` and `resource_projection` predicates of its rules compare with, then the quantities of its
+    pools (#424 ACM-POOL: capacity, regeneration amount and period)."""
     named = {
-        (entry["rule_id"], entry["path"]) for _, entry in _entries(bindings)
-        if entry["file"] == SCHEDULE_FILE and "rule_id" in entry
+        ("rules" if "rule_id" in entry else "pools", entry.get("rule_id", entry.get("pool_id")), entry["path"])
+        for _, entry in _entries(bindings) if entry["file"] == SCHEDULE_FILE
     }
     count, errors = 0, []
-    for rule_id, index in schedule.rules.items():
-        for ref, literal in predicate_literals(schedule.doc["rules"][index]):
-            count += 1
-            if (rule_id, ref) not in named:
-                detail = {"path": str(schedule.path), "rule_id": rule_id, "pointer": ref, "literal": str(literal)}
-                errors.append(error(BINDING_UNBOUND_LITERAL, detail, at("", "rules", index) + ref))
+    for holder, member, items, literals in (
+        ("rules", "rule_id", schedule.rules, predicate_literals),
+        ("pools", "pool_id", schedule.pools, pool_literals),
+    ):
+        for item_id, index in items.items():
+            for ref, literal in literals(schedule.doc[holder][index]):
+                count += 1
+                if (holder, item_id, ref) not in named:
+                    detail = {"path": str(schedule.path), member: item_id, "pointer": ref, "literal": str(literal)}
+                    errors.append(error(BINDING_UNBOUND_LITERAL, detail, at("", holder, index) + ref))
     return count, errors
 
 
@@ -230,7 +237,8 @@ def check_bindings(
     unknowns: Unknowns = Unknowns(),
 ) -> dict[str, Any]:
     """`acmodel bindings check [--strict]`: every bound literal equals its exported threshold; with `strict`,
-    no literal of a `fact` or `resource_projection` predicate of a schedule.json rule is left unbound."""
+    no literal of a `fact` or `resource_projection` predicate of a schedule.json rule, and no quantity of one of
+    its pools, is left unbound."""
     run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
     repo, targets = _targets(run, bindings, strict)

@@ -6,6 +6,8 @@ the literal 1 of rule `x.single` is fixed, with its reason.
 
 P80 (#424 6457254776), the tests after the CRLF one: `--strict` also counts the operands of `resource_projection`
 predicates, and a binding names a pool of `schedule.json` by `pool_id` and a pointer into the pool.
+
+ACM-POOL (#424), the last test: `--strict` also scans the quantities of the pools of `schedule.json`.
 """
 
 from __future__ import annotations
@@ -326,11 +328,20 @@ def test_a_binding_names_a_pool_by_its_id_and_a_pointer_into_it(example, acmodel
     assert json.loads((example / SCHEDULE).read_text(encoding="utf-8"))["pools"] == [
         {**POOL, "projection": {"amount": 20, "per_ms": 3600000}}]
 
-    status, doc = bindings(acmodel, example, "check", "--strict")
+    status, doc = bindings(acmodel, example, "check")
 
     assert (status, doc["errors"]) == (0, [])
     assert doc["data"]["bindings"][3] == {**entry, "form": "constant", "literal": 3600000}
-    assert doc["data"]["literals"] == 3  # the literals of the pools are not scanned
+
+    # ACM-POOL: --strict scans the pool's quantities now; the bound period passes, the other two do not.
+    status, doc = bindings(acmodel, example, "check", "--strict")
+
+    assert status == 6
+    assert errors(doc) == [
+        ("binding_unbound_literal", "/pools/0" + pointer, {
+            "path": str(example / SCHEDULE), "pool_id": "pool.s", "pointer": pointer, "literal": literal})
+        for pointer, literal in (("/capacity", "800"), ("/projection/amount", "20"))
+    ]
 
 
 def bindings_refusal(folder: Path, reason: str, ref: str, **values: object) -> tuple:
@@ -364,3 +375,56 @@ def test_a_schedule_json_binding_names_exactly_one_rule_or_pool(example, acmodel
 
     assert result == status
     assert errors(doc) == [expected(example)]
+
+
+# ACM-POOL: a pool whose capacity is the account's read cap (#386 CF-5) and which regains 1 every hour. Its
+# minimum confidence is a setting of the Runtime, not a quantity, and is not scanned.
+READ_POOL = {"id": "pool.r", "capacity": {"type": "fact", "fact_key": "resource.a_capacity", "offset": 0},
+             "projection": {"amount": 1, "per_ms": 3600000},
+             "observation": {"kind": "fact", "fact_key": "resource.a"},
+             "value_source": {"kind": "ledger_fact", "minimum_confidence_milli": 1}, "group_delay": None}
+STEP_RULE = {"id": "step.r", "kind": "derive", "subject": "res.a", "logic": {"value": "1"},
+             "provenance": [{"kind": "logic", "ref": "fixture"}], "status": "confirmed"}
+
+
+def test_strict_scans_the_quantities_of_a_pool(example, acmodel):
+    """Unbound, the capacity's offset, the amount and the period (projection/per_ms) are refused; bound to their
+    thresholds, or fixed with a reason, they pass."""
+    model = example / MODEL
+    add_threshold(model, PERIOD_RULE, "thr.pool.period")
+    add_threshold(model, STEP_RULE, "thr.pool.step")
+    edit(example / SCHEDULE, lambda doc: doc.update(pools=[READ_POOL]))
+
+    assert bindings(acmodel, example, "check")[0] == 0
+    status, doc = bindings(acmodel, example, "check", "--strict")
+
+    assert status == 6
+    assert errors(doc) == [
+        ("binding_unbound_literal", "/pools/0" + pointer, {
+            "path": str(example / SCHEDULE), "pool_id": "pool.r", "pointer": pointer, "literal": literal})
+        for pointer, literal in (("/capacity/offset", "0"), ("/projection/amount", "1"),
+                                 ("/projection/per_ms", "3600000"))
+    ]
+
+    def bind(doc):
+        doc["bindings"].extend([
+            {"threshold": "thr.pool.step", "file": SCHEDULE, "pool_id": "pool.r", "path": "/projection/amount"},
+            {"threshold": "thr.pool.period", "file": SCHEDULE, "pool_id": "pool.r", "path": "/projection/per_ms"}])
+        doc["fixed"].append({"file": SCHEDULE, "pool_id": "pool.r", "path": "/capacity/offset",
+                             "reason": "the read cap itself, without a margin", "ref": "fixture"})
+
+    edit(model / "bindings.json", bind)
+
+    status, doc = bindings(acmodel, example, "check", "--strict")
+
+    assert (status, doc["errors"]) == (0, [])
+    assert doc["data"]["literals"] == 6  # three of the rules, three of the pool
+    assert doc["data"]["bindings"][3:] == [
+        {"entry": "/bindings/3", "threshold": "thr.pool.step", "form": "constant", "file": SCHEDULE,
+         "pool_id": "pool.r", "path": "/projection/amount", "literal": 1},
+        {"entry": "/bindings/4", "threshold": "thr.pool.period", "form": "constant", "file": SCHEDULE,
+         "pool_id": "pool.r", "path": "/projection/per_ms", "literal": 3600000},
+    ]
+    assert doc["data"]["fixed"][1:] == [{
+        "entry": "/fixed/1", "file": SCHEDULE, "pool_id": "pool.r", "path": "/capacity/offset", "literal": 0,
+        "reason": "the read cap itself, without a margin", "ref": "fixture"}]

@@ -22,6 +22,7 @@ RULE_REFERENCE_MISSING = "rule_reference_missing"
 DATA_REFERENCE_MISSING = "data_reference_missing"
 STATE_REFERENCE_MISSING = "state_reference_missing"
 RULE_PROVENANCE_MISSING = "rule_provenance_missing"
+RULE_PROVENANCE_UNSOURCED = "rule_provenance_unsourced"  # acmodel check: a warning, an error under --strict-provenance
 RULE_STATUS_INVALID = "rule_status_invalid"
 RULE_CONFLICT = "rule_conflict"
 RULE_CYCLE = "rule_cycle"
@@ -79,6 +80,7 @@ EXIT_STATUS = {
     DATA_REFERENCE_MISSING: 1,
     STATE_REFERENCE_MISSING: 1,
     RULE_PROVENANCE_MISSING: 1,
+    RULE_PROVENANCE_UNSOURCED: 1,
     RULE_STATUS_INVALID: 1,
     RULE_CONFLICT: 1,
     RULE_CYCLE: 1,

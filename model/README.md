@@ -38,7 +38,7 @@ py -3.13 -I -B model\acmodel.py setup
 ```text
 py -3 -I -B model\acmodel.py version
 model\acmodel.cmd version
-model\acmodel.cmd check <resource repo>\ours\model
+model\acmodel.cmd check <resource repo>\ours\model [--strict-provenance] [--report-supplements]
 model\acmodel.cmd run <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd economy <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd explain <resource repo>\ours\model threshold:<id> --state <state snapshot>
@@ -55,7 +55,12 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
 
 - **`check`** reads a model (its folder or its `model.json`) and checks it without computing anything:
   references, duplicate ids, statuses, provenance, `supersedes` and conflicts, pending rules, where
-  `pref:` may appear, loops, and the hashes of external datasets (`contracts/formats.md`).
+  `pref:` may appear, loops, and the hashes of external datasets (`contracts/formats.md`). It also warns where a
+  provenance does not show its class: a number of a confirmed rule or data row without a public source, a
+  ruling, a design value or a marked supplement; a measurement without `role`; a source without `class`; a guide
+  row without the class underneath it (`rule_provenance_unsourced`). These are errors only with
+  `--strict-provenance`. `--report-supplements` lists every supplemented value, to replace once a public source
+  gives it.
 - **`run`** checks the model, then the dimensions of its expressions and its preference keys, and
   computes its derived values and thresholds for one account state, exactly. An output that cannot be
   computed (a reading the state lacks, say) is blocked with its error; the others are still computed, and
@@ -106,8 +111,9 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
 - **`bindings check`** compares each literal that `ours/model/bindings.json` ties to a threshold, in a rule
   or a pool of the repository's `schedule.json` or in a pack file, with the value `export thresholds` would
   write. With `--strict` it also refuses every number of a `fact` or `resource_projection` predicate of
-  `schedule.json` that is neither bound nor listed as fixed with a reason, so no number without provenance
-  reaches the schedule. It writes nothing.
+  `schedule.json`, and every quantity of its pools (capacity, regeneration amount and period), that is neither
+  bound nor listed as fixed with a reason, so no number without provenance reaches the schedule. It writes
+  nothing.
 - **`bindings apply`** writes the bound literals that differ, and changes only their bytes: line ends
   (CRLF files stay CRLF) and formatting are kept. It refuses what `check` refuses, other than a differing
   value, and then writes nothing (`contracts/formats.md`, "Bindings").

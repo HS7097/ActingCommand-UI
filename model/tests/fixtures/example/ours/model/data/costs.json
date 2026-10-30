@@ -2,6 +2,7 @@
  "columns": {"a": {"type": "integer", "dimension": "amount:res.a"}},
  "rows": [
    {"activity": "act.run", "a": "70", "status": "confirmed",
-    "provenance": [{"kind": "measurement", "ref": "M-1", "date": "2026-01-01"}]},
+    "provenance": [{"kind": "measurement", "ref": "M-1", "date": "2026-01-01", "role": "supplement",
+                    "searched": ["src.w1"]}]},
    {"activity": "act.daily", "a": "15", "status": "confirmed",
     "provenance": [{"kind": "source", "source": "src.d2", "locator": "row 12", "revision": "r100"}]}]}

@@ -134,3 +134,20 @@ def predicate_literals(rule: dict[str, Any]) -> Iterator[tuple[str, int]]:
             stack.extend(reversed([(child, at(ref, key)) for key, child in value.items()]))
         elif isinstance(value, list):
             stack.extend(reversed([(child, at(ref, index)) for index, child in enumerate(value)]))
+
+
+def pool_literals(pool: dict[str, Any]) -> Iterator[tuple[str, int]]:
+    """(pointer relative to the pool, integer) of each quantity of a pool of the scheduling format (#424 ACM-POOL),
+    in this order: its `capacity`, or the offset of its fact reference (`capacity/offset`, #386 CF-5), then its
+    regeneration's `projection/amount` and `projection/per_ms`. Its `value_source`, `group_delay` and `valuation`
+    are settings of the Runtime and the scorer, as a rule's `max_age_ms` and weights are, and are not listed."""
+    capacity = pool.get("capacity")
+    if integer(capacity):
+        yield "/capacity", capacity
+    elif fact_reference(capacity) and integer(capacity.get("offset")):
+        yield "/capacity/offset", capacity["offset"]
+    projection = pool.get("projection")
+    if isinstance(projection, dict):
+        for member in ("amount", "per_ms"):
+            if integer(projection.get(member)):
+                yield at("", "projection", member), projection[member]
