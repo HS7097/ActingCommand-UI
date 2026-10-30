@@ -2,6 +2,8 @@
 
 It runs on what the readers accepted and computes nothing. Every problem is one registered error
 with the file in `detail.path` and the JSON pointer in `ref`; all of them are reported together.
+The provenance classes (#424 ACM-PROV, `rule_provenance_unsourced`) are warnings, and errors only
+under `--strict-provenance`.
 """
 
 from __future__ import annotations
@@ -24,12 +26,13 @@ from acmodel.codes import (
     RULE_PENDING_UNBOUNDED,
     RULE_PREF_MISPLACED,
     RULE_PROVENANCE_MISSING,
+    RULE_PROVENANCE_UNSOURCED,
     RULE_REFERENCE_MISSING,
     RULE_STATUS_INVALID,
     STATE_REFERENCE_MISSING,
 )
 from acmodel.envelope import Failure, error
-from acmodel.expr import Call, Reference, parse
+from acmodel.expr import Call, Literal, Reference, parse
 from acmodel.expr.syntax import CURRENT, FLOW_FUNCTIONS
 from acmodel.model import readers
 
@@ -52,6 +55,27 @@ NAMED = {
 RANDOM_PRODUCT = re.compile(f"random:({ids.ID})")
 # Kinds whose rules hold one value per subject and slot (formats.md, "Conflicts").
 SUBJECT_ONLY = ("regen", "flow", "exchange", "cooldown", "random", "objective")
+# The provenance kinds that give a number its provenance by themselves (#424 ACM-PROV): a source, a ruling, and a
+# design value (logic). A supplement that names the sources it searched does too, and a guide row counts as the
+# kind underneath it.
+NUMBER_SOURCES = ("source", "ruling", "logic")
+NUMBER_COLUMNS = ("integer", "decimal")
+
+
+def gives_number(item: dict[str, Any]) -> bool:
+    """Whether a provenance entry can be the provenance of a number: never a behaviour confirmation, a pending
+    check, a measurement without a role or a guide row without the class underneath it."""
+    if item["kind"] in NUMBER_SOURCES or (item["kind"] == "guide" and "source" in item):
+        return True
+    return item.get("role") == "supplement" and bool(item.get("searched"))
+
+
+def described(item: dict[str, Any]) -> str:
+    """A provenance entry as `rule_provenance_unsourced` lists it (`found`): its kind, then its role, or `source`
+    for a guide row on a source."""
+    if "role" in item:
+        return f"{item['kind']}:{item['role']}"
+    return "guide:source" if item["kind"] == "guide" and "source" in item else item["kind"]
 
 
 def _slot(kind: str, logic: dict[str, Any]) -> str | None:
@@ -111,10 +135,14 @@ def _cuts(text: str) -> list[int]:
 
 
 class Checker:
-    def __init__(self, model: Model, datasets: Path) -> None:
+    def __init__(self, model: Model, datasets: Path, *, strict_provenance: bool = False) -> None:
         self.model = model
         self.datasets = datasets
+        self.strict_provenance = strict_provenance
         self.errors: list[dict[str, Any]] = []
+        self.warnings: list[dict[str, Any]] = []  # the provenance classes, unless strict_provenance
+        self.supplements: list[dict[str, Any]] = []  # every supplement entry the tool reads (--report-supplements)
+        self.numbered: set[tuple[str, str]] = set()  # (path, ref) of the entries whose expressions hold a number
         self.entries: dict[str, Entry] = {}  # the first declaration of each id
         self.entities: list[Entry] = []
         self.rules: list[Entry] = []
@@ -159,6 +187,11 @@ class Checker:
 
     def problem(self, code: str, path: str, ref: str, **values: Any) -> None:
         self.errors.append(error(code, {"path": path, **values}, ref))
+
+    def unsourced(self, path: str, ref: str, reason: str, entry: str, entry_id: str, **values: Any) -> None:
+        """A provenance class problem (#424 ACM-PROV): a warning, or an error under `--strict-provenance`."""
+        detail = {"path": path, "reason": reason, "entry": entry, "id": entry_id, **values}
+        (self.errors if self.strict_provenance else self.warnings).append(error(RULE_PROVENANCE_UNSOURCED, detail, ref))
 
     def active(self, entry: Entry) -> bool:
         """The first declaration of its id, and not superseded: what the tool reads."""
@@ -215,6 +248,8 @@ class Checker:
         for index, source in enumerate(sources.doc["sources"]):
             if self.first(seen, "source", source["id"], sources.path, at("", "sources", index, "id")):
                 self.sources.add(source["id"])
+            if "class" not in source:
+                self.unsourced(sources.path, at("", "sources", index), "class_missing", "source", source["id"])
         seen = {}
         for index, engine in enumerate(manifest.doc["engines"]):
             if self.first(seen, "engine", engine["engine_id"], manifest.path, at("", "engines", index, "engine_id")):
@@ -310,13 +345,44 @@ class Checker:
         if value not in allowed:
             self.problem(RULE_STATUS_INVALID, path, ref, id=entry_id, literal=value, expected=list(allowed))
 
-    def provenance(self, path: str, ref: str, entry: str, entry_id: str, items: list[dict[str, Any]]) -> None:
-        """A provenance list at `ref`: not empty, and every source it cites is in sources.json."""
+    def provenance(
+        self, path: str, ref: str, entry: str, entry_id: str, items: list[dict[str, Any]], *, read: bool = True
+    ) -> None:
+        """A provenance list at `ref`: not empty, and every source it cites or searched is in sources.json. Of
+        what the tool reads (`read`; a superseded rule is not), a measurement names its role and a guide row the
+        class underneath it, and each supplement is listed for `--report-supplements` (#424 ACM-PROV)."""
         if not items:
             self.problem(RULE_PROVENANCE_MISSING, path, ref, entry=entry, id=entry_id)
         for index, item in enumerate(items):
-            if item["kind"] == "source" and item["source"] not in self.sources:
-                self.problem(RULE_REFERENCE_MISSING, path, at(ref, index, "source"), target=item["source"], expected=["source"])
+            item_ref = at(ref, index)
+            if "source" in item and item["source"] not in self.sources:  # a source, or the source of a guide row
+                self.problem(
+                    RULE_REFERENCE_MISSING, path, at(item_ref, "source"), target=item["source"], expected=["source"]
+                )
+            for position, searched in enumerate(item.get("searched", ())):
+                if searched not in self.sources:
+                    self.problem(
+                        RULE_REFERENCE_MISSING, path, at(item_ref, "searched", position), target=searched,
+                        expected=["source"],
+                    )
+            if not read:
+                continue
+            if item["kind"] == "measurement" and "role" not in item:
+                self.unsourced(path, item_ref, "role_missing", entry, entry_id)
+            elif item["kind"] == "guide" and "source" not in item and "role" not in item:
+                self.unsourced(path, item_ref, "guide_class_missing", entry, entry_id)
+            if item.get("role") == "supplement":
+                self.supplements.append(
+                    {"path": path, "ref": item_ref, "entry": entry, "id": entry_id, "provenance": item}
+                )
+
+    def numbers(
+        self, path: str, ref: str, entry: str, entry_id: str, status: str, items: list[dict[str, Any]], held: bool
+    ) -> None:
+        """Every number of a confirmed rule or data row (`held`: it holds one) has at least one provenance entry
+        that can be a number's (#424 ACM-PROV). An empty list is `rule_provenance_missing` already."""
+        if status == "confirmed" and held and items and not any(gives_number(item) for item in items):
+            self.unsourced(path, ref, "number_unsourced", entry, entry_id, found=[described(item) for item in items])
 
     def dimension(self, path: str, ref: str, column: dict[str, Any]) -> None:
         dimension = column.get("dimension", "")
@@ -335,8 +401,10 @@ class Checker:
     def rule(self, rule: Entry) -> None:
         doc, path = rule.doc, rule.path
         self.status(path, at(rule.ref, "status"), rule.id, doc["status"], RULE_STATUSES)
-        self.provenance(path, at(rule.ref, "provenance"), "rule", rule.id, doc["provenance"])
-        if rule.id in self.superseded:
+        superseded = rule.id in self.superseded
+        provenance = at(rule.ref, "provenance")
+        self.provenance(path, provenance, "rule", rule.id, doc["provenance"], read=not superseded)
+        if superseded:
             return  # kept for history and never read
         self.need(path, at(rule.ref, "subject"), doc["subject"], ("entity",))
         for index, unknown in enumerate(doc.get("unknowns", ())):
@@ -347,6 +415,9 @@ class Checker:
         for ref, text in expressions(readers.RULE, doc, rule.ref):
             self.expression(rule, None if ref == general else node, ref, text)
         self.pending(rule)
+        # Its numbers: those of its expressions, and a drop's samples.
+        held = (path, rule.ref) in self.numbered or "samples" in doc["logic"].get("drop", {})
+        self.numbers(path, provenance, "rule", rule.id, doc["status"], doc["provenance"], held)
 
     def logic(self, rule: Entry, node: str | None) -> None:
         """The ids in a rule's logic that are not inside expressions."""
@@ -427,14 +498,19 @@ class Checker:
         if "provenance" in doc:
             self.provenance(path, "/provenance", "table", doc["table"], doc["provenance"])
         keys = (doc["key"],) if isinstance(doc["key"], str) else tuple(doc["key"])
+        # A row's numbers are its cells of the integer and decimal value columns; key cells name the row.
+        held = any(column["type"] in NUMBER_COLUMNS for name, column in doc["columns"].items() if name not in keys)
         for index, row in enumerate(doc.get("rows", ())):
             ref = at("", "rows", index)
             row_id = ",".join(_cell(row[name]) for name in keys)
             self.status(path, at(ref, "status"), row_id, row["status"], ROW_STATUSES)
             if "provenance" in row:
                 self.provenance(path, at(ref, "provenance"), "row", row_id, row["provenance"])
+                self.numbers(path, at(ref, "provenance"), "row", row_id, row["status"], row["provenance"], held)
             elif not doc.get("provenance"):
                 self.problem(RULE_PROVENANCE_MISSING, path, ref, entry="row", id=row_id)
+            else:  # the table's provenance
+                self.numbers(path, ref, "row", row_id, row["status"], doc["provenance"], held)
         if "external" in doc:
             external = doc["external"]
             if external["source"] not in self.sources:
@@ -459,6 +535,8 @@ class Checker:
                 self.errors.append({**entry, "detail": {**entry["detail"], "path": path}})
             return
         for item in nodes(parsed.root):
+            if isinstance(item, Literal) and not isinstance(item.value, bool):  # a number or a duration
+                self.numbered.add((path, owner.ref))
             if isinstance(item, Reference):
                 self.reference(owner, node, ref, item)
             elif isinstance(item, Call) and item.function in FLOW_FUNCTIONS:

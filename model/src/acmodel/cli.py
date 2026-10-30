@@ -41,10 +41,15 @@ COMMANDS = {
 }
 GROUPS = {name.split(" ")[0] for name in COMMANDS if " " in name}
 # Flags: options that take no value, each optional and given at most once.
-FLAGS = {"bindings check": ("--strict",), "cache gc": ("--apply",)}
+FLAGS = {
+    "check": ("--strict-provenance", "--report-supplements"),
+    "bindings check": ("--strict",),
+    "cache gc": ("--apply",),
+}
 USAGE = (
     "usage: acmodel.py <command> [<argument>] [--<option> <value>]\n"
-    "commands: setup, version, check <model folder or model.json>,\n"
+    "commands: setup, version,\n"
+    "          check <model folder or model.json> [--strict-provenance] [--report-supplements],\n"
     "          run <model folder or model.json> --state <state file>,\n"
     "          economy <model folder or model.json> --state <state file>,\n"
     "          explain <model folder or model.json> <output id> --state <state file>,\n"
@@ -118,9 +123,14 @@ def _version(system: System) -> dict[str, Any]:
     }
 
 
-def _check(args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
+def _check(args: list[str], cfg: config.Config, system: System) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The static check and its provenance warnings (#424 ACM-PROV): errors only under `--strict-provenance`;
+    `--report-supplements` lists the supplemented values."""
     _dependencies(system)
-    return check_model(Path(args[0]), datasets=cfg.datasets)
+    return check_model(
+        Path(args[0]), datasets=cfg.datasets, strict_provenance="--strict-provenance" in args[1:],
+        report_supplements="--report-supplements" in args[1:],
+    )
 
 
 def _run(
@@ -254,7 +264,7 @@ def main(argv: Sequence[str], system: System) -> int:
         elif command == "version":
             data = _version(system)
         elif command == "check":
-            data = _check(args, cfg, system)
+            data, warnings = _check(args, cfg, system)
         elif command == "run":
             data, errors, warnings = _run(args, cfg, system)
         elif command == "economy":
@@ -276,7 +286,7 @@ def main(argv: Sequence[str], system: System) -> int:
     except Failure as failure:
         if failure.errors[0]["code"] == USAGE_INVALID:
             system.stderr.write(USAGE)
-        return write(build(command, {}, failure.errors), system.stdout, system.stderr)
+        return write(build(command, {}, failure.errors, failure.warnings), system.stdout, system.stderr)
     except Exception as exc:  # a defect: the traceback goes to stderr, the envelope still holds
         traceback.print_exc(file=system.stderr)
         crashed = error(COMMAND_CRASHED, {"exception_type": type(exc).__name__})

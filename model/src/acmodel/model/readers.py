@@ -54,14 +54,65 @@ DECIMAL_TEXT = Text(r"-?(0|[1-9][0-9]*)(\.[0-9]+)?")
 SEGMENTS = r"([a-z0-9][a-z0-9_.-]*/)*[a-z0-9][a-z0-9_.-]*\.json"
 NOTE = {"note": TEXT}
 
+# The role of a measurement, or of a guide row that is a live reading (#424 ACM-PROV): `supplement`, a neutral
+# constant that no public source gives, or `behaviour`, a confirmation of how the game behaves, which is never
+# the provenance of a number. The class of a source of sources.json.
+ROLES = ("supplement", "behaviour")
+SOURCE_CLASSES = ("wiki", "drop_stats", "datamine", "official")
+# A supplement names the source ids it searched without finding the value, and a drop rate its samples.
+SUPPLEMENT_MEMBERS = ("searched", "samples", "successes")
+ROLE_MEMBERS = {
+    "role": Choice(*ROLES),
+    "searched": ListOf(ID),
+    "samples": Integer(1, MAX),
+    "successes": Integer(0, MAX),
+}
+
+
+def _role(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """The members of a role: `supplement` needs `searched`, and takes `samples` and `successes` together (at
+    most `samples`); `behaviour` takes none of them, and neither does an entry without a role (the static check
+    warns of that one)."""
+    present = [name for name in SUPPLEMENT_MEMBERS if name in value]
+    if value.get("role") != "supplement":
+        if present and "role" not in value:
+            return ctx.refuse("member_missing", pointer(ref, "role"), key="role")
+        for name in present:
+            ctx.refuse("member_unknown", pointer(ref, name), key=name)
+        return not present
+    ok = True
+    if "searched" not in value:
+        ok = ctx.refuse("member_missing", pointer(ref, "searched"), key="searched")
+    pair = [name for name in ("samples", "successes") if name in value]
+    if len(pair) == 1:
+        other = "successes" if pair[0] == "samples" else "samples"
+        ok = ctx.refuse("member_missing", pointer(ref, other), key=other, expected=["samples", "successes"])
+    elif pair and value["successes"] > value["samples"]:
+        ok = ctx.refuse("value_invalid", pointer(ref, "successes"), literal=str(value["successes"]))
+    return ok
+
+
+def _guide(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """A guide row names the class underneath it: a source of sources.json, or the role of the reading it is.
+    Not both; a source takes none of a role's members."""
+    if "source" not in value:
+        return _role(value, ref, ctx)
+    if "role" in value:
+        return ctx.refuse("member_conflict", pointer(ref, "role"), key="role", expected=["source", "role"])
+    present = [name for name in SUPPLEMENT_MEMBERS if name in value]
+    for name in present:
+        ctx.refuse("member_unknown", pointer(ref, name), key=name)
+    return not present
+
+
 PROVENANCE = ListOf(
     Tagged(
         "kind",
         {
             "source": Object({"source": ID, "locator": TEXT}, {"revision": TEXT, "quote": TEXT}),
             "ruling": Object({"ref": TEXT, "where": TEXT, "date": DATE}),
-            "measurement": Object({"ref": TEXT, "date": DATE}, {"by": TEXT, "evidence": TEXT}),
-            "guide": Object({"ref": TEXT}),
+            "measurement": Object({"ref": TEXT, "date": DATE}, {"by": TEXT, "evidence": TEXT, **ROLE_MEMBERS}, _role),
+            "guide": Object({"ref": TEXT}, {"source": ID, **ROLE_MEMBERS}, _guide),
             "logic": Object({"ref": TEXT}),
             "pending_check": Object({"ref": TEXT}, {"by": TEXT}),
         },
@@ -185,12 +236,28 @@ LOGIC: dict[str, Spec] = {
     "weight_ref": Object({"file": TEXT, "pointer": POINTER, "compares_to": ID}),
 }
 
+
+def _drop_samples(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """A supplemented drop rate (#424 ACM-PROV): each `supplement` in the provenance of a `random` rule whose
+    `drop` is a `rate` carries the `samples` and `successes` it rests on. A drop from `samples` holds them
+    already."""
+    if "rate" not in value["logic"].get("drop", {}):
+        return True
+    ok = True
+    for index, item in enumerate(value["provenance"]):
+        if item.get("role") == "supplement" and "samples" not in item:
+            where = pointer(pointer(pointer(ref, "provenance"), index), "samples")
+            ok = ctx.refuse("member_missing", where, key="samples", expected=["samples", "successes"])
+    return ok
+
+
 RULE = Tagged(
     "kind",
     {
         kind: Object(
             {"id": ID, "subject": ID, "logic": logic, "provenance": PROVENANCE, "status": TEXT},
             {"when": EXPR, "unknowns": ListOf(UNKNOWN_ID), "supersedes": ListOf(ID), **NOTE},
+            _drop_samples if kind == "random" else None,
         )
         for kind, logic in LOGIC.items()
     },
@@ -354,7 +421,14 @@ DATA = Format(
 SOURCES = Format(
     "acmodel.sources.v1",
     "acmodel.sources.v1",
-    Object({"schema_version": ANY, "sources": ListOf(Object({"id": ID, "title": TEXT}, {"url": TEXT, **NOTE}))}),
+    Object(
+        {
+            "schema_version": ANY,
+            "sources": ListOf(
+                Object({"id": ID, "title": TEXT}, {"url": TEXT, "class": Choice(*SOURCE_CLASSES), **NOTE})
+            ),
+        }
+    ),
 )
 
 STATE = Format(

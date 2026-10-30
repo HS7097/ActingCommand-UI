@@ -24,11 +24,13 @@ def error(code: str, detail: dict[str, Any] | None = None, ref: str | None = Non
 
 
 class Failure(Exception):
-    """Registered errors that end the command."""
+    """Registered errors that end the command, and the warnings found before them (`acmodel check`: the
+    provenance warnings, which an error elsewhere in the model does not hide)."""
 
     def __init__(self, *errors: dict[str, Any]) -> None:
         super().__init__(", ".join(entry["code"] for entry in errors))
         self.errors = list(errors)
+        self.warnings: list[dict[str, Any]] = []
 
 
 def build(

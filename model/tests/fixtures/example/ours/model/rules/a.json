@@ -16,7 +16,7 @@
      "logic": {"cap_kind": "soft_read", "reading": "resource.a_capacity",
                "on_reach": {"block_income_from": ["act.collect"], "other_income": "notice_only"}},
      "provenance": [{"kind": "source", "source": "src.w1", "locator": "page P2"},
-                    {"kind": "measurement", "ref": "M-3", "date": "2026-01-03",
+                    {"kind": "measurement", "ref": "M-3", "date": "2026-01-03", "role": "behaviour",
                      "evidence": "collect above the read cap changed nothing"}],
      "status": "confirmed"},
     {"id": "cap.s.storage", "kind": "cap", "subject": "fac.s",

@@ -1,7 +1,7 @@
 {
   "schema_version": "acmodel.sources.v1",
   "sources": [
-    {"id": "src.w1", "title": "Example wiki, pages P1 to P4"},
-    {"id": "src.d2", "title": "Example data sheet"}
+    {"id": "src.w1", "title": "Example wiki, pages P1 to P4", "class": "wiki"},
+    {"id": "src.d2", "title": "Example data sheet", "class": "datamine"}
   ]
 }

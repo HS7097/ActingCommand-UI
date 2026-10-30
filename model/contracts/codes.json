@@ -38,11 +38,12 @@
       "since": "0.1.0",
       "values": {
         "path": {"type": "path", "required": true},
-        "rule_id": {"type": "token", "required": true},
+        "rule_id": {"type": "token", "required": false},
+        "pool_id": {"type": "token", "required": false},
         "pointer": {"type": "token", "required": true},
         "literal": {"type": "token", "required": true}
       },
-      "description": "acmodel bindings check --strict: an integer literal that a fact or resource_projection predicate of a schedule.json rule (rule_id) compares with, a fact predicate's typed value (value/value) or its fact reference's offset (value/offset), or a resource_projection predicate's value (value) or its fact reference's offset (value/offset), is neither bound to a threshold nor listed under fixed in bindings.json, so it is a number without provenance (#424 design 6.3). The literals of the pools are not scanned. pointer is the literal's JSON pointer relative to the rule, as bindings.json writes it; path is schedule.json and the error's ref the literal's pointer in it."
+      "description": "acmodel bindings check --strict: an integer literal of schedule.json is neither bound to a threshold nor listed under fixed in bindings.json, so it is a number without provenance (#424 design 6.3). Of a rule (rule_id), the literals a fact or resource_projection predicate compares with: a fact predicate's typed value (value/value) or its fact reference's offset (value/offset), or a resource_projection predicate's value (value) or its fact reference's offset (value/offset). Of a pool (pool_id, #424 ACM-POOL), its quantities: its capacity (capacity) or its fact reference's offset (capacity/offset), and its projection's amount (projection/amount) and period (projection/per_ms). Exactly one of rule_id and pool_id is there. pointer is the literal's JSON pointer relative to the rule or the pool, as bindings.json writes it; path is schedule.json and the error's ref the literal's pointer in it."
     },
     "binding_unsupported": {
       "category": "error",
@@ -712,6 +713,28 @@
         "id": {"type": "token", "required": true}
       },
       "description": "acmodel check: a rule, an unknown, a data row or a data table has an empty provenance list, or a data row has none and its table gives none. id is the entry's id (a row's key parts joined with commas, a table's id); the error's ref is the empty list, or the row."
+    },
+    "rule_provenance_unsourced": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["number_unsourced", "role_missing", "class_missing", "guide_class_missing"]
+        },
+        "entry": {
+          "type": "vocab",
+          "required": true,
+          "members": ["rule", "unknown", "row", "table", "source"]
+        },
+        "id": {"type": "token", "required": true},
+        "found": {"type": "list:token", "required": false}
+      },
+      "description": "acmodel check (#424 ACM-PROV): a provenance does not show the class of what it rests on. A warning, which never changes the exit status; an error only under check --strict-provenance (never under bindings check --strict). number_unsourced: a confirmed rule or data row (entry, id) holds a number (a number or a duration in an expression, a drop's samples, a cell of an integer or decimal value column) and no provenance entry that can be a number's: a source, a ruling, a logic entry, a measurement or guide row of role supplement with a non-empty searched, or a guide row on a source. found lists its entries (kind, kind:role, or guide:source); a behaviour confirmation is never one. ref is its provenance list, or the row when the table's provenance is its. role_missing: a measurement without role; class_missing: a source of sources.json (entry source) without class; guide_class_missing: a guide row that names neither the source nor the role underneath it. ref is that entry. A superseded rule is not checked. Account data has no class: it never enters a rule or data file, and an output that reads the account state is per_account."
     },
     "rule_reference_missing": {
       "category": "error",
