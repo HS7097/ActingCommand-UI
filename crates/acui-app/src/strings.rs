@@ -125,6 +125,10 @@ pub struct Labels {
     pub join: &'static str,
     pub recovered_badge: &'static str,
     pub integrity_ok: &'static str,
+    /// An offline SQLite root: since LN-OFF-1 the opening checks the head,
+    /// the tail and the eviction proofs only, and earlier records are
+    /// authenticated as they are read, so "intact" would overstate it.
+    pub integrity_ok_sqlite: &'static str,
     pub integrity_bad: &'static str,
     pub writer_absent: &'static str,
     pub writer_locked: &'static str,
@@ -526,6 +530,7 @@ pub const ZH: Labels = Labels {
     join: "；",
     recovered_badge: "已恢复",
     integrity_ok: "完整",
+    integrity_ok_sqlite: "打开时的检查通过（较早的记录读到时再校验）",
     integrity_bad: "不完整：读全={} · 损坏尾部={}",
     writer_absent: "无写入进程记录",
     writer_locked: "记录被占用（{} 字节）",
@@ -855,6 +860,7 @@ pub const EN: Labels = Labels {
     join: "; ",
     recovered_badge: "Recovered",
     integrity_ok: "Intact",
+    integrity_ok_sqlite: "Passed the opening check (earlier records are verified as they are read)",
     integrity_bad: "Not intact: read_complete={} · corrupt tail={}",
     writer_absent: "No writer recorded",
     writer_locked: "Record held open ({} bytes)",
