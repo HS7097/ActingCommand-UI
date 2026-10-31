@@ -71,8 +71,12 @@ class Evaluator:
 # `acquisition`, `protected` and `conversions`; `objective` (version 1) is an objective's value or horizon.
 # `economy` 5: a price whose re-solve with one grain more is infeasible (a regen stop that can hold no more) shows
 # a null `low` instead of blocking the steady state, so a steady state that version 4 kept blocked is solved again.
+# PRICE-2b-2: `economy` 6: the steady state shows its `coverage` section (the four classes of the pools, the static
+# components and the estimates it read) and gives each price the status of its static component; it reads the `no_use`
+# rules. A derive's `estimate` is checked where its value is computed (`rule`, `general`, `reference`), but no model
+# that held one was read before, so no value of those kinds changes and they keep their versions.
 EVALUATORS: dict[str, Evaluator] = {
-    "economy": Evaluator(5, ("numpy", "python", "scipy")),
+    "economy": Evaluator(6, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
     "flow": Evaluator(3),
     "general": Evaluator(3),
