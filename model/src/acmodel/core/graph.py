@@ -14,6 +14,9 @@
 - ("general", <a rule, flow, member or point key>): that node from the rules and the data only, which
   `max_single_income` reads. It never reads the account state; a node that would need it is marked so
   (`needs_state`), and so is every such node that reads it;
+- ("reference", <a rule, flow, member, point or regen key>): that node in the reference state, which the
+  economy's steady state reads (#424 ACM-PRICE G-A): as a ("general", …) node, but a cap with a reading and a
+  `reference` has the value of its `reference`, and so `cap:<id>` and `rule:<id>` read that value;
 - ("impacts", <an output's key>): the impacts of the continuous unknowns of an output that computes with more
   than one, each with the others held at their ends (`_SubGraph`);
 - ("sampled", <an output's key>): with `unknowns.samples`, the Monte Carlo tallies of an output that reads a
@@ -138,8 +141,10 @@ if TYPE_CHECKING:
 # The kinds of graph node (the first part of a node's key); every other first part names a leaf.
 NODE_KINDS = (
     "rule", "general_logic", "offset", "flow", "member", "point", "threshold", "general", "sampled", "impacts",
-    "regen", "economy",
+    "regen", "economy", "reference",
 )
+# The prefixes of the nodes from the rules and the data only: in general, and in the reference state.
+GENERAL, REFERENCE = "general", "reference"
 
 
 @dataclass(frozen=True)
@@ -158,7 +163,7 @@ class Scenario:
 class Result:
     scenarios: tuple[Scenario, ...] = ()
     blocked_by: frozenset[int] = frozenset()  # the root errors that block it; empty when it is computed
-    needs_state: bool = False  # a ("general", …) node that the rules and the data alone do not give
+    needs_state: bool = False  # a ("general", …) or ("reference", …) node the rules and the data alone do not give
 
     @property
     def blocked(self) -> bool:
@@ -546,6 +551,18 @@ class _General(_Environment):
         return super().members(ref)
 
 
+class _Reference(_General):
+    """The environment of a ("reference", …) node: the rules and the data only, in the reference state. Its
+    references read ("reference", …) nodes, where a cap with a reading has its `reference` (#424 ACM-PRICE G-A);
+    `max_single_income` stays general logic and reads ("general", …) nodes."""
+
+    prefix = (REFERENCE,)
+
+
+# The environment of each kind of node from the rules and the data only; any other node has `_Environment`.
+_ENVIRONMENTS: dict[str | None, type[_Environment]] = {GENERAL: _General, REFERENCE: _Reference}
+
+
 class Graph:
     """One run's graph over the model `checker` accepted, typed by `typed`, for one account state."""
 
@@ -708,7 +725,7 @@ class Graph:
         `unknowns.wilson_digits` for the Wilson bounds of a `beta_from_samples` unknown or of a drop from samples,
         `random.max_transitions` for a pity chain, and `random.enclosure_digits` for both random rules; none for
         any other node."""
-        node = key[1:] if key[0] == "general" else key
+        node = key[1:] if key[0] in _ENVIRONMENTS else key
         if node[0] not in ("rule", "point"):
             return {}
         entry, settings = self.checker.entries[node[1]], self.settings
@@ -792,7 +809,8 @@ class Graph:
             return self.sampled(key[1:])
         if key[0] == "impacts":
             return self.impacts(key[1:])
-        general = key[0] == "general"  # the same node from the rules and the data only
+        # The same node from the rules and the data only: in general, or in the reference state.
+        general = key[0] if key[0] in _ENVIRONMENTS else None
         if general:
             key = key[1:]
         self.depend(("entry", key[1]))  # first: what the node is, and so what it reads next
@@ -810,6 +828,9 @@ class Graph:
         if "when" in entry.doc:  # a conditional value: evaluated by a later slice
             return self.blocked(_unsupported("when", 0, "when", at(entry.ref, "when")).errors, entry.path)
         if key[0] == "rule" and entry.kind == "cap" and "value" not in logic:
+            if general == REFERENCE and "reference" in logic:  # the reading's value in the reference state
+                ref = at(entry.ref, "logic", "reference")
+                return self.expression(entry, _at(ref), own, general=general, unresolved=unresolved)
             return Result(needs_state=True) if general else self.cap_reading(entry, own, unresolved)
         if key[0] == "rule" and entry.kind == "random":
             return self.random_rule(entry, own, unresolved, general)
@@ -837,17 +858,17 @@ class Graph:
         own: str,
         mode: str | None = None,
         *,
-        general: bool = False,
+        general: str | None = None,
         unresolved: tuple[str, ...] = (),
     ) -> Result:
         """The value `value_of` computes in each scenario's environment (from the rules and the data only
-        when `general`), once per scenario."""
+        when `general` names a prefix: `general`, or `reference` for the reference state), once per scenario."""
         scenarios = []
         todo: list[tuple[tuple[str, str], ...]] = [()]
         while todo:
             unknowns = todo.pop()
             chosen = dict(unknowns)
-            env = (_General if general else _Environment)(self, owner, chosen, own, unresolved)
+            env = _ENVIRONMENTS.get(general, _Environment)(self, owner, chosen, own, unresolved)
             try:
                 value = value_of(env, chosen)
             except _Branch as branch:
@@ -867,7 +888,7 @@ class Graph:
             ))
         return Result(tuple(sorted(scenarios, key=lambda scenario: scenario.unknowns)))
 
-    def point(self, entry: Entry, general: bool) -> Result:
+    def point(self, entry: Entry, general: str | None) -> Result:
         """An interval or distribution unknown (`core.unknown`).
         - An empirical one has a scenario per value; in a `_SubGraph` that samples it, the sample's value.
         - A continuous one is its enclosure, after every bound is evaluated and found in order (`range_invalid`);
@@ -896,7 +917,7 @@ class Graph:
 
         return self.expression(entry, value_of, CONFIRMED, general=general)
 
-    def random_rule(self, rule: Entry, own: str, unresolved: tuple[str, ...], general: bool) -> Result:
+    def random_rule(self, rule: Entry, own: str, unresolved: tuple[str, ...], general: str | None) -> Result:
         """A random rule's value (`core.random`): a pity chain's expected pulls to the target from a fresh start,
         or a drop's chance per run.
         - A chain's members must be single values (`evaluation_unsupported`, `found` `interval`, when continuous

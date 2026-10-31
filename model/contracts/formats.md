@@ -146,7 +146,7 @@ always), `unknowns` (unknown ids), `supersedes` (rule ids), `note`]. `kind` sele
 
 | `kind` | `logic` members |
 |---|---|
-| `cap` | `cap_kind` selects the rest. `hard` and `storage`: `on_reach` and exactly one of `value` (expr) and `reading` (fact key). `soft_read`: `reading` and `on_reach`. `on_reach` is `block_all_income`, `stop_production`, `discard`, `void_at_reset` or `{"block_income_from": [activity ids], "other_income": "notice_only"}`. |
+| `cap` | `cap_kind` selects the rest. `hard` and `storage`: `on_reach` and exactly one of `value` (expr) and `reading` (fact key). `soft_read`: `reading` and `on_reach`. `on_reach` is `block_all_income`, `stop_production`, `discard`, `void_at_reset` or `{"block_income_from": [activity ids], "other_income": "notice_only"}`. Every kind may add [`reference` (expr): with a `reading` only, the cap's value in the reference state, which the economy's steady state reads instead of the reading (#424 ACM-PRICE G-A); it must not read the account state] and [`per` (period id): with `on_reach` `void_at_reset` only, the period at whose resets the cap voids what lies above it; absent means every day (G-C)]. A `reference` beside a `value` is `member_conflict`, a `per` with another `on_reach` `member_unknown`. |
 | `regen` | `amount`, `every` [`while` (absent means always)], all expr |
 | `flow` | [`consumes`, `produces` (resource id to expr; a product may instead be `random:<id>`, naming a `random` rule), `moves` (`from`, `to`, `amount`), `counts_on` (`success` or `attempt`), `batch` (`min`, `max`), `requires` (gate rule ids)] |
 | `exchange` | `gives`, `takes` (resource id to expr) [`limit` (expr)] |
@@ -345,7 +345,7 @@ state have their own codes.
 | `stock:<id>` | a `store` |
 | `moves.from`, `moves.to` | a `resource` or a `store` |
 | `block_income_from`, `shared_with` | `activity` entities |
-| `limit.per` | a period |
+| `limit.per`, a cap's `per` | a period |
 | `rule:<id>`; `weight_ref.compares_to` | an active rule |
 | `cap:<id>`; `count:<id>`; flow `requires`; a `random:<id>` product | an active `cap`, `limit`, `gate` or `random` rule |
 | `metric:<rule>.<name>` | an active `engine` rule and one of its `metrics`; the longest rule id that leaves a metric name is taken |
@@ -476,7 +476,7 @@ together, with exit status 1.
   | Member | Expects |
   |---|---|
   | a rule's `when`; regen `while`; gate `requires` | a boolean |
-  | cap `value` | the cap's dimension |
+  | cap `value`, `reference` | the cap's dimension |
   | limit `max`; flow `batch.min`, `batch.max`; exchange `limit` | `count` |
   | regen `amount` | the amount of what its subject holds (a resource or a store) |
   | regen `every`, cooldown `min_interval`, objective `horizon` | `time` |
@@ -514,7 +514,8 @@ together, with exit status 1.
 
 **Nodes.** The outputs are:
 - `rule:<id>`: the value of every active `derive` (its `value`, then its `round`), `cap` (its `value`, or its
-  reading), `limit` (its `max`) and `random` rule with a `pity_chain` or a `drop` (see "Random rules");
+  reading; never its `reference`, which only the economy's steady state reads), `limit` (its `max`) and `random`
+  rule with a `pity_chain` or a `drop` (see "Random rules");
 - `general_logic:<id>`: a derive's `general_logic`, computed beside its value and read by nothing;
 - `threshold:<id>`: each threshold of `exports.json`. The `constant` form is the derive's value, the
   `fact_offset` form the value of its `live.offset`; then the threshold's `round`. The `fact_offset` form
@@ -727,19 +728,36 @@ does. The configuration keys are under `lp`, `search` and `economy` (`contracts/
   execution succeeds, and a batch is that many executions.
 - **Moves.** A move whose amount comes from the rules and the data moves that amount per execution. A move whose
   amount needs the account state, such as a collection of what the store holds (`stock:<store>`), moves a variable
-  amount, at most its store's storage cap per execution; its store must have a storage cap with a value (`state`).
+  amount, at most its store's storage cap per execution; its store must have a storage cap with a value, or in the
+  steady state with a `reference` (`state`).
 - **Regens.** A regen with an `every` of a day or less brings its amount times a day over `every` in each step. A
   longer `every` must be a whole number of days, and its amount comes whole in the first step and every that many
   steps after; in the steady state it must divide the cycle (`every`). An `every` that is not positive is
-  `value_invalid`. A store's regen is its production. A `while` is read only when it says what the store's storage
-  cap does (`stock:<store> < cap:<its storage cap>`); any other is refused (`while`).
+  `value_invalid`. A store's regen is its production. A `while` is read only when it says where production stops,
+  in one of these two forms; any other is refused (`while`):
+  - a store's regen, what the store's storage cap does (`stock:<store> < cap:<its storage cap>`);
+  - in the steady state, a resource's regen that stops at a cap of that resource (#424 ACM-PRICE G-B):
+    `amount:<resource> < cap:<cap>` (or `rule:<cap>`), the cap having a `value` or a `reference`, or
+    `amount:<resource> < read:<fact>`, the fact being the reading of the one cap of that resource that has a
+    `reference`. The cap's value (its `reference`, for a reading) is where the regen stops. In each step what the step
+    consumes of the resource comes first, then what the regen brings, up to that value; the rest of the regen is lost
+    (`lost_production`, at most what the regen brings in the step). Other incomes are not stopped. The cap is priced
+    like any cap with a value, and its stock ends the cycle with exactly the stock it began with. The plan does not
+    model it yet (`while`).
 - **Caps:**
   - `hard` on a resource, with `block_all_income` or `discard`: its stock stays at or below the cap at every step
     boundary. What the cap blocks overflows: at most the step's income, never stock already held.
+  - `hard` on a resource with `void_at_reset`, in the steady state (G-C): read as `discard`, but only at the resets
+    of its `per` (every step boundary for a day, or without `per`; every seventh, from the first, for a week). Between
+    them the stock may exceed the cap; what lies above it at a reset is voided: it overflows in the step that ends at
+    the reset, at most the income since the last reset. The plan refuses it (`void_at_reset`).
   - `storage` on a store, with `stop_production`, `discard` or `block_all_income`: its stock stays at or below the
     cap, and production beyond it is lost (at most the step's production).
   - `soft_read` on a resource, with `block_income_from`: the plan reads it (see below). The steady state reads no
-    account value, so it does not.
+    account value, so it does not, but where a resource's regen stops at it (above).
+  - A cap with a `reading` counts, in the steady state, at its `reference`, and so do `cap:<id>` and `rule:<id>` in
+    what the steady state reads (G-A); `read:<fact>` still reads the account state. A `reference` that needs the
+    account state is refused (`state`), as is a reading without a `reference`. The plan and `run` read the reading.
   - Any other subject or `on_reach` is refused, with `found` the subject's kind or the `on_reach`.
 - **Limits.** Each window of the limit's period (one step for a day, seven for a week) counts the executions of its
   subject and of its `shared_with` activities: at most `max`.
@@ -748,35 +766,51 @@ does. The configuration keys are under `lp`, `search` and `economy` (`contracts/
   the flow run. Any other gate is refused (`gate`).
 - **Not modelled yet**, each refused: `exchange`, `cooldown` and `objective` rules (an objective's terms read
   metrics, which come with the search); a `random:` product; a `when`; and an amount, cap or limit that reads an
-  unknown (`unknown`), because each program solves single values.
+  unknown (`unknown`), because each program solves single values. In the steady state, a pending flow is left out
+  instead (below).
+- **Pending flows** (the ACM-PRICE addendum, part 1). In the steady state, a flow whose `status` is `pending` and one
+  of whose amounts reads an unknown is not refused: its activity is left out of the program and listed in
+  `excluded_pending`, with the flow, the activity and the unknowns its amounts read. Every price is then provisional,
+  computed without that activity (`price_status`). Once the flow no longer reads an unknown (a measurement filled
+  in), it is in the program again, and nothing is provisional for that reason. A flow of another status that reads
+  an unknown, any other rule that does, and every such flow in the plan are refused (`unknown`).
 
 Every refusal is `expr_eval_failed` (`evaluation_unsupported`, operator `economy`, `found` as named above) at the
 rule, member or period, and blocks the output; nothing is approximated.
 
 **Status** of each output: the worst of the rules, rows and readings it read. It is provisional when it depends on
-an unknown it does not read: one that a pending rule it read names.
+an unknown it does not read: one that a pending rule it read names. Each amount, regen member, cap, limit and gate
+keeps its own status, so that a price can later have the status of what it reads (#424 ACM-PRICE 4.6); in this
+version the steady state's status is that of all of them but those of the pending flows it leaves out, and
+provisional when it leaves one out.
 
 ### The steady state (`steady`)
 
-- **Game-wide.** It reads the rules and the data only, never the account state. An amount, cap or limit that needs
-  the account state is refused (`state`).
+- **Game-wide.** It reads the rules and the data only, in the reference state (a cap with a reading at its
+  `reference`), never the account state. An amount, cap or limit that needs the account state is refused (`state`).
 - **Its objective** is the numeraire's gain over one cycle, maximised. Every other stock ends the cycle with at least
-  the stock it began with, and a stock with a hard or storage cap with exactly that stock, so the cycle can repeat.
+  the stock it began with, and a stock with a hard or storage cap, or whose regen stops at a cap, with exactly that
+  stock, so the cycle can repeat.
 - **Prices.** A resource's price in a step is the change of the optimum per grain (`lp.grain`, 1) when that step
   brings one grain more, and when it brings one grain less.
   - When the two agree, the price is exact (`"1/10"`).
   - Otherwise it is the interval `{"low", "high"}` (a degenerate basis); `high` is null when one grain less is
     infeasible.
-  - The same holds for each cap with a value and each limit (`rule_prices`), re-solved with its value one grain
-    higher and one lower. The numeraire's price is 1.
+  - The same holds for each cap with a value (a `reference` counts as one) that the program reads and each limit
+    (`rule_prices`), re-solved with its value one grain higher and one lower. The numeraire's price is 1.
+- **The status of each price** (`price_status`): resource to `{status, reasons}`. `reasons` says why a price is
+  provisional: `excluded_pending`, computed without the activities in `excluded_pending`; `inputs`, a rule, row or
+  reading it read is provisional, or depends on an unknown that a pending rule it read names (in this version,
+  everything the steady state read). A confirmed price has no reason.
 - **Activity values** per step: what one execution produces less what it consumes, at that step's prices, in the
   numeraire. Where a price is an interval, so is the value, and an unbounded end is null. An activity that moves out
   of or into a store has no value (null): what it moves depends on what the store holds.
-- **Losses** over one cycle: per resource with a hard cap its `overflow`, and per store with a storage cap its
-  `lost_production`. They are the least among the optimal solutions, from a second solve at the optimum.
+- **Losses** over one cycle: per resource with a hard cap its `overflow`, and per store with a storage cap and per
+  resource whose regen stops at a cap its `lost_production`. They are the least among the optimal solutions, from a
+  second solve at the optimum.
 - **Marginals.** HiGHS's marginals of the same rows are kept in `marginals`, as a cross-check only. A marginal outside
   its price's interval is the warning `lp_dual_disagrees`; the price stands. A storage cap's marginal also counts the
-  moves it bounds, whose coefficient it is.
+  moves it bounds, whose coefficient it is, and a cap's the regen stops at it.
 
 ### The plan (`plan`)
 
@@ -823,7 +857,8 @@ an unknown it does not read: one that a pending rule it read names.
 two has `status` and `per_account`; a blocked one has only `status`.
 - **`steady`:** `cycle` (`steps`, `step_seconds`), `objective`, `prices` (resource to its price per step),
   `rule_prices`, `activity_values` (activity to its value per step, or null), `losses` (`overflow`,
-  `lost_production`), `marginals` (`prices`, `rule_prices`) and `excluded`.
+  `lost_production`), `marginals` (`prices`, `rule_prices`), `excluded`, `excluded_pending` (a list of `{flow,
+  activity, unknowns}`, by flow) and `price_status`.
 - **`plan`:** `steps`, `proven`, `objective`, `counts` (activity to its count per step), `moved` (collection to its
   amount per step), `end` (the final stocks), `unread` and `excluded`.
 

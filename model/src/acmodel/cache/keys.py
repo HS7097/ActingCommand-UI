@@ -59,8 +59,12 @@ class Evaluator:
 # unknown, which any expression may read, is its Wilson enclosure instead of a refusal, and a random rule has a
 # value (`core.random`: the exact pity chain and the Wilson bounds compute with integers and fractions only, so
 # they declare no library).
+# #424 ACM-PRICE PRICE-1: `reference` is a node in the reference state (version 1, a derivation kind like
+# `general`), and the steady state reads it; `economy` 2: the steady state reads caps' references, a resource's
+# regen stop and void_at_reset caps, leaves out pending flows whose unknowns it cannot read, and shows
+# `excluded_pending` and `price_status`.
 EVALUATORS: dict[str, Evaluator] = {
-    "economy": Evaluator(1, ("numpy", "python", "scipy")),
+    "economy": Evaluator(2, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
     "flow": Evaluator(3),
     "general": Evaluator(3),
@@ -69,6 +73,7 @@ EVALUATORS: dict[str, Evaluator] = {
     "member": Evaluator(3),
     "offset": Evaluator(3),
     "point": Evaluator(2),
+    "reference": Evaluator(1),
     "regen": Evaluator(1),
     "rule": Evaluator(3),
     "sampled": Evaluator(2, ("numpy", "python")),

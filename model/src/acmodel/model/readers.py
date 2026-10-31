@@ -169,7 +169,25 @@ ON_REACH = Either(
     string=Choice("block_all_income", "stop_production", "discard", "void_at_reset"),
     object=Object({"block_income_from": ListOf(ID), "other_income": Choice("notice_only")}),
 )
-CAP_BY_VALUE = Object({"on_reach": ON_REACH}, {"value": EXPR, "reading": FACT_KEY}, exactly_one("value", "reading"))
+_VALUE_OR_READING = exactly_one("value", "reading")
+
+
+def _cap(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """A cap's `reference`, its value in the reference state, goes with a `reading` (#424 ACM-PRICE G-A), and its
+    `per`, the period at whose resets it voids, with `on_reach` `void_at_reset` (G-C)."""
+    ok = True
+    if "reference" in value and "reading" not in value:
+        ok = ctx.refuse("member_conflict", pointer(ref, "reference"), key="reference", expected=["value", "reference"])
+    if "per" in value and value["on_reach"] != "void_at_reset":
+        ok = ctx.refuse("member_unknown", pointer(ref, "per"), key="per") and ok
+    return ok
+
+
+CAP_MEMBERS = {"reference": EXPR, "per": ID}
+CAP_BY_VALUE = Object(
+    {"on_reach": ON_REACH}, {"value": EXPR, "reading": FACT_KEY, **CAP_MEMBERS},
+    lambda value, ref, ctx: _VALUE_OR_READING(value, ref, ctx) and _cap(value, ref, ctx),
+)
 COMPARISON = Choice(
     "eq", "not_eq", "less_than", "less_than_or_equal", "greater_than", "greater_than_or_equal"
 )
@@ -180,7 +198,7 @@ LOGIC: dict[str, Spec] = {
         {
             "hard": CAP_BY_VALUE,
             "storage": CAP_BY_VALUE,
-            "soft_read": Object({"reading": FACT_KEY, "on_reach": ON_REACH}),
+            "soft_read": Object({"reading": FACT_KEY, "on_reach": ON_REACH}, CAP_MEMBERS, _cap),
         },
     ),
     "regen": Object({"amount": EXPR, "every": EXPR}, {"while": EXPR}),

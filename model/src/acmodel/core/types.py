@@ -328,9 +328,9 @@ class _Types:
     def expected(self, owner: Entry, role: tuple[str, ...]) -> list[tuple[str, Type]]:
         checker, kind, logic = self.checker, owner.kind, owner.doc["logic"]
         member = role[1:] if role[0] == "logic" else ()
-        if kind == "cap" and member == ("value",):
+        if kind == "cap" and member in (("value",), ("reference",)):  # a reference is the cap's value too
             dim = cap_dimension(checker, owner)
-            return [("value", dim)] if dim is not None else []
+            return [(member[0], dim)] if dim is not None else []
         if kind == "regen":
             resource = held(checker, owner.doc["subject"])
             amounts = [("amount", amount(resource))] if resource is not None else []
