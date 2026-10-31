@@ -397,10 +397,12 @@ made:
   font size and line height in the interface is one base size meant for a person at normal DPI (list row
   14px, detail pane 13px, subheading 16px, line height 26px) multiplied by this one factor; `app.slint`
   has only this one knob, `Scale.factor`.
-- **Language**: 中文 / English. **Takes effect after a restart**, and that sentence is written right next
-  to the box. The two language tables are in `crates/acui-app/src/strings.rs` (`ZH` and `EN`); at startup
-  the selected one fills the `Strings` global once, and there is no re-layout afterwards — there is no
-  gettext, and no swapping of words at runtime.
+- **Language**: 中文 / English. **Takes effect on the spot**: the choice fills the `Strings` global again
+  and paints every line of the window again — the launcher's two lines, the frame pane's note, the port
+  box and the words after a read error included. A background thread never holds a language table; it
+  hands back phrases that are put into words when painted, so a start or a frame read still in flight
+  reports in the new language. The two language tables are in `crates/acui-app/src/strings.rs` (`ZH` and
+  `EN`); there is no gettext. A read face's own error text is shown verbatim, untranslated.
 
 Two-layer labels: the upper layer is the name for a person to read, and the grey lower layer is the
 verbatim form used in the program — the raw `event_type`, module names, ids of every kind,
@@ -450,7 +452,12 @@ backslashes.
 ## Launcher
 
 The third line of the top bar. On the left is the Runtime state from the last probe, then two buttons, and
-the line below it is the result of the last Start or Request shutdown press.
+the line below it is the result of the last Start or Request shutdown press: plain words first (no key,
+code, PID or path; an outcome code shows only as its short words), then the technical text; the whole line
+turns red on a failure and wraps instead of being cut. The probe, the whole start (probe, launch,
+readiness, record) and the shutdown request each run on a background thread of their own, and the window
+never waits on them; one request of each kind runs at a time, and a second press while one has not
+finished only says so. Of probes in flight, only the newest one's answer is shown.
 
 - **Runtime state**: probed once at startup, and probed again after every Start or Request shutdown
   press. A probe is one `RuntimeClient::connect`: on a connection it says "running · PID · owner epoch"
@@ -517,8 +524,8 @@ the line below it is the result of the last Start or Request shutdown press.
   contract, and an `unlock_owner_completed` with a non-zero exit code each have their own line, and none
   retries the start. After any outcome but an
   unlock the entry is back at its first step; a new start withdraws it. Start is refused while the
-  unlock runs, and pressing it again while the previous start is still polling for readiness is
-  refused outright — "The Previous Start Is Still Waiting for Readiness" — launching nothing. The console records no client action for it: there is no running Runtime to record
+  unlock runs, and pressing it again while the previous start has not finished is
+  refused outright — "The Previous Start Has Not Finished" — launching nothing. The console records no client action for it: there is no running Runtime to record
   through, and `unlock-owner` appends its own `cli.command` fact (action `owner.unlock`). It never
   deletes `owner.lock` (Runtime `contracts/actingd-unlock-owner.md`).
 - **Request shutdown**: only through the typed client, never killing a process. It opens a new connection
@@ -1031,13 +1038,13 @@ startup-failure window in `report.rs`, and the client operations — probe, requ
 the start press, and the online open's status and fact reads — are in `acui-source` (`probe_runtime` /
 `request_shutdown` / `record_start` / `instance_facts`).
 
-Every background worker — the start's readiness poll and its record, request shutdown, unlock-owner, a
-frame read, and every acsetup worker (release lookup, install or
+Every background worker — the probe at startup, the whole start (probe, launch, readiness poll and its
+record), request shutdown, unlock-owner, a frame read, and every acsetup worker (release lookup, install or
 upgrade, writing the options, discovery, reading resources, writing instances, settling) — is started through
 `std::thread::Builder`. A thread the system refuses is stated, with the OS error, where that action
-reports, and what the worker would have cleared (the start or unlock in flight, the save in progress,
-the frame request) is reset: never a panic on the event loop. A launched actingd whose readiness poll
-cannot start keeps running, and the line says so and that pressing Start again probes it. A child that was killed but could not be reaped is
+reports, and what the worker would have cleared (the probe, start, shutdown or unlock in flight, the save
+in progress, the frame request) is reset: never a panic on the event loop. A start whose thread cannot
+start launches nothing, and the line says so. A child that was killed but could not be reaped is
 said as that, not as a kill that failed.
 
 Two more crates sit outside these four layers. `acui-setup` (binary `acsetup`) is the setup wizard; it

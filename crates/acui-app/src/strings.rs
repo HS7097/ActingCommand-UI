@@ -5,8 +5,10 @@
 //! exception is the words for an outcome code, which are in acui-rows'
 //! `outcome-text.json` (`acui_rows::outcome`), next to the UI's code table.
 //!
-//! The chosen table is read once at startup, into the `Strings` global for the
-//! labels the window draws itself and directly for the lines the console fills.
+//! The table of the language shown is taken again at every paint (`Ui::labels`):
+//! into the `Strings` global for the labels the window draws itself, filled
+//! again when the language changes, and directly for the lines the console
+//! fills. A worker thread never holds a table; it hands back a `Phrase`.
 
 use acui_rows::outcome::{explain, Tongue};
 
@@ -82,7 +84,6 @@ pub struct Labels {
     pub text_sizes: [&'static str; 3],
     pub language: &'static str,
     pub languages: [&'static str; 2],
-    pub restart_note: &'static str,
     pub severity_min: [&'static str; 4],
     pub severity_max: [&'static str; 4],
     pub all_modules: &'static str,
@@ -206,8 +207,27 @@ pub struct Labels {
     pub outcome_unknown_short: &'static str,
     /// A follow tick's failure, shown beside the view's own.
     pub follow_failed: &'static str,
+    /// The committed time span could not be read: the read's own words.
+    pub span_failed: &'static str,
     /// The launcher block in the top bar: status, two buttons, one line.
     pub launcher_title: &'static str,
+    /// The launcher in plain words, before the technical line: what the
+    /// Runtime is doing, or what became of the last request. No key, code, pid
+    /// or path goes in these.
+    pub launcher_checking: &'static str,
+    pub launcher_starting: &'static str,
+    pub launcher_running: &'static str,
+    pub launcher_not_running: &'static str,
+    pub launcher_check_failed: &'static str,
+    pub launcher_start_failed: &'static str,
+    pub launcher_needs_unlock: &'static str,
+    pub launcher_stopping: &'static str,
+    pub launcher_stop_requested: &'static str,
+    pub launcher_stop_failed: &'static str,
+    pub launcher_not_configured: &'static str,
+    pub launcher_busy: &'static str,
+    /// A plain sentence, then the short words of the outcome code behind it.
+    pub launcher_because: &'static str,
     pub start: &'static str,
     pub request_shutdown: &'static str,
     /// pid, owner epoch.
@@ -217,9 +237,8 @@ pub struct Labels {
     pub already_running: &'static str,
     /// The OS error of a worker thread that could not be started.
     pub thread_failed: &'static str,
-    /// actingd's pid, the OS error.
-    pub start_unwatched: &'static str,
     pub start_busy: &'static str,
+    pub shutdown_busy: &'static str,
     /// settings key.
     pub key_not_configured: &'static str,
     /// settings key, value.
@@ -362,7 +381,6 @@ pub const ZH: Labels = Labels {
     text_sizes: ["标准", "大", "特大"],
     language: "语言",
     languages: ["中文", "English"],
-    restart_note: "重启后生效",
     severity_min: ["严重度不限", "≥ 警告", "≥ 错误", "≥ 致命"],
     severity_max: ["上限不限", "≤ 信息", "≤ 警告", "≤ 错误"],
     all_modules: "全部模块",
@@ -552,15 +570,29 @@ pub const ZH: Labels = Labels {
     outcome_unknown: "这个码不在本界面的说明表里，可能来自更新版本的 Runtime；以上是原码，详情见排障窗口",
     outcome_unknown_short: "未收录的码",
     follow_failed: "跟随最新：{}",
+    span_failed: "时间跨度：{}",
     launcher_title: "启动器",
+    launcher_checking: "正在检查 Runtime…",
+    launcher_starting: "正在启动 Runtime…",
+    launcher_running: "Runtime 正在运行",
+    launcher_not_running: "Runtime 没有运行",
+    launcher_check_failed: "没能检查 Runtime 是否在运行",
+    launcher_start_failed: "Runtime 没能启动",
+    launcher_needs_unlock: "需要解锁：上一个 Runtime 没有正常退出",
+    launcher_stopping: "正在请求 Runtime 停止…",
+    launcher_stop_requested: "已请求 Runtime 停止",
+    launcher_stop_failed: "停止请求没有成功",
+    launcher_not_configured: "启动所需的路径没有配置，请按安装说明填写设置文件",
+    launcher_busy: "上一次请求还没完成",
+    launcher_because: "{}：{}",
     start: "启动",
     request_shutdown: "请求关闭",
     runtime_running: "Runtime 运行中 · PID {} · owner epoch {}",
     runtime_not_running: "Runtime 未运行 · {}（{}）",
     already_running: "已在运行，未拉起",
     thread_failed: "无法启动后台线程：{}",
-    start_unwatched: "已拉起 actingd（PID {}），但等待就绪的线程启动失败：{}；要知道它是否就绪，再按一次「启动」探测",
-    start_busy: "上一次启动仍在等待就绪",
+    start_busy: "上一次启动还没结束",
+    shutdown_busy: "上一次关闭请求还在进行",
     key_not_configured: "acui.toml 未配置 {}",
     key_not_absolute: "acui.toml 的 {} 不是绝对路径：{}",
     log_dir_failed: "无法建立日志目录 {}：{}",
@@ -657,7 +689,6 @@ pub const EN: Labels = Labels {
     text_sizes: ["Standard", "Large", "Extra Large"],
     language: "Language",
     languages: ["中文", "English"],
-    restart_note: "Takes effect after restart",
     severity_min: ["Any Level", "≥ Warning", "≥ Error", "≥ Fatal"],
     severity_max: ["Any Upper Bound", "≤ Info", "≤ Warning", "≤ Error"],
     all_modules: "All Modules",
@@ -847,15 +878,29 @@ pub const EN: Labels = Labels {
     outcome_unknown: "This code is not in this console's table; it may come from a newer Runtime. The code is shown as is; see the troubleshooting window for details",
     outcome_unknown_short: "code not in this console's table",
     follow_failed: "Following latest: {}",
+    span_failed: "Time span: {}",
     launcher_title: "Launcher",
+    launcher_checking: "Checking the Runtime…",
+    launcher_starting: "Starting the Runtime…",
+    launcher_running: "The Runtime Is Running",
+    launcher_not_running: "The Runtime Is Not Running",
+    launcher_check_failed: "Could Not Check Whether the Runtime Is Running",
+    launcher_start_failed: "The Runtime Did Not Start",
+    launcher_needs_unlock: "Unlock Needed: the Last Runtime Did Not Exit Cleanly",
+    launcher_stopping: "Asking the Runtime to Stop…",
+    launcher_stop_requested: "The Runtime Was Asked to Stop",
+    launcher_stop_failed: "The Stop Request Did Not Go Through",
+    launcher_not_configured: "A Path the Start Needs Is Not Set; Fill In the Settings File as the Installation Guide Says",
+    launcher_busy: "The Previous Request Has Not Finished",
+    launcher_because: "{}: {}",
     start: "Start",
     request_shutdown: "Request Shutdown",
     runtime_running: "Runtime Running · PID {} · Owner Epoch {}",
     runtime_not_running: "Runtime Not Running · {} ({})",
     already_running: "Already Running, Nothing Started",
     thread_failed: "Starting a Background Thread Failed: {}",
-    start_unwatched: "actingd Launched (PID {}), but the Readiness Thread Failed to Start: {}; Press Start Again to Probe Whether It Is Ready",
-    start_busy: "The Previous Start Is Still Waiting for Readiness",
+    start_busy: "The Previous Start Has Not Finished",
+    shutdown_busy: "The Previous Shutdown Request Is Still Running",
     key_not_configured: "{} Not Configured in acui.toml",
     key_not_absolute: "{} in acui.toml Is Not an Absolute Path: {}",
     log_dir_failed: "Cannot Create Log Directory {}: {}",

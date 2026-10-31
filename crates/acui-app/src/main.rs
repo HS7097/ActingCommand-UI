@@ -5,13 +5,17 @@
 //! with a launcher block that starts the daemon detached and asks it, through
 //! the same typed client, to shut down. A start that fails is shown in a window
 //! of its own (`report`); what the settings file holds that the console cannot
-//! take is shown at the top of the window.
+//! take is shown at the top of the window. Every word is put together when it
+//! is painted, in the language shown then (`ui`, `phrase`), so a language
+//! picked in the box takes effect at once.
 
 mod install;
 mod launcher;
+mod phrase;
 mod report;
 mod settings;
 mod strings;
+mod ui;
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -37,12 +41,14 @@ use acui_source::{
 };
 use anyhow::{bail, Result};
 use install::InstallPaths;
+use phrase::{phrase, verbatim, Phrase};
 use report::Fatal;
 use settings::{SettingsIssue, TextSize};
 use slint::{
     Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode, VecModel,
 };
 use strings::{fill, outcome_sentence, outcome_short, Labels, Language};
+use ui::Ui;
 
 slint::include_modules!();
 
@@ -104,25 +110,24 @@ fn parse_args() -> Result<Args> {
 }
 
 /// One state root (its read face open or unopened), its view model when open,
-/// the chosen language, and the frame read in flight.
+/// what the windows share, and the frame read in flight.
 struct App {
     /// The installation inputs of this process, retained across all UI actions.
     installation: Option<acui_installation::Snapshot>,
     source: Session,
     /// `None` while the read face is unopened: there is no page to model.
     model: Option<RefCell<ViewModel>>,
-    labels: &'static Labels,
+    /// The language and text size shown, the settings file and its notices,
+    /// and the launcher's view.
+    ui: Rc<Ui>,
     /// The module option list as the box currently shows it, and what each
     /// entry after the first one means. Rebuilt from every page.
     module_options: RefCell<Vec<SharedString>>,
     module_choices: RefCell<Vec<OriginModule>>,
-    /// Instance identity by ADB port, read once at the pinned snapshot.
+    /// Instance identity by ADB port, read once at the pinned snapshot. The
+    /// port box's items come from it at every paint (`port_options`), in the
+    /// language shown then.
     port_map: PortMap,
-    /// The port option list, fixed for the session like the map it comes
-    /// from, and the port each entry after the first one means. Empty
-    /// choices mean the box is disabled and its one item says why.
-    port_options: Vec<SharedString>,
-    port_choices: Vec<u16>,
     /// The frame request the pane has made, if any. Shared with the read's
     /// completion, which runs on the event loop but has to be `Send`.
     frame: Arc<Mutex<Option<FrameRequest>>>,
@@ -137,11 +142,6 @@ struct App {
     frame_events: RefCell<Option<FrameEvents>>,
     /// The state root and the two launcher paths, as this run resolved them.
     launcher: launcher::Launcher,
-    /// The settings file the two boxes save to, what it held that this run
-    /// could not take, and the last save's failure, shown until a save succeeds.
-    settings: settings::SettingsFile,
-    settings_issues: Vec<SettingsIssue>,
-    save_issue: RefCell<Option<SettingsIssue>>,
     /// Runs the follow ticks while "follow latest" is on.
     follow: Timer,
     /// Reloads once the time cursor's handle rests.
@@ -161,6 +161,16 @@ enum PortMap {
 }
 
 impl App {
+    /// The table of the language shown now.
+    fn labels(&self) -> &'static Labels {
+        self.ui.labels()
+    }
+
+    /// Whether the read face is the running Runtime's.
+    fn online(&self) -> bool {
+        matches!(self.source, Session::Open(ReadSource::Online(_)))
+    }
+
     fn port_bindings(&self) -> Option<&PortBindings> {
         match &self.port_map {
             PortMap::Read(bindings) => Some(bindings),
@@ -179,23 +189,44 @@ impl App {
     /// The pixel size the current request's verified frame decoded to, when
     /// that request was made for this event.
     fn decoded_size(&self, sequence: u64) -> Option<(f32, f32)> {
-        let request = (*self.frame_request())?;
+        let held = self.frame_request();
+        let request = held.as_ref()?;
         let (width, height) = request.decoded.filter(|_| request.sequence == sequence)?;
         Some((width as f32, height as f32))
     }
 }
 
 /// A frame's id as `code` writes it, and its events as read, or why not.
-type FrameEvents = (String, Result<Vec<ProjectedEvent>, String>);
+type FrameEvents = (String, Result<Vec<ProjectedEvent>, FrameLookupError>);
 
-/// One frame read: the event it is for and its generation, and once that read
-/// is verified and decoded, the pixel size. A switch, a clear or a failure
-/// drops the size with the request it belongs to.
-#[derive(Clone, Copy)]
+/// Why a frame's own events could not be read: put into words when painted.
+#[derive(Clone)]
+enum FrameLookupError {
+    /// A page of the read says its source is incomplete, so it cannot say the
+    /// capture is absent.
+    Incomplete,
+    /// The read face's own words.
+    Read(String),
+}
+
+impl FrameLookupError {
+    fn text(&self, labels: &Labels) -> String {
+        match self {
+            Self::Incomplete => labels.source_incomplete.to_owned(),
+            Self::Read(text) => text.clone(),
+        }
+    }
+}
+
+/// One frame read: the event it is for and its generation, what the pane says
+/// about it — reading, verified, or why not — and once that read is verified
+/// and decoded, the pixel size. A switch, a clear or a failure drops the size
+/// with the request it belongs to.
 struct FrameRequest {
     sequence: u64,
     generation: u64,
     decoded: Option<(u32, u32)>,
+    note: Phrase,
 }
 
 /// Every way out of a start goes through `report`: the usage, a command line
@@ -254,31 +285,27 @@ fn run(args: Args, loaded: settings::Loaded, language: Language) -> Result<(), F
                 state_root.display().to_string(),
                 None,
             );
-            advance_span(labels, source, &mut model, None);
+            advance_span(source, &mut model, None);
             model.tab = args.tab.unwrap_or(LedgerView::Events);
             (Some(RefCell::new(model)), port_map)
         }
         // Nothing is asked of a face that is not open.
         Session::Unopened { .. } => (None, PortMap::Unopened),
     };
-    let (port_options, port_choices) = port_options(labels, &port_map);
+    let launcher_view = launcher::LauncherView::new(source.offline_reason().is_some());
+    let ui = Ui::new(language, &stored, loaded.file, loaded.issues, launcher_view);
     let app = Rc::new(App {
         installation,
         source,
         model,
-        labels,
+        ui,
         module_options: RefCell::new(Vec::new()),
         module_choices: RefCell::new(Vec::new()),
         port_map,
-        port_options,
-        port_choices,
         frame: Arc::new(Mutex::new(None)),
         generation: Arc::new(AtomicU64::new(0)),
         worker: Arc::new(Mutex::new(())),
         launcher: launcher::Launcher::new(state_root, actingd_config, actingd_exe),
-        settings: loaded.file,
-        settings_issues: loaded.issues,
-        save_issue: RefCell::new(None),
         frame_events: RefCell::new(None),
         follow: Timer::default(),
         cursor_rest: Timer::default(),
@@ -288,10 +315,11 @@ fn run(args: Args, loaded: settings::Loaded, language: Language) -> Result<(), F
     let window_failed =
         |error: slint::PlatformError| Fatal::failed(fill(labels.window_failed, &[&error.to_string()]));
     let window = AppWindow::new().map_err(window_failed)?;
-    install_strings(&window, labels, matches!(app.source, Session::Open(ReadSource::Online(_))));
-    window.global::<Scale>().set_factor(stored.text_size.factor());
-    window.set_text_size_index(stored.text_size.index());
-    window.set_language_index(if language == Language::Zh { 0 } else { 1 });
+    fill_strings(window.global::<Strings>(), labels, app.online());
+    let text_size = app.ui.text_size.get();
+    window.global::<Scale>().set_factor(text_size.factor());
+    window.set_text_size_index(text_size.index());
+    window.set_language_index(language_index(language));
     install_callbacks(&window, &app);
     launcher::install(&window, &app);
     paint_notices(&window, &app);
@@ -305,11 +333,11 @@ fn run(args: Args, loaded: settings::Loaded, language: Language) -> Result<(), F
 /// where the technical log is. A save's failure stays until a save succeeds;
 /// one that only repeats a problem found at the start is not said twice.
 fn paint_notices(window: &AppWindow, app: &App) {
-    let labels = app.labels;
-    let save = app.save_issue.borrow();
-    let fresh = save.as_ref().filter(|issue| !app.settings_issues.contains(*issue));
+    let labels = app.labels();
+    let notices = app.ui.notices.borrow();
+    let fresh = notices.save.as_ref().filter(|issue| !notices.settings.contains(*issue));
     let (mut errors, mut warnings) = (Vec::new(), Vec::new());
-    for issue in app.settings_issues.iter().chain(fresh) {
+    for issue in notices.settings.iter().chain(fresh) {
         let text = issue.text(labels);
         if issue.is_error() {
             errors.push(text);
@@ -329,16 +357,37 @@ fn paint_notices(window: &AppWindow, app: &App) {
 fn settings_saved(window: &AppWindow, app: &App, saved: Result<(), SettingsIssue>) {
     let failure = saved.err();
     if let Some(issue) = &failure {
-        report::log("settings", &issue.text(app.labels));
+        report::log("settings", &issue.text(app.labels()));
     }
-    app.save_issue.replace(failure);
+    app.ui.notices.borrow_mut().save = failure;
     paint_notices(window, app);
 }
 
-/// Fills the `Strings` global once. There is no second call: the language
-/// switch takes effect when the program is started again.
-fn install_strings(window: &AppWindow, labels: &'static Labels, online: bool) {
-    let global = window.global::<Strings>();
+/// A language picked in the box: saved, then shown at once — the labels the
+/// window draws, the lines it fills (the launcher's, the frame pane's and the
+/// read errors' included) and the notices, the save's failure among them.
+/// Setting the box's index from here does not call `selected` again.
+fn set_language(window: &AppWindow, app: &Rc<App>, language: Language) {
+    let saved = app.ui.settings.save_language(language);
+    app.ui.language.set(language);
+    fill_strings(window.global::<Strings>(), app.labels(), app.online());
+    window.set_language_index(language_index(language));
+    settings_saved(window, app, saved);
+    refresh(window, app);
+    launcher::paint(window, &app.ui);
+}
+
+fn language_index(language: Language) -> i32 {
+    match language {
+        Language::Zh => 0,
+        Language::En => 1,
+    }
+}
+
+/// Fills the `Strings` global from one language's table: at startup, and
+/// again at every language switch. A box keeps its picked index when its
+/// option list is replaced.
+fn fill_strings(global: Strings<'_>, labels: &Labels, online: bool) {
     global.set_window_title(labels.window_title.into());
     global.set_data_source(
         if online { labels.data_source_online } else { labels.data_source }.into(),
@@ -348,7 +397,6 @@ fn install_strings(window: &AppWindow, labels: &'static Labels, online: bool) {
     global.set_show_up_to(labels.show_up_to.into());
     global.set_text_size(labels.text_size.into());
     global.set_language(labels.language.into());
-    global.set_restart_note(labels.restart_note.into());
     global.set_text_size_options(shared(&labels.text_sizes));
     global.set_language_options(shared(&labels.languages));
     global.set_severity_min_options(shared(&labels.severity_min));
@@ -379,12 +427,14 @@ fn install_strings(window: &AppWindow, labels: &'static Labels, online: bool) {
     global.set_request_shutdown(labels.request_shutdown.into());
 }
 
-/// The port box's items: the first means every instance, then one per port,
-/// ascending, naming the port and the member its latest binding is for, with
-/// ` +n` for the further members of the same port. A map with nothing to
-/// pick — no binding facts, facts that name no port, online, an unopened
-/// face, or a refused read — gives one item that says which, and no choices,
-/// so the box is disabled.
+/// The port box's items, and the port each item after the first one means: the
+/// first means every instance, then one per port, ascending, naming the port
+/// and the member its latest binding is for, with ` +n` for the further
+/// members of the same port. A map with nothing to pick — no binding facts,
+/// facts that name no port, online, an unopened face, or a refused read —
+/// gives one item that says which, and no choices, so the box is disabled.
+/// Made again at every paint and every pick, in the language shown then; the
+/// map itself is fixed for the session.
 fn port_options(labels: &Labels, port_map: &PortMap) -> (Vec<SharedString>, Vec<u16>) {
     let bindings = match port_map {
         PortMap::Read(bindings) if !bindings.ports.is_empty() => bindings,
@@ -474,7 +524,7 @@ fn reload(app: &Rc<App>, earlier: bool) {
             None => Ok(snapshot),
             Some(bound) => {
                 let estimate = upper_for_time(model.span(), snapshot, bound);
-                checked_upper(app.labels, source, &model, estimate, snapshot)
+                checked_upper(source, &model, estimate, snapshot)
             }
         };
         *app.frame_request() = None;
@@ -498,10 +548,7 @@ fn reload(app: &Rc<App>, earlier: bool) {
         };
         let pages = model
             .window_query(window)
-            .and_then(|query| {
-                read_window(source, &query)
-                    .map_err(|error| QueryError::ReadFailed(read_failure(app.labels, &error)))
-            });
+            .and_then(|query| read_window(source, &query).map_err(|error| read_failed(&error)));
         match pages {
             Ok(pages) => model.apply_window(window, &pages),
             Err(error) => {
@@ -555,7 +602,6 @@ fn upper_for_time(span: Option<(u64, u64)>, snapshot: u64, bound: u64) -> u64 {
 /// stopped may hold no row and still go on (#411 A51): it decides nothing
 /// above the start, so that is the pin too.
 fn checked_upper(
-    labels: &Labels,
     source: &ReadSource,
     model: &ViewModel,
     estimate: u64,
@@ -571,9 +617,7 @@ fn checked_upper(
         query
             .validate()
             .map_err(|error| QueryError::Rejected(error.code().to_string()))?;
-        let page = source
-            .query(&query, 1, None)
-            .map_err(|error| QueryError::ReadFailed(read_failure(labels, &error)))?;
+        let page = source.query(&query, 1, None).map_err(|error| read_failed(&error))?;
         let Some(found) = page.events().first() else {
             return Ok(if page.next_cursor().is_some() { snapshot } else { upper });
         };
@@ -639,12 +683,14 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
     // A port is one instance: its whole set of ids goes into the query, or
     // nothing does. The first item, and any name not on the list, clears both.
     on!(on_port_changed, |app, model, name| {
-        let entry = app
-            .port_options
+        // The list the box shows: made in the language it was painted in,
+        // which is the one shown now.
+        let (options, choices) = port_options(app.labels(), &app.port_map);
+        let entry = options
             .iter()
             .position(|option| *option == name)
             .and_then(|index| index.checked_sub(1))
-            .and_then(|index| app.port_choices.get(index))
+            .and_then(|index| choices.get(index))
             .and_then(|port| app.port_entry(*port));
         {
             let mut model = model.borrow_mut();
@@ -745,23 +791,22 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
         let app = Rc::clone(app);
         window.on_text_size_changed(move |index| {
             let size = TextSize::from_index(index);
-            let saved = app.settings.save_text_size(size);
+            let saved = app.ui.settings.save_text_size(size);
+            app.ui.text_size.set(size);
             if let Some(window) = weak.upgrade() {
                 window.global::<Scale>().set_factor(size.factor());
                 settings_saved(&window, &app, saved);
             }
         });
     }
-    // Language is written now and read at the next start; the note beside the
-    // box says so.
+    // Language is written now and shown at once.
     {
         let weak = window.as_weak();
         let app = Rc::clone(app);
         window.on_language_changed(move |index| {
             let language = if index == 1 { Language::En } else { Language::Zh };
-            let saved = app.settings.save_language(language);
             if let Some(window) = weak.upgrade() {
-                settings_saved(&window, &app, saved);
+                set_language(&window, &app, language);
             }
         });
     }
@@ -781,8 +826,7 @@ fn jump_latest(window: &AppWindow, app: &Rc<App>) {
     };
     match source.repin() {
         Err(error) => {
-            model.borrow_mut().query_error =
-                Some(QueryError::ReadFailed(read_failure(app.labels, &error)));
+            model.borrow_mut().query_error = Some(read_failed(&error));
         }
         Ok(_) => {
             source.refresh_instances();
@@ -799,7 +843,7 @@ fn start_at_pin(window: &AppWindow, app: &Rc<App>, source: &ReadSource, model: &
         let mut model = model.borrow_mut();
         model.set_pin(source.open_report(), source.snapshot_position());
         model.filters.to_timestamp_unix_ms = None;
-        advance_span(app.labels, source, &mut model, None);
+        advance_span(source, &mut model, None);
     }
     window.set_cursor_value(1000.0);
     reload(app, false);
@@ -808,8 +852,8 @@ fn start_at_pin(window: &AppWindow, app: &Rc<App>, source: &ReadSource, model: &
 /// Moves the span's end to the event at the pin: `time` when a read already
 /// holds that event, one read of it otherwise. A span never read is read
 /// whole. A failed read leaves the span as it was and stays in `span_error`
-/// until one succeeds.
-fn advance_span(labels: &Labels, source: &ReadSource, model: &mut ViewModel, time: Option<u64>) {
+/// until one succeeds; the paint says it is the span's.
+fn advance_span(source: &ReadSource, model: &mut ViewModel, time: Option<u64>) {
     let span = match (model.span(), time) {
         (Some((first, _)), Some(last)) => Ok(Some((first, last))),
         (Some((first, last)), None) => event_time(source, Some(source.snapshot_position()))
@@ -821,10 +865,7 @@ fn advance_span(labels: &Labels, source: &ReadSource, model: &mut ViewModel, tim
             model.set_span(span);
             model.span_error = None;
         }
-        Err(error) => {
-            let reason = format!("时间跨度 / time span: {}", read_failure(labels, &error));
-            model.span_error = Some(QueryError::ReadFailed(reason));
-        }
+        Err(error) => model.span_error = Some(read_failed(&error)),
     }
 }
 
@@ -845,8 +886,7 @@ fn set_following(window: &AppWindow, app: &Rc<App>, on: bool) {
     // What an earlier following failed at goes once it is turned on again.
     model.borrow_mut().follow_error = None;
     if let Err(error) = source.repin() {
-        model.borrow_mut().query_error =
-            Some(QueryError::ReadFailed(read_failure(app.labels, &error)));
+        model.borrow_mut().query_error = Some(read_failed(&error));
         window.set_following(false);
         refresh(window, app);
         return;
@@ -890,8 +930,7 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
     let moved = match source.poll() {
         Ok(moved) => moved,
         Err(error) => {
-            model.borrow_mut().follow_error =
-                Some(QueryError::ReadFailed(read_failure(app.labels, &error)));
+            model.borrow_mut().follow_error = Some(read_failed(&error));
             refresh(window, app);
             return;
         }
@@ -921,10 +960,9 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
             let Some(window) = model.next_newer_window() else {
                 break;
             };
-            let pages = model.window_query(window).and_then(|query| {
-                read_window(source, &query)
-                    .map_err(|error| QueryError::ReadFailed(read_failure(app.labels, &error)))
-            });
+            let pages = model
+                .window_query(window)
+                .and_then(|query| read_window(source, &query).map_err(|error| read_failed(&error)));
             match pages {
                 Ok(pages) => {
                     pin_time = pin_time.or_else(|| {
@@ -947,14 +985,14 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
             app.follow.stop();
             window.set_following(false);
         } else if moved {
-            advance_span(app.labels, source, &mut model, pin_time);
+            advance_span(source, &mut model, pin_time);
         }
     }
     refresh(window, app);
 }
 
 fn refresh(window: &AppWindow, app: &Rc<App>) {
-    let labels = app.labels;
+    let labels = app.labels();
     let (Session::Open(source), Some(model)) = (&app.source, &app.model) else {
         paint_unopened(window, app);
         return;
@@ -1106,7 +1144,7 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
         errors.push(fill(labels.follow_failed, &[&query_error_text(labels, Some(error))]));
     }
     if let Some(error) = &model.span_error {
-        errors.push(query_error_text(labels, Some(error)));
+        errors.push(fill(labels.span_failed, &[&query_error_text(labels, Some(error))]));
     }
     window.set_filter_error(errors.join(" · ").into());
     window.set_has_more(model.has_earlier());
@@ -1201,7 +1239,7 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
             };
             let none_note = match &frame {
                 Some(FrameView { failure: Some(failure), .. }) => {
-                    fill(labels.frame_events_failed, &[failure])
+                    fill(labels.frame_events_failed, &[&failure.text(labels)])
                 }
                 Some(_) => labels.frame_capture_missing.to_string(),
                 None if model.selected().is_some_and(is_input) => {
@@ -1298,7 +1336,7 @@ fn refresh(window: &AppWindow, app: &Rc<App>) {
 /// pane say the ledger is not opened instead of standing empty, which would
 /// read as an empty ledger. The controls that would query it are off.
 fn paint_unopened(window: &AppWindow, app: &Rc<App>) {
-    let labels = app.labels;
+    let labels = app.labels();
     window.set_ledger_dir_value(app.source.state_root().display().to_string().into());
     window.set_storage_format_value(labels.none.into());
     window.set_read_up_to_text(labels.ledger_unopened.into());
@@ -1333,11 +1371,12 @@ fn sync_modules(
             choices.sort();
         }
     }
-    let mut options = vec![SharedString::from(app.labels.all_modules)];
+    let labels = app.labels();
+    let mut options = vec![SharedString::from(labels.all_modules)];
     options.extend(
         choices
             .iter()
-            .map(|module| SharedString::from(module_text(app.labels, *module))),
+            .map(|module| SharedString::from(module_text(labels, *module))),
     );
     let index = picked
         .and_then(|module| choices.iter().position(|option| *option == module))
@@ -1350,14 +1389,16 @@ fn sync_modules(
 }
 
 /// Puts the port box back on the port the console is filtering by, found in
-/// the session's fixed list; the first item when there is none.
+/// the list the session's fixed map gives in the language shown; the first
+/// item when there is none.
 fn sync_ports(window: &AppWindow, app: &Rc<App>, picked: Option<u16>) {
+    let (options, choices) = port_options(app.labels(), &app.port_map);
     let index = picked
-        .and_then(|port| app.port_choices.iter().position(|choice| *choice == port))
+        .and_then(|port| choices.iter().position(|choice| *choice == port))
         .map(|index| index as i32 + 1)
         .unwrap_or(0);
-    window.set_port_options(models(app.port_options.clone()));
-    window.set_port_enabled(!app.port_choices.is_empty());
+    window.set_port_options(models(options));
+    window.set_port_enabled(!choices.is_empty());
     window.set_port_index(index);
 }
 
@@ -1405,7 +1446,10 @@ fn detail_lines(labels: &Labels, event: &ProjectedEvent) -> Vec<FieldLine> {
 }
 
 /// The frame pane. A frame is read on demand for the selected event only, and
-/// only after the ledger says the material was not evicted.
+/// only after the ledger says the material was not evicted. The read's worker
+/// hands back the bytes and a `Phrase`; the pane's note is kept with the
+/// request, so a paint while the read runs, or after it, says it again in the
+/// language shown then.
 fn update_frame(
     window: &AppWindow,
     app: &Rc<App>,
@@ -1414,7 +1458,7 @@ fn update_frame(
     payload_frame_size: Option<(f32, f32)>,
     none_note: String,
 ) {
-    let labels = app.labels;
+    let labels = app.labels();
     let Some(target) = target else {
         clear_frame(window, app, none_note);
         return;
@@ -1434,20 +1478,29 @@ fn update_frame(
         );
         return;
     }
+    let reading = {
+        let bytes = target.artifact.byte_count.to_string();
+        phrase(move |labels| fill(labels.frame_reading, &[&bytes]))
+    };
     let generation = {
         let mut request = app.frame_request();
-        if request.is_some_and(|request| request.sequence == target.event.sequence) {
+        if let Some(held) =
+            request.as_ref().filter(|held| held.sequence == target.event.sequence)
+        {
+            window.set_frame_note((held.note)(labels).into());
             return;
         }
         let generation = app.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        *request =
-            Some(FrameRequest { sequence: target.event.sequence, generation, decoded: None });
+        *request = Some(FrameRequest {
+            sequence: target.event.sequence,
+            generation,
+            decoded: None,
+            note: Arc::clone(&reading),
+        });
         generation
     };
     window.set_frame_ready(false);
-    window.set_frame_note(
-        fill(labels.frame_reading, &[&target.artifact.byte_count.to_string()]).into(),
-    );
+    window.set_frame_note(reading(labels).into());
 
     let shared = Arc::clone(&app.generation);
     let frame = Arc::clone(&app.frame);
@@ -1466,19 +1519,27 @@ fn update_frame(
             return;
         }
         let read = reader.read(target.event, &target.artifact, snapshot, &still_wanted);
-        let painted = match read {
-            Err(error) => Err(error.to_string()),
+        let painted: Result<(u32, u32, Vec<u8>), Phrase> = match read {
+            Err(error) => Err(verbatim(error.to_string())),
             Ok(None) => return,
             Ok(Some(outcome)) => match &outcome.bytes {
-                Some(bytes) => decode_png(labels, bytes),
-                None => Err(outcome_text(labels, &outcome)),
+                Some(bytes) => decode_png(bytes),
+                None => Err(outcome_phrase(&outcome)),
             },
+        };
+        let note = match &painted {
+            Ok((width, height, _)) => {
+                let (width, height) = (width.to_string(), height.to_string());
+                phrase(move |labels| fill(labels.frame_verified, &[&width, &height]))
+            }
+            Err(text) => Arc::clone(text),
         };
         report::post("acui-frame", move || {
             if shared.load(Ordering::SeqCst) != generation {
                 return;
             }
-            // The decoded size belongs to this request; a failure leaves it unknown.
+            // The decoded size and the note belong to this request; a failure
+            // leaves the size unknown.
             if let Some(request) = frame
                 .lock()
                 .unwrap_or_else(|held| held.into_inner())
@@ -1486,20 +1547,19 @@ fn update_frame(
                 .filter(|request| request.generation == generation)
             {
                 request.decoded = painted.as_ref().ok().map(|(width, height, _)| (*width, *height));
+                request.note = Arc::clone(&note);
             }
-            let Some(window) = weak.upgrade() else {
+            let (Some(window), Some(ui)) = (weak.upgrade(), ui::current()) else {
                 return;
             };
+            let labels = ui.labels();
+            window.set_frame_note(note(labels).into());
             match painted {
                 Ok((width, height, rgba)) => {
                     let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(width, height);
                     buffer.make_mut_bytes().copy_from_slice(&rgba);
                     window.set_frame_image(Image::from_rgba8(buffer));
                     window.set_frame_ready(true);
-                    window.set_frame_note(
-                        fill(labels.frame_verified, &[&width.to_string(), &height.to_string()])
-                            .into(),
-                    );
                     // The payload did not state a size; the verified frame does.
                     if payload_frame_size.is_none() {
                         window.set_canvas_width(width as f32);
@@ -1510,10 +1570,7 @@ fn update_frame(
                         );
                     }
                 }
-                Err(text) => {
-                    window.set_frame_ready(false);
-                    window.set_frame_note(text.into());
-                }
+                Err(_) => window.set_frame_ready(false),
             }
         });
     });
@@ -1530,44 +1587,71 @@ fn clear_frame(window: &AppWindow, app: &Rc<App>, note: String) {
     window.set_frame_note(note.into());
 }
 
-fn decode_png(labels: &Labels, bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Phrase> {
     let decoded = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
-        .map_err(|error| fill(labels.frame_decode_failed, &[&error.to_string()]))?
+        .map_err(|error| {
+            let error = error.to_string();
+            phrase(move |labels| fill(labels.frame_decode_failed, &[&error]))
+        })?
         .to_rgba8();
     Ok((decoded.width(), decoded.height(), decoded.into_raw()))
 }
 
-fn outcome_text(labels: &Labels, outcome: &MaterialOutcome) -> String {
-    let mut text = fill(labels.frame_unavailable, &[&code(&outcome.state)]);
-    if let Some(limit) = &outcome.limit {
-        text.push_str(&format!(" · {}", code(limit)));
-    }
-    if let Some(eviction) = &outcome.eviction {
-        text.push_str(&format!(" · {}", eviction_text(labels, eviction)));
-    }
-    if let Some(failure) = &outcome.failure {
-        text.push_str(&format!(" · {failure}"));
-    }
-    text
+/// Why the read face gave no material, as the worker found it: the state and
+/// limit codes verbatim, the eviction it observed, and its own failure text.
+fn outcome_phrase(outcome: &MaterialOutcome) -> Phrase {
+    let state = code(&outcome.state);
+    let limit = outcome.limit.as_ref().map(code);
+    let eviction = outcome.eviction.as_ref().map(Eviction::of);
+    let failure = outcome.failure.clone();
+    phrase(move |labels| {
+        let mut text = fill(labels.frame_unavailable, &[&state]);
+        if let Some(limit) = &limit {
+            text.push_str(&format!(" · {limit}"));
+        }
+        if let Some(eviction) = &eviction {
+            text.push_str(&format!(" · {}", eviction.text(labels)));
+        }
+        if let Some(failure) = &failure {
+            text.push_str(&format!(" · {failure}"));
+        }
+        text
+    })
 }
 
 fn eviction_text(labels: &Labels, eviction: &ArtifactEvictionObservation) -> String {
-    fill(
-        labels.frame_evicted,
-        &[
-            &eviction
-                .disposition
-                .as_ref()
-                .map(code)
-                .unwrap_or_else(|| labels.none.to_string()),
-            &eviction.intent.sequence.to_string(),
-            &eviction
-                .terminal_event
-                .map(|terminal| format!(" → #{}", terminal.sequence))
-                .unwrap_or_default(),
-            &eviction.through_sequence.to_string(),
-        ],
-    )
+    Eviction::of(eviction).text(labels)
+}
+
+/// What an eviction observation says, as plain values a worker can hand back.
+struct Eviction {
+    disposition: Option<String>,
+    intent: u64,
+    terminal: Option<u64>,
+    through: u64,
+}
+
+impl Eviction {
+    fn of(eviction: &ArtifactEvictionObservation) -> Self {
+        Self {
+            disposition: eviction.disposition.as_ref().map(code),
+            intent: eviction.intent.sequence,
+            terminal: eviction.terminal_event.map(|terminal| terminal.sequence),
+            through: eviction.through_sequence,
+        }
+    }
+
+    fn text(&self, labels: &Labels) -> String {
+        fill(
+            labels.frame_evicted,
+            &[
+                self.disposition.as_deref().unwrap_or(labels.none),
+                &self.intent.to_string(),
+                &self.terminal.map(|terminal| format!(" → #{terminal}")).unwrap_or_default(),
+                &self.through.to_string(),
+            ],
+        )
+    }
 }
 
 fn recovery_text(labels: &Labels, group: &RecoveryGroup) -> String {
@@ -1715,18 +1799,22 @@ fn query_error_text(labels: &Labels, error: Option<&QueryError>) -> String {
                 None => text,
             }
         }
-        Some(QueryError::ReadFailed(reason)) => fill(labels.read_failed, &[reason]),
+        // The read face's own words, and, when the error carries one of the
+        // console's own codes, that code's words after them.
+        Some(QueryError::ReadFailed { text, code }) => {
+            let reason = match (*code).and_then(|code| outcome_sentence(labels, code)) {
+                Some(words) => format!("{text} · {words}"),
+                None => text.clone(),
+            };
+            fill(labels.read_failed, &[&reason])
+        }
     }
 }
 
-/// A read's error as the view states it: its text, and, when the error carries
-/// one of the console's own codes, that code's words after it.
-fn read_failure(labels: &Labels, error: &anyhow::Error) -> String {
-    let text = error.to_string();
-    match console_code(error).and_then(|code| outcome_sentence(labels, code)) {
-        Some(words) => format!("{text} · {words}"),
-        None => text,
-    }
+/// A read's error as the view keeps it: the read face's text, and its console
+/// code when it carries one; both are put into words when painted.
+fn read_failed(error: &anyhow::Error) -> QueryError {
+    QueryError::ReadFailed { text: error.to_string(), code: console_code(error) }
 }
 
 /// A code on a card line, which does not wrap: the code, and its short words
@@ -1833,7 +1921,7 @@ struct FrameView {
     group: FrameGroup,
     via: BasisVia,
     basis_sequence: u64,
-    failure: Option<String>,
+    failure: Option<FrameLookupError>,
 }
 
 /// The selected event's frame, found among the loaded rows. When they hold no
@@ -1854,12 +1942,12 @@ fn frame_view(app: &App, source: &ReadSource, model: &ViewModel) -> Option<Frame
             ..EventQuery::default()
         };
         // A read the page says is incomplete cannot say the capture is absent.
-        let read = read_window(source, &query).map_err(|error| error.to_string()).and_then(|pages| {
-            match pages.iter().all(|page| page_source_complete(page)) {
+        let read = read_window(source, &query)
+            .map_err(|error| FrameLookupError::Read(error.to_string()))
+            .and_then(|pages| match pages.iter().all(|page| page_source_complete(page)) {
                 true => Ok(pages.iter().flat_map(|page| page.events().iter().cloned()).collect()),
-                false => Err(app.labels.source_incomplete.to_string()),
-            }
-        });
+                false => Err(FrameLookupError::Incomplete),
+            });
         *cache = Some((frame.clone(), read));
     }
     let (extra, failure) = match cache.as_ref() {

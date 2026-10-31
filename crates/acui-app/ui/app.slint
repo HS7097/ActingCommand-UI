@@ -146,9 +146,9 @@ export global Scale {
     out property <length> row: 26px * root.factor;
 }
 
-// Every label a person reads, filled once at startup from the Rust table for
-// the chosen language. There is no runtime re-render: the switch takes effect
-// when the program is started again.
+// Every label a person reads, filled from the Rust table for the language
+// shown: at startup, and again whenever the language changes, which takes
+// effect at once.
 export global Strings {
     in property <string> window-title;
     in property <string> data-source;
@@ -157,7 +157,6 @@ export global Strings {
     in property <string> show-up-to;
     in property <string> text-size;
     in property <string> language;
-    in property <string> restart-note;
     in property <[string]> text-size-options;
     in property <[string]> language-options;
     in property <[string]> severity-min-options;
@@ -301,15 +300,17 @@ export component AppWindow inherits Window {
     in property <bool> frame-ready;
     in property <string> payload-json;
     // The launcher block: what the last probe said about the Runtime, and the
-    // outcome of the last button press.
+    // outcome of the last button press, plain words first; red when it failed.
     in property <string> runtime-status-text;
     in property <string> launcher-line;
+    in property <bool> launcher-failed;
     // The unlock entry, offered only after a start whose fatal line named
     // owner_resource_unconfirmed: its first press only opens the confirmation,
     // and only the confirm runs anything. Then the last unlock's outcome.
     in property <bool> unlock-offered;
     in-out property <bool> unlock-confirming;
     in property <string> unlock-line;
+    in property <bool> unlock-failed;
     // What the settings file holds that the console could not take, or why a
     // setting was not saved, one per line: errors, then warnings. Then where
     // the technical log is, or why it cannot be written.
@@ -413,7 +414,6 @@ export component AppWindow inherits Window {
                             root.language-changed(self.current-index);
                         }
                     }
-                    Caption { text: Strings.restart-note; }
                 }
                 HorizontalLayout {
                     spacing: 14px;
@@ -496,11 +496,10 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-                Text {
+                Notice {
                     text: root.launcher-line;
+                    failed: root.launcher-failed;
                     font-size: Scale.grey-font;
-                    color: Palette.foreground.with-alpha(0.7);
-                    overflow: elide;
                 }
                 if root.unlock-offered || root.unlock-line != "": HorizontalLayout {
                     spacing: 14px;
@@ -523,12 +522,11 @@ export component AppWindow inherits Window {
                             root.unlock-owner();
                         }
                     }
-                    Text {
+                    Notice {
                         text: root.unlock-line;
+                        failed: root.unlock-failed;
                         font-size: Scale.grey-font;
                         vertical-alignment: center;
-                        color: Palette.foreground.with-alpha(0.7);
-                        overflow: elide;
                         min-width: 40px;
                         horizontal-stretch: 1;
                     }
