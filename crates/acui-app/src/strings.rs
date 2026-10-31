@@ -125,6 +125,10 @@ pub struct Labels {
     pub join: &'static str,
     pub recovered_badge: &'static str,
     pub integrity_ok: &'static str,
+    /// An offline SQLite root: since LN-OFF-1 the opening checks the head,
+    /// the tail and the eviction proofs only, and earlier records are
+    /// authenticated as they are read, so "intact" would overstate it.
+    pub integrity_ok_sqlite: &'static str,
     pub integrity_bad: &'static str,
     pub writer_absent: &'static str,
     pub writer_locked: &'static str,
@@ -140,7 +144,7 @@ pub struct Labels {
     /// detail; the hint only follows `ledger_io` with io kind `not_found`.
     pub source_unopened: &'static str,
     pub source_unopened_hint: &'static str,
-    /// Follows `ledger_read_budget_exceeded`: the offline opening's own budget.
+    /// Follows `ledger_read_budget_exceeded`: the offline opening's own 60 s deadline.
     pub source_unopened_budget_hint: &'static str,
     /// The ledger's io kind; appended to the unopened line.
     pub io_kind_text: &'static str,
@@ -526,6 +530,7 @@ pub const ZH: Labels = Labels {
     join: "；",
     recovered_badge: "已恢复",
     integrity_ok: "完整",
+    integrity_ok_sqlite: "打开时的检查通过（较早的记录读到时再校验）",
     integrity_bad: "不完整：读全={} · 损坏尾部={}",
     writer_absent: "无写入进程记录",
     writer_locked: "记录被占用（{} 字节）",
@@ -538,7 +543,7 @@ pub const ZH: Labels = Labels {
     source_offline_failed: "离线 · 自动：连接 Runtime 失败 {}（{}）",
     source_unopened: "账本未能打开：{}（{}）· {}",
     source_unopened_hint: "状态根里还没有账本，多半是 Runtime 从未在这里启动过；可用启动器的「启动」",
-    source_unopened_budget_hint: "账本超出离线读取预算（1 GiB、30 万条、60 秒）：这么大的账本暂时只能在线读，离线要等 Runtime 侧修好",
+    source_unopened_budget_hint: "离线打开没能在 60 秒内完成（详情里的 phase 指出停在哪一步）：可重启本台再试，或在 Runtime 运行时在线读",
     io_kind_text: " · IO 类别 {}",
     ledger_unopened: "账本未打开",
     list_unopened: "账本未打开：没有读取任何事件，原因见实例卡",
@@ -855,6 +860,7 @@ pub const EN: Labels = Labels {
     join: "; ",
     recovered_badge: "Recovered",
     integrity_ok: "Intact",
+    integrity_ok_sqlite: "Passed the opening check (earlier records are verified as they are read)",
     integrity_bad: "Not intact: read_complete={} · corrupt tail={}",
     writer_absent: "No writer recorded",
     writer_locked: "Record held open ({} bytes)",
@@ -867,7 +873,7 @@ pub const EN: Labels = Labels {
     source_offline_failed: "Offline · auto: connecting to the Runtime failed with {} ({})",
     source_unopened: "ledger could not be opened: {} ({}) · {}",
     source_unopened_hint: "the state root has no ledger yet, most likely because the Runtime has never been started here; use Start in the launcher",
-    source_unopened_budget_hint: "the ledger exceeds the offline read budget (1 GiB, 300,000 events, 60 s): read a ledger this large online for now; offline waits for the Runtime-side fix",
+    source_unopened_budget_hint: "the offline opening did not finish within 60 s (the detail's phase says where it stopped): restart the console to try again, or read online while the Runtime runs",
     io_kind_text: " · io kind {}",
     ledger_unopened: "Ledger Not Opened",
     list_unopened: "Ledger not opened: no events were read; the instance card says why",

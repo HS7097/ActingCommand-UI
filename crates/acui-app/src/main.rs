@@ -1537,6 +1537,7 @@ fn recovery_text(labels: &Labels, group: &RecoveryGroup) -> String {
 
 fn integrity_text(labels: &Labels, card: &InstanceCard) -> String {
     match (&card.corrupt_tail, card.read_complete) {
+        (None, true) if card.backend == "sqlite" => labels.integrity_ok_sqlite.to_string(),
         (None, true) => labels.integrity_ok.to_string(),
         (tail, complete) => fill(
             labels.integrity_bad,

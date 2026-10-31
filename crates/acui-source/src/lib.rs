@@ -4,8 +4,10 @@
 //! The console never joins a path into the state root, never opens `ledger/`,
 //! `artifacts/` or `runtime-state.sqlite`, and never spawns a CLI. Everything
 //! below goes through the Runtime's own entries. Offline, `GlobalLedger` picks
-//! the medium and authenticates the snapshot, `query_view_page` projects the
-//! formal page, and `read_material_complete` resolves, guards and verifies material.
+//! the medium and opens a bounded snapshot at one pinned point,
+//! `query_view_page` projects the formal page (at most 256 records or 768 KiB,
+//! with a cursor to the rest), and `read_material_complete` resolves, guards
+//! and verifies material.
 //! Offline, `runtime_facts_at` replays the instances' task facts at the pinned
 //! position. Online, the same pages, material whole (the client's own
 //! `read_material_complete` assembles the verified ranges), the instances'
@@ -65,20 +67,26 @@ const MATERIAL_READ_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Bound on the offline face's one fact replay per session.
 const FACTS_READ_DEADLINE: Duration = Duration::from_secs(30);
-/// The offline face's own opening of the ledger. That opening reads and
-/// authenticates the whole ledger in memory (a bounded offline opening is
-/// tracked on the Runtime side, Workflow #422), so a production-size ledger
-/// would exhaust the host. Past this budget the ledger refuses with
-/// `ledger_read_budget_exceeded` and the session stays unopened, loudly.
-const OFFLINE_OPEN_BYTES: u64 = 1 << 30;
-const OFFLINE_OPEN_EVENTS: usize = 300_000;
+/// The offline face's own opening of the ledger. On an SQLite root the opening
+/// is a bounded snapshot (Runtime 0.12.32, Workflow #422 LN-OFF-1): the writer
+/// open's checks, `1..=head` contiguous, the newest records authenticated and
+/// the eviction proof set read, no other history; each later read is one page
+/// of at most `MAX_RUNTIME_EVENT_QUERY_EVENTS` records or 768 KiB with a cursor
+/// to the rest (Alice, decision 115). So the opening takes a deadline only, no
+/// byte or event limit, which would refuse a ledger for how much it holds.
+/// 60 s, not the ledger's 600 s default: the session opens before the window
+/// shows. Past it, `ledger_read_budget_exceeded` (detail `phase=open|proofs`)
+/// and the session stays unopened, loudly. A Segment root (test builds only)
+/// is read whole within it.
 const OFFLINE_OPEN_DEADLINE: Duration = Duration::from_secs(60);
 /// Bound on each later read of the offline snapshot: one page, or the port
-/// map's binding read. The snapshot keeps the deadline it was opened under and
-/// the ledger checks it on every page, so each read sets its own first
-/// (`set_read_deadline`); the opening's byte and event limits stay. 30 s, as
-/// the facts replay and a material read, each of which opens the ledger anew
-/// within that same bound.
+/// map's binding read. On an SQLite root the ledger gives each read its own
+/// 10 s from its start (`ledger_observer.writer_reply_timeout_ms`'s factory
+/// value) and a caller can only tighten it, so for one page this changes
+/// nothing; it caps the binding read, which pages under one call, at 30 s in
+/// all. The deadline a snapshot holds is sticky, so each read sets its own
+/// first (`set_read_deadline`). 30 s, as the facts replay and a material read,
+/// each of which opens the ledger anew within that same bound.
 const OFFLINE_READ_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The io timeout of the session's ledger page connection (see `LedgerPages`):
@@ -129,7 +137,7 @@ impl Spelling for Location {
     }
 }
 
-/// One authenticated snapshot of one state root.
+/// One bounded snapshot of one state root, pinned at its opening.
 pub struct EvidenceSource {
     root: PathBuf,
     /// In a cell because each read resets its deadline (see `snapshot_for_read`)
@@ -164,11 +172,8 @@ impl From<GlobalLedgerError> for LedgerOpenFailure {
 impl EvidenceSource {
     pub fn open(state_root: impl Into<PathBuf>) -> Result<Self, LedgerOpenFailure> {
         let root = state_root.into();
-        let config = GlobalLedgerEvidenceConfig::new(&root).with_budget(
-            OFFLINE_OPEN_BYTES,
-            OFFLINE_OPEN_EVENTS,
-            Instant::now() + OFFLINE_OPEN_DEADLINE,
-        );
+        let config = GlobalLedgerEvidenceConfig::new(&root)
+            .with_deadline(Instant::now() + OFFLINE_OPEN_DEADLINE);
         let snapshot = GlobalLedger::open_metadata(config)?;
         Ok(Self { root, snapshot: RefCell::new(snapshot) })
     }
@@ -183,8 +188,8 @@ impl EvidenceSource {
     }
 
     /// The snapshot for one read, its deadline first set to
-    /// `OFFLINE_READ_DEADLINE` from now, so a read is not refused by the
-    /// deadline the snapshot was opened under.
+    /// `OFFLINE_READ_DEADLINE` from now, so no read runs under the deadline an
+    /// earlier one set.
     fn snapshot_for_read(&self) -> Ref<'_, GlobalLedgerMetadata> {
         self.snapshot
             .borrow_mut()
