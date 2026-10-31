@@ -82,7 +82,9 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   - **the steady state**, game-wide: an LP over one cycle (the least common multiple of the periods' days, at most
     `economy.max_cycle_steps`; a month and longer periods relaxed by rate), with the price of every resource
     per step and of every cap and limit, exact or an interval, by re-solves one grain up and down; the value of
-    each activity; and the least overflow and lost production;
+    each activity; and the least overflow and lost production. Its objective is the value of the goal sinks of
+    the `objective` rules; the protected acquisition is held first (`objective_tier_conflict`), and the
+    protected acquisitions are listed;
   - **the plan** of one account: a MILP from the state's readings over `economy.plan_horizon` days, with integer
     counts and read caps that block collections at or above them, its final stocks priced by the steady state,
     stopped only by `search.milp_node_limit` (then `proven: false`).

@@ -5,8 +5,9 @@ Two nodes of the derivation graph (`core.graph`), each computed after what it re
 - ("economy", "steady"): the values, game-wide. A cyclic steady state over the least common multiple of the
   periods' lengths within `economy.max_cycle_steps` (a longer period and a month relaxed by rate and listed in
   `relaxed`, #424 ACM-PRICE PRICE-3), built
-  from the rules and the data only, in the reference state (the graph's "reference" nodes: a cap with a reading
-  counts at its `reference`, #424 ACM-PRICE G-A), and solved as an LP. It gives the optimum per cycle; the price
+  from the rules and the data only, in the neutral reference state (the graph's "reference" nodes: a cap with a
+  reading counts at its `reference`, #424 ACM-PRICE G-A and ruling 126 A), and solved as LPs. Value comes only
+  through the goal sinks of the objective rules (PRICE-2a, below). It gives the optimum per cycle; the price
   of every resource in every step and of every cap and limit, by re-solves at plus and minus one grain
   (`lp.grain`), exact when both sides agree and an interval otherwise; the value of each activity at those
   prices; and the least overflow and lost production among the optimal solutions. HiGHS's marginals are only a
@@ -29,9 +30,27 @@ storage cap, and per resource whose regen
 stops at a cap (steady), its lost production; per move whose amount needs the account state (a collection that
 takes what the store holds) the amount it moves, at most the store's storage cap per execution. Rows, in
 canonical order (by kind, id and step): the balances, the bounds of overflow by income, the cyclic rows (steady),
-the caps, the income caps per window, the limits per window, the moves, the regen stops (steady), the read caps'
+the caps, the demand rows' bounds (steady), the floors of the tier solves (steady: A ≥ A*, V ≥ V*), the income caps
+per window, the limits per window, the moves, the probes of a tie (steady), the regen stops (steady), the read caps'
 indicators (plan), the opening stocks (plan) and the bounds of what an income cap voids by the income it counts.
 Columns are sorted by variable id.
+
+**The objective** (#424 ACM-PRICE 2.2 and addendum 2.1 §4; PRICE-2a). The numeraire is a `value` entity, which
+holds no stock: what counts is what the goal sinks bring per cycle. Per step a column per main objective (it
+takes one unit of its resource for `value` value units) and per row of the secondary objective's demand table (it
+takes the row's costs, from the costs table by key, for `points × value + main` value units, at most `count ×
+cycle days ÷ horizon days` a cycle). Two functions are defined once each and used for both the solves and the
+checks: the value V (`total_value`, what the sinks bring) and the protected acquisition A (`acquisition`: what the
+protected acquisitions P bring of the main goals at their values, less what an income cap that counts one of them
+voids of it, and the `main` of each demand row). An activity is in P (`acquirers`) when it brings in a main goal
+item, a limit or an income cap counts it, and each of its inputs (a non-zero amount it consumes, a store or resource
+it moves out of) is time: a resource or store with a regen that is not a slot, or a slot that only acquisitions use;
+another acquisition is a conversion, compared inside V. Three solves:
+- S3, V alone: its optimum V0 is the objective, and its program is the one every price re-solve changes;
+- S1, A alone: its optimum A* (none when A has no term: A* is 0 and S2 is S3);
+- S2, V with A ≥ A*: its optimum V*. V0 > V* is `objective_tier_conflict`, which blocks the steady state;
+  an activity that some optimum of S3 uses and no optimum of S2 does is `objective_tier_tie` (a warning).
+All of them compare exact fractions; a row A ≥ A* or V ≥ V* is checked exactly like every other row.
 
 **Exactness.** Every solution is converted with `Fraction(x).limit_denominator(lp.max_denominator)` and checked
 exactly against every bound, integrality and row (`lp_numeric_check_failed`). Objective values, prices and
@@ -60,11 +79,14 @@ from acmodel.codes import (
     LP_INFEASIBLE,
     LP_NUMERIC_CHECK_FAILED,
     LP_SOLVE_FAILED,
+    OBJECTIVE_TIER_CONFLICT,
+    OBJECTIVE_TIER_TIE,
+    RULE_PENDING_UNBOUNDED,
     SEARCH_BUDGET_EXHAUSTED,
     STATE_READING_MISSING,
 )
 from acmodel.config import EconomySettings
-from acmodel.core.common import CONFIRMED, PROVISIONAL, Need, worst
+from acmodel.core.common import CONFIRMED, PROVISIONAL, RULE_STATUS, Need, worst
 from acmodel.core.unknown import read as unknowns_read, rule_status
 from acmodel.envelope import Failure, error
 from acmodel.expr import Binary, Literal, Reference
@@ -82,7 +104,11 @@ NODES = {STEADY: ("economy", STEADY), PLAN: ("economy", PLAN)}
 OUTPUTS = {STEADY: "economy:steady", PLAN: "economy:plan"}
 # The rule kinds the economy reads, and of them the kinds it does not model yet.
 RULE_KINDS = ("cap", "cooldown", "exchange", "flow", "gate", "limit", "objective", "regen")
-NOT_MODELLED = ("cooldown", "exchange", "objective")
+NOT_MODELLED = ("cooldown", "exchange")
+MAIN = "main"  # an objective's tier: a main goal; the other is `secondary`, the reference demand
+DEMAND_COLUMNS = ("count", "points", "main")  # a demand row's columns, as the static check requires them
+# The rows of the tier solves (PRICE-2a): A ≥ A* holds S2 and the faces of S2; V ≥ V* the faces of an optimum.
+ACQUISITION, VALUE = "acquisition", "value"
 HARD_REACH = ("block_all_income", "discard")
 VOID = "void_at_reset"  # a hard cap the steady state reads as `discard` at the resets of its `per` only
 STORAGE_REACH = ("block_all_income", "discard", "stop_production")
@@ -227,7 +253,8 @@ class _Shape:
     windows: dict[str, int]  # period id -> the steps of one of its windows
     resources: list[str]
     stores: dict[str, str]  # store -> the resource it holds
-    numeraire: str
+    goals: list[Entry]  # the main objectives, by id
+    secondary: Entry | None  # the secondary objective (at most one: its subject is the numeraire)
     activities: list[str]
     excluded: list[str]  # activities behind a gate of origin person (#424 design 4.7)
     parts: list[_Part]
@@ -442,13 +469,16 @@ def _shape(graph: Graph, solve: str) -> _Shape:
             refused.append(_refused(rule.path, at(rule.ref, "subject"), subject.kind))
         else:
             limits.append((rule, (subject.id, *rule.doc["logic"].get("shared_with", ()))))
+    objectives = of("objective")  # the static check holds a main goal to a resource, the secondary to the numeraire
+    secondary = [rule for rule in objectives if rule.doc["logic"]["tier"] != MAIN]
     return _Shape(
         path=manifest.path,
         cycle=cycle,
         windows=windows,
         resources=[e.id for e in entities if e.kind == "resource"],
         stores={e.id: e.doc["holds"] for e in entities if e.kind == "store"},
-        numeraire=manifest.doc["numeraire"],
+        goals=[rule for rule in objectives if rule.doc["logic"]["tier"] == MAIN],
+        secondary=secondary[0] if secondary else None,
         activities=sorted({activity for _, activity in flows} - excluded),
         excluded=sorted(excluded),
         parts=parts,
@@ -470,6 +500,20 @@ def _shape(graph: Graph, solve: str) -> _Shape:
 
 
 @dataclass(frozen=True)
+class _Demand:
+    """One row of the secondary objective's demand table, a goal sink of the steady state (#424 ACM-PRICE 2.2 (3),
+    2.3): what one execution takes (the costs table's row of the same key), the value units it brings (`points ×
+    value + main`), of them those A counts (`main`), and the executions a cycle allows (`count × cycle days ÷ horizon
+    days`)."""
+
+    key: str  # the row's key cells, joined with commas
+    costs: tuple[tuple[str, Fraction], ...]  # (resource, amount), by resource; no amount of 0
+    value: Fraction
+    main: Fraction
+    most: Fraction
+
+
+@dataclass(frozen=True)
 class _Model:
     """One program's evaluated inputs: everything the builder needs, as exact numbers."""
 
@@ -478,11 +522,16 @@ class _Model:
     steps: int
     resources: tuple[str, ...]
     stores: tuple[str, ...]
-    numeraire: str
     activities: tuple[str, ...]
     excluded: tuple[str, ...]
     net: dict[tuple[str, str], Fraction]  # (activity, resource or store) -> net amount per execution
     income: dict[tuple[str, str], Fraction]  # (activity, resource) -> what one execution brings in
+    # activity -> what it takes from: the resources it consumes a non-zero amount of, the entities it moves out of
+    inputs: dict[str, tuple[str, ...]]
+    slots: frozenset[str]  # the slot resources of the model (`slots`)
+    goals: tuple[tuple[str, str, Fraction], ...]  # steady: (main objective, its resource, the value of one unit)
+    demand: tuple[_Demand, ...]  # steady: the secondary objective's demand rows, by key
+    secondary: str | None  # steady: the secondary objective, the group of the demand rows' bounds
     moves: tuple[tuple[str, str, str, str], ...]  # (flow, activity, store, target): takes what the store holds
     regens: tuple[tuple[str, str, tuple[Fraction, ...]], ...]  # (rule, resource or store, income per step)
     stops: dict[str, tuple[str, str, Fraction]]  # resource -> (its regen, the cap it stops at, that cap's value)
@@ -498,7 +547,7 @@ class _Model:
     soft: tuple[tuple[str, str, Fraction, tuple[str, ...]], ...]  # (cap, resource, its reading, blocked moves)
     start: dict[str, tuple[str | None, Fraction]]  # plan: entity -> (its group, its opening stock)
     unread: tuple[str, ...]  # plan: entities that need no reading, started at 0
-    weights: dict[str, Fraction]  # the objective: the value of each entity's gain over the program
+    weights: dict[str, Fraction]  # plan: its objective, the value of each entity's gain over the program
     grain: Fraction
 
     @property
@@ -513,6 +562,8 @@ class _Model:
         found |= {rule for rule, _, _, _ in self.limits} | {cap for cap, _, _, _ in self.soft}
         found |= {cap for cap, _, _, _, _ in self.incomes}
         found |= {group for group, _ in self.start.values() if group is not None}
+        if self.demand and self.secondary is not None:  # the demand rows' bounds
+            found.add(self.secondary)
         return sorted(found)
 
     def priced(self) -> list[tuple[str, Fraction]]:
@@ -671,6 +722,12 @@ class _Reader:
             found.append(_Item(cap, ("rule", cap.id), at(cap.ref, "logic", "value")))
         for rule, _ in shape.limits:
             found.append(_Item(rule, ("rule", rule.id), at(rule.ref, "logic", "max")))
+        if not self.plan:  # the goal sinks' values (PRICE-2a); the plan values its final stocks instead
+            objectives = [*shape.goals, *([shape.secondary] if shape.secondary is not None else [])]
+            for rule in objectives:
+                members = ("value",) if rule.doc["logic"]["tier"] == MAIN else ("value", "horizon")
+                for member in members:
+                    found.append(_Item(rule, ("objective", rule.id, member), at(rule.ref, "logic", member)))
         return found
 
     def values(self, items: list[_Item]) -> tuple[dict[tuple[str, ...], Any], set[str]]:
@@ -718,7 +775,7 @@ class _Reader:
             self.need([("rule", cap.id) for cap in shape.soft] + [NODES[STEADY]])
         values, variable = self.values(items)
         steps = settings.plan_horizon if plan else shape.cycle
-        weights = {shape.numeraire: Fraction(1)}
+        weights: dict[str, Fraction] = {}  # the steady state's objective is its goal sinks' value (`total_value`)
         if plan:  # the final stocks are priced by the steady state, at the step the plan ends in
             graph.depend(NODES[STEADY])
             steady = graph.results[NODES[STEADY]]
@@ -770,6 +827,21 @@ class _Reader:
             _add(net, (part.activity, target), amount)
             _add(income, (part.activity, target), max(amount, Fraction(0)))
         activities = set(shape.activities) - left_out
+        # What each activity takes from (PRICE-2a, the inputs of §4.1): a non-zero amount it consumes, or an entity
+        # it moves out of; an amount of 0 is no input.
+        inputs: dict[str, set[str]] = {}
+        for part in shape.parts:
+            if part.activity not in activities:
+                continue
+            if part.member == "consumes" and values.get(part.key):
+                inputs.setdefault(part.activity, set()).add(part.resource)
+            elif part.member == "moves" and (part.flow in variable or values.get(part.key)):
+                inputs.setdefault(part.activity, set()).add(part.source)
+        goals = () if plan else tuple(
+            (rule.id, rule.doc["subject"], values[("objective", rule.id, "value")])
+            for rule in shape.goals if ("objective", rule.id, "value") in values
+        )
+        demand = () if plan else self.demand(values, steps)
         relaxed: dict[str, tuple[str, Fraction, Fraction]] = {}
 
         def window(rule: Entry) -> int:
@@ -801,11 +873,15 @@ class _Reader:
             steps=steps,
             resources=tuple(shape.resources),
             stores=tuple(sorted(shape.stores)),
-            numeraire=shape.numeraire,
             activities=tuple(a for a in shape.activities if a in activities),
             excluded=tuple(shape.excluded),
             net=net,
             income=income,
+            inputs={activity: tuple(sorted(found)) for activity, found in sorted(inputs.items())},
+            slots=slots(graph.checker, graph.typed) & frozenset(shape.resources),
+            goals=goals,
+            demand=demand,
+            secondary=None if plan or shape.secondary is None else shape.secondary.id,
             moves=tuple(moves),
             regens=tuple(regens),
             stops=stops,
@@ -839,6 +915,58 @@ class _Reader:
             self.refuse(rule.path, ref, "every")
             return None
         return tuple(amount if step % apart == 0 else Fraction(0) for step in range(steps))
+
+    def demand(self, values: dict[tuple[str, ...], Any], steps: int) -> tuple[_Demand, ...]:
+        """The steady state's demand rows (#424 ACM-PRICE 2.3): each row of the secondary objective's demand table,
+        by key, with the costs table's row of that key (the static check joined them). A row is data, never the
+        account state, so the reference demand is neutral (126 A). A horizon that is not positive is `value_invalid`;
+        an external table, whose rows this version does not read, is refused (`external_dataset`); a pending row,
+        which names no unknown, blocks (`rule_pending_unbounded`, `no_unknown`)."""
+        rule = self.shape.secondary
+        if rule is None:
+            return ()
+        lam, horizon = values.get(("objective", rule.id, "value")), values.get(("objective", rule.id, "horizon"))
+        if lam is None or horizon is None:  # refused or blocked: reported already
+            return ()
+        logic, graph = rule.doc["logic"], self.graph
+        if horizon.seconds <= 0:
+            detail = {
+                "path": rule.path, "reason": "value_invalid", "operator": "horizon", "position": 0, "expected": "positive",
+            }
+            self.refused.append(error(EXPR_EVAL_FAILED, detail, at(rule.ref, "logic", "horizon")))
+            return ()
+        tables = {}
+        for member in ("demand", "costs"):
+            graph.depend(("table", logic[member]))
+            tables[member] = graph.checker.tables[logic[member]]
+            if tables[member].rows is None:
+                self.refuse(rule.path, at(rule.ref, "logic", member), "external_dataset")
+                return ()
+            graph.depend(("table_keys", logic[member]))
+        demand, costs = tables["demand"], tables["costs"]
+        columns = sorted(name for name in costs.file.doc["columns"] if name not in costs.keys)
+        found = []
+        for key in sorted(demand.rows):
+            row, cost = self.row(logic["demand"], demand, key), self.row(logic["costs"], costs, key)
+            if row is None or cost is None:
+                continue
+            count, points, main = (Fraction(row[name]) for name in DEMAND_COLUMNS)
+            amounts = tuple((name, Fraction(cost[name])) for name in columns if Fraction(cost[name]) != 0)
+            most = count * steps * STEP_SECONDS / horizon.seconds
+            found.append(_Demand(",".join(key), amounts, points * lam + main, main, most))
+        return tuple(found)
+
+    def row(self, table_id: str, table: Any, key: tuple[str, ...]) -> dict[str, Any] | None:
+        """A data row the steady state reads, noted with its status; None for a pending row, which blocks."""
+        self.graph.depend(("row", table_id, *key))
+        index = table.rows[key]
+        row = table.file.doc["rows"][index]
+        if row["status"] == "pending":
+            detail = {"path": table.file.path, "id": f"{table_id}[{','.join(key)}]", "reason": "no_unknown"}
+            self.refused.append(error(RULE_PENDING_UNBOUNDED, detail, at("", "rows", index, "status")))
+            return None
+        self.note(("row", table_id, *key), RULE_STATUS[row["status"]])
+        return row
 
     def read_caps(self, variable: set[str], hard: dict[str, Any], storage: dict[str, Any]) -> tuple[Any, ...]:
         """The plan's read caps: each with its reading and the collections it blocks at or above it."""
@@ -918,19 +1046,30 @@ class _Program:
     objective: dict[Key, Fraction]  # maximised
 
 
+def _floor(name: str, coefficients: dict[Key, Fraction], bound: Fraction) -> tuple[_Row, ...]:
+    """The row that holds a function of the program at or above `bound` (A ≥ A* or V ≥ V*, PRICE-2a): `(floor,
+    name, 0)`, its terms negated, at most -bound. No row for a function without a term, which is 0 everywhere."""
+    if not coefficients:
+        return ()
+    return (_Row(("floor", name, 0), {key: -value for key, value in coefficients.items()}, "le", -bound, None),)
+
+
 def _program(
     model: _Model,
     *,
     extra: dict[tuple[str, int], Fraction] | None = None,
     values: dict[str, Fraction] | None = None,
     omit: frozenset[str] = frozenset(),
-    weights: dict[str, Fraction] | None = None,
-    floor: Fraction | None = None,
+    objective: dict[Key, Fraction] | None = None,
+    added: tuple[_Row, ...] = (),
+    least_losses: bool = False,
 ) -> _Program:
     """The program of `model`. `extra` adds income to a resource in a step and `values` replaces the value of a
-    cap or limit (the price re-solves); `omit` drops rule groups (the infeasibility analysis); `weights`
-    replaces the objective ({} for none); with `floor`, the objective must reach it and the overflow and lost
-    production are minimised instead (what an income cap voids is not: the overflow is the least)."""
+    cap or limit (the price re-solves); `omit` drops rule groups (the infeasibility analysis). Its objective is,
+    for the steady state, the value V of its goal sinks (`total_value`: S3, and every price re-solve) and, for the
+    plan, the stocks' gain at `weights`; `objective` replaces it ({} for none; `acquisition` for S1). `added`
+    adds rows (the floors of `_floor`, a probe). With `least_losses`, the overflow and lost production are
+    minimised instead (what an income cap voids is not: the overflow is the least)."""
     extra, values = extra or {}, values or {}
     zero, one, steps, plan = Fraction(0), Fraction(1), model.steps, model.solve == PLAN
     variables: dict[Key, tuple[Fraction, Fraction | None, bool]] = {}
@@ -970,6 +1109,19 @@ def _program(
     for activity in model.activities:
         for step in range(steps):
             variables[("x", activity, step)] = (zero, None, plan)
+    # The goal sinks (steady, PRICE-2a): per step the executions of each main objective's (`g`) and each demand
+    # row's (`q`); what one execution takes of each entity.
+    sinks: dict[str, list[tuple[str, str, Fraction]]] = {}
+    for rule, resource, _ in model.goals:
+        sinks.setdefault(resource, []).append(("g", rule, one))
+    for row in model.demand:
+        for resource, amount in row.costs:
+            sinks.setdefault(resource, []).append(("q", row.key, amount))
+    for step in range(steps):
+        for rule, _, _ in model.goals:
+            variables[("g", rule, step)] = (zero, None, False)
+        for row in model.demand:
+            variables[("q", row.key, step)] = (zero, None, False)
     for entity in model.entities:
         for step in range(steps + 1):
             variables[("s", entity, step)] = (zero, None, False)
@@ -997,6 +1149,8 @@ def _program(
                 amount = model.net.get((activity, entity))
                 if amount:
                     coefficients[("x", activity, step)] = -amount
+            for kind, name, amount in sinks.get(entity, ()):  # what a goal sink takes
+                coefficients[(kind, name, step)] = coefficients.get((kind, name, step), zero) + amount
             inflow: dict[Key, Fraction] = {}
             for activity in model.activities:
                 amount = model.income.get((activity, entity))
@@ -1027,11 +1181,10 @@ def _program(
                     positive += received(entity, blocked)[1]
                 rows.append(_Row(("overflow", entity, step), _nonzero(bound), "le", positive, None))
     if not plan:  # a steady state ends each cycle with at least the stock it began with; a capped one with it
-        for entity in model.entities:
-            if entity != model.numeraire:
-                cyclic = {("s", entity, 0): one, ("s", entity, steps): -one}
-                sense = "eq" if entity in hard or entity in storage or entity in stops else "le"
-                rows.append(_Row(("cyclic", entity, 0), cyclic, sense, zero, None))
+        for entity in model.entities:  # the numeraire is a value entity, no stock: its gain is the sinks' value
+            cyclic = {("s", entity, 0): one, ("s", entity, steps): -one}
+            sense = "eq" if entity in hard or entity in storage or entity in stops else "le"
+            rows.append(_Row(("cyclic", entity, 0), cyclic, sense, zero, None))
     for entity, (cap, value) in sorted((*hard.items(), *storage.items())):
         for step in range(0, steps + 1, every.get(entity, 1)):  # a void_at_reset cap holds at its resets only
             rows.append(_Row(("cap", cap, step), {("s", entity, step): one}, "le", value, cap))
@@ -1043,6 +1196,8 @@ def _program(
                 used = model.income.get((activity, entity), zero) - model.net.get((activity, entity), zero)
                 if used:
                     row[("x", activity, step)] = -used
+            for kind, name, amount in sinks.get(entity, ()):
+                row[(kind, name, step)] = row.get((kind, name, step), zero) - amount
             rows.append(_Row(("stop", cap, step), _nonzero(row), "le", value - regen_income(entity, step), cap))
     for rule, members, window, maximum in model.limits:
         if rule in omit:
@@ -1052,6 +1207,10 @@ def _program(
             if counted:
                 most_runs = values.get(rule, maximum) * model.scale(rule)  # a relaxed period's by rate
                 rows.append(_Row(("limit", rule, index), counted, "le", most_runs, rule))
+    if model.secondary not in omit:  # a demand row runs at most `count × cycle days ÷ horizon days` a cycle
+        for row in model.demand:
+            counted = {("q", row.key, step): one for step in range(steps)}
+            rows.append(_Row(("demand", row.key, 0), counted, "le", row.most, model.secondary))
     for cap, resource, members, window, value in model.incomes:
         if cap in omit:
             continue
@@ -1098,15 +1257,108 @@ def _program(
     for entity, (group, amount) in model.start.items():
         if group is None or group not in omit:
             rows.append(_Row(("start", entity, 0), {("s", entity, 0): one}, "eq", amount, group))
-    objective: dict[Key, Fraction] = {}
-    for entity, weight in (model.weights if weights is None else weights).items():
-        _add(objective, ("s", entity, steps), weight)
-        _add(objective, ("s", entity, 0), -weight)
-    objective = _nonzero(objective)
-    if floor is not None:
-        rows.append(_Row(("optimum", "", 0), {key: -value for key, value in objective.items()}, "le", -floor, None))
-        objective = {key: -one for key in variables if key[0] in ("o", "l")}
-    return _Program(variables, tuple(rows), objective)
+    rows.extend(added)
+    goal: dict[Key, Fraction] = {}
+    if least_losses:
+        goal = {key: -one for key in variables if key[0] in ("o", "l")}
+    elif objective is not None:
+        goal = dict(objective)
+    elif plan:  # the stocks' gain, each at the steady state's price
+        for entity, weight in model.weights.items():
+            _add(goal, ("s", entity, steps), weight)
+            _add(goal, ("s", entity, 0), -weight)
+    else:
+        goal = total_value(model)
+    return _Program(variables, tuple(rows), _nonzero(goal))
+
+
+# The objective functions (PRICE-2a; #424 ACM-PRICE addendum 2.1 §4.1): each defined once, for the solves and the
+# checks alike ---------------------------------------------------------------------------------------------------
+
+
+def acquirers(model: _Model) -> list[dict[str, Any]]:
+    """Each activity that acquires a main goal item, by id: it brings one in (it produces it, or moves into it).
+    Its record holds `goals` (those items), `bounds` (the limits and income caps that count it), `inputs` (what it
+    takes from: a non-zero amount it consumes, an entity it moves out of) and `spends`, the inputs that are not
+    time. An input is time when it is a resource or store with a regen (one that brings something) that is not a
+    slot, or a slot that only acquisitions take from. The activity is protected, in P, when a bound counts it and it
+    spends nothing (`protects`); otherwise it is a conversion, compared inside V like any other activity."""
+    worth = {resource for _, resource, _ in model.goals}
+    brought: dict[str, set[str]] = {}
+    for (activity, resource), amount in model.income.items():
+        if resource in worth and amount > 0:
+            brought.setdefault(activity, set()).add(resource)
+    for _, activity, _, target in model.moves:
+        if target in worth:
+            brought.setdefault(activity, set()).add(target)
+    bounds: dict[str, set[str]] = {}
+    for rule, members, _, _ in model.limits:
+        for activity in members:
+            bounds.setdefault(activity, set()).add(rule)
+    for cap, _, members, _, _ in model.incomes:
+        for activity in members:
+            bounds.setdefault(activity, set()).add(cap)
+    regenerated = {target for _, target, incomes in model.regens if any(amount > 0 for amount in incomes)}
+    takers: dict[str, set[str]] = {}  # entity -> the activities that take from it
+    for activity, inputs in model.inputs.items():
+        for entity in inputs:
+            takers.setdefault(entity, set()).add(activity)
+
+    def time(entity: str) -> bool:
+        if entity in model.slots:
+            return takers[entity] <= set(brought)
+        return entity in regenerated
+
+    found = []
+    for activity in sorted(brought):
+        inputs = list(model.inputs.get(activity, ()))
+        found.append({
+            "activity": activity, "goals": sorted(brought[activity]), "bounds": sorted(bounds.get(activity, ())),
+            "inputs": inputs, "spends": [entity for entity in inputs if not time(entity)],
+        })
+    return found
+
+
+def protects(record: dict[str, Any]) -> bool:
+    """Whether an acquisition (`acquirers`) is protected: in P (§4.1)."""
+    return bool(record["bounds"]) and not record["spends"]
+
+
+def acquisition(model: _Model) -> dict[Key, Fraction]:
+    """A, the protected acquisition (§4.1): over the cycle, what the activities of P bring in of each main goal item
+    (net of what they take of it), at its value; less what each income cap on such an item that counts an activity
+    of P voids, at that value; and the `main` of each demand row's executions. Its terms; none when nothing counts."""
+    worth = {resource: weight for _, resource, weight in model.goals}
+    protected = {record["activity"] for record in acquirers(model) if protects(record)}
+    found: dict[Key, Fraction] = {}
+    for step in range(model.steps):
+        for activity in sorted(protected):
+            for resource, weight in worth.items():
+                amount = model.net.get((activity, resource))
+                if amount:
+                    _add(found, ("x", activity, step), weight * amount)
+        for flow, activity, _, target in model.moves:
+            if activity in protected and target in worth:
+                _add(found, ("m", flow, step), worth[target])
+        for cap, resource, members, _, _ in model.incomes:
+            if resource in worth and protected & set(members):
+                _add(found, ("v", cap, step), -worth[resource])
+        for row in model.demand:
+            if row.main:
+                _add(found, ("q", row.key, step), row.main)
+    return _nonzero(found)
+
+
+def total_value(model: _Model) -> dict[Key, Fraction]:
+    """V, the value of the goal sinks over the cycle (§4.1): each main goal item it takes at its value, and each
+    demand row's executions at `points × value + main`. Its terms."""
+    found: dict[Key, Fraction] = {}
+    for step in range(model.steps):
+        for rule, _, weight in model.goals:
+            _add(found, ("g", rule, step), weight)
+        for row in model.demand:
+            _add(found, ("q", row.key, step), row.value)
+    return _nonzero(found)
 
 
 # The solver ----------------------------------------------------------------------------------------------
@@ -1277,6 +1529,20 @@ def _marginals(section: Any, rows: list[_Row]) -> dict[Key, float]:
     return {row.key: value for row, value in zip(rows, values, strict=True)}
 
 
+@dataclass(frozen=True)
+class _Tiers:
+    """The steady state's three solves (`_Solver.tiers`; PRICE-2a), which PRICE-2b's dual reads."""
+
+    program: _Program  # S3's: V alone; every price re-solve changes it
+    base: _Solution  # S3's optimum: its value V0 is the objective
+    acquired: Fraction  # A*, S1's optimum (0 when A has no term)
+    second: _Solution  # S2's optimum (S3's when A has no term)
+    floors: tuple[_Row, ...]  # S2's added row: A ≥ A*
+    face: tuple[_Row, ...]  # the rows of the lexicographic optima: A ≥ A*, V ≥ V*
+    records: list[dict[str, Any]]  # the acquisitions (`acquirers`), protected or not
+    ties: tuple[str, ...]  # `objective_tier_tie`
+
+
 class _Solver:
     def __init__(self, model: _Model, settings: EconomySettings) -> None:
         self.model = model
@@ -1410,7 +1676,7 @@ class _Solver:
         dropped: set[str] = set()
         unchecked: list[str] = []
         for group in model.groups():
-            verdict = self.feasible(_program(model, omit=frozenset(dropped | {group}), weights={}))
+            verdict = self.feasible(_program(model, omit=frozenset(dropped | {group}), objective={}))
             if verdict is False:
                 dropped.add(group)
             elif verdict is None:
@@ -1473,17 +1739,103 @@ class _Solver:
                     dual += -base.le[("move", flow, step)] * float(base.x[("x", activity, step)])
         return dual
 
-    def steady(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        model, steps = self.model, self.model.steps
+    def optimal(self, program: _Program, stage: str) -> _Solution:
+        """The optimum of a program that has one: the program of the optimum with rows that a solution of it meets
+        (a floor at an optimum, a probe), or another objective over the same rows."""
+        solution = self.lp(program, stage)
+        if solution.status != "optimal":
+            raise self.failure(LP_SOLVE_FAILED, stage=stage, reason="solver_status", status=2)
+        return solution
+
+    def tiers(self) -> _Tiers:
+        """The three solves (#424 ACM-PRICE addendum 2.1 §4.2). S3 maximises V alone: an infeasible one is
+        `lp_infeasible`, and its optimum V0 is the objective. S1 maximises A, giving A*; S2 maximises V with A ≥ A*,
+        giving V*. When A has no term, A* is 0 and S2 is S3. V* above V0 cannot be (S3 relaxes S2) and is
+        `lp_numeric_check_failed`; V0 above V*, exactly, is `objective_tier_conflict`. Then the ties."""
+        model = self.model
+        value, acquired = total_value(model), acquisition(model)
         program = _program(model)
         base = self.lp(program, "optimum")
         if base.status != "optimal":
             raise Failure(self.conflict())
-        optimum = base.value
-        least = self.lp(_program(model, floor=optimum), "losses")
+        records = acquirers(model)
+        if not acquired:
+            face = _floor(VALUE, value, base.value)
+            return _Tiers(program, base, Fraction(0), base, (), face, records, ())
+        first = self.optimal(_program(model, objective=acquired), ACQUISITION)
+        floors = _floor(ACQUISITION, acquired, first.value)
+        second = self.optimal(_program(model, added=floors), VALUE)
+        if second.value > base.value:
+            raise self.failure(
+                LP_NUMERIC_CHECK_FAILED, stage=VALUE, constraint=VALUE, found=str(second.value), bound=f"<={base.value}"
+            )
+        if base.value > second.value:
+            raise Failure(self.tier_conflict(acquired, records, first.value, second, base))
+        face = floors + _floor(VALUE, value, second.value)
+        ties = self.ties(face, _floor(VALUE, value, base.value), second, base)
+        return _Tiers(program, base, first.value, second, floors, face, records, tuple(ties))
+
+    def tier_conflict(
+        self, acquired: dict[Key, Fraction], records: list[dict[str, Any]], most: Fraction, second: _Solution,
+        base: _Solution,
+    ) -> dict[str, Any]:
+        """`objective_tier_conflict`: by value alone, the secondary goal takes what the protected acquisition needs
+        (V0 > V*). It lists what of A is smaller in the optimum of S3 than in that of S2, each by the term of A it
+        owns: the protected `activities` (what they bring in), the demand rows' `steps` (their `main`) and the income
+        `caps` (what they void); and P (`protected`), to check against the guide what the criteria protect."""
+        model = self.model
+        flows = {flow: activity for flow, activity, _, _ in model.moves}
+        member = {"x": "activities", "m": "activities", "q": "steps", "v": "caps"}
+
+        def parts(x: dict[Key, Fraction]) -> dict[tuple[str, str], Fraction]:
+            found: dict[tuple[str, str], Fraction] = {}
+            for key, weight in acquired.items():
+                kind, name, _ = key
+                _add(found, (member[kind], flows.get(name, name) if kind == "m" else name), weight * x[key])
+            return found
+
+        before, after = parts(second.x), parts(base.x)
+        detail: dict[str, Any] = {
+            "path": model.path, "acquisition": str(most), "value": str(second.value), "unconstrained": str(base.value),
+            "activities": [],
+            "protected": [record["activity"] for record in records if protects(record)],
+        }
+        for (name, owner), amount in sorted(before.items()):
+            if after[(name, owner)] < amount:
+                detail.setdefault(name, []).append(owner)
+        return error(OBJECTIVE_TIER_CONFLICT, detail)
+
+    def ties(
+        self, face: tuple[_Row, ...], unconstrained: tuple[_Row, ...], second: _Solution, base: _Solution
+    ) -> list[str]:
+        """`objective_tier_tie` (§4.2): the activities that some optimum of S3 uses and no optimum of S2 does. By
+        value alone they are as good as the acquisition, and they would lower A. An activity is probed only when the
+        optimum of S2 found does not use it: the most of it, at most 1 a cycle (so the probe is bounded), on the
+        optima of S2 (`face`: A ≥ A*, V ≥ V*) and then, when that is 0, on those of S3 (V ≥ V0)."""
+        model, one = self.model, Fraction(1)
+        found = []
+        for activity in model.activities:
+            keys = [("x", activity, step) for step in range(model.steps)]
+            if any(second.x[key] > 0 for key in keys):
+                continue
+            probe = (_Row(("probe", activity, 0), {key: one for key in keys}, "le", one, None),)
+            objective = {key: one for key in keys}
+            if self.optimal(_program(model, objective=objective, added=face + probe), "tie").value > 0:
+                continue
+            if any(base.x[key] > 0 for key in keys) or self.optimal(
+                _program(model, objective=objective, added=unconstrained + probe), "tie"
+            ).value > 0:
+                found.append(activity)
+        return found
+
+    def steady(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        model, steps = self.model, self.model.steps
+        tiers = self.tiers()
+        program, base, optimum = tiers.program, tiers.base, tiers.base.value
+        least = self.lp(_program(model, added=tiers.face, least_losses=True), "losses")
         if least.status != "optimal":
             raise self.failure(LP_SOLVE_FAILED, stage="losses", reason="solver_status", status=2)
-        warnings: list[dict[str, Any]] = []
+        warnings = [error(OBJECTIVE_TIER_TIE, {"path": model.path, "activity": activity}) for activity in tiers.ties]
         prices: dict[str, list[tuple[Fraction, Fraction | None]]] = {}
         marginals: dict[str, list[Fraction]] = {}
         for resource in model.resources:
@@ -1510,6 +1862,9 @@ class _Solver:
         data = {
             "cycle": {"steps": steps, "step_seconds": STEP_SECONDS},
             "objective": str(optimum),
+            "acquisition": str(tiers.acquired),
+            "protected": [record for record in tiers.records if protects(record)],
+            "conversions": [record for record in tiers.records if not protects(record)],
             "prices": {resource: [_price(price) for price in prices[resource]] for resource in model.resources},
             "rule_prices": {rule: _price(price) for rule, price in rule_prices.items()},
             "activity_values": values,

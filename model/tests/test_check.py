@@ -72,7 +72,7 @@ def test_the_worked_example_checks_clean(make_system, app_dir, check_envelope):
     assert doc["data"] == {
         "path": str(EXAMPLE / "model.json"),
         "model_id": "example",
-        "entities": 6,
+        "entities": 7,  # with the numeraire, a value entity (#424 ACM-PRICE PRICE-2a)
         "rules": 13,
         "superseded": 0,
         "unknowns": 1,
