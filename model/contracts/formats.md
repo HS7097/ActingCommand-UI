@@ -116,7 +116,7 @@ optional ones in brackets.
 | `model_id` | id |
 | `files` | `{"rules": [...], "data": [...]}`: the model's files, relative to the folder of `model.json`. Each path is `rules/…json` or `data/…json`, with segments `[a-z0-9][a-z0-9_.-]*`. |
 | `periods` | the period entities (resets), see below |
-| `numeraire` | the id of the resource that values are counted in |
+| `numeraire` | the id of the `value` entity that values are counted in (#424 ACM-PRICE 2.2 (1); see "The objective" under "The economy") |
 | `engines` | a list of `{engine_id, interface, min_version}`. `interface` is `acmodel.engine.v2`; `min_version` is digits separated by dots. Where an engine's code lives is local configuration, never this file (#424 design D-4). |
 | [`note`] | |
 
@@ -140,6 +140,7 @@ Members: `entities`, `rules` and `unknowns`, all required lists (they may be emp
 | `activity` | `id` [`note`] |
 | `entity_class` | `id`, `attributes` (attribute id to a column type, as in data files) [`note`] |
 | `window` | `id`, `starts_at_unix_s`, `ends_at_unix_s` (integers ≥ 0) [`note`] |
+| `value` | `id` [`note`]: the unit values are counted in, which `numeraire` names (#424 ACM-PRICE 2.2 (1)). It holds no stock and has no reading: it is no pool, no flow consumes or produces it, and nothing binds it. |
 
 Periods are entities too; they are declared in `model.json`.
 
@@ -148,7 +149,7 @@ always), `unknowns` (unknown ids), `supersedes` (rule ids), `note`]. `kind` sele
 
 | `kind` | `logic` members |
 |---|---|
-| `cap` | `cap_kind` selects the rest. `hard` and `storage`: `on_reach` and exactly one of `value` (expr) and `reading` (fact key). `soft_read`: `reading` and `on_reach`. `income` (#424 ACM-PRICE 3.3), what a period may earn: `value` (expr), `per` (period id) and `on_reach` [`from` (activity ids: the activities whose income it counts; absent means every activity that produces the resource or moves into it)]; it takes neither `reading` nor `reference`. `on_reach` is `block_all_income`, `stop_production`, `discard`, `void_at_reset` or `{"block_income_from": [activity ids], "other_income": "notice_only"}`. `hard`, `storage` and `soft_read` may add [`reference` (expr): with a `reading` only, the cap's value in the reference state, which the economy's steady state reads instead of the reading (#424 ACM-PRICE G-A); it must not read the account state] and [`per` (period id): with `on_reach` `void_at_reset` only, the period at whose resets the cap voids what lies above it; absent means every day (G-C)]. A `reference` beside a `value` is `member_conflict`, a `per` with another `on_reach` `member_unknown`. |
+| `cap` | `cap_kind` selects the rest. `hard` and `storage`: `on_reach` and exactly one of `value` (expr) and `reading` (fact key). `soft_read`: `reading` and `on_reach`. `income` (#424 ACM-PRICE 3.3), what a period may earn: `value` (expr), `per` (period id) and `on_reach` [`from` (activity ids: the activities whose income it counts; absent means every activity that produces the resource or moves into it)]; it takes neither `reading` nor `reference`. `on_reach` is `block_all_income`, `stop_production`, `discard`, `void_at_reset` or `{"block_income_from": [activity ids], "other_income": "notice_only"}`. `hard`, `storage` and `soft_read` may add [`reference` (expr): with a `reading` only, the cap's value in the reference state, which the economy's steady state reads instead of the reading (#424 ACM-PRICE G-A); it must not read the account state. The reference state is neutral (ruling 126 A): the value is the same for every account, never this account's level] and [`per` (period id): with `on_reach` `void_at_reset` only, the period at whose resets the cap voids what lies above it; absent means every day (G-C)]. A `reference` beside a `value` is `member_conflict`, a `per` with another `on_reach` `member_unknown`. |
 | `regen` | `amount`, `every` [`while` (absent means always)], all expr |
 | `flow` | [`consumes`, `produces` (resource id to expr; a product may instead be `random:<id>`, naming a `random` rule), `moves` (`from`, `to`, `amount`), `counts_on` (`success` or `attempt`), `batch` (`min`, `max`), `requires` (gate rule ids)] |
 | `exchange` | `gives`, `takes` (resource id to expr) [`limit` (expr)] |
@@ -156,10 +157,27 @@ always), `unknowns` (unknown ids), `supersedes` (rule ids), `note`]. `kind` sele
 | `cooldown` | `min_interval` (expr) |
 | `gate` | `irreversible` (boolean), `origin` (`any` or `person`) [`requires` (expr; absent means no state condition), `prefs` (preference keys)] |
 | `random` | exactly one of `pity_chain` (`rate`, `hard_pity`, `carry_over` (boolean) [`p_up`, `guarantee_after_miss` (boolean), `spark`]), `drop` (`rate`, or `samples` ≥ 1 with `successes` ≤ `samples`) and `outcomes` (a non-empty list of `{p, then}`, `then` being resource id to expr) |
-| `derive` | `value` [`round` (`floor`, `ceil` or `half_even`; absent means exact), `general_logic` (expr), `live` (`fact`, `comparison`, `reference_fact`, `offset`)]. `comparison` is `eq`, `not_eq`, `less_than`, `less_than_or_equal`, `greater_than` or `greater_than_or_equal`, as in the Runtime's fact references. |
+| `derive` | `value` [`round` (`floor`, `ceil` or `half_even`; absent means exact), `general_logic` (expr), `live` (`fact`, `comparison`, `reference_fact`, `offset`), `estimate` (below)]. `comparison` is `eq`, `not_eq`, `less_than`, `less_than_or_equal`, `greater_than` or `greater_than_or_equal`, as in the Runtime's fact references. |
 | `engine` | `engine` (engine id), `op` (`evaluate`, `predict` or `search`), `inputs` (id to expr), `metrics` (ids) |
-| `objective` | `numeraire` (resource id), `terms` (list of expr), `horizon` (expr) |
+| `objective` | a goal sink of the economy (#424 ACM-PRICE 2.2, PRICE-2a; see "The objective" under "The economy"). `tier` selects the rest. `main`, a main goal: `value` (expr), what one unit of the subject, a resource, is worth in value units. `secondary`, the reference demand, whose subject is the numeraire: `demand` and `costs` (table ids), `value` (expr), what one training point is worth in value units, and `horizon` (expr), the time the demand's counts are spread over. It reads no preference. |
 | `weight_ref` | `file`, `pointer` (a non-empty JSON pointer), `compares_to` (output id) |
+| `no_use` | a declared zero (#424 ACM-PRICE addendum 2.1 §3.2, PRICE-2b-2): the subject, a pool (a resource), has no use. `reason` (text, why) [`holds_when` (text, the account condition it holds under; absent means always) and `facts` (a non-empty list of fact keys, the neutral facts the resource side checks that condition with on the instances), which go together (`member_missing`)]. It has no value and no expression. Its provenance names the public pages the reason rests on. |
+
+**The estimate of a provisional derive** (`estimate`, #424 ACM-PRICE addendum 2.1 §3.7, PRICE-2b-2) says what range
+the derive's point value stands for, so that the impact assessment can move it (PRICE-4). `value` stays the point value
+everywhere: the steady state, `run` and the economy read only it, and nothing reads the estimate but the coverage section
+and the checks below.
+- It is allowed only on a rule of status `provisional`; on any other it is `member_unknown`.
+- Its members: `basis` (`variants`, a choice the pack makes at run time, by variant; `samples`, a supplement from
+  observation; `statistics`, a public statistics site; `design`, a design value), `covers` (`activities`, a non-empty list
+  of the activities whose amounts per run the estimate describes [`holds_when`, text, the account condition the point value
+  holds under, never which account; `facts`, fact keys that check it]), and exactly one of `of` (an expression: the quantity
+  the point value averages, written with the unknowns it averages over, `unknown:<id>.<member>`; the range is its value
+  over every scenario of them, each point of a discrete one and the enclosure of a continuous one) and the pair `low` and
+  `high` (expressions, the two ends). `of` with `low` or `high` is `member_conflict`, neither `member_missing` (both with
+  `expected` `["of", "low"]`), and `low` without `high` or the reverse `member_missing`.
+- Which variants it covers is given by the unknowns `of` reads; which stages, shops or projects by `covers.activities`;
+  which accounts by `covers.holds_when`.
 
 Absent members of `pity_chain` mean: `p_up` 1 (every top-tier pull is the target), `guarantee_after_miss` false
 and no `spark`. The run computes a `pity_chain` and a `drop` (see "Random rules" under "The run"); `outcomes`
@@ -343,10 +361,13 @@ state have their own codes.
 | Where | Must name |
 |---|---|
 | a rule's `subject`; `cleared:<id>` | an entity of any kind (periods included) |
-| a store's `holds`; the keys of `consumes`, `produces`, `gives`, `takes` and an outcome's `then`; `numeraire` (model and objective); `amount:<id>`; the `amount:<id>` dimension of a column or an attribute | a `resource` |
+| a store's `holds`; the keys of `consumes`, `produces`, `gives`, `takes` and an outcome's `then`; `amount:<id>`; the `amount:<id>` dimension of a column or an attribute; a main objective's `subject`; each column of a secondary objective's costs table but its key (the error at that column of the data file) | a `resource` |
+| `numeraire` of `model.json` | a `value` entity |
+| a secondary objective's `subject` | the numeraire (`expected` `numeraire`) |
 | `stock:<id>` | a `store` |
 | `moves.from`, `moves.to` | a `resource` or a `store` |
-| `block_income_from`, `shared_with`, an income cap's `from` | `activity` entities |
+| `block_income_from`, `shared_with`, an income cap's `from`, an estimate's `covers.activities` | `activity` entities |
+| a `no_use` rule's `subject` | a `resource` (`expected` `resource`, with `found`) |
 | `limit.per`, a cap's `per` | a period |
 | `rule:<id>`; `weight_ref.compares_to` | an active rule |
 | `cap:<id>`; `count:<id>`; flow `requires`; a `random:<id>` product | an active `cap`, `limit`, `gate` or `random` rule |
@@ -362,6 +383,10 @@ state have their own codes.
   the model and a column it declares.
 - The key has as many parts as the table's key, and for inline rows it matches a row. The key `$` in a `sum` or
   `count` matches every row.
+- **A secondary objective** (#424 ACM-PRICE 2.3): `demand` and `costs` name tables of the model (`table`, at the
+  member); the demand table declares the columns `count`, `points` and `main` (`column`, at `/logic/demand`); and
+  the two are joined by key, so the key of each row of an inline demand table is the key of a row of the costs
+  table (`row`, with `table` the costs table and `key` the row's key, at that row of the demand table's file).
 
 **State references** (`state_reference_missing`, with `missing` `reading`, `entity_class` or `attribute`):
 - **Fact keys.** A fact key is declared as the `reading` of an entity or of an active `cap` rule. `read:<fact>`,
@@ -388,8 +413,10 @@ state have their own codes.
 
 ### Where `pref:` may appear
 
-A preference is read only in the expressions of a `gate` rule and in the `terms` of an `objective` rule (#424
-design D-2). Anywhere else, unknowns included, `pref:` is `rule_pref_misplaced`.
+A preference is read only in the expressions of a `gate` rule (#424 design D-2, as ACM-PRICE 2.2 (7) changes it).
+Anywhere else, unknowns and every member of an `objective` rule included, `pref:` is `rule_pref_misplaced`: the
+objective gives values that are the same for every account, and the preferences are a layer of their own above
+them (ruling R18).
 
 ### Conflicts
 
@@ -404,7 +431,7 @@ design D-2). Anywhere else, unknowns included, `pref:` is `rule_pref_misplaced`.
 |---|---|
 | `cap` | `cap_kind` |
 | `limit` | `per` |
-| `regen`, `flow`, `exchange`, `cooldown`, `random`, `objective` | the subject alone |
+| `regen`, `flow`, `exchange`, `cooldown`, `random`, `objective`, `no_use` | the subject alone |
 | `gate`, `derive`, `engine`, `weight_ref` | none: their rules never conflict |
 
 ### Loops
@@ -417,9 +444,33 @@ design D-2). Anywhere else, unknowns included, `pref:` is `rule_pref_misplaced`.
   - `max_single_income(<r>, <cap>)` links to the cap, to the flow rules that produce `<r>` or move into it, and
     to the `storage` cap of each store that such a flow moves out of.
   - A flow's `requires` links to its gates, and a `random:<id>` product to its random rule.
-  - A derive's `general_logic` is only compared with its value, and nothing reads it, so it links nothing.
+  - A derive's `general_logic` is only compared with its value, and nothing reads it, so it links nothing; nor does
+    its `estimate`.
 - **Refusal:** a loop is `rule_cycle` with `via` `reference`. `members` are its nodes, sorted (`rule:<id>`,
   `unknown:<id>` or `unknown:<id>.<member>`). The error points at the first member's first link into the loop.
+
+### Declared zeros and estimates (#424 ACM-PRICE PRICE-2b-2)
+
+These read the static judgement of coverage (see "Coverage" under "The economy"), which needs every reference
+resolved: the check makes them only when it found nothing else.
+- **`no_use_contradicted`** (addendum 2.1 §3.2): a pool declared zero is covered: it has a main objective (`goal`), a
+  demand row takes it (`costs`), or an activity takes it and brings in a covered pool that is not declared zero (`use`,
+  with the `activities`). A use that leads only to other declared zeros is no use, so it never contradicts. The error is
+  at the declaration, and nothing of the model is computed while it stands.
+- **`no_use_condition_incomplete`**: a pool's uses lead directly to another declared zero (an activity takes the pool and
+  brings that zero in), whose `facts` the pool's declaration does not all hold (`downstream`, `missing`): the pool is
+  zero only where its downstream zero is, so its condition is its own and theirs together. Each declaration answers for
+  the zeros its uses lead to directly; those answer for theirs. A pool that is neither covered nor declared zero is
+  unknown, never 0.
+- **An estimate's checks** (addendum 2.1 §3.7). Check 1, one of `of` and `low`/`high`, is the reader's. Check 2, the
+  point value within the range, needs the values: the run makes it (`estimate_outside_range`, see "Evaluation" under
+  "The run"). Here:
+  - check 3, **`estimate_basis_invalid`**: `basis` `variants` needs an `of` that reads a member of a `variants` unknown
+    (`missing` `variants_unknown`); `samples` needs a `measurement` of role `supplement` in the rule's provenance
+    (`supplement`), one with `samples` and `successes` when `of` reads a `beta_from_samples` distribution (`samples`);
+  - check 4, **`estimate_scope_exceeded`**: each activity one of whose rules (a flow, a limit: a rule whose subject is the
+    activity) reads the derive, directly or through other derives, is in `covers.activities`; `activities` are those that
+    are not, and `read_by` their rules that read it. An estimate is never used for an activity it does not cover.
 
 ### External datasets
 
@@ -482,9 +533,11 @@ together, with exit status 1.
   | limit `max`; flow `batch.min`, `batch.max`; exchange `limit` | `count` |
   | regen `amount` | the amount of what its subject holds (a resource or a store) |
   | regen `every`, cooldown `min_interval`, objective `horizon` | `time` |
+  | objective `value` | `value` (a number literal fits) |
   | flow `consumes`, `produces`; exchange `gives`, `takes` | the amount of the resource named by the key |
   | flow `moves.amount` | the amount that `from` holds, and the amount that `to` holds |
   | derive `general_logic` | the dimension of its `value` |
+  | derive `estimate`: `of`, `low`, `high` | a number of the dimension of its `value`, never a boolean (`operator` `estimate`) |
   | derive `live.offset` | the dimension of `live.reference_fact`, which is that of `live.fact` (`operator` `live`) |
   | random `pity_chain.rate`, `pity_chain.p_up`, `drop.rate`, an outcome's `p` | `none` (a chance) |
   | random `pity_chain.hard_pity`, `pity_chain.spark` | `count` |
@@ -495,6 +548,10 @@ together, with exit status 1.
 
   `operator` names the member, and `operands` are the expected and the found type. The engine members are not
   checked here; their slice checks them.
+- **A secondary objective's tables** (#424 ACM-PRICE 2.3): each column the economy reads is an `integer` or
+  `decimal` column of its dimension. In the demand table `count` is a `count`, `points` and `main` are `none`; in
+  the costs table the column of each resource is the amount of that resource. Another type or dimension is
+  `operator` `demand` or `costs`, position 0, at the column (`/columns/<id>`, or its `/dimension`) of the data file.
 
 **References** (`rule_reference_missing`):
 - **Preference keys.** Every `pref:<key>` and every key of a gate's `prefs` is in the preference defaults'
@@ -547,8 +604,8 @@ what it reads, without recursion.
 **Not evaluated yet** (`expr_eval_failed`, `evaluation_unsupported`; `found` names it): `metric:`, `count:` and
 `pref:` references, `random:<id>` products, the rows of an external table, and a value rule's `when`. Every
 output that needs one is blocked. The other rule kinds (regen, exchange, cooldown, gate, engine, objective,
-weight_ref), and random rules with `outcomes`, are type-checked but not evaluated. `acmodel economy` reads the flow,
-regen, cap, limit and gate rules (see "The economy").
+weight_ref, no_use), and random rules with `outcomes`, are type-checked but not evaluated. `acmodel economy` reads the
+flow, regen, cap, limit, gate and objective rules, and its coverage section the `no_use` rules (see "The economy").
 
 **Unknowns.** A node that reads a discrete unknown is computed once per point of it, and once per point of each
 further one that it reads under that choice. A continuous unknown is one enclosure, and what reads it is computed
@@ -570,6 +627,14 @@ at its own expression, with `needed_by`, the outputs it blocks; the run then exi
 
 **Notes** (`data.notes`; never errors): `ruling_overrides_general_logic`, for a derive whose value differs from
 its `general_logic`. The value stands by its provenance, and the difference is reported.
+
+**An estimate's range** (#424 ACM-PRICE addendum 2.1 §3.7, check 2; PRICE-2b-2). A derive with an `estimate` computes
+it beside its value, in the same state, and nothing reads it: `of` over every scenario of the unknowns it reads (from its
+lowest to its highest value, an enclosure counting with both ends), or the lowest value of `low` to the highest of
+`high`. Every scenario of the value, both ends of an enclosure, lies in that range; otherwise the rule is blocked
+(`estimate_outside_range`, with `value`, `low` and `high`, at the estimate), and so is every output that reads it. An
+estimate that cannot be computed blocks the rule with its own errors. In the reference state of the economy's steady
+state, an estimate that needs the account state is not checked: `run`, which reads the state, checks it.
 
 ### Unknowns
 
@@ -801,54 +866,351 @@ does. The configuration keys are under `lp`, `search` and `economy` (`contracts/
 - **Gates.** A flow behind a gate of origin `person` (real payment) takes its activity out of both programs; the
   activity is listed in `excluded` (#424 design 4.7). A gate with no `requires`, no `prefs` and not irreversible lets
   the flow run. Any other gate is refused (`gate`).
-- **Not modelled yet**, each refused: `exchange`, `cooldown` and `objective` rules (an objective's terms read
-  metrics, which come with the search); a `random:` product; a `when`; and an amount, cap or limit that reads an
-  unknown (`unknown`), because each program solves single values. In the steady state, a pending flow is left out
-  instead (below).
+- **Objectives.** The steady state's objective comes from the `objective` rules, its goal sinks (see "The
+  objective" below). The plan reads none of them: its objective values its final stocks.
+- **Not modelled yet**, each refused: `exchange` and `cooldown` rules; a `random:` product; a `when`; and an amount,
+  cap, limit or objective value that reads an unknown (`unknown`), because each program solves single values. In the
+  steady state, a pending flow is left out instead (below).
 - **Pending flows** (the ACM-PRICE addendum, part 1). In the steady state, a flow whose `status` is `pending` and one
   of whose amounts reads an unknown is not refused: its activity is left out of the program and listed in
-  `excluded_pending`, with the flow, the activity and the unknowns its amounts read. Every price is then provisional,
-  computed without that activity (`price_status`). Once the flow no longer reads an unknown (a measurement filled
-  in), it is in the program again, and nothing is provisional for that reason. A flow of another status that reads
+  `excluded_pending`, with the flow, the activity and the unknowns its amounts read. It is a structural gap: every
+  price of its static component is then provisional, computed without that activity, and a component with no edge to
+  it keeps its own status (`price_status`, see "Coverage" below; addendum 2.1 §3.3, PRICE-2b-2). Once the flow no longer
+  reads an unknown (a measurement filled in), it is in the program again, and nothing is provisional for that reason. A flow of another status that reads
   an unknown, any other rule that does, and every such flow in the plan are refused (`unknown`).
 
 Every refusal is `expr_eval_failed` (`evaluation_unsupported`, operator `economy`, `found` as named above) at the
 rule, member or period, and blocks the output; nothing is approximated.
 
 **Status** of each output: the worst of the rules, rows and readings it read. It is provisional when it depends on
-an unknown it does not read: one that a pending rule it read names. Each amount, regen member, cap, limit and gate
-keeps its own status, so that a price can later have the status of what it reads (#424 ACM-PRICE 4.6); in this
-version the steady state's status is that of all of them but those of the pending flows it leaves out, and
-provisional when it leaves one out.
+an unknown it does not read: one that a pending rule it read names. Each amount, regen member, cap, limit, gate,
+objective member and demand or costs row keeps its own status, so that each price has the status of its static
+component (#424 ACM-PRICE 4.6, PRICE-2b-2; see "Coverage" below). The steady state's status is the worst of all of them
+but those of the pending flows it leaves out, provisional when it leaves one out, and never better than any price's.
+
+### The objective (`objective` rules; #424 ACM-PRICE 2.2, 2.3 and addendum 2.1 §4, PRICE-2a)
+
+The steady state values everything in the unit of the numeraire, a `value` entity. That entity holds no stock, so
+nothing can be kept in it: what counts is what the **goal sinks** bring in per cycle. Each sink is a column of the
+steady state's program, per step, that takes something and brings value units.
+
+**A main goal** is one `objective` rule of `tier` `main` per resource that is a main goal item (one that the game
+sells for real money and that play can earn again and again, such as a premium currency):
+```json
+{"id": "goal.<item>", "kind": "objective", "subject": "<resource>",
+ "logic": {"tier": "main", "value": "rule:w.<item>"}, "provenance": […], "status": "…"}
+```
+- `value` is what one unit of the resource is worth, in value units (dimension `value`; a number fits). It comes from
+  the public exchange rates, as a rule with its provenance (`w.<item>`, of class `official` or `wiki`); it is data,
+  never a preference.
+- Its sink takes one unit of the resource for `value` value units, in any number.
+
+**The secondary goal** is at most one `objective` rule of `tier` `secondary`, whose `subject` is the numeraire: the
+reference demand, the training a neutral reference state still needs (ruling 108; the reference state is neutral,
+ruling 126 A, below):
+```json
+{"id": "goal.training", "kind": "objective", "subject": "<the numeraire>",
+ "logic": {"tier": "secondary", "demand": "refdemand", "costs": "training_costs",
+           "value": "rule:w.point", "horizon": "365d"}, "provenance": […], "status": "…"}
+```
+- `demand` names the demand table, `costs` the costs table, both of the model (`files.data`, inline rows). The costs
+  are written once, in the costs table; the demand table names them by key.
+- The **costs table** has a key (a step of training, such as `<class>.lv100_105`) and one column per resource that
+  some step costs, the column's id being the resource's id, `integer` or `decimal`, of dimension `amount:<resource>`;
+  a step that does not use a resource has 0 there. Each row's provenance is the public cost table it comes from.
+- The **demand table** has the same key and three columns: `count` (dimension `count`), how many times the reference
+  state still does the step over `horizon`; `points` (`none`), the training points one step is worth; and `main`
+  (`none`), the value units the step adds to the main goal later (a level that raises a repeatable main income;
+  usually 0: the neutral reference state has every mode at its top tier already). The key of each row must be a row
+  of the costs table (`data_reference_missing`, `row`). A row may stand for a class of steps; the grain is the
+  research channel's.
+- `value` is what one training point is worth, in value units (λ, from public exchange rates, with its provenance:
+  data, never a preference); `horizon` (time, positive, else `value_invalid`) is the time the counts are spread over
+  (365 days for a year's model).
+- Each demand row is a sink that takes the row's costs for `points × value + main` value units, at most `count ×
+  cycle days ÷ horizon days` times a cycle (its bound is a group of the infeasibility analysis, named by the
+  objective). A pending row blocks the steady state (`rule_pending_unbounded`, `no_unknown`), as a run does; an
+  external table is refused (`external_dataset`).
+
+**Two functions**, each defined once and used both to optimise and to check (`core/flow.py`: `total_value`,
+`acquisition`, `acquirers`):
+- **The value V**: what the goal sinks bring over the cycle, each main goal item taken at its `value` and each
+  demand row at `points × value + main`.
+- **The protected acquisition A**: what the protected acquisitions (P, below) bring in of the main goal items over
+  the cycle, net of what they take of them, at their values; less what an income cap on such an item that counts an
+  activity of P voids of it, at that value; plus the `main` of each demand row's executions. A use of a main goal item
+  (a sink, a conversion that spends it) never lowers A: the use side is compared inside V.
+- **P, the protected acquisitions** (§4.1, decided mechanically): an activity is in P when all three hold:
+  1. it acquires a main goal item: it produces one (more than 0 an execution) or moves into one;
+  2. a limit counts it (its subject or `shared_with`), or an income cap does (its `from` lists it, or omits `from`
+     while it brings the cap's resource in);
+  3. each of its inputs is time. Its inputs are the resources it consumes a non-zero amount of (an amount of 0 is no
+     input) and what its moves take from. An input is time when it is a resource or store with a regen that brings
+     something and is not a slot (stamina, a facility's store), or a slot (see "Slots") that only activities of the
+     first kind take from, so that its capacity earns main goal income alone.
+  Every other activity of the first kind is a **conversion**: it spends another pool (a stock without regen, such as
+  a currency or a material) or capacity it shares with other uses, and is compared inside V like any activity. It
+  is never protected; a minimum of it is an instruction (#429 R-13, a player goal), not the model's.
+- **The three solves** (§4.2), each exact:
+  - S3 maximises V alone. Its optimum V0 is the steady state's `objective`, and its program is the one every price
+    re-solve changes. An infeasible S3 is `lp_infeasible`.
+  - S1 maximises A alone: A* (`acquisition`). When A has no term (no P, no `main`), A* is 0 and S2 is S3.
+  - S2 maximises V with A ≥ A* (the row `floor:acquisition:0`, checked exactly as every other row): V*. V* above V0
+    is `lp_numeric_check_failed` (stage `value`).
+  - V0 above V* is **`objective_tier_conflict`**: by value alone the secondary goal would take what the protected
+    acquisition needs, and pool prices cannot hold that priority, so the steady state is blocked (and so is the plan).
+    It lists the protected activities whose part of A is smaller in the optimum of S3 than in that of S2
+    (`activities`; `steps` and `caps` for a demand row's `main` and an income cap's void), and P (`protected`). The
+    data (the weights and their provenance) or an instruction resolves it, never the engine.
+  - V0 = V*: the lexicographic optimum is an optimum of V, and the steady state is priced from S3. An activity that
+    some optimum of S3 uses and no optimum of S2 does is the warning **`objective_tier_tie`**, one per activity: by
+    value it is as good as the acquisition it would take from (probed on each face, at most one execution a cycle).
+    - **Complementary slackness** (PRICE-2c) spares most probes. S3's dual (see "The joint price vector") is solved and
+      checked exactly first, and gives an exact optimal dual point (y, w). An activity whose dual slack there,
+      s_j = (Aᵀy + w − c)_j, is above 0 in every step runs in no optimum of S3, so in none of S2 either (V* = V0, so
+      S2's optima are optima of S3): it is no tie, and it is not probed. The argument: for any feasible x and dual
+      feasible (y, w), c·x ≤ (Aᵀy + w)·x = y·(Ax) + w·x ≤ b·y + u·w (x ≥ 0 and s ≥ 0; y ≥ 0 where Ax ≤ b; w ≥ 0 and
+      x ≤ u). At an optimum x* both ends equal V0 (strong duality, checked exactly), so Σ_j s_j·x*_j = 0, each term at
+      least 0 and so 0: s_j > 0 gives x*_j = 0 in every optimum. A slack of 0 proves nothing, so only those activities
+      are probed.
+    - **A probe that cannot be verified** (PRICE-2c). A probe's answer above 0 holds for any exactly feasible point; an
+      answer of 0 only for a certified optimum ("Exactness and failures"). A tie that its probes cannot decide exactly
+      (no certified 0, or a probe whose LP fails its exact check) is the warning **`lp_probe_unverified`** (`probe`
+      `tie`), never "no tie": its activity counts as a structural gap of its component (`probe_unverified`, see
+      "Coverage") and the steady state stands.
+  - The least losses are taken among the lexicographic optima (A ≥ A*, V ≥ V*).
+- **The reference state is neutral** (ruling 126 A). The steady state reads the rules and the data only: a cap's
+  `reference` is its value in the neutral reference state (facility levels, stage stars), the demand and costs are
+  the neutral reference demand from public cost tables, and an objective's `value` and `horizon` never read the
+  account state (`state`, as every member). So the values are the same for every account; an account's line-up,
+  unlocks, saturation and reward tiers belong to the layer above the model (admission facts, in-step choices, #429
+  R-13, player goals, a conditional zero's acceptance scope).
+- A model without an objective rule has V = 0: every price is 0.
 
 ### The steady state (`steady`)
 
 - **Game-wide.** It reads the rules and the data only, in the reference state (a cap with a reading at its
   `reference`), never the account state. An amount, cap or limit that needs the account state is refused (`state`).
-- **Its objective** is the numeraire's gain over one cycle, maximised. Every other stock ends the cycle with at least
-  the stock it began with, and a stock with a hard or storage cap, or whose regen stops at a cap, with exactly that
-  stock, so the cycle can repeat.
-- **Prices.** A resource's price in a step is the change of the optimum per grain (`lp.grain`, 1) when that step
-  brings one grain more, and when it brings one grain less.
+- **Its objective** is the value of its goal sinks over one cycle (V, "The objective" above), after the
+  protected acquisition A is checked (S1, S2 and S3). Every stock ends the cycle with at least the stock it began
+  with, and a stock with a hard or storage cap, or whose regen stops at a cap, with exactly that stock, so the cycle
+  can repeat.
+- **Prices** (#424 ACM-PRICE addendum 2.1 §2.2 step 3; PRICE-2b-1). A resource's price in a step is the projection
+  of the dual of its balance row in that step on D*, the optimal face of S3's dual (see "The joint price vector"):
+  its least value there, the exact value of one more unit, and its greatest, the exact value of one less.
   - When the two agree, the price is exact (`"1/10"`).
-  - Otherwise it is the interval `{"low", "high"}` (a degenerate basis); `high` is null when one grain less is
-    infeasible.
-  - The same holds for each cap with a value (a `reference` counts as one; an income cap too) that the program reads
-    and each limit (`rule_prices`), re-solved with its value one grain higher and one lower. A relaxed rule's value is
-    its value per period, so its price is the cycle's gain per unit of it. The numeraire's price is 1.
-- **The status of each price** (`price_status`): resource to `{status, reasons}`. `reasons` says why a price is
-  provisional: `excluded_pending`, computed without the activities in `excluded_pending`; `inputs`, a rule, row or
-  reading it read is provisional, or depends on an unknown that a pending rule it read names (in this version,
-  everything the steady state read). A confirmed price has no reason.
-- **Activity values** per step: what one execution produces less what it consumes, at that step's prices, in the
-  numeraire. Where a price is an interval, so is the value, and an unbounded end is null. An activity that moves out
+  - Otherwise it is the interval `{"low", "high"}` (a degenerate basis); `high` is null when one less is
+    infeasible, and `low` when one more is: the cycle cannot hold it. That happens at a regen stop, whose stock
+    ends the cycle as it began and loses at most what the regen brings, when the program can use no more of the
+    resource and already loses all that its regen brings (its users left out as pending, say). Neither is an error.
+  - **Cross-checks** (`lp_dual_disagrees`, a warning; the price stands). The change of the optimum per grain
+    (`lp.grain`, 1) when that step brings one grain more of income, and one grain less, is kept in `grain`, in the
+    same shape: its chords enclose the projection's exact derivatives, so the projection lies inside it (check
+    `grain`, exact); it is wider where a kink lies within a grain (with income 10.5 and a use bound at 10, the
+    re-solves give `[1, 3/2]` and the projection `1`). They can differ only where one grain more of income can
+    overflow at a hard cap while one more unit of stock has no room. HiGHS's marginal lies inside the projection,
+    within the tolerance τ (check `marginal`; see "Marginals" below).
+  - Each cap with a value (a `reference` counts as one; an income cap too) that the program reads and each limit
+    (`rule_prices`) is priced by re-solves, with its value one grain higher and one lower: exact when the two agree, an
+    interval otherwise. A relaxed rule's value is its value per period, so its price is the cycle's gain per unit of
+    it. Every re-solve is of S3, V alone; a price is in value units, and the numeraire, which holds nothing, has none.
+- **The status of each price** (`price_status`): resource to `{status, reasons}`, the status and the reasons of its
+  static component (see "Coverage" below): `excluded_pending`, `no_steady_supply`, `objective_tier_tie` and
+  `probe_unverified` (PRICE-2c), the structural gaps the component holds, and `inputs`, a rule, row or reading of the component is provisional, depends on
+  an unknown it leaves unresolved, or names an unknown. A confirmed price has no reason. The graph output
+  `price:<resource>` shows its entry (see "The joint price vector" below).
+- **Activity values** per step: what one execution produces less what it consumes, at that step's prices, in value
+  units. Where a price is an interval, so is the value, and an unbounded end is null. An activity that moves out
   of or into a store has no value (null): what it moves depends on what the store holds.
+- **The joint price vector and the activity judgements** (`joint`): see "The joint price vector" below.
 - **Losses** over one cycle: per resource with a hard cap its `overflow`, and per store with a storage cap and per
-  resource whose regen stops at a cap its `lost_production`. They are the least among the optimal solutions, from a
-  second solve at the optimum.
-- **Marginals.** HiGHS's marginals of the same rows are kept in `marginals`, as a cross-check only. A marginal outside
-  its price's interval is the warning `lp_dual_disagrees`; the price stands. A storage cap's marginal also counts the
-  moves it bounds, whose coefficient it is, and a cap's the regen stops at it.
+  resource whose regen stops at a cap its `lost_production`. They are the least among the lexicographic optima (A ≥
+  A*, V ≥ V*), from a further solve.
+- **The tiers**: `objective` is V0 (= V*), `acquisition` A*, and `protected` and `conversions` the activities that
+  acquire a main goal item, in P and not, by id, each `{activity, goals, bounds, inputs, spends}`: the main goal items
+  it brings in, the limits and income caps that count it, its inputs and of them those that are not time (empty for
+  P). A protected activity has a bound and spends nothing. The research channel checks this list against the guide.
+- **Marginals.** HiGHS's marginals of the same rows are kept in `marginals`, as a cross-check only, each made a
+  fraction by `limit_denominator(lp.max_denominator)`. A marginal m outside its price's interval by more than the
+  tolerance τ is the warning `lp_dual_disagrees` (check `marginal`); the price stands. m agrees with an end p of the
+  interval when |m − p| ≤ τ · max(1, |p|), with τ = 1e-7 (`MARGINAL_TOLERANCE` in `core/flow.py`), HiGHS's default
+  dual feasibility tolerance: a marginal is a float, and an exact price can have a denominator far above
+  `lp.max_denominator` (numbers with four decimals give some near 6e28), so the two never agree exactly. Only this
+  comparison of a float with an exact price has a tolerance: the check `grain`, of two exact fractions, and every
+  exactness check stay exact. A storage cap's marginal also counts the moves it bounds, whose coefficient it is, and a
+  cap's the regen stops at it.
+
+### The joint price vector (`joint`; #424 ACM-PRICE addendum 2.1 §2, ruling 127 iii; PRICE-2b-1)
+
+The Runtime adds the pools a task touches before it rounds once, so the prices it is given must be the coordinates of
+one dual optimal point, never a pick per pool: with V = min(A, B, C), each pool's interval is [0, 1], their midpoints
+(1/2, 1/2, 1/2) value a set at 3/2, and the joint vector (1/3, 1/3, 1/3) at its 1.
+
+- **The dual**, generated from the rows of S3's program, never written by hand: a variable per row (non-negative for
+  an at-most; free for an equality, held as the difference of two non-negative ones, `y+` less `y-`), a non-negative
+  one per variable with an upper bound, a row per column (Σ_i A_ij·y_i + w_j ≥ c_j), and the cost Σ rhs·y + Σ u·w,
+  minimised. D*, its optimal face, adds the strong-duality row `duality:face:0`: the cost equals V0. The least cost,
+  solved and checked exactly, must be V0 exactly; every solution on the dual is checked exactly against every dual
+  row and the strong-duality row. Either failing is `lp_numeric_check_failed` (stage `dual`); it blocks the steady
+  state, so that no price is exportable without the whole vector (§2.6), and with it the plan.
+- **The projection.** A pool's coordinate π_r is the mean over the cycle of its balance rows' duals (the average
+  price: an activity's value is linear in the prices, so its value at the mean is the mean of its values per step).
+  Its `interval` is π_r's least and greatest value on D*, an unbounded end null: these replace the re-solves as the
+  price's interval.
+- **How the values on D* are found** (PRICE-2c; every result is the same, exactly, only fewer and smaller LPs are
+  solved):
+  - *Proved by S3's basis.* For a resource without a hard cap, one solve with S3's certified basis gives how its basic
+    variables move when the step brings more or less income. Where one grain more (or less) leaves them within their
+    bounds, the basis stays optimal (its dual feasibility does not read the right sides), so the optimum moves by
+    exactly one grain times the balance row's dual in that basis: that chord needs no re-solve. Where a little more (or
+    less) does, the optimum is linear on that side with that slope, its derivative there: the projection's `low` (or
+    `high`) needs no LP.
+  - *Pinned by the chords.* With f(δ) the optimum when a step brings δ more of a resource (its balance row's right
+    side raised by δ, nothing else), f is concave; its right and left derivatives are the projection's `low` and
+    `high`, and its chords enclose them: (f(g) − f(0))/g ≤ `low` ≤ `high` ≤ (f(0) − f(−g))/g. So when the re-solves at
+    plus and minus one grain (`grain`) both exist and agree, the projection is exactly that value and no LP on D* is
+    solved for it. A resource with a hard cap never takes this way (one grain more also raises what may overflow, a
+    second right side).
+  - *Constant on D*.* A pool whose projection is exact in every step has its one mean as its `interval`, and an
+    activity whose value reads only such pools has its one value as its `range`: no LP.
+  - *D* in the complementary-slackness form.* The other projections, intervals and ranges, and the forcing costs, are
+    solved on the optimal face written without the strong-duality row: the dual's rows and variables with, for an
+    exact optimum x* of the primal, the dual of each at-most row x* leaves slack fixed at 0, the `w` of each variable
+    below its upper bound fixed at 0, and the dual row of each variable above 0 an equality. A dual feasible point is
+    optimal exactly when it is complementary to one primal optimum, so this is the face itself; HiGHS solves on it far
+    faster than on the face with its dense cost row (on a large model, one such LP took minutes). x* is S3's optimum
+    (exactly optimal once the strong-duality check has found a dual point of its cost), and for a forcing cost an
+    optimum of S3 that runs the activity its `most` (its `most` probe's solution, or S3's when complementary
+    slackness gave `most` 0). The selection and its exact check use the face.
+  - *Warm starts.* Consecutive LPs on the same rows that differ only in their objective (those above) are given to
+    the HiGHS instance that solved the previous one, with the objective changed: HiGHS's primal simplex goes on from
+    the basis it ended at, without presolve. Only where HiGHS starts differs; each LP's exact vertex and certificate
+    are its own ("Exactness and failures").
+- **The selection**, each step an exact LP on D* and what is fixed so far, in this order:
+  1. a pool bounded below only (`high` null: one less is infeasible) that a main goal values (its own `objective` of
+     tier `main`): fixed at its least value, the value of one more (its goal's weight), by id; `by` `one_more`;
+  2. the lexicographic max-min over K: each pool of a bounded interval (`low` < `high`), at the normalised distance
+     min(π − low, high − π) ÷ (high − low) from its ends; and each activity that no optimum of S3 runs and whose value
+     f (what it produces less what it consumes, at π) reaches 0 on D* and no higher, from a finite least value m, at
+     (0 − f) ÷ (0 − m). A stage maximises the level t that every free coordinate reaches; each coordinate that is at t
+     in every optimum of the stage (the most it reaches while the others reach t is t) is fixed at its value there,
+     and the next stage goes on with the rest. Each stage fixes at least one. The stages are `max_min`, each `{level,
+     fixed}`, the fixed coordinates by id: `price:<pool>` and `activity_value:<activity>`; a pool fixed here has `by`
+     `max_min`. So a pool's coordinate is its interval's midpoint when that point is jointly feasible and makes no
+     activity outside the optima read 0, and an activity that no optimum runs reads strictly below 0: a value of 0 is
+     then only an optimum's marginal activity;
+  3. a pool whose two ends agree has that value; `by` `exact`;
+
+  and last, each pool still free, which the selection withholds (`withheld`, below), by id: at its least value on
+  the face left (`one_more`), else at its greatest (`one_less`), else, unbounded both ways, at 0 (`zero`). It is free
+  through the max-min, so a coordinate that is not exported never moves one that is (the design leaves a pool bounded
+  below only and valued by no goal free in the same way). The vector is then checked exactly as a point of D*. It is
+  independent of the dual point HiGHS returns: each step is an LP's optimal value.
+- **`withheld`**: null, or why the selection gives no exportable price:
+  - `{"reason": "no_steady_supply"}`: one less unit is infeasible (`high` null) and no main goal values the pool: it
+    has no steady supply, a structural gap (§3.1);
+  - `{"reason": "no_room", ["regen", "stop"], ["cap"], "excluded"}`: one more unit is infeasible (`low` null): nothing
+    in the cycle can take it. Its coordinate is fixed last, at its greatest value on the face left, the value of one
+    less unit (finite: one less only loses less), mirroring step 1. It names what bounds the pool: its regen stop (`regen`, the regen; `stop`,
+    the cap it stops at) and its hard cap (`cap`), and the pending flows left out that take from it (`excluded`, by
+    id). This is the regen stop whose only users are left out as pending (`low` null, `high` 0); the plan still
+    refuses a regen stop (`while`), so it never reads a price without a low end.
+- **The activity judgements** (`activities`), per activity of the program:
+  - `value`: f at the vector; `range`: f's least and greatest value on D* (exact, or `{low, high}` with a null for
+    an unbounded end); both null for an activity that moves out of or into a store (what it moves depends on what the
+    store holds);
+  - `most`: the most an optimum of S3 runs it over the cycle (null when unbounded); `in_optimum`: whether that is
+    above 0;
+  - `forcing_cost`: the loss per execution of running it more than `most`, the greatest dual of the row "its
+    executions over the cycle at least `most`" on the optimal face of S3 with that row; `input_bound`: true when that
+    dual is unbounded, so nothing is left in the cycle to run it again (`forcing_cost` null; a matter of timing only).
+    An unbounded `most` costs nothing more: 0. A positive cost means one more execution crowds out a better use or
+    makes what is already saturated: such an activity is no zero-band realization (addendum 2.1 §7).
+  - `most` needs no probe for an activity whose dual slack at the exact optimal dual point of S3 is above 0 in every
+    step: by complementary slackness (see "The objective", the three solves) no optimum runs it, so `most` is 0 and
+    `in_optimum` false (PRICE-2c);
+  - `unverified` (PRICE-2c): the judgements whose probe could not be verified exactly, in this order: `most`, `range`,
+    `forcing_cost` (empty when every one is). `most` needs a certified optimum of its LP, and `range` and `forcing_cost`
+    a certified optimum or HiGHS's unbounded status of each of theirs ("Exactness and failures"). An unverified
+    judgement is null, never guessed: `most` with `in_optimum`, `range`, and `forcing_cost` with `input_bound`;
+    `forcing_cost` reads `most`, so it is unverified with it. Each unverified probe is the warning
+    `lp_probe_unverified` (`probe` `most`, `range` or `forcing_cost`; none of its own for a `forcing_cost` that only
+    `most` leaves unverified). An activity whose `most` or `range` is unverified is left out of K (whether an optimum
+    runs it is not known); its component counts as a structural gap (`probe_unverified`, see "Coverage"). The joint
+    price vector itself is never relaxed: the dual, the projections and the selection still block when they fail.
+- **The graph outputs** `price:<resource>` and the diagnostic `activity_value:<activity>` (#424 ACM-PRICE 4.1): each
+  resource's and each activity's entry of `joint`, a price with its own `status` and `reasons` (its entry of
+  `price_status`: its static component's, see "Coverage" below), an activity's value with the steady state's
+  `status`, and `per_account` false. `explain` prints their provenance; nothing binds or exports an activity's value.
+  They are blocked exactly when the steady state is. `out/prices.json` and the acceptances of `price:` are PRICE-4's.
+
+### Coverage (`coverage`; #424 ACM-PRICE addendum 2.1 §3.1–§3.3 and §3.7, the design's §4.6; PRICE-2b-2)
+
+The coverage section of the steady state lets the research channel and Alice read whether a game's business coverage is
+complete (addendum 2.1 §3.6): no structural gap, every pool a business rule touches covered or verified zero, and every
+estimate accepted (that last part, and the report in `out/prices.json` and `bindings check`'s `data.coverage`, are
+PRICE-4's). The code is `src/acmodel/check/coverage.py` (the static judgement, which `acmodel check` reads too) and
+`src/acmodel/core/coverage.py` (the section).
+
+**The static judgement.** From the rules and the data only: no value is computed and nothing is solved. An amount counts
+unless it is written as the number 0 (`"0"`); what any other expression comes to only the run knows, so it counts.
+- **Uses.** An activity, the subject of an active flow that no gate of origin `person` keeps out (real payment, never in
+  the economy), takes from what it consumes and what its moves take from, and brings in what it produces and what its
+  moves bring into.
+- **Covered** (§3.1): a pool reaches a goal sink through activities when any one holds: it has its own goal term (a main
+  objective; `goal`); it has a place in the costs table (a demand row of the secondary objective takes a non-zero amount
+  of it; `costs`); or an activity takes it and brings in a covered pool other than itself (`use`). A pool declared zero
+  (`no_use`) never covers what leads to it: a use that leads only to declared zeros is no use (§3.2).
+- **No steady supply** (§3.3): a pool that an activity or a demand row takes, that no regen (of an amount not written as
+  0 or less) and no activity brings in, and that has no goal term of its own: one grain less of it would be infeasible.
+- **Static components** (the design's §4.6): the connected components of the flow graph. Its nodes are the resources,
+  stores and activities, and the goal sinks: each main objective, and the secondary objective. Its edges are the amounts
+  of the flows (each activity to what it takes from and brings in), the activities a cap blocks (`block_income_from`) or
+  counts (an income cap's `from`), a limit's `shared_with`, each main objective to its resource and the secondary
+  objective to the resources its demand rows take. Each rule the economy reads belongs to the node it is about: a flow
+  and its gates to the activity, a regen, cap or limit to its subject, an objective and the rows of its tables to its
+  sink. A component is named by its first member in id order.
+
+**Structural gaps** (§3.3). A component that holds one is a structural gap as a whole, for each it holds:
+`excluded_pending` (an activity the steady state left out, see "Pending flows"), `no_steady_supply` (a pool without a
+steady supply), `objective_tier_tie` (an activity of the warning `objective_tier_tie`) and `probe_unverified` (an
+activity of the warning `lp_probe_unverified`: whether it is a tie, or a judgement of it, could not be verified exactly,
+PRICE-2c; conservative, never read as no tie). Its prices are computed and
+shown, provisional, and are not exportable (PRICE-4 writes `pending`). A component with no edge to a gap keeps its own
+class and status. Two gaps of §3.3 have no place here: an `objective_tier_conflict` blocks the whole steady state (and
+with it this section), and a pool brought only within an activity window cannot be written yet (no flow is tied to a
+window before ACM-PRICE-E), so it is not in the model.
+
+**The status of a price** is that of its static component: the worst status of the items of the component the steady
+state read (amounts, regen members, caps and limits, objective members, demand and costs rows, gates), each with the
+status of everything its value read. It is provisional (`inputs`) when one of them is provisional or depends on an
+unknown it leaves unresolved, or when a rule of the component, or a rule its expressions reach, names an unknown in its
+`unknowns`, whatever its own status; and when the component is a structural gap. A pending flow the steady state left
+out counts as `excluded_pending` only. So two components with no edge between them have their own statuses: one may be
+confirmed while the other is provisional.
+
+**The class of a pool** (§3.1), each resource that is not a slot:
+
+| `class` | When | `reasons` |
+|---|---|---|
+| `verified_zero` | declared zero, and the static check found the declaration sound (`no_use_contradicted`, `no_use_condition_incomplete`) | `no_use`; `no_use` names the rule, and `status` is its status |
+| `structural_gap` | otherwise, when its component is a structural gap | the component's gaps |
+| `covered` | otherwise, when it is covered; `status` provisional means covered with estimates | its grounds: `goal`, `costs`, `use` |
+| `unknown` | anything else | `not_covered`, and `zero_uses` when uses of it lead only to declared zeros |
+
+**The section** (`coverage`):
+- `pools`: pool to `{class, status, reasons, component}` (and `no_use` for a verified zero);
+- `components`: component to `{members, status, gap, gaps, reasons}`, for each component that holds a resource: its
+  members by id; `gap`, whether it is a structural gap; `gaps`, each gap it holds to its activities or pools, by id; and
+  the reasons of its status, the gaps in the order above, then `inputs`;
+- `counts`: the pools of each class, and `with_estimates`, the covered ones whose status is provisional;
+- `estimates`: each provisional derive the steady state read, through any node, by id: `{rule, value, estimate}`, its
+  point value and its `estimate` as written (null when it has none), so that the research channel can verify the
+  estimates of its step 3.
+
+What it leaves to PRICE-4: a covered pool whose price is 0 names the constraint that makes it 0 (an LP fact); a verified
+zero is exported only with its acceptance and `scope`; a pool of `schedule.json` that the model lacks is unknown; and a
+provisional derive under `estimates` without an `estimate` is `estimate_missing` there.
 
 ### The plan (`plan`)
 
@@ -866,8 +1228,8 @@ provisional when it leaves one out.
     (`unbounded_stock`).
   - Any other income of the listed activities is refused (`income`).
 - **Its objective** is the value of what the stocks gain over the horizon, maximised. Each resource counts at the
-  steady state's price for the step the plan ends in: the low end of an interval, the value of one more unit. A store's
-  stock counts nothing at the end.
+  steady state's re-solved price (`grain`) for the step the plan ends in: the low end of an interval, the value of one
+  more unit of income. A store's stock counts nothing at the end.
 - **The MILP** is solved within `search.milp_node_limit` nodes and a relative gap of 0, and never against a time limit.
   - A plan that the limit stops before it is proven optimal is shown with `proven: false`, with the warning
     `search_budget_exhausted`.
@@ -877,12 +1239,33 @@ provisional when it leaves one out.
 ### Exactness and failures
 
 - **Exact solutions.** Every solution is made exact before it is used.
-  - The variables HiGHS leaves at a bound, and the integer ones rounded, are fixed. The rows they leave tight are
-    solved exactly for the others.
-  - When those rows do not determine them, each value is converted with `limit_denominator(lp.max_denominator)`
-    instead.
+  - **An LP's, from HiGHS's basis** (PRICE-2c; `src/acmodel/core/exact.py`). HiGHS is called through the bindings
+    scipy bundles (`scipy.optimize._highspy`, the module `linprog` calls, with `linprog`'s model and options), so that
+    its column and row basis statuses are read with its solution. The basis is defined by those statuses, never by
+    values close to a bound: each nonbasic column is fixed at the bound its status names, each nonbasic row is tight at
+    the end its status names, and the basic variables (columns, and the rows' logical variables r = a·x) are solved
+    exactly in fractions from the basis system B·z_B = −N·z_N (a sparse elimination), and the row duals from
+    Bᵀ·y = c_B. The basis is **certified** when it is exactly optimal: every basic variable within its bounds, and the
+    reduced cost of every nonbasic one of the sign of a maximum (at most 0 where it could rise, at least 0 where it
+    could fall). Its vertex is then the exact optimum, whatever HiGHS's tolerances (1e-7) let pass.
+  - **The pivoting fallback.** A basis that is not exactly optimal gets at most `lp.max_pivots` (20) exact simplex
+    pivots, each with Bland's rule (the least index enters, and leaves among ties) and every quantity re-solved from the
+    new basis: a primal step when the basis is primal feasible, a dual step when it is dual feasible. A basis that is
+    neither, singular, invalid (not one basic variable per row, or a nonbasic one at an end that is unbounded), or not
+    optimal after the cap is not certified.
+  - **Otherwise** (no valid basis, no certificate, and every MILP): the variables HiGHS leaves at a bound, and the
+    integer ones rounded, are fixed, and the rows they leave tight are solved exactly for the others; when those rows
+    do not determine them, each value is converted with `limit_denominator(lp.max_denominator)` instead. Such a solution
+    is feasible once checked, but not certified optimal.
   - The result is checked exactly against every bound, integrality and row; what breaks one is
     `lp_numeric_check_failed`. Objectives, prices and losses come only from these fractions.
+  - So is every solution on the steady state's dual, against every dual row and the strong-duality row, and the
+    dual's least cost must be V0 exactly (stage `dual`; "The joint price vector").
+  - **Probes** (PRICE-2c): a per-activity probe (a tie, `most`, `range`, `forcing_cost`) whose answer needs an optimum
+    reads it only from a certified one; an answer above 0 of a tie probe holds for any exactly feasible point. A probe
+    that is not verified, or whose LP fails (`lp_numeric_check_failed`, `lp_solve_failed`), is `lp_probe_unverified`, a
+    warning, and never blocks the steady state. Every other solve (S3, S1, S2, the least losses, the price re-solves,
+    the dual and every step of the joint price vector) blocks as before when its check fails.
 - **Infeasible.** An infeasible program is `lp_infeasible`. It names a minimal set of conflicting groups: each regen,
   cap, limit and read cap is a group, and in a plan each opening stock. They are dropped in turn, in id order, and
   each stays dropped while the rest is still infeasible. A group whose check cannot be decided is kept and listed in
@@ -894,17 +1277,21 @@ provisional when it leaves one out.
 
 `data` holds `path`, `model_id`, `state`, `run_id` and `work`, as `run` does, and `steady` and `plan`. Each of the
 two has `status` and `per_account`; a blocked one has only `status`.
-- **`steady`:** `cycle` (`steps`, `step_seconds`), `objective`, `prices` (resource to its price per step),
-  `rule_prices`, `activity_values` (activity to its value per step, or null), `losses` (`overflow`,
-  `lost_production`), `marginals` (`prices`, `rule_prices`), `excluded`, `relaxed` (a list of `{rule, per, days,
-  value}`, by rule), `excluded_pending` (a list of `{flow, activity, unknowns}`, by flow) and `price_status`.
+- **`steady`:** `cycle` (`steps`, `step_seconds`), `objective`, `acquisition`, `protected`, `conversions`, `prices`
+  (resource to its price per step), `rule_prices`, `activity_values` (activity to its value per step, or null),
+  `joint` (`prices`: resource to `{value, interval, by, withheld}`; `max_min`: a list of `{level, fixed}`;
+  `activities`: activity to `{value, range, in_optimum, most, forcing_cost, input_bound, unverified}`), `losses` (`overflow`,
+  `lost_production`), `grain` (`prices`: resource to its re-solved price per step), `marginals` (`prices`,
+  `rule_prices`), `excluded`, `relaxed` (a list of `{rule, per, days, value}`, by rule), `excluded_pending` (a list
+  of `{flow, activity, unknowns}`, by flow), `price_status` and `coverage` (see "Coverage").
 - **`plan`:** `steps`, `proven`, `objective`, `counts` (activity to its count per step), `moved` (collection to its
   amount per step), `end` (the final stocks), `unread`, `excluded` and `relaxed`.
 - With `--steady-only` (`contracts/cli.md`), `data` holds `steady` and no `plan`: the plan is not computed, and none
   of its errors is reported.
 
 A number is a string holding an exact rational. The errors name the outputs they block in `needed_by`:
-`economy:steady` and `economy:plan`. The warnings are those of the solves.
+`economy:steady` and `economy:plan` (the graph outputs `price:` and `activity_value:` are blocked with the steady
+state). The warnings are those of the solves.
 
 ## Outputs: provenance, `explain`, `thresholds.json`, the tables and the scoring documents
 
@@ -918,7 +1305,7 @@ of an `if`, the row a `lookup` found, every row of a set.
 |---|---|
 | `schema_version` | `acmodel.provenance.v1` |
 | `model_id` | the model's id |
-| `output` | `rule:<id>`, `general_logic:<id>` or `threshold:<id>` |
+| `output` | `rule:<id>`, `general_logic:<id>` or `threshold:<id>`; or an output of the economy's steady state, `price:<resource>` or `activity_value:<activity>` (PRICE-2b-1) |
 | `result` | the output as `run` shows it (a rule without its `general_logic`, which is an output of its own) |
 | `versions` | `rules`: the sha256 over `model.json`, `sources.json` and the rule files; `data`: over the data files; `tool`: the tool version. Each file counts as `[path, document]`, sorted by path. A hash is over canonical JSON: sorted keys, no whitespace, UTF-8. |
 | `nodes` | node id to node; the tree is rooted at `output` |
@@ -933,10 +1320,19 @@ one of the same output `model_id_duplicate` (`namespace` `acceptance`): `explain
 - Paths are relative to the model folder, with `/`.
 - A node of the general logic (`max_single_income`, from the rules and the data only) has `general:` before
   its id and the member `general: true`.
+- A node in the reference state, which the economy's steady state reads, has `reference:` before its id and the
+  member `reference: true`; a cap with a reading points at its `reference`. Its regens and objectives are such nodes
+  too: `reference:regen:<id>:<amount or every>` and `reference:objective:<id>:<value or horizon>`, whose `ref` is that
+  member.
+- An economy output (`price:<resource>`, `activity_value:<activity>`) reads `economy:steady`, which reads what the
+  steady state's program was built from: its reference-state nodes, its data rows and its gates (`entry:<id>`). In
+  this version an economy output's tree is the whole steady state's.
 
 | `node` | Ids | Members |
 |---|---|---|
 | `threshold` | `threshold:<id>` | `id`, `form`, [`round`], `file` (`exports.json`), `ref`, `sha256` of its entry |
+| `price`, `activity_value` | `price:<resource>`, `activity_value:<activity>` | `resource` or `activity` |
+| `economy` | `economy:steady` | `solve` (`steady`), `file` (`model.json`) |
 | `rule` | `rule:<id>` (its value), `general_logic:<id>`, `offset:<id>` (`live.offset`); the flow amounts `flow:<id>:consumes:<resource>`, `flow:<id>:produces:<resource>` and `flow:<id>:moves`; `entry:<id>`, a rule consulted for its logic only (the cap of `max_single_income`, and an income whose amount needs the account state, which its store's storage cap bounds) | `kind`, `id`, `file`, `ref` (the pointer of the expression, or of a cap's `reading`, or a random rule's form; for `entry:` the rule's), `sha256` of the rule entry, and its `status` and `provenance` as written; a random rule whose value the run carries as its enclosure adds `exact_values`, `[{"unknowns", "value"}]`, the exact value per scenario |
 | `unknown` | `member:<unknown>:<member>`; `point:<unknown>` (an interval or a distribution) | as a rule, with `member` for a member; `ref` is the unknown's |
 | `row` | `row:<table>[<key parts joined with commas>]` | `table`, `key`, `file`, `ref`, `sha256` of the row, `status`, `provenance` (the row's, else the table's) |
@@ -951,8 +1347,12 @@ The last four come from the account state, so an output whose tree holds one is 
 
 It runs the model as `run` does and prints the provenance document of `<output>` in `data.provenance`, beside
 `path`, `model_id`, `state` and `output`. It writes nothing.
-- An id that is not an output of the model is `usage_invalid` (`output_unknown`).
-- A blocked output has no tree. The errors that block it are reported, with exit status 1.
+- For `price:<resource>` and `activity_value:<activity>` it also computes the economy's steady state, without the
+  cache, with the keys under `lp` and `economy`; its `result` is the output as "The joint price vector" shows it.
+- An id that is not an output of the model is `usage_invalid` (`output_unknown`): for an economy output, an id that
+  names no resource (no activity) of the model, or none of the steady state (an activity it leaves out).
+- A blocked output has no tree. The errors that block it are reported, with exit status 1 (for an economy output,
+  those of the steady state, each needed by the output).
 
 ### `acmodel export thresholds <model> --state <file>`
 

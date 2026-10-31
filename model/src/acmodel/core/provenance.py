@@ -3,7 +3,9 @@
 `assemble(run, output)` gives the provenance document (`acmodel.provenance.v1`) of one output of a run that
 is not blocked. `output` is `rule:<id>`, `general_logic:<id>` or `threshold:<id>`, as `needed_by` names
 them. The tree is assembled from what each graph node's value read (`graph`, "Reads"), so it holds exactly
-what the value rests on.
+what the value rests on. `assemble_economy(run, output)` gives it for an output of the economy's steady state
+(#424 ACM-PRICE 4.1; PRICE-2b-1): `price:<resource>` and `activity_value:<activity>`, which read the steady state
+(`economy:steady`), which reads what its program was built from.
 
 - `nodes` maps a node id to the node, and the tree is rooted at `output`. Each node lists in `reads` the
   ids of what it read, sorted; a leaf reads nothing. A node read twice is listed once.
@@ -14,7 +16,9 @@ Node ids:
 - a graph node: its key joined with `:`. These are `rule:<id>`, `general_logic:<id>`, `offset:<id>`,
   `threshold:<id>`, `flow:<id>:consumes:<resource>` (or `produces`), `flow:<id>:moves`,
   `member:<unknown>:<member>` and `point:<unknown>` (an interval or a distribution), each with `general:` in
-  front for the node from the rules and the data only;
+  front for the node from the rules and the data only, and `reference:` for the node in the reference state that
+  the steady state reads, as are `reference:regen:<id>:<member>` and `reference:objective:<id>:<member>`;
+- the economy: `economy:steady`, and its outputs `price:<resource>` and `activity_value:<activity>`;
 - `row:<table>[<key parts joined with commas>]`, and `entry:<rule id>` for a rule consulted for its logic;
 - the account state: `reading:<fact>`, `cleared:<id>`, `entity:<class>[<id>].<attribute>` and
   `entities:<class>`.
@@ -28,19 +32,26 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from acmodel.cache.keys import canonical_text
 from acmodel.check.checker import Entry
 from acmodel.check.walk import at
 from acmodel.codes import MODEL_ID_DUPLICATE, RULE_REFERENCE_MISSING, USAGE_INVALID
-from acmodel.config import Unknowns
-from acmodel.core.common import PROVISIONAL, value_member
+from acmodel.config import EconomySettings, Unknowns
+from acmodel.core import flow
+from acmodel.core.common import PROVISIONAL, solve, value_member
 from acmodel.core.run import Run, evaluate_model
 from acmodel.core.versions import relative as _relative
 from acmodel.core.versions import sha256, versions
 from acmodel.envelope import Failure, error
 
 SCHEMA_VERSION = "acmodel.provenance.v1"
-GRAPH_NODES = ("rule", "general_logic", "offset", "flow", "member", "point", "threshold", "general")
+GRAPH_NODES = (
+    "rule", "general_logic", "offset", "flow", "member", "point", "threshold", "general", "reference", "regen",
+    "objective",
+)
 STATE_NODES = ("reading", "cleared", "entity", "entities")
+# The entity an economy output names (PRICE-2b-1): a price a resource's, an activity's value an activity's.
+ECONOMY_SUBJECTS = {"price": "resource", "activity_value": "activity"}
 
 
 def relative(run: Run, path: str) -> str:
@@ -61,6 +72,10 @@ def outputs(run: Run) -> dict[str, tuple[str, str]]:
 
 
 def _reads(run: Run, item: tuple[str, ...]) -> list[tuple[str, ...]]:
+    if item[0] in flow.GRAPH_OUTPUTS:  # an economy output reads the steady state
+        return [flow.NODES[flow.STEADY]]
+    if item[0] == "economy":  # what its program was built from
+        return sorted(dict.fromkeys(run.graph.results[item].reads), key=node_id)
     if item[0] not in GRAPH_NODES:
         return []
     found: dict[tuple[str, ...], None] = {}
@@ -92,6 +107,8 @@ def _expression(entry: Entry, key: tuple[str, ...]) -> str:
         member = ("live", "offset")
     elif key[0] == "flow":
         member = ("moves", "amount") if key[2] == "moves" else key[2:4]
+    elif key[0] in ("regen", "objective"):  # a regen's amount or interval, an objective's value or horizon
+        member = (key[2],)
     elif entry.kind in ("limit", "random"):
         member = value_member(entry)
     elif entry.kind == "cap" and "value" not in logic:
@@ -106,6 +123,18 @@ def _describe(run: Run, item: tuple[str, ...]) -> dict[str, Any]:
     if kind == "general":
         node = {key: value for key, value in _describe(run, item[1:]).items() if key != "exact_values"}
         return {**node, "general": True, **_exact_values(run, item)}
+    if kind == "reference":  # in the reference state: a cap with a reading counts at its `reference`
+        node = {key: value for key, value in _describe(run, item[1:]).items() if key != "exact_values"}
+        entry = checker.entries[item[2]]
+        if item[1] == "rule" and entry.kind == "cap":
+            logic = entry.doc["logic"]
+            if "value" not in logic and "reference" in logic:
+                node["ref"] = at(entry.ref, "logic", "reference")
+        return {**node, "reference": True, **_exact_values(run, item)}
+    if kind == "economy":
+        return {"node": "economy", "solve": item[1], "file": relative(run, checker.model.manifest.path)}
+    if kind in flow.GRAPH_OUTPUTS:
+        return {"node": kind, ECONOMY_SUBJECTS[kind]: item[1]}
     if kind == "threshold":
         index, threshold = next(
             (index, entry) for index, entry in enumerate(run.exports.doc["thresholds"]) if entry["id"] == item[1]
@@ -203,10 +232,10 @@ def acceptance(run: Run, output: str) -> dict[str, Any] | None:
     }
 
 
-def assemble(run: Run, output: str) -> dict[str, Any]:
-    """The provenance document of `output`, an output of `run` that is not blocked."""
+def _document(run: Run, output: str, root: tuple[str, ...], result: dict[str, Any]) -> dict[str, Any]:
+    """The provenance document of `output`, rooted at the graph node `root`, with its `result`."""
     nodes: dict[str, dict[str, Any]] = {}
-    todo = [outputs(run)[output]]
+    todo = [root]
     while todo:
         item = todo.pop()
         name = node_id(item)
@@ -215,18 +244,53 @@ def assemble(run: Run, output: str) -> dict[str, Any]:
         found = _reads(run, item)
         nodes[name] = {**_describe(run, item), "reads": [node_id(read) for read in found]}
         todo.extend(found)
-    doc = {
+    return {
         "schema_version": SCHEMA_VERSION,
         "model_id": run.head["model_id"],
         "output": output,
-        "result": output_result(run, output),
+        "result": result,
         "versions": versions(run.checker, run.folder),
         "nodes": dict(sorted(nodes.items())),
     }
+
+
+def assemble(run: Run, output: str) -> dict[str, Any]:
+    """The provenance document of `output`, an output of `run` that is not blocked."""
+    doc = _document(run, output, outputs(run)[output], output_result(run, output))
     accepted = acceptance(run, output)
     if accepted is not None:
         doc["acceptance"] = accepted
     return doc
+
+
+def assemble_economy(run: Run, output: str) -> dict[str, Any]:
+    """The provenance document of an output of the economy's steady state (PRICE-2b-1): `price:<resource>` or
+    `activity_value:<activity>`, computed on the run's graph. Its tree is in this version the steady state's
+    (`economy:steady`): everything the steady state read.
+    - An id whose kind is not one of these, or that names no resource (no activity) of the model, or none of the
+      steady state, is `usage_invalid` (`output_unknown`).
+    - A blocked steady state has no tree: the errors that block it are raised, each needed by `output`.
+    - exports.json's acceptances are checked as for every output (`acceptances`); none accepts an economy output in
+      this version."""
+    kind, _, target = output.partition(":")
+    entry = run.checker.entries.get(target)
+    unknown = Failure(error(USAGE_INVALID, {"reason": "output_unknown", "argument": output}))
+    if kind not in ECONOMY_SUBJECTS or entry is None or entry.kind != ECONOMY_SUBJECTS[kind]:
+        raise unknown
+    key, graph = flow.NODES[flow.STEADY], run.graph
+    solve([key], graph.compute, graph.results)
+    steady = graph.results[key]
+    if steady.blocked:
+        found = sorted(
+            (graph.errors[index] for index in steady.blocked_by),
+            key=lambda root: (root["detail"]["path"], root.get("ref", ""), root["code"], canonical_text(root)),
+        )
+        raise Failure(*({**root, "needed_by": [output]} for root in found))
+    result = flow.output(steady, output)
+    if result is None:
+        raise unknown
+    acceptances(run)
+    return _document(run, output, (kind, target), result)
 
 
 def explain(
@@ -237,13 +301,17 @@ def explain(
     datasets: Path | str,
     max_bits: int,
     unknowns: Unknowns = Unknowns(),
+    economy: EconomySettings = EconomySettings(),
 ) -> dict[str, Any]:
-    """`acmodel explain`: the provenance document of one output for one account state.
+    """`acmodel explain`: the provenance document of one output for one account state; an output of the
+    economy's steady state (`price:`, `activity_value:`) with the keys under `lp` and `economy` (`economy`).
 
     An id that is not an output of the model is `usage_invalid` (`output_unknown`). A blocked output has no
     tree: the errors that block it are raised.
     """
-    run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
+    run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns, economy=economy)
+    if output.partition(":")[0] in ECONOMY_SUBJECTS:
+        return {**run.head, "output": output, "provenance": assemble_economy(run, output)}
     key = outputs(run).get(output)
     if key is None:
         raise Failure(error(USAGE_INVALID, {"reason": "output_unknown", "argument": output}))

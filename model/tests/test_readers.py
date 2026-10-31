@@ -61,6 +61,7 @@ def test_the_worked_example_reads():
         "fac.s",
         "act.collect",
         "act.run",
+        "value.example",  # the numeraire, a value entity (#424 ACM-PRICE PRICE-2a)
         "act.daily",
     ]
     assert [rule["id"] for rule in rules[0]["rules"]] == [

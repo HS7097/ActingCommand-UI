@@ -177,6 +177,7 @@ class _Types:
                 self.lookup_keys(source, typed)
             self.flows(source)
         self.caps_and_gates()
+        self.objective_tables()
         outputs = self.outputs()
         outputs.update(self.thresholds())
         if self.errors:
@@ -349,6 +350,7 @@ class _Types:
             ("limit", ("max",)): ("max", COUNT),
             ("cooldown", ("min_interval",)): ("min_interval", TIME),
             ("gate", ("requires",)): ("requires", BOOL),
+            ("objective", ("value",)): ("value", VALUE),
             ("objective", ("horizon",)): ("horizon", TIME),
         }
         return [fixed[kind, member]] if (kind, member) in fixed else []
@@ -382,6 +384,10 @@ class _Types:
             value = self.memo.get(("expr", owner.path, at(owner.ref, "logic", "value")))
             if value is not None and unify(value, found) is None:
                 refuse("general_logic", [value, found])
+        elif role[:2] == ("logic", "estimate"):  # `of`, `low`, `high`: a number of the value's dimension (§3.7)
+            value = self.memo.get(("expr", owner.path, at(owner.ref, "logic", "value")))
+            if value is not None and (BOOL in (value, found) or unify(value, found) is None):
+                refuse("estimate", [value, found])
         elif role == ("logic", "live", "offset"):
             declared = [self.facts.get(logic["live"][name], set()) for name in ("fact", "reference_fact")]
             for kinds in declared:
@@ -445,6 +451,38 @@ class _Types:
                 for index, key in enumerate(rule.doc["logic"].get("prefs", ())):
                     if key not in self.prefs:
                         self.record(_missing(key, ["pref"], at(rule.ref, "logic", "prefs", index)).errors, rule.path)
+
+    def objective_tables(self) -> None:
+        """The columns of a secondary objective's tables have the dimensions the economy reads them with (#424
+        ACM-PRICE 2.3): in the demand table `count` a count, `points` and `main` none; in the costs table each
+        resource's column the amount of that resource. Another type or dimension is `expr_dimension_mismatch`
+        (operator `demand` or `costs`, operands the expected and the found type), at the column. A table, column or
+        resource the static check found missing is not checked again."""
+        checker = self.checker
+        for rule in checker.rules:
+            if not (checker.active(rule) and rule.kind == "objective" and rule.doc["logic"]["tier"] == "secondary"):
+                continue
+            logic = rule.doc["logic"]
+            demand, costs = checker.tables.get(logic["demand"]), checker.tables.get(logic["costs"])
+            if demand is not None:
+                columns = demand.file.doc["columns"]
+                for name, expected in (("count", COUNT), ("points", NONE), ("main", NONE)):
+                    if name in columns:
+                        self.column_fits(demand.file.path, name, columns[name], expected, "demand")
+            if costs is not None:
+                columns = costs.file.doc["columns"]
+                for name, spec in columns.items():
+                    entry = checker.entries.get(name)
+                    if name not in costs.keys and entry is not None and entry.kind == "resource":
+                        self.column_fits(costs.file.path, name, spec, amount(name), "costs")
+
+    def column_fits(self, path: str, name: str, spec: dict[str, Any], expected: Type, operator: str) -> None:
+        ref = at("", "columns", name)
+        if spec["type"] not in ("integer", "decimal"):
+            self.record(_mismatch(operator, [expected, spec["type"]], 0, ref).errors, path)
+        elif dimension(spec["dimension"]) != expected:
+            found = dimension(spec["dimension"])
+            self.record(_mismatch(operator, [expected, found], 0, at(ref, "dimension")).errors, path)
 
     def outputs(self) -> dict[tuple[str, str], Type]:
         checker, found = self.checker, {}

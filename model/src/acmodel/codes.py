@@ -54,8 +54,17 @@ LP_INFEASIBLE = "lp_infeasible"
 LP_NUMERIC_CHECK_FAILED = "lp_numeric_check_failed"
 LP_SOLVE_FAILED = "lp_solve_failed"
 LP_DUAL_DISAGREES = "lp_dual_disagrees"  # acmodel economy: a warning, the price stands
+LP_PROBE_UNVERIFIED = "lp_probe_unverified"  # acmodel economy: a warning, a per-activity probe not verified exactly
+OBJECTIVE_TIER_CONFLICT = "objective_tier_conflict"  # acmodel economy: V0 > V*, the steady state is blocked
+OBJECTIVE_TIER_TIE = "objective_tier_tie"  # acmodel economy: a warning, an activity of S3's optima and none of S2's
 SEARCH_BUDGET_EXHAUSTED = "search_budget_exhausted"  # a warning: the economy's plan or the search unproven
 SEARCH_FAILED = "search_failed"
+# #424 ACM-PRICE PRICE-2b-2: a pool's declared zero and a provisional derive's estimate (addendum 2.1 §3.2, §3.7).
+NO_USE_CONTRADICTED = "no_use_contradicted"  # acmodel check: a declared zero whose pool is covered
+NO_USE_CONDITION_INCOMPLETE = "no_use_condition_incomplete"  # acmodel check: a downstream zero's facts missing
+ESTIMATE_OUTSIDE_RANGE = "estimate_outside_range"  # acmodel run: a point value outside its estimate
+ESTIMATE_BASIS_INVALID = "estimate_basis_invalid"  # acmodel check: an estimate that lacks what its basis needs
+ESTIMATE_SCOPE_EXCEEDED = "estimate_scope_exceeded"  # acmodel check: an activity that reads it is not covered
 
 EXIT_OK = 0
 
@@ -112,6 +121,14 @@ EXIT_STATUS = {
     LP_NUMERIC_CHECK_FAILED: 1,
     LP_SOLVE_FAILED: 1,
     LP_DUAL_DISAGREES: 0,
+    LP_PROBE_UNVERIFIED: 0,
+    OBJECTIVE_TIER_CONFLICT: 1,
+    OBJECTIVE_TIER_TIE: 0,
     SEARCH_BUDGET_EXHAUSTED: 0,
     SEARCH_FAILED: 1,
+    NO_USE_CONTRADICTED: 1,
+    NO_USE_CONDITION_INCOMPLETE: 1,
+    ESTIMATE_OUTSIDE_RANGE: 1,
+    ESTIMATE_BASIS_INVALID: 1,
+    ESTIMATE_SCOPE_EXCEEDED: 1,
 }

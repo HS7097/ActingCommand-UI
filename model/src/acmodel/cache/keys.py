@@ -66,14 +66,37 @@ class Evaluator:
 # PRICE-3: `economy` 3: income caps, `days` periods, the steady cycle as the least common multiple of the
 # periods within `economy.max_cycle_steps` (in the steady state's spec), and months and longer periods relaxed by
 # rate and shown in `relaxed`.
+# PRICE-2a: `economy` 4: the numeraire is a value entity fed by goal sinks, and the steady state solves the
+# acquisition A, then the value V with A held, then V alone (S1, S2, S3), refusing a tier conflict and showing
+# `acquisition`, `protected` and `conversions`; `objective` (version 1) is an objective's value or horizon.
+# `economy` 5: a price whose re-solve with one grain more is infeasible (a regen stop that can hold no more) shows
+# a null `low` instead of blocking the steady state, so a steady state that version 4 kept blocked is solved again.
+# PRICE-2b-2: `economy` 6: the steady state shows its `coverage` section (the four classes of the pools, the static
+# components and the estimates it read) and gives each price the status of its static component; it reads the `no_use`
+# rules. A derive's `estimate` is checked where its value is computed (`rule`, `general`, `reference`), but no model
+# that held one was read before, so no value of those kinds changes and they keep their versions.
+# PRICE-2b-1: `economy` 7: the steady state solves its dual and checks it exactly; a resource's price per step is
+# its projection on the dual's optimal face (the re-solves move to `grain`); it shows the joint price vector and the
+# activity judgements (`joint`); an economy node keeps what it read (`reads`), the provenance of `price:` and
+# `activity_value:`; and a HiGHS marginal within `MARGINAL_TOLERANCE` of its exact price (relative, 1e-7) is no
+# longer `lp_dual_disagrees`.
+# PRICE-2c: `economy` 8: an LP's exact solution is the vertex of HiGHS's basis, made exactly optimal by at most
+# `lp.max_pivots` exact pivots (in the steady state's spec); complementary slackness at the exact optimal dual spares
+# the tie and `most` probes of an activity no optimum runs; a per-activity probe that cannot be verified exactly is
+# `lp_probe_unverified` (a warning, its activity a structural gap, `probe_unverified`) instead of blocking the steady
+# state; each activity judgement lists what is `unverified`. The values on D* are the same, found with fewer and smaller
+# LPs: S3's basis proves a chord or a projection's end where it stays optimal, a projection pinned by its re-solves'
+# chords needs none, a pool or activity constant on D* none, and the others are solved on D* in its
+# complementary-slackness form, with HiGHS warm-started between LPs on the same rows.
 EVALUATORS: dict[str, Evaluator] = {
-    "economy": Evaluator(3, ("numpy", "python", "scipy")),
+    "economy": Evaluator(8, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
     "flow": Evaluator(3),
     "general": Evaluator(3),
     "general_logic": Evaluator(3),
     "impacts": Evaluator(2),
     "member": Evaluator(3),
+    "objective": Evaluator(1),
     "offset": Evaluator(3),
     "point": Evaluator(2),
     "reference": Evaluator(1),

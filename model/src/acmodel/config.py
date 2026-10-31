@@ -47,7 +47,7 @@ _MEMBERS = {
     "unknowns": {"scale", "samples", "seed", "chunk_size", "resolution", "wilson_digits", "drop_z"},
     "sensitivity": {"top_n"},
     "random": {"max_transitions", "enclosure_digits"},
-    "lp": {"max_denominator", "grain"},
+    "lp": {"max_denominator", "grain", "max_pivots"},
     "search": {
         "milp_node_limit", "top_k", "exact_max", "node_limit", "screen_scale", "screen_chunk_rows", "screen_max_rows",
     },
@@ -123,7 +123,9 @@ class EconomySettings:
     - `plan_horizon` (`economy.plan_horizon`): the steps (days) of an account's plan;
     - `max_cycle_steps` (`economy.max_cycle_steps`): the most steps (days) of the steady state's cycle, the least
       common multiple of the periods' lengths; a period that would make it longer is relaxed by rate (#424
-      ACM-PRICE PRICE-3).
+      ACM-PRICE PRICE-3);
+    - `max_pivots` (`lp.max_pivots`): the most exact simplex pivots that may make HiGHS's basis of an LP exactly
+      optimal (`core.exact`, #424 PRICE-2c); 0 takes the basis as it is.
     """
 
     max_denominator: int = 1_000_000
@@ -131,11 +133,13 @@ class EconomySettings:
     node_limit: int = 100_000
     plan_horizon: int = 7
     max_cycle_steps: int = 28
+    max_pivots: int = 20
 
     def keyed(self) -> dict[str, int]:
         """Every key, for the run id of `economy`."""
         return {"max_denominator": self.max_denominator, "grain": self.grain, "node_limit": self.node_limit,
-                "plan_horizon": self.plan_horizon, "max_cycle_steps": self.max_cycle_steps}
+                "plan_horizon": self.plan_horizon, "max_cycle_steps": self.max_cycle_steps,
+                "max_pivots": self.max_pivots}
 
 
 # The range of each economy key: (section, key) to (field, lowest, highest or None). HiGHS counts nodes in a
@@ -146,6 +150,7 @@ ECONOMY_RANGES = {
     ("search", "milp_node_limit"): ("node_limit", 1, 2**31 - 1),
     ("economy", "plan_horizon"): ("plan_horizon", 1, None),
     ("economy", "max_cycle_steps"): ("max_cycle_steps", 1, None),
+    ("lp", "max_pivots"): ("max_pivots", 0, None),
 }
 
 

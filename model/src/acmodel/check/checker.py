@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from acmodel import ids
+from acmodel.check import coverage
 from acmodel.check.cycles import Links, loops
 from acmodel.check.external import verify
 from acmodel.check.files import File, Model
@@ -53,13 +54,17 @@ NAMED = {
 }
 # A product of a flow may be `random:<id>` instead of an expression (#424 design 3.3).
 RANDOM_PRODUCT = re.compile(f"random:({ids.ID})")
-# Kinds whose rules hold one value per subject and slot (formats.md, "Conflicts").
-SUBJECT_ONLY = ("regen", "flow", "exchange", "cooldown", "random", "objective")
+# Kinds whose rules hold one value per subject and slot (formats.md, "Conflicts"); a pool's zero declaration
+# (`no_use`, #424 ACM-PRICE PRICE-2b-2) is one per pool.
+SUBJECT_ONLY = ("regen", "flow", "exchange", "cooldown", "random", "objective", "no_use")
 # The provenance kinds that give a number its provenance by themselves (#424 ACM-PROV): a source, a ruling, and a
 # design value (logic). A supplement that names the sources it searched does too, and a guide row counts as the
 # kind underneath it.
 NUMBER_SOURCES = ("source", "ruling", "logic")
 NUMBER_COLUMNS = ("integer", "decimal")
+# The columns of a secondary objective's demand table (#424 ACM-PRICE 2.3): per step, how many times the reference
+# state still does it over the horizon, its training points and its value units for the main goal.
+DEMAND_COLUMNS = ("count", "points", "main")
 
 
 def gives_number(item: dict[str, Any]) -> bool:
@@ -162,7 +167,7 @@ class Checker:
         self.supersede()
         self.derive()
         manifest = self.model.manifest
-        self.need(manifest.path, "/numeraire", manifest.doc["numeraire"], ("resource",))
+        self.need(manifest.path, "/numeraire", manifest.doc["numeraire"], ("value",))
         for entity in self.entities:
             self.entity(entity)
         for rule in self.rules:
@@ -173,6 +178,8 @@ class Checker:
             self.table(file)
         self.conflicts()
         self.cycles()
+        if not self.errors:  # what needs every reference resolved (#424 ACM-PRICE PRICE-2b-2)
+            self.errors.extend(coverage.problems(self))
         if self.errors:
             raise Failure(*self.errors)
         return {
@@ -412,8 +419,9 @@ class Checker:
         node = "rule:" + rule.id if self.active(rule) else None
         self.logic(rule, node)
         general = at(rule.ref, "logic", "general_logic")  # compared with the value, never read by it
+        estimate = at(rule.ref, "logic", "estimate") + "/"  # likewise (#424 ACM-PRICE addendum 2.1 §3.7)
         for ref, text in expressions(readers.RULE, doc, rule.ref):
-            self.expression(rule, None if ref == general else node, ref, text)
+            self.expression(rule, None if ref == general or ref.startswith(estimate) else node, ref, text)
         self.pending(rule)
         # Its numbers: those of its expressions, and a drop's samples.
         held = (path, rule.ref) in self.numbered or "samples" in doc["logic"].get("drop", {})
@@ -452,17 +460,73 @@ class Checker:
         elif kind == "random" and "outcomes" in logic:
             for index, outcome in enumerate(logic["outcomes"]):
                 named.extend((at(base, "outcomes", index, "then", name), name, ("resource",)) for name in outcome["then"])
-        elif kind == "derive" and "live" in logic:
-            for member in ("fact", "reference_fact"):
+        elif kind == "derive" and ("live" in logic or "estimate" in logic):
+            for member in ("fact", "reference_fact") if "live" in logic else ():
                 self.fact(path, at(base, "live", member), logic["live"][member])
+            # The activities an estimate covers (#424 ACM-PRICE addendum 2.1 §3.7).
+            for index, activity in enumerate(logic.get("estimate", {}).get("covers", {}).get("activities", ())):
+                named.append((at(base, "estimate", "covers", "activities", index), activity, ("activity",)))
         elif kind == "engine" and logic["engine"] not in self.engines:
             self.problem(RULE_REFERENCE_MISSING, path, at(base, "engine"), target=logic["engine"], expected=["engine"])
         elif kind == "objective":
-            named.append((at(base, "numeraire"), logic["numeraire"], ("resource",)))
+            self.objective(rule)
         elif kind == "weight_ref":
             named.append((at(base, "compares_to"), logic["compares_to"], ("rule",)))
+        elif kind == "no_use":  # a pool's zero (#424 ACM-PRICE addendum 2.1 §3.2): its subject is a resource
+            subject = self.entries.get(rule.doc["subject"])
+            if subject is not None and subject.category == "entity" and subject.kind != "resource":
+                self.problem(
+                    RULE_REFERENCE_MISSING, path, at(rule.ref, "subject"), target=subject.id, expected=["resource"],
+                    found=subject.token,
+                )
         for ref, target, expected in named:
             self.need(path, ref, target, expected)
+
+    def objective(self, rule: Entry) -> None:
+        """A goal sink (#424 ACM-PRICE 2.2, 2.3). A main goal's subject is a resource. The secondary goal's subject
+        is the numeraire; its `demand` and `costs` name data tables; the demand table declares `count`, `points` and
+        `main`; every other column of the costs table is a resource; and the two are joined by key, so each row of
+        the demand table is a row of the costs table (`data_reference_missing`, at the demand row)."""
+        logic, base, path = rule.doc["logic"], at(rule.ref, "logic"), rule.path
+        subject = self.entries.get(rule.doc["subject"])
+        found = subject if subject is not None and subject.category == "entity" else None  # else `need` said so
+        if logic["tier"] == "main":
+            if found is not None and found.kind != "resource":
+                self.problem(
+                    RULE_REFERENCE_MISSING, path, at(rule.ref, "subject"), target=found.id, expected=["resource"],
+                    found=found.token,
+                )
+            return
+        if found is not None and found.id != self.model.manifest.doc["numeraire"]:
+            self.problem(
+                RULE_REFERENCE_MISSING, path, at(rule.ref, "subject"), target=found.id, expected=["numeraire"],
+                found=found.token,
+            )
+        tables: dict[str, Table | None] = {}
+        for member in ("demand", "costs"):
+            tables[member] = self.tables.get(logic[member])
+            if tables[member] is None:
+                self.problem(DATA_REFERENCE_MISSING, path, at(base, member), missing="table", table=logic[member])
+        demand, costs = tables["demand"], tables["costs"]
+        if demand is not None:
+            for column in DEMAND_COLUMNS:
+                if column not in demand.file.doc["columns"]:
+                    self.problem(
+                        DATA_REFERENCE_MISSING, path, at(base, "demand"), missing="column", table=logic["demand"],
+                        column=column,
+                    )
+        if costs is not None:
+            for column in costs.file.doc["columns"]:
+                if column not in costs.keys:
+                    self.need(costs.file.path, at("", "columns", column), column, ("resource",))
+        if demand is None or costs is None or demand.rows is None or costs.rows is None:
+            return  # an external table's rows are not read here; the economy refuses it
+        for key, index in demand.rows.items():
+            if key not in costs.rows:
+                self.problem(
+                    DATA_REFERENCE_MISSING, demand.file.path, at("", "rows", index), missing="row",
+                    table=logic["costs"], key=list(key),
+                )
 
     def pending(self, rule: Entry) -> None:
         """A pending rule is usable only through an unknown with a range (#424 design 3.3)."""
@@ -618,10 +682,9 @@ class Checker:
         self.problem(RULE_REFERENCE_MISSING, path, ref, target=target, expected=["unknown"], position=position)
 
     def pref(self, owner: Entry, ref: str, item: Reference) -> None:
-        """`pref:` only inside a gate or an objective's terms (#424 design D-2)."""
+        """`pref:` only inside a gate (#424 design D-2, as ACM-PRICE 2.2 (7) changes it: an objective reads no
+        preference, so the values it gives are the same for every account)."""
         if owner.token == "rule.gate":
-            return
-        if owner.token == "rule.objective" and ref.startswith(at(owner.ref, "logic", "terms") + "/"):
             return
         self.problem(
             RULE_PREF_MISPLACED, owner.path, ref,

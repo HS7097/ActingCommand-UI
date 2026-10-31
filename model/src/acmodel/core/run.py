@@ -110,16 +110,17 @@ def evaluate_model(
     max_bits: int,
     unknowns: Unknowns = Unknowns(),
     cache: Session | None = None,
+    economy: EconomySettings = EconomySettings(),
 ) -> Run:
     """Check the model at `path` (its folder or `model.json`) and evaluate it for the state at `state_path`
-    with the keys under `unknowns` (sensitivity and sampling), through `cache` when one is given.
+    with the keys under `unknowns` (sensitivity and sampling), through `cache` when one is given. `economy` holds
+    the keys under `lp`, `search` and `economy` for an economy node that `explain` computes on the run's graph.
 
     A model that does not check, or inputs that do not read, raise `Failure` and compute nothing.
     Otherwise every output is computed or blocked: `errors` are those of the blocked outputs.
     """
     checker, graph, folder, exports_file, head, prefs = _graph(
-        path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns, economy=EconomySettings(),
-        cache=cache,
+        path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns, economy=economy, cache=cache,
     )
     data, blocked = graph.run()
     return Run(checker, graph, folder, exports_file, head, data, blocked, prefs[-1] if prefs else None)

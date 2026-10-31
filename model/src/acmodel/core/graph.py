@@ -22,6 +22,8 @@
 - ("sampled", <an output's key>): with `unknowns.samples`, the Monte Carlo tallies of an output that reads a
   distribution (`_SubGraph`);
 - ("regen", id, "amount" | "every"): a regen's amount and interval, which the economy reads;
+- ("objective", id, "value" | "horizon"): an objective's value and a secondary objective's horizon, which the
+  economy's steady state reads in the reference state (#424 ACM-PRICE PRICE-2a);
 - ("economy", "steady" | "plan"): the economy's two solves (`core.flow`), computed only when asked for.
 
 **Scenarios.** A node that reads a discrete unknown (variants, empirical) has one value per point of it. The
@@ -75,6 +77,7 @@ from acmodel.check.checker import Checker, Entry
 from acmodel.check.walk import at, nodes
 from acmodel.codes import (
     DATA_REFERENCE_MISSING,
+    ESTIMATE_OUTSIDE_RANGE,
     EXPR_EVAL_FAILED,
     EXPR_OVERFLOW,
     RULE_PENDING_UNBOUNDED,
@@ -141,7 +144,7 @@ if TYPE_CHECKING:
 # The kinds of graph node (the first part of a node's key); every other first part names a leaf.
 NODE_KINDS = (
     "rule", "general_logic", "offset", "flow", "member", "point", "threshold", "general", "sampled", "impacts",
-    "regen", "economy", "reference",
+    "regen", "economy", "reference", "objective",
 )
 # The prefixes of the nodes from the rules and the data only: in general, and in the reference state.
 GENERAL, REFERENCE = "general", "reference"
@@ -837,12 +840,13 @@ class Graph:
         if key[0] == "rule":
             member = ("max",) if entry.kind == "limit" else ("value",)
             ref = at(entry.ref, "logic", *member)
-            return self.expression(entry, _at(ref), own, logic.get("round"), general=general, unresolved=unresolved)
+            found = self.expression(entry, _at(ref), own, logic.get("round"), general=general, unresolved=unresolved)
+            return self.estimated(entry, found, general) if "estimate" in logic else found
         if key[0] == "general_logic":
             return self.expression(entry, _at(at(entry.ref, "logic", "general_logic")), own, unresolved=unresolved)
         if key[0] == "offset":
             return self.expression(entry, _at(at(entry.ref, "logic", "live", "offset")), own, unresolved=unresolved)
-        if key[0] == "regen":
+        if key[0] in ("regen", "objective"):  # a regen's amount or interval; an objective's value or horizon
             ref = at(entry.ref, "logic", key[2])
             return self.expression(entry, _at(ref), own, general=general, unresolved=unresolved)
         ref = at(entry.ref, "logic", "moves", "amount") if key[2] == "moves" else at(entry.ref, "logic", key[2], key[3])
@@ -887,6 +891,34 @@ class Graph:
                 tuple(sorted(env.unresolved)), tuple(sorted(env.free)), env.exact_value,
             ))
         return Result(tuple(sorted(scenarios, key=lambda scenario: scenario.unknowns)))
+
+    def estimated(self, rule: Entry, value: Result, general: str | None) -> Result:
+        """A provisional derive's value, once its point lies in the range of its `estimate` (#424 ACM-PRICE addendum
+        2.1 §3.7, check 2; PRICE-2b-2). The range is computed beside the value in the same environment, and read by
+        nothing else: `of` over every scenario of the unknowns it reads, or the lowest `low` to the highest `high`.
+        A value outside it, at any end of any scenario, blocks the rule (`estimate_outside_range`); so does an
+        estimate that cannot be computed. In an environment without the account state (`general`, `reference`), an
+        estimate that needs it is not checked there: the run, which reads the state, checks it."""
+        if value.blocked or value.needs_state:
+            return value
+        estimate, base = rule.doc["logic"]["estimate"], at(rule.ref, "logic", "estimate")
+        ends = []
+        for member in ("of",) if "of" in estimate else ("low", "high"):
+            found = self.expression(rule, _at(at(base, member)), CONFIRMED, general=general)
+            if found.needs_state:
+                return value
+            if found.blocked:
+                return found
+            ends.append(found)
+        low = min((interval.bounds(s.value)[0] for s in ends[0].scenarios), key=_magnitude)
+        high = max((interval.bounds(s.value)[1] for s in ends[-1].scenarios), key=_magnitude)
+        points = [interval.bounds(s.value) for s in value.scenarios]
+        if all(_magnitude(low) <= _magnitude(first) and _magnitude(last) <= _magnitude(high) for first, last, _ in points):
+            return value
+        detail = {
+            "id": rule.id, "value": [_text(s.value) for s in value.scenarios], "low": _text(low), "high": _text(high),
+        }
+        return self.blocked([error(ESTIMATE_OUTSIDE_RANGE, detail, base)], rule.path)
 
     def point(self, entry: Entry, general: str | None) -> Result:
         """An interval or distribution unknown (`core.unknown`).

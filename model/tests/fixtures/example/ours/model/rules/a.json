@@ -5,6 +5,7 @@
     {"id": "fac.s", "kind": "store", "holds": "res.a", "reading": "resource.s_stock"},
     {"id": "act.collect", "kind": "activity"},
     {"id": "act.run", "kind": "activity"},
+    {"id": "value.example", "kind": "value"},
     {"id": "act.daily", "kind": "activity"}
   ],
   "rules": [
