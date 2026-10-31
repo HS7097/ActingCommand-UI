@@ -113,11 +113,11 @@
 不写：列表写账本未打开，不留一片空白；页签、过滤框、编号框和时间滑块都停用；模块框、端口框与帧区写「账本未打开」。不向账本发
 任何查询，不读任何素材。启动器照常可用。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.29 之后 main 上、已合入
-Workflow #429 R-0、R-15a、R-0c 的一个提交，说 0.12 协议（`runtime-client` 修订 3、账本修订 4）：
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.32（含 Workflow #422
+LN-OFF-1 有界离线打开），说 0.12 协议（`runtime-client` 修订 3、账本修订 4）：
 
 ```
-rev = "239db17770140fc55c6d60468856aaaa99e5ef53"
+rev = "5f3c2b9de6f3804b52accb23989de5e4f684c021"
 ```
 
 五个 crate（contract / ledger / ledger-forensics / runtime-client / execution-kernel）共用这一个 rev。
