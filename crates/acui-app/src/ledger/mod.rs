@@ -228,7 +228,8 @@ impl LedgerHandle {
 
     /// A new session on the same state root and face: the reader of the old
     /// one stops at its next page, and the new one opens the read face again,
-    /// from the tab and filters the boxes show, without a time bound.
+    /// from the tab and filters the boxes show, without a time bound. The
+    /// last resume's line goes with the old session (`Resume::reopened`).
     pub fn reopen(&self, ui: &Ui) {
         self.follow.stop();
         self.cursor_rest.stop();

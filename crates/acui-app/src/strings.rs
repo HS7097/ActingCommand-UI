@@ -372,16 +372,12 @@ pub struct Labels {
     pub resume_no_thread: &'static str,
     /// After a resume's line: the status is being read again on a new
     /// connection, or it was. Code (with its short words), client operation:
-    /// that read failed. The face reads offline: no status. After a reopen:
-    /// the window is opening; it read the status as it opened; code, client
-    /// operation: it did not. The face does not read: nothing was read.
+    /// that read failed. The face reads offline: no status. The face does not
+    /// read: nothing was read.
     pub resume_rereading: &'static str,
     pub resume_reread: &'static str,
     pub resume_reread_failed: &'static str,
     pub resume_reread_offline: &'static str,
-    pub resume_reopening: &'static str,
-    pub resume_session_read: &'static str,
-    pub resume_session_unread: &'static str,
     pub resume_not_reread: &'static str,
     /// attempt, attempts.
     pub shutdown_busy_retry: &'static str,
@@ -765,9 +761,6 @@ pub const ZH: Labels = Labels {
     resume_reread: " · 已换新连接重读状态，以上方的暂停行为准",
     resume_reread_failed: " · 换新连接重读状态失败：{}（{}），暂停情况未知，详见实例卡片",
     resume_reread_offline: " · 本窗口现在离线读取，读不到状态，暂停情况未知",
-    resume_reopening: " · 窗口正在重新打开，打开时会读状态…",
-    resume_session_read: " · 窗口已重新打开并读了状态，以上方的暂停行为准",
-    resume_session_unread: " · 窗口重新打开时状态没读到：{}（{}），暂停情况未知，详见实例卡片",
     resume_not_reread: " · 窗口没有在读取，状态没有重读，暂停情况未知",
     shutdown_busy_retry: "请求关闭 · 忙碌重试 {}/{}",
     shutdown_attempts: "第 {}/{} 次",
@@ -1127,9 +1120,6 @@ pub const EN: Labels = Labels {
     resume_reread: " · Status Read Again on a New Connection; the Pause Lines Above Are Current",
     resume_reread_failed: " · Reading the Status Again on a New Connection Failed: {} ({}); Whether It Is Paused Is Unknown, See the Instance Card",
     resume_reread_offline: " · This Window Now Reads Offline: No Status Can Be Read, and Whether It Is Paused Is Unknown",
-    resume_reopening: " · The Window Is Reopening and Reads the Status As It Opens…",
-    resume_session_read: " · The Window Was Reopened and Read the Status; the Pause Lines Above Are Current",
-    resume_session_unread: " · The Window Was Reopened but the Status Was Not Read: {} ({}); Whether It Is Paused Is Unknown, See the Instance Card",
     resume_not_reread: " · The Window Is Not Reading: the Status Was Not Read Again, and Whether It Is Paused Is Unknown",
     shutdown_busy_retry: "Request Shutdown · Busy, Retry {}/{}",
     shutdown_attempts: "Attempt {}/{}",

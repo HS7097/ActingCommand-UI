@@ -13,6 +13,8 @@
 //! window is painted from that. The line says what that read found: a read
 //! that failed, or one never made, leaves whether scheduling is paused
 //! unknown, and the line says so in red, never that the status was read.
+//! The line belongs to the session of the window it came back in: a reopen
+//! starts the new session without it, which reads the status itself.
 //!
 //! Two kinds of pause offer no resume, only why: the one Alice lifts herself
 //! (`alice-116-scheduler-stop`), and a deployment's, which the installer
@@ -85,11 +87,10 @@ enum Reread {
     Asked,
     /// The reader's read landed, with what it found.
     Landed(StatusReread),
-    /// Not asked of the session open now: the face was not open when the
-    /// answer came, or the window was opened anew since. Only what that
-    /// session read as it opened, if it opened, is the status after the
-    /// answer.
-    BySession,
+    /// Not asked: nothing was sent, or the face was not open when the answer
+    /// came. A session whose face is not open reads nothing more; a reopen
+    /// starts a new one, without this line.
+    NotAsked,
 }
 
 impl Resume {
@@ -100,7 +101,7 @@ impl Resume {
             Some(Stage::Sending) => true,
             Some(Stage::Settled { reread: Reread::Asked, .. }) => open,
             Some(
-                Stage::Settled { reread: Reread::Landed(_) | Reread::BySession, .. }
+                Stage::Settled { reread: Reread::Landed(_) | Reread::NotAsked, .. }
                 | Stage::NoThread(_),
             )
             | None => false,
@@ -117,13 +118,16 @@ impl Resume {
         }
     }
 
-    /// A new session of the window reads the status itself as it opens: no
-    /// confirmation carries over to it, and the last press's line follows
-    /// what that session reads, never a read the old one was asked for.
+    /// A new session of the window reads the status itself as it opens, and
+    /// starts without the old one's confirmation or the line of a press that
+    /// came back, or never went out, in it: that line was the old session's.
+    /// A press still out stays, so the window stays busy and nothing is sent
+    /// twice; its answer is shown as it lands, with the status read after it
+    /// in the session open then.
     pub fn reopened(&mut self) {
         self.confirming = None;
-        if let Some(Flight { stage: Stage::Settled { reread, .. }, .. }) = &mut self.flight {
-            *reread = Reread::BySession;
+        if !matches!(self.flight, Some(Flight { stage: Stage::Sending, .. })) {
+            self.flight = None;
         }
     }
 }
@@ -278,16 +282,11 @@ fn line(labels: &Labels, resume: &Resume, state: &LedgerState) -> (String, bool)
 /// What became of the status read after an answer, and whether it leaves
 /// whether scheduling is paused unknown. Only a read that was made says the
 /// pause lines are current: one that failed says its code; a face that does
-/// not read, or reads offline, says nothing was read; after a reopen, the
-/// line follows what the new session read as it opened.
+/// not read, or reads offline, says nothing was read.
 fn reread_text(labels: &Labels, reread: &Reread, state: &LedgerState) -> (String, bool) {
-    let facts = match &state.phase {
-        Phase::Unopened { .. } | Phase::Failed { .. } => {
-            return (labels.resume_not_reread.to_owned(), true)
-        }
-        Phase::Opening { .. } => None,
-        Phase::Open(facts) => Some(facts),
-    };
+    if !matches!(state.phase, Phase::Opening { .. } | Phase::Open(_)) {
+        return (labels.resume_not_reread.to_owned(), true);
+    }
     match reread {
         Reread::Asked => (labels.resume_rereading.to_owned(), false),
         Reread::Landed(StatusReread::Read) => (labels.resume_reread.to_owned(), false),
@@ -296,17 +295,8 @@ fn reread_text(labels: &Labels, reread: &Reread, state: &LedgerState) -> (String
             (fill(labels.resume_reread_failed, &[&code, operation]), true)
         }
         Reread::Landed(StatusReread::Offline) => (labels.resume_reread_offline.to_owned(), true),
-        Reread::BySession => match facts.map(|facts| &facts.instances) {
-            None => (labels.resume_reopening.to_owned(), false),
-            Some(InstancesSnapshot::Online(Ok(_))) => (labels.resume_session_read.to_owned(), false),
-            Some(InstancesSnapshot::Online(Err(failure))) => {
-                let (code, operation) = unread(labels, failure);
-                (fill(labels.resume_session_unread, &[&code, operation]), true)
-            }
-            Some(InstancesSnapshot::Offline(_)) => {
-                (labels.resume_reread_offline.to_owned(), true)
-            }
-        },
+        // Asked of no reader: whether scheduling is paused is unknown.
+        Reread::NotAsked => (labels.resume_not_reread.to_owned(), true),
     }
 }
 
@@ -401,9 +391,9 @@ fn picked(ledger: &LedgerHandle, index: i32) -> Option<PauseTarget> {
 
 /// The answer, on the event loop. The window keeps it, and unless nothing was
 /// sent its reader reads the status again; a face that is not open reads
-/// nothing, and the line says so, until a new session reads the status
-/// itself. A window closed meanwhile shows nothing more, so the technical log
-/// keeps the answer.
+/// nothing, and the line says so, until a reopen starts a new session
+/// without the line. A window closed meanwhile shows nothing more, so the
+/// technical log keeps the answer.
 fn settled(id: u64, target: PauseTarget, outcome: ResumeOutcome) {
     let (Some(ledger), Some(ui)) = (find(id), ui::current()) else {
         report::log("acui-resume", &log_text(id, &target, &outcome));
@@ -415,7 +405,7 @@ fn settled(id: u64, target: PauseTarget, outcome: ResumeOutcome) {
     }
     let open = matches!(ledger.lock().phase, Phase::Opening { .. } | Phase::Open(_));
     let ask = open && !matches!(outcome, ResumeOutcome::NotSent(_));
-    let reread = if ask { Reread::Asked } else { Reread::BySession };
+    let reread = if ask { Reread::Asked } else { Reread::NotAsked };
     let stage = Stage::Settled { outcome, reread };
     ledger.resume.borrow_mut().flight = Some(Flight { target, stage });
     if ask {

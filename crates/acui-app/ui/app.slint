@@ -259,13 +259,17 @@ component Caption inherits Text {
 }
 
 // A line that says how something went: red when it failed, amber for a
-// warning, grey otherwise. It wraps and is never cut short.
+// warning, grey otherwise. It wraps and is never cut short: at least as tall
+// as its wrapped lines at the width it is given. A box or row shown by `if`
+// or `for` is otherwise measured at its preferred width, where nothing wraps,
+// and its last lines would spill over its frame.
 component Notice inherits Text {
     in property <bool> failed;
     in property <bool> warning;
     font-size: Scale.body-font;
     color: root.failed ? Severity.error : root.warning ? Severity.warning : Palette.foreground.with-alpha(0.7);
     wrap: word-wrap;
+    min-height: self.preferred-height;
     vertical-stretch: 0;
 }
 
