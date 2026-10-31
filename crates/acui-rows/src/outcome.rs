@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The UI's own outcome codes, and the words a person reads for them.
+//! The UI's own outcome codes, and the words a person reads for a code.
 //!
 //! Two tables are compiled in and parsed once. `outcome-codes.json` is the
 //! UI's code table in the Runtime catalog's format
@@ -9,12 +9,13 @@
 //! Simplified Chinese (`zh-Hans`): one generic sentence per category, and each
 //! UI code's own sentence, short form and handling.
 //!
-//! The Runtime's catalog is not compiled in, so a Runtime code gets no words
-//! here and its caller shows the code as it is. CI checks this table against
-//! the Runtime's merged catalog at the Runtime commit Cargo.toml pins, merged
-//! by that commit's own `outcome-guard merge` (Workflow #378 A-4): no name of
-//! one side is the other's, the keys a UI code uses exist, and every UI code
-//! has its words and its constant here.
+//! A Runtime code gets its category's generic sentence, the category read from
+//! the merged catalog the pinned contract crate embeds
+//! (`actingcommand_contract::outcome::catalog_json`). CI checks this table
+//! against the Runtime's merged catalog at the Runtime commit Cargo.toml pins,
+//! merged by that commit's own `outcome-guard merge` (Workflow #378 A-4): no
+//! name of one side is the other's, the keys a UI code uses exist, and every
+//! UI code has its words and its constant here.
 //!
 //! Rust code names a UI code through the constants below, never as a literal.
 
@@ -55,6 +56,7 @@ const TEXT_FILE: &str = "outcome-text.json";
 const CODES_SOURCE: &str = include_str!("../outcome-codes.json");
 const TEXT_SOURCE: &str = include_str!("../outcome-text.json");
 const CODES_SCHEMA: &str = "actingcommand.outcome-codes.v1";
+const RUNTIME_CATALOG: &str = "the pinned Runtime's embedded outcome catalog";
 
 /// The language the words are in, by the tags the Runtime's `language`
 /// vocabulary registers (Workflow #378 A-8).
@@ -105,7 +107,7 @@ impl Category {
     }
 }
 
-/// What a person reads for one UI code.
+/// What a person reads for one code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Explanation {
     pub category: Category,
@@ -137,15 +139,23 @@ impl fmt::Display for OutcomeTableError {
 
 impl std::error::Error for OutcomeTableError {}
 
-/// The words for one UI code: the code's own, or, when it has none, its
-/// category's generic sentence. `Ok(None)` when the code is not in the UI's
-/// table, as every Runtime code is: the caller then shows the code as it is.
-/// A compiled-in table that does not parse is an error, every time it is
-/// asked, never a panic.
+/// The words for one code, in three cases:
+/// - a UI code, one of the UI's table: the code's own words, or, when it has
+///   none, its category's generic sentence;
+/// - a Runtime code, one the UI's table does not hold and the merged catalog
+///   the pinned contract crate embeds does: its category's generic sentence,
+///   without handling (the UI has no words of its own for a Runtime code);
+/// - any other code: `Ok(None)`, and the caller shows the code as it is.
+///
+/// A compiled-in table that does not parse, the embedded catalog included, is
+/// an error, every time it is asked, never a panic.
 pub fn explain(code: &str, tongue: Tongue) -> Result<Option<Explanation>, OutcomeTableError> {
     let tables = tables()?;
     let Some(&category) = tables.categories.get(code) else {
-        return Ok(None);
+        return match runtime_category(code)? {
+            Some(category) => tables.generic_words(category, tongue).map(Some),
+            None => Ok(None),
+        };
     };
     if let Some(text) = tables.codes.get(code) {
         let words = text.words(tongue);
@@ -156,18 +166,30 @@ pub fn explain(code: &str, tongue: Tongue) -> Result<Option<Explanation>, Outcom
             handling: Some(words.handling.as_str()),
         }));
     }
-    let words = tables.generic.get(&(category, tongue)).ok_or_else(|| {
-        OutcomeTableError::new(
-            TEXT_FILE,
-            format!("generic.{}.{} is missing", category.as_str(), tongue.tag()),
-        )
-    })?;
-    Ok(Some(Explanation {
-        category,
-        sentence: words.sentence.as_str(),
-        short: words.short.as_str(),
-        handling: None,
-    }))
+    tables.generic_words(category, tongue).map(Some)
+}
+
+/// The category the merged catalog the pinned contract crate embeds gives a
+/// code; `Ok(None)` when the catalog holds no such code. Read through
+/// `catalog_json`, which hands a parse failure back; the contract's
+/// `CodeStr::registered` is not used, as its index panics on one.
+fn runtime_category(code: &str) -> Result<Option<Category>, OutcomeTableError> {
+    let catalog = actingcommand_contract::outcome::catalog_json()
+        .map_err(|error| OutcomeTableError::new(RUNTIME_CATALOG, error.to_string()))?;
+    let Some(entry) = object(catalog, "codes", RUNTIME_CATALOG)?.get(code) else {
+        return Ok(None);
+    };
+    entry
+        .get("category")
+        .and_then(Value::as_str)
+        .and_then(Category::parse)
+        .map(Some)
+        .ok_or_else(|| {
+            OutcomeTableError::new(
+                RUNTIME_CATALOG,
+                format!("codes.{code}.category is not one of success, info, warning, error, fatal"),
+            )
+        })
 }
 
 /// The two tables, parsed at the first ask; a parse failure is kept and
@@ -267,6 +289,26 @@ impl Tables {
             codes.insert(code.clone(), own);
         }
         Ok(Self { categories, generic, codes })
+    }
+
+    /// A category's generic sentence, which gives no advice (`handling: None`).
+    fn generic_words(
+        &'static self,
+        category: Category,
+        tongue: Tongue,
+    ) -> Result<Explanation, OutcomeTableError> {
+        let words = self.generic.get(&(category, tongue)).ok_or_else(|| {
+            OutcomeTableError::new(
+                TEXT_FILE,
+                format!("generic.{}.{} is missing", category.as_str(), tongue.tag()),
+            )
+        })?;
+        Ok(Explanation {
+            category,
+            sentence: words.sentence.as_str(),
+            short: words.short.as_str(),
+            handling: None,
+        })
     }
 }
 

@@ -41,7 +41,7 @@ use acui_source::{
 use serde_json::Value;
 use slint::{ComponentHandle, SharedString};
 
-use crate::strings::{fill, Labels};
+use crate::strings::{fill, outcome_short, Labels};
 use crate::{App, AppWindow};
 
 /// Readiness is polled: up to this many connect attempts, this far apart.
@@ -746,7 +746,8 @@ fn record_text(labels: &Labels, record: Result<u64, ClientFailure>) -> String {
 
 /// The Runtime's refusal code verbatim when it answered with one, then the
 /// client's own error code and operation, then the host failure behind the
-/// refusal when the receipt names one.
+/// refusal when the receipt names one; last, the short words of the refusal
+/// code, or of the client's code when there is no refusal.
 pub fn failure_text(
     labels: &Labels,
     refused: &str,
@@ -759,6 +760,11 @@ pub fn failure_text(
     };
     if let Some((host_code, operation)) = &failure.host {
         text.push_str(&fill(labels.host_failure, &[host_code, operation]));
+    }
+    let code = failure.runtime_code.as_deref().unwrap_or(failure.code);
+    if let Some(short) = outcome_short(labels, code) {
+        text.push_str(" · ");
+        text.push_str(&short);
     }
     text
 }

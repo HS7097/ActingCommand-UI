@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The two language tables. Every word a person reads in this program is here
 //! and nowhere else; the wire spellings a row also shows — raw event types,
-//! module names, ids, schema strings, sha256 — are never translated.
+//! module names, ids, schema strings, sha256 — are never translated. The one
+//! exception is the words for an outcome code, which are in acui-rows'
+//! `outcome-text.json` (`acui_rows::outcome`), next to the UI's code table.
 //!
 //! The chosen table is read once at startup, into the `Strings` global for the
 //! labels the window draws itself and directly for the lines the console fills.
+
+use acui_rows::outcome::{explain, Tongue};
 
 /// `zh` or `en`, as the settings file and `--lang` spell it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +37,14 @@ impl Language {
         match self {
             Self::Zh => &ZH,
             Self::En => &EN,
+        }
+    }
+
+    /// The outcome words' language for this table.
+    pub const fn outcome_tongue(self) -> Tongue {
+        match self {
+            Self::Zh => Tongue::ZhHans,
+            Self::En => Tongue::En,
         }
     }
 }
@@ -184,6 +196,10 @@ pub struct Labels {
     pub filter_instance_conflict: &'static str,
     pub filter_rejected: &'static str,
     pub read_failed: &'static str,
+    /// An outcome code's sentence, then its handling.
+    pub outcome_words: &'static str,
+    /// The outcome words could not be read: the table's problem.
+    pub outcome_table_unusable: &'static str,
     /// A follow tick's failure, shown beside the view's own.
     pub follow_failed: &'static str,
     /// The launcher block in the top bar: status, two buttons, one line.
@@ -585,6 +601,8 @@ pub const ZH: Labels = Labels {
     filter_instance_conflict: "端口与实例编号只能选一",
     filter_rejected: "过滤条件无效：{}",
     read_failed: "读取失败：{}",
+    outcome_words: "{}{}",
+    outcome_table_unusable: "结果码说明表不可用：{}",
     follow_failed: "跟随最新：{}",
     launcher_title: "启动器",
     start: "启动",
@@ -915,6 +933,8 @@ pub const EN: Labels = Labels {
     filter_instance_conflict: "Pick a port or type an instance id, not both",
     filter_rejected: "Filter rejected: {}",
     read_failed: "Read failed: {}",
+    outcome_words: "{} {}",
+    outcome_table_unusable: "Outcome words unavailable: {}",
     follow_failed: "Following latest: {}",
     launcher_title: "Launcher",
     start: "Start",
@@ -1087,4 +1107,27 @@ pub fn fill(template: &str, values: &[&str]) -> String {
     }
     text.push_str(rest);
     text
+}
+
+/// What a person reads for an outcome code, in the table's language: its
+/// sentence, then its handling when it has one. `None` for a code neither the
+/// UI's table nor the pinned Runtime's catalog holds; an outcome table that
+/// does not parse is said, not dropped.
+pub fn outcome_sentence(labels: &Labels, code: &str) -> Option<String> {
+    match explain(code, labels.tongue.outcome_tongue()) {
+        Ok(words) => words.map(|words| match words.handling {
+            Some(handling) => fill(labels.outcome_words, &[words.sentence, handling]),
+            None => words.sentence.to_owned(),
+        }),
+        Err(error) => Some(fill(labels.outcome_table_unusable, &[&error.to_string()])),
+    }
+}
+
+/// An outcome code's short form, for a line that does not wrap; `None` and
+/// errors as `outcome_sentence`.
+pub fn outcome_short(labels: &Labels, code: &str) -> Option<String> {
+    match explain(code, labels.tongue.outcome_tongue()) {
+        Ok(words) => words.map(|words| words.short.to_owned()),
+        Err(error) => Some(fill(labels.outcome_table_unusable, &[&error.to_string()])),
+    }
 }

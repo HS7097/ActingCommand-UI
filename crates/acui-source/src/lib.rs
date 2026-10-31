@@ -423,6 +423,40 @@ impl RebuildFailed {
             },
         }
     }
+
+    /// As a read's error shows it: `prefix`, then the reason, as text. A
+    /// Runtime of another owner epoch also carries the console's own code
+    /// beneath that text, for `console_code`; the text is the same either way.
+    fn into_error(self, prefix: &str) -> anyhow::Error {
+        let text = format!("{prefix}{self}");
+        match self {
+            Self::Connect(_) => anyhow!(text),
+            Self::OwnerEpochChanged => {
+                anyhow::Error::new(ConsoleCode(CONSOLE_RUNTIME_OWNER_CHANGED)).context(text)
+            }
+        }
+    }
+}
+
+/// One of the console's own outcome codes, beneath the text of a read's error:
+/// the text already ends with the code, and this lets the window find it and
+/// show its words without reading the text.
+#[derive(Debug)]
+struct ConsoleCode(&'static str);
+
+impl fmt::Display for ConsoleCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for ConsoleCode {}
+
+/// The console's own outcome code a read's error carries, if any: so far only
+/// `CONSOLE_RUNTIME_OWNER_CHANGED`, from a rebuild that reached a Runtime of
+/// another owner epoch.
+pub fn console_code(error: &anyhow::Error) -> Option<&'static str> {
+    error.chain().find_map(|cause| cause.downcast_ref::<ConsoleCode>()).map(|code| code.0)
 }
 
 impl Rebuilding {
@@ -524,7 +558,7 @@ impl LedgerPages {
         let client = self
             .connection
             .client(root)
-            .map_err(|reason| anyhow!("Runtime 查询失败：{reason}"))?;
+            .map_err(|reason| reason.into_error("Runtime 查询失败："))?;
         let first = match call(&client) {
             Ok(value) => return Ok(value),
             Err(error) => error,
@@ -536,7 +570,7 @@ impl LedgerPages {
         }
         std::thread::sleep(LEDGER_PAGE_RETRY_BACKOFF);
         if let Err(reason) = self.connection.reconnect(root) {
-            return Err(anyhow!("Runtime 查询失败：{first}；{reason}"));
+            return Err(reason.into_error(&format!("Runtime 查询失败：{first}；")));
         }
         let client = self.connection.current();
         call(&client).map_err(|error| {
@@ -707,7 +741,7 @@ impl OnlineSource {
         let client = self
             .main
             .client(&self.root)
-            .map_err(|reason| anyhow!("Runtime 事实快照读取失败：{reason}"))?;
+            .map_err(|reason| reason.into_error("Runtime 事实快照读取失败："))?;
         let snapshot = client.runtime_fact_snapshot().map_err(|error| {
             self.main.note(&error);
             anyhow!("Runtime 事实快照读取失败：{error}")

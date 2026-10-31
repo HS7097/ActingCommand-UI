@@ -29,15 +29,15 @@ use acui_rows::{
     RuntimeEventQueryPage, Sensitivity, WriterFacts, MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 use acui_source::{
-    InstanceFacts, MaterialOutcome, OfflineFacts, OfflineReason, ReadSource, RuntimeInstance,
-    Session, SourceMode, MAX_FRAME_BYTES,
+    console_code, InstanceFacts, MaterialOutcome, OfflineFacts, OfflineReason, ReadSource,
+    RuntimeInstance, Session, SourceMode, MAX_FRAME_BYTES,
 };
 use anyhow::{bail, Result};
 use settings::TextSize;
 use slint::{
     Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode, VecModel,
 };
-use strings::{fill, Labels, Language};
+use strings::{fill, outcome_sentence, outcome_short, Labels, Language};
 
 slint::include_modules!();
 
@@ -235,7 +235,7 @@ fn main() -> Result<()> {
                 state_root.display().to_string(),
                 None,
             );
-            advance_span(source, &mut model, None);
+            advance_span(labels, source, &mut model, None);
             model.tab = args.tab.unwrap_or(LedgerView::Events);
             (Some(RefCell::new(model)), port_map)
         }
@@ -421,7 +421,7 @@ fn reload(app: &Rc<App>, earlier: bool) {
             None => Ok(snapshot),
             Some(bound) => {
                 let estimate = upper_for_time(model.span(), snapshot, bound);
-                checked_upper(source, &model, estimate, snapshot)
+                checked_upper(app.labels, source, &model, estimate, snapshot)
             }
         };
         *app.frame_request() = None;
@@ -447,7 +447,7 @@ fn reload(app: &Rc<App>, earlier: bool) {
             .window_query(window)
             .and_then(|query| {
                 read_window(source, &query)
-                    .map_err(|error| QueryError::ReadFailed(error.to_string()))
+                    .map_err(|error| QueryError::ReadFailed(read_failure(app.labels, &error)))
             });
         match pages {
             Ok(pages) => model.apply_window(window, &pages),
@@ -502,6 +502,7 @@ fn upper_for_time(span: Option<(u64, u64)>, snapshot: u64, bound: u64) -> u64 {
 /// stopped may hold no row and still go on (#411 A51): it decides nothing
 /// above the start, so that is the pin too.
 fn checked_upper(
+    labels: &Labels,
     source: &ReadSource,
     model: &ViewModel,
     estimate: u64,
@@ -519,7 +520,7 @@ fn checked_upper(
             .map_err(|error| QueryError::Rejected(error.code().to_string()))?;
         let page = source
             .query(&query, 1, None)
-            .map_err(|error| QueryError::ReadFailed(error.to_string()))?;
+            .map_err(|error| QueryError::ReadFailed(read_failure(labels, &error)))?;
         let Some(found) = page.events().first() else {
             return Ok(if page.next_cursor().is_some() { snapshot } else { upper });
         };
@@ -716,7 +717,8 @@ fn jump_latest(window: &AppWindow, app: &Rc<App>) {
     };
     match source.repin() {
         Err(error) => {
-            model.borrow_mut().query_error = Some(QueryError::ReadFailed(error.to_string()));
+            model.borrow_mut().query_error =
+                Some(QueryError::ReadFailed(read_failure(app.labels, &error)));
         }
         Ok(_) => {
             source.refresh_instances();
@@ -733,7 +735,7 @@ fn start_at_pin(window: &AppWindow, app: &Rc<App>, source: &ReadSource, model: &
         let mut model = model.borrow_mut();
         model.set_pin(source.open_report(), source.snapshot_position());
         model.filters.to_timestamp_unix_ms = None;
-        advance_span(source, &mut model, None);
+        advance_span(app.labels, source, &mut model, None);
     }
     window.set_cursor_value(1000.0);
     reload(app, false);
@@ -743,7 +745,7 @@ fn start_at_pin(window: &AppWindow, app: &Rc<App>, source: &ReadSource, model: &
 /// holds that event, one read of it otherwise. A span never read is read
 /// whole. A failed read leaves the span as it was and stays in `span_error`
 /// until one succeeds.
-fn advance_span(source: &ReadSource, model: &mut ViewModel, time: Option<u64>) {
+fn advance_span(labels: &Labels, source: &ReadSource, model: &mut ViewModel, time: Option<u64>) {
     let span = match (model.span(), time) {
         (Some((first, _)), Some(last)) => Ok(Some((first, last))),
         (Some((first, last)), None) => event_time(source, Some(source.snapshot_position()))
@@ -756,7 +758,7 @@ fn advance_span(source: &ReadSource, model: &mut ViewModel, time: Option<u64>) {
             model.span_error = None;
         }
         Err(error) => {
-            let reason = format!("时间跨度 / time span: {error}");
+            let reason = format!("时间跨度 / time span: {}", read_failure(labels, &error));
             model.span_error = Some(QueryError::ReadFailed(reason));
         }
     }
@@ -779,7 +781,8 @@ fn set_following(window: &AppWindow, app: &Rc<App>, on: bool) {
     // What an earlier following failed at goes once it is turned on again.
     model.borrow_mut().follow_error = None;
     if let Err(error) = source.repin() {
-        model.borrow_mut().query_error = Some(QueryError::ReadFailed(error.to_string()));
+        model.borrow_mut().query_error =
+            Some(QueryError::ReadFailed(read_failure(app.labels, &error)));
         window.set_following(false);
         refresh(window, app);
         return;
@@ -823,7 +826,8 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
     let moved = match source.poll() {
         Ok(moved) => moved,
         Err(error) => {
-            model.borrow_mut().follow_error = Some(QueryError::ReadFailed(error.to_string()));
+            model.borrow_mut().follow_error =
+                Some(QueryError::ReadFailed(read_failure(app.labels, &error)));
             refresh(window, app);
             return;
         }
@@ -855,7 +859,7 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
             };
             let pages = model.window_query(window).and_then(|query| {
                 read_window(source, &query)
-                    .map_err(|error| QueryError::ReadFailed(error.to_string()))
+                    .map_err(|error| QueryError::ReadFailed(read_failure(app.labels, &error)))
             });
             match pages {
                 Ok(pages) => {
@@ -879,7 +883,7 @@ fn follow_tick(window: &AppWindow, app: &Rc<App>) {
             app.follow.stop();
             window.set_following(false);
         } else if moved {
-            advance_span(source, &mut model, pin_time);
+            advance_span(app.labels, source, &mut model, pin_time);
         }
     }
     refresh(window, app);
@@ -1592,6 +1596,10 @@ fn source_text(labels: &Labels, source: &Session) -> String {
         if let Some(kind) = &failure.io_kind {
             text.push_str(&fill(labels.io_kind_text, &[kind]));
         }
+        if let Some(words) = outcome_sentence(labels, failure.code) {
+            text.push_str(" · ");
+            text.push_str(&words);
+        }
         if failure.code == "ledger_io" && failure.io_kind.as_deref() == Some("not_found") {
             text.push_str(" · ");
             text.push_str(labels.source_unopened_hint);
@@ -1628,13 +1636,40 @@ fn frame_size_text(labels: &Labels, frame_size: Option<(f32, f32)>) -> String {
     }
 }
 
+/// A refused query names its code, the contract's or the console's own; the
+/// code's words follow it.
 fn query_error_text(labels: &Labels, error: Option<&QueryError>) -> String {
     match error {
         None => String::new(),
         Some(QueryError::IdNotCanonical) => labels.filter_id_error.to_string(),
         Some(QueryError::InstanceFilterConflict) => labels.filter_instance_conflict.to_string(),
-        Some(QueryError::Rejected(reason)) => fill(labels.filter_rejected, &[reason]),
+        Some(QueryError::Rejected(reason)) => {
+            let text = fill(labels.filter_rejected, &[reason]);
+            match outcome_sentence(labels, reason) {
+                Some(words) => format!("{text} · {words}"),
+                None => text,
+            }
+        }
         Some(QueryError::ReadFailed(reason)) => fill(labels.read_failed, &[reason]),
+    }
+}
+
+/// A read's error as the view states it: its text, and, when the error carries
+/// one of the console's own codes, that code's words after it.
+fn read_failure(labels: &Labels, error: &anyhow::Error) -> String {
+    let text = error.to_string();
+    match console_code(error).and_then(|code| outcome_sentence(labels, code)) {
+        Some(words) => format!("{text} · {words}"),
+        None => text,
+    }
+}
+
+/// A code on a card line, which does not wrap: the code, and its short words
+/// when it has any.
+fn code_short(labels: &Labels, code: &str) -> String {
+    match outcome_short(labels, code) {
+        Some(short) => format!("{code} · {short}"),
+        None => code.to_string(),
     }
 }
 
@@ -1877,9 +1912,9 @@ fn instance_lines(labels: &Labels, source: &ReadSource) -> Vec<FieldLine> {
             let text = labels.instances_unread.to_string();
             let mut lines = vec![field(labels, "runtime_instances", text, "")];
             if let Some(runtime_code) = &failure.runtime_code {
-                lines.push(field(labels, "runtime_refusal", runtime_code.clone(), ""));
+                lines.push(field(labels, "runtime_refusal", code_short(labels, runtime_code), ""));
             }
-            let code = failure.code.to_string();
+            let code = code_short(labels, failure.code);
             lines.push(field(labels, "client_error", code, failure.operation));
             if let Some((host_code, operation)) = &failure.host {
                 lines.push(field(labels, "host_failure", host_code.clone(), operation.as_str()));
@@ -1960,7 +1995,7 @@ fn offline_instance_lines(labels: &Labels, facts: &OfflineFacts) -> Vec<FieldLin
                 field(
                     labels,
                     "facts_error",
-                    code.clone(),
+                    code_short(labels, code),
                     operation.as_deref().unwrap_or(labels.none),
                 ),
             ];
