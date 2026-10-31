@@ -79,7 +79,9 @@
   轮询把它移到 Runtime 事实快照说出的位置（见下）。离线从不移动。之后每页都是
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`，
   同一个限定到一窗的 `EventQuery`、同一个页上限、同一个 `next_cursor`。
-- 素材走同一条连接上的 `RuntimeClient::read_material_complete`：客户端自己分段读（每段
+- 素材走自己那条连接上的 `RuntimeClient::read_material_complete`：这条连接在钉住时与页连接一起建好、
+  连到同一个 owner epoch，读素材（最长 30 秒）时跟随轮询和状态读取不用排在它后面；一次读取把它锁死后
+  下次重建。客户端自己分段读（每段
   192 KiB，遇到拒收大段的 Runtime 退到 64 KiB），每段由 Runtime 对整份校验，拼完后客户端再核
   一次总长与 sha256——结果形状与离线整份读相同。监控台不再自己拼段。
 - 介质、损坏尾部、写入进程记录与修复条数是离线读面对文件的观察，Runtime 不在页上说这些；
@@ -715,7 +717,9 @@ Runtime 的看门狗是一个计划任务，所以 acsetup 不替人设置。要
 - `acui-model`：纯 Rust 视图模型（页签、过滤、翻页、恢复折叠、选中项），不依赖 slint，**也不
   出人话**——它只给结构化事实，措辞一律由 `acui-app` 按语言表挑。
 - `acui-app`：唯一依赖 slint 的 crate，`.slint` 文件在 `crates/acui-app/ui/`；两张语言表在
-  `strings.rs`，设置文件的读写在 `settings.rs`。
+  `strings.rs`，设置文件的读写在 `settings.rs`。账本窗口只按自己的状态绘制（`ledger/state.rs`、
+  `ledger/paint.rs`），不直接问读面；读取先把结果放进状态，读帧与解码在窗口自己的工作线程上
+  （`ledger/frame.rs`）。
 
 `slint` 1.17.x，`default-features = false`；账本对监控台只读（监控台发出的请求——启动按钮、关闭
 请求——由 Runtime 自己记账；状态读取不留账本记录），控制入口只有启动器的两个按钮（启动 /

@@ -108,7 +108,9 @@ answers come from:
   after that is
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`,
   the same `EventQuery` bounded to one window, the same page limit, the same `next_cursor`.
-- Material goes through `RuntimeClient::read_material_complete` on the same connection: the client
+- Material goes through `RuntimeClient::read_material_complete` on a connection of its own, made at
+  the pin with the page connection, to the same owner epoch, and rebuilt after a read latched it; so a
+  material read (up to 30 s) never holds a follow poll or a status read behind it. The client
   reads the ranges itself (192 KiB each, 64 KiB against a Runtime that refuses larger ones), the Runtime
   verifies each against the whole file, and the client checks the assembled length and sha256 — the same
   result shape as the offline whole-object read. The console no longer assembles ranges itself.
@@ -1025,7 +1027,10 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   dependency on slint and **no plain language either** — it gives structured facts only, and all wording
   is chosen by `acui-app` from the language tables.
 - `acui-app`: the only crate that depends on slint; the `.slint` files are in `crates/acui-app/ui/`, the
-  two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`.
+  two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`. The
+  ledger window is painted from its own state alone (`ledger/state.rs`, `ledger/paint.rs`), never from
+  the read face; the reads leave their results there first, and a frame is read and decoded on the
+  window's own worker (`ledger/frame.rs`).
 
 `slint` 1.17.x, `default-features = false`; the ledger is read-only to the console (what the Runtime
 records of the console's own requests — the start press, shutdown requests — it records itself; the

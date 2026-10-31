@@ -352,12 +352,19 @@ impl EvidenceSource {
 pub struct OnlineSource {
     root: PathBuf,
     /// The session's main connection, at the client's default io timeout:
-    /// follow polls, the instances' status and facts, material reads and
-    /// `open_report`. Rebuilt after the client latched it (see `Rebuilding`).
+    /// follow polls, the instances' status and facts, and `open_report`.
+    /// Rebuilt after the client latched it (see `Rebuilding`).
     main: Rebuilding,
     /// The connection every page, the first included, and every repin reads
     /// through.
     pages: LedgerPages,
+    /// The connection material reads go through, on the frame worker, at the
+    /// client's default io timeout. Apart from the main one: the clones of a
+    /// connection share it, and their exchanges wait for one another, so a
+    /// material read, which may run up to `MATERIAL_READ_DEADLINE`, would
+    /// otherwise hold a follow poll or a status read behind it. Rebuilt after
+    /// a read latched it (see `MaterialReader::Online`).
+    material: Rebuilding,
     /// The pin every page reads at. `repin` moves it on a person's jump to the
     /// latest or when following is turned on; `poll` moves it while following.
     snapshot: Cell<u64>,
@@ -366,11 +373,11 @@ pub struct OnlineSource {
 }
 
 /// How a kept connection is made again: `OnlineSource::connect` for the main
-/// connection, `LedgerPages::connect` for the page one.
+/// and the material connection, `LedgerPages::connect` for the page one.
 type Connect = fn(&Path) -> Result<RuntimeClient, RuntimeClientError>;
 
-/// A connection the session keeps — the main one or the page one — rebuilt
-/// after the client latched it. R-0c (Runtime contracts/runtime-interface.md,
+/// A connection the session keeps — the main, the page or the material one —
+/// rebuilt after the client latched it. R-0c (Runtime contracts/runtime-interface.md,
 /// the client methods): a receipt timeout, and any exchange that fails fatally
 /// (`is_fatal`: without the Runtime's error projection, or with a fatal one),
 /// latches the connection, and every later exchange on it or on a clone of it
@@ -387,8 +394,8 @@ struct Rebuilding {
     /// must reach that same Runtime, since every pin was stated by it.
     owner_epoch: OwnerEpoch,
     /// Set once an exchange on the connection, or on a clone of it, failed
-    /// fatally; a material read on the frame worker sets it there (see
-    /// `MaterialReader::Online`). Cleared by a rebuild.
+    /// fatally; a material read on the frame worker sets it on the material
+    /// connection (see `MaterialReader::Online`). Cleared by a rebuild.
     latched: Arc<AtomicBool>,
 }
 
@@ -667,8 +674,9 @@ impl OnlineSource {
     /// Discovery is the client's: it reads `runtime-info.json`, takes the
     /// loopback address from it and checks the owner epoch on connect. This is
     /// the console's own connection (actor `ui`, source `ui`), for what it asks
-    /// on its own — material, the status and facts read at open, follow polls,
-    /// probes; pages go through the session's page connection (`LedgerPages`).
+    /// on its own — the status and facts read at open, follow polls, probes,
+    /// and, on a connection of their own, material reads; pages go through the
+    /// session's page connection (`LedgerPages`).
     fn connect(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
         RuntimeClient::connect(RuntimeClientConfig::new(
             root,
@@ -699,21 +707,36 @@ impl OnlineSource {
 
     /// The first page, asked without a snapshot on the session's page
     /// connection, is where the Runtime states the position this session then
-    /// reads at.
+    /// reads at. The page and the material connection are made first, to the
+    /// Runtime the main connection reached.
     fn pin(root: PathBuf, client: RuntimeClient) -> Result<Self> {
         let owner_epoch = client.runtime_info().owner_epoch();
         let main = Rebuilding::new(Self::connect, client, owner_epoch);
         let pages = LedgerPages::open(&root, owner_epoch)?;
+        let material = Self::open_material(&root, owner_epoch)?;
         let (snapshot, read_complete) = latest(&pages, &root)?;
         let instances = read_instances(&main, &root);
         Ok(Self {
             root,
             main,
             pages,
+            material,
             snapshot: Cell::new(snapshot),
             read_complete: Cell::new(read_complete),
             instances: RefCell::new(instances),
         })
+    }
+
+    /// The material connection at open, to the Runtime of the session's owner
+    /// epoch, as the page connection is made (`LedgerPages::open`): a failed
+    /// connect fails the online face as its main connect does.
+    fn open_material(root: &Path, owner_epoch: OwnerEpoch) -> Result<Rebuilding> {
+        let client = Self::connect(root)
+            .map_err(|error| anyhow!("在线读面不可用 / online source unavailable: {error}"))?;
+        if client.runtime_info().owner_epoch() != owner_epoch {
+            bail!("在线读面不可用 / online source unavailable: {CONSOLE_RUNTIME_OWNER_CHANGED}");
+        }
+        Ok(Rebuilding::new(Self::connect, client, owner_epoch))
     }
 
     pub fn instances(&self) -> Ref<'_, Result<RuntimeInstances, ClientFailure>> {
@@ -838,13 +861,13 @@ impl OnlineSource {
         }
     }
 
-    /// The material handle on the main connection, rebuilt first when an
-    /// earlier exchange latched it; when that rebuild fails, a handle whose
-    /// read says why.
+    /// The material handle on the material connection, rebuilt first when an
+    /// earlier read latched it; when that rebuild fails, a handle whose read
+    /// says why.
     fn material_reader(&self) -> MaterialReader {
-        match self.main.client(&self.root) {
+        match self.material.client(&self.root) {
             Ok(client) => {
-                MaterialReader::Online { client, latched: Arc::clone(&self.main.latched) }
+                MaterialReader::Online { client, latched: Arc::clone(&self.material.latched) }
             }
             Err(reason) => MaterialReader::Unavailable(reason.to_string()),
         }
@@ -1355,16 +1378,16 @@ fn record_press(state_root: &Path, control_id: &str) -> Result<(RuntimeClient, u
 
 /// Where a material read goes. Offline it is the forensic read face over the
 /// state root; online it is the Runtime's own typed material read, on the
-/// session's main connection, not the page connection.
+/// session's material connection, neither the main nor the page connection.
 #[derive(Clone)]
 pub enum MaterialReader {
     Offline(PathBuf),
-    /// The main connection as last rebuilt, with its latch: a read that fails
-    /// fatally sets it, so the session's next exchange on the main connection
+    /// The material connection as last rebuilt, with its latch: a read that
+    /// fails fatally sets it, so the next handle the session gives out
     /// connects anew (see `Rebuilding`).
     Online { client: RuntimeClient, latched: Arc<AtomicBool> },
-    /// The main connection was latched and its rebuild failed: the read fails
-    /// with why.
+    /// The material connection was latched and its rebuild failed: the read
+    /// fails with why.
     Unavailable(String),
 }
 
@@ -1480,7 +1503,7 @@ pub fn read_material(
 }
 
 /// The online counterpart of [`read_material`]: `RuntimeClient::read_material_complete`
-/// on the session's main connection, under the same byte cap and deadline. The
+/// on the session's material connection, under the same byte cap and deadline. The
 /// client asks `still_wanted` between ranges and drops an unfinished assembly
 /// itself; a read stopped that way is superseded, and nothing is shown. A client error is kept whole (code, operation,
 /// the Runtime's refusal and host failure), not reduced to its code.
@@ -1512,9 +1535,9 @@ fn read_material_online(
         Instant::now() + MATERIAL_READ_DEADLINE,
         still_wanted,
     );
-    // A fatal client error latched the main connection this clone shares; the
-    // session's next exchange on it connects anew (see `Rebuilding`). Marked
-    // even for a read no longer wanted.
+    // A fatal client error latched the material connection this clone shares;
+    // the next handle the session gives out connects anew (see `Rebuilding`).
+    // Marked even for a read no longer wanted.
     let fatal = match &result {
         RuntimeMaterialCompleteResult::NotProvided { error: Some(error), .. }
         | RuntimeMaterialCompleteResult::Failed { error, .. } => error.is_fatal(),
