@@ -10,9 +10,6 @@ name: fixture
 # Manual runs only. It builds no console, publishes no release and changes no
 # other workflow.
 on:
-  # TEMPORARY: lets the first run happen on this branch before the file is on main; removed before merge.
-  push:
-    branches: [claude/e11-fixture-root]
   workflow_dispatch:
     inputs:
       rounds:
