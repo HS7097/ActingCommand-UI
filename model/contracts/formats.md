@@ -978,7 +978,13 @@ ruling 126 A, below):
       (no certified 0, or a probe whose LP fails its exact check) is the warning **`lp_probe_unverified`** (`probe`
       `tie`), never "no tie": its activity counts as a structural gap of its component (`probe_unverified`, see
       "Coverage") and the steady state stands.
-  - The least losses are taken among the lexicographic optima (A ≥ A*, V ≥ V*).
+    - **The faces the probes read** (PRICE-2e). The optima of S3 are probed on S3's optimal face in its
+      complementary-slackness form ("S3's optimal face", below), with no row V ≥ V0; those of S2 on that form with
+      A ≥ A*: V* = V0 here, so S2's optima are S3's that meet A ≥ A*, and the row V ≥ V* is not needed either. The
+      same sets as before, so the same answers.
+  - The least losses are taken among the lexicographic optima (A ≥ A*, V ≥ V*). That LP keeps the row V ≥ V* (PRICE-2e
+    poses the probes' faces without it): `losses` reads its solution, not only its optimal value, and one LP of
+    another form could stop at another of the least-loss vertices.
 - **The reference state is neutral** (ruling 126 A). The steady state reads the rules and the data only: a cap's
   `reference` is its value in the neutral reference state (facility levels, stage stars), the demand and costs are
   the neutral reference demand from public cost tables, and an objective's `value` and `horizon` never read the
@@ -1075,9 +1081,11 @@ one dual optimal point, never a pick per pool: with V = min(A, B, C), each pool'
 - **The dual**, generated from the rows of S3's program, never written by hand: a variable per row (non-negative for
   an at-most; free for an equality, held as the difference of two non-negative ones, `y+` less `y-`), a non-negative
   one per variable with an upper bound, a row per column (Σ_i A_ij·y_i + w_j ≥ c_j), and the cost Σ rhs·y + Σ u·w,
-  minimised. D*, its optimal face, adds the strong-duality row `duality:face:0`: the cost equals V0. The least cost,
-  solved and checked exactly, must be V0 exactly; every solution on the dual is checked exactly against every dual
-  row and the strong-duality row. Either failing is `lp_numeric_check_failed` (stage `dual`); it blocks the steady
+  minimised. D*, its optimal face, is the dual's points at the strong-duality row `duality:face:0`: the cost equals V0.
+  The least cost, solved and checked exactly, must be V0 exactly. Every LP on D* is solved on its
+  complementary-slackness form, which needs no strong-duality row (below; the selection too since PRICE-2e), and every
+  solution there is checked exactly against every row and bound of that form; the joint vector also at the
+  strong-duality row, exactly. Any of these failing is `lp_numeric_check_failed` (stage `dual`); it blocks the steady
   state, so that no price is exportable without the whole vector (§2.6), and with it the plan.
 - **The projection.** A pool's coordinate π_r is the mean over the cycle of its balance rows' duals (the average
   price: an activity's value is linear in the prices, so its value at the mean is the mean of its values per step).
@@ -1108,11 +1116,31 @@ one dual optimal point, never a pick per pool: with V = min(A, B, C), each pool'
     faster than on the face with its dense cost row (on a large model, one such LP took minutes). x* is S3's optimum
     (exactly optimal once the strong-duality check has found a dual point of its cost), and for a forcing cost an
     optimum of S3 that runs the activity its `most` (its `most` probe's solution, or S3's when complementary
-    slackness gave `most` 0). The selection and its exact check use the face.
+    slackness gave `most` 0). Since PRICE-2e the selection and its exact check are solved on it too, with the rows that
+    fix the coordinates so far: on a large model, the face with its strong-duality row held one withheld pool's LP of
+    the selection for over 30 minutes. In the dual's own terms these are its complementary-slackness conditions with
+    x*, the dual of its dual: a dual variable whose reduced cost (its primal row's slack b_i − a_i·x*, or for a `w` its
+    bound's slack u_j − x*_j) is above 0 sits at 0, and a dual row whose own dual x*_j is above 0 is tight.
+  - *S3's optimal face* (PRICE-2e), where `most` and the ties are probed, is written the same way from the dual side,
+    without the row V ≥ V0 (the dense row of every term of the objective): with the exact optimal dual point (y*, w*)
+    of the strong-duality check, each column whose dual slack s_j = (Aᵀy* + w* − c)_j is above 0 fixed at its lower
+    bound 0, each variable with an upper bound whose `w`, that bound's dual, is above 0 fixed at its upper bound, and
+    each at-most row whose dual y_i is above 0 an equality. For any feasible x, c·x = b·y* + u·w* − Σ_i y_i·(b_i −
+    a_i·x) − Σ_j w_j·(u_j − x_j) − Σ_j s_j·x_j (the sum over the at-most rows; an equality's slack is 0 whatever its
+    free dual), and b·y* + u·w* = V0; each product is of two factors at least 0, so x is optimal exactly when every
+    one is 0: the fixed bounds and the equalities above. In reduced-cost terms (d_j = c_j − (Aᵀy*)_j = w_j − s_j, a
+    maximum), a variable whose reduced cost is not 0 sits at the bound it names: below 0 at its lower bound, above 0 at
+    its upper. A bounded variable with both duals above 0 would be asked to sit at 0 and at its upper bound; S3's
+    optimum meets every condition, so that happens only when the upper bound is 0. The same set as with the row V ≥ V0,
+    so every probe's value is the same.
   - *Warm starts.* Consecutive LPs on the same rows that differ only in their objective (those above) are given to
     the HiGHS instance that solved the previous one, with the objective changed: HiGHS's primal simplex goes on from
-    the basis it ended at, without presolve. Only where HiGHS starts differs; each LP's exact vertex and certificate
-    are its own ("Exactness and failures").
+    the basis it ended at, without presolve. Since PRICE-2e each face has its instance (D*, and S3's optimal face for
+    the `most` probes, whose LPs alternate with the ranges); the selection adds a row per coordinate it fixes, given to
+    the instance as a new basic row, and fixes each pool at the extreme the last LP found, which its solution meets;
+    and the first `most` probe, and each tie probe that S3's optimum meets, starts from S3's basis (S3's vertex lies on
+    the face). Only where HiGHS starts differs; each LP's exact vertex and certificate are its own ("Exactness and
+    failures").
 - **The selection**, each step an exact LP on D* and what is fixed so far, in this order:
   1. a pool bounded below only (`high` null: one less is infeasible) that a main goal values (its own `objective` of
      tier `main`): fixed at its least value, the value of one more (its goal's weight), by id; `by` `one_more`;
@@ -1131,8 +1159,9 @@ one dual optimal point, never a pick per pool: with V = min(A, B, C), each pool'
   and last, each pool still free, which the selection withholds (`withheld`, below), by id: at its least value on
   the face left (`one_more`), else at its greatest (`one_less`), else, unbounded both ways, at 0 (`zero`). It is free
   through the max-min, so a coordinate that is not exported never moves one that is (the design leaves a pool bounded
-  below only and valued by no goal free in the same way). The vector is then checked exactly as a point of D*. It is
-  independent of the dual point HiGHS returns: each step is an LP's optimal value.
+  below only and valued by no goal free in the same way). The vector is then checked exactly as a point of D*: an
+  exactly checked solution of D*'s complementary-slackness form with every coordinate fixed, whose cost is V0 exactly
+  at the strong-duality row. It is independent of the dual point HiGHS returns: each step is an LP's optimal value.
 - **`withheld`**: null, or why the selection gives no exportable price:
   - `{"reason": "no_steady_supply"}`: one less unit is infeasible (`high` null) and no main goal values the pool: it
     has no steady supply, a structural gap (§3.1);
@@ -1272,7 +1301,8 @@ provisional derive under `estimates` without an `estimate` is `estimate_missing`
     values close to a bound: each nonbasic column is fixed at the bound its status names, each nonbasic row is tight at
     the end its status names, and the basic variables (columns, and the rows' logical variables r = a·x) are solved
     exactly in fractions from the basis system B·z_B = −N·z_N (a sparse elimination), and the row duals from
-    Bᵀ·y = c_B. The basis is **certified** when it is exactly optimal: every basic variable within its bounds, and the
+    Bᵀ·y = c_B (since PRICE-2e from the same elimination, recorded and applied transposed: one system's solution each,
+    the same as two eliminations give). The basis is **certified** when it is exactly optimal: every basic variable within its bounds, and the
     reduced cost of every nonbasic one of the sign of a maximum (at most 0 where it could rise, at least 0 where it
     could fall). Its vertex is then the exact optimum, whatever HiGHS's tolerances (1e-7) let pass.
   - **The pivoting fallback.** A basis that is not exactly optimal gets at most `lp.max_pivots` (20) exact simplex
@@ -1294,8 +1324,9 @@ provisional derive under `estimates` without an `estimate` is `estimate_missing`
     is feasible once checked, but not certified optimal.
   - The result is checked exactly against every bound, integrality and row; what breaks one is
     `lp_numeric_check_failed`. Objectives, prices and losses come only from these fractions.
-  - So is every solution on the steady state's dual, against every dual row and the strong-duality row, and the
-    dual's least cost must be V0 exactly (stage `dual`; "The joint price vector").
+  - So is every solution on the steady state's dual, against every row and bound of D*'s complementary-slackness form
+    (which holds the dual rows), the joint vector also at the strong-duality row, and the dual's least cost must be V0
+    exactly (stage `dual`; "The joint price vector").
   - **Probes** (PRICE-2c): a per-activity probe (a tie, `most`, `range`, `forcing_cost`) whose answer needs an optimum
     reads it only from a certified one; an answer above 0 of a tie probe holds for any exactly feasible point. A probe
     that is not verified, or whose LP fails (`lp_numeric_check_failed`, `lp_solve_failed`), is `lp_probe_unverified`, a
