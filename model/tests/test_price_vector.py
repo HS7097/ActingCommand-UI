@@ -621,10 +621,14 @@ def test_a_marginal_outside_the_projection_is_a_warning_and_the_vector_stands(tm
 
 # The tolerance of the marginal cross-check (MARGINAL_TOLERANCE, τ = 1e-7) -------------------------------------------
 
-# 1 + 1/(3 × 10^20): an exact price whose denominator no marginal can have (a float made a fraction with a denominator
-# of at most lp.max_denominator, 10^6), as the prices of a model whose numbers carry four decimals (denominators near
-# 6e28), where a strict comparison warned 59 times on a real model.
-LARGE = Fraction(3 * 10**20 + 1, 3 * 10**20)
+# L = 2 + 1/1000003 = 2000007/1000003: an exact price whose denominator, the prime 1000003, no marginal can have (a
+# float made a fraction with a denominator of at most lp.max_denominator, 10^6), as the prices of a model whose numbers
+# carry four decimals (denominators near 6e28), where a strict comparison warned 59 times on a real model. Every number
+# its solves give is 0 or at least 1 (L - 1 = 1 + 1/1000003 is the least), so HiGHS's doubles stand for them, the exact
+# vertex rebuilds each from the rows it leaves tight, and every exact check passes. (Not so with a fractional part below
+# a double's resolution: 1 + 1/(3 × 10^20) is the double 1.0, the re-solve of one v less runs the goal's sink 1/(3 ×
+# 10^20) times, read as 0, and its exact check refuses the steady state, `lp_numeric_check_failed` at balance:res.v:0.)
+LARGE = Fraction(2000007, 1000003)
 LARGE_JOINT = {
     "prices": {"res.a": priced(str(LARGE), str(LARGE), "exact"), "res.v": EXACT_V},
     "max_min": [],
@@ -633,36 +637,43 @@ LARGE_JOINT = {
 
 
 def large_fixture(folder: Path) -> Path:
-    """a comes at 1 a day; act.conv turns one a into 1 + 1/(3 × 10^20) v (`LARGE`)."""
-    flows = {"act.conv": ({"res.a": "1"}, {"res.v": "1 + 1 / 300000000000000000000"})}
+    """a comes at 1 a day; act.conv turns one a into 2 + 1/1000003 v (`LARGE`)."""
+    flows = {"act.conv": ({"res.a": "1"}, {"res.v": "2 + 1 / 1000003"})}
     return example(folder, ["res.a"], {"res.a": "1"}, flows)
 
 
 def test_a_marginal_within_the_tolerance_of_a_price_with_a_large_denominator_agrees(tmp_path, economy):
-    """By hand: act.conv runs once a day and its L = 1 + 1/(3 × 10^20) v go to the goal at 1 each, so V0 = L. D* is
-    π_v = 1 (the goal's sink runs in every optimum) and π_a = L·π_v = L (act.conv runs in every optimum, so its dual row
-    is tight): a's price is exact, L, and so are its re-solves (one more a is one more conversion, L; one less one
-    fewer, L). act.conv reads L - L = 0, runs once and the day brings no more a (input_bound).
+    """By hand: act.conv runs once a day and its L = 2 + 1/1000003 = 2000007/1000003 v go to the goal at 1 each, so
+    V0 = L. D* is π_v = 1 (the goal's sink runs in every optimum) and π_a = L·π_v = L (act.conv runs in every optimum,
+    so its dual row is tight): a's price is exact, L, and so are its re-solves (one more a is one more conversion,
+    2L - L = L; one less one fewer, L - 0 = L); v's re-solves are (L + 1) - L = 1 and L - (L - 1) = 1, the sink
+    running L - 1 = 1000004/1000003 times. act.conv reads L·1 - 1·L = 0, runs once and the day brings no more a
+    (input_bound).
 
-    HiGHS solves the program in floats, where L is 1.0 (1/(3 × 10^20) lies far below the step of a double at 1,
-    2.2e-16), so its marginal of a's balance row is 1, and `limit_denominator(10^6)` could not give a denominator of
-    3 × 10^20 anyway: the marginal is 1, never L. |1 - L| = 1/(3 × 10^20) <= 1e-7 · max(1, L): within τ, so the
-    cross-check agrees and there is no warning, where the strict comparison warned (`marginal` 1 below `low` L)."""
+    HiGHS solves the program in doubles, where L is 2.000000999997 (within 1.4e-16), and its marginal of a's balance
+    row is -L, the price L. `limit_denominator(10^6)` cannot give the denominator 1000003: L's continued fraction is
+    [2; 1000003], whose quotient 1000003 passes 10^6, so the candidates are 2 and 2 + 1/10^6, and the nearer is the
+    marginal m = 2000001/1000000 (for any double from about 5e-7 below L to 3.5e-12 above it). By hand
+    m - L = 1/10^6 - 1/1000003 = 3/(10^6 × 1000003) = 3/1000003000000, about 3.0e-12: not 0, so a strict comparison
+    would warn (m above `high` L), and at most τ · max(1, L) = L/10^7 = 2000007/10000030000000, about 2.0e-7: within
+    τ, so the cross-check agrees and there is no warning."""
     status, doc = economy(large_fixture(tmp_path), "--steady-only")
 
     assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
-    assert steady(doc)["prices"] == grain(doc) == {"res.a": [str(LARGE)], "res.v": ["1"]}
+    assert steady(doc)["prices"] == grain(doc) == {"res.a": ["2000007/1000003"], "res.v": ["1"]}
     marginal = Fraction(doc["data"]["steady"]["marginals"]["prices"]["res.a"][0])
-    assert marginal == 1 and marginal != LARGE  # a strict comparison would warn
+    assert marginal == Fraction(2000001, 1000000) and marginal != LARGE  # a strict comparison would warn
+    assert marginal - LARGE == Fraction(3, 1000003000000)
     assert abs(marginal - LARGE) <= economy_flow.MARGINAL_TOLERANCE * max(1, LARGE)
     assert joint(doc) == LARGE_JOINT
 
 
 def test_a_marginal_beyond_the_tolerance_is_still_a_warning(tmp_path, economy, monkeypatch):
-    """The fixture above, with HiGHS's marginal of a's balance row given as 1.000001 (its marginal -1.000001; the
-    shift must pass half the gap of 1e-6 between 1 and the next fraction of denominator at most 10^6, or
-    `limit_denominator` gives 1 again). It is the fraction 1000001/1000000, and by hand |1000001/1000000 - L| =
-    1/10^6 - 1/(3 × 10^20), above τ · max(1, L) = 1e-7 · L (about 1e-7): outside a's exact price L by ten times the
+    """The fixture above, with HiGHS's marginal of a's balance row given as -2.000003 (the price 2.000003, the double
+    nearest 2000003/1000000, whose denominator is 10^6), so `limit_denominator(10^6)` gives that fraction back: the
+    marginal is 2000003/1000000. By hand its distance from a's exact price L = 2000007/1000003 is 3/10^6 - 1/1000003
+    = (3 × 1000003 - 10^6)/(10^6 × 1000003), that is 2000009/1000003000000, about 2.0e-6, above τ · max(1, L) = L/10^7
+    = 2000007/10000030000000 (about 2.0e-7) by a factor 20000090/2000007, about 10: outside the price by ten times the
     tolerance, so the cross-check still warns (`lp_dual_disagrees`, check `marginal`). The price, the vector and the
     judgements stand as D* gives them."""
     marginals = economy_flow._marginals
@@ -670,7 +681,7 @@ def test_a_marginal_beyond_the_tolerance_is_still_a_warning(tmp_path, economy, m
     def shifted(section: Any, rows: Any) -> dict:
         found = marginals(section, rows)
         if ("balance", "res.a", 0) in found:
-            found[("balance", "res.a", 0)] = -1.000001
+            found[("balance", "res.a", 0)] = -2.000003
         return found
 
     monkeypatch.setattr(economy_flow, "_marginals", shifted)
@@ -683,7 +694,7 @@ def test_a_marginal_beyond_the_tolerance_is_still_a_warning(tmp_path, economy, m
         "code": "lp_dual_disagrees",
         "detail": {
             "path": model_path(folder), "target": "res.a", "step": 0, "check": "marginal",
-            "marginal": "1000001/1000000", "low": str(LARGE), "high": str(LARGE),
+            "marginal": "2000003/1000000", "low": str(LARGE), "high": str(LARGE),
         },
     }]
     assert steady(doc)["prices"] == {"res.a": [str(LARGE)], "res.v": ["1"]}
