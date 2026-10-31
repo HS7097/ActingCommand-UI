@@ -136,14 +136,15 @@ answers come from:
   there is no lease offline, and each instance's id (short; the full id in grey) with its three facts. A
   ledger with no event yet says so; a replay the read face declines states its reason, and a failed one
   its code, operation, io kind (for an io error) and detail, one per line. The replay runs once as the
-  session opens, before the window shows, bounded by a 30-second deadline.
+  session opens (after the window shows, on the window's reader thread), bounded by a 30-second deadline.
 
 `--source <auto|offline|online>`, default `auto`: if the client can connect to the Runtime the state root
 points at, online; otherwise offline. The instance card's first line, "read face", states which one was
 chosen and why (`runtime-info.json` absent, or the client error code of the failed connection). With
-`online`, a failed connection **exits directly carrying the client's error code**; it does not quietly
+`online`, a failed connection **is an error carrying the client's error code**; it does not quietly
 switch to offline. Across both read faces, a Runtime that connects but cannot answer the first page is an
-error in any mode, with no fallback.
+error in any mode, with no fallback. Neither error ends the console: the window stays, the list and the
+instance card state in red why the read face did not open, and "Reopen" is offered.
 
 When the offline read face cannot be opened — with `offline`, or with `auto` falling back to it — the
 console does not exit: the window opens **unopened**, which is what a fresh install looks like, since the
@@ -156,7 +157,27 @@ most likely because the Runtime has never been started here, and point at the la
 fact is shown, not even a zero: the list says the ledger is not opened instead of standing empty; the
 tabs, the filter boxes, the id box and the time slider are off; the module and port boxes and the frame
 pane say "ledger not opened". Nothing is asked of the ledger and no material is read. The launcher works
-as usual.
+as usual; once the Runtime has started and made the ledger, "Reopen" opens the read face again.
+
+**The reader thread**: the window comes up first, and the read face is opened afterwards on the window's
+own reader thread (`acui-ledger-<window id>`). Opening, page reads, reading earlier, following, the jump
+to the latest, the time bound's probes and the frame's own events are all read there, one request after
+another; the window's event loop never waits on a read, and the read face never leaves that thread. While
+it opens, the list says the ledger is being opened and the controls are off. While a read is in flight,
+the top bar has one more line, "… waiting N s (a read of this kind takes at most about M s)", or "at most
+about M s per page" for a read that follows a cursor. It shows once a request has read for more than a
+second, so a quick read never makes the rows below jump; then its clock moves once a second, and only
+while a read is in flight. A tab or filter change, the time slider at rest, the jump to the latest, following turned
+on or off, and a reopen supersede the reads in flight: what they read is not left in the window, and a read
+that follows a cursor stops before its next page; a follow poll is only sent once the last one has
+finished. The window's state is locked only for the few milliseconds it takes to leave a result there or to
+paint, never while reading. A reader thread that panics, or that the system refuses, is stated in red in
+the window and in the technical log, and "Reopen" is offered too. "Reopen" starts a new session: the old
+reader stops after the page in hand, and the new session opens the read face again with the tab and the
+filters the boxes show now, without a time bound. When a read reaches a Runtime that is another process now
+(`console_runtime_owner_changed`), the top bar says so beside "Reopen", which reads the Runtime that runs
+now. A time span read follows the cursor for at most 64 pages; with still no event it stops, as
+`console_time_span_page_limit`, rather than keep the window reading.
 
 Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.32 (with
 Workflow #422 LN-OFF-1, the bounded offline opening), which speaks the 0.12 protocols
@@ -328,9 +349,11 @@ them, and for the step's other events through the effect intent that shares thei
 physical input (`input.*`) does not carry its frame under the `Ui` profile — its `before_frame_id` is
 projected away — so its frame is the one of the last effect intent of its run before it; the sentence
 under the frame says which event the frame was taken from. The frame is found among the loaded rows
-first; only when they hold no capture of it are the frame's own events read, with one query by frame
-id, kept while the pane stays on that frame. A failed or incomplete read is stated in the frame note
-under the frame, and the next reload tries again.
+first; only when they hold no capture of it are the frame's own events read, by the reader thread, with
+one query by frame id (the note under the frame says so while it runs), kept while the pane stays on that
+frame. A failed or incomplete read is stated in the frame note under the frame, and the next reload tries
+again. The material reader is the one the reader thread hands the frame pane; when a frame read latches
+the material connection, the reader thread makes a new one at once, and the next frame read uses it.
 
 On the frame, beside the event's own geometry:
 
@@ -378,7 +401,7 @@ directory and open it with `acui --state-root <root> --source offline`. It is ma
 ### When the start fails
 
 A start that cannot go on — a command line the console does not understand, an installation selection it
-cannot read, no state root, a read face that cannot be opened, a window that cannot be made — is shown in a
+cannot read, no state root, a window that cannot be made — is shown in a
 window of its own with the reason, written to the console the program was started from (if there is one),
 and appended to the technical log. The exit code is 2 for a command line the console does not understand
 and 1 otherwise. When not even that window can be made, a system message box says it. `--help` prints the
@@ -387,7 +410,9 @@ usage on that console, or shows it in the same window when there is none, and ex
 The technical log is `%LOCALAPPDATA%\ActingCommand\logs\acui-<start unix ms>.log` (elsewhere under
 `$XDG_STATE_HOME`, else `$HOME/.local/state`), beside actingd's start logs. It is created by its first
 entry and holds failures only: a failed start, a problem of the settings file, a result a background
-thread could not hand back to the window. Once it exists, the top of the window says where it is; when it
+thread could not hand back to the window, a ledger reader thread that could not start or that panicked. A
+read face that does not open is no failed start: the window stays and says why in its ledger area (see
+above). Once it exists, the top of the window says where it is; when it
 cannot be written, the window says that instead.
 
 ## Interface language and text size
@@ -1029,8 +1054,9 @@ One Cargo workspace, dependency direction app → model → rows ← source:
 - `acui-app`: the only crate that depends on slint; the `.slint` files are in `crates/acui-app/ui/`, the
   two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`. The
   ledger window is painted from its own state alone (`ledger/state.rs`, `ledger/paint.rs`), never from
-  the read face; the reads leave their results there first, and a frame is read and decoded on the
-  window's own worker (`ledger/frame.rs`).
+  the read face; the read face is opened and held by the window's own reader thread
+  (`ledger/worker.rs`), the reads leave their results in the state first, and a frame is read and
+  decoded on the window's own worker (`ledger/frame.rs`).
 
 `slint` 1.17.x, `default-features = false`; the ledger is read-only to the console (what the Runtime
 records of the console's own requests — the start press, shutdown requests — it records itself; the

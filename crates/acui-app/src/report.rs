@@ -6,9 +6,10 @@
 //! The technical log is `acui-<start unix ms>.log` in the directory actingd's
 //! start logs go to (`logs_dir`). It is created by its first entry, and only a
 //! few kinds of entry go into it: a start that failed, a problem of the
-//! settings file, a hand-off to the event loop that failed. Nothing of the
-//! ledger read goes there. Once it exists the windows show where it is, and
-//! when it cannot be written they say that instead.
+//! settings file, a hand-off to the event loop that failed, a ledger reader
+//! thread that could not start, panicked or was gone. No read itself goes
+//! there. Once it exists the windows show where it is, and when it cannot be
+//! written they say that instead.
 //!
 //! A start that fails is said everywhere it can be: the log, the console (this
 //! process's own, a stream the caller redirected, or the parent's, attached),
@@ -26,7 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use slint::ComponentHandle;
 
 use crate::strings::{fill, Labels};
-use crate::{Scale, StartupErrorWindow};
+use crate::{AppWindow, Scale, StartupErrorWindow};
 
 /// A start that cannot go on: what to say, and the exit code it ends with.
 pub struct Fatal {
@@ -138,6 +139,15 @@ pub fn log_note(labels: &Labels) -> (String, bool) {
             (fill(labels.log_failed, &[&path.display().to_string(), error]), true)
         }
     }
+}
+
+/// The main window's line about the log, painted from `log_note`: by the
+/// notices, and by every ledger repaint, since a reader that could not start,
+/// panicked or was gone may have just made the log.
+pub fn paint_log_note(window: &AppWindow, labels: &Labels) {
+    let (note, failed) = log_note(labels);
+    window.set_log_note(note.into());
+    window.set_log_failed(failed);
 }
 
 /// Hands `job` from a worker thread to the event loop. That fails only once the

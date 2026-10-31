@@ -166,6 +166,7 @@ export global Strings {
     in property <string> show-performance;
     in property <string> jump-latest;
     in property <string> follow-latest;
+    in property <string> reopen-ledger;
     in property <string> card-title;
     in property <string> card-note;
     in property <string> detail-title;
@@ -276,10 +277,20 @@ export component AppWindow inherits Window {
     in property <bool> port-enabled;
     in property <[RowItem]> rows;
     in property <string> filter-error;
-    // Set only while the read face is unopened: shown where the rows would be,
-    // and every control that would query the ledger is off.
+    // Set only while the read face is not open — opening (grey), unopened or
+    // failed (red): shown where the rows would be, and every control that
+    // would query the ledger is off.
     in property <string> unopened-note;
+    in property <bool> unopened-failed;
     property <bool> ledger-live: root.unopened-note == "";
+    // What the window's reader is reading, and how long it has waited; empty
+    // while it waits for a request.
+    in property <string> busy-text;
+    // A new session of the read face, offered when it did not open, when its
+    // reader stopped, or when a read reached another Runtime; and why, when
+    // the rest of the window does not already say it.
+    in property <bool> reopen-offered;
+    in property <string> reopen-note;
     in property <bool> has-more;
     // The performance monitor's routine events shown; hidden by default.
     in-out property <bool> show-performance;
@@ -340,6 +351,7 @@ export component AppWindow inherits Window {
     callback show-performance-changed(bool);
     callback jump-latest();
     callback follow-changed(bool);
+    callback reopen-ledger();
     callback text-size-changed(int);
     callback language-changed(int);
     callback start-runtime();
@@ -467,6 +479,26 @@ export component AppWindow inherits Window {
                         width: 150px * Scale.factor;
                         overflow: elide;
                         color: Palette.foreground.with-alpha(0.75);
+                    }
+                }
+                if root.busy-text != "": Notice {
+                    text: root.busy-text;
+                    font-size: Scale.grey-font;
+                }
+                if root.reopen-offered: HorizontalLayout {
+                    spacing: 14px;
+                    Button {
+                        text: Strings.reopen-ledger;
+                        clicked => {
+                            root.reopen-ledger();
+                        }
+                    }
+                    Notice {
+                        text: root.reopen-note;
+                        failed: true;
+                        vertical-alignment: center;
+                        min-width: 40px;
+                        horizontal-stretch: 1;
                     }
                 }
                 // launcher: Runtime status, the two requests, and one line for what
@@ -677,7 +709,7 @@ export component AppWindow inherits Window {
                     // An empty list here would read as an empty ledger.
                     if !root.ledger-live: Text {
                         text: root.unopened-note;
-                        color: Severity.error;
+                        color: root.unopened-failed ? Severity.error : Palette.foreground.with-alpha(0.7);
                         font-size: Scale.list-font;
                         vertical-stretch: 0;
                         wrap: word-wrap;

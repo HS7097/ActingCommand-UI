@@ -1,44 +1,51 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The ledger window's paint, and every word of it: the card, the list, the
-//! detail, the frame pane and the boxes, made from the window's state alone
-//! (`LedgerState`) in the language shown at that moment. Nothing here reads
-//! the read face; a new frame read takes the caller's material reader, runs on
-//! the window's frame slot and comes back here to be painted (`frame_read`).
+//! detail, the frame pane, the boxes and the busy line, made from the window's
+//! state alone (`LedgerState`) in the language shown at that moment, while the
+//! caller holds its lock. Nothing here reads the read face; a new frame read
+//! takes the material reader the window's reader published, runs on the
+//! window's frame slot and comes back here to be painted (`frame_read`).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use acui_model::{
     BasisVia, DisplayRow, FrameGroup, FrameTarget, InstanceCard, Mark, Overlay, QueryError,
     RecoveryGroup, ViewModel, ALL_TABS,
 };
+use acui_rows::outcome::CONSOLE_RUNTIME_OWNER_CHANGED;
 use acui_rows::{
     code, event_type_names, format_bytes, format_clock, format_full, links_named, module_names,
     seconds_since, short_id, ArtifactEvictionObservation, EventSeverity, LedgerCount,
     OriginModule, ProjectedEvent, Sensitivity, WriterFacts,
 };
-use acui_source::{
-    MaterialOutcome, MaterialReader, OfflineFacts, OfflineReason, RuntimeInstance, MAX_FRAME_BYTES,
+use acui_source::{MaterialOutcome, OfflineFacts, OfflineReason, RuntimeInstance, MAX_FRAME_BYTES};
+use slint::{
+    ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
 };
-use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
 use crate::ledger::frame::{FrameRequest, FrameSlot};
 use crate::ledger::state::{
-    FrameLookupError, InstancesSnapshot, LedgerState, Phase, PortMap, SourceFacts,
+    BusyKind, FrameLookupError, InstancesSnapshot, LedgerFailure, LedgerState, Phase, PortMap,
+    SourceFacts,
 };
 use crate::ledger::LedgerHandle;
 use crate::phrase::{phrase, Phrase};
 use crate::strings::{fill, outcome_sentence, outcome_short, Labels, Language};
 use crate::ui::Ui;
-use crate::{AppWindow, ArtifactItem, FieldLine, OverlayItem, RowItem, TargetItem};
+use crate::{AppWindow, ArtifactItem, FieldLine, OverlayItem, RowItem, Strings, TargetItem};
+
+/// How long a request runs before the busy line shows.
+const BUSY_QUIET: Duration = Duration::from_secs(1);
 
 /// The port box's items, and the port each item after the first one means: the
 /// first means every instance, then one per port, ascending, naming the port
 /// and the member its latest binding is for, with ` +n` for the further
 /// members of the same port. A map with nothing to pick — no binding facts,
-/// facts that name no port, online, an unopened face, or a refused read —
-/// gives one item that says which, and no choices, so the box is disabled.
-/// Made again at every paint and every pick, in the language shown then; the
-/// map itself is fixed for the session.
+/// facts that name no port, online, a face still opening or unopened, or a
+/// refused read — gives one item that says which, and no choices, so the box
+/// is disabled. Made again at every paint and every pick, in the language
+/// shown then; the map itself is fixed for the session.
 pub fn port_options(labels: &Labels, port_map: &PortMap) -> (Vec<SharedString>, Vec<u16>) {
     let bindings = match port_map {
         PortMap::Read(bindings) if !bindings.ports.is_empty() => bindings,
@@ -46,6 +53,7 @@ pub fn port_options(labels: &Labels, port_map: &PortMap) -> (Vec<SharedString>, 
             return (vec![labels.all_instances.into()], Vec::new())
         }
         PortMap::Read(_) => return (vec![labels.no_binding_records.into()], Vec::new()),
+        PortMap::Opening => return (vec![labels.ledger_opening.into()], Vec::new()),
         PortMap::Online => return (vec![labels.port_online_unsupported.into()], Vec::new()),
         PortMap::Unopened => return (vec![labels.ledger_unopened.into()], Vec::new()),
         PortMap::Failed(error) => return (vec![error.to_string().into()], Vec::new()),
@@ -64,25 +72,30 @@ pub fn port_options(labels: &Labels, port_map: &PortMap) -> (Vec<SharedString>, 
     (options, bindings.ports.iter().map(|entry| entry.port).collect())
 }
 
-/// Paints the ledger window from its state alone, in the language of
-/// `labels`: nothing here reads the read face. What a paint needs read is read
-/// before it (`prepare`, in `main.rs`). `reader` hands out the material reader
-/// as the session holds it then, and is asked only when the pane starts a new
-/// frame read: on a latched material connection that is where the session
-/// connects anew, so a paint that starts no read never does.
-pub fn refresh(
-    window: &AppWindow,
-    ledger: &LedgerHandle,
-    labels: &Labels,
-    reader: &dyn Fn() -> MaterialReader,
-) {
-    let state = ledger.state.borrow();
+/// Paints the ledger window from `state` alone, in the language of `labels`:
+/// nothing here reads the read face, and the caller holds the state's lock for
+/// the length of the paint. What a paint needs read, the window's reader read
+/// before it. A new frame read takes a clone of the material reader the reader
+/// published.
+pub fn refresh(window: &AppWindow, ledger: &LedgerHandle, state: &LedgerState, labels: &Labels) {
+    let source = match &state.phase {
+        Phase::Open(facts) if facts.offline_reason.is_none() => labels.data_source_online,
+        Phase::Open(_) | Phase::Unopened { .. } => labels.data_source,
+        Phase::Opening { .. } | Phase::Failed { .. } => labels.data_source_pending,
+    };
+    window.global::<Strings>().set_data_source(source.into());
+    window.set_busy_text(busy_text(labels, state).into());
+    let (offered, note) = reopen_offer(labels, state);
+    window.set_reopen_offered(offered);
+    window.set_reopen_note(note.into());
     let (Phase::Open(facts), Some(model)) = (&state.phase, &state.model) else {
-        paint_unopened(window, &state, labels);
+        paint_closed(window, ledger, state, labels);
         return;
     };
     let card = model.instance_card(state.port_bindings());
 
+    window.set_unopened_note(SharedString::new());
+    window.set_unopened_failed(false);
     window.set_ledger_dir_value(card.state_root.as_str().into());
     window.set_storage_format_value(backend_text(labels, &card.backend).into());
     let scope = model.read_scope();
@@ -122,7 +135,7 @@ pub fn refresh(
         field(
             labels,
             "source",
-            source_text(labels, &state),
+            source_text(labels, state),
             if state.offline_reason().is_some() { "offline" } else { "online" },
         ),
         field(labels, "latest_sequence", card.latest_sequence.to_string(), "latest_sequence"),
@@ -216,7 +229,7 @@ pub fn refresh(
     window.set_active_tab(active as i32);
 
     sync_modules(window, ledger, labels, &model.filters.origin_module.clone(), card.modules);
-    sync_ports(window, &state, labels, model.filters.port);
+    sync_ports(window, state, labels, model.filters.port);
 
     let display = model.display_rows();
     let mut errors = Vec::new();
@@ -315,12 +328,13 @@ pub fn refresh(
             // The frame the event was taken on or acted on, with what the
             // ledger says about it; an event of no frame keeps its own capture,
             // if it has one.
-            let mut frame = frame_view(&state, model);
+            let mut frame = frame_view(state, model);
             let target = match frame.as_mut() {
                 Some(frame) => frame.group.target.take(),
                 None => model.frame_target(),
             };
             let none_note = match &frame {
+                Some(FrameView { pending: true, .. }) => labels.frame_events_reading.to_string(),
                 Some(FrameView { failure: Some(failure), .. }) => {
                     fill(labels.frame_events_failed, &[&failure.text(labels)])
                 }
@@ -335,9 +349,9 @@ pub fn refresh(
                 detail.frame_size.or(frame.as_ref().and_then(|frame| frame.group.extent));
             update_frame(
                 window,
-                &ledger.frame,
+                ledger,
+                state,
                 labels,
-                reader,
                 model.snapshot_position(),
                 target,
                 stated_size,
@@ -402,48 +416,155 @@ pub fn refresh(
             );
             window.set_payload_json(detail.pretty_payload_json.into());
         }
-        None => {
-            window.set_detail_lines(models(vec![FieldLine {
-                label: labels.not_selected.into(),
-                value: SharedString::new(),
-                raw: SharedString::new(),
-                wrap: false,
-            }]));
-            window.set_artifacts(models(Vec::<ArtifactItem>::new()));
-            window.set_overlays(models(Vec::<OverlayItem>::new()));
-            window.set_targets(models(Vec::<TargetItem>::new()));
-            window.set_frame_page(SharedString::new());
-            window.set_frame_explain(SharedString::new());
-            window.set_canvas_width(1.0);
-            window.set_canvas_height(1.0);
-            window.set_frame_size_text(SharedString::new());
-            window.set_payload_json(SharedString::new());
-            clear_frame(window, &ledger.frame, labels.no_event_selected.to_string());
-        }
+        None => clear_detail(window, ledger, labels, labels.no_event_selected.to_string()),
     }
 }
 
-/// The window over an unopened read face, painted once: nothing was read, so
-/// the card has the read-face line only, and the list, the boxes and the frame
-/// pane say the ledger is not opened instead of standing empty, which would
-/// read as an empty ledger. The controls that would query it are off.
-fn paint_unopened(window: &AppWindow, state: &LedgerState, labels: &Labels) {
+/// The detail pane with no event: no lines but "not selected", no material,
+/// no geometry, and the frame pane saying `note`.
+fn clear_detail(window: &AppWindow, ledger: &LedgerHandle, labels: &Labels, note: String) {
+    window.set_detail_lines(models(vec![FieldLine {
+        label: labels.not_selected.into(),
+        value: SharedString::new(),
+        raw: SharedString::new(),
+        wrap: false,
+    }]));
+    window.set_artifacts(models(Vec::<ArtifactItem>::new()));
+    window.set_overlays(models(Vec::<OverlayItem>::new()));
+    window.set_targets(models(Vec::<TargetItem>::new()));
+    window.set_frame_page(SharedString::new());
+    window.set_frame_explain(SharedString::new());
+    window.set_canvas_width(1.0);
+    window.set_canvas_height(1.0);
+    window.set_frame_size_text(SharedString::new());
+    window.set_payload_json(SharedString::new());
+    clear_frame(window, &ledger.frame, note);
+}
+
+/// The window over a read face that is not open — still opening, unopened, or
+/// failed: nothing is shown as read, so the card has the read-face line only,
+/// and the list, the boxes and the frame pane say why instead of standing
+/// empty, which would read as an empty ledger. The controls that would query
+/// it are off. Whatever an earlier session of the window painted goes.
+fn paint_closed(window: &AppWindow, ledger: &LedgerHandle, state: &LedgerState, labels: &Labels) {
+    let (top, note, failed) = match &state.phase {
+        Phase::Opening { .. } | Phase::Open(_) => {
+            (labels.ledger_opening, labels.list_opening.to_owned(), false)
+        }
+        Phase::Unopened { .. } => (labels.ledger_unopened, labels.list_unopened.to_owned(), true),
+        Phase::Failed { failure, .. } => (labels.ledger_unopened, failure_text(labels, failure), true),
+    };
+    let (value, raw) = match &state.phase {
+        Phase::Unopened { .. } => (source_text(labels, state), "offline"),
+        Phase::Failed { failure, .. } => (failure_text(labels, failure), ""),
+        Phase::Opening { .. } | Phase::Open(_) => (labels.ledger_opening.to_owned(), ""),
+    };
     window.set_ledger_dir_value(state.state_root().display().to_string().into());
     window.set_storage_format_value(labels.none.into());
-    window.set_read_up_to_text(labels.ledger_unopened.into());
+    window.set_read_up_to_text(top.into());
+    window.set_loaded_rows_text(SharedString::new());
+    window.set_follow_available(false);
+    window.set_cursor_label(labels.all.into());
     // The card's only line, and so the one that may wrap.
     window.set_card_lines(models(vec![FieldLine {
         label: labels.field("source").into(),
-        value: source_text(labels, state).into(),
-        raw: "offline".into(),
+        value: value.into(),
+        raw: raw.into(),
         wrap: true,
     }]));
     window.set_tab_labels(shared(&labels.tabs));
     window.set_active_tab(-1);
-    window.set_module_options(models(vec![SharedString::from(labels.ledger_unopened)]));
+    window.set_module_options(models(vec![SharedString::from(top)]));
+    window.set_module_index(0);
     sync_ports(window, state, labels, None);
-    window.set_unopened_note(labels.list_unopened.into());
-    window.set_frame_note(labels.list_unopened.into());
+    window.set_filter_error(SharedString::new());
+    window.set_has_more(false);
+    window.set_rows(models(Vec::<RowItem>::new()));
+    window.set_selected_index(-1);
+    window.set_unopened_note(note.as_str().into());
+    window.set_unopened_failed(failed);
+    clear_detail(window, ledger, labels, note);
+}
+
+/// Why a session reads nothing more.
+fn failure_text(labels: &Labels, failure: &LedgerFailure) -> String {
+    match failure {
+        LedgerFailure::Open { text, code } => {
+            let reason = match (*code).and_then(|code| outcome_sentence(labels, code)) {
+                Some(words) => format!("{text} · {words}"),
+                None => text.clone(),
+            };
+            fill(labels.ledger_open_failed, &[&reason])
+        }
+        LedgerFailure::Panicked(message) => {
+            fill(labels.ledger_worker_panicked, &[message.as_deref().unwrap_or(labels.none)])
+        }
+        LedgerFailure::NoThread(error) => fill(labels.thread_failed, &[error]),
+        LedgerFailure::Gone => labels.ledger_worker_gone.to_owned(),
+    }
+}
+
+/// Whether the window offers a new session, and why when the rest of the
+/// window does not already say it: a face that did not open, a reader that
+/// stopped, or a read that reached a Runtime other than the session's.
+fn reopen_offer(labels: &Labels, state: &LedgerState) -> (bool, String) {
+    match &state.phase {
+        Phase::Opening { .. } => (false, String::new()),
+        Phase::Unopened { .. } | Phase::Failed { .. } => (true, String::new()),
+        Phase::Open(facts) if owner_changed(state, facts) => {
+            (true, labels.ledger_owner_changed.to_owned())
+        }
+        Phase::Open(_) => (false, String::new()),
+    }
+}
+
+/// Whether a read of this session, or its last status read, reached a Runtime
+/// of another owner epoch: every later read through that connection fails the
+/// same way, and only a new session reads the Runtime that runs now.
+fn owner_changed(state: &LedgerState, facts: &SourceFacts) -> bool {
+    let changed = |error: &Option<QueryError>| {
+        matches!(
+            error,
+            Some(QueryError::ReadFailed { code: Some(found), .. })
+                if *found == CONSOLE_RUNTIME_OWNER_CHANGED
+        )
+    };
+    let read = state.model.as_ref().is_some_and(|model| {
+        changed(&model.query_error) || changed(&model.follow_error) || changed(&model.span_error)
+    });
+    let status = matches!(
+        &facts.instances,
+        InstancesSnapshot::Online(Err(failure)) if failure.code == CONSOLE_RUNTIME_OWNER_CHANGED
+    );
+    read || status
+}
+
+/// The busy line: what the window's reader is reading, how long it has
+/// waited, and about how long a read of that kind may take; empty while it
+/// waits for a request, and for a request's first `BUSY_QUIET`, so a quick one
+/// never flashes a line that pushes the window's rows down and back.
+pub fn busy_text(labels: &Labels, state: &LedgerState) -> String {
+    let Some(busy) = state.busy.as_ref().filter(|busy| busy.started.elapsed() >= BUSY_QUIET)
+    else {
+        return String::new();
+    };
+    let what = match busy.kind {
+        BusyKind::Opening => labels.ledger_opening.to_owned(),
+        BusyKind::Bindings => labels.busy_bindings.to_owned(),
+        BusyKind::Span => labels.busy_span.to_owned(),
+        BusyKind::Probing => labels.busy_probing.to_owned(),
+        BusyKind::Reading { read, of } => {
+            fill(labels.busy_reading, &[&read.to_string(), &of.to_string()])
+        }
+        BusyKind::Repinning => labels.busy_repinning.to_owned(),
+        BusyKind::Polling => labels.busy_polling.to_owned(),
+        BusyKind::Instances => labels.busy_instances.to_owned(),
+        BusyKind::FrameEvents => labels.frame_events_reading.to_owned(),
+        BusyKind::Reconnecting => labels.busy_reconnecting.to_owned(),
+    };
+    let template = if busy.per_page { labels.busy_waited_page } else { labels.busy_waited };
+    let waited = busy.since.elapsed().as_secs().to_string();
+    fill(template, &[&what, &waited, &busy.bound.to_string()])
 }
 
 /// Rebuilds the module option list from the loaded rows and puts the box back
@@ -540,18 +661,21 @@ fn detail_lines(labels: &Labels, event: &ProjectedEvent) -> Vec<FieldLine> {
 /// only after the ledger says the material was not evicted. The read runs on
 /// the window's frame slot (`FrameSlot::read`), which hands back the bytes and
 /// a `Phrase`; the pane's note is kept with the request, so a paint while the
-/// read runs, or after it, says it again in the language shown then. `reader`
-/// is asked once per new request, never for a request already held.
+/// read runs, or after it, says it again in the language shown then. A new
+/// request takes a clone of the material reader the window's reader published;
+/// a read that finds it latched, or unusable, asks the window's reader for a
+/// new one, for the request after it.
 fn update_frame(
     window: &AppWindow,
-    slot: &FrameSlot,
+    ledger: &LedgerHandle,
+    state: &LedgerState,
     labels: &Labels,
-    reader: &dyn Fn() -> MaterialReader,
     snapshot: u64,
     target: Option<FrameTarget>,
     payload_frame_size: Option<(f32, f32)>,
     none_note: String,
 ) {
+    let slot = &ledger.frame;
     let Some(target) = target else {
         clear_frame(window, slot, none_note);
         return;
@@ -571,6 +695,12 @@ fn update_frame(
         );
         return;
     }
+    // Published together with the open face, so only a window still opening
+    // has none; it paints no frame.
+    let Some(reader) = state.reader.as_ref() else {
+        clear_frame(window, slot, labels.ledger_opening.to_string());
+        return;
+    };
     let reading = {
         let bytes = target.artifact.byte_count.to_string();
         phrase(move |labels| fill(labels.frame_reading, &[&bytes]))
@@ -594,7 +724,17 @@ fn update_frame(
     };
     window.set_frame_ready(false);
     window.set_frame_note(reading(labels).into());
-    let started = slot.read(window, reader(), target, snapshot, generation, payload_frame_size);
+    let (id, session) = (ledger.id, state.tag.session);
+    let rebuild = move || crate::ledger::refresh_reader(id, session);
+    let started = slot.read(
+        window,
+        reader.clone(),
+        target,
+        snapshot,
+        generation,
+        payload_frame_size,
+        rebuild,
+    );
     // No read runs. The request is dropped, so choosing the event again retries.
     if let Err(error) = started {
         clear_frame(window, slot, fill(labels.thread_failed, &[&error.to_string()]));
@@ -962,31 +1102,34 @@ const fn recovery_index(state: acui_rows::LedgerRecoveryState) -> usize {
 }
 
 /// The frame pane's view of the selected event's frame: what the ledger says
-/// about it, how it was found, and why the frame's events could not be read.
+/// about it, how it was found, whether the frame's own events are still being
+/// read, and why they could not be read.
 struct FrameView {
     group: FrameGroup,
     via: BasisVia,
     basis_sequence: u64,
+    pending: bool,
     failure: Option<FrameLookupError>,
 }
 
 /// The selected event's frame, found among the loaded rows and, when they hold
-/// no capture of it, among the frame's own events, read before the paint —
-/// one query by frame id, kept while the pane stays on that frame — so an
-/// event still lands on its frame when the capture is filtered out or not
+/// no capture of it, among the frame's own events, which the window's reader
+/// reads — one query by frame id, kept while the pane stays on that frame — so
+/// an event still lands on its frame when the capture is filtered out or not
 /// loaded.
 fn frame_view(state: &LedgerState, model: &ViewModel) -> Option<FrameView> {
     let (basis, via) = model.selected_basis()?;
     let frame_id = *basis.links.frame_id()?;
     let frame = code(&frame_id);
     let basis_sequence = basis.sequence;
+    let pending = state.frame_events.pending(&frame);
     let (extra, failure) = match state.frame_events.of(&frame) {
         Some(Ok(events)) => (events.as_slice(), None),
         Some(Err(error)) => (&[][..], Some(error.clone())),
         None => (&[][..], None),
     };
     let group = model.frame_group(&frame, extra);
-    Some(FrameView { group, via, basis_sequence, failure })
+    Some(FrameView { group, via, basis_sequence, pending, failure })
 }
 
 fn is_input(event: &ProjectedEvent) -> bool {

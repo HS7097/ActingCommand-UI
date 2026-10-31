@@ -112,6 +112,18 @@
         "short": "实例状态缺少来源",
         "handling": "请确认监控台与 Runtime 来自同一版本，然后重新打开监控台。"
       }
+    },
+    "console_time_span_page_limit": {
+      "en": {
+        "sentence": "The time span could not be read: page after page came back without an event, so the console stopped asking. The event list is not affected.",
+        "short": "Time span not read",
+        "handling": "Jump to the latest, or reopen the window, to read it again."
+      },
+      "zh-Hans": {
+        "sentence": "时间跨度没能读出：一页接一页都没有返回事件，监控台已停止追读；事件列表不受影响。",
+        "short": "时间跨度未读出",
+        "handling": "可点「跳到最新」或重新打开窗口再读一次。"
+      }
     }
   }
 }

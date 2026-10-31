@@ -76,7 +76,10 @@ impl FrameSlot {
     /// cannot be stopped midway on either face, so a superseded one runs to
     /// its end, bounded by the byte cap and the deadline, and its result is
     /// dropped; one queued behind the slot that is superseded by then never
-    /// starts. A thread the system refuses comes back as the error.
+    /// starts. A read that left the material connection latched, or a reader
+    /// whose rebuild had failed, hands `rebuild` to the event loop, superseded
+    /// or not, so the window's reader makes the next one. A thread the system
+    /// refuses comes back as the error.
     pub fn read(
         &self,
         window: &AppWindow,
@@ -85,6 +88,7 @@ impl FrameSlot {
         snapshot: u64,
         generation: u64,
         payload_frame_size: Option<(f32, f32)>,
+        rebuild: impl FnOnce() + Send + 'static,
     ) -> io::Result<()> {
         let shared = Arc::clone(&self.generation);
         let frame = Arc::clone(&self.request);
@@ -97,6 +101,9 @@ impl FrameSlot {
                 return;
             }
             let read = reader.read(target.event, &target.artifact, snapshot, &still_wanted);
+            if needs_rebuild(&reader) {
+                report::post("acui-frame", rebuild);
+            }
             let painted: Result<(u32, u32, Vec<u8>), Phrase> = match read {
                 Err(error) => Err(verbatim(error.to_string())),
                 Ok(None) => return,
@@ -131,6 +138,17 @@ impl FrameSlot {
                 paint::frame_read(&window, &ui, note, painted, payload_frame_size);
             });
         })
+    }
+}
+
+/// Whether the next frame read needs a new material reader: the online one
+/// is latched (a read failed fatally on its connection), or the rebuild that
+/// made this one had failed.
+fn needs_rebuild(reader: &MaterialReader) -> bool {
+    match reader {
+        MaterialReader::Offline(_) => false,
+        MaterialReader::Online { latched, .. } => latched.load(Ordering::SeqCst),
+        MaterialReader::Unavailable(_) => true,
     }
 }
 

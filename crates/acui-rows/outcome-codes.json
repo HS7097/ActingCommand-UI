@@ -83,6 +83,20 @@
       "description": "The Runtime answered the console's status read (operation runtime_status) without the observation source it records for that read, so the console cannot state the ledger position the instances' status was read at. The instances' live status is not shown; the event pages read as before.",
       "common_causes": "A Runtime whose status reply does not carry its observation source; a console and a Runtime from releases that do not match.",
       "handling": "Run the console and the Runtime from the same release, then reopen the console."
+    },
+    "console_time_span_page_limit": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ui",
+      "layer": "ui",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "1.0.0",
+      "description": "Reading the committed time span (the time of the snapshot's first event, and of the event at the pin), the console followed the page cursor for its page limit (64 pages) without finding an event, and stopped. A page the Runtime's read budget stopped may hold no row and still go on, so a run of empty pages that never ends would otherwise keep the ledger window reading for ever. The time cursor keeps the span it had, or none, until a span read succeeds; the event pages read as before.",
+      "common_causes": "A ledger whose pages keep coming back empty under the read budget: a very busy host, or a very large ledger read offline.",
+      "handling": "Jump to the latest, turn following on, or reopen the window to read the span again; if it recurs, read with a less busy host."
     }
   },
   "locations": {}

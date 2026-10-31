@@ -227,7 +227,8 @@ pub struct LauncherView {
     unlock_offered: bool,
     unlock_line: Option<Line>,
     /// The window reads offline, or its offline face is unopened: a Runtime
-    /// that runs is not what it shows, and the line says so.
+    /// that runs is not what it shows, and the line says so. False until the
+    /// ledger window's reader has opened its read face (`set_reads_offline`).
     reads_offline: bool,
 }
 
@@ -241,6 +242,14 @@ impl LauncherView {
             unlock_line: None,
             reads_offline,
         }
+    }
+
+    /// Whether the window reads offline, or its offline face is unopened, as
+    /// the ledger window found its read face; true when that changed.
+    pub fn set_reads_offline(&mut self, reads_offline: bool) -> bool {
+        let changed = self.reads_offline != reads_offline;
+        self.reads_offline = reads_offline;
+        changed
     }
 
     /// A new probe: from now on only its answer counts. `checking` puts the
