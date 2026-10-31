@@ -197,7 +197,7 @@ def _explain(args: list[str], cfg: config.Config, system: System) -> dict[str, A
     _dependencies(system)
     return explain(
         Path(args[0]), args[1], Path(args[2]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits,
-        unknowns=cfg.unknowns,
+        unknowns=cfg.unknowns, economy=cfg.economy,
     )
 
 

@@ -161,8 +161,10 @@ def economy(make_system, app_dir, write_config):
 
 
 def steady(doc: dict[str, Any]) -> dict[str, Any]:
-    """The steady state without HiGHS's marginals, which are a cross-check only (and need not be unique)."""
-    return {key: value for key, value in doc["data"]["steady"].items() if key != "marginals"}
+    """The steady state without HiGHS's marginals, which are a cross-check only (and need not be unique), and
+    without what PRICE-2b-1 adds, which test_price_vector.py pins: the re-solved prices (`grain`, a cross-check now)
+    and the joint price vector with the activity judgements (`joint`)."""
+    return {key: value for key, value in doc["data"]["steady"].items() if key not in ("marginals", "grain", "joint")}
 
 
 def settled(*resources: str) -> dict[str, Any]:

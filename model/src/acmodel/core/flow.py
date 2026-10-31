@@ -8,11 +8,14 @@ Two nodes of the derivation graph (`core.graph`), each computed after what it re
   from the rules and the data only, in the neutral reference state (the graph's "reference" nodes: a cap with a
   reading counts at its `reference`, #424 ACM-PRICE G-A and ruling 126 A), and solved as LPs. Value comes only
   through the goal sinks of the objective rules (PRICE-2a, below). It gives the optimum per cycle; the price
-  of every resource in every step and of every cap and limit, by re-solves at plus and minus one grain
-  (`lp.grain`), exact when both sides agree and an interval otherwise; the value of each activity at those
-  prices; and the least overflow and lost production among the optimal solutions. HiGHS's marginals are only a
-  cross-check (`lp_dual_disagrees`). A pending flow whose amounts read unknowns is left out and listed
-  (`excluded_pending`), and then every price is provisional (`price_status`; the ACM-PRICE addendum, part 1).
+  of every resource in every step, the projection of its balance row's dual onto the dual's optimal face D*
+  (below, PRICE-2b-1), exact when both ends agree and an interval otherwise; the price of every cap and limit,
+  by re-solves at plus and minus one grain (`lp.grain`); the value of each activity at those prices; the joint
+  price vector and the activity judgements (below); and the least overflow and lost production among the
+  optimal solutions. The re-solves of the resources' prices at plus and minus one grain (`grain`) and HiGHS's
+  marginals are only cross-checks (`lp_dual_disagrees`). A pending flow whose amounts read unknowns is left out
+  and listed (`excluded_pending`), and then every price is provisional (`price_status`; the ACM-PRICE addendum,
+  part 1).
 - ("economy", "plan"): one account's plan. From the state's readings over `economy.plan_horizon` steps, with
   integer counts and an indicator per read cap and step, solved as a MILP within `search.milp_node_limit`
   nodes and never a time limit; the final stocks are priced by the steady state. A plan the node limit stops is
@@ -52,6 +55,25 @@ another acquisition is a conversion, compared inside V. Three solves:
   an activity that some optimum of S3 uses and no optimum of S2 does is `objective_tier_tie` (a warning).
 All of them compare exact fractions; a row A ≥ A* or V ≥ V* is checked exactly like every other row.
 
+**The joint price vector** (#424 ACM-PRICE addendum 2.1 §2.2, ruling 127 iii; PRICE-2b-1). The exported prices are
+one point of D*, never a pick per pool. Steps:
+1. the dual of S3's program, generated from its rows (`_dual`): a variable per row (free for an equality, as the
+   difference of two non-negative ones), one per variable with an upper bound, a row per column; D* adds the
+   strong-duality row, the dual's cost at V0 (`FACE`). That HiGHS's least cost is V0 is checked exactly
+   (`duality`), and so is every solution on the dual against every dual row and the face
+   (`lp_numeric_check_failed`, stage `dual`, which blocks the steady state: no price without the whole vector);
+2. the projection: a pool's coordinate is the mean over the cycle's steps of its balance rows' duals, and its
+   interval `[low, high]` its least and greatest value on D*, an unbounded end null;
+3. the selection (`joint`), each step an exact LP: (1) a pool bounded below only that a main goal values is fixed
+   at its least value (the value of one more), by id; (2) the lexicographic max-min over K: the pools of a bounded
+   interval and the activities that no optimum runs and whose value reaches 0 somewhere on D* (`max_min`); (3) a
+   pool whose ends agree has its one value; and last, each pool the selection withholds (bounded below only and no
+   main goal: `no_steady_supply`; without a low end: `no_room`), by id, at its low end on the face left, else its
+   high end, else 0. The vector is then checked exactly as a point of D*;
+4. the activity judgements: an activity's value at the vector and its range on D*, the most an optimum of S3 runs
+   it (`in_optimum` when above 0), and the loss per execution of running it more (`forcing_cost`, from the dual of
+   S3 with that most as a floor; `input_bound` when that dual is unbounded: nothing is left to run it again).
+
 **Exactness.** Every solution is converted with `Fraction(x).limit_denominator(lp.max_denominator)` and checked
 exactly against every bound, integrality and row (`lp_numeric_check_failed`). Objective values, prices and
 losses are computed from the checked fractions, never from the solver's floats.
@@ -67,7 +89,7 @@ stays dropped while the rest is still infeasible.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -120,23 +142,45 @@ PREFIX = {STEADY: ("reference",), PLAN: ("general",)}
 # `excluded_pending`; or a rule, data row or reading it read is provisional, or depends on an unknown that a
 # pending rule it read names.
 EXCLUDED_PENDING, INPUTS = "excluded_pending", "inputs"
-# How an economy node is kept in the cache.
-FORMAT = {"economy": ["data", "status", "per_account", "warnings", "blocked"]}
+# How an economy node is kept in the cache: with what the steady state read, the provenance of its outputs.
+FORMAT = {"economy": ["data", "status", "per_account", "warnings", "blocked", "reads"]}
 _STATE = object()  # a node from the rules and the data only that would need the account state
 
 Key = tuple[str, str, int]
 _Pair = tuple[Fraction | None, Fraction | None]  # a price: its low and high ends, None for unbounded
 
+# The joint price vector (PRICE-2b-1; addendum 2.1 §2.2). The stages of the solves on the dual (its check, the
+# projections, the selection, the ranges and the forcing costs) and of the judgements' primal solves (the most an
+# optimum runs an activity).
+DUAL, JUDGEMENT = "dual", "judgement"
+FACE: Key = ("duality", "face", 0)  # the strong-duality row: the dual's cost at the primal optimum
+LEVEL: Key = ("t", "level", 0)  # the max-min's level, a variable of its stage
+PROBE: Key = ("t", "probe", 0)  # the distance of one coordinate, a variable of the probe of a stage
+# The economy's graph outputs (#424 ACM-PRICE 4.1): `price:<resource>` and the diagnostic `activity_value:<activity>`,
+# and the ids of the max-min's coordinates.
+PRICE, ACTIVITY_VALUE = "price:", "activity_value:"
+GRAPH_OUTPUTS = ("price", "activity_value")
+# How a pool's coordinate is chosen (`by`): its ends agree; the max-min; its least value (the value of one more);
+# its greatest (the value of one less); 0, unbounded both ways.
+EXACT, MAX_MIN, ONE_MORE, ONE_LESS, ZERO = "exact", "max_min", "one_more", "one_less", "zero"
+# Why the selection withholds a pool's coordinate: one less is infeasible and no main goal values it (it has no
+# steady supply); one more is infeasible (no room: nothing in the cycle can take one more unit, as where a regen
+# stops at a cap and the pending flows that would use it are left out).
+NO_STEADY_SUPPLY, NO_ROOM = "no_steady_supply", "no_room"
+
 
 @dataclass(frozen=True)
 class Economy:
-    """The value of an economy node: its output as `economy` shows it, or the errors that block it."""
+    """The value of an economy node: its output as `economy` shows it, or the errors that block it; and what it
+    read, the graph nodes, data rows and gates its outputs rest on (the provenance of `price:` and
+    `activity_value:`, PRICE-2b-1)."""
 
     data: dict[str, Any] | None = None
     status: str = CONFIRMED
     per_account: bool = False
     warnings: tuple[dict[str, Any], ...] = ()
     blocked_by: frozenset[int] = frozenset()
+    reads: tuple[tuple[str, ...], ...] = ()
 
     @property
     def blocked(self) -> bool:
@@ -174,17 +218,38 @@ def model_leaf(checker: Checker) -> dict[str, Any]:
 def encode(result: Economy, blocked: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "data": result.data, "status": result.status, "per_account": result.per_account,
-        "warnings": list(result.warnings), "blocked": blocked,
+        "warnings": list(result.warnings), "blocked": blocked, "reads": [list(item) for item in result.reads],
     }
 
 
 def decode(doc: dict[str, Any], register: Callable[[list[dict[str, Any]]], frozenset[int]]) -> Economy:
-    return Economy(doc["data"], doc["status"], doc["per_account"], tuple(doc["warnings"]), register(doc["blocked"]))
+    return Economy(
+        doc["data"], doc["status"], doc["per_account"], tuple(doc["warnings"]), register(doc["blocked"]),
+        tuple(tuple(item) for item in doc["reads"]),
+    )
 
 
 def render(result: Economy) -> dict[str, Any]:
     """An economy output as `economy` shows it."""
     return {"status": "blocked"} if result.blocked else result.data
+
+
+def output(result: Economy, name: str) -> dict[str, Any] | None:
+    """The economy's graph output `price:<resource>` or `activity_value:<activity>` (#424 ACM-PRICE 4.1; PRICE-2b-1)
+    as `explain` shows it, from a steady state that is not blocked: its `status`, `per_account` (false: the steady
+    state is game-wide) and its entry of `joint`; a price adds the `reasons` of its status (`price_status`). An
+    activity's value is a diagnosis only: nothing binds or exports it. None when the steady state has no such
+    output."""
+    kind, target = name.split(":", 1)
+    joint = result.data["joint"]
+    if kind == "price":
+        found = joint["prices"].get(target)
+        if found is None:
+            return None
+        status = result.data["price_status"][target]
+        return {"status": status["status"], "reasons": status["reasons"], "per_account": False, **found}
+    found = joint["activities"].get(target)
+    return None if found is None else {"status": result.status, "per_account": False, **found}
 
 
 def _refused(path: str, ref: str, found: str) -> dict[str, Any]:
@@ -209,8 +274,9 @@ def _price(pair: tuple[Fraction | None, Fraction | None]) -> Any:
 
 
 def _low(shown: Any) -> Fraction:
-    """The low end of a price as `_price` shows it: the value of one more unit. It is null only where the steady
-    state cannot hold one more unit, at a regen stop, which the plan refuses (`while`) before it reads a price."""
+    """The low end of a re-solved price (`grain`) as `_price` shows it: the value of one more unit of income. It is
+    null only where the steady state cannot hold one more unit, at a regen stop, which the plan refuses (`while`)
+    before it reads a price."""
     low = shown if isinstance(shown, str) else shown["low"]
     if low is None:
         raise ValueError("the plan read a steady-state price without a low end")
@@ -553,6 +619,9 @@ class _Model:
     unread: tuple[str, ...]  # plan: entities that need no reading, started at 0
     weights: dict[str, Fraction]  # plan: its objective, the value of each entity's gain over the program
     grain: Fraction
+    # steady: entity -> the pending flows left out (`excluded_pending`) that take from it, by id (PRICE-2b-1: why a
+    # price has no low end)
+    left_out: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def entities(self) -> tuple[str, ...]:
@@ -631,6 +700,9 @@ class _Reader:
         # gate), and for the plan the steady state) -> its status and the unknowns it depends on unresolved.
         self.statuses: dict[tuple[str, ...], tuple[str, frozenset[str]]] = {}
         self.pending: dict[str, set[str]] = {}  # steady: a pending flow left out -> the unknowns its amounts read
+        # What the program read, in order, as a graph node's scenario records it (`graph`, "Reads"): the graph nodes,
+        # the data rows and the gates consulted (`entry`). The provenance of the economy's outputs (PRICE-2b-1).
+        self.reads: dict[tuple[str, ...], None] = {}
         self.blocked: set[int] = set()
         self.refused = list(shape.refused)
         entries = graph.checker.entries
@@ -678,6 +750,7 @@ class _Reader:
         """The one scenario of a node, noted for `item`; `_STATE` for a node from the rules and the data only
         that would need the account state; `_Unknowns` for one that read unknowns; None when it is blocked."""
         self.graph.depend(key)
+        self.reads[key] = None
         result = self.graph.results[key]
         if result.blocked:
             self.blocked.update(result.blocked_by)
@@ -770,6 +843,7 @@ class _Reader:
                 values[item.key] = found.value
         for flow, gate in self.shape.gates:
             self.consult(("requires", flow, gate.id), gate)
+            self.reads[("entry", gate.id)] = None
         return values, variable
 
     def model(self, settings: EconomySettings) -> _Model | None:
@@ -782,6 +856,7 @@ class _Reader:
         steady: Economy | None = None
         if plan:  # the final stocks are priced by the steady state, at the step the plan ends in
             graph.depend(NODES[STEADY])
+            self.reads[NODES[STEADY]] = None
             steady = graph.results[NODES[STEADY]]
             if steady.blocked:
                 self.blocked.update(steady.blocked_by)
@@ -871,8 +946,13 @@ class _Reader:
             return None
         weights: dict[str, Fraction] = {}  # the steady state's objective is its goal sinks' value (`total_value`)
         if steady is not None:  # read once nothing is refused: a price without a low end comes only with a refusal
-            cycle = steady.data["cycle"]["steps"]
-            weights = {r: _low(steady.data["prices"][r][steps % cycle]) for r in shape.resources}
+            cycle = steady.data["cycle"]["steps"]  # one more unit of income, re-solved (`grain`), as before PRICE-2b-1
+            weights = {r: _low(steady.data["grain"]["prices"][r][steps % cycle]) for r in shape.resources}
+        left_out: dict[str, set[str]] = {}  # what the pending flows left out take from (PRICE-2b-1, `no_room`)
+        for part in shape.parts:
+            taken = part.resource if part.member == "consumes" else part.source if part.member == "moves" else None
+            if part.flow in self.pending and taken is not None:
+                left_out.setdefault(taken, set()).add(part.flow)
         return _Model(
             solve=self.solve,
             path=shape.path,
@@ -902,6 +982,7 @@ class _Reader:
             unread=tuple(unread),
             weights=weights,
             grain=Fraction(settings.grain),
+            left_out={entity: tuple(sorted(flows)) for entity, flows in sorted(left_out.items())},
         )
 
     def incomes(self, rule: Entry, amount: Fraction, seconds: Fraction, steps: int) -> tuple[Fraction, ...] | None:
@@ -965,6 +1046,7 @@ class _Reader:
     def row(self, table_id: str, table: Any, key: tuple[str, ...]) -> dict[str, Any] | None:
         """A data row the steady state reads, noted with its status; None for a pending row, which blocks."""
         self.graph.depend(("row", table_id, *key))
+        self.reads[("row", table_id, *key)] = None
         index = table.rows[key]
         row = table.file.doc["rows"][index]
         if row["status"] == "pending":
@@ -1278,6 +1360,88 @@ def _program(
     return _Program(variables, tuple(rows), _nonzero(goal))
 
 
+# The dual (PRICE-2b-1; #424 ACM-PRICE addendum 2.1 §2.2 step 2) -------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Dual:
+    """The dual of a program, generated from the program's rows, never written by hand.
+
+    The program maximises c·x over its rows (equalities, and at-mosts) with 0 ≤ x ≤ u. The dual minimises its
+    `cost`, Σ_i rhs_i·y_i + Σ_j u_j·w_j, over:
+    - a variable per row: non-negative for an at-most (`y`), free for an equality, which a `_Program` (numeric lower
+      bounds only) holds as the difference of two non-negative ones (`y+` less `y-`);
+    - a non-negative variable per variable with an upper bound (`w`);
+    - a row per column j (`dual`), Σ_i A_ij·y_i + w_j ≥ c_j, written as the at-most −Σ_i A_ij·y_i − w_j ≤ −c_j.
+    `duals` maps each row of the program to its dual, a combination of these variables."""
+
+    variables: dict[Key, tuple[Fraction, Fraction | None, bool]]
+    rows: tuple[_Row, ...]
+    cost: dict[Key, Fraction]
+    duals: dict[Key, dict[Key, Fraction]]
+
+    def face(self, optimum: Fraction) -> tuple[_Row, ...]:
+        """Its rows and the strong-duality row, its cost at the program's optimum (`FACE`): their solutions are D*,
+        the dual's optimal face."""
+        return (*self.rows, _Row(FACE, dict(self.cost), "eq", optimum, None))
+
+
+def _dual(program: _Program) -> _Dual:
+    """The dual of `program` (`_Dual`). Its variables must be continuous and start at 0, as the steady state's are;
+    any other is a defect."""
+    zero, one = Fraction(0), Fraction(1)
+    variables: dict[Key, tuple[Fraction, Fraction | None, bool]] = {}
+    duals: dict[Key, dict[Key, Fraction]] = {}
+    cost: dict[Key, Fraction] = {}
+    for row in sorted(program.rows, key=lambda row: row.key):
+        token = _token(row.key)
+        duals[row.key] = {("y+", token, 0): one, ("y-", token, 0): -one} if row.sense == "eq" else {("y", token, 0): one}
+        for key, sign in duals[row.key].items():
+            variables[key] = (zero, None, False)
+            _add(cost, key, sign * row.rhs)
+    uppers: dict[Key, Key] = {}
+    for key in sorted(program.variables):
+        low, high, integer = program.variables[key]
+        if low != 0 or integer:
+            raise ValueError(f"the dual needs continuous variables from 0: {_token(key)}")
+        if high is not None:
+            uppers[key] = ("w", _token(key), 0)
+            variables[uppers[key]] = (zero, None, False)
+            _add(cost, uppers[key], high)
+    columns: dict[Key, dict[Key, Fraction]] = {key: {} for key in program.variables}
+    for row in program.rows:
+        for key, coefficient in row.coefficients.items():
+            for dual, sign in duals[row.key].items():
+                _add(columns[key], dual, sign * coefficient)
+    rows = []
+    for key in sorted(program.variables):
+        coefficients = {dual: -amount for dual, amount in columns[key].items()}
+        if key in uppers:
+            coefficients[uppers[key]] = -one
+        rows.append(_Row(("dual", _token(key), 0), _nonzero(coefficients), "le", -program.objective.get(key, zero), None))
+    return _Dual(variables, tuple(rows), _nonzero(cost), duals)
+
+
+def _distance(
+    name: str, function: dict[Key, Fraction], low: Fraction, high: Fraction, two_sided: bool, at: Key | Fraction
+) -> list[_Row]:
+    """The rows that hold a coordinate of the max-min (addendum 2.1 §2.2 step 4.2) at a normalised distance of at
+    least `at` from the ends of its range [low, high] on D*: `at` is a variable (the level, or a probe) or a level.
+    A pool's distance is min(f − low, high − f) ÷ (high − low); an activity's value, whose high end is 0, is pushed
+    below it only (`two_sided` false): (high − f) ÷ (high − low)."""
+    span = high - low
+    negated = {key: -value for key, value in function.items()}
+    if isinstance(at, Fraction):
+        found = [_Row(("level", f"{name} high", 0), dict(function), "le", high - span * at, None)]
+        if two_sided:
+            found.append(_Row(("level", f"{name} low", 0), negated, "le", -low - span * at, None))
+        return found
+    found = [_Row(("level", f"{name} high", 0), {**function, at: span}, "le", high, None)]
+    if two_sided:
+        found.append(_Row(("level", f"{name} low", 0), {**negated, at: span}, "le", -low, None))
+    return found
+
+
 # The objective functions (PRICE-2a; #424 ACM-PRICE addendum 2.1 §4.1): each defined once, for the solves and the
 # checks alike ---------------------------------------------------------------------------------------------------
 
@@ -1585,7 +1749,9 @@ class _Solver:
     def objective(self, program: _Program, x: dict[Key, Fraction]) -> Fraction:
         return sum((weight * x[key] for key, weight in program.objective.items()), Fraction(0))
 
-    def lp(self, program: _Program, stage: str, *, check: bool = True) -> _Solution:
+    def lp(self, program: _Program, stage: str, *, check: bool = True, unbounded: bool = False) -> _Solution:
+        """An LP. With `unbounded`, an objective without a maximum is the status `unbounded` (an end of a projection
+        that is null, PRICE-2b-1); else it is `lp_solve_failed`."""
         from scipy.optimize import linprog
 
         arrays = _arrays(program)
@@ -1603,6 +1769,8 @@ class _Solver:
             result = call(False)
         if result.status == 2:
             return _Solution("infeasible")
+        if result.status == 3 and unbounded:
+            return _Solution("unbounded")
         if result.status == 3:
             raise self.failure(LP_SOLVE_FAILED, stage=stage, reason="unbounded", status=3)
         if result.status != 0:
@@ -1724,10 +1892,12 @@ class _Solver:
         return Fraction(dual).limit_denominator(self.settings.max_denominator)
 
     def disagrees(self, target: str, step: int | None, marginal: Fraction, price: _Pair) -> list[dict[str, Any]]:
+        """`lp_dual_disagrees` (check `marginal`): HiGHS's marginal outside the price's interval, a resource's
+        projection on D* or a rule's re-solves. The price stands."""
         low, high = price
         if (low is None or low <= marginal) and (high is None or marginal <= high):
             return []
-        detail: dict[str, Any] = {"path": self.model.path, "target": target, "marginal": str(marginal)}
+        detail: dict[str, Any] = {"path": self.model.path, "target": target, "check": "marginal", "marginal": str(marginal)}
         if low is not None:
             detail["low"] = str(low)
         if step is not None:
@@ -1735,6 +1905,244 @@ class _Solver:
         if high is not None:
             detail["high"] = str(high)
         return [error(LP_DUAL_DISAGREES, detail)]
+
+    def outside(self, target: str, step: int, price: _Pair, grain: _Pair) -> list[dict[str, Any]]:
+        """`lp_dual_disagrees` (check `grain`; PRICE-2b-1): a resource's projection on D* not inside the interval of
+        its re-solves at plus and minus one grain, which holds it whenever the two measure the same income (the
+        projection's ends are the exact derivatives, the re-solves' their chords). The projection stands."""
+        low, high = price
+        grain_low, grain_high = grain
+        below = grain_low is None or (low is not None and grain_low <= low)
+        above = grain_high is None or (high is not None and high <= grain_high)
+        if below and above:
+            return []
+        detail: dict[str, Any] = {"path": self.model.path, "target": target, "step": step, "check": "grain"}
+        for name, value in (("low", low), ("high", high), ("grain_low", grain_low), ("grain_high", grain_high)):
+            if value is not None:
+                detail[name] = str(value)
+        return [error(LP_DUAL_DISAGREES, detail)]
+
+    def extreme(
+        self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: Any, function: dict[Key, Fraction],
+        sense: int,
+    ) -> Fraction | None:
+        """The greatest (`sense` 1) or least (-1) value of a linear function on the solutions of `rows` (D*, or a face
+        of it), exact; None when it is unbounded. The rows always have a solution: they hold the dual point that the
+        strong-duality check found (`lp_solve_failed`, stage `dual`, otherwise)."""
+        program = _Program(variables, tuple(rows), _nonzero({key: sense * value for key, value in function.items()}))
+        found = self.lp(program, DUAL, unbounded=True)
+        if found.status == "unbounded":
+            return None
+        if found.status != "optimal":
+            raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2)
+        return sense * found.value
+
+    def ends(
+        self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: Any, function: dict[Key, Fraction]
+    ) -> _Pair:
+        """A linear function's least and greatest values on the solutions of `rows`, None where unbounded."""
+        return self.extreme(variables, rows, function, -1), self.extreme(variables, rows, function, 1)
+
+    def duality(self, dual: _Dual, optimum: Fraction) -> None:
+        """The strong-duality check (addendum 2.1 §2.2 step 2): the dual's least cost, solved and checked exactly
+        against every dual row, must be the primal optimum V0, exactly. Otherwise `lp_numeric_check_failed` (stage
+        `dual`, at the strong-duality row), which blocks the steady state: no price is exportable without it."""
+        found = self.lp(_Program(dual.variables, dual.rows, {key: -value for key, value in dual.cost.items()}), DUAL)
+        if found.status != "optimal":  # the primal has an optimum, so its dual has one
+            raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2)
+        least = -found.value
+        if least != optimum:
+            raise self.failure(
+                LP_NUMERIC_CHECK_FAILED, stage=DUAL, constraint=_token(FACE), found=str(least), bound=f"={optimum}"
+            )
+
+    def max_min(
+        self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: list[_Row],
+        coordinates: dict[str, tuple[dict[Key, Fraction], Fraction, Fraction, bool]],
+    ) -> tuple[dict[str, Fraction], list[dict[str, Any]]]:
+        """The lexicographic max-min of addendum 2.1 §2.2 step 4.2 over K (`coordinates`: id -> its function, the low
+        and high ends of its range on D*, and whether it is two-sided, `_distance`), on the solutions of `rows`. A
+        stage maximises the level t that every free coordinate's distance reaches; a coordinate whose distance is t
+        in every optimum of the stage (its probe, the most it reaches while the others reach t, is t) is fixed at its
+        value there, one value by convexity, and its row added to `rows`. Each stage fixes at least one, so it ends;
+        none fixed is `lp_numeric_check_failed` (stage `dual`). Returns the fixed values and the stages, each
+        `{level, fixed}` (the coordinates it fixed, by id)."""
+        zero, one = Fraction(0), Fraction(1)
+        free = dict(coordinates)
+        fixed: dict[str, Fraction] = {}
+        stages: list[dict[str, Any]] = []
+        while free:
+            names = sorted(free)
+            levels = [row for name in names for row in _distance(name, *free[name], LEVEL)]
+            stage = _Program({**variables, LEVEL: (zero, None, False)}, (*rows, *levels), {LEVEL: one})
+            best = self.optimal(stage, DUAL)
+            level = best.value
+            newly = []
+            for name in names:
+                others = [row for other in names if other != name for row in _distance(other, *free[other], level)]
+                probe = _Program(
+                    {**variables, PROBE: (zero, None, False)}, (*rows, *others, *_distance(name, *free[name], PROBE)),
+                    {PROBE: one},
+                )
+                if self.optimal(probe, DUAL).value <= level:
+                    newly.append(name)
+            if not newly:
+                raise self.failure(
+                    LP_NUMERIC_CHECK_FAILED, stage=DUAL, constraint="max_min", found=str(level), bound="fixed"
+                )
+            for name in newly:
+                function = free.pop(name)[0]
+                fixed[name] = sum((coefficient * best.x[key] for key, coefficient in function.items()), zero)
+                rows.append(_Row(("fix", name, 0), function, "eq", fixed[name], None))
+            stages.append({"level": str(level), "fixed": newly})
+        return fixed, stages
+
+    def joint(self, dual: _Dual, optimum: Fraction) -> dict[str, Any]:
+        """The joint price vector and the activity judgements (addendum 2.1 §2.2 steps 3-5; ruling 127 iii): the
+        steady state's `joint`.
+
+        - **The projection.** A pool's coordinate is the mean over the cycle of its balance rows' duals; its
+          `interval` is its least and greatest value on D*, an unbounded end null.
+        - **The selection**, each an exact LP on D* and the coordinates fixed so far, in this order:
+          1. a pool bounded below only (`high` null: one less is infeasible) that a main goal values: its least
+             value, the value of one more (its goal's weight), by id (`one_more`);
+          2. the max-min over K (`max_min`): the pools of a bounded interval (`low` < `high`), and each activity
+             that no optimum runs whose value reaches 0 on D* and no higher, from a finite least value (pushed
+             strictly below 0, so that a value of 0 is only an optimum's marginal activity);
+          3. a pool whose ends agree has its one value (`exact`);
+          then each pool still free, which the selection withholds (`withheld`), by id, at its low end on the face
+          left (`one_more`), else at its high end (`one_less`: a pool without a low end, mirroring step 1), else at
+          0 (`zero`). Being free through the max-min, a withheld coordinate never moves an exported one. The
+          vector is checked exactly as a point of D*.
+        - **The judgements** of each activity: its `value` at the vector and its `range` on D* (null for one that
+          moves out of or into a store: what it moves depends on what the store holds); `most`, the most an optimum
+          of S3 runs it over the cycle (null when unbounded), and `in_optimum`, whether that is above 0;
+          `forcing_cost`, the loss per execution of running it more than `most`: the greatest dual of the row
+          "its executions at least `most`" on the optimal face of S3 with that row, and `input_bound` when that
+          dual is unbounded (nothing is left in the cycle to run it again; `forcing_cost` null). Unbounded `most`
+          costs nothing more: 0."""
+        model, steps, zero, one = self.model, self.model.steps, Fraction(0), Fraction(1)
+        variables, face = dual.variables, dual.face(optimum)
+        pools: dict[str, dict[Key, Fraction]] = {}
+        for resource in model.resources:
+            mean: dict[Key, Fraction] = {}
+            for step in range(steps):
+                for key, sign in dual.duals[("balance", resource, step)].items():
+                    _add(mean, key, sign / steps)
+            pools[resource] = _nonzero(mean)
+        intervals = {resource: self.ends(variables, face, pools[resource]) for resource in model.resources}
+        floor = _floor(VALUE, total_value(model), optimum)  # S3's optimal face
+        most: dict[str, Fraction | None] = {}
+        worth: dict[str, dict[Key, Fraction]] = {}
+        ranges: dict[str, _Pair] = {}
+        for activity in model.activities:
+            counts = {("x", activity, step): one for step in range(steps)}
+            found = self.lp(_program(model, objective=counts, added=floor), JUDGEMENT, unbounded=True)
+            if found.status == "infeasible":  # it holds S3's optimum
+                raise self.failure(LP_SOLVE_FAILED, stage=JUDGEMENT, reason="solver_status", status=2)
+            most[activity] = None if found.status == "unbounded" else found.value
+            if model.touches_store(activity):
+                continue
+            value: dict[Key, Fraction] = {}
+            for resource in model.resources:
+                amount = model.net.get((activity, resource))
+                if amount:
+                    for key, coefficient in pools[resource].items():
+                        _add(value, key, amount * coefficient)
+            worth[activity] = _nonzero(value)
+            ranges[activity] = self.ends(variables, face, worth[activity])
+        rows = list(face)
+        chosen: dict[str, tuple[Fraction, str]] = {}
+        goals = {resource for _, resource, _ in model.goals}
+
+        def fix(resource: str, value: Fraction | None, by: str) -> None:
+            if value is None:  # an end that D* bounds is bounded on every face of it
+                raise self.failure(LP_NUMERIC_CHECK_FAILED, stage=DUAL, constraint=PRICE + resource, found="null", bound=by)
+            rows.append(_Row(("fix", PRICE + resource, 0), pools[resource], "eq", value, None))
+            chosen[resource] = (value, by)
+
+        for resource in model.resources:  # steps 1 and 3
+            low, high = intervals[resource]
+            if low is not None and low == high:
+                chosen[resource] = (low, EXACT)
+            elif low is not None and high is None and resource in goals:
+                fix(resource, self.extreme(variables, rows, pools[resource], -1), ONE_MORE)
+        coordinates: dict[str, tuple[dict[Key, Fraction], Fraction, Fraction, bool]] = {}
+        for resource in model.resources:
+            low, high = intervals[resource]
+            if low is not None and high is not None and low < high:
+                coordinates[PRICE + resource] = (pools[resource], low, high, True)
+        for activity, (low, high) in ranges.items():
+            if most[activity] == 0 and low is not None and high == 0 and low < 0:
+                coordinates[ACTIVITY_VALUE + activity] = (worth[activity], low, high, False)
+        fixed, stages = self.max_min(variables, rows, coordinates)  # step 2
+        for resource in model.resources:
+            if PRICE + resource in fixed:
+                chosen[resource] = (fixed[PRICE + resource], MAX_MIN)
+        for resource in model.resources:  # the withheld coordinates, free through the max-min
+            if resource in chosen:
+                continue
+            low = self.extreme(variables, rows, pools[resource], -1)
+            if low is not None:
+                fix(resource, low, ONE_MORE)
+                continue
+            high = self.extreme(variables, rows, pools[resource], 1)
+            fix(resource, high if high is not None else zero, ONE_LESS if high is not None else ZERO)
+        self.optimal(_Program(variables, tuple(rows), {}), DUAL)  # the vector is a point of D*, checked exactly
+        vector = {resource: chosen[resource][0] for resource in model.resources}
+        prices = {
+            resource: {
+                "value": str(vector[resource]), "interval": _price(intervals[resource]), "by": chosen[resource][1],
+                "withheld": self.withheld(resource, intervals[resource], goals),
+            }
+            for resource in model.resources
+        }
+        activities: dict[str, Any] = {}
+        for activity in model.activities:
+            count, cost = most[activity], zero
+            if count is not None:
+                forced = _Row(
+                    ("forced", activity, 0), {("x", activity, step): -one for step in range(steps)}, "le", -count, None
+                )
+                forcing = _dual(_program(model, added=(forced,)))
+                cost = self.extreme(forcing.variables, forcing.face(optimum), forcing.duals[forced.key], 1)
+            value = None
+            if activity in worth:
+                value = sum(
+                    (amount * vector[entity] for (name, entity), amount in model.net.items()
+                     if name == activity and entity in vector),
+                    zero,
+                )
+            activities[activity] = {
+                "value": _text(value),
+                "range": _price(ranges[activity]) if activity in ranges else None,
+                "in_optimum": count is None or count > 0,
+                "most": _text(count),
+                "forcing_cost": _text(cost),
+                "input_bound": cost is None,
+            }
+        return {"prices": prices, "max_min": stages, "activities": activities}
+
+    def withheld(self, resource: str, interval: _Pair, goals: set[str]) -> dict[str, Any] | None:
+        """Why the selection withholds a pool's coordinate, or None (addendum 2.1 §2.2 step 4.1 and its mirror):
+        - `no_room`: one more unit is infeasible (`low` null): nothing in the cycle can take it. It names what
+          bounds the pool there: its regen stop (`regen`, `stop`) and its hard cap (`cap`), and the pending flows
+          left out that would take from it (`excluded`);
+        - `no_steady_supply`: one less unit is infeasible (`high` null) and no main goal values it: it has no steady
+          supply, a structural gap (§3.1)."""
+        low, high = interval
+        model = self.model
+        if low is None:
+            found: dict[str, Any] = {"reason": NO_ROOM}
+            if resource in model.stops:
+                found["regen"], found["stop"] = model.stops[resource][0], model.stops[resource][1]
+            if resource in model.hard:
+                found["cap"] = model.hard[resource][0]
+            found["excluded"] = list(model.left_out.get(resource, ()))
+            return found
+        if high is None and resource not in goals:
+            return {"reason": NO_STEADY_SUPPLY}
+        return None
 
     def rule_dual(self, program: _Program, base: _Solution, rule: str) -> float:
         """HiGHS's derivative of the optimum by a rule's value: its rows' marginals (times what a unit counts, for
@@ -1839,6 +2247,8 @@ class _Solver:
         return found
 
     def steady(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """The steady state. A resource's price in a step is the projection of its balance row's dual on D*
+        (PRICE-2b-1); its re-solves at plus and minus one grain (`grain`) and HiGHS's marginal cross-check it."""
         model, steps = self.model, self.model.steps
         tiers = self.tiers()
         program, base, optimum = tiers.program, tiers.base, tiers.base.value
@@ -1846,15 +2256,22 @@ class _Solver:
         if least.status != "optimal":
             raise self.failure(LP_SOLVE_FAILED, stage="losses", reason="solver_status", status=2)
         warnings = [error(OBJECTIVE_TIER_TIE, {"path": model.path, "activity": activity}) for activity in tiers.ties]
-        prices: dict[str, list[tuple[Fraction, Fraction | None]]] = {}
+        dual = _dual(program)  # S3's, which every price re-solve changes
+        self.duality(dual, optimum)
+        face = dual.face(optimum)
+        prices: dict[str, list[_Pair]] = {}
+        grains: dict[str, list[_Pair]] = {}
         marginals: dict[str, list[Fraction]] = {}
         for resource in model.resources:
-            prices[resource], marginals[resource] = [], []
+            prices[resource], grains[resource], marginals[resource] = [], [], []
             for step in range(steps):
-                price = self.price(optimum, lambda delta: {"extra": {(resource, step): delta}})
+                price = self.ends(dual.variables, face, dual.duals[("balance", resource, step)])
+                grain = self.price(optimum, lambda delta: {"extra": {(resource, step): delta}})
                 marginal = self.marginal(-base.eq[("balance", resource, step)])
                 warnings += self.disagrees(resource, step, marginal, price)
+                warnings += self.outside(resource, step, price, grain)
                 prices[resource].append(price)
+                grains[resource].append(grain)
                 marginals[resource].append(marginal)
         rule_prices: dict[str, tuple[Fraction, Fraction | None]] = {}
         rule_marginals: dict[str, Fraction] = {}
@@ -1878,10 +2295,12 @@ class _Solver:
             "prices": {resource: [_price(price) for price in prices[resource]] for resource in model.resources},
             "rule_prices": {rule: _price(price) for rule, price in rule_prices.items()},
             "activity_values": values,
+            "joint": self.joint(dual, optimum),
             "losses": {
                 "overflow": {r: str(self.total(least, "o", r)) for r in sorted(model.hard)},
                 "lost_production": {f: str(self.total(least, "l", f)) for f in sorted({*model.storage, *model.stops})},
             },
+            "grain": {"prices": {resource: [_price(pair) for pair in grains[resource]] for resource in model.resources}},
             "marginals": {
                 "prices": {resource: [str(m) for m in marginals[resource]] for resource in model.resources},
                 "rule_prices": {rule: str(m) for rule, m in rule_marginals.items()},
@@ -1966,4 +2385,7 @@ def compute(graph: Graph, solve: str) -> Economy:
         data["excluded_pending"] = pending
         data["price_status"] = {r: {"status": status, "reasons": list(reasons)} for r in model.resources}
     per_account = solve == PLAN
-    return Economy({"status": status, "per_account": per_account, **data}, status, per_account, tuple(warnings))
+    return Economy(
+        {"status": status, "per_account": per_account, **data}, status, per_account, tuple(warnings),
+        reads=tuple(reader.reads),
+    )

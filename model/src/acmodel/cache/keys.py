@@ -71,8 +71,12 @@ class Evaluator:
 # `acquisition`, `protected` and `conversions`; `objective` (version 1) is an objective's value or horizon.
 # `economy` 5: a price whose re-solve with one grain more is infeasible (a regen stop that can hold no more) shows
 # a null `low` instead of blocking the steady state, so a steady state that version 4 kept blocked is solved again.
+# PRICE-2b-1: `economy` 6: the steady state solves its dual and checks it exactly; a resource's price per step is
+# its projection on the dual's optimal face (the re-solves move to `grain`); it shows the joint price vector and the
+# activity judgements (`joint`); and an economy node keeps what it read (`reads`), the provenance of `price:` and
+# `activity_value:`.
 EVALUATORS: dict[str, Evaluator] = {
-    "economy": Evaluator(5, ("numpy", "python", "scipy")),
+    "economy": Evaluator(6, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
     "flow": Evaluator(3),
     "general": Evaluator(3),
