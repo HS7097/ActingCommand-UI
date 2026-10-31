@@ -10,6 +10,9 @@ members = [
     # component-interfaces.json stays where it is: build.yml reads it there.
     "crates/acui-installation",
 ]
+# The offline acceptance material maker (Workflow #429 E11) is its own package
+# with its own Cargo.lock, built only by .github/workflows/fixture.yml.
+exclude = ["tools/fixture-state-root"]
 resolver = "2"
 
 [workspace.package]
