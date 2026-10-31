@@ -1913,6 +1913,11 @@ def _restricted(dual: _Dual, program: _Program, x: dict[Key, Fraction]) -> tuple
     return variables, tuple(rows)
 
 
+def _one(pair: _Pair) -> bool:
+    """Whether an interval is one exact value (its two ends agree)."""
+    return pair[0] is not None and pair[0] == pair[1]
+
+
 def _pinned(model: _Model, resource: str, grain: _Pair) -> bool:
     """Whether a resource's re-solves at plus and minus one grain in a step (`grain`, their chords) pin its projection
     on D* to one value, so that no LP on D* is needed for it (PRICE-2c).
@@ -2391,7 +2396,7 @@ class _Solver:
             pools[resource] = _nonzero(mean)
         intervals: dict[str, _Pair] = {}
         for resource in model.resources:
-            if all(low is not None and low == high for low, high in prices[resource]):  # constant on D* (`_pinned`)
+            if all(_one(pair) for pair in prices[resource]):  # constant on D* in every step, so is its mean
                 mean = sum((low for low, _ in prices[resource]), zero) / steps
                 intervals[resource] = (mean, mean)
             else:
@@ -2426,7 +2431,7 @@ class _Solver:
                         _add(value, key, amount * coefficient)
             worth[activity] = _nonzero(value)
             read = [resource for resource in model.resources if model.net.get((activity, resource))]
-            if all(intervals[resource][0] is not None and intervals[resource][0] == intervals[resource][1] for resource in read):
+            if all(_one(intervals[resource]) for resource in read):
                 constant = sum((model.net[(activity, resource)] * intervals[resource][0] for resource in read), zero)
                 ranges[activity] = (constant, constant)  # every pool it reads is constant on D*, so is its value
                 continue
