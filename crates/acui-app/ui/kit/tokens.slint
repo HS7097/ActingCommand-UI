@@ -4,6 +4,14 @@
 // Palette. Each window has its own copy of the globals.
 import { Palette } from "std-widgets.slint";
 
+// What a status band says, in one of five colours; `none` draws no band.
+// Which state of a page takes which colour is that page's to decide.
+export enum StatusTone { none, ok, held, attention, fault, offline }
+
+// A card's kind: an ordinary card, or one pinned at the top of a page to say
+// what failed.
+export enum CardTone { normal, pinned }
+
 // Severity keeps semantic colours; these mid tones stay legible on both palettes.
 export global Severity {
     out property <color> info: #3fa14b;
@@ -50,6 +58,13 @@ export global Look {
     out property <brush> control-text: Palette.control-foreground;
     out property <brush> control-border: Palette.border;
     out property <brush> focus-ring: Palette.accent-background;
+    // The five status colours, StatusTone's: Severity's hues and one blue,
+    // mid tones that stay legible on a light page and on a dark one.
+    out property <brush> status-ok: #3fa14b;
+    out property <brush> status-held: #3b82d6;
+    out property <brush> status-attention: #d08a00;
+    out property <brush> status-fault: #e0525f;
+    out property <brush> status-offline: #8a8a8a;
     out property <length> radius: 4px;
     // A card's inner padding and the gap between cards; the text size does
     // not scale them.

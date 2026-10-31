@@ -1,7 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
+import { Button, CheckBox, ComboBox } from "std-widgets.slint";
 import { Look, Scale } from "tokens.slint";
 
-// A page tab: the active one in the accent, the rest as controls.
+// Where the keyboard focus is: a 1px line in the focus colour, following the
+// corners of what it is drawn on and filling it unless placed and sized. Over
+// a control filled with the accent it takes the accent's text colour instead,
+// or it would vanish into the fill.
+export component FocusRing inherits Rectangle {
+    in property <bool> on-accent;
+    border-width: 1px;
+    border-color: root.on-accent ? Look.accent-text : Look.focus-ring;
+    border-radius: Look.radius;
+}
+
+// A page tab: the active one in the accent, the rest as controls. Tab reaches
+// it and Return or Space picks it, as a click does; a click does not take the
+// focus. Left and right do not move between tabs.
 export component SkinTab inherits Rectangle {
     in property <string> label;
     in property <bool> active;
@@ -16,6 +30,16 @@ export component SkinTab inherits Rectangle {
     // the list keep their own width instead of being squeezed by six names.
     min-width: 52px;
     clip: true;
+    accessible-role: tab;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.active;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.clicked();
+        }
+    }
     HorizontalLayout {
         padding-left: 7px;
         padding-right: 7px;
@@ -26,6 +50,8 @@ export component SkinTab inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
             min-width: 0px;
+            // The tab itself carries the name.
+            accessible-role: none;
         }
     }
     TouchArea {
@@ -34,4 +60,69 @@ export component SkinTab inherits Rectangle {
             root.clicked();
         }
     }
+    focus-scope := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (root.enabled && (event.text == Key.Return || event.text == Key.Space)) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    // Inside the tab's edge, where the tab's own clip keeps it.
+    if focus-scope.has-focus && root.enabled: FocusRing {
+        x: 2px;
+        y: 2px;
+        width: root.width - 4px;
+        height: root.height - 4px;
+        border-radius: max(0px, Look.radius - 2px);
+        on-accent: root.active;
+    }
 }
+
+// A push button. The look sits in a layout of its own, which hands its size
+// out to the caller even when the look is one shown by `if`: a plain element
+// passes on none of an `if` child's size.
+export component SkinButton {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked();
+    HorizontalLayout {
+        padding: 0;
+        Button {
+            text: root.text;
+            enabled: root.enabled;
+            clicked => {
+                root.clicked();
+            }
+        }
+    }
+}
+
+// A check box whose state is the caller's, through `checked`. Laid out as
+// SkinButton is, for the same reason.
+export component SkinCheckBox {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in-out property <bool> checked;
+    callback toggled();
+    HorizontalLayout {
+        padding: 0;
+        CheckBox {
+            text: root.text;
+            enabled: root.enabled;
+            checked <=> root.checked;
+            toggled => {
+                root.toggled();
+            }
+        }
+    }
+}
+
+// A drop-down: the std ComboBox as it is. Windows use this name, so a
+// drop-down drawn by the kit can take its place later without a window
+// changing. It is never built by `if`, so a window's alias to a box's
+// `current-index` keeps holding.
+export component SkinComboBox inherits ComboBox { }

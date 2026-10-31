@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { Button, CheckBox, ComboBox, LineEdit, ListView, ScrollView, Slider, TextEdit } from "std-widgets.slint";
-import { Card, Look, Scale, Severity, SkinTab } from "kit/lib.slint";
+import { Button, LineEdit, ListView, ScrollView, Slider, TextEdit } from "std-widgets.slint";
+import { Card, CardTitle, Look, Scale, Severity, SkinButton, SkinCheckBox, SkinComboBox, SkinTab } from "kit/lib.slint";
 
 // The kit's globals the Rust side reaches, each window's own copy.
 export { Scale, Look }
@@ -395,7 +395,7 @@ export component LedgerWindow inherits Window {
                     // Display settings share the source row, so the reading row below
                     // keeps its width for what was read and what is hidden.
                     Caption { text: Strings.text-size; }
-                    text-size-box := ComboBox {
+                    text-size-box := SkinComboBox {
                         width: 110px * Scale.factor;
                         model: Strings.text-size-options;
                         selected => {
@@ -403,7 +403,7 @@ export component LedgerWindow inherits Window {
                         }
                     }
                     Caption { text: Strings.language; }
-                    language-box := ComboBox {
+                    language-box := SkinComboBox {
                         width: 100px * Scale.factor;
                         model: Strings.language-options;
                         selected => {
@@ -419,14 +419,14 @@ export component LedgerWindow inherits Window {
                         vertical-alignment: center;
                         color: Look.text;
                     }
-                    Button {
+                    SkinButton {
                         text: Strings.jump-latest;
                         enabled: root.ledger-live && root.follow-available;
                         clicked => {
                             root.jump-latest();
                         }
                     }
-                    CheckBox {
+                    SkinCheckBox {
                         text: Strings.follow-latest;
                         enabled: root.ledger-live && root.follow-available;
                         checked <=> root.following;
@@ -471,7 +471,7 @@ export component LedgerWindow inherits Window {
                 }
                 if root.reopen-offered: HorizontalLayout {
                     spacing: 14px;
-                    Button {
+                    SkinButton {
                         text: Strings.reopen-ledger;
                         clicked => {
                             root.reopen-ledger();
@@ -507,7 +507,7 @@ export component LedgerWindow inherits Window {
                 }
                 if root.unlock-offered || root.unlock-line != "": HorizontalLayout {
                     spacing: 14px;
-                    if root.unlock-offered && !root.unlock-confirming: Button {
+                    if root.unlock-offered && !root.unlock-confirming: SkinButton {
                         text: Strings.unlock-owner;
                         clicked => {
                             root.unlock-confirming = true;
@@ -520,7 +520,7 @@ export component LedgerWindow inherits Window {
                         vertical-alignment: center;
                         color: Look.text;
                     }
-                    if root.unlock-offered && root.unlock-confirming: Button {
+                    if root.unlock-offered && root.unlock-confirming: SkinButton {
                         text: Strings.unlock-confirm;
                         clicked => {
                             root.unlock-owner();
@@ -547,7 +547,7 @@ export component LedgerWindow inherits Window {
                         min-width: 40px * Scale.factor;
                         horizontal-stretch: 1;
                     }
-                    if pause.offered && !pause.confirming: Button {
+                    if pause.offered && !pause.confirming: SkinButton {
                         text: Strings.resume-scheduling;
                         clicked => {
                             root.resume-asked(index);
@@ -560,7 +560,7 @@ export component LedgerWindow inherits Window {
                         vertical-alignment: center;
                         color: Look.text;
                     }
-                    if pause.offered && pause.confirming: Button {
+                    if pause.offered && pause.confirming: SkinButton {
                         text: Strings.resume-confirm;
                         clicked => {
                             root.resume-confirmed(index);
@@ -586,7 +586,7 @@ export component LedgerWindow inherits Window {
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
-                    Text { text: Strings.card-title; font-size: Scale.head-font; color: Look.card-title; font-weight: 700; }
+                    CardTitle { text: Strings.card-title; }
                     Text {
                         text: Strings.card-note;
                         color: Look.text-caption;
@@ -649,7 +649,7 @@ export component LedgerWindow inherits Window {
                     HorizontalLayout {
                         spacing: 6px;
                         vertical-stretch: 0;
-                        ComboBox {
+                        SkinComboBox {
                             // The floor scales with the text: at 特大 an 80px
                             // box holds two characters and an ellipsis.
                             min-width: 100px * Scale.factor;
@@ -661,7 +661,7 @@ export component LedgerWindow inherits Window {
                                 root.minimum-severity-changed(self.current-index);
                             }
                         }
-                        ComboBox {
+                        SkinComboBox {
                             min-width: 100px * Scale.factor;
                             preferred-width: 150px * Scale.factor;
                             enabled: root.ledger-live;
@@ -671,7 +671,7 @@ export component LedgerWindow inherits Window {
                                 root.maximum-severity-changed(self.current-index);
                             }
                         }
-                        module-box := ComboBox {
+                        module-box := SkinComboBox {
                             min-width: 90px * Scale.factor;
                             preferred-width: 180px * Scale.factor;
                             enabled: root.ledger-live;
@@ -680,7 +680,7 @@ export component LedgerWindow inherits Window {
                                 root.module-changed(self.current-value);
                             }
                         }
-                        CheckBox {
+                        SkinCheckBox {
                             text: Strings.show-performance;
                             enabled: root.ledger-live;
                             checked <=> root.show-performance;
@@ -688,7 +688,7 @@ export component LedgerWindow inherits Window {
                                 root.show-performance-changed(self.checked);
                             }
                         }
-                        port-box := ComboBox {
+                        port-box := SkinComboBox {
                             min-width: 90px * Scale.factor;
                             preferred-width: 180px * Scale.factor;
                             enabled: root.port-enabled;
@@ -802,7 +802,7 @@ export component LedgerWindow inherits Window {
                             }
                         }
                     }
-                    if root.has-more: Button {
+                    if root.has-more: SkinButton {
                         text: Strings.continue-reading;
                         vertical-stretch: 0;
                         clicked => {
@@ -820,7 +820,7 @@ export component LedgerWindow inherits Window {
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
-                    Text { text: Strings.detail-title; font-size: Scale.head-font; color: Look.card-title; font-weight: 700; }
+                    CardTitle { text: Strings.detail-title; }
                     VerticalLayout {
                         spacing: 2px;
                         vertical-stretch: 0;
@@ -838,7 +838,7 @@ export component LedgerWindow inherits Window {
                     if root.artifacts.length > 0: VerticalLayout {
                         spacing: 4px;
                         vertical-stretch: 0;
-                        Text { text: Strings.artifacts-title; font-size: Scale.head-font; color: Look.card-title; font-weight: 700; }
+                        CardTitle { text: Strings.artifacts-title; }
                         ScrollView {
                             viewport-width: self.visible-width;
                             min-height: 54px * Scale.factor;
@@ -874,7 +874,7 @@ export component LedgerWindow inherits Window {
                     HorizontalLayout {
                         spacing: 8px;
                         vertical-stretch: 0;
-                        Text { text: Strings.overlays-title; font-size: Scale.head-font; color: Look.card-title; font-weight: 700; }
+                        CardTitle { text: Strings.overlays-title; }
                         // The recognized page sits above the frame, not on it:
                         // on it, it would cover the page's own header targets.
                         if root.frame-page != "": Text {
@@ -959,7 +959,7 @@ export component LedgerWindow inherits Window {
                         wrap: word-wrap;
                     }
                     Text { text: root.frame-note; font-size: Scale.grey-font; vertical-stretch: 0; color: Look.text-caption; wrap: word-wrap; }
-                    Text { text: Strings.raw-data-title; font-size: Scale.head-font; vertical-stretch: 0; color: Look.card-title; font-weight: 700; }
+                    CardTitle { text: Strings.raw-data-title; vertical-stretch: 0; }
                     TextEdit {
                         read-only: true;
                         wrap: word-wrap;
@@ -1067,18 +1067,15 @@ export component WorkbenchWindow inherits Window {
                 }
                 HorizontalLayout {
                     spacing: 14px;
-                    Text {
+                    CardTitle {
                         text: Strings.window-title;
-                        font-size: Scale.head-font;
-                        font-weight: 700;
                         vertical-alignment: center;
-                        color: Look.card-title;
                         overflow: elide;
                         min-width: 0px;
                         horizontal-stretch: 1;
                     }
                     Caption { text: Strings.text-size; }
-                    text-size-box := ComboBox {
+                    text-size-box := SkinComboBox {
                         width: 110px * Scale.factor;
                         model: Strings.text-size-options;
                         selected => {
@@ -1086,7 +1083,7 @@ export component WorkbenchWindow inherits Window {
                         }
                     }
                     Caption { text: Strings.language; }
-                    language-box := ComboBox {
+                    language-box := SkinComboBox {
                         width: 100px * Scale.factor;
                         model: Strings.language-options;
                         selected => {
@@ -1115,14 +1112,14 @@ export component WorkbenchWindow inherits Window {
                         min-width: 40px * Scale.factor;
                         horizontal-stretch: 1;
                     }
-                    Button {
+                    SkinButton {
                         text: Strings.start;
                         enabled: root.installed;
                         clicked => {
                             root.start-runtime();
                         }
                     }
-                    Button {
+                    SkinButton {
                         text: Strings.request-shutdown;
                         enabled: root.installed;
                         clicked => {
@@ -1147,7 +1144,7 @@ export component WorkbenchWindow inherits Window {
                 spacing: 6px;
                 HorizontalLayout {
                     alignment: start;
-                    Button {
+                    SkinButton {
                         text: Strings.open-ledger;
                         enabled: root.installed;
                         clicked => {
@@ -1158,7 +1155,7 @@ export component WorkbenchWindow inherits Window {
                 HorizontalLayout {
                     spacing: 14px;
                     // Off until the Runtime can add an instance itself.
-                    Button {
+                    SkinButton {
                         text: Strings.add-instance;
                         enabled: false;
                     }
@@ -1237,6 +1234,7 @@ export component StartupErrorWindow inherits Window {
         HorizontalLayout {
             vertical-stretch: 0;
             alignment: end;
+            // The std button, not the kit's: this window always keeps the flat look.
             Button {
                 text: root.close-label;
                 clicked => {
