@@ -934,7 +934,9 @@ ruling 126 A, below):
   brings one grain more, and when it brings one grain less.
   - When the two agree, the price is exact (`"1/10"`).
   - Otherwise it is the interval `{"low", "high"}` (a degenerate basis); `high` is null when one grain less is
-    infeasible.
+    infeasible, and `low` when one grain more is: the cycle cannot hold it. That happens at a regen stop, whose stock
+    ends the cycle as it began and loses at most what the regen brings, when the program can use no more of the
+    resource and already loses all that its regen brings (its users left out as pending, say). Neither is an error.
   - The same holds for each cap with a value (a `reference` counts as one; an income cap too) that the program reads
     and each limit (`rule_prices`), re-solved with its value one grain higher and one lower. A relaxed rule's value is
     its value per period, so its price is the cycle's gain per unit of it. Every re-solve is of S3, V alone; a price

@@ -542,10 +542,10 @@
         "target": {"type": "token", "required": true},
         "step": {"type": "integer", "required": false},
         "marginal": {"type": "token", "required": true},
-        "low": {"type": "token", "required": true},
+        "low": {"type": "token", "required": false},
         "high": {"type": "token", "required": false}
       },
-      "description": "acmodel economy (a warning): HiGHS's marginal (marginal, as an exact fraction) of a price of the steady state lies outside the interval its re-solves at plus and minus one grain give (low, and high, absent when one grain less is infeasible). target is a resource, with step its step in the cycle, or a cap or limit rule. The price stands as the re-solves give it; the marginal is only a cross-check (#424 design-py 4.3). path is model.json."
+      "description": "acmodel economy (a warning): HiGHS's marginal (marginal, as an exact fraction) of a price of the steady state lies outside the interval its re-solves at plus and minus one grain give (low, absent when one grain more is infeasible, and high, absent when one grain less is). target is a resource, with step its step in the cycle, or a cap or limit rule. The price stands as the re-solves give it; the marginal is only a cross-check (#424 design-py 4.3). path is model.json."
     },
     "lp_infeasible": {
       "category": "error",
@@ -591,7 +591,7 @@
         "node_limit": {"type": "integer", "required": false},
         "raw_text": {"type": "raw_text", "required": false}
       },
-      "description": "acmodel economy: HiGHS gave no usable solution. unbounded: the objective has no maximum, so the rules let the value of the goal sinks (or, in S1, the protected acquisition) grow without end (status 3). solver_status: another status (status, scipy's, with HiGHS's message as raw_text) after a second try without presolve; or no solution where one must exist (status 2: a re-solve with one more grain, the steady state's S1, S2 or a tie probe, which only add a row that a solution already meets or change the objective, or the least losses at the optimum). no_solution (plan): the MILP stopped, at its node limit search.milp_node_limit (node_limit; nodes explored) or otherwise, without any feasible plan. stage: the optimum, the steady state's acquisition (S1), value (S2) or tie probe, the least losses, or a price re-solve. The output is blocked. path is model.json."
+      "description": "acmodel economy: HiGHS gave no usable solution. unbounded: the objective has no maximum, so the rules let the value of the goal sinks (or, in S1, the protected acquisition) grow without end (status 3). solver_status: another status (status, scipy's, with HiGHS's message as raw_text) after a second try without presolve; or no solution where one must exist (status 2: the steady state's S1, S2 or a tie probe, which only add a row that a solution already meets or change the objective, or the least losses at the optimum). no_solution (plan): the MILP stopped, at its node limit search.milp_node_limit (node_limit; nodes explored) or otherwise, without any feasible plan. stage: the optimum, the steady state's acquisition (S1), value (S2) or tie probe, the least losses, or a price re-solve. The output is blocked. path is model.json."
     },
     "model_file_invalid": {
       "category": "error",

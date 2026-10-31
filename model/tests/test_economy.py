@@ -677,6 +677,64 @@ def test_a_resources_regen_stops_at_its_caps_reference_and_the_loss_is_counted(t
     }
 
 
+def test_a_regen_stop_that_can_hold_no_more_has_a_price_unbounded_below(tmp_path, economy):
+    """A regression of PRICE-2a. r's regen (10 a day) stops at its natural cap (reference 50), and its only user,
+    act.p (10 r for some v, a pending flow), is left out, so nothing in the program uses r. act.a brings 2 v a day
+    for nothing, at most 3 times. Until PRICE-2a the numeraire was a resource without a cyclic row; now it is the
+    value entity, and a resource like r, which no longer has that exemption, made the re-solve with one more r
+    infeasible, which blocked the steady state (`lp_solve_failed`, stage `price`, status 2).
+
+    By hand, one daily step: r ends the cycle with the stock it began with and nothing uses it, so all 10 its regen
+    brings are lost (`lost_production` 10), at most what the regen brings. One more r has nowhere to go: the re-solve
+    is infeasible, so the price has no low end (null); one less only loses one r less, so its high end is 0. act.a runs
+    3 times: 6 v, which the main goal takes at 1 each, so V0 = 6; v is worth 1, act.a's limit 2 (a fourth execution
+    brings 2 v), act.a 2 per execution, and r's cap 0 (one higher or lower changes nothing). act.p's limit counts no
+    activity of the program (0). act.a is protected (no input, a limit): A* = 6 = V*. Every price is provisional, for
+    act.p's sake. The plan does not model a regen stop (`while`), so it is refused, never crashed."""
+    unknown = {
+        "id": "unk.p", "kind": "interval", "question": "fixture", "interval": {"low": "1", "high": "3"},
+        "status": "pending", "provenance": [{"kind": "pending_check", "ref": "fixture"}],
+    }
+    act_p = {**flow("flow.p", "act.p", consumes={"res.r": "10"}, produces={"res.v": "unknown:unk.p"}), "status": "pending"}
+    folder = model(
+        tmp_path, [DAY],
+        [resource("res.v", "fact.v"), resource("res.r", "fact.r"), activity("act.a"), activity("act.p")],
+        [
+            regen("regen.r", "res.r", "10", "1d", **{"while": "amount:res.r < read:fact.r_cap"}),
+            cap("cap.r.natural", "res.r", "soft_read", {"block_income_from": [], "other_income": "notice_only"},
+                reading="fact.r_cap", reference="50"),
+            flow("flow.a", "act.a", produces={"res.v": "2"}),
+            limit("limit.a", "act.a", "3", "day"),
+            {**act_p, "unknowns": ["unk.p"]},
+            limit("limit.p", "act.p", "1", "day"),
+        ],
+        {"fact.v": 0, "fact.r": 0, "fact.r_cap": 30},
+        [unknown],
+    )
+
+    _, doc = economy(folder)
+
+    assert doc["warnings"] == []
+    assert all(entry["needed_by"] == ["economy:plan"] for entry in doc["errors"])  # nothing blocks the steady state
+    assert doc["data"]["plan"] == {"status": "blocked"}
+    assert steady(doc) == {
+        "status": "provisional", "per_account": False,
+        "cycle": {"steps": 1, "step_seconds": 86400},
+        "objective": "6",
+        **acquisitions("6", [acquirer("act.a", ["res.v"], ["limit.a"], [])]),
+        "prices": {"res.r": [{"low": None, "high": "0"}], "res.v": ["1"]},
+        "rule_prices": {"cap.r.natural": "0", "limit.a": "2", "limit.p": "0"},
+        "activity_values": {"act.a": ["2"]},
+        "losses": {"overflow": {}, "lost_production": {"res.r": "10"}},
+        "excluded": [],
+        "relaxed": [],
+        "excluded_pending": [{"flow": "flow.p", "activity": "act.p", "unknowns": ["unk.p"]}],
+        "price_status": {
+            resource: {"status": "provisional", "reasons": ["excluded_pending"]} for resource in ("res.r", "res.v")
+        },
+    }
+
+
 def pending_fixture(folder: Path, produces: str, status: str, **unknowns: list[str]) -> Path:
     """r comes at 100 a day. act.a turns 10 r into 1 v, at most 3 times a day; act.p turns 10 r into `produces` v,
     at most 20 times a day, by a flow of `status` (naming `unknowns`). unk.p, how much v one act.p gives, is an

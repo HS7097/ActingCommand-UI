@@ -69,8 +69,10 @@ class Evaluator:
 # PRICE-2a: `economy` 4: the numeraire is a value entity fed by goal sinks, and the steady state solves the
 # acquisition A, then the value V with A held, then V alone (S1, S2, S3), refusing a tier conflict and showing
 # `acquisition`, `protected` and `conversions`; `objective` (version 1) is an objective's value or horizon.
+# `economy` 5: a price whose re-solve with one grain more is infeasible (a regen stop that can hold no more) shows
+# a null `low` instead of blocking the steady state, so a steady state that version 4 kept blocked is solved again.
 EVALUATORS: dict[str, Evaluator] = {
-    "economy": Evaluator(4, ("numpy", "python", "scipy")),
+    "economy": Evaluator(5, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
     "flow": Evaluator(3),
     "general": Evaluator(3),

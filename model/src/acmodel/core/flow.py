@@ -125,7 +125,7 @@ FORMAT = {"economy": ["data", "status", "per_account", "warnings", "blocked"]}
 _STATE = object()  # a node from the rules and the data only that would need the account state
 
 Key = tuple[str, str, int]
-_Pair = tuple[Fraction, Fraction | None]  # a price: its low and high ends, None for unbounded
+_Pair = tuple[Fraction | None, Fraction | None]  # a price: its low and high ends, None for unbounded
 
 
 @dataclass(frozen=True)
@@ -209,8 +209,12 @@ def _price(pair: tuple[Fraction | None, Fraction | None]) -> Any:
 
 
 def _low(shown: Any) -> Fraction:
-    """The low end of a price as `_price` shows it: the value of one more unit."""
-    return Fraction(shown if isinstance(shown, str) else shown["low"])
+    """The low end of a price as `_price` shows it: the value of one more unit. It is null only where the steady
+    state cannot hold one more unit, at a regen stop, which the plan refuses (`while`) before it reads a price."""
+    low = shown if isinstance(shown, str) else shown["low"]
+    if low is None:
+        raise ValueError("the plan read a steady-state price without a low end")
+    return Fraction(low)
 
 
 def _add(table: dict[Any, Fraction], key: Any, amount: Fraction) -> None:
@@ -775,7 +779,7 @@ class _Reader:
             self.need([("rule", cap.id) for cap in shape.soft] + [NODES[STEADY]])
         values, variable = self.values(items)
         steps = settings.plan_horizon if plan else shape.cycle
-        weights: dict[str, Fraction] = {}  # the steady state's objective is its goal sinks' value (`total_value`)
+        steady: Economy | None = None
         if plan:  # the final stocks are priced by the steady state, at the step the plan ends in
             graph.depend(NODES[STEADY])
             steady = graph.results[NODES[STEADY]]
@@ -783,8 +787,6 @@ class _Reader:
                 self.blocked.update(steady.blocked_by)
                 return None
             self.note(NODES[STEADY], steady.status)
-            cycle = steady.data["cycle"]["steps"]
-            weights = {r: _low(steady.data["prices"][r][steps % cycle]) for r in shape.resources}
         regens = []
         for rule in shape.regens:
             amount, every = values.get(("regen", rule.id, "amount")), values.get(("regen", rule.id, "every"))
@@ -867,6 +869,10 @@ class _Reader:
         start, unread = self.opening(net, moves, regens, hard, storage, soft) if plan else ({}, ())
         if self.refused or self.blocked:
             return None
+        weights: dict[str, Fraction] = {}  # the steady state's objective is its goal sinks' value (`total_value`)
+        if steady is not None:  # read once nothing is refused: a price without a low end comes only with a refusal
+            cycle = steady.data["cycle"]["steps"]
+            weights = {r: _low(steady.data["prices"][r][steps % cycle]) for r in shape.resources}
         return _Model(
             solve=self.solve,
             path=shape.path,
@@ -1696,16 +1702,18 @@ class _Solver:
     def price(self, optimum: Fraction, change: Callable[[Fraction], dict[str, Any]]) -> _Pair:
         """The value of one more grain (re-solved with `change(+grain)`) and of one grain less (`change(-grain)`),
         each per unit. Equal, they are an exact price; else an interval, unbounded above when one grain less is
-        infeasible."""
+        infeasible and below when one grain more is. One grain more of a resource is infeasible where the cycle
+        cannot hold it: a resource whose regen stops at a cap ends the cycle with exactly its opening stock and loses
+        at most what its regen brings, so when the program can use no more of it and already loses all its regen
+        brings (its only users left out as pending, say), there is no room for one more. A cap's or a limit's value
+        one grain higher only relaxes the program."""
         grain = self.model.grain
         more = self.lp(_program(self.model, **change(grain)), "price")
-        if more.status != "optimal":
-            raise self.failure(LP_SOLVE_FAILED, stage="price", reason="solver_status", status=2)
         less = self.lp(_program(self.model, **change(-grain)), "price")
-        right = (more.value - optimum) / grain
-        if less.status != "optimal":
-            return right, None
-        left = (optimum - less.value) / grain
+        right = (more.value - optimum) / grain if more.status == "optimal" else None
+        left = (optimum - less.value) / grain if less.status == "optimal" else None
+        if right is None or left is None:
+            return right, left
         return min(right, left), max(right, left)
 
     def marginal(self, dual: float) -> Fraction:
@@ -1717,9 +1725,11 @@ class _Solver:
 
     def disagrees(self, target: str, step: int | None, marginal: Fraction, price: _Pair) -> list[dict[str, Any]]:
         low, high = price
-        if low <= marginal and (high is None or marginal <= high):
+        if (low is None or low <= marginal) and (high is None or marginal <= high):
             return []
-        detail: dict[str, Any] = {"path": self.model.path, "target": target, "marginal": str(marginal), "low": str(low)}
+        detail: dict[str, Any] = {"path": self.model.path, "target": target, "marginal": str(marginal)}
+        if low is not None:
+            detail["low"] = str(low)
         if step is not None:
             detail["step"] = step
         if high is not None:
@@ -1896,7 +1906,7 @@ class _Solver:
             if not amount:
                 continue
             cheap, dear = prices[resource][step]
-            ends = (amount * cheap, None if dear is None else amount * dear)
+            ends = (None if cheap is None else amount * cheap, None if dear is None else amount * dear)
             down, up = (ends[0], ends[1]) if amount > 0 else (ends[1], ends[0])
             low = None if low is None or down is None else low + down
             high = None if high is None or up is None else high + up
