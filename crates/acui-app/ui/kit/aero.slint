@@ -1,0 +1,151 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Win7 Aero as the kit draws it: the constants it was set to, and the faces
+// of the Aero controls. This file reads nothing from the rest of the kit,
+// which reads AeroConst from here; what a face needs from the tokens, its
+// text size, it is handed by property.
+
+// The Aero look's constants, written here once: the glass and the opening and
+// closing as Alice set them in UQ-5 (10-30), the frame's sizes, edges and
+// solid glass from the sample (aero-mock ui/aero.slint), as
+// tmp-win7/row48677-1.png shows them. The Rust side reads the blur, the
+// timings, the zoom and the corner from here as well. Values that draw
+// nothing at these settings are kept as they were set.
+export global AeroConst {
+    // The glass behind the caption band and the frame: see-through (mode 1).
+    out property <string> preset: "custom";
+    out property <color> glass-color: #74b8fc;
+    out property <float> intensity: 0.10;
+    out property <float> color-balance: 0;
+    out property <float> afterglow-balance: 0;
+    out property <float> blur-balance: 1.0;
+    // The blur's standard deviation, in logical px; 0 is no blur at all.
+    out property <float> sigma: 0.0;
+    out property <float> highlight: 0;
+    out property <float> streaks: 0.22;
+    out property <float> haze: 0;
+    // Win10 acrylic's tint, which mode 1 does not use.
+    out property <float> acrylic-tint: 0;
+    // A window fades and zooms in from `zoom-from` as it opens, and back out
+    // as it closes.
+    out property <duration> appear-time: 250ms;
+    out property <duration> vanish-time: 180ms;
+    out property <float> zoom-from: 0.94;
+    // The frame round the window: its width, its corners, its dark outer and
+    // light inner edge.
+    out property <length> frame: 8px;
+    out property <length> radius: 7px;
+    out property <color> frame-outer: #000000a0;
+    out property <color> frame-inner: #ffffff99;
+    // The glass drawn solid, where nothing can be seen through it.
+    out property <color> glass-solid: #c0c0c0;
+    // The tint over the glass, by Win7's formula as the sample has it; fully
+    // transparent at these settings. What lies behind is taken to be of
+    // middle brightness, the sample's own guess before it reads the
+    // wallpaper; it counts only with an afterglow, and that is 0 here.
+    out property <float> tint-alpha: clamp(1 - root.blur-balance, 0, 1);
+    out property <float> behind-luma: 0.5;
+    out property <color> tint: root.glass-color.mix(#000000, clamp((root.color-balance + root.afterglow-balance * root.behind-luma) / max(0.001, root.tint-alpha), 0, 1)).with-alpha(root.tint-alpha);
+}
+
+// The face of a Win7 push button, after the sample's AeroButton: grey, edged
+// in blue under the pointer, deeper blue while pressed, washed out when off.
+// It only draws. Whoever uses it takes the pointer, the keys and the focus,
+// names it to a screen reader, and hands it its states and its text size.
+export component AeroButtonFace inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> hover;
+    in property <bool> pressed;
+    in property <length> font-size: 12px;
+    // Never narrower than its text and its margins, as the std button is.
+    min-width: max(75px, label.preferred-width + 24px);
+    preferred-width: max(75px, label.preferred-width + 24px);
+    height: 23px;
+    // A button keeps its own size in a row, as the std one does.
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: 3px;
+    border-width: 1px;
+    border-color: !root.enabled ? #adb2b5 : root.pressed ? #2c628b : root.hover ? #3c7fb1 : #707070;
+    background: !root.enabled ? #f4f4f4
+        : root.pressed ? @linear-gradient(180deg, #e5f4fc 0%, #c4e5f6 49%, #98d1ef 50%, #68b3db 100%)
+        : root.hover ? @linear-gradient(180deg, #eaf6fd 0%, #d9f0fc 49%, #bee6fd 50%, #a7d9f5 100%)
+        : @linear-gradient(180deg, #f2f2f2 0%, #ebebeb 49%, #dddddd 50%, #cfcfcf 100%);
+    Rectangle {
+        x: 1px;
+        y: 1px;
+        width: parent.width - 2px;
+        height: parent.height - 2px;
+        border-radius: 2px;
+        border-width: 1px;
+        border-color: !root.enabled ? transparent : #ffffffb3;
+    }
+    label := Text {
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.text;
+        font-size: root.font-size;
+        color: root.enabled ? #000000 : #838383;
+        // The control round the face carries the name.
+        accessible-role: none;
+    }
+}
+
+// The face of a Win7 check box, after the sample's AeroCheck: the small
+// framed box, its tick, and the text beside it. It only draws, as
+// AeroButtonFace does.
+export component AeroCheckFace inherits Rectangle {
+    in property <string> text;
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    in property <bool> hover;
+    in property <length> font-size: 12px;
+    // Where the text starts, past the box.
+    out property <length> label-x: 19px;
+    // Never narrower than its text, with 2px to spare after it for a focus
+    // line drawn round the text.
+    min-width: root.label-x + label.preferred-width + 2px;
+    preferred-width: root.label-x + label.preferred-width + 2px;
+    height: 20px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    Rectangle {
+        x: 0;
+        y: (parent.height - 13px) / 2;
+        width: 13px;
+        height: 13px;
+        border-width: 1px;
+        border-color: !root.enabled ? #bcbcbc : root.hover ? #3c7fb1 : #8e8f8f;
+        background: #ffffff;
+        Rectangle {
+            x: 2px;
+            y: 2px;
+            width: 9px;
+            height: 9px;
+            border-width: 1px;
+            border-color: root.hover ? #79c6f9 : #aeb3b9;
+            background: root.hover ? @linear-gradient(135deg, #b1dffd 0%, #e9f7fe 100%) : @linear-gradient(135deg, #cbcfd5 0%, #f6f6f6 100%);
+        }
+        if root.checked: Path {
+            width: 13px;
+            height: 13px;
+            viewbox-width: 13;
+            viewbox-height: 13;
+            stroke: root.enabled ? #4a5f97 : #8f8f8f;
+            stroke-width: 2px;
+            commands: "M 3 6.6 L 5.5 9.2 L 10 3.6";
+        }
+    }
+    label := Text {
+        x: root.label-x;
+        width: parent.width - root.label-x;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.text;
+        font-size: root.font-size;
+        color: root.enabled ? #000000 : #838383;
+        accessible-role: none;
+    }
+}

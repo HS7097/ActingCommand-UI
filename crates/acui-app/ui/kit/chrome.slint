@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// What a window's contents are drawn in: the page, and around it the frame
+// the theme draws.
+import { Palette } from "std-widgets.slint";
+import { Look } from "tokens.slint";
+
+// Holds a window's contents on its page. In the Aero skin the std widgets in
+// the window are set light, to sit on Win7's white page; back in the flat
+// skin they follow the system's light or dark setting again. The frame is
+// the system's for now: `Look.chrome` stays false, so the page fills the
+// window. The page sits in a layout rather than at a set place, so the
+// contents' minimum and preferred size still reach the window.
+export component WindowChrome inherits Rectangle {
+    property <bool> aero: Look.aero;
+    // A window starts in the flat skin and the std widgets' own setting,
+    // which follows the system; Look.skin is set only once it exists.
+    init => {
+        if (root.aero) {
+            Palette.color-scheme = ColorScheme.light;
+        }
+    }
+    changed aero => {
+        Palette.color-scheme = root.aero ? ColorScheme.light : ColorScheme.unknown;
+    }
+    VerticalLayout {
+        padding-left: Look.frame;
+        padding-right: Look.frame;
+        padding-top: Look.caption-height;
+        padding-bottom: Look.frame;
+        client := Rectangle {
+            background: Look.page;
+            clip: Look.chrome;
+            @children
+        }
+    }
+}

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { Button, CheckBox, ComboBox } from "std-widgets.slint";
+import { AeroButtonFace, AeroCheckFace } from "aero.slint";
 import { Look, Scale } from "tokens.slint";
 
 // Where the keyboard focus is: a 1px line in the focus colour, following the
@@ -82,27 +83,75 @@ export component SkinTab inherits Rectangle {
     }
 }
 
-// A push button. The look sits in a layout of its own, which hands its size
-// out to the caller even when the look is one shown by `if`: a plain element
-// passes on none of an `if` child's size.
+// A push button: the std one in the flat skin, Win7's in the Aero skin. The
+// look sits in a layout of its own, which hands its size out to the caller
+// even though each look is shown by `if`: a plain element passes on none of
+// an `if` child's size.
 export component SkinButton {
     in property <string> text;
     in property <bool> enabled: true;
     callback clicked();
     HorizontalLayout {
         padding: 0;
-        Button {
+        if !Look.aero: Button {
             text: root.text;
             enabled: root.enabled;
             clicked => {
                 root.clicked();
             }
         }
+        // One height whatever the row, centred in a taller one. Tab reaches
+        // it and Return or Space presses it, as a click does; a click does
+        // not take the focus.
+        if Look.aero: VerticalLayout {
+            alignment: center;
+            AeroButtonFace {
+                text: root.text;
+                enabled: root.enabled;
+                hover: touch.has-hover;
+                pressed: touch.pressed;
+                font-size: Scale.body-font;
+                height: 23px * Scale.factor;
+                accessible-role: button;
+                accessible-label: root.text;
+                accessible-enabled: root.enabled;
+                accessible-action-default => {
+                    if (root.enabled) {
+                        root.clicked();
+                    }
+                }
+                touch := TouchArea {
+                    enabled: root.enabled;
+                    clicked => {
+                        root.clicked();
+                    }
+                }
+                focus-scope := FocusScope {
+                    enabled: root.enabled;
+                    focus-on-click: false;
+                    key-pressed(event) => {
+                        if (root.enabled && (event.text == Key.Return || event.text == Key.Space)) {
+                            root.clicked();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+                // Inside the button's two edges.
+                if focus-scope.has-focus && root.enabled: FocusRing {
+                    x: 2px;
+                    y: 2px;
+                    width: parent.width - 4px;
+                    height: parent.height - 4px;
+                    border-radius: max(0px, Look.radius - 2px);
+                }
+            }
+        }
     }
 }
 
-// A check box whose state is the caller's, through `checked`. Laid out as
-// SkinButton is, for the same reason.
+// A check box whose state is the caller's, through `checked`, in either
+// skin. Laid out as SkinButton is, for the same reason.
 export component SkinCheckBox {
     in property <string> text;
     in property <bool> enabled: true;
@@ -110,12 +159,62 @@ export component SkinCheckBox {
     callback toggled();
     HorizontalLayout {
         padding: 0;
-        CheckBox {
+        if !Look.aero: CheckBox {
             text: root.text;
             enabled: root.enabled;
             checked <=> root.checked;
             toggled => {
                 root.toggled();
+            }
+        }
+        // The face only shows `checked`; a click, Space or a screen reader
+        // flips it here. Tab reaches it; a click does not take the focus.
+        if Look.aero: VerticalLayout {
+            alignment: center;
+            AeroCheckFace {
+                text: root.text;
+                checked: root.checked;
+                enabled: root.enabled;
+                hover: touch.has-hover;
+                font-size: Scale.body-font;
+                height: 20px * Scale.factor;
+                accessible-role: checkbox;
+                accessible-label: root.text;
+                accessible-enabled: root.enabled;
+                accessible-checkable: true;
+                accessible-checked: root.checked;
+                accessible-action-default => {
+                    if (root.enabled) {
+                        root.checked = !root.checked;
+                        root.toggled();
+                    }
+                }
+                touch := TouchArea {
+                    enabled: root.enabled;
+                    clicked => {
+                        root.checked = !root.checked;
+                        root.toggled();
+                    }
+                }
+                focus-scope := FocusScope {
+                    enabled: root.enabled;
+                    focus-on-click: false;
+                    key-pressed(event) => {
+                        if (root.enabled && event.text == Key.Space) {
+                            root.checked = !root.checked;
+                            root.toggled();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+                // Round the text, as Win7 drew it.
+                if focus-scope.has-focus && root.enabled: FocusRing {
+                    x: parent.label-x - 2px;
+                    y: 0;
+                    width: parent.width - self.x;
+                    height: parent.height;
+                }
             }
         }
     }

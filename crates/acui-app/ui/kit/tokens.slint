@@ -3,6 +3,7 @@
 // look every window and kit component reads instead of the std-widgets
 // Palette. Each window has its own copy of the globals.
 import { Palette } from "std-widgets.slint";
+import { AeroConst } from "aero.slint";
 
 // The look a window is drawn in, as the theme picks it.
 export enum Skin { flat, aero }
@@ -36,34 +37,45 @@ export global Scale {
 }
 
 // What every page, card, text and control is drawn in, so a window or a kit
-// component never reads the Palette itself. These are the flat values: they
-// follow the platform style's Palette, and so the system's light or dark
-// setting.
+// component never reads the Palette itself. The flat values follow the
+// platform style's Palette, and so the system's light or dark setting; the
+// Aero values are Win7's white page, light whatever the system's setting.
 export global Look {
     // The skin this window is drawn in: set before the window shows, and again
     // whenever a theme is picked in any window.
     in property <Skin> skin;
-    // The page the window's contents are drawn on, and the window's own ground.
-    out property <brush> page: Palette.background;
-    out property <brush> window-background: root.page;
-    out property <brush> card-background: Palette.alternate-background;
-    out property <brush> card-border: Palette.border;
-    out property <brush> card-title: Palette.foreground;
+    // Whether this window draws its own Aero frame instead of the system's:
+    // only on Windows, once that frame is in place. Nothing sets it yet.
+    in property <bool> chrome;
+    // Whether the window is maximized; its own frame has no edges or rounded
+    // corners then.
+    in property <bool> maximized;
+    // Why this window's look falls short of its theme, in plain words for the
+    // window to show; empty when it does not.
+    in property <string> failure;
+    out property <bool> aero: root.skin == Skin.aero;
+    // The page the window's contents are drawn on, and the window's own ground:
+    // under its own frame the window is clear, for the glass to show.
+    out property <brush> page: root.aero ? #ffffff : Palette.background;
+    out property <brush> window-background: root.aero && root.chrome ? transparent : root.page;
+    out property <brush> card-background: root.aero ? #ffffff : Palette.alternate-background;
+    out property <brush> card-border: root.aero ? #dfdfdf : Palette.border;
+    out property <brush> card-title: root.aero ? #003399 : Palette.foreground;
     // Text, then four steps back from it: values that stand a little back,
     // the grey lines, captions, and the wire spellings and ids furthest back.
-    out property <brush> text: Palette.foreground;
-    out property <brush> text-strong: Palette.foreground.with-alpha(0.85);
-    out property <brush> text-secondary: Palette.foreground.with-alpha(0.7);
-    out property <brush> text-caption: Palette.foreground.with-alpha(0.6);
-    out property <brush> text-faint: Palette.foreground.with-alpha(0.45);
-    out property <brush> accent: Palette.accent-background;
-    out property <brush> accent-text: Palette.accent-foreground;
+    out property <brush> text: root.aero ? #000000 : Palette.foreground;
+    out property <brush> text-strong: root.aero ? #000000d9 : Palette.foreground.with-alpha(0.85);
+    out property <brush> text-secondary: root.aero ? #5c5c5c : Palette.foreground.with-alpha(0.7);
+    out property <brush> text-caption: root.aero ? #5c5c5c : Palette.foreground.with-alpha(0.6);
+    out property <brush> text-faint: root.aero ? #838383 : Palette.foreground.with-alpha(0.45);
+    out property <brush> accent: root.aero ? #3c7fb1 : Palette.accent-background;
+    out property <brush> accent-text: root.aero ? #ffffff : Palette.accent-foreground;
     // The selected row: the accent, faint enough for the row's text to read.
     out property <brush> selection: root.accent.with-alpha(0.35);
-    out property <brush> control-background: Palette.control-background;
-    out property <brush> control-text: Palette.control-foreground;
-    out property <brush> control-border: Palette.border;
-    out property <brush> focus-ring: Palette.accent-background;
+    out property <brush> control-background: root.aero ? #f2f2f2 : Palette.control-background;
+    out property <brush> control-text: root.aero ? #000000 : Palette.control-foreground;
+    out property <brush> control-border: root.aero ? #707070 : Palette.border;
+    out property <brush> focus-ring: root.aero ? #3c7fb1 : Palette.accent-background;
     // The five status colours, StatusTone's: Severity's hues and one blue,
     // mid tones that stay legible on a light page and on a dark one.
     out property <brush> status-ok: #3fa14b;
@@ -71,9 +83,18 @@ export global Look {
     out property <brush> status-attention: #d08a00;
     out property <brush> status-fault: #e0525f;
     out property <brush> status-offline: #8a8a8a;
-    out property <length> radius: 4px;
+    out property <length> radius: root.aero ? 3px : 4px;
     // A card's inner padding and the gap between cards; the text size does
     // not scale them.
     out property <length> pad: 12px;
     out property <length> gap: 8px;
+    // The window's own frame, all 0 unless it draws one: the caption band, as
+    // tall as the text size needs; the frame's width at each edge and the
+    // radius of its corners, neither while maximized; and what the frame adds
+    // to the window's width and height.
+    out property <length> caption-height: root.aero && root.chrome ? 30px * Scale.factor : 0px;
+    out property <length> frame: root.aero && root.chrome && !root.maximized ? AeroConst.frame : 0px;
+    out property <length> corner: root.aero && root.chrome && !root.maximized ? AeroConst.radius : 0px;
+    out property <length> chrome-width: 2 * root.frame;
+    out property <length> chrome-height: root.caption-height + root.frame;
 }
