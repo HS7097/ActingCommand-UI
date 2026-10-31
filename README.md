@@ -99,7 +99,7 @@ answers come from:
   the client itself, the loopback address is taken by it, and the owner epoch is checked by it at connect
   time. The read face is only a client: it does not kill or wait for the Runtime, does not touch
   `owner.lock`, and writes nothing into the state root; launching and requesting shutdown belong to the
-  top bar's launcher (see the "Launcher" section), and shutdown too goes only through this same typed
+  workbench's launcher (see the "Launcher" section), and shutdown too goes only through this same typed
   client.
 - The first page at startup asks without a snapshot position; the `snapshot_ledger_position` the Runtime
   states on that page is the position this session reads at — the pin. A person's jump to the latest,
@@ -147,7 +147,7 @@ error in any mode, with no fallback. Neither error ends the console: the window 
 instance card state in red why the read face did not open, and "Reopen" is offered.
 
 When the offline read face cannot be opened — with `offline`, or with `auto` falling back to it — the
-console does not exit: the window opens **unopened**, which is what a fresh install looks like, since the
+console does not exit: the ledger window opens **unopened**, which is what a fresh install looks like, since the
 Runtime creates the ledger on its first start. The instance card then has only its first line, "read
 face", which says the ledger could not be opened and states the read face's own `code`, `operation` and
 `detail` verbatim, and for an io error its io kind (`LedgerIoKind`: `not_found`, `permission_denied`,
@@ -157,7 +157,11 @@ most likely because the Runtime has never been started here, and point at the la
 fact is shown, not even a zero: the list says the ledger is not opened instead of standing empty; the
 tabs, the filter boxes, the id box and the time slider are off; the module and port boxes and the frame
 pane say "ledger not opened". Nothing is asked of the ledger and no material is read. The launcher works
-as usual; once the Runtime has started and made the ledger, "Reopen" opens the read face again.
+as usual; once the Runtime has started and made the ledger, "Reopen" opens the read face again. A window
+of the default source (`auto`) that reads offline, or whose offline face is unopened, because no Runtime
+was there offers "Reopen" as soon as the launcher's probe finds one running, with a line saying it can
+read online now; a window `--source offline` asked for keeps reading offline. Neither switches read face
+mid-session on its own.
 
 **The reader thread**: the window comes up first, and the read face is opened afterwards on the window's
 own reader thread (`acui-ledger-<window id>`). Opening, page reads, reading earlier, following, the jump
@@ -377,19 +381,34 @@ acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events
 acui --help
 ```
 
-`--state-root` applies to this run only and overrides `state_root` in the settings file; if neither is
-present it shows the usage as a failed start (see "When the start fails") and exits with a non-zero
-code, guessing no default. Started through an A/B installation's fixed
-entry `<install root>\ui\acui.exe`, the console takes the state root, the configuration and the Runtime
-program from the installation's selection instead, and refuses a `--state-root` that differs from it.
-`--source` selects the read face (see above).
-`--tab` specifies the startup tab (for screenshots and review), and its values are the views' own wire
-names. `--lang` applies to **this run only**, overrides the language in the settings file, and is not
-written back to the settings file.
+The main window is the **workbench**: the Runtime in plain words with Start and Request Shutdown, the
+plain-words result of the last press, the language and the text size, a "Troubleshooting and Ledger"
+button, and an "Add Instance" button that is off (see "Instance configuration"). The ledger window,
+"Advanced Troubleshooting and Ledger History", opens only when asked: from that button, or at the start
+when `--tab` or `--source` is given. There is at most one per source (the default `auto`, `online`,
+`offline`); asking again restores the one open (Slint 1.17 has no call that brings a window to the
+front). `--state-root` alone opens none, since the fixed entry passes it on every start. A closed ledger
+window's reader stops after the page in hand; opening it again is a new window and a new session. Closing
+the workbench ends the program, except while an unlock runs (see "Launcher").
 
-The window is resizable: 1400×900 by default, 1100×700 minimum; the middle column stretches with the
-window and the two side columns keep a fixed width. The window follows the system DPI; the program sets no
-scaling of its own.
+`--state-root` applies to this run only and overrides `state_root` in the settings file; if neither is
+present the workbench still opens, with a red bar at its top that says there is no state root to use and
+gives the usage, and Start, Request Shutdown and "Troubleshooting and Ledger" are off; no default is
+guessed. Started through an A/B installation's fixed
+entry `<install root>\ui\acui.exe`, the console takes the state root, the configuration and the Runtime
+program from the installation's selection instead, and refuses a `--state-root` that differs from it (in
+the same red bar). `--source` selects the ledger window's read face (see above).
+`--tab` specifies the ledger window's startup tab (for screenshots and review), and its values are the
+views' own wire names. `--lang` applies to **this run only**, overrides the language in the settings
+file, and is not written back to the settings file.
+
+Started directly — `acui.exe`, or a shortcut that points at it — the console opens no black console
+window; started from a command line, `--help` and the reason for a failed start still go to that
+console. Started through the fixed entry `acforward.exe`, a console window still shows for now.
+
+The windows are resizable: the workbench 820×560 by default, 600×420 minimum; the ledger window 1400×900
+by default, 1100×700 minimum, its middle column stretching with the window and the two side columns
+keeping a fixed width. The windows follow the system DPI; the program sets no scaling of its own.
 
 Offline acceptance material: `tools/fixture-state-root` is a small generator, its own package outside the
 workspace and its build, that starts the pinned Runtime host on two fake devices and leaves a small v0.12
@@ -400,33 +419,40 @@ directory and open it with `acui --state-root <root> --source offline`. It is ma
 
 ### When the start fails
 
-A start that cannot go on — a command line the console does not understand, an installation selection it
-cannot read, no state root, a window that cannot be made — is shown in a
+A start that cannot go on — a command line the console does not understand, a workbench window that
+cannot be made — is shown in a
 window of its own with the reason, written to the console the program was started from (if there is one),
 and appended to the technical log. The exit code is 2 for a command line the console does not understand
 and 1 otherwise. When not even that window can be made, a system message box says it. `--help` prints the
-usage on that console, or shows it in the same window when there is none, and exits 0.
+usage on that console, or shows it in the same window when there is none, and exits 0. An installation
+selection it cannot read, a `--state-root` that differs from it, a `state_root` that is not absolute, or no
+state root at all is no failed start: the workbench opens with a red bar, plain words first and then the
+original, and the technical log has it too.
 
 The technical log is `%LOCALAPPDATA%\ActingCommand\logs\acui-<start unix ms>.log` (elsewhere under
 `$XDG_STATE_HOME`, else `$HOME/.local/state`), beside actingd's start logs. It is created by its first
-entry and holds failures only: a failed start, a problem of the settings file, a result a background
-thread could not hand back to the window, a ledger reader thread that could not start or that panicked. A
-read face that does not open is no failed start: the window stays and says why in its ledger area (see
-above). Once it exists, the top of the window says where it is; when it
-cannot be written, the window says that instead.
+entry and holds failures only: a failed start or no state root to use, a problem of the settings file, a
+result a background thread could not hand back to the window, a ledger window that could not be made or
+shown, a ledger reader thread that could not start or that panicked. A
+read face that does not open is no failed start: the ledger window stays and says why in its ledger area
+(see above). Once it exists, the top of every window says where it is; when it
+cannot be written, the windows say that instead.
 
 ## Interface language and text size
 
-Two dropdowns at the right of the top bar; a choice is written into the settings file as soon as it is
-made:
+Two dropdowns at the right of the workbench's top and of every ledger window's top bar; a choice made in
+any window applies at once to every open window and is written into the settings file as soon as it is
+made, and a ledger window opened later comes up with the current language and text size:
 
 - **Text size**: standard / large / extra-large = 1.0 / 1.25 / 1.5. **Takes effect on the spot**. Every
   font size and line height in the interface is one base size meant for a person at normal DPI (list row
   14px, detail pane 13px, subheading 16px, line height 26px) multiplied by this one factor; `app.slint`
-  has only this one knob, `Scale.factor`.
-- **Language**: 中文 / English. **Takes effect on the spot**: the choice fills the `Strings` global again
-  and paints every line of the window again — the launcher's two lines, the frame pane's note, the port
-  box and the words after a read error included. A background thread never holds a language table; it
+  has only this one knob, `Scale.factor`. The minimum widths of the controls that hold text (the boxes,
+  the id box, the time slider, the notice lines) and the minimum heights of text areas are multiplied by
+  it too; a window's minimum size and the three columns' floor widths are not.
+- **Language**: 中文 / English. **Takes effect on the spot**: the choice fills every window's `Strings`
+  global again and paints every line of every window again — the launcher's plain and technical lines,
+  the frame pane's note, the port box and the words after a read error included. A background thread never holds a language table; it
   hands back phrases that are put into words when painted, so a start or a frame read still in flight
   reports in the new language. The two language tables are in `crates/acui-app/src/strings.rs` (`ZH` and
   `EN`); there is no gettext. A read face's own error text is shown verbatim, untranslated.
@@ -466,7 +492,7 @@ result goes to `acui.toml.tmp` beside it, which then replaces the file. **This i
 console itself reads and writes**, besides the actingd start logs the launcher creates and, after an
 early exit, reads back, and its own technical log (see those sections): it is not inside any state root,
 and the state root still belongs entirely to the read face. A missing file is a first run: the defaults
-(Chinese, standard, flat) are used and nothing is said. Anything else is said at the top of the window,
+(Chinese, standard, flat) are used and nothing is said. Anything else is said at the top of every window,
 with the file and the line: a value the console does not recognize, or a line that is not `key = value`,
 in amber, the default used and the line kept; a file that is there but cannot be read (permissions, not
 UTF-8), in red, the defaults used and **no save at all this run**, so the file is never written over; no
@@ -478,10 +504,13 @@ backslashes.
 
 ## Launcher
 
-The third line of the top bar. On the left is the Runtime state from the last probe, then two buttons, and
-the line below it is the result of the last Start or Request shutdown press: plain words first (no key,
-code, PID or path; an outcome code shows only as its short words), then the technical text; the whole line
-turns red on a failure and wraps instead of being cut. The probe, the whole start (probe, launch,
+On the workbench: on the left the Runtime state from the last probe, in plain words, then the Start and
+Request Shutdown buttons, and the line below them is the result of the last press, in plain words only (no
+key, code, PID or path; an outcome code shows only as its short words; a failure only the technical text
+states adds "details in Troubleshooting and Ledger"). Every ledger window's top bar has the technical
+lines: the state from the last probe with its PID and owner epoch, or the client's code, and below it the
+technical text of the last press; the unlock entry is there too (below). A line turns red on a failure and
+wraps instead of being cut. The probe, the whole start (probe, launch,
 readiness, record) and the shutdown request each run on a background thread of their own, and the window
 never waits on them; one request of each kind runs at a time, and a second press while one has not
 finished only says so. Of probes in flight, only the newest one's answer is shown.
@@ -506,9 +535,9 @@ finished only says so. Of probes in flight, only the newest one's answer is show
   outcome line — or that the log could not be read, with the error, or holds no such line — and the log
   path; if it has not exited it
   does one more `connect`, and a connection means ready, stating the PID and owner epoch, and then the
-  press is recorded (see below). If this console is reading offline, or its offline face is unopened, it
-  appends the sentence "to read online, restart with `--source online`" — it **never quietly switches
-  read face mid-session**. If all 60 attempts fail to connect, it says "still not ready" and the last
+  press is recorded (see below). A ledger window of the default source that reads offline, or whose
+  offline face is unopened, then offers "Reopen", saying it can read online now — it **never quietly
+  switches read face mid-session**. If all 60 attempts fail to connect, it says "still not ready" and the last
   client error code. Readiness is **never read from the daemon's output**: the log is read back only
   after an early exit, for that one outcome, and nothing in it is interpreted but whether its code is
   `owner_resource_unconfirmed` (below).
@@ -530,7 +559,8 @@ finished only says so. Of probes in flight, only the newest one's answer is show
 - **Unlock owner**: offered only when the terminal outcome of the last start has the code
   `owner_resource_unconfirmed`
   — actingd refused the state root because its last Runtime owner exited with device resources in use or
-  unconfirmed. A line below the result line then shows an "Unlock Owner…" button. The first press runs
+  unconfirmed. The workbench then says an unlock is needed and points at "Troubleshooting and Ledger", and
+  every ledger window shows an "Unlock Owner…" button below its technical lines. The first press runs
   nothing: it only shows the statement "the device resources of the last Runtime are released" and a
   "Confirm and Unlock" button. The second press runs, from `actingd_exe` (absolute, as for Start), exactly
   `unlock-owner --config <actingd_config> --actor acui --confirm-resources-released`, on a worker thread,
@@ -551,7 +581,8 @@ finished only says so. Of probes in flight, only the newest one's answer is show
   contract, and an `unlock_owner_completed` with a non-zero exit code each have their own line, and none
   retries the start. After any outcome but an
   unlock the entry is back at its first step; a new start withdraws it. Start is refused while the
-  unlock runs, and pressing it again while the previous start has not finished is
+  unlock runs, and so is closing the workbench, which says to close it once the unlock has ended;
+  pressing Start again while the previous start has not finished is
   refused outright — "The Previous Start Has Not Finished" — launching nothing. The console records no client action for it: there is no running Runtime to record
   through, and `unlock-owner` appends its own `cli.command` fact (action `owner.unlock`). It never
   deletes `owner.lock` (Runtime `contracts/actingd-unlock-owner.md`).
@@ -587,8 +618,10 @@ containing upper-case letters, a known issue, so use `actingctl pause` / `resume
 
 The console no longer has an instance-configuration window. Until the Runtime's `install instance`
 lands, an instance can only be added by hand: edit the `instances` of the actingd configuration
-(`actingd_config`) as the Runtime's installation notes describe, then restart the Runtime. Finding
-instances comes back with the console's own instance page in a later version.
+(`actingd_config`) as the Runtime's installation notes describe, then restart the Runtime. The
+workbench's "Add Instance" button is off for that reason, with this note beside it and the path of that
+configuration file below, selectable to copy. Finding instances comes back with the console's own
+instance page in a later version.
 
 ## Setup wizard acsetup
 
@@ -1052,7 +1085,9 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   dependency on slint and **no plain language either** — it gives structured facts only, and all wording
   is chosen by `acui-app` from the language tables.
 - `acui-app`: the only crate that depends on slint; the `.slint` files are in `crates/acui-app/ui/`, the
-  two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`. The
+  two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`. What the
+  windows share — the language, the text size, the launcher's view, and the registry of the workbench and
+  the ledger windows — is in `ui.rs`, on the event loop only. The
   ledger window is painted from its own state alone (`ledger/state.rs`, `ledger/paint.rs`), never from
   the read face; the read face is opened and held by the window's own reader thread
   (`ledger/worker.rs`), the reads leave their results in the state first, and a frame is read and

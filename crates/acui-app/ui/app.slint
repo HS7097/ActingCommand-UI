@@ -147,10 +147,12 @@ export global Scale {
 }
 
 // Every label a person reads, filled from the Rust table for the language
-// shown: at startup, and again whenever the language changes, which takes
-// effect at once.
+// shown: in every window, before it shows, and again in every window whenever
+// the language changes, which takes effect at once. Each window has its own
+// copy of the globals, so each is filled.
 export global Strings {
     in property <string> window-title;
+    in property <string> ledger-window-title;
     in property <string> data-source;
     in property <string> ledger-dir;
     in property <string> storage-format;
@@ -186,6 +188,12 @@ export global Strings {
     in property <string> unlock-confirm;
     in property <string> start;
     in property <string> request-shutdown;
+    // The workbench's own: the way into the ledger window, the instance entry
+    // that waits for the Runtime, and the file to edit by hand meanwhile.
+    in property <string> open-ledger;
+    in property <string> add-instance;
+    in property <string> add-instance-note;
+    in property <string> config-file;
 }
 
 component TabButton inherits Rectangle {
@@ -247,8 +255,10 @@ component Notice inherits Text {
     vertical-stretch: 0;
 }
 
-export component AppWindow inherits Window {
-    title: Strings.window-title;
+// The advanced troubleshooting and ledger window: one per source at most,
+// opened from the workbench, or at the start with --tab or --source.
+export component LedgerWindow inherits Window {
+    title: Strings.ledger-window-title;
     icon: @image-url("../assets/acui-256.png");
     preferred-width: 1400px;
     preferred-height: 900px;
@@ -287,10 +297,12 @@ export component AppWindow inherits Window {
     // while it waits for a request.
     in property <string> busy-text;
     // A new session of the read face, offered when it did not open, when its
-    // reader stopped, or when a read reached another Runtime; and why, when
-    // the rest of the window does not already say it.
+    // reader stopped, when a read reached another Runtime, or when a Runtime
+    // is up while this window reads offline for want of one; and why, when the
+    // rest of the window does not already say it, red when that is a failure.
     in property <bool> reopen-offered;
     in property <string> reopen-note;
+    in property <bool> reopen-failed;
     in property <bool> has-more;
     // The performance monitor's routine events shown; hidden by default.
     in-out property <bool> show-performance;
@@ -310,8 +322,10 @@ export component AppWindow inherits Window {
     in property <image> frame-image;
     in property <bool> frame-ready;
     in property <string> payload-json;
-    // The launcher block: what the last probe said about the Runtime, and the
-    // outcome of the last button press, plain words first; red when it failed.
+    // The launcher's technical lines: what the last probe said about the
+    // Runtime (its pid and owner epoch, or the client's code), and the
+    // technical words of the last request; red when they say a failure. Start
+    // and Request Shutdown are on the workbench.
     in property <string> runtime-status-text;
     in property <string> launcher-line;
     in property <bool> launcher-failed;
@@ -354,9 +368,7 @@ export component AppWindow inherits Window {
     callback reopen-ledger();
     callback text-size-changed(int);
     callback language-changed(int);
-    callback start-runtime();
     callback unlock-owner();
-    callback request-shutdown();
 
     VerticalLayout {
         padding: 8px;
@@ -398,7 +410,7 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                         color: Palette.foreground.with-alpha(0.85);
                         overflow: elide;
-                        min-width: 40px;
+                        min-width: 40px * Scale.factor;
                         horizontal-stretch: 1;
                     }
                     Caption { text: Strings.storage-format; }
@@ -457,11 +469,11 @@ export component AppWindow inherits Window {
                         color: Palette.foreground.with-alpha(0.75);
                         horizontal-stretch: 1;
                         overflow: elide;
-                        min-width: 20px;
+                        min-width: 20px * Scale.factor;
                     }
                     Caption { text: Strings.show-up-to; }
                     Slider {
-                        width: 150px;
+                        width: 150px * Scale.factor;
                         enabled: root.ledger-live;
                         minimum: 0;
                         maximum: 1000;
@@ -495,14 +507,14 @@ export component AppWindow inherits Window {
                     }
                     Notice {
                         text: root.reopen-note;
-                        failed: true;
+                        failed: root.reopen-failed;
                         vertical-alignment: center;
-                        min-width: 40px;
+                        min-width: 40px * Scale.factor;
                         horizontal-stretch: 1;
                     }
                 }
-                // launcher: Runtime status, the two requests, and one line for what
-                // the last request came back with.
+                // The launcher's technical lines: the Runtime as the last probe
+                // found it, and the technical words of the last request.
                 HorizontalLayout {
                     spacing: 14px;
                     Caption { text: Strings.launcher-title; }
@@ -512,23 +524,11 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                         color: Palette.foreground;
                         overflow: elide;
-                        min-width: 40px;
+                        min-width: 40px * Scale.factor;
                         horizontal-stretch: 1;
                     }
-                    Button {
-                        text: Strings.start;
-                        clicked => {
-                            root.start-runtime();
-                        }
-                    }
-                    Button {
-                        text: Strings.request-shutdown;
-                        clicked => {
-                            root.request-shutdown();
-                        }
-                    }
                 }
-                Notice {
+                if root.launcher-line != "": Notice {
                     text: root.launcher-line;
                     failed: root.launcher-failed;
                     font-size: Scale.grey-font;
@@ -559,7 +559,7 @@ export component AppWindow inherits Window {
                         failed: root.unlock-failed;
                         font-size: Scale.grey-font;
                         vertical-alignment: center;
-                        min-width: 40px;
+                        min-width: 40px * Scale.factor;
                         horizontal-stretch: 1;
                     }
                 }
@@ -663,7 +663,7 @@ export component AppWindow inherits Window {
                             }
                         }
                         module-box := ComboBox {
-                            min-width: 90px;
+                            min-width: 90px * Scale.factor;
                             preferred-width: 180px * Scale.factor;
                             enabled: root.ledger-live;
                             model: root.module-options;
@@ -680,7 +680,7 @@ export component AppWindow inherits Window {
                             }
                         }
                         port-box := ComboBox {
-                            min-width: 90px;
+                            min-width: 90px * Scale.factor;
                             preferred-width: 180px * Scale.factor;
                             enabled: root.port-enabled;
                             model: root.port-options;
@@ -689,7 +689,7 @@ export component AppWindow inherits Window {
                             }
                         }
                         LineEdit {
-                            min-width: 70px;
+                            min-width: 70px * Scale.factor;
                             horizontal-stretch: 1;
                             enabled: root.ledger-live;
                             placeholder-text: Strings.id-placeholder;
@@ -955,7 +955,7 @@ export component AppWindow inherits Window {
                         read-only: true;
                         wrap: word-wrap;
                         font-size: Scale.body-font;
-                        min-height: 80px;
+                        min-height: 80px * Scale.factor;
                         preferred-height: 150px * Scale.factor;
                         max-height: 150px * Scale.factor;
                         vertical-stretch: 0;
@@ -964,6 +964,223 @@ export component AppWindow inherits Window {
                 }
             }
         }
+    }
+}
+
+// The main window: the Runtime in plain words with Start and Request
+// Shutdown, the display settings, the way into the ledger window, and where an
+// instance is added for now. No code, pid or wire name shows here; those stay
+// in the ledger window's technical lines. Closing it ends the program.
+export component WorkbenchWindow inherits Window {
+    title: Strings.window-title;
+    icon: @image-url("../assets/acui-256.png");
+    preferred-width: 820px;
+    preferred-height: 560px;
+    min-width: 600px;
+    min-height: 420px;
+    default-font-size: Scale.body-font;
+    background: Palette.background;
+
+    // Why this run has no state root to start from: plain words, then the
+    // original. Start, Request Shutdown and the ledger window are off
+    // meanwhile; the language and the text size still work.
+    in property <string> install-issue;
+    property <bool> installed: root.install-issue == "";
+    // What the settings file holds that the console could not take, or why a
+    // setting was not saved, one per line: errors, then warnings. Then what
+    // this window could not do itself, and where the technical log is, or why
+    // it cannot be written.
+    in property <string> settings-errors;
+    in property <string> settings-warnings;
+    in property <string> errors;
+    in property <string> log-note;
+    in property <bool> log-failed;
+    // The Runtime in plain words, and what became of the last request; red
+    // when either says a failure.
+    in property <string> status-text;
+    in property <bool> status-failed;
+    in property <string> launcher-line;
+    in property <bool> launcher-failed;
+    // The Runtime's configuration file an instance is added to by hand,
+    // selectable so it can be copied; or why there is none.
+    in property <string> config-path;
+    in property <string> config-note;
+
+    in-out property <int> text-size-index <=> text-size-box.current-index;
+    in-out property <int> language-index <=> language-box.current-index;
+
+    callback start-runtime();
+    callback request-shutdown();
+    callback open-ledger();
+    callback text-size-changed(int);
+    callback language-changed(int);
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        if root.install-issue != "": Panel {
+            vertical-stretch: 0;
+            VerticalLayout {
+                padding: 8px;
+                padding-left: 12px;
+                padding-right: 12px;
+                Notice {
+                    text: root.install-issue;
+                    failed: true;
+                }
+            }
+        }
+
+        // notices and the display settings
+        Panel {
+            vertical-stretch: 0;
+            VerticalLayout {
+                padding: 8px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 4px;
+                if root.settings-errors != "": Notice {
+                    text: root.settings-errors;
+                    failed: true;
+                }
+                if root.settings-warnings != "": Notice {
+                    text: root.settings-warnings;
+                    warning: true;
+                }
+                if root.errors != "": Notice {
+                    text: root.errors;
+                    failed: true;
+                }
+                if root.log-note != "": Notice {
+                    text: root.log-note;
+                    failed: root.log-failed;
+                }
+                HorizontalLayout {
+                    spacing: 14px;
+                    Text {
+                        text: Strings.window-title;
+                        font-size: Scale.head-font;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        color: Palette.foreground;
+                        overflow: elide;
+                        min-width: 0px;
+                        horizontal-stretch: 1;
+                    }
+                    Caption { text: Strings.text-size; }
+                    text-size-box := ComboBox {
+                        width: 110px * Scale.factor;
+                        model: Strings.text-size-options;
+                        selected => {
+                            root.text-size-changed(self.current-index);
+                        }
+                    }
+                    Caption { text: Strings.language; }
+                    language-box := ComboBox {
+                        width: 100px * Scale.factor;
+                        model: Strings.language-options;
+                        selected => {
+                            root.language-changed(self.current-index);
+                        }
+                    }
+                }
+            }
+        }
+
+        // the launcher, in plain words
+        Panel {
+            vertical-stretch: 0;
+            VerticalLayout {
+                padding: 10px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 6px;
+                HorizontalLayout {
+                    spacing: 14px;
+                    Caption { text: Strings.launcher-title; }
+                    Notice {
+                        text: root.status-text;
+                        failed: root.status-failed;
+                        vertical-alignment: center;
+                        min-width: 40px * Scale.factor;
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: Strings.start;
+                        enabled: root.installed;
+                        clicked => {
+                            root.start-runtime();
+                        }
+                    }
+                    Button {
+                        text: Strings.request-shutdown;
+                        enabled: root.installed;
+                        clicked => {
+                            root.request-shutdown();
+                        }
+                    }
+                }
+                if root.launcher-line != "": Notice {
+                    text: root.launcher-line;
+                    failed: root.launcher-failed;
+                }
+            }
+        }
+
+        // the ledger window, and instances
+        Panel {
+            vertical-stretch: 0;
+            VerticalLayout {
+                padding: 10px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 6px;
+                HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: Strings.open-ledger;
+                        enabled: root.installed;
+                        clicked => {
+                            root.open-ledger();
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 14px;
+                    // Off until the Runtime can add an instance itself.
+                    Button {
+                        text: Strings.add-instance;
+                        enabled: false;
+                    }
+                    Notice {
+                        text: Strings.add-instance-note;
+                        vertical-alignment: center;
+                        min-width: 40px * Scale.factor;
+                        horizontal-stretch: 1;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 14px;
+                    Caption { text: Strings.config-file; }
+                    if root.config-path != "": LineEdit {
+                        text: root.config-path;
+                        read-only: true;
+                        font-size: Scale.body-font;
+                        min-width: 160px * Scale.factor;
+                        horizontal-stretch: 1;
+                    }
+                    if root.config-path == "": Notice {
+                        text: root.config-note;
+                        vertical-alignment: center;
+                        min-width: 40px * Scale.factor;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+
+        Rectangle { }
     }
 }
 

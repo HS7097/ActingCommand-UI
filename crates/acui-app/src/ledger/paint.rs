@@ -33,7 +33,7 @@ use crate::ledger::LedgerHandle;
 use crate::phrase::{phrase, Phrase};
 use crate::strings::{fill, outcome_sentence, outcome_short, Labels, Language};
 use crate::ui::Ui;
-use crate::{AppWindow, ArtifactItem, FieldLine, OverlayItem, RowItem, Strings, TargetItem};
+use crate::{ArtifactItem, FieldLine, LedgerWindow, OverlayItem, RowItem, Strings, TargetItem};
 
 /// How long a request runs before the busy line shows.
 const BUSY_QUIET: Duration = Duration::from_secs(1);
@@ -76,8 +76,14 @@ pub fn port_options(labels: &Labels, port_map: &PortMap) -> (Vec<SharedString>, 
 /// nothing here reads the read face, and the caller holds the state's lock for
 /// the length of the paint. What a paint needs read, the window's reader read
 /// before it. A new frame read takes a clone of the material reader the reader
-/// published.
-pub fn refresh(window: &AppWindow, ledger: &LedgerHandle, state: &LedgerState, labels: &Labels) {
+/// published. `runtime_ready` is the launcher's newest probe: a Runtime is up.
+pub fn refresh(
+    window: &LedgerWindow,
+    ledger: &LedgerHandle,
+    state: &LedgerState,
+    labels: &Labels,
+    runtime_ready: bool,
+) {
     let source = match &state.phase {
         Phase::Open(facts) if facts.offline_reason.is_none() => labels.data_source_online,
         Phase::Open(_) | Phase::Unopened { .. } => labels.data_source,
@@ -85,9 +91,7 @@ pub fn refresh(window: &AppWindow, ledger: &LedgerHandle, state: &LedgerState, l
     };
     window.global::<Strings>().set_data_source(source.into());
     window.set_busy_text(busy_text(labels, state).into());
-    let (offered, note) = reopen_offer(labels, state);
-    window.set_reopen_offered(offered);
-    window.set_reopen_note(note.into());
+    paint_reopen(window, state, labels, runtime_ready);
     let (Phase::Open(facts), Some(model)) = (&state.phase, &state.model) else {
         paint_closed(window, ledger, state, labels);
         return;
@@ -422,7 +426,7 @@ pub fn refresh(window: &AppWindow, ledger: &LedgerHandle, state: &LedgerState, l
 
 /// The detail pane with no event: no lines but "not selected", no material,
 /// no geometry, and the frame pane saying `note`.
-fn clear_detail(window: &AppWindow, ledger: &LedgerHandle, labels: &Labels, note: String) {
+fn clear_detail(window: &LedgerWindow, ledger: &LedgerHandle, labels: &Labels, note: String) {
     window.set_detail_lines(models(vec![FieldLine {
         label: labels.not_selected.into(),
         value: SharedString::new(),
@@ -446,7 +450,12 @@ fn clear_detail(window: &AppWindow, ledger: &LedgerHandle, labels: &Labels, note
 /// and the list, the boxes and the frame pane say why instead of standing
 /// empty, which would read as an empty ledger. The controls that would query
 /// it are off. Whatever an earlier session of the window painted goes.
-fn paint_closed(window: &AppWindow, ledger: &LedgerHandle, state: &LedgerState, labels: &Labels) {
+fn paint_closed(
+    window: &LedgerWindow,
+    ledger: &LedgerHandle,
+    state: &LedgerState,
+    labels: &Labels,
+) {
     let (top, note, failed) = match &state.phase {
         Phase::Opening { .. } | Phase::Open(_) => {
             (labels.ledger_opening, labels.list_opening.to_owned(), false)
@@ -504,17 +513,48 @@ fn failure_text(labels: &Labels, failure: &LedgerFailure) -> String {
     }
 }
 
-/// Whether the window offers a new session, and why when the rest of the
-/// window does not already say it: a face that did not open, a reader that
-/// stopped, or a read that reached a Runtime other than the session's.
-fn reopen_offer(labels: &Labels, state: &LedgerState) -> (bool, String) {
+/// The reopen offer alone: painted with the rest of the window, and again with
+/// the launcher's lines (`LedgerHandle::paint_reopen`), since a Runtime the
+/// launcher finds up is worth a new session to a window that reads offline
+/// only for want of one.
+pub fn paint_reopen(
+    window: &LedgerWindow,
+    state: &LedgerState,
+    labels: &Labels,
+    runtime_ready: bool,
+) {
+    let (offered, note, failed) = reopen_offer(labels, state, runtime_ready);
+    window.set_reopen_offered(offered);
+    window.set_reopen_note(note.into());
+    window.set_reopen_failed(failed);
+}
+
+/// Whether the window offers a new session, why when the rest of the window
+/// does not already say it, and whether that why is a failure: a face that did
+/// not open, a reader that stopped, a read that reached a Runtime other than
+/// the session's, or a Runtime that is up now while the window reads offline
+/// because `auto` found none. A window `--source offline` asked for reads
+/// offline as asked, Runtime or not.
+fn reopen_offer(
+    labels: &Labels,
+    state: &LedgerState,
+    runtime_ready: bool,
+) -> (bool, String, bool) {
+    let online_now = runtime_ready
+        && matches!(
+            state.offline_reason(),
+            Some(OfflineReason::RuntimeInfoAbsent | OfflineReason::ConnectFailed { .. })
+        );
+    let started = || (true, labels.ledger_runtime_started.to_owned(), false);
     match &state.phase {
-        Phase::Opening { .. } => (false, String::new()),
-        Phase::Unopened { .. } | Phase::Failed { .. } => (true, String::new()),
+        Phase::Opening { .. } => (false, String::new(), false),
+        Phase::Unopened { .. } if online_now => started(),
+        Phase::Unopened { .. } | Phase::Failed { .. } => (true, String::new(), false),
         Phase::Open(facts) if owner_changed(state, facts) => {
-            (true, labels.ledger_owner_changed.to_owned())
+            (true, labels.ledger_owner_changed.to_owned(), true)
         }
-        Phase::Open(_) => (false, String::new()),
+        Phase::Open(_) if online_now => started(),
+        Phase::Open(_) => (false, String::new(), false),
     }
 }
 
@@ -570,7 +610,7 @@ pub fn busy_text(labels: &Labels, state: &LedgerState) -> String {
 /// Rebuilds the module option list from the loaded rows and puts the box back
 /// on the module it is filtering by, found by name in the list that now exists.
 fn sync_modules(
-    window: &AppWindow,
+    window: &LedgerWindow,
     ledger: &LedgerHandle,
     labels: &Labels,
     picked: &Option<OriginModule>,
@@ -603,7 +643,7 @@ fn sync_modules(
 /// Puts the port box back on the port the console is filtering by, found in
 /// the list the session's fixed map gives in the language shown; the first
 /// item when there is none.
-fn sync_ports(window: &AppWindow, state: &LedgerState, labels: &Labels, picked: Option<u16>) {
+fn sync_ports(window: &LedgerWindow, state: &LedgerState, labels: &Labels, picked: Option<u16>) {
     let (options, choices) = port_options(labels, &state.port_map);
     let index = picked
         .and_then(|port| choices.iter().position(|choice| *choice == port))
@@ -666,7 +706,7 @@ fn detail_lines(labels: &Labels, event: &ProjectedEvent) -> Vec<FieldLine> {
 /// a read that finds it latched, or unusable, asks the window's reader for a
 /// new one, for the request after it.
 fn update_frame(
-    window: &AppWindow,
+    window: &LedgerWindow,
     ledger: &LedgerHandle,
     state: &LedgerState,
     labels: &Labels,
@@ -741,7 +781,7 @@ fn update_frame(
     }
 }
 
-fn clear_frame(window: &AppWindow, slot: &FrameSlot, note: String) {
+fn clear_frame(window: &LedgerWindow, slot: &FrameSlot, note: String) {
     slot.clear();
     window.set_frame_ready(false);
     window.set_frame_note(note.into());
@@ -751,7 +791,7 @@ fn clear_frame(window: &AppWindow, slot: &FrameSlot, note: String) {
 /// language shown now: the pane's note, and the frame once it is verified and
 /// decoded.
 pub fn frame_read(
-    window: &AppWindow,
+    window: &LedgerWindow,
     ui: &Ui,
     note: Phrase,
     painted: Result<(u32, u32, Vec<u8>), Phrase>,

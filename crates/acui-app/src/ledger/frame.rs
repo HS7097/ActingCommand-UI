@@ -14,7 +14,7 @@ use slint::ComponentHandle;
 
 use crate::ledger::paint;
 use crate::phrase::{verbatim, Phrase};
-use crate::{launcher, report, ui, AppWindow};
+use crate::{launcher, report, ui, LedgerWindow};
 
 /// One frame read: the event it is for and its generation, what the pane says
 /// about it — reading, verified, or why not — and once that read is verified
@@ -82,7 +82,7 @@ impl FrameSlot {
     /// refuses comes back as the error.
     pub fn read(
         &self,
-        window: &AppWindow,
+        window: &LedgerWindow,
         reader: MaterialReader,
         target: FrameTarget,
         snapshot: u64,

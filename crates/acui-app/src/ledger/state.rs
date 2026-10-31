@@ -343,12 +343,6 @@ impl LedgerState {
         }
     }
 
-    /// Whether the window reads offline, or its offline face is unopened: a
-    /// Runtime that runs is not what it shows.
-    pub fn reads_offline(&self) -> bool {
-        self.offline_reason().is_some()
-    }
-
     pub fn port_bindings(&self) -> Option<&PortBindings> {
         self.port_map.bindings()
     }

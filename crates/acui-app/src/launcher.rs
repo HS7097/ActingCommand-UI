@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The launcher block: the one place the console starts the daemon, and the
-//! one place it asks the Runtime to stop.
+//! The launcher: the one place the console starts the daemon, and the one
+//! place it asks the Runtime to stop. Start and Request Shutdown are on the
+//! workbench, which says what the launcher found in plain words; every ledger
+//! window shows the technical lines and holds the unlock entry (`paint`).
 //!
 //! Start spawns `actingcommand-actingd --config <actingd_config>` detached,
 //! with its stdout and stderr in a log file under the console's own directory
@@ -18,25 +20,26 @@
 //! After an early exit the log is read back once, for actingd's terminal
 //! outcome: its last `OUTCOME actingd:` line that holds an outcome envelope
 //! (runtime-outcomes 1), shown as the developer line written with it. When
-//! that outcome's code is `owner_resource_unconfirmed` the block offers
-//! `actingd unlock-owner`, run only on a second, confirming press: no console
-//! window, output captured, killed and reaped if it outlives its timeout. It
-//! appends its own ledger fact, so no client action is recorded for it; a v2
-//! report whose outcome is `unlock_owner_completed`, with exit code 0, presses
-//! start once more.
+//! that outcome's code is `owner_resource_unconfirmed` the launcher offers
+//! `actingd unlock-owner`, run only on a second, confirming press in a ledger
+//! window: no console window, output captured, killed and reaped if it
+//! outlives its timeout. It appends its own ledger fact, so no client action is
+//! recorded for it; a v2 report whose outcome is `unlock_owner_completed`, with
+//! exit code 0, starts once more, as a start press does.
 //!
 //! Nothing here waits on the event loop: a probe, a whole start (probe, launch,
 //! readiness, record), a shutdown and an unlock each run on a thread of their
 //! own, one of each kind at a time, and hand back facts and `Phrase`s, never
 //! text. What they said is kept in the `LauncherView` and painted from there in
-//! the language shown at that moment: a plain line for a person (`LauncherKind`)
-//! and, beside it, the technical one with the codes, pids and paths.
+//! the language shown at that moment: plain lines for a person on the workbench
+//! (`LauncherKind`), and the technical ones, with the codes, pids and paths, in
+//! every ledger window. A probe that finds a Runtime up is also what offers a
+//! ledger window that reads offline for want of one to read it online.
 
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -47,13 +50,12 @@ use acui_source::{
     probe_runtime, record_start, request_shutdown, ClientFailure, RuntimeFacts, SHUTDOWN_ATTEMPTS,
 };
 use serde_json::Value;
-use slint::ComponentHandle;
 
+use crate::install::InstallPaths;
 use crate::phrase::{phrase, verbatim, Line, Phrase};
 use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
-use crate::{App, AppWindow};
 
 /// Readiness is polled: up to this many connect attempts, this far apart.
 const READY_ATTEMPTS: u32 = 60;
@@ -77,7 +79,7 @@ const OUTCOME_SCHEMA: &str = "actingcommand.outcome.v1";
 /// The developer line's levels: `<LEVEL> actingd: <code> <text>`.
 const DEVELOPER_PREFIXES: [&str; 4] =
     ["INFO actingd:", "WARN actingd:", "ERROR actingd:", "FATAL actingd:"];
-/// The one terminal outcome code the block answers, with the unlock entry.
+/// The one terminal outcome code the launcher answers, with the unlock entry.
 const OWNER_RESOURCE_UNCONFIRMED: &str = "owner_resource_unconfirmed";
 /// Names the surface, not a person: no user name goes into the ledger.
 const UNLOCK_ACTOR: &str = "acui";
@@ -91,33 +93,41 @@ const UNLOCK_COMPLETED: &str = "unlock_owner_completed";
 const UNLOCK_TIMEOUT: Duration = Duration::from_secs(180);
 const UNLOCK_POLL: Duration = Duration::from_millis(100);
 
+/// The state root and the two launcher paths, as this run resolved them, and
+/// the requests in flight.
 pub struct Launcher {
     pub state_root: PathBuf,
     pub actingd_config: Option<PathBuf>,
     pub actingd_exe: Option<PathBuf>,
+    /// The installation inputs of this process, retained across all UI actions.
+    installation: Option<Snapshot>,
     /// One start in flight at a time: set from the press until its thread's
     /// last word is painted.
     starting: Arc<AtomicBool>,
-    /// Set while unlock-owner runs; a start is refused meanwhile.
+    /// Set while unlock-owner runs; a start is refused meanwhile, and the
+    /// workbench does not close.
     unlocking: Arc<AtomicBool>,
     /// One shutdown request in flight at a time.
     shutting_down: Arc<AtomicBool>,
 }
 
 impl Launcher {
-    pub fn new(
-        state_root: PathBuf,
-        actingd_config: Option<PathBuf>,
-        actingd_exe: Option<PathBuf>,
-    ) -> Self {
+    pub fn new(paths: InstallPaths) -> Self {
+        let InstallPaths { installation, state_root, actingd_config, actingd_exe } = paths;
         Self {
             state_root,
             actingd_config,
             actingd_exe,
+            installation,
             starting: Arc::new(AtomicBool::new(false)),
             unlocking: Arc::new(AtomicBool::new(false)),
             shutting_down: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Whether unlock-owner runs now.
+    pub fn unlocking(&self) -> bool {
+        self.unlocking.load(Ordering::SeqCst)
     }
 }
 
@@ -209,6 +219,8 @@ impl LauncherLine {
 
 /// What the newest probe said.
 enum Status {
+    /// This run has no state root: there is nothing to probe.
+    Unavailable,
     /// Out, and not answered yet.
     Checking,
     Probed(Result<RuntimeFacts, ClientFailure>),
@@ -216,7 +228,7 @@ enum Status {
     Failed(String),
 }
 
-/// The launcher as the block paints it. Workers change it only through jobs
+/// The launcher as the windows paint it. Workers change it only through jobs
 /// handed to the event loop.
 pub struct LauncherView {
     status: Status,
@@ -226,30 +238,24 @@ pub struct LauncherView {
     line: Option<LauncherLine>,
     unlock_offered: bool,
     unlock_line: Option<Line>,
-    /// The window reads offline, or its offline face is unopened: a Runtime
-    /// that runs is not what it shows, and the line says so. False until the
-    /// ledger window's reader has opened its read face (`set_reads_offline`).
-    reads_offline: bool,
 }
 
 impl LauncherView {
-    pub fn new(reads_offline: bool) -> Self {
+    /// Before the first probe: checking, or with no state root, nothing to
+    /// check.
+    pub fn new(installed: bool) -> Self {
         Self {
-            status: Status::Checking,
+            status: if installed { Status::Checking } else { Status::Unavailable },
             probe_seq: 0,
             line: None,
             unlock_offered: false,
             unlock_line: None,
-            reads_offline,
         }
     }
 
-    /// Whether the window reads offline, or its offline face is unopened, as
-    /// the ledger window found its read face; true when that changed.
-    pub fn set_reads_offline(&mut self, reads_offline: bool) -> bool {
-        let changed = self.reads_offline != reads_offline;
-        self.reads_offline = reads_offline;
-        changed
+    /// Whether the newest probe that answered found a Runtime up.
+    pub fn runtime_ready(&self) -> bool {
+        matches!(self.status, Status::Probed(Ok(_)))
     }
 
     /// A new probe: from now on only its answer counts. `checking` puts the
@@ -275,101 +281,113 @@ impl LauncherView {
         }
     }
 
+    /// The status in plain words, for the workbench, and whether they say a
+    /// failure.
+    fn status_plain(&self, labels: &Labels) -> (String, bool) {
+        let kind = match &self.status {
+            Status::Unavailable => LauncherKind::NotConfigured,
+            Status::Checking => LauncherKind::Checking,
+            Status::Probed(Ok(_)) => LauncherKind::Running,
+            Status::Probed(Err(_)) => LauncherKind::NotRunning,
+            Status::Failed(_) => LauncherKind::CheckFailed,
+        };
+        (kind.human(labels), kind.failed())
+    }
+
+    /// The status with its pid and owner epoch, or the client's code, for the
+    /// ledger windows.
     fn status_text(&self, labels: &Labels) -> String {
         match &self.status {
+            Status::Unavailable => labels.launcher_not_configured.to_owned(),
             Status::Checking => labels.launcher_checking.to_owned(),
             Status::Probed(probe) => probe_text(labels, probe),
             Status::Failed(error) => fill(labels.thread_failed, &[error]),
         }
     }
 
-    /// The plain words first, then the technical ones; with no request yet,
-    /// the plain words of the status. Red when either says a failure.
-    fn line_text(&self, labels: &Labels) -> (String, bool) {
+    /// What became of the last request in plain words, for the workbench;
+    /// nothing before the first. A failure only the technical words say is
+    /// pointed at where they are. Red when it says a failure.
+    fn line_plain(&self, labels: &Labels) -> (String, bool) {
         let Some(line) = &self.line else {
-            let kind = match &self.status {
-                Status::Checking => LauncherKind::Checking,
-                Status::Probed(Ok(_)) => LauncherKind::Running,
-                Status::Probed(Err(_)) => LauncherKind::NotRunning,
-                Status::Failed(_) => LauncherKind::CheckFailed,
-            };
-            return (kind.human(labels), kind.failed());
+            return (String::new(), false);
         };
         let mut text = line.kind.human(labels);
-        let technical = (line.technical)(labels);
-        if !technical.is_empty() {
+        if line.failed && !line.kind.failed() {
             text.push_str(" · ");
-            text.push_str(&technical);
-        }
-        if self.reads_offline && line.kind == LauncherKind::Running {
-            text.push_str(" · ");
-            text.push_str(labels.restart_online);
+            text.push_str(labels.launcher_see_ledger);
         }
         (text, line.failed || line.kind.failed())
     }
-}
 
-pub fn install(window: &AppWindow, app: &Rc<App>) {
-    {
-        let weak = window.as_weak();
-        let app = Rc::clone(app);
-        window.on_start_runtime(move || {
-            if let Some(window) = weak.upgrade() {
-                start(&window, &app);
-            }
-        });
-    }
-    {
-        let weak = window.as_weak();
-        let app = Rc::clone(app);
-        window.on_request_shutdown(move || {
-            if let Some(window) = weak.upgrade() {
-                shutdown(&window, &app);
-            }
-        });
-    }
-    {
-        let weak = window.as_weak();
-        let app = Rc::clone(app);
-        window.on_unlock_owner(move || {
-            if let Some(window) = weak.upgrade() {
-                unlock(&window, &app);
-            }
-        });
+    /// The last request's technical words, for the ledger windows; nothing
+    /// before the first, or when they have nothing to add. Red when the
+    /// request failed.
+    fn line_technical(&self, labels: &Labels) -> (String, bool) {
+        match &self.line {
+            Some(line) => ((line.technical)(labels), line.failed || line.kind.failed()),
+            None => (String::new(), false),
+        }
     }
 }
 
-/// The block as the view stands, in the language shown now.
-pub fn paint(window: &AppWindow, ui: &Ui) {
+/// The launcher as the view stands, in the language shown now: the plain
+/// lines on the workbench; the technical ones and the unlock entry in every
+/// ledger window, with the reopen offer that follows whether a Runtime is up.
+pub fn paint(ui: &Ui) {
     let labels = ui.labels();
     let view = ui.launcher_view.borrow();
-    window.set_runtime_status_text(view.status_text(labels).into());
-    let (line, failed) = view.line_text(labels);
-    window.set_launcher_line(line.into());
-    window.set_launcher_failed(failed);
-    window.set_unlock_offered(view.unlock_offered);
+    let (status, status_failed) = view.status_plain(labels);
+    let (line, line_failed) = view.line_plain(labels);
+    let technical_status = view.status_text(labels);
+    let (technical, technical_failed) = view.line_technical(labels);
+    let unlock_offered = view.unlock_offered;
     let (unlock, unlock_failed) = match &view.unlock_line {
         Some(line) => ((line.text)(labels), line.failed),
         None => (String::new(), false),
     };
-    window.set_unlock_line(unlock.into());
-    window.set_unlock_failed(unlock_failed);
+    drop(view);
+    if let Some(window) = ui.workbench() {
+        window.set_status_text(status.into());
+        window.set_status_failed(status_failed);
+        window.set_launcher_line(line.into());
+        window.set_launcher_failed(line_failed);
+    }
+    for handle in ui.ledgers() {
+        let window = &handle.window;
+        window.set_runtime_status_text(technical_status.as_str().into());
+        window.set_launcher_line(technical.as_str().into());
+        window.set_launcher_failed(technical_failed);
+        window.set_unlock_offered(unlock_offered);
+        window.set_unlock_line(unlock.as_str().into());
+        window.set_unlock_failed(unlock_failed);
+        handle.paint_reopen(ui);
+    }
 }
 
-/// One probe, on a thread of its own; the block says it is checking until the
-/// answer comes.
-pub fn refresh_status(window: &AppWindow, app: &App) {
-    let seq = app.ui.launcher_view.borrow_mut().begin_probe(true);
-    let root = app.launcher.state_root.clone();
-    let weak = window.as_weak();
+/// Every ledger window's unlock entry back at its first step.
+fn unconfirm(ui: &Ui) {
+    for handle in ui.ledgers() {
+        handle.window.set_unlock_confirming(false);
+    }
+}
+
+/// One probe, on a thread of its own; the windows say it is checking until
+/// the answer comes. With no state root there is nothing to probe.
+pub fn refresh_status(ui: &Ui) {
+    let Ok(launcher) = &ui.launcher else {
+        return;
+    };
+    let seq = ui.launcher_view.borrow_mut().begin_probe(true);
+    let root = launcher.state_root.clone();
     let probed = spawn_worker("acui-probe", move || {
         let probe = probe_runtime(&root);
-        post("acui-probe", &weak, move |view| view.probed(seq, probe));
+        post("acui-probe", move |view| view.probed(seq, probe));
     });
     if let Err(error) = probed {
-        app.ui.launcher_view.borrow_mut().probe_failed(seq, error.to_string());
+        ui.launcher_view.borrow_mut().probe_failed(seq, error.to_string());
     }
-    paint(window, &app.ui);
+    paint(ui);
 }
 
 fn probe_text(labels: &Labels, probe: &Result<RuntimeFacts, ClientFailure>) -> String {
@@ -385,24 +403,27 @@ fn probe_text(labels: &Labels, probe: &Result<RuntimeFacts, ClientFailure>) -> S
     }
 }
 
-/// A start press. The event loop only checks that no unlock and no other
-/// start runs, marks this one as running and says it is checking; the whole
-/// start runs on `acui-start`.
-fn start(window: &AppWindow, app: &App) {
-    let (launcher, ui) = (&app.launcher, &app.ui);
+/// A start press on the workbench, or the start after an unlock. The event
+/// loop only checks that no unlock and no other start runs, marks this one as
+/// running and says it is checking; the whole start runs on `acui-start`. With
+/// no state root the button is off and nothing starts.
+pub fn start(ui: &Ui) {
+    let Ok(launcher) = &ui.launcher else {
+        return;
+    };
     if launcher.unlocking.load(Ordering::SeqCst) {
         let busy = phrase(|labels| labels.unlock_busy.to_owned());
         ui.launcher_view.borrow_mut().line = Some(LauncherLine::new(LauncherKind::Busy, busy, false));
-        paint(window, ui);
+        paint(ui);
         return;
     }
     if launcher.starting.swap(true, Ordering::SeqCst) {
         let busy = phrase(|labels| labels.start_busy.to_owned());
         ui.launcher_view.borrow_mut().line = Some(LauncherLine::new(LauncherKind::Busy, busy, false));
-        paint(window, ui);
+        paint(ui);
         return;
     }
-    window.set_unlock_confirming(false);
+    unconfirm(ui);
     let seq = {
         let mut view = ui.launcher_view.borrow_mut();
         view.unlock_offered = false;
@@ -415,9 +436,8 @@ fn start(window: &AppWindow, app: &App) {
         state_root: launcher.state_root.clone(),
         actingd_exe: launcher.actingd_exe.clone(),
         actingd_config: launcher.actingd_config.clone(),
-        installation: app.installation.clone(),
+        installation: launcher.installation.clone(),
         starting: Arc::clone(&launcher.starting),
-        weak: window.as_weak(),
         probe_seq: seq,
     };
     let started = spawn_worker("acui-start", move || run_start(job));
@@ -431,18 +451,17 @@ fn start(window: &AppWindow, app: &App) {
         let kind = LauncherKind::StartFailed { code: None };
         view.line = Some(LauncherLine::new(kind, technical, true));
     }
-    paint(window, ui);
+    paint(ui);
 }
 
-/// What one start press hands its thread: what it starts from, and where it
-/// reports.
+/// What one start press hands its thread: what it starts from, and the probe
+/// its answers count for.
 struct StartJob {
     state_root: PathBuf,
     actingd_exe: Option<PathBuf>,
     actingd_config: Option<PathBuf>,
     installation: Option<Snapshot>,
     starting: Arc<AtomicBool>,
-    weak: slint::Weak<AppWindow>,
     probe_seq: u64,
 }
 
@@ -451,12 +470,12 @@ struct StartJob {
 /// Its last word clears `starting`, so no start press lands between that line
 /// and the unlock offer.
 fn run_start(job: StartJob) {
-    let StartJob { state_root, actingd_exe, actingd_config, installation, starting, weak, probe_seq } =
+    let StartJob { state_root, actingd_exe, actingd_config, installation, starting, probe_seq } =
         job;
     // The last word of this start, painted with `starting` cleared.
     let finish = |line: LauncherLine, facts: Option<RuntimeFacts>, offer_unlock: bool| {
         let starting = Arc::clone(&starting);
-        post("acui-start", &weak, move |view| {
+        post("acui-start", move |view| {
             starting.store(false, Ordering::SeqCst);
             if let Some(facts) = facts {
                 view.probed(probe_seq, Ok(facts));
@@ -467,11 +486,11 @@ fn run_start(job: StartJob) {
     };
     let probe = probe_runtime(&state_root);
     let running = probe.is_ok();
-    post("acui-start", &weak, move |view| view.probed(probe_seq, probe));
+    post("acui-start", move |view| view.probed(probe_seq, probe));
     if running {
         let already = phrase(|labels| labels.already_running.to_owned());
         let line = LauncherLine::new(LauncherKind::Running, already, false);
-        post("acui-start", &weak, move |view| view.line = Some(line));
+        post("acui-start", move |view| view.line = Some(line));
         let record = record_start(&state_root, false);
         let failed = record.is_err();
         let record = record_phrase(record);
@@ -515,7 +534,7 @@ fn run_start(job: StartJob) {
             fill(labels.start_waiting, &[&pid, &attempt, &READY_ATTEMPTS.to_string(), &log_text])
         });
         let line = LauncherLine::new(LauncherKind::Starting, technical, false);
-        post("acui-start", &weak, move |view| view.line = Some(line));
+        post("acui-start", move |view| view.line = Some(line));
     };
     waiting(0);
 
@@ -690,16 +709,20 @@ fn spawn(exe: &Path, config: &Path, log: &Path, installation: Option<&Snapshot>)
     command.spawn()
 }
 
-/// The confirming press. The entry is withdrawn while unlock-owner runs, back
-/// at its first step after any outcome but an unlock, and gone after one.
-fn unlock(window: &AppWindow, app: &App) {
-    let (launcher, ui) = (&app.launcher, &app.ui);
-    window.set_unlock_confirming(false);
+/// The confirming press, in a ledger window. The entry is withdrawn in every
+/// ledger window while unlock-owner runs, back at its first step after any
+/// outcome but an unlock, and gone after one; an unlock starts once more, as a
+/// start press does. The workbench does not close meanwhile.
+pub fn unlock(ui: &Ui) {
+    let Ok(launcher) = &ui.launcher else {
+        return;
+    };
+    unconfirm(ui);
     let (exe, config) = match actingd_paths(&launcher.actingd_exe, &launcher.actingd_config) {
         Ok((exe, config)) => (exe.to_path_buf(), config.to_path_buf()),
         Err(technical) => {
             ui.launcher_view.borrow_mut().unlock_line = Some(Line::failed(technical));
-            paint(window, ui);
+            paint(ui);
             return;
         }
     };
@@ -711,18 +734,18 @@ fn unlock(window: &AppWindow, app: &App) {
         view.unlock_line = Some(Line::said(running));
     }
     let unlocking = Arc::clone(&launcher.unlocking);
-    let installation = app.installation.clone();
-    let weak = window.as_weak();
+    let installation = launcher.installation.clone();
     let ran = spawn_worker("acui-unlock", move || {
         let (text, unlocked) = unlock_outcome(&exe, &config, installation.as_ref());
         report::post("acui-unlock", move || {
             unlocking.store(false, Ordering::SeqCst);
-            let (Some(ui), Some(window)) = (crate::ui::current(), weak.upgrade()) else {
+            let Some(ui) = crate::ui::current() else {
                 return;
             };
-            // The start paints the block itself; nothing of the view is held meanwhile.
+            // The start paints the launcher itself; nothing of the view is
+            // held meanwhile.
             if unlocked {
-                window.invoke_start_runtime();
+                start(&ui);
             }
             {
                 let mut view = ui.launcher_view.borrow_mut();
@@ -732,7 +755,10 @@ fn unlock(window: &AppWindow, app: &App) {
                 // After the start, which clears the unlock line.
                 view.unlock_line = Some(Line { text, failed: !unlocked });
             }
-            paint(&window, &ui);
+            // The workbench may close again.
+            ui.close_refused.set(false);
+            ui.paint_notices();
+            paint(&ui);
         });
     });
     // Nothing ran: the entry goes back to its first step, with the reason.
@@ -744,7 +770,7 @@ fn unlock(window: &AppWindow, app: &App) {
         let failed = phrase(move |labels| fill(labels.thread_failed, &[&error]));
         view.unlock_line = Some(Line::failed(failed));
     }
-    paint(window, ui);
+    paint(ui);
 }
 
 /// The words unlock-owner's answer comes to, and whether it unlocked: only an
@@ -956,14 +982,17 @@ fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> io::Result<JoinHandle<io:
     })
 }
 
-/// A shutdown press, on `acui-shutdown`; a second press while one runs is
-/// refused, so no two requests go out at once.
-fn shutdown(window: &AppWindow, app: &App) {
-    let (launcher, ui) = (&app.launcher, &app.ui);
+/// A shutdown press on the workbench, on `acui-shutdown`; a second press while
+/// one runs is refused, so no two requests go out at once. With no state root
+/// the button is off and nothing is sent.
+pub fn shutdown(ui: &Ui) {
+    let Ok(launcher) = &ui.launcher else {
+        return;
+    };
     if launcher.shutting_down.swap(true, Ordering::SeqCst) {
         let busy = phrase(|labels| labels.shutdown_busy.to_owned());
         ui.launcher_view.borrow_mut().line = Some(LauncherLine::new(LauncherKind::Busy, busy, false));
-        paint(window, ui);
+        paint(ui);
         return;
     }
     let seq = {
@@ -974,7 +1003,6 @@ fn shutdown(window: &AppWindow, app: &App) {
     };
     let root = launcher.state_root.clone();
     let shutting_down = Arc::clone(&launcher.shutting_down);
-    let weak = window.as_weak();
     let sent = spawn_worker("acui-shutdown", move || {
         let outcome = request_shutdown(&root, |attempt| {
             let technical = phrase(move |labels| {
@@ -982,7 +1010,7 @@ fn shutdown(window: &AppWindow, app: &App) {
                 fill(labels.shutdown_busy_retry, &[&attempt, &total])
             });
             let line = LauncherLine::new(LauncherKind::Stopping, technical, false);
-            post("acui-shutdown", &weak, move |view| view.line = Some(line));
+            post("acui-shutdown", move |view| view.line = Some(line));
         });
         let attempts = outcome.attempts;
         let failed = outcome.result.is_err();
@@ -1017,7 +1045,7 @@ fn shutdown(window: &AppWindow, app: &App) {
         // this may still say running.
         let probe = probe_runtime(&root);
         let line = LauncherLine::new(kind, technical, failed);
-        post("acui-shutdown", &weak, move |view| {
+        post("acui-shutdown", move |view| {
             shutting_down.store(false, Ordering::SeqCst);
             view.probed(seq, probe);
             view.line = Some(line);
@@ -1031,7 +1059,7 @@ fn shutdown(window: &AppWindow, app: &App) {
         let kind = LauncherKind::StopFailed { code: None };
         ui.launcher_view.borrow_mut().line = Some(LauncherLine::new(kind, technical, true));
     }
-    paint(window, ui);
+    paint(ui);
 }
 
 /// A named worker thread. A thread the system refuses comes back as the error
@@ -1071,20 +1099,14 @@ fn failure_text(labels: &Labels, refused: &str, failed: &str, failure: &ClientFa
 }
 
 /// Hands a worker's news to the event loop: it goes into the launcher's view,
-/// and the block is painted again in the language shown at that moment.
-fn post(
-    what: &str,
-    weak: &slint::Weak<AppWindow>,
-    update: impl FnOnce(&mut LauncherView) + Send + 'static,
-) {
-    let weak = weak.clone();
+/// and every window paints the launcher again in the language shown at that
+/// moment.
+fn post(what: &str, update: impl FnOnce(&mut LauncherView) + Send + 'static) {
     report::post(what, move || {
         let Some(ui) = crate::ui::current() else {
             return;
         };
         update(&mut *ui.launcher_view.borrow_mut());
-        if let Some(window) = weak.upgrade() {
-            paint(&window, &ui);
-        }
+        paint(&ui);
     });
 }

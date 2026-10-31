@@ -71,8 +71,10 @@ impl TextSize {
     }
 }
 
-/// The look the windows are drawn in, as `theme` spells it. Read, checked and
-/// kept here; nothing draws by it yet, and nothing here writes it.
+/// The look the windows are drawn in, as `theme` spells it. Only checked: a
+/// value that is neither is an issue, and the line is kept as written, like
+/// every line. Nothing draws by it yet and nothing holds it, so nothing here
+/// writes it either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Theme {
     Flat,
@@ -93,7 +95,6 @@ impl Theme {
 pub struct Settings {
     pub language: Language,
     pub text_size: TextSize,
-    pub theme: Theme,
     /// The state root to open when `--state-root` is not given.
     pub state_root: Option<PathBuf>,
     /// The actingd configuration file the launcher passes as `--config`.
@@ -107,7 +108,6 @@ impl Default for Settings {
         Self {
             language: Language::Zh,
             text_size: TextSize::Standard,
-            theme: Theme::Flat,
             state_root: None,
             actingd_config: None,
             actingd_exe: None,
@@ -249,10 +249,11 @@ pub fn load() -> Loaded {
                 Some(text_size) => settings.text_size = text_size,
                 None => issues.push(unknown("text_size")),
             },
-            "theme" => match Theme::from_wire(value) {
-                Some(theme) => settings.theme = theme,
-                None => issues.push(unknown("theme")),
-            },
+            "theme" => {
+                if Theme::from_wire(value).is_none() {
+                    issues.push(unknown("theme"));
+                }
+            }
             "state_root" => settings.state_root = path_value(value),
             "actingd_config" => settings.actingd_config = path_value(value),
             "actingd_exe" => settings.actingd_exe = path_value(value),

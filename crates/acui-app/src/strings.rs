@@ -6,9 +6,9 @@
 //! `outcome-text.json` (`acui_rows::outcome`), next to the UI's code table.
 //!
 //! The table of the language shown is taken again at every paint (`Ui::labels`):
-//! into the `Strings` global for the labels the window draws itself, filled
-//! again when the language changes, and directly for the lines the console
-//! fills. A worker thread never holds a table; it hands back a `Phrase`.
+//! into each window's `Strings` global for the labels the window draws itself,
+//! filled again in every window when the language changes, and directly for
+//! the lines the console fills. A worker thread never holds a table; it hands back a `Phrase`.
 
 use acui_rows::outcome::{explain, Tongue};
 
@@ -56,7 +56,9 @@ impl Language {
 pub struct Labels {
     /// Which of the two tables this is, for the dictionary lookups in `acui-rows`.
     pub tongue: Language,
+    /// The workbench's title; the ledger window's.
     pub window_title: &'static str,
+    pub ledger_window_title: &'static str,
     pub usage: &'static str,
     pub data_source: &'static str,
     pub data_source_online: &'static str,
@@ -220,6 +222,9 @@ pub struct Labels {
     pub ledger_worker_gone: &'static str,
     /// A read reached a Runtime other than the session's; beside "reopen".
     pub ledger_owner_changed: &'static str,
+    /// A Runtime is up while an `auto` window reads offline for want of one;
+    /// beside "reopen".
+    pub ledger_runtime_started: &'static str,
     /// The button that opens a new session of the read face.
     pub reopen_ledger: &'static str,
     /// The busy line: what the reader reads, the seconds it has waited, and
@@ -239,11 +244,11 @@ pub struct Labels {
     /// The selected frame's own events are being read: the busy line and the
     /// frame pane.
     pub frame_events_reading: &'static str,
-    /// The launcher block in the top bar: status, two buttons, one line.
+    /// The launcher's caption, on the workbench and in the ledger window.
     pub launcher_title: &'static str,
-    /// The launcher in plain words, before the technical line: what the
-    /// Runtime is doing, or what became of the last request. No key, code, pid
-    /// or path goes in these.
+    /// The launcher in plain words, on the workbench: what the Runtime is
+    /// doing, or what became of the last request. No key, code, pid or path
+    /// goes in these; the ledger window has the technical lines.
     pub launcher_checking: &'static str,
     pub launcher_starting: &'static str,
     pub launcher_running: &'static str,
@@ -258,6 +263,8 @@ pub struct Labels {
     pub launcher_busy: &'static str,
     /// A plain sentence, then the short words of the outcome code behind it.
     pub launcher_because: &'static str,
+    /// After a plain line whose technical words alone say a failure.
+    pub launcher_see_ledger: &'static str,
     pub start: &'static str,
     pub request_shutdown: &'static str,
     /// pid, owner epoch.
@@ -286,7 +293,6 @@ pub struct Labels {
     pub start_exited: &'static str,
     /// pid, owner epoch.
     pub start_ready: &'static str,
-    pub restart_online: &'static str,
     /// attempts, client error code, client operation.
     pub start_not_ready: &'static str,
     /// The start press as a client action: its sequence.
@@ -370,6 +376,19 @@ pub struct Labels {
     pub state_root_not_absolute: &'static str,
     /// The read face refused to open at the start: error.
     pub ledger_open_failed: &'static str,
+    /// The workbench's red bar when this run has no state root: the original
+    /// words of why.
+    pub install_issue: &'static str,
+    /// The workbench: the way into the ledger window; the instance entry that
+    /// waits for the Runtime and what to do meanwhile; the caption of the
+    /// configuration file to edit, and what it says when none is set.
+    pub open_ledger: &'static str,
+    pub add_instance: &'static str,
+    pub add_instance_note: &'static str,
+    pub config_file: &'static str,
+    pub config_path_missing: &'static str,
+    /// The workbench refused to close while an unlock runs.
+    pub close_unlock_busy: &'static str,
     /// The settings file: the variables its directory comes from; file, error;
     /// file, line, key, value; file, line; file; file, error.
     pub settings_no_dir: &'static str,
@@ -388,6 +407,7 @@ pub struct Labels {
 pub const ZH: Labels = Labels {
     tongue: Language::Zh,
     window_title: "ActingCommand 监控台",
+    ledger_window_title: "高级排障与历史账本",
     usage: "用法：acui [--state-root <状态根>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]\n不给 --state-root 时取 acui.toml 的 state_root；两处都没有就不开台。",
     data_source: "数据来源：本机账本（只读）",
     data_source_online: "数据来源：运行中的 Runtime（只读）",
@@ -607,6 +627,7 @@ pub const ZH: Labels = Labels {
     ledger_worker_panicked: "读取线程意外终止：{}",
     ledger_worker_gone: "读取线程已经退出",
     ledger_owner_changed: "Runtime 已换成另一个进程：这个窗口读的是已经退出的那一个；按「重新打开」改读现在运行的 Runtime",
+    ledger_runtime_started: "Runtime 已经在运行：这个窗口读的是离线账本；按「重新打开」改为在线读取",
     reopen_ledger: "重新打开",
     busy_waited: "{} 已等待 {} 秒（这类读取最长约 {} 秒）",
     busy_waited_page: "{} 已等待 {} 秒（每页最长约 {} 秒）",
@@ -626,13 +647,14 @@ pub const ZH: Labels = Labels {
     launcher_not_running: "Runtime 没有运行",
     launcher_check_failed: "没能检查 Runtime 是否在运行",
     launcher_start_failed: "Runtime 没能启动",
-    launcher_needs_unlock: "需要解锁：上一个 Runtime 没有正常退出",
+    launcher_needs_unlock: "需要解锁：上一个 Runtime 没有正常退出，请在「排障与账本」里处理",
     launcher_stopping: "正在请求 Runtime 停止…",
     launcher_stop_requested: "已请求 Runtime 停止",
     launcher_stop_failed: "停止请求没有成功",
     launcher_not_configured: "启动所需的路径没有配置，请按安装说明填写设置文件",
     launcher_busy: "上一次请求还没完成",
     launcher_because: "{}：{}",
+    launcher_see_ledger: "详情见「排障与账本」",
     start: "启动",
     request_shutdown: "请求关闭",
     runtime_running: "Runtime 运行中 · PID {} · owner epoch {}",
@@ -649,7 +671,6 @@ pub const ZH: Labels = Labels {
     start_waiting: "已拉起 PID {} · 等待就绪 {}/{} · 日志 {}",
     start_exited: "actingd 已退出，退出码 {} · {} · 日志 {}",
     start_ready: "Runtime 已就绪 · PID {} · owner epoch {}",
-    restart_online: "本台按离线读；要在线读请带 --source online 重启",
     start_not_ready: "{} 次尝试后仍未就绪 · 最后错误 {}（{}）",
     start_recorded: "动作已记账 #{}",
     start_record_refused: "动作记账被拒：{} · 客户端 {}（{}）",
@@ -700,6 +721,13 @@ pub const ZH: Labels = Labels {
     state_root_differs: "--state-root 与本安装选定的配置不一致：给的是 {}，安装选定的是 {}",
     state_root_not_absolute: "acui.toml 的 state_root 不是绝对路径：{}",
     ledger_open_failed: "账本读面打不开：{}",
+    install_issue: "这次运行没有可用的状态根：「启动」和「排障与账本」暂时不能用，语言和字号仍可修改。\n原因：{}",
+    open_ledger: "排障与账本",
+    add_instance: "添加实例",
+    add_instance_note: "等 Runtime 支持；现在请按安装说明手工编辑配置文件",
+    config_file: "配置文件",
+    config_path_missing: "还没有配置 Runtime 的配置文件：请按安装说明填写设置文件",
+    close_unlock_busy: "解锁还在进行：等它结束再关闭监控台",
     settings_no_dir: "找不到存放设置文件的目录（{} 未设置）：本次按默认设置运行，改了的设置也存不下来",
     settings_unreadable: "设置文件 {} 读不出：{}。本次按默认设置运行；为免覆盖原文件，本次不保存设置",
     settings_unknown_value: "设置文件 {} 第 {} 行的取值认不出（{} = {}），本次按默认处理；这一行原样保留",
@@ -714,6 +742,7 @@ pub const ZH: Labels = Labels {
 pub const EN: Labels = Labels {
     tongue: Language::En,
     window_title: "ActingCommand Console",
+    ledger_window_title: "Advanced Troubleshooting and Ledger History",
     usage: "Usage: acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]\nWithout --state-root the state_root key of acui.toml is used; with neither, the console does not open.",
     data_source: "Data Source: Local Ledger (Read-Only)",
     data_source_online: "Data Source: Running Runtime (Read-Only)",
@@ -933,6 +962,7 @@ pub const EN: Labels = Labels {
     ledger_worker_panicked: "The reader thread stopped unexpectedly: {}",
     ledger_worker_gone: "The reader thread has exited",
     ledger_owner_changed: "The Runtime is another process now: this window reads the one that exited; press Reopen to read the Runtime that runs now",
+    ledger_runtime_started: "The Runtime is running now: this window reads the ledger offline; press Reopen to read it online",
     reopen_ledger: "Reopen",
     busy_waited: "{} Waiting {} s (a read of this kind takes at most about {} s)",
     busy_waited_page: "{} Waiting {} s (at most about {} s per page)",
@@ -952,13 +982,14 @@ pub const EN: Labels = Labels {
     launcher_not_running: "The Runtime Is Not Running",
     launcher_check_failed: "Could Not Check Whether the Runtime Is Running",
     launcher_start_failed: "The Runtime Did Not Start",
-    launcher_needs_unlock: "Unlock Needed: the Last Runtime Did Not Exit Cleanly",
+    launcher_needs_unlock: "Unlock Needed: the Last Runtime Did Not Exit Cleanly; Handle It in Troubleshooting and Ledger",
     launcher_stopping: "Asking the Runtime to Stop…",
     launcher_stop_requested: "The Runtime Was Asked to Stop",
     launcher_stop_failed: "The Stop Request Did Not Go Through",
     launcher_not_configured: "A Path the Start Needs Is Not Set; Fill In the Settings File as the Installation Guide Says",
     launcher_busy: "The Previous Request Has Not Finished",
     launcher_because: "{}: {}",
+    launcher_see_ledger: "Details in Troubleshooting and Ledger",
     start: "Start",
     request_shutdown: "Request Shutdown",
     runtime_running: "Runtime Running · PID {} · Owner Epoch {}",
@@ -975,7 +1006,6 @@ pub const EN: Labels = Labels {
     start_waiting: "Started PID {} · Waiting for Readiness {}/{} · Log {}",
     start_exited: "actingd Exited with Code {} · {} · Log {}",
     start_ready: "Runtime Ready · PID {} · Owner Epoch {}",
-    restart_online: "This Console Reads Offline; Restart with --source online to Read It",
     start_not_ready: "Not Ready After {} Attempts · Last Error {} ({})",
     start_recorded: "Action Recorded at #{}",
     start_record_refused: "Action Record Refused: {} · Client {} ({})",
@@ -1026,6 +1056,13 @@ pub const EN: Labels = Labels {
     state_root_differs: "--state-root differs from this installation's selected configuration: given {}, selected {}",
     state_root_not_absolute: "state_root in acui.toml is not an absolute path: {}",
     ledger_open_failed: "The ledger's read face could not be opened: {}",
+    install_issue: "This run has no state root to use: Start and Troubleshooting and Ledger are off for now, and the language and the text size still work.\nWhy: {}",
+    open_ledger: "Troubleshooting and Ledger",
+    add_instance: "Add Instance",
+    add_instance_note: "Waits for Runtime support; for now, edit the configuration file by hand as the installation guide says",
+    config_file: "Configuration File",
+    config_path_missing: "No Runtime configuration file is set: fill in the settings file as the installation guide says",
+    close_unlock_busy: "The unlock is still running: close the console once it has ended",
     settings_no_dir: "No directory for the settings file ({} not set): this run uses the default settings, and a changed setting cannot be saved",
     settings_unreadable: "The settings file {} could not be read: {}. This run uses the default settings and saves none, so the file is never written over",
     settings_unknown_value: "The settings file {}, line {}: the value is not recognized ({} = {}); the default is used, and the line is kept as it is",
