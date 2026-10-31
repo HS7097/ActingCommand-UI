@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acui_installation::outcome::{
+use acui_rows::outcome::{
     CONSOLE_CLIENT_ACTION_TERMINAL_MISSING, CONSOLE_INSTANCE_BINDING_MISSING,
     CONSOLE_RUNTIME_OWNER_CHANGED, CONSOLE_STATUS_SOURCE_MISSING,
 };

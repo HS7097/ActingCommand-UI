@@ -8,6 +8,7 @@
   "codes": {
     "console_client_action_terminal_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ui",
       "layer": "ui",
       "uncertain": true,
@@ -23,6 +24,7 @@
     },
     "console_instance_binding_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ui",
       "layer": "ui",
       "uncertain": false,
@@ -38,6 +40,7 @@
     },
     "console_routine_performance_type_unknown": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ui",
       "layer": "ui",
       "uncertain": false,
@@ -51,19 +54,23 @@
     },
     "console_runtime_owner_changed": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ui",
       "layer": "ui",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "operation": "optional"
+      },
       "review": "pending",
       "status": "active",
       "since": "1.0.0",
-      "description": "The session's ledger page connection reached a Runtime of another owner epoch than the session's main connection: the Runtime restarted, or another one took the state root, in between. The page connection is opened with the session and rebuilt after a failed exchange (a timeout, or another failure the client latches the connection on). At open, the online read face does not open, so the session does not open. At a rebuild, the session's page pin was stated by the Runtime that is gone, so the page query fails and is not retried. The console detects this itself; the Runtime client's runtime_owner_epoch_changed means the same.",
+      "description": "The console reached a Runtime of another owner epoch than its session's: the Runtime restarted, or another one took the state root, while the console was opening or open. The session's first connection fixes the owner epoch, and every connection the session keeps must reach that same Runtime: the page connection opened with the session, and the main or page connection rebuilt after a failed exchange (a timeout, or another failure the client latches a connection on). At open, the online read face does not open, so the session does not open. At a rebuild, every pin of the session was stated by the Runtime that is gone, so the read that asked (a page query, a follow poll, the instances' status read, a material read) fails and is not retried, and every later read through that connection fails the same way until the console is reopened; on the instance card the code comes with operation connect_runtime. The console detects this itself; the Runtime client's runtime_owner_epoch_changed means the same.",
       "common_causes": "The Runtime was restarted or replaced while the console was opening or open.",
       "handling": "Reopen the console to read from the Runtime that is running now."
     },
     "console_status_source_missing": {
       "category": "error",
+      "ladder_class": "none",
       "owner": "ui",
       "layer": "ui",
       "uncertain": false,

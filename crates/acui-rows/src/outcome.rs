@@ -11,9 +11,10 @@
 //!
 //! The Runtime's catalog is not compiled in, so a Runtime code gets no words
 //! here and its caller shows the code as it is. CI checks this table against
-//! the Runtime's merged catalog at the commit `runtime-outcome-catalog.rev`
-//! names (Workflow #378 A-4): no name of one side is the other's, the keys a
-//! UI code uses exist, and every UI code has its words and its constant here.
+//! the Runtime's merged catalog at the Runtime commit Cargo.toml pins, merged
+//! by that commit's own `outcome-guard merge` (Workflow #378 A-4): no name of
+//! one side is the other's, the keys a UI code uses exist, and every UI code
+//! has its words and its constant here.
 //!
 //! Rust code names a UI code through the constants below, never as a literal.
 
@@ -34,9 +35,10 @@ pub const CONSOLE_CLIENT_ACTION_TERMINAL_MISSING: &str = "console_client_action_
 /// event types of the pinned contract.
 pub const CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN: &str =
     "console_routine_performance_type_unknown";
-/// The session's page connection reached a Runtime of another owner epoch than
-/// the session's. The Runtime client's `runtime_owner_epoch_changed` means the
-/// same; the console detects it itself, so it states its own code.
+/// A connection the session keeps, opened with it or rebuilt, reached a
+/// Runtime of another owner epoch than the session's. The Runtime client's
+/// `runtime_owner_epoch_changed` means the same; the console detects it
+/// itself, so it states its own code.
 pub const CONSOLE_RUNTIME_OWNER_CHANGED: &str = "console_runtime_owner_changed";
 
 /// Every code constant above: the code table must hold each of them.

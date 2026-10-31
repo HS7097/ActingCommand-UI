@@ -5,10 +5,11 @@
 //! each event carries, the retention facts and the material read result are the
 //! contract's own types, re-exported unchanged. What this crate adds is display
 //! only — local time, wire codes as text, shortened ids, the display-name
-//! dictionary — plus the two plain structs `acui-source` fills from the
-//! ledger's own observations.
+//! dictionary, the UI's outcome codes and their words (`outcome`) — plus the
+//! two plain structs `acui-source` fills from the ledger's own observations.
 
 mod display;
+pub mod outcome;
 
 pub use display::{event_type_names, format_bytes, module_names};
 

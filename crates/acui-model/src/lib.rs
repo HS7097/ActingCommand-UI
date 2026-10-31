@@ -19,7 +19,7 @@ pub use frame_group::{BasisVia, FrameGroup, Mark, TargetBox};
 pub use overlay::{extract_frame_size, extract_overlays, Overlay};
 pub use tabs::{tab_from_name, tab_name, ALL_TABS};
 
-use acui_installation::outcome::CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN;
+use acui_rows::outcome::CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN;
 use acui_rows::{
     code, page_source_complete, payload_value, ArtifactEvictionObservation, ArtifactKind,
     EventQuery, EventSeverity, InstanceId, LedgerCount, LedgerEventPosition, LedgerRecoveryGap,

@@ -48,52 +48,110 @@ jobs:
         with:
           # Empty outside a release run: the event's own commit, as before.
           ref: ${{ inputs.source_sha }}
-      # Workflow #378 A-4: the UI's own outcome codes, locations and keys (setup_ and console_
-      # names, crates/acui-installation/outcome-codes.json) and their words (outcome-text.json)
-      # against the Runtime's merged catalog at the commit runtime-outcome-catalog.rev names. That
-      # pin is apart from the Cargo dependency's rev; edit the file to move it. Both legs run it;
-      # it is a verification step, not a test.
-      - name: Check UI outcome codes against the Runtime catalog
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libxcb1-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxcb-icccm4-dev \
+            libxcb-cursor-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libxkbcommon-x11-dev
+      - uses: dtolnay/rust-toolchain@stable
+      # Workflow #378 A-4, #429 UI-0b: the UI's own outcome codes, locations and keys (setup_ and
+      # console_ names, crates/acui-rows/outcome-codes.json) and their words (outcome-text.json)
+      # against the merged catalog of the Runtime this build links. The commit is the rev of the
+      # Runtime git dependencies in Cargo.toml (Cargo.lock must agree); the catalog is what that
+      # commit's `outcome-guard merge` prints (runtime-outcomes.md, Catalog files: the merged
+      # catalog is generated, not committed). Both legs run it; it is a check, not a test.
+      - name: Read the Runtime pin from Cargo.toml
+        id: runtime-pin
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $revPath = 'crates/acui-installation/runtime-outcome-catalog.rev'
-          $tablePath = 'crates/acui-installation/outcome-codes.json'
-          $textPath = 'crates/acui-installation/outcome-text.json'
-          $constPath = 'crates/acui-installation/src/outcome.rs'
-          $schema = 'actingcommand.outcome-codes.v1'
-
-          $revText = Get-Content -LiteralPath $revPath -Raw
-          if ($null -eq $revText -or $revText -cnotmatch '\A[0-9a-f]{40}\r?\n?\z') {
-            throw "outcome_catalog_rev_invalid: $revPath must hold one 40-character lowercase Runtime commit and nothing else, not '$revText'"
+          $PSNativeCommandUseErrorActionPreference = $false
+          $url = 'https://github.com/HS7097/ActingCommand-Runtime.git'
+          $manifests = @(& git ls-files -- '*Cargo.toml' | Where-Object { [IO.Path]::GetFileName($_) -ceq 'Cargo.toml' })
+          if ($LASTEXITCODE -ne 0 -or $manifests.Count -eq 0) {
+            throw "runtime_pin_unreadable: git ls-files lists no Cargo.toml (exit code $LASTEXITCODE)"
           }
-          $rev = $revText.Substring(0, 40)
-          $url = "https://raw.githubusercontent.com/HS7097/ActingCommand-Runtime/$rev/contracts/outcome-codes.json"
-          $runtimeText = $null
-          foreach ($attempt in 1, 2) {
-            try {
-              $runtimeText = (Invoke-WebRequest -Uri $url -TimeoutSec 120).Content
-              if ($runtimeText -is [byte[]]) { $runtimeText = [Text.Encoding]::UTF8.GetString($runtimeText) }
-              break
-            } catch {
-              if ($attempt -eq 2) {
-                throw "outcome_catalog_unavailable: the Runtime catalog at $rev did not download in 2 attempts ($url): $($_.Exception.Message)"
+          $revs = [Collections.Generic.SortedSet[string]]::new([StringComparer]::Ordinal)
+          $problems = [Collections.Generic.List[string]]::new()
+          foreach ($manifest in $manifests) {
+            $number = 0
+            foreach ($line in Get-Content -LiteralPath $manifest) {
+              $number++
+              if ($line.TrimStart().StartsWith('#') -or -not $line.Contains('HS7097/ActingCommand-Runtime')) { continue }
+              $match = [regex]::Match($line, 'git\s*=\s*"([^"]*)".*\brev\s*=\s*"([0-9a-f]{40})"')
+              if (-not $match.Success -or $match.Groups[1].Value -cne $url) {
+                $problems.Add("$manifest`:$number names the Runtime without git = ""$url"" and a 40-character lowercase rev on the same line")
+                continue
               }
-              Write-Host "Runtime catalog download attempt $attempt failed: $($_.Exception.Message); retrying in 10 s"
-              Start-Sleep -Seconds 10
+              [void]$revs.Add($match.Groups[2].Value)
             }
           }
+          if ($revs.Count -ne 1) { $problems.Add("the manifests pin $($revs.Count) Runtime revs ($($revs -join ', ')), not exactly one") }
+          if ($problems.Count -ne 0) { throw "runtime_pin_invalid:`n- $($problems -join "`n- ")" }
+          $rev = @($revs)[0]
+          # The commit cargo build --locked links: every Runtime source in Cargo.lock is that rev.
+          $sources = @(Get-Content -LiteralPath 'Cargo.lock' | Where-Object { $_.Contains('HS7097/ActingCommand-Runtime') })
+          $expected = "source = ""git+$url`?rev=$rev#$rev"""
+          if ($sources.Count -eq 0 -or @($sources | Where-Object { $_ -cne $expected }).Count -ne 0) {
+            throw "runtime_pin_invalid: Cargo.lock's Runtime sources are not all $expected`: $($sources -join ' | ')"
+          }
+          Write-Host "Runtime pin $rev (Cargo.toml rev; Cargo.lock agrees)"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "rev=$rev"
+      - name: Check out the pinned Runtime
+        uses: actions/checkout@v4
+        with:
+          repository: HS7097/ActingCommand-Runtime
+          ref: ${{ steps.runtime-pin.outputs.rev }}
+          path: runtime-pin
+          persist-credentials: false
+      # bash, not pwsh: the redirect keeps the merged catalog's bytes (it holds non-ASCII text).
+      # On failure the guard prints every `ERROR outcome-guard:` line and exits 1.
+      - name: Merge the pinned Runtime outcome catalog
+        shell: bash
+        working-directory: runtime-pin
+        run: cargo run --locked -p actingcommand-outcome-guard --bin outcome-guard -- merge > "$RUNNER_TEMP/runtime-outcome-catalog.json"
+      - name: Check UI outcome codes against the Runtime catalog
+        shell: pwsh
+        env:
+          RUNTIME_REV: ${{ steps.runtime-pin.outputs.rev }}
+          RUNTIME_CATALOG: ${{ runner.temp }}/runtime-outcome-catalog.json
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $crate = 'crates/acui-rows'
+          $tablePath = "$crate/outcome-codes.json"
+          $textPath = "$crate/outcome-text.json"
+          $constPath = "$crate/src/outcome.rs"
+          $schema = 'actingcommand.outcome-codes.v1'
+
+          $rev = $env:RUNTIME_REV
+          $catalogPath = $env:RUNTIME_CATALOG
+          if ("$rev" -cnotmatch '\A[0-9a-f]{40}\z') {
+            throw "outcome_catalog_rev_invalid: RUNTIME_REV '$rev' is not a 40-character lowercase Runtime commit"
+          }
           try {
+            $runtimeText = [IO.File]::ReadAllText($catalogPath, [Text.UTF8Encoding]::new($false, $true))
             $runtime = $runtimeText | ConvertFrom-Json -Depth 64
           } catch {
-            throw "outcome_catalog_unreadable: the Runtime catalog at $rev is not JSON: $($_.Exception.Message)"
+            throw "outcome_catalog_unreadable: the merged Runtime catalog at $rev ($catalogPath) is not UTF-8 JSON: $($_.Exception.Message)"
           }
+          $catalogSha = (Get-FileHash -LiteralPath $catalogPath -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($runtime.schema_version -cne $schema) {
-            throw "outcome_catalog_unreadable: the Runtime catalog at $rev has schema_version '$($runtime.schema_version)', not $schema"
+            throw "outcome_catalog_unreadable: the merged Runtime catalog at $rev has schema_version '$($runtime.schema_version)', not $schema"
           }
-          foreach ($section in 'keys', 'domains', 'codes', 'locations') {
+          foreach ($section in 'keys', 'vocabularies', 'domains', 'codes', 'locations') {
             if ($runtime.$section -isnot [Management.Automation.PSCustomObject]) {
-              throw "outcome_catalog_unreadable: the Runtime catalog at $rev has no $section object"
+              throw "outcome_catalog_unreadable: the merged Runtime catalog at $rev has no $section object"
             }
           }
           try {
@@ -126,6 +184,7 @@ jobs:
           $runtimeLocations = New-NameSet (Get-Members $runtime.locations)
           $runtimeKeys = New-NameSet (Get-Members $runtime.keys)
           $runtimePrefixes = @(Get-Members $runtime.domains)
+          $ladderTokens = New-NameSet (Get-Members $runtime.vocabularies.ladder_class.tokens)
 
           if ($ui.schema_version -cne $schema) { $problems.Add("$tablePath`: schema_version is not $schema") }
           foreach ($section in 'domains', 'keys', 'codes', 'locations') {
@@ -183,6 +242,12 @@ jobs:
               if (-not (Test-Words $entry.description)) { $problems.Add("$singular $name`: description is empty") }
               if ($kind -cne 'codes') { continue }
               if ($entry.category -cnotin $categories) { $problems.Add("code $name`: category is not one of $($categories -join ', ')") }
+              $ladder = "$($entry.ladder_class)"
+              if (-not $ladderTokens.Contains($ladder)) {
+                $problems.Add("code $name`: ladder_class '$ladder' is not a token of the Runtime vocabulary ladder_class")
+              } elseif ($ladder -ceq 'stability_warning' -and $entry.category -cnotin 'warning', 'error') {
+                $problems.Add("code $name`: a stability_warning code is of category warning or error")
+              }
               if ($entry.uncertain -isnot [bool]) { $problems.Add("code $name`: uncertain is not true or false") }
               foreach ($field in 'common_causes', 'handling') {
                 if (-not (Test-Words $entry.$field) -or ($entry.review -ceq 'settled' -and $entry.$field -ceq 'TBD')) {
@@ -259,26 +324,9 @@ jobs:
           }
 
           if ($problems.Count -ne 0) {
-            throw "outcome_catalog_conflict: $($problems.Count) problem(s) against Runtime ${rev}:`n- $($problems -join "`n- ")"
+            throw "outcome_catalog_conflict: $($problems.Count) problem(s) against Runtime ${rev} (merged catalog SHA-256 $catalogSha):`n- $($problems -join "`n- ")"
           }
-          Write-Host "$($uiCodes.Count) codes / $($uiLocations.Count) locations checked against Runtime $rev"
-      - name: Install Linux GUI dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libxkbcommon-dev \
-            libwayland-dev \
-            libxcb1-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libxcb-icccm4-dev \
-            libxcb-cursor-dev \
-            libfontconfig1-dev \
-            libfreetype6-dev \
-            libxkbcommon-x11-dev
-      - uses: dtolnay/rust-toolchain@stable
+          Write-Host "$($uiCodes.Count) codes / $($uiLocations.Count) locations checked against Runtime $rev (merged catalog SHA-256 $catalogSha)"
       - run: cargo build --locked --release --workspace
 
       # Windows only: stage the console and the stable entry with a build manifest in the
