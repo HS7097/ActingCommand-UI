@@ -82,7 +82,9 @@ answers come from:
 **Offline** (the original path):
 
 - `GlobalLedger::open_metadata` opens the state root; the ledger itself determines the medium
-  (segment / sqlite), authenticates the snapshot, and gives `latest_sequence` and the completeness
+  (segment / sqlite), opens a bounded snapshot at one pinned point (on sqlite: the writer open's checks,
+  the newest records and the eviction proofs; each page authenticates the rows it reads, at most 256
+  records or 768 KiB a page, with a cursor to the rest), and gives `latest_sequence` and the completeness
   observation. The whole session reads fixed at this one snapshot position.
 - `actingcommand_ledger_forensics::query_view_page` produces the official page `RuntimeEventQueryPage`:
   events, the view membership each event carries, the read range, the page cursor, run recovery

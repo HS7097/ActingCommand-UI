@@ -61,7 +61,9 @@
 **离线**（原路径）：
 
 - `GlobalLedger::open_metadata` 打开状态根，由账本自己判定介质（segment / sqlite）、
-  认证快照、给出 `latest_sequence` 与完整性观察。整个会话固定在这一个快照位置上读。
+  打开钉在一点上的有界快照（sqlite：只做写者打开时的检查、认证最新一段记录、读驱逐证明；每页读到
+  哪条认证哪条，一页至多 256 条或 768 KiB，游标续读），给出 `latest_sequence` 与完整性观察。整个会话
+  固定在这一个快照位置上读。
 - `actingcommand_ledger_forensics::query_view_page` 出正式页 `RuntimeEventQueryPage`：
   事件、每条事件自带的视图归属、读取范围、页游标、运行恢复分组、产物淘汰事实。
 - `actingcommand_ledger_forensics::read_material_complete` 整份读素材：由读面解析引用、拿到
