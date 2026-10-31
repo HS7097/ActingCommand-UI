@@ -31,6 +31,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use acui_rows::outcome::{
+    CONSOLE_CLIENT_ACTION_TERMINAL_MISSING, CONSOLE_INSTANCE_BINDING_MISSING,
+    CONSOLE_RUNTIME_OWNER_CHANGED, CONSOLE_STATUS_SOURCE_MISSING,
+};
 use acui_rows::{
     code, page_source_complete, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord,
     EventActor, EventQuery, EventSource, LedgerCount, LedgerEventPosition, LedgerView, OpenReport,
@@ -241,7 +245,7 @@ impl EvidenceSource {
                 .filter_map(|id| bindings.latest.get(id))
                 .max_by_key(|binding| binding.sequence)
                 .ok_or_else(|| {
-                    anyhow!("instance_binding_malformed: 端口 {port} 没有绑定事实")
+                    anyhow!("{CONSOLE_INSTANCE_BINDING_MISSING}: 端口 {port} 没有绑定事实")
                 })?;
             ports.push(PortEntry {
                 port: *port,
@@ -399,25 +403,60 @@ impl fmt::Display for RebuildFailed {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Connect(error) => write!(formatter, "{error}"),
-            Self::OwnerEpochChanged => formatter.write_str(OWNER_EPOCH_CHANGED),
+            Self::OwnerEpochChanged => formatter.write_str(CONSOLE_RUNTIME_OWNER_CHANGED),
         }
     }
 }
 
 impl RebuildFailed {
-    /// As the card shows a client failure: the client's own error, or
-    /// `runtime_owner_epoch_changed` at the client's connect operation.
+    /// As the card shows a client failure: the client's own error, or the
+    /// console's own `CONSOLE_RUNTIME_OWNER_CHANGED` at the client's connect
+    /// operation.
     fn into_failure(self) -> ClientFailure {
         match self {
             Self::Connect(error) => ClientFailure::from(error),
             Self::OwnerEpochChanged => ClientFailure {
-                code: OWNER_EPOCH_CHANGED,
+                code: CONSOLE_RUNTIME_OWNER_CHANGED,
                 operation: CONNECT_RUNTIME,
                 runtime_code: None,
                 host: None,
             },
         }
     }
+
+    /// As a read's error shows it: `prefix`, then the reason, as text. A
+    /// Runtime of another owner epoch also carries the console's own code
+    /// beneath that text, for `console_code`; the text is the same either way.
+    fn into_error(self, prefix: &str) -> anyhow::Error {
+        let text = format!("{prefix}{self}");
+        match self {
+            Self::Connect(_) => anyhow!(text),
+            Self::OwnerEpochChanged => {
+                anyhow::Error::new(ConsoleCode(CONSOLE_RUNTIME_OWNER_CHANGED)).context(text)
+            }
+        }
+    }
+}
+
+/// One of the console's own outcome codes, beneath the text of a read's error:
+/// the text already ends with the code, and this lets the window find it and
+/// show its words without reading the text.
+#[derive(Debug)]
+struct ConsoleCode(&'static str);
+
+impl fmt::Display for ConsoleCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for ConsoleCode {}
+
+/// The console's own outcome code a read's error carries, if any: so far only
+/// `CONSOLE_RUNTIME_OWNER_CHANGED`, from a rebuild that reached a Runtime of
+/// another owner epoch.
+pub fn console_code(error: &anyhow::Error) -> Option<&'static str> {
+    error.chain().find_map(|cause| cause.downcast_ref::<ConsoleCode>()).map(|code| code.0)
 }
 
 impl Rebuilding {
@@ -495,7 +534,7 @@ impl LedgerPages {
         let client = Self::connect(root)
             .map_err(|error| anyhow!("在线读面不可用 / online source unavailable: {error}"))?;
         if client.runtime_info().owner_epoch() != owner_epoch {
-            bail!("在线读面不可用 / online source unavailable: {OWNER_EPOCH_CHANGED}");
+            bail!("在线读面不可用 / online source unavailable: {CONSOLE_RUNTIME_OWNER_CHANGED}");
         }
         Ok(Self { connection: Rebuilding::new(Self::connect, client, owner_epoch) })
     }
@@ -519,7 +558,7 @@ impl LedgerPages {
         let client = self
             .connection
             .client(root)
-            .map_err(|reason| anyhow!("Runtime 查询失败：{reason}"))?;
+            .map_err(|reason| reason.into_error("Runtime 查询失败："))?;
         let first = match call(&client) {
             Ok(value) => return Ok(value),
             Err(error) => error,
@@ -531,7 +570,7 @@ impl LedgerPages {
         }
         std::thread::sleep(LEDGER_PAGE_RETRY_BACKOFF);
         if let Err(reason) = self.connection.reconnect(root) {
-            return Err(anyhow!("Runtime 查询失败：{first}；{reason}"));
+            return Err(reason.into_error(&format!("Runtime 查询失败：{first}；")));
         }
         let client = self.connection.current();
         call(&client).map_err(|error| {
@@ -552,10 +591,6 @@ fn page_timed_out(error: &RuntimeClientError) -> bool {
             matches!(io.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock)
         })
 }
-
-/// The reason a page connection gives when it reached a Runtime of another
-/// owner epoch than the session's: the client's own spelling of that failure.
-const OWNER_EPOCH_CHANGED: &str = "runtime_owner_epoch_changed";
 
 /// The client's own spelling of its connect operation (`ClientLocation::ConnectRuntime`).
 const CONNECT_RUNTIME: &str = "connect_runtime";
@@ -706,7 +741,7 @@ impl OnlineSource {
         let client = self
             .main
             .client(&self.root)
-            .map_err(|reason| anyhow!("Runtime 事实快照读取失败：{reason}"))?;
+            .map_err(|reason| reason.into_error("Runtime 事实快照读取失败："))?;
         let snapshot = client.runtime_fact_snapshot().map_err(|error| {
             self.main.note(&error);
             anyhow!("Runtime 事实快照读取失败：{error}")
@@ -1078,15 +1113,16 @@ pub fn probe_runtime(state_root: &Path) -> Result<RuntimeFacts, ClientFailure> {
 /// rebuilt first when an earlier exchange latched it. Neither appends a ledger
 /// record (Runtime contracts/runtime-state-observation.md, AO-4q). Either
 /// failing fails the pair with its own error; a status without its source is
-/// `status_source_missing`, since the card would otherwise state a position the
-/// Runtime did not give. Only the three `task.` keys are taken.
+/// the console's own `CONSOLE_STATUS_SOURCE_MISSING`, since the card would
+/// otherwise state a position the Runtime did not give. Only the three `task.`
+/// keys are taken.
 fn read_instances(main: &Rebuilding, root: &Path) -> Result<RuntimeInstances, ClientFailure> {
     let client = main.client(root).map_err(RebuildFailed::into_failure)?;
     let status = client.status().map_err(|error| main.failure(error))?;
     let status_sequence = status
         .source()
         .ok_or(ClientFailure {
-            code: "status_source_missing",
+            code: CONSOLE_STATUS_SOURCE_MISSING,
             operation: "runtime_status",
             runtime_code: None,
             host: None,
@@ -1289,14 +1325,17 @@ pub fn record_start(state_root: &Path, spawned: bool) -> Result<u64, ClientFailu
 /// press recorded there as a value-less button client action whose receipt
 /// must carry a terminal event: a press is a person's act, so the record says
 /// actor `user`, source `ui`. Gives back the interaction, on which a shutdown
-/// request goes out as the same person, and the record's ledger position.
+/// request goes out as the same person, and the record's ledger position. A
+/// record the contract refuses to build fails with the contract's own code; a
+/// receipt without its terminal event is the console's own
+/// `CONSOLE_CLIENT_ACTION_TERMINAL_MISSING`.
 fn record_press(state_root: &Path, control_id: &str) -> Result<(RuntimeClient, u64), ClientFailure> {
     let client = OnlineSource::connect_as_person(state_root)?;
     let interaction = client.begin_interaction()?;
     let action =
         ClientActionRecord::new("acui.launcher", control_id, ClientActionKind::Button, None, None)
-            .map_err(|_| ClientFailure {
-                code: "client_action_invalid",
+            .map_err(|error| ClientFailure {
+                code: error.code().spelling(),
                 operation: "record_client_action",
                 runtime_code: None,
                 host: None,
@@ -1305,7 +1344,7 @@ fn record_press(state_root: &Path, control_id: &str) -> Result<(RuntimeClient, u
     let sequence = recorded
         .terminal()
         .ok_or(ClientFailure {
-            code: "client_action_terminal_missing",
+            code: CONSOLE_CLIENT_ACTION_TERMINAL_MISSING,
             operation: "record_client_action",
             runtime_code: None,
             host: None,

@@ -19,6 +19,7 @@ pub use frame_group::{BasisVia, FrameGroup, Mark, TargetBox};
 pub use overlay::{extract_frame_size, extract_overlays, Overlay};
 pub use tabs::{tab_from_name, tab_name, ALL_TABS};
 
+use acui_rows::outcome::CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN;
 use acui_rows::{
     code, page_source_complete, payload_value, ArtifactEvictionObservation, ArtifactKind,
     EventQuery, EventSeverity, InstanceId, LedgerCount, LedgerEventPosition, LedgerRecoveryGap,
@@ -53,7 +54,9 @@ pub enum QueryError {
     /// A port is picked and an `instance_` id is typed: the ledger takes one
     /// instance filter, and the console gives neither precedence.
     InstanceFilterConflict,
-    /// The ledger refused the assembled query; carries the ledger's own code.
+    /// The ledger refused the assembled query; carries the ledger's own code,
+    /// or the console's own `CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN` when its
+    /// routine performance types do not parse.
     Rejected(String),
     /// The read face could not answer; carries what it reported.
     ReadFailed(String),
@@ -308,7 +311,9 @@ impl ViewModel {
                 .iter()
                 .map(|name| parse_id(name))
                 .collect::<Option<_>>()
-                .ok_or_else(|| QueryError::Rejected("routine_performance_type_unknown".into()))?;
+                .ok_or_else(|| {
+                    QueryError::Rejected(CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN.into())
+                })?;
             query
                 .validate()
                 .map_err(|error| QueryError::Rejected(error.code().to_string()))?;
