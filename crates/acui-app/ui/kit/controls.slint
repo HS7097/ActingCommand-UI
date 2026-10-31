@@ -167,8 +167,9 @@ export component SkinCheckBox {
                 root.toggled();
             }
         }
-        // The face only shows `checked`; a click, Space or a screen reader
-        // flips it here. Tab reaches it; a click does not take the focus.
+        // The face only shows `checked`; a click, Return, Space or a screen
+        // reader flips it here, as the std CheckBox does. Tab reaches it;
+        // a click does not take the focus.
         if Look.aero: VerticalLayout {
             alignment: center;
             AeroCheckFace {
@@ -200,7 +201,7 @@ export component SkinCheckBox {
                     enabled: root.enabled;
                     focus-on-click: false;
                     key-pressed(event) => {
-                        if (root.enabled && event.text == Key.Space) {
+                        if (root.enabled && (event.text == Key.Return || event.text == Key.Space)) {
                             root.checked = !root.checked;
                             root.toggled();
                             return accept;
