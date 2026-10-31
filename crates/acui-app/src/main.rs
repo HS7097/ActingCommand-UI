@@ -1596,13 +1596,14 @@ fn source_text(labels: &Labels, source: &Session) -> String {
         if let Some(kind) = &failure.io_kind {
             text.push_str(&fill(labels.io_kind_text, &[kind]));
         }
-        if let Some(words) = outcome_sentence(labels, failure.code) {
-            text.push_str(" · ");
-            text.push_str(&words);
-        }
+        // A state root with no ledger yet is a first run, not a failure: it
+        // gets the start hint instead of the error category's sentence.
         if failure.code == "ledger_io" && failure.io_kind.as_deref() == Some("not_found") {
             text.push_str(" · ");
             text.push_str(labels.source_unopened_hint);
+        } else if let Some(words) = outcome_sentence(labels, failure.code) {
+            text.push_str(" · ");
+            text.push_str(&words);
         }
         if failure.code == "ledger_read_budget_exceeded" {
             text.push_str(" · ");
