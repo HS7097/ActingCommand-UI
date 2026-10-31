@@ -2,7 +2,9 @@
 and 4.4, design-py 4.3; contracts/formats.md, "The economy").
 
 Two nodes of the derivation graph (`core.graph`), each computed after what it reads and kept in the cache:
-- ("economy", "steady"): the values, game-wide. A cyclic steady state over the longest declared period, built
+- ("economy", "steady"): the values, game-wide. A cyclic steady state over the least common multiple of the
+  periods' lengths within `economy.max_cycle_steps` (a longer period and a month relaxed by rate and listed in
+  `relaxed`, #424 ACM-PRICE PRICE-3), built
   from the rules and the data only, in the reference state (the graph's "reference" nodes: a cap with a reading
   counts at its `reference`, #424 ACM-PRICE G-A), and solved as an LP. It gives the optimum per cycle; the price
   of every resource in every step and of every cap and limit, by re-solves at plus and minus one grain
@@ -15,15 +17,21 @@ Two nodes of the derivation graph (`core.graph`), each computed after what it re
   nodes and never a time limit; the final stocks are priced by the steady state. A plan the node limit stops is
   `search_budget_exhausted`, with `proven: false`.
 
-**The program** (generated from the rules, never written by hand). One step is one day; a cycle is one week
-when the model declares a week period, else one day. Per activity and step a count; per resource and store a
+**The program** (generated from the rules, never written by hand). One step is one day; a steady cycle is the
+least common multiple of the periods' lengths in days (day 1, week 7, a `days` period its `length`), each taken
+in order of length while the multiple stays within `economy.max_cycle_steps`. A period that is not taken, and a
+month, is relaxed: what counts per period counts over the whole program, at its value times the program's days
+over the period's (a month is 146097/4800 days). The plan relaxes a `days` period and a month too. Per activity
+and step a count; per resource and store a
 stock at every step boundary; per hard-capped resource an overflow (income the cap blocks; for a void_at_reset
-cap only in the step before each reset of its period); per store with a storage cap, and per resource whose regen
+cap only in the step before each reset of its period); per income cap and step what it voids; per store with a
+storage cap, and per resource whose regen
 stops at a cap (steady), its lost production; per move whose amount needs the account state (a collection that
 takes what the store holds) the amount it moves, at most the store's storage cap per execution. Rows, in
 canonical order (by kind, id and step): the balances, the bounds of overflow by income, the cyclic rows (steady),
-the caps, the limits per window, the moves, the regen stops (steady), the read caps' indicators (plan) and the
-opening stocks (plan). Columns are sorted by variable id.
+the caps, the income caps per window, the limits per window, the moves, the regen stops (steady), the read caps'
+indicators (plan), the opening stocks (plan) and the bounds of what an income cap voids by the income it counts.
+Columns are sorted by variable id.
 
 **Exactness.** Every solution is converted with `Fraction(x).limit_denominator(lp.max_denominator)` and checked
 exactly against every bound, integrality and row (`lp_numeric_check_failed`). Objective values, prices and
@@ -59,7 +67,7 @@ from acmodel.config import EconomySettings
 from acmodel.core.common import CONFIRMED, PROVISIONAL, Need, worst
 from acmodel.core.unknown import read as unknowns_read, rule_status
 from acmodel.envelope import Failure, error
-from acmodel.expr import Binary, Reference
+from acmodel.expr import Binary, Literal, Reference
 from acmodel.expr.interval import Interval, Undecided
 
 if TYPE_CHECKING:
@@ -67,6 +75,8 @@ if TYPE_CHECKING:
 
 STEP_SECONDS = 86400  # one step is one day, the shortest period unit
 WEEK_STEPS = 7
+# A month's days: the mean of the Gregorian calendar's 400 years (#424 ACM-PRICE 3.3), exact.
+MONTH_DAYS = Fraction(146097, 4800)
 STEADY, PLAN = "steady", "plan"
 NODES = {STEADY: ("economy", STEADY), PLAN: ("economy", PLAN)}
 OUTPUTS = {STEADY: "economy:steady", PLAN: "economy:plan"}
@@ -110,6 +120,8 @@ class Economy:
 def spec_keys(settings: EconomySettings, solve: str) -> dict[str, int]:
     """The configuration keys a node's value depends on, for its spec in the cache."""
     keys = {"max_denominator": settings.max_denominator, "grain": settings.grain}
+    if solve == STEADY:
+        keys["max_cycle_steps"] = settings.max_cycle_steps
     if solve == PLAN:
         keys.update(node_limit=settings.node_limit, plan_horizon=settings.plan_horizon)
     return keys
@@ -226,6 +238,8 @@ class _Shape:
     storage: dict[str, Entry]  # store -> its storage cap
     soft: list[Entry]  # read caps that block incomes
     limits: list[tuple[Entry, tuple[str, ...]]]  # a limit and the activities it counts
+    incomes: list[tuple[Entry, tuple[str, ...]]]  # an income cap and the activities whose income it counts
+    relaxed: dict[str, Fraction]  # period id -> its days, for the periods the program relaxes by rate
     gates: list[tuple[str, Entry]]  # (flow, a gate it requires)
     refused: list[dict[str, Any]]
 
@@ -275,17 +289,67 @@ def _stops_at(checker: Checker, graph: Graph, rule: Entry) -> Entry | None:
     return found[0] if len(found) == 1 else None
 
 
+def _periods(
+    periods: list[dict[str, Any]], steady: bool, most: int
+) -> tuple[int, dict[str, int], dict[str, Fraction]]:
+    """The steady cycle (#424 ACM-PRICE 3.4), the periods read as they are (period id -> the steps of one
+    window), and those relaxed by rate (period id -> its days).
+
+    The steady cycle is the least common multiple of the periods of a fixed length (day 1, week 7, `days` its
+    `length`), taken shortest first (then by id) while the multiple stays within `economy.max_cycle_steps`; the
+    others are relaxed, and so is a month, which has no fixed length (146097/4800 days, 3.3). The plan starts at a
+    reset of every day and week period; it has no start date to place a `days` period's `anchor_date` or a month's
+    reset, so it relaxes them (the steady cycle is not its own)."""
+    fixed: dict[str, int] = {}
+    relaxed: dict[str, Fraction] = {}
+    for period in periods:
+        unit = period["unit"]
+        if unit == "month" or (unit == "days" and not steady):
+            relaxed[period["id"]] = MONTH_DAYS if unit == "month" else Fraction(period["length"])
+        else:
+            fixed[period["id"]] = period["length"] if unit == "days" else WEEK_STEPS if unit == "week" else 1
+    if not steady:
+        return 1, fixed, relaxed
+    cycle, windows = 1, {}
+    for period, steps in sorted(fixed.items(), key=lambda item: (item[1], item[0])):
+        joined = math.lcm(cycle, steps)
+        if joined <= most:
+            cycle, windows[period] = joined, steps
+        else:
+            relaxed[period] = Fraction(steps)
+    return cycle, windows, relaxed
+
+
+def slots(checker: Checker, typed: Any) -> frozenset[str]:
+    """The slot resources (#424 ACM-PRICE 3.1): each resource with an active hard cap whose `value` is the number
+    0. Its stock never carries over a step boundary, so a slot is counted in slot-hours that are used in the step
+    they come in or lost; it is no Runtime pool, and its price is a diagnosis only (it cannot be bound)."""
+    found = set()
+    for rule in checker.rules:
+        if not (checker.active(rule) and rule.kind == "cap" and rule.doc["logic"]["cap_kind"] == "hard"):
+            continue
+        subject = checker.entries.get(rule.doc["subject"])
+        if subject is None or subject.kind != "resource" or "value" not in rule.doc["logic"]:
+            continue
+        root = typed.expressions[(rule.path, at(rule.ref, "logic", "value"))].root
+        if isinstance(root, Literal) and type(root.value) is Fraction and root.value == 0:
+            found.add(subject.id)
+    return frozenset(found)
+
+
+def _brings(part: _Part, resource: str) -> bool:
+    """Whether an amount of a flow brings the resource in: it produces it, or moves into it."""
+    return (part.member == "produces" and part.resource == resource) or (
+        part.member == "moves" and part.target == resource
+    )
+
+
 def _shape(graph: Graph, solve: str) -> _Shape:
     checker = graph.checker
     manifest = checker.model.manifest
     steady = solve == STEADY
     refused: list[dict[str, Any]] = []
-    windows: dict[str, int] = {}
-    for index, period in enumerate(manifest.doc["periods"]):
-        if period["unit"] == "month":  # a month has no fixed number of steps
-            refused.append(_refused(manifest.path, at("", "periods", index, "unit"), "month"))
-        else:
-            windows[period["id"]] = WEEK_STEPS if period["unit"] == "week" else 1
+    cycle, windows, relaxed = _periods(manifest.doc["periods"], steady, graph.economy.max_cycle_steps)
     entities = sorted((e for e in checker.entities if checker.entries.get(e.id) is e), key=lambda e: e.id)
     rules = sorted((r for r in checker.rules if checker.active(r) and r.kind in RULE_KINDS), key=lambda r: r.id)
 
@@ -345,9 +409,10 @@ def _shape(graph: Graph, solve: str) -> _Shape:
     void: dict[str, int] = {}
     storage: dict[str, Entry] = {}
     soft: list[Entry] = []
+    incomes: list[tuple[Entry, tuple[str, ...]]] = []
     allowed = {
         "hard": ("resource", HARD_REACH + ((VOID,) if steady else ())), "storage": ("store", STORAGE_REACH),
-        "soft_read": ("resource", ("block_income_from",)),
+        "soft_read": ("resource", ("block_income_from",)), "income": ("resource", HARD_REACH),
     }
     for rule in of("cap"):
         logic, subject = rule.doc["logic"], checker.entries[rule.doc["subject"]]
@@ -357,12 +422,17 @@ def _shape(graph: Graph, solve: str) -> _Shape:
             refused.append(_refused(rule.path, at(rule.ref, "subject"), subject.kind))
         elif reach not in reaches:
             refused.append(_refused(rule.path, at(rule.ref, "logic", "on_reach"), reach))
+        elif reach == VOID and logic.get("per") in relaxed:  # it voids at resets the program does not place
+            refused.append(_refused(rule.path, at(rule.ref, "logic", "per"), VOID))
         elif logic["cap_kind"] == "hard":
             hard[subject.id] = rule
-            if reach == VOID:  # its resets: those of its period (a month is refused above), else every day
+            if reach == VOID:  # its resets: those of its period, else every day
                 void[subject.id] = windows.get(logic.get("per", ""), 1)
         elif logic["cap_kind"] == "storage":
             storage[subject.id] = rule
+        elif logic["cap_kind"] == "income":  # what the activities it lists bring in, else all that bring it in
+            earners = logic.get("from", sorted({part.activity for part in parts if _brings(part, subject.id)}))
+            incomes.append((rule, tuple(earners)))
         else:
             soft.append(rule)
     limits: list[tuple[Entry, tuple[str, ...]]] = []
@@ -370,11 +440,11 @@ def _shape(graph: Graph, solve: str) -> _Shape:
         subject = checker.entries[rule.doc["subject"]]
         if subject.kind != "activity":
             refused.append(_refused(rule.path, at(rule.ref, "subject"), subject.kind))
-        elif rule.doc["logic"]["per"] in windows:  # a month period is refused above
+        else:
             limits.append((rule, (subject.id, *rule.doc["logic"].get("shared_with", ()))))
     return _Shape(
         path=manifest.path,
-        cycle=max(windows.values(), default=1),
+        cycle=cycle,
         windows=windows,
         resources=[e.id for e in entities if e.kind == "resource"],
         stores={e.id: e.doc["holds"] for e in entities if e.kind == "store"},
@@ -389,6 +459,8 @@ def _shape(graph: Graph, solve: str) -> _Shape:
         storage=storage,
         soft=soft,
         limits=limits,
+        incomes=incomes,
+        relaxed=relaxed,
         gates=gates,
         refused=refused,
     )
@@ -418,6 +490,11 @@ class _Model:
     void: dict[str, int]  # resource -> the steps between the resets at which its hard cap voids
     storage: dict[str, tuple[str, Fraction]]  # store -> (cap, value)
     limits: tuple[tuple[str, tuple[str, ...], int, Fraction], ...]  # (rule, activities, window steps, max)
+    # (cap, resource, the activities whose income it counts, window steps, value): an income cap (PRICE-3)
+    incomes: tuple[tuple[str, str, tuple[str, ...], int, Fraction], ...]
+    # rule -> (its period, the period's days, the program's days over them): a limit or income cap whose period
+    # the program relaxes by rate; its value counts times the last over one window of the whole program
+    relaxed: dict[str, tuple[str, Fraction, Fraction]]
     soft: tuple[tuple[str, str, Fraction, tuple[str, ...]], ...]  # (cap, resource, its reading, blocked moves)
     start: dict[str, tuple[str | None, Fraction]]  # plan: entity -> (its group, its opening stock)
     unread: tuple[str, ...]  # plan: entities that need no reading, started at 0
@@ -434,16 +511,32 @@ class _Model:
         found |= {cap for cap, _ in (*self.hard.values(), *self.storage.values())}
         found |= {cap for _, cap, _ in self.stops.values()}
         found |= {rule for rule, _, _, _ in self.limits} | {cap for cap, _, _, _ in self.soft}
+        found |= {cap for cap, _, _, _, _ in self.incomes}
         found |= {group for group, _ in self.start.values() if group is not None}
         return sorted(found)
 
     def priced(self) -> list[tuple[str, Fraction]]:
-        """The rules with a value that the steady state prices: caps with a value (a regen's stop included, each
-        cap once) and limits."""
+        """The rules with a value that the steady state prices: caps with a value (a regen's stop and an income
+        cap included, each cap once) and limits."""
         found = dict([*self.hard.values(), *self.storage.values()])
         found.update((cap, value) for _, cap, value in self.stops.values())
+        found.update((cap, value) for cap, _, _, _, value in self.incomes)
         found.update((rule, maximum) for rule, _, _, maximum in self.limits)
         return sorted(found.items())
+
+    def scale(self, rule: str) -> Fraction:
+        """What one unit of a limit's or an income cap's value counts in the program: 1, or for a relaxed period
+        the program's days over the period's."""
+        return self.relaxed[rule][2] if rule in self.relaxed else Fraction(1)
+
+    def shown_relaxed(self) -> list[dict[str, str]]:
+        """The rules the program relaxes, by id: each with its period, the period's days and the value it counts
+        with over the program."""
+        values = {rule: value for rule, value in self.priced()}
+        return [
+            {"rule": rule, "per": per, "days": str(days), "value": str(values[rule] * scale)}
+            for rule, (per, days, scale) in sorted(self.relaxed.items())
+        ]
 
     def touches_store(self, activity: str) -> bool:
         return any(key == activity and entity in self.stores for key, entity in self.net) or any(
@@ -574,6 +667,8 @@ class _Reader:
             logic = cap.doc["logic"]
             member = "reference" if not self.plan and "reference" in logic else "reading"
             found.append(_Item(cap, ("rule", cap.id), at(cap.ref, "logic", "value" if "value" in logic else member)))
+        for cap, _ in shape.incomes:
+            found.append(_Item(cap, ("rule", cap.id), at(cap.ref, "logic", "value")))
         for rule, _ in shape.limits:
             found.append(_Item(rule, ("rule", rule.id), at(rule.ref, "logic", "max")))
         return found
@@ -675,12 +770,26 @@ class _Reader:
             _add(net, (part.activity, target), amount)
             _add(income, (part.activity, target), max(amount, Fraction(0)))
         activities = set(shape.activities) - left_out
+        relaxed: dict[str, tuple[str, Fraction, Fraction]] = {}
+
+        def window(rule: Entry) -> int:
+            """The steps of one window of the rule's period; a relaxed period's is the whole program."""
+            per = rule.doc["logic"]["per"]
+            if per not in shape.relaxed:
+                return shape.windows[per]
+            relaxed[rule.id] = (per, shape.relaxed[per], Fraction(steps) / shape.relaxed[per])
+            return steps
+
         limits = tuple(
-            (
-                rule.id, tuple(sorted(set(members) & activities)), shape.windows[rule.doc["logic"]["per"]],
-                values[("rule", rule.id)],
-            )
+            (rule.id, tuple(sorted(set(members) & activities)), window(rule), values[("rule", rule.id)])
             for rule, members in shape.limits if ("rule", rule.id) in values
+        )
+        capped = tuple(
+            (
+                cap.id, cap.doc["subject"], tuple(sorted(set(earners) & activities)), window(cap),
+                values[("rule", cap.id)],
+            )
+            for cap, earners in shape.incomes if ("rule", cap.id) in values
         )
         soft = self.read_caps(variable, hard, storage) if plan else ()
         start, unread = self.opening(net, moves, regens, hard, storage, soft) if plan else ({}, ())
@@ -704,6 +813,8 @@ class _Reader:
             void={r: shape.void[r] for r in hard if r in shape.void},
             storage=storage,
             limits=limits,
+            incomes=capped,
+            relaxed=relaxed,
             soft=soft,
             start=start,
             unread=tuple(unread),
@@ -819,7 +930,7 @@ def _program(
     """The program of `model`. `extra` adds income to a resource in a step and `values` replaces the value of a
     cap or limit (the price re-solves); `omit` drops rule groups (the infeasibility analysis); `weights`
     replaces the objective ({} for none); with `floor`, the objective must reach it and the overflow and lost
-    production are minimised instead."""
+    production are minimised instead (what an income cap voids is not: the overflow is the least)."""
     extra, values = extra or {}, values or {}
     zero, one, steps, plan = Fraction(0), Fraction(1), model.steps, model.solve == PLAN
     variables: dict[Key, tuple[Fraction, Fraction | None, bool]] = {}
@@ -872,6 +983,12 @@ def _program(
     for flow, _, _, _ in model.moves:
         for step in range(steps):
             variables[("m", flow, step)] = (zero, None, False)
+    voids: dict[str, list[str]] = {}  # resource -> its income caps, each voiding in every step (PRICE-3)
+    for cap, resource, _, _, _ in model.incomes:
+        if cap not in omit:
+            voids.setdefault(resource, []).append(cap)
+            for step in range(steps):
+                variables[("v", cap, step)] = (zero, None, False)
     for entity in model.entities:
         inflows: list[dict[Key, Fraction]] = []
         for step in range(steps):
@@ -895,6 +1012,8 @@ def _program(
             for kind in ("o", "l"):
                 if (kind, entity, step) in variables:
                     coefficients[(kind, entity, step)] = one
+            for cap in voids.get(entity, ()):  # what an income cap voids never reaches the stock
+                coefficients[("v", cap, step)] = one
             inflows.append(inflow)
             rows.append(_Row(("balance", entity, step), _nonzero(coefficients), "eq", received(entity, step)[0], None))
             if overflows(entity, step):  # what overflows is income the cap blocks, never stock already held
@@ -903,6 +1022,8 @@ def _program(
                 for blocked in range(step + 1 - every[entity], step + 1):  # the steps since the last reset
                     for key, amount in inflows[blocked].items():
                         bound[key] = bound.get(key, zero) - amount
+                    for cap in voids.get(entity, ()):  # nor what an income cap voids of the same income
+                        bound[("v", cap, blocked)] = bound.get(("v", cap, blocked), zero) + one
                     positive += received(entity, blocked)[1]
                 rows.append(_Row(("overflow", entity, step), _nonzero(bound), "le", positive, None))
     if not plan:  # a steady state ends each cycle with at least the stock it began with; a capped one with it
@@ -929,7 +1050,31 @@ def _program(
         for index, first in enumerate(range(0, steps, window)):
             counted = {("x", a, step): one for a in members for step in range(first, min(first + window, steps))}
             if counted:
-                rows.append(_Row(("limit", rule, index), counted, "le", values.get(rule, maximum), rule))
+                most_runs = values.get(rule, maximum) * model.scale(rule)  # a relaxed period's by rate
+                rows.append(_Row(("limit", rule, index), counted, "le", most_runs, rule))
+    for cap, resource, members, window, value in model.incomes:
+        if cap in omit:
+            continue
+        # An income cap (PRICE-3): per window of its period, what the activities it lists bring in, less what it
+        # voids, is at most its value; it voids at most what they bring in, step by step.
+        for index, first in enumerate(range(0, steps, window)):
+            counted: dict[Key, Fraction] = {}
+            for step in range(first, min(first + window, steps)):
+                earned = {
+                    ("x", activity, step): model.income[(activity, resource)] for activity in members
+                    if model.income.get((activity, resource))
+                }
+                earned.update(
+                    (("m", flow, step), one) for flow, activity, _, target in model.moves
+                    if target == resource and activity in members
+                )
+                bound = {("v", cap, step): one, **{key: -amount for key, amount in earned.items()}}
+                rows.append(_Row(("voided", cap, step), bound, "le", zero, None))
+                for key, amount in earned.items():
+                    counted[key] = counted.get(key, zero) + amount
+                counted[("v", cap, step)] = -one
+            most_kept = values.get(cap, value) * model.scale(cap)
+            rows.append(_Row(("income", cap, index), counted, "le", most_kept, cap))
     for flow, activity, source, _ in model.moves:
         for step in range(steps):
             bound = {("m", flow, step): one, ("x", activity, step): -most[source]}
@@ -1316,10 +1461,11 @@ class _Solver:
         return [error(LP_DUAL_DISAGREES, detail)]
 
     def rule_dual(self, program: _Program, base: _Solution, rule: str) -> float:
-        """HiGHS's derivative of the optimum by a rule's value: its rows' marginals, and for a storage cap also
-        the moves it bounds (the cap is their coefficient)."""
-        dual = sum(
-            -base.le[row.key] for row in program.rows if row.group == rule and row.key[0] in ("cap", "limit", "stop")
+        """HiGHS's derivative of the optimum by a rule's value: its rows' marginals (times what a unit counts, for
+        a relaxed period), and for a storage cap also the moves it bounds (the cap is their coefficient)."""
+        rows = ("cap", "limit", "stop", "income")
+        dual = float(self.model.scale(rule)) * sum(
+            -base.le[row.key] for row in program.rows if row.group == rule and row.key[0] in rows
         )
         for flow, activity, source, _ in self.model.moves:
             if self.model.storage.get(source, ("",))[0] == rule:
@@ -1376,6 +1522,7 @@ class _Solver:
                 "rule_prices": {rule: str(m) for rule, m in rule_marginals.items()},
             },
             "excluded": list(model.excluded),
+            "relaxed": model.shown_relaxed(),
         }
         return data, warnings
 
@@ -1422,6 +1569,7 @@ class _Solver:
             "end": {entity: str(x[("s", entity, steps)]) for entity in model.entities},
             "unread": list(model.unread),
             "excluded": list(model.excluded),
+            "relaxed": model.shown_relaxed(),
         }
         return data, warnings
 

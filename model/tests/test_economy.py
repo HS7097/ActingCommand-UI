@@ -5,6 +5,7 @@ tests on Windows and on Ubuntu, so both legs must give the same exact values."""
 from __future__ import annotations
 
 import json
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -81,14 +82,14 @@ def model(
 
 @pytest.fixture
 def economy(make_system, app_dir, write_config):
-    """`acmodel economy` on a fixture folder, with the given configuration keys: (exit status, envelope). The
-    envelope is one acmodel.cli.v1 line whose errors and warnings agree with contracts/codes.json."""
+    """`acmodel economy` on a fixture folder, with the given flags and configuration keys: (exit status,
+    envelope). The envelope is one acmodel.cli.v1 line whose errors and warnings agree with contracts/codes.json."""
 
-    def run(folder: Path, **sections: Any) -> tuple[int, dict[str, Any]]:
+    def run(folder: Path, *flags: str, **sections: Any) -> tuple[int, dict[str, Any]]:
         if sections:
             write_config({"schema_version": "acmodel.config.v1", **sections})
         system = make_system(prefix=app_dir / "venv")
-        argv = ["economy", str(folder / "ours" / "model"), "--state", str(folder / "state.json")]
+        argv = ["economy", str(folder / "ours" / "model"), "--state", str(folder / "state.json"), *flags]
         status = cli.main(argv, system)
         [line] = system.stdout.getvalue().splitlines()
         doc = json.loads(line)
@@ -162,6 +163,7 @@ STORE_STEADY = {
     "activity_values": {"act.a": ["1"], "act.b": ["0"], "act.collect": None},
     "losses": {"overflow": {}, "lost_production": {"fac.f": "80"}},
     "excluded": [],
+    "relaxed": [],
     **settled("res.c", "res.s", "res.v"),
 }
 
@@ -198,6 +200,7 @@ CYCLIC_STEADY = {
     "activity_values": {"act.d": ["1"] + ["0"] * 6},
     "losses": {"overflow": {"res.r": "10"}, "lost_production": {}},
     "excluded": [],
+    "relaxed": [],
     **settled("res.r", "res.v"),
 }
 
@@ -324,6 +327,7 @@ def test_per_period_and_shared_limits(tmp_path, economy):
         "activity_values": {"act.a": ["2"] * 7, "act.b": SEVEN, "act.c": ["0"] * 7},
         "losses": {"overflow": {}, "lost_production": {}},
         "excluded": [],
+        "relaxed": [],
         **settled("res.r", "res.v"),
     }
 
@@ -398,6 +402,7 @@ def test_a_degenerate_fixture_gives_a_price_interval(tmp_path, economy):
         "activity_values": {"act.a": [{"low": "0", "high": "2"}]},
         "losses": {"overflow": {}, "lost_production": {}},
         "excluded": [],
+        "relaxed": [],
         **settled("res.r", "res.v"),
     }
 
@@ -580,6 +585,7 @@ def test_a_resources_regen_stops_at_its_caps_reference_and_the_loss_is_counted(t
         "activity_values": {"act.d": ["0"] * 7},
         "losses": {"overflow": {}, "lost_production": {"res.r": "10"}},
         "excluded": [],
+        "relaxed": [],
         **settled("res.r", "res.v"),
     }
 
@@ -625,6 +631,7 @@ def test_a_pending_flow_with_an_unresolved_unknown_is_left_out_and_every_price_i
         "activity_values": {"act.a": ["1"]},
         "losses": {"overflow": {}, "lost_production": {}},
         "excluded": [],
+        "relaxed": [],
         "excluded_pending": [{"flow": "flow.p", "activity": "act.p", "unknowns": ["unk.p"]}],
         "price_status": {
             resource: {"status": "provisional", "reasons": ["excluded_pending"]} for resource in ("res.r", "res.v")
@@ -648,6 +655,7 @@ def test_a_pending_flow_whose_unknown_is_resolved_is_back_and_nothing_is_provisi
         "activity_values": {"act.a": ["-1"], "act.p": ["0"]},
         "losses": {"overflow": {}, "lost_production": {}},
         "excluded": [],
+        "relaxed": [],
         **settled("res.r", "res.v"),
     }
 
@@ -664,3 +672,212 @@ def test_a_flow_that_reads_an_unknown_and_is_not_pending_still_refuses(tmp_path,
         refused(folder, "/rules/3/logic/produces/res.v", "unknown", "economy:plan", "economy:steady")
     ]
     assert doc["data"]["steady"] == doc["data"]["plan"] == {"status": "blocked"}
+
+
+# #424 ACM-PRICE PRICE-3: income caps, `days` periods, the cycle and its relaxed periods, slot-hours ------------
+
+MONTH = {"id": "month", "unit": "month", "reset_minute": 0, "utc_offset_minutes": 0, "reset_day": 1}
+SEASON = {
+    "id": "season", "unit": "days", "reset_minute": 0, "utc_offset_minutes": 0, "length": 14,
+    "anchor_date": "2026-10-05",
+}
+
+
+def income_fixture(folder: Path, periods: list, per: str, value: str, s_a_day: str) -> Path:
+    """s comes at `s_a_day` a day. act.a turns 10 s into 10 r, and an income cap lets act.a bring in at most `value`
+    r per `per` (the rest is voided); act.b turns 1 r into 1 v, with no limit."""
+    return model(
+        folder, periods,
+        [resource("res.v", "fact.v"), resource("res.s", "fact.s"), resource("res.r", "fact.r"), activity("act.a"),
+         activity("act.b")],
+        [
+            regen("regen.s", "res.s", s_a_day, "1d"),
+            flow("flow.a", "act.a", consumes={"res.s": "10"}, produces={"res.r": "10"}),
+            cap("cap.r.income", "res.r", "income", "discard", value=value, per=per, **{"from": ["act.a"]}),
+            flow("flow.b", "act.b", consumes={"res.r": "1"}, produces={"res.v": "1"}),
+        ],
+        {"fact.v": 0, "fact.s": 0, "fact.r": 0},
+    )
+
+
+def test_a_weekly_income_cap_that_holds_prices_what_only_buys_its_income_at_zero(tmp_path, economy):
+    """Design test 5. s comes at 10 a day: act.a could bring in 70 r a week, but the weekly income cap keeps 30 of
+    it and voids the rest; act.b turns the 30 r into 30 v.
+
+    By hand, a week (7 steps): 30 v. While the cap holds, s, whose only use is income the cap voids, is worth 0 on
+    every day: with one s more or one less, act.a can still bring in far more than 30 r. The cap's price is above
+    0: one unit more keeps one more r, which act.b turns into 1 v, and one unit less loses it (1). An r that comes
+    from outside the capped income is not counted by the cap, and act.b turns it into 1 v (1 on every day). act.a
+    is worth its 10 r at 1 less its 10 s at 0: 10, the cap's price for each r it brings in (as an activity at its
+    binding limit is worth the limit's price); act.b, the marginal activity, 0."""
+    status, doc = economy(income_fixture(tmp_path, [DAY, WEEK], "week", "30", "10"))
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    found = steady(doc)
+    assert found["prices"]["res.s"] == ["0"] * 7
+    assert Fraction(found["rule_prices"]["cap.r.income"]) > 0
+    assert found == {
+        "status": "confirmed", "per_account": False,
+        "cycle": {"steps": 7, "step_seconds": 86400},
+        "objective": "30",
+        "prices": {"res.r": SEVEN, "res.s": ["0"] * 7, "res.v": SEVEN},
+        "rule_prices": {"cap.r.income": "1"},
+        "activity_values": {"act.a": ["10"] * 7, "act.b": ["0"] * 7},
+        "losses": {"overflow": {}, "lost_production": {}},
+        "excluded": [],
+        "relaxed": [],
+        **settled("res.r", "res.s", "res.v"),
+    }
+
+
+def test_a_monthly_income_cap_is_relaxed_by_rate_and_listed(tmp_path, economy):
+    """Design test 6. As above, with s at 1000 a day and an income cap of 6957 r a month. The day and the week make
+    the cycle 7 steps. A month is 146097/4800 = 48699/1600 days, so the steady state relaxes the cap to its rate,
+    6957 × 7 ÷ (146097/4800) = 1600 r a cycle (146097 = 21 × 6957), and lists it in `relaxed`. The plan relaxes it
+    over its 7 steps the same way.
+
+    By hand: 1600 v a week (the 7000 s could bring in 7000 r). s is worth 0, r and v 1, as above. One unit more of
+    the monthly cap keeps 1600/6957 more r a week, and one less that much less: its price is 1600/6957."""
+    status, doc = economy(income_fixture(tmp_path, [DAY, WEEK, MONTH], "month", "6957", "1000"))
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    relaxed = [{"rule": "cap.r.income", "per": "month", "days": "48699/1600", "value": "1600"}]
+    assert steady(doc) == {
+        "status": "confirmed", "per_account": False,
+        "cycle": {"steps": 7, "step_seconds": 86400},
+        "objective": "1600",
+        "prices": {"res.r": SEVEN, "res.s": ["0"] * 7, "res.v": SEVEN},
+        "rule_prices": {"cap.r.income": "1600/6957"},
+        "activity_values": {"act.a": ["10"] * 7, "act.b": ["0"] * 7},
+        "losses": {"overflow": {}, "lost_production": {}},
+        "excluded": [],
+        "relaxed": relaxed,
+        **settled("res.r", "res.s", "res.v"),
+    }
+    assert doc["data"]["plan"]["relaxed"] == relaxed
+
+
+def season_fixture(folder: Path) -> Path:
+    """r comes at 10 a day. act.e turns 10 r into 2 v, at most 3 times a 14-day season; act.c turns 10 r into 1 v,
+    with no limit."""
+    return model(
+        folder, [DAY, WEEK, SEASON],
+        [resource("res.v", "fact.v"), resource("res.r", "fact.r"), activity("act.c"), activity("act.e")],
+        [
+            regen("regen.r", "res.r", "10", "1d"),
+            flow("flow.e", "act.e", consumes={"res.r": "10"}, produces={"res.v": "2"}),
+            limit("limit.e", "act.e", "3", "season"),
+            flow("flow.c", "act.c", consumes={"res.r": "10"}, produces={"res.v": "1"}),
+        ],
+        {"fact.v": 0, "fact.r": 0},
+    )
+
+
+def test_a_14_day_period_makes_a_14_step_cycle_and_counts_per_14_days(tmp_path, economy):
+    """Design test 7. A day, a week and a 14-day season: the cycle is their least common multiple, 14 steps, within
+    `economy.max_cycle_steps` (28), and act.e's limit counts per 14-day window.
+
+    By hand: 140 r a cycle, 14 executions: act.e 3 (6 v) and act.c 11 (11 v), so 17 v (a weekly window would allow
+    act.e 6 and give 20). r is worth 1/10 on every day (act.c is the marginal activity); act.e is worth 2 - 1 = 1
+    and act.c 0; the limit one higher moves one execution from act.c to act.e, and one lower back (1).
+
+    With `economy.max_cycle_steps` 7 the season does not fit: the cycle is 7 steps, and the limit is relaxed to
+    3 × 7 ÷ 14 = 3/2 a cycle and listed. By hand: 7 executions, act.e 3/2 (3 v) and act.c 11/2: 17/2 v. One more of
+    the season's limit is 1/2 more of act.e a cycle: 1/2."""
+    status, doc = economy(season_fixture(tmp_path / "fits"))
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    assert steady(doc) == {
+        "status": "confirmed", "per_account": False,
+        "cycle": {"steps": 14, "step_seconds": 86400},
+        "objective": "17",
+        "prices": {"res.r": ["1/10"] * 14, "res.v": ["1"] * 14},
+        "rule_prices": {"limit.e": "1"},
+        "activity_values": {"act.c": ["0"] * 14, "act.e": ["1"] * 14},
+        "losses": {"overflow": {}, "lost_production": {}},
+        "excluded": [],
+        "relaxed": [],
+        **settled("res.r", "res.v"),
+    }
+
+    status, doc = economy(season_fixture(tmp_path / "relaxed"), economy={"max_cycle_steps": 7})
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    assert steady(doc) == {
+        "status": "confirmed", "per_account": False,
+        "cycle": {"steps": 7, "step_seconds": 86400},
+        "objective": "17/2",
+        "prices": {"res.r": ["1/10"] * 7, "res.v": SEVEN},
+        "rule_prices": {"limit.e": "1/2"},
+        "activity_values": {"act.c": ["0"] * 7, "act.e": SEVEN},
+        "losses": {"overflow": {}, "lost_production": {}},
+        "excluded": [],
+        "relaxed": [{"rule": "limit.e", "per": "season", "days": "14", "value": "3/2"}],
+        **settled("res.r", "res.v"),
+    }
+
+
+def test_slot_hours_price_the_activity_they_bound(tmp_path, economy):
+    """Design test 8, the slot-hours writing (formats.md, "Slots"). Two slots: slot.s regains 2 an hour (48
+    slot-hours a day) under a hard cap of 0, so no hour carries over; act.m holds a slot for 8 hours and gives 1 v.
+
+    By hand, a day: 6 executions use the 48 hours, 6 v. One hour more or less is 1/8 of an execution: a slot-hour
+    is worth 1/8, so act.m, bound by the slots, is worth before its hours (1 v) the slot's price times its 8 hours,
+    and 0 with them. The cap one higher keeps an hour the cycle cannot use (0); one lower is infeasible (null).
+    Nothing overflows at the optimum. That a slot cannot be bound as a pool is test_bindings.py's
+    `test_a_slot_resource_cannot_be_bound_as_a_pool`."""
+    folder = model(
+        tmp_path, [DAY],
+        [resource("res.v", "fact.v"), resource("slot.s", "fact.slot"), activity("act.m")],
+        [
+            regen("regen.slot.s", "slot.s", "2", "1h"),
+            cap("cap.slot.s", "slot.s", "hard", "discard", value="0"),
+            flow("flow.m", "act.m", consumes={"slot.s": "8"}, produces={"res.v": "1"}),
+        ],
+        {"fact.v": 0, "fact.slot": 0},
+    )
+
+    status, doc = economy(folder)
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    found = steady(doc)
+    assert Fraction(found["prices"]["slot.s"][0]) * 8 == Fraction(found["prices"]["res.v"][0]) * 1
+    assert found == {
+        "status": "confirmed", "per_account": False,
+        "cycle": {"steps": 1, "step_seconds": 86400},
+        "objective": "6",
+        "prices": {"res.v": ["1"], "slot.s": ["1/8"]},
+        "rule_prices": {"cap.slot.s": {"low": "0", "high": None}},
+        "activity_values": {"act.m": ["0"]},
+        "losses": {"overflow": {"slot.s": "0"}, "lost_production": {}},
+        "excluded": [],
+        "relaxed": [],
+        **settled("res.v", "slot.s"),
+    }
+
+
+def test_steady_only_reports_the_steady_state_alone(tmp_path, economy):
+    """The coordinator's addition to PRICE-3 (`--steady-only`): a rule regression needs the steady state alone.
+    The cyclic fixture with a state sample that lacks r's reading. The steady state never reads the account state,
+    but the plan opens at the readings: without the flag the plan is blocked (`state_reading_missing`, needed by the
+    plan only) and the exit status is 1; with it, only the steady state is computed and reported, and it exits 0."""
+    folder = cyclic_fixture(tmp_path)
+    state = json.loads((folder / "state.json").read_text(encoding="utf-8"))
+    del state["readings"]["fact.r"]
+    write(folder / "state.json", state)
+    rules = str(folder / "ours" / "model" / "rules" / "economy.json")
+
+    status, doc = economy(folder)
+
+    assert status == CODES["state_reading_missing"]["exit"] == 1
+    assert doc["errors"] == [{
+        "code": "state_reading_missing", "detail": {"path": rules, "fact": "fact.r"}, "ref": "/entities/1/reading",
+        "needed_by": ["economy:plan"],
+    }]
+    assert (steady(doc), doc["data"]["plan"]) == (CYCLIC_STEADY, {"status": "blocked"})
+
+    status, doc = economy(folder, "--steady-only")
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    assert "plan" not in doc["data"]
+    assert steady(doc) == CYCLIC_STEADY

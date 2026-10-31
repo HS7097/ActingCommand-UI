@@ -423,8 +423,11 @@ class Checker:
         """The ids in a rule's logic that are not inside expressions."""
         logic, base, path, kind = rule.doc["logic"], at(rule.ref, "logic"), rule.path, rule.kind
         named: list[tuple[str, str, tuple[str, ...]]] = []
-        if kind == "cap" and "per" in logic:  # the period at whose resets a void_at_reset cap voids
+        if kind == "cap" and "per" in logic:  # a void_at_reset cap's period (it voids at its resets), an income cap's
             named.append((at(base, "per"), logic["per"], ("period",)))
+        if kind == "cap":  # the activities whose income an income cap counts
+            for index, activity in enumerate(logic.get("from", ())):
+                named.append((at(base, "from", index), activity, ("activity",)))
         if kind == "cap" and isinstance(logic["on_reach"], dict):
             for index, activity in enumerate(logic["on_reach"]["block_income_from"]):
                 named.append((at(base, "on_reach", "block_income_from", index), activity, ("activity",)))

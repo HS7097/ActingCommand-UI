@@ -199,6 +199,9 @@ LOGIC: dict[str, Spec] = {
             "hard": CAP_BY_VALUE,
             "storage": CAP_BY_VALUE,
             "soft_read": Object({"reading": FACT_KEY, "on_reach": ON_REACH}, CAP_MEMBERS, _cap),
+            # What the activities `from` (absent: all that bring the resource in) may earn per window of `per`
+            # (#424 ACM-PRICE 3.3).
+            "income": Object({"value": EXPR, "per": ID, "on_reach": ON_REACH}, {"from": ListOf(ID)}),
         },
     ),
     "regen": Object({"amount": EXPR, "every": EXPR}, {"while": EXPR}),
@@ -396,6 +399,8 @@ MODEL = Format(
                         "day": Object(PERIOD, NOTE),
                         "week": Object({**PERIOD, "reset_weekday": WEEKDAY}, NOTE),
                         "month": Object({**PERIOD, "reset_day": Integer(1, 28)}, NOTE),
+                        # A period of a fixed number of days, such as a 14-day season (#424 ACM-PRICE 3.4).
+                        "days": Object({**PERIOD, "length": Integer(2, 366), "anchor_date": DATE}, NOTE),
                     },
                 )
             ),

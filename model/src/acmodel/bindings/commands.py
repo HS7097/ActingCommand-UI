@@ -18,7 +18,8 @@ them (`export.thresholds.threshold_entry`), so a binding holds only what the exp
 every integer literal of a `fact` or `resource_projection` predicate of a `schedule.json` rule, and every
 quantity of a `schedule.json` pool (#424 ACM-POOL), that is neither bound nor fixed (`binding_unbound_literal`).
 `apply` writes each bound literal that differs, changing only the literal's bytes; it refuses everything `check`
-refuses but a differing value, and then writes nothing.
+refuses but a differing value, and then writes nothing. Neither binds a pool that is a slot resource of the model
+(`binding_mismatch`, `slot`; #424 ACM-PRICE 3.1): a slot is no Runtime pool.
 """
 
 from __future__ import annotations
@@ -50,6 +51,7 @@ from acmodel.codes import (
     RULE_REFERENCE_MISSING,
 )
 from acmodel.config import Unknowns
+from acmodel.core.flow import slots
 from acmodel.core.provenance import STATE_NODES, assemble
 from acmodel.core.run import Run, evaluate_model
 from acmodel.envelope import Failure, error
@@ -169,6 +171,16 @@ class _Literal:
             ref = at("", self.holder) if self.ref is None else self.ref
         return error(BINDING_MISMATCH, {**detail, **values}, ref)
 
+    def slot(self, slots: frozenset[str]) -> dict[str, Any] | None:
+        """`slot` when the entry names a pool of `schedule.json` that is a slot resource of the model (#424
+        ACM-PRICE 3.1, `core.flow.slots`): a slot is no Runtime pool, and its price is a diagnosis only, so nothing
+        binds it. At the pool, or at /pools when no pool has that id."""
+        pool = self.entry.get("pool_id")
+        if pool not in slots:
+            return None
+        pools = self.target.pools
+        return self.mismatch("slot", at("", "pools", pools[pool]) if pool in pools else at("", "pools"))
+
     def missing(self) -> dict[str, Any] | None:
         """`literal_missing` when the entry names no integer literal."""
         if integer(self.value):
@@ -244,9 +256,10 @@ def check_bindings(
     repo, targets = _targets(run, bindings, strict)
     values, errors = _values(run, bindings)
     bound, fixed = [], []
+    slot_ids = slots(run.checker, run.graph.typed)
     for ref, entry in _entries(bindings):
         literal = _Literal(targets, ref, entry)
-        missing = literal.missing()
+        missing = literal.slot(slot_ids) or literal.missing()
         if missing is not None:
             errors.append(missing)
         elif "threshold" not in entry:
@@ -300,9 +313,10 @@ def apply_bindings(
     values, errors = _values(run, bindings)
     edits: dict[str, list[tuple[str, int]]] = {}
     changed = []
+    slot_ids = slots(run.checker, run.graph.typed)
     for ref, entry in _entries(bindings):
         literal = _Literal(targets, ref, entry)
-        missing = literal.missing()
+        missing = literal.slot(slot_ids) or literal.missing()
         if missing is not None:
             errors.append(missing)
             continue
