@@ -84,21 +84,27 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
 - **`economy`** solves the economy with scipy's HiGHS (`contracts/formats.md`, "The economy"):
   - **the steady state**, game-wide: an LP over one cycle (the least common multiple of the periods' days, at most
     `economy.max_cycle_steps`; a month and longer periods relaxed by rate), with the price of every resource
-    per step and of every cap and limit, exact or an interval, by re-solves one grain up and down; the value of
-    each activity; and the least overflow and lost production. Its objective is the value of the goal sinks of
-    the `objective` rules; the protected acquisition is held first (`objective_tier_conflict`), and the
-    protected acquisitions are listed. Its coverage section classes each pool as covered, a structural gap,
-    verified zero (a `no_use` declaration the static check found sound) or unknown, lists the static components
-    of the flow graph, and gives each price the status of its component, so that a component with no edge to a
-    gap keeps its own; it also lists the estimates (`estimate` of a provisional derive) it read;
+    per step, exact or an interval, from its dual's optimal face, and of every cap and limit by re-solves one grain
+    up and down; the value of each activity; and the least overflow and lost production. Its objective is the
+    value of the goal sinks of the `objective` rules; the protected acquisition is held first
+    (`objective_tier_conflict`), and the protected acquisitions are listed. Its dual, generated from its rows and
+    checked exactly, gives the **joint price vector**: one dual optimal point for all the pools, chosen by a
+    lexicographic max-min, never a midpoint per pool; and the **activity judgements** (value, range on the face,
+    whether an optimum runs it, the cost of running it once more). These are the outputs `price:<resource>` and the
+    diagnostic `activity_value:<activity>`. HiGHS's marginals are a cross-check only, within a relative tolerance
+    of 1e-7 (`lp_dual_disagrees`). Its coverage section classes each pool as covered, a structural gap, verified
+    zero (a `no_use` declaration the static check found sound) or unknown, lists the static components of the
+    flow graph, and gives each price the status of its component, so that a component with no edge to a gap keeps
+    its own; it also lists the estimates (`estimate` of a provisional derive) it read;
   - **the plan** of one account: a MILP from the state's readings over `economy.plan_horizon` days, with integer
     counts and read caps that block collections at or above them, its final stocks priced by the steady state,
     stopped only by `search.milp_node_limit` (then `proven: false`).
-  Every solution is made exact and checked exactly (`lp_numeric_check_failed`); contradictory rules are named
+  Every solution, the dual's too, is made exact and checked exactly (`lp_numeric_check_failed`); contradictory rules are named
   (`lp_infeasible`); what the programs do not model yet is refused, never approximated.
 - **`explain`** prints the provenance tree of one output (`rule:<id>`, `general_logic:<id>` or
-  `threshold:<id>`): every rule, data row, ruling and reading its value rests on, with their hashes and
-  the model's versions. It writes nothing; like `export thresholds`, it computes without the cache.
+  `threshold:<id>`, and the steady state's `price:<resource>` and `activity_value:<activity>`): every rule, data
+  row, ruling and reading its value rests on, with their hashes and the model's versions. It writes nothing; like
+  `export thresholds`, it computes without the cache.
 - **`export thresholds`** writes `out/thresholds.json` and one provenance file per threshold into the
   model folder, for delivery with the resource repository. It never commits. Only account-independent
   values go into these shared files: a threshold that read the account state, is not confirmed, is not an

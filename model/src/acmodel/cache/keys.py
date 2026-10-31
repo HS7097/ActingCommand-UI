@@ -75,8 +75,13 @@ class Evaluator:
 # components and the estimates it read) and gives each price the status of its static component; it reads the `no_use`
 # rules. A derive's `estimate` is checked where its value is computed (`rule`, `general`, `reference`), but no model
 # that held one was read before, so no value of those kinds changes and they keep their versions.
+# PRICE-2b-1: `economy` 7: the steady state solves its dual and checks it exactly; a resource's price per step is
+# its projection on the dual's optimal face (the re-solves move to `grain`); it shows the joint price vector and the
+# activity judgements (`joint`); an economy node keeps what it read (`reads`), the provenance of `price:` and
+# `activity_value:`; and a HiGHS marginal within `MARGINAL_TOLERANCE` of its exact price (relative, 1e-7) is no
+# longer `lp_dual_disagrees`.
 EVALUATORS: dict[str, Evaluator] = {
-    "economy": Evaluator(6, ("numpy", "python", "scipy")),
+    "economy": Evaluator(7, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
     "flow": Evaluator(3),
     "general": Evaluator(3),

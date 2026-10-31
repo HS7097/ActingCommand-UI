@@ -589,11 +589,14 @@
         "path": {"type": "path", "required": true},
         "target": {"type": "token", "required": true},
         "step": {"type": "integer", "required": false},
-        "marginal": {"type": "token", "required": true},
+        "check": {"type": "vocab", "required": true, "members": ["marginal", "grain"]},
+        "marginal": {"type": "token", "required": false},
         "low": {"type": "token", "required": false},
-        "high": {"type": "token", "required": false}
+        "high": {"type": "token", "required": false},
+        "grain_low": {"type": "token", "required": false},
+        "grain_high": {"type": "token", "required": false}
       },
-      "description": "acmodel economy (a warning): HiGHS's marginal (marginal, as an exact fraction) of a price of the steady state lies outside the interval its re-solves at plus and minus one grain give (low, absent when one grain more is infeasible, and high, absent when one grain less is). target is a resource, with step its step in the cycle, or a cap or limit rule. The price stands as the re-solves give it; the marginal is only a cross-check (#424 design-py 4.3). path is model.json."
+      "description": "acmodel economy (a warning): a cross-check of a price of the steady state disagrees; the price stands (#424 design-py 4.3, ACM-PRICE addendum 2.1 section 2.2 step 3). target is a resource, with step its step in the cycle, or a cap or limit rule. check marginal: HiGHS's marginal (marginal, as an exact fraction made by limit_denominator(lp.max_denominator)) lies outside the price's interval (low, absent when one more unit is infeasible, and high, absent when one less is) by more than the tolerance tau: for a resource its projection on the dual's optimal face, for a rule its re-solves at plus and minus one grain. The marginal m agrees with an end p when |m - p| <= tau * max(1, |p|), with tau = 1e-7 (MARGINAL_TOLERANCE in core/flow.py, HiGHS's default dual feasibility tolerance; PRICE-2b-1): the marginal is a float and an exact price can have a denominator far above lp.max_denominator, so the two never agree exactly. check grain (a resource, PRICE-2b-1; two exact fractions, compared exactly, with no tolerance): its projection (low, high) does not lie inside the interval of its re-solves at plus and minus one grain (grain_low and grain_high, each absent when that re-solve is infeasible), which holds it whenever the two measure the same income; they can differ where the income one grain more can overflow at a hard cap while one more unit of stock has no room. path is model.json."
     },
     "lp_infeasible": {
       "category": "error",
@@ -617,12 +620,12 @@
       "values": {
         "path": {"type": "path", "required": true},
         "solve": {"type": "vocab", "required": true, "members": ["steady", "plan"]},
-        "stage": {"type": "vocab", "required": true, "members": ["optimum", "acquisition", "value", "tie", "losses", "price"]},
+        "stage": {"type": "vocab", "required": true, "members": ["optimum", "acquisition", "value", "tie", "losses", "price", "dual", "judgement"]},
         "constraint": {"type": "token", "required": true},
         "found": {"type": "token", "required": true},
         "bound": {"type": "token", "required": true}
       },
-      "description": "acmodel economy: a solution of HiGHS, converted to exact fractions with lp.max_denominator, breaks a bound, an integrality or a row of its program when checked exactly. stage is the solve: the optimum (the steady state's S3, the value V alone, or the plan), the steady state's acquisition (S1, the protected acquisition A alone) and value (S2, V with A at least A*, whose row floor:acquisition:0 is checked exactly as every other row), a probe for objective_tier_tie (tie), the least losses among the optimal solutions (steady state), or a price re-solve. constraint is the row or the variable (kind:id:step), found its exact left side or value, and bound what it must meet (=, <= or >= a value, integer, or finite; a value or marginal that is not finite is found as its float text, with constraint marginal for a marginal). With stage value and constraint value, S2's optimum (found) is above S3's (bound), which a relaxation cannot be. The output is blocked; nothing is rounded into place. path is model.json."
+      "description": "acmodel economy: a solution of HiGHS, converted to exact fractions with lp.max_denominator, breaks a bound, an integrality or a row of its program when checked exactly. stage is the solve: the optimum (the steady state's S3, the value V alone, or the plan), the steady state's acquisition (S1, the protected acquisition A alone) and value (S2, V with A at least A*, whose row floor:acquisition:0 is checked exactly as every other row), a probe for objective_tier_tie (tie), the least losses among the optimal solutions (steady state), a price re-solve, a solve on the steady state's dual (dual, PRICE-2b-1: its least cost, a projection, a step of the selection of the joint price vector, a range or a forcing cost, each checked exactly against every dual row and the strong-duality row duality:face:0), or a judgement's primal solve (judgement: the most an optimum runs an activity). constraint is the row or the variable (kind:id:step), found its exact left side or value, and bound what it must meet (=, <= or >= a value, integer, or finite; a value or marginal that is not finite is found as its float text, with constraint marginal for a marginal). With stage value and constraint value, S2's optimum (found) is above S3's (bound), which a relaxation cannot be. With stage dual and constraint duality:face:0, the dual's least cost (found) is not the primal optimum (bound): strong duality fails exactly, so no price vector exists to export. With stage dual and constraint max_min, a stage of the selection fixed no coordinate at its level (found); with constraint price:<resource>, a pool's end that the dual's optimal face bounds came out unbounded (bound, the end it was fixed at). The output is blocked, and with stage dual no price of the steady state is exportable; nothing is rounded into place. path is model.json."
     },
     "lp_solve_failed": {
       "category": "error",
@@ -632,14 +635,14 @@
       "values": {
         "path": {"type": "path", "required": true},
         "solve": {"type": "vocab", "required": true, "members": ["steady", "plan"]},
-        "stage": {"type": "vocab", "required": true, "members": ["optimum", "acquisition", "value", "tie", "losses", "price"]},
+        "stage": {"type": "vocab", "required": true, "members": ["optimum", "acquisition", "value", "tie", "losses", "price", "dual", "judgement"]},
         "reason": {"type": "vocab", "required": true, "members": ["unbounded", "solver_status", "no_solution"]},
         "status": {"type": "integer", "required": false},
         "nodes": {"type": "integer", "required": false},
         "node_limit": {"type": "integer", "required": false},
         "raw_text": {"type": "raw_text", "required": false}
       },
-      "description": "acmodel economy: HiGHS gave no usable solution. unbounded: the objective has no maximum, so the rules let the value of the goal sinks (or, in S1, the protected acquisition) grow without end (status 3). solver_status: another status (status, scipy's, with HiGHS's message as raw_text) after a second try without presolve; or no solution where one must exist (status 2: the steady state's S1, S2 or a tie probe, which only add a row that a solution already meets or change the objective, or the least losses at the optimum). no_solution (plan): the MILP stopped, at its node limit search.milp_node_limit (node_limit; nodes explored) or otherwise, without any feasible plan. stage: the optimum, the steady state's acquisition (S1), value (S2) or tie probe, the least losses, or a price re-solve. The output is blocked. path is model.json."
+      "description": "acmodel economy: HiGHS gave no usable solution. unbounded: the objective has no maximum, so the rules let the value of the goal sinks (or, in S1, the protected acquisition) grow without end (status 3). solver_status: another status (status, scipy's, with HiGHS's message as raw_text) after a second try without presolve; or no solution where one must exist (status 2: the steady state's S1, S2 or a tie probe, which only add a row that a solution already meets or change the objective, or the least losses at the optimum). no_solution (plan): the MILP stopped, at its node limit search.milp_node_limit (node_limit; nodes explored) or otherwise, without any feasible plan. stage: the optimum, the steady state's acquisition (S1), value (S2) or tie probe, the least losses, a price re-solve, a solve on the steady state's dual (dual, PRICE-2b-1; solver_status with status 2 where its optimal face, which holds the dual point found, has no solution) or a judgement's primal solve (judgement). The output is blocked. path is model.json."
     },
     "model_file_invalid": {
       "category": "error",
