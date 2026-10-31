@@ -267,6 +267,11 @@ acui --help
 窗口可缩放：默认 1400×900，最小 1100×700，中栏随窗口伸缩，两侧栏保持定宽。窗口跟随系统
 DPI；程序自己不设缩放。
 
+离线验收材料：`tools/fixture-state-root` 是个小生成器（独立包，不在 workspace 与构建里），在两台假设备上起钉住的
+Runtime 宿主，留下一个小的 v0.12 状态根（带端口的实例绑定、两帧带材料的截图、几百条事件，离线不止一页）。
+手动工作流 `fixture`（`.github/workflows/fixture.yml`，Windows）构建并运行它，把整个根打成 zip 作为产物
+`fixture-state-root-<提交号>` 上传；解压到可写目录后用 `acui --state-root <根> --source offline` 打开。它是材料，不是测试。
+
 ## 界面语言与字号
 
 顶栏右侧两个下拉框，选完就写进设置文件：

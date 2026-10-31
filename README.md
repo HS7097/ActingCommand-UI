@@ -366,6 +366,13 @@ The window is resizable: 1400×900 by default, 1100×700 minimum; the middle col
 window and the two side columns keep a fixed width. The window follows the system DPI; the program sets no
 scaling of its own.
 
+Offline acceptance material: `tools/fixture-state-root` is a small generator, its own package outside the
+workspace and its build, that starts the pinned Runtime host on two fake devices and leaves a small v0.12
+state root (instance bindings with ports, two capture frames with material, a few hundred events, more
+than one offline page). The manual workflow `fixture` (`.github/workflows/fixture.yml`, Windows) builds and
+runs it and uploads the zipped root as the artifact `fixture-state-root-<commit>`; unzip it to a writable
+directory and open it with `acui --state-root <root> --source offline`. It is material, not a test.
+
 ## Interface language and text size
 
 Two dropdowns at the right of the top bar; a choice is written into the settings file as soon as it is
