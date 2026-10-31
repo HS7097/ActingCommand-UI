@@ -10,6 +10,9 @@ name: fixture
 # Manual runs only. It builds no console, publishes no release and changes no
 # other workflow.
 on:
+  # TEMPORARY: lets the first run happen on this branch before the file is on main; removed before merge.
+  push:
+    branches: [claude/e11-fixture-root]
   workflow_dispatch:
     inputs:
       rounds:
@@ -51,7 +54,7 @@ jobs:
         id: root
         shell: pwsh
         env:
-          ROUNDS: ${{ inputs.rounds }}
+          ROUNDS: ${{ inputs.rounds || '60' }}
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:RUNNER_TEMP 'fixture\state-root'
