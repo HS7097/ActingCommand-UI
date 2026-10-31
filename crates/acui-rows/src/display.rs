@@ -5,7 +5,7 @@
 //! spelling is shown next to the name either way.
 
 /// `(wire, 中文, English)` for every `EventType` the contract declares.
-const EVENT_TYPES: [(&str, &str, &str); 134] = [
+const EVENT_TYPES: [(&str, &str, &str); 135] = [
     ("provider.startup_observed", "厂商启动已观察", "Provider Startup Observed"),
     ("runtime.started", "运行时已启动", "Runtime Started"),
     ("runtime.takeover", "运行时已接管", "Runtime Takeover"),
@@ -50,6 +50,7 @@ const EVENT_TYPES: [(&str, &str, &str); 134] = [
     ("policy.control_state_recorded", "策略控制状态已记录", "Policy Control State Recorded"),
     ("policy.activity_state_recorded", "策略活动状态已记录", "Policy Activity State Recorded"),
     ("policy.fact_refresh_transition", "事实刷新状态转换", "Policy Fact Refresh Transition"),
+    ("policy.not_run_changed", "策略未运行原因已变化", "Policy Not Run Changed"),
     ("catalog.transition_intent", "目录切换意图", "Catalog Transition Intent"),
     ("catalog.activated", "目录已启用", "Catalog Activated"),
     ("catalog.rolled_back", "目录已回滚", "Catalog Rolled Back"),
