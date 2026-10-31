@@ -3,7 +3,8 @@
   "entities": [
     {"id": "res.a", "kind": "resource", "reading": "resource.a"},
     {"id": "res.b", "kind": "resource", "reading": "resource.b"},
-    {"id": "win.season", "kind": "window", "starts_at_unix_s": 1767225600, "ends_at_unix_s": 1769904000}
+    {"id": "win.season", "kind": "window", "starts_at_unix_s": 1767225600, "ends_at_unix_s": 1769904000},
+    {"id": "value.tabular", "kind": "value"}
   ],
   "rules": [
     {"id": "v.whole", "kind": "derive", "subject": "res.a", "logic": {"value": "1200"},

@@ -22,6 +22,8 @@
 - ("sampled", <an output's key>): with `unknowns.samples`, the Monte Carlo tallies of an output that reads a
   distribution (`_SubGraph`);
 - ("regen", id, "amount" | "every"): a regen's amount and interval, which the economy reads;
+- ("objective", id, "value" | "horizon"): an objective's value and a secondary objective's horizon, which the
+  economy's steady state reads in the reference state (#424 ACM-PRICE PRICE-2a);
 - ("economy", "steady" | "plan"): the economy's two solves (`core.flow`), computed only when asked for.
 
 **Scenarios.** A node that reads a discrete unknown (variants, empirical) has one value per point of it. The
@@ -141,7 +143,7 @@ if TYPE_CHECKING:
 # The kinds of graph node (the first part of a node's key); every other first part names a leaf.
 NODE_KINDS = (
     "rule", "general_logic", "offset", "flow", "member", "point", "threshold", "general", "sampled", "impacts",
-    "regen", "economy", "reference",
+    "regen", "economy", "reference", "objective",
 )
 # The prefixes of the nodes from the rules and the data only: in general, and in the reference state.
 GENERAL, REFERENCE = "general", "reference"
@@ -842,7 +844,7 @@ class Graph:
             return self.expression(entry, _at(at(entry.ref, "logic", "general_logic")), own, unresolved=unresolved)
         if key[0] == "offset":
             return self.expression(entry, _at(at(entry.ref, "logic", "live", "offset")), own, unresolved=unresolved)
-        if key[0] == "regen":
+        if key[0] in ("regen", "objective"):  # a regen's amount or interval; an objective's value or horizon
             ref = at(entry.ref, "logic", key[2])
             return self.expression(entry, _at(ref), own, general=general, unresolved=unresolved)
         ref = at(entry.ref, "logic", "moves", "amount") if key[2] == "moves" else at(entry.ref, "logic", key[2], key[3])

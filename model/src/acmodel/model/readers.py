@@ -140,6 +140,8 @@ ENTITY = Tagged(
         "window": Object(
             {"id": ID, "starts_at_unix_s": Integer(0, MAX), "ends_at_unix_s": Integer(0, MAX)}, NOTE
         ),
+        # The unit values are counted in (#424 ACM-PRICE 2.2 (1)): the numeraire. No reading, no pool, never bound.
+        "value": Object({"id": ID}, NOTE),
     },
 )
 
@@ -253,7 +255,16 @@ LOGIC: dict[str, Spec] = {
             "metrics": ListOf(ID),
         }
     ),
-    "objective": Object({"numeraire": ID, "terms": ListOf(EXPR), "horizon": EXPR}),
+    # A goal sink (#424 ACM-PRICE 2.2 (2), (3); addendum 2.1 §4): a main goal is a resource worth `value` value
+    # units each; the secondary goal is the reference demand, its steps (`demand`) joined by key to their costs
+    # (`costs`), each point worth `value`, over `horizon`.
+    "objective": Tagged(
+        "tier",
+        {
+            "main": Object({"value": EXPR}),
+            "secondary": Object({"demand": ID, "costs": ID, "value": EXPR, "horizon": EXPR}),
+        },
+    ),
     "weight_ref": Object({"file": TEXT, "pointer": POINTER, "compares_to": ID}),
 }
 
