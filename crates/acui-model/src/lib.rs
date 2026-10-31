@@ -58,8 +58,10 @@ pub enum QueryError {
     /// or the console's own `CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN` when its
     /// routine performance types do not parse.
     Rejected(String),
-    /// The read face could not answer; carries what it reported.
-    ReadFailed(String),
+    /// The read face could not answer: its own words, verbatim, and the
+    /// console's own code when the error carries one. Nothing here is in a
+    /// language: the console puts the code into words when it paints.
+    ReadFailed { text: String, code: Option<&'static str> },
 }
 
 /// Filter state, turned into one `EventQuery` and re-run against the ledger.

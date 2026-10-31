@@ -71,10 +71,9 @@ and guesses nothing.
 
 The program accepts only one argument: the state root. **All file IO for reading ledger data belongs to
 the read face**; the console never assembles paths inside the state root itself, never opens `ledger/`,
-`artifacts/` or `runtime-state.sqlite`, and never launches a CLI to read data. It starts three
-kinds of process, all of them named in "Launcher" and "Instance configuration": actingd itself (**Start**),
-the twice-confirmed `actingd unlock-owner` (the unlock, see "Launcher"), and `actingd check-config`
-when an instance-configuration save is checked (see "Instance configuration").
+`artifacts/` or `runtime-state.sqlite`, and never launches a CLI to read data. It starts two
+kinds of process, both named in "Launcher": actingd itself (**Start**) and the twice-confirmed
+`actingd unlock-owner` (the unlock).
 
 There are two read faces, with the same query, page and cursor semantics; they differ only in where the
 answers come from:
@@ -100,7 +99,7 @@ answers come from:
   the client itself, the loopback address is taken by it, and the owner epoch is checked by it at connect
   time. The read face is only a client: it does not kill or wait for the Runtime, does not touch
   `owner.lock`, and writes nothing into the state root; launching and requesting shutdown belong to the
-  top bar's launcher (see the "Launcher" section), and shutdown too goes only through this same typed
+  workbench's launcher (see the "Launcher" section), and shutdown too goes only through this same typed
   client.
 - The first page at startup asks without a snapshot position; the `snapshot_ledger_position` the Runtime
   states on that page is the position this session reads at — the pin. A person's jump to the latest,
@@ -109,7 +108,9 @@ answers come from:
   after that is
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`,
   the same `EventQuery` bounded to one window, the same page limit, the same `next_cursor`.
-- Material goes through `RuntimeClient::read_material_complete` on the same connection: the client
+- Material goes through `RuntimeClient::read_material_complete` on a connection of its own, made at
+  the pin with the page connection, to the same owner epoch, and rebuilt after a read latched it; so a
+  material read (up to 30 s) never holds a follow poll or a status read behind it. The client
   reads the ranges itself (192 KiB each, 64 KiB against a Runtime that refuses larger ones), the Runtime
   verifies each against the whole file, and the client checks the assembled length and sha256 — the same
   result shape as the offline whole-object read. The console no longer assembles ranges itself.
@@ -135,17 +136,18 @@ answers come from:
   there is no lease offline, and each instance's id (short; the full id in grey) with its three facts. A
   ledger with no event yet says so; a replay the read face declines states its reason, and a failed one
   its code, operation, io kind (for an io error) and detail, one per line. The replay runs once as the
-  session opens, before the window shows, bounded by a 30-second deadline.
+  session opens (after the window shows, on the window's reader thread), bounded by a 30-second deadline.
 
 `--source <auto|offline|online>`, default `auto`: if the client can connect to the Runtime the state root
 points at, online; otherwise offline. The instance card's first line, "read face", states which one was
 chosen and why (`runtime-info.json` absent, or the client error code of the failed connection). With
-`online`, a failed connection **exits directly carrying the client's error code**; it does not quietly
+`online`, a failed connection **is an error carrying the client's error code**; it does not quietly
 switch to offline. Across both read faces, a Runtime that connects but cannot answer the first page is an
-error in any mode, with no fallback.
+error in any mode, with no fallback. Neither error ends the console: the window stays, the list and the
+instance card state in red why the read face did not open, and "Reopen" is offered.
 
 When the offline read face cannot be opened — with `offline`, or with `auto` falling back to it — the
-console does not exit: the window opens **unopened**, which is what a fresh install looks like, since the
+console does not exit: the ledger window opens **unopened**, which is what a fresh install looks like, since the
 Runtime creates the ledger on its first start. The instance card then has only its first line, "read
 face", which says the ledger could not be opened and states the read face's own `code`, `operation` and
 `detail` verbatim, and for an io error its io kind (`LedgerIoKind`: `not_found`, `permission_denied`,
@@ -155,14 +157,39 @@ most likely because the Runtime has never been started here, and point at the la
 fact is shown, not even a zero: the list says the ledger is not opened instead of standing empty; the
 tabs, the filter boxes, the id box and the time slider are off; the module and port boxes and the frame
 pane say "ledger not opened". Nothing is asked of the ledger and no material is read. The launcher works
-as usual.
+as usual; once the Runtime has started and made the ledger, "Reopen" opens the read face again. A window
+of the default source (`auto`) that reads offline, or whose offline face is unopened, because no Runtime
+was there offers "Reopen" as soon as the launcher's probe finds one running, with a line saying it can
+read online now; a window `--source offline` asked for keeps reading offline. Neither switches read face
+mid-session on its own.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.32 (with
-Workflow #422 LN-OFF-1, the bounded offline opening), which speaks the 0.12 protocols
-(`runtime-client` revision 3, ledger revision 4):
+**The reader thread**: the window comes up first, and the read face is opened afterwards on the window's
+own reader thread (`acui-ledger-<window id>`). Opening, page reads, reading earlier, following, the jump
+to the latest, the time bound's probes and the frame's own events are all read there, one request after
+another; the window's event loop never waits on a read, and the read face never leaves that thread. While
+it opens, the list says the ledger is being opened and the controls are off. While a read is in flight,
+the top bar has one more line, "… waiting N s (a read of this kind takes at most about M s)", or "at most
+about M s per page" for a read that follows a cursor. It shows once a request has read for more than a
+second, so a quick read never makes the rows below jump; then its clock moves once a second, and only
+while a read is in flight. A tab or filter change, the time slider at rest, the jump to the latest, following turned
+on or off, and a reopen supersede the reads in flight: what they read is not left in the window, and a read
+that follows a cursor stops before its next page; a follow poll is only sent once the last one has
+finished. The window's state is locked only for the few milliseconds it takes to leave a result there or to
+paint, never while reading. A reader thread that panics, or that the system refuses, is stated in red in
+the window and in the technical log, and "Reopen" is offered too. "Reopen" starts a new session: the old
+reader stops after the page in hand, and the new session opens the read face again with the tab and the
+filters the boxes show now, without a time bound. When a read reaches a Runtime that is another process now
+(`console_runtime_owner_changed`), the top bar says so beside "Reopen", which reads the Runtime that runs
+now. A time span read follows the cursor for at most 64 pages; with still no event it stops, as
+`console_time_span_page_limit`, rather than keep the window reading.
+
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), the head of Runtime
+PR #1469 (Workflow #429 114-A: the not-run history shapes and ledger revision 5, on top of R-7a; it keeps
+v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 4, ledger
+revision 5). The Runtime merges pull requests with a merge commit, so this head stays on its main:
 
 ```
-rev = "5f3c2b9de6f3804b52accb23989de5e4f684c021"
+rev = "4d3523f78240b2b97ef57c876ec2bb63d403b1eb"
 ```
 
 The five crates (contract / ledger / ledger-forensics / runtime-client / execution-kernel) share this one rev.
@@ -327,9 +354,11 @@ them, and for the step's other events through the effect intent that shares thei
 physical input (`input.*`) does not carry its frame under the `Ui` profile — its `before_frame_id` is
 projected away — so its frame is the one of the last effect intent of its run before it; the sentence
 under the frame says which event the frame was taken from. The frame is found among the loaded rows
-first; only when they hold no capture of it are the frame's own events read, with one query by frame
-id, kept while the pane stays on that frame. A failed or incomplete read is stated in the frame note
-under the frame, and the next reload tries again.
+first; only when they hold no capture of it are the frame's own events read, by the reader thread, with
+one query by frame id (the note under the frame says so while it runs), kept while the pane stays on that
+frame. A failed or incomplete read is stated in the frame note under the frame, and the next reload tries
+again. The material reader is the one the reader thread hands the frame pane; when a frame read latches
+the material connection, the reader thread makes a new one at once, and the next frame read uses it.
 
 On the frame, beside the event's own geometry:
 
@@ -353,18 +382,34 @@ acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events
 acui --help
 ```
 
-`--state-root` applies to this run only and overrides `state_root` in the settings file; if neither is
-present it prints the usage and exits, guessing no default. Started through an A/B installation's fixed
-entry `<install root>\ui\acui.exe`, the console takes the state root, the configuration and the Runtime
-program from the installation's selection instead, and refuses a `--state-root` that differs from it.
-`--source` selects the read face (see above).
-`--tab` specifies the startup tab (for screenshots and review), and its values are the views' own wire
-names. `--lang` applies to **this run only**, overrides the language in the settings file, and is not
-written back to the settings file.
+The main window is the **workbench**: the Runtime in plain words with Start and Request Shutdown, the
+plain-words result of the last press, the language and the text size, a "Troubleshooting and Ledger"
+button, and an "Add Instance" button that is off (see "Instance configuration"). The ledger window,
+"Advanced Troubleshooting and Ledger History", opens only when asked: from that button, or at the start
+when `--tab` or `--source` is given. There is at most one per source (the default `auto`, `online`,
+`offline`); asking again restores the one open (Slint 1.17 has no call that brings a window to the
+front). `--state-root` alone opens none, since the fixed entry passes it on every start. A closed ledger
+window's reader stops after the page in hand; opening it again is a new window and a new session. Closing
+the workbench ends the program, except while an unlock runs (see "Launcher").
 
-The window is resizable: 1400×900 by default, 1100×700 minimum; the middle column stretches with the
-window and the two side columns keep a fixed width. The window follows the system DPI; the program sets no
-scaling of its own.
+`--state-root` applies to this run only and overrides `state_root` in the settings file; if neither is
+present the workbench still opens, with a red bar at its top that says there is no state root to use and
+gives the usage, and Start, Request Shutdown and "Troubleshooting and Ledger" are off; no default is
+guessed. Started through an A/B installation's fixed
+entry `<install root>\ui\acui.exe`, the console takes the state root, the configuration and the Runtime
+program from the installation's selection instead, and refuses a `--state-root` that differs from it (in
+the same red bar). `--source` selects the ledger window's read face (see above).
+`--tab` specifies the ledger window's startup tab (for screenshots and review), and its values are the
+views' own wire names. `--lang` applies to **this run only**, overrides the language in the settings
+file, and is not written back to the settings file.
+
+Started directly — `acui.exe`, or a shortcut that points at it — the console opens no black console
+window; started from a command line, `--help` and the reason for a failed start still go to that
+console. Started through the fixed entry `acforward.exe`, a console window still shows for now.
+
+The windows are resizable: the workbench 820×560 by default, 600×420 minimum; the ledger window 1400×900
+by default, 1100×700 minimum, its middle column stretching with the window and the two side columns
+keeping a fixed width. The windows follow the system DPI; the program sets no scaling of its own.
 
 Offline acceptance material: `tools/fixture-state-root` is a small generator, its own package outside the
 workspace and its build, that starts the pinned Runtime host on two fake devices and leaves a small v0.12
@@ -373,19 +418,45 @@ than one offline page). The manual workflow `fixture` (`.github/workflows/fixtur
 runs it and uploads the zipped root as the artifact `fixture-state-root-<commit>`; unzip it to a writable
 directory and open it with `acui --state-root <root> --source offline`. It is material, not a test.
 
+### When the start fails
+
+A start that cannot go on — a command line the console does not understand, a workbench window that
+cannot be made — is shown in a
+window of its own with the reason, written to the console the program was started from (if there is one),
+and appended to the technical log. The exit code is 2 for a command line the console does not understand
+and 1 otherwise. When not even that window can be made, a system message box says it. `--help` prints the
+usage on that console, or shows it in the same window when there is none, and exits 0. An installation
+selection it cannot read, a `--state-root` that differs from it, a `state_root` that is not absolute, or no
+state root at all is no failed start: the workbench opens with a red bar, plain words first and then the
+original, and the technical log has it too.
+
+The technical log is `%LOCALAPPDATA%\ActingCommand\logs\acui-<start unix ms>.log` (elsewhere under
+`$XDG_STATE_HOME`, else `$HOME/.local/state`), beside actingd's start logs. It is created by its first
+entry and holds failures only: a failed start or no state root to use, a problem of the settings file, a
+result a background thread could not hand back to the window, a ledger window that could not be made or
+shown, a ledger reader thread that could not start or that panicked. A
+read face that does not open is no failed start: the ledger window stays and says why in its ledger area
+(see above). Once it exists, the top of every window says where it is; when it
+cannot be written, the windows say that instead.
+
 ## Interface language and text size
 
-Two dropdowns at the right of the top bar; a choice is written into the settings file as soon as it is
-made:
+Two dropdowns at the right of the workbench's top and of every ledger window's top bar; a choice made in
+any window applies at once to every open window and is written into the settings file as soon as it is
+made, and a ledger window opened later comes up with the current language and text size:
 
 - **Text size**: standard / large / extra-large = 1.0 / 1.25 / 1.5. **Takes effect on the spot**. Every
   font size and line height in the interface is one base size meant for a person at normal DPI (list row
   14px, detail pane 13px, subheading 16px, line height 26px) multiplied by this one factor; `app.slint`
-  has only this one knob, `Scale.factor`.
-- **Language**: 中文 / English. **Takes effect after a restart**, and that sentence is written right next
-  to the box. The two language tables are in `crates/acui-app/src/strings.rs` (`ZH` and `EN`); at startup
-  the selected one fills the `Strings` global once, and there is no re-layout afterwards — there is no
-  gettext, and no swapping of words at runtime.
+  has only this one knob, `Scale.factor`. The minimum widths of the controls that hold text (the boxes,
+  the id box, the time slider, the notice lines) and the minimum heights of text areas are multiplied by
+  it too; a window's minimum size and the three columns' floor widths are not.
+- **Language**: 中文 / English. **Takes effect on the spot**: the choice fills every window's `Strings`
+  global again and paints every line of every window again — the launcher's plain and technical lines,
+  the frame pane's note, the port box and the words after a read error included. A background thread never holds a language table; it
+  hands back phrases that are put into words when painted, so a start or a frame read still in flight
+  reports in the new language. The two language tables are in `crates/acui-app/src/strings.rs` (`ZH` and
+  `EN`); there is no gettext. A read face's own error text is shown verbatim, untranslated.
 
 Two-layer labels: the upper layer is the name for a person to read, and the grey lower layer is the
 verbatim form used in the program — the raw `event_type`, module names, ids of every kind,
@@ -403,27 +474,47 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml (falls back to $HOME/.config/
 ```
 
 ```toml
-lang = "zh"          # zh | en
-text_size = "standard"   # standard | large | extra-large
-state_root = '<install root>\state'                                  # optional, absolute path
-actingd_config = '<install root>\actingd.config.json'                # optional, absolute path
-actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'     # optional, absolute path
+# zh | en
+lang = "zh"
+# standard | large | extra-large
+text_size = "standard"
+# flat | aero; read and checked only, nothing is drawn by it yet
+theme = "flat"
+# optional, absolute paths
+state_root = '<install root>\state'
+actingd_config = '<install root>\actingd.config.json'
+actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'
 ```
 
-It is read once at startup and written once on every dropdown change; on write-back the three path keys
-are kept verbatim. **This is the only file the console itself reads and writes**, besides the `instances`
-the instance-configuration window saves into `actingd_config` and the actingd start logs the launcher
-creates and, after an early exit, reads back (see those sections): it is not inside any
-state root, and the state root still belongs entirely to the read face. If the file is absent, unreadable,
-or holds an unrecognized value, the defaults (Chinese, standard) are used. The parser is hand-written: one
-`key = value` per line, one matching pair of quotes stripped, no escape handling — write Windows paths in
-single quotes (TOML literal strings), not in double quotes with doubled backslashes.
+It is read once at startup, and a dropdown change writes its one key: the file is read again, the last
+line of that key is replaced (or a line appended), and every other line — comments, the path keys, keys
+the console does not know such as `install_root`, lines it cannot parse — is kept byte for byte; the
+result goes to `acui.toml.tmp` beside it, which then replaces the file. **This is the only file the
+console itself reads and writes**, besides the actingd start logs the launcher creates and, after an
+early exit, reads back, and its own technical log (see those sections): it is not inside any state root,
+and the state root still belongs entirely to the read face. A missing file is a first run: the defaults
+(Chinese, standard, flat) are used and nothing is said. Anything else is said at the top of every window,
+with the file and the line: a value the console does not recognize, or a line that is not `key = value`,
+in amber, the default used and the line kept; a file that is there but cannot be read (permissions, not
+UTF-8), in red, the defaults used and **no save at all this run**, so the file is never written over; no
+config directory, or a save that failed, in red, the latter until a save succeeds. Each also goes to the
+technical log. The parser is hand-written: one `key = value` per line, a line starting with `#` is a
+comment, one matching pair of quotes is stripped, there is no escape handling and no comment after a
+value — write Windows paths in single quotes (TOML literal strings), not in double quotes with doubled
+backslashes.
 
 ## Launcher
 
-The third line of the top bar. On the left is the Runtime state from the last probe, then two buttons (and
-last the instance-configuration button, see the next section), and the line below it is the result of the
-last Start or Request shutdown press, or why the instance-configuration window did not open.
+On the workbench: on the left the Runtime state from the last probe, in plain words, then the Start and
+Request Shutdown buttons, and the line below them is the result of the last press, in plain words only (no
+key, code, PID or path; an outcome code shows only as its short words; a failure only the technical text
+states adds "details in Troubleshooting and Ledger"). Every ledger window's top bar has the technical
+lines: the state from the last probe with its PID and owner epoch, or the client's code, and below it the
+technical text of the last press; the unlock entry is there too (below). A line turns red on a failure and
+wraps instead of being cut. The probe, the whole start (probe, launch,
+readiness, record) and the shutdown request each run on a background thread of their own, and the window
+never waits on them; one request of each kind runs at a time, and a second press while one has not
+finished only says so. Of probes in flight, only the newest one's answer is shown.
 
 - **Runtime state**: probed once at startup, and probed again after every Start or Request shutdown
   press. A probe is one `RuntimeClient::connect`: on a connection it says "running · PID · owner epoch"
@@ -445,9 +536,9 @@ last Start or Request shutdown press, or why the instance-configuration window d
   outcome line — or that the log could not be read, with the error, or holds no such line — and the log
   path; if it has not exited it
   does one more `connect`, and a connection means ready, stating the PID and owner epoch, and then the
-  press is recorded (see below). If this console is reading offline, or its offline face is unopened, it
-  appends the sentence "to read online, restart with `--source online`" — it **never quietly switches
-  read face mid-session**. If all 60 attempts fail to connect, it says "still not ready" and the last
+  press is recorded (see below). A ledger window of the default source that reads offline, or whose
+  offline face is unopened, then offers "Reopen", saying it can read online now — it **never quietly
+  switches read face mid-session**. If all 60 attempts fail to connect, it says "still not ready" and the last
   client error code. Readiness is **never read from the daemon's output**: the log is read back only
   after an early exit, for that one outcome, and nothing in it is interpreted but whether its code is
   `owner_resource_unconfirmed` (below).
@@ -469,7 +560,8 @@ last Start or Request shutdown press, or why the instance-configuration window d
 - **Unlock owner**: offered only when the terminal outcome of the last start has the code
   `owner_resource_unconfirmed`
   — actingd refused the state root because its last Runtime owner exited with device resources in use or
-  unconfirmed. A line below the result line then shows an "Unlock Owner…" button. The first press runs
+  unconfirmed. The workbench then says an unlock is needed and points at "Troubleshooting and Ledger", and
+  every ledger window shows an "Unlock Owner…" button below its technical lines. The first press runs
   nothing: it only shows the statement "the device resources of the last Runtime are released" and a
   "Confirm and Unlock" button. The second press runs, from `actingd_exe` (absolute, as for Start), exactly
   `unlock-owner --config <actingd_config> --actor acui --confirm-resources-released`, on a worker thread,
@@ -490,8 +582,9 @@ last Start or Request shutdown press, or why the instance-configuration window d
   contract, and an `unlock_owner_completed` with a non-zero exit code each have their own line, and none
   retries the start. After any outcome but an
   unlock the entry is back at its first step; a new start withdraws it. Start is refused while the
-  unlock runs, and pressing it again while the previous start is still polling for readiness is
-  refused outright — "The Previous Start Is Still Waiting for Readiness" — launching nothing. The console records no client action for it: there is no running Runtime to record
+  unlock runs, and so is closing the workbench, which says to close it once the unlock has ended;
+  pressing Start again while the previous start has not finished is
+  refused outright — "The Previous Start Has Not Finished" — launching nothing. The console records no client action for it: there is no running Runtime to record
   through, and `unlock-owner` appends its own `cli.command` fact (action `owner.unlock`). It never
   deletes `owner.lock` (Runtime `contracts/actingd-unlock-owner.md`).
 - **Request shutdown**: only through the typed client, never killing a process. It opens a new connection
@@ -516,75 +609,40 @@ last Start or Request shutdown press, or why the instance-configuration window d
   `kill`, no blocking `wait`, no job object attached; the handle is dropped once the readiness decision
   ends, and the daemon outlives the console.
 
-The console has no pause or resume control: pause scheduling with
+The console has no pause control: pause scheduling with
 `actingctl pause --state-root <state root>` (add `--instance <alias>` for one instance) and lift it with
 `actingctl resume` and the same flags, or use the MCP tools `ac_pause` / `ac_resume` (see "MCP for
 agents"; in Runtime v0.11.6 these two fail with `client_action_invalid` for an alias
-containing upper-case letters, a known issue, so use `actingctl pause` / `resume` there). Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
+containing upper-case letters, a known issue, so use `actingctl pause` / `resume` there). The ledger window
+can only resume, conditionally, a pause another tool set (below). Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
+
+- **Conditional resume (ledger window)**: below the technical lines the window lists the global pause and
+  each instance's pause of its last status read (reason, revision, since), each by its own scope. One
+  another tool set — the global one, or an instance's whose device is handed back — carries "Resume
+  Scheduling…": the first press only shows the statement "resume this one pause" and "Confirm and
+  Resume"; the confirm sends one conditional `ResumeScheduling` on a worker thread, over a fresh person's
+  connection (actor `user`), its condition the owner epoch of that status read and the scope's revision,
+  so the Runtime refuses it and lifts nothing once that pause has changed or another Runtime runs; only the
+  pause of that line is resumed. Lifted, refused (shown by its code, "code not in this console's table" for
+  one the table lacks) or not confirmed (a receipt timeout, a dropped connection,
+  `runtime_scheduling_resume_unconfirmed`), nothing is sent again: the status is read again on a new
+  connection and painted. The line says what that read found: one that failed, or one the window could not
+  make (it reads offline, or no longer reads), says in red, with its code, that whether scheduling is
+  paused is unknown, and a failed status read shows one red line in place of the pause lines; only a read
+  that was made says the pause lines are current. Two kinds of pause get no button, only why: reason
+  `alice-116-scheduler-stop` ("Alice decides when this pause is lifted"), and a deployment's — `acsetup_update`, `install_restart`
+  and any reason starting with `deploy-` — which the installer lifts (the console does not run
+  `release-hold`). An instance pause still draining or handing its device back gets none either: the
+  Runtime refuses its resume then.
 
 ## Instance configuration
 
-The 实例配置 / Instance Configuration button opens a second window over the `instances` of
-`actingd_config`, the file Start hands to actingd. Each entry is listed with its alias, `instance_id`,
-binding as the file states it (`fixture_backend`, which the Runtime takes before any binding key / MuMu
-index / MuMu name / ADB serial, shown instead of `host` + `port` when an entry has both / ADB host:port /
-no binding key in the file — the Runtime's default address is not restated), `application_id`, capture
-and touch backend, and what the session's port map says about that id — bound on a port, bound with the
-latest binding outside the port map (serial-configured or with no port; the map does not tell which), or
-not bound; read online, with the ledger not opened, or when reading the bindings failed, the row says
-that instead, and an entry without a string `instance_id` says there that it cannot be edited. A key
-holding JSON `null` reads as absent, in the list and in the form. The file is read again whenever the
-window opens and after every save; a reason it cannot be listed takes the count's place, never an empty
-list.
-
-- **Discover**: Discover Instances asks the running Runtime, through the typed client
-  (`discover_instances()`) on a worker thread, to re-run its provider's MuMu instance discovery; the
-  Runtime runs `MuMuManager` on the host, and the client waits up to 25 seconds. The contract admits
-  this query only from a person at the console or an operator's CLI, so it goes out on its own
-  connection as actor `user`, source `ui` (the enum, not an OS user name), like the launcher's
-  presses. It binds nothing and touches no device; by contract an answered query appends no ledger
-  record (AO-4q), and a refusal is recorded as `command.rejected` plus `runtime.failed`. The box beside it then
-  lists every instance reported: its MuMu index, whether it runs, the alias the running Runtime binds
-  to it (if any), its ADB address, the Android version, and its name last; the line states how many,
-  the provider version and the ledger's committed head when the Runtime sampled the answer. Choosing in
-  the box only selects; Use Selected applies:
-  an instance neither the file (an entry with its index as `instance_index`, its name as
-  `instance_name`, or its ADB port as `port`) nor the running Runtime binds starts a new entry bound by
-  that index (the alias and the rest still to fill; its address is left to discovery at startup), while
-  one already bound is pointed at and nothing changes. With no Runtime
-  running, or a refusal (`instance_discovery_unavailable`, `mumu_manager_version_unsupported`, …), the
-  line states the Runtime's code, the client error and any host failure, and no earlier result stays
-  pickable.
-- **The form**: Add Instance starts a new entry and a click on a row loads that entry. An entry without a
-  string `instance_id`, or one whose binding no kind of the form represents — with `fixture_backend`,
-  with `serial` set, or with no binding key at all — is listed, but a click on it says why and it cannot
-  be saved. There is no delete. `alias` is required; a new entry's `instance_id` is `instance_` + 32
-  lowercase hex characters from the OS RNG, and every `instance_id` is shown read-only; the binding is
-  exactly one of `instance_index` (MuMu index), `instance_name` (MuMu name), or `host` + `port` (an
-  explicit ADB address). `adb_path` is optional with every binding: left empty, the Runtime uses AC's own
-  adb (`<install root>/tools/platform-tools/adb.exe`, whose sha256 the Runtime checks, refusing to start
-  when it is missing or differs); given with a MuMu binding, it may only be MuMu's own adb or AC's own
-  adb. An empty box writes no key, and emptying it on an existing entry removes the key. This needs a
-  Runtime that takes its tools from the A/B install root. AC's bundled adb belongs to the
-  install root, shared by both slots; other tools should use their own configured adb. `nemu_app_index` is an
-  optional whole number. The form does not check
-  `application_id`, `capture_backend` or `touch_backend`: whether they are needed and valid is decided by
-  check-config, which also checks the `nemu_app_index` pairing. Only what needs the MuMu discovery
-  result waits until the Runtime starts: the `MuMuManager` version and capabilities, exactly one
-  discovered match, a declared `adb_path`, `host` or `port` against the discovered values, and the ADB
-  endpoint (Runtime `contracts/actingd-check-config.md`, from `3d5398d6`). Text is trimmed and an empty
-  box writes no key; a missing required value or a number that does not parse is stated before anything
-  is written.
-- **Save**: the installed console reads its fixed private configuration generation and applies only
-  the form's keys. It sends the JSON proposal over stdin to the verified fixed acsetup manager,
-  with its complete original selection. acsetup alone qualifies resources, prepares the private
-  successor, checks its configuration and commits after an exact active-generation/byte comparison.
-  Conflicts and missing material fail visibly; prior generations remain intact. The request has a
-  240-second client bound. A lost response or timeout leaves the result unknown; the console does
-  not kill the manager or submit again.
-- **Effect**: the returned selection is verified before save is reported. Reopen the console to
-  acquire that generation before restarting Runtime. The running console and its children retain
-  their original generation, and the editor never restarts Runtime itself.
+The console no longer has an instance-configuration window. Until the Runtime's `install instance`
+lands, an instance can only be added by hand: edit the `instances` of the actingd configuration
+(`actingd_config`) as the Runtime's installation notes describe, then restart the Runtime. The
+workbench's "Add Instance" button is off for that reason, with this note beside it and the path of that
+configuration file below, selectable to copy. Finding instances comes back with the console's own
+instance page in a later version.
 
 ## Setup wizard acsetup
 
@@ -674,8 +732,7 @@ log" below):
      OneDrive desktop is found where Explorer finds it), written through the shell's own `IShellLink`.
      Unchecked writes nothing; the finish page lists the shortcuts written.
 3. **Instances**, optional, looked for as soon as the page opens: "跳过 / Skip" leaves `instances`
-   empty, to be filled later with the console's top-bar 实例配置 / Instance Configuration button; the
-   finish page says so. Where MuMu is comes from the Runtime's own `check-config` (`mumu_root`: its path
+   empty, to be filled in by hand later (see "Instance configuration"); the finish page says so. Where MuMu is comes from the Runtime's own `check-config` (`mumu_root`: its path
    and source — `ACTINGCOMMAND_NEMU_FOLDER`, a running MuMu, the per-user or machine uninstall registry,
    the vendor folders; see the
    Runtime's `contracts/actingd-check-config.md`), or from the folder a person names when none is found;
@@ -1049,28 +1106,34 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   dependency on slint and **no plain language either** — it gives structured facts only, and all wording
   is chosen by `acui-app` from the language tables.
 - `acui-app`: the only crate that depends on slint; the `.slint` files are in `crates/acui-app/ui/`, the
-  two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`.
+  two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`. What the
+  windows share — the language, the text size, the launcher's view, and the registry of the workbench and
+  the ledger windows — is in `ui.rs`, on the event loop only. The
+  ledger window is painted from its own state alone (`ledger/state.rs`, `ledger/paint.rs`), never from
+  the read face; the read face is opened and held by the window's own reader thread
+  (`ledger/worker.rs`), the reads leave their results in the state first, a frame is read and
+  decoded on the window's own worker (`ledger/frame.rs`), and the conditional resume is in
+  `ledger/resume.rs`.
 
 `slint` 1.17.x, `default-features = false`; the ledger is read-only to the console (what the Runtime
-records of the console's own requests — the start press, shutdown requests, a refused instance discovery
-query — it records itself; the status read and an answered discovery query append nothing), the only
-control entry points are the
-launcher's two buttons (start / request shutdown, see above), its owner-unlock entry (a confirmed
-`actingd unlock-owner`), and the instance-configuration window's check-config-gated save, and there is no
-approval entry point; the console crates carry no tests, and CI builds the workspace without running
+records of the console's own requests — the start press, shutdown and resume requests — it records itself; the
+status read appends nothing), the only control entry points are the launcher's two buttons (start /
+request shutdown, see above), its owner-unlock entry (a confirmed `actingd unlock-owner`) and the ledger
+window's confirmed conditional resume (end of "Launcher"), and there
+is no approval entry point; the console crates carry no tests, and CI builds the workspace without running
 tests. The launcher is in
-`crates/acui-app/src/launcher.rs`, the instance-configuration window in `instances.rs`, and the client
-operations — probe, request shutdown, recording the start press, the online open's status and fact
-reads, and instance discovery — are in `acui-source` (`probe_runtime` / `request_shutdown` /
-`record_start` / `instance_facts` / `discover_instances`).
+`crates/acui-app/src/launcher.rs`, where the paths come from in `install.rs`, the technical log and the
+startup-failure window in `report.rs`, and the client operations — probe, request shutdown, recording
+the start press, the online open's status and fact reads, and the conditional resume — are in `acui-source` (`probe_runtime` /
+`request_shutdown` / `record_start` / `instance_facts` / `resume_paused`).
 
-Every background worker — the start's readiness poll and its record, request shutdown, unlock-owner, a
-save's check-config, discovery, a frame read, and every acsetup worker (release lookup, install or
+Every background worker — the probe at startup, the whole start (probe, launch, readiness poll and its
+record), request shutdown, unlock-owner, a conditional resume, a frame read, and every acsetup worker (release lookup, install or
 upgrade, writing the options, discovery, reading resources, writing instances, settling) — is started through
 `std::thread::Builder`. A thread the system refuses is stated, with the OS error, where that action
-reports, and what the worker would have cleared (the start or unlock in flight, the save in progress,
-the frame request) is reset: never a panic on the event loop. A launched actingd whose readiness poll
-cannot start keeps running, and the line says so and that pressing Start again probes it. A child that was killed but could not be reaped is
+reports, and what the worker would have cleared (the probe, start, shutdown, unlock or resume in flight, the save
+in progress, the frame request) is reset: never a panic on the event loop. A start whose thread cannot
+start launches nothing, and the line says so. A child that was killed but could not be reaped is
 said as that, not as a kill that failed.
 
 Two more crates sit outside these four layers. `acui-setup` (binary `acsetup`) is the setup wizard; it

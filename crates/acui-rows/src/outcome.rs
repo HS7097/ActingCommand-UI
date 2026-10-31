@@ -41,14 +41,18 @@ pub const CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN: &str =
 /// `runtime_owner_epoch_changed` means the same; the console detects it
 /// itself, so it states its own code.
 pub const CONSOLE_RUNTIME_OWNER_CHANGED: &str = "console_runtime_owner_changed";
+/// The console followed the page cursor of a time span read for its whole page
+/// limit without finding an event, and stopped.
+pub const CONSOLE_TIME_SPAN_PAGE_LIMIT: &str = "console_time_span_page_limit";
 
 /// Every code constant above: the code table must hold each of them.
-const UI_CODES: [&str; 5] = [
+const UI_CODES: [&str; 6] = [
     CONSOLE_INSTANCE_BINDING_MISSING,
     CONSOLE_STATUS_SOURCE_MISSING,
     CONSOLE_CLIENT_ACTION_TERMINAL_MISSING,
     CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN,
     CONSOLE_RUNTIME_OWNER_CHANGED,
+    CONSOLE_TIME_SPAN_PAGE_LIMIT,
 ];
 
 const CODES_FILE: &str = "outcome-codes.json";

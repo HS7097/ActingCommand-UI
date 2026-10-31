@@ -21,6 +21,17 @@ export struct RowItem {
     note: string,
 }
 
+// A scheduling pause of the last status read: its line, and its resume entry
+// when a person may lift it here — offered, and at its second step. `failed`:
+// the line says the status was not read, so whether scheduling is paused is
+// unknown.
+export struct PauseItem {
+    text: string,
+    offered: bool,
+    confirming: bool,
+    failed: bool,
+}
+
 // `raw` is the second layer: the wire spelling behind the name, or empty.
 export struct FieldLine {
     label: string,
@@ -146,18 +157,19 @@ export global Scale {
     out property <length> row: 26px * root.factor;
 }
 
-// Every label a person reads, filled once at startup from the Rust table for
-// the chosen language. There is no runtime re-render: the switch takes effect
-// when the program is started again.
+// Every label a person reads, filled from the Rust table for the language
+// shown: in every window, before it shows, and again in every window whenever
+// the language changes, which takes effect at once. Each window has its own
+// copy of the globals, so each is filled.
 export global Strings {
     in property <string> window-title;
+    in property <string> ledger-window-title;
     in property <string> data-source;
     in property <string> ledger-dir;
     in property <string> storage-format;
     in property <string> show-up-to;
     in property <string> text-size;
     in property <string> language;
-    in property <string> restart-note;
     in property <[string]> text-size-options;
     in property <[string]> language-options;
     in property <[string]> severity-min-options;
@@ -167,6 +179,7 @@ export global Strings {
     in property <string> show-performance;
     in property <string> jump-latest;
     in property <string> follow-latest;
+    in property <string> reopen-ledger;
     in property <string> card-title;
     in property <string> card-note;
     in property <string> detail-title;
@@ -184,8 +197,17 @@ export global Strings {
     in property <string> unlock-owner;
     in property <string> unlock-statement;
     in property <string> unlock-confirm;
+    in property <string> resume-scheduling;
+    in property <string> resume-statement;
+    in property <string> resume-confirm;
     in property <string> start;
     in property <string> request-shutdown;
+    // The workbench's own: the way into the ledger window, the instance entry
+    // that waits for the Runtime, and the file to edit by hand meanwhile.
+    in property <string> open-ledger;
+    in property <string> add-instance;
+    in property <string> add-instance-note;
+    in property <string> config-file;
 }
 
 component TabButton inherits Rectangle {
@@ -236,27 +258,25 @@ component Caption inherits Text {
     vertical-alignment: center;
 }
 
-// The instance-configuration window's labels, and the top-bar button's. A
-// global is one per window instance, so the console fills it on both windows.
-export global ConfigStrings {
-    in property <string> title;
-    in property <string> intro;
-    in property <string> add;
-    // alias, instance_id, binding, adb_path, nemu_app_index, application_id,
-    // capture_backend, touch_backend.
-    in property <[string]> fields;
-    in property <[string]> kinds;
-    // instance_index, instance_name, host, port; adb_path optional, then
-    // required; nemu_app_index.
-    in property <[string]> placeholders;
-    in property <string> optional-note;
-    in property <string> save;
-    in property <string> discover;
-    in property <string> discover-use;
+// A line that says how something went: red when it failed, amber for a
+// warning, grey otherwise. It wraps and is never cut short: at least as tall
+// as its wrapped lines at the width it is given. A box or row shown by `if`
+// or `for` is otherwise measured at its preferred width, where nothing wraps,
+// and its last lines would spill over its frame.
+component Notice inherits Text {
+    in property <bool> failed;
+    in property <bool> warning;
+    font-size: Scale.body-font;
+    color: root.failed ? Severity.error : root.warning ? Severity.warning : Palette.foreground.with-alpha(0.7);
+    wrap: word-wrap;
+    min-height: self.preferred-height;
+    vertical-stretch: 0;
 }
 
-export component AppWindow inherits Window {
-    title: Strings.window-title;
+// The advanced troubleshooting and ledger window: one per source at most,
+// opened from the workbench, or at the start with --tab or --source.
+export component LedgerWindow inherits Window {
+    title: Strings.ledger-window-title;
     icon: @image-url("../assets/acui-256.png");
     preferred-width: 1400px;
     preferred-height: 900px;
@@ -285,10 +305,22 @@ export component AppWindow inherits Window {
     in property <bool> port-enabled;
     in property <[RowItem]> rows;
     in property <string> filter-error;
-    // Set only while the read face is unopened: shown where the rows would be,
-    // and every control that would query the ledger is off.
+    // Set only while the read face is not open — opening (grey), unopened or
+    // failed (red): shown where the rows would be, and every control that
+    // would query the ledger is off.
     in property <string> unopened-note;
+    in property <bool> unopened-failed;
     property <bool> ledger-live: root.unopened-note == "";
+    // What the window's reader is reading, and how long it has waited; empty
+    // while it waits for a request.
+    in property <string> busy-text;
+    // A new session of the read face, offered when it did not open, when its
+    // reader stopped, when a read reached another Runtime, or when a Runtime
+    // is up while this window reads offline for want of one; and why, when the
+    // rest of the window does not already say it, red when that is a failure.
+    in property <bool> reopen-offered;
+    in property <string> reopen-note;
+    in property <bool> reopen-failed;
     in property <bool> has-more;
     // The performance monitor's routine events shown; hidden by default.
     in-out property <bool> show-performance;
@@ -308,16 +340,35 @@ export component AppWindow inherits Window {
     in property <image> frame-image;
     in property <bool> frame-ready;
     in property <string> payload-json;
-    // The launcher block: what the last probe said about the Runtime, and the
-    // outcome of the last button press.
+    // The launcher's technical lines: what the last probe said about the
+    // Runtime (its pid and owner epoch, or the client's code), and the
+    // technical words of the last request; red when they say a failure. Start
+    // and Request Shutdown are on the workbench.
     in property <string> runtime-status-text;
     in property <string> launcher-line;
+    in property <bool> launcher-failed;
     // The unlock entry, offered only after a start whose fatal line named
     // owner_resource_unconfirmed: its first press only opens the confirmation,
     // and only the confirm runs anything. Then the last unlock's outcome.
     in property <bool> unlock-offered;
     in-out property <bool> unlock-confirming;
     in property <string> unlock-line;
+    in property <bool> unlock-failed;
+    // The scheduling pauses of the last status read, global first: each line
+    // with its resume entry when another tool set the pause. Its first press
+    // only asks for the confirmation; only the confirm resumes, and only that
+    // one pause. A status read that failed leaves one red line instead. Then
+    // the last resume's line, red when it says a failure.
+    in property <[PauseItem]> pauses;
+    in property <string> resume-line;
+    in property <bool> resume-failed;
+    // What the settings file holds that the console could not take, or why a
+    // setting was not saved, one per line: errors, then warnings. Then where
+    // the technical log is, or why it cannot be written.
+    in property <string> settings-errors;
+    in property <string> settings-warnings;
+    in property <string> log-note;
+    in property <bool> log-failed;
 
     // Two-way aliases, so the console can put a box back on the option it means
     // after the option list is rebuilt, without ever losing the box's own state.
@@ -340,12 +391,13 @@ export component AppWindow inherits Window {
     callback show-performance-changed(bool);
     callback jump-latest();
     callback follow-changed(bool);
+    callback reopen-ledger();
     callback text-size-changed(int);
     callback language-changed(int);
-    callback start-runtime();
     callback unlock-owner();
-    callback request-shutdown();
-    callback open-config();
+    // By the pause line's place among `pauses` as painted.
+    callback resume-asked(int);
+    callback resume-confirmed(int);
 
     VerticalLayout {
         padding: 8px;
@@ -359,6 +411,18 @@ export component AppWindow inherits Window {
                 padding-left: 12px;
                 padding-right: 12px;
                 spacing: 4px;
+                if root.settings-errors != "": Notice {
+                    text: root.settings-errors;
+                    failed: true;
+                }
+                if root.settings-warnings != "": Notice {
+                    text: root.settings-warnings;
+                    warning: true;
+                }
+                if root.log-note != "": Notice {
+                    text: root.log-note;
+                    failed: root.log-failed;
+                }
                 HorizontalLayout {
                     spacing: 14px;
                     Text {
@@ -375,7 +439,7 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                         color: Palette.foreground.with-alpha(0.85);
                         overflow: elide;
-                        min-width: 40px;
+                        min-width: 40px * Scale.factor;
                         horizontal-stretch: 1;
                     }
                     Caption { text: Strings.storage-format; }
@@ -403,7 +467,6 @@ export component AppWindow inherits Window {
                             root.language-changed(self.current-index);
                         }
                     }
-                    Caption { text: Strings.restart-note; }
                 }
                 HorizontalLayout {
                     spacing: 14px;
@@ -435,11 +498,11 @@ export component AppWindow inherits Window {
                         color: Palette.foreground.with-alpha(0.75);
                         horizontal-stretch: 1;
                         overflow: elide;
-                        min-width: 20px;
+                        min-width: 20px * Scale.factor;
                     }
                     Caption { text: Strings.show-up-to; }
                     Slider {
-                        width: 150px;
+                        width: 150px * Scale.factor;
                         enabled: root.ledger-live;
                         minimum: 0;
                         maximum: 1000;
@@ -459,9 +522,28 @@ export component AppWindow inherits Window {
                         color: Palette.foreground.with-alpha(0.75);
                     }
                 }
-                // launcher: Runtime status, the two requests, the instance-configuration
-                // button, and one line for what the last request came back with, or
-                // why that window did not open.
+                if root.busy-text != "": Notice {
+                    text: root.busy-text;
+                    font-size: Scale.grey-font;
+                }
+                if root.reopen-offered: HorizontalLayout {
+                    spacing: 14px;
+                    Button {
+                        text: Strings.reopen-ledger;
+                        clicked => {
+                            root.reopen-ledger();
+                        }
+                    }
+                    Notice {
+                        text: root.reopen-note;
+                        failed: root.reopen-failed;
+                        vertical-alignment: center;
+                        min-width: 40px * Scale.factor;
+                        horizontal-stretch: 1;
+                    }
+                }
+                // The launcher's technical lines: the Runtime as the last probe
+                // found it, and the technical words of the last request.
                 HorizontalLayout {
                     spacing: 14px;
                     Caption { text: Strings.launcher-title; }
@@ -471,33 +553,14 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                         color: Palette.foreground;
                         overflow: elide;
-                        min-width: 40px;
+                        min-width: 40px * Scale.factor;
                         horizontal-stretch: 1;
                     }
-                    Button {
-                        text: Strings.start;
-                        clicked => {
-                            root.start-runtime();
-                        }
-                    }
-                    Button {
-                        text: Strings.request-shutdown;
-                        clicked => {
-                            root.request-shutdown();
-                        }
-                    }
-                    Button {
-                        text: ConfigStrings.title;
-                        clicked => {
-                            root.open-config();
-                        }
-                    }
                 }
-                Text {
+                if root.launcher-line != "": Notice {
                     text: root.launcher-line;
+                    failed: root.launcher-failed;
                     font-size: Scale.grey-font;
-                    color: Palette.foreground.with-alpha(0.7);
-                    overflow: elide;
                 }
                 if root.unlock-offered || root.unlock-line != "": HorizontalLayout {
                     spacing: 14px;
@@ -520,15 +583,51 @@ export component AppWindow inherits Window {
                             root.unlock-owner();
                         }
                     }
-                    Text {
+                    Notice {
                         text: root.unlock-line;
+                        failed: root.unlock-failed;
                         font-size: Scale.grey-font;
                         vertical-alignment: center;
-                        color: Palette.foreground.with-alpha(0.7);
-                        overflow: elide;
-                        min-width: 40px;
+                        min-width: 40px * Scale.factor;
                         horizontal-stretch: 1;
                     }
+                }
+                // The scheduling pauses, each with its resume entry in two
+                // steps as the unlock entry has; then the last resume's line.
+                for pause[index] in root.pauses: HorizontalLayout {
+                    spacing: 14px;
+                    Notice {
+                        text: pause.text;
+                        failed: pause.failed;
+                        warning: true;
+                        vertical-alignment: center;
+                        min-width: 40px * Scale.factor;
+                        horizontal-stretch: 1;
+                    }
+                    if pause.offered && !pause.confirming: Button {
+                        text: Strings.resume-scheduling;
+                        clicked => {
+                            root.resume-asked(index);
+                        }
+                    }
+                    if pause.offered && pause.confirming: Text {
+                        text: Strings.resume-statement;
+                        font-size: Scale.body-font;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        color: Palette.foreground;
+                    }
+                    if pause.offered && pause.confirming: Button {
+                        text: Strings.resume-confirm;
+                        clicked => {
+                            root.resume-confirmed(index);
+                        }
+                    }
+                }
+                if root.resume-line != "": Notice {
+                    text: root.resume-line;
+                    failed: root.resume-failed;
+                    font-size: Scale.grey-font;
                 }
             }
         }
@@ -630,7 +729,7 @@ export component AppWindow inherits Window {
                             }
                         }
                         module-box := ComboBox {
-                            min-width: 90px;
+                            min-width: 90px * Scale.factor;
                             preferred-width: 180px * Scale.factor;
                             enabled: root.ledger-live;
                             model: root.module-options;
@@ -647,7 +746,7 @@ export component AppWindow inherits Window {
                             }
                         }
                         port-box := ComboBox {
-                            min-width: 90px;
+                            min-width: 90px * Scale.factor;
                             preferred-width: 180px * Scale.factor;
                             enabled: root.port-enabled;
                             model: root.port-options;
@@ -656,7 +755,7 @@ export component AppWindow inherits Window {
                             }
                         }
                         LineEdit {
-                            min-width: 70px;
+                            min-width: 70px * Scale.factor;
                             horizontal-stretch: 1;
                             enabled: root.ledger-live;
                             placeholder-text: Strings.id-placeholder;
@@ -676,7 +775,7 @@ export component AppWindow inherits Window {
                     // An empty list here would read as an empty ledger.
                     if !root.ledger-live: Text {
                         text: root.unopened-note;
-                        color: Severity.error;
+                        color: root.unopened-failed ? Severity.error : Palette.foreground.with-alpha(0.7);
                         font-size: Scale.list-font;
                         vertical-stretch: 0;
                         wrap: word-wrap;
@@ -922,7 +1021,7 @@ export component AppWindow inherits Window {
                         read-only: true;
                         wrap: word-wrap;
                         font-size: Scale.body-font;
-                        min-height: 80px;
+                        min-height: 80px * Scale.factor;
                         preferred-height: 150px * Scale.factor;
                         max-height: 150px * Scale.factor;
                         vertical-stretch: 0;
@@ -934,141 +1033,271 @@ export component AppWindow inherits Window {
     }
 }
 
-// One entry of the actingd configuration's `instances`, as the file states it.
-export struct InstanceRow {
-    alias: string,
-    binding: string,
-    detail: string,
-    // What the session's port map says about this instance_id.
-    ledger: string,
-}
-
-export component ConfigWindow inherits Window {
-    title: ConfigStrings.title;
+// The main window: the Runtime in plain words with Start and Request
+// Shutdown, the display settings, the way into the ledger window, and where an
+// instance is added for now. No code, pid or wire name shows here; those stay
+// in the ledger window's technical lines. Closing it ends the program.
+export component WorkbenchWindow inherits Window {
+    title: Strings.window-title;
     icon: @image-url("../assets/acui-256.png");
-    preferred-width: 960px;
-    preferred-height: 720px;
+    preferred-width: 820px;
+    preferred-height: 560px;
+    min-width: 600px;
+    min-height: 420px;
     default-font-size: Scale.body-font;
     background: Palette.background;
 
-    // The file's path and count, or the reason it could not be listed.
-    in property <string> list-note;
-    in property <bool> list-failed;
-    in property <[InstanceRow]> rows;
-    in property <int> selected-index;
-    // False when the form has no instance_id to save under.
-    in property <bool> form-ready;
-    in property <string> form-id;
-    in property <bool> saving;
-    in property <string> outcome;
-    in property <bool> outcome-failed;
-    in-out property <string> form-alias;
-    in-out property <int> form-kind;
-    in-out property <string> form-index;
-    in-out property <string> form-name;
-    in-out property <string> form-host;
-    in-out property <string> form-port;
-    in-out property <string> form-adb;
-    in-out property <string> form-nemu;
-    in-out property <string> form-application;
-    in-out property <string> form-capture;
-    in-out property <string> form-touch;
-    // The discovery box: a placeholder first, then what the last query reported.
-    in property <[string]> discovered;
-    in-out property <int> discovered-index;
-    in property <bool> discovering;
-    in property <string> discover-note;
-    in property <bool> discover-failed;
+    // Why this run has no state root to start from: plain words, then the
+    // original. Start, Request Shutdown and the ledger window are off
+    // meanwhile; the language and the text size still work.
+    in property <string> install-issue;
+    property <bool> installed: root.install-issue == "";
+    // What the settings file holds that the console could not take, or why a
+    // setting was not saved, one per line: errors, then warnings. Then what
+    // this window could not do itself, and where the technical log is, or why
+    // it cannot be written.
+    in property <string> settings-errors;
+    in property <string> settings-warnings;
+    in property <string> errors;
+    in property <string> log-note;
+    in property <bool> log-failed;
+    // The Runtime in plain words, and what became of the last request; red
+    // when either says a failure.
+    in property <string> status-text;
+    in property <bool> status-failed;
+    in property <string> launcher-line;
+    in property <bool> launcher-failed;
+    // The Runtime's configuration file an instance is added to by hand,
+    // selectable so it can be copied; or why there is none.
+    in property <string> config-path;
+    in property <string> config-note;
 
-    callback add-instance();
-    callback discover();
-    // The discovery box's chosen item, counted with its placeholder at 0.
-    callback discovered-picked(int);
-    callback row-clicked(int);
-    callback save();
-    // The file read and listed again; the console calls it after a save.
-    callback reload();
+    in-out property <int> text-size-index <=> text-size-box.current-index;
+    in-out property <int> language-index <=> language-box.current-index;
+
+    callback start-runtime();
+    callback request-shutdown();
+    callback open-ledger();
+    callback text-size-changed(int);
+    callback language-changed(int);
 
     VerticalLayout {
         padding: 8px;
         spacing: 8px;
-        Panel {
+
+        if root.install-issue != "": Panel {
+            vertical-stretch: 0;
             VerticalLayout {
-                padding: 10px;
-                spacing: 6px;
-                Caption { text: ConfigStrings.intro; wrap: word-wrap; }
-                Text { text: root.list-note; color: root.list-failed ? Severity.error : Palette.foreground; wrap: word-wrap; }
-                ListView {
-                    min-height: 120px;
-                    for row[index] in root.rows: Rectangle {
-                        height: Scale.row * 2;
-                        background: index == root.selected-index ? Palette.accent-background.with-alpha(0.35) : transparent;
-                        VerticalLayout {
-                            padding-left: 6px;
-                            padding-right: 6px;
-                            HorizontalLayout {
-                                spacing: 12px;
-                                Text { text: row.alias; font-size: Scale.list-font; font-weight: 700; color: Palette.foreground; vertical-alignment: center; }
-                                Text { text: row.binding; font-size: Scale.list-font; color: Palette.foreground; vertical-alignment: center; }
-                                Text { text: row.ledger; font-size: Scale.list-font; color: Palette.foreground.with-alpha(0.75); vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                            }
-                            Text { text: row.detail; font-size: Scale.grey-font; color: Palette.foreground.with-alpha(0.6); overflow: elide; }
+                padding: 8px;
+                padding-left: 12px;
+                padding-right: 12px;
+                Notice {
+                    text: root.install-issue;
+                    failed: true;
+                }
+            }
+        }
+
+        // notices and the display settings
+        Panel {
+            vertical-stretch: 0;
+            VerticalLayout {
+                padding: 8px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 4px;
+                if root.settings-errors != "": Notice {
+                    text: root.settings-errors;
+                    failed: true;
+                }
+                if root.settings-warnings != "": Notice {
+                    text: root.settings-warnings;
+                    warning: true;
+                }
+                if root.errors != "": Notice {
+                    text: root.errors;
+                    failed: true;
+                }
+                if root.log-note != "": Notice {
+                    text: root.log-note;
+                    failed: root.log-failed;
+                }
+                HorizontalLayout {
+                    spacing: 14px;
+                    Text {
+                        text: Strings.window-title;
+                        font-size: Scale.head-font;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        color: Palette.foreground;
+                        overflow: elide;
+                        min-width: 0px;
+                        horizontal-stretch: 1;
+                    }
+                    Caption { text: Strings.text-size; }
+                    text-size-box := ComboBox {
+                        width: 110px * Scale.factor;
+                        model: Strings.text-size-options;
+                        selected => {
+                            root.text-size-changed(self.current-index);
                         }
-                        TouchArea { enabled: !root.saving; clicked => { root.row-clicked(index); } }
+                    }
+                    Caption { text: Strings.language; }
+                    language-box := ComboBox {
+                        width: 100px * Scale.factor;
+                        model: Strings.language-options;
+                        selected => {
+                            root.language-changed(self.current-index);
+                        }
                     }
                 }
             }
         }
+
+        // the launcher, in plain words
         Panel {
             vertical-stretch: 0;
             VerticalLayout {
                 padding: 10px;
+                padding-left: 12px;
+                padding-right: 12px;
                 spacing: 6px;
                 HorizontalLayout {
-                    spacing: 6px;
-                    Button { text: ConfigStrings.discover; enabled: !root.saving && !root.discovering; clicked => { root.discover(); } }
-                    // Choosing only selects; the button applies, so arrow keys
-                    // or the wheel over the box never replace the form.
-                    if root.discovered.length > 1: ComboBox {
-                        width: 360px * Scale.factor;
-                        model: root.discovered;
-                        current-index <=> root.discovered-index;
-                        enabled: !root.saving && !root.discovering;
+                    spacing: 14px;
+                    Caption { text: Strings.launcher-title; }
+                    Notice {
+                        text: root.status-text;
+                        failed: root.status-failed;
+                        vertical-alignment: center;
+                        min-width: 40px * Scale.factor;
+                        horizontal-stretch: 1;
                     }
-                    if root.discovered.length > 1: Button {
-                        text: ConfigStrings.discover-use;
-                        enabled: root.discovered-index > 0 && !root.saving && !root.discovering;
-                        clicked => { root.discovered-picked(root.discovered-index); }
-                    }
-                    Text { text: root.discover-note; color: root.discover-failed ? Severity.error : Palette.foreground; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
-                }
-                GridLayout {
-                    spacing: 6px;
-                    Row { Caption { text: ConfigStrings.fields[0]; } LineEdit { text <=> root.form-alias; } }
-                    Row { Caption { text: ConfigStrings.fields[1]; } Text { text: root.form-id; color: Palette.foreground; vertical-alignment: center; } }
-                    Row {
-                        Caption { text: ConfigStrings.fields[2]; }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            ComboBox { width: 240px * Scale.factor; model: ConfigStrings.kinds; current-index <=> root.form-kind; }
-                            if root.form-kind == 0: LineEdit { text <=> root.form-index; placeholder-text: ConfigStrings.placeholders[0]; }
-                            if root.form-kind == 1: LineEdit { text <=> root.form-name; placeholder-text: ConfigStrings.placeholders[1]; }
-                            if root.form-kind == 2: LineEdit { text <=> root.form-host; placeholder-text: ConfigStrings.placeholders[2]; }
-                            if root.form-kind == 2: LineEdit { text <=> root.form-port; placeholder-text: ConfigStrings.placeholders[3]; }
+                    Button {
+                        text: Strings.start;
+                        enabled: root.installed;
+                        clicked => {
+                            root.start-runtime();
                         }
                     }
-                    Row { Caption { text: ConfigStrings.fields[3]; } LineEdit { text <=> root.form-adb; placeholder-text: ConfigStrings.placeholders[root.form-kind == 2 ? 5 : 4]; } }
-                    Row { Caption { text: ConfigStrings.fields[4]; } LineEdit { text <=> root.form-nemu; placeholder-text: ConfigStrings.placeholders[6]; } }
-                    Row { Caption { text: ConfigStrings.fields[5]; } LineEdit { text <=> root.form-application; } }
-                    Row { Caption { text: ConfigStrings.fields[6]; } LineEdit { text <=> root.form-capture; } }
-                    Row { Caption { text: ConfigStrings.fields[7]; } LineEdit { text <=> root.form-touch; } }
+                    Button {
+                        text: Strings.request-shutdown;
+                        enabled: root.installed;
+                        clicked => {
+                            root.request-shutdown();
+                        }
+                    }
                 }
-                Caption { text: ConfigStrings.optional-note; wrap: word-wrap; }
+                if root.launcher-line != "": Notice {
+                    text: root.launcher-line;
+                    failed: root.launcher-failed;
+                }
+            }
+        }
+
+        // the ledger window, and instances
+        Panel {
+            vertical-stretch: 0;
+            VerticalLayout {
+                padding: 10px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 6px;
                 HorizontalLayout {
-                    spacing: 10px;
-                    Button { text: ConfigStrings.save; primary: true; enabled: root.form-ready && !root.saving; clicked => { root.save(); } }
-                    Button { text: ConfigStrings.add; enabled: !root.saving; clicked => { root.add-instance(); } }
-                    Text { text: root.outcome; color: root.outcome-failed ? Severity.error : Palette.foreground; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
+                    alignment: start;
+                    Button {
+                        text: Strings.open-ledger;
+                        enabled: root.installed;
+                        clicked => {
+                            root.open-ledger();
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 14px;
+                    // Off until the Runtime can add an instance itself.
+                    Button {
+                        text: Strings.add-instance;
+                        enabled: false;
+                    }
+                    Notice {
+                        text: Strings.add-instance-note;
+                        vertical-alignment: center;
+                        min-width: 40px * Scale.factor;
+                        horizontal-stretch: 1;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 14px;
+                    Caption { text: Strings.config-file; }
+                    if root.config-path != "": LineEdit {
+                        text: root.config-path;
+                        read-only: true;
+                        font-size: Scale.body-font;
+                        min-width: 160px * Scale.factor;
+                        horizontal-stretch: 1;
+                    }
+                    if root.config-path == "": Notice {
+                        text: root.config-note;
+                        vertical-alignment: center;
+                        min-width: 40px * Scale.factor;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+
+        Rectangle { }
+    }
+}
+
+// The one window a start that failed shows, and the usage's when there is no
+// console to print it on. Closing it ends the program.
+export component StartupErrorWindow inherits Window {
+    in property <string> heading;
+    in property <string> body;
+    in property <bool> failed;
+    // Where the technical log is, or why it cannot be written.
+    in property <string> log-note;
+    in property <bool> log-failed;
+    in property <string> close-label;
+    callback dismiss();
+
+    title: root.heading;
+    icon: @image-url("../assets/acui-256.png");
+    preferred-width: 720px;
+    preferred-height: 420px;
+    default-font-size: Scale.body-font;
+    background: Palette.background;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+        Text {
+            text: root.heading;
+            font-size: Scale.head-font;
+            font-weight: 700;
+            color: root.failed ? Severity.error : Palette.foreground;
+            vertical-stretch: 0;
+        }
+        // Read-only but selectable, so the text can be copied as it is.
+        TextEdit {
+            read-only: true;
+            wrap: word-wrap;
+            font-size: Scale.body-font;
+            vertical-stretch: 1;
+            text: root.body;
+        }
+        if root.log-note != "": Notice {
+            text: root.log-note;
+            failed: root.log-failed;
+        }
+        HorizontalLayout {
+            vertical-stretch: 0;
+            alignment: end;
+            Button {
+                text: root.close-label;
+                clicked => {
+                    root.dismiss();
                 }
             }
         }
