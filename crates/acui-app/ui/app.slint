@@ -236,23 +236,15 @@ component Caption inherits Text {
     vertical-alignment: center;
 }
 
-// The instance-configuration window's labels, and the top-bar button's. A
-// global is one per window instance, so the console fills it on both windows.
-export global ConfigStrings {
-    in property <string> title;
-    in property <string> intro;
-    in property <string> add;
-    // alias, instance_id, binding, adb_path, nemu_app_index, application_id,
-    // capture_backend, touch_backend.
-    in property <[string]> fields;
-    in property <[string]> kinds;
-    // instance_index, instance_name, host, port; adb_path optional, then
-    // required; nemu_app_index.
-    in property <[string]> placeholders;
-    in property <string> optional-note;
-    in property <string> save;
-    in property <string> discover;
-    in property <string> discover-use;
+// A line that says how something went: red when it failed, amber for a
+// warning, grey otherwise. It wraps and is never cut short.
+component Notice inherits Text {
+    in property <bool> failed;
+    in property <bool> warning;
+    font-size: Scale.body-font;
+    color: root.failed ? Severity.error : root.warning ? Severity.warning : Palette.foreground.with-alpha(0.7);
+    wrap: word-wrap;
+    vertical-stretch: 0;
 }
 
 export component AppWindow inherits Window {
@@ -318,6 +310,13 @@ export component AppWindow inherits Window {
     in property <bool> unlock-offered;
     in-out property <bool> unlock-confirming;
     in property <string> unlock-line;
+    // What the settings file holds that the console could not take, or why a
+    // setting was not saved, one per line: errors, then warnings. Then where
+    // the technical log is, or why it cannot be written.
+    in property <string> settings-errors;
+    in property <string> settings-warnings;
+    in property <string> log-note;
+    in property <bool> log-failed;
 
     // Two-way aliases, so the console can put a box back on the option it means
     // after the option list is rebuilt, without ever losing the box's own state.
@@ -345,7 +344,6 @@ export component AppWindow inherits Window {
     callback start-runtime();
     callback unlock-owner();
     callback request-shutdown();
-    callback open-config();
 
     VerticalLayout {
         padding: 8px;
@@ -359,6 +357,18 @@ export component AppWindow inherits Window {
                 padding-left: 12px;
                 padding-right: 12px;
                 spacing: 4px;
+                if root.settings-errors != "": Notice {
+                    text: root.settings-errors;
+                    failed: true;
+                }
+                if root.settings-warnings != "": Notice {
+                    text: root.settings-warnings;
+                    warning: true;
+                }
+                if root.log-note != "": Notice {
+                    text: root.log-note;
+                    failed: root.log-failed;
+                }
                 HorizontalLayout {
                     spacing: 14px;
                     Text {
@@ -459,9 +469,8 @@ export component AppWindow inherits Window {
                         color: Palette.foreground.with-alpha(0.75);
                     }
                 }
-                // launcher: Runtime status, the two requests, the instance-configuration
-                // button, and one line for what the last request came back with, or
-                // why that window did not open.
+                // launcher: Runtime status, the two requests, and one line for what
+                // the last request came back with.
                 HorizontalLayout {
                     spacing: 14px;
                     Caption { text: Strings.launcher-title; }
@@ -484,12 +493,6 @@ export component AppWindow inherits Window {
                         text: Strings.request-shutdown;
                         clicked => {
                             root.request-shutdown();
-                        }
-                    }
-                    Button {
-                        text: ConfigStrings.title;
-                        clicked => {
-                            root.open-config();
                         }
                     }
                 }
@@ -934,141 +937,54 @@ export component AppWindow inherits Window {
     }
 }
 
-// One entry of the actingd configuration's `instances`, as the file states it.
-export struct InstanceRow {
-    alias: string,
-    binding: string,
-    detail: string,
-    // What the session's port map says about this instance_id.
-    ledger: string,
-}
+// The one window a start that failed shows, and the usage's when there is no
+// console to print it on. Closing it ends the program.
+export component StartupErrorWindow inherits Window {
+    in property <string> heading;
+    in property <string> body;
+    in property <bool> failed;
+    // Where the technical log is, or why it cannot be written.
+    in property <string> log-note;
+    in property <bool> log-failed;
+    in property <string> close-label;
+    callback dismiss();
 
-export component ConfigWindow inherits Window {
-    title: ConfigStrings.title;
+    title: root.heading;
     icon: @image-url("../assets/acui-256.png");
-    preferred-width: 960px;
-    preferred-height: 720px;
+    preferred-width: 720px;
+    preferred-height: 420px;
     default-font-size: Scale.body-font;
     background: Palette.background;
 
-    // The file's path and count, or the reason it could not be listed.
-    in property <string> list-note;
-    in property <bool> list-failed;
-    in property <[InstanceRow]> rows;
-    in property <int> selected-index;
-    // False when the form has no instance_id to save under.
-    in property <bool> form-ready;
-    in property <string> form-id;
-    in property <bool> saving;
-    in property <string> outcome;
-    in property <bool> outcome-failed;
-    in-out property <string> form-alias;
-    in-out property <int> form-kind;
-    in-out property <string> form-index;
-    in-out property <string> form-name;
-    in-out property <string> form-host;
-    in-out property <string> form-port;
-    in-out property <string> form-adb;
-    in-out property <string> form-nemu;
-    in-out property <string> form-application;
-    in-out property <string> form-capture;
-    in-out property <string> form-touch;
-    // The discovery box: a placeholder first, then what the last query reported.
-    in property <[string]> discovered;
-    in-out property <int> discovered-index;
-    in property <bool> discovering;
-    in property <string> discover-note;
-    in property <bool> discover-failed;
-
-    callback add-instance();
-    callback discover();
-    // The discovery box's chosen item, counted with its placeholder at 0.
-    callback discovered-picked(int);
-    callback row-clicked(int);
-    callback save();
-    // The file read and listed again; the console calls it after a save.
-    callback reload();
-
     VerticalLayout {
-        padding: 8px;
+        padding: 12px;
         spacing: 8px;
-        Panel {
-            VerticalLayout {
-                padding: 10px;
-                spacing: 6px;
-                Caption { text: ConfigStrings.intro; wrap: word-wrap; }
-                Text { text: root.list-note; color: root.list-failed ? Severity.error : Palette.foreground; wrap: word-wrap; }
-                ListView {
-                    min-height: 120px;
-                    for row[index] in root.rows: Rectangle {
-                        height: Scale.row * 2;
-                        background: index == root.selected-index ? Palette.accent-background.with-alpha(0.35) : transparent;
-                        VerticalLayout {
-                            padding-left: 6px;
-                            padding-right: 6px;
-                            HorizontalLayout {
-                                spacing: 12px;
-                                Text { text: row.alias; font-size: Scale.list-font; font-weight: 700; color: Palette.foreground; vertical-alignment: center; }
-                                Text { text: row.binding; font-size: Scale.list-font; color: Palette.foreground; vertical-alignment: center; }
-                                Text { text: row.ledger; font-size: Scale.list-font; color: Palette.foreground.with-alpha(0.75); vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                            }
-                            Text { text: row.detail; font-size: Scale.grey-font; color: Palette.foreground.with-alpha(0.6); overflow: elide; }
-                        }
-                        TouchArea { enabled: !root.saving; clicked => { root.row-clicked(index); } }
-                    }
-                }
-            }
-        }
-        Panel {
+        Text {
+            text: root.heading;
+            font-size: Scale.head-font;
+            font-weight: 700;
+            color: root.failed ? Severity.error : Palette.foreground;
             vertical-stretch: 0;
-            VerticalLayout {
-                padding: 10px;
-                spacing: 6px;
-                HorizontalLayout {
-                    spacing: 6px;
-                    Button { text: ConfigStrings.discover; enabled: !root.saving && !root.discovering; clicked => { root.discover(); } }
-                    // Choosing only selects; the button applies, so arrow keys
-                    // or the wheel over the box never replace the form.
-                    if root.discovered.length > 1: ComboBox {
-                        width: 360px * Scale.factor;
-                        model: root.discovered;
-                        current-index <=> root.discovered-index;
-                        enabled: !root.saving && !root.discovering;
-                    }
-                    if root.discovered.length > 1: Button {
-                        text: ConfigStrings.discover-use;
-                        enabled: root.discovered-index > 0 && !root.saving && !root.discovering;
-                        clicked => { root.discovered-picked(root.discovered-index); }
-                    }
-                    Text { text: root.discover-note; color: root.discover-failed ? Severity.error : Palette.foreground; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
-                }
-                GridLayout {
-                    spacing: 6px;
-                    Row { Caption { text: ConfigStrings.fields[0]; } LineEdit { text <=> root.form-alias; } }
-                    Row { Caption { text: ConfigStrings.fields[1]; } Text { text: root.form-id; color: Palette.foreground; vertical-alignment: center; } }
-                    Row {
-                        Caption { text: ConfigStrings.fields[2]; }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            ComboBox { width: 240px * Scale.factor; model: ConfigStrings.kinds; current-index <=> root.form-kind; }
-                            if root.form-kind == 0: LineEdit { text <=> root.form-index; placeholder-text: ConfigStrings.placeholders[0]; }
-                            if root.form-kind == 1: LineEdit { text <=> root.form-name; placeholder-text: ConfigStrings.placeholders[1]; }
-                            if root.form-kind == 2: LineEdit { text <=> root.form-host; placeholder-text: ConfigStrings.placeholders[2]; }
-                            if root.form-kind == 2: LineEdit { text <=> root.form-port; placeholder-text: ConfigStrings.placeholders[3]; }
-                        }
-                    }
-                    Row { Caption { text: ConfigStrings.fields[3]; } LineEdit { text <=> root.form-adb; placeholder-text: ConfigStrings.placeholders[root.form-kind == 2 ? 5 : 4]; } }
-                    Row { Caption { text: ConfigStrings.fields[4]; } LineEdit { text <=> root.form-nemu; placeholder-text: ConfigStrings.placeholders[6]; } }
-                    Row { Caption { text: ConfigStrings.fields[5]; } LineEdit { text <=> root.form-application; } }
-                    Row { Caption { text: ConfigStrings.fields[6]; } LineEdit { text <=> root.form-capture; } }
-                    Row { Caption { text: ConfigStrings.fields[7]; } LineEdit { text <=> root.form-touch; } }
-                }
-                Caption { text: ConfigStrings.optional-note; wrap: word-wrap; }
-                HorizontalLayout {
-                    spacing: 10px;
-                    Button { text: ConfigStrings.save; primary: true; enabled: root.form-ready && !root.saving; clicked => { root.save(); } }
-                    Button { text: ConfigStrings.add; enabled: !root.saving; clicked => { root.add-instance(); } }
-                    Text { text: root.outcome; color: root.outcome-failed ? Severity.error : Palette.foreground; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
+        }
+        // Read-only but selectable, so the text can be copied as it is.
+        TextEdit {
+            read-only: true;
+            wrap: word-wrap;
+            font-size: Scale.body-font;
+            vertical-stretch: 1;
+            text: root.body;
+        }
+        if root.log-note != "": Notice {
+            text: root.log-note;
+            failed: root.log-failed;
+        }
+        HorizontalLayout {
+            vertical-stretch: 0;
+            alignment: end;
+            Button {
+                text: root.close-label;
+                clicked => {
+                    root.dismiss();
                 }
             }
         }

@@ -406,30 +406,12 @@ pub fn configured<'a>(
     }
 }
 
-/// `%LOCALAPPDATA%\ActingCommand\logs\actingd-<unix_ms>.log` on Windows,
-/// `$XDG_STATE_HOME` (or `$HOME/.local/state`) elsewhere. The directory is
-/// created here; the file is created by `spawn`.
+/// `actingd-<unix_ms>.log` in the console's log directory (`report::logs_dir`:
+/// `%LOCALAPPDATA%\ActingCommand\logs` on Windows), beside its own technical
+/// log. The directory is created here; the file is created by `spawn`.
 fn log_path(labels: &Labels) -> Result<PathBuf, String> {
-    let (base, name) = if cfg!(windows) {
-        (
-            std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
-            "%LOCALAPPDATA%",
-        )
-    } else {
-        (
-            std::env::var_os("XDG_STATE_HOME")
-                .map(PathBuf::from)
-                .or_else(|| {
-                    std::env::var_os("HOME")
-                        .map(|home| PathBuf::from(home).join(".local").join("state"))
-                }),
-            "$XDG_STATE_HOME / $HOME",
-        )
-    };
-    let Some(base) = base else {
-        return Err(fill(labels.log_dir_failed, &[name, labels.none]));
-    };
-    let dir = base.join("ActingCommand").join("logs");
+    let dir = crate::report::logs_dir()
+        .map_err(|names| fill(labels.log_dir_failed, &[names, labels.none]))?;
     std::fs::create_dir_all(&dir).map_err(|error| {
         fill(
             labels.log_dir_failed,

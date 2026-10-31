@@ -71,10 +71,9 @@ and guesses nothing.
 
 The program accepts only one argument: the state root. **All file IO for reading ledger data belongs to
 the read face**; the console never assembles paths inside the state root itself, never opens `ledger/`,
-`artifacts/` or `runtime-state.sqlite`, and never launches a CLI to read data. It starts three
-kinds of process, all of them named in "Launcher" and "Instance configuration": actingd itself (**Start**),
-the twice-confirmed `actingd unlock-owner` (the unlock, see "Launcher"), and `actingd check-config`
-when an instance-configuration save is checked (see "Instance configuration").
+`artifacts/` or `runtime-state.sqlite`, and never launches a CLI to read data. It starts two
+kinds of process, both named in "Launcher": actingd itself (**Start**) and the twice-confirmed
+`actingd unlock-owner` (the unlock).
 
 There are two read faces, with the same query, page and cursor semantics; they differ only in where the
 answers come from:
@@ -354,7 +353,8 @@ acui --help
 ```
 
 `--state-root` applies to this run only and overrides `state_root` in the settings file; if neither is
-present it prints the usage and exits, guessing no default. Started through an A/B installation's fixed
+present it shows the usage as a failed start (see "When the start fails") and exits with a non-zero
+code, guessing no default. Started through an A/B installation's fixed
 entry `<install root>\ui\acui.exe`, the console takes the state root, the configuration and the Runtime
 program from the installation's selection instead, and refuses a `--state-root` that differs from it.
 `--source` selects the read face (see above).
@@ -372,6 +372,21 @@ state root (instance bindings with ports, two capture frames with material, a fe
 than one offline page). The manual workflow `fixture` (`.github/workflows/fixture.yml`, Windows) builds and
 runs it and uploads the zipped root as the artifact `fixture-state-root-<commit>`; unzip it to a writable
 directory and open it with `acui --state-root <root> --source offline`. It is material, not a test.
+
+### When the start fails
+
+A start that cannot go on — a command line the console does not understand, an installation selection it
+cannot read, no state root, a read face that cannot be opened, a window that cannot be made — is shown in a
+window of its own with the reason, written to the console the program was started from (if there is one),
+and appended to the technical log. The exit code is 2 for a command line the console does not understand
+and 1 otherwise. When not even that window can be made, a system message box says it. `--help` prints the
+usage on that console, or shows it in the same window when there is none, and exits 0.
+
+The technical log is `%LOCALAPPDATA%\ActingCommand\logs\acui-<start unix ms>.log` (elsewhere under
+`$XDG_STATE_HOME`, else `$HOME/.local/state`), beside actingd's start logs. It is created by its first
+entry and holds failures only: a failed start, a problem of the settings file, a result a background
+thread could not hand back to the window. Once it exists, the top of the window says where it is; when it
+cannot be written, the window says that instead.
 
 ## Interface language and text size
 
@@ -403,27 +418,39 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml (falls back to $HOME/.config/
 ```
 
 ```toml
-lang = "zh"          # zh | en
-text_size = "standard"   # standard | large | extra-large
-state_root = '<install root>\state'                                  # optional, absolute path
-actingd_config = '<install root>\actingd.config.json'                # optional, absolute path
-actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'     # optional, absolute path
+# zh | en
+lang = "zh"
+# standard | large | extra-large
+text_size = "standard"
+# flat | aero; read and checked only, nothing is drawn by it yet
+theme = "flat"
+# optional, absolute paths
+state_root = '<install root>\state'
+actingd_config = '<install root>\actingd.config.json'
+actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'
 ```
 
-It is read once at startup and written once on every dropdown change; on write-back the three path keys
-are kept verbatim. **This is the only file the console itself reads and writes**, besides the `instances`
-the instance-configuration window saves into `actingd_config` and the actingd start logs the launcher
-creates and, after an early exit, reads back (see those sections): it is not inside any
-state root, and the state root still belongs entirely to the read face. If the file is absent, unreadable,
-or holds an unrecognized value, the defaults (Chinese, standard) are used. The parser is hand-written: one
-`key = value` per line, one matching pair of quotes stripped, no escape handling — write Windows paths in
-single quotes (TOML literal strings), not in double quotes with doubled backslashes.
+It is read once at startup, and a dropdown change writes its one key: the file is read again, the last
+line of that key is replaced (or a line appended), and every other line — comments, the path keys, keys
+the console does not know such as `install_root`, lines it cannot parse — is kept byte for byte; the
+result goes to `acui.toml.tmp` beside it, which then replaces the file. **This is the only file the
+console itself reads and writes**, besides the actingd start logs the launcher creates and, after an
+early exit, reads back, and its own technical log (see those sections): it is not inside any state root,
+and the state root still belongs entirely to the read face. A missing file is a first run: the defaults
+(Chinese, standard, flat) are used and nothing is said. Anything else is said at the top of the window,
+with the file and the line: a value the console does not recognize, or a line that is not `key = value`,
+in amber, the default used and the line kept; a file that is there but cannot be read (permissions, not
+UTF-8), in red, the defaults used and **no save at all this run**, so the file is never written over; no
+config directory, or a save that failed, in red, the latter until a save succeeds. Each also goes to the
+technical log. The parser is hand-written: one `key = value` per line, a line starting with `#` is a
+comment, one matching pair of quotes is stripped, there is no escape handling and no comment after a
+value — write Windows paths in single quotes (TOML literal strings), not in double quotes with doubled
+backslashes.
 
 ## Launcher
 
-The third line of the top bar. On the left is the Runtime state from the last probe, then two buttons (and
-last the instance-configuration button, see the next section), and the line below it is the result of the
-last Start or Request shutdown press, or why the instance-configuration window did not open.
+The third line of the top bar. On the left is the Runtime state from the last probe, then two buttons, and
+the line below it is the result of the last Start or Request shutdown press.
 
 - **Runtime state**: probed once at startup, and probed again after every Start or Request shutdown
   press. A probe is one `RuntimeClient::connect`: on a connection it says "running · PID · owner epoch"
@@ -524,67 +551,10 @@ containing upper-case letters, a known issue, so use `actingctl pause` / `resume
 
 ## Instance configuration
 
-The 实例配置 / Instance Configuration button opens a second window over the `instances` of
-`actingd_config`, the file Start hands to actingd. Each entry is listed with its alias, `instance_id`,
-binding as the file states it (`fixture_backend`, which the Runtime takes before any binding key / MuMu
-index / MuMu name / ADB serial, shown instead of `host` + `port` when an entry has both / ADB host:port /
-no binding key in the file — the Runtime's default address is not restated), `application_id`, capture
-and touch backend, and what the session's port map says about that id — bound on a port, bound with the
-latest binding outside the port map (serial-configured or with no port; the map does not tell which), or
-not bound; read online, with the ledger not opened, or when reading the bindings failed, the row says
-that instead, and an entry without a string `instance_id` says there that it cannot be edited. A key
-holding JSON `null` reads as absent, in the list and in the form. The file is read again whenever the
-window opens and after every save; a reason it cannot be listed takes the count's place, never an empty
-list.
-
-- **Discover**: Discover Instances asks the running Runtime, through the typed client
-  (`discover_instances()`) on a worker thread, to re-run its provider's MuMu instance discovery; the
-  Runtime runs `MuMuManager` on the host, and the client waits up to 25 seconds. The contract admits
-  this query only from a person at the console or an operator's CLI, so it goes out on its own
-  connection as actor `user`, source `ui` (the enum, not an OS user name), like the launcher's
-  presses. It binds nothing and touches no device; by contract an answered query appends no ledger
-  record (AO-4q), and a refusal is recorded as `command.rejected` plus `runtime.failed`. The box beside it then
-  lists every instance reported: its MuMu index, whether it runs, the alias the running Runtime binds
-  to it (if any), its ADB address, the Android version, and its name last; the line states how many,
-  the provider version and the ledger's committed head when the Runtime sampled the answer. Choosing in
-  the box only selects; Use Selected applies:
-  an instance neither the file (an entry with its index as `instance_index`, its name as
-  `instance_name`, or its ADB port as `port`) nor the running Runtime binds starts a new entry bound by
-  that index (the alias and the rest still to fill; its address is left to discovery at startup), while
-  one already bound is pointed at and nothing changes. With no Runtime
-  running, or a refusal (`instance_discovery_unavailable`, `mumu_manager_version_unsupported`, …), the
-  line states the Runtime's code, the client error and any host failure, and no earlier result stays
-  pickable.
-- **The form**: Add Instance starts a new entry and a click on a row loads that entry. An entry without a
-  string `instance_id`, or one whose binding no kind of the form represents — with `fixture_backend`,
-  with `serial` set, or with no binding key at all — is listed, but a click on it says why and it cannot
-  be saved. There is no delete. `alias` is required; a new entry's `instance_id` is `instance_` + 32
-  lowercase hex characters from the OS RNG, and every `instance_id` is shown read-only; the binding is
-  exactly one of `instance_index` (MuMu index), `instance_name` (MuMu name), or `host` + `port` (an
-  explicit ADB address). `adb_path` is optional with every binding: left empty, the Runtime uses AC's own
-  adb (`<install root>/tools/platform-tools/adb.exe`, whose sha256 the Runtime checks, refusing to start
-  when it is missing or differs); given with a MuMu binding, it may only be MuMu's own adb or AC's own
-  adb. An empty box writes no key, and emptying it on an existing entry removes the key. This needs a
-  Runtime that takes its tools from the A/B install root. AC's bundled adb belongs to the
-  install root, shared by both slots; other tools should use their own configured adb. `nemu_app_index` is an
-  optional whole number. The form does not check
-  `application_id`, `capture_backend` or `touch_backend`: whether they are needed and valid is decided by
-  check-config, which also checks the `nemu_app_index` pairing. Only what needs the MuMu discovery
-  result waits until the Runtime starts: the `MuMuManager` version and capabilities, exactly one
-  discovered match, a declared `adb_path`, `host` or `port` against the discovered values, and the ADB
-  endpoint (Runtime `contracts/actingd-check-config.md`, from `3d5398d6`). Text is trimmed and an empty
-  box writes no key; a missing required value or a number that does not parse is stated before anything
-  is written.
-- **Save**: the installed console reads its fixed private configuration generation and applies only
-  the form's keys. It sends the JSON proposal over stdin to the verified fixed acsetup manager,
-  with its complete original selection. acsetup alone qualifies resources, prepares the private
-  successor, checks its configuration and commits after an exact active-generation/byte comparison.
-  Conflicts and missing material fail visibly; prior generations remain intact. The request has a
-  240-second client bound. A lost response or timeout leaves the result unknown; the console does
-  not kill the manager or submit again.
-- **Effect**: the returned selection is verified before save is reported. Reopen the console to
-  acquire that generation before restarting Runtime. The running console and its children retain
-  their original generation, and the editor never restarts Runtime itself.
+The console no longer has an instance-configuration window. Until the Runtime's `install instance`
+lands, an instance can only be added by hand: edit the `instances` of the actingd configuration
+(`actingd_config`) as the Runtime's installation notes describe, then restart the Runtime. Finding
+instances comes back with the console's own instance page in a later version.
 
 ## Setup wizard acsetup
 
@@ -674,8 +644,7 @@ log" below):
      OneDrive desktop is found where Explorer finds it), written through the shell's own `IShellLink`.
      Unchecked writes nothing; the finish page lists the shortcuts written.
 3. **Instances**, optional, looked for as soon as the page opens: "跳过 / Skip" leaves `instances`
-   empty, to be filled later with the console's top-bar 实例配置 / Instance Configuration button; the
-   finish page says so. Where MuMu is comes from the Runtime's own `check-config` (`mumu_root`: its path
+   empty, to be filled in by hand later (see "Instance configuration"); the finish page says so. Where MuMu is comes from the Runtime's own `check-config` (`mumu_root`: its path
    and source — `ACTINGCOMMAND_NEMU_FOLDER`, a running MuMu, the per-user or machine uninstall registry,
    the vendor folders; see the
    Runtime's `contracts/actingd-check-config.md`), or from the folder a person names when none is found;
@@ -1052,20 +1021,18 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`.
 
 `slint` 1.17.x, `default-features = false`; the ledger is read-only to the console (what the Runtime
-records of the console's own requests — the start press, shutdown requests, a refused instance discovery
-query — it records itself; the status read and an answered discovery query append nothing), the only
-control entry points are the
-launcher's two buttons (start / request shutdown, see above), its owner-unlock entry (a confirmed
-`actingd unlock-owner`), and the instance-configuration window's check-config-gated save, and there is no
-approval entry point; the console crates carry no tests, and CI builds the workspace without running
+records of the console's own requests — the start press, shutdown requests — it records itself; the
+status read appends nothing), the only control entry points are the launcher's two buttons (start /
+request shutdown, see above) and its owner-unlock entry (a confirmed `actingd unlock-owner`), and there
+is no approval entry point; the console crates carry no tests, and CI builds the workspace without running
 tests. The launcher is in
-`crates/acui-app/src/launcher.rs`, the instance-configuration window in `instances.rs`, and the client
-operations — probe, request shutdown, recording the start press, the online open's status and fact
-reads, and instance discovery — are in `acui-source` (`probe_runtime` / `request_shutdown` /
-`record_start` / `instance_facts` / `discover_instances`).
+`crates/acui-app/src/launcher.rs`, where the paths come from in `install.rs`, the technical log and the
+startup-failure window in `report.rs`, and the client operations — probe, request shutdown, recording
+the start press, and the online open's status and fact reads — are in `acui-source` (`probe_runtime` /
+`request_shutdown` / `record_start` / `instance_facts`).
 
 Every background worker — the start's readiness poll and its record, request shutdown, unlock-owner, a
-save's check-config, discovery, a frame read, and every acsetup worker (release lookup, install or
+frame read, and every acsetup worker (release lookup, install or
 upgrade, writing the options, discovery, reading resources, writing instances, settling) — is started through
 `std::thread::Builder`. A thread the system refuses is stated, with the OS error, where that action
 reports, and what the worker would have cleared (the start or unlock in flight, the save in progress,

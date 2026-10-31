@@ -3,16 +3,19 @@
 //! Runtime state root, opened through the formal ledger read face — offline
 //! over the files, or online through the typed client of the running Runtime —
 //! with a launcher block that starts the daemon detached and asks it, through
-//! the same typed client, to shut down. A second window lists and edits the
-//! `instances` of the actingd configuration that block starts the daemon with.
+//! the same typed client, to shut down. A start that fails is shown in a window
+//! of its own (`report`); what the settings file holds that the console cannot
+//! take is shown at the top of the window.
 
-mod instances;
+mod install;
 mod launcher;
+mod report;
 mod settings;
 mod strings;
 
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -33,7 +36,9 @@ use acui_source::{
     RuntimeInstance, Session, SourceMode, MAX_FRAME_BYTES,
 };
 use anyhow::{bail, Result};
-use settings::TextSize;
+use install::InstallPaths;
+use report::Fatal;
+use settings::{SettingsIssue, TextSize};
 use slint::{
     Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode, VecModel,
 };
@@ -132,6 +137,11 @@ struct App {
     frame_events: RefCell<Option<FrameEvents>>,
     /// The state root and the two launcher paths, as this run resolved them.
     launcher: launcher::Launcher,
+    /// The settings file the two boxes save to, what it held that this run
+    /// could not take, and the last save's failure, shown until a save succeeds.
+    settings: settings::SettingsFile,
+    settings_issues: Vec<SettingsIssue>,
+    save_issue: RefCell<Option<SettingsIssue>>,
     /// Runs the follow ticks while "follow latest" is on.
     follow: Timer,
     /// Reloads once the time cursor's handle rests.
@@ -188,40 +198,49 @@ struct FrameRequest {
     decoded: Option<(u32, u32)>,
 }
 
-fn main() -> Result<()> {
-    let args = parse_args()?;
-    let mut stored = settings::load();
-    let language = args.language.unwrap_or(stored.language);
+/// Every way out of a start goes through `report`: the usage, a command line
+/// it cannot read, and whatever stops `run`, each with its exit code.
+fn main() -> ExitCode {
+    report::begin();
+    let loaded = settings::load();
+    let parsed = parse_args();
+    // A failure is said in the language this run would have shown: `--lang`
+    // when the command line got that far, else the file's.
+    let language = parsed
+        .as_ref()
+        .ok()
+        .and_then(|args| args.language)
+        .unwrap_or(loaded.settings.language);
     let labels = language.labels();
-    if args.help {
-        println!("{}", labels.usage);
-        return Ok(());
+    let factor = loaded.settings.text_size.factor();
+    for issue in &loaded.issues {
+        report::log("settings", &issue.text(labels));
     }
-    let installation = acui_installation::Snapshot::for_current_process().map_err(anyhow::Error::msg)?;
-    if let Some(snapshot) = &installation {
-        let state_root = snapshot.state_root().map_err(anyhow::Error::msg)?;
-        if args.state_root.as_ref().is_some_and(|requested| requested != &state_root) {
-            bail!("--state-root differs from this installation's selected configuration");
+    let args = match parsed {
+        Ok(args) => args,
+        Err(error) => {
+            let text = format!("{error}\n\n{}", labels.usage);
+            return report::fatal(&Fatal::arguments(text), labels, factor);
         }
-        stored.state_root = Some(state_root);
-        stored.actingd_config = Some(snapshot.config_path().map_err(anyhow::Error::msg)?);
-        stored.actingd_exe = Some(snapshot.slot_root().join("runtime").join("actingcommand-actingd.exe"));
-    }
-    // `--state-root` is this run's; the file's `state_root` stands in for it.
-    // Neither is a silent default: with both missing the usage is the answer.
-    let state_root = match args.state_root {
-        Some(root) => root,
-        None => match stored.state_root.clone() {
-            Some(root) if root.is_absolute() => root,
-            Some(root) => bail!(
-                "acui.toml 的 state_root 不是绝对路径 / state_root in acui.toml is not absolute: {}",
-                root.display()
-            ),
-            None => bail!("{}", labels.usage),
-        },
     };
+    if args.help {
+        return report::help(labels, factor);
+    }
+    match run(args, loaded, language) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(fatal) => report::fatal(&fatal, labels, factor),
+    }
+}
 
-    let source = Session::open(&state_root, args.source)?;
+fn run(args: Args, loaded: settings::Loaded, language: Language) -> Result<(), Fatal> {
+    let labels = language.labels();
+    let stored = loaded.settings;
+    let InstallPaths { installation, state_root, actingd_config, actingd_exe } =
+        install::resolve(&args, &stored).map_err(|issue| Fatal::failed(issue.text(labels)))?;
+
+    let source = Session::open(&state_root, args.source).map_err(|error| {
+        Fatal::failed(fill(labels.ledger_open_failed, &[&format!("{error:#}")]))
+    })?;
     let (model, port_map) = match &source {
         Session::Open(source) => {
             let port_map = match source.instance_bindings() {
@@ -256,30 +275,64 @@ fn main() -> Result<()> {
         frame: Arc::new(Mutex::new(None)),
         generation: Arc::new(AtomicU64::new(0)),
         worker: Arc::new(Mutex::new(())),
-        launcher: launcher::Launcher::new(
-            state_root,
-            stored.actingd_config.clone(),
-            stored.actingd_exe.clone(),
-        ),
+        launcher: launcher::Launcher::new(state_root, actingd_config, actingd_exe),
+        settings: loaded.file,
+        settings_issues: loaded.issues,
+        save_issue: RefCell::new(None),
         frame_events: RefCell::new(None),
         follow: Timer::default(),
         cursor_rest: Timer::default(),
     });
     reload(&app, false);
 
-    let window = AppWindow::new()?;
+    let window_failed =
+        |error: slint::PlatformError| Fatal::failed(fill(labels.window_failed, &[&error.to_string()]));
+    let window = AppWindow::new().map_err(window_failed)?;
     install_strings(&window, labels, matches!(app.source, Session::Open(ReadSource::Online(_))));
     window.global::<Scale>().set_factor(stored.text_size.factor());
     window.set_text_size_index(stored.text_size.index());
     window.set_language_index(if language == Language::Zh { 0 } else { 1 });
     install_callbacks(&window, &app);
     launcher::install(&window, &app);
-    let config_window = ConfigWindow::new()?;
-    instances::install(&window, &config_window, &app);
+    paint_notices(&window, &app);
     refresh(&window, &app);
     launcher::refresh_status(&window, &app);
-    window.run()?;
+    window.run().map_err(window_failed)?;
     Ok(())
+}
+
+/// The top of the window: the settings file's problems, errors first, and
+/// where the technical log is. A save's failure stays until a save succeeds;
+/// one that only repeats a problem found at the start is not said twice.
+fn paint_notices(window: &AppWindow, app: &App) {
+    let labels = app.labels;
+    let save = app.save_issue.borrow();
+    let fresh = save.as_ref().filter(|issue| !app.settings_issues.contains(*issue));
+    let (mut errors, mut warnings) = (Vec::new(), Vec::new());
+    for issue in app.settings_issues.iter().chain(fresh) {
+        let text = issue.text(labels);
+        if issue.is_error() {
+            errors.push(text);
+        } else {
+            warnings.push(text);
+        }
+    }
+    window.set_settings_errors(errors.join("\n").into());
+    window.set_settings_warnings(warnings.join("\n").into());
+    let (note, failed) = report::log_note(labels);
+    window.set_log_note(note.into());
+    window.set_log_failed(failed);
+}
+
+/// A box's save: its failure goes to the log and stays on screen; a save that
+/// worked clears the last failure.
+fn settings_saved(window: &AppWindow, app: &App, saved: Result<(), SettingsIssue>) {
+    let failure = saved.err();
+    if let Some(issue) = &failure {
+        report::log("settings", &issue.text(app.labels));
+    }
+    app.save_issue.replace(failure);
+    paint_notices(window, app);
 }
 
 /// Fills the `Strings` global once. There is no second call: the language
@@ -686,21 +739,32 @@ fn install_callbacks(window: &AppWindow, app: &Rc<App>) {
     {
         // Text size applies now, through the one scale property. Only the text
         // size is written: the language is the file's own, or a `--lang`
-        // override that this run must not save over it.
+        // override that this run must not save over it. A save that fails
+        // still leaves the size applied, and says so at the top.
         let weak = window.as_weak();
+        let app = Rc::clone(app);
         window.on_text_size_changed(move |index| {
             let size = TextSize::from_index(index);
-            settings::save_text_size(size);
+            let saved = app.settings.save_text_size(size);
             if let Some(window) = weak.upgrade() {
                 window.global::<Scale>().set_factor(size.factor());
+                settings_saved(&window, &app, saved);
             }
         });
     }
     // Language is written now and read at the next start; the note beside the
     // box says so.
-    window.on_language_changed(move |index| {
-        settings::save_language(if index == 1 { Language::En } else { Language::Zh });
-    });
+    {
+        let weak = window.as_weak();
+        let app = Rc::clone(app);
+        window.on_language_changed(move |index| {
+            let language = if index == 1 { Language::En } else { Language::Zh };
+            let saved = app.settings.save_language(language);
+            if let Some(window) = weak.upgrade() {
+                settings_saved(&window, &app, saved);
+            }
+        });
+    }
 }
 
 /// How often "follow latest" asks where the ledger is: one fact snapshot,
@@ -1410,7 +1474,7 @@ fn update_frame(
                 None => Err(outcome_text(labels, &outcome)),
             },
         };
-        let _ = slint::invoke_from_event_loop(move || {
+        report::post("acui-frame", move || {
             if shared.load(Ordering::SeqCst) != generation {
                 return;
             }

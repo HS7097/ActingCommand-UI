@@ -52,9 +52,8 @@
 
 程序只认一个参数：状态根。**读账本数据的文件 IO 都归读面**，监控台自己从不拼接状态根里的路径，
 不打开 `ledger/`、`artifacts/` 或 `runtime-state.sqlite`，也不为读数据拉起任何 CLI。它拉起的
-进程只有三种，都在「启动器」与「实例配置」两节里写明：actingd 本身（「启动」），经两次确认的
-`actingd unlock-owner`（解锁，见「启动器」一节），以及保存实例配置时用来校验的
-`actingd check-config`（见「实例配置」一节）。
+进程只有两种，都在「启动器」一节里写明：actingd 本身（「启动」）与经两次确认的
+`actingd unlock-owner`（解锁）。
 
 读面有两张，同一套查询、页、游标语义，只是答案从哪来不同：
 
@@ -259,8 +258,8 @@ acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events
 acui --help
 ```
 
-`--state-root` 只对这一次运行有效，覆盖设置文件里的 `state_root`；两处都没有就打印用法退出，
-不猜默认值。经 A/B 安装的固定入口 `<安装根>\ui\acui.exe` 启动时，状态根、配置与 Runtime 程序改取自安装的
+`--state-root` 只对这一次运行有效，覆盖设置文件里的 `state_root`；两处都没有就按启动失败显示用法（见下面「启动失败时」）
+并以非 0 退出，不猜默认值。经 A/B 安装的固定入口 `<安装根>\ui\acui.exe` 启动时，状态根、配置与 Runtime 程序改取自安装的
 选择，`--state-root` 与之不同就拒绝。`--source` 选读面（见上）。`--tab` 指定启动页签（截图与复核用），取值就是视图
 自己的 wire 名。`--lang` 只对**这一次运行**有效，覆盖设置文件里的语言，不写回设置文件。
 
@@ -271,6 +270,18 @@ DPI；程序自己不设缩放。
 Runtime 宿主，留下一个小的 v0.12 状态根（带端口的实例绑定、两帧带材料的截图、几百条事件，离线不止一页）。
 手动工作流 `fixture`（`.github/workflows/fixture.yml`，Windows）构建并运行它，把整个根打成 zip 作为产物
 `fixture-state-root-<提交号>` 上传；解压到可写目录后用 `acui --state-root <根> --source offline` 打开。它是材料，不是测试。
+
+### 启动失败时
+
+启动走不下去时——命令行看不懂、读不出本安装的选择、没有状态根、账本读面打不开、窗口建不出来——监控台
+另开一个窗口写明原因，同时写到启动它的那个控制台（如果有），并追加进技术日志。命令行看不懂时退出码为 2，
+其余为 1。连这个窗口也建不出来时，用系统消息框说。`--help` 把用法印在那个控制台上，没有控制台就用同一个
+窗口显示，退出码 0。
+
+技术日志是 `%LOCALAPPDATA%\ActingCommand\logs\acui-<启动时的 unix 毫秒>.log`（其他平台在
+`$XDG_STATE_HOME`，没有就在 `$HOME/.local/state` 下），与 actingd 的启动日志同一目录。有第一条要写时
+才创建，只记失败：启动失败、设置文件的问题、后台线程交不回窗口的结果。文件建出来以后，窗口顶部写明它在
+哪；写不进去时，那里改写原因。
 
 ## 界面语言与字号
 
@@ -297,24 +308,33 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml（没有就用 $HOME/.config/
 ```
 
 ```toml
-lang = "zh"          # zh | en
-text_size = "standard"   # standard | large | extra-large
-state_root = '<install root>\state'                                  # 可选，绝对路径
-actingd_config = '<install root>\actingd.config.json'                # 可选，绝对路径
-actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'     # 可选，绝对路径
+# zh | en
+lang = "zh"
+# standard | large | extra-large
+text_size = "standard"
+# flat | aero；只读取和校验，界面暂不按它绘制
+theme = "flat"
+# 可选，绝对路径
+state_root = '<install root>\state'
+actingd_config = '<install root>\actingd.config.json'
+actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'
 ```
 
-开台时读一次，下拉框一改就写一次；写回时三个路径键原样保留。**这是监控台唯一自己读写的
-文件**（实例配置窗口保存进 `actingd_config` 的 `instances`，以及启动器创建、早退后读回的 actingd
-启动日志除外，见各自那一节）：它不在任何
-状态根里，状态根依旧全归读面。文件不存在、读不出来或取值不认识，都按默认值（中文、标准）
-来。解析器是手写的：一行一个 `key = value`，去掉一对成对的引号，不处理转义——Windows 路径
-写在单引号里（TOML 字面量字符串），不要写成双引号里加双反斜杠的形式。
+开台时读一次；下拉框一改，就只写这一个键：先重读文件，换掉这个键的最后一行（没有就追加一行），其余
+各行——注释、路径键、监控台不认识的键（例如 `install_root`）、解析不了的行——逐字节保留；结果先写进
+旁边的 `acui.toml.tmp`，再替换原文件。**这是监控台唯一自己读写的文件**（启动器创建、早退后读回的
+actingd 启动日志，以及监控台自己的技术日志除外，见各自那一节）：它不在任何状态根里，状态根依旧全归
+读面。文件不存在就是首次运行：按默认值（中文、标准、flat）来，不提示。其余情况都在窗口顶部写明文件与
+行号：取值不认识、某行不是 `key = value`，黄字，按默认值处理、原行保留；文件在却读不出（权限、不是
+UTF-8），红字，按默认值运行，**本次一概不保存**，绝不覆盖原文件；找不到配置目录、保存失败，红字，后者
+一直显示到下次保存成功。这些同时写进技术日志。解析器是手写的：一行一个 `key = value`，`#` 开头的行是
+注释，去掉一对成对的引号，不处理转义，值后面不能再跟注释——Windows 路径写在单引号里（TOML 字面量
+字符串），不要写成双引号里加双反斜杠的形式。
 
 ## 启动器
 
-顶栏第三行。左边是上一次探测的 Runtime 状态，两个按钮（最后还有「实例配置」按钮，见下一节），
-下面一行是上一次「启动」或「请求关闭」的结果，或实例配置窗口没能打开的原因。
+顶栏第三行。左边是上一次探测的 Runtime 状态，然后是两个按钮，下面一行是上一次「启动」或「请求关闭」
+的结果。
 
 - **Runtime 状态**：开台时探测一次，之后每按一次「启动」或「请求关闭」再探测。探测就是一次
   `RuntimeClient::connect`：连上了写「运行中 · PID · owner epoch」（取自它自己的
@@ -389,47 +409,9 @@ actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'     # 可选，
 
 ## 实例配置
 
-「实例配置」按钮打开第二个窗口，对象是 `actingd_config`——「启动」交给 actingd 的那份文件——
-里的 `instances`。每一项列出别名、`instance_id`、文件里写的绑定（`fixture_backend`，Runtime
-先于任何绑定键采用它 / MuMu 序号 / MuMu 名称 / ADB 序列号，与 `host` + `port` 同在时只显示
-序列号 / ADB host:port / 文件未写绑定键——不替 Runtime 复述默认地址）、`application_id`、截
-图与触控后端，以及本会话的端口映射对这个编号怎么说——绑在某个端口、绑了但最新一次不在端口映
-射里（序列号配置或无端口，映射分不出是哪种）、没有绑定；在线读面、账本未打开或读绑定失败时，行里直说；
-没有字符串 `instance_id` 的项在这个位置写明不可编辑。值为 JSON `null` 的键，列表和表单里都
-当作没写。每次打开窗口、每次保存之后都重新读文件；列不出来的原因写在条数的位置上，绝不显示
-成一个空列表。
-
-- **发现**：「发现实例」在工作线程上经类型化客户端（`discover_instances()`）请正在运行的 Runtime 重跑
-  一次其提供者的 MuMu 实例发现；Runtime 会在宿主上运行 `MuMuManager`，客户端最多等 25 秒。契约只接受
-  控制台前的人或操作员 CLI 发起这个查询，所以它单独开一条连接，身份是 actor `user`、source `ui`（枚举
-  值，不是系统用户名），与启动器的按钮相同。它不绑定任何东西，也不碰设备；按契约，答复了的查询
-  不追加账本记录（AO-4q），拒绝记成 `command.rejected` 加 `runtime.failed`。旁边的框随后列出报告的
-  每个实例：MuMu 序号、是否在运行、运行中的 Runtime 给它绑定的别名（若有）、ADB 地址、Android 版本，
-  名称放最后；那一行写出个数、提供者版本和 Runtime 取样这次答复时账本的已提交位置。在框里选只是选中，
-  点「采用所选」才生效：
-  配置文件里没有指向它的项（`instance_index` 等于其序号、`instance_name` 等于其名称，或 `port` 等于其
-  ADB 端口）、运行中的 Runtime 也没绑定它时，就以这个序号为绑定起一个新项（别名等照填；地址留给启动
-  时的发现）；已被绑定的只指明是哪一项，什么也不改。没有 Runtime 在跑，或
-  被拒（`instance_discovery_unavailable`、`mumu_manager_version_unsupported` 等）时，那一行写 Runtime
-  的码、客户端错误与宿主失败，之前的结果也不再可选。
-- **表单**：「新增实例」另起一项，点一行把那一项载入表单。没有字符串 `instance_id` 的项，以及表单
-  的哪种绑定都表示不了的项——配置了 `fixture_backend`、设了 `serial`、一个绑定键都没写——照样列
-  出，但点它会写明原因、不能保存。没有删除。`alias` 必填；新实例的 `instance_id` 是 `instance_`
-  加系统随机源的 32 位小写十六进制，所有 `instance_id` 都只读显示；绑定恰好一种——`instance_index`
-  （MuMu 序号）、`instance_name`（MuMu 名称），或 `host` + `port`（显式 ADB 地址）。`adb_path` 三种
-  绑定下都选填：留空则 Runtime 用 AC 自带的 adb（`<安装根>/tools/platform-tools/adb.exe`，Runtime 核它的
-  sha256，缺失或不符就拒绝启动）；MuMu 绑定下若填写，只能是 MuMu 自带的 adb 或 AC 自带的 adb。留空的
-  框不写这个键，编辑已有项时清空它会删掉这个键。这需要从 A/B 安装根取工具的 Runtime；AC 自带 adb 属于安装根、两个槽共用，其它工具使用各自配置的 adb。`nemu_app_index` 是选填的整数。`application_id`、`capture_backend`、`touch_backend` 表单不检查，要不要填、取值是否有效都由
-  check-config 判定，`nemu_app_index` 的配对也由它查。只有要靠 MuMu 发现结果的几项到 Runtime 启动
-  时才查：`MuMuManager` 版本与能力、发现结果恰好匹配一个、声明的 `adb_path`、`host`、`port` 与发现值
-  不冲突、ADB 端点（Runtime `contracts/actingd-check-config.md`，`3d5398d6` 起）。文本去掉首尾空白，
-  留空的框不写这个键；必填项为空、数字解析不了，都在写任何东西之前直说。
-- **保存**：已安装监控台读取本进程固定的私有配置代际，只修改表单管理的键，
-  经 stdin 把 JSON 提案与原完整选择交给已核的固定 acsetup。只有 acsetup 做资源资格、私有后继代际准备、
-  配置检查及准确 generation/字节基线比较后的提交。冲突和材料不足明确失败，原代际保留。
-  客户端最多等 240 秒；答复丢失或超时表示结果未知，监控台不结束管理进程、不重复提交。
-- **生效**：返回选择核验通过才报告保存。重新打开监控台以取得后继代际，再重启 Runtime；
-  原监控台及其子调用保持原代际，编辑器本身不重启 Runtime。
+监控台不再有实例配置窗口。在 Runtime 的 `install instance` 落地之前，添加实例只能手工编辑配置：按 Runtime
+的安装说明改 actingd 配置（`actingd_config`）里的 `instances`，再重启 Runtime。实例发现会随以后版本里
+监控台自己的实例页回来。
 
 ## 安装向导 acsetup
 
@@ -488,7 +470,7 @@ actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'     # 可选，
      的 `ActingCommand.lnk`，放在按用户的开始菜单「程序」（`FOLDERID_Programs`）或桌面（`FOLDERID_Desktop`，
      桌面被重定向或在 OneDrive 里也照资源管理器的位置找），经系统自己的 `IShellLink` 写出。不勾就什么也不写；
      完成页列出写出的快捷方式。
-3. **实例**，可选，一进页面就开始查找：「跳过」让 `instances` 留空，之后点监控台顶栏的「实例配置」按钮添加；
+3. **实例**，可选，一进页面就开始查找：「跳过」让 `instances` 留空，之后手工添加（见「实例配置」一节）；
    完成页也这样写。MuMu 在哪由 Runtime 自己的 `check-config` 给出（`mumu_root`：路径与来源——
    `ACTINGCOMMAND_NEMU_FOLDER`、运行中的 MuMu、
    按用户或按机器的卸载注册表、厂商目录；见 Runtime 的 `contracts/actingd-check-config.md`），找不到时才由人填
@@ -731,14 +713,13 @@ Runtime 的看门狗是一个计划任务，所以 acsetup 不替人设置。要
   `strings.rs`，设置文件的读写在 `settings.rs`。
 
 `slint` 1.17.x，`default-features = false`；账本对监控台只读（监控台发出的请求——启动按钮、关闭
-请求、被拒的实例发现查询——由 Runtime 自己记账；状态读取和答复了的实例发现查询不留账本记录），控制入口只有启动器的两个按钮（启动 /
-请求关闭，见上）、启动器的解锁入口（经确认的 `actingd unlock-owner`）与实例配置窗口经 check-config
-把关的保存，没有审批入口；监控台的 crate 不带测试，CI 只构建工作区、不跑测试。启动器在
-`crates/acui-app/src/launcher.rs`，实例配置窗口在 `instances.rs`，探测、请求关闭、记下启动按钮、
-在线开台时的状态与事实读取、实例发现这几个客户端操作在 `acui-source`（`probe_runtime` /
-`request_shutdown` / `record_start` / `instance_facts` / `discover_instances`）。
+请求——由 Runtime 自己记账；状态读取不留账本记录），控制入口只有启动器的两个按钮（启动 /
+请求关闭，见上）与启动器的解锁入口（经确认的 `actingd unlock-owner`），没有审批入口；监控台的 crate 不带测试，CI 只构建工作区、不跑测试。启动器在
+`crates/acui-app/src/launcher.rs`，路径从哪来在 `install.rs`，技术日志与启动失败窗口在 `report.rs`，
+探测、请求关闭、记下启动按钮、在线开台时的状态与事实读取这几个客户端操作在 `acui-source`
+（`probe_runtime` / `request_shutdown` / `record_start` / `instance_facts`）。
 
-每个后台工作线程——启动的就绪等待与记账、请求关闭、unlock-owner、保存时的 check-config、实例发现、
+每个后台工作线程——启动的就绪等待与记账、请求关闭、unlock-owner、
 读帧，以及 acsetup 的每个工作线程（查询发布件、安装或升级、写入选项、实例发现、读取资源、写入实例、收尾确认）——都经 `std::thread::Builder` 启动。系统拒绝建线程时，在这个动作
 回报的位置写明，附系统错误，并把工作线程本该复位的状态（进行中的启动或解锁、保存中、帧请求）复位：
 绝不在事件循环里 panic。已拉起的 actingd 若等不到就绪线程，照样在跑，结果行直说，并提示再按一次「启动」即可探测。子进程终止了但
