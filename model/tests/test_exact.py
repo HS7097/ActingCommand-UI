@@ -193,11 +193,12 @@ def test_the_re_solves_at_one_grain_from_s3_give_the_values_of_new_lps(tmp_path,
     """PRICE-2d (`core.flow._Solver.regrain`). The fixture twice: as it is, and with S3's basis made to prove no chord
     (`chords`), so that every side of every resource's re-solves at plus and minus one grain, in every step, goes the
     way PRICE-2d adds: HiGHS's instance of S3 with only the moved row ends, warm-started from S3's basis, and its vertex
-    solved exactly by updating S3's factorised basis (`exact.reoptimum`). Each value is compared with a new LP of the
+    solved exactly by updating S3's factorised basis (`exact.reoptimum`; with no time bound on the update, so that no
+    clock decides the way). Each value is compared with a new LP of the
     same program, the way before PRICE-2d: the same exact optimum, side by side. The weekly variant (seven steps) has a
     hard cap on res.s, whose one grain more also moves an overflow row, and res.t, which nothing brings in: one grain
-    less of it is infeasible in every step, which HiGHS's basis proves exactly (`exact.infeasible`), as a new LP finds
-    it. The steady output is the same both times, and each run stays within the fixture's bound."""
+    less of it is infeasible in every step, which HiGHS's warm start finds and a new LP then decides, as before. The
+    steady output is the same both times, and each run stays within the fixture's bound."""
     started = time.perf_counter()
     status, plain = economy(regression_fixture(tmp_path / "plain", periods, capped), "--steady-only")
     plain_elapsed = time.perf_counter() - started
@@ -214,6 +215,7 @@ def test_the_re_solves_at_one_grain_from_s3_give_the_values_of_new_lps(tmp_path,
 
     monkeypatch.setattr(economy_flow._Solver, "chords", lambda self, resource_id, step: ((None, None), (None, None)))
     monkeypatch.setattr(economy_flow._Solver, "regrain", checked)
+    monkeypatch.setattr(economy_flow._Solver, "update_budget", lambda self: float("inf"))  # no clock: always update
     started = time.perf_counter()
     forced_status, forced = economy(regression_fixture(tmp_path / "forced", periods, capped), "--steady-only")
     forced_elapsed = time.perf_counter() - started
@@ -229,8 +231,7 @@ def test_the_re_solves_at_one_grain_from_s3_give_the_values_of_new_lps(tmp_path,
     assert infeasible == ({("res.t", step, Fraction(-1)) for step in range(7)} if capped else set())
     ways = {entry[5] for entry in compared if entry[3] is not None}
     assert "warm" in ways and all(way.startswith("warm") for way in ways), ways
-    proofs = {entry[5] for entry in compared if entry[3] is None}  # a basis far from S3's leaves it to a new LP
-    assert proofs <= {"warm_infeasible", "new_lp_status_2"} and ("warm_infeasible" in proofs or not capped), proofs
+    assert all(entry[5].startswith("new_lp_status_") for entry in compared if entry[3] is None)  # HiGHS: not optimal
     assert warnings(forced) == warnings(plain)
     assert forced["data"]["steady"] == plain["data"]["steady"]
     assert plain_elapsed < SECONDS and forced_elapsed < SECONDS, (plain_elapsed, forced_elapsed)

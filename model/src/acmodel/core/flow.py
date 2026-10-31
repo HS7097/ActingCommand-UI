@@ -81,8 +81,7 @@ one point of D*, never a pick per pool. Steps:
 **The re-solves at ±grain** (PRICE-2d, `_Solver.regrain`). One grain more or less of a resource's income moves only right
 sides of S3's program, so each re-solve starts from S3: S3's basis proves it where it stays primal feasible
 (`exact.shifted`, `exact.ranging`); else HiGHS's instance of S3 gets only the moved row ends and goes on from S3's
-basis, and its vertex is solved by updating S3's factorised basis (`exact.reoptimum`), or its infeasibility proven
-from the basis it stopped at (`exact.infeasible`); else, as before, a new LP.
+basis, and its vertex is solved by updating S3's factorised basis (`exact.reoptimum`); else, as before, a new LP.
 
 **Exactness.** An LP's solution is the vertex of HiGHS's basis (its column and row statuses), solved exactly and made
 exactly optimal with at most `lp.max_pivots` exact pivots (`core.exact`, PRICE-2c): a certified optimum. Where that
@@ -1911,11 +1910,6 @@ def _highs_moved(
         run = _Run(4, "passOptions")
     if run is None:
         run = _highs_run(solver, n, m)
-        if run.status == 2:  # infeasible: the basis HiGHS stopped at, for an exact proof (`exact.infeasible`)
-            basis = solver.getBasis()
-            statuses = [int(value) for value in basis.col_status] + [int(value) for value in basis.row_status]
-            if bool(getattr(basis, "valid", True)) and len(statuses) == n + m:
-                run = replace(run, statuses=tuple(statuses))
     restored = [solver.changeRowBounds(place, low, high) != failed for place, (low, high) in restore.items()]
     return run, all(restored)
 
@@ -1951,8 +1945,7 @@ class _Grained:
     places: dict[Key, int]
     ends: tuple[tuple[float, float], ...]
     holders: dict[Key, tuple[int, ...]]
-    # the most variables that may enter S3's basis for the update to cost less than a new rebuild (`_Solver.hold`)
-    most: int = 0
+    factorised: float = 0.0  # the seconds S3's basis took to factorise (`_Solver.hold`)
 
     def moved(self, moves: dict[int, Fraction]) -> exact.Problem:
         """S3's program as `core.exact` reads it, with the ends of the rows `moves` (by place) moved by those amounts:
@@ -2101,6 +2094,10 @@ class _Solver:
         self.warm: tuple[Any, Any, _Arrays, Any] | None = None
         self.last_problem: exact.Problem | None = None  # the last LP's program as `core.exact` read it (`vertex`)
         self.grained: _Grained | None = None  # PRICE-2d: S3, held for its re-solves at ±grain (`regrain`)
+        # PRICE-2d: the most variables an update may let enter S3's basis, and the seconds of the new rebuilds so far
+        # (`regrain`: they choose the exact way only, never a value)
+        self.update_most = 0
+        self.rebuilds: list[float] = []
         # PRICE-2d: how each side of a resource's re-solves at ±grain was found (`grain_way`); a diagnosis, never output
         self.grain_ways: dict[str, int] = {}
 
@@ -2350,14 +2347,9 @@ class _Solver:
         self.grain_ways[way] = self.grain_ways.get(way, 0) + 1
 
     def hold(self, program: _Program, base: _Solution) -> _Grained | None:
-        """S3, held for its re-solves at ±grain (`_Grained`, PRICE-2d); None when its optimum is not certified (no basis
-        to start from: each re-solve is then a new LP, as before).
-
-        How far a re-solve's basis may be from S3's for the update to pay (`most`): the update solves once with S3's
-        factorisation for each variable that enters and twice more, and a new rebuild (`exact.optimum`) eliminates
-        twice, about what factorising S3's basis took. So `most` is twice the time of that factorisation over the time
-        of one solve with it, less 2, both timed here on S3 itself: the solves of the three nonbasic columns of least
-        reduced cost (those likeliest to enter). It changes only which exact way a re-solve takes, never its value."""
+        """S3, held for its re-solves at ±grain (`_Grained`, PRICE-2d), with the time its basis took to factorise (the
+        first estimate of a new rebuild's, `regrain`); None when its optimum is not certified (no basis to start from:
+        each re-solve is then a new LP, as before)."""
         if base.basis is None:
             return None
         problem, vertex, arrays = base.basis
@@ -2367,12 +2359,7 @@ class _Solver:
         if factored is None:
             return None
         n = len(problem.cost)
-        likely = sorted((k for k in range(n) if k not in factored.basic), key=lambda k: (abs(factored.reduced[k]), k))
-        started = time.perf_counter()
-        for k in likely[:3]:
-            factored.ftran(factored.columns[k])
-        solved = (time.perf_counter() - started) / max(1, len(likely[:3]))
-        most = len(problem.rows) if solved <= 0 else max(0, min(len(problem.rows), int(2 * factorised / solved) - 2))
+        self.update_most = len(problem.rows)
         ordered = (*arrays.le, *arrays.eq)
         holders: dict[Key, list[int]] = {}
         for place, row in enumerate(ordered):
@@ -2387,7 +2374,7 @@ class _Solver:
         saved = None if base.solver is None else base.solver.getBasis()
         return _Grained(
             program, base, base.solver, saved, arrays, factored, ordered, {row.key: i for i, row in enumerate(ordered)},
-            ends, {key: tuple(places) for key, places in holders.items()}, most,
+            ends, {key: tuple(places) for key, places in holders.items()}, factorised,
         )
 
     def grain_moves(self, resource: str, step: int, delta: Fraction) -> dict[int, Fraction] | None:
@@ -2423,18 +2410,28 @@ class _Solver:
             found.append(None if change is None else change / delta)
         return (found[0], found[1]), (None, None)
 
+    def update_budget(self) -> float:
+        """The seconds an update of S3's basis may take (`regrain`): what a new rebuild takes, the mean of this steady
+        state's so far, at first twice the time S3's basis took to factorise."""
+        if self.rebuilds:
+            return sum(self.rebuilds) / len(self.rebuilds)
+        return 2 * self.grained.factorised if self.grained is not None else 0.0
+
     def regrain(self, resource: str, step: int, delta: Fraction) -> Fraction | None:
         """The optimum of S3's program with `delta` more income of `resource` in `step` (a re-solve at ±grain,
         PRICE-2d), exact; None when it is infeasible. The same value as a new LP of that program, found from S3:
         - HiGHS's instance of S3 gets only the moved row ends (`_income_moves`) and goes on from S3's basis (dual
           simplex, no presolve: `_highs_moved`);
         - its basis is solved exactly by updating S3's factorised basis (`exact.reoptimum`), and where that does not
-          certify it or the basis is far from S3's (the update would cost more than a new elimination), by `optimum`'s
-          new elimination with its exact pivots;
-        - the vertex is checked exactly against every bound and row it changes (`_Grained.violation`);
-        - where HiGHS finds it infeasible, the basis it stopped at proves that exactly (`exact.infeasible`): None.
-        Where HiGHS ends otherwise, where neither a certified vertex nor a proof comes of it, and where the income moves
-        more than right sides, the re-solve is a new LP, as before (`resolved`)."""
+          certify it or the basis is far from S3's, by `optimum`'s new elimination with its exact pivots. Far: the
+          update stops once it has taken as long as a new rebuild takes (their mean so far, at first twice S3's
+          factorisation), and then no later update lets more variables enter than this one had (`update_most`). The
+          time chooses the way only: what comes of it is always what `optimum` gives at that basis (a vertex the
+          update certifies is that basis's, which `optimum` certifies with no pivot);
+        - the vertex is checked exactly against every bound and row it changes (`_Grained.violation`).
+        Where HiGHS does not end optimal there (an infeasible re-solve: a new LP decides that, as before), where no
+        certified vertex comes of it, and where the income moves more than right sides, the re-solve is a new LP, as
+        before (`resolved`)."""
         grained = self.grained
         moves = None if grained is None or grained.solver is None else self.grain_moves(resource, step, delta)
         if moves is not None:
@@ -2453,13 +2450,23 @@ class _Solver:
                     LP_SOLVE_FAILED, stage="price", reason="solver_status", status=4, raw_text="changeRowBounds"
                 )
             if run.status == 0 and run.statuses is not None:
+                deadline = time.perf_counter() + self.update_budget()
+
+                def stop(entered: int) -> bool:  # the update has taken as long as a new rebuild takes
+                    if time.perf_counter() <= deadline:
+                        return False
+                    self.update_most = min(self.update_most, entered)
+                    return True
+
                 vertex: exact.Vertex | exact.Refused | str = exact.reoptimum(
-                    problem, grained.factored, run.statuses, grained.most
+                    problem, grained.factored, run.statuses, self.update_most, stop
                 )
                 way = "warm"
                 if isinstance(vertex, str):  # why the update did not certify it: a new elimination, as any LP's
                     way = f"warm_eliminated_{vertex}"
+                    started = time.perf_counter()
                     vertex = exact.optimum(problem, run.statuses, self.settings.max_pivots)
+                    self.rebuilds.append(time.perf_counter() - started)
                 if isinstance(vertex, exact.Vertex):
                     x = dict(zip(grained.arrays.columns, vertex.x, strict=True))
                     broken = grained.violation(x, moves)
@@ -2468,11 +2475,6 @@ class _Solver:
                     self.grain_way(way)
                     return self.objective(grained.program, x)
                 self.grain_way("new_lp_not_certified")
-            elif run.status == 2 and run.statuses is not None and exact.infeasible(
-                problem, grained.factored, run.statuses, grained.most
-            ):
-                self.grain_way("warm_infeasible")
-                return None
             else:
                 self.grain_way(f"new_lp_status_{run.status}")
         else:

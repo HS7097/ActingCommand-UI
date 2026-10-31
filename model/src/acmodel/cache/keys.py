@@ -90,10 +90,9 @@ class Evaluator:
 # complementary-slackness form, with HiGHS warm-started between LPs on the same rows.
 # PRICE-2d: `economy` 9: a resource's re-solves at plus and minus one grain start from S3 (S3's basis proves a chord of
 # a resource with a hard cap too; otherwise HiGHS's instance of S3 with the moved row ends, warm-started, and its vertex
-# solved by updating S3's factorised basis, or its infeasibility proven exactly from the basis HiGHS stopped at). Each is
-# the exact optimum, as a re-solve whose basis was certified gave it before; a re-solve whose new LP was not certified
-# gave a feasible value that need not be the optimum, so a value can change there, and version 8's entries are not
-# reused.
+# solved by updating S3's factorised basis where HiGHS ends near it, else by a new elimination). Each is the exact
+# optimum, as a re-solve whose basis was certified gave it before; a re-solve whose new LP was not certified gave a
+# feasible value that need not be the optimum, so a value can change there, and version 8's entries are not reused.
 EVALUATORS: dict[str, Evaluator] = {
     "economy": Evaluator(9, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),

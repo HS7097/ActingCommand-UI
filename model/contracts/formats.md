@@ -1022,19 +1022,17 @@ ruling 126 A, below):
        exactly by updating S3's basis, which is factorised once: in product form, each variable that enters replacing
        one that leaves (an eta matrix per exchange), so no new elimination is made; then certified exactly as every
        LP's basis is ("Exactness and failures"). A basis this does not certify gets the exact pivots of any LP, from a
-       new elimination; so does a basis so far from S3's that the update would cost more than that: the update solves
-       once with S3's factorisation for each variable that enters and twice more, a new rebuild eliminates about twice
-       what factorising S3's basis took, so at most twice the factorisation's time over one solve's, less 2, may enter
-       (both timed once on S3: the solves of its three nonbasic columns of least reduced cost). The rule only picks
-       which exact way is taken, never a value. Where HiGHS finds the re-solve infeasible, the basis it stopped at,
-       solved the same way, proves it exactly when one of its basic variables lies outside its bounds and no nonbasic
-       variable can move within its bounds in a direction that brings it back (the proof of a dual simplex step that
-       finds nothing to enter: that variable is already as near its bound as any point within the nonbasic
-       variables' bounds lets it be, and every solution is such a point). The end is then null, as a new LP's
-       infeasibility makes it.
-    3. *A new LP*, as before PRICE-2d, where HiGHS does not end optimal or infeasible there, where step 2 gives no
-       certified vertex and no proof of infeasibility, or where the income would move more than right sides (a store's
-       bound on lost production, or what a move under a read cap takes; no resource has one).
+       new elimination; so does a basis so far from S3's that the update would cost more than that. The update solves
+       once with S3's factorisation for each variable that enters and applies every eta so far, so its cost grows
+       with the square of their number: it stops once it has taken as long as a new rebuild takes (the mean of this
+       steady state's rebuilds so far, at first twice the time S3's basis took to factorise), and no later update
+       then lets more variables enter than it had. The time picks the way only: what comes of a basis is always what
+       the new elimination gives at it (a vertex the update certifies is that basis's own, which the elimination
+       certifies with no pivot).
+    3. *A new LP*, as before PRICE-2d, where HiGHS does not end optimal there (one grain more or less is infeasible,
+       say: a new LP decides that, as before), where step 2 gives no certified vertex, or where the income would move
+       more than right sides (a store's bound on lost production, or what a move under a read cap takes; no resource
+       has one).
     The vertex of step 2 is checked exactly against every bound and row it changes (those holding a variable whose
     value differs from S3's, and the moved rows); every other bound and row is S3's, with S3's values, which S3's own
     exact check passed. A cap's or a limit's price (`rule_prices`) is a new LP for each re-solve.
@@ -1288,9 +1286,8 @@ provisional derive under `estimates` without an `estimate` is `estimate_missing`
     column's solve is not 0; none is singular): the basic values E·(z_B + B⁻¹·Δv) and the duals y + B⁻ᵀ·Δu, from the
     change Δv of the nonbasic part of the right side and the change Δu of the basic costs. The certificate is the
     same, exactly. A basis it does not certify, or one too far from S3's for the update to cost less than a new
-    elimination (more variables enter than that allows, timed on S3), takes the pivoting fallback from a new
-    elimination. An infeasible re-solve is null only when HiGHS's basis proves it exactly (a basic variable out of its
-    bounds that no nonbasic one can bring back) or a new LP finds it infeasible, as before.
+    elimination (the update stops once it has taken as long as one), takes the pivoting fallback from a new
+    elimination. A re-solve HiGHS does not end optimal is a new LP, as before.
   - **Otherwise** (no valid basis, no certificate, and every MILP): the variables HiGHS leaves at a bound, and the
     integer ones rounded, are fixed, and the rows they leave tight are solved exactly for the others; when those rows
     do not determine them, each value is converted with `limit_denominator(lp.max_denominator)` instead. Such a solution

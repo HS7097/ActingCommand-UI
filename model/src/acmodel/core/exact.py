@@ -33,10 +33,8 @@ that any further right side is solved with the recorded steps, `Factor`, without
   the ends), and the optimum moves by exactly Σ duals[row]·move, with no LP (`ranging` is its one-row form);
 - `reoptimum`: otherwise HiGHS's new basis, from a warm start, is solved by updating the factorisation in product form
   (B'⁻¹ = E_k ⋯ E_1·B⁻¹, one eta matrix per variable that enters), and certified as `optimum` certifies a basis; a
-  basis that this does not certify, or one so far from S3's that more variables enter than the caller allows (where
-  a new elimination costs less), is left to `optimum`;
-- `infeasible`: where HiGHS stops infeasible, its basis, solved the same way, proves that exactly when a basic
-  variable out of its bounds cannot be brought back by any nonbasic one."""
+  basis that this does not certify, or one so far from S3's that the update would cost more than a new elimination
+  (the caller bounds it), is left to `optimum`."""
 
 from __future__ import annotations
 
@@ -44,7 +42,7 @@ import heapq
 import math
 from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import Hashable, Sequence
+from typing import Callable, Hashable, Sequence
 
 # HiGHS's HighsBasisStatus values (scipy's bundled HiGHS, `scipy.optimize._highspy._core.HighsBasisStatus`).
 LOWER, BASIC, UPPER, ZERO, NONBASIC = 0, 1, 2, 3, 4
@@ -693,20 +691,21 @@ def shifted(base: Factored, moves: dict[int, Fraction]) -> Fraction | None:
 
 
 _Etas = list[tuple[int, int, dict[int, Fraction]]]
-# Why a basis is not solved by updating a factorisation (`reoptimum`, `infeasible`): its statuses are not a basis; it
-# is singular; it is so far from base's that the update would cost more than a new rebuild (more variables enter than
-# the caller allows, `_moved`); or (`reoptimum`) it is not exactly optimal.
+# Why a basis is not solved by updating a factorisation (`reoptimum`): its statuses are not a basis; it is singular; it
+# is so far from base's that the update would cost more than a new rebuild (as the caller bounds it, `_moved`); or it
+# is not exactly optimal.
 UPDATE_NOT_BASIS, UPDATE_SINGULAR, UPDATE_FAR, UPDATE_NOT_OPTIMAL = "not_basis", "singular", "far", "not_optimal"
 
 
 def _moved(
-    problem: Problem, base: Factored, statuses: Sequence[int], most: int
+    problem: Problem, base: Factored, statuses: Sequence[int], most: int, stop: Callable[[int], bool] | None = None
 ) -> tuple[list[int], dict[int, Fraction], _Etas, dict[int, Fraction], list[int]] | str:
     """HiGHS's basis `statuses` of `problem` (base's rows and costs, other ends) solved by updating base's factorisation
     (`reoptimum`): its basic variables, the nonbasic ones' values, the etas, every variable's value, and the basic ones
     outside their bounds, by index. Else why not: the statuses are not a basis, the basis is singular, or it is far
-    from base's: more than `most` variables enter (the update solves once with base's factorisation for each, where a
-    new rebuild would cost less; the caller says how many it may take). That is decided before any solve.
+    from base's: more than `most` variables enter (decided before any solve), or `stop`, asked before each one enters
+    with how many have entered so far, says the update has cost enough (the update solves once with base's
+    factorisation for each and applies every eta so far, where a new rebuild may cost less: the caller decides).
 
     A variable nonbasic in both bases at the same value (the same object, or an equal one) adds nothing to Δv; a basic
     variable whose value and bounds did not move keeps base's value, within base's bounds."""
@@ -725,7 +724,9 @@ def _moved(
     if len(leaving) > most:
         return UPDATE_FAR
     etas: _Etas = []
-    for q in sorted(new - base.basic):
+    for entered, q in enumerate(sorted(new - base.basic)):
+        if stop is not None and stop(entered):
+            return UPDATE_FAR
         alpha = base.ftran(columns[q])
         for p, entered, earlier in etas:
             _eta(alpha, p, entered, earlier)
@@ -773,60 +774,14 @@ def _moved(
     return basic, at, etas, full, broken
 
 
-def infeasible(problem: Problem, base: Factored, statuses: Sequence[int], most: int) -> bool:
-    """Whether HiGHS's basis `statuses` of `problem` (base's rows and costs, other ends), where HiGHS found it
-    infeasible, proves that exactly (PRICE-2d), solved by updating base's factorisation (`_moved`).
-
-    The proof is the one a dual simplex step finds: a basic variable x_r outside its bounds, below its lower end say,
-    whose row of B'⁻¹ (ρ, from Bᵀ·ρ = e_r) gives x_r = −Σ_k (ρ·a_k)·z_k over the nonbasic variables. When no nonbasic
-    variable can move within its bounds in a direction that raises x_r (each is at the end that maximises its term, or
-    fixed), x_r is already its greatest value over every point whose nonbasic variables are within their bounds, a set
-    that holds every solution; so no solution has x_r at its lower end, and there is none. False when no basic variable
-    outside its bounds gives this proof, or the basis cannot be solved by the update (`_moved`, at most `most`
-    variables entering): the caller then solves a new LP."""
-    moved = _moved(problem, base, statuses, most)
-    if isinstance(moved, str):
-        return False
-    basic, at, etas, full, broken = moved
-    if not broken:
-        return False
-    lower, upper, columns = problem.lower, problem.upper, base.columns
-    zero = Fraction(0)
-    for r in broken:
-        rising = lower[r] is not None and full[r] < lower[r]  # x_r must rise; else it must fall
-        u: dict[int, Fraction] = {r: Fraction(1)}
-        for p, q, alpha in reversed(etas):
-            total = u.pop(q, zero) - sum((a * u[k] for k, a in alpha.items() if k != p and k in u), zero)
-            if total:
-                u[p] = total / alpha[p]
-        rho = base.btran(u)
-        rates: dict[int, Fraction] = {}  # ρ·a_k: x_r moves by −rate per unit of z_k
-        for i, amount in rho.items():
-            for j, a in problem.rows[i].items():
-                rates[j] = rates.get(j, zero) + a * amount
-            rates[len(problem.cost) + i] = rates.get(len(problem.cost) + i, zero) - amount
-        proven = True
-        for k, rate in rates.items():
-            if not rate or k not in at:
-                continue
-            value = at[k]
-            rises = upper[k] is None or value < upper[k]
-            falls = lower[k] is None or value > lower[k]
-            raises = (rises and rate < 0) or (falls and rate > 0)  # moving z_k that way raises x_r
-            lowers = (rises and rate > 0) or (falls and rate < 0)
-            if (rising and raises) or (not rising and lowers):
-                proven = False
-                break
-        if proven:
-            return True
-    return False
-
-
-def reoptimum(problem: Problem, base: Factored, statuses: Sequence[int], most: int) -> Vertex | str:
+def reoptimum(
+    problem: Problem, base: Factored, statuses: Sequence[int], most: int, stop: Callable[[int], bool] | None = None
+) -> Vertex | str:
     """The exactly optimal vertex of `problem`, which has `base`'s rows and costs and other ends, at HiGHS's basis
     `statuses`, solved by updating `base`'s factorisation instead of a new elimination; else why not (`UPDATE_…`: not a
-    basis, singular, far from base's (more than `most` variables enter), or not exactly optimal, primal and dual
-    feasible): the caller then takes `optimum`, a new elimination with its exact pivots.
+    basis, singular, far from base's (more than `most` variables enter, or `stop` ends the update: `_moved`), or not
+    exactly optimal, primal and dual feasible): the caller then takes `optimum`, a new elimination with its exact
+    pivots.
 
     The update is the product form of the inverse. Each variable that enters, by index, replaces one that leaves, the
     least whose entry in α = B⁻¹·a_q (its column's solve in the basis so far) is not 0, which exists exactly when the
@@ -835,7 +790,7 @@ def reoptimum(problem: Problem, base: Factored, statuses: Sequence[int], most: i
     the new duals y + B⁻ᵀ·Δu, Δu the change of the basic costs that the etas carry back to base's basis; each reduced
     cost base's less its column times the change of the duals. Then the certificate of `optimum`, exactly: every
     basic variable within its bounds, every nonbasic one's reduced cost of the sign of a maximum."""
-    moved = _moved(problem, base, statuses, most)
+    moved = _moved(problem, base, statuses, most, stop)
     if isinstance(moved, str):
         return moved
     basic, at, etas, full, broken = moved
