@@ -157,12 +157,12 @@ tabs, the filter boxes, the id box and the time slider are off; the module and p
 pane say "ledger not opened". Nothing is asked of the ledger and no material is read. The launcher works
 as usual.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.32 (with
-Workflow #422 LN-OFF-1, the bounded offline opening), which speaks the 0.12 protocols
-(`runtime-client` revision 3, ledger revision 4):
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime main after
+Workflow #429 R-7a (the player hold shapes; it keeps v0.12.32's bounded offline opening), which speaks the 0.12 protocols
+(`runtime-client` revision 4, ledger revision 4):
 
 ```
-rev = "5f3c2b9de6f3804b52accb23989de5e4f684c021"
+rev = "f57f7d20225737d288013367dae158949a4cd57d"
 ```
 
 The five crates (contract / ledger / ledger-forensics / runtime-client / execution-kernel) share this one rev.
