@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-only
+import { Look } from "tokens.slint";
+
+// A card: one framed group on the page.
+export component Card inherits Rectangle {
+    background: Look.card-background;
+    border-radius: Look.radius;
+    border-width: 1px;
+    border-color: Look.card-border;
+}

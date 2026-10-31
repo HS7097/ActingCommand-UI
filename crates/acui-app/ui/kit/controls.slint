@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: GPL-3.0-only
+import { Look, Scale } from "tokens.slint";
+
+// A page tab: the active one in the accent, the rest as controls.
+export component SkinTab inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: Scale.row + 6px;
+    background: active ? Look.accent : Look.control-background;
+    border-radius: Look.radius;
+    border-width: 1px;
+    border-color: active ? Look.accent : Look.control-border;
+    // The tabs give way first when the window is narrow, so the panes beside
+    // the list keep their own width instead of being squeezed by six names.
+    min-width: 52px;
+    clip: true;
+    HorizontalLayout {
+        padding-left: 7px;
+        padding-right: 7px;
+        Text {
+            text: label;
+            font-size: Scale.body-font;
+            color: active ? Look.accent-text : Look.control-text;
+            vertical-alignment: center;
+            overflow: elide;
+            min-width: 0px;
+        }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

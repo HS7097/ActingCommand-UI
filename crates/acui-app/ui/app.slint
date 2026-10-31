@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { Button, CheckBox, ComboBox, LineEdit, ListView, Palette, ScrollView, Slider, TextEdit } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ListView, ScrollView, Slider, TextEdit } from "std-widgets.slint";
+import { Card, Look, Scale, Severity, SkinTab } from "kit/lib.slint";
+
+// The kit's globals the Rust side reaches, each window's own copy.
+export { Scale, Look }
 
 export struct RowItem {
     // A run's recovery header, with its folded rows following it.
@@ -109,17 +113,6 @@ export struct OverlayItem {
     mark: bool,
 }
 
-// Severity keeps semantic colours; these mid tones stay legible on both palettes.
-global Severity {
-    out property <color> info: #3fa14b;
-    out property <color> warning: #d08a00;
-    out property <color> debug: #8a8a8a;
-    out property <color> error: #e0525f;
-}
-
-// The one text-size knob. Every font size and every row height in this file is
-// a base size for a human at normal DPI multiplied by `factor`; nothing else
-// scales the interface, so 标准 / 大 / 特大 is a single number.
 // The list's column widths, in one place: the header and the rows read the same
 // numbers, so the two can never drift apart. These are what each column wants;
 // a list too narrow to give every column its want hands each the same fraction
@@ -146,15 +139,6 @@ global Column {
     // What the squeezed columns never get: the two margins, the seven gaps and
     // the clock.
     out property <length> fixed: 2 * root.margin + 7 * root.spacing + root.time;
-}
-
-export global Scale {
-    in property <float> factor: 1.0;
-    out property <length> list-font: 14px * root.factor;
-    out property <length> body-font: 13px * root.factor;
-    out property <length> head-font: 16px * root.factor;
-    out property <length> grey-font: 11px * root.factor;
-    out property <length> row: 26px * root.factor;
 }
 
 // Every label a person reads, filled from the Rust table for the language
@@ -210,51 +194,10 @@ export global Strings {
     in property <string> config-file;
 }
 
-component TabButton inherits Rectangle {
-    in property <string> label;
-    in property <bool> active;
-    in property <bool> enabled: true;
-    callback clicked();
-    height: Scale.row + 6px;
-    background: active ? Palette.accent-background : Palette.control-background;
-    border-radius: 4px;
-    border-width: 1px;
-    border-color: active ? Palette.accent-background : Palette.border;
-    // The tabs give way first when the window is narrow, so the panes beside
-    // the list keep their own width instead of being squeezed by six names.
-    min-width: 52px;
-    clip: true;
-    HorizontalLayout {
-        padding-left: 7px;
-        padding-right: 7px;
-        Text {
-            text: label;
-            font-size: Scale.body-font;
-            color: active ? Palette.accent-foreground : Palette.control-foreground;
-            vertical-alignment: center;
-            overflow: elide;
-            min-width: 0px;
-        }
-    }
-    TouchArea {
-        enabled: root.enabled;
-        clicked => {
-            root.clicked();
-        }
-    }
-}
-
-component Panel inherits Rectangle {
-    background: Palette.alternate-background;
-    border-radius: 4px;
-    border-width: 1px;
-    border-color: Palette.border;
-}
-
 // A grey caption over the value it names: the two-layer label, top layer.
 component Caption inherits Text {
     font-size: Scale.grey-font;
-    color: Palette.foreground.with-alpha(0.6);
+    color: Look.text-caption;
     vertical-alignment: center;
 }
 
@@ -267,7 +210,7 @@ component Notice inherits Text {
     in property <bool> failed;
     in property <bool> warning;
     font-size: Scale.body-font;
-    color: root.failed ? Severity.error : root.warning ? Severity.warning : Palette.foreground.with-alpha(0.7);
+    color: root.failed ? Severity.error : root.warning ? Severity.warning : Look.text-secondary;
     wrap: word-wrap;
     min-height: self.preferred-height;
     vertical-stretch: 0;
@@ -283,7 +226,7 @@ export component LedgerWindow inherits Window {
     min-width: 1100px;
     min-height: 700px;
     default-font-size: Scale.body-font;
-    background: Palette.background;
+    background: Look.window-background;
 
     in property <string> ledger-dir-value;
     in property <string> storage-format-value;
@@ -404,7 +347,7 @@ export component LedgerWindow inherits Window {
         spacing: 8px;
 
         // top bar
-        Panel {
+        Card {
             vertical-stretch: 0;
             VerticalLayout {
                 padding: 8px;
@@ -430,14 +373,14 @@ export component LedgerWindow inherits Window {
                         font-size: Scale.body-font;
                         font-weight: 700;
                         vertical-alignment: center;
-                        color: Palette.foreground;
+                        color: Look.text;
                     }
                     Caption { text: Strings.ledger-dir; }
                     Text {
                         text: root.ledger-dir-value;
                         font-size: Scale.body-font;
                         vertical-alignment: center;
-                        color: Palette.foreground.with-alpha(0.85);
+                        color: Look.text-strong;
                         overflow: elide;
                         min-width: 40px * Scale.factor;
                         horizontal-stretch: 1;
@@ -447,7 +390,7 @@ export component LedgerWindow inherits Window {
                         text: root.storage-format-value;
                         font-size: Scale.body-font;
                         vertical-alignment: center;
-                        color: Palette.foreground;
+                        color: Look.text;
                     }
                     // Display settings share the source row, so the reading row below
                     // keeps its width for what was read and what is hidden.
@@ -474,7 +417,7 @@ export component LedgerWindow inherits Window {
                         text: root.read-up-to-text;
                         font-size: Scale.body-font;
                         vertical-alignment: center;
-                        color: Palette.foreground;
+                        color: Look.text;
                     }
                     Button {
                         text: Strings.jump-latest;
@@ -495,7 +438,7 @@ export component LedgerWindow inherits Window {
                         text: root.loaded-rows-text;
                         font-size: Scale.body-font;
                         vertical-alignment: center;
-                        color: Palette.foreground.with-alpha(0.75);
+                        color: Look.text-secondary;
                         horizontal-stretch: 1;
                         overflow: elide;
                         min-width: 20px * Scale.factor;
@@ -519,7 +462,7 @@ export component LedgerWindow inherits Window {
                         vertical-alignment: center;
                         width: 150px * Scale.factor;
                         overflow: elide;
-                        color: Palette.foreground.with-alpha(0.75);
+                        color: Look.text-secondary;
                     }
                 }
                 if root.busy-text != "": Notice {
@@ -551,7 +494,7 @@ export component LedgerWindow inherits Window {
                         text: root.runtime-status-text;
                         font-size: Scale.body-font;
                         vertical-alignment: center;
-                        color: Palette.foreground;
+                        color: Look.text;
                         overflow: elide;
                         min-width: 40px * Scale.factor;
                         horizontal-stretch: 1;
@@ -575,7 +518,7 @@ export component LedgerWindow inherits Window {
                         font-size: Scale.body-font;
                         font-weight: 700;
                         vertical-alignment: center;
-                        color: Palette.foreground;
+                        color: Look.text;
                     }
                     if root.unlock-offered && root.unlock-confirming: Button {
                         text: Strings.unlock-confirm;
@@ -615,7 +558,7 @@ export component LedgerWindow inherits Window {
                         font-size: Scale.body-font;
                         font-weight: 700;
                         vertical-alignment: center;
-                        color: Palette.foreground;
+                        color: Look.text;
                     }
                     if pause.offered && pause.confirming: Button {
                         text: Strings.resume-confirm;
@@ -636,17 +579,17 @@ export component LedgerWindow inherits Window {
             spacing: 8px;
 
             // left: instance card
-            Panel {
+            Card {
                 horizontal-stretch: 0;
                 min-width: 200px;
                 preferred-width: 240px;
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
-                    Text { text: Strings.card-title; font-size: Scale.head-font; color: Palette.foreground; font-weight: 700; }
+                    Text { text: Strings.card-title; font-size: Scale.head-font; color: Look.card-title; font-weight: 700; }
                     Text {
                         text: Strings.card-note;
-                        color: Palette.foreground.with-alpha(0.6);
+                        color: Look.text-caption;
                         font-size: Scale.grey-font;
                         wrap: word-wrap;
                     }
@@ -663,7 +606,7 @@ export component LedgerWindow inherits Window {
                                     Caption { text: line.label; }
                                     Caption {
                                         text: line.raw;
-                                        color: Palette.foreground.with-alpha(0.4);
+                                        color: Look.text-faint;
                                         overflow: elide;
                                         horizontal-stretch: 1;
                                     }
@@ -671,7 +614,7 @@ export component LedgerWindow inherits Window {
                                 Text {
                                     text: line.value;
                                     font-size: Scale.body-font;
-                                    color: Palette.foreground;
+                                    color: Look.text;
                                     wrap: line.wrap ? word-wrap : no-wrap;
                                     overflow: line.wrap ? clip : elide;
                                 }
@@ -683,7 +626,7 @@ export component LedgerWindow inherits Window {
             }
 
             // middle: timeline
-            Panel {
+            Card {
                 horizontal-stretch: 1;
                 // The list is the pane a narrow window must keep: at the
                 // window's own minimum the panes beside it give way first.
@@ -694,7 +637,7 @@ export component LedgerWindow inherits Window {
                     HorizontalLayout {
                         spacing: 6px;
                         vertical-stretch: 0;
-                        for label[index] in root.tab-labels: TabButton {
+                        for label[index] in root.tab-labels: SkinTab {
                             label: label;
                             active: index == root.active-tab;
                             enabled: root.ledger-live;
@@ -775,7 +718,7 @@ export component LedgerWindow inherits Window {
                     // An empty list here would read as an empty ledger.
                     if !root.ledger-live: Text {
                         text: root.unopened-note;
-                        color: root.unopened-failed ? Severity.error : Palette.foreground.with-alpha(0.7);
+                        color: root.unopened-failed ? Severity.error : Look.text-secondary;
                         font-size: Scale.list-font;
                         vertical-stretch: 0;
                         wrap: word-wrap;
@@ -818,9 +761,9 @@ export component LedgerWindow inherits Window {
                         for row[index] in root.rows: Rectangle {
                             height: Scale.row;
                             background: row.recovery
-                                ? Palette.control-background
+                                ? Look.control-background
                                 : index == root.selected-index
-                                    ? Palette.accent-background.with-alpha(0.35)
+                                    ? Look.selection
                                     : transparent;
                             HorizontalLayout {
                                 padding-left: row.folded ? 22px : Column.margin;
@@ -833,8 +776,8 @@ export component LedgerWindow inherits Window {
                                     vertical-alignment: center;
                                     overflow: elide;
                                 }
-                                if !row.recovery: Text { text: row.sequence-text; font-size: Scale.list-font; width: row.folded ? max(head.w-seq - 22px, 8px) : head.w-seq; overflow: elide; color: Palette.foreground.with-alpha(0.6); vertical-alignment: center; }
-                                if !row.recovery: Text { text: row.clock; font-size: Scale.list-font; width: head.w-time; overflow: elide; color: Palette.foreground; vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.sequence-text; font-size: Scale.list-font; width: row.folded ? max(head.w-seq - 22px, 8px) : head.w-seq; overflow: elide; color: Look.text-caption; vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.clock; font-size: Scale.list-font; width: head.w-time; overflow: elide; color: Look.text; vertical-alignment: center; }
                                 if !row.recovery: Text {
                                     text: row.level;
                                     font-size: Scale.list-font;
@@ -845,12 +788,12 @@ export component LedgerWindow inherits Window {
                                         : row.level-tone == 1 ? Severity.info
                                         : row.level-tone == 2 ? Severity.warning : Severity.error;
                                 }
-                                if !row.recovery: Text { text: row.module; font-size: Scale.list-font; width: head.w-module; overflow: elide; vertical-alignment: center; color: Palette.foreground.with-alpha(0.8); }
-                                if !row.recovery: Text { text: row.event-name; font-size: Scale.list-font; width: head.w-event; overflow: elide; color: Palette.foreground; vertical-alignment: center; }
-                                if !row.recovery: Text { text: row.event-raw; font-size: Scale.grey-font; width: head.w-raw; overflow: elide; color: Palette.foreground.with-alpha(0.45); vertical-alignment: center; }
-                                if !row.recovery: Text { text: row.port; font-size: Scale.list-font; width: head.w-port; overflow: elide; vertical-alignment: center; color: Palette.foreground.with-alpha(0.8); }
+                                if !row.recovery: Text { text: row.module; font-size: Scale.list-font; width: head.w-module; overflow: elide; vertical-alignment: center; color: Look.text-strong; }
+                                if !row.recovery: Text { text: row.event-name; font-size: Scale.list-font; width: head.w-event; overflow: elide; color: Look.text; vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.event-raw; font-size: Scale.grey-font; width: head.w-raw; overflow: elide; color: Look.text-faint; vertical-alignment: center; }
+                                if !row.recovery: Text { text: row.port; font-size: Scale.list-font; width: head.w-port; overflow: elide; vertical-alignment: center; color: Look.text-strong; }
                                 if row.folded: Text { text: row.note; font-size: Scale.grey-font; color: Severity.warning; vertical-alignment: center; }
-                                if !row.recovery: Text { text: row.link-id; font-size: Scale.grey-font; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; color: Palette.foreground.with-alpha(0.55); overflow: elide; }
+                                if !row.recovery: Text { text: row.link-id; font-size: Scale.grey-font; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; color: Look.text-caption; overflow: elide; }
                             }
                             TouchArea {
                                 clicked => {
@@ -870,14 +813,14 @@ export component LedgerWindow inherits Window {
             }
 
             // right: detail
-            Panel {
+            Card {
                 horizontal-stretch: 0;
                 min-width: 300px;
                 preferred-width: 360px;
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
-                    Text { text: Strings.detail-title; font-size: Scale.head-font; color: Palette.foreground; font-weight: 700; }
+                    Text { text: Strings.detail-title; font-size: Scale.head-font; color: Look.card-title; font-weight: 700; }
                     VerticalLayout {
                         spacing: 2px;
                         vertical-stretch: 0;
@@ -887,15 +830,15 @@ export component LedgerWindow inherits Window {
                             Caption { text: line.label; width: 150px * Scale.factor; overflow: elide; }
                             // Elide so a narrow panel cuts with an ellipsis instead of silently
                             // turning a long id into a shorter, wrong-looking one.
-                            Text { text: line.value; font-size: Scale.body-font; color: Palette.foreground; overflow: elide; }
-                            Text { text: line.raw; font-size: Scale.grey-font; vertical-alignment: center; color: Palette.foreground.with-alpha(0.45); overflow: elide; }
+                            Text { text: line.value; font-size: Scale.body-font; color: Look.text; overflow: elide; }
+                            Text { text: line.raw; font-size: Scale.grey-font; vertical-alignment: center; color: Look.text-faint; overflow: elide; }
                         }
                     }
                     // No artifacts on the selected event: the whole block collapses, no blank band.
                     if root.artifacts.length > 0: VerticalLayout {
                         spacing: 4px;
                         vertical-stretch: 0;
-                        Text { text: Strings.artifacts-title; font-size: Scale.head-font; color: Palette.foreground; font-weight: 700; }
+                        Text { text: Strings.artifacts-title; font-size: Scale.head-font; color: Look.card-title; font-weight: 700; }
                         ScrollView {
                             viewport-width: self.visible-width;
                             min-height: 54px * Scale.factor;
@@ -904,24 +847,24 @@ export component LedgerWindow inherits Window {
                             VerticalLayout {
                                 spacing: 4px;
                                 for artifact in root.artifacts: Rectangle {
-                                    background: Palette.control-background;
+                                    background: Look.control-background;
                                     border-radius: 3px;
                                     vertical-stretch: 0;
                                     VerticalLayout {
                                         padding: 5px;
                                         spacing: 1px;
-                                        Text { text: artifact.kind; font-size: Scale.body-font; color: Palette.foreground; overflow: elide; }
+                                        Text { text: artifact.kind; font-size: Scale.body-font; color: Look.text; overflow: elide; }
                                         Text {
                                             text: artifact.detail;
-                                            color: Palette.foreground.with-alpha(0.7);
+                                            color: Look.text-secondary;
                                             font-size: Scale.grey-font;
                                         }
                                         HorizontalLayout {
                                             spacing: 5px;
                                             Caption { text: artifact.sha256-label; }
-                                            Text { text: artifact.sha256; color: Palette.foreground.with-alpha(0.45); overflow: elide; font-size: Scale.grey-font; }
+                                            Text { text: artifact.sha256; color: Look.text-faint; overflow: elide; font-size: Scale.grey-font; }
                                         }
-                                        Text { text: artifact.artifact-id; color: Palette.foreground.with-alpha(0.45); overflow: elide; font-size: Scale.grey-font; }
+                                        Text { text: artifact.artifact-id; color: Look.text-faint; overflow: elide; font-size: Scale.grey-font; }
                                     }
                                 }
                                 Rectangle { }
@@ -931,14 +874,14 @@ export component LedgerWindow inherits Window {
                     HorizontalLayout {
                         spacing: 8px;
                         vertical-stretch: 0;
-                        Text { text: Strings.overlays-title; font-size: Scale.head-font; color: Palette.foreground; font-weight: 700; }
+                        Text { text: Strings.overlays-title; font-size: Scale.head-font; color: Look.card-title; font-weight: 700; }
                         // The recognized page sits above the frame, not on it:
                         // on it, it would cover the page's own header targets.
                         if root.frame-page != "": Text {
                             text: root.frame-page;
                             font-size: Scale.body-font;
                             font-weight: 700;
-                            color: Palette.foreground;
+                            color: Look.text;
                             vertical-alignment: center;
                         }
                         Caption { text: root.frame-size-text; horizontal-stretch: 1; overflow: elide; }
@@ -1012,11 +955,11 @@ export component LedgerWindow inherits Window {
                         text: root.frame-explain;
                         font-size: Scale.body-font;
                         vertical-stretch: 0;
-                        color: Palette.foreground;
+                        color: Look.text;
                         wrap: word-wrap;
                     }
-                    Text { text: root.frame-note; font-size: Scale.grey-font; vertical-stretch: 0; color: Palette.foreground.with-alpha(0.6); wrap: word-wrap; }
-                    Text { text: Strings.raw-data-title; font-size: Scale.head-font; vertical-stretch: 0; color: Palette.foreground; font-weight: 700; }
+                    Text { text: root.frame-note; font-size: Scale.grey-font; vertical-stretch: 0; color: Look.text-caption; wrap: word-wrap; }
+                    Text { text: Strings.raw-data-title; font-size: Scale.head-font; vertical-stretch: 0; color: Look.card-title; font-weight: 700; }
                     TextEdit {
                         read-only: true;
                         wrap: word-wrap;
@@ -1045,7 +988,7 @@ export component WorkbenchWindow inherits Window {
     min-width: 600px;
     min-height: 420px;
     default-font-size: Scale.body-font;
-    background: Palette.background;
+    background: Look.window-background;
 
     // Why this run has no state root to start from: plain words, then the
     // original. Start, Request Shutdown and the ledger window are off
@@ -1085,7 +1028,7 @@ export component WorkbenchWindow inherits Window {
         padding: 8px;
         spacing: 8px;
 
-        if root.install-issue != "": Panel {
+        if root.install-issue != "": Card {
             vertical-stretch: 0;
             VerticalLayout {
                 padding: 8px;
@@ -1099,7 +1042,7 @@ export component WorkbenchWindow inherits Window {
         }
 
         // notices and the display settings
-        Panel {
+        Card {
             vertical-stretch: 0;
             VerticalLayout {
                 padding: 8px;
@@ -1129,7 +1072,7 @@ export component WorkbenchWindow inherits Window {
                         font-size: Scale.head-font;
                         font-weight: 700;
                         vertical-alignment: center;
-                        color: Palette.foreground;
+                        color: Look.card-title;
                         overflow: elide;
                         min-width: 0px;
                         horizontal-stretch: 1;
@@ -1155,7 +1098,7 @@ export component WorkbenchWindow inherits Window {
         }
 
         // the launcher, in plain words
-        Panel {
+        Card {
             vertical-stretch: 0;
             VerticalLayout {
                 padding: 10px;
@@ -1195,7 +1138,7 @@ export component WorkbenchWindow inherits Window {
         }
 
         // the ledger window, and instances
-        Panel {
+        Card {
             vertical-stretch: 0;
             VerticalLayout {
                 padding: 10px;
@@ -1267,7 +1210,7 @@ export component StartupErrorWindow inherits Window {
     preferred-width: 720px;
     preferred-height: 420px;
     default-font-size: Scale.body-font;
-    background: Palette.background;
+    background: Look.window-background;
 
     VerticalLayout {
         padding: 12px;
@@ -1276,7 +1219,7 @@ export component StartupErrorWindow inherits Window {
             text: root.heading;
             font-size: Scale.head-font;
             font-weight: 700;
-            color: root.failed ? Severity.error : Palette.foreground;
+            color: root.failed ? Severity.error : Look.text;
             vertical-stretch: 0;
         }
         // Read-only but selectable, so the text can be copied as it is.

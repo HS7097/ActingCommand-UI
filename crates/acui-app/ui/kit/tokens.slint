@@ -1,0 +1,58 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// The kit's tokens: the semantic colours, the one text-size knob, and the
+// look every window and kit component reads instead of the std-widgets
+// Palette. Each window has its own copy of the globals.
+import { Palette } from "std-widgets.slint";
+
+// Severity keeps semantic colours; these mid tones stay legible on both palettes.
+export global Severity {
+    out property <color> info: #3fa14b;
+    out property <color> warning: #d08a00;
+    out property <color> debug: #8a8a8a;
+    out property <color> error: #e0525f;
+}
+
+// The one text-size knob. Every font size and every row height in app.slint and
+// the kit is a base size for a human at normal DPI multiplied by `factor`;
+// nothing else scales the interface, so 标准 / 大 / 特大 is a single number.
+export global Scale {
+    in property <float> factor: 1.0;
+    out property <length> list-font: 14px * root.factor;
+    out property <length> body-font: 13px * root.factor;
+    out property <length> head-font: 16px * root.factor;
+    out property <length> grey-font: 11px * root.factor;
+    out property <length> row: 26px * root.factor;
+}
+
+// What every page, card, text and control is drawn in, so a window or a kit
+// component never reads the Palette itself. These are the flat values: they
+// follow the platform style's Palette, and so the system's light or dark
+// setting.
+export global Look {
+    // The page the window's contents are drawn on, and the window's own ground.
+    out property <brush> page: Palette.background;
+    out property <brush> window-background: root.page;
+    out property <brush> card-background: Palette.alternate-background;
+    out property <brush> card-border: Palette.border;
+    out property <brush> card-title: Palette.foreground;
+    // Text, then four steps back from it: values that stand a little back,
+    // the grey lines, captions, and the wire spellings and ids furthest back.
+    out property <brush> text: Palette.foreground;
+    out property <brush> text-strong: Palette.foreground.with-alpha(0.85);
+    out property <brush> text-secondary: Palette.foreground.with-alpha(0.7);
+    out property <brush> text-caption: Palette.foreground.with-alpha(0.6);
+    out property <brush> text-faint: Palette.foreground.with-alpha(0.45);
+    out property <brush> accent: Palette.accent-background;
+    out property <brush> accent-text: Palette.accent-foreground;
+    // The selected row: the accent, faint enough for the row's text to read.
+    out property <brush> selection: root.accent.with-alpha(0.35);
+    out property <brush> control-background: Palette.control-background;
+    out property <brush> control-text: Palette.control-foreground;
+    out property <brush> control-border: Palette.border;
+    out property <brush> focus-ring: Palette.accent-background;
+    out property <length> radius: 4px;
+    // A card's inner padding and the gap between cards; the text size does
+    // not scale them.
+    out property <length> pad: 12px;
+    out property <length> gap: 8px;
+}
