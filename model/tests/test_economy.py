@@ -56,7 +56,9 @@ def write(path: Path, doc: dict[str, Any]) -> None:
     path.write_text(json.dumps(doc, indent=1), encoding="utf-8")
 
 
-def model(folder: Path, periods: list, entities: list, rules: list, readings: dict[str, int]) -> Path:
+def model(
+    folder: Path, periods: list, entities: list, rules: list, readings: dict[str, int], unknowns: list | None = None
+) -> Path:
     """A neutral repository folder with one rule file, and its account state; returns the folder."""
     base = folder / "ours" / "model"
     write(base / "model.json", {
@@ -67,7 +69,7 @@ def model(folder: Path, periods: list, entities: list, rules: list, readings: di
     write(base / "sources.json", {"schema_version": "acmodel.sources.v1", "sources": []})
     write(base / "exports.json", {"schema_version": "acmodel.exports.v1", "thresholds": [], "tables": [], "scoring": []})
     write(base / "rules" / "economy.json", {
-        "schema_version": "acmodel.rules.v1", "entities": entities, "rules": rules, "unknowns": [],
+        "schema_version": "acmodel.rules.v1", "entities": entities, "rules": rules, "unknowns": unknowns or [],
     })
     write(folder / "state.json", {
         "schema_version": "acmodel.state.v1", "model_id": "economy", "label": "acct-1",
@@ -108,6 +110,15 @@ def economy(make_system, app_dir, write_config):
 def steady(doc: dict[str, Any]) -> dict[str, Any]:
     """The steady state without HiGHS's marginals, which are a cross-check only (and need not be unique)."""
     return {key: value for key, value in doc["data"]["steady"].items() if key != "marginals"}
+
+
+def settled(*resources: str) -> dict[str, Any]:
+    """What a confirmed steady state that left no pending flow out shows of it (#424 ACM-PRICE addendum, part 1):
+    no `excluded_pending`, and each price confirmed, for no reason."""
+    return {
+        "excluded_pending": [],
+        "price_status": {resource: {"status": "confirmed", "reasons": []} for resource in resources},
+    }
 
 
 def store_fixture(folder: Path) -> Path:
@@ -151,6 +162,7 @@ STORE_STEADY = {
     "activity_values": {"act.a": ["1"], "act.b": ["0"], "act.collect": None},
     "losses": {"overflow": {}, "lost_production": {"fac.f": "80"}},
     "excluded": [],
+    **settled("res.c", "res.s", "res.v"),
 }
 
 
@@ -186,6 +198,7 @@ CYCLIC_STEADY = {
     "activity_values": {"act.d": ["1"] + ["0"] * 6},
     "losses": {"overflow": {"res.r": "10"}, "lost_production": {}},
     "excluded": [],
+    **settled("res.r", "res.v"),
 }
 
 
@@ -311,6 +324,7 @@ def test_per_period_and_shared_limits(tmp_path, economy):
         "activity_values": {"act.a": ["2"] * 7, "act.b": SEVEN, "act.c": ["0"] * 7},
         "losses": {"overflow": {}, "lost_production": {}},
         "excluded": [],
+        **settled("res.r", "res.v"),
     }
 
 
@@ -384,6 +398,7 @@ def test_a_degenerate_fixture_gives_a_price_interval(tmp_path, economy):
         "activity_values": {"act.a": [{"low": "0", "high": "2"}]},
         "losses": {"overflow": {}, "lost_production": {}},
         "excluded": [],
+        **settled("res.r", "res.v"),
     }
 
 
@@ -479,3 +494,173 @@ def test_the_node_limit_gives_search_budget_exhausted_unproven(tmp_path, economy
     gained = sum(row[kinds] * ran for row, ran in zip(weights, runs))
     assert plan["end"]["res.v"] == plan["objective"] == str(gained)
     assert (plan["moved"], plan["unread"], plan["excluded"]) == ({}, [], [])
+
+
+# #424 ACM-PRICE PRICE-1: the steady state unblocked -----------------------------------------------------------
+
+
+def refused(folder: Path, ref: str, found: str, *needed_by: str) -> dict[str, Any]:
+    """The economy's refusal of what it does not model (`expr_eval_failed`, `evaluation_unsupported`) at `ref` of
+    the fixture's rule file, with the outputs it blocks."""
+    detail = {
+        "path": str(folder / "ours" / "model" / "rules" / "economy.json"), "reason": "evaluation_unsupported",
+        "operator": "economy", "position": 0, "found": found,
+    }
+    return {"code": "expr_eval_failed", "detail": detail, "ref": ref, "needed_by": list(needed_by)}
+
+
+def read_cap_fixture(folder: Path, **reference: str) -> Path:
+    """The cyclic fixture (r comes as 70 at each weekly reset; act.d uses 10 r for 1 v, at most once a day), its
+    hard cap read from the account state (20 here), and with `reference` the cap's value in the reference state."""
+    return model(
+        folder, [DAY, WEEK],
+        [resource("res.v", "fact.v"), resource("res.r", "fact.r"), activity("act.d")],
+        [
+            regen("regen.r", "res.r", "70", "7d"),
+            cap("cap.r.hard", "res.r", "hard", "block_all_income", reading="fact.r_cap", **reference),
+            flow("flow.d", "act.d", consumes={"res.r": "10"}, produces={"res.v": "1"}),
+            limit("limit.d", "act.d", "1", "day"),
+        ],
+        {"fact.v": 0, "fact.r": 0, "fact.r_cap": 20},
+    )
+
+
+def test_the_steady_state_reads_a_caps_reference_and_the_plan_its_reading(tmp_path, economy):
+    """Design test 10 (G-A). With the reference 50, the steady state is the cyclic fixture's, whatever the reading.
+    The plan reads the cap 20 from the state: by hand, the reset step takes 70, act.d uses 10 and 40 overflow; two
+    more days use the 20 left, so the plan gains 3 v (r ends at 0, and is worth 0 at the step the plan ends in).
+    Without the reference, the steady state would need the account state: it is refused (`state`)."""
+    status, doc = economy(read_cap_fixture(tmp_path / "reference", reference="50"))
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    assert steady(doc) == CYCLIC_STEADY
+    plan = doc["data"]["plan"]
+    assert (plan["status"], plan["proven"], plan["objective"], plan["end"]["res.v"]) == ("confirmed", True, "3", "3")
+
+    folder = read_cap_fixture(tmp_path / "reading")
+    status, doc = economy(folder)
+
+    assert status == 1
+    assert doc["errors"] == [refused(folder, "/rules/1/logic/reading", "state", "economy:plan", "economy:steady")]
+    assert doc["data"]["steady"] == doc["data"]["plan"] == {"status": "blocked"}
+
+
+def test_a_resources_regen_stops_at_its_caps_reference_and_the_loss_is_counted(tmp_path, economy):
+    """Design test 11 (G-B). The cyclic fixture, but r has no hard cap: its regen stops at its natural cap, a read
+    cap whose reference is 50 (the reading, 30, is the plan's).
+
+    By hand, a week: on the reset step act.d uses 10 and the regen fills r up to 50, so 10 of the 70 are lost; act.d
+    runs on five more days: 6 v. Only the regen stops at the cap: one more r on any day gives a tenth of an execution
+    more, and one less a tenth less (1/10 on every day, and act.d is worth 0). The cap one higher loses one r less,
+    one lower one more (1/10). A daily limit of 2 uses 20 on the reset step, so nothing is lost (+1); a limit of 0
+    loses all 6."""
+    folder = model(
+        tmp_path, [DAY, WEEK],
+        [resource("res.v", "fact.v"), resource("res.r", "fact.r"), activity("act.d")],
+        [
+            regen("regen.r", "res.r", "70", "7d", **{"while": "amount:res.r < read:fact.r_cap"}),
+            cap("cap.r.natural", "res.r", "soft_read", {"block_income_from": [], "other_income": "notice_only"},
+                reading="fact.r_cap", reference="50"),
+            flow("flow.d", "act.d", consumes={"res.r": "10"}, produces={"res.v": "1"}),
+            limit("limit.d", "act.d", "1", "day"),
+        ],
+        {"fact.v": 0, "fact.r": 0, "fact.r_cap": 30},
+    )
+
+    _, doc = economy(folder)
+
+    assert doc["warnings"] == []
+    assert all(entry["needed_by"] == ["economy:plan"] for entry in doc["errors"])  # nothing blocks the steady state
+    assert steady(doc) == {
+        "status": "confirmed", "per_account": False,
+        "cycle": {"steps": 7, "step_seconds": 86400},
+        "objective": "6",
+        "prices": {"res.r": ["1/10"] * 7, "res.v": SEVEN},
+        "rule_prices": {"cap.r.natural": "1/10", "limit.d": {"low": "1", "high": "6"}},
+        "activity_values": {"act.d": ["0"] * 7},
+        "losses": {"overflow": {}, "lost_production": {"res.r": "10"}},
+        "excluded": [],
+        **settled("res.r", "res.v"),
+    }
+
+
+def pending_fixture(folder: Path, produces: str, status: str, **unknowns: list[str]) -> Path:
+    """r comes at 100 a day. act.a turns 10 r into 1 v, at most 3 times a day; act.p turns 10 r into `produces` v,
+    with no limit, by a flow of `status` (naming `unknowns`). unk.p, how much v one act.p gives, is an interval from
+    1 to 3 that no measurement has narrowed yet."""
+    act_p = {**flow("flow.p", "act.p", consumes={"res.r": "10"}, produces={"res.v": produces}), "status": status}
+    unknown = {
+        "id": "unk.p", "kind": "interval", "question": "fixture", "interval": {"low": "1", "high": "3"},
+        "status": "pending", "provenance": [{"kind": "pending_check", "ref": "fixture"}],
+    }
+    return model(
+        folder, [DAY],
+        [resource("res.v", "fact.v"), resource("res.r", "fact.r"), activity("act.a"), activity("act.p")],
+        [
+            regen("regen.r", "res.r", "100", "1d"),
+            flow("flow.a", "act.a", consumes={"res.r": "10"}, produces={"res.v": "1"}),
+            limit("limit.a", "act.a", "3", "day"),
+            {**act_p, **unknowns},
+        ],
+        {"fact.v": 0, "fact.r": 0},
+        [unknown],
+    )
+
+
+def test_a_pending_flow_with_an_unresolved_unknown_is_left_out_and_every_price_is_provisional(tmp_path, economy):
+    """The ACM-PRICE addendum, part 1. act.p's flow is pending: how much v it gives is unk.p, not measured yet. The
+    steady state leaves act.p out and lists it, instead of refusing the whole game. By hand, without it: act.a runs
+    3 times a day (3 v; its limit is worth 1), and the other 70 r are left over (worth 0). Every price is
+    provisional: it was computed without act.p."""
+    _, doc = economy(pending_fixture(tmp_path, "unknown:unk.p", "pending", unknowns=["unk.p"]))
+
+    assert doc["warnings"] == []
+    assert all(entry["needed_by"] == ["economy:plan"] for entry in doc["errors"])  # nothing blocks the steady state
+    assert steady(doc) == {
+        "status": "provisional", "per_account": False,
+        "cycle": {"steps": 1, "step_seconds": 86400},
+        "objective": "3",
+        "prices": {"res.r": ["0"], "res.v": ["1"]},
+        "rule_prices": {"limit.a": "1"},
+        "activity_values": {"act.a": ["1"]},
+        "losses": {"overflow": {}, "lost_production": {}},
+        "excluded": [],
+        "excluded_pending": [{"flow": "flow.p", "activity": "act.p", "unknowns": ["unk.p"]}],
+        "price_status": {
+            resource: {"status": "provisional", "reasons": ["excluded_pending"]} for resource in ("res.r", "res.v")
+        },
+    }
+
+
+def test_a_pending_flow_whose_unknown_is_resolved_is_back_and_nothing_is_provisional_for_it(tmp_path, economy):
+    """The same flow once unk.p is measured: act.p gives 2 v, and its flow is confirmed. It is back in the steady
+    state, and no price is provisional for its sake. By hand: act.p's 2 v for 10 r beat act.a's 1, so all 100 r go
+    to act.p, 20 v a day; r is worth 1/5, act.p 0 and act.a 1 - 2 = -1, and the limit of act.a binds nothing (0)."""
+    status, doc = economy(pending_fixture(tmp_path, "2", "confirmed"))
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    assert steady(doc) == {
+        "status": "confirmed", "per_account": False,
+        "cycle": {"steps": 1, "step_seconds": 86400},
+        "objective": "20",
+        "prices": {"res.r": ["1/5"], "res.v": ["1"]},
+        "rule_prices": {"limit.a": "0"},
+        "activity_values": {"act.a": ["-1"], "act.p": ["0"]},
+        "losses": {"overflow": {}, "lost_production": {}},
+        "excluded": [],
+        **settled("res.r", "res.v"),
+    }
+
+
+def test_a_flow_that_reads_an_unknown_and_is_not_pending_still_refuses(tmp_path, economy):
+    """A provisional flow that reads unk.p is refused as before (`unknown`), and with it the steady state and the
+    plan."""
+    folder = pending_fixture(tmp_path, "unknown:unk.p", "provisional")
+
+    status, doc = economy(folder)
+
+    assert status == 1
+    assert doc["errors"] == [
+        refused(folder, "/rules/3/logic/produces/res.v", "unknown", "economy:plan", "economy:steady")
+    ]
+    assert doc["data"]["steady"] == doc["data"]["plan"] == {"status": "blocked"}

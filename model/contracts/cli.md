@@ -216,7 +216,9 @@ what needed it.
   `lp.grain`, and for the plan `search.milp_node_limit` and `economy.plan_horizon`. Their trace is the model's
   structure that the economy reads (its periods, numeraire, entities and the rules of the kinds it reads), each
   amount, cap and limit node, and for the plan the steady state and the opening readings; so a change of the
-  account state solves only the plan again. A regen's amount and interval are nodes of kind `regen`. The run id of
+  account state solves only the plan again. A regen's amount and interval are nodes of kind `regen`. The steady
+  state reads its nodes in the reference state, of kind `reference` (from the rules and the data only, as `general`,
+  but a cap with a reading at its `reference`; `formats.md`, "The economy"). The run id of
   `economy` adds the command and those keys to `run`'s inputs, and its `outputs.json` adds the warnings.
 - **Sampled and impacts nodes.** The Monte Carlo tallies of an output (kind `sampled`, `formats.md`,
   "Unknowns") declare `numpy` and the `python` minor version, and their spec adds the keys under `unknowns`

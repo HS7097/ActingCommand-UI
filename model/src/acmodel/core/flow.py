@@ -3,11 +3,13 @@ and 4.4, design-py 4.3; contracts/formats.md, "The economy").
 
 Two nodes of the derivation graph (`core.graph`), each computed after what it reads and kept in the cache:
 - ("economy", "steady"): the values, game-wide. A cyclic steady state over the longest declared period, built
-  from the rules and the data only (the graph's "general" nodes) and solved as an LP. It gives the optimum per
-  cycle; the price of every resource in every step and of every cap and limit, by re-solves at plus and minus
-  one grain (`lp.grain`), exact when both sides agree and an interval otherwise; the value of each activity at
-  those prices; and the least overflow and lost production among the optimal solutions. HiGHS's marginals are
-  only a cross-check (`lp_dual_disagrees`).
+  from the rules and the data only, in the reference state (the graph's "reference" nodes: a cap with a reading
+  counts at its `reference`, #424 ACM-PRICE G-A), and solved as an LP. It gives the optimum per cycle; the price
+  of every resource in every step and of every cap and limit, by re-solves at plus and minus one grain
+  (`lp.grain`), exact when both sides agree and an interval otherwise; the value of each activity at those
+  prices; and the least overflow and lost production among the optimal solutions. HiGHS's marginals are only a
+  cross-check (`lp_dual_disagrees`). A pending flow whose amounts read unknowns is left out and listed
+  (`excluded_pending`), and then every price is provisional (`price_status`; the ACM-PRICE addendum, part 1).
 - ("economy", "plan"): one account's plan. From the state's readings over `economy.plan_horizon` steps, with
   integer counts and an indicator per read cap and step, solved as a MILP within `search.milp_node_limit`
   nodes and never a time limit; the final stocks are priced by the steady state. A plan the node limit stops is
@@ -15,12 +17,13 @@ Two nodes of the derivation graph (`core.graph`), each computed after what it re
 
 **The program** (generated from the rules, never written by hand). One step is one day; a cycle is one week
 when the model declares a week period, else one day. Per activity and step a count; per resource and store a
-stock at every step boundary; per hard-capped resource an overflow (income the cap blocks); per store with a
-storage cap its lost production; per move whose amount needs the account state (a collection that takes what
-the store holds) the amount it moves, at most the store's storage cap per execution. Rows, in canonical order
-(by kind, id and step): the balances, the bounds of overflow by income, the cyclic rows (steady), the caps, the
-limits per window, the moves, the read caps' indicators (plan) and the opening stocks (plan). Columns are sorted
-by variable id.
+stock at every step boundary; per hard-capped resource an overflow (income the cap blocks; for a void_at_reset
+cap only in the step before each reset of its period); per store with a storage cap, and per resource whose regen
+stops at a cap (steady), its lost production; per move whose amount needs the account state (a collection that
+takes what the store holds) the amount it moves, at most the store's storage cap per execution. Rows, in
+canonical order (by kind, id and step): the balances, the bounds of overflow by income, the cyclic rows (steady),
+the caps, the limits per window, the moves, the regen stops (steady), the read caps' indicators (plan) and the
+opening stocks (plan). Columns are sorted by variable id.
 
 **Exactness.** Every solution is converted with `Fraction(x).limit_denominator(lp.max_denominator)` and checked
 exactly against every bound, integrality and row (`lp_numeric_check_failed`). Objective values, prices and
@@ -54,7 +57,7 @@ from acmodel.codes import (
 )
 from acmodel.config import EconomySettings
 from acmodel.core.common import CONFIRMED, PROVISIONAL, Need, worst
-from acmodel.core.unknown import rule_status
+from acmodel.core.unknown import read as unknowns_read, rule_status
 from acmodel.envelope import Failure, error
 from acmodel.expr import Binary, Reference
 from acmodel.expr.interval import Interval, Undecided
@@ -71,8 +74,16 @@ OUTPUTS = {STEADY: "economy:steady", PLAN: "economy:plan"}
 RULE_KINDS = ("cap", "cooldown", "exchange", "flow", "gate", "limit", "objective", "regen")
 NOT_MODELLED = ("cooldown", "exchange", "objective")
 HARD_REACH = ("block_all_income", "discard")
+VOID = "void_at_reset"  # a hard cap the steady state reads as `discard` at the resets of its `per` only
 STORAGE_REACH = ("block_all_income", "discard", "stop_production")
 READING_GROUP = "reading:"
+# The prefix of the graph nodes each program reads first: the steady state's from the reference state, the
+# plan's from the rules and the data only (and then, where they need it, the account state's).
+PREFIX = {STEADY: ("reference",), PLAN: ("general",)}
+# Why a price of the steady state is provisional (`price_status`): it was computed without the activities of
+# `excluded_pending`; or a rule, data row or reading it read is provisional, or depends on an unknown that a
+# pending rule it read names.
+EXCLUDED_PENDING, INPUTS = "excluded_pending", "inputs"
 # How an economy node is kept in the cache.
 FORMAT = {"economy": ["data", "status", "per_account", "warnings", "blocked"]}
 _STATE = object()  # a node from the rules and the data only that would need the account state
@@ -209,11 +220,13 @@ class _Shape:
     excluded: list[str]  # activities behind a gate of origin person (#424 design 4.7)
     parts: list[_Part]
     regens: list[Entry]
+    stops: dict[str, tuple[Entry, Entry]]  # steady: resource -> (its regen, the cap its regen stops at)
     hard: dict[str, Entry]  # resource -> its hard cap
+    void: dict[str, int]  # steady: resource -> the steps of the period at whose resets its void_at_reset cap voids
     storage: dict[str, Entry]  # store -> its storage cap
     soft: list[Entry]  # read caps that block incomes
     limits: list[tuple[Entry, tuple[str, ...]]]  # a limit and the activities it counts
-    gates: list[Entry]
+    gates: list[tuple[str, Entry]]  # (flow, a gate it requires)
     refused: list[dict[str, Any]]
 
 
@@ -232,9 +245,40 @@ def _stops_production(checker: Checker, graph: Graph, rule: Entry) -> bool:
     )
 
 
-def _shape(graph: Graph) -> _Shape:
+def _stops_at(checker: Checker, graph: Graph, rule: Entry) -> Entry | None:
+    """The cap at which a resource's regen stops (#424 ACM-PRICE G-B): its `while` is `amount:<resource> <
+    cap:<cap>` (or `rule:<cap>`) with a cap of that resource that has a `value` or a `reference`, or `amount:<resource>
+    < read:<fact>` with the one cap of that resource whose reading the fact is and that has a `reference`. None for
+    any other `while`."""
+    resource = rule.doc["subject"]
+    root = graph.typed.expressions[(rule.path, at(rule.ref, "logic", "while"))].root
+    if not (
+        isinstance(root, Binary) and root.op == "<"
+        and isinstance(root.left, Reference) and (root.left.kind, root.left.target) == ("amount", resource)
+        and isinstance(root.right, Reference)
+    ):
+        return None
+    right = root.right
+    caps = [
+        cap for cap in checker.rules if checker.active(cap) and cap.kind == "cap" and cap.doc["subject"] == resource
+    ]
+
+    def has(cap: Entry, *members: str) -> bool:
+        return any(member in cap.doc["logic"] for member in members)
+
+    if right.kind in ("cap", "rule"):
+        found = [cap for cap in caps if cap.id == right.target and has(cap, "value", "reference")]
+    elif right.kind == "read":
+        found = [cap for cap in caps if cap.doc["logic"].get("reading") == right.target and has(cap, "reference")]
+    else:
+        return None
+    return found[0] if len(found) == 1 else None
+
+
+def _shape(graph: Graph, solve: str) -> _Shape:
     checker = graph.checker
     manifest = checker.model.manifest
+    steady = solve == STEADY
     refused: list[dict[str, Any]] = []
     windows: dict[str, int] = {}
     for index, period in enumerate(manifest.doc["periods"]):
@@ -252,7 +296,7 @@ def _shape(graph: Graph) -> _Shape:
         if rule.kind in NOT_MODELLED:
             refused.append(_refused(rule.path, rule.ref, rule.kind))
     excluded: set[str] = set()
-    gates: list[Entry] = []
+    gates: list[tuple[str, Entry]] = []
     flows: list[tuple[Entry, str]] = []
     for rule in of("flow"):
         subject = checker.entries[rule.doc["subject"]]
@@ -260,7 +304,7 @@ def _shape(graph: Graph) -> _Shape:
             refused.append(_refused(rule.path, at(rule.ref, "subject"), subject.kind))
             continue
         requires = [checker.entries[gate] for gate in rule.doc["logic"].get("requires", ())]
-        gates.extend(requires)
+        gates.extend((rule.id, gate) for gate in requires)
         if any(gate.doc["logic"]["origin"] == "person" for gate in requires):
             excluded.add(subject.id)  # real payment: never in a computed plan or value
         for index, gate in enumerate(requires):
@@ -281,19 +325,28 @@ def _shape(graph: Graph) -> _Shape:
             moves, ref = logic["moves"], at(rule.ref, "logic", "moves", "amount")
             parts.append(_Part(rule.id, rule.path, activity, "moves", None, moves["from"], moves["to"], ref))
     regens: list[Entry] = []
+    stops: dict[str, tuple[Entry, Entry]] = {}
     for rule in of("regen"):
         subject = checker.entries[rule.doc["subject"]]
         if subject.kind not in ("resource", "store"):
             refused.append(_refused(rule.path, at(rule.ref, "subject"), subject.kind))
+            continue
+        if "while" in rule.doc["logic"] and subject.kind == "resource":
+            stop = _stops_at(checker, graph, rule) if steady else None  # the plan does not model it
+            if stop is None:
+                refused.append(_refused(rule.path, at(rule.ref, "logic", "while"), "while"))
+                continue
+            stops[subject.id] = (rule, stop)
         elif "while" in rule.doc["logic"] and not _stops_production(checker, graph, rule):
             refused.append(_refused(rule.path, at(rule.ref, "logic", "while"), "while"))
-        else:
-            regens.append(rule)
+            continue
+        regens.append(rule)
     hard: dict[str, Entry] = {}
+    void: dict[str, int] = {}
     storage: dict[str, Entry] = {}
     soft: list[Entry] = []
     allowed = {
-        "hard": ("resource", HARD_REACH), "storage": ("store", STORAGE_REACH),
+        "hard": ("resource", HARD_REACH + ((VOID,) if steady else ())), "storage": ("store", STORAGE_REACH),
         "soft_read": ("resource", ("block_income_from",)),
     }
     for rule in of("cap"):
@@ -306,6 +359,8 @@ def _shape(graph: Graph) -> _Shape:
             refused.append(_refused(rule.path, at(rule.ref, "logic", "on_reach"), reach))
         elif logic["cap_kind"] == "hard":
             hard[subject.id] = rule
+            if reach == VOID:  # its resets: those of its period (a month is refused above), else every day
+                void[subject.id] = windows.get(logic.get("per", ""), 1)
         elif logic["cap_kind"] == "storage":
             storage[subject.id] = rule
         else:
@@ -328,7 +383,9 @@ def _shape(graph: Graph) -> _Shape:
         excluded=sorted(excluded),
         parts=parts,
         regens=regens,
+        stops=stops,
         hard=hard,
+        void=void,
         storage=storage,
         soft=soft,
         limits=limits,
@@ -356,7 +413,9 @@ class _Model:
     income: dict[tuple[str, str], Fraction]  # (activity, resource) -> what one execution brings in
     moves: tuple[tuple[str, str, str, str], ...]  # (flow, activity, store, target): takes what the store holds
     regens: tuple[tuple[str, str, tuple[Fraction, ...]], ...]  # (rule, resource or store, income per step)
+    stops: dict[str, tuple[str, str, Fraction]]  # resource -> (its regen, the cap it stops at, that cap's value)
     hard: dict[str, tuple[str, Fraction]]  # resource -> (cap, value)
+    void: dict[str, int]  # resource -> the steps between the resets at which its hard cap voids
     storage: dict[str, tuple[str, Fraction]]  # store -> (cap, value)
     limits: tuple[tuple[str, tuple[str, ...], int, Fraction], ...]  # (rule, activities, window steps, max)
     soft: tuple[tuple[str, str, Fraction, tuple[str, ...]], ...]  # (cap, resource, its reading, blocked moves)
@@ -373,14 +432,18 @@ class _Model:
         """The rule groups the infeasibility analysis drops in turn, in id order."""
         found = {rule for rule, _, _ in self.regens}
         found |= {cap for cap, _ in (*self.hard.values(), *self.storage.values())}
+        found |= {cap for _, cap, _ in self.stops.values()}
         found |= {rule for rule, _, _, _ in self.limits} | {cap for cap, _, _, _ in self.soft}
         found |= {group for group, _ in self.start.values() if group is not None}
         return sorted(found)
 
     def priced(self) -> list[tuple[str, Fraction]]:
-        """The rules with a value that the steady state prices: caps with a value and limits."""
-        found = [*self.hard.values(), *self.storage.values(), *((rule, maximum) for rule, _, _, maximum in self.limits)]
-        return sorted(found)
+        """The rules with a value that the steady state prices: caps with a value (a regen's stop included, each
+        cap once) and limits."""
+        found = dict([*self.hard.values(), *self.storage.values()])
+        found.update((cap, value) for _, cap, value in self.stops.values())
+        found.update((rule, maximum) for rule, _, _, maximum in self.limits)
+        return sorted(found.items())
 
     def touches_store(self, activity: str) -> bool:
         return any(key == activity and entity in self.stores for key, entity in self.net) or any(
@@ -396,18 +459,30 @@ class _Item:
     part: _Part | None = None
 
 
+@dataclass(frozen=True)
+class _Unknowns:
+    """What `_Reader.read` gives for a node that read unknowns, which the economy cannot read: it solves single
+    values. `unknowns` are those the node read."""
+
+    unknowns: frozenset[str]
+
+
 class _Reader:
-    """Reads the graph nodes one program needs: from the rules and the data only for the steady state, with the
-    account state where needed for the plan. It records the status, the unknowns left unresolved, the errors
-    that block the program and what it refuses."""
+    """Reads the graph nodes one program needs: in the reference state for the steady state, from the rules and the
+    data only and with the account state where needed for the plan. It records the status of each item it reads
+    and the unknowns that leave it unresolved (#424 ACM-PRICE 4.6), the errors that block the program, what it
+    refuses, and in the steady state the pending flows it leaves out (`excluded_pending`)."""
 
     def __init__(self, graph: Graph, shape: _Shape, solve: str) -> None:
         self.graph = graph
         self.shape = shape
         self.plan = solve == PLAN
         self.solve = solve
-        self.status = CONFIRMED
-        self.unresolved: set[str] = set()
+        self.prefix = PREFIX[solve]
+        # What each item read: an item's key (a flow amount, a regen member, a cap or limit, ("requires", flow,
+        # gate), and for the plan the steady state) -> its status and the unknowns it depends on unresolved.
+        self.statuses: dict[tuple[str, ...], tuple[str, frozenset[str]]] = {}
+        self.pending: dict[str, set[str]] = {}  # steady: a pending flow left out -> the unknowns its amounts read
         self.blocked: set[int] = set()
         self.refused = list(shape.refused)
         entries = graph.checker.entries
@@ -416,10 +491,32 @@ class _Reader:
             if "reading" in entries[entity].doc
         }
 
-    def consult(self, entry: Entry) -> None:
+    def note(self, key: tuple[str, ...], status: str, unresolved: Any = ()) -> None:
+        """What item `key` read: the worst status so far, and the unknowns it depends on without reading them."""
+        before, left = self.statuses.get(key, (CONFIRMED, frozenset()))
+        self.statuses[key] = (worst(before, status), left | frozenset(unresolved))
+
+    def consult(self, key: tuple[str, ...], entry: Entry) -> None:
         own, unresolved = rule_status(entry)
-        self.status = worst(self.status, own)
-        self.unresolved.update(unresolved)
+        self.note(key, own, unresolved)
+
+    def inputs(self) -> str:
+        """The status of what the program read: the worst status of its items, but those of the pending flows it
+        left out, and provisional when any of them depends on an unknown it leaves unresolved."""
+        status, unresolved = CONFIRMED, False
+        for key, (found, left) in self.statuses.items():
+            if key[0] in ("flow", "requires") and key[1] in self.pending:
+                continue
+            status, unresolved = worst(status, found), unresolved or bool(left)
+        return worst(status, PROVISIONAL) if unresolved else status
+
+    def excluded_pending(self) -> list[dict[str, Any]]:
+        """The pending flows the steady state left out, by id: each with its activity and the unknowns it read."""
+        entries = self.graph.checker.entries
+        return [
+            {"flow": flow, "activity": entries[flow].doc["subject"], "unknowns": sorted(self.pending[flow])}
+            for flow in sorted(self.pending)
+        ]
 
     def refuse(self, path: str, ref: str, found: str) -> None:
         self.refused.append(_refused(path, ref, found))
@@ -429,9 +526,9 @@ class _Reader:
             if key not in self.graph.results:
                 raise Need(key)
 
-    def read(self, key: tuple[str, ...], path: str, ref: str) -> Any:
-        """The one scenario of a node; `_STATE` for a node from the rules and the data only that would need the
-        account state; None when it is blocked or read unknowns (refused: the economy solves single values)."""
+    def read(self, key: tuple[str, ...], item: tuple[str, ...]) -> Any:
+        """The one scenario of a node, noted for `item`; `_STATE` for a node from the rules and the data only
+        that would need the account state; `_Unknowns` for one that read unknowns; None when it is blocked."""
         self.graph.depend(key)
         result = self.graph.results[key]
         if result.blocked:
@@ -441,11 +538,14 @@ class _Reader:
             return _STATE
         scenario, *more = result.scenarios
         if more or scenario.unknowns or scenario.free or type(scenario.value) in (Interval, Undecided):
-            self.refuse(path, ref, "unknown")
-            return None
-        self.status = worst(self.status, scenario.status)
-        self.unresolved.update(scenario.unresolved)
+            return _Unknowns(frozenset(unknowns_read(result.scenarios)))
+        self.note(item, scenario.status, scenario.unresolved)
         return scenario
+
+    def leaves_out(self, item: _Item) -> bool:
+        """Whether the steady state leaves out the flow of an item that read unknowns, instead of refusing it: a
+        flow amount of a pending rule (the ACM-PRICE addendum, part 1). Any other is refused (`unknown`)."""
+        return not self.plan and item.part is not None and item.owner.doc["status"] == "pending"
 
     def reads_stock(self, scenario: Scenario) -> bool:
         """Whether a value read, through any node, the reading of a stock the program itself changes."""
@@ -468,28 +568,31 @@ class _Reader:
         for rule in shape.regens:
             for member in ("amount", "every"):
                 found.append(_Item(rule, ("regen", rule.id, member), at(rule.ref, "logic", member)))
-        for cap in (*shape.hard.values(), *shape.storage.values()):
-            member = "value" if "value" in cap.doc["logic"] else "reading"
-            found.append(_Item(cap, ("rule", cap.id), at(cap.ref, "logic", member)))
+        caps = [*shape.hard.values(), *shape.storage.values()]
+        caps += [cap for _, cap in shape.stops.values() if cap.id not in {other.id for other in caps}]
+        for cap in caps:  # the steady state reads a reading's `reference` (G-A), the plan the reading
+            logic = cap.doc["logic"]
+            member = "reference" if not self.plan and "reference" in logic else "reading"
+            found.append(_Item(cap, ("rule", cap.id), at(cap.ref, "logic", "value" if "value" in logic else member)))
         for rule, _ in shape.limits:
             found.append(_Item(rule, ("rule", rule.id), at(rule.ref, "logic", "max")))
         return found
 
     def values(self, items: list[_Item]) -> tuple[dict[tuple[str, ...], Any], set[str]]:
         """The value of each item, and the flows whose move takes what its store holds."""
-        graph, plan = self.graph, self.plan
-        self.need([("general",) + item.key for item in items])
+        graph, plan, prefix = self.graph, self.plan, self.prefix
+        self.need([prefix + item.key for item in items])
         if plan:
             self.need([
                 item.key for item in items
-                if graph.results[("general",) + item.key].needs_state
+                if graph.results[prefix + item.key].needs_state
                 and not (item.part and item.part.member == "moves")
             ])
         values: dict[tuple[str, ...], Any] = {}
         variable: set[str] = set()
         for item in items:
-            self.consult(item.owner)
-            found = self.read(("general",) + item.key, item.owner.path, item.ref)
+            self.consult(item.key, item.owner)
+            found = self.read(prefix + item.key, item.key)
             if found is _STATE:
                 if item.part is not None and item.part.member == "moves":
                     variable.add(item.part.flow)  # a collection: it takes what the store holds
@@ -497,14 +600,20 @@ class _Reader:
                 if not plan:  # the steady state is game-wide: it never reads the account state
                     self.refuse(item.owner.path, item.ref, "state")
                     continue
-                found = self.read(item.key, item.owner.path, item.ref)
-                if found is not None and self.reads_stock(found):  # a stock the plan changes as it goes
-                    self.refuse(item.owner.path, item.ref, "stock")
+                found = self.read(item.key, item.key)
+                if found is not None and not isinstance(found, _Unknowns) and self.reads_stock(found):
+                    self.refuse(item.owner.path, item.ref, "stock")  # a stock the plan changes as it goes
                     continue
+            if isinstance(found, _Unknowns):
+                if self.leaves_out(item):  # left out and listed, not refused (the ACM-PRICE addendum, part 1)
+                    self.pending.setdefault(item.part.flow, set()).update(found.unknowns)
+                else:
+                    self.refuse(item.owner.path, item.ref, "unknown")
+                continue
             if found is not None:
                 values[item.key] = found.value
-        for gate in self.shape.gates:
-            self.consult(gate)
+        for flow, gate in self.shape.gates:
+            self.consult(("requires", flow, gate.id), gate)
         return values, variable
 
     def model(self, settings: EconomySettings) -> _Model | None:
@@ -521,7 +630,7 @@ class _Reader:
             if steady.blocked:
                 self.blocked.update(steady.blocked_by)
                 return None
-            self.status = worst(self.status, steady.status)
+            self.note(NODES[STEADY], steady.status)
             cycle = steady.data["cycle"]["steps"]
             weights = {r: _low(steady.data["prices"][r][steps % cycle]) for r in shape.resources}
         regens = []
@@ -536,10 +645,18 @@ class _Reader:
         storage = {
             f: (cap.id, values[("rule", cap.id)]) for f, cap in shape.storage.items() if ("rule", cap.id) in values
         }
+        regenerated = {rule for rule, _, _ in regens}
+        stops = {
+            r: (rule.id, cap.id, values[("rule", cap.id)]) for r, (rule, cap) in shape.stops.items()
+            if ("rule", cap.id) in values and rule.id in regenerated
+        }
+        left_out = {part.activity for part in shape.parts if part.flow in self.pending}
         net: dict[tuple[str, str], Fraction] = {}
         income: dict[tuple[str, str], Fraction] = {}
         moves = []
         for part in shape.parts:
+            if part.flow in self.pending:  # a pending flow the steady state leaves out
+                continue
             if part.member == "moves" and part.flow in variable:
                 if part.source not in storage:  # only a store's storage cap bounds what one move takes
                     self.refuse(part.path, part.ref, "state")
@@ -557,7 +674,7 @@ class _Reader:
                 _add(net, (part.activity, part.source), -amount)
             _add(net, (part.activity, target), amount)
             _add(income, (part.activity, target), max(amount, Fraction(0)))
-        activities = set(shape.activities)
+        activities = set(shape.activities) - left_out
         limits = tuple(
             (
                 rule.id, tuple(sorted(set(members) & activities)), shape.windows[rule.doc["logic"]["per"]],
@@ -576,13 +693,15 @@ class _Reader:
             resources=tuple(shape.resources),
             stores=tuple(sorted(shape.stores)),
             numeraire=shape.numeraire,
-            activities=tuple(shape.activities),
+            activities=tuple(a for a in shape.activities if a in activities),
             excluded=tuple(shape.excluded),
             net=net,
             income=income,
             moves=tuple(moves),
             regens=tuple(regens),
+            stops=stops,
             hard=hard,
+            void={r: shape.void[r] for r in hard if r in shape.void},
             storage=storage,
             limits=limits,
             soft=soft,
@@ -614,8 +733,11 @@ class _Reader:
         """The plan's read caps: each with its reading and the collections it blocks at or above it."""
         found = []
         for cap in self.shape.soft:
-            self.consult(cap)
-            scenario = self.read(("rule", cap.id), cap.path, at(cap.ref, "logic", "reading"))
+            self.consult(("rule", cap.id), cap)
+            scenario = self.read(("rule", cap.id), ("rule", cap.id))
+            if isinstance(scenario, _Unknowns):
+                self.refuse(cap.path, at(cap.ref, "logic", "reading"), "unknown")
+                continue
             if scenario is None or scenario is _STATE:
                 continue
             resource = cap.doc["subject"]
@@ -703,6 +825,7 @@ def _program(
     variables: dict[Key, tuple[Fraction, Fraction | None, bool]] = {}
     rows: list[_Row] = []
     income: dict[tuple[str, int], tuple[Fraction, Fraction]] = {}  # (entity, step) -> (all, the positive part)
+    regenerated: dict[tuple[str, int], Fraction] = {}  # (regen, step) -> its income in the step
 
     def receive(entity: str, step: int, amount: Fraction) -> None:
         total, positive = income.get((entity, step), (zero, zero))
@@ -712,14 +835,26 @@ def _program(
         if rule not in omit:
             for step, amount in enumerate(incomes):
                 receive(target, step, amount)
+                regenerated[(rule, step)] = amount
     for (entity, step), amount in sorted(extra.items()):
         receive(entity, step, amount)
     hard = {r: (cap, values.get(cap, value)) for r, (cap, value) in model.hard.items() if cap not in omit}
     storage = {f: (cap, values.get(cap, value)) for f, (cap, value) in model.storage.items() if cap not in omit}
+    stops = {r: (rule, cap, values.get(cap, value)) for r, (rule, cap, value) in model.stops.items() if cap not in omit}
     most = {f: values.get(cap, value) for f, (cap, value) in model.storage.items()}  # what one move takes at most
+    every = {r: model.void.get(r, 1) for r in hard}  # the steps between the boundaries at which a hard cap holds
 
     def received(entity: str, step: int) -> tuple[Fraction, Fraction]:
         return income.get((entity, step), (zero, zero))
+
+    def regen_income(entity: str, step: int) -> Fraction:
+        """What the regen of a resource whose regen stops brings in a step (G-B)."""
+        return regenerated.get((stops[entity][0], step), zero)
+
+    def overflows(entity: str, step: int) -> bool:
+        """Whether a hard cap blocks income in a step: in every step, and for a void_at_reset cap only in the step
+        that ends at a reset of its period (G-C)."""
+        return entity in hard and (step + 1) % every[entity] == 0
 
     for activity in model.activities:
         for step in range(steps):
@@ -728,14 +863,17 @@ def _program(
         for step in range(steps + 1):
             variables[("s", entity, step)] = (zero, None, False)
         for step in range(steps):
-            if entity in hard:
+            if overflows(entity, step):
                 variables[("o", entity, step)] = (zero, None, False)
             if entity in storage:  # production lost at the storage cap: at most what the store produces
                 variables[("l", entity, step)] = (zero, received(entity, step)[1], False)
+            if entity in stops:  # production lost where the regen stops: at most what the regen brings
+                variables[("l", entity, step)] = (zero, max(regen_income(entity, step), zero), False)
     for flow, _, _, _ in model.moves:
         for step in range(steps):
             variables[("m", flow, step)] = (zero, None, False)
     for entity in model.entities:
+        inflows: list[dict[Key, Fraction]] = []
         for step in range(steps):
             coefficients = {("s", entity, step + 1): one, ("s", entity, step): -one}
             for activity in model.activities:
@@ -754,24 +892,37 @@ def _program(
                     inflow[key] = inflow.get(key, zero) + one
                 if source == entity:
                     coefficients[key] = coefficients.get(key, zero) + one
-            if entity in hard:
-                coefficients[("o", entity, step)] = one
-            if entity in storage:
-                coefficients[("l", entity, step)] = one
-            total, positive = received(entity, step)
-            rows.append(_Row(("balance", entity, step), _nonzero(coefficients), "eq", total, None))
-            if entity in hard:  # what overflows is income the cap blocks, never stock already held
-                bound = {("o", entity, step): one, **{key: -amount for key, amount in inflow.items()}}
+            for kind in ("o", "l"):
+                if (kind, entity, step) in variables:
+                    coefficients[(kind, entity, step)] = one
+            inflows.append(inflow)
+            rows.append(_Row(("balance", entity, step), _nonzero(coefficients), "eq", received(entity, step)[0], None))
+            if overflows(entity, step):  # what overflows is income the cap blocks, never stock already held
+                bound: dict[Key, Fraction] = {("o", entity, step): one}
+                positive = zero
+                for blocked in range(step + 1 - every[entity], step + 1):  # the steps since the last reset
+                    for key, amount in inflows[blocked].items():
+                        bound[key] = bound.get(key, zero) - amount
+                    positive += received(entity, blocked)[1]
                 rows.append(_Row(("overflow", entity, step), _nonzero(bound), "le", positive, None))
     if not plan:  # a steady state ends each cycle with at least the stock it began with; a capped one with it
         for entity in model.entities:
             if entity != model.numeraire:
                 cyclic = {("s", entity, 0): one, ("s", entity, steps): -one}
-                sense = "eq" if entity in hard or entity in storage else "le"
+                sense = "eq" if entity in hard or entity in storage or entity in stops else "le"
                 rows.append(_Row(("cyclic", entity, 0), cyclic, sense, zero, None))
     for entity, (cap, value) in sorted((*hard.items(), *storage.items())):
-        for step in range(steps + 1):
+        for step in range(0, steps + 1, every.get(entity, 1)):  # a void_at_reset cap holds at its resets only
             rows.append(_Row(("cap", cap, step), {("s", entity, step): one}, "le", value, cap))
+    for entity, (rule, cap, value) in sorted(stops.items()):
+        # The regen stops at the cap (G-B): what the step consumes first, then what the regen brings, up to the cap.
+        for step in range(steps):
+            row = {("s", entity, step): one, ("l", entity, step): -one}
+            for activity in model.activities:
+                used = model.income.get((activity, entity), zero) - model.net.get((activity, entity), zero)
+                if used:
+                    row[("x", activity, step)] = -used
+            rows.append(_Row(("stop", cap, step), _nonzero(row), "le", value - regen_income(entity, step), cap))
     for rule, members, window, maximum in model.limits:
         if rule in omit:
             continue
@@ -1167,7 +1318,9 @@ class _Solver:
     def rule_dual(self, program: _Program, base: _Solution, rule: str) -> float:
         """HiGHS's derivative of the optimum by a rule's value: its rows' marginals, and for a storage cap also
         the moves it bounds (the cap is their coefficient)."""
-        dual = sum(-base.le[row.key] for row in program.rows if row.group == rule and row.key[0] in ("cap", "limit"))
+        dual = sum(
+            -base.le[row.key] for row in program.rows if row.group == rule and row.key[0] in ("cap", "limit", "stop")
+        )
         for flow, activity, source, _ in self.model.moves:
             if self.model.storage.get(source, ("",))[0] == rule:
                 for step in range(self.model.steps):
@@ -1216,7 +1369,7 @@ class _Solver:
             "activity_values": values,
             "losses": {
                 "overflow": {r: str(self.total(least, "o", r)) for r in sorted(model.hard)},
-                "lost_production": {f: str(self.total(least, "l", f)) for f in sorted(model.storage)},
+                "lost_production": {f: str(self.total(least, "l", f)) for f in sorted({*model.storage, *model.stops})},
             },
             "marginals": {
                 "prices": {resource: [str(m) for m in marginals[resource]] for resource in model.resources},
@@ -1227,7 +1380,9 @@ class _Solver:
         return data, warnings
 
     def total(self, solution: _Solution, kind: str, entity: str) -> Fraction:
-        return sum((solution.x[(kind, entity, step)] for step in range(self.model.steps)), Fraction(0))
+        """An overflow or a loss over the cycle (a void_at_reset cap overflows only before its resets)."""
+        x = solution.x
+        return sum((x.get((kind, entity, step), Fraction(0)) for step in range(self.model.steps)), Fraction(0))
 
     def value(self, activity: str, prices: dict[str, list[_Pair]], step: int) -> tuple[Fraction | None, Fraction | None]:
         """An activity's value per execution in a step: the prices of what it produces less what it consumes,
@@ -1278,16 +1433,24 @@ def compute(graph: Graph, solve: str) -> Economy:
     """The economy node `solve` (steady or plan) of `graph`. It raises `Need` until every node it reads is
     computed, as every graph node does."""
     graph.depend(("economy_model",))
-    shape = _shape(graph)
+    shape = _shape(graph, solve)
     reader = _Reader(graph, shape, solve)
     model = reader.model(graph.economy)
     if model is None:
         return Economy(blocked_by=graph.register(reader.refused) | frozenset(reader.blocked))
-    status = worst(reader.status, PROVISIONAL) if reader.unresolved else reader.status
+    status = reader.inputs()
     solver = _Solver(model, graph.economy)
     try:
         data, warnings = solver.steady() if solve == STEADY else solver.plan()
     except Failure as failure:
         return Economy(blocked_by=graph.register(failure.errors))
+    if solve == STEADY:
+        # Without the pending flows it left out, every price is provisional (the ACM-PRICE addendum, part 1); the
+        # status of what each price read is, in this version, that of everything the steady state read.
+        pending = reader.excluded_pending()
+        reasons = ([EXCLUDED_PENDING] if pending else []) + ([INPUTS] if status != CONFIRMED else [])
+        status = worst(status, PROVISIONAL) if pending else status
+        data["excluded_pending"] = pending
+        data["price_status"] = {r: {"status": status, "reasons": list(reasons)} for r in model.resources}
     per_account = solve == PLAN
     return Economy({"status": status, "per_account": per_account, **data}, status, per_account, tuple(warnings))
