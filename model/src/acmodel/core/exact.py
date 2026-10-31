@@ -29,6 +29,7 @@ probe)."""
 from __future__ import annotations
 
 import heapq
+import math
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import Hashable, Sequence
@@ -79,25 +80,31 @@ def solve(
 ) -> dict[Hashable, Fraction] | None:
     """The one solution of a square sparse linear system, exactly; None when it has none or more than one.
 
-    Sparse Gaussian elimination over fractions. Each step takes an unknown that only one remaining equation holds (a
-    column singleton: no fill), else the shortest remaining equation and in it the unknown that the fewest equations
-    hold (Markowitz's choice; ties by order of `unknowns`); it eliminates that unknown from the other equations. Then
-    back substitution, last pivot first. Every coefficient is exact; a coefficient that cancels is dropped."""
+    Sparse Gaussian elimination, fraction-free: each equation is scaled to integers (by the least common multiple of
+    its denominators), an elimination replaces an equation by the pivot coefficient times it less its coefficient times
+    the pivot equation, and the result is divided by the greatest common divisor of its terms, so every number stays
+    an exact integer and small. Each step takes an unknown that only one remaining equation holds (a column singleton:
+    no fill), else the shortest remaining equation and in it the unknown that the fewest equations hold (Markowitz's
+    choice; ties by order of `unknowns`); it eliminates that unknown from the other equations. Then back substitution
+    in fractions, last pivot first. A coefficient that cancels is dropped."""
     size = len(unknowns)
     if len(equations) != size:
         return None
     rank = {unknown: position for position, unknown in enumerate(unknowns)}
-    rows: list[dict[Hashable, Fraction]] = []
-    values: list[Fraction] = []
+    rows: list[dict[Hashable, int]] = []
+    values: list[int] = []
     holders: dict[Hashable, set[int]] = {unknown: set() for unknown in unknowns}
     for index, equation in enumerate(equations):
-        row = {unknown: coefficient for unknown, coefficient in equation.items() if coefficient != 0}
+        given = {unknown: Fraction(coefficient) for unknown, coefficient in equation.items() if coefficient != 0}
+        value = Fraction(rhs[index])
+        scale = math.lcm(value.denominator, *(coefficient.denominator for coefficient in given.values()))
+        row = {unknown: c.numerator * (scale // c.denominator) for unknown, c in given.items()}
         for unknown in row:
             if unknown not in holders:
                 raise ValueError(f"an equation holds {unknown!r}, which is not an unknown")
             holders[unknown].add(index)
         rows.append(row)
-        values.append(Fraction(rhs[index]))
+        values.append(value.numerator * (scale // value.denominator))
     active = set(range(size))
     shortest = [(len(row), index) for index, row in enumerate(rows)]
     heapq.heapify(shortest)
@@ -127,11 +134,14 @@ def solve(
         coefficient = row[unknown]
         for other in sorted(holders[unknown] - {index}):
             target = rows[other]
-            factor = target.pop(unknown) / coefficient
+            factor = target.pop(unknown)
+            if coefficient != 1:  # target ← coefficient·target − factor·row
+                for name in target:
+                    target[name] *= coefficient
             for name, amount in row.items():
                 if name == unknown:
                     continue
-                updated = target.get(name, Fraction(0)) - factor * amount
+                updated = target.get(name, 0) - factor * amount
                 if updated:
                     if name not in target:
                         holders[name].add(other)
@@ -141,7 +151,12 @@ def solve(
                     holders[name].discard(other)
                     if len(holders[name]) == 1 and name not in done:
                         singles.append(name)
-            values[other] -= factor * value
+            values[other] = coefficient * values[other] - factor * value
+            common = math.gcd(values[other], *target.values())
+            if common > 1:
+                for name in target:
+                    target[name] //= common
+                values[other] //= common
             heapq.heappush(shortest, (len(target), other))
         holders[unknown] = set()
         active.discard(index)
@@ -157,7 +172,7 @@ def solve(
     found: dict[Hashable, Fraction] = {}
     for index, unknown in reversed(order):
         row = rows[index]
-        rest = sum((amount * found[name] for name, amount in row.items() if name != unknown), Fraction(0))
+        rest = sum((amount * found[name] for name, amount in row.items() if name != unknown and found[name]), Fraction(0))
         found[unknown] = (values[index] - rest) / row[unknown]
     return found
 
