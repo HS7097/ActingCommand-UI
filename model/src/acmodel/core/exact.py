@@ -207,26 +207,33 @@ def optimum(problem: Problem, statuses: Sequence[int], cap: int) -> Vertex | Ref
     everything = range(m)
     pivots = 0
     while True:
-        b_rows: list[dict[int, Fraction]] = [{} for _ in everything]
+        # B is block-triangular: a basic logical r_i is its row's value, and a basic logical's row has a zero dual.
+        # So both systems shrink to the tight rows (the rows whose logical is nonbasic) and the basic columns, a
+        # square system as large as the basic columns; then each basic logical is its row's value.
+        structural = [k for k in basic if k < n]
+        tight = [i for i in everything if n + i in at]
+        chosen = set(structural)
+        equations, rhs = [], []
+        for i in tight:
+            row = problem.rows[i]
+            equations.append({j: a for j, a in row.items() if j in chosen and a})
+            rhs.append(at[n + i] - sum((a * at[j] for j, a in row.items() if at.get(j)), Fraction(0)))
+        x_basic = solve(equations, rhs, structural)
+        if x_basic is None:
+            return Refused(SINGULAR, pivots)
+        z = {**at, **x_basic}
         for k in basic:
-            for i, coefficient in columns[k].items():
-                b_rows[i][k] = coefficient
-        rhs = [Fraction(0)] * m
-        for k, value in at.items():
-            if value:
-                for i, coefficient in columns[k].items():
-                    rhs[i] -= coefficient * value
-        z_basic = solve(b_rows, rhs, basic)
-        if z_basic is None:
+            if k >= n:  # the terms at 0 add nothing (the sums skip them, exactly)
+                z[k] = sum((a * z[j] for j, a in problem.rows[k - n].items() if z[j]), Fraction(0))
+        held = set(tight)
+        transposed = [{i: a for i, a in columns[j].items() if i in held} for j in structural]
+        y_tight = solve(transposed, [cost[j] for j in structural], tight)
+        if y_tight is None:
             return Refused(SINGULAR, pivots)
-        z = {**at, **z_basic}
-        dual_equations = [columns[k] for k in basic]
-        y = solve(dual_equations, [cost[k] for k in basic], list(everything))
-        if y is None:
-            return Refused(SINGULAR, pivots)
+        y = [y_tight.get(i, Fraction(0)) for i in everything]
 
         def reduced(k: int) -> Fraction:
-            return cost[k] - sum((coefficient * y[i] for i, coefficient in columns[k].items()), Fraction(0))
+            return cost[k] - sum((coefficient * y[i] for i, coefficient in columns[k].items() if y[i]), Fraction(0))
 
         def rises(k: int) -> bool:  # a nonbasic variable that could increase
             return upper[k] is None or at[k] < upper[k]
@@ -241,13 +248,17 @@ def optimum(problem: Problem, statuses: Sequence[int], cap: int) -> Vertex | Ref
         costs = {k: reduced(k) for k in at}
         dual = [k for k in sorted(at) if (rises(k) and costs[k] > 0) or (falls(k) and costs[k] < 0)]
         if not primal and not dual:
-            return Vertex(tuple(z[j] for j in range(n)), tuple(y[i] for i in everything), pivots)
+            return Vertex(tuple(z[j] for j in range(n)), tuple(y), pivots)
         if pivots >= cap:
             return Refused(PIVOT_CAP, pivots)
         position = {k: p for p, k in enumerate(basic)}
         if not primal:  # a primal simplex step: the least index whose reduced cost improves enters
             entering = dual[0]
             sign = 1 if rises(entering) and costs[entering] > 0 else -1
+            b_rows: list[dict[int, Fraction]] = [{} for _ in everything]  # B, row by row
+            for k in basic:
+                for i, coefficient in columns[k].items():
+                    b_rows[i][k] = coefficient
             alpha = solve(b_rows, [columns[entering].get(i, Fraction(0)) for i in everything], basic)
             if alpha is None:
                 return Refused(SINGULAR, pivots)
@@ -279,12 +290,12 @@ def optimum(problem: Problem, statuses: Sequence[int], cap: int) -> Vertex | Ref
             rising = lower[leaving] is not None and z[leaving] < lower[leaving]
             direction = 1 if rising else -1
             unit = [Fraction(1) if k == leaving else Fraction(0) for k in basic]
-            rho = solve(dual_equations, unit, list(everything))
+            rho = solve([columns[k] for k in basic], unit, list(everything))  # Bᵀ·ρ = e: B⁻¹'s row of `leaving`
             if rho is None:
                 return Refused(SINGULAR, pivots)
             choice: tuple[Fraction, int] | None = None
             for k in sorted(at):
-                alpha_k = sum((coefficient * rho[i] for i, coefficient in columns[k].items()), Fraction(0))
+                alpha_k = sum((coefficient * rho[i] for i, coefficient in columns[k].items() if rho[i]), Fraction(0))
                 if not alpha_k:
                     continue
                 if (rises(k) and alpha_k * direction < 0) or (falls(k) and alpha_k * direction > 0):

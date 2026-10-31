@@ -1057,6 +1057,29 @@ one dual optimal point, never a pick per pool: with V = min(A, B, C), each pool'
   price: an activity's value is linear in the prices, so its value at the mean is the mean of its values per step).
   Its `interval` is π_r's least and greatest value on D*, an unbounded end null: these replace the re-solves as the
   price's interval.
+- **How the values on D* are found** (PRICE-2c; every result is the same, exactly, only fewer and smaller LPs are
+  solved):
+  - *Pinned by the chords.* With f(δ) the optimum when a step brings δ more of a resource (its balance row's right
+    side raised by δ, nothing else), f is concave; its right and left derivatives are the projection's `low` and
+    `high`, and its chords enclose them: (f(g) − f(0))/g ≤ `low` ≤ `high` ≤ (f(0) − f(−g))/g. So when the re-solves at
+    plus and minus one grain (`grain`) both exist and agree, the projection is exactly that value and no LP on D* is
+    solved for it. A resource with a hard cap never takes this way (one grain more also raises what may overflow, a
+    second right side).
+  - *Constant on D*.* A pool whose projection is exact in every step has its one mean as its `interval`, and an
+    activity whose value reads only such pools has its one value as its `range`: no LP.
+  - *D* in the complementary-slackness form.* The other projections, intervals and ranges, and the forcing costs, are
+    solved on the optimal face written without the strong-duality row: the dual's rows and variables with, for an
+    exact optimum x* of the primal, the dual of each at-most row x* leaves slack fixed at 0, the `w` of each variable
+    below its upper bound fixed at 0, and the dual row of each variable above 0 an equality. A dual feasible point is
+    optimal exactly when it is complementary to one primal optimum, so this is the face itself; HiGHS solves on it far
+    faster than on the face with its dense cost row (on a large model, one such LP took minutes). x* is S3's optimum
+    (exactly optimal once the strong-duality check has found a dual point of its cost), and for a forcing cost an
+    optimum of S3 that runs the activity its `most` (its `most` probe's solution, or S3's when complementary
+    slackness gave `most` 0). The selection and its exact check use the face.
+  - *Warm starts.* Consecutive LPs on the same rows that differ only in their objective (those above) are given to
+    the HiGHS instance that solved the previous one, with the objective changed: HiGHS's primal simplex goes on from
+    the basis it ended at, without presolve. Only where HiGHS starts differs; each LP's exact vertex and certificate
+    are its own ("Exactness and failures").
 - **The selection**, each step an exact LP on D* and what is fixed so far, in this order:
   1. a pool bounded below only (`high` null: one less is infeasible) that a main goal values (its own `objective` of
      tier `main`): fixed at its least value, the value of one more (its goal's weight), by id; `by` `one_more`;

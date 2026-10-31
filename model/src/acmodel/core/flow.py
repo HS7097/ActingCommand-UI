@@ -96,7 +96,7 @@ stays dropped while the rest is still infeasible.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -188,6 +188,9 @@ MARGINAL_TOLERANCE = Fraction(1, 10**7)
 # valid basis (`no_basis`), its basis gave no certified vertex (an `exact` reason), or the probe's LP failed.
 TIE, MOST, RANGE, FORCING = "tie", "most", "range", "forcing_cost"
 NO_BASIS, SOLVE_FAILED = "no_basis", "solve_failed"
+# HiGHS's simplex strategies (`SimplexStrategy`): the dual simplex, which `linprog` sets for every solve, and the primal
+# simplex, which goes on from a feasible basis when only the objective changes (`_highs_again`, PRICE-2c).
+DUAL_SIMPLEX, PRIMAL_SIMPLEX = 1, 4
 
 
 @dataclass(frozen=True)
@@ -1600,42 +1603,59 @@ class _Arrays:
     integer: list[int]
 
 
-def _arrays(program: _Program) -> _Arrays:
-    """The program as scipy wants it: sparse rows in canonical order, columns by variable id, and the objective
-    negated (scipy minimises)."""
+def _float(number: Fraction) -> float:
+    """float(number), as `numbers.Rational` computes it (the integers' true division), without its dispatch."""
+    return number.numerator / number.denominator
+
+
+def _matrix(selected: list[_Row], columns: list[Key]) -> Any:
+    """Rows as a sparse matrix over `columns`; None for no rows (the solver is given none)."""
     import numpy as np
     from scipy import sparse
 
-    columns = sorted(program.variables)
+    if not selected:
+        return None
     index = {key: position for position, key in enumerate(columns)}
+    data, row_index, column_index = [], [], []
+    for position, row in enumerate(selected):
+        for key in sorted(row.coefficients):
+            data.append(_float(row.coefficients[key]))
+            row_index.append(position)
+            column_index.append(index[key])
+    places = (np.array(row_index, dtype=np.int64), np.array(column_index, dtype=np.int64))
+    return sparse.csr_array((np.array(data, dtype=np.float64), places), shape=(len(selected), len(columns)))
+
+
+def _costs(program: _Program, columns: list[Key]) -> Any:
+    """The objective over `columns`, negated (scipy minimises)."""
+    import numpy as np
+
+    index = {key: position for position, key in enumerate(columns)}
+    c = np.zeros(len(columns), dtype=np.float64)
+    for key, weight in program.objective.items():
+        c[index[key]] = -_float(weight)
+    return c
+
+
+def _arrays(program: _Program) -> _Arrays:
+    """The program as scipy wants it: sparse rows in canonical order, columns by variable id, and the objective
+    negated (scipy minimises). All the rows in one matrix (`a_all`) only for a MILP, which reads them so."""
+    import numpy as np
+
+    columns = sorted(program.variables)
     rows = sorted(program.rows, key=lambda row: row.key)
     eq = [row for row in rows if row.sense == "eq"]
     le = [row for row in rows if row.sense == "le"]
-
-    def matrix(selected: list[_Row]) -> Any:
-        if not selected:  # no rows of this sense: the solver is given none
-            return None
-        data, row_index, column_index = [], [], []
-        for position, row in enumerate(selected):
-            for key in sorted(row.coefficients):
-                data.append(float(row.coefficients[key]))
-                row_index.append(position)
-                column_index.append(index[key])
-        places = (np.array(row_index, dtype=np.int64), np.array(column_index, dtype=np.int64))
-        return sparse.csr_array((np.array(data, dtype=np.float64), places), shape=(len(selected), len(columns)))
-
-    c = np.zeros(len(columns), dtype=np.float64)
-    for key, weight in program.objective.items():
-        c[index[key]] = -float(weight)
     bounds = [program.variables[key] for key in columns]
+    integer = [1 if integer else 0 for _, _, integer in bounds]
     return _Arrays(
-        columns=columns, rows=rows, eq=eq, le=le, c=c,
-        a_eq=matrix(eq), b_eq=np.array([float(row.rhs) for row in eq], dtype=np.float64),
-        a_le=matrix(le), b_le=np.array([float(row.rhs) for row in le], dtype=np.float64),
-        a_all=matrix(rows),
-        lower=[float(low) for low, _, _ in bounds],
-        upper=[None if high is None else float(high) for _, high, _ in bounds],
-        integer=[1 if integer else 0 for _, _, integer in bounds],
+        columns=columns, rows=rows, eq=eq, le=le, c=_costs(program, columns),
+        a_eq=_matrix(eq, columns), b_eq=np.array([_float(row.rhs) for row in eq], dtype=np.float64),
+        a_le=_matrix(le, columns), b_le=np.array([_float(row.rhs) for row in le], dtype=np.float64),
+        a_all=_matrix(rows, columns) if any(integer) else None,
+        lower=[_float(low) for low, _, _ in bounds],
+        upper=[None if high is None else _float(high) for _, high, _ in bounds],
+        integer=integer,
     )
 
 
@@ -1651,7 +1671,7 @@ def _violation(program: _Program, x: dict[Key, Fraction]) -> dict[str, str] | No
         if integer and value.denominator != 1:
             return {"constraint": _token(key), "found": str(value), "bound": "integer"}
     for row in sorted(program.rows, key=lambda row: row.key):
-        lhs = sum((value * x[key] for key, value in row.coefficients.items()), Fraction(0))
+        lhs = sum((value * x[key] for key, value in row.coefficients.items() if x[key]), Fraction(0))  # 0s add nothing
         if (lhs != row.rhs) if row.sense == "eq" else (lhs > row.rhs):
             sense = "=" if row.sense == "eq" else "<="
             return {"constraint": _token(row.key), "found": str(lhs), "bound": f"{sense}{row.rhs}"}
@@ -1748,6 +1768,7 @@ class _Run:
     x: Any = None
     duals: Any = None
     statuses: tuple[int, ...] | None = None
+    solver: Any = None  # the HiGHS instance that holds the LP, for a warm start (`_highs_again`)
 
 
 def _highs(arrays: _Arrays, presolve: bool) -> _Run:
@@ -1779,17 +1800,46 @@ def _highs(arrays: _Arrays, presolve: bool) -> _Run:
     lp.a_matrix_.start_ = matrix.indptr
     lp.a_matrix_.index_ = matrix.indices
     lp.a_matrix_.value_ = matrix.data
+    solver = highs._Highs()
+    if solver.passOptions(_options(presolve, DUAL_SIMPLEX)) == highs.HighsStatus.kError:
+        return _Run(4, "passOptions")
+    if solver.passModel(lp) == highs.HighsStatus.kError:
+        return _Run(2, solver.modelStatusToString(highs.HighsModelStatus.kModelError))
+    return _highs_run(solver, n, matrix.shape[0])
+
+
+def _options(presolve: bool, strategy: int) -> Any:
+    """HiGHS's options as `linprog` sets them (no output, no debugging), with presolve and a simplex strategy."""
+    from scipy.optimize._highspy import _core as highs
+
     options = highs.HighsOptions()
     options.presolve = "on" if presolve else "off"
     options.output_flag = False
     options.log_to_console = False
     options.highs_debug_level = 0  # kHighsDebugLevelNone, as linprog sets it
-    options.simplex_strategy = 1  # kSimplexStrategyDual, as linprog sets it
-    solver = highs._Highs()
-    if solver.passOptions(options) == highs.HighsStatus.kError:
+    options.simplex_strategy = strategy
+    return options
+
+
+def _highs_again(solver: Any, arrays: _Arrays) -> _Run:
+    """The LP that HiGHS instance `solver` holds, with the objective of `arrays` instead (PRICE-2c): the same rows and
+    bounds, so the basis of its last solve is still primal feasible, and HiGHS's primal simplex goes on from it,
+    without presolve (which would set the basis aside), instead of solving from scratch."""
+    import numpy as np
+    from scipy.optimize._highspy import _core as highs
+
+    n = len(arrays.columns)
+    if solver.passOptions(_options(False, PRIMAL_SIMPLEX)) == highs.HighsStatus.kError:
         return _Run(4, "passOptions")
-    if solver.passModel(lp) == highs.HighsStatus.kError:
-        return _Run(2, solver.modelStatusToString(highs.HighsModelStatus.kModelError))
+    solver.changeColsCost(n, np.arange(n, dtype=np.int32), np.asarray(arrays.c, dtype=np.float64))
+    return _highs_run(solver, n, len(arrays.le) + len(arrays.eq))
+
+
+def _highs_run(solver: Any, n: int, m: int) -> _Run:
+    """Run HiGHS on the LP it holds (`_highs`) and read its status, solution and basis."""
+    import numpy as np
+    from scipy.optimize._highspy import _core as highs
+
     solver.run()
     found = solver.getModelStatus()
     text = solver.modelStatusToString(found)
@@ -1800,14 +1850,14 @@ def _highs(arrays: _Arrays, presolve: bool) -> _Run:
     }
     status = statuses.get(found, 4)
     if status != 0:
-        return _Run(status, text)
+        return _Run(status, text, solver=solver)
     solution, basis = solver.getSolution(), solver.getBasis()
     columns = [int(value) for value in basis.col_status]
     rows = [int(value) for value in basis.row_status]
-    valid = bool(getattr(basis, "valid", True)) and len(columns) == n and len(rows) == matrix.shape[0]
+    valid = bool(getattr(basis, "valid", True)) and len(columns) == n and len(rows) == m
     return _Run(
         0, text, np.array(solution.col_value, dtype=np.float64), np.array(solution.row_dual, dtype=np.float64),
-        tuple(columns + rows) if valid else None,
+        tuple(columns + rows) if valid else None, solver,
     )
 
 
@@ -1831,6 +1881,52 @@ class _Unverified:
     `lp_probe_unverified` beyond `path`, `probe` and `activity`."""
 
     detail: dict[str, Any]
+
+
+def _restricted(dual: _Dual, program: _Program, x: dict[Key, Fraction]) -> tuple[dict[Key, Any], tuple[_Row, ...]]:
+    """D*, the optimal face of a program's dual, in the form complementary slackness with an exact optimum x* of the
+    program gives it (PRICE-2c): the dual's variables and rows with, for each at-most row that x* leaves slack, its
+    dual fixed at 0; for each variable below its upper bound at x*, its `w` fixed at 0; and for each variable above 0
+    at x*, its dual row an equality.
+
+    A dual feasible point is optimal exactly when it is complementary to one primal optimum (c·x* ≤ (Aᵀy + w)·x* =
+    y·(Ax*) + w·x* ≤ b·y + u·w holds with equality exactly then, `_never`), so these are D*'s points, with no
+    strong-duality row: a set HiGHS solves on far faster than the face, whose dense cost row it can take minutes on. x*
+    must be an exact optimum: S3's (exactly feasible, and exactly optimal once `duality` has found a dual point of the
+    same cost), or for a forcing cost an optimum of S3 that runs the activity its `most` (the solution of its `most`
+    probe, exactly feasible on S3's optimal face; S3's own when complementary slackness gave `most` 0). The LPs that
+    read only a value on D* (the projections, the intervals, the ranges, the forcing costs) are solved on it; the
+    selection and its exact check keep the face."""
+    zero = Fraction(0)
+    variables: dict[Key, Any] = dict(dual.variables)
+    for row in program.rows:
+        if row.sense == "le" and sum((a * x[key] for key, a in row.coefficients.items() if x[key]), zero) < row.rhs:
+            for key in dual.duals[row.key]:
+                variables[key] = (zero, zero, False)
+    rows = []
+    for key in sorted(program.variables):
+        low, high, _ = program.variables[key]
+        if high is not None and x[key] < high:
+            variables[("w", _token(key), 0)] = (zero, zero, False)
+        row = dual.by_column[key]
+        rows.append(replace(row, sense="eq") if x[key] > low else row)
+    return variables, tuple(rows)
+
+
+def _pinned(model: _Model, resource: str, grain: _Pair) -> bool:
+    """Whether a resource's re-solves at plus and minus one grain in a step (`grain`, their chords) pin its projection
+    on D* to one value, so that no LP on D* is needed for it (PRICE-2c).
+
+    Let f(δ) be the optimum with δ more income of the resource in the step: the program's balance row of that step has
+    its right side raised by δ and nothing else changes, so f is the optimum of a maximum as a function of one right
+    side, concave. Its right derivative is the least of that row's dual on D* (the projection's `low`) and its left
+    derivative the greatest (`high`), and a concave function's chords enclose its derivatives:
+        (f(g) − f(0)) / g ≤ f'₊(0) ≤ f'₋(0) ≤ (f(0) − f(−g)) / g.
+    So when both chords exist and are equal, all four are: the projection is exactly that value. One grain more also
+    raises what a hard cap's overflow may be (the income it blocks), a second right side, so a resource with a hard cap
+    never takes this way; nor does a pair of chords that differ, or that lacks one (an end infeasible)."""
+    low, high = grain
+    return resource not in model.hard and low is not None and low == high
 
 
 def _never(dual: _Dual, point: dict[Key, Fraction], keys: list[Key]) -> bool:
@@ -1875,6 +1971,9 @@ class _Solver:
     def __init__(self, model: _Model, settings: EconomySettings) -> None:
         self.model = model
         self.settings = settings
+        # PRICE-2c: the last LP solved with `warm` (its variables and rows, held so that they stay the objects they are;
+        # its arrays; the HiGHS instance that holds it), for the next LP on the same rows with another objective
+        self.warm: tuple[Any, Any, _Arrays, Any] | None = None
 
     def failure(self, code: str, **detail: Any) -> Failure:
         return Failure(error(code, {"path": self.model.path, "solve": self.model.solve, **detail}))
@@ -1924,12 +2023,26 @@ class _Solver:
                 return x, found
         return self.exact(program, arrays.columns, run.x, stage), found
 
-    def lp(self, program: _Program, stage: str, *, check: bool = True, unbounded: bool = False) -> _Solution:
+    def lp(
+        self, program: _Program, stage: str, *, check: bool = True, unbounded: bool = False, warm: bool = False
+    ) -> _Solution:
         """An LP, solved by HiGHS (`_highs`) and made exact from its basis (`vertex`). With `unbounded`, an objective
         without a maximum is the status `unbounded` (an end of a projection that is null, PRICE-2b-1); else it is
-        `lp_solve_failed`."""
-        arrays = _arrays(program)
-        result = _highs(arrays, True)
+        `lp_solve_failed`.
+
+        With `warm` (the LPs on one face of the dual, which differ only in their objective: the projections, the
+        intervals, the ranges; PRICE-2c), an LP whose variables and rows are those of the last such LP, the same
+        objects, is given to the HiGHS instance that solved it, with its objective changed, so HiGHS starts from the
+        basis it ended at. Only where HiGHS starts differs: the exact vertex and its certificate are the new LP's own."""
+        result = None
+        if warm and self.warm is not None and self.warm[0] is program.variables and self.warm[1] is program.rows:
+            arrays = replace(self.warm[2], c=_costs(program, self.warm[2].columns))
+            result = _highs_again(self.warm[3], arrays)
+        else:
+            arrays = _arrays(program)
+            result = _highs(arrays, True)
+            if warm and result.solver is not None:
+                self.warm = (program.variables, program.rows, arrays, result.solver)
         if result.status not in (0, 2, 3):  # "unbounded or infeasible" from presolve, or numerical trouble
             result = _highs(arrays, False)
         if result.status == 2:
@@ -1955,12 +2068,14 @@ class _Solver:
             pivots=0 if found is None else found.pivots,
         )
 
-    def probe(self, program: _Program, stage: str, *, unbounded: bool = False) -> _Solution | _Unverified:
+    def probe(
+        self, program: _Program, stage: str, *, unbounded: bool = False, warm: bool = False
+    ) -> _Solution | _Unverified:
         """The LP of a per-activity probe (PRICE-2c): its solution, certified or not (`lp`), or `_Unverified` when it
         could not be solved and checked (`solve_failed`, with the error it raised: what blocked the whole steady state
         before PRICE-2c), or HiGHS finds the probe infeasible although an optimum meets it."""
         try:
-            found = self.lp(program, stage, unbounded=unbounded)
+            found = self.lp(program, stage, unbounded=unbounded, warm=warm)
         except Failure as failure:
             first = failure.errors[0]
             detail: dict[str, Any] = {"reason": SOLVE_FAILED, "stage": stage, "error": first["code"]}
@@ -2006,7 +2121,8 @@ class _Solver:
                 low = [float(row.rhs) if row.sense == "eq" else -np.inf for row in arrays.rows]
                 high = [float(row.rhs) for row in arrays.rows]
                 low, high = np.array(low, dtype=np.float64), np.array(high, dtype=np.float64)
-                constraints = LinearConstraint(arrays.a_all, low, high)
+                every = arrays.a_all if arrays.a_all is not None else _matrix(arrays.rows, arrays.columns)
+                constraints = LinearConstraint(every, low, high)
             integrality = np.array(arrays.integer, dtype=np.int64)
             bounds = Bounds(lower, upper)
             return milp(arrays.c, integrality=integrality, bounds=bounds, constraints=constraints, options=options)
@@ -2135,7 +2251,7 @@ class _Solver:
         of it), exact; None when it is unbounded. The rows always have a solution: they hold the dual point that the
         strong-duality check found (`lp_solve_failed`, stage `dual`, otherwise)."""
         program = _Program(variables, tuple(rows), _nonzero({key: sense * value for key, value in function.items()}))
-        found = self.lp(program, DUAL, unbounded=True)
+        found = self.lp(program, DUAL, unbounded=True, warm=True)
         if found.status == "unbounded":
             return None
         if found.status != "optimal":
@@ -2156,7 +2272,7 @@ class _Solver:
         found: list[Fraction | None] = []
         for sense in (-1, 1):
             program = _Program(variables, tuple(rows), _nonzero({key: sense * value for key, value in function.items()}))
-            end = self.certain(self.probe(program, DUAL, unbounded=True), DUAL)
+            end = self.certain(self.probe(program, DUAL, unbounded=True, warm=True), DUAL)
             if isinstance(end, _Unverified):
                 return end
             found.append(None if end.status == "unbounded" else sense * end.value)
@@ -2220,10 +2336,12 @@ class _Solver:
         return fixed, stages
 
     def joint(
-        self, dual: _Dual, point: dict[Key, Fraction], optimum: Fraction
+        self, dual: _Dual, point: dict[Key, Fraction], optimum: Fraction, prices: dict[str, list[_Pair]],
+        on_face: tuple[dict[Key, Any], tuple[_Row, ...]], optimal: dict[Key, Fraction],
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """The joint price vector and the activity judgements (addendum 2.1 §2.2 steps 3-5; ruling 127 iii): the
-        steady state's `joint`, and the warnings of its probes.
+        steady state's `joint`, and the warnings of its probes. `prices` are the projections per step (`steady`),
+        `on_face` D* as the intervals and the ranges read it (`_restricted`), and `optimal` S3's optimum.
 
         - **The projection.** A pool's coordinate is the mean over the cycle of its balance rows' duals; its
           `interval` is its least and greatest value on D*, an unbounded end null.
@@ -2247,6 +2365,9 @@ class _Solver:
           costs nothing more: 0.
         - **Complementary slackness** (PRICE-2c, `_never`): an activity whose dual slack is above 0 in every step at
           the exact optimal dual `point` runs in no optimum, so its `most` is 0 without a probe.
+        - **Constant on D*** (PRICE-2c): a pool whose projection is exact in every step (`_pinned`, or its LPs) is
+          constant on D*, its mean too, so its interval is that mean with no LP; and an activity whose value reads
+          only such pools has a constant value on D*, its range, with no probe.
         - **Unverified probes** (PRICE-2c): a probe of `most`, `range` or `forcing_cost` whose LP gives no certified
           optimum is `lp_probe_unverified` (returned with the section), its members null and its name listed in the
           activity's `unverified`; an activity whose `most` or `range` is unverified is left out of K (whether it is
@@ -2268,9 +2389,16 @@ class _Solver:
                 for key, sign in dual.duals[("balance", resource, step)].items():
                     _add(mean, key, sign / steps)
             pools[resource] = _nonzero(mean)
-        intervals = {resource: self.ends(variables, face, pools[resource]) for resource in model.resources}
+        intervals: dict[str, _Pair] = {}
+        for resource in model.resources:
+            if all(low is not None and low == high for low, high in prices[resource]):  # constant on D* (`_pinned`)
+                mean = sum((low for low, _ in prices[resource]), zero) / steps
+                intervals[resource] = (mean, mean)
+            else:
+                intervals[resource] = self.ends(*on_face, pools[resource])
         floor = _floor(VALUE, total_value(model), optimum)  # S3's optimal face
         most: dict[str, Fraction | None] = {}
+        runs: dict[str, dict[Key, Fraction]] = {}  # activity -> its `most` probe's solution
         worth: dict[str, dict[Key, Fraction]] = {}
         ranges: dict[str, _Pair] = {}
         for activity in model.activities:
@@ -2286,6 +2414,8 @@ class _Solver:
                     note(MOST, activity, found)
                 else:
                     most[activity] = None if found.status == "unbounded" else found.value
+                    if found.status != "unbounded":  # an optimum of S3 that runs it `most`: its forcing cost's x*
+                        runs[activity] = found.x
             if model.touches_store(activity):
                 continue
             value: dict[Key, Fraction] = {}
@@ -2295,7 +2425,12 @@ class _Solver:
                     for key, coefficient in pools[resource].items():
                         _add(value, key, amount * coefficient)
             worth[activity] = _nonzero(value)
-            ends = self.probed_ends(variables, face, worth[activity])
+            read = [resource for resource in model.resources if model.net.get((activity, resource))]
+            if all(intervals[resource][0] is not None and intervals[resource][0] == intervals[resource][1] for resource in read):
+                constant = sum((model.net[(activity, resource)] * intervals[resource][0] for resource in read), zero)
+                ranges[activity] = (constant, constant)  # every pool it reads is constant on D*, so is its value
+                continue
+            ends = self.probed_ends(*on_face, worth[activity])
             if isinstance(ends, _Unverified):
                 note(RANGE, activity, ends)
             else:
@@ -2358,8 +2493,10 @@ class _Solver:
                 forced = _Row(
                     ("forced", activity, 0), {("x", activity, step): -one for step in range(steps)}, "le", -count, None
                 )
-                forcing = _dual(_program(model, added=(forced,)))
-                program = _Program(forcing.variables, forcing.face(optimum), _nonzero(dict(forcing.duals[forced.key])))
+                forced_program = _program(model, added=(forced,))
+                forcing = _dual(forced_program)
+                restricted = _restricted(forcing, forced_program, runs.get(activity, optimal))
+                program = _Program(*restricted, _nonzero(dict(forcing.duals[forced.key])))
                 found = self.certain(self.probe(program, DUAL, unbounded=True), DUAL)
                 if isinstance(found, _Unverified):
                     note(FORCING, activity, found)
@@ -2554,14 +2691,18 @@ class _Solver:
         warnings += tiers.unverified
         dual = tiers.dual  # S3's, which every price re-solve changes, checked exactly (`duality`)
         face = dual.face(optimum)
+        on_face = _restricted(dual, program, base.x)  # D*, for the LPs that read only a value on it
         prices: dict[str, list[_Pair]] = {}
         grains: dict[str, list[_Pair]] = {}
         marginals: dict[str, list[Fraction]] = {}
         for resource in model.resources:
             prices[resource], grains[resource], marginals[resource] = [], [], []
             for step in range(steps):
-                price = self.ends(dual.variables, face, dual.duals[("balance", resource, step)])
                 grain = self.price(optimum, lambda delta: {"extra": {(resource, step): delta}})
+                if _pinned(model, resource, grain):
+                    price = grain  # the chords pin the projection (PRICE-2c): no LP on D*
+                else:
+                    price = self.ends(*on_face, dual.duals[("balance", resource, step)])
                 marginal = self.marginal(-base.eq[("balance", resource, step)])
                 warnings += self.disagrees(resource, step, marginal, price)
                 warnings += self.outside(resource, step, price, grain)
@@ -2581,7 +2722,7 @@ class _Solver:
                 values[activity] = None
                 continue
             values[activity] = [_price(self.value(activity, prices, step)) for step in range(steps)]
-        joint, judged = self.joint(dual, tiers.point, optimum)
+        joint, judged = self.joint(dual, tiers.point, optimum, prices, on_face, base.x)
         warnings += judged
         data = {
             "cycle": {"steps": steps, "step_seconds": STEP_SECONDS},

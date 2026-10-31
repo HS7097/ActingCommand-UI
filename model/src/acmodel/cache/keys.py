@@ -84,7 +84,9 @@ class Evaluator:
 # `lp.max_pivots` exact pivots (in the steady state's spec); complementary slackness at the exact optimal dual spares
 # the tie and `most` probes of an activity no optimum runs; a per-activity probe that cannot be verified exactly is
 # `lp_probe_unverified` (a warning, its activity a structural gap, `probe_unverified`) instead of blocking the steady
-# state; each activity judgement lists what is `unverified`.
+# state; each activity judgement lists what is `unverified`. The values on D* are the same, found with fewer and smaller
+# LPs: a projection pinned by its re-solves' chords needs none, a pool or activity constant on D* none, and the others
+# are solved on D* in its complementary-slackness form, with HiGHS warm-started between LPs on the same rows.
 EVALUATORS: dict[str, Evaluator] = {
     "economy": Evaluator(8, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
