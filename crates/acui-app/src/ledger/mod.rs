@@ -36,7 +36,7 @@ use acui_rows::{code, EventQuery, EventSeverity, LedgerView, OriginModule};
 use acui_source::{PauseTarget, SourceMode};
 use slint::{SharedString, Timer, TimerMode};
 
-use crate::settings::TextSize;
+use crate::settings::{TextSize, Theme};
 use crate::ui::{self, language_from_index, Ui};
 use crate::{launcher, report, LedgerWindow};
 use frame::FrameSlot;
@@ -725,7 +725,7 @@ pub fn install_callbacks(handle: &Rc<LedgerHandle>) {
             launcher::unlock(&ui);
         }
     });
-    // The two display boxes are the shared state's: what is picked here is
+    // The three display boxes are the shared state's: what is picked here is
     // applied to every window, and saved.
     handle.window.on_text_size_changed(|index| {
         if let Some(ui) = ui::current() {
@@ -735,6 +735,11 @@ pub fn install_callbacks(handle: &Rc<LedgerHandle>) {
     handle.window.on_language_changed(|index| {
         if let Some(ui) = ui::current() {
             ui.set_language(language_from_index(index));
+        }
+    });
+    handle.window.on_theme_changed(|index| {
+        if let Some(ui) = ui::current() {
+            ui.set_theme(Theme::from_index(index));
         }
     });
 }

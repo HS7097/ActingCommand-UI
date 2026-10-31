@@ -4,6 +4,9 @@
 // Palette. Each window has its own copy of the globals.
 import { Palette } from "std-widgets.slint";
 
+// The look a window is drawn in, as the theme picks it.
+export enum Skin { flat, aero }
+
 // What a status band says, in one of five colours; `none` draws no band.
 // Which state of a page takes which colour is that page's to decide.
 export enum StatusTone { none, ok, held, attention, fault, offline }
@@ -37,6 +40,9 @@ export global Scale {
 // follow the platform style's Palette, and so the system's light or dark
 // setting.
 export global Look {
+    // The skin this window is drawn in: set before the window shows, and again
+    // whenever a theme is picked in any window.
+    in property <Skin> skin;
     // The page the window's contents are drawn on, and the window's own ground.
     out property <brush> page: Palette.background;
     out property <brush> window-background: root.page;

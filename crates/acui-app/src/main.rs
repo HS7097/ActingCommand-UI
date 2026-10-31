@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! ActingCommand 监控台 / ActingCommand Console. Its main window is the
 //! workbench (`ui`): the Runtime in plain words with the launcher's Start and
-//! Request Shutdown (`launcher`), the language and the text size, and the way
-//! into the advanced troubleshooting and ledger window (`ledger`) — a
-//! read-only window over this run's state root, opened through the formal
-//! ledger read face, offline over the files or online through the typed client
-//! of the running Runtime, with the launcher's technical lines and its unlock
-//! entry. That window opens only when asked: from the workbench, or at the
-//! start with `--tab` or `--source`; at most one per source.
+//! Request Shutdown (`launcher`), the language, the text size and the theme
+//! (`skin`), and the way into the advanced troubleshooting and ledger window
+//! (`ledger`) — a read-only window over this run's state root, opened through
+//! the formal ledger read face, offline over the files or online through the
+//! typed client of the running Runtime, with the launcher's technical lines and
+//! its unlock entry. That window opens only when asked: from the workbench, or
+//! at the start with `--tab` or `--source`; at most one per source.
 //!
 //! A start that fails is shown in a window of its own (`report`); a state root
 //! this run cannot find is said in red on the workbench, which stays. Every
 //! word is put together when it is painted, in the language shown then (`ui`,
-//! `phrase`), so a language or a text size picked in any window takes effect
-//! at once in every window. A ledger window comes up first; its own reader
+//! `phrase`), so a language, a text size or a theme picked in any window takes
+//! effect at once in every window. A ledger window comes up first; its own reader
 //! thread then opens the read face and does every read of it, and the window
 //! is painted from what the reads leave in its state, never from the read face
 //! itself. Started directly, the program opens no console window of its own;
@@ -27,6 +27,7 @@ mod ledger;
 mod phrase;
 mod report;
 mod settings;
+mod skin;
 mod strings;
 mod ui;
 

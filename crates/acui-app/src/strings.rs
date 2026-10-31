@@ -86,6 +86,10 @@ pub struct Labels {
     pub text_sizes: [&'static str; 3],
     pub language: &'static str,
     pub languages: [&'static str; 2],
+    /// The theme box, in `Theme` index order. On a system other than Windows
+    /// the second option says it has no glass there.
+    pub theme: &'static str,
+    pub theme_options: [&'static str; 2],
     pub severity_min: [&'static str; 4],
     pub severity_max: [&'static str; 4],
     pub all_modules: &'static str,
@@ -432,6 +436,18 @@ pub struct Labels {
     pub config_path_missing: &'static str,
     /// The workbench refused to close while an unlock runs.
     pub close_unlock_busy: &'static str,
+    /// The Aero frame's caption buttons, by the names a screen reader says.
+    pub caption_minimize: &'static str,
+    pub caption_maximize: &'static str,
+    pub caption_restore: &'static str,
+    pub caption_close: &'static str,
+    /// At the top of an Aero window whose own frame, or whose glass, did not
+    /// come up: what the window is drawn with instead. Not said yet: no window
+    /// draws a frame of its own so far.
+    #[allow(dead_code)]
+    pub chrome_failed: &'static str,
+    #[allow(dead_code)]
+    pub glass_failed: &'static str,
     /// The settings file: the variables its directory comes from; file, error;
     /// file, line, key, value; file, line; file; file, error.
     pub settings_no_dir: &'static str,
@@ -474,6 +490,11 @@ pub const ZH: Labels = Labels {
     text_sizes: ["标准", "大", "特大"],
     language: "语言",
     languages: ["中文", "English"],
+    theme: "主题",
+    theme_options: [
+        "现代扁平",
+        if cfg!(windows) { "Win7 Aero" } else { "Win7 Aero（实心）" },
+    ],
     severity_min: ["严重度不限", "≥ 警告", "≥ 错误", "≥ 致命"],
     severity_max: ["上限不限", "≤ 信息", "≤ 警告", "≤ 错误"],
     all_modules: "全部模块",
@@ -795,6 +816,12 @@ pub const ZH: Labels = Labels {
     config_file: "配置文件",
     config_path_missing: "还没有配置 Runtime 的配置文件：请按安装说明填写设置文件",
     close_unlock_busy: "解锁还在进行：等它结束再关闭监控台",
+    caption_minimize: "最小化",
+    caption_maximize: "最大化",
+    caption_restore: "还原",
+    caption_close: "关闭",
+    chrome_failed: "Aero 外框没有生效，这个窗口改用系统标题栏。详情见技术日志。",
+    glass_failed: "Aero 玻璃没有生效，这个窗口改用实心外观。详情见技术日志。",
     settings_no_dir: "找不到存放设置文件的目录（{} 未设置）：本次按默认设置运行，改了的设置也存不下来",
     settings_unreadable: "设置文件 {} 读不出：{}。本次按默认设置运行；为免覆盖原文件，本次不保存设置",
     settings_unknown_value: "设置文件 {} 第 {} 行的取值认不出（{} = {}），本次按默认处理；这一行原样保留",
@@ -833,6 +860,11 @@ pub const EN: Labels = Labels {
     text_sizes: ["Standard", "Large", "Extra Large"],
     language: "Language",
     languages: ["中文", "English"],
+    theme: "Theme",
+    theme_options: [
+        "Modern Flat",
+        if cfg!(windows) { "Win7 Aero" } else { "Win7 Aero (Solid)" },
+    ],
     severity_min: ["Any Level", "≥ Warning", "≥ Error", "≥ Fatal"],
     severity_max: ["Any Upper Bound", "≤ Info", "≤ Warning", "≤ Error"],
     all_modules: "All Modules",
@@ -1154,6 +1186,12 @@ pub const EN: Labels = Labels {
     config_file: "Configuration File",
     config_path_missing: "No Runtime configuration file is set: fill in the settings file as the installation guide says",
     close_unlock_busy: "The unlock is still running: close the console once it has ended",
+    caption_minimize: "Minimize",
+    caption_maximize: "Maximize",
+    caption_restore: "Restore",
+    caption_close: "Close",
+    chrome_failed: "The Aero frame did not take effect: this window uses the system title bar instead. The technical log has the details.",
+    glass_failed: "The Aero glass did not take effect: this window uses a solid look instead. The technical log has the details.",
     settings_no_dir: "No directory for the settings file ({} not set): this run uses the default settings, and a changed setting cannot be saved",
     settings_unreadable: "The settings file {} could not be read: {}. This run uses the default settings and saves none, so the file is never written over",
     settings_unknown_value: "The settings file {}, line {}: the value is not recognized ({} = {}); the default is used, and the line is kept as it is",

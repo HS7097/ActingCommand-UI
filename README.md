@@ -383,8 +383,8 @@ acui --help
 ```
 
 The main window is the **workbench**: the Runtime in plain words with Start and Request Shutdown, the
-plain-words result of the last press, the language and the text size, a "Troubleshooting and Ledger"
-button, and an "Add Instance" button that is off (see "Instance configuration"). The ledger window,
+plain-words result of the last press, the language, the text size and the theme, a "Troubleshooting and
+Ledger" button, and an "Add Instance" button that is off (see "Instance configuration"). The ledger window,
 "Advanced Troubleshooting and Ledger History", opens only when asked: from that button, or at the start
 when `--tab` or `--source` is given. There is at most one per source (the default `auto`, `online`,
 `offline`); asking again restores the one open (Slint 1.17 has no call that brings a window to the
@@ -439,24 +439,30 @@ read face that does not open is no failed start: the ledger window stays and say
 (see above). Once it exists, the top of every window says where it is; when it
 cannot be written, the windows say that instead.
 
-## Interface language and text size
+## Interface language, text size and theme
 
-Two dropdowns at the right of the workbench's top and of every ledger window's top bar; a choice made in
+Three dropdowns at the right of the workbench's top and of every ledger window's top bar; a choice made in
 any window applies at once to every open window and is written into the settings file as soon as it is
-made, and a ledger window opened later comes up with the current language and text size:
+made, and a ledger window opened later comes up with the current language, text size and theme:
 
 - **Text size**: standard / large / extra-large = 1.0 / 1.25 / 1.5. **Takes effect on the spot**. Every
   font size and line height in the interface is one base size meant for a person at normal DPI (list row
-  14px, detail pane 13px, subheading 16px, line height 26px) multiplied by this one factor; `app.slint`
-  has only this one knob, `Scale.factor`. The minimum widths of the controls that hold text (the boxes,
-  the id box, the time slider, the notice lines) and the minimum heights of text areas are multiplied by
-  it too; a window's minimum size and the three columns' floor widths are not.
+  14px, detail pane 13px, subheading 16px, line height 26px) multiplied by this one factor; the interface
+  has only this one knob, `Scale.factor` (in `crates/acui-app/ui/kit/tokens.slint`). The minimum widths
+  of the controls that hold text (the boxes, the id box, the time slider, the notice lines) and the
+  minimum heights of text areas are multiplied by it too; a window's minimum size and the three columns'
+  floor widths are not.
 - **Language**: 中文 / English. **Takes effect on the spot**: the choice fills every window's `Strings`
   global again and paints every line of every window again — the launcher's plain and technical lines,
   the frame pane's note, the port box and the words after a read error included. A background thread never holds a language table; it
   hands back phrases that are put into words when painted, so a start or a frame read still in flight
   reports in the new language. The two language tables are in `crates/acui-app/src/strings.rs` (`ZH` and
   `EN`); there is no gettext. A read face's own error text is shown verbatim, untranslated.
+- **Theme**: Modern Flat / Win7 Aero (`flat` / `aero` in the settings file). **Takes effect on the spot**,
+  nothing is restarted: the choice sets the skin of every window's own `Look` global, which every page,
+  card, text and control of the interface is drawn from (`crates/acui-app/ui/kit/`). Modern Flat follows
+  the system's light or dark setting. On a system other than Windows the second option is named
+  Win7 Aero (Solid).
 
 Two-layer labels: the upper layer is the name for a person to read, and the grey lower layer is the
 verbatim form used in the program — the raw `event_type`, module names, ids of every kind,
@@ -466,7 +472,7 @@ displayed verbatim, not guessed**.
 
 ### Settings file
 
-Language and text size are stored under the per-user configuration directory:
+Language, text size and theme are stored under the per-user configuration directory:
 
 ```
 Windows:  %APPDATA%\ActingCommand\acui.toml
@@ -478,7 +484,7 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml (falls back to $HOME/.config/
 lang = "zh"
 # standard | large | extra-large
 text_size = "standard"
-# flat | aero; read and checked only, nothing is drawn by it yet
+# flat | aero; set from the theme dropdown, every window is drawn by it
 theme = "flat"
 # optional, absolute paths
 state_root = '<install root>\state'
@@ -1107,8 +1113,9 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   is chosen by `acui-app` from the language tables.
 - `acui-app`: the only crate that depends on slint; the `.slint` files are in `crates/acui-app/ui/`, the
   two language tables in `strings.rs`, and settings-file reading and writing in `settings.rs`. What the
-  windows share — the language, the text size, the launcher's view, and the registry of the workbench and
-  the ledger windows — is in `ui.rs`, on the event loop only. The
+  windows share — the language, the text size, the theme, the launcher's view, and the registry of the
+  workbench and the ledger windows — is in `ui.rs`, on the event loop only; each window's skin by the
+  theme is set in `skin.rs`. The
   ledger window is painted from its own state alone (`ledger/state.rs`, `ledger/paint.rs`), never from
   the read face; the read face is opened and held by the window's own reader thread
   (`ledger/worker.rs`), the reads leave their results in the state first, a frame is read and

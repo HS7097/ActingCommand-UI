@@ -154,8 +154,10 @@ export global Strings {
     in property <string> show-up-to;
     in property <string> text-size;
     in property <string> language;
+    in property <string> theme;
     in property <[string]> text-size-options;
     in property <[string]> language-options;
+    in property <[string]> theme-options;
     in property <[string]> severity-min-options;
     in property <[string]> severity-max-options;
     in property <string> id-placeholder;
@@ -192,6 +194,11 @@ export global Strings {
     in property <string> add-instance;
     in property <string> add-instance-note;
     in property <string> config-file;
+    // The Aero frame's caption buttons, by the names a screen reader says.
+    in property <string> caption-minimize;
+    in property <string> caption-maximize;
+    in property <string> caption-restore;
+    in property <string> caption-close;
 }
 
 // A grey caption over the value it names: the two-layer label, top layer.
@@ -319,6 +326,7 @@ export component LedgerWindow inherits Window {
     in-out property <int> port-index <=> port-box.current-index;
     in-out property <int> text-size-index <=> text-size-box.current-index;
     in-out property <int> language-index <=> language-box.current-index;
+    in-out property <int> theme-index <=> theme-box.current-index;
 
     callback tab-changed(int);
     callback minimum-severity-changed(int);
@@ -337,6 +345,7 @@ export component LedgerWindow inherits Window {
     callback reopen-ledger();
     callback text-size-changed(int);
     callback language-changed(int);
+    callback theme-changed(int);
     callback unlock-owner();
     // By the pause line's place among `pauses` as painted.
     callback resume-asked(int);
@@ -366,6 +375,39 @@ export component LedgerWindow inherits Window {
                     text: root.log-note;
                     failed: root.log-failed;
                 }
+                // Display settings on a row of their own, at its end: with the source
+                // line beside them, their fixed widths would not fit the narrowest
+                // window at the larger text sizes. The reading row below keeps its
+                // width for what was read and what is hidden.
+                HorizontalLayout {
+                    spacing: 14px;
+                    alignment: end;
+                    Caption { text: Strings.text-size; }
+                    text-size-box := SkinComboBox {
+                        width: 110px * Scale.factor;
+                        model: Strings.text-size-options;
+                        selected => {
+                            root.text-size-changed(self.current-index);
+                        }
+                    }
+                    Caption { text: Strings.language; }
+                    language-box := SkinComboBox {
+                        width: 100px * Scale.factor;
+                        model: Strings.language-options;
+                        selected => {
+                            root.language-changed(self.current-index);
+                        }
+                    }
+                    Caption { text: Strings.theme; }
+                    // Wider off Windows, where the second option also says it has no glass.
+                    theme-box := SkinComboBox {
+                        width: (Platform.os == OperatingSystemType.windows ? 120px : 160px) * Scale.factor;
+                        model: Strings.theme-options;
+                        selected => {
+                            root.theme-changed(self.current-index);
+                        }
+                    }
+                }
                 HorizontalLayout {
                     spacing: 14px;
                     Text {
@@ -391,24 +433,6 @@ export component LedgerWindow inherits Window {
                         font-size: Scale.body-font;
                         vertical-alignment: center;
                         color: Look.text;
-                    }
-                    // Display settings share the source row, so the reading row below
-                    // keeps its width for what was read and what is hidden.
-                    Caption { text: Strings.text-size; }
-                    text-size-box := SkinComboBox {
-                        width: 110px * Scale.factor;
-                        model: Strings.text-size-options;
-                        selected => {
-                            root.text-size-changed(self.current-index);
-                        }
-                    }
-                    Caption { text: Strings.language; }
-                    language-box := SkinComboBox {
-                        width: 100px * Scale.factor;
-                        model: Strings.language-options;
-                        selected => {
-                            root.language-changed(self.current-index);
-                        }
                     }
                 }
                 HorizontalLayout {
@@ -1017,12 +1041,14 @@ export component WorkbenchWindow inherits Window {
 
     in-out property <int> text-size-index <=> text-size-box.current-index;
     in-out property <int> language-index <=> language-box.current-index;
+    in-out property <int> theme-index <=> theme-box.current-index;
 
     callback start-runtime();
     callback request-shutdown();
     callback open-ledger();
     callback text-size-changed(int);
     callback language-changed(int);
+    callback theme-changed(int);
 
     VerticalLayout {
         padding: 8px;
@@ -1088,6 +1114,22 @@ export component WorkbenchWindow inherits Window {
                         model: Strings.language-options;
                         selected => {
                             root.language-changed(self.current-index);
+                        }
+                    }
+                }
+                // The theme on a row of its own, under the other two at its end: on
+                // the title row the three boxes would not fit the narrowest window at
+                // the larger text sizes.
+                HorizontalLayout {
+                    spacing: 14px;
+                    alignment: end;
+                    Caption { text: Strings.theme; }
+                    // Wider off Windows, where the second option also says it has no glass.
+                    theme-box := SkinComboBox {
+                        width: (Platform.os == OperatingSystemType.windows ? 120px : 160px) * Scale.factor;
+                        model: Strings.theme-options;
+                        selected => {
+                            root.theme-changed(self.current-index);
                         }
                     }
                 }
