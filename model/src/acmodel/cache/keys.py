@@ -80,8 +80,13 @@ class Evaluator:
 # activity judgements (`joint`); an economy node keeps what it read (`reads`), the provenance of `price:` and
 # `activity_value:`; and a HiGHS marginal within `MARGINAL_TOLERANCE` of its exact price (relative, 1e-7) is no
 # longer `lp_dual_disagrees`.
+# PRICE-2c: `economy` 8: an LP's exact solution is the vertex of HiGHS's basis, made exactly optimal by at most
+# `lp.max_pivots` exact pivots (in the steady state's spec); complementary slackness at the exact optimal dual spares
+# the tie and `most` probes of an activity no optimum runs; a per-activity probe that cannot be verified exactly is
+# `lp_probe_unverified` (a warning, its activity a structural gap, `probe_unverified`) instead of blocking the steady
+# state; each activity judgement lists what is `unverified`.
 EVALUATORS: dict[str, Evaluator] = {
-    "economy": Evaluator(7, ("numpy", "python", "scipy")),
+    "economy": Evaluator(8, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
     "flow": Evaluator(3),
     "general": Evaluator(3),

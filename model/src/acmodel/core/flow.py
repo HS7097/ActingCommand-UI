@@ -54,7 +54,10 @@ another acquisition is a conversion, compared inside V. Three solves:
 - S1, A alone: its optimum A* (none when A has no term: A* is 0 and S2 is S3);
 - S2, V with A ≥ A*: its optimum V*. V0 > V* is `objective_tier_conflict`, which blocks the steady state;
   an activity that some optimum of S3 uses and no optimum of S2 does is `objective_tier_tie` (a warning).
-All of them compare exact fractions; a row A ≥ A* or V ≥ V* is checked exactly like every other row.
+All of them compare exact fractions; a row A ≥ A* or V ≥ V* is checked exactly like every other row. An activity
+whose dual slack at the exact optimal point of S3's dual is above 0 runs in no optimum (complementary slackness,
+`_never`; PRICE-2c), so it needs no tie probe and no probe of `most`; a probe that cannot be verified exactly is
+`lp_probe_unverified` (a warning, its activity a structural gap) and never blocks the steady state.
 
 **The joint price vector** (#424 ACM-PRICE addendum 2.1 §2.2, ruling 127 iii; PRICE-2b-1). The exported prices are
 one point of D*, never a pick per pool. Steps:
@@ -75,9 +78,12 @@ one point of D*, never a pick per pool. Steps:
    it (`in_optimum` when above 0), and the loss per execution of running it more (`forcing_cost`, from the dual of
    S3 with that most as a floor; `input_bound` when that dual is unbounded: nothing is left to run it again).
 
-**Exactness.** Every solution is converted with `Fraction(x).limit_denominator(lp.max_denominator)` and checked
-exactly against every bound, integrality and row (`lp_numeric_check_failed`). Objective values, prices and
-losses are computed from the checked fractions, never from the solver's floats.
+**Exactness.** An LP's solution is the vertex of HiGHS's basis (its column and row statuses), solved exactly and made
+exactly optimal with at most `lp.max_pivots` exact pivots (`core.exact`, PRICE-2c): a certified optimum. Where that
+fails, and for a MILP, the variables at a bound are fixed and the rows they leave tight solved exactly, else each value
+is converted with `Fraction(x).limit_denominator(lp.max_denominator)`. Every solution is checked exactly against every
+bound, integrality and row (`lp_numeric_check_failed`). Objective values, prices and losses are computed from the
+checked fractions, never from the solver's floats.
 
 **Infeasibility.** An infeasible program names a minimal set of conflicting rule groups (`lp_infeasible`): each
 group (a regen, cap, limit or read cap, and in a plan each opening stock) is dropped in turn, in id order, and
@@ -101,6 +107,7 @@ from acmodel.codes import (
     LP_DUAL_DISAGREES,
     LP_INFEASIBLE,
     LP_NUMERIC_CHECK_FAILED,
+    LP_PROBE_UNVERIFIED,
     LP_SOLVE_FAILED,
     OBJECTIVE_TIER_CONFLICT,
     OBJECTIVE_TIER_TIE,
@@ -109,7 +116,7 @@ from acmodel.codes import (
     STATE_READING_MISSING,
 )
 from acmodel.config import EconomySettings
-from acmodel.core import coverage
+from acmodel.core import coverage, exact
 from acmodel.core.common import CONFIRMED, PROVISIONAL, RULE_STATUS, Need, worst
 from acmodel.core.unknown import read as unknowns_read, rule_status
 from acmodel.envelope import Failure, error
@@ -175,6 +182,12 @@ NO_STEADY_SUPPLY, NO_ROOM = "no_steady_supply", "no_room"
 # so the two never agree exactly. Only this comparison of a float with an exact price has a tolerance: the check
 # `grain`, of two exact fractions, and every exactness check stay exact.
 MARGINAL_TOLERANCE = Fraction(1, 10**7)
+# A per-activity probe that cannot be verified exactly (PRICE-2c): `lp_probe_unverified`, a warning, and its activity a
+# structural gap of its static component (`core.coverage`). The probes, by the judgement they answer: a tie
+# (`objective_tier_tie`), the most an optimum runs it, its value's range on D*, its forcing cost. Why: HiGHS left no
+# valid basis (`no_basis`), its basis gave no certified vertex (an `exact` reason), or the probe's LP failed.
+TIE, MOST, RANGE, FORCING = "tie", "most", "range", "forcing_cost"
+NO_BASIS, SOLVE_FAILED = "no_basis", "solve_failed"
 
 
 @dataclass(frozen=True)
@@ -200,6 +213,7 @@ def spec_keys(settings: EconomySettings, solve: str) -> dict[str, int]:
     keys = {"max_denominator": settings.max_denominator, "grain": settings.grain}
     if solve == STEADY:
         keys["max_cycle_steps"] = settings.max_cycle_steps
+        keys["max_pivots"] = settings.max_pivots  # PRICE-2c: which probes are verified
     if solve == PLAN:
         keys.update(node_limit=settings.node_limit, plan_horizon=settings.plan_horizon)
     return keys
@@ -1387,12 +1401,14 @@ class _Dual:
       bounds only) holds as the difference of two non-negative ones (`y+` less `y-`);
     - a non-negative variable per variable with an upper bound (`w`);
     - a row per column j (`dual`), Σ_i A_ij·y_i + w_j ≥ c_j, written as the at-most −Σ_i A_ij·y_i − w_j ≤ −c_j.
-    `duals` maps each row of the program to its dual, a combination of these variables."""
+    `duals` maps each row of the program to its dual, a combination of these variables, and `by_column` each column of
+    the program to its dual row (PRICE-2c: its dual slack, `_never`)."""
 
     variables: dict[Key, tuple[Fraction, Fraction | None, bool]]
     rows: tuple[_Row, ...]
     cost: dict[Key, Fraction]
     duals: dict[Key, dict[Key, Fraction]]
+    by_column: dict[Key, _Row] = field(default_factory=dict)
 
     def face(self, optimum: Fraction) -> tuple[_Row, ...]:
         """Its rows and the strong-duality row, its cost at the program's optimum (`FACE`): their solutions are D*,
@@ -1428,12 +1444,15 @@ def _dual(program: _Program) -> _Dual:
             for dual, sign in duals[row.key].items():
                 _add(columns[key], dual, sign * coefficient)
     rows = []
+    by_column: dict[Key, _Row] = {}
     for key in sorted(program.variables):
         coefficients = {dual: -amount for dual, amount in columns[key].items()}
         if key in uppers:
             coefficients[uppers[key]] = -one
-        rows.append(_Row(("dual", _token(key), 0), _nonzero(coefficients), "le", -program.objective.get(key, zero), None))
-    return _Dual(variables, tuple(rows), _nonzero(cost), duals)
+        cost_j = -program.objective.get(key, zero)
+        by_column[key] = _Row(("dual", _token(key), 0), _nonzero(coefficients), "le", cost_j, None)
+        rows.append(by_column[key])
+    return _Dual(variables, tuple(rows), _nonzero(cost), duals, by_column)
 
 
 def _distance(
@@ -1557,6 +1576,11 @@ class _Solution:
     le: dict[Key, float] | None = None  # and of the other rows
     nodes: int = 0
     raw_status: int = 0
+    # PRICE-2c: an LP's optimum is certified when x is the exactly optimal vertex of a basis (`core.exact`); else
+    # why not (`refusal`: an `exact` reason, or `no_basis`) and after how many exact pivots
+    certified: bool = False
+    refusal: str | None = None
+    pivots: int = 0
 
 
 @dataclass(frozen=True)
@@ -1708,9 +1732,126 @@ def _solve_exact(system: list[tuple[dict[Key, Fraction], Fraction]], unknowns: l
     return found
 
 
-def _marginals(section: Any, rows: list[_Row]) -> dict[Key, float]:
-    values = [] if section is None else [float(value) for value in section.marginals]
-    return {row.key: value for row, value in zip(rows, values, strict=True)}
+def _marginals(rows: list[_Row], values: Any) -> dict[Key, float]:
+    return {row.key: float(value) for row, value in zip(rows, values, strict=True)}
+
+
+@dataclass(frozen=True)
+class _Run:
+    """One HiGHS run of an LP (`_highs`): its status as scipy's `linprog` maps HiGHS's model status (0 optimal, 1 a
+    limit, 2 infeasible, 3 unbounded, 4 anything else) with HiGHS's text, and for an optimum the column values, the row
+    duals (scipy's marginals; the at-most rows first, then the equalities) and the basis statuses (the columns, then
+    the rows in that order; None when HiGHS holds no valid basis)."""
+
+    status: int
+    message: str
+    x: Any = None
+    duals: Any = None
+    statuses: tuple[int, ...] | None = None
+
+
+def _highs(arrays: _Arrays, presolve: bool) -> _Run:
+    """An LP solved by HiGHS as `scipy.optimize.linprog(method="highs")` solves it (the same model: the at-most rows,
+    then the equalities; the same options), through the HiGHS bindings scipy bundles and `linprog` calls
+    (`scipy.optimize._highspy._core`; scipy is pinned in requirements.txt), so that the basis statuses can be read too
+    (PRICE-2c): the exact vertex is rebuilt from them (`core.exact`)."""
+    import numpy as np
+    from scipy import sparse
+    from scipy.optimize._highspy import _core as highs
+
+    n = len(arrays.columns)
+    blocks = [block for block in (arrays.a_le, arrays.a_eq) if block is not None]
+    matrix = sparse.csc_array(sparse.vstack(blocks) if blocks else sparse.csc_array((0, n), dtype=np.float64))
+    infinity = highs.kHighsInf
+    row_lower = np.concatenate((np.full(len(arrays.le), -infinity), arrays.b_eq)).astype(np.float64)
+    row_upper = np.concatenate((arrays.b_le, arrays.b_eq)).astype(np.float64)
+    lp = highs.HighsLp()
+    lp.num_col_ = n
+    lp.num_row_ = matrix.shape[0]
+    lp.a_matrix_.num_col_ = n
+    lp.a_matrix_.num_row_ = matrix.shape[0]
+    lp.a_matrix_.format_ = highs.MatrixFormat.kColwise
+    lp.col_cost_ = arrays.c
+    lp.col_lower_ = np.array(arrays.lower, dtype=np.float64)
+    lp.col_upper_ = np.array([infinity if high is None else high for high in arrays.upper], dtype=np.float64)
+    lp.row_lower_ = row_lower
+    lp.row_upper_ = row_upper
+    lp.a_matrix_.start_ = matrix.indptr
+    lp.a_matrix_.index_ = matrix.indices
+    lp.a_matrix_.value_ = matrix.data
+    options = highs.HighsOptions()
+    options.presolve = "on" if presolve else "off"
+    options.output_flag = False
+    options.log_to_console = False
+    options.highs_debug_level = 0  # kHighsDebugLevelNone, as linprog sets it
+    options.simplex_strategy = 1  # kSimplexStrategyDual, as linprog sets it
+    solver = highs._Highs()
+    if solver.passOptions(options) == highs.HighsStatus.kError:
+        return _Run(4, "passOptions")
+    if solver.passModel(lp) == highs.HighsStatus.kError:
+        return _Run(2, solver.modelStatusToString(highs.HighsModelStatus.kModelError))
+    solver.run()
+    found = solver.getModelStatus()
+    text = solver.modelStatusToString(found)
+    statuses = {
+        highs.HighsModelStatus.kOptimal: 0, highs.HighsModelStatus.kTimeLimit: 1,
+        highs.HighsModelStatus.kIterationLimit: 1, highs.HighsModelStatus.kInfeasible: 2,
+        highs.HighsModelStatus.kModelError: 2, highs.HighsModelStatus.kUnbounded: 3,
+    }
+    status = statuses.get(found, 4)
+    if status != 0:
+        return _Run(status, text)
+    solution, basis = solver.getSolution(), solver.getBasis()
+    columns = [int(value) for value in basis.col_status]
+    rows = [int(value) for value in basis.row_status]
+    valid = bool(getattr(basis, "valid", True)) and len(columns) == n and len(rows) == matrix.shape[0]
+    return _Run(
+        0, text, np.array(solution.col_value, dtype=np.float64), np.array(solution.row_dual, dtype=np.float64),
+        tuple(columns + rows) if valid else None,
+    )
+
+
+def _exact_problem(program: _Program, arrays: _Arrays) -> exact.Problem:
+    """The program as `core.exact` reads it, in the order HiGHS was given it (`_highs`): the columns by id, the
+    at-most rows and then the equalities, and the objective maximised."""
+    index = {key: position for position, key in enumerate(arrays.columns)}
+    ordered = (*arrays.le, *arrays.eq)
+    lower: list[Fraction | None] = [program.variables[key][0] for key in arrays.columns]
+    upper: list[Fraction | None] = [program.variables[key][1] for key in arrays.columns]
+    lower += [None if row.sense == "le" else row.rhs for row in ordered]
+    upper += [row.rhs for row in ordered]
+    rows = tuple({index[key]: value for key, value in row.coefficients.items()} for row in ordered)
+    cost = tuple(program.objective.get(key, Fraction(0)) for key in arrays.columns)
+    return exact.Problem(cost, tuple(lower), tuple(upper), rows)
+
+
+@dataclass(frozen=True)
+class _Unverified:
+    """A per-activity probe that could not be verified exactly (PRICE-2c): the detail of its warning
+    `lp_probe_unverified` beyond `path`, `probe` and `activity`."""
+
+    detail: dict[str, Any]
+
+
+def _never(dual: _Dual, point: dict[Key, Fraction], keys: list[Key]) -> bool:
+    """Whether complementary slackness proves that no optimum of a program sets any of `keys` above 0 (PRICE-2c):
+    each one's dual slack at an exact optimal point (y, w) of the program's dual (`_dual`, checked by `duality`) is
+    above 0.
+
+    The program maximises c·x over its rows (at-most and equalities) with 0 ≤ x ≤ u, and the dual minimises b·y + u·w
+    over Aᵀy + w ≥ c, y ≥ 0 on the at-most rows, w ≥ 0. A column's dual slack s_j = (Aᵀy + w − c)_j is its dual row's
+    right side less its left side, at least 0. For any feasible x and (y, w):
+        c·x ≤ (Aᵀy + w)·x = y·(Ax) + w·x ≤ b·y + u·w,
+    the first since x ≥ 0 and s ≥ 0, the second since y·(Ax) ≤ y·b (y ≥ 0 where Ax ≤ b, Ax = b elsewhere) and w·x ≤ w·u.
+    At an optimum x* and the optimal (y, w) both ends are the optimum (strong duality: `duality` checks exactly that
+    the cost at (y, w) is V0), so the first inequality holds with equality: Σ_j s_j·x*_j = 0, a sum of terms each at
+    least 0, each therefore 0. So s_j > 0 gives x*_j = 0 in every optimum x*, and no probe is needed for it. A slack
+    of 0 proves nothing (another optimum may still run it): only those are probed."""
+    for key in keys:
+        row = dual.by_column[key]
+        if row.rhs - sum((value * point[name] for name, value in row.coefficients.items()), Fraction(0)) <= 0:
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -1725,6 +1866,9 @@ class _Tiers:
     face: tuple[_Row, ...]  # the rows of the lexicographic optima: A ≥ A*, V ≥ V*
     records: list[dict[str, Any]]  # the acquisitions (`acquirers`), protected or not
     ties: tuple[str, ...]  # `objective_tier_tie`
+    dual: _Dual  # S3's dual (PRICE-2b-1), checked exactly (`duality`)
+    point: dict[Key, Fraction]  # an exact optimal point of it: the dual slacks of complementary slackness (PRICE-2c)
+    unverified: tuple[dict[str, Any], ...] = ()  # `lp_probe_unverified` of the tie probes (PRICE-2c)
 
 
 class _Solver:
@@ -1736,7 +1880,8 @@ class _Solver:
         return Failure(error(code, {"path": self.model.path, "solve": self.model.solve, **detail}))
 
     def exact(self, program: _Program, columns: list[Key], raw: Any, stage: str) -> dict[Key, Fraction]:
-        """The solution as exact fractions, checked exactly against every bound, integrality and row.
+        """The solution as exact fractions, checked exactly against every bound, integrality and row: a MILP's, and
+        an LP's whose basis gives no certified vertex (`vertex`, PRICE-2c).
 
         First the vertex itself: the variables at a bound (and the integer ones, rounded) are fixed, and the
         rows they leave tight are solved exactly for the others. When that system does not determine them, or its
@@ -1763,24 +1908,30 @@ class _Solver:
     def objective(self, program: _Program, x: dict[Key, Fraction]) -> Fraction:
         return sum((weight * x[key] for key, weight in program.objective.items()), Fraction(0))
 
+    def vertex(self, program: _Program, arrays: _Arrays, run: _Run, stage: str) -> tuple[dict[Key, Fraction], Any]:
+        """An LP's optimum as exact fractions (PRICE-2c), and how it was found: an `exact.Vertex` when HiGHS's basis
+        (with at most `lp.max_pivots` exact pivots) gives the exactly optimal vertex, which is then checked exactly
+        against every bound and row as every solution is; else the reason it does not (an `exact.Refused`, or None for
+        no basis), and the solution rebuilt and checked as before (`exact`): feasible, but not certified optimal."""
+        found = None
+        if run.statuses is not None:
+            found = exact.optimum(_exact_problem(program, arrays), run.statuses, self.settings.max_pivots)
+            if isinstance(found, exact.Vertex):
+                x = dict(zip(arrays.columns, found.x, strict=True))
+                problem = _violation(program, x)
+                if problem is not None:  # a certified vertex meets every row by construction: a defect
+                    raise self.failure(LP_NUMERIC_CHECK_FAILED, stage=stage, **problem)
+                return x, found
+        return self.exact(program, arrays.columns, run.x, stage), found
+
     def lp(self, program: _Program, stage: str, *, check: bool = True, unbounded: bool = False) -> _Solution:
-        """An LP. With `unbounded`, an objective without a maximum is the status `unbounded` (an end of a projection
-        that is null, PRICE-2b-1); else it is `lp_solve_failed`."""
-        from scipy.optimize import linprog
-
+        """An LP, solved by HiGHS (`_highs`) and made exact from its basis (`vertex`). With `unbounded`, an objective
+        without a maximum is the status `unbounded` (an end of a projection that is null, PRICE-2b-1); else it is
+        `lp_solve_failed`."""
         arrays = _arrays(program)
-
-        def call(presolve: bool) -> Any:
-            return linprog(
-                arrays.c,
-                A_ub=arrays.a_le if arrays.le else None, b_ub=arrays.b_le if arrays.le else None,
-                A_eq=arrays.a_eq if arrays.eq else None, b_eq=arrays.b_eq if arrays.eq else None,
-                bounds=list(zip(arrays.lower, arrays.upper)), method="highs", options={"presolve": presolve},
-            )
-
-        result = call(True)
+        result = _highs(arrays, True)
         if result.status not in (0, 2, 3):  # "unbounded or infeasible" from presolve, or numerical trouble
-            result = call(False)
+            result = _highs(arrays, False)
         if result.status == 2:
             return _Solution("infeasible")
         if result.status == 3 and unbounded:
@@ -1789,14 +1940,51 @@ class _Solver:
             raise self.failure(LP_SOLVE_FAILED, stage=stage, reason="unbounded", status=3)
         if result.status != 0:
             raise self.failure(
-                LP_SOLVE_FAILED, stage=stage, reason="solver_status", status=int(result.status), raw_text=str(result.message)
+                LP_SOLVE_FAILED, stage=stage, reason="solver_status", status=int(result.status), raw_text=result.message
             )
         if not check:
             return _Solution("optimal")
-        x = self.exact(program, arrays.columns, result.x, stage)
-        eq = _marginals(getattr(result, "eqlin", None), arrays.eq) if arrays.eq else {}
-        le = _marginals(getattr(result, "ineqlin", None), arrays.le) if arrays.le else {}
-        return _Solution("optimal", x, self.objective(program, x), eq, le)
+        x, found = self.vertex(program, arrays, result, stage)
+        duals = list(result.duals)
+        le = _marginals(arrays.le, duals[: len(arrays.le)])
+        eq = _marginals(arrays.eq, duals[len(arrays.le):])
+        certified = isinstance(found, exact.Vertex)
+        return _Solution(
+            "optimal", x, self.objective(program, x), eq, le, certified=certified,
+            refusal=None if certified else (found.reason if found is not None else NO_BASIS),
+            pivots=0 if found is None else found.pivots,
+        )
+
+    def probe(self, program: _Program, stage: str, *, unbounded: bool = False) -> _Solution | _Unverified:
+        """The LP of a per-activity probe (PRICE-2c): its solution, certified or not (`lp`), or `_Unverified` when it
+        could not be solved and checked (`solve_failed`, with the error it raised: what blocked the whole steady state
+        before PRICE-2c), or HiGHS finds the probe infeasible although an optimum meets it."""
+        try:
+            found = self.lp(program, stage, unbounded=unbounded)
+        except Failure as failure:
+            first = failure.errors[0]
+            detail: dict[str, Any] = {"reason": SOLVE_FAILED, "stage": stage, "error": first["code"]}
+            for name in ("constraint", "found", "bound"):
+                if name in first["detail"]:
+                    detail[name] = str(first["detail"][name])
+            return _Unverified(detail)
+        if found.status == "infeasible":
+            return _Unverified({"reason": SOLVE_FAILED, "stage": stage, "error": LP_SOLVE_FAILED})
+        return found
+
+    def certain(self, found: _Solution | _Unverified, stage: str) -> _Solution | _Unverified:
+        """A probe's answer when it is exact: an unbounded status, or a certified optimum; else `_Unverified`, with why
+        its basis gave no certificate."""
+        if isinstance(found, _Unverified) or found.status == "unbounded" or found.certified:
+            return found
+        detail: dict[str, Any] = {"reason": found.refusal or NO_BASIS, "stage": stage}
+        if found.pivots:
+            detail["pivots"] = found.pivots
+        return _Unverified(detail)
+
+    def unverified(self, probe: str, activity: str, found: _Unverified) -> dict[str, Any]:
+        """The warning `lp_probe_unverified` of one probe of an activity (PRICE-2c)."""
+        return error(LP_PROBE_UNVERIFIED, {"path": self.model.path, "probe": probe, "activity": activity, **found.detail})
 
     def milp(self, program: _Program, stage: str, *, check: bool = True) -> _Solution:
         """A MILP within `search.milp_node_limit` nodes. HiGHS proves optimality with a relative gap of 0; a
@@ -1960,10 +2148,26 @@ class _Solver:
         """A linear function's least and greatest values on the solutions of `rows`, None where unbounded."""
         return self.extreme(variables, rows, function, -1), self.extreme(variables, rows, function, 1)
 
-    def duality(self, dual: _Dual, optimum: Fraction) -> None:
+    def probed_ends(
+        self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: Any, function: dict[Key, Fraction]
+    ) -> _Pair | _Unverified:
+        """`ends` as a per-activity probe (an activity's range on D*, PRICE-2c): each end certified or unbounded, else
+        `_Unverified` for the first that is not."""
+        found: list[Fraction | None] = []
+        for sense in (-1, 1):
+            program = _Program(variables, tuple(rows), _nonzero({key: sense * value for key, value in function.items()}))
+            end = self.certain(self.probe(program, DUAL, unbounded=True), DUAL)
+            if isinstance(end, _Unverified):
+                return end
+            found.append(None if end.status == "unbounded" else sense * end.value)
+        return found[0], found[1]
+
+    def duality(self, dual: _Dual, optimum: Fraction) -> dict[Key, Fraction]:
         """The strong-duality check (addendum 2.1 §2.2 step 2): the dual's least cost, solved and checked exactly
         against every dual row, must be the primal optimum V0, exactly. Otherwise `lp_numeric_check_failed` (stage
-        `dual`, at the strong-duality row), which blocks the steady state: no price is exportable without it."""
+        `dual`, at the strong-duality row), which blocks the steady state: no price is exportable without it. Returns
+        that dual point: an exact optimal point of the dual, whose slacks decide by complementary slackness which
+        activities no optimum runs (`_never`, PRICE-2c)."""
         found = self.lp(_Program(dual.variables, dual.rows, {key: -value for key, value in dual.cost.items()}), DUAL)
         if found.status != "optimal":  # the primal has an optimum, so its dual has one
             raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2)
@@ -1972,6 +2176,7 @@ class _Solver:
             raise self.failure(
                 LP_NUMERIC_CHECK_FAILED, stage=DUAL, constraint=_token(FACE), found=str(least), bound=f"={optimum}"
             )
+        return found.x
 
     def max_min(
         self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: list[_Row],
@@ -2014,9 +2219,11 @@ class _Solver:
             stages.append({"level": str(level), "fixed": newly})
         return fixed, stages
 
-    def joint(self, dual: _Dual, optimum: Fraction) -> dict[str, Any]:
+    def joint(
+        self, dual: _Dual, point: dict[Key, Fraction], optimum: Fraction
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """The joint price vector and the activity judgements (addendum 2.1 §2.2 steps 3-5; ruling 127 iii): the
-        steady state's `joint`.
+        steady state's `joint`, and the warnings of its probes.
 
         - **The projection.** A pool's coordinate is the mean over the cycle of its balance rows' duals; its
           `interval` is its least and greatest value on D*, an unbounded end null.
@@ -2037,9 +2244,23 @@ class _Solver:
           `forcing_cost`, the loss per execution of running it more than `most`: the greatest dual of the row
           "its executions at least `most`" on the optimal face of S3 with that row, and `input_bound` when that
           dual is unbounded (nothing is left in the cycle to run it again; `forcing_cost` null). Unbounded `most`
-          costs nothing more: 0."""
+          costs nothing more: 0.
+        - **Complementary slackness** (PRICE-2c, `_never`): an activity whose dual slack is above 0 in every step at
+          the exact optimal dual `point` runs in no optimum, so its `most` is 0 without a probe.
+        - **Unverified probes** (PRICE-2c): a probe of `most`, `range` or `forcing_cost` whose LP gives no certified
+          optimum is `lp_probe_unverified` (returned with the section), its members null and its name listed in the
+          activity's `unverified`; an activity whose `most` or `range` is unverified is left out of K (whether it is
+          an optimum's is not known), and its component is a structural gap (`core.coverage`). `forcing_cost` reads
+          `most`, so it is unverified with it."""
         model, steps, zero, one = self.model, self.model.steps, Fraction(0), Fraction(1)
         variables, face = dual.variables, dual.face(optimum)
+        warnings: list[dict[str, Any]] = []
+        unverified: dict[str, list[str]] = {activity: [] for activity in model.activities}
+
+        def note(probe: str, activity: str, found: _Unverified) -> None:
+            unverified[activity].append(probe)
+            warnings.append(self.unverified(probe, activity, found))
+
         pools: dict[str, dict[Key, Fraction]] = {}
         for resource in model.resources:
             mean: dict[Key, Fraction] = {}
@@ -2054,10 +2275,17 @@ class _Solver:
         ranges: dict[str, _Pair] = {}
         for activity in model.activities:
             counts = {("x", activity, step): one for step in range(steps)}
-            found = self.lp(_program(model, objective=counts, added=floor), JUDGEMENT, unbounded=True)
-            if found.status == "infeasible":  # it holds S3's optimum
-                raise self.failure(LP_SOLVE_FAILED, stage=JUDGEMENT, reason="solver_status", status=2)
-            most[activity] = None if found.status == "unbounded" else found.value
+            if _never(dual, point, list(counts)):  # complementary slackness: no optimum runs it
+                most[activity] = zero
+            else:
+                found = self.certain(
+                    self.probe(_program(model, objective=counts, added=floor), JUDGEMENT, unbounded=True), JUDGEMENT
+                )
+                if isinstance(found, _Unverified):
+                    most[activity] = None
+                    note(MOST, activity, found)
+                else:
+                    most[activity] = None if found.status == "unbounded" else found.value
             if model.touches_store(activity):
                 continue
             value: dict[Key, Fraction] = {}
@@ -2067,7 +2295,11 @@ class _Solver:
                     for key, coefficient in pools[resource].items():
                         _add(value, key, amount * coefficient)
             worth[activity] = _nonzero(value)
-            ranges[activity] = self.ends(variables, face, worth[activity])
+            ends = self.probed_ends(variables, face, worth[activity])
+            if isinstance(ends, _Unverified):
+                note(RANGE, activity, ends)
+            else:
+                ranges[activity] = ends
         rows = list(face)
         chosen: dict[str, tuple[Fraction, str]] = {}
         goals = {resource for _, resource, _ in model.goals}
@@ -2090,6 +2322,8 @@ class _Solver:
             if low is not None and high is not None and low < high:
                 coordinates[PRICE + resource] = (pools[resource], low, high, True)
         for activity, (low, high) in ranges.items():
+            if MOST in unverified[activity]:  # whether an optimum runs it is not known: it is not in K
+                continue
             if most[activity] == 0 and low is not None and high == 0 and low < 0:
                 coordinates[ACTIVITY_VALUE + activity] = (worth[activity], low, high, False)
         fixed, stages = self.max_min(variables, rows, coordinates)  # step 2
@@ -2117,12 +2351,21 @@ class _Solver:
         activities: dict[str, Any] = {}
         for activity in model.activities:
             count, cost = most[activity], zero
-            if count is not None:
+            if MOST in unverified[activity]:  # the forcing cost reads `most`
+                unverified[activity].append(FORCING)
+                cost = None
+            elif count is not None:
                 forced = _Row(
                     ("forced", activity, 0), {("x", activity, step): -one for step in range(steps)}, "le", -count, None
                 )
                 forcing = _dual(_program(model, added=(forced,)))
-                cost = self.extreme(forcing.variables, forcing.face(optimum), forcing.duals[forced.key], 1)
+                program = _Program(forcing.variables, forcing.face(optimum), _nonzero(dict(forcing.duals[forced.key])))
+                found = self.certain(self.probe(program, DUAL, unbounded=True), DUAL)
+                if isinstance(found, _Unverified):
+                    note(FORCING, activity, found)
+                    cost = None
+                else:
+                    cost = None if found.status == "unbounded" else found.value
             value = None
             if activity in worth:
                 value = sum(
@@ -2130,15 +2373,17 @@ class _Solver:
                      if name == activity and entity in vector),
                     zero,
                 )
+            doubtful = unverified[activity]
             activities[activity] = {
                 "value": _text(value),
                 "range": _price(ranges[activity]) if activity in ranges else None,
-                "in_optimum": count is None or count > 0,
+                "in_optimum": None if MOST in doubtful else count is None or count > 0,
                 "most": _text(count),
                 "forcing_cost": _text(cost),
-                "input_bound": cost is None,
+                "input_bound": None if FORCING in doubtful else cost is None,
+                "unverified": list(doubtful),
             }
-        return {"prices": prices, "max_min": stages, "activities": activities}
+        return {"prices": prices, "max_min": stages, "activities": activities}, warnings
 
     def withheld(self, resource: str, interval: _Pair, goals: set[str]) -> dict[str, Any] | None:
         """Why the selection withholds a pool's coordinate, or None (addendum 2.1 §2.2 step 4.1 and its mirror):
@@ -2186,7 +2431,8 @@ class _Solver:
         """The three solves (#424 ACM-PRICE addendum 2.1 §4.2). S3 maximises V alone: an infeasible one is
         `lp_infeasible`, and its optimum V0 is the objective. S1 maximises A, giving A*; S2 maximises V with A ≥ A*,
         giving V*. When A has no term, A* is 0 and S2 is S3. V* above V0 cannot be (S3 relaxes S2) and is
-        `lp_numeric_check_failed`; V0 above V*, exactly, is `objective_tier_conflict`. Then the ties."""
+        `lp_numeric_check_failed`; V0 above V*, exactly, is `objective_tier_conflict`. Then S3's dual, checked exactly
+        (`duality`; PRICE-2c moves it before the ties, which read its optimal point), and the ties."""
         model = self.model
         value, acquired = total_value(model), acquisition(model)
         program = _program(model)
@@ -2196,7 +2442,9 @@ class _Solver:
         records = acquirers(model)
         if not acquired:
             face = _floor(VALUE, value, base.value)
-            return _Tiers(program, base, Fraction(0), base, (), face, records, ())
+            dual = _dual(program)
+            point = self.duality(dual, base.value)
+            return _Tiers(program, base, Fraction(0), base, (), face, records, (), dual, point)
         first = self.optimal(_program(model, objective=acquired), ACQUISITION)
         floors = _floor(ACQUISITION, acquired, first.value)
         second = self.optimal(_program(model, added=floors), VALUE)
@@ -2207,8 +2455,12 @@ class _Solver:
         if base.value > second.value:
             raise Failure(self.tier_conflict(acquired, records, first.value, second, base))
         face = floors + _floor(VALUE, value, second.value)
-        ties = self.ties(face, _floor(VALUE, value, base.value), second, base)
-        return _Tiers(program, base, first.value, second, floors, face, records, tuple(ties))
+        dual = _dual(program)
+        point = self.duality(dual, base.value)
+        ties, unverified = self.ties(face, _floor(VALUE, value, base.value), second, base, dual, point)
+        return _Tiers(
+            program, base, first.value, second, floors, face, records, tuple(ties), dual, point, tuple(unverified)
+        )
 
     def tier_conflict(
         self, acquired: dict[Key, Fraction], records: list[dict[str, Any]], most: Fraction, second: _Solution,
@@ -2241,27 +2493,53 @@ class _Solver:
         return error(OBJECTIVE_TIER_CONFLICT, detail)
 
     def ties(
-        self, face: tuple[_Row, ...], unconstrained: tuple[_Row, ...], second: _Solution, base: _Solution
-    ) -> list[str]:
+        self, face: tuple[_Row, ...], unconstrained: tuple[_Row, ...], second: _Solution, base: _Solution,
+        dual: _Dual, point: dict[Key, Fraction],
+    ) -> tuple[list[str], list[dict[str, Any]]]:
         """`objective_tier_tie` (§4.2): the activities that some optimum of S3 uses and no optimum of S2 does. By
-        value alone they are as good as the acquisition, and they would lower A. An activity is probed only when the
-        optimum of S2 found does not use it: the most of it, at most 1 a cycle (so the probe is bounded), on the
-        optima of S2 (`face`: A ≥ A*, V ≥ V*) and then, when that is 0, on those of S3 (V ≥ V0)."""
+        value alone they are as good as the acquisition, and they would lower A. Returns them, and the warnings of the
+        probes that could not be verified (PRICE-2c).
+
+        - **No probe by complementary slackness** (PRICE-2c, `_never`): an activity whose dual slack at the exact
+          optimal point of S3's dual is above 0 in every step runs in no optimum of S3, so in none of S2 either (V* =
+          V0: S2's optima are optima of S3): it is no tie.
+        - **The probes.** Any other activity that the optimum of S2 found does not use: the most of it, at most 1 a
+          cycle (so the probe is bounded), on the optima of S2 (`face`: A ≥ A*, V ≥ V*) and then, when that is 0, on
+          those of S3 (V ≥ V0). An answer above 0 holds exactly for any exact feasible point (a point of the face that
+          runs it); an answer of 0 only for a certified optimum (`core.exact`). The tie is decided when the answers
+          that decide it are exact: a probe on S2 above 0 (no tie); one on S3 at a certified 0 (no tie); one on S3
+          above 0, or the optimum of S3 using it, with one on S2 at a certified 0 (a tie). Otherwise it is
+          unverified: the warning `lp_probe_unverified` (`probe` tie), never "no tie", and its component counts as a
+          structural gap (`core.coverage`)."""
         model, one = self.model, Fraction(1)
-        found = []
+        found: list[str] = []
+        warnings: list[dict[str, Any]] = []
         for activity in model.activities:
             keys = [("x", activity, step) for step in range(model.steps)]
+            if _never(dual, point, keys):
+                continue
             if any(second.x[key] > 0 for key in keys):
                 continue
             probe = (_Row(("probe", activity, 0), {key: one for key in keys}, "le", one, None),)
             objective = {key: one for key in keys}
-            if self.optimal(_program(model, objective=objective, added=face + probe), "tie").value > 0:
-                continue
-            if any(base.x[key] > 0 for key in keys) or self.optimal(
-                _program(model, objective=objective, added=unconstrained + probe), "tie"
-            ).value > 0:
+            on_second = self.probe(_program(model, objective=objective, added=face + probe), TIE)
+            if isinstance(on_second, _Solution) and on_second.value > 0:
+                continue  # an optimum of S2 runs it
+            second_zero = isinstance(on_second, _Solution) and on_second.certified
+            used = any(base.x[key] > 0 for key in keys)
+            on_base: _Solution | _Unverified | None = None
+            if not used:
+                on_base = self.probe(_program(model, objective=objective, added=unconstrained + probe), TIE)
+                if isinstance(on_base, _Solution) and on_base.value > 0:
+                    used = True
+                elif isinstance(on_base, _Solution) and on_base.certified:
+                    continue  # no optimum of S3 runs it
+            if used and second_zero:
                 found.append(activity)
-        return found
+                continue
+            doubtful = on_second if not second_zero else on_base
+            warnings.append(self.unverified(TIE, activity, self.certain(doubtful, TIE)))
+        return found, warnings
 
     def steady(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """The steady state. A resource's price in a step is the projection of its balance row's dual on D*
@@ -2273,8 +2551,8 @@ class _Solver:
         if least.status != "optimal":
             raise self.failure(LP_SOLVE_FAILED, stage="losses", reason="solver_status", status=2)
         warnings = [error(OBJECTIVE_TIER_TIE, {"path": model.path, "activity": activity}) for activity in tiers.ties]
-        dual = _dual(program)  # S3's, which every price re-solve changes
-        self.duality(dual, optimum)
+        warnings += tiers.unverified
+        dual = tiers.dual  # S3's, which every price re-solve changes, checked exactly (`duality`)
         face = dual.face(optimum)
         prices: dict[str, list[_Pair]] = {}
         grains: dict[str, list[_Pair]] = {}
@@ -2303,6 +2581,8 @@ class _Solver:
                 values[activity] = None
                 continue
             values[activity] = [_price(self.value(activity, prices, step)) for step in range(steps)]
+        joint, judged = self.joint(dual, tiers.point, optimum)
+        warnings += judged
         data = {
             "cycle": {"steps": steps, "step_seconds": STEP_SECONDS},
             "objective": str(optimum),
@@ -2312,7 +2592,7 @@ class _Solver:
             "prices": {resource: [_price(price) for price in prices[resource]] for resource in model.resources},
             "rule_prices": {rule: _price(price) for rule, price in rule_prices.items()},
             "activity_values": values,
-            "joint": self.joint(dual, optimum),
+            "joint": joint,
             "losses": {
                 "overflow": {r: str(self.total(least, "o", r)) for r in sorted(model.hard)},
                 "lost_production": {f: str(self.total(least, "l", f)) for f in sorted({*model.storage, *model.stops})},

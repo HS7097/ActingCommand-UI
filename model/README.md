@@ -92,7 +92,11 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
     lexicographic max-min, never a midpoint per pool; and the **activity judgements** (value, range on the face,
     whether an optimum runs it, the cost of running it once more). These are the outputs `price:<resource>` and the
     diagnostic `activity_value:<activity>`. HiGHS's marginals are a cross-check only, within a relative tolerance
-    of 1e-7 (`lp_dual_disagrees`). Its coverage section classes each pool as covered, a structural gap, verified
+    of 1e-7 (`lp_dual_disagrees`). Every LP's solution is the vertex of HiGHS's basis, solved exactly in fractions
+    and made exactly optimal by at most `lp.max_pivots` exact pivots (`src/acmodel/core/exact.py`); complementary
+    slackness at the exact optimal dual spares the probes of an activity no optimum runs; and a per-activity probe
+    that still cannot be verified exactly (a tie, or a judgement) is reported unverified (`lp_probe_unverified`, its
+    component a structural gap) instead of blocking the steady state, whose prices still block when they fail. Its coverage section classes each pool as covered, a structural gap, verified
     zero (a `no_use` declaration the static check found sound) or unknown, lists the static components of the
     flow graph, and gives each price the status of its component, so that a component with no edge to a gap keeps
     its own; it also lists the estimates (`estimate` of a provisional derive) it read;
@@ -210,7 +214,8 @@ default:
   may need at most `random.max_transitions` (1000000) transitions; a random rule's value beyond `expr.max_bits`
   is carried as its enclosure to `random.enclosure_digits` (12) decimals (`contracts/formats.md`, "Random
   rules").
-- **Economy.** `lp.max_denominator` (1000000) bounds the fractions a solver's floats become, `lp.grain` (1) is the
+- **Economy.** `lp.max_denominator` (1000000) bounds the fractions a solver's floats become where no basis gives the
+  exact vertex, `lp.max_pivots` (20) the exact pivots that may make HiGHS's basis exactly optimal, `lp.grain` (1) is the
   step of the price re-solves, `search.milp_node_limit` (100000) the plan's only budget, `economy.plan_horizon`
   (7) its days, and `economy.max_cycle_steps` (28) the most days of the steady state's cycle.
 - **Search.** The generic search fills disjoint teams from a roster: it screens every legal team with numpy (the

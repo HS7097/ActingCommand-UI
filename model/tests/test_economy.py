@@ -5,6 +5,7 @@ tests on Windows and on Ubuntu, so both legs must give the same exact values."""
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -1341,6 +1342,55 @@ def test_an_activity_as_good_as_the_acquisition_by_value_alone_is_a_tie(tmp_path
             resource: {"status": "provisional", "reasons": ["objective_tier_tie"]} for resource in ("res.g", "res.m", "res.s")
         },
     }
+
+
+def test_a_tie_probe_that_cannot_be_verified_is_a_warning_and_a_structural_gap(tmp_path, economy, monkeypatch):
+    """PRICE-2c, the fixture above. The probes for the tie are given HiGHS's answer with act.train half a run higher
+    and no basis, so their exact check fails as a large model's did (`lp_numeric_check_failed`): on S2's optima, the
+    m that half run makes goes nowhere, and m's balance row reads -1/2, not 0. Before PRICE-2c that blocked the whole
+    steady state. Now whether act.train is a tie is unverified: never "no tie", the warning `lp_probe_unverified` (probe
+    `tie`, with the error its probe raised) and no `objective_tier_tie`; its component is a structural gap
+    (`probe_unverified`), so every price is provisional; and the steady state stands, priced as before."""
+    exact, vertex, certify = economy_flow._Solver.exact, economy_flow._vertex, economy_flow._Solver.vertex
+    spoilt = ("x", "act.train", 0)
+
+    def probing(program: Any) -> bool:
+        return any(row.key[0] == "probe" for row in program.rows)
+
+    def without_basis(solver: Any, program: Any, arrays: Any, run: Any, stage: str) -> Any:
+        if probing(program):
+            run = replace(run, statuses=None)
+        return certify(solver, program, arrays, run, stage)
+
+    def shifted(solver: Any, program: Any, columns: list, raw: Any, stage: str) -> Any:
+        if probing(program):
+            raw = [float(value) + (0.5 if key == spoilt else 0.0) for key, value in zip(columns, raw, strict=True)]
+        return exact(solver, program, columns, raw, stage)
+
+    monkeypatch.setattr(economy_flow._Solver, "vertex", without_basis)
+    monkeypatch.setattr(economy_flow._Solver, "exact", shifted)
+    monkeypatch.setattr(
+        economy_flow, "_vertex", lambda program, floats: None if probing(program) else vertex(program, floats)
+    )
+    folder = shared_fixture(tmp_path, "10", most="10")
+
+    status, doc = economy(folder, "--steady-only")
+
+    assert (status, doc["errors"]) == (0, [])
+    assert doc["warnings"] == [{
+        "code": "lp_probe_unverified",
+        "detail": {
+            "path": model_path(folder), "probe": "tie", "activity": "act.train", "stage": "tie", "reason": "solve_failed",
+            "error": "lp_numeric_check_failed", "constraint": "balance:res.m:0", "found": "-1/2", "bound": "=0",
+        },
+    }]
+    assert doc["data"]["steady"]["coverage"]["components"]["act.get"]["gaps"] == {"probe_unverified": ["act.train"]}
+    assert steady(doc)["price_status"] == {
+        resource: {"status": "provisional", "reasons": ["probe_unverified"]} for resource in ("res.g", "res.m", "res.s")
+    }
+    assert (steady(doc)["status"], steady(doc)["objective"], steady(doc)["prices"]) == (
+        "provisional", "100", {"res.g": ["1"], "res.m": ["10"], "res.s": ["1"]}
+    )
 
 
 def test_a_solution_a_millionth_short_of_a_star_is_refused_exactly(tmp_path, economy, monkeypatch):
