@@ -157,12 +157,13 @@ tabs, the filter boxes, the id box and the time slider are off; the module and p
 pane say "ledger not opened". Nothing is asked of the ledger and no material is read. The launcher works
 as usual.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime main after
-Workflow #429 R-7a (the player hold shapes; it keeps v0.12.32's bounded offline opening), which speaks the 0.12 protocols
-(`runtime-client` revision 4, ledger revision 4):
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), the head of Runtime
+PR #1469 (Workflow #429 114-A: the not-run history shapes and ledger revision 5, on top of R-7a; it keeps
+v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 4, ledger
+revision 5). The Runtime merges pull requests with a merge commit, so this head stays on its main:
 
 ```
-rev = "f57f7d20225737d288013367dae158949a4cd57d"
+rev = "4d3523f78240b2b97ef57c876ec2bb63d403b1eb"
 ```
 
 The five crates (contract / ledger / ledger-forensics / runtime-client / execution-kernel) share this one rev.
