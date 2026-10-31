@@ -200,6 +200,10 @@ pub struct Labels {
     pub outcome_words: &'static str,
     /// The outcome words could not be read: the table's problem.
     pub outcome_table_unusable: &'static str,
+    /// A code neither the UI's table nor the pinned Runtime's catalog holds,
+    /// such as one a newer Runtime sends: said, never left blank.
+    pub outcome_unknown: &'static str,
+    pub outcome_unknown_short: &'static str,
     /// A follow tick's failure, shown beside the view's own.
     pub follow_failed: &'static str,
     /// The launcher block in the top bar: status, two buttons, one line.
@@ -603,6 +607,8 @@ pub const ZH: Labels = Labels {
     read_failed: "读取失败：{}",
     outcome_words: "{}{}",
     outcome_table_unusable: "结果码说明表不可用：{}",
+    outcome_unknown: "这个码不在本界面的说明表里，可能来自更新版本的 Runtime；以上是原码，详情见排障窗口",
+    outcome_unknown_short: "未收录的码",
     follow_failed: "跟随最新：{}",
     launcher_title: "启动器",
     start: "启动",
@@ -935,6 +941,8 @@ pub const EN: Labels = Labels {
     read_failed: "Read failed: {}",
     outcome_words: "{} {}",
     outcome_table_unusable: "Outcome words unavailable: {}",
+    outcome_unknown: "This code is not in this console's table; it may come from a newer Runtime. The code is shown as is; see the troubleshooting window for details",
+    outcome_unknown_short: "code not in this console's table",
     follow_failed: "Following latest: {}",
     launcher_title: "Launcher",
     start: "Start",
@@ -1110,24 +1118,27 @@ pub fn fill(template: &str, values: &[&str]) -> String {
 }
 
 /// What a person reads for an outcome code, in the table's language: its
-/// sentence, then its handling when it has one. `None` for a code neither the
-/// UI's table nor the pinned Runtime's catalog holds; an outcome table that
-/// does not parse is said, not dropped.
+/// sentence, then its handling when it has one. A code neither the UI's table
+/// nor the pinned Runtime's catalog holds (a newer Runtime's, say) gets the
+/// unknown-code sentence, never nothing; an outcome table that does not parse
+/// is said, not dropped.
 pub fn outcome_sentence(labels: &Labels, code: &str) -> Option<String> {
     match explain(code, labels.tongue.outcome_tongue()) {
-        Ok(words) => words.map(|words| match words.handling {
+        Ok(Some(words)) => Some(match words.handling {
             Some(handling) => fill(labels.outcome_words, &[words.sentence, handling]),
             None => words.sentence.to_owned(),
         }),
+        Ok(None) => Some(labels.outcome_unknown.to_owned()),
         Err(error) => Some(fill(labels.outcome_table_unusable, &[&error.to_string()])),
     }
 }
 
-/// An outcome code's short form, for a line that does not wrap; `None` and
-/// errors as `outcome_sentence`.
+/// An outcome code's short form, for a line that does not wrap; unknown codes
+/// and errors as `outcome_sentence`.
 pub fn outcome_short(labels: &Labels, code: &str) -> Option<String> {
     match explain(code, labels.tongue.outcome_tongue()) {
-        Ok(words) => words.map(|words| words.short.to_owned()),
+        Ok(Some(words)) => Some(words.short.to_owned()),
+        Ok(None) => Some(labels.outcome_unknown_short.to_owned()),
         Err(error) => Some(fill(labels.outcome_table_unusable, &[&error.to_string()])),
     }
 }
