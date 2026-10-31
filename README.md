@@ -608,11 +608,31 @@ finished only says so. Of probes in flight, only the newest one's answer is show
   `kill`, no blocking `wait`, no job object attached; the handle is dropped once the readiness decision
   ends, and the daemon outlives the console.
 
-The console has no pause or resume control: pause scheduling with
+The console has no pause control: pause scheduling with
 `actingctl pause --state-root <state root>` (add `--instance <alias>` for one instance) and lift it with
 `actingctl resume` and the same flags, or use the MCP tools `ac_pause` / `ac_resume` (see "MCP for
 agents"; in Runtime v0.11.6 these two fail with `client_action_invalid` for an alias
-containing upper-case letters, a known issue, so use `actingctl pause` / `resume` there). Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
+containing upper-case letters, a known issue, so use `actingctl pause` / `resume` there). The ledger window
+can only resume, conditionally, a pause another tool set (below). Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
+
+- **Conditional resume (ledger window)**: below the technical lines the window lists the global pause and
+  each instance's pause of its last status read (reason, revision, since), each by its own scope. One
+  another tool set — the global one, or an instance's whose device is handed back — carries "Resume
+  Scheduling…": the first press only shows the statement "resume this one pause" and "Confirm and
+  Resume"; the confirm sends one conditional `ResumeScheduling` on a worker thread, over a fresh person's
+  connection (actor `user`), its condition the owner epoch of that status read and the scope's revision,
+  so the Runtime refuses it and lifts nothing once that pause has changed or another Runtime runs; only the
+  pause of that line is resumed. Lifted, refused (shown by its code, "code not in this console's table" for
+  one the table lacks) or not confirmed (a receipt timeout, a dropped connection,
+  `runtime_scheduling_resume_unconfirmed`), nothing is sent again: the status is read again on a new
+  connection and painted. The line says what that read found: one that failed, or one the window could not
+  make (it reads offline, or no longer reads), says in red, with its code, that whether scheduling is
+  paused is unknown, and a failed status read shows one red line in place of the pause lines; only a read
+  that was made says the pause lines are current. Two kinds of pause get no button, only why: reason
+  `alice-116-scheduler-stop` ("Alice decides when this pause is lifted"), and a deployment's — `acsetup_update`, `install_restart`
+  and any reason starting with `deploy-` — which the installer lifts (the console does not run
+  `release-hold`). An instance pause still draining or handing its device back gets none either: the
+  Runtime refuses its resume then.
 
 ## Instance configuration
 
@@ -1090,25 +1110,27 @@ One Cargo workspace, dependency direction app → model → rows ← source:
   the ledger windows — is in `ui.rs`, on the event loop only. The
   ledger window is painted from its own state alone (`ledger/state.rs`, `ledger/paint.rs`), never from
   the read face; the read face is opened and held by the window's own reader thread
-  (`ledger/worker.rs`), the reads leave their results in the state first, and a frame is read and
-  decoded on the window's own worker (`ledger/frame.rs`).
+  (`ledger/worker.rs`), the reads leave their results in the state first, a frame is read and
+  decoded on the window's own worker (`ledger/frame.rs`), and the conditional resume is in
+  `ledger/resume.rs`.
 
 `slint` 1.17.x, `default-features = false`; the ledger is read-only to the console (what the Runtime
-records of the console's own requests — the start press, shutdown requests — it records itself; the
+records of the console's own requests — the start press, shutdown and resume requests — it records itself; the
 status read appends nothing), the only control entry points are the launcher's two buttons (start /
-request shutdown, see above) and its owner-unlock entry (a confirmed `actingd unlock-owner`), and there
+request shutdown, see above), its owner-unlock entry (a confirmed `actingd unlock-owner`) and the ledger
+window's confirmed conditional resume (end of "Launcher"), and there
 is no approval entry point; the console crates carry no tests, and CI builds the workspace without running
 tests. The launcher is in
 `crates/acui-app/src/launcher.rs`, where the paths come from in `install.rs`, the technical log and the
 startup-failure window in `report.rs`, and the client operations — probe, request shutdown, recording
-the start press, and the online open's status and fact reads — are in `acui-source` (`probe_runtime` /
-`request_shutdown` / `record_start` / `instance_facts`).
+the start press, the online open's status and fact reads, and the conditional resume — are in `acui-source` (`probe_runtime` /
+`request_shutdown` / `record_start` / `instance_facts` / `resume_paused`).
 
 Every background worker — the probe at startup, the whole start (probe, launch, readiness poll and its
-record), request shutdown, unlock-owner, a frame read, and every acsetup worker (release lookup, install or
+record), request shutdown, unlock-owner, a conditional resume, a frame read, and every acsetup worker (release lookup, install or
 upgrade, writing the options, discovery, reading resources, writing instances, settling) — is started through
 `std::thread::Builder`. A thread the system refuses is stated, with the OS error, where that action
-reports, and what the worker would have cleared (the probe, start, shutdown or unlock in flight, the save
+reports, and what the worker would have cleared (the probe, start, shutdown, unlock or resume in flight, the save
 in progress, the frame request) is reset: never a panic on the event loop. A start whose thread cannot
 start launches nothing, and the line says so. A child that was killed but could not be reaped is
 said as that, not as a kill that failed.

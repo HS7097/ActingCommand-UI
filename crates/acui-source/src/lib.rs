@@ -18,7 +18,8 @@
 //! never writes into the state root. The launcher's two
 //! questions — is a Runtime running here, and will it accept a shutdown
 //! request — are asked through that same typed client, and its start press is
-//! recorded through it, at the end of this file.
+//! recorded through it, at the end of this file; so is a person's conditional
+//! resume of the one scheduling pause a status read reported (`resume_paused`).
 //! Every connection a session keeps is rebuilt after the client latched it
 //! (see `Rebuilding`); what a person does goes out on a fresh connection each
 //! time.
@@ -44,7 +45,8 @@ use acui_rows::{
 };
 use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
-    FactValue, OwnerEpoch, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
+    FactValue, InstancePauseStage, OwnerEpoch, RuntimeFactRecord, RuntimeFactScope,
+    RuntimeFactSnapshot, RuntimeResult, SchedulingPauseExpectation, SchedulingPauseScope,
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
@@ -615,7 +617,62 @@ pub struct RuntimeInstances {
     pub status_sequence: u64,
     /// The ledger position the fact snapshot is sealed at.
     pub facts_position: u64,
+    /// The global scheduling pause, as the same status read reported it.
+    pub global_pause: Option<PauseFact>,
     pub instances: Vec<RuntimeInstance>,
+}
+
+/// A scheduling pause as one status read reported it (Workflow #191 ps1): the
+/// reason its caller gave, a name of `[a-z0-9_.-]` the contract keeps as it
+/// was given; its revision and since when; an instance pause's stage; and
+/// what a conditional resume of exactly this pause names (`resume_paused`).
+#[derive(Debug, Clone)]
+pub struct PauseFact {
+    pub reason: String,
+    pub revision: u64,
+    pub since_unix_ms: u64,
+    /// `None` for the global pause, which has no stage.
+    pub stage: Option<PauseStage>,
+    pub target: PauseTarget,
+}
+
+/// Where an instance pause stands (`InstancePauseStage`): its runs still
+/// draining, its device being handed back, or handed back. The Runtime resumes
+/// only a released one; it refuses the other two (`scheduling_pause_draining`,
+/// `scheduling_pause_releasing`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PauseStage {
+    Draining,
+    Paused,
+    Released,
+}
+
+/// The one pause a conditional resume lifts (Workflow #338 R4): its scope, and
+/// the owner epoch and the revision of the status read that reported it. The
+/// Runtime compares both under its pause table's lock and refuses the resume
+/// of any other pause (`scheduling_pause_owner_epoch_mismatch`,
+/// `scheduling_pause_revision_mismatch`). Made only from a status read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PauseTarget {
+    scope: SchedulingPauseScope,
+    expected: SchedulingPauseExpectation,
+}
+
+impl PauseTarget {
+    /// The paused instance's alias; `None` for the global pause.
+    pub fn instance_alias(&self) -> Option<&str> {
+        self.scope.instance_alias()
+    }
+
+    /// The revision the status read reported.
+    pub fn revision(&self) -> u64 {
+        self.expected.revision
+    }
+
+    /// The owner epoch of the status read, as the wire spells it.
+    pub fn owner_epoch(&self) -> String {
+        code(&self.expected.owner_epoch)
+    }
 }
 
 /// One instance as the status read registers it, with the `task.` facts the
@@ -668,6 +725,8 @@ pub struct RuntimeInstanceLive {
     /// Never true together with `lease_active`, by contract.
     pub takeover_cooldown_active: bool,
     pub queued_request_count: u32,
+    /// The instance's own scheduling pause, apart from the global one.
+    pub pause: Option<PauseFact>,
 }
 
 impl OnlineSource {
@@ -675,8 +734,9 @@ impl OnlineSource {
     /// loopback address from it and checks the owner epoch on connect. This is
     /// the console's own connection (actor `ui`, source `ui`), for what it asks
     /// on its own — the status and facts read at open, follow polls, probes,
-    /// and, on a connection of their own, material reads; pages go through the
-    /// session's page connection (`LedgerPages`).
+    /// and, on a connection of their own, material reads and the status read
+    /// again after a person's resume; pages go through the session's page
+    /// connection (`LedgerPages`).
     fn connect(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
         RuntimeClient::connect(RuntimeClientConfig::new(
             root,
@@ -687,9 +747,10 @@ impl OnlineSource {
     }
 
     /// A connection for what a person does at the console — a button press, a
-    /// shutdown request, a discovery query: actor `user`, source `ui`. The
-    /// Runtime admits a shutdown request and an instance discovery only from
-    /// this origin or an operator's CLI.
+    /// shutdown request, a discovery query, a scheduling resume: actor `user`,
+    /// source `ui`. The Runtime admits a shutdown request, an instance
+    /// discovery and a scheduling resume only from this origin or an
+    /// operator's CLI.
     ///
     /// Both console connections bind channel `ui` (Runtime
     /// contracts/runtime-interface.md, #389 U-2). Every press takes a fresh one
@@ -798,6 +859,7 @@ impl OnlineSource {
                 RuntimeInstances {
                     status_sequence: current.status_sequence,
                     facts_position: snapshot.ledger_position,
+                    global_pause: current.global_pause.clone(),
                     instances,
                 }
             }
@@ -809,6 +871,26 @@ impl OnlineSource {
     pub fn refresh_instances(&self) {
         let refreshed = read_instances(&self.main, &self.root);
         *self.instances.borrow_mut() = refreshed;
+    }
+
+    /// Re-reads status and facts, as at open, on a connection made for this
+    /// read alone, to the session's Runtime, and let go after it: after a
+    /// person's resume (`resume_paused`), whatever became of it. A connect that
+    /// fails, or reaches a Runtime of another owner epoch, is the read's
+    /// failure, as a rebuild's is.
+    pub fn reread_instances(&self) {
+        let owner_epoch = self.main.owner_epoch;
+        let fresh = Self::connect(&self.root).map_err(RebuildFailed::Connect).and_then(|client| {
+            if client.runtime_info().owner_epoch() != owner_epoch {
+                return Err(RebuildFailed::OwnerEpochChanged);
+            }
+            Ok(Rebuilding::new(Self::connect, client, owner_epoch))
+        });
+        let reread = match fresh {
+            Ok(connection) => read_instances(&connection, &self.root),
+            Err(reason) => Err(reason.into_failure()),
+        };
+        *self.instances.borrow_mut() = reread;
     }
 
     pub fn state_root(&self) -> &Path {
@@ -1081,6 +1163,14 @@ impl ReadSource {
         }
     }
 
+    /// Online, re-reads status and facts on a connection of their own (see
+    /// `OnlineSource::reread_instances`); offline, nothing: there is no status.
+    pub fn reread_instances(&self) {
+        if let Self::Online(source) = self {
+            source.reread_instances();
+        }
+    }
+
     /// A handle a background thread reads material through.
     pub fn material_reader(&self) -> MaterialReader {
         match self {
@@ -1152,6 +1242,19 @@ fn read_instances(main: &Rebuilding, root: &Path) -> Result<RuntimeInstances, Cl
         })?
         .ledger_committed_head;
     let snapshot = client.runtime_fact_snapshot().map_err(|error| main.failure(error))?;
+    // Every pause names the owner epoch of this one status read, with its own
+    // scope's revision, so a resume of it lifts only what this read saw.
+    let owner_epoch = status.owner_epoch();
+    let global_pause = status.scheduling_pause().map(|pause| PauseFact {
+        reason: pause.pause_reason.as_str().to_owned(),
+        revision: pause.revision,
+        since_unix_ms: pause.since_unix_ms,
+        stage: None,
+        target: PauseTarget {
+            scope: SchedulingPauseScope::Global,
+            expected: SchedulingPauseExpectation { owner_epoch, revision: pause.revision },
+        },
+    });
     let mut instances: Vec<RuntimeInstance> = status
         .instances()
         .iter()
@@ -1163,6 +1266,25 @@ fn read_instances(main: &Rebuilding, root: &Path) -> Result<RuntimeInstances, Cl
                 lease_active: instance.lease_active(),
                 takeover_cooldown_active: instance.takeover_cooldown_active(),
                 queued_request_count: instance.queued_request_count(),
+                pause: instance.pause().map(|pause| PauseFact {
+                    reason: pause.pause_reason.as_str().to_owned(),
+                    revision: pause.revision,
+                    since_unix_ms: pause.since_unix_ms,
+                    stage: Some(match pause.stage {
+                        InstancePauseStage::Draining => PauseStage::Draining,
+                        InstancePauseStage::Paused => PauseStage::Paused,
+                        InstancePauseStage::Released => PauseStage::Released,
+                    }),
+                    target: PauseTarget {
+                        scope: SchedulingPauseScope::Instance {
+                            instance_alias: instance.instance_alias().to_string(),
+                        },
+                        expected: SchedulingPauseExpectation {
+                            owner_epoch,
+                            revision: pause.revision,
+                        },
+                    },
+                }),
             }),
             game: None,
             server: None,
@@ -1170,7 +1292,12 @@ fn read_instances(main: &Rebuilding, root: &Path) -> Result<RuntimeInstances, Cl
         })
         .collect();
     fold_task_facts(&snapshot.records, &mut instances);
-    Ok(RuntimeInstances { status_sequence, facts_position: snapshot.ledger_position, instances })
+    Ok(RuntimeInstances {
+        status_sequence,
+        facts_position: snapshot.ledger_position,
+        global_pause,
+        instances,
+    })
 }
 
 /// Folds a snapshot's instance-scoped `task.game` / `task.server` / `task.page`
@@ -1374,6 +1501,67 @@ fn record_press(state_root: &Path, control_id: &str) -> Result<(RuntimeClient, u
         })?
         .sequence;
     Ok((interaction, sequence))
+}
+
+/// The client's own spellings (`ContractLocation::ResumeScheduling`,
+/// `ClientCode`): the resume's operation, the answer of a Runtime that does not
+/// know the condition and lifted nothing, and a result the client should never
+/// give back.
+const RESUME_SCHEDULING: &str = "resume_scheduling";
+const RUNTIME_OPERATION_UNSUPPORTED: &str = "runtime_operation_unsupported";
+const RUNTIME_RESULT_UNEXPECTED: &str = "runtime_result_unexpected";
+
+/// What became of one person's conditional resume (`resume_paused`).
+#[derive(Debug, Clone)]
+pub enum ResumeOutcome {
+    /// The pause is lifted: its scope's revision after the lift and, for an
+    /// instance, the device code of a reconnect that failed
+    /// (`selfcheck.failure_code`), which never rolls the resume back.
+    Resumed { revision: u64, device_failure: Option<String> },
+    /// The Runtime answered and the resume did not succeed: its refusal, in
+    /// `runtime_code`; or the client's own `runtime_operation_unsupported`,
+    /// from a Runtime that does not know the condition and lifted nothing.
+    Refused(ClientFailure),
+    /// No connection: nothing was sent.
+    NotSent(ClientFailure),
+    /// Sent, and nothing says what became of it: a receipt that timed out, a
+    /// connection that ended before it, the client's
+    /// `runtime_scheduling_resume_unconfirmed`. It is not sent again.
+    Unconfirmed(ClientFailure),
+}
+
+/// One person's resume of the one pause `target` names: a fresh person's
+/// connection (see `OnlineSource::connect_as_person`), one `ResumeScheduling`
+/// with its expectation on it, so the Runtime lifts that pause and no other
+/// (Workflow #338 R4), and the connection let go. Sent once, whatever comes
+/// back, and never as an unconditional resume; what to show after it is a
+/// status read on another connection (`OnlineSource::reread_instances`).
+pub fn resume_paused(state_root: &Path, target: &PauseTarget) -> ResumeOutcome {
+    let client = match OnlineSource::connect_as_person(state_root) {
+        Ok(client) => client,
+        Err(error) => return ResumeOutcome::NotSent(ClientFailure::from(error)),
+    };
+    match client.resume_scheduling_expected(target.scope.clone(), target.expected) {
+        Ok(RuntimeResult::SchedulingResumed { revision, selfcheck, .. }) => ResumeOutcome::Resumed {
+            revision,
+            device_failure: selfcheck.and_then(|check| check.failure_code),
+        },
+        // The client checks the result itself and gives back no other.
+        Ok(_) => ResumeOutcome::Unconfirmed(ClientFailure {
+            code: RUNTIME_RESULT_UNEXPECTED,
+            operation: RESUME_SCHEDULING,
+            runtime_code: None,
+            host: None,
+        }),
+        Err(error) => {
+            let failure = ClientFailure::from(error);
+            if failure.runtime_code.is_some() || failure.code == RUNTIME_OPERATION_UNSUPPORTED {
+                ResumeOutcome::Refused(failure)
+            } else {
+                ResumeOutcome::Unconfirmed(failure)
+            }
+        }
+    }
 }
 
 /// Where a material read goes. Offline it is the forensic read face over the

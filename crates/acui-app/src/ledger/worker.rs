@@ -33,8 +33,8 @@ use acui_rows::{
 use acui_source::{console_code, ReadSource, Session, SourceMode};
 
 use crate::ledger::state::{
-    Busy, BusyKind, FrameEventsSlot, FrameLookupError, LedgerFailure, LedgerShared, LedgerState,
-    Phase, PortMap, RequestTag, SourceFacts,
+    Busy, BusyKind, FrameEventsSlot, FrameLookupError, InstancesSnapshot, LedgerFailure,
+    LedgerShared, LedgerState, Phase, PortMap, RequestTag, SourceFacts, StatusReread,
 };
 use crate::{launcher, report};
 
@@ -95,6 +95,10 @@ pub enum Command {
     /// A frame read found the material reader latched, or its rebuild failed:
     /// a new one is made and published.
     RefreshReader,
+    /// A person's resume came back (`resume`): status and facts are read again
+    /// on a connection of their own. Not superseded by a new generation: the
+    /// status belongs to the session, not to the view.
+    RereadInstances,
 }
 
 /// What a session opens: the state root and the face `--source` asks for, and
@@ -347,6 +351,7 @@ impl Worker {
             }
             Command::FrameEvents { frame, query } => self.frame_events(source, frame, &query),
             Command::RefreshReader => self.refresh_reader(source),
+            Command::RereadInstances => self.reread_instances(source),
         };
         self.settle(finished);
         self.idle();
@@ -728,6 +733,29 @@ impl Worker {
         self.busy(Busy::new(BusyKind::Reconnecting, REBUILD_SECONDS, false))?;
         let reader = source.material_reader();
         self.in_session(|state| state.reader = Some(reader))
+    }
+
+    /// After a person's resume, whatever became of it: status and facts read
+    /// again on a connection made for this read alone — never on the one the
+    /// resume went out on — and left for the whole session, whatever request
+    /// is current. Neither read appends a ledger record. Offline there is no
+    /// status, and nothing is read. What the read found goes with it: one
+    /// that failed is never said as one that was made.
+    fn reread_instances(&self, source: &ReadSource) -> Result<(), Superseded> {
+        self.busy(Busy::new(BusyKind::Instances, INSTANCES_SECONDS, false))?;
+        source.reread_instances();
+        let facts = SourceFacts::of(source);
+        let found = match &facts.instances {
+            InstancesSnapshot::Online(Ok(_)) => StatusReread::Read,
+            InstancesSnapshot::Online(Err(failure)) => StatusReread::Failed(failure.clone()),
+            InstancesSnapshot::Offline(_) => StatusReread::Offline,
+        };
+        self.in_session(|state| {
+            state.phase = Phase::Open(facts);
+            state.effects.status_reread = Some(found);
+        })?;
+        self.repaint();
+        Ok(())
     }
 }
 

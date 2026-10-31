@@ -25,6 +25,7 @@ use slint::{
 };
 
 use crate::ledger::frame::{FrameRequest, FrameSlot};
+use crate::ledger::resume;
 use crate::ledger::state::{
     BusyKind, FrameLookupError, InstancesSnapshot, LedgerFailure, LedgerState, Phase, PortMap,
     SourceFacts,
@@ -92,6 +93,7 @@ pub fn refresh(
     window.global::<Strings>().set_data_source(source.into());
     window.set_busy_text(busy_text(labels, state).into());
     paint_reopen(window, state, labels, runtime_ready);
+    resume::paint(window, ledger, state, labels);
     let (Phase::Open(facts), Some(model)) = (&state.phase, &state.model) else {
         paint_closed(window, ledger, state, labels);
         return;
@@ -1044,8 +1046,8 @@ fn query_error_text(labels: &Labels, error: Option<&QueryError>) -> String {
 }
 
 /// A code on a card line, which does not wrap: the code, and its short words
-/// when it has any.
-fn code_short(labels: &Labels, code: &str) -> String {
+/// when it has any. The resume line says a status read's failure the same way.
+pub fn code_short(labels: &Labels, code: &str) -> String {
     match outcome_short(labels, code) {
         Some(short) => format!("{code} · {short}"),
         None => code.to_string(),

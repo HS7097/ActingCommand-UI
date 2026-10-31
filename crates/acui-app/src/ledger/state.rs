@@ -272,6 +272,21 @@ pub struct Effects {
     /// A follow read failed: the ticks stop and the box is unticked, its
     /// reason kept on screen.
     pub follow_halted: bool,
+    /// The status was read again after a person's resume (`resume`), and
+    /// what that read found: the resume line says it, never a read that
+    /// failed as one that was made.
+    pub status_reread: Option<StatusReread>,
+}
+
+/// What the status read after a person's resume found.
+pub enum StatusReread {
+    /// It was read: the pause lines are this read's.
+    Read,
+    /// It was not read, for the client's failure: whether scheduling is
+    /// paused is unknown.
+    Failed(ClientFailure),
+    /// The session reads offline: there is no status to read.
+    Offline,
 }
 
 impl LedgerState {

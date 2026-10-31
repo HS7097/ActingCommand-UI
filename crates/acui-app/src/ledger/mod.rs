@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! A ledger window's own side, apart from the read face: what it shows
 //! (`state`), how that is painted, with every word of it (`paint`), its frame
-//! reads (`frame`), and its reader (`worker`), the thread that opens the read
-//! face after the window is up and does every read of it.
+//! reads (`frame`), a person's conditional resume of a scheduling pause
+//! (`resume`), and its reader (`worker`), the thread that opens the read face
+//! after the window is up and does every read of it.
 //!
 //! On the event loop a window only changes its state and hands its reader a
 //! request (`Command`); a change that supersedes the reads in flight takes a
@@ -18,6 +19,7 @@
 
 pub mod frame;
 pub mod paint;
+pub mod resume;
 pub mod state;
 pub mod worker;
 
@@ -31,7 +33,7 @@ use std::time::Duration;
 
 use acui_model::{DisplayRow, Filters, ViewModel, ALL_TABS};
 use acui_rows::{code, EventQuery, EventSeverity, LedgerView, OriginModule};
-use acui_source::SourceMode;
+use acui_source::{PauseTarget, SourceMode};
 use slint::{SharedString, Timer, TimerMode};
 
 use crate::settings::TextSize;
@@ -39,6 +41,7 @@ use crate::ui::{self, language_from_index, Ui};
 use crate::{launcher, report, LedgerWindow};
 use frame::FrameSlot;
 use paint::port_options;
+use resume::Resume;
 use state::{
     Effects, FrameEventsSlot, LedgerFailure, LedgerShared, LedgerState, Phase, PortMap, RequestTag,
 };
@@ -78,6 +81,11 @@ pub struct LedgerHandle {
     pub frame: FrameSlot,
     pub module_options: RefCell<Vec<SharedString>>,
     pub module_choices: RefCell<Vec<OriginModule>>,
+    /// The scheduling pause each pause line's resume entry names, in the order
+    /// painted; `None` for a line that offers none (`resume::paint`).
+    pauses: RefCell<Vec<Option<PauseTarget>>>,
+    /// A person's conditional resume in this window (`resume`).
+    resume: RefCell<Resume>,
     /// Runs the follow ticks while "follow latest" is on.
     follow: Timer,
     /// Reloads once the time cursor's handle rests.
@@ -159,6 +167,8 @@ impl LedgerHandle {
             frame: FrameSlot::default(),
             module_options: RefCell::new(Vec::new()),
             module_choices: RefCell::new(Vec::new()),
+            pauses: RefCell::new(Vec::new()),
+            resume: RefCell::new(Resume::default()),
             follow: Timer::default(),
             cursor_rest: Timer::default(),
             busy_tick: Timer::default(),
@@ -225,6 +235,7 @@ impl LedgerHandle {
         self.window.set_following(false);
         self.window.set_cursor_value(1000.0);
         self.frame.clear();
+        self.resume.borrow_mut().reopened();
         let carry = {
             let mut state = self.lock();
             let carry = state.model.as_ref().map(|model| (model.tab, model.filters.clone()));
@@ -503,6 +514,9 @@ impl LedgerHandle {
             self.follow.stop();
             self.window.set_following(false);
         }
+        if let Some(found) = effects.status_reread {
+            self.resume.borrow_mut().reread(found);
+        }
     }
 
     /// Only the busy line: by its clock, or as a read starts or ends.
@@ -700,6 +714,10 @@ pub fn install_callbacks(handle: &Rc<LedgerHandle>) {
             ledger.reopen(&ui);
         });
     }
+    // A pause line's resume entry, by the line's place as painted: the first
+    // press only asks for the confirmation; the confirming press resumes.
+    on!(on_resume_asked, |ledger, ui, index| resume::asked(&ledger, index));
+    on!(on_resume_confirmed, |ledger, ui, index| resume::confirmed(&ledger, index));
     // The launcher's unlock entry: its confirming press.
     handle.window.on_unlock_owner(|| {
         if let Some(ui) = ui::current() {

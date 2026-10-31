@@ -21,6 +21,17 @@ export struct RowItem {
     note: string,
 }
 
+// A scheduling pause of the last status read: its line, and its resume entry
+// when a person may lift it here — offered, and at its second step. `failed`:
+// the line says the status was not read, so whether scheduling is paused is
+// unknown.
+export struct PauseItem {
+    text: string,
+    offered: bool,
+    confirming: bool,
+    failed: bool,
+}
+
 // `raw` is the second layer: the wire spelling behind the name, or empty.
 export struct FieldLine {
     label: string,
@@ -186,6 +197,9 @@ export global Strings {
     in property <string> unlock-owner;
     in property <string> unlock-statement;
     in property <string> unlock-confirm;
+    in property <string> resume-scheduling;
+    in property <string> resume-statement;
+    in property <string> resume-confirm;
     in property <string> start;
     in property <string> request-shutdown;
     // The workbench's own: the way into the ledger window, the instance entry
@@ -336,6 +350,14 @@ export component LedgerWindow inherits Window {
     in-out property <bool> unlock-confirming;
     in property <string> unlock-line;
     in property <bool> unlock-failed;
+    // The scheduling pauses of the last status read, global first: each line
+    // with its resume entry when another tool set the pause. Its first press
+    // only asks for the confirmation; only the confirm resumes, and only that
+    // one pause. A status read that failed leaves one red line instead. Then
+    // the last resume's line, red when it says a failure.
+    in property <[PauseItem]> pauses;
+    in property <string> resume-line;
+    in property <bool> resume-failed;
     // What the settings file holds that the console could not take, or why a
     // setting was not saved, one per line: errors, then warnings. Then where
     // the technical log is, or why it cannot be written.
@@ -369,6 +391,9 @@ export component LedgerWindow inherits Window {
     callback text-size-changed(int);
     callback language-changed(int);
     callback unlock-owner();
+    // By the pause line's place among `pauses` as painted.
+    callback resume-asked(int);
+    callback resume-confirmed(int);
 
     VerticalLayout {
         padding: 8px;
@@ -562,6 +587,43 @@ export component LedgerWindow inherits Window {
                         min-width: 40px * Scale.factor;
                         horizontal-stretch: 1;
                     }
+                }
+                // The scheduling pauses, each with its resume entry in two
+                // steps as the unlock entry has; then the last resume's line.
+                for pause[index] in root.pauses: HorizontalLayout {
+                    spacing: 14px;
+                    Notice {
+                        text: pause.text;
+                        failed: pause.failed;
+                        warning: true;
+                        vertical-alignment: center;
+                        min-width: 40px * Scale.factor;
+                        horizontal-stretch: 1;
+                    }
+                    if pause.offered && !pause.confirming: Button {
+                        text: Strings.resume-scheduling;
+                        clicked => {
+                            root.resume-asked(index);
+                        }
+                    }
+                    if pause.offered && pause.confirming: Text {
+                        text: Strings.resume-statement;
+                        font-size: Scale.body-font;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        color: Palette.foreground;
+                    }
+                    if pause.offered && pause.confirming: Button {
+                        text: Strings.resume-confirm;
+                        clicked => {
+                            root.resume-confirmed(index);
+                        }
+                    }
+                }
+                if root.resume-line != "": Notice {
+                    text: root.resume-line;
+                    failed: root.resume-failed;
+                    font-size: Scale.grey-font;
                 }
             }
         }

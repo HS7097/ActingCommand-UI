@@ -336,6 +336,53 @@ pub struct Labels {
     /// error.
     pub unlock_output_failed: &'static str,
     pub unlock_spawn_failed: &'static str,
+    /// A scheduling pause's line in the ledger window. Its scope: global, or
+    /// an instance's (alias). Then scope, reason, revision, since: a pause
+    /// another tool set, with the stage of an instance's that cannot be resumed
+    /// yet; the one Alice lifts herself; a deployment's, which the installer
+    /// lifts.
+    pub pause_global: &'static str,
+    pub pause_instance: &'static str,
+    pub pause_other_tool: &'static str,
+    pub pause_draining: &'static str,
+    pub pause_releasing: &'static str,
+    pub pause_alice: &'static str,
+    pub pause_deploy: &'static str,
+    /// In place of the pause lines when the status read failed: code (with
+    /// its short words), client operation.
+    pub pauses_unread: &'static str,
+    /// The resume entry of a pause another tool set: its button, the statement
+    /// the second press makes, and the button that makes it.
+    pub resume_scheduling: &'static str,
+    pub resume_statement: &'static str,
+    pub resume_confirm: &'static str,
+    /// The last resume. scope, owner epoch, revision: out. scope, new
+    /// revision: lifted; then the device code of a reconnect that failed, with
+    /// its words. scope, runtime refusal code, client error code, client
+    /// operation: refused. scope, client error code, client operation: did not
+    /// succeed without a refusal code, not sent, not confirmed. scope, why: no
+    /// thread for it.
+    pub resume_sending: &'static str,
+    pub resume_done: &'static str,
+    pub resume_device_failed: &'static str,
+    pub resume_refused: &'static str,
+    pub resume_failed: &'static str,
+    pub resume_not_sent: &'static str,
+    pub resume_unconfirmed: &'static str,
+    pub resume_no_thread: &'static str,
+    /// After a resume's line: the status is being read again on a new
+    /// connection, or it was. Code (with its short words), client operation:
+    /// that read failed. The face reads offline: no status. After a reopen:
+    /// the window is opening; it read the status as it opened; code, client
+    /// operation: it did not. The face does not read: nothing was read.
+    pub resume_rereading: &'static str,
+    pub resume_reread: &'static str,
+    pub resume_reread_failed: &'static str,
+    pub resume_reread_offline: &'static str,
+    pub resume_reopening: &'static str,
+    pub resume_session_read: &'static str,
+    pub resume_session_unread: &'static str,
+    pub resume_not_reread: &'static str,
     /// attempt, attempts.
     pub shutdown_busy_retry: &'static str,
     /// attempts sent, attempts.
@@ -695,6 +742,33 @@ pub const ZH: Labels = Labels {
     unlock_unreaped: "已终止，但回收失败：{}",
     unlock_output_failed: "读取 unlock-owner 输出失败：{} · 退出码 {}",
     unlock_spawn_failed: "运行 unlock-owner（{}）失败：{}",
+    pause_global: "全局调度",
+    pause_instance: "实例 {} 的调度",
+    pause_other_tool: "{}：被其他工具暂停（理由 {}，修订 {}，自 {}）",
+    pause_draining: " · 正在等进行中的任务收尾，收尾后才能恢复",
+    pause_releasing: " · 正在交还设备，交还后才能恢复",
+    pause_alice: "{}：已暂停（理由 {}，修订 {}，自 {}）· 此暂停由 Alice 决定恢复",
+    pause_deploy: "{}：部署暂停（理由 {}，修订 {}，自 {}）· 这是安装器加的部署暂停，请用安装器恢复",
+    pauses_unread: "状态没读到，暂停情况未知：{}（{}）",
+    resume_scheduling: "恢复自动调度…",
+    resume_statement: "确认：只恢复这一份暂停；它已有变动时 Runtime 会拒绝",
+    resume_confirm: "确认并恢复",
+    resume_sending: "正在恢复{}（owner epoch {}，修订 {}）…",
+    resume_done: "已恢复{}（新修订 {}）",
+    resume_device_failed: " · 设备还没连上：{}",
+    resume_refused: "恢复{}没有成功：Runtime 答 {} · 客户端 {}（{}）",
+    resume_failed: "恢复{}没有成功：{}（{}）",
+    resume_not_sent: "恢复{}的请求没有发出：{}（{}）",
+    resume_unconfirmed: "恢复{}的结果未确认：{}（{}）· 没有重发",
+    resume_no_thread: "恢复{}的请求没有发出：{}",
+    resume_rereading: " · 正在换新连接重读状态…",
+    resume_reread: " · 已换新连接重读状态，以上方的暂停行为准",
+    resume_reread_failed: " · 换新连接重读状态失败：{}（{}），暂停情况未知，详见实例卡片",
+    resume_reread_offline: " · 本窗口现在离线读取，读不到状态，暂停情况未知",
+    resume_reopening: " · 窗口正在重新打开，打开时会读状态…",
+    resume_session_read: " · 窗口已重新打开并读了状态，以上方的暂停行为准",
+    resume_session_unread: " · 窗口重新打开时状态没读到：{}（{}），暂停情况未知，详见实例卡片",
+    resume_not_reread: " · 窗口没有在读取，状态没有重读，暂停情况未知",
     shutdown_busy_retry: "请求关闭 · 忙碌重试 {}/{}",
     shutdown_attempts: "第 {}/{} 次",
     shutdown_accepted: "关闭请求已受理 · 回执 {} · 请求 {} · 动作已记账 #{}",
@@ -1030,6 +1104,33 @@ pub const EN: Labels = Labels {
     unlock_unreaped: "Killed, but Reaping It Failed: {}",
     unlock_output_failed: "Reading unlock-owner Output Failed: {} · Exit Code {}",
     unlock_spawn_failed: "Running unlock-owner ({}) Failed: {}",
+    pause_global: "Global Scheduling",
+    pause_instance: "Scheduling of Instance {}",
+    pause_other_tool: "{}: Paused by Another Tool (Reason {}, Revision {}, Since {})",
+    pause_draining: " · Waiting for the Running Tasks to Finish; It Can Be Resumed After That",
+    pause_releasing: " · Handing the Device Back; It Can Be Resumed After That",
+    pause_alice: "{}: Paused (Reason {}, Revision {}, Since {}) · Alice Decides When This Pause Is Lifted",
+    pause_deploy: "{}: Deployment Pause (Reason {}, Revision {}, Since {}) · The Installer Set It; Lift It with the Installer",
+    pauses_unread: "The Status Was Not Read; Whether Scheduling Is Paused Is Unknown: {} ({})",
+    resume_scheduling: "Resume Scheduling…",
+    resume_statement: "Confirm: Resume This One Pause; the Runtime Refuses If It Has Changed",
+    resume_confirm: "Confirm and Resume",
+    resume_sending: "Resuming {} (Owner Epoch {}, Revision {})…",
+    resume_done: "Resumed {} (New Revision {})",
+    resume_device_failed: " · The Device Is Not Connected Yet: {}",
+    resume_refused: "Resuming {} Did Not Succeed: the Runtime Answered {} · Client {} ({})",
+    resume_failed: "Resuming {} Did Not Succeed: {} ({})",
+    resume_not_sent: "The Resume of {} Was Not Sent: {} ({})",
+    resume_unconfirmed: "Whether {} Was Resumed Is Not Confirmed: {} ({}) · Not Sent Again",
+    resume_no_thread: "The Resume of {} Was Not Sent: {}",
+    resume_rereading: " · Reading the Status Again on a New Connection…",
+    resume_reread: " · Status Read Again on a New Connection; the Pause Lines Above Are Current",
+    resume_reread_failed: " · Reading the Status Again on a New Connection Failed: {} ({}); Whether It Is Paused Is Unknown, See the Instance Card",
+    resume_reread_offline: " · This Window Now Reads Offline: No Status Can Be Read, and Whether It Is Paused Is Unknown",
+    resume_reopening: " · The Window Is Reopening and Reads the Status As It Opens…",
+    resume_session_read: " · The Window Was Reopened and Read the Status; the Pause Lines Above Are Current",
+    resume_session_unread: " · The Window Was Reopened but the Status Was Not Read: {} ({}); Whether It Is Paused Is Unknown, See the Instance Card",
+    resume_not_reread: " · The Window Is Not Reading: the Status Was Not Read Again, and Whether It Is Paused Is Unknown",
     shutdown_busy_retry: "Request Shutdown · Busy, Retry {}/{}",
     shutdown_attempts: "Attempt {}/{}",
     shutdown_accepted: "Shutdown Accepted · Receipt {} · Request {} · Action Recorded at #{}",

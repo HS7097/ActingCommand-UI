@@ -8,8 +8,9 @@
 //! few kinds of entry go into it: a start that failed or found no state root,
 //! a problem of the settings file, a hand-off to the event loop that failed, a
 //! ledger window that could not be made, shown or hidden, a ledger reader
-//! thread that could not start, panicked or was gone. No read itself goes
-//! there. Once it exists the windows show where it is, and when it cannot be
+//! thread that could not start, panicked or was gone, and the answer of a
+//! person's resume whose ledger window closed before it came back. No read
+//! itself goes there. Once it exists the windows show where it is, and when it cannot be
 //! written they say that instead.
 //!
 //! A start that fails is said everywhere it can be: the log, the console (this

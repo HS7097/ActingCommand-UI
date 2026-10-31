@@ -487,6 +487,9 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_unlock_owner(labels.unlock_owner.into());
     global.set_unlock_statement(labels.unlock_statement.into());
     global.set_unlock_confirm(labels.unlock_confirm.into());
+    global.set_resume_scheduling(labels.resume_scheduling.into());
+    global.set_resume_statement(labels.resume_statement.into());
+    global.set_resume_confirm(labels.resume_confirm.into());
     global.set_start(labels.start.into());
     global.set_request_shutdown(labels.request_shutdown.into());
     global.set_open_ledger(labels.open_ledger.into());
