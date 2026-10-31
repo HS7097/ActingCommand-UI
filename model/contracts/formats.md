@@ -123,7 +123,9 @@ optional ones in brackets.
 A period is `{id, unit, reset_minute, utc_offset_minutes}` [`note`]:
 - `reset_minute` is 0–1439 (the minute of the day of the reset);
 - `utc_offset_minutes` is −720 to 840;
-- `unit` is `day`, `week` (adds `reset_weekday`: `mon` … `sun`) or `month` (adds `reset_day`: 1–28).
+- `unit` is `day`, `week` (adds `reset_weekday`: `mon` … `sun`), `month` (adds `reset_day`: 1–28) or `days`
+  (#424 ACM-PRICE 3.4), a period of a fixed number of days such as a 14-day season: it adds `length` (2–366, its
+  days) and `anchor_date` (`YYYY-MM-DD`, the date of one of its resets).
 
 ## `rules/<topic>.json` (`acmodel.rules.v1`)
 
@@ -146,7 +148,7 @@ always), `unknowns` (unknown ids), `supersedes` (rule ids), `note`]. `kind` sele
 
 | `kind` | `logic` members |
 |---|---|
-| `cap` | `cap_kind` selects the rest. `hard` and `storage`: `on_reach` and exactly one of `value` (expr) and `reading` (fact key). `soft_read`: `reading` and `on_reach`. `on_reach` is `block_all_income`, `stop_production`, `discard`, `void_at_reset` or `{"block_income_from": [activity ids], "other_income": "notice_only"}`. Every kind may add [`reference` (expr): with a `reading` only, the cap's value in the reference state, which the economy's steady state reads instead of the reading (#424 ACM-PRICE G-A); it must not read the account state] and [`per` (period id): with `on_reach` `void_at_reset` only, the period at whose resets the cap voids what lies above it; absent means every day (G-C)]. A `reference` beside a `value` is `member_conflict`, a `per` with another `on_reach` `member_unknown`. |
+| `cap` | `cap_kind` selects the rest. `hard` and `storage`: `on_reach` and exactly one of `value` (expr) and `reading` (fact key). `soft_read`: `reading` and `on_reach`. `income` (#424 ACM-PRICE 3.3), what a period may earn: `value` (expr), `per` (period id) and `on_reach` [`from` (activity ids: the activities whose income it counts; absent means every activity that produces the resource or moves into it)]; it takes neither `reading` nor `reference`. `on_reach` is `block_all_income`, `stop_production`, `discard`, `void_at_reset` or `{"block_income_from": [activity ids], "other_income": "notice_only"}`. `hard`, `storage` and `soft_read` may add [`reference` (expr): with a `reading` only, the cap's value in the reference state, which the economy's steady state reads instead of the reading (#424 ACM-PRICE G-A); it must not read the account state] and [`per` (period id): with `on_reach` `void_at_reset` only, the period at whose resets the cap voids what lies above it; absent means every day (G-C)]. A `reference` beside a `value` is `member_conflict`, a `per` with another `on_reach` `member_unknown`. |
 | `regen` | `amount`, `every` [`while` (absent means always)], all expr |
 | `flow` | [`consumes`, `produces` (resource id to expr; a product may instead be `random:<id>`, naming a `random` rule), `moves` (`from`, `to`, `amount`), `counts_on` (`success` or `attempt`), `batch` (`min`, `max`), `requires` (gate rule ids)] |
 | `exchange` | `gives`, `takes` (resource id to expr) [`limit` (expr)] |
@@ -344,7 +346,7 @@ state have their own codes.
 | a store's `holds`; the keys of `consumes`, `produces`, `gives`, `takes` and an outcome's `then`; `numeraire` (model and objective); `amount:<id>`; the `amount:<id>` dimension of a column or an attribute | a `resource` |
 | `stock:<id>` | a `store` |
 | `moves.from`, `moves.to` | a `resource` or a `store` |
-| `block_income_from`, `shared_with` | `activity` entities |
+| `block_income_from`, `shared_with`, an income cap's `from` | `activity` entities |
 | `limit.per`, a cap's `per` | a period |
 | `rule:<id>`; `weight_ref.compares_to` | an active rule |
 | `cap:<id>`; `count:<id>`; flow `requires`; a `random:<id>` product | an active `cap`, `limit`, `gate` or `random` rule |
@@ -717,10 +719,21 @@ does. The configuration keys are under `lp`, `search` and `economy` (`contracts/
 
 ### What the programs model
 
-- **Time.** One step is one day. The steady state's cycle is one week when the model declares a period of unit
-  `week`, else one day. A period of unit `month` is refused (`month`): a month has no fixed number of days. Reset
-  minutes and offsets are not read: the steady state looks the same from every step, and a plan starts at a reset of
-  every period.
+- **Time.** One step is one day. Reset minutes and offsets are not read: the steady state looks the same from every
+  step, and a plan starts at a reset of every day and week period.
+  - **The steady cycle** (#424 ACM-PRICE 3.4) is the least common multiple of the lengths of the periods that have a
+    fixed number of days: a `day` 1, a `week` 7, a `days` period its `length`. They are taken shortest first (by id
+    among equals), each while the multiple stays at most `economy.max_cycle_steps` (28); one that would make it
+    longer is relaxed (below). With a day and a week the cycle is 7 steps, with a 14-day period as well 14; with no
+    period it is 1.
+  - **Relaxed periods** (3.3). A `month` has no fixed number of days: it counts as 146097/4800 days (the mean of the
+    Gregorian calendar's 400 years, exact). In the steady state a month and every period the cycle does not take are
+    relaxed by rate; so are, in the plan, a month and every `days` period (the plan has no start date that would place
+    its `anchor_date`). A limit or income cap of a relaxed period has one window, the whole program, and its value
+    counts times the program's days over the period's (`value × steps ÷ days`). This is exact for the long-run
+    average and drops only the order within the period. Each is listed in `relaxed`, by rule: `{rule, per, days,
+    value}`, `days` the period's and `value` what it counts over the program. A `void_at_reset` cap of a relaxed
+    period is refused (`void_at_reset`, at its `per`): its resets have no place in the cycle.
 - **Stocks.** Each resource and store has a stock at every step boundary, never below 0. A store's stock is apart
   from the stock of the resource it holds.
 - **Activities.** Each activity that is the subject of a flow has a count per step. One execution performs all its
@@ -748,9 +761,17 @@ does. The configuration keys are under `lp`, `search` and `economy` (`contracts/
   - `hard` on a resource, with `block_all_income` or `discard`: its stock stays at or below the cap at every step
     boundary. What the cap blocks overflows: at most the step's income, never stock already held.
   - `hard` on a resource with `void_at_reset`, in the steady state (G-C): read as `discard`, but only at the resets
-    of its `per` (every step boundary for a day, or without `per`; every seventh, from the first, for a week). Between
+    of its `per` (every step boundary for a day, or without `per`; every seventh, from the first, for a week; every
+    `length`-th for a `days` period the cycle takes). Between
     them the stock may exceed the cap; what lies above it at a reset is voided: it overflows in the step that ends at
     the reset, at most the income since the last reset. The plan refuses it (`void_at_reset`).
+  - `income` on a resource, with `discard` or `block_all_income` (#424 ACM-PRICE 3.3): per window of its `per` (as
+    a limit's, below; a relaxed period's at its rate), what the activities it counts bring into the resource (their
+    products and their moves into it) less what the cap voids is at most its `value`. It voids, in each step, at most
+    what they bring in that step, and the rest reaches the stock as usual; what it voids is never stock already held,
+    and with a hard cap on the same resource the two together never remove more than the step's income. Other
+    incomes (a regen, other activities) are not counted. Both programs read it, and it is priced like any cap with a
+    value (`rule_prices`). The overflow among the losses is the least with what the cap voids aside.
   - `storage` on a store, with `stop_production`, `discard` or `block_all_income`: its stock stays at or below the
     cap, and production beyond it is lost (at most the step's production).
   - `soft_read` on a resource, with `block_income_from`: the plan reads it (see below). The steady state reads no
@@ -759,8 +780,24 @@ does. The configuration keys are under `lp`, `search` and `economy` (`contracts/
     what the steady state reads (G-A); `read:<fact>` still reads the account state. A `reference` that needs the
     account state is refused (`state`), as is a reading without a `reference`. The plan and `run` read the reading.
   - Any other subject or `on_reach` is refused, with `found` the subject's kind or the `on_reach`.
-- **Limits.** Each window of the limit's period (one step for a day, seven for a week) counts the executions of its
-  subject and of its `shared_with` activities: at most `max`.
+- **Limits.** Each window of the limit's period (one step for a day, seven for a week, `length` for a `days` period;
+  the whole program, at its rate, for a relaxed one) counts the executions of its subject and of its `shared_with`
+  activities: at most `max`.
+- **Slots: concurrency as slot-hours** (#424 ACM-PRICE 3.1). A bound on how many executions run at once (a number
+  of slots, such as four expeditions at a time) needs no format of its own. It is written as a resource of
+  slot-hours:
+  - a `resource` entity `slot.<name>`;
+  - a `regen` of it: `amount` the number of slots, `every` `1h`, no `while`;
+  - a `hard` cap of it: `value` `"0"`, `on_reach` `discard`;
+  - each activity that holds a slot consumes its hours: `consumes` `slot.<name>` the hours it runs (an expression,
+    such as `rule:<a derive of the hours>`).
+
+  The cap of 0 voids every slot-hour not used in the step it comes in, so slots never carry over: a step gives at
+  most slots × 24 hours of running. The cap's price is `{"low": "0", "high": null}`, and the slot's price is what one
+  more hour of running is worth: an activity bound by the slots is worth, before its slot-hours, its slot price times
+  its hours. Such a resource (any resource with an active hard cap whose `value` is the number 0) is a slot: it is no
+  Runtime pool and its price is a diagnosis only, so `bindings check` and `bindings apply` refuse any entry that names
+  it as a pool (`binding_mismatch`, `slot`; see "Bindings").
 - **Gates.** A flow behind a gate of origin `person` (real payment) takes its activity out of both programs; the
   activity is listed in `excluded` (#424 design 4.7). A gate with no `requires`, no `prefs` and not irreversible lets
   the flow run. Any other gate is refused (`gate`).
@@ -796,8 +833,9 @@ provisional when it leaves one out.
   - When the two agree, the price is exact (`"1/10"`).
   - Otherwise it is the interval `{"low", "high"}` (a degenerate basis); `high` is null when one grain less is
     infeasible.
-  - The same holds for each cap with a value (a `reference` counts as one) that the program reads and each limit
-    (`rule_prices`), re-solved with its value one grain higher and one lower. The numeraire's price is 1.
+  - The same holds for each cap with a value (a `reference` counts as one; an income cap too) that the program reads
+    and each limit (`rule_prices`), re-solved with its value one grain higher and one lower. A relaxed rule's value is
+    its value per period, so its price is the cycle's gain per unit of it. The numeraire's price is 1.
 - **The status of each price** (`price_status`): resource to `{status, reasons}`. `reasons` says why a price is
   provisional: `excluded_pending`, computed without the activities in `excluded_pending`; `inputs`, a rule, row or
   reading it read is provisional, or depends on an unknown that a pending rule it read names (in this version,
@@ -817,8 +855,9 @@ provisional when it leaves one out.
 - **One account.** Each resource and store opens at its reading in the state. One that declares no reading needs
   none when nothing can lower or cap its stock: it opens at 0 and is listed in `unread`. Otherwise a missing reading
   is `state_reading_missing`.
-- **Its horizon** is `economy.plan_horizon` steps (7). It starts at a reset of every period and in the first step of
-  every regen with a longer `every`. A limit's first window is whole, because the state holds no counts yet.
+- **Its horizon** is `economy.plan_horizon` steps (7). It starts at a reset of every day and week period and in the
+  first step of every regen with a longer `every`; a month and a `days` period are relaxed over the horizon (see
+  "Time"). A limit's and an income cap's first window is whole, because the state holds no counts yet.
 - **Counts are integers**; moved amounts and stocks need not be.
 - **Read caps.** A `soft_read` cap blocks, in each step, the collections (moves that take what a store holds) of the
   activities it lists, unless the step opens at least one grain below the cap's reading. So a collection is blocked at
@@ -857,10 +896,12 @@ provisional when it leaves one out.
 two has `status` and `per_account`; a blocked one has only `status`.
 - **`steady`:** `cycle` (`steps`, `step_seconds`), `objective`, `prices` (resource to its price per step),
   `rule_prices`, `activity_values` (activity to its value per step, or null), `losses` (`overflow`,
-  `lost_production`), `marginals` (`prices`, `rule_prices`), `excluded`, `excluded_pending` (a list of `{flow,
-  activity, unknowns}`, by flow) and `price_status`.
+  `lost_production`), `marginals` (`prices`, `rule_prices`), `excluded`, `relaxed` (a list of `{rule, per, days,
+  value}`, by rule), `excluded_pending` (a list of `{flow, activity, unknowns}`, by flow) and `price_status`.
 - **`plan`:** `steps`, `proven`, `objective`, `counts` (activity to its count per step), `moved` (collection to its
-  amount per step), `end` (the final stocks), `unread` and `excluded`.
+  amount per step), `end` (the final stocks), `unread`, `excluded` and `relaxed`.
+- With `--steady-only` (`contracts/cli.md`), `data` holds `steady` and no `plan`: the plan is not computed, and none
+  of its errors is reported.
 
 A number is a string holding an exact rational. The errors name the outputs they block in `needed_by`:
 `economy:steady` and `economy:plan`. The warnings are those of the solves.
@@ -1095,6 +1136,10 @@ says `greater_than_or_equal`).
   - `form`, at a literal that cannot hold the threshold's form;
   - `literal_missing`, when the rule, the pool or the pointer names no integer. Fixed entries are checked for
     this too.
+  - `slot`, when `pool_id` is a slot resource of the model (a resource with an active hard cap whose `value` is
+    0; see "Slots" under "The economy", #424 ACM-PRICE 3.1), at the pool (`/pools`, when no pool has that id). A
+    slot is no Runtime pool and its price is a diagnosis only, so neither a binding nor a fixed entry may name it.
+    `bindings apply` refuses it the same way.
 - **`--strict`** also reads `schedule.json`. It refuses every integer literal that a `fact` or
   `resource_projection` predicate of one of its rules compares with, and every quantity of one of its pools,
   when the literal is neither bound nor fixed (`binding_unbound_literal`, exit 6, with `rule_id` or `pool_id`).

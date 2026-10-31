@@ -79,7 +79,8 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   `cache.max_bytes` (a dry run without `--apply`). A corrupt value is never used: `run` warns
   (`cache_entry_corrupt`) and computes it again (`contracts/cli.md`, "Cache").
 - **`economy`** solves the economy with scipy's HiGHS (`contracts/formats.md`, "The economy"):
-  - **the steady state**, game-wide: an LP over one cycle (a week, or a day), with the price of every resource
+  - **the steady state**, game-wide: an LP over one cycle (the least common multiple of the periods' days, at most
+    `economy.max_cycle_steps`; a month and longer periods relaxed by rate), with the price of every resource
     per step and of every cap and limit, exact or an interval, by re-solves one grain up and down; the value of
     each activity; and the least overflow and lost production;
   - **the plan** of one account: a MILP from the state's readings over `economy.plan_horizon` days, with integer
@@ -196,8 +197,8 @@ default:
   is carried as its enclosure to `random.enclosure_digits` (12) decimals (`contracts/formats.md`, "Random
   rules").
 - **Economy.** `lp.max_denominator` (1000000) bounds the fractions a solver's floats become, `lp.grain` (1) is the
-  step of the price re-solves, `search.milp_node_limit` (100000) the plan's only budget, and `economy.plan_horizon`
-  (7) its days.
+  step of the price re-solves, `search.milp_node_limit` (100000) the plan's only budget, `economy.plan_horizon`
+  (7) its days, and `economy.max_cycle_steps` (28) the most days of the steady state's cycle.
 - **Search.** The generic search fills disjoint teams from a roster: it screens every legal team with numpy (the
   engine's predict terms at `search.screen_scale`, 1000000, in chunks of `search.screen_chunk_rows`, 2<sup>20</sup>,
   up to `search.screen_max_rows`, 2<sup>23</sup>, per team), evaluates every team when all have at most

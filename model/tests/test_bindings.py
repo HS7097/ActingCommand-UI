@@ -428,3 +428,38 @@ def test_strict_scans_the_quantities_of_a_pool(example, acmodel):
     assert doc["data"]["fixed"][1:] == [{
         "entry": "/fixed/1", "file": SCHEDULE, "pool_id": "pool.r", "path": "/capacity/offset", "literal": 0,
         "reason": "the read cap itself, without a margin", "ref": "fixture"}]
+
+
+# #424 ACM-PRICE PRICE-3, design test 8: slot.s is a slot, written in slot-hours (two slots: 2 an hour under a hard
+# cap of 0, formats.md "Slots"). It is no Runtime pool.
+SLOT_RULES = [
+    {"id": "regen.slot.s", "kind": "regen", "subject": "slot.s", "logic": {"amount": "2", "every": "1h"},
+     "provenance": [{"kind": "logic", "ref": "fixture"}], "status": "confirmed"},
+    {"id": "cap.slot.s", "kind": "cap", "subject": "slot.s",
+     "logic": {"cap_kind": "hard", "value": "0", "on_reach": "discard"},
+     "provenance": [{"kind": "logic", "ref": "fixture"}], "status": "confirmed"},
+]
+
+
+def test_a_slot_resource_cannot_be_bound_as_a_pool(example, acmodel):
+    """A pool of schedule.json named after the slot, with its capacity bound to a threshold: `check` and `apply`
+    both refuse the entry (`binding_mismatch`, `slot`, at the pool), and `apply` writes nothing."""
+
+    def slot(doc):
+        doc["entities"].append({"id": "slot.s", "kind": "resource"})
+        doc["rules"].extend(SLOT_RULES)
+
+    edit(example / MODEL / "rules" / "a.json", slot)
+    edit(example / SCHEDULE, lambda doc: doc.update(pools=[{**POOL, "id": "slot.s"}]))
+    edit(example / MODEL / "bindings.json", lambda doc: doc["bindings"].append(
+        {"threshold": "thr.daily.floor", "file": SCHEDULE, "pool_id": "slot.s", "path": "/capacity"}))
+    before = (example / SCHEDULE).read_bytes()
+    expected = [("binding_mismatch", "/pools/0", {
+        "path": str(example / SCHEDULE), "entry": "/bindings/3", "reason": "slot", "threshold": "thr.daily.floor",
+        "pool_id": "slot.s"})]
+
+    for command in ("check", "apply"):
+        status, doc = bindings(acmodel, example, command)
+
+        assert (status, doc["data"], errors(doc)) == (6, {}, expected)
+    assert (example / SCHEDULE).read_bytes() == before

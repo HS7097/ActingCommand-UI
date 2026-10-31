@@ -51,7 +51,7 @@ _MEMBERS = {
     "search": {
         "milp_node_limit", "top_k", "exact_max", "node_limit", "screen_scale", "screen_chunk_rows", "screen_max_rows",
     },
-    "economy": {"plan_horizon"},
+    "economy": {"plan_horizon", "max_cycle_steps"},
     "export": {"validator_timeout_ms"},
     "watch": watch_settings.MEMBERS,
 }
@@ -120,18 +120,22 @@ class EconomySettings:
     - `grain` (`lp.grain`): the grain of every amount, one unit: the step of the price re-solves, and how far
       below a read cap a collection must start;
     - `node_limit` (`search.milp_node_limit`): the most nodes a MILP may explore; the only budget, never a time;
-    - `plan_horizon` (`economy.plan_horizon`): the steps (days) of an account's plan.
+    - `plan_horizon` (`economy.plan_horizon`): the steps (days) of an account's plan;
+    - `max_cycle_steps` (`economy.max_cycle_steps`): the most steps (days) of the steady state's cycle, the least
+      common multiple of the periods' lengths; a period that would make it longer is relaxed by rate (#424
+      ACM-PRICE PRICE-3).
     """
 
     max_denominator: int = 1_000_000
     grain: int = 1
     node_limit: int = 100_000
     plan_horizon: int = 7
+    max_cycle_steps: int = 28
 
     def keyed(self) -> dict[str, int]:
         """Every key, for the run id of `economy`."""
         return {"max_denominator": self.max_denominator, "grain": self.grain, "node_limit": self.node_limit,
-                "plan_horizon": self.plan_horizon}
+                "plan_horizon": self.plan_horizon, "max_cycle_steps": self.max_cycle_steps}
 
 
 # The range of each economy key: (section, key) to (field, lowest, highest or None). HiGHS counts nodes in a
@@ -141,6 +145,7 @@ ECONOMY_RANGES = {
     ("lp", "grain"): ("grain", 1, None),
     ("search", "milp_node_limit"): ("node_limit", 1, 2**31 - 1),
     ("economy", "plan_horizon"): ("plan_horizon", 1, None),
+    ("economy", "max_cycle_steps"): ("max_cycle_steps", 1, None),
 }
 
 

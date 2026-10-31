@@ -63,8 +63,11 @@ class Evaluator:
 # `general`), and the steady state reads it; `economy` 2: the steady state reads caps' references, a resource's
 # regen stop and void_at_reset caps, leaves out pending flows whose unknowns it cannot read, and shows
 # `excluded_pending` and `price_status`.
+# PRICE-3: `economy` 3: income caps, `days` periods, the steady cycle as the least common multiple of the
+# periods within `economy.max_cycle_steps` (in the steady state's spec), and months and longer periods relaxed by
+# rate and shown in `relaxed`.
 EVALUATORS: dict[str, Evaluator] = {
-    "economy": Evaluator(2, ("numpy", "python", "scipy")),
+    "economy": Evaluator(3, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
     "flow": Evaluator(3),
     "general": Evaluator(3),

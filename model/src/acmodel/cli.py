@@ -43,6 +43,7 @@ GROUPS = {name.split(" ")[0] for name in COMMANDS if " " in name}
 # Flags: options that take no value, each optional and given at most once.
 FLAGS = {
     "check": ("--strict-provenance", "--report-supplements"),
+    "economy": ("--steady-only",),
     "bindings check": ("--strict",),
     "cache gc": ("--apply",),
 }
@@ -51,7 +52,7 @@ USAGE = (
     "commands: setup, version,\n"
     "          check <model folder or model.json> [--strict-provenance] [--report-supplements],\n"
     "          run <model folder or model.json> --state <state file>,\n"
-    "          economy <model folder or model.json> --state <state file>,\n"
+    "          economy <model folder or model.json> --state <state file> [--steady-only],\n"
     "          explain <model folder or model.json> <output id> --state <state file>,\n"
     "          export thresholds <model folder or model.json> --state <state file>,\n"
     "          export tables <model folder or model.json> --state <state file> --repo <repository>,\n"
@@ -153,13 +154,14 @@ def _economy(
     args: list[str], cfg: config.Config, system: System
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """The economy's steady state and plan, with the errors that block them, and the warnings of the cache and
-    of the solves. It computes through the cache under `paths.state_root`, as `run` does."""
+    of the solves; with `--steady-only`, the steady state alone. It computes through the cache under
+    `paths.state_root`, as `run` does."""
     packages = _dependencies(system)
     with cache.open_store(cfg.state_root, max_bytes=cfg.cache_max_bytes) as store:
         session = cache.Session(store, libraries=cache.libraries(system.python_version, packages))
         data, errors, warnings = run_economy(
             Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits,
-            unknowns=cfg.unknowns, economy=cfg.economy, cache=session,
+            unknowns=cfg.unknowns, economy=cfg.economy, cache=session, steady_only="--steady-only" in args[2:],
         )
     _report_eviction(data, system)
     return data, errors, session.warnings + warnings

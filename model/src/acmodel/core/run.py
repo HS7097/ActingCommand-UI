@@ -180,19 +180,22 @@ def run_economy(
     unknowns: Unknowns = Unknowns(),
     economy: EconomySettings = EconomySettings(),
     cache: Session | None = None,
+    steady_only: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """`acmodel economy`: the model checked as `run` checks it, then the steady state and the plan
     (`core.flow`) and only the graph nodes they read. Returns `data` (`steady` and `plan`), the errors that
     block them, each with `needed_by`, and the warnings of the solves (`lp_dual_disagrees`,
     `search_budget_exhausted`). With `cache`, it computes incrementally, `data` also holds `run_id` and `work`,
-    and the outputs are kept under `runs/<run id>/`."""
+    and the outputs are kept under `runs/<run id>/`. With `steady_only` (`--steady-only`) it computes the steady
+    state alone: the plan is never computed, so neither it nor its errors are in the answer."""
     checker, graph, folder, exports, head, prefs = _graph(
         path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns, economy=economy, cache=cache
     )
-    keys = [flow.NODES[flow.STEADY], flow.NODES[flow.PLAN]]
+    solves = {name: key for name, key in flow.NODES.items() if name == flow.STEADY or not steady_only}
+    keys = list(solves.values())
     solve(keys, graph.compute if cache is None else graph.cached, graph.results)
     needed_by: dict[int, list[str]] = {index: [] for index in range(len(graph.errors))}
-    for solve_name, key in flow.NODES.items():
+    for solve_name, key in solves.items():
         for index in graph.results[key].blocked_by:
             needed_by[index].append(flow.OUTPUTS[solve_name])
     errors = [{**entry, "needed_by": sorted(needed_by[index])} for index, entry in enumerate(graph.errors)]
@@ -201,12 +204,13 @@ def run_economy(
         {canonical_text(entry): entry for key in keys for entry in graph.results[key].warnings}.values(),
         key=canonical_text,
     )
-    data = {name: flow.render(graph.results[key]) for name, key in flow.NODES.items()}
+    data = {name: flow.render(graph.results[key]) for name, key in solves.items()}
     if cache is None:
         return {**head, **data}, errors, warnings
     inputs = _run_inputs(checker, graph, folder, exports, head, prefs[-1] if prefs else None, max_bits, unknowns)
     inputs["config"]["economy"] = economy.keyed()
-    inputs["command"] = "economy"  # never the run id of `run` with the same inputs
+    # Never the run id of `run` with the same inputs, nor of the other form of `economy`.
+    inputs["command"] = "economy --steady-only" if steady_only else "economy"
     run_id = cache.run_id(inputs)
     outputs = {
         "schema_version": RUN_SCHEMA, "run_id": run_id, "data": {**head, **data}, "errors": errors, "warnings": warnings,
