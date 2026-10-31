@@ -1584,6 +1584,8 @@ class _Solution:
     certified: bool = False
     refusal: str | None = None
     pivots: int = 0
+    # a certified optimum's program as `core.exact` read it, its vertex and the arrays (the order of its rows)
+    basis: tuple[Any, Any, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -1979,6 +1981,7 @@ class _Solver:
         # PRICE-2c: the last LP solved with `warm` (its variables and rows, held so that they stay the objects they are;
         # its arrays; the HiGHS instance that holds it), for the next LP on the same rows with another objective
         self.warm: tuple[Any, Any, _Arrays, Any] | None = None
+        self.last_problem: exact.Problem | None = None  # the last LP's program as `core.exact` read it (`vertex`)
 
     def failure(self, code: str, **detail: Any) -> Failure:
         return Failure(error(code, {"path": self.model.path, "solve": self.model.solve, **detail}))
@@ -2019,7 +2022,8 @@ class _Solver:
         no basis), and the solution rebuilt and checked as before (`exact`): feasible, but not certified optimal."""
         found = None
         if run.statuses is not None:
-            found = exact.optimum(_exact_problem(program, arrays), run.statuses, self.settings.max_pivots)
+            self.last_problem = _exact_problem(program, arrays)
+            found = exact.optimum(self.last_problem, run.statuses, self.settings.max_pivots)
             if isinstance(found, exact.Vertex):
                 x = dict(zip(arrays.columns, found.x, strict=True))
                 problem = _violation(program, x)
@@ -2071,6 +2075,7 @@ class _Solver:
             "optimal", x, self.objective(program, x), eq, le, certified=certified,
             refusal=None if certified else (found.reason if found is not None else NO_BASIS),
             pivots=0 if found is None else found.pivots,
+            basis=(self.last_problem, found, arrays) if certified else None,
         )
 
     def probe(
@@ -2190,22 +2195,42 @@ class _Solver:
             detail["unchecked"] = unchecked
         return error(LP_INFEASIBLE, detail)
 
-    def price(self, optimum: Fraction, change: Callable[[Fraction], dict[str, Any]]) -> _Pair:
+    def price(self, optimum: Fraction, change: Callable[[Fraction], dict[str, Any]], known: _Pair = (None, None)) -> _Pair:
         """The value of one more grain (re-solved with `change(+grain)`) and of one grain less (`change(-grain)`),
         each per unit. Equal, they are an exact price; else an interval, unbounded above when one grain less is
         infeasible and below when one grain more is. One grain more of a resource is infeasible where the cycle
         cannot hold it: a resource whose regen stops at a cap ends the cycle with exactly its opening stock and loses
         at most what its regen brings, so when the program can use no more of it and already loses all its regen
         brings (its only users left out as pending, say), there is no room for one more. A cap's or a limit's value
-        one grain higher only relaxes the program."""
+        one grain higher only relaxes the program. `known` holds a side that S3's basis already proves (`chords`,
+        PRICE-2c), which is then not re-solved."""
         grain = self.model.grain
-        more = self.lp(_program(self.model, **change(grain)), "price")
-        less = self.lp(_program(self.model, **change(-grain)), "price")
-        right = (more.value - optimum) / grain if more.status == "optimal" else None
-        left = (optimum - less.value) / grain if less.status == "optimal" else None
+        right, left = known
+        if right is None:
+            more = self.lp(_program(self.model, **change(grain)), "price")
+            right = (more.value - optimum) / grain if more.status == "optimal" else None
+        if left is None:
+            less = self.lp(_program(self.model, **change(-grain)), "price")
+            left = (optimum - less.value) / grain if less.status == "optimal" else None
         if right is None or left is None:
             return right, left
         return min(right, left), max(right, left)
+
+    def chords(self, base: _Solution, rows: dict[Key, int], resource: str, step: int) -> tuple[_Pair, _Pair]:
+        """What S3's certified basis proves of a resource's price in a step without an LP (PRICE-2c), each None where
+        it does not: the chords of its re-solves at plus and minus one grain, and its projection's ends. When one grain
+        more (or less) of income leaves the basis primal feasible (`exact.ranging`), it stays optimal and the optimum
+        moves by exactly one grain times the balance row's dual in that basis: that is the chord. When a little more
+        (or less) does, the optimum is linear on that side with that slope: that is the derivative there, the
+        projection's `low` (or `high`). Only for a resource without a hard cap, whose grain moves its balance row's
+        right side alone (`_pinned`)."""
+        if base.basis is None or resource in self.model.hard:
+            return (None, None), (None, None)
+        problem, vertex, _ = base.basis
+        row = rows[("balance", resource, step)]
+        up, down, rises, falls = exact.ranging(problem, vertex, row, Fraction(self.model.grain))
+        dual = vertex.duals[row]
+        return ((dual if up else None), (dual if down else None)), ((dual if rises else None), (dual if falls else None))
 
     def marginal(self, dual: float) -> Fraction:
         if not math.isfinite(dual):
@@ -2697,17 +2722,22 @@ class _Solver:
         dual = tiers.dual  # S3's, which every price re-solve changes, checked exactly (`duality`)
         face = dual.face(optimum)
         on_face = _restricted(dual, program, base.x)  # D*, for the LPs that read only a value on it
+        rows = {} if base.basis is None else {row.key: i for i, row in enumerate((*base.basis[2].le, *base.basis[2].eq))}
         prices: dict[str, list[_Pair]] = {}
         grains: dict[str, list[_Pair]] = {}
         marginals: dict[str, list[Fraction]] = {}
         for resource in model.resources:
             prices[resource], grains[resource], marginals[resource] = [], [], []
             for step in range(steps):
-                grain = self.price(optimum, lambda delta: {"extra": {(resource, step): delta}})
+                known, sides = self.chords(base, rows, resource, step)
+                grain = self.price(optimum, lambda delta: {"extra": {(resource, step): delta}}, known)
                 if _pinned(model, resource, grain):
                     price = grain  # the chords pin the projection (PRICE-2c): no LP on D*
-                else:
-                    price = self.ends(*on_face, dual.duals[("balance", resource, step)])
+                else:  # each end that S3's basis does not prove is an LP on D*
+                    function = dual.duals[("balance", resource, step)]
+                    low = sides[0] if sides[0] is not None else self.extreme(*on_face, function, -1)
+                    high = sides[1] if sides[1] is not None else self.extreme(*on_face, function, 1)
+                    price = (low, high)
                 marginal = self.marginal(-base.eq[("balance", resource, step)])
                 warnings += self.disagrees(resource, step, marginal, price)
                 warnings += self.outside(resource, step, price, grain)

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import heapq
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Hashable, Sequence
 
@@ -60,11 +60,14 @@ class Problem:
 @dataclass(frozen=True)
 class Vertex:
     """An exactly optimal basic solution: the structural values `x`, the row duals `duals` (y, in the program's
-    maximising sense: Σ_i a_ij·y_i = c_j for a basic column) and the pivots it took from HiGHS's basis."""
+    maximising sense: Σ_i a_ij·y_i = c_j for a basic column) and the pivots it took from HiGHS's basis; and, for
+    `stays`, its basic variables and every variable's value (`values`: the columns, then the rows' logicals)."""
 
     x: tuple[Fraction, ...]
     duals: tuple[Fraction, ...]
     pivots: int
+    basic: tuple[int, ...] = field(default=(), compare=False)
+    values: tuple[Fraction, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)
@@ -263,7 +266,7 @@ def optimum(problem: Problem, statuses: Sequence[int], cap: int) -> Vertex | Ref
         costs = {k: reduced(k) for k in at}
         dual = [k for k in sorted(at) if (rises(k) and costs[k] > 0) or (falls(k) and costs[k] < 0)]
         if not primal and not dual:
-            return Vertex(tuple(z[j] for j in range(n)), tuple(y), pivots)
+            return Vertex(tuple(z[j] for j in range(n)), tuple(y), pivots, tuple(basic), tuple(z[k] for k in range(n + m)))
         if pivots >= cap:
             return Refused(PIVOT_CAP, pivots)
         position = {k: p for p, k in enumerate(basic)}
@@ -326,3 +329,44 @@ def optimum(problem: Problem, statuses: Sequence[int], cap: int) -> Vertex | Ref
         else:
             return Refused(NOT_FEASIBLE, pivots)
         pivots += 1
+
+
+def ranging(problem: Problem, vertex: Vertex, row: int, step: Fraction) -> tuple[bool, bool, bool, bool]:
+    """Whether `vertex`'s basis stays primal feasible when both ends of equality row `row` (its logical nonbasic) move
+    up by `step`, down by `step`, up a little, down a little. Where it does, it stays optimal (dual feasibility does
+    not read the right sides), so the optimum moves by exactly the move times duals[row] that far: a chord of `step`
+    is then duals[row], and a little gives the derivative on that side, duals[row]. All False when the row's logical
+    is basic; nothing is solved but the basis system once, with the row's unit move as its right side.
+
+    "A little" holds when each basic variable at a bound moves off it inward or not at all, and "by step" when each
+    basic variable's value moved by step stays within its bounds."""
+    n, m = len(problem.cost), len(problem.rows)
+    basic = set(vertex.basic)
+    if not basic or n + row in basic or problem.lower[n + row] != problem.upper[n + row]:
+        return False, False, False, False
+    structural = [k for k in vertex.basic if k < n]
+    tight = [i for i in range(m) if n + i not in basic]
+    chosen = set(structural)
+    equations = [{j: a for j, a in problem.rows[i].items() if j in chosen and a} for i in tight]
+    moved = solve(equations, [Fraction(1) if i == row else Fraction(0) for i in tight], structural)
+    if moved is None:
+        return False, False, False, False
+    values, lower, upper = vertex.values, problem.lower, problem.upper
+    holds = {(1, True): True, (-1, True): True, (1, False): True, (-1, False): True}  # (direction, by step)
+    for k in vertex.basic:
+        if k < n:
+            change = moved[k]
+        else:
+            change = sum((a * moved[j] for j, a in problem.rows[k - n].items() if j in chosen and moved[j]), Fraction(0))
+        if not change:
+            continue
+        for sign in (1, -1):
+            rate = sign * change  # how z_k moves per unit of the move
+            end = lower[k] if rate < 0 else upper[k]
+            if end is None:
+                continue
+            if values[k] == end:  # at the bound it moves towards: not even a little
+                holds[(sign, False)] = holds[(sign, True)] = False
+            elif (rate < 0 and values[k] + step * rate < end) or (rate > 0 and values[k] + step * rate > end):
+                holds[(sign, True)] = False
+    return holds[(1, True)], holds[(-1, True)], holds[(1, False)], holds[(-1, False)]
