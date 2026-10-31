@@ -1,5 +1,6 @@
 """#424 ACM-PRICE PRICE-2b-1: the joint price vector and the activity judgements (addendum 2.1 §2), on the worked
-examples EX1-EX6 of §2.4 in neutral ids (the tests of §2.5), and a price without a low end.
+examples EX1-EX6 of §2.4 in neutral ids (the tests of §2.5), a price without a low end, and the tolerance of HiGHS's
+marginal against an exact price whose denominator is very large.
 
 Every fixture is a one-day cycle in which res.v is the one main goal, worth 1 value unit (`test_economy.model`), so a
 unit of v is worth exactly 1 and stands for the examples' "value". Each docstring works out by hand D*, the optimal
@@ -403,7 +404,7 @@ def test_a_pool_bounded_below_only_takes_its_goals_weight_and_without_a_goal_is_
 
 def price_result(doc: dict[str, Any], pool: str) -> dict[str, Any]:
     """What `price:<pool>` shows besides its entry of `joint`: the status and reasons of `price_status`, the price's
-    own (PRICE-2b-2 refines it per component), and `per_account` false."""
+    own, which is its static component's (PRICE-2b-2), and `per_account` false."""
     found = doc["data"]["steady"]["price_status"][pool]
     return {"status": found["status"], "reasons": found["reasons"], "per_account": False}
 
@@ -412,7 +413,13 @@ def test_explain_prints_a_price_and_an_activity_value_with_the_steady_states_tre
     """The graph outputs `price:<resource>` and `activity_value:<activity>` (#424 ACM-PRICE 4.1) of the fixture above:
     each its entry of `joint`, a price with its own status (`price_status`) and an activity's value with the steady
     state's, and the tree of what the steady state read (its flows, limits and objectives in the reference state). An
-    id that names no activity is not an output."""
+    id that names no activity is not an output.
+
+    The price's status is its static component's (PRICE-2b-2, `core.coverage`). By hand: act.spend joins d to v,
+    act.research p to v, act.free and goal.v are on v and goal.d on d, so all of them are one component. p is taken
+    (by act.research), nothing brings it in (no regen, no activity) and it has no goal of its own: it has no steady
+    supply, so the component is a structural gap, and d's price is provisional for `no_steady_supply`, as is the
+    steady state."""
     folder = bounded_below_fixture(tmp_path)
     _, economy_doc = economy(folder, "--steady-only")
 
@@ -421,6 +428,9 @@ def test_explain_prints_a_price_and_an_activity_value_with_the_steady_states_tre
     assert (status, doc["errors"]) == (0, [])
     provenance = doc["data"]["provenance"]
     assert (doc["data"]["output"], provenance["output"]) == ("price:res.d", "price:res.d")
+    assert price_result(economy_doc, "res.d") == {
+        "status": "provisional", "reasons": ["no_steady_supply"], "per_account": False,
+    }
     assert provenance["result"] == {**price_result(economy_doc, "res.d"), **BOUNDED_BELOW_JOINT["prices"]["res.d"]}
     nodes = provenance["nodes"]
     assert nodes["price:res.d"] == {"node": "price", "resource": "res.d", "reads": ["economy:steady"]}
@@ -488,7 +498,11 @@ def test_a_price_without_a_low_end_is_fixed_at_its_high_end_and_withheld(tmp_pat
     the pending flow left out that would use r; free through the selection, it is fixed last at its high end, the
     value of one less unit: 0 (`one_less`, the mirror of step 1). v is exact; act.a reads 2, runs 3 times, and its
     limit lets it run no more. The steady state is provisional (act.p is left out), and so is the price; the plan
-    still refuses the regen stop (`while`), so it never reads a price without a low end."""
+    still refuses the regen stop (`while`), so it never reads a price without a low end.
+
+    The price's status is its static component's (PRICE-2b-2): act.p takes r and brings in v, and act.a and goal.v are
+    on v, so r, v, act.a and act.p are one component, which holds the gap `excluded_pending` (act.p); nothing in it
+    is provisional otherwise (flow.p names unk.p, but a flow left out counts as `excluded_pending` only)."""
     folder = stop_fixture(tmp_path)
 
     _, economy_doc = economy(folder)
@@ -497,6 +511,9 @@ def test_a_price_without_a_low_end_is_fixed_at_its_high_end_and_withheld(tmp_pat
     assert all(entry["needed_by"] == ["economy:plan"] for entry in economy_doc["errors"])  # the steady state stands
     assert economy_doc["data"]["plan"] == {"status": "blocked"}
     assert steady(economy_doc)["status"] == "provisional"
+    assert steady(economy_doc)["price_status"] == {
+        resource: {"status": "provisional", "reasons": ["excluded_pending"]} for resource in ("res.r", "res.v")
+    }
     assert steady(economy_doc)["prices"] == grain(economy_doc) == {"res.r": [between(None, "0")], "res.v": ["1"]}
     assert joint(economy_doc) == {
         "prices": {"res.r": priced("0", between(None, "0"), "one_less", NO_ROOM), "res.v": EXACT_V},
@@ -600,3 +617,74 @@ def test_a_marginal_outside_the_projection_is_a_warning_and_the_vector_stands(tm
     }]
     assert steady(doc)["prices"] == {"res.a": [between("0", "2")], "res.v": ["1"]}
     assert joint(doc) == EX5_JOINT
+
+
+# The tolerance of the marginal cross-check (MARGINAL_TOLERANCE, τ = 1e-7) -------------------------------------------
+
+# 1 + 1/(3 × 10^20): an exact price whose denominator no marginal can have (a float made a fraction with a denominator
+# of at most lp.max_denominator, 10^6), as the prices of a model whose numbers carry four decimals (denominators near
+# 6e28), where a strict comparison warned 59 times on a real model.
+LARGE = Fraction(3 * 10**20 + 1, 3 * 10**20)
+LARGE_JOINT = {
+    "prices": {"res.a": priced(str(LARGE), str(LARGE), "exact"), "res.v": EXACT_V},
+    "max_min": [],
+    "activities": {"act.conv": judged("0", "0", "1")},
+}
+
+
+def large_fixture(folder: Path) -> Path:
+    """a comes at 1 a day; act.conv turns one a into 1 + 1/(3 × 10^20) v (`LARGE`)."""
+    flows = {"act.conv": ({"res.a": "1"}, {"res.v": "1 + 1 / 300000000000000000000"})}
+    return example(folder, ["res.a"], {"res.a": "1"}, flows)
+
+
+def test_a_marginal_within_the_tolerance_of_a_price_with_a_large_denominator_agrees(tmp_path, economy):
+    """By hand: act.conv runs once a day and its L = 1 + 1/(3 × 10^20) v go to the goal at 1 each, so V0 = L. D* is
+    π_v = 1 (the goal's sink runs in every optimum) and π_a = L·π_v = L (act.conv runs in every optimum, so its dual row
+    is tight): a's price is exact, L, and so are its re-solves (one more a is one more conversion, L; one less one
+    fewer, L). act.conv reads L - L = 0, runs once and the day brings no more a (input_bound).
+
+    HiGHS solves the program in floats, where L is 1.0 (1/(3 × 10^20) lies far below the step of a double at 1,
+    2.2e-16), so its marginal of a's balance row is 1, and `limit_denominator(10^6)` could not give a denominator of
+    3 × 10^20 anyway: the marginal is 1, never L. |1 - L| = 1/(3 × 10^20) <= 1e-7 · max(1, L): within τ, so the
+    cross-check agrees and there is no warning, where the strict comparison warned (`marginal` 1 below `low` L)."""
+    status, doc = economy(large_fixture(tmp_path), "--steady-only")
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    assert steady(doc)["prices"] == grain(doc) == {"res.a": [str(LARGE)], "res.v": ["1"]}
+    marginal = Fraction(doc["data"]["steady"]["marginals"]["prices"]["res.a"][0])
+    assert marginal == 1 and marginal != LARGE  # a strict comparison would warn
+    assert abs(marginal - LARGE) <= economy_flow.MARGINAL_TOLERANCE * max(1, LARGE)
+    assert joint(doc) == LARGE_JOINT
+
+
+def test_a_marginal_beyond_the_tolerance_is_still_a_warning(tmp_path, economy, monkeypatch):
+    """The fixture above, with HiGHS's marginal of a's balance row given as 1.000001 (its marginal -1.000001; the
+    shift must pass half the gap of 1e-6 between 1 and the next fraction of denominator at most 10^6, or
+    `limit_denominator` gives 1 again). It is the fraction 1000001/1000000, and by hand |1000001/1000000 - L| =
+    1/10^6 - 1/(3 × 10^20), above τ · max(1, L) = 1e-7 · L (about 1e-7): outside a's exact price L by ten times the
+    tolerance, so the cross-check still warns (`lp_dual_disagrees`, check `marginal`). The price, the vector and the
+    judgements stand as D* gives them."""
+    marginals = economy_flow._marginals
+
+    def shifted(section: Any, rows: Any) -> dict:
+        found = marginals(section, rows)
+        if ("balance", "res.a", 0) in found:
+            found[("balance", "res.a", 0)] = -1.000001
+        return found
+
+    monkeypatch.setattr(economy_flow, "_marginals", shifted)
+    folder = large_fixture(tmp_path)
+
+    status, doc = economy(folder, "--steady-only")
+
+    assert (status, doc["errors"]) == (0, [])
+    assert doc["warnings"] == [{
+        "code": "lp_dual_disagrees",
+        "detail": {
+            "path": model_path(folder), "target": "res.a", "step": 0, "check": "marginal",
+            "marginal": "1000001/1000000", "low": str(LARGE), "high": str(LARGE),
+        },
+    }]
+    assert steady(doc)["prices"] == {"res.a": [str(LARGE)], "res.v": ["1"]}
+    assert joint(doc) == LARGE_JOINT

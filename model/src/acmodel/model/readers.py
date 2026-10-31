@@ -12,7 +12,7 @@ present, expressions) is the static check's, not the readers'.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from acmodel import ids
 from acmodel.envelope import Failure
@@ -193,6 +193,46 @@ CAP_BY_VALUE = Object(
 COMPARISON = Choice(
     "eq", "not_eq", "less_than", "less_than_or_equal", "greater_than", "greater_than_or_equal"
 )
+# The account condition a statement holds under (#424 ACM-PRICE PRICE-2b-2, addendum 2.1 §3.2 and §3.7): a text,
+# and the neutral fact keys the resource side checks it with on the instances.
+FACTS = ListOf(FACT_KEY, min_items=1)
+
+
+def _together(*names: str) -> Callable[[dict[str, Any], str, Context], bool]:
+    """A rule: the optional members `names` are all present or all absent (the absent one is `member_missing`)."""
+
+    def rule(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+        present = [name for name in names if name in value]
+        if not present or len(present) == len(names):
+            return True
+        missing = next(name for name in names if name not in value)
+        return ctx.refuse("member_missing", pointer(ref, missing), key=missing, expected=list(names))
+
+    return rule
+
+
+def _estimate(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """A `pt.*` estimate (addendum 2.1 §3.7, check 1): exactly one of `of` and the pair `low` and `high`, which go
+    together."""
+    ends = [name for name in ("low", "high") if name in value]
+    if "of" in value and ends:
+        return ctx.refuse("member_conflict", pointer(ref, ends[0]), key=ends[0], expected=["of", "low"])
+    if "of" not in value and not ends:
+        return ctx.refuse("member_missing", pointer(ref, "of"), key="of", expected=["of", "low"])
+    return _together("low", "high")(value, ref, ctx)
+
+
+# The estimate of a provisional derive (§3.7): what range its point value stands for, on what basis, for which
+# activities and under which account condition. Only the impact assessment and the coverage report read it.
+ESTIMATE_BASES = ("variants", "samples", "statistics", "design")
+ESTIMATE = Object(
+    {
+        "basis": Choice(*ESTIMATE_BASES),
+        "covers": Object({"activities": ListOf(ID, min_items=1)}, {"holds_when": TEXT, "facts": FACTS}),
+    },
+    {"of": EXPR, "low": EXPR, "high": EXPR},
+    _estimate,
+)
 
 LOGIC: dict[str, Spec] = {
     "cap": Tagged(
@@ -245,6 +285,7 @@ LOGIC: dict[str, Spec] = {
             "live": Object(
                 {"fact": FACT_KEY, "comparison": COMPARISON, "reference_fact": FACT_KEY, "offset": EXPR}
             ),
+            "estimate": ESTIMATE,
         },
     ),
     "engine": Object(
@@ -266,6 +307,9 @@ LOGIC: dict[str, Spec] = {
         },
     ),
     "weight_ref": Object({"file": TEXT, "pointer": POINTER, "compares_to": ID}),
+    # A declared zero (#424 ACM-PRICE PRICE-2b-2, addendum 2.1 §3.2): the subject, a pool, has no use; why, and
+    # the condition it holds under (absent: always) with the fact keys that check it, which go together.
+    "no_use": Object({"reason": TEXT}, {"holds_when": TEXT, "facts": FACTS}, _together("holds_when", "facts")),
 }
 
 
@@ -283,13 +327,21 @@ def _drop_samples(value: dict[str, Any], ref: str, ctx: Context) -> bool:
     return ok
 
 
+def _estimated(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """An `estimate` only on a provisional derive (addendum 2.1 §3.7): on any other it is `member_unknown`."""
+    if "estimate" in value["logic"] and value["status"] != "provisional":
+        return ctx.refuse("member_unknown", pointer(pointer(ref, "logic"), "estimate"), key="estimate")
+    return True
+
+
+RULE_CHECKS = {"random": _drop_samples, "derive": _estimated}
 RULE = Tagged(
     "kind",
     {
         kind: Object(
             {"id": ID, "subject": ID, "logic": logic, "provenance": PROVENANCE, "status": TEXT},
             {"when": EXPR, "unknowns": ListOf(UNKNOWN_ID), "supersedes": ListOf(ID), **NOTE},
-            _drop_samples if kind == "random" else None,
+            RULE_CHECKS.get(kind),
         )
         for kind, logic in LOGIC.items()
     },

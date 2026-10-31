@@ -384,6 +384,10 @@ class _Types:
             value = self.memo.get(("expr", owner.path, at(owner.ref, "logic", "value")))
             if value is not None and unify(value, found) is None:
                 refuse("general_logic", [value, found])
+        elif role[:2] == ("logic", "estimate"):  # `of`, `low`, `high`: a number of the value's dimension (§3.7)
+            value = self.memo.get(("expr", owner.path, at(owner.ref, "logic", "value")))
+            if value is not None and (BOOL in (value, found) or unify(value, found) is None):
+                refuse("estimate", [value, found])
         elif role == ("logic", "live", "offset"):
             declared = [self.facts.get(logic["live"][name], set()) for name in ("fact", "reference_fact")]
             for kinds in declared:

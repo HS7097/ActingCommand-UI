@@ -60,7 +60,10 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   ruling, a design value or a marked supplement; a measurement without `role`; a source without `class`; a guide
   row without the class underneath it (`rule_provenance_unsourced`). These are errors only with
   `--strict-provenance`. `--report-supplements` lists every supplemented value, to replace once a public source
-  gives it.
+  gives it. A pool declared zero (`no_use`) must have no use (`no_use_contradicted`) and must carry the conditions
+  of the zeros its uses lead to (`no_use_condition_incomplete`); the `estimate` of a provisional derive must have
+  what its basis needs and cover every activity that reads it (`estimate_basis_invalid`, `estimate_scope_exceeded`;
+  its point value outside the range is found where it is computed, `estimate_outside_range`).
 - **`run`** checks the model, then the dimensions of its expressions and its preference keys, and
   computes its derived values and thresholds for one account state, exactly. An output that cannot be
   computed (a reading the state lacks, say) is blocked with its error; the others are still computed, and
@@ -88,7 +91,11 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
     checked exactly, gives the **joint price vector**: one dual optimal point for all the pools, chosen by a
     lexicographic max-min, never a midpoint per pool; and the **activity judgements** (value, range on the face,
     whether an optimum runs it, the cost of running it once more). These are the outputs `price:<resource>` and the
-    diagnostic `activity_value:<activity>`;
+    diagnostic `activity_value:<activity>`. HiGHS's marginals are a cross-check only, within a relative tolerance
+    of 1e-7 (`lp_dual_disagrees`). Its coverage section classes each pool as covered, a structural gap, verified
+    zero (a `no_use` declaration the static check found sound) or unknown, lists the static components of the
+    flow graph, and gives each price the status of its component, so that a component with no edge to a gap keeps
+    its own; it also lists the estimates (`estimate` of a provisional derive) it read;
   - **the plan** of one account: a MILP from the state's readings over `economy.plan_horizon` days, with integer
     counts and read caps that block collections at or above them, its final stocks priced by the steady state,
     stopped only by `search.milp_node_limit` (then `proven: false`).

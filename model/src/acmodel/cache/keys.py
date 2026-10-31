@@ -71,12 +71,17 @@ class Evaluator:
 # `acquisition`, `protected` and `conversions`; `objective` (version 1) is an objective's value or horizon.
 # `economy` 5: a price whose re-solve with one grain more is infeasible (a regen stop that can hold no more) shows
 # a null `low` instead of blocking the steady state, so a steady state that version 4 kept blocked is solved again.
-# PRICE-2b-1: `economy` 6: the steady state solves its dual and checks it exactly; a resource's price per step is
+# PRICE-2b-2: `economy` 6: the steady state shows its `coverage` section (the four classes of the pools, the static
+# components and the estimates it read) and gives each price the status of its static component; it reads the `no_use`
+# rules. A derive's `estimate` is checked where its value is computed (`rule`, `general`, `reference`), but no model
+# that held one was read before, so no value of those kinds changes and they keep their versions.
+# PRICE-2b-1: `economy` 7: the steady state solves its dual and checks it exactly; a resource's price per step is
 # its projection on the dual's optimal face (the re-solves move to `grain`); it shows the joint price vector and the
-# activity judgements (`joint`); and an economy node keeps what it read (`reads`), the provenance of `price:` and
-# `activity_value:`.
+# activity judgements (`joint`); an economy node keeps what it read (`reads`), the provenance of `price:` and
+# `activity_value:`; and a HiGHS marginal within `MARGINAL_TOLERANCE` of its exact price (relative, 1e-7) is no
+# longer `lp_dual_disagrees`.
 EVALUATORS: dict[str, Evaluator] = {
-    "economy": Evaluator(6, ("numpy", "python", "scipy")),
+    "economy": Evaluator(7, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
     "flow": Evaluator(3),
     "general": Evaluator(3),

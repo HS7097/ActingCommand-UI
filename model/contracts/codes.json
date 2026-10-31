@@ -311,6 +311,54 @@
       },
       "description": "An engine answered outside acmodel.engine.v2 (#424 design-py 7.1); ref is the JSON pointer in that request's result, or in describe's. not_json: a value that is not a JSON value (found names it: a type such as set or tuple, float_not_finite, string_invalid, <type>_key). result_invalid: a result of the wrong shape (expected): not an object, no depends_on, a depends_on id that the request's entities lack, an evaluate result without numeric metrics or with an unknown member, a malformed error. result_count: evaluate or predict did not return a list of one result per request. These fail the requests concerned and the call goes on. describe_invalid: describe disagrees with engine.json (engine_id, version, ops, max_batch) or is malformed; frame_invalid: the worker sent a frame the host cannot read. These two fail the call."
     },
+    "estimate_basis_invalid": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "id": {"type": "token", "required": true},
+        "basis": {
+          "type": "vocab",
+          "required": true,
+          "members": ["variants", "samples"]
+        },
+        "missing": {
+          "type": "vocab",
+          "required": true,
+          "members": ["variants_unknown", "supplement", "samples"]
+        }
+      },
+      "description": "acmodel check (#424 ACM-PRICE PRICE-2b-2, addendum 2.1 section 3.7, the estimate's check 3): the estimate of a provisional derive (id) lacks what its basis needs. variants (a choice the pack makes at run time): its of reads no member of a variants unknown (unknown:<id>.<member>), so missing is variants_unknown. samples (a supplement from observation): the rule's provenance has no measurement of role supplement (missing supplement), or its of reads a beta_from_samples distribution and no such supplement carries samples and successes (missing samples). The bases statistics and design need nothing here. The check makes it only when nothing else was refused. path is the rule file and the error's ref the estimate's basis."
+    },
+    "estimate_outside_range": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "id": {"type": "token", "required": true},
+        "value": {"type": "list:token", "required": true},
+        "low": {"type": "token", "required": true},
+        "high": {"type": "token", "required": true}
+      },
+      "description": "acmodel run, economy, explain, the exports and bindings (#424 ACM-PRICE PRICE-2b-2, addendum 2.1 section 3.7, the estimate's check 2): the point value of a provisional derive (id) does not lie in the range of its estimate. The range is, for of, its lowest to its highest value over every scenario of the unknowns it reads (each point of a discrete one, the enclosure of a continuous one), and for low and high the lowest value of low to the highest of high; value lists the rule's values (each scenario, an enclosure as <low>..<high>), low and high the range, as exact rationals (time in seconds). It is found where the rule is computed, in the same state (the reference state for the economy's steady state); an estimate that reads the account state is checked only where the account state is read. The rule's output is blocked, and so is everything that reads it. path is the rule file and the error's ref the estimate."
+    },
+    "estimate_scope_exceeded": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "id": {"type": "token", "required": true},
+        "activities": {"type": "list:token", "required": true},
+        "read_by": {"type": "list:token", "required": true}
+      },
+      "description": "acmodel check (#424 ACM-PRICE PRICE-2b-2, addendum 2.1 section 3.7, the estimate's check 4): an activity reads a provisional derive (id) whose estimate does not cover it: a rule of the activity (its subject, such as a flow or a limit) reads the derive in an expression, directly or through other derives, and covers.activities does not list the activity. An estimate is never used for a stage, shop or project it does not cover. activities are those not covered, by id, and read_by the rules of them that read it. The check makes it only when nothing else was refused. path is the rule file and the error's ref the estimate's covers.activities."
+    },
     "export_refused": {
       "category": "error",
       "exit": 5,
@@ -385,7 +433,7 @@
         "position": {"type": "integer", "required": true},
         "path": {"type": "path", "required": false}
       },
-      "description": "An operator or function of an expression gets operands whose types do not fit: an amount of one resource with another, an amount with a time, a bare number with a time, a boolean where a number is needed or the reverse (expr/dimensions.py lists the rules). operands are the operands' types (amount:<resource>, time, count, value, none, number, bool); position is the character offset of the operator. The error's ref is the JSON pointer of the expression. acmodel run (contracts/formats.md, The run) adds path, the file, and also refuses: an expression whose type does not fit what its member expects (operator is the member, e.g. when, value, max, every, consumes, moves, general_logic, offset; operands are the expected and the found type; position is the expression's top operator); a reference whose value has no type in the language (operator reference; operands is a preference's JSON type string, array, object or null, or a column's type enum or id); a fact key declared with two dimensions (operator read); a lookup key that does not fit its key column (operator lookup); the variants of a member or the bounds of a range that do not fit each other (operator variants, interval or distribution); a threshold of a boolean (operator threshold, ref in exports.json); a column of a secondary objective's tables that is not of the type the economy reads it with (operator demand: count a count, points and main none; operator costs: a resource's column the amount of that resource; position 0, operands the expected and the found type or column type; path the data file and the error's ref the column, or its dimension). acmodel export tables and export scoring: a cell or placeholder whose output does not fit it (operator table or scoring, position 0, operands the expected type, number or bool, and the output's): an integer column or a placeholder takes a number, a boolean column a boolean; path is exports.json or the template, and the error's ref the $model."
+      "description": "An operator or function of an expression gets operands whose types do not fit: an amount of one resource with another, an amount with a time, a bare number with a time, a boolean where a number is needed or the reverse (expr/dimensions.py lists the rules). operands are the operands' types (amount:<resource>, time, count, value, none, number, bool); position is the character offset of the operator. The error's ref is the JSON pointer of the expression. acmodel run (contracts/formats.md, The run) adds path, the file, and also refuses: an expression whose type does not fit what its member expects (operator is the member, e.g. when, value, max, every, consumes, moves, general_logic, offset, and estimate for the of, low and high of a derive's estimate, which take a number of the value's dimension; operands are the expected and the found type; position is the expression's top operator); a reference whose value has no type in the language (operator reference; operands is a preference's JSON type string, array, object or null, or a column's type enum or id); a fact key declared with two dimensions (operator read); a lookup key that does not fit its key column (operator lookup); the variants of a member or the bounds of a range that do not fit each other (operator variants, interval or distribution); a threshold of a boolean (operator threshold, ref in exports.json); a column of a secondary objective's tables that is not of the type the economy reads it with (operator demand: count a count, points and main none; operator costs: a resource's column the amount of that resource; position 0, operands the expected and the found type or column type; path the data file and the error's ref the column, or its dimension). acmodel export tables and export scoring: a cell or placeholder whose output does not fit it (operator table or scoring, position 0, operands the expected type, number or bool, and the output's): an integer column or a placeholder takes a number, a boolean column a boolean; path is exports.json or the template, and the error's ref the $model."
     },
     "expr_eval_failed": {
       "category": "error",
@@ -548,7 +596,7 @@
         "grain_low": {"type": "token", "required": false},
         "grain_high": {"type": "token", "required": false}
       },
-      "description": "acmodel economy (a warning): a cross-check of a price of the steady state disagrees; the price stands (#424 design-py 4.3, ACM-PRICE addendum 2.1 section 2.2 step 3). target is a resource, with step its step in the cycle, or a cap or limit rule. check marginal: HiGHS's marginal (marginal, as an exact fraction) lies outside the price's interval (low, absent when one more unit is infeasible, and high, absent when one less is): for a resource its projection on the dual's optimal face, for a rule its re-solves at plus and minus one grain. check grain (a resource, PRICE-2b-1): its projection (low, high) does not lie inside the interval of its re-solves at plus and minus one grain (grain_low and grain_high, each absent when that re-solve is infeasible), which holds it whenever the two measure the same income; they can differ where the income one grain more can overflow at a hard cap while one more unit of stock has no room. path is model.json."
+      "description": "acmodel economy (a warning): a cross-check of a price of the steady state disagrees; the price stands (#424 design-py 4.3, ACM-PRICE addendum 2.1 section 2.2 step 3). target is a resource, with step its step in the cycle, or a cap or limit rule. check marginal: HiGHS's marginal (marginal, as an exact fraction made by limit_denominator(lp.max_denominator)) lies outside the price's interval (low, absent when one more unit is infeasible, and high, absent when one less is) by more than the tolerance tau: for a resource its projection on the dual's optimal face, for a rule its re-solves at plus and minus one grain. The marginal m agrees with an end p when |m - p| <= tau * max(1, |p|), with tau = 1e-7 (MARGINAL_TOLERANCE in core/flow.py, HiGHS's default dual feasibility tolerance; PRICE-2b-1): the marginal is a float and an exact price can have a denominator far above lp.max_denominator, so the two never agree exactly. check grain (a resource, PRICE-2b-1; two exact fractions, compared exactly, with no tolerance): its projection (low, high) does not lie inside the interval of its re-solves at plus and minus one grain (grain_low and grain_high, each absent when that re-solve is infeasible), which holds it whenever the two measure the same income; they can differ where the income one grain more can overflow at a hard cap while one more unit of stock has no room. path is model.json."
     },
     "lp_infeasible": {
       "category": "error",
@@ -637,6 +685,34 @@
         "first_ref": {"type": "token", "required": true}
       },
       "description": "acmodel check: an id is declared twice in one namespace. model: entities, periods, rules and unknowns share one; table: data tables; row: the keys of one table's rows (id joins the key parts with commas); source: sources.json; engine: model.json engines; threshold (acmodel run): the thresholds of exports.json; literal (acmodel bindings): the literals that the bindings and the fixed entries of bindings.json name, by file, rule_id or pool_id, and pointer (id joins them with colons). export_table (acmodel export tables): the table_id of the tables of exports.json; scoring (acmodel export scoring): the ids of its scoring templates; acceptance (acmodel explain and the exports): the outputs its acceptances accept. path and the error's ref are the second declaration, first_path and first_ref the first, which references resolve to."
+    },
+    "no_use_condition_incomplete": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "id": {"type": "token", "required": true},
+        "pool": {"type": "token", "required": true},
+        "downstream": {"type": "token", "required": true},
+        "missing": {"type": "list:token", "required": true}
+      },
+      "description": "acmodel check (#424 ACM-PRICE PRICE-2b-2, addendum 2.1 section 3.2): a pool's declared zero (the no_use rule id on pool) leaves out a condition of a zero its uses lead to. An activity takes pool and brings in downstream, itself declared zero; the pool is zero only where downstream is, so its facts must hold every fact key of downstream's facts, and missing lists those it lacks, sorted (a declaration without holds_when and facts holds none). Each zero is held to the zeros its uses lead to directly, which are held to theirs in turn. One error per pair. The check makes it only when nothing else was refused. path is the rule file and the error's ref the declaration's /logic/facts, or its /logic when it has none."
+    },
+    "no_use_contradicted": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "id": {"type": "token", "required": true},
+        "pool": {"type": "token", "required": true},
+        "grounds": {"type": "list:token", "required": true},
+        "activities": {"type": "list:token", "required": false}
+      },
+      "description": "acmodel check (#424 ACM-PRICE PRICE-2b-2, addendum 2.1 section 3.2): a pool's declared zero (the no_use rule id on pool) is contradicted: the pool is covered (formats.md, Coverage), so it has a use. grounds are why, in this order: goal (a main objective on it), costs (a demand row of the secondary objective takes it), use (an activity takes it and brings in a covered pool that is not declared zero; activities lists those activities, by id). A use that leads only to other declared zeros is no use, so it never contradicts. Nothing of the model is computed while it stands. The check makes it only when nothing else was refused. path is the rule file and the error's ref the declaration."
     },
     "objective_tier_conflict": {
       "category": "error",
@@ -780,7 +856,7 @@
         "superseded_by": {"type": "token", "required": false},
         "position": {"type": "integer", "required": false}
       },
-      "description": "acmodel check: a reference to a declaration of the model does not resolve to one of the expected kinds (an entity kind, entity, rule, rule.<kind>, unknown, unknown_member, metric, engine, source or param; value for the numeraire of model.json, which names the value entity; resource for a main objective's subject, numeraire for a secondary objective's, which must be the model's numeraire, and resource for a column of a secondary objective's costs table, the error's path then that data file and its ref the column): nothing has that id, it is of another kind (found), or it is a superseded rule (superseded_by), which is never read. The error's ref is the JSON pointer of the referring member or expression, and position the reference's character offset in an expression. acmodel run (contracts/formats.md, The run) adds: pref, a preference key (pref:<key>, a gate's prefs) that the preference defaults do not hold; rule.derive, rule.cap, rule.limit, a rule: reference to a rule without a value; resource, store, a cap's subject; rule.flow, a cost or yield (target the activity) or max_single_income (target the cap) with no flow amount behind it; rule.derive and rule.derive.live, the from of a threshold in exports.json, which needs live in the fact_offset form. acmodel bindings adds threshold, the threshold of a binding in bindings.json that exports.json does not list (ref is the binding's threshold). The exports (and acmodel explain, for acceptances) add output: an acceptance of exports.json (ref its output), a table cell (ref its $model) or a scoring template's placeholder (path the template, ref its $model) that names no output of the model (rule:<id> of a rule with a value, general_logic:<id>, threshold:<id>); acmodel export tables adds window, a column's valid_until that names no window entity (found the kind it names)."
+      "description": "acmodel check: a reference to a declaration of the model does not resolve to one of the expected kinds (an entity kind, entity, rule, rule.<kind>, unknown, unknown_member, metric, engine, source or param; value for the numeraire of model.json, which names the value entity; resource for a main objective's subject and a no_use rule's (a declared zero is a pool's), numeraire for a secondary objective's, which must be the model's numeraire, and resource for a column of a secondary objective's costs table, the error's path then that data file and its ref the column): nothing has that id, it is of another kind (found), or it is a superseded rule (superseded_by), which is never read. The error's ref is the JSON pointer of the referring member or expression, and position the reference's character offset in an expression. acmodel run (contracts/formats.md, The run) adds: pref, a preference key (pref:<key>, a gate's prefs) that the preference defaults do not hold; rule.derive, rule.cap, rule.limit, a rule: reference to a rule without a value; resource, store, a cap's subject; rule.flow, a cost or yield (target the activity) or max_single_income (target the cap) with no flow amount behind it; rule.derive and rule.derive.live, the from of a threshold in exports.json, which needs live in the fact_offset form. acmodel bindings adds threshold, the threshold of a binding in bindings.json that exports.json does not list (ref is the binding's threshold). The exports (and acmodel explain, for acceptances) add output: an acceptance of exports.json (ref its output), a table cell (ref its $model) or a scoring template's placeholder (path the template, ref its $model) that names no output of the model (rule:<id> of a rule with a value, general_logic:<id>, threshold:<id>); acmodel export tables adds window, a column's valid_until that names no window entity (found the kind it names)."
     },
     "rule_status_invalid": {
       "category": "error",
