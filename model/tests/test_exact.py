@@ -4,16 +4,19 @@ resources with only some activities in the optimum), whose time CI bounds.
 
 The pivoting tests give `exact.optimum` a basis by hand, as HiGHS's statuses would give it, on one small program worked
 out below; the fixture runs `acmodel economy` and checks its result against the optimum computed here exactly, and
-(PRICE-2d) that its re-solves at plus and minus one grain from S3 give the values of new LPs."""
+(PRICE-2d) that its re-solves at plus and minus one grain from S3 give the values of new LPs, and (PRICE-2e) that the
+optimal faces in their complementary-slackness form give the extremes the dense forms give."""
 
 from __future__ import annotations
 
 import time
 from fractions import Fraction
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from acmodel.config import EconomySettings
 from acmodel.core import exact
 from acmodel.core import flow as economy_flow
 from test_economy import (
@@ -235,3 +238,86 @@ def test_the_re_solves_at_one_grain_from_s3_give_the_values_of_new_lps(tmp_path,
     assert warnings(forced) == warnings(plain)
     assert forced["data"]["steady"] == plain["data"]["steady"]
     assert plain_elapsed < SECONDS and forced_elapsed < SECONDS, (plain_elapsed, forced_elapsed)
+
+
+def test_a_bounded_variable_whose_dual_is_above_0_sits_at_its_bound_on_the_optimal_face():
+    """PRICE-2e (`core.flow._optimal_face`, `_restricted`). maximise 3x + 2y + 2z over x + y + z ≤ 4 (row r0),
+    x + 3y + 3z ≤ 9 (row r1), 0 ≤ x ≤ 3, y, z ≥ 0. By hand: V0 = 11, with x = 3 at its upper bound and y + z = 1; r1
+    has slack (6 < 9). The dual: r0's dual a, r1's b, and w, the dual of x's upper bound; its rows a + b + w ≥ 3 (x)
+    and a + 3b ≥ 2 (y, and z), its cost 4a + 9b + 3w. Its one optimum: b = 0 (r1 is slack), a = 2 (y or z above 0:
+    their rows tight), w = 1 (x above 0: its row tight), the cost 11: a non-zero dual on a bounded variable.
+    Complementary slackness with it fixes x at its upper bound 3 (w above 0) and makes r0 an equality (a above 0); r1
+    stays an at-most (b = 0), and y and z stay free (their dual slack is 0). So S3's optimal face is x = 3, y + z = 1:
+    y and z each range over [0, 1] and y - z over [-1, 1], as on the program with the dense row V ≥ 11. D*, in its
+    complementary-slackness form with an optimum (x* fixes b at 0, and makes the rows of x and of the one of y, z it
+    runs equalities) and with the strong-duality row, is the one point (2, 0, 1)."""
+    one, zero = F(1), F(0)
+    x, y, z = ("x", "x", 0), ("x", "y", 0), ("x", "z", 0)
+    rows = (
+        economy_flow._Row(("row", "r0", 0), {x: one, y: one, z: one}, "le", F(4), None),
+        economy_flow._Row(("row", "r1", 0), {x: one, y: F(3), z: F(3)}, "le", F(9), None),
+    )
+    program = economy_flow._Program(
+        {x: (zero, F(3), False), y: (zero, None, False), z: (zero, None, False)}, rows, {x: F(3), y: F(2), z: F(2)}
+    )
+    solver = economy_flow._Solver(SimpleNamespace(path="fixture", solve="steady"), EconomySettings())
+    base = solver.lp(program, "optimum")
+    assert (base.status, base.value, base.certified) == ("optimal", F(11), True)
+    dual = economy_flow._dual(program)
+    point = solver.duality(dual, base.value)
+    a, b, w = ("y", "row:r0:0", 0), ("y", "row:r1:0", 0), ("w", "x:x:0", 0)
+    assert (point[a], point[b], point[w]) == (F(2), zero, one)
+
+    variables, face = economy_flow._optimal_face(dual, program, point)
+    assert (variables[x], variables[y], variables[z]) == ((F(3), F(3), False), (zero, None, False), (zero, None, False))
+    assert [(row.key[1], row.sense) for row in face] == [("r0", "eq"), ("r1", "le")]
+    dense = (program.variables, (*rows, *economy_flow._floor(economy_flow.VALUE, program.objective, base.value)))
+    expected = {"x": (F(3), F(3)), "y": (zero, one), "z": (zero, one), "y-z": (F(-1), one)}
+    for name, function in (("x", {x: one}), ("y", {y: one}), ("z", {z: one}), ("y-z", {y: one, z: F(-1)})):
+        found = tuple(solver.extreme(variables, face, function, sense) for sense in (-1, 1))
+        assert found == tuple(solver.extreme(*dense, function, sense) for sense in (-1, 1)) == expected[name], name
+
+    restricted = economy_flow._restricted(dual, program, base.x)
+    assert economy_flow.FACE not in {row.key for row in restricted[1]}
+    for key in (a, b, w):
+        found = tuple(solver.extreme(*restricted, {key: one}, sense) for sense in (-1, 1))
+        on_dense = tuple(solver.extreme(dual.variables, dual.face(base.value), {key: one}, sense) for sense in (-1, 1))
+        assert found == on_dense == (point[key], point[key]), key
+
+
+def test_the_selection_and_the_most_probes_give_on_the_dense_faces_what_they_give_without_them(
+    tmp_path, economy, monkeypatch
+):
+    """PRICE-2e. The weekly fixture with res.s's hard cap and res.t (`regression_fixture`, `capped`): one less res.t is
+    infeasible and no main goal values it, so the selection withholds it and fixes it in its last step at its least
+    value on the face left, after the max-min. The steady state solves every LP on D* in D*'s complementary-slackness
+    form (`_restricted`) and each `most` on S3's optimal face in its complementary-slackness form (`_optimal_face`):
+    neither holds a dense row. The joint price vector and the judgements are then computed again on the dense forms,
+    as before PRICE-2e: D* as the dual's rows with the strong-duality row (`_Dual.face`), and S3's optimal face as S3's
+    rows with V ≥ V0 (`_floor`), with no start from S3's basis. Each step of the selection and each judgement is an
+    optimal value, the same on either form, so the two agree term by term; the run stays within the fixture's bound."""
+    joint = economy_flow._Solver.joint
+    calls: list = []
+
+    def recorded(self, *args):
+        found = joint(self, *args)
+        calls.append((self, args, found))
+        return found
+
+    monkeypatch.setattr(economy_flow._Solver, "joint", recorded)
+    started = time.perf_counter()
+    status, doc = economy(regression_fixture(tmp_path, [DAY, WEEK], capped=True), "--steady-only")
+    elapsed = time.perf_counter() - started
+
+    assert (status, doc["errors"]) == (0, [])
+    [(solver, (dual, point, optimum, prices, on_face, optimal, primal, seed), found)] = calls
+    assert economy_flow.FACE not in {row.key for row in on_face[1]}
+    assert not any(row.key[0] == "floor" for row in primal[1])
+    withheld = found[0]["prices"]["res.t"]
+    assert (withheld["by"], withheld["withheld"]) == ("one_more", {"reason": "no_steady_supply"})
+    s3 = economy_flow._program(solver.model)
+    floor = economy_flow._floor(economy_flow.VALUE, economy_flow.total_value(solver.model), optimum)
+    dense_dual = (dual.variables, dual.face(optimum))
+    dense_primal = (s3.variables, (*s3.rows, *floor))
+    assert joint(solver, dual, point, optimum, prices, dense_dual, optimal, dense_primal, None) == found
+    assert elapsed < SECONDS, elapsed
