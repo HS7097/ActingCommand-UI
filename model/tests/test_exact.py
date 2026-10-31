@@ -3,7 +3,8 @@ synthetic regression fixture of the shape of a large model (about 110 activities
 resources with only some activities in the optimum), whose time CI bounds.
 
 The pivoting tests give `exact.optimum` a basis by hand, as HiGHS's statuses would give it, on one small program worked
-out below; the fixture runs `acmodel economy` and checks its result against the optimum computed here exactly."""
+out below; the fixture runs `acmodel economy` and checks its result against the optimum computed here exactly, and
+(PRICE-2d) that its re-solves at plus and minus one grain from S3 give the values of new LPs."""
 
 from __future__ import annotations
 
@@ -11,10 +12,15 @@ import time
 from fractions import Fraction
 from pathlib import Path
 
+import pytest
+
 from acmodel.core import exact
+from acmodel.core import flow as economy_flow
 from test_economy import (
     DAY,
+    WEEK,
     activity,
+    cap,
     economy,  # noqa: F401 (the fixture `acmodel economy`)
     flow,
     goal,
@@ -119,12 +125,19 @@ def _shape() -> list[tuple[str, int, int, int, bool]]:
     return found
 
 
-def regression_fixture(folder: Path) -> Path:
+def regression_fixture(folder: Path, periods: list | None = None, capped: bool = False) -> Path:
     """res.s comes at 1000 a day; res.m1 .. res.m4 are main goals worth `GOALS`; each of the 110 activities turns some s
     into one material (`_shape`). The 22 limited ones (at most 5 a day) are protected acquisitions; the others are
-    conversions."""
+    conversions. `periods` are the model's (a day by default: a cycle of one step). With `capped` (PRICE-2d), res.s has
+    a hard cap of 1500, and act.t turns res.t, which nothing brings in, into res.m1 (so one less res.t is infeasible)."""
     entities = [resource("res.s", "fact.s"), *(resource(f"res.m{k}", f"fact.m{k}") for k in range(1, 5))]
     rules = [regen("regen.s", "res.s", str(SUPPLY), "1d")]
+    readings = {"fact.s": 0, **{f"fact.m{k}": 0 for k in range(1, 5)}}
+    if capped:
+        rules.append(cap("cap.s.hard", "res.s", "hard", "block_all_income", value="1500"))
+        entities += [resource("res.t", "fact.t"), activity("act.t")]
+        rules.append(flow("flow.t", "act.t", consumes={"res.t": "1"}, produces={"res.m1": "0.5"}))
+        readings["fact.t"] = 0
     for name, material, consumed, produced, limited in _shape():
         entities.append(activity(name))
         rules.append(flow(
@@ -134,8 +147,7 @@ def regression_fixture(folder: Path) -> Path:
         if limited:
             rules.append(limit("limit." + name[4:], name, str(MOST), "day"))
     goals = [goal(f"goal.m{k}", f"res.m{k}", GOALS[k - 1]) for k in range(1, 5)]
-    readings = {"fact.s": 0, **{f"fact.m{k}": 0 for k in range(1, 5)}}
-    return model(folder, [DAY], entities, rules, readings, goals=goals)
+    return model(folder, periods or [DAY], entities, rules, readings, goals=goals)
 
 
 def test_a_large_model_with_four_decimals_is_solved_exactly_and_in_bounded_time(tmp_path, economy):
@@ -174,3 +186,51 @@ def test_a_large_model_with_four_decimals_is_solved_exactly_and_in_bounded_time(
     }
     assert all(judged["unverified"] == [] for judged in activities.values())
     assert elapsed < SECONDS, elapsed
+
+
+@pytest.mark.parametrize("periods, capped", [([DAY], False), ([DAY, WEEK], True)], ids=["day", "week_hard_cap"])
+def test_the_re_solves_at_one_grain_from_s3_give_the_values_of_new_lps(tmp_path, economy, monkeypatch, periods, capped):
+    """PRICE-2d (`core.flow._Solver.regrain`). The fixture twice: as it is, and with S3's basis made to prove no chord
+    (`chords`), so that every side of every resource's re-solves at plus and minus one grain, in every step, goes the
+    way PRICE-2d adds: HiGHS's instance of S3 with only the moved row ends, warm-started from S3's basis, and its vertex
+    solved exactly by updating S3's factorised basis (`exact.reoptimum`). Each value is compared with a new LP of the
+    same program, the way before PRICE-2d: the same exact optimum, side by side. The weekly variant (seven steps) has a
+    hard cap on res.s, whose one grain more also moves an overflow row, and res.t, which nothing brings in: one grain
+    less of it is infeasible in every step, which HiGHS's basis proves exactly (`exact.infeasible`), as a new LP finds
+    it. The steady output is the same both times, and each run stays within the fixture's bound."""
+    started = time.perf_counter()
+    status, plain = economy(regression_fixture(tmp_path / "plain", periods, capped), "--steady-only")
+    plain_elapsed = time.perf_counter() - started
+    regrain = economy_flow._Solver.regrain
+    compared: list[tuple[str, int, Fraction, Fraction | None, Fraction | None, str]] = []
+
+    def checked(self, resource_id, step, delta):
+        before = dict(self.grain_ways)
+        found = regrain(self, resource_id, step, delta)
+        [way] = [key for key, count in self.grain_ways.items() if count != before.get(key, 0)]
+        again = self.resolved(economy_flow._program(self.model, extra={(resource_id, step): delta}))
+        compared.append((resource_id, step, delta, found, again, way))
+        return found
+
+    monkeypatch.setattr(economy_flow._Solver, "chords", lambda self, resource_id, step: ((None, None), (None, None)))
+    monkeypatch.setattr(economy_flow._Solver, "regrain", checked)
+    started = time.perf_counter()
+    forced_status, forced = economy(regression_fixture(tmp_path / "forced", periods, capped), "--steady-only")
+    forced_elapsed = time.perf_counter() - started
+
+    def warnings(doc):  # each folder's own model.json path left out
+        return [{**w, "detail": {k: v for k, v in w["detail"].items() if k != "path"}} for w in doc["warnings"]]
+
+    assert (status, plain["errors"], forced_status, forced["errors"]) == (0, [], 0, [])
+    steps, resources = (7, 6) if capped else (1, 5)
+    assert len(compared) == resources * steps * 2  # two sides a step
+    assert [entry[:3] for entry in compared if entry[3] != entry[4]] == []
+    infeasible = {(entry[0], entry[1], entry[2]) for entry in compared if entry[3] is None}
+    assert infeasible == ({("res.t", step, Fraction(-1)) for step in range(7)} if capped else set())
+    ways = {entry[5] for entry in compared if entry[3] is not None}
+    assert "warm" in ways and all(way.startswith("warm") for way in ways), ways
+    proofs = {entry[5] for entry in compared if entry[3] is None}  # a basis far from S3's leaves it to a new LP
+    assert proofs <= {"warm_infeasible", "new_lp_status_2"} and ("warm_infeasible" in proofs or not capped), proofs
+    assert warnings(forced) == warnings(plain)
+    assert forced["data"]["steady"] == plain["data"]["steady"]
+    assert plain_elapsed < SECONDS and forced_elapsed < SECONDS, (plain_elapsed, forced_elapsed)

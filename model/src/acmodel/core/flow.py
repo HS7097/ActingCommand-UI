@@ -78,6 +78,12 @@ one point of D*, never a pick per pool. Steps:
    it (`in_optimum` when above 0), and the loss per execution of running it more (`forcing_cost`, from the dual of
    S3 with that most as a floor; `input_bound` when that dual is unbounded: nothing is left to run it again).
 
+**The re-solves at ±grain** (PRICE-2d, `_Solver.regrain`). One grain more or less of a resource's income moves only right
+sides of S3's program, so each re-solve starts from S3: S3's basis proves it where it stays primal feasible
+(`exact.shifted`, `exact.ranging`); else HiGHS's instance of S3 gets only the moved row ends and goes on from S3's
+basis, and its vertex is solved by updating S3's factorised basis (`exact.reoptimum`), or its infeasibility proven
+from the basis it stopped at (`exact.infeasible`); else, as before, a new LP.
+
 **Exactness.** An LP's solution is the vertex of HiGHS's basis (its column and row statuses), solved exactly and made
 exactly optimal with at most `lp.max_pivots` exact pivots (`core.exact`, PRICE-2c): a certified optimum. Where that
 fails, and for a MILP, the variables at a bound are fixed and the rows they leave tight solved exactly, else each value
@@ -96,6 +102,7 @@ stays dropped while the rest is still infeasible.
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import TYPE_CHECKING, Any, Callable
@@ -1391,6 +1398,25 @@ def _program(
     return _Program(variables, tuple(rows), _nonzero(goal))
 
 
+def _income_moves(model: _Model, resource: str, step: int, amount: Fraction) -> dict[Key, Fraction] | None:
+    """The rows of the steady program whose right side `amount` more income of `resource` in `step` moves, as
+    `_program`'s `extra` moves them, each by how much (PRICE-2d): its balance row of that step, and for a resource with
+    a hard cap, when the amount is above 0 (only income that comes counts), the overflow row of the step that closes
+    the cap's window holding that step. None where the income moves more than right sides: a store's bound on lost
+    production, or what a move under a read cap may take from it."""
+    if model.solve != STEADY or resource in model.storage or resource in model.stores:
+        return None
+    if any(move[2] == resource for move in model.moves if any(move[0] in flows for _, _, _, flows in model.soft)):
+        return None
+    moves: dict[Key, Fraction] = {("balance", resource, step): amount}
+    if resource in model.hard and amount > 0:
+        every = model.void.get(resource, 1)
+        for closing in range(step, min(step + every, model.steps)):
+            if (closing + 1) % every == 0:
+                moves[("overflow", resource, closing)] = amount
+    return moves
+
+
 # The dual (PRICE-2b-1; #424 ACM-PRICE addendum 2.1 §2.2 step 2) -------------------------------------------------
 
 
@@ -1586,6 +1612,7 @@ class _Solution:
     pivots: int = 0
     # a certified optimum's program as `core.exact` read it, its vertex and the arrays (the order of its rows)
     basis: tuple[Any, Any, Any] | None = None
+    solver: Any = None  # PRICE-2d: S3's HiGHS instance (`lp` with `keep`), for its re-solves at ±grain (`_Grained`)
 
 
 @dataclass(frozen=True)
@@ -1863,6 +1890,36 @@ def _highs_run(solver: Any, n: int, m: int) -> _Run:
     )
 
 
+def _highs_moved(
+    solver: Any, saved: Any, ends: dict[int, tuple[float, float]], restore: dict[int, tuple[float, float]], n: int, m: int
+) -> tuple[_Run, bool]:
+    """S3's LP, which HiGHS instance `solver` holds, with the rows `ends` (by place: the at-most rows, then the
+    equalities) given those ends instead (PRICE-2d, a re-solve at ±grain): from S3's basis `saved`, still dual feasible
+    since no cost changed, HiGHS's dual simplex goes on without presolve (which would set the basis aside). Then the rows
+    get their ends `restore` back, so that the instance holds S3's LP again; and whether that worked."""
+    from scipy.optimize._highspy import _core as highs
+
+    failed = highs.HighsStatus.kError
+    run: _Run | None = None
+    for place, (low, high) in ends.items():
+        if solver.changeRowBounds(place, low, high) == failed:
+            run = _Run(4, "changeRowBounds")
+            break
+    if run is None and solver.setBasis(saved) == failed:
+        run = _Run(4, "setBasis")
+    if run is None and solver.passOptions(_options(False, DUAL_SIMPLEX)) == failed:
+        run = _Run(4, "passOptions")
+    if run is None:
+        run = _highs_run(solver, n, m)
+        if run.status == 2:  # infeasible: the basis HiGHS stopped at, for an exact proof (`exact.infeasible`)
+            basis = solver.getBasis()
+            statuses = [int(value) for value in basis.col_status] + [int(value) for value in basis.row_status]
+            if bool(getattr(basis, "valid", True)) and len(statuses) == n + m:
+                run = replace(run, statuses=tuple(statuses))
+    restored = [solver.changeRowBounds(place, low, high) != failed for place, (low, high) in restore.items()]
+    return run, all(restored)
+
+
 def _exact_problem(program: _Program, arrays: _Arrays) -> exact.Problem:
     """The program as `core.exact` reads it, in the order HiGHS was given it (`_highs`): the columns by id, the
     at-most rows and then the equalities, and the objective maximised."""
@@ -1875,6 +1932,67 @@ def _exact_problem(program: _Program, arrays: _Arrays) -> exact.Problem:
     rows = tuple({index[key]: value for key, value in row.coefficients.items()} for row in ordered)
     cost = tuple(program.objective.get(key, Fraction(0)) for key in arrays.columns)
     return exact.Problem(cost, tuple(lower), tuple(upper), rows)
+
+
+@dataclass(frozen=True)
+class _Grained:
+    """S3's certified optimum, held for its re-solves at plus and minus one grain (PRICE-2d; `_Solver.regrain`): its
+    program and solution, its HiGHS instance and the basis HiGHS ended at, its program as `core.exact` reads it with its
+    basis factorised (`exact.factored`), and its rows in HiGHS's order (the at-most rows, then the equalities): their
+    places by key, their float ends as HiGHS was given them, and for each column the places of the rows that hold it."""
+
+    program: _Program
+    base: _Solution
+    solver: Any
+    saved: Any
+    arrays: _Arrays
+    factored: exact.Factored
+    ordered: tuple[_Row, ...]
+    places: dict[Key, int]
+    ends: tuple[tuple[float, float], ...]
+    holders: dict[Key, tuple[int, ...]]
+    # the most variables that may enter S3's basis for the update to cost less than a new rebuild (`_Solver.hold`)
+    most: int = 0
+
+    def moved(self, moves: dict[int, Fraction]) -> exact.Problem:
+        """S3's program as `core.exact` reads it, with the ends of the rows `moves` (by place) moved by those amounts:
+        both ends of an equality, the one end of an at-most."""
+        problem = self.factored.problem
+        n = len(problem.cost)
+        lower, upper = list(problem.lower), list(problem.upper)
+        for place, amount in moves.items():
+            k = n + place
+            lower[k] = None if lower[k] is None else lower[k] + amount
+            upper[k] = None if upper[k] is None else upper[k] + amount
+        return exact.Problem(problem.cost, tuple(lower), tuple(upper), problem.rows)
+
+    def violation(self, x: dict[Key, Fraction], moves: dict[int, Fraction]) -> dict[str, str] | None:
+        """`_violation` of x as a solution of S3's program with the right sides of the rows `moves` moved: the first
+        bound or row it breaks exactly, in canonical order. The bounds of the variables whose value differs from S3's
+        and the rows that hold one of them, or whose right side moved, are each computed again from x; every other bound
+        and row is S3's, with the same right side and the same values, which S3's own exact check passed."""
+        program, before = self.program, self.base.x
+        changed = [key for key in self.arrays.columns if x[key] is not before[key] and x[key] != before[key]]
+        for key in sorted(changed):
+            low, high, integer = program.variables[key]
+            value = x[key]
+            if value < low:
+                return {"constraint": _token(key), "found": str(value), "bound": f">={low}"}
+            if high is not None and value > high:
+                return {"constraint": _token(key), "found": str(value), "bound": f"<={high}"}
+            if integer and value.denominator != 1:
+                return {"constraint": _token(key), "found": str(value), "bound": "integer"}
+        places = set(moves)
+        for key in changed:
+            places.update(self.holders.get(key, ()))
+        for place in sorted(places, key=lambda place: self.ordered[place].key):
+            row = self.ordered[place]
+            rhs = row.rhs + moves.get(place, Fraction(0))
+            lhs = sum((value * x[key] for key, value in row.coefficients.items() if x[key]), Fraction(0))
+            if (lhs != rhs) if row.sense == "eq" else (lhs > rhs):
+                sense = "=" if row.sense == "eq" else "<="
+                return {"constraint": _token(row.key), "found": str(lhs), "bound": f"{sense}{rhs}"}
+        return None
 
 
 @dataclass(frozen=True)
@@ -1982,6 +2100,9 @@ class _Solver:
         # its arrays; the HiGHS instance that holds it), for the next LP on the same rows with another objective
         self.warm: tuple[Any, Any, _Arrays, Any] | None = None
         self.last_problem: exact.Problem | None = None  # the last LP's program as `core.exact` read it (`vertex`)
+        self.grained: _Grained | None = None  # PRICE-2d: S3, held for its re-solves at ±grain (`regrain`)
+        # PRICE-2d: how each side of a resource's re-solves at ±grain was found (`grain_way`); a diagnosis, never output
+        self.grain_ways: dict[str, int] = {}
 
     def failure(self, code: str, **detail: Any) -> Failure:
         return Failure(error(code, {"path": self.model.path, "solve": self.model.solve, **detail}))
@@ -2033,11 +2154,12 @@ class _Solver:
         return self.exact(program, arrays.columns, run.x, stage), found
 
     def lp(
-        self, program: _Program, stage: str, *, check: bool = True, unbounded: bool = False, warm: bool = False
+        self, program: _Program, stage: str, *, check: bool = True, unbounded: bool = False, warm: bool = False,
+        keep: bool = False,
     ) -> _Solution:
         """An LP, solved by HiGHS (`_highs`) and made exact from its basis (`vertex`). With `unbounded`, an objective
         without a maximum is the status `unbounded` (an end of a projection that is null, PRICE-2b-1); else it is
-        `lp_solve_failed`.
+        `lp_solve_failed`. With `keep` (S3, PRICE-2d), the solution holds the HiGHS instance that solved it.
 
         With `warm` (the LPs on one face of the dual, which differ only in their objective: the projections, the
         intervals, the ranges; PRICE-2c), an LP whose variables and rows are those of the last such LP, the same
@@ -2076,6 +2198,7 @@ class _Solver:
             refusal=None if certified else (found.reason if found is not None else NO_BASIS),
             pivots=0 if found is None else found.pivots,
             basis=(self.last_problem, found, arrays) if certified else None,
+            solver=result.solver if keep else None,
         )
 
     def probe(
@@ -2195,42 +2318,166 @@ class _Solver:
             detail["unchecked"] = unchecked
         return error(LP_INFEASIBLE, detail)
 
-    def price(self, optimum: Fraction, change: Callable[[Fraction], dict[str, Any]], known: _Pair = (None, None)) -> _Pair:
-        """The value of one more grain (re-solved with `change(+grain)`) and of one grain less (`change(-grain)`),
-        each per unit. Equal, they are an exact price; else an interval, unbounded above when one grain less is
-        infeasible and below when one grain more is. One grain more of a resource is infeasible where the cycle
-        cannot hold it: a resource whose regen stops at a cap ends the cycle with exactly its opening stock and loses
-        at most what its regen brings, so when the program can use no more of it and already loses all its regen
-        brings (its only users left out as pending, say), there is no room for one more. A cap's or a limit's value
-        one grain higher only relaxes the program. `known` holds a side that S3's basis already proves (`chords`,
-        PRICE-2c), which is then not re-solved."""
+    def price(
+        self, optimum: Fraction, resolve: Callable[[Fraction], Fraction | None], known: _Pair = (None, None)
+    ) -> _Pair:
+        """The value of one more grain (the optimum re-solved with +grain, `resolve(grain)`) and of one grain less
+        (`resolve(-grain)`), each per unit; `resolve` gives None for a re-solve that is infeasible. Equal, they are an
+        exact price; else an interval, unbounded above when one grain less is infeasible and below when one grain more
+        is. One grain more of a resource is infeasible where the cycle cannot hold it: a resource whose regen stops at a
+        cap ends the cycle with exactly its opening stock and loses at most what its regen brings, so when the program
+        can use no more of it and already loses all its regen brings (its only users left out as pending, say), there
+        is no room for one more. A cap's or a limit's value one grain higher only relaxes the program. `known` holds a
+        side that S3's basis already proves (`chords`, PRICE-2c), which is then not re-solved."""
         grain = self.model.grain
         right, left = known
         if right is None:
-            more = self.lp(_program(self.model, **change(grain)), "price")
-            right = (more.value - optimum) / grain if more.status == "optimal" else None
+            more = resolve(grain)
+            right = None if more is None else (more - optimum) / grain
         if left is None:
-            less = self.lp(_program(self.model, **change(-grain)), "price")
-            left = (optimum - less.value) / grain if less.status == "optimal" else None
+            less = resolve(-grain)
+            left = None if less is None else (optimum - less) / grain
         if right is None or left is None:
             return right, left
         return min(right, left), max(right, left)
 
-    def chords(self, base: _Solution, rows: dict[Key, int], resource: str, step: int) -> tuple[_Pair, _Pair]:
-        """What S3's certified basis proves of a resource's price in a step without an LP (PRICE-2c), each None where
-        it does not: the chords of its re-solves at plus and minus one grain, and its projection's ends. When one grain
-        more (or less) of income leaves the basis primal feasible (`exact.ranging`), it stays optimal and the optimum
-        moves by exactly one grain times the balance row's dual in that basis: that is the chord. When a little more
-        (or less) does, the optimum is linear on that side with that slope: that is the derivative there, the
-        projection's `low` (or `high`). Only for a resource without a hard cap, whose grain moves its balance row's
-        right side alone (`_pinned`)."""
-        if base.basis is None or resource in self.model.hard:
+    def resolved(self, program: _Program) -> Fraction | None:
+        """The optimum of a price re-solve, a new LP (`lp`); None when it is infeasible."""
+        found = self.lp(program, "price")
+        return found.value if found.status == "optimal" else None
+
+    def grain_way(self, way: str) -> None:
+        self.grain_ways[way] = self.grain_ways.get(way, 0) + 1
+
+    def hold(self, program: _Program, base: _Solution) -> _Grained | None:
+        """S3, held for its re-solves at ±grain (`_Grained`, PRICE-2d); None when its optimum is not certified (no basis
+        to start from: each re-solve is then a new LP, as before).
+
+        How far a re-solve's basis may be from S3's for the update to pay (`most`): the update solves once with S3's
+        factorisation for each variable that enters and twice more, and a new rebuild (`exact.optimum`) eliminates
+        twice, about what factorising S3's basis took. So `most` is twice the time of that factorisation over the time
+        of one solve with it, less 2, both timed here on S3 itself: the solves of the three nonbasic columns of least
+        reduced cost (those likeliest to enter). It changes only which exact way a re-solve takes, never its value."""
+        if base.basis is None:
+            return None
+        problem, vertex, arrays = base.basis
+        started = time.perf_counter()
+        factored = exact.factored(problem, vertex)
+        factorised = time.perf_counter() - started
+        if factored is None:
+            return None
+        n = len(problem.cost)
+        likely = sorted((k for k in range(n) if k not in factored.basic), key=lambda k: (abs(factored.reduced[k]), k))
+        started = time.perf_counter()
+        for k in likely[:3]:
+            factored.ftran(factored.columns[k])
+        solved = (time.perf_counter() - started) / max(1, len(likely[:3]))
+        most = len(problem.rows) if solved <= 0 else max(0, min(len(problem.rows), int(2 * factorised / solved) - 2))
+        ordered = (*arrays.le, *arrays.eq)
+        holders: dict[Key, list[int]] = {}
+        for place, row in enumerate(ordered):
+            for key in row.coefficients:
+                holders.setdefault(key, []).append(place)
+        infinity = math.inf
+        ends = tuple(
+            (-infinity if problem.lower[n + place] is None else _float(problem.lower[n + place]),
+             infinity if problem.upper[n + place] is None else _float(problem.upper[n + place]))
+            for place in range(len(ordered))
+        )
+        saved = None if base.solver is None else base.solver.getBasis()
+        return _Grained(
+            program, base, base.solver, saved, arrays, factored, ordered, {row.key: i for i, row in enumerate(ordered)},
+            ends, {key: tuple(places) for key, places in holders.items()}, most,
+        )
+
+    def grain_moves(self, resource: str, step: int, delta: Fraction) -> dict[int, Fraction] | None:
+        """The rows of S3's program, by place, whose right side `delta` more income of `resource` in `step` moves, and by
+        how much (`_income_moves`); None where it moves more than right sides."""
+        moves = _income_moves(self.model, resource, step, delta)
+        if moves is None or self.grained is None or any(key not in self.grained.places for key in moves):
+            return None
+        return {self.grained.places[key]: amount for key, amount in moves.items()}
+
+    def chords(self, resource: str, step: int) -> tuple[_Pair, _Pair]:
+        """What S3's certified basis proves of a resource's price in a step without an LP (PRICE-2c, PRICE-2d), each None
+        where it does not: the chords of its re-solves at plus and minus one grain, and its projection's ends. When one
+        grain more (or less) of income leaves the basis primal feasible, it stays optimal and the optimum moves by
+        exactly the moved right sides times their rows' duals in that basis (`exact.shifted`; for a resource without a
+        hard cap, its balance row's alone, `exact.ranging`): that is the chord. When a little more (or less) does, the
+        optimum is linear on that side with that slope: that is the derivative there, the projection's `low` (or
+        `high`), only for a resource without a hard cap, whose grain moves its balance row's right side alone
+        (`_pinned`). Each solve is one with the basis factorised once (`exact.factored`)."""
+        grained = self.grained
+        if grained is None:
             return (None, None), (None, None)
-        problem, vertex, _ = base.basis
-        row = rows[("balance", resource, step)]
-        up, down, rises, falls = exact.ranging(problem, vertex, row, Fraction(self.model.grain))
-        dual = vertex.duals[row]
-        return ((dual if up else None), (dual if down else None)), ((dual if rises else None), (dual if falls else None))
+        factored, grain = grained.factored, Fraction(self.model.grain)
+        if resource not in self.model.hard:
+            row = grained.places[("balance", resource, step)]
+            up, down, rises, falls = exact.ranging(factored.problem, factored.vertex, row, grain, factored)
+            dual = factored.vertex.duals[row]
+            return ((dual if up else None), (dual if down else None)), ((dual if rises else None), (dual if falls else None))
+        found: list[Fraction | None] = []
+        for delta in (grain, -grain):  # the chords (f(g) − f(0)) / g and (f(0) − f(−g)) / g
+            moves = self.grain_moves(resource, step, delta)
+            change = None if moves is None else exact.shifted(factored, moves)
+            found.append(None if change is None else change / delta)
+        return (found[0], found[1]), (None, None)
+
+    def regrain(self, resource: str, step: int, delta: Fraction) -> Fraction | None:
+        """The optimum of S3's program with `delta` more income of `resource` in `step` (a re-solve at ±grain,
+        PRICE-2d), exact; None when it is infeasible. The same value as a new LP of that program, found from S3:
+        - HiGHS's instance of S3 gets only the moved row ends (`_income_moves`) and goes on from S3's basis (dual
+          simplex, no presolve: `_highs_moved`);
+        - its basis is solved exactly by updating S3's factorised basis (`exact.reoptimum`), and where that does not
+          certify it or the basis is far from S3's (the update would cost more than a new elimination), by `optimum`'s
+          new elimination with its exact pivots;
+        - the vertex is checked exactly against every bound and row it changes (`_Grained.violation`);
+        - where HiGHS finds it infeasible, the basis it stopped at proves that exactly (`exact.infeasible`): None.
+        Where HiGHS ends otherwise, where neither a certified vertex nor a proof comes of it, and where the income moves
+        more than right sides, the re-solve is a new LP, as before (`resolved`)."""
+        grained = self.grained
+        moves = None if grained is None or grained.solver is None else self.grain_moves(resource, step, delta)
+        if moves is not None:
+            problem = grained.moved(moves)
+            n, m = len(problem.cost), len(problem.rows)
+            ends = {
+                place: (-math.inf if problem.lower[n + place] is None else _float(problem.lower[n + place]),
+                        math.inf if problem.upper[n + place] is None else _float(problem.upper[n + place]))
+                for place in moves
+            }
+            run, restored = _highs_moved(
+                grained.solver, grained.saved, ends, {place: grained.ends[place] for place in moves}, n, m
+            )
+            if not restored:
+                raise self.failure(
+                    LP_SOLVE_FAILED, stage="price", reason="solver_status", status=4, raw_text="changeRowBounds"
+                )
+            if run.status == 0 and run.statuses is not None:
+                vertex: exact.Vertex | exact.Refused | str = exact.reoptimum(
+                    problem, grained.factored, run.statuses, grained.most
+                )
+                way = "warm"
+                if isinstance(vertex, str):  # why the update did not certify it: a new elimination, as any LP's
+                    way = f"warm_eliminated_{vertex}"
+                    vertex = exact.optimum(problem, run.statuses, self.settings.max_pivots)
+                if isinstance(vertex, exact.Vertex):
+                    x = dict(zip(grained.arrays.columns, vertex.x, strict=True))
+                    broken = grained.violation(x, moves)
+                    if broken is not None:  # a certified vertex meets every row by construction: a defect
+                        raise self.failure(LP_NUMERIC_CHECK_FAILED, stage="price", **broken)
+                    self.grain_way(way)
+                    return self.objective(grained.program, x)
+                self.grain_way("new_lp_not_certified")
+            elif run.status == 2 and run.statuses is not None and exact.infeasible(
+                problem, grained.factored, run.statuses, grained.most
+            ):
+                self.grain_way("warm_infeasible")
+                return None
+            else:
+                self.grain_way(f"new_lp_status_{run.status}")
+        else:
+            self.grain_way("new_lp_no_basis" if grained is None or grained.solver is None else "new_lp_moves_more")
+        return self.resolved(_program(self.model, extra={(resource, step): delta}))
 
     def marginal(self, dual: float) -> Fraction:
         if not math.isfinite(dual):
@@ -2603,7 +2850,7 @@ class _Solver:
         model = self.model
         value, acquired = total_value(model), acquisition(model)
         program = _program(model)
-        base = self.lp(program, "optimum")
+        base = self.lp(program, "optimum", keep=True)
         if base.status != "optimal":
             raise Failure(self.conflict())
         records = acquirers(model)
@@ -2722,15 +2969,18 @@ class _Solver:
         dual = tiers.dual  # S3's, which every price re-solve changes, checked exactly (`duality`)
         face = dual.face(optimum)
         on_face = _restricted(dual, program, base.x)  # D*, for the LPs that read only a value on it
-        rows = {} if base.basis is None else {row.key: i for i, row in enumerate((*base.basis[2].le, *base.basis[2].eq))}
+        self.grained = self.hold(program, base)  # S3 with its basis factorised, for the re-solves at ±grain (PRICE-2d)
         prices: dict[str, list[_Pair]] = {}
         grains: dict[str, list[_Pair]] = {}
         marginals: dict[str, list[Fraction]] = {}
         for resource in model.resources:
             prices[resource], grains[resource], marginals[resource] = [], [], []
             for step in range(steps):
-                known, sides = self.chords(base, rows, resource, step)
-                grain = self.price(optimum, lambda delta: {"extra": {(resource, step): delta}}, known)
+                known, sides = self.chords(resource, step)
+                for side in known:
+                    if side is not None:
+                        self.grain_way("basis")
+                grain = self.price(optimum, lambda delta: self.regrain(resource, step, delta), known)
                 if _pinned(model, resource, grain):
                     price = grain  # the chords pin the projection (PRICE-2c): no LP on D*
                 else:  # each end that S3's basis does not prove is an LP on D*
@@ -2747,7 +2997,7 @@ class _Solver:
         rule_prices: dict[str, tuple[Fraction, Fraction | None]] = {}
         rule_marginals: dict[str, Fraction] = {}
         for rule, value in model.priced():
-            price = self.price(optimum, lambda delta: {"values": {rule: value + delta}})
+            price = self.price(optimum, lambda delta: self.resolved(_program(model, values={rule: value + delta})))
             marginal = self.marginal(self.rule_dual(program, base, rule))
             warnings += self.disagrees(rule, None, marginal, price)
             rule_prices[rule], rule_marginals[rule] = price, marginal
