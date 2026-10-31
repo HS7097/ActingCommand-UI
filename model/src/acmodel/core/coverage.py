@@ -12,7 +12,10 @@ a rule of the component, or a rule its expressions reach, names an unknown (`unk
 (`inputs`). A component that holds a structural gap is provisional too, for each gap it holds:
 - `excluded_pending`, an activity the steady state left out (a pending flow whose amounts read unknowns);
 - `no_steady_supply`, a pool without a steady supply;
-- `objective_tier_tie`, an activity of S3's optima and none of S2's.
+- `objective_tier_tie`, an activity of S3's optima and none of S2's;
+- `probe_unverified`, an activity a probe of which could not be verified exactly (`lp_probe_unverified`, PRICE-2c):
+  whether it is a tie, the most an optimum runs it, its range or its forcing cost. Conservative: an unverified tie is
+  never read as no tie.
 
 The pending flows the steady state left out count as `excluded_pending` only: their own items and the unknowns they
 name are not `inputs`. A component that holds no gap keeps its own status, whatever another component holds.
@@ -34,7 +37,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from acmodel.check.coverage import judge
-from acmodel.codes import OBJECTIVE_TIER_TIE
+from acmodel.codes import LP_PROBE_UNVERIFIED, OBJECTIVE_TIER_TIE
 from acmodel.core.common import CONFIRMED, PROVISIONAL, worst
 from acmodel.expr import Duration
 
@@ -47,7 +50,8 @@ COVERED, STRUCTURAL_GAP, VERIFIED_ZERO, UNKNOWN = "covered", "structural_gap", "
 CLASSES = (COVERED, STRUCTURAL_GAP, VERIFIED_ZERO, UNKNOWN)
 # The structural gaps a component may hold (§3.3), in this order, and why it is provisional otherwise.
 EXCLUDED_PENDING, NO_STEADY_SUPPLY, TIER_TIE = "excluded_pending", "no_steady_supply", "objective_tier_tie"
-GAPS = (EXCLUDED_PENDING, NO_STEADY_SUPPLY, TIER_TIE)
+PROBE_UNVERIFIED = "probe_unverified"  # PRICE-2c
+GAPS = (EXCLUDED_PENDING, NO_STEADY_SUPPLY, TIER_TIE, PROBE_UNVERIFIED)
 INPUTS = "inputs"
 # The steady state reads its nodes in the reference state (`core.flow.PREFIX`).
 REFERENCE = "reference"
@@ -124,9 +128,10 @@ def report(graph: Graph, reader: Any, model: Any, warnings: list[dict[str, Any]]
     for pool in static.unsupplied:
         gaps.setdefault(component[pool], {}).setdefault(NO_STEADY_SUPPLY, set()).add(pool)
     for warning in warnings:
-        if warning["code"] == OBJECTIVE_TIER_TIE:
+        gap = {OBJECTIVE_TIER_TIE: TIER_TIE, LP_PROBE_UNVERIFIED: PROBE_UNVERIFIED}.get(warning["code"])
+        if gap is not None:
             activity = warning["detail"]["activity"]
-            gaps.setdefault(component[activity], {}).setdefault(TIER_TIE, set()).add(activity)
+            gaps.setdefault(component[activity], {}).setdefault(gap, set()).add(activity)
 
     def reasons(name: str) -> list[str]:
         return [gap for gap in GAPS if gap in gaps.get(name, {})] + ([INPUTS] if name in inputs else [])

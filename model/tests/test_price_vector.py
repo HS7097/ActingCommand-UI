@@ -11,6 +11,7 @@ same exact values."""
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ from test_economy import (
     regen,
     resource,
     steady,
+    training,
 )
 
 EXACT_V = {"value": "1", "interval": "1", "by": "exact", "withheld": None}  # res.v, the main goal worth 1
@@ -50,10 +52,11 @@ def priced(value: str, interval: Any, by: str, withheld: dict[str, Any] | None =
 
 def judged(value: str | None, span: Any, most: str | None, *, forcing_cost: str | None = None) -> dict[str, Any]:
     """An activity's entry of `joint.activities`: its value at the vector, its range on D*, the most an optimum runs
-    it, and the loss per execution of running it more; none (null) is `input_bound`."""
+    it, and the loss per execution of running it more; none (null) is `input_bound`; every probe verified (PRICE-2c:
+    `unverified` empty)."""
     return {
         "value": value, "range": span, "in_optimum": most is None or Fraction(most) > 0, "most": most,
-        "forcing_cost": forcing_cost, "input_bound": forcing_cost is None,
+        "forcing_cost": forcing_cost, "input_bound": forcing_cost is None, "unverified": [],
     }
 
 
@@ -548,10 +551,12 @@ def test_a_dual_point_that_fails_its_exact_check_blocks_every_price(tmp_path, ec
     the limit's dual half a unit higher, and the exact vertex is not rebuilt from it, so the fractions stand as given:
     they still meet every dual row (the limit's dual only adds slack to the sink's), but the cost is 5/2, not V0. The
     strong-duality check refuses it exactly (`lp_numeric_check_failed`, stage `dual`, at `duality:face:0`), which
-    blocks the steady state: no price is exportable, `explain` of a price reports the error, and nothing is written."""
+    blocks the steady state: no price is exportable, `explain` of a price reports the error, and nothing is written.
+    (PRICE-2c rebuilds an LP's vertex from HiGHS's basis first, so that solve is given no basis here: its answer is
+    rebuilt from the floats as before.)"""
     folder = ex5(tmp_path)
     limit_dual = ("y", "limit:limit.sink:0", 0)
-    exact, vertex = economy_flow._Solver.exact, economy_flow._vertex
+    exact, vertex, certify = economy_flow._Solver.exact, economy_flow._vertex, economy_flow._Solver.vertex
 
     def least_cost(program: Any) -> bool:  # the dual's least cost: a dual program without the strong-duality row
         keys = {row.key for row in program.rows}
@@ -562,7 +567,13 @@ def test_a_dual_point_that_fails_its_exact_check_blocks_every_price(tmp_path, ec
             raw = [float(value) + (0.5 if key == limit_dual else 0.0) for key, value in zip(columns, raw, strict=True)]
         return exact(solver, program, columns, raw, stage)
 
+    def without_basis(solver: Any, program: Any, arrays: Any, run: Any, stage: str) -> Any:
+        if stage == "dual" and least_cost(program):
+            run = replace(run, statuses=None)
+        return certify(solver, program, arrays, run, stage)
+
     monkeypatch.setattr(economy_flow._Solver, "exact", spoilt)
+    monkeypatch.setattr(economy_flow._Solver, "vertex", without_basis)
     monkeypatch.setattr(
         economy_flow, "_vertex", lambda program, floats: None if least_cost(program) else vertex(program, floats)
     )
@@ -699,3 +710,98 @@ def test_a_marginal_beyond_the_tolerance_is_still_a_warning(tmp_path, economy, m
     }]
     assert steady(doc)["prices"] == {"res.a": [str(LARGE)], "res.v": ["1"]}
     assert joint(doc) == LARGE_JOINT
+
+
+# PRICE-2c: complementary slackness, and a probe that cannot be verified ----------------------------------------------
+
+
+def surplus_fixture(folder: Path) -> Path:
+    """s comes at 105 a day. act.get turns 10 s into 10 g (the main goal, worth 1), at most 10 a day; act.train turns 10 s
+    into 1 m, act.waste 10 s into 1/10 m; the demand row `m` takes 1 m for 1 point, a point worth 1/2, at most 100 a
+    day."""
+    return model(
+        folder, [DAY],
+        [resource("res.g", "fact.g"), resource("res.s", "fact.s"), resource("res.m", "fact.m"), activity("act.get"),
+         activity("act.train"), activity("act.waste")],
+        [
+            regen("regen.s", "res.s", "105", "1d"),
+            flow("flow.get", "act.get", consumes={"res.s": "10"}, produces={"res.g": "10"}),
+            limit("limit.get", "act.get", "10", "day"),
+            flow("flow.train", "act.train", consumes={"res.s": "10"}, produces={"res.m": "1"}),
+            flow("flow.waste", "act.waste", consumes={"res.s": "10"}, produces={"res.m": "0.1"}),
+        ],
+        {"fact.g": 0, "fact.s": 0, "fact.m": 0},
+        goals=[goal("goal.g", "res.g", "1"), training("0.5", "1d")], demand=[("m", "100", "1", "0")],
+        costs=[("m", {"res.m": "1"})],
+    )
+
+
+def test_complementary_slackness_spares_the_probes_of_an_activity_no_optimum_runs(tmp_path, economy, monkeypatch):
+    """PRICE-2c (`core.flow._never`). By hand: act.get runs its 10 a day (100 s for 100 g: A* = 100) and act.train the 5
+    s left (half a run: half an m, which the demand row takes for a quarter of a value unit): V0 = V* = 401/4. The
+    optimum is unique, and so is D*: π_g = 1, π_m = 1/2 (the demand row runs half a time, below its bound), π_s = π_m /
+    10 = 1/20 (act.train runs), limit.get's dual 10 - 10 × 1/20 = 19/2. act.waste's dual slack is 10 × 1/20 - 1/10 ×
+    1/2 = 9/20 > 0, so by complementary slackness no optimum of S3 runs it, and none of S2: neither a tie probe nor a
+    probe of its `most` is solved. Its judgements still read exactly: it is worth 1/10 × 1/2 - 10 × 1/20 = -9/20 on all
+    of D*, runs 0 times, and forced to run it loses its slack, 9/20 an execution. act.get and act.train run in the
+    optimum (slack 0), so `most` probes them; the optimum of S2 runs both, so no tie probe is needed."""
+    probes = []
+    probe = economy_flow._Solver.probe
+
+    def recorded(solver: Any, program: Any, stage: str, **options: Any) -> Any:
+        if stage in ("tie", "judgement"):
+            probes.append((stage, sorted({key[1] for key in program.objective if key[0] == "x"})))
+        return probe(solver, program, stage, **options)
+
+    monkeypatch.setattr(economy_flow._Solver, "probe", recorded)
+
+    status, doc = economy(surplus_fixture(tmp_path), "--steady-only")
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    assert (steady(doc)["objective"], steady(doc)["acquisition"]) == ("401/4", "100")
+    assert steady(doc)["prices"] == {"res.g": ["1"], "res.m": ["1/2"], "res.s": ["1/20"]}
+    assert probes == [("judgement", ["act.get"]), ("judgement", ["act.train"])]
+    assert joint(doc)["activities"]["act.waste"] == judged("-9/20", "-9/20", "0", forcing_cost="9/20")
+
+
+def test_a_judgement_probe_that_cannot_be_verified_is_unverified_and_a_structural_gap(tmp_path, economy, monkeypatch):
+    """PRICE-2c. The fixture above, with HiGHS's basis withheld from the probe of the most an optimum runs act.train, so
+    that its answer (1/2, rebuilt from the rows its variables leave tight) is feasible but not certified optimal. It is
+    not guessed: `most` and `in_optimum` are null, and so are `forcing_cost` and `input_bound`, which read `most`; the
+    activity lists both as `unverified`, and its value and range, which do not read it, stand. The warning
+    `lp_probe_unverified` names the probe and why (`no_basis`). act.train's static component, which holds every pool, is
+    a structural gap (`probe_unverified`), so every price is provisional, and so is the steady state, which is not
+    blocked: the price vector is the one the plain fixture gives."""
+    certify = economy_flow._Solver.vertex
+
+    def without_basis(solver: Any, program: Any, arrays: Any, run: Any, stage: str) -> Any:
+        if stage == "judgement" and set(program.objective) == {("x", "act.train", 0)}:
+            run = replace(run, statuses=None)
+        return certify(solver, program, arrays, run, stage)
+
+    plain_status, plain = economy(surplus_fixture(tmp_path / "plain"), "--steady-only")
+    monkeypatch.setattr(economy_flow._Solver, "vertex", without_basis)
+    folder = surplus_fixture(tmp_path / "unverified")
+
+    status, doc = economy(folder, "--steady-only")
+
+    assert (plain_status, plain["warnings"], status, doc["errors"]) == (0, [], 0, [])
+    assert doc["warnings"] == [{
+        "code": "lp_probe_unverified",
+        "detail": {
+            "path": model_path(folder), "probe": "most", "activity": "act.train", "stage": "judgement",
+            "reason": "no_basis",
+        },
+    }]
+    assert joint(doc)["activities"]["act.train"] == {
+        "value": "0", "range": "0", "in_optimum": None, "most": None, "forcing_cost": None, "input_bound": None,
+        "unverified": ["most", "forcing_cost"],
+    }
+    assert joint(plain)["activities"]["act.train"]["unverified"] == []
+    assert joint(doc)["prices"] == joint(plain)["prices"]
+    found = doc["data"]["steady"]
+    assert found["coverage"]["components"]["act.get"]["gaps"] == {"probe_unverified": ["act.train"]}
+    assert found["price_status"] == {
+        resource: {"status": "provisional", "reasons": ["probe_unverified"]} for resource in ("res.g", "res.m", "res.s")
+    }
+    assert found["status"] == "provisional"

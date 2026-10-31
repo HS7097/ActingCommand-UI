@@ -965,6 +965,19 @@ ruling 126 A, below):
   - V0 = V*: the lexicographic optimum is an optimum of V, and the steady state is priced from S3. An activity that
     some optimum of S3 uses and no optimum of S2 does is the warning **`objective_tier_tie`**, one per activity: by
     value it is as good as the acquisition it would take from (probed on each face, at most one execution a cycle).
+    - **Complementary slackness** (PRICE-2c) spares most probes. S3's dual (see "The joint price vector") is solved and
+      checked exactly first, and gives an exact optimal dual point (y, w). An activity whose dual slack there,
+      s_j = (Aᵀy + w − c)_j, is above 0 in every step runs in no optimum of S3, so in none of S2 either (V* = V0, so
+      S2's optima are optima of S3): it is no tie, and it is not probed. The argument: for any feasible x and dual
+      feasible (y, w), c·x ≤ (Aᵀy + w)·x = y·(Ax) + w·x ≤ b·y + u·w (x ≥ 0 and s ≥ 0; y ≥ 0 where Ax ≤ b; w ≥ 0 and
+      x ≤ u). At an optimum x* both ends equal V0 (strong duality, checked exactly), so Σ_j s_j·x*_j = 0, each term at
+      least 0 and so 0: s_j > 0 gives x*_j = 0 in every optimum. A slack of 0 proves nothing, so only those activities
+      are probed.
+    - **A probe that cannot be verified** (PRICE-2c). A probe's answer above 0 holds for any exactly feasible point; an
+      answer of 0 only for a certified optimum ("Exactness and failures"). A tie that its probes cannot decide exactly
+      (no certified 0, or a probe whose LP fails its exact check) is the warning **`lp_probe_unverified`** (`probe`
+      `tie`), never "no tie": its activity counts as a structural gap of its component (`probe_unverified`, see
+      "Coverage") and the steady state stands.
   - The least losses are taken among the lexicographic optima (A ≥ A*, V ≥ V*).
 - **The reference state is neutral** (ruling 126 A). The steady state reads the rules and the data only: a cap's
   `reference` is its value in the neutral reference state (facility levels, stage stars), the demand and costs are
@@ -1002,8 +1015,8 @@ ruling 126 A, below):
     interval otherwise. A relaxed rule's value is its value per period, so its price is the cycle's gain per unit of
     it. Every re-solve is of S3, V alone; a price is in value units, and the numeraire, which holds nothing, has none.
 - **The status of each price** (`price_status`): resource to `{status, reasons}`, the status and the reasons of its
-  static component (see "Coverage" below): `excluded_pending`, `no_steady_supply` and `objective_tier_tie`, the
-  structural gaps the component holds, and `inputs`, a rule, row or reading of the component is provisional, depends on
+  static component (see "Coverage" below): `excluded_pending`, `no_steady_supply`, `objective_tier_tie` and
+  `probe_unverified` (PRICE-2c), the structural gaps the component holds, and `inputs`, a rule, row or reading of the component is provisional, depends on
   an unknown it leaves unresolved, or names an unknown. A confirmed price has no reason. The graph output
   `price:<resource>` shows its entry (see "The joint price vector" below).
 - **Activity values** per step: what one execution produces less what it consumes, at that step's prices, in value
@@ -1044,6 +1057,35 @@ one dual optimal point, never a pick per pool: with V = min(A, B, C), each pool'
   price: an activity's value is linear in the prices, so its value at the mean is the mean of its values per step).
   Its `interval` is π_r's least and greatest value on D*, an unbounded end null: these replace the re-solves as the
   price's interval.
+- **How the values on D* are found** (PRICE-2c; every result is the same, exactly, only fewer and smaller LPs are
+  solved):
+  - *Proved by S3's basis.* For a resource without a hard cap, one solve with S3's certified basis gives how its basic
+    variables move when the step brings more or less income. Where one grain more (or less) leaves them within their
+    bounds, the basis stays optimal (its dual feasibility does not read the right sides), so the optimum moves by
+    exactly one grain times the balance row's dual in that basis: that chord needs no re-solve. Where a little more (or
+    less) does, the optimum is linear on that side with that slope, its derivative there: the projection's `low` (or
+    `high`) needs no LP.
+  - *Pinned by the chords.* With f(δ) the optimum when a step brings δ more of a resource (its balance row's right
+    side raised by δ, nothing else), f is concave; its right and left derivatives are the projection's `low` and
+    `high`, and its chords enclose them: (f(g) − f(0))/g ≤ `low` ≤ `high` ≤ (f(0) − f(−g))/g. So when the re-solves at
+    plus and minus one grain (`grain`) both exist and agree, the projection is exactly that value and no LP on D* is
+    solved for it. A resource with a hard cap never takes this way (one grain more also raises what may overflow, a
+    second right side).
+  - *Constant on D*.* A pool whose projection is exact in every step has its one mean as its `interval`, and an
+    activity whose value reads only such pools has its one value as its `range`: no LP.
+  - *D* in the complementary-slackness form.* The other projections, intervals and ranges, and the forcing costs, are
+    solved on the optimal face written without the strong-duality row: the dual's rows and variables with, for an
+    exact optimum x* of the primal, the dual of each at-most row x* leaves slack fixed at 0, the `w` of each variable
+    below its upper bound fixed at 0, and the dual row of each variable above 0 an equality. A dual feasible point is
+    optimal exactly when it is complementary to one primal optimum, so this is the face itself; HiGHS solves on it far
+    faster than on the face with its dense cost row (on a large model, one such LP took minutes). x* is S3's optimum
+    (exactly optimal once the strong-duality check has found a dual point of its cost), and for a forcing cost an
+    optimum of S3 that runs the activity its `most` (its `most` probe's solution, or S3's when complementary
+    slackness gave `most` 0). The selection and its exact check use the face.
+  - *Warm starts.* Consecutive LPs on the same rows that differ only in their objective (those above) are given to
+    the HiGHS instance that solved the previous one, with the objective changed: HiGHS's primal simplex goes on from
+    the basis it ended at, without presolve. Only where HiGHS starts differs; each LP's exact vertex and certificate
+    are its own ("Exactness and failures").
 - **The selection**, each step an exact LP on D* and what is fixed so far, in this order:
   1. a pool bounded below only (`high` null: one less is infeasible) that a main goal values (its own `objective` of
      tier `main`): fixed at its least value, the value of one more (its goal's weight), by id; `by` `one_more`;
@@ -1084,6 +1126,18 @@ one dual optimal point, never a pick per pool: with V = min(A, B, C), each pool'
     dual is unbounded, so nothing is left in the cycle to run it again (`forcing_cost` null; a matter of timing only).
     An unbounded `most` costs nothing more: 0. A positive cost means one more execution crowds out a better use or
     makes what is already saturated: such an activity is no zero-band realization (addendum 2.1 §7).
+  - `most` needs no probe for an activity whose dual slack at the exact optimal dual point of S3 is above 0 in every
+    step: by complementary slackness (see "The objective", the three solves) no optimum runs it, so `most` is 0 and
+    `in_optimum` false (PRICE-2c);
+  - `unverified` (PRICE-2c): the judgements whose probe could not be verified exactly, in this order: `most`, `range`,
+    `forcing_cost` (empty when every one is). `most` needs a certified optimum of its LP, and `range` and `forcing_cost`
+    a certified optimum or HiGHS's unbounded status of each of theirs ("Exactness and failures"). An unverified
+    judgement is null, never guessed: `most` with `in_optimum`, `range`, and `forcing_cost` with `input_bound`;
+    `forcing_cost` reads `most`, so it is unverified with it. Each unverified probe is the warning
+    `lp_probe_unverified` (`probe` `most`, `range` or `forcing_cost`; none of its own for a `forcing_cost` that only
+    `most` leaves unverified). An activity whose `most` or `range` is unverified is left out of K (whether an optimum
+    runs it is not known); its component counts as a structural gap (`probe_unverified`, see "Coverage"). The joint
+    price vector itself is never relaxed: the dual, the projections and the selection still block when they fail.
 - **The graph outputs** `price:<resource>` and the diagnostic `activity_value:<activity>` (#424 ACM-PRICE 4.1): each
   resource's and each activity's entry of `joint`, a price with its own `status` and `reasons` (its entry of
   `price_status`: its static component's, see "Coverage" below), an activity's value with the steady state's
@@ -1119,7 +1173,9 @@ unless it is written as the number 0 (`"0"`); what any other expression comes to
 
 **Structural gaps** (§3.3). A component that holds one is a structural gap as a whole, for each it holds:
 `excluded_pending` (an activity the steady state left out, see "Pending flows"), `no_steady_supply` (a pool without a
-steady supply) and `objective_tier_tie` (an activity of the warning `objective_tier_tie`). Its prices are computed and
+steady supply), `objective_tier_tie` (an activity of the warning `objective_tier_tie`) and `probe_unverified` (an
+activity of the warning `lp_probe_unverified`: whether it is a tie, or a judgement of it, could not be verified exactly,
+PRICE-2c; conservative, never read as no tie). Its prices are computed and
 shown, provisional, and are not exportable (PRICE-4 writes `pending`). A component with no edge to a gap keeps its own
 class and status. Two gaps of §3.3 have no place here: an `objective_tier_conflict` blocks the whole steady state (and
 with it this section), and a pool brought only within an activity window cannot be written yet (no flow is tied to a
@@ -1183,14 +1239,33 @@ provisional derive under `estimates` without an `estimate` is `estimate_missing`
 ### Exactness and failures
 
 - **Exact solutions.** Every solution is made exact before it is used.
-  - The variables HiGHS leaves at a bound, and the integer ones rounded, are fixed. The rows they leave tight are
-    solved exactly for the others.
-  - When those rows do not determine them, each value is converted with `limit_denominator(lp.max_denominator)`
-    instead.
+  - **An LP's, from HiGHS's basis** (PRICE-2c; `src/acmodel/core/exact.py`). HiGHS is called through the bindings
+    scipy bundles (`scipy.optimize._highspy`, the module `linprog` calls, with `linprog`'s model and options), so that
+    its column and row basis statuses are read with its solution. The basis is defined by those statuses, never by
+    values close to a bound: each nonbasic column is fixed at the bound its status names, each nonbasic row is tight at
+    the end its status names, and the basic variables (columns, and the rows' logical variables r = a·x) are solved
+    exactly in fractions from the basis system B·z_B = −N·z_N (a sparse elimination), and the row duals from
+    Bᵀ·y = c_B. The basis is **certified** when it is exactly optimal: every basic variable within its bounds, and the
+    reduced cost of every nonbasic one of the sign of a maximum (at most 0 where it could rise, at least 0 where it
+    could fall). Its vertex is then the exact optimum, whatever HiGHS's tolerances (1e-7) let pass.
+  - **The pivoting fallback.** A basis that is not exactly optimal gets at most `lp.max_pivots` (20) exact simplex
+    pivots, each with Bland's rule (the least index enters, and leaves among ties) and every quantity re-solved from the
+    new basis: a primal step when the basis is primal feasible, a dual step when it is dual feasible. A basis that is
+    neither, singular, invalid (not one basic variable per row, or a nonbasic one at an end that is unbounded), or not
+    optimal after the cap is not certified.
+  - **Otherwise** (no valid basis, no certificate, and every MILP): the variables HiGHS leaves at a bound, and the
+    integer ones rounded, are fixed, and the rows they leave tight are solved exactly for the others; when those rows
+    do not determine them, each value is converted with `limit_denominator(lp.max_denominator)` instead. Such a solution
+    is feasible once checked, but not certified optimal.
   - The result is checked exactly against every bound, integrality and row; what breaks one is
     `lp_numeric_check_failed`. Objectives, prices and losses come only from these fractions.
   - So is every solution on the steady state's dual, against every dual row and the strong-duality row, and the
     dual's least cost must be V0 exactly (stage `dual`; "The joint price vector").
+  - **Probes** (PRICE-2c): a per-activity probe (a tie, `most`, `range`, `forcing_cost`) whose answer needs an optimum
+    reads it only from a certified one; an answer above 0 of a tie probe holds for any exactly feasible point. A probe
+    that is not verified, or whose LP fails (`lp_numeric_check_failed`, `lp_solve_failed`), is `lp_probe_unverified`, a
+    warning, and never blocks the steady state. Every other solve (S3, S1, S2, the least losses, the price re-solves,
+    the dual and every step of the joint price vector) blocks as before when its check fails.
 - **Infeasible.** An infeasible program is `lp_infeasible`. It names a minimal set of conflicting groups: each regen,
   cap, limit and read cap is a group, and in a plan each opening stock. They are dropped in turn, in id order, and
   each stays dropped while the rest is still infeasible. A group whose check cannot be decided is kept and listed in
@@ -1205,7 +1280,7 @@ two has `status` and `per_account`; a blocked one has only `status`.
 - **`steady`:** `cycle` (`steps`, `step_seconds`), `objective`, `acquisition`, `protected`, `conversions`, `prices`
   (resource to its price per step), `rule_prices`, `activity_values` (activity to its value per step, or null),
   `joint` (`prices`: resource to `{value, interval, by, withheld}`; `max_min`: a list of `{level, fixed}`;
-  `activities`: activity to `{value, range, in_optimum, most, forcing_cost, input_bound}`), `losses` (`overflow`,
+  `activities`: activity to `{value, range, in_optimum, most, forcing_cost, input_bound, unverified}`), `losses` (`overflow`,
   `lost_production`), `grain` (`prices`: resource to its re-solved price per step), `marginals` (`prices`,
   `rule_prices`), `excluded`, `relaxed` (a list of `{rule, per, days, value}`, by rule), `excluded_pending` (a list
   of `{flow, activity, unknowns}`, by flow), `price_status` and `coverage` (see "Coverage").

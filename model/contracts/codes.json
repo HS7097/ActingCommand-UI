@@ -620,12 +620,35 @@
       "values": {
         "path": {"type": "path", "required": true},
         "solve": {"type": "vocab", "required": true, "members": ["steady", "plan"]},
-        "stage": {"type": "vocab", "required": true, "members": ["optimum", "acquisition", "value", "tie", "losses", "price", "dual", "judgement"]},
+        "stage": {"type": "vocab", "required": true, "members": ["optimum", "acquisition", "value", "losses", "price", "dual"]},
         "constraint": {"type": "token", "required": true},
         "found": {"type": "token", "required": true},
         "bound": {"type": "token", "required": true}
       },
-      "description": "acmodel economy: a solution of HiGHS, converted to exact fractions with lp.max_denominator, breaks a bound, an integrality or a row of its program when checked exactly. stage is the solve: the optimum (the steady state's S3, the value V alone, or the plan), the steady state's acquisition (S1, the protected acquisition A alone) and value (S2, V with A at least A*, whose row floor:acquisition:0 is checked exactly as every other row), a probe for objective_tier_tie (tie), the least losses among the optimal solutions (steady state), a price re-solve, a solve on the steady state's dual (dual, PRICE-2b-1: its least cost, a projection, a step of the selection of the joint price vector, a range or a forcing cost, each checked exactly against every dual row and the strong-duality row duality:face:0), or a judgement's primal solve (judgement: the most an optimum runs an activity). constraint is the row or the variable (kind:id:step), found its exact left side or value, and bound what it must meet (=, <= or >= a value, integer, or finite; a value or marginal that is not finite is found as its float text, with constraint marginal for a marginal). With stage value and constraint value, S2's optimum (found) is above S3's (bound), which a relaxation cannot be. With stage dual and constraint duality:face:0, the dual's least cost (found) is not the primal optimum (bound): strong duality fails exactly, so no price vector exists to export. With stage dual and constraint max_min, a stage of the selection fixed no coordinate at its level (found); with constraint price:<resource>, a pool's end that the dual's optimal face bounds came out unbounded (bound, the end it was fixed at). The output is blocked, and with stage dual no price of the steady state is exportable; nothing is rounded into place. path is model.json."
+      "description": "acmodel economy: a solution of HiGHS, made exact, breaks a bound, an integrality or a row of its program when checked exactly. An LP's solution is the vertex of HiGHS's basis (its column and row basis statuses), solved exactly in fractions and made exactly optimal with at most lp.max_pivots exact pivots (PRICE-2c, core/exact.py); where the basis gives no such vertex, and for a MILP, the variables at a bound are fixed and the rows they leave tight solved exactly, else each value is converted with limit_denominator(lp.max_denominator). stage is the solve: the optimum (the steady state's S3, the value V alone, or the plan), the steady state's acquisition (S1, the protected acquisition A alone) and value (S2, V with A at least A*, whose row floor:acquisition:0 is checked exactly as every other row), the least losses among the optimal solutions (steady state), a price re-solve, or a solve on the steady state's dual (dual, PRICE-2b-1: its least cost, a projection, a step of the selection of the joint price vector, each checked exactly against every dual row and the strong-duality row duality:face:0). A per-activity probe (a tie, the most an optimum runs an activity, its range or its forcing cost) never blocks: it is lp_probe_unverified (PRICE-2c). constraint is the row or the variable (kind:id:step), found its exact left side or value, and bound what it must meet (=, <= or >= a value, integer, or finite; a value or marginal that is not finite is found as its float text, with constraint marginal for a marginal). With stage value and constraint value, S2's optimum (found) is above S3's (bound), which a relaxation cannot be. With stage dual and constraint duality:face:0, the dual's least cost (found) is not the primal optimum (bound): strong duality fails exactly, so no price vector exists to export. With stage dual and constraint max_min, a stage of the selection fixed no coordinate at its level (found); with constraint price:<resource>, a pool's end that the dual's optimal face bounds came out unbounded (bound, the end it was fixed at). The output is blocked, and with stage dual no price of the steady state is exportable; nothing is rounded into place. path is model.json."
+    },
+    "lp_probe_unverified": {
+      "category": "warning",
+      "exit": 0,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "probe": {"type": "vocab", "required": true, "members": ["tie", "most", "range", "forcing_cost"]},
+        "activity": {"type": "token", "required": true},
+        "stage": {"type": "vocab", "required": true, "members": ["tie", "judgement", "dual"]},
+        "reason": {
+          "type": "vocab",
+          "required": true,
+          "members": ["no_basis", "basis_invalid", "singular", "pivot_cap", "not_feasible", "unbounded", "infeasible", "solve_failed"]
+        },
+        "pivots": {"type": "integer", "required": false},
+        "error": {"type": "vocab", "required": false, "members": ["lp_numeric_check_failed", "lp_solve_failed"]},
+        "constraint": {"type": "token", "required": false},
+        "found": {"type": "token", "required": false},
+        "bound": {"type": "token", "required": false}
+      },
+      "description": "acmodel economy (a warning; #424 PRICE-2c): a per-activity probe of the steady state could not be verified exactly, so its answer is reported unverified, never guessed. probe: tie (whether the activity is objective_tier_tie: an optimum of S3 runs it and none of S2 does; never read as no tie), most (the most an optimum of S3 runs it: most and in_optimum null), range (its value's least and greatest on the dual's optimal face D*: range null) or forcing_cost (forcing_cost and input_bound null; also unverified, without a warning of its own, when most is). The activity's entry of joint.activities lists it in unverified, an activity whose most or range is unverified is left out of the max-min, and its static component counts as a structural gap of the coverage section (probe_unverified), so its prices are provisional. stage is its LP's stage (tie; judgement for most; dual for range and forcing_cost). reason: HiGHS left no valid basis (no_basis); its basis gave no exactly optimal vertex (core/exact.py: basis_invalid, a nonbasic variable at an unbounded end or not m basic ones; singular; pivot_cap, still not optimal after lp.max_pivots exact pivots, pivots; not_feasible, neither primal nor dual feasible; unbounded or infeasible, an exact pivot that finds no bound or no variable to enter); or the probe's LP failed (solve_failed: error is the error it raised, lp_numeric_check_failed with its constraint, found and bound, or lp_solve_failed, which blocked the whole steady state before PRICE-2c). An answer of a probe above 0 holds for any exactly feasible point, an answer of 0 or a most only for a certified optimum. The joint price vector and the solves it reads (S3, S1, S2, the dual and its strong-duality check, the projections and the selection) are never relaxed: they still block. path is model.json."
     },
     "lp_solve_failed": {
       "category": "error",
@@ -635,14 +658,14 @@
       "values": {
         "path": {"type": "path", "required": true},
         "solve": {"type": "vocab", "required": true, "members": ["steady", "plan"]},
-        "stage": {"type": "vocab", "required": true, "members": ["optimum", "acquisition", "value", "tie", "losses", "price", "dual", "judgement"]},
+        "stage": {"type": "vocab", "required": true, "members": ["optimum", "acquisition", "value", "losses", "price", "dual"]},
         "reason": {"type": "vocab", "required": true, "members": ["unbounded", "solver_status", "no_solution"]},
         "status": {"type": "integer", "required": false},
         "nodes": {"type": "integer", "required": false},
         "node_limit": {"type": "integer", "required": false},
         "raw_text": {"type": "raw_text", "required": false}
       },
-      "description": "acmodel economy: HiGHS gave no usable solution. unbounded: the objective has no maximum, so the rules let the value of the goal sinks (or, in S1, the protected acquisition) grow without end (status 3). solver_status: another status (status, scipy's, with HiGHS's message as raw_text) after a second try without presolve; or no solution where one must exist (status 2: the steady state's S1, S2 or a tie probe, which only add a row that a solution already meets or change the objective, or the least losses at the optimum). no_solution (plan): the MILP stopped, at its node limit search.milp_node_limit (node_limit; nodes explored) or otherwise, without any feasible plan. stage: the optimum, the steady state's acquisition (S1), value (S2) or tie probe, the least losses, a price re-solve, a solve on the steady state's dual (dual, PRICE-2b-1; solver_status with status 2 where its optimal face, which holds the dual point found, has no solution) or a judgement's primal solve (judgement). The output is blocked. path is model.json."
+      "description": "acmodel economy: HiGHS gave no usable solution. unbounded: the objective has no maximum, so the rules let the value of the goal sinks (or, in S1, the protected acquisition) grow without end (status 3). solver_status: another status (status, scipy's, with HiGHS's message as raw_text) after a second try without presolve; or no solution where one must exist (status 2: the steady state's S1 or S2, which only add a row that a solution already meets or change the objective, or the least losses at the optimum). no_solution (plan): the MILP stopped, at its node limit search.milp_node_limit (node_limit; nodes explored) or otherwise, without any feasible plan. stage: the optimum, the steady state's acquisition (S1) or value (S2), the least losses, a price re-solve, or a solve on the steady state's dual (dual, PRICE-2b-1; solver_status with status 2 where its optimal face, which holds the dual point found, has no solution). A per-activity probe never blocks: it is lp_probe_unverified (PRICE-2c). The output is blocked. path is model.json."
     },
     "model_file_invalid": {
       "category": "error",
