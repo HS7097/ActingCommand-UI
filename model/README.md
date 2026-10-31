@@ -96,7 +96,9 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
     and made exactly optimal by at most `lp.max_pivots` exact pivots (`src/acmodel/core/exact.py`); complementary
     slackness at the exact optimal dual spares the probes of an activity no optimum runs; and a per-activity probe
     that still cannot be verified exactly (a tie, or a judgement) is reported unverified (`lp_probe_unverified`, its
-    component a structural gap) instead of blocking the steady state, whose prices still block when they fail. Its coverage section classes each pool as covered, a structural gap, verified
+    component a structural gap) instead of blocking the steady state, whose prices still block when they fail. The
+    values on D* come from as few and as small LPs as exactness allows: what S3's basis proves, chords that pin a
+    projection, and D* in its complementary-slackness form (`contracts/formats.md`, "The joint price vector"). Its coverage section classes each pool as covered, a structural gap, verified
     zero (a `no_use` declaration the static check found sound) or unknown, lists the static components of the
     flow graph, and gives each price the status of its component, so that a component with no edge to a gap keeps
     its own; it also lists the estimates (`estimate` of a provisional derive) it read;

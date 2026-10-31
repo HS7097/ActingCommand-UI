@@ -1059,6 +1059,12 @@ one dual optimal point, never a pick per pool: with V = min(A, B, C), each pool'
   price's interval.
 - **How the values on D* are found** (PRICE-2c; every result is the same, exactly, only fewer and smaller LPs are
   solved):
+  - *Proved by S3's basis.* For a resource without a hard cap, one solve with S3's certified basis gives how its basic
+    variables move when the step brings more or less income. Where one grain more (or less) leaves them within their
+    bounds, the basis stays optimal (its dual feasibility does not read the right sides), so the optimum moves by
+    exactly one grain times the balance row's dual in that basis: that chord needs no re-solve. Where a little more (or
+    less) does, the optimum is linear on that side with that slope, its derivative there: the projection's `low` (or
+    `high`) needs no LP.
   - *Pinned by the chords.* With f(δ) the optimum when a step brings δ more of a resource (its balance row's right
     side raised by δ, nothing else), f is concave; its right and left derivatives are the projection's `low` and
     `high`, and its chords enclose them: (f(g) − f(0))/g ≤ `low` ≤ `high` ≤ (f(0) − f(−g))/g. So when the re-solves at

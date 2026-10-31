@@ -75,6 +75,21 @@ def test_the_pivots_stop_at_their_cap_and_a_basis_must_have_one_basic_variable_p
     assert exact.optimum(PROBLEM, (U, B, L, B), cap=20) == exact.Refused(exact.BASIS_INVALID, 0)  # row 0 has no lower end
 
 
+def test_a_basis_proves_on_which_sides_it_stays_optimal_when_a_right_side_moves():
+    """maximise x over x + y = s (an equality), 0 ≤ x ≤ 3, y ≥ 0. With s = 4 the optimum is x = 3 at its bound and y =
+    1 basic; y's column gives the row's dual 0 (x's reduced cost 1 ≥ 0 at its upper bound). Moving s moves y alone,
+    one for one: by 2 up y is 3, by 2 down -1 (infeasible), a little either way stays feasible. With s = 3, y = 0 is
+    basic at its bound: up still holds, down not even a little."""
+    four = exact.Problem(cost=(F(1), F(0)), lower=(F(0), F(0), F(4)), upper=(F(3), None, F(4)), rows=({0: F(1), 1: F(1)},))
+    vertex = exact.optimum(four, (U, B, U), cap=20)
+    assert (vertex.x, vertex.duals) == ((F(3), F(1)), (F(0),))
+    assert exact.ranging(four, vertex, 0, F(2)) == (True, False, True, True)
+    three = exact.Problem(cost=(F(1), F(0)), lower=(F(0), F(0), F(3)), upper=(F(3), None, F(3)), rows=({0: F(1), 1: F(1)},))
+    vertex = exact.optimum(three, (U, B, L), cap=20)
+    assert vertex.x == (F(3), F(0))
+    assert exact.ranging(three, vertex, 0, F(1)) == (True, False, True, False)
+
+
 # The regression fixture --------------------------------------------------------------------------------------------
 
 ACTIVITIES = 110
