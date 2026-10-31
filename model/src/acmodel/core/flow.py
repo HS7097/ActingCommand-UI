@@ -12,7 +12,8 @@ Two nodes of the derivation graph (`core.graph`), each computed after what it re
   (`lp.grain`), exact when both sides agree and an interval otherwise; the value of each activity at those
   prices; and the least overflow and lost production among the optimal solutions. HiGHS's marginals are only a
   cross-check (`lp_dual_disagrees`). A pending flow whose amounts read unknowns is left out and listed
-  (`excluded_pending`), and then every price is provisional (`price_status`; the ACM-PRICE addendum, part 1).
+  (`excluded_pending`; the ACM-PRICE addendum, part 1). Each price has the status of its static component, and the
+  coverage section classes each pool (`price_status`, `coverage`: `core.coverage`, PRICE-2b-2).
 - ("economy", "plan"): one account's plan. From the state's readings over `economy.plan_horizon` steps, with
   integer counts and an indicator per read cap and step, solved as a MILP within `search.milp_node_limit`
   nodes and never a time limit; the final stocks are priced by the steady state. A plan the node limit stops is
@@ -86,6 +87,7 @@ from acmodel.codes import (
     STATE_READING_MISSING,
 )
 from acmodel.config import EconomySettings
+from acmodel.core import coverage
 from acmodel.core.common import CONFIRMED, PROVISIONAL, RULE_STATUS, Need, worst
 from acmodel.core.unknown import read as unknowns_read, rule_status
 from acmodel.envelope import Failure, error
@@ -102,8 +104,9 @@ MONTH_DAYS = Fraction(146097, 4800)
 STEADY, PLAN = "steady", "plan"
 NODES = {STEADY: ("economy", STEADY), PLAN: ("economy", PLAN)}
 OUTPUTS = {STEADY: "economy:steady", PLAN: "economy:plan"}
-# The rule kinds the economy reads, and of them the kinds it does not model yet.
-RULE_KINDS = ("cap", "cooldown", "exchange", "flow", "gate", "limit", "objective", "regen")
+# The rule kinds the economy reads, and of them the kinds it does not model yet. A pool's declared zero (`no_use`)
+# is read by the coverage section only (`core.coverage`, PRICE-2b-2).
+RULE_KINDS = ("cap", "cooldown", "exchange", "flow", "gate", "limit", "no_use", "objective", "regen")
 NOT_MODELLED = ("cooldown", "exchange")
 MAIN = "main"  # an objective's tier: a main goal; the other is `secondary`, the reference demand
 DEMAND_COLUMNS = ("count", "points", "main")  # a demand row's columns, as the static check requires them
@@ -116,10 +119,8 @@ READING_GROUP = "reading:"
 # The prefix of the graph nodes each program reads first: the steady state's from the reference state, the
 # plan's from the rules and the data only (and then, where they need it, the account state's).
 PREFIX = {STEADY: ("reference",), PLAN: ("general",)}
-# Why a price of the steady state is provisional (`price_status`): it was computed without the activities of
-# `excluded_pending`; or a rule, data row or reading it read is provisional, or depends on an unknown that a
-# pending rule it read names.
-EXCLUDED_PENDING, INPUTS = "excluded_pending", "inputs"
+# Why a price of the steady state is provisional (`price_status`): the coverage section's reasons of its static
+# component (`core.coverage`, PRICE-2b-2).
 # How an economy node is kept in the cache.
 FORMAT = {"economy": ["data", "status", "per_account", "warnings", "blocked"]}
 _STATE = object()  # a node from the rules and the data only that would need the account state
@@ -1958,12 +1959,14 @@ def compute(graph: Graph, solve: str) -> Economy:
     except Failure as failure:
         return Economy(blocked_by=graph.register(failure.errors))
     if solve == STEADY:
-        # Without the pending flows it left out, every price is provisional (the ACM-PRICE addendum, part 1); the
-        # status of what each price read is, in this version, that of everything the steady state read.
+        # Each price has the status of its static component (#424 ACM-PRICE 4.6, addendum 2.1 §3.3; PRICE-2b-2): a
+        # component that left out a pending flow, or holds another structural gap, is provisional, and one that does
+        # not keeps its own status. The steady state is the worst of them.
         pending = reader.excluded_pending()
-        reasons = ([EXCLUDED_PENDING] if pending else []) + ([INPUTS] if status != CONFIRMED else [])
-        status = worst(status, PROVISIONAL) if pending else status
+        found, prices = coverage.report(graph, reader, model, warnings)
+        status = worst(status, *([PROVISIONAL] if pending else []), *(price["status"] for price in prices.values()))
         data["excluded_pending"] = pending
-        data["price_status"] = {r: {"status": status, "reasons": list(reasons)} for r in model.resources}
+        data["price_status"] = prices
+        data["coverage"] = found
     per_account = solve == PLAN
     return Economy({"status": status, "per_account": per_account, **data}, status, per_account, tuple(warnings))

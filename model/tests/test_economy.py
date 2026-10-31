@@ -161,8 +161,9 @@ def economy(make_system, app_dir, write_config):
 
 
 def steady(doc: dict[str, Any]) -> dict[str, Any]:
-    """The steady state without HiGHS's marginals, which are a cross-check only (and need not be unique)."""
-    return {key: value for key, value in doc["data"]["steady"].items() if key != "marginals"}
+    """The steady state without HiGHS's marginals, which are a cross-check only (and need not be unique), and without
+    its coverage section (PRICE-2b-2), which test_coverage.py pins."""
+    return {key: value for key, value in doc["data"]["steady"].items() if key not in ("marginals", "coverage")}
 
 
 def settled(*resources: str) -> dict[str, Any]:
@@ -1308,7 +1309,10 @@ def test_an_activity_as_good_as_the_acquisition_by_value_alone_is_a_tie(tmp_path
     By hand: V0 = 100 however s is split, A* = 100 (all s to act.get), V* = 100: no conflict. Some optimum of S3 runs
     act.train, no optimum of S2 does: `objective_tier_tie` for act.train, a warning. Priced from S3: s is worth 1
     (a tenth of either), g 1, m 10, both activities 0, and act.get's limit 0 (one more finds no s; one less moves
-    10 s to act.train, worth the same)."""
+    10 s to act.train, worth the same).
+
+    The tie is a structural gap (addendum 2.1 §3.1, PRICE-2b-2): s joins act.get and act.train, g's sink and the demand
+    row's into one static component, so every price is provisional for it, and so is the steady state."""
     folder = shared_fixture(tmp_path, "10", most="10")
 
     status, doc = economy(folder, "--steady-only")
@@ -1317,8 +1321,9 @@ def test_an_activity_as_good_as_the_acquisition_by_value_alone_is_a_tie(tmp_path
     assert doc["warnings"] == [
         {"code": "objective_tier_tie", "detail": {"path": model_path(folder), "activity": "act.train"}}
     ]
+    assert doc["data"]["steady"]["coverage"]["components"]["act.get"]["gaps"] == {"objective_tier_tie": ["act.train"]}
     assert steady(doc) == {
-        "status": "confirmed", "per_account": False,
+        "status": "provisional", "per_account": False,
         "cycle": {"steps": 1, "step_seconds": 86400},
         "objective": "100",
         **acquisitions("100", [acquirer("act.get", ["res.g"], ["limit.get"], ["res.s"])]),
@@ -1328,7 +1333,10 @@ def test_an_activity_as_good_as_the_acquisition_by_value_alone_is_a_tie(tmp_path
         "losses": {"overflow": {}, "lost_production": {}},
         "excluded": [],
         "relaxed": [],
-        **settled("res.g", "res.m", "res.s"),
+        "excluded_pending": [],
+        "price_status": {
+            resource: {"status": "provisional", "reasons": ["objective_tier_tie"]} for resource in ("res.g", "res.m", "res.s")
+        },
     }
 
 

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from acmodel import ids
+from acmodel.check import coverage
 from acmodel.check.cycles import Links, loops
 from acmodel.check.external import verify
 from acmodel.check.files import File, Model
@@ -53,8 +54,9 @@ NAMED = {
 }
 # A product of a flow may be `random:<id>` instead of an expression (#424 design 3.3).
 RANDOM_PRODUCT = re.compile(f"random:({ids.ID})")
-# Kinds whose rules hold one value per subject and slot (formats.md, "Conflicts").
-SUBJECT_ONLY = ("regen", "flow", "exchange", "cooldown", "random", "objective")
+# Kinds whose rules hold one value per subject and slot (formats.md, "Conflicts"); a pool's zero declaration
+# (`no_use`, #424 ACM-PRICE PRICE-2b-2) is one per pool.
+SUBJECT_ONLY = ("regen", "flow", "exchange", "cooldown", "random", "objective", "no_use")
 # The provenance kinds that give a number its provenance by themselves (#424 ACM-PROV): a source, a ruling, and a
 # design value (logic). A supplement that names the sources it searched does too, and a guide row counts as the
 # kind underneath it.
@@ -176,6 +178,8 @@ class Checker:
             self.table(file)
         self.conflicts()
         self.cycles()
+        if not self.errors:  # what needs every reference resolved (#424 ACM-PRICE PRICE-2b-2)
+            self.errors.extend(coverage.problems(self))
         if self.errors:
             raise Failure(*self.errors)
         return {
@@ -415,8 +419,9 @@ class Checker:
         node = "rule:" + rule.id if self.active(rule) else None
         self.logic(rule, node)
         general = at(rule.ref, "logic", "general_logic")  # compared with the value, never read by it
+        estimate = at(rule.ref, "logic", "estimate") + "/"  # likewise (#424 ACM-PRICE addendum 2.1 §3.7)
         for ref, text in expressions(readers.RULE, doc, rule.ref):
-            self.expression(rule, None if ref == general else node, ref, text)
+            self.expression(rule, None if ref == general or ref.startswith(estimate) else node, ref, text)
         self.pending(rule)
         # Its numbers: those of its expressions, and a drop's samples.
         held = (path, rule.ref) in self.numbered or "samples" in doc["logic"].get("drop", {})
@@ -455,15 +460,25 @@ class Checker:
         elif kind == "random" and "outcomes" in logic:
             for index, outcome in enumerate(logic["outcomes"]):
                 named.extend((at(base, "outcomes", index, "then", name), name, ("resource",)) for name in outcome["then"])
-        elif kind == "derive" and "live" in logic:
-            for member in ("fact", "reference_fact"):
+        elif kind == "derive" and ("live" in logic or "estimate" in logic):
+            for member in ("fact", "reference_fact") if "live" in logic else ():
                 self.fact(path, at(base, "live", member), logic["live"][member])
+            # The activities an estimate covers (#424 ACM-PRICE addendum 2.1 §3.7).
+            for index, activity in enumerate(logic.get("estimate", {}).get("covers", {}).get("activities", ())):
+                named.append((at(base, "estimate", "covers", "activities", index), activity, ("activity",)))
         elif kind == "engine" and logic["engine"] not in self.engines:
             self.problem(RULE_REFERENCE_MISSING, path, at(base, "engine"), target=logic["engine"], expected=["engine"])
         elif kind == "objective":
             self.objective(rule)
         elif kind == "weight_ref":
             named.append((at(base, "compares_to"), logic["compares_to"], ("rule",)))
+        elif kind == "no_use":  # a pool's zero (#424 ACM-PRICE addendum 2.1 §3.2): its subject is a resource
+            subject = self.entries.get(rule.doc["subject"])
+            if subject is not None and subject.category == "entity" and subject.kind != "resource":
+                self.problem(
+                    RULE_REFERENCE_MISSING, path, at(rule.ref, "subject"), target=subject.id, expected=["resource"],
+                    found=subject.token,
+                )
         for ref, target, expected in named:
             self.need(path, ref, target, expected)
 
