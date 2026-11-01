@@ -269,6 +269,12 @@ pub struct Labels {
     pub launcher_because: &'static str,
     /// After a plain line whose technical words alone say a failure.
     pub launcher_see_ledger: &'static str,
+    /// The status line: a Runtime is there and did not answer the last read.
+    pub link_no_answer: &'static str,
+    /// The status line: reading the Runtime went wrong rather than finding it down.
+    pub link_trouble: &'static str,
+    /// A notice: a read panicked; the thread goes on with the next.
+    pub read_panicked: &'static str,
     pub start: &'static str,
     pub request_shutdown: &'static str,
     /// pid, owner epoch.
@@ -719,6 +725,9 @@ pub const ZH: Labels = Labels {
     launcher_busy: "上一次请求还没完成",
     launcher_because: "{}：{}",
     launcher_see_ledger: "详情见「排障与账本」",
+    link_no_answer: "Runtime 正在停止或暂时没有回答",
+    link_trouble: "连接 Runtime 出错",
+    read_panicked: "读取 Runtime 状态时程序内部出错，下一轮会重试；详情见技术日志",
     start: "启动",
     request_shutdown: "请求关闭",
     runtime_running: "Runtime 运行中 · PID {} · owner epoch {}",
@@ -1089,6 +1098,9 @@ pub const EN: Labels = Labels {
     launcher_busy: "The Previous Request Has Not Finished",
     launcher_because: "{}: {}",
     launcher_see_ledger: "Details in Troubleshooting and Ledger",
+    link_no_answer: "The Runtime Is Stopping or Not Answering Right Now",
+    link_trouble: "Something Went Wrong Connecting to the Runtime",
+    read_panicked: "Reading the Runtime's State Failed Inside the Console; It Tries Again Next Round. Details Are in the Technical Log",
     start: "Start",
     request_shutdown: "Request Shutdown",
     runtime_running: "Runtime Running · PID {} · Owner Epoch {}",

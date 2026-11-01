@@ -8,10 +8,11 @@
 //! few kinds of entry go into it: a start that failed or found no state root,
 //! a problem of the settings file, a hand-off to the event loop that failed, a
 //! ledger window that could not be made, shown or hidden, a ledger reader
-//! thread that could not start, panicked or was gone, and the answer of a
-//! person's resume whose ledger window closed before it came back. No read
-//! itself goes there. Once it exists the windows show where it is, and when it cannot be
-//! written they say that instead.
+//! thread that could not start, panicked or was gone, the answer of a person's
+//! resume whose ledger window closed before it came back, and of the workbench's
+//! reads (`workbench`) what changed about them, a read that took long and their
+//! count at the end of the run. No read itself goes there. Once it exists the
+//! windows show where it is, and when it cannot be written they say that instead.
 //!
 //! A start that fails is said everywhere it can be: the log, the console (this
 //! process's own, a stream the caller redirected, or the parent's, attached),

@@ -27,14 +27,18 @@
 //! recorded for it; a v2 report whose outcome is `unlock_owner_completed`, with
 //! exit code 0, starts once more, as a start press does.
 //!
-//! Nothing here waits on the event loop: a probe, a whole start (probe, launch,
-//! readiness, record), a shutdown and an unlock each run on a thread of their
-//! own, one of each kind at a time, and hand back facts and `Phrase`s, never
-//! text. What they said is kept in the `LauncherView` and painted from there in
-//! the language shown at that moment: plain lines for a person on the workbench
-//! (`LauncherKind`), and the technical ones, with the codes, pids and paths, in
-//! every ledger window. A probe that finds a Runtime up is also what offers a
-//! ledger window that reads offline for want of one to read it online.
+//! Nothing here waits on the event loop: a whole start (probe, launch, readiness,
+//! record), a shutdown and an unlock each run on a thread of their own, one of
+//! each kind at a time, and hand back facts and `Phrase`s, never text. What they
+//! said is kept in the `LauncherView` and painted from there in the language shown
+//! at that moment: plain lines for a person on the workbench (`LauncherKind`), and
+//! the technical ones, with the codes, pids and paths, in every ledger window.
+//!
+//! The Runtime's status comes from the workbench's `Status` reads (`workbench`),
+//! which land in the view as `LauncherView::live`, whatever the launcher itself
+//! is doing; a press's own probe counts only until the next of them. A status
+//! that finds a Runtime up is also what offers a ledger window that reads offline
+//! for want of one to read it online.
 
 use std::fs::File;
 use std::io::{self, Read};
@@ -56,6 +60,7 @@ use crate::phrase::{phrase, verbatim, Line, Phrase};
 use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
+use crate::workbench::{self, model::Link};
 
 /// Readiness is polled: up to this many connect attempts, this far apart.
 const READY_ATTEMPTS: u32 = 60;
@@ -281,14 +286,36 @@ impl LauncherView {
         }
     }
 
+    /// A `Status` read of the workbench's: it now stands for the newest probe,
+    /// so a one-off probe still out says nothing. Whether the status changed, so
+    /// the windows are painted only for news.
+    pub fn live(&mut self, probe: Result<RuntimeFacts, ClientFailure>) -> bool {
+        self.probe_seq += 1;
+        if matches!(&self.status, Status::Probed(current) if *current == probe) {
+            return false;
+        }
+        self.status = Status::Probed(probe);
+        true
+    }
+
+    /// The thread behind those reads did not start, or is gone: why.
+    pub fn reading_failed(&mut self, error: String) {
+        self.probe_seq += 1;
+        self.status = Status::Failed(error);
+    }
+
     /// The status in plain words, for the workbench, and whether they say a
-    /// failure.
-    fn status_plain(&self, labels: &Labels) -> (String, bool) {
+    /// failure. `link` tells apart why a read found no Runtime to say running.
+    fn status_plain(&self, labels: &Labels, link: &Link) -> (String, bool) {
         let kind = match &self.status {
             Status::Unavailable => LauncherKind::NotConfigured,
             Status::Checking => LauncherKind::Checking,
             Status::Probed(Ok(_)) => LauncherKind::Running,
-            Status::Probed(Err(_)) => LauncherKind::NotRunning,
+            Status::Probed(Err(_)) => match link {
+                Link::NoAnswer(_) => return (labels.link_no_answer.to_owned(), false),
+                Link::Trouble(_) => return (labels.link_trouble.to_owned(), true),
+                _ => LauncherKind::NotRunning,
+            },
             Status::Failed(_) => LauncherKind::CheckFailed,
         };
         (kind.human(labels), kind.failed())
@@ -337,7 +364,7 @@ impl LauncherView {
 pub fn paint(ui: &Ui) {
     let labels = ui.labels();
     let view = ui.launcher_view.borrow();
-    let (status, status_failed) = view.status_plain(labels);
+    let (status, status_failed) = view.status_plain(labels, ui.model.borrow().link());
     let (line, line_failed) = view.line_plain(labels);
     let technical_status = view.status_text(labels);
     let (technical, technical_failed) = view.line_technical(labels);
@@ -370,24 +397,6 @@ fn unconfirm(ui: &Ui) {
     for handle in ui.ledgers() {
         handle.window.set_unlock_confirming(false);
     }
-}
-
-/// One probe, on a thread of its own; the windows say it is checking until
-/// the answer comes. With no state root there is nothing to probe.
-pub fn refresh_status(ui: &Ui) {
-    let Ok(launcher) = &ui.launcher else {
-        return;
-    };
-    let seq = ui.launcher_view.borrow_mut().begin_probe(true);
-    let root = launcher.state_root.clone();
-    let probed = spawn_worker("acui-probe", move || {
-        let probe = probe_runtime(&root);
-        post("acui-probe", move |view| view.probed(seq, probe));
-    });
-    if let Err(error) = probed {
-        ui.launcher_view.borrow_mut().probe_failed(seq, error.to_string());
-    }
-    paint(ui);
 }
 
 fn probe_text(labels: &Labels, probe: &Result<RuntimeFacts, ClientFailure>) -> String {
@@ -475,7 +484,7 @@ fn run_start(job: StartJob) {
     // The last word of this start, painted with `starting` cleared.
     let finish = |line: LauncherLine, facts: Option<RuntimeFacts>, offer_unlock: bool| {
         let starting = Arc::clone(&starting);
-        post("acui-start", move |view| {
+        post_last("acui-start", move |view| {
             starting.store(false, Ordering::SeqCst);
             if let Some(facts) = facts {
                 view.probed(probe_seq, Ok(facts));
@@ -1045,7 +1054,7 @@ pub fn shutdown(ui: &Ui) {
         // this may still say running.
         let probe = probe_runtime(&root);
         let line = LauncherLine::new(kind, technical, failed);
-        post("acui-shutdown", move |view| {
+        post_last("acui-shutdown", move |view| {
             shutting_down.store(false, Ordering::SeqCst);
             view.probed(seq, probe);
             view.line = Some(line);
@@ -1108,5 +1117,18 @@ fn post(what: &str, update: impl FnOnce(&mut LauncherView) + Send + 'static) {
         };
         update(&mut *ui.launcher_view.borrow_mut());
         paint(&ui);
+    });
+}
+
+/// A request's last word: as `post`, and a `Status` read at once, so the status
+/// does not lag behind what the line just said for a whole read interval.
+fn post_last(what: &str, update: impl FnOnce(&mut LauncherView) + Send + 'static) {
+    report::post(what, move || {
+        let Some(ui) = crate::ui::current() else {
+            return;
+        };
+        update(&mut *ui.launcher_view.borrow_mut());
+        paint(&ui);
+        workbench::poke_live(&ui);
     });
 }

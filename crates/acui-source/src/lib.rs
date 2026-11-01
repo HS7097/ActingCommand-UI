@@ -1187,7 +1187,7 @@ impl ReadSource {
 /// The Runtime a state root names, as one fresh connect learned it: the pid
 /// and owner epoch from its own `runtime-info.json`, after the client's
 /// owner-epoch check on connect.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeFacts {
     pub pid: u32,
     pub owner_epoch: String,
@@ -1196,7 +1196,7 @@ pub struct RuntimeFacts {
 /// A client operation that did not succeed: the client's own error code and
 /// operation, and, when the Runtime answered with a refusal, that refusal's
 /// code verbatim, with the host failure behind it when the refusal names one.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientFailure {
     pub code: &'static str,
     pub operation: &'static str,

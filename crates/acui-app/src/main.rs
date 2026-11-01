@@ -9,6 +9,8 @@
 //! its unlock entry. That window opens only when asked: from the workbench, or
 //! at the start with `--tab` or `--source`; at most one per source.
 //!
+//! While it is up two threads read the Runtime for the workbench (`workbench`).
+//!
 //! A start that fails is shown in a window of its own (`report`); a state root
 //! this run cannot find is said in red on the workbench, which stays. Every
 //! word is put together when it is painted, in the language shown then (`ui`,
@@ -30,6 +32,7 @@ mod settings;
 mod skin;
 mod strings;
 mod ui;
+mod workbench;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -139,10 +142,12 @@ fn main() -> ExitCode {
 
 /// The workbench comes up whatever this run's paths are: a state root it
 /// cannot find is said on it in red, and only Start, Request Shutdown and the
-/// ledger window are off. Then the first probe. A ledger window opens at the
+/// ledger window are off. Then the reading threads, whose first `Status` read
+/// is the first word on the Runtime. A ledger window opens at the
 /// start only for `--tab` or `--source`: the fixed entry passes `--state-root`
 /// on every start, and that alone opens none. Once the event loop is over the
-/// windows are hidden and let go, and then the shared state.
+/// reading threads are told to end, the windows are hidden and let go, and then
+/// the shared state.
 fn run(args: Args, loaded: settings::Loaded, language: Language) -> Result<(), Fatal> {
     let labels = language.labels();
     let stored = loaded.settings;
@@ -155,7 +160,7 @@ fn run(args: Args, loaded: settings::Loaded, language: Language) -> Result<(), F
         |error: slint::PlatformError| Fatal::failed(fill(labels.window_failed, &[&error.to_string()]));
     let workbench = WorkbenchWindow::new().map_err(window_failed)?;
     ui.show_workbench(workbench).map_err(window_failed)?;
-    launcher::refresh_status(&ui);
+    workbench::start(&ui);
     if args.tab.is_some() || args.source.is_some() {
         ui.open_ledger(args.source.unwrap_or_default(), args.tab);
     }

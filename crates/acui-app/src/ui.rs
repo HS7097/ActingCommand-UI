@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! What the windows of this process share, on the event loop only: the
 //! language shown, the text size, the theme, what the settings file holds that
-//! this run could not take, the launcher and its view, and the windows
-//! themselves — the workbench, which is the main window, and the ledger windows
-//! opened from it, at most one per source. A window takes its words from here
+//! this run could not take, the launcher and its view, the workbench's reads and
+//! what they left, and the windows themselves — the workbench, which is the main
+//! window, and the ledger windows opened from it, at most one per source. A window
+//! takes its words from here
 //! at the moment it paints, and a language, text size or theme picked in any
 //! window is applied to every window at once.
 //!
@@ -30,6 +31,8 @@ use crate::report;
 use crate::settings::{Settings, SettingsFile, SettingsIssue, TextSize, Theme};
 use crate::skin::{self, Skins};
 use crate::strings::{fill, Labels, Language};
+use crate::workbench::model::Model;
+use crate::workbench::{self, Reading};
 use crate::{LedgerWindow, Look, Scale, Strings, WorkbenchWindow};
 
 /// The shared look on one window, of either kind: the words of the language
@@ -61,6 +64,10 @@ pub struct Ui {
     /// the workbench says so in red, and Start and the ledger window are off.
     pub launcher: Result<Launcher, InstallIssue>,
     pub launcher_view: RefCell<LauncherView>,
+    /// What the workbench's reads left.
+    pub model: RefCell<Model>,
+    /// The workbench's reading threads, while they run.
+    pub reading: RefCell<Option<Reading>>,
     /// The main window, from just before it shows until the event loop is over.
     workbench: RefCell<Option<WorkbenchWindow>>,
     /// The ledger windows open now, by id.
@@ -105,6 +112,8 @@ impl Ui {
             notices: RefCell::new(Notices { settings: issues, save: None, window: None }),
             launcher,
             launcher_view: RefCell::new(launcher_view),
+            model: RefCell::new(Model::new()),
+            reading: RefCell::new(None),
             workbench: RefCell::new(None),
             ledgers: RefCell::new(BTreeMap::new()),
             next_id: Cell::new(1),
@@ -234,9 +243,11 @@ impl Ui {
         });
     }
 
-    /// After the event loop: every window hidden and let go, before the shared
-    /// state itself goes. A window that does not hide is said in the log.
+    /// After the event loop: the reading threads told to end, then every window
+    /// hidden and let go, before the shared state itself goes. A window that does
+    /// not hide is said in the log.
     pub fn close_all(&self) {
+        workbench::stop(self);
         let ledgers = std::mem::take(&mut *self.ledgers.borrow_mut());
         for handle in ledgers.values() {
             handle.close();
@@ -335,7 +346,7 @@ impl Ui {
     }
 
     /// The top of every window: the settings file's problems, errors first; on
-    /// the workbench, what it could not do itself; and where the technical log
+    /// the workbench, what it could not do itself or read; and where the technical log
     /// is. A save's failure stays until a save succeeds; one that only repeats
     /// a problem found at the start is not said twice.
     pub fn paint_notices(&self) {
@@ -359,6 +370,9 @@ impl Ui {
             if self.close_refused.get() {
                 own.push(labels.close_unlock_busy.to_owned());
             }
+            own.extend(self.model.borrow().faults().map(|fault| fault.text(labels)));
+            // Both reading threads failing alike is said once.
+            own.dedup();
             (errors.join("\n"), warnings.join("\n"), own.join("\n"))
         };
         if let Some(window) = self.workbench() {
