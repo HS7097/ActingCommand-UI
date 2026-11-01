@@ -91,9 +91,10 @@
         "path": {"type": "path", "required": true},
         "found": {"type": "token", "required": false},
         "exception_type": {"type": "name", "required": false},
-        "raw_text": {"type": "raw_text", "required": false}
+        "raw_text": {"type": "raw_text", "required": false},
+        "wait_ms": {"type": "integer", "required": false}
       },
-      "description": "The cache under paths.state_root cannot be used, so the command stops; it never computes without it. open: the cache folder or its index (path) cannot be created or opened, the index does not take the WAL journal mode, or its schema is not acmodel.cache.v1 (found is the journal mode or the schema found). read and write: reading or writing the index, a blob or a run's outputs failed (found is used when the index's use counter does not read). evict: removing evicted entries or files failed. exception_type and raw_text are the exception's."
+      "description": "The cache under paths.state_root cannot be used, so the command stops; it never computes without it. wait_ms: another process held the lock on the index past cache.wait_ms, the wait this connection used (#424 PRICE-2f). open: the cache folder or its index (path) cannot be created or opened, the index does not take the WAL journal mode, or its schema is not acmodel.cache.v1 (found is the journal mode or the schema found). read and write: reading or writing the index, a blob or a run's outputs failed (found is used when the index's use counter does not read). evict: removing evicted entries or files failed. exception_type and raw_text are the exception's."
     },
     "command_crashed": {
       "category": "error",

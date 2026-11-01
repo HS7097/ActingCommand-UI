@@ -53,6 +53,10 @@ EXCLUDED_PENDING, NO_STEADY_SUPPLY, TIER_TIE = "excluded_pending", "no_steady_su
 PROBE_UNVERIFIED = "probe_unverified"  # PRICE-2c
 GAPS = (EXCLUDED_PENDING, NO_STEADY_SUPPLY, TIER_TIE, PROBE_UNVERIFIED)
 INPUTS = "inputs"
+# The reasons `economy --steady-only --quick` cannot rule out (PRICE-2f, `coverage_unknown`): it runs the tie probes, so a
+# `probe_unverified` it shows holds, but not the judgements' (`most`, the range, the forcing cost), so one it does not
+# show may still hold. Every other gap and `inputs` come from what the program read and the three solves.
+NEEDS_LATER_STAGES = (PROBE_UNVERIFIED,)
 # The steady state reads its nodes in the reference state (`core.flow.PREFIX`).
 REFERENCE = "reference"
 

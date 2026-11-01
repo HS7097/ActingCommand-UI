@@ -101,6 +101,8 @@ class Evaluator:
 # selection whose basis is not certified gives a feasible value that need not be the optimum, and a probe may be
 # certified on one form and not on the other (`lp_probe_unverified`), so a value can change there, and version 9's
 # entries are not reused.
+# PRICE-2f: `economy` stays 10. ("economy", "quick") is a node of the same kind under its own spec, and the steady state
+# and the plan compute what they did. Any change to what the quick look computes bumps this version too.
 EVALUATORS: dict[str, Evaluator] = {
     "economy": Evaluator(10, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),

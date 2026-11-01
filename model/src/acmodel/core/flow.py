@@ -22,6 +22,13 @@ Two nodes of the derivation graph (`core.graph`), each computed after what it re
   nodes and never a time limit; the final stocks are priced by the steady state. A plan the node limit stops is
   `search_budget_exhausted`, with `proven: false`.
 
+**The quick look** (#424 PRICE-2f; `economy --steady-only --quick`, for iteration only, never for acceptance). A third
+node, ("economy", "quick"), of the same kind and so the same evaluator, under its own spec and key: the steady state's
+program, read as the steady state reads it, but only the three solves (`_Solver.tiers`) and the least losses, stopping
+before the re-solves at ±grain, the projections, the prices of the rules, the activities' values and the joint vector
+(`_Solver.quick`). Nothing reads it: no other node, no export, no provenance document; it neither fills nor reuses
+("economy", "steady"). Its `dual_prices` are one optimal dual, `tiers.point`, not the selection and not an interval.
+
 **The program** (generated from the rules, never written by hand). One step is one day; a steady cycle is the
 least common multiple of the periods' lengths in days (day 1, week 7, a `days` period its `length`), each taken
 in order of length while the multiple stays within `economy.max_cycle_steps`. A period that is not taken, and a
@@ -141,7 +148,10 @@ WEEK_STEPS = 7
 MONTH_DAYS = Fraction(146097, 4800)
 STEADY, PLAN = "steady", "plan"
 NODES = {STEADY: ("economy", STEADY), PLAN: ("economy", PLAN)}
-OUTPUTS = {STEADY: "economy:steady", PLAN: "economy:plan"}
+# The quick look (module docstring): its own node and output, kept out of `NODES`, the economy's two solves.
+QUICK = "quick"
+QUICK_NODE = ("economy", QUICK)
+OUTPUTS = {STEADY: "economy:steady", PLAN: "economy:plan", QUICK: "economy:quick"}
 # The rule kinds the economy reads, and of them the kinds it does not model yet. A pool's declared zero (`no_use`)
 # is read by the coverage section only (`core.coverage`, PRICE-2b-2).
 RULE_KINDS = ("cap", "cooldown", "exchange", "flow", "gate", "limit", "no_use", "objective", "regen")
@@ -226,7 +236,7 @@ class Economy:
 def spec_keys(settings: EconomySettings, solve: str) -> dict[str, int]:
     """The configuration keys a node's value depends on, for its spec in the cache."""
     keys = {"max_denominator": settings.max_denominator, "grain": settings.grain}
-    if solve == STEADY:
+    if solve in (STEADY, QUICK):
         keys["max_cycle_steps"] = settings.max_cycle_steps
         keys["max_pivots"] = settings.max_pivots  # PRICE-2c: which probes are verified
     if solve == PLAN:
@@ -3182,11 +3192,8 @@ class _Solver:
         model, steps = self.model, self.model.steps
         tiers = self.tiers()
         program, base, optimum = tiers.program, tiers.base, tiers.base.value
-        least = self.lp(_program(model, added=tiers.face, least_losses=True), "losses")
-        if least.status != "optimal":
-            raise self.failure(LP_SOLVE_FAILED, stage="losses", reason="solver_status", status=2)
-        warnings = [error(OBJECTIVE_TIER_TIE, {"path": model.path, "activity": activity}) for activity in tiers.ties]
-        warnings += tiers.unverified
+        least = self.least_losses(tiers)
+        warnings = self.tier_warnings(tiers)
         dual = tiers.dual  # S3's, which every price re-solve changes, checked exactly (`duality`)
         on_face = _restricted(dual, program, base.x)  # D*, for every LP on it (PRICE-2e: the selection's too)
         self.grained = self.hold(program, base)  # S3 with its basis factorised, for the re-solves at ±grain (PRICE-2d)
@@ -3231,18 +3238,12 @@ class _Solver:
         warnings += judged
         data = {
             "cycle": {"steps": steps, "step_seconds": STEP_SECONDS},
-            "objective": str(optimum),
-            "acquisition": str(tiers.acquired),
-            "protected": [record for record in tiers.records if protects(record)],
-            "conversions": [record for record in tiers.records if not protects(record)],
+            **self.shown_tiers(tiers),
             "prices": {resource: [_price(price) for price in prices[resource]] for resource in model.resources},
             "rule_prices": {rule: _price(price) for rule, price in rule_prices.items()},
             "activity_values": values,
             "joint": joint,
-            "losses": {
-                "overflow": {r: str(self.total(least, "o", r)) for r in sorted(model.hard)},
-                "lost_production": {f: str(self.total(least, "l", f)) for f in sorted({*model.storage, *model.stops})},
-            },
+            "losses": self.shown_losses(least),
             "grain": {"prices": {resource: [_price(pair) for pair in grains[resource]] for resource in model.resources}},
             "marginals": {
                 "prices": {resource: [str(m) for m in marginals[resource]] for resource in model.resources},
@@ -3252,6 +3253,60 @@ class _Solver:
             "relaxed": model.shown_relaxed(),
         }
         return data, warnings
+
+    def quick(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """The quick look (module docstring; PRICE-2f): the three solves and the least losses, as `steady` has them, and
+        no later stage. `dual_prices` is each balance row's dual at `tiers.point`, S3's exact dual point that `duality`
+        checked: one optimal dual, a point of D*, so within the interval `prices` shows for it, but neither the joint
+        vector's coordinate nor an interval. S3 may have many: which one depends on the solver's path."""
+        model, tiers = self.model, self.tiers()
+        least = self.least_losses(tiers)
+        point, duals = tiers.point, tiers.dual.duals
+
+        def at_point(function: dict[Key, Fraction]) -> str:
+            return str(sum((value * point[key] for key, value in function.items()), Fraction(0)))
+
+        data = {
+            **self.shown_tiers(tiers),
+            "dual_prices": {
+                resource: [at_point(duals[("balance", resource, step)]) for step in range(model.steps)]
+                for resource in model.resources
+            },
+            "losses": self.shown_losses(least),
+            "excluded": list(model.excluded),
+            "relaxed": model.shown_relaxed(),
+        }
+        return data, self.tier_warnings(tiers)
+
+    def least_losses(self, tiers: _Tiers) -> _Solution:
+        """The least overflow and lost production among the lexicographic optima (`tiers.face`)."""
+        least = self.lp(_program(self.model, added=tiers.face, least_losses=True), "losses")
+        if least.status != "optimal":
+            raise self.failure(LP_SOLVE_FAILED, stage="losses", reason="solver_status", status=2)
+        return least
+
+    def tier_warnings(self, tiers: _Tiers) -> list[dict[str, Any]]:
+        """What the three solves warn of: `objective_tier_tie`, then the tie probes' `lp_probe_unverified`."""
+        path = self.model.path
+        return [error(OBJECTIVE_TIER_TIE, {"path": path, "activity": activity}) for activity in tiers.ties] + list(
+            tiers.unverified
+        )
+
+    def shown_tiers(self, tiers: _Tiers) -> dict[str, Any]:
+        """The three solves as the output shows them: V0, A* and the acquisitions, protected or not."""
+        return {
+            "objective": str(tiers.base.value),
+            "acquisition": str(tiers.acquired),
+            "protected": [record for record in tiers.records if protects(record)],
+            "conversions": [record for record in tiers.records if not protects(record)],
+        }
+
+    def shown_losses(self, least: _Solution) -> dict[str, Any]:
+        model = self.model
+        return {
+            "overflow": {r: str(self.total(least, "o", r)) for r in sorted(model.hard)},
+            "lost_production": {f: str(self.total(least, "l", f)) for f in sorted({*model.storage, *model.stops})},
+        }
 
     def total(self, solution: _Solution, kind: str, entity: str) -> Fraction:
         """An overflow or a loss over the cycle (a void_at_reset cap overflows only before its resets)."""
@@ -3305,20 +3360,27 @@ class _Solver:
 
 
 def compute(graph: Graph, solve: str) -> Economy:
-    """The economy node `solve` (steady or plan) of `graph`. It raises `Need` until every node it reads is
-    computed, as every graph node does."""
+    """The economy node `solve` (steady, plan or quick) of `graph`. It raises `Need` until every node it reads is
+    computed, as every graph node does. The quick look reads and builds the steady state's program."""
     graph.depend(("economy_model",))
-    shape = _shape(graph, solve)
-    reader = _Reader(graph, shape, solve)
+    built = STEADY if solve == QUICK else solve
+    shape = _shape(graph, built)
+    reader = _Reader(graph, shape, built)
     model = reader.model(graph.economy)
     if model is None:
         return Economy(blocked_by=graph.register(reader.refused) | frozenset(reader.blocked))
     status = reader.inputs()
     solver = _Solver(model, graph.economy)
     try:
-        data, warnings = solver.steady() if solve == STEADY else solver.plan()
+        data, warnings = solver.quick() if solve == QUICK else solver.steady() if solve == STEADY else solver.plan()
     except Failure as failure:
         return Economy(blocked_by=graph.register(failure.errors))
+    if solve == QUICK:
+        # Its status says what it is, never the worst of what it read: no reader takes it for a steady state's. The
+        # coverage is the steady state's as far as these solves know it (`coverage.NEEDS_LATER_STAGES`).
+        found, _ = coverage.report(graph, reader, model, warnings)
+        shown = {"status": QUICK, **data, "coverage": found, "coverage_unknown": list(coverage.NEEDS_LATER_STAGES)}
+        return Economy(shown, QUICK, False, tuple(warnings), reads=tuple(reader.reads))
     if solve == STEADY:
         # Each price has the status of its static component (#424 ACM-PRICE 4.6, addendum 2.1 §3.3; PRICE-2b-2): a
         # component that left out a pending flow, or holds another structural gap, is provisional, and one that does
