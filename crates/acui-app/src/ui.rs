@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! What the windows of this process share, on the event loop only: the
-//! language shown, the text size, what the settings file holds that this run
-//! could not take, the launcher and its view, and the windows themselves — the
-//! workbench, which is the main window, and the ledger windows opened from it,
-//! at most one per source. A window takes its words from here at the moment it
-//! paints, and a language or text size picked in any window is applied to
-//! every window at once.
+//! language shown, the text size, the theme, what the settings file holds that
+//! this run could not take, the launcher and its view, and the windows
+//! themselves — the workbench, which is the main window, and the ledger windows
+//! opened from it, at most one per source. A window takes its words from here
+//! at the moment it paints, and a language, text size or theme picked in any
+//! window is applied to every window at once.
 //!
 //! `main` holds the one strong reference for the length of the event loop and
 //! lets it go once the loop is over, after every window is hidden; the
@@ -27,13 +27,14 @@ use crate::launcher::{self, Launcher, LauncherView};
 use crate::ledger::paint::shared;
 use crate::ledger::{self, LedgerHandle, OpenArgs};
 use crate::report;
-use crate::settings::{Settings, SettingsFile, SettingsIssue, TextSize};
+use crate::settings::{Settings, SettingsFile, SettingsIssue, TextSize, Theme};
+use crate::skin::{self, Skins};
 use crate::strings::{fill, Labels, Language};
-use crate::{LedgerWindow, Scale, Strings, WorkbenchWindow};
+use crate::{LedgerWindow, Look, Scale, Strings, WorkbenchWindow};
 
 /// The shared look on one window, of either kind: the words of the language
-/// shown, the text size's factor, and both boxes on what is picked. A new
-/// window gets it before it shows.
+/// shown, the text size's factor, the theme's skin, and the three boxes on what
+/// is picked. A new window gets it before it shows.
 macro_rules! apply_appearance {
     ($window:expr, $ui:expr) => {{
         let (window, ui) = ($window, $ui);
@@ -42,12 +43,17 @@ macro_rules! apply_appearance {
         window.global::<Scale>().set_factor(size.factor());
         window.set_text_size_index(size.index());
         window.set_language_index(language_index(ui.language.get()));
+        window.set_theme_index(ui.theme.get().index());
+        skin::apply_before_show(window.global::<Look>(), ui);
     }};
 }
 
 pub struct Ui {
     pub language: Cell<Language>,
     pub text_size: Cell<TextSize>,
+    pub theme: Cell<Theme>,
+    /// Each window's look, by the theme.
+    skins: Skins,
     /// The settings file the boxes save to.
     pub settings: SettingsFile,
     pub notices: RefCell<Notices>,
@@ -93,6 +99,8 @@ impl Ui {
         let ui = Rc::new(Self {
             language: Cell::new(language),
             text_size: Cell::new(stored.text_size),
+            theme: Cell::new(stored.theme),
+            skins: Skins,
             settings,
             notices: RefCell::new(Notices { settings: issues, save: None, window: None }),
             launcher,
@@ -290,6 +298,31 @@ impl Ui {
         self.settings_saved(saved);
     }
 
+    /// A theme picked in either kind of window: applied now in every window,
+    /// through each window's own look. Only the theme is written, as with the
+    /// text size; a save that fails still leaves the theme applied, and says so
+    /// at the top.
+    pub fn set_theme(&self, theme: Theme) {
+        let saved = self.settings.save_theme(theme);
+        self.theme.set(theme);
+        if let Some(window) = self.workbench() {
+            window.set_theme_index(theme.index());
+            self.skins.switch(window.global::<Look>(), theme);
+        }
+        for handle in self.ledgers() {
+            handle.window.set_theme_index(theme.index());
+            self.skins.switch(handle.window.global::<Look>(), theme);
+        }
+        // The save rewrote the line a bad value stood on, so the warning the
+        // start gave about that line ("kept as it is") is no longer true.
+        if saved.is_ok() {
+            self.notices.borrow_mut().settings.retain(|issue| {
+                !matches!(issue, SettingsIssue::UnknownValue { key: "theme", .. })
+            });
+        }
+        self.settings_saved(saved);
+    }
+
     /// A box's save: its failure goes to the log and stays on screen; a save
     /// that worked clears the last failure.
     fn settings_saved(&self, saved: Result<(), SettingsIssue>) {
@@ -403,7 +436,7 @@ fn language_index(language: Language) -> i32 {
 
 /// The workbench's controls. Start and Request Shutdown are the launcher's;
 /// "troubleshooting and ledger" opens the window of the default source; the
-/// two boxes apply to every window. Closing it ends the program, unless an
+/// three boxes apply to every window. Closing it ends the program, unless an
 /// unlock runs: then it stays and says why.
 fn install_workbench(window: &WorkbenchWindow) {
     window.on_start_runtime(|| {
@@ -429,6 +462,11 @@ fn install_workbench(window: &WorkbenchWindow) {
     window.on_language_changed(|index| {
         if let Some(ui) = current() {
             ui.set_language(language_from_index(index));
+        }
+    });
+    window.on_theme_changed(|index| {
+        if let Some(ui) = current() {
+            ui.set_theme(Theme::from_index(index));
         }
     });
     window.window().on_close_requested(|| {
@@ -460,8 +498,10 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_show_up_to(labels.show_up_to.into());
     global.set_text_size(labels.text_size.into());
     global.set_language(labels.language.into());
+    global.set_theme(labels.theme.into());
     global.set_text_size_options(shared(&labels.text_sizes));
     global.set_language_options(shared(&labels.languages));
+    global.set_theme_options(shared(&labels.theme_options));
     global.set_severity_min_options(shared(&labels.severity_min));
     global.set_severity_max_options(shared(&labels.severity_max));
     global.set_id_placeholder(labels.id_placeholder.into());
@@ -496,4 +536,8 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_add_instance(labels.add_instance.into());
     global.set_add_instance_note(labels.add_instance_note.into());
     global.set_config_file(labels.config_file.into());
+    global.set_caption_minimize(labels.caption_minimize.into());
+    global.set_caption_maximize(labels.caption_maximize.into());
+    global.set_caption_restore(labels.caption_restore.into());
+    global.set_caption_close(labels.caption_close.into());
 }

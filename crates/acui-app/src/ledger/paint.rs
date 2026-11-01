@@ -21,7 +21,7 @@ use acui_rows::{
 };
 use acui_source::{MaterialOutcome, OfflineFacts, OfflineReason, RuntimeInstance, MAX_FRAME_BYTES};
 use slint::{
-    ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
+    ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
 };
 
 use crate::ledger::frame::{FrameRequest, FrameSlot};
@@ -217,7 +217,8 @@ pub fn refresh(
     // Only the tab a person is looking at carries a number, and the number is
     // the rows this view has loaded — never a count taken from another view.
     let active = ALL_TABS.iter().position(|tab| *tab == model.tab).unwrap_or(0);
-    window.set_tab_labels(models(
+    sync_tab_labels(
+        window,
         labels
             .tabs
             .iter()
@@ -230,8 +231,8 @@ pub fn refresh(
                     SharedString::from(*name)
                 }
             })
-            .collect::<Vec<_>>(),
-    ));
+            .collect(),
+    );
     window.set_active_tab(active as i32);
 
     sync_modules(window, ledger, labels, &model.filters.origin_module.clone(), card.modules);
@@ -483,7 +484,7 @@ fn paint_closed(
         raw: raw.into(),
         wrap: true,
     }]));
-    window.set_tab_labels(shared(&labels.tabs));
+    sync_tab_labels(window, labels.tabs.iter().map(|name| SharedString::from(*name)).collect());
     window.set_active_tab(-1);
     window.set_module_options(models(vec![SharedString::from(top)]));
     window.set_module_index(0);
@@ -1408,4 +1409,23 @@ pub fn shared(items: &[&'static str]) -> ModelRc<SharedString> {
 
 pub fn models<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(items))
+}
+
+/// Puts the tab names into the list the window already shows, one row at a
+/// time, so the tabs drawn from it stay — and with them the keyboard focus a
+/// person left on one. A new list makes the window throw every tab away and
+/// build them again, and the focus goes with the tab it sat on. Only when the
+/// rows differ in number (the first paint) is the list itself replaced.
+fn sync_tab_labels(window: &LedgerWindow, texts: Vec<SharedString>) {
+    let current = window.get_tab_labels();
+    match current.as_any().downcast_ref::<VecModel<SharedString>>() {
+        Some(rows) if rows.row_count() == texts.len() => {
+            for (index, text) in texts.into_iter().enumerate() {
+                if rows.row_data(index).as_ref() != Some(&text) {
+                    rows.set_row_data(index, text);
+                }
+            }
+        }
+        _ => window.set_tab_labels(models(texts)),
+    }
 }

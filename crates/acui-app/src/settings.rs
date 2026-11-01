@@ -61,7 +61,8 @@ impl TextSize {
         }
     }
 
-    /// The one number every font size and row height in `app.slint` is scaled by.
+    /// The one number every font size and row height in `app.slint` and its
+    /// kit is scaled by.
     pub const fn factor(self) -> f32 {
         match self {
             Self::Standard => 1.0,
@@ -71,10 +72,10 @@ impl TextSize {
     }
 }
 
-/// The look the windows are drawn in, as `theme` spells it. Only checked: a
-/// value that is neither is an issue, and the line is kept as written, like
-/// every line. Nothing draws by it yet and nothing holds it, so nothing here
-/// writes it either.
+/// The look the windows are drawn in, as `theme` spells it: picked in any
+/// window, applied to every window at once and saved, like the text size. A
+/// value that is neither is an issue: the windows are drawn flat, and the line
+/// is kept as written, like every line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Theme {
     Flat,
@@ -82,11 +83,32 @@ pub enum Theme {
 }
 
 impl Theme {
+    pub const fn wire(self) -> &'static str {
+        match self {
+            Self::Flat => "flat",
+            Self::Aero => "aero",
+        }
+    }
+
     pub fn from_wire(text: &str) -> Option<Self> {
         match text {
             "flat" => Some(Self::Flat),
             "aero" => Some(Self::Aero),
             _ => None,
+        }
+    }
+
+    pub const fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Aero,
+            _ => Self::Flat,
+        }
+    }
+
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::Flat => 0,
+            Self::Aero => 1,
         }
     }
 }
@@ -95,6 +117,7 @@ impl Theme {
 pub struct Settings {
     pub language: Language,
     pub text_size: TextSize,
+    pub theme: Theme,
     /// The state root to open when `--state-root` is not given.
     pub state_root: Option<PathBuf>,
     /// The actingd configuration file the launcher passes as `--config`.
@@ -108,6 +131,7 @@ impl Default for Settings {
         Self {
             language: Language::Zh,
             text_size: TextSize::Standard,
+            theme: Theme::Flat,
             state_root: None,
             actingd_config: None,
             actingd_exe: None,
@@ -249,11 +273,10 @@ pub fn load() -> Loaded {
                 Some(text_size) => settings.text_size = text_size,
                 None => issues.push(unknown("text_size")),
             },
-            "theme" => {
-                if Theme::from_wire(value).is_none() {
-                    issues.push(unknown("theme"));
-                }
-            }
+            "theme" => match Theme::from_wire(value) {
+                Some(theme) => settings.theme = theme,
+                None => issues.push(unknown("theme")),
+            },
             "state_root" => settings.state_root = path_value(value),
             "actingd_config" => settings.actingd_config = path_value(value),
             "actingd_exe" => settings.actingd_exe = path_value(value),
@@ -313,6 +336,11 @@ impl SettingsFile {
     /// the file.
     pub fn save_text_size(&self, text_size: TextSize) -> Result<(), SettingsIssue> {
         self.save_key("text_size", &format!("\"{}\"", text_size.wire()))
+    }
+
+    /// Writes the theme, and nothing else, for the same reason.
+    pub fn save_theme(&self, theme: Theme) -> Result<(), SettingsIssue> {
+        self.save_key("theme", &format!("\"{}\"", theme.wire()))
     }
 
     /// Sets one key to `value` (TOML as written, quotes included). The file is

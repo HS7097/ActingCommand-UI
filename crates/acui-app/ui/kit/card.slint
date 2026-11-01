@@ -1,0 +1,45 @@
+// SPDX-License-Identifier: GPL-3.0-only
+import { CardTone, Look, Scale, StatusTone } from "tokens.slint";
+
+// A band in one of the five status colours; `none` draws nothing. Whoever
+// uses it places and sizes it; a card draws its own with `strip`.
+export component StatusStrip inherits Rectangle {
+    in property <StatusTone> tone;
+    background: root.tone == StatusTone.ok ? Look.status-ok
+        : root.tone == StatusTone.held ? Look.status-held
+        : root.tone == StatusTone.attention ? Look.status-attention
+        : root.tone == StatusTone.fault ? Look.status-fault
+        : root.tone == StatusTone.offline ? Look.status-offline
+        : transparent;
+}
+
+// A card: one framed group on the page. What goes in it, and the padding
+// around that, is the caller's. `strip` draws a 4px status band down its left
+// edge. A `pinned` card, the one held at the top of a page to say what
+// failed, is edged heavier, in the fault colour.
+export component Card inherits Rectangle {
+    in property <CardTone> tone;
+    in property <StatusTone> strip;
+    background: Look.card-background;
+    border-radius: Look.radius;
+    border-width: root.tone == CardTone.pinned ? 2px : 1px;
+    border-color: root.tone == CardTone.pinned ? Look.status-fault : Look.card-border;
+    @children
+    // Over the contents and the card's own left edge, rounded as the card is.
+    if root.strip != StatusTone.none: StatusStrip {
+        x: 0;
+        y: 0;
+        width: 4px;
+        height: root.height;
+        tone: root.strip;
+        border-top-left-radius: Look.radius;
+        border-bottom-left-radius: Look.radius;
+    }
+}
+
+// A card's title line.
+export component CardTitle inherits Text {
+    font-size: Scale.head-font;
+    font-weight: 700;
+    color: Look.card-title;
+}
