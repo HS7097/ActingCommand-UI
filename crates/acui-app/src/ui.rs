@@ -28,7 +28,7 @@ use crate::ledger::paint::shared;
 use crate::ledger::{self, LedgerHandle, OpenArgs};
 use crate::report;
 use crate::settings::{Settings, SettingsFile, SettingsIssue, TextSize, Theme};
-use crate::skin::{self, Skins, WindowKey};
+use crate::skin::{self, Closing, Skins, WindowKey};
 use crate::strings::{fill, Labels, Language};
 use crate::{LedgerWindow, Look, Scale, Strings, WorkbenchWindow};
 
@@ -188,11 +188,9 @@ impl Ui {
         let handle = LedgerHandle::new(id, window, open);
         apply_appearance!(&handle.window, self, WindowKey::Ledger(id));
         ledger::install_callbacks(&handle);
-        handle.window.window().on_close_requested(move || {
-            if let Some(ui) = current() {
-                ui.close_ledger(id);
-            }
-            CloseRequestResponse::HideWindow
+        handle.window.window().on_close_requested(move || match current() {
+            Some(ui) => ui.close_ledger(id),
+            None => CloseRequestResponse::HideWindow,
         });
         self.ledgers.borrow_mut().insert(id, Rc::clone(&handle));
         self.paint_notices();
@@ -222,21 +220,50 @@ impl Ui {
         self.paint_notices();
     }
 
-    /// A ledger window a person closed: its native frame comes off before the
-    /// window hides, its timers stop and its reads in flight are let go at once
-    /// (`LedgerHandle::close`); it leaves the registry once the close has been
-    /// handled, so the window is never let go inside its own callback.
-    fn close_ledger(&self, id: u64) {
-        self.skins.window_closing(WindowKey::Ledger(id));
+    /// A ledger window a person closed: its timers stop and its reads in flight
+    /// are let go at once (`LedgerHandle::close`), whether or not it fades. A
+    /// window with nothing to fade loses its native frame now and hides on this
+    /// answer; it leaves the registry once the close has been handled, so the
+    /// window is never let go inside its own callback. One with a frame of its
+    /// own stays through its fade (`Ui::finish_ledger_close`).
+    fn close_ledger(&self, id: u64) -> CloseRequestResponse {
+        let key = WindowKey::Ledger(id);
+        let closing = self.skins.begin_close(self, key);
+        if matches!(closing, Closing::Underway) {
+            return CloseRequestResponse::KeepWindowShown;
+        }
         if let Some(handle) = self.ledger(id) {
             handle.close();
         }
-        Timer::single_shot(Duration::ZERO, move || {
+        let Closing::FadingFor(fade) = closing else {
+            self.skins.window_closing(key);
+            Timer::single_shot(Duration::ZERO, move || {
+                if let Some(ui) = current() {
+                    let removed = ui.ledgers.borrow_mut().remove(&id);
+                    drop(removed);
+                }
+            });
+            return CloseRequestResponse::HideWindow;
+        };
+        Timer::single_shot(fade, move || {
             if let Some(ui) = current() {
-                let removed = ui.ledgers.borrow_mut().remove(&id);
-                drop(removed);
+                ui.finish_ledger_close(id);
             }
         });
+        CloseRequestResponse::KeepWindowShown
+    }
+
+    /// A ledger window's fade has run out: hidden, its native frame off, and let
+    /// go. A window that does not hide is said in the log.
+    fn finish_ledger_close(&self, id: u64) {
+        if let Some(handle) = self.ledger(id) {
+            if let Err(error) = handle.window.hide() {
+                report::log("acui-window", &format!("acui-ledger-{id}: {error}"));
+            }
+        }
+        self.skins.window_closing(WindowKey::Ledger(id));
+        let removed = self.ledgers.borrow_mut().remove(&id);
+        drop(removed);
     }
 
     /// After the event loop: every native frame off, then every window hidden
@@ -447,8 +474,9 @@ fn language_index(language: Language) -> i32 {
 
 /// The workbench's controls. Start and Request Shutdown are the launcher's;
 /// "troubleshooting and ledger" opens the window of the default source; the
-/// three boxes apply to every window. Closing it ends the program, unless an
-/// unlock runs: then it stays and says why.
+/// three boxes apply to every window. Closing it ends the program, after its
+/// fade if it has a frame of its own, unless an unlock runs: then it stays and
+/// says why, without fading.
 fn install_workbench(window: &WorkbenchWindow) {
     window.on_start_runtime(|| {
         if let Some(ui) = current() {
@@ -489,14 +517,44 @@ fn install_workbench(window: &WorkbenchWindow) {
             ui.paint_notices();
             return CloseRequestResponse::KeepWindowShown;
         }
-        // Its native frame comes off before it hides.
-        ui.skins.window_closing(WindowKey::Workbench);
-        // The ledger windows close with it.
-        if let Err(error) = slint::quit_event_loop() {
-            report::log("acui-window", &format!("quit_event_loop: {error}"));
+        match ui.skins.begin_close(&ui, WindowKey::Workbench) {
+            Closing::AtOnce => {
+                // Its native frame comes off before it hides.
+                ui.skins.window_closing(WindowKey::Workbench);
+                quit_event_loop();
+                CloseRequestResponse::HideWindow
+            }
+            Closing::FadingFor(fade) => {
+                Timer::single_shot(fade, || {
+                    if let Some(ui) = current() {
+                        finish_workbench_close(&ui);
+                    }
+                });
+                CloseRequestResponse::KeepWindowShown
+            }
+            Closing::Underway => CloseRequestResponse::KeepWindowShown,
         }
-        CloseRequestResponse::HideWindow
     });
+}
+
+/// The workbench's fade has run out: the program ends, and `Ui::close_all` takes
+/// the windows down, the ledger windows with it. The controls stayed live while
+/// it faded, so an unlock may have begun: then it stays, as if asked during the
+/// unlock.
+fn finish_workbench_close(ui: &Ui) {
+    if ui.unlocking() {
+        ui.skins.close_called_off(ui, WindowKey::Workbench);
+        ui.close_refused.set(true);
+        ui.paint_notices();
+        return;
+    }
+    quit_event_loop();
+}
+
+fn quit_event_loop() {
+    if let Err(error) = slint::quit_event_loop() {
+        report::log("acui-window", &format!("quit_event_loop: {error}"));
+    }
 }
 
 /// Fills one window's `Strings` global from one language's table: before the

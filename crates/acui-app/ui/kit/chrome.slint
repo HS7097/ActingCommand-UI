@@ -108,7 +108,9 @@ component FrameEdges inherits Rectangle {
 // page fills the window. The page sits in a layout rather than at a set place,
 // so the contents' minimum and preferred size still reach the window; the
 // frame's parts are all shown by `if` and placed, so they pass on no size and
-// the contents stay alive through a switch.
+// the contents stay alive through a switch. The stage carries everything that
+// fades and zooms as the window opens and closes; it takes no set place either,
+// for the same reason.
 export component WindowChrome inherits Rectangle {
     in property <string> title;
     in property <string> minimize-label;
@@ -126,38 +128,47 @@ export component WindowChrome inherits Rectangle {
     changed aero => {
         Palette.color-scheme = root.aero ? ColorScheme.light : ColorScheme.unknown;
     }
-    if Look.chrome: GlassLayers {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-    }
-    if Look.chrome: CaptionBar {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: Look.caption-height;
-        title: root.title;
-        minimize-label: root.minimize-label;
-        maximize-label: root.maximize-label;
-        restore-label: root.restore-label;
-        close-label: root.close-label;
-    }
-    VerticalLayout {
-        padding-left: Look.frame;
-        padding-right: Look.frame;
-        padding-top: Look.caption-height;
-        padding-bottom: Look.frame;
-        client := Rectangle {
-            background: Look.page;
-            clip: Look.chrome;
-            @children
+    stage := Rectangle {
+        opacity: Look.appear ? 1 : 0;
+        transform-scale: Look.appear ? 1 : AeroConst.zoom-from;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        animate opacity, transform-scale {
+            duration: Look.appear ? AeroConst.appear-time : AeroConst.vanish-time;
+            easing: Look.appear ? ease-out : ease-in;
         }
-    }
-    if Look.chrome && !Look.maximized: FrameEdges {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
+        if Look.chrome: GlassLayers {
+            x: 0px;
+            y: 0px;
+            width: root.width;
+            height: root.height;
+        }
+        if Look.chrome: CaptionBar {
+            x: 0px;
+            y: 0px;
+            width: root.width;
+            height: Look.caption-height;
+            title: root.title;
+            minimize-label: root.minimize-label;
+            maximize-label: root.maximize-label;
+            restore-label: root.restore-label;
+            close-label: root.close-label;
+        }
+        VerticalLayout {
+            padding-left: Look.frame;
+            padding-right: Look.frame;
+            padding-top: Look.caption-height;
+            padding-bottom: Look.frame;
+            client := Rectangle {
+                background: Look.page;
+                clip: Look.chrome;
+                @children
+            }
+        }
+        if Look.chrome && !Look.maximized: FrameEdges {
+            x: 0px;
+            y: 0px;
+            width: root.width;
+            height: root.height;
+        }
     }
 }

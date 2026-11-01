@@ -54,6 +54,10 @@ export global Look {
     // Whether the window is maximized; its own frame has no edges or rounded
     // corners then.
     in property <bool> maximized;
+    // Whether the window stands in full view. Under its own frame it starts
+    // false and fades in once the frame is on, and goes false again to fade out
+    // as it closes; a window in the system's frame leaves that to the system.
+    in property <bool> appear: true;
     // Why this window's look falls short of its theme, in plain words for the
     // window to show; empty when it does not.
     in property <string> failure;
