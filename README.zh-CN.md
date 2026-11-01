@@ -137,7 +137,7 @@ Runtime 在运行，就给出「重新打开」并写明可以改为在线读取
 说 0.12 协议（`runtime-client` 修订 4、账本修订 5）。Runtime 用合并提交合入 PR，这个头会留在它的 main 上：
 
 ```
-rev = "4d3523f78240b2b97ef57c876ec2bb63d403b1eb"
+rev = "7f654bfa598db7a1cab29f88b449bd4dbc7cb8e4"
 ```
 
 五个 crate（contract / ledger / ledger-forensics / runtime-client / execution-kernel）共用这一个 rev。

@@ -15,8 +15,8 @@ publish = false
 # the fake instances resolve as physical devices, as the observe and lease
 # paths require.
 [dependencies]
-actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "4d3523f78240b2b97ef57c876ec2bb63d403b1eb" }
-actingcommand-device = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "4d3523f78240b2b97ef57c876ec2bb63d403b1eb" }
-actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "4d3523f78240b2b97ef57c876ec2bb63d403b1eb" }
-actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "4d3523f78240b2b97ef57c876ec2bb63d403b1eb" }
-actingcommand-runtime-host = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "4d3523f78240b2b97ef57c876ec2bb63d403b1eb" }
+actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "7f654bfa598db7a1cab29f88b449bd4dbc7cb8e4" }
+actingcommand-device = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "7f654bfa598db7a1cab29f88b449bd4dbc7cb8e4" }
+actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "7f654bfa598db7a1cab29f88b449bd4dbc7cb8e4" }
+actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "7f654bfa598db7a1cab29f88b449bd4dbc7cb8e4" }
+actingcommand-runtime-host = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "7f654bfa598db7a1cab29f88b449bd4dbc7cb8e4" }

@@ -189,7 +189,7 @@ v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-c
 revision 5). The Runtime merges pull requests with a merge commit, so this head stays on its main:
 
 ```
-rev = "4d3523f78240b2b97ef57c876ec2bb63d403b1eb"
+rev = "7f654bfa598db7a1cab29f88b449bd4dbc7cb8e4"
 ```
 
 The five crates (contract / ledger / ledger-forensics / runtime-client / execution-kernel) share this one rev.
