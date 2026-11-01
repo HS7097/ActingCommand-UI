@@ -43,16 +43,18 @@ GROUPS = {name.split(" ")[0] for name in COMMANDS if " " in name}
 # Flags: options that take no value, each optional and given at most once.
 FLAGS = {
     "check": ("--strict-provenance", "--report-supplements"),
-    "economy": ("--steady-only",),
+    "economy": ("--steady-only", "--quick"),
     "bindings check": ("--strict",),
     "cache gc": ("--apply",),
 }
+# A flag that is only valid together with another of its command's; without it, it is `argument_unexpected`.
+FLAG_NEEDS = {"--quick": "--steady-only"}
 USAGE = (
     "usage: acmodel.py <command> [<argument>] [--<option> <value>]\n"
     "commands: setup, version,\n"
     "          check <model folder or model.json> [--strict-provenance] [--report-supplements],\n"
     "          run <model folder or model.json> --state <state file>,\n"
-    "          economy <model folder or model.json> --state <state file> [--steady-only],\n"
+    "          economy <model folder or model.json> --state <state file> [--steady-only [--quick]],\n"
     "          explain <model folder or model.json> <output id> --state <state file>,\n"
     "          export thresholds <model folder or model.json> --state <state file>,\n"
     "          export tables <model folder or model.json> --state <state file> --repo <repository>,\n"
@@ -104,6 +106,9 @@ def parse(argv: Sequence[str]) -> tuple[str, list[str]]:
     for option in options:
         if option not in given:
             raise _usage("argument_missing", option)
+    for flag in flags:
+        if flag in set_flags and FLAG_NEEDS.get(flag, flag) not in set_flags:
+            raise _usage("argument_unexpected", flag)
     return command, positional + [given[option] for option in options] + [flag for flag in flags if flag in set_flags]
 
 
@@ -140,7 +145,7 @@ def _run(
     """A run returns its outputs together with the errors of the blocked ones (a partial run), and the
     warnings of the cache. It computes through the cache under `paths.state_root`."""
     packages = _dependencies(system)
-    with cache.open_store(cfg.state_root, max_bytes=cfg.cache_max_bytes) as store:
+    with cache.open_store(cfg.state_root, max_bytes=cfg.cache_max_bytes, wait_ms=cfg.cache_wait_ms) as store:
         session = cache.Session(store, libraries=cache.libraries(system.python_version, packages))
         data, errors = run_model(
             Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits,
@@ -154,14 +159,15 @@ def _economy(
     args: list[str], cfg: config.Config, system: System
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """The economy's steady state and plan, with the errors that block them, and the warnings of the cache and
-    of the solves; with `--steady-only`, the steady state alone. It computes through the cache under
-    `paths.state_root`, as `run` does."""
+    of the solves; with `--steady-only`, the steady state alone; with `--quick` too, the quick look at it instead
+    (`data.quick`, for iteration only). It computes through the cache under `paths.state_root`, as `run` does."""
     packages = _dependencies(system)
-    with cache.open_store(cfg.state_root, max_bytes=cfg.cache_max_bytes) as store:
+    with cache.open_store(cfg.state_root, max_bytes=cfg.cache_max_bytes, wait_ms=cfg.cache_wait_ms) as store:
         session = cache.Session(store, libraries=cache.libraries(system.python_version, packages))
         data, errors, warnings = run_economy(
             Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits,
             unknowns=cfg.unknowns, economy=cfg.economy, cache=session, steady_only="--steady-only" in args[2:],
+            quick="--quick" in args[2:],
         )
     _report_eviction(data, system)
     return data, errors, session.warnings + warnings
@@ -180,10 +186,10 @@ def _cache(command: str, args: list[str], cfg: config.Config, system: System) ->
     """`cache stats`, `cache verify` (its errors are the corrupt entries) and `cache gc [--apply]`."""
     _dependencies(system)
     if command == "cache stats":
-        return cache.stats(cfg.state_root, max_bytes=cfg.cache_max_bytes), []
+        return cache.stats(cfg.state_root, max_bytes=cfg.cache_max_bytes, wait_ms=cfg.cache_wait_ms), []
     if command == "cache verify":
-        return cache.verify(cfg.state_root)
-    data = cache.gc(cfg.state_root, max_bytes=cfg.cache_max_bytes, apply="--apply" in args)
+        return cache.verify(cfg.state_root, wait_ms=cfg.cache_wait_ms)
+    data = cache.gc(cfg.state_root, max_bytes=cfg.cache_max_bytes, apply="--apply" in args, wait_ms=cfg.cache_wait_ms)
     if data["apply"]:
         system.stderr.write(
             f"acmodel: cache gc removed {data['entries_removed']} entries, {data['blobs_removed']} blobs "

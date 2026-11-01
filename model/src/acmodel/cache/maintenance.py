@@ -16,7 +16,17 @@ import os
 from pathlib import Path
 from typing import Any
 
-from acmodel.cache.store import CACHE, HASH, RUNS, TEMP, CorruptEntry, existing_store, reads, unavailable
+from acmodel.cache.store import (
+    CACHE,
+    DEFAULT_WAIT_MS,
+    HASH,
+    RUNS,
+    TEMP,
+    CorruptEntry,
+    existing_store,
+    reads,
+    unavailable,
+)
 from acmodel.codes import CACHE_ENTRY_CORRUPT
 from acmodel.envelope import error
 
@@ -32,8 +42,8 @@ def _runs(state_root: Path) -> int:
         raise unavailable("read", folder, exc) from exc
 
 
-def stats(state_root: Path, *, max_bytes: int) -> dict[str, Any]:
-    store = existing_store(state_root, max_bytes=max_bytes)
+def stats(state_root: Path, *, max_bytes: int, wait_ms: int = DEFAULT_WAIT_MS) -> dict[str, Any]:
+    store = existing_store(state_root, max_bytes=max_bytes, wait_ms=wait_ms)
     head = {"path": str(state_root / CACHE), "exists": store is not None, "max_bytes": max_bytes}
     if store is None:
         return {**head, "entries": 0, "blobs": 0, "bytes": 0, "by_kind": {}, "runs": _runs(state_root)}
@@ -53,8 +63,8 @@ def stats(state_root: Path, *, max_bytes: int) -> dict[str, Any]:
     }
 
 
-def verify(state_root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    store = existing_store(state_root, max_bytes=0)  # verify never evicts
+def verify(state_root: Path, *, wait_ms: int = DEFAULT_WAIT_MS) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    store = existing_store(state_root, max_bytes=0, wait_ms=wait_ms)  # verify never evicts
     head = {"path": str(state_root / CACHE), "exists": store is not None}
     if store is None:
         return {**head, "entries": 0, "blobs": 0, "problems": 0}, []
@@ -79,8 +89,8 @@ def verify(state_root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return {**head, "entries": len(rows), "blobs": len(checked), "problems": len(errors)}, errors
 
 
-def gc(state_root: Path, *, max_bytes: int, apply: bool) -> dict[str, Any]:
-    store = existing_store(state_root, max_bytes=max_bytes)
+def gc(state_root: Path, *, max_bytes: int, apply: bool, wait_ms: int = DEFAULT_WAIT_MS) -> dict[str, Any]:
+    store = existing_store(state_root, max_bytes=max_bytes, wait_ms=wait_ms)
     head = {"path": str(state_root / CACHE), "exists": store is not None, "apply": apply, "max_bytes": max_bytes}
     if store is None:
         return {
