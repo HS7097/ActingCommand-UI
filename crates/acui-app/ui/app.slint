@@ -409,6 +409,7 @@ export component LedgerWindow inherits Window {
                         Caption { text: Strings.theme; }
                         // Wider off Windows, where the second option also says it has no glass.
                         theme-box := SkinComboBox {
+                            accessible-label: Strings.theme;
                             width: (Platform.os == OperatingSystemType.windows ? 120px : 160px) * Scale.factor;
                             model: Strings.theme-options;
                             selected => {
@@ -1025,7 +1026,7 @@ export component WorkbenchWindow inherits Window {
 
     // Why this run has no state root to start from: plain words, then the
     // original. Start, Request Shutdown and the ledger window are off
-    // meanwhile; the language and the text size still work.
+    // meanwhile; the language, the text size and the theme still work.
     in property <string> install-issue;
     property <bool> installed: root.install-issue == "";
     // What the settings file holds that the console could not take, or why a
@@ -1143,6 +1144,7 @@ export component WorkbenchWindow inherits Window {
                         Caption { text: Strings.theme; }
                         // Wider off Windows, where the second option also says it has no glass.
                         theme-box := SkinComboBox {
+                            accessible-label: Strings.theme;
                             width: (Platform.os == OperatingSystemType.windows ? 120px : 160px) * Scale.factor;
                             model: Strings.theme-options;
                             selected => {

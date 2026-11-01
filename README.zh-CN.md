@@ -334,7 +334,8 @@ Runtime 宿主，留下一个小的 v0.12 状态根（带端口的实例绑定�
   不翻译。
 - **主题**：现代扁平 / Win7 Aero（设置文件里写 `flat` / `aero`）。**当场生效**，不用重开：选完就设好每个
   窗口自己的 `Look` 全局的外观，界面里的页面、卡片、文字和控件都按它画（`crates/acui-app/ui/kit/`）。
-  现代扁平跟随系统的浅色或深色设置。Windows 以外的系统上，第二项叫「Win7 Aero（实心）」。
+  现代扁平跟随系统的浅色或深色设置；Win7 Aero 的窗口里面固定浅色，不随系统变。启动失败窗固定用现代扁平，
+它出现在主题生效之前。Windows 以外的系统上，第二项叫「Win7 Aero（实心）」。
 
 两层标签：上层是给人看的名字，下层灰色的是程序里的原样写法——原始 `event_type`、模块名、
 各种 id、`payload_schema`、sha256 一律不翻译。字典在 `crates/acui-rows/src/display.rs`，覆盖
@@ -354,7 +355,7 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml（没有就用 $HOME/.config/
 lang = "zh"
 # standard | large | extra-large
 text_size = "standard"
-# flat | aero；由「主题」下拉框设定，所有窗口按它绘制
+# flat | aero；由「主题」下拉框设定，工作台和账本窗口按它绘制
 theme = "flat"
 # 可选，绝对路径
 state_root = '<install root>\state'

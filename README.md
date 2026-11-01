@@ -461,7 +461,8 @@ made, and a ledger window opened later comes up with the current language, text 
 - **Theme**: Modern Flat / Win7 Aero (`flat` / `aero` in the settings file). **Takes effect on the spot**,
   nothing is restarted: the choice sets the skin of every window's own `Look` global, which every page,
   card, text and control of the interface is drawn from (`crates/acui-app/ui/kit/`). Modern Flat follows
-  the system's light or dark setting. On a system other than Windows the second option is named
+  the system's light or dark setting; inside a Win7 Aero window the page stays light whatever the system
+  says. The startup failure window is always Modern Flat, as it comes before the theme does. On a system other than Windows the second option is named
   Win7 Aero (Solid).
 
 Two-layer labels: the upper layer is the name for a person to read, and the grey lower layer is the
@@ -484,7 +485,7 @@ Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml (falls back to $HOME/.config/
 lang = "zh"
 # standard | large | extra-large
 text_size = "standard"
-# flat | aero; set from the theme dropdown, every window is drawn by it
+# flat | aero; set from the theme dropdown, the workbench and the ledger windows are drawn by it
 theme = "flat"
 # optional, absolute paths
 state_root = '<install root>\state'

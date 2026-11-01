@@ -313,6 +313,13 @@ impl Ui {
             handle.window.set_theme_index(theme.index());
             self.skins.switch(handle.window.global::<Look>(), theme);
         }
+        // The save rewrote the line a bad value stood on, so the warning the
+        // start gave about that line ("kept as it is") is no longer true.
+        if saved.is_ok() {
+            self.notices.borrow_mut().settings.retain(|issue| {
+                !matches!(issue, SettingsIssue::UnknownValue { key: "theme", .. })
+            });
+        }
         self.settings_saved(saved);
     }
 
