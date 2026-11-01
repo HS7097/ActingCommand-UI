@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { Button, LineEdit, ListView, ScrollView, Slider, TextEdit } from "std-widgets.slint";
-import { Card, CardTitle, Look, Scale, Severity, SkinButton, SkinCheckBox, SkinComboBox, SkinTab, WindowChrome } from "kit/lib.slint";
+import { Card, CardTitle, CardTone, Look, Scale, Severity, SkinButton, SkinCheckBox, SkinComboBox, SkinTab, StatusDot, StatusTone, WindowChrome } from "kit/lib.slint";
 
 // The kit's globals the Rust side reaches, each window's own copy.
 export { Scale, Look }
@@ -189,11 +189,13 @@ export global Strings {
     in property <string> start;
     in property <string> request-shutdown;
     // The workbench's own: the way into the ledger window, the instance entry
-    // that waits for the Runtime, and the file to edit by hand meanwhile.
+    // that waits for the Runtime, the file to edit by hand meanwhile, and the
+    // caption of a failed start's log.
     in property <string> open-ledger;
     in property <string> add-instance;
     in property <string> add-instance-note;
     in property <string> config-file;
+    in property <string> start-log;
     // The Aero frame's caption buttons, by the names a screen reader says.
     in property <string> caption-minimize;
     in property <string> caption-maximize;
@@ -1010,17 +1012,23 @@ export component LedgerWindow inherits Window {
     }
 }
 
-// The main window: the Runtime in plain words with Start and Request
-// Shutdown, the display settings, the way into the ledger window, and where an
-// instance is added for now. No code, pid or wire name shows here; those stay
-// in the ledger window's technical lines. Closing it ends the program.
+// The main window. At the top the bar: the Runtime's lamp and its state in plain
+// words, Start, and at the far end the way into the ledger window. Under it what
+// became of the last request, and what this window could not read. Then two
+// columns: on the left the accounts, and where one is added for now; on the right
+// the settings file's problems, what falls short of the theme, where the technical
+// log is, the display settings and Request Shutdown. No code, pid or wire name
+// shows here; those stay in the ledger window's technical lines. Closing it ends
+// the program.
 export component WorkbenchWindow inherits Window {
     title: Strings.window-title;
     icon: @image-url("../assets/acui-256.png");
-    preferred-width: 820px;
-    preferred-height: 560px;
-    min-width: 600px;
-    min-height: 420px;
+    preferred-width: 1200px;
+    preferred-height: 780px;
+    // Not scaled with the text: what the text size needs of a window is the
+    // person's to give it, by resizing.
+    min-width: 1000px + Look.chrome-width;
+    min-height: 640px + Look.chrome-height;
     default-font-size: Scale.body-font;
     background: Look.window-background;
 
@@ -1038,12 +1046,20 @@ export component WorkbenchWindow inherits Window {
     in property <string> errors;
     in property <string> log-note;
     in property <bool> log-failed;
-    // The Runtime in plain words, and what became of the last request; red
-    // when either says a failure.
+    // The lamp: its colour, the Runtime in plain words, red when they say a
+    // failure, and whether a start makes sense now.
+    in property <StatusTone> lamp-tone;
     in property <string> status-text;
     in property <bool> status-failed;
+    in property <bool> start-offered;
+    // What became of the last request, red when it says a failure; and when a
+    // start failed, the log of the daemon it launched, selectable so it can be
+    // copied.
     in property <string> launcher-line;
     in property <bool> launcher-failed;
+    in property <string> start-log-path;
+    // Why the left column has no account to show, when it has none.
+    in property <string> accounts-note;
     // The Runtime's configuration file an instance is added to by hand,
     // selectable so it can be copied; or why there is none.
     in property <string> config-path;
@@ -1067,6 +1083,7 @@ export component WorkbenchWindow inherits Window {
             spacing: 8px;
 
             if root.install-issue != "": Card {
+                tone: CardTone.pinned;
                 vertical-stretch: 0;
                 VerticalLayout {
                     padding: 8px;
@@ -1079,175 +1096,199 @@ export component WorkbenchWindow inherits Window {
                 }
             }
 
-            // notices and the display settings
+            // the top bar
             Card {
+                vertical-stretch: 0;
+                HorizontalLayout {
+                    padding: 8px;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 10px;
+                    StatusDot { tone: root.lamp-tone; }
+                    // Gives way before the buttons do; what is cut short here is
+                    // never the only place a failure is said.
+                    Text {
+                        text: root.status-text;
+                        font-size: Scale.body-font;
+                        color: root.status-failed ? Severity.error : Look.text;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        min-width: 0px;
+                        horizontal-stretch: 0;
+                    }
+                    SkinButton {
+                        text: Strings.start;
+                        enabled: root.installed && root.start-offered;
+                        clicked => {
+                            root.start-runtime();
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    SkinButton {
+                        text: Strings.open-ledger;
+                        enabled: root.installed;
+                        clicked => {
+                            root.open-ledger();
+                        }
+                    }
+                }
+            }
+
+            // what became of the last request, and what could not be read
+            if root.errors != "" || root.launcher-line != "" || root.start-log-path != "": Card {
                 vertical-stretch: 0;
                 VerticalLayout {
                     padding: 8px;
                     padding-left: 12px;
                     padding-right: 12px;
                     spacing: 4px;
-                    if root.settings-errors != "": Notice {
-                        text: root.settings-errors;
-                        failed: true;
-                    }
-                    if root.settings-warnings != "": Notice {
-                        text: root.settings-warnings;
-                        warning: true;
-                    }
                     if root.errors != "": Notice {
                         text: root.errors;
                         failed: true;
-                    }
-                    // Why this window's look falls short of its theme, and what it
-                    // fell back to; the details are in the technical log.
-                    if Look.failure != "": Notice {
-                        text: Look.failure;
-                        failed: true;
-                    }
-                    if root.log-note != "": Notice {
-                        text: root.log-note;
-                        failed: root.log-failed;
-                    }
-                    HorizontalLayout {
-                        spacing: 14px;
-                        CardTitle {
-                            text: Strings.window-title;
-                            vertical-alignment: center;
-                            overflow: elide;
-                            min-width: 0px;
-                            horizontal-stretch: 1;
-                        }
-                        Caption { text: Strings.text-size; }
-                        text-size-box := SkinComboBox {
-                            width: 110px * Scale.factor;
-                            model: Strings.text-size-options;
-                            selected => {
-                                root.text-size-changed(self.current-index);
-                            }
-                        }
-                        Caption { text: Strings.language; }
-                        language-box := SkinComboBox {
-                            width: 100px * Scale.factor;
-                            model: Strings.language-options;
-                            selected => {
-                                root.language-changed(self.current-index);
-                            }
-                        }
-                    }
-                    // The theme on a row of its own, under the other two at its end: on
-                    // the title row the three boxes would not fit the narrowest window at
-                    // the larger text sizes.
-                    HorizontalLayout {
-                        spacing: 14px;
-                        alignment: end;
-                        Caption { text: Strings.theme; }
-                        // Wider off Windows, where the second option also says it has no glass.
-                        theme-box := SkinComboBox {
-                            accessible-label: Strings.theme;
-                            width: (Platform.os == OperatingSystemType.windows ? 120px : 160px) * Scale.factor;
-                            model: Strings.theme-options;
-                            selected => {
-                                root.theme-changed(self.current-index);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // the launcher, in plain words
-            Card {
-                vertical-stretch: 0;
-                VerticalLayout {
-                    padding: 10px;
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    spacing: 6px;
-                    HorizontalLayout {
-                        spacing: 14px;
-                        Caption { text: Strings.launcher-title; }
-                        Notice {
-                            text: root.status-text;
-                            failed: root.status-failed;
-                            vertical-alignment: center;
-                            min-width: 40px * Scale.factor;
-                            horizontal-stretch: 1;
-                        }
-                        SkinButton {
-                            text: Strings.start;
-                            enabled: root.installed;
-                            clicked => {
-                                root.start-runtime();
-                            }
-                        }
-                        SkinButton {
-                            text: Strings.request-shutdown;
-                            enabled: root.installed;
-                            clicked => {
-                                root.request-shutdown();
-                            }
-                        }
                     }
                     if root.launcher-line != "": Notice {
                         text: root.launcher-line;
                         failed: root.launcher-failed;
                     }
-                }
-            }
-
-            // the ledger window, and instances
-            Card {
-                vertical-stretch: 0;
-                VerticalLayout {
-                    padding: 10px;
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    spacing: 6px;
-                    HorizontalLayout {
-                        alignment: start;
-                        SkinButton {
-                            text: Strings.open-ledger;
-                            enabled: root.installed;
-                            clicked => {
-                                root.open-ledger();
-                            }
-                        }
-                    }
-                    HorizontalLayout {
+                    if root.start-log-path != "": HorizontalLayout {
                         spacing: 14px;
-                        // Off until the Runtime can add an instance itself.
-                        SkinButton {
-                            text: Strings.add-instance;
-                            enabled: false;
-                        }
-                        Notice {
-                            text: Strings.add-instance-note;
-                            vertical-alignment: center;
-                            min-width: 40px * Scale.factor;
-                            horizontal-stretch: 1;
-                        }
-                    }
-                    HorizontalLayout {
-                        spacing: 14px;
-                        Caption { text: Strings.config-file; }
-                        if root.config-path != "": LineEdit {
-                            text: root.config-path;
+                        Caption { text: Strings.start-log; }
+                        LineEdit {
+                            text: root.start-log-path;
                             read-only: true;
                             font-size: Scale.body-font;
                             min-width: 160px * Scale.factor;
                             horizontal-stretch: 1;
                         }
-                        if root.config-path == "": Notice {
-                            text: root.config-note;
-                            vertical-alignment: center;
-                            min-width: 40px * Scale.factor;
-                            horizontal-stretch: 1;
-                        }
                     }
                 }
             }
 
-            Rectangle { }
+            HorizontalLayout {
+                spacing: 8px;
+                vertical-stretch: 1;
+
+                // left: the accounts, and where one is added for now
+                ScrollView {
+                    horizontal-stretch: 0;
+                    width: min(300px * Scale.factor, 420px);
+                    viewport-width: self.visible-width;
+                    VerticalLayout {
+                        spacing: 8px;
+                        if root.accounts-note != "": Notice {
+                            text: root.accounts-note;
+                        }
+                        Card {
+                            vertical-stretch: 0;
+                            VerticalLayout {
+                                padding: 10px;
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                spacing: 6px;
+                                HorizontalLayout {
+                                    alignment: start;
+                                    // Off until the Runtime can add an instance itself.
+                                    SkinButton {
+                                        text: Strings.add-instance;
+                                        enabled: false;
+                                    }
+                                }
+                                Notice { text: Strings.add-instance-note; }
+                                Caption {
+                                    text: Strings.config-file;
+                                    vertical-stretch: 0;
+                                }
+                                if root.config-path != "": LineEdit {
+                                    text: root.config-path;
+                                    read-only: true;
+                                    font-size: Scale.body-font;
+                                }
+                                if root.config-path == "": Notice {
+                                    text: root.config-note;
+                                }
+                            }
+                        }
+                        Rectangle { }
+                    }
+                }
+
+                // right: the window itself
+                Card {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        padding: 10px;
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 6px;
+                        if root.settings-errors != "": Notice {
+                            text: root.settings-errors;
+                            failed: true;
+                        }
+                        if root.settings-warnings != "": Notice {
+                            text: root.settings-warnings;
+                            warning: true;
+                        }
+                        // Why this window's look falls short of its theme, and what it
+                        // fell back to; the details are in the technical log.
+                        if Look.failure != "": Notice {
+                            text: Look.failure;
+                            failed: true;
+                        }
+                        if root.log-note != "": Notice {
+                            text: root.log-note;
+                            failed: root.log-failed;
+                        }
+                        HorizontalLayout {
+                            spacing: 14px;
+                            alignment: start;
+                            Caption { text: Strings.text-size; }
+                            text-size-box := SkinComboBox {
+                                width: 110px * Scale.factor;
+                                model: Strings.text-size-options;
+                                selected => {
+                                    root.text-size-changed(self.current-index);
+                                }
+                            }
+                            Caption { text: Strings.language; }
+                            language-box := SkinComboBox {
+                                width: 100px * Scale.factor;
+                                model: Strings.language-options;
+                                selected => {
+                                    root.language-changed(self.current-index);
+                                }
+                            }
+                        }
+                        // The theme on a row of its own: beside the other two, the
+                        // three boxes would not fit this column at the larger text
+                        // sizes.
+                        HorizontalLayout {
+                            spacing: 14px;
+                            alignment: start;
+                            Caption { text: Strings.theme; }
+                            // Wider off Windows, where the second option also says it has no glass.
+                            theme-box := SkinComboBox {
+                                accessible-label: Strings.theme;
+                                width: (Platform.os == OperatingSystemType.windows ? 120px : 160px) * Scale.factor;
+                                model: Strings.theme-options;
+                                selected => {
+                                    root.theme-changed(self.current-index);
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            alignment: start;
+                            SkinButton {
+                                text: Strings.request-shutdown;
+                                enabled: root.installed;
+                                clicked => {
+                                    root.request-shutdown();
+                                }
+                            }
+                        }
+                        Rectangle { }
+                    }
+                }
+            }
         }
     }
 }

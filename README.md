@@ -382,9 +382,11 @@ acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events
 acui --help
 ```
 
-The main window is the **workbench**: the Runtime in plain words with Start and Request Shutdown, the
-plain-words result of the last press, the language, the text size and the theme, a "Troubleshooting and
-Ledger" button, and an "Add Instance" button that is off (see "Instance configuration"). The ledger window,
+The main window is the **workbench**. Its top bar has a lamp with the Runtime in plain words, Start, and a
+"Troubleshooting and Ledger" button; under it is the plain-words result of the last press. Then two
+columns: the left one is for the accounts, with an "Add Account or Device" button that is off (see
+"Instance configuration"); the right one has the language, the text size, the theme and Request Shutdown.
+The ledger window,
 "Advanced Troubleshooting and Ledger History", opens only when asked: from that button, or at the start
 when `--tab` or `--source` is given. There is at most one per source (the default `auto`, `online`,
 `offline`); asking again restores the one open (Slint 1.17 has no call that brings a window to the
@@ -407,7 +409,7 @@ Started directly — `acui.exe`, or a shortcut that points at it — the console
 window; started from a command line, `--help` and the reason for a failed start still go to that
 console. Started through the fixed entry `acforward.exe`, a console window still shows for now.
 
-The windows are resizable: the workbench 820×560 by default, 600×420 minimum; the ledger window 1400×900
+The windows are resizable: the workbench 1200×780 by default, 1000×640 minimum; the ledger window 1400×900
 by default, 1100×700 minimum, its middle column stretching with the window and the two side columns
 keeping a fixed width. The windows follow the system DPI; the program sets no scaling of its own.
 
@@ -441,7 +443,7 @@ cannot be written, the windows say that instead.
 
 ## Interface language, text size and theme
 
-Three dropdowns at the right of the workbench's top and of every ledger window's top bar; a choice made in
+Three dropdowns in the workbench's right column and at the right of every ledger window's top bar; a choice made in
 any window applies at once to every open window and is written into the settings file as soon as it is
 made, and a ledger window opened later comes up with the current language, text size and theme:
 
@@ -512,13 +514,17 @@ backslashes.
 
 ## Launcher
 
-On the workbench: on the left the Runtime state from the last probe, in plain words, then the Start and
-Request Shutdown buttons, and the line below them is the result of the last press, in plain words only (no
-key, code, PID or path; an outcome code shows only as its short words; a failure only the technical text
-states adds "details in Troubleshooting and Ledger"). Every ledger window's top bar has the technical
+On the workbench the top bar has a lamp and the Runtime state from the newest status read, in plain words,
+then the Start button, on only while the Runtime is not running and no start is out; it is off while the
+lamp says the Runtime is stopping or not answering, or that connecting to it went wrong, since one may still
+be there. It is also on when the status reads themselves fail, since a start probes first. Request Shutdown
+is in the right column. The line under the top bar is the result of the last press, in plain words only (no key,
+code, PID or path; an outcome code shows only as its short words; a failure only the technical text states
+adds "details in Troubleshooting and Ledger"). A start that launched a daemon and got no Runtime from it
+also shows that daemon's log path there, selectable to copy. Every ledger window's top bar has the technical
 lines: the state from the last probe with its PID and owner epoch, or the client's code, and below it the
 technical text of the last press; the unlock entry is there too (below). A line turns red on a failure and
-wraps instead of being cut. The probe, the whole start (probe, launch,
+wraps instead of being cut; only the lamp's words elide when the top bar is short of room. The probe, the whole start (probe, launch,
 readiness, record) and the shutdown request each run on a background thread of their own, and the window
 never waits on them; one request of each kind runs at a time, and a second press while one has not
 finished only says so. Of probes in flight, only the newest one's answer is shown.
@@ -647,7 +653,7 @@ can only resume, conditionally, a pause another tool set (below). Start at boot 
 The console no longer has an instance-configuration window. Until the Runtime's `install instance`
 lands, an instance can only be added by hand: edit the `instances` of the actingd configuration
 (`actingd_config`) as the Runtime's installation notes describe, then restart the Runtime. The
-workbench's "Add Instance" button is off for that reason, with this note beside it and the path of that
+workbench's "Add Account or Device" button is off for that reason, with this note under it and the path of that
 configuration file below, selectable to copy. Finding instances comes back with the console's own
 instance page in a later version.
 

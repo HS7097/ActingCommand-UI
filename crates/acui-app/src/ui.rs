@@ -31,7 +31,7 @@ use crate::report;
 use crate::settings::{Settings, SettingsFile, SettingsIssue, TextSize, Theme};
 use crate::skin::{self, Skins};
 use crate::strings::{fill, Labels, Language};
-use crate::workbench::model::Model;
+use crate::workbench::model::{AccountsNote, Model};
 use crate::workbench::{self, Reading};
 use crate::{LedgerWindow, Look, Scale, Strings, WorkbenchWindow};
 
@@ -403,7 +403,7 @@ impl Ui {
 
     /// The workbench's lines that only the language changes: why this run has
     /// no state root, and the Runtime's configuration file, where an instance
-    /// is added by hand for now.
+    /// is added by hand for now. And the accounts note, which reads change too.
     pub fn paint_workbench(&self) {
         let Some(window) = self.workbench() else {
             return;
@@ -423,6 +423,22 @@ impl Ui {
         };
         window.set_config_path(path.into());
         window.set_config_note(note.into());
+        self.paint_accounts_note();
+    }
+
+    /// Why the workbench's left column has no account to show, if it has none.
+    pub fn paint_accounts_note(&self) {
+        let Some(window) = self.workbench() else {
+            return;
+        };
+        let labels = self.labels();
+        let note = match self.model.borrow().accounts_note() {
+            AccountsNote::Nothing => "",
+            AccountsNote::NoneConfigured => labels.accounts_none,
+            AccountsNote::NotRunning => labels.accounts_not_running,
+            AccountsNote::Unreachable => labels.accounts_unreachable,
+        };
+        window.set_accounts_note(note.into());
     }
 }
 
@@ -550,6 +566,7 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_add_instance(labels.add_instance.into());
     global.set_add_instance_note(labels.add_instance_note.into());
     global.set_config_file(labels.config_file.into());
+    global.set_start_log(labels.start_log.into());
     global.set_caption_minimize(labels.caption_minimize.into());
     global.set_caption_maximize(labels.caption_maximize.into());
     global.set_caption_restore(labels.caption_restore.into());

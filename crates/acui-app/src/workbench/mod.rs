@@ -115,6 +115,7 @@ fn lane_failed(ui: &Ui, lane: Lane, error: String) {
         ui.launcher_view.borrow_mut().reading_failed(error);
     }
     ui.paint_notices();
+    ui.paint_accounts_note();
     launcher::paint(ui);
 }
 
@@ -154,17 +155,21 @@ fn landed(landing: Landing) {
 
 fn live_landed(ui: &Ui, read: LiveRead) {
     let probe = probe_of(&read);
-    let (landed, link_changed) = {
+    let (landed, link_changed, note_changed) = {
         let mut model = ui.model.borrow_mut();
+        let note = model.accounts_note();
         let landed = model.apply_live(read);
         log_link(&landed.previous, model.link());
         let link_changed = landed.previous != *model.link();
-        (landed, link_changed)
+        (landed, link_changed, model.accounts_note() != note)
     };
     // Painting the launcher goes through every ledger window: only for news.
     let status_changed = ui.launcher_view.borrow_mut().live(probe);
     if status_changed || link_changed {
         launcher::paint(ui);
+    }
+    if note_changed {
+        ui.paint_accounts_note();
     }
     if landed.fault_cleared {
         ui.paint_notices();

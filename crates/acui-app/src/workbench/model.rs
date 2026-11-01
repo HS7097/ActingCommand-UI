@@ -62,6 +62,18 @@ impl Fault {
     }
 }
 
+/// Why the left column has no account to show, when no read has left one there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountsNote {
+    Nothing,
+    /// The Runtime answers, and its configuration has none.
+    NoneConfigured,
+    /// No Runtime runs, and none was seen this run.
+    NotRunning,
+    /// The Runtime cannot be read, and none was seen this run.
+    Unreachable,
+}
+
 pub struct Model {
     link: Link,
     /// As the newest `Status` listed them; none while `link` is not `Online`:
@@ -127,6 +139,22 @@ impl Model {
         self.live_fault.iter().chain(self.slow_fault.iter())
     }
 
+    pub fn accounts_note(&self) -> AccountsNote {
+        let unseen = self.seen_aliases.is_empty();
+        match &self.link {
+            Link::Unknown => AccountsNote::Nothing,
+            Link::Online { .. } if self.instances.is_empty() => AccountsNote::NoneConfigured,
+            Link::Online { .. } => AccountsNote::Nothing,
+            Link::Absent(_) if unseen => AccountsNote::NotRunning,
+            Link::NoAnswer(_) | Link::Trouble(_) | Link::ThreadFailed if unseen => {
+                AccountsNote::Unreachable
+            }
+            Link::Absent(_) | Link::NoAnswer(_) | Link::Trouble(_) | Link::ThreadFailed => {
+                AccountsNote::Nothing
+            }
+        }
+    }
+
     /// One `Status` read: a new owner epoch lets go of everything read of the old
     /// one, but not of the aliases seen.
     pub fn apply_live(&mut self, read: LiveRead) -> LiveLanded {
@@ -163,8 +191,10 @@ impl Model {
 
     /// One schedule explanation read. With no epoch to hold it to, a read says
     /// nothing, and a failure neither: `Status` already said why. A failure names
-    /// no epoch: one from before a restart is taken for now, and the read that
-    /// the restart pokes settles it next.
+    /// no epoch: one of a read that was out across a restart is taken for now, and
+    /// the read that the restart poked, queued behind it, settles it next. That read
+    /// does not itself fail for finding its connection over, since the lane asks
+    /// again on a new one (`ReadLane::read_explain`).
     pub fn apply_explain(
         &mut self,
         read: Result<ExplainRead, ClientFailure>,

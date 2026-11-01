@@ -248,7 +248,7 @@ pub struct Labels {
     /// The selected frame's own events are being read: the busy line and the
     /// frame pane.
     pub frame_events_reading: &'static str,
-    /// The launcher's caption, on the workbench and in the ledger window.
+    /// The launcher's caption, in the ledger window.
     pub launcher_title: &'static str,
     /// The launcher in plain words, on the workbench: what the Runtime is
     /// doing, or what became of the last request. No key, code, pid or path
@@ -434,12 +434,20 @@ pub struct Labels {
     pub install_issue: &'static str,
     /// The workbench: the way into the ledger window; the instance entry that
     /// waits for the Runtime and what to do meanwhile; the caption of the
-    /// configuration file to edit, and what it says when none is set.
+    /// configuration file to edit, and what it says when none is set; the
+    /// caption of a failed start's log.
     pub open_ledger: &'static str,
     pub add_instance: &'static str,
     pub add_instance_note: &'static str,
     pub config_file: &'static str,
     pub config_path_missing: &'static str,
+    pub start_log: &'static str,
+    /// Why the workbench's left column shows no account: the Runtime answers and
+    /// has none; none was seen this run and no Runtime runs; none was seen this
+    /// run and the Runtime cannot be read.
+    pub accounts_none: &'static str,
+    pub accounts_not_running: &'static str,
+    pub accounts_unreachable: &'static str,
     /// The workbench refused to close while an unlock runs.
     pub close_unlock_busy: &'static str,
     /// The Aero frame's caption buttons, by the names a screen reader says.
@@ -713,7 +721,7 @@ pub const ZH: Labels = Labels {
     launcher_title: "启动器",
     launcher_checking: "正在检查 Runtime…",
     launcher_starting: "正在启动 Runtime…",
-    launcher_running: "Runtime 正在运行",
+    launcher_running: "Runtime 在线",
     launcher_not_running: "Runtime 没有运行",
     launcher_check_failed: "没能检查 Runtime 是否在运行",
     launcher_start_failed: "Runtime 没能启动",
@@ -820,10 +828,14 @@ pub const ZH: Labels = Labels {
     ledger_open_failed: "账本读面打不开：{}",
     install_issue: "这次运行没有可用的状态根：「启动」和「排障与账本」暂时不能用，语言、字号和主题仍可修改。\n原因：{}",
     open_ledger: "排障与账本",
-    add_instance: "添加实例",
+    add_instance: "+ 添加账号/设备",
     add_instance_note: "等 Runtime 支持；现在请按安装说明手工编辑配置文件",
     config_file: "配置文件",
     config_path_missing: "还没有配置 Runtime 的配置文件：请按安装说明填写设置文件",
+    start_log: "启动日志",
+    accounts_none: "这个配置里还没有账号。怎么添加见下方说明",
+    accounts_not_running: "Runtime 没有运行，看不到账号",
+    accounts_unreachable: "现在读不到 Runtime，看不到账号",
     close_unlock_busy: "解锁还在进行：等它结束再关闭监控台",
     caption_minimize: "最小化",
     caption_maximize: "最大化",
@@ -1086,7 +1098,7 @@ pub const EN: Labels = Labels {
     launcher_title: "Launcher",
     launcher_checking: "Checking the Runtime…",
     launcher_starting: "Starting the Runtime…",
-    launcher_running: "The Runtime Is Running",
+    launcher_running: "The Runtime Is Online",
     launcher_not_running: "The Runtime Is Not Running",
     launcher_check_failed: "Could Not Check Whether the Runtime Is Running",
     launcher_start_failed: "The Runtime Did Not Start",
@@ -1193,10 +1205,14 @@ pub const EN: Labels = Labels {
     ledger_open_failed: "The ledger's read face could not be opened: {}",
     install_issue: "This run has no state root to use: Start and Troubleshooting and Ledger are off for now, and the language, the text size and the theme still work.\nWhy: {}",
     open_ledger: "Troubleshooting and Ledger",
-    add_instance: "Add Instance",
+    add_instance: "+ Add Account or Device",
     add_instance_note: "Waits for Runtime support; for now, edit the configuration file by hand as the installation guide says",
     config_file: "Configuration File",
     config_path_missing: "No Runtime configuration file is set: fill in the settings file as the installation guide says",
+    start_log: "Start Log",
+    accounts_none: "This configuration has no accounts yet. See below for how to add one",
+    accounts_not_running: "The Runtime is not running, so no accounts can be seen",
+    accounts_unreachable: "The Runtime cannot be read right now, so no accounts can be seen",
     close_unlock_busy: "The unlock is still running: close the console once it has ended",
     caption_minimize: "Minimize",
     caption_maximize: "Maximize",

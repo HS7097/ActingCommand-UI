@@ -12,7 +12,9 @@
 //!
 //! Lanes ask only what is answered from memory or takes no ledger record:
 //! `Status`, and `ScheduleExplanation` without its candidate rows. How often is
-//! the caller's, too: a lane never retries and keeps no clock.
+//! the caller's, too: a lane keeps no clock, and asks again by itself in one case
+//! only, a schedule explanation on a connection that turns out to have ended
+//! ([`ReadLane::read_explain`]).
 //!
 //! Left out on purpose: `player_hold` and `control` (the hold's read face is
 //! UI-3d's); `emulator_state` (read only at discovery and control, and `off` may
@@ -20,6 +22,7 @@
 //! here stops a run); a fence's recheck counts.
 
 use std::collections::BTreeMap;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -66,12 +69,29 @@ impl ReadLane {
     }
 
     /// One `ScheduleExplanation` of every instance, without candidate rows.
+    ///
+    /// This lane reads seldom, and not at all while the workbench is minimized, so
+    /// the connection it kept may have ended with the Runtime it was made to, and
+    /// the read a restart pokes is the first to find out. Such a request reached
+    /// nothing, so it goes once more on a new connection, and only that answer
+    /// counts: the restart costs no failure and no wait for the next read. A
+    /// connection made for this read is not asked again, and neither is anything
+    /// that may be a Runtime busy with the first request (`connection_ended`).
     pub fn read_explain(&mut self) -> Result<ExplainRead, ClientFailure> {
+        let kept = self.client.is_some();
+        let asked = match self.ask_explain() {
+            Err(error) if kept && connection_ended(&error) => self.ask_explain(),
+            asked => asked,
+        };
+        asked.map_err(ClientFailure::from)
+    }
+
+    fn ask_explain(&mut self) -> Result<ExplainRead, RuntimeClientError> {
         let client = self.connection()?;
         let epoch = code(&client.runtime_info().owner_epoch());
         match client.schedule_explanation(None, false) {
             Ok(explanation) => Ok(explain_read(epoch, &explanation)),
-            Err(error) => Err(self.settled(error).into()),
+            Err(error) => Err(self.settled(error)),
         }
     }
 
@@ -154,6 +174,22 @@ fn live_failure(error: RuntimeClientError) -> LiveRead {
     } else {
         LiveRead::Trouble(failure)
     }
+}
+
+/// Whether a request found its connection over: the write failed, or the connection
+/// ended before the receipt's header. A read that timed out is not this, though the
+/// client gives it the same code when the request has no deadline of its own: the
+/// Runtime may be busy, and a second request would wait behind the first.
+fn connection_ended(error: &RuntimeClientError) -> bool {
+    matches!(
+        error.code().spelling(),
+        "runtime_request_write_failed" | "runtime_request_flush_failed"
+    ) || error.receipt_header_io().is_some_and(|io| {
+        matches!(
+            io.kind(),
+            ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted
+        )
+    })
 }
 
 /// One answered `Status`. `epoch` and `pid` are of the connection's
