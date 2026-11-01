@@ -529,7 +529,7 @@ fn request_close(key: WindowKey) {
 }
 
 fn log_info(key: WindowKey, text: &str) {
-    report::log(LOG_KIND, &format!("{key:?}: {text}"));
+    report::log_quiet(LOG_KIND, &format!("{key:?}: {text}"));
 }
 
 /// Where the native layer's reports go: back to the event loop, with nothing of

@@ -23,6 +23,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -53,6 +54,10 @@ impl Fatal {
 static STARTED: OnceLock<u128> = OnceLock::new();
 
 static LOG: Mutex<Log> = Mutex::new(Log::Unwritten);
+
+/// Whether `log` has written anything: a log that only holds `log_quiet`
+/// entries is not worth a line on every window.
+static WORTH_SHOWING: AtomicBool = AtomicBool::new(false);
 
 enum Log {
     /// Nothing was logged yet, so there is no file.
@@ -97,6 +102,14 @@ pub fn logs_dir() -> Result<PathBuf, &'static str> {
 /// there is none yet or the last entry could not be written. A failure is kept
 /// for `log_note` to say; it never stops the caller.
 pub fn log(kind: &str, text: &str) {
+    WORTH_SHOWING.store(true, Ordering::Relaxed);
+    log_quiet(kind, text);
+}
+
+/// The same entry for what went as it should, such as a window's glass being
+/// built: it goes in the file and does not by itself put the log's place on
+/// the windows. Not being able to write it is still shown.
+pub fn log_quiet(kind: &str, text: &str) {
     let entry = format!("{} {kind}: {text}\n", unix_ms());
     let mut log = LOG.lock().unwrap_or_else(PoisonError::into_inner);
     if !matches!(*log, Log::Open { .. }) {
@@ -130,14 +143,17 @@ fn open() -> Log {
 }
 
 /// The line every window shows about the log, and whether it says a failure:
-/// empty while nothing was logged. Painted by the notices, and by every ledger
+/// empty while nothing but `log_quiet` entries was logged. Painted by the notices, and by every ledger
 /// repaint, since a reader that could not start, panicked or was gone may have
 /// just made the log (`Ui::paint_log_notes`).
 pub fn log_note(labels: &Labels) -> (String, bool) {
     let log = LOG.lock().unwrap_or_else(PoisonError::into_inner);
     match &*log {
         Log::Unwritten => (String::new(), false),
-        Log::Open { path, .. } => (fill(labels.log_written, &[&path.display().to_string()]), false),
+        Log::Open { path, .. } if WORTH_SHOWING.load(Ordering::Relaxed) => {
+            (fill(labels.log_written, &[&path.display().to_string()]), false)
+        }
+        Log::Open { .. } => (String::new(), false),
         Log::NoDirectory { names } => (fill(labels.log_no_dir, &[*names]), true),
         Log::Failed { path, error } => {
             (fill(labels.log_failed, &[&path.display().to_string(), error]), true)
