@@ -261,7 +261,7 @@ class Watcher:
         cfg = self.cfg
         try:
             imported = self._import()
-            with cache.open_store(cfg.state_root, max_bytes=cfg.cache_max_bytes) as store:
+            with cache.open_store(cfg.state_root, max_bytes=cfg.cache_max_bytes, wait_ms=cfg.cache_wait_ms) as store:
                 session = cache.Session(store, libraries=self.libraries)
                 run = evaluate_model(
                     self.model, imported, datasets=cfg.datasets, max_bits=cfg.expr_max_bits, unknowns=cfg.unknowns,

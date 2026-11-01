@@ -20,6 +20,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Mapping
 
+from acmodel.cache.store import DEFAULT_WAIT_MS as DEFAULT_CACHE_WAIT_MS
 from acmodel.codes import CONFIG_INVALID
 from acmodel.engine import settings as engine_settings
 from acmodel.envelope import Failure, error
@@ -40,7 +41,7 @@ _MEMBERS = {
     "paths": {"venv", "state_root", "datasets", "actinglab"},
     "compute": {"blas_threads", "priority", "job", "workers"},
     "expr": {"max_bits"},
-    "cache": {"max_bytes"},
+    "cache": {"max_bytes", "wait_ms"},
     "host": {"memory", "cpu", "quiet_windows", "pause_file", "pause_poll_ms"},
     "engine": engine_settings.ENGINE_MEMBERS,
     "engines": engine_settings.ENGINES_MEMBERS,
@@ -198,6 +199,7 @@ class Config:
     expr_max_bits: int
     host: host_caps.HostCaps
     cache_max_bytes: int
+    cache_wait_ms: int  # `cache.wait_ms`: how long a connection to the cache's index waits for a lock
     engine: engine_settings.EngineSettings
     unknowns: Unknowns
     economy: EconomySettings
@@ -289,9 +291,13 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
     max_bits = _section(doc, "expr", path).get("max_bits", DEFAULT_EXPR_MAX_BITS)
     if type(max_bits) is not int or max_bits < 1:
         raise _invalid("value_invalid", path, _pointer("expr", "max_bits"))
-    cache_max_bytes = _section(doc, "cache", path).get("max_bytes", DEFAULT_CACHE_MAX_BYTES)
+    cache_section = _section(doc, "cache", path)
+    cache_max_bytes = cache_section.get("max_bytes", DEFAULT_CACHE_MAX_BYTES)
     if type(cache_max_bytes) is not int or cache_max_bytes < 1:
         raise _invalid("value_invalid", path, _pointer("cache", "max_bytes"))
+    cache_wait_ms = cache_section.get("wait_ms", DEFAULT_CACHE_WAIT_MS)
+    if type(cache_wait_ms) is not int or cache_wait_ms < 1:
+        raise _invalid("value_invalid", path, _pointer("cache", "wait_ms"))
     state_root = _absolute(paths, "state_root", root / "state", path)
     sections = {name: _section(doc, name, path) for name in ("unknowns", "sensitivity", "random")}
     for (name, key), (low, high) in UNKNOWNS_RANGES.items():
@@ -340,6 +346,7 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         expr_max_bits=max_bits,
         host=host,
         cache_max_bytes=cache_max_bytes,
+        cache_wait_ms=cache_wait_ms,
         engine=engine,
         unknowns=Unknowns(**sections["unknowns"], **sections["sensitivity"], **sections["random"]),
         economy=EconomySettings(**economy),
