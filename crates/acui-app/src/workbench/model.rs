@@ -12,8 +12,8 @@ use std::time::Instant;
 use acui_source::workbench::{ExplainRead, InstanceLive, LiveRead, LiveSnapshot};
 use acui_source::{ClientFailure, PauseFact};
 
-use super::card::{self, CardView, Down};
-use super::read::Lane;
+use super::card::{self, CardView, Down, Schedule};
+use super::read::{Lane, EXPLAIN_TOO_OLD};
 use crate::strings::{fill, Labels};
 
 /// The Runtime as the newest `Status` read found it.
@@ -86,12 +86,18 @@ pub struct Model {
     /// account seen stays on the workbench, in grey, while no Runtime answers.
     seen_aliases: Vec<String>,
     explain: Slice<ExplainRead>,
+    /// When the slow thread was last told to read now: no answer can be asked of
+    /// it sooner, so a long gap before that says nothing against the explanation.
+    explain_asked_at: Option<Instant>,
+    /// Whether the workbench is not minimized. The slow thread does not read while
+    /// it is, so no read is late then.
+    shown: bool,
     /// The owner epoch last online. A Runtime that comes back with the same one
     /// has not restarted, so what was read of it stands.
     epoch: Option<String>,
     live_fault: Option<Fault>,
     slow_fault: Option<Fault>,
-    /// The codes the log was told it has no words for: once each.
+    /// The lines the log got about codes the cards have no words for: once each.
     told_codes: BTreeSet<String>,
 }
 
@@ -129,6 +135,8 @@ impl Model {
             global_pause: None,
             seen_aliases: Vec::new(),
             explain: Slice::empty(),
+            explain_asked_at: None,
+            shown: true,
             epoch: None,
             live_fault: None,
             slow_fault: None,
@@ -163,22 +171,55 @@ impl Model {
     /// The accounts of the left column: as `Status` listed them while the Runtime
     /// answers; otherwise every alias seen this run, with nothing an earlier answer
     /// said of it.
-    pub fn cards(&self) -> Vec<CardView> {
+    pub fn cards(&self, now: Instant) -> Vec<CardView> {
         match Down::of(&self.link) {
-            None => self
-                .instances
-                .iter()
-                .map(|instance| card::card_view(instance, self.global_pause.as_ref()))
-                .collect(),
+            None => {
+                let schedule = self.schedule(now);
+                self.instances
+                    .iter()
+                    .map(|instance| {
+                        card::card_view(instance, self.global_pause.as_ref(), schedule)
+                    })
+                    .collect()
+            }
             Some(down) => {
                 self.seen_aliases.iter().map(|alias| card::down_view(alias, down)).collect()
             }
         }
     }
 
-    /// Whether the log has yet to hear of `code`; it has from now on.
-    pub fn first_told(&mut self, code: &str) -> bool {
-        self.told_codes.insert(code.to_owned())
+    /// What the schedule explanation reads leave now. A thread that does not read
+    /// counts as a read that failed: with no value and no failure the card would
+    /// otherwise say there is no explanation yet.
+    fn schedule(&self, now: Instant) -> Schedule<'_> {
+        if self.explain.error.is_some() || self.slow_fault.is_some() || self.explain_late(now) {
+            return Schedule::Unreadable;
+        }
+        match &self.explain.value {
+            Some(read) if read.evaluated => Schedule::Evaluated(&read.rows),
+            Some(_) | None => Schedule::NotEvaluated,
+        }
+    }
+
+    fn explain_late(&self, now: Instant) -> bool {
+        let since = self.explain.read_at.max(self.explain_asked_at);
+        self.shown
+            && since.is_some_and(|since| now.saturating_duration_since(since) > EXPLAIN_TOO_OLD)
+    }
+
+    /// The slow thread was told to read now.
+    pub fn explain_asked(&mut self, now: Instant) {
+        self.explain_asked_at = Some(now);
+    }
+
+    /// Whether the workbench is not minimized, as last looked at.
+    pub fn set_shown(&mut self, shown: bool) {
+        self.shown = shown;
+    }
+
+    /// Whether the log has yet to hear `line`; it has from now on.
+    pub fn first_told(&mut self, line: &str) -> bool {
+        self.told_codes.insert(line.to_owned())
     }
 
     /// One `Status` read: a new owner epoch lets go of everything read of the old

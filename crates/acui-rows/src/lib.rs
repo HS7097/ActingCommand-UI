@@ -175,6 +175,18 @@ pub fn format_full(timestamp_unix_ms: u64) -> String {
     }
 }
 
+/// `hh:mm` in local time, with the month and day when that is not today, for a
+/// time a person waits for.
+pub fn format_minute(timestamp_unix_ms: u64) -> String {
+    match local(timestamp_unix_ms) {
+        Some(time) if time.date_naive() == Local::now().date_naive() => {
+            time.format("%H:%M").to_string()
+        }
+        Some(time) => time.format("%m-%d %H:%M").to_string(),
+        None => "—".to_string(),
+    }
+}
+
 /// Whole seconds from a committed timestamp to now; negative if it is ahead.
 pub fn seconds_since(timestamp_unix_ms: u64) -> i64 {
     Local::now().timestamp_millis().saturating_sub(timestamp_unix_ms as i64) / 1000
