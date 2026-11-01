@@ -4,14 +4,17 @@
 //! rows come and go only when the accounts do, so a read every few seconds costs
 //! nothing and moves nothing.
 
+use std::time::Instant;
+
+use acui_rows::format_minute;
 use acui_rows::outcome::explain;
 use slint::{Model as _, VecModel};
 
-use super::card::{Band, CardView, Down, Line};
+use super::card::{Band, CardView, Down, Line, ReasonClass};
 use crate::ledger::paint::models;
 use crate::ledger::resume::Lifter;
 use crate::report;
-use crate::strings::{fill, Labels};
+use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
 use crate::{AccountCard, StatusTone, WorkbenchWindow};
 
@@ -21,7 +24,7 @@ pub fn cards(ui: &Ui) {
         return;
     };
     let labels = ui.labels();
-    let views = ui.model.borrow().cards();
+    let views = ui.model.borrow().cards(Instant::now());
     let cards = views.iter().map(|view| account_card(ui, labels, view)).collect();
     sync(&window, cards);
 }
@@ -55,8 +58,7 @@ fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
             Band::Offline => StatusTone::Offline,
         },
         main: line_text(ui, labels, &view.main).into(),
-        // None of these lines says a failure.
-        main_failed: false,
+        main_failed: matches!(view.main, Line::ScheduleUnreadable),
         note: notes.join(" · ").into(),
     }
 }
@@ -93,7 +95,17 @@ fn line_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
         }
         Line::Recovering => labels.card_recovering.to_owned(),
         Line::LadderHold => labels.card_ladder_hold.to_owned(),
-        Line::Nothing => String::new(),
+        Line::ScheduleUnreadable => labels.card_schedule_unreadable.to_owned(),
+        Line::Preparing => labels.card_preparing.to_owned(),
+        Line::Reason { class, why, wake } => {
+            let words = reason_words(ui, labels, *class, why);
+            match wake {
+                Some(wake) => fill(labels.card_with_wake, &[&words, &format_minute(*wake)]),
+                None => words,
+            }
+        }
+        Line::NotEvaluated => labels.card_not_evaluated.to_owned(),
+        Line::NotPlanned => labels.card_not_planned.to_owned(),
     }
 }
 
@@ -112,14 +124,49 @@ fn task_name<'a>(labels: &Labels, package: &'a Option<String>) -> &'a str {
     package.as_deref().unwrap_or(labels.card_task_unnamed)
 }
 
+/// A reason in plain words. One the card has no sentence for still says something:
+/// its category's words, or the unknown code's, and the code goes to the log once.
+fn reason_words(ui: &Ui, labels: &Labels, class: ReasonClass, why: &str) -> String {
+    let words = match class {
+        ReasonClass::ControlGate => labels.card_schedule_updating,
+        ReasonClass::Held => labels.card_why_held,
+        ReasonClass::Unavailable => labels.card_why_unavailable,
+        ReasonClass::DeviceBusy => labels.card_why_device_busy,
+        ReasonClass::Quiet => labels.card_why_quiet,
+        ReasonClass::QuietSoon => labels.card_why_quiet_soon,
+        ReasonClass::UpdateWait => labels.card_why_update_wait,
+        ReasonClass::PackProblem => labels.card_why_pack_problem,
+        ReasonClass::Closed => labels.card_why_closed,
+        ReasonClass::Paced => labels.card_why_paced,
+        ReasonClass::Queue => labels.card_why_queue,
+        ReasonClass::RemedyWait => labels.card_why_remedy_wait,
+        ReasonClass::NeedsChoice => labels.card_why_needs_choice,
+        ReasonClass::Suspended => labels.card_why_suspended,
+        ReasonClass::BenefitUnknown => labels.card_why_benefit_unknown,
+        ReasonClass::BenefitNonpositive => labels.card_why_benefit_nonpositive,
+        ReasonClass::NoProgress => labels.card_why_no_progress,
+        ReasonClass::NoTask => labels.card_why_no_task,
+        ReasonClass::Unlisted => {
+            let line = format!("no sentence for not-running reason {why}");
+            if ui.model.borrow_mut().first_told(&line) {
+                report::log("acui-cards", &line);
+            }
+            return outcome_short(labels, why)
+                .unwrap_or_else(|| labels.outcome_unknown_short.to_owned());
+        }
+    };
+    words.to_owned()
+}
+
 /// A fence's cause in plain words. The card never shows the code: one the tables do
 /// not know gets a general sentence, and goes to the log once.
 fn cause_words(ui: &Ui, labels: &Labels, cause: &str) -> String {
     match explain(cause, labels.tongue.outcome_tongue()) {
         Ok(Some(words)) => words.short.to_owned(),
         Ok(None) => {
-            if ui.model.borrow_mut().first_told(cause) {
-                report::log("acui-cards", &format!("no words for fence cause {cause}"));
+            let line = format!("no words for fence cause {cause}");
+            if ui.model.borrow_mut().first_told(&line) {
+                report::log("acui-cards", &line);
             }
             labels.card_cause_unknown.to_owned()
         }

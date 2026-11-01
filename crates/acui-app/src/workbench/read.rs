@@ -43,6 +43,11 @@ static READS: [Cadence; READ_KINDS] = [
 /// A read longer than this leaves a line in the technical log.
 const LONG_READ: Duration = secs(2);
 
+/// A schedule explanation not read again for this long no longer counts as what
+/// the schedule says now. Far above the slow thread's own times, so a read that
+/// waits behind a slow one is not called unreadable.
+pub const EXPLAIN_TOO_OLD: Duration = secs(60);
+
 /// How long a thread with nothing due sleeps: a window coming back pokes it.
 const NOTHING_DUE: Duration = secs(3600);
 

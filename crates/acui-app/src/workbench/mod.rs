@@ -102,6 +102,9 @@ pub fn poke_live(ui: &Ui) {
 }
 
 fn poke(ui: &Ui, lane: Lane) {
+    if lane == Lane::Slow {
+        ui.model.borrow_mut().explain_asked(Instant::now());
+    }
     let gone = ui.reading.borrow_mut().as_mut().is_some_and(|reading| reading.poke(lane));
     if gone {
         lane_failed(ui, lane, format!("{} ended", lane.name()));
@@ -131,6 +134,7 @@ fn check_shown() {
         return;
     };
     let shown = !window.window().is_minimized();
+    ui.model.borrow_mut().set_shown(shown);
     let came_back = ui
         .reading
         .borrow()
@@ -195,6 +199,7 @@ fn explain_landed(ui: &Ui, read: Result<ExplainRead, ClientFailure>) {
     if landed.fault_cleared {
         ui.paint_notices();
     }
+    paint::cards(ui);
 }
 
 fn panicked(ui: &Ui, lane: Lane, message: String) {
@@ -202,6 +207,7 @@ fn panicked(ui: &Ui, lane: Lane, message: String) {
     if ui.model.borrow_mut().read_panicked(lane, message) {
         report::log(lane.name(), &line);
         ui.paint_notices();
+        paint::cards(ui);
     }
 }
 
