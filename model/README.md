@@ -98,7 +98,11 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
     that still cannot be verified exactly (a tie, or a judgement) is reported unverified (`lp_probe_unverified`, its
     component a structural gap) instead of blocking the steady state, whose prices still block when they fail. The
     values on D* come from as few and as small LPs as exactness allows: what S3's basis proves, chords that pin a
-    projection, and D* in its complementary-slackness form (`contracts/formats.md`, "The joint price vector"). Its coverage section classes each pool as covered, a structural gap, verified
+    projection, and D* in its complementary-slackness form (`contracts/formats.md`, "The joint price vector"). A
+    resource's re-solves at plus and minus one grain start from S3: where its basis does not prove them, HiGHS's
+    instance of S3 gets only the moved row ends, warm-started from S3's basis, and the vertex is solved by updating
+    S3's factorised basis where HiGHS ends near it, else by a new elimination (`contracts/formats.md`, "How the
+    re-solves are found"). Its coverage section classes each pool as covered, a structural gap, verified
     zero (a `no_use` declaration the static check found sound) or unknown, lists the static components of the
     flow graph, and gives each price the status of its component, so that a component with no edge to a gap keeps
     its own; it also lists the estimates (`estimate` of a provisional derive) it read;

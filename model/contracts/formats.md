@@ -1010,6 +1010,32 @@ ruling 126 A, below):
     re-solves give `[1, 3/2]` and the projection `1`). They can differ only where one grain more of income can
     overflow at a hard cap while one more unit of stock has no room. HiGHS's marginal lies inside the projection,
     within the tolerance τ (check `marginal`; see "Marginals" below).
+  - **How the re-solves are found** (PRICE-2d; each is the exact optimum of S3's program with that income, the value
+    a new LP of it gives, so `grain` and the check are as before). One grain more or less of income in a step moves
+    only right sides of S3's program: the balance row of that step, and for a resource with a hard cap, one grain
+    more also the overflow row of the step that closes the cap's window (the income it may block). So:
+    1. *Proved by S3's basis.* Where S3's certified basis stays primal feasible with the moved right sides, it stays
+       optimal, and the optimum moves by exactly the moves times their rows' duals: no LP (below, "How the values on
+       D* are found").
+    2. *Otherwise from S3.* HiGHS's instance of S3 gets only the moved row ends and goes on from S3's basis, which is
+       still dual feasible (no cost changed): its dual simplex, without presolve. The basis it ends at is solved
+       exactly by updating S3's basis, which is factorised once: in product form, each variable that enters replacing
+       one that leaves (an eta matrix per exchange), so no new elimination is made; then certified exactly as every
+       LP's basis is ("Exactness and failures"). A basis this does not certify gets the exact pivots of any LP, from a
+       new elimination; so does a basis so far from S3's that the update would cost more than that. The update solves
+       once with S3's factorisation for each variable that enters and applies every eta so far, so its cost grows
+       with the square of their number: it stops once it has taken as long as a new rebuild takes (the mean of this
+       steady state's rebuilds so far, at first twice the time S3's basis took to factorise), and no later update
+       then lets more variables enter than it had. The time picks the way only: what comes of a basis is always what
+       the new elimination gives at it (a vertex the update certifies is that basis's own, which the elimination
+       certifies with no pivot).
+    3. *A new LP*, as before PRICE-2d, where HiGHS does not end optimal there (one grain more or less is infeasible,
+       say: a new LP decides that, as before), where step 2 gives no certified vertex, or where the income would move
+       more than right sides (a store's bound on lost production, or what a move under a read cap takes; no resource
+       has one).
+    The vertex of step 2 is checked exactly against every bound and row it changes (those holding a variable whose
+    value differs from S3's, and the moved rows); every other bound and row is S3's, with S3's values, which S3's own
+    exact check passed. A cap's or a limit's price (`rule_prices`) is a new LP for each re-solve.
   - Each cap with a value (a `reference` counts as one; an income cap too) that the program reads and each limit
     (`rule_prices`) is priced by re-solves, with its value one grain higher and one lower: exact when the two agree, an
     interval otherwise. A relaxed rule's value is its value per period, so its price is the cycle's gain per unit of
@@ -1059,12 +1085,13 @@ one dual optimal point, never a pick per pool: with V = min(A, B, C), each pool'
   price's interval.
 - **How the values on D* are found** (PRICE-2c; every result is the same, exactly, only fewer and smaller LPs are
   solved):
-  - *Proved by S3's basis.* For a resource without a hard cap, one solve with S3's certified basis gives how its basic
-    variables move when the step brings more or less income. Where one grain more (or less) leaves them within their
-    bounds, the basis stays optimal (its dual feasibility does not read the right sides), so the optimum moves by
-    exactly one grain times the balance row's dual in that basis: that chord needs no re-solve. Where a little more (or
-    less) does, the optimum is linear on that side with that slope, its derivative there: the projection's `low` (or
-    `high`) needs no LP.
+  - *Proved by S3's basis.* One solve with S3's certified basis, factorised once for all of them (PRICE-2d), gives how
+    its basic variables move when the step brings more or less income. Where one grain more (or less) leaves them
+    within their bounds, the basis stays optimal (its dual feasibility does not read the right sides), so the optimum
+    moves by exactly one grain times the balance row's dual in that basis (and for a resource with a hard cap, whose
+    one grain more also moves an overflow row, times the sum of the two rows' duals; PRICE-2d): that chord needs no
+    re-solve. For a resource without a hard cap, where a little more (or less) does, the optimum is linear on that
+    side with that slope, its derivative there: the projection's `low` (or `high`) needs no LP.
   - *Pinned by the chords.* With f(δ) the optimum when a step brings δ more of a resource (its balance row's right
     side raised by δ, nothing else), f is concave; its right and left derivatives are the projection's `low` and
     `high`, and its chords enclose them: (f(g) − f(0))/g ≤ `low` ≤ `high` ≤ (f(0) − f(−g))/g. So when the re-solves at
@@ -1253,6 +1280,14 @@ provisional derive under `estimates` without an `estimate` is `estimate_missing`
     new basis: a primal step when the basis is primal feasible, a dual step when it is dual feasible. A basis that is
     neither, singular, invalid (not one basic variable per row, or a nonbasic one at an end that is unbounded), or not
     optimal after the cap is not certified.
+  - **A re-solve of S3 at ±grain** (PRICE-2d; "How the re-solves are found"). Its program differs from S3's only in
+    some right sides, so its basis is solved by updating S3's factorised basis (product form of the inverse: B'⁻¹ =
+    E_k ⋯ E_1·B⁻¹, one eta matrix per variable that enters, each replacing the least leaving one whose entry in its
+    column's solve is not 0; none is singular): the basic values E·(z_B + B⁻¹·Δv) and the duals y + B⁻ᵀ·Δu, from the
+    change Δv of the nonbasic part of the right side and the change Δu of the basic costs. The certificate is the
+    same, exactly. A basis it does not certify, or one too far from S3's for the update to cost less than a new
+    elimination (the update stops once it has taken as long as one), takes the pivoting fallback from a new
+    elimination. A re-solve HiGHS does not end optimal is a new LP, as before.
   - **Otherwise** (no valid basis, no certificate, and every MILP): the variables HiGHS leaves at a bound, and the
     integer ones rounded, are fixed, and the rows they leave tight are solved exactly for the others; when those rows
     do not determine them, each value is converted with `limit_denominator(lp.max_denominator)` instead. Such a solution
