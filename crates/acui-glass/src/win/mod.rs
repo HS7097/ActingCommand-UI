@@ -1,38 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Windows. Nothing is built on it yet: it answers like every other platform
-//! (`unsupported`), with the same calls the native layer will fill in, so the
-//! console keeps the system's frame and there is never a `Frame`.
+//! Windows: the frame's native half, a subclass on each window that gives it
+//! its own hit test (`subclass`). The glass behind the frame is not built yet:
+//! a window's glass area is simply clear, and its calls answer as unsupported.
 
-use std::rc::Rc;
+mod dwm;
+mod hittest;
+mod hwnd;
+mod subclass;
 
-use raw_window_handle::HasWindowHandle;
+pub use subclass::{attach, detach, detach_to_sink, same_window, set_chrome, set_geometry};
 
-use crate::{Capability, Fade, FrameEvent, Geometry, GlassError, Step};
+use crate::{Capability, Fade, GlassError, Step};
 
 fn unsupported() -> GlassError {
-    GlassError { step: Step::Unsupported, detail: "the Aero frame is not built yet".to_owned() }
+    GlassError { step: Step::Unsupported, detail: "the Aero glass is not built yet".to_owned() }
 }
 
 pub fn capability() -> Capability {
-    Capability::SolidOnly
+    Capability::Glass
 }
-
-pub fn attach(
-    _window: &impl HasWindowHandle,
-    _geometry: Geometry,
-    _sigma: f32,
-    _sink: Rc<dyn Fn(FrameEvent)>,
-) -> Result<isize, GlassError> {
-    Err(unsupported())
-}
-
-pub fn same_window(_key: isize, _window: &impl HasWindowHandle) -> bool {
-    false
-}
-
-pub fn set_geometry(_key: isize, _geometry: Geometry) {}
-
-pub fn set_chrome(_key: isize, _on: bool) {}
 
 pub fn show_glass(_key: isize, _fade: Option<Fade>) -> Result<(), GlassError> {
     Err(unsupported())
@@ -45,9 +31,3 @@ pub fn fade_out(_key: isize, _fade: Fade) -> Result<(), GlassError> {
 pub fn hide_glass(_key: isize) -> Result<(), GlassError> {
     Err(unsupported())
 }
-
-pub fn detach(_key: isize) -> Result<(), GlassError> {
-    Err(unsupported())
-}
-
-pub fn detach_to_sink(_key: isize) {}

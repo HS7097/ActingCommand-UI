@@ -45,14 +45,22 @@ export global Look {
     // whenever a theme is picked in any window.
     in property <Skin> skin;
     // Whether this window draws its own Aero frame instead of the system's:
-    // only on Windows, once that frame is in place. Nothing sets it yet.
+    // only on Windows, and it falls back to false if that frame cannot be put
+    // in place.
     in property <bool> chrome;
+    // Whether the glass of that frame can be seen through; it is drawn solid
+    // when not.
+    in property <bool> glass;
     // Whether the window is maximized; its own frame has no edges or rounded
     // corners then.
     in property <bool> maximized;
     // Why this window's look falls short of its theme, in plain words for the
     // window to show; empty when it does not.
     in property <string> failure;
+    // The caption buttons of the frame; the window's owner acts on them.
+    callback minimize();
+    callback toggle-maximize();
+    callback close();
     out property <bool> aero: root.skin == Skin.aero;
     // The page the window's contents are drawn on, and the window's own ground:
     // under its own frame the window is clear, for the glass to show.

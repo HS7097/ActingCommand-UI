@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { Button, LineEdit, ListView, ScrollView, Slider, TextEdit } from "std-widgets.slint";
-import { Card, CardTitle, Look, Scale, Severity, SkinButton, SkinCheckBox, SkinComboBox, SkinTab, WindowChrome } from "kit/lib.slint";
+import { AeroConst, Card, CardTitle, Look, Scale, Severity, SkinButton, SkinCheckBox, SkinComboBox, SkinTab, WindowChrome } from "kit/lib.slint";
 
 // The kit's globals the Rust side reaches, each window's own copy.
-export { Scale, Look }
+export { Scale, Look, AeroConst }
 
 export struct RowItem {
     // A run's recovery header, with its folded rows following it.
@@ -230,8 +230,9 @@ export component LedgerWindow inherits Window {
     icon: @image-url("../assets/acui-256.png");
     preferred-width: 1400px;
     preferred-height: 900px;
-    min-width: 1100px;
-    min-height: 700px;
+    no-frame: Look.chrome;
+    min-width: 1100px + Look.chrome-width;
+    min-height: 700px + Look.chrome-height;
     default-font-size: Scale.body-font;
     background: Look.window-background;
 
@@ -353,6 +354,11 @@ export component LedgerWindow inherits Window {
 
     // The page, and the frame the theme draws round it.
     WindowChrome {
+        title: root.title;
+        minimize-label: Strings.caption-minimize;
+        maximize-label: Strings.caption-maximize;
+        restore-label: Strings.caption-restore;
+        close-label: Strings.caption-close;
         VerticalLayout {
             padding: 8px;
             spacing: 8px;
@@ -1019,8 +1025,9 @@ export component WorkbenchWindow inherits Window {
     icon: @image-url("../assets/acui-256.png");
     preferred-width: 820px;
     preferred-height: 560px;
-    min-width: 600px;
-    min-height: 420px;
+    no-frame: Look.chrome;
+    min-width: 600px + Look.chrome-width;
+    min-height: 420px + Look.chrome-height;
     default-font-size: Scale.body-font;
     background: Look.window-background;
 
@@ -1062,6 +1069,11 @@ export component WorkbenchWindow inherits Window {
 
     // The page, and the frame the theme draws round it.
     WindowChrome {
+        title: root.title;
+        minimize-label: Strings.caption-minimize;
+        maximize-label: Strings.caption-maximize;
+        restore-label: Strings.caption-restore;
+        close-label: Strings.caption-close;
         VerticalLayout {
             padding: 8px;
             spacing: 8px;

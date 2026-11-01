@@ -28,7 +28,7 @@ use crate::ledger::paint::shared;
 use crate::ledger::{self, LedgerHandle, OpenArgs};
 use crate::report;
 use crate::settings::{Settings, SettingsFile, SettingsIssue, TextSize, Theme};
-use crate::skin::{self, Skins};
+use crate::skin::{self, Skins, WindowKey};
 use crate::strings::{fill, Labels, Language};
 use crate::{LedgerWindow, Look, Scale, Strings, WorkbenchWindow};
 
@@ -36,7 +36,7 @@ use crate::{LedgerWindow, Look, Scale, Strings, WorkbenchWindow};
 /// shown, the text size's factor, the theme's skin, and the three boxes on what
 /// is picked. A new window gets it before it shows.
 macro_rules! apply_appearance {
-    ($window:expr, $ui:expr) => {{
+    ($window:expr, $ui:expr, $key:expr) => {{
         let (window, ui) = ($window, $ui);
         fill_strings(window.global::<Strings>(), ui.labels());
         let size = ui.text_size.get();
@@ -44,7 +44,7 @@ macro_rules! apply_appearance {
         window.set_text_size_index(size.index());
         window.set_language_index(language_index(ui.language.get()));
         window.set_theme_index(ui.theme.get().index());
-        skin::apply_before_show(window.global::<Look>(), ui);
+        skin::apply_before_show(window.global::<Look>(), ui, $key);
     }};
 }
 
@@ -143,12 +143,14 @@ impl Ui {
     /// shows, then shown.
     pub fn show_workbench(&self, window: WorkbenchWindow) -> Result<(), PlatformError> {
         install_workbench(&window);
-        apply_appearance!(&window, self);
+        apply_appearance!(&window, self, WindowKey::Workbench);
         *self.workbench.borrow_mut() = Some(window.clone_strong());
         self.paint_workbench();
         self.paint_notices();
         launcher::paint(self);
-        window.show()
+        window.show()?;
+        self.skins.after_show(WindowKey::Workbench);
+        Ok(())
     }
 
     /// The ledger window of `mode`: the one open is shown again; else a new
@@ -184,7 +186,7 @@ impl Ui {
         self.next_id.set(id + 1);
         let open = OpenArgs { state_root: launcher.state_root.clone(), mode, tab };
         let handle = LedgerHandle::new(id, window, open);
-        apply_appearance!(&handle.window, self);
+        apply_appearance!(&handle.window, self, WindowKey::Ledger(id));
         ledger::install_callbacks(&handle);
         handle.window.window().on_close_requested(move || {
             if let Some(ui) = current() {
@@ -198,11 +200,13 @@ impl Ui {
         handle.refresh(self);
         if let Err(error) = handle.window.show() {
             // Nothing was read: the window goes as it came.
+            self.skins.window_closing(WindowKey::Ledger(id));
             let removed = self.ledgers.borrow_mut().remove(&id);
             drop(removed);
             self.window_shown(Err(error));
             return;
         }
+        self.skins.after_show(WindowKey::Ledger(id));
         self.window_shown(Ok(()));
         handle.start(None);
     }
@@ -218,11 +222,12 @@ impl Ui {
         self.paint_notices();
     }
 
-    /// A ledger window a person closed: its timers stop and its reads in
-    /// flight are let go at once (`LedgerHandle::close`); it leaves the
-    /// registry once the close has been handled, so the window is never let go
-    /// inside its own callback.
+    /// A ledger window a person closed: its native frame comes off before the
+    /// window hides, its timers stop and its reads in flight are let go at once
+    /// (`LedgerHandle::close`); it leaves the registry once the close has been
+    /// handled, so the window is never let go inside its own callback.
     fn close_ledger(&self, id: u64) {
+        self.skins.window_closing(WindowKey::Ledger(id));
         if let Some(handle) = self.ledger(id) {
             handle.close();
         }
@@ -234,9 +239,11 @@ impl Ui {
         });
     }
 
-    /// After the event loop: every window hidden and let go, before the shared
-    /// state itself goes. A window that does not hide is said in the log.
+    /// After the event loop: every native frame off, then every window hidden
+    /// and let go, before the shared state itself goes. A window that does not
+    /// hide is said in the log.
     pub fn close_all(&self) {
+        self.skins.detach_all();
         let ledgers = std::mem::take(&mut *self.ledgers.borrow_mut());
         for handle in ledgers.values() {
             handle.close();
@@ -271,6 +278,7 @@ impl Ui {
             fill_strings(handle.window.global::<Strings>(), labels);
             handle.window.set_language_index(index);
         }
+        self.skins.paint_failures(self);
         self.settings_saved(saved);
         self.paint_workbench();
         launcher::paint(self);
@@ -283,17 +291,20 @@ impl Ui {
     /// window, through the one scale property. Only the text size is written:
     /// the language is the file's own, or a `--lang` override that this run
     /// must not save over it. A save that fails still leaves the size applied,
-    /// and says so at the top.
+    /// and says so at the top. The caption band grows with the text, so a
+    /// window's own frame is told its new measures.
     pub fn set_text_size(&self, size: TextSize) {
         let saved = self.settings.save_text_size(size);
         self.text_size.set(size);
         if let Some(window) = self.workbench() {
             window.global::<Scale>().set_factor(size.factor());
             window.set_text_size_index(size.index());
+            self.skins.geometry_changed(self, WindowKey::Workbench);
         }
         for handle in self.ledgers() {
             handle.window.global::<Scale>().set_factor(size.factor());
             handle.window.set_text_size_index(size.index());
+            self.skins.geometry_changed(self, WindowKey::Ledger(handle.id));
         }
         self.settings_saved(saved);
     }
@@ -307,11 +318,11 @@ impl Ui {
         self.theme.set(theme);
         if let Some(window) = self.workbench() {
             window.set_theme_index(theme.index());
-            self.skins.switch(window.global::<Look>(), theme);
+            self.skins.switch(self, WindowKey::Workbench, theme);
         }
         for handle in self.ledgers() {
             handle.window.set_theme_index(theme.index());
-            self.skins.switch(handle.window.global::<Look>(), theme);
+            self.skins.switch(self, WindowKey::Ledger(handle.id), theme);
         }
         // The save rewrote the line a bad value stood on, so the warning the
         // start gave about that line ("kept as it is") is no longer true.
@@ -478,6 +489,8 @@ fn install_workbench(window: &WorkbenchWindow) {
             ui.paint_notices();
             return CloseRequestResponse::KeepWindowShown;
         }
+        // Its native frame comes off before it hides.
+        ui.skins.window_closing(WindowKey::Workbench);
         // The ledger windows close with it.
         if let Err(error) = slint::quit_event_loop() {
             report::log("acui-window", &format!("quit_event_loop: {error}"));

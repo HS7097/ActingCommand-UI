@@ -2,15 +2,119 @@
 // What a window's contents are drawn in: the page, and around it the frame
 // the theme draws.
 import { Palette } from "std-widgets.slint";
-import { Look } from "tokens.slint";
+import { AeroConst, CaptionButtons, GlowText, Streaks } from "aero.slint";
+import { Look, Scale } from "tokens.slint";
 
-// Holds a window's contents on its page. In the Aero skin the std widgets in
-// the window are set light, to sit on Win7's white page; back in the flat
-// skin they follow the system's light or dark setting again. The frame is
-// the system's for now: `Look.chrome` stays false, so the page fills the
-// window. The page sits in a layout rather than at a set place, so the
-// contents' minimum and preferred size still reach the window.
+// The glass behind the caption band and the frame: clear where the window can
+// be seen through, or solid where it cannot, and over it what Win7 drew on
+// the glass.
+component GlassLayers inherits Rectangle {
+    border-radius: Look.corner;
+    clip: true;
+    Rectangle {
+        background: Look.glass ? AeroConst.tint : AeroConst.glass-solid;
+    }
+    Rectangle {
+        background: Colors.white.with-alpha(AeroConst.haze);
+    }
+    // The reflection band.
+    Rectangle {
+        y: 0px;
+        height: 56px;
+        background: @linear-gradient(180deg, Colors.white.with-alpha(AeroConst.highlight) 0%, Colors.white.with-alpha(0) 100%);
+    }
+    Streaks { }
+}
+
+// The caption band: the mark, the title and the caption buttons. The native
+// layer's hit test treats all of the band but the buttons as the title bar, so
+// the system moves, snaps and maximizes the window from it and nothing else
+// here can be clicked: never put a control in this band.
+component CaptionBar inherits Rectangle {
+    in property <string> title;
+    in property <string> minimize-label;
+    in property <string> maximize-label;
+    in property <string> restore-label;
+    in property <string> close-label;
+    HorizontalLayout {
+        x: 6px;
+        y: (parent.height - self.height) / 2;
+        width: parent.width - 6px - AeroConst.caption-buttons-width - 2 * AeroConst.caption-buttons-inset;
+        height: 24px * Scale.factor;
+        spacing: 2px;
+        Rectangle {
+            width: 18px;
+            Image {
+                x: 0px;
+                y: (parent.height - self.height) / 2;
+                width: 16px;
+                height: 16px;
+                source: @image-url("../../assets/acui-256.png");
+                accessible-role: none;
+            }
+        }
+        GlowText {
+            text: root.title;
+            size: 12px * Scale.factor;
+        }
+        Rectangle { }
+    }
+    CaptionButtons {
+        x: parent.width - self.width - AeroConst.caption-buttons-inset;
+        y: 0px;
+        maximized: Look.maximized;
+        minimize-label: root.minimize-label;
+        maximize-label: root.maximize-label;
+        restore-label: root.restore-label;
+        close-label: root.close-label;
+        minimize => {
+            Look.minimize();
+        }
+        toggle-maximize => {
+            Look.toggle-maximize();
+        }
+        close-window => {
+            Look.close();
+        }
+    }
+}
+
+// The two edges every Win7 window had: dark outside, light inside.
+component FrameEdges inherits Rectangle {
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        border-radius: Look.corner;
+        border-width: 1px;
+        border-color: AeroConst.frame-outer;
+    }
+    Rectangle {
+        x: 1px;
+        y: 1px;
+        width: parent.width - 2px;
+        height: parent.height - 2px;
+        border-radius: max(0px, Look.corner - 1px);
+        border-width: 1px;
+        border-color: AeroConst.frame-inner;
+    }
+}
+
+// Holds a window's contents on its page, with the frame the theme draws round
+// it. In the Aero skin the std widgets in the window are set light, to sit on
+// Win7's white page; back in the flat skin they follow the system's light or
+// dark setting again. Without `Look.chrome` the frame is the system's and the
+// page fills the window. The page sits in a layout rather than at a set place,
+// so the contents' minimum and preferred size still reach the window; the
+// frame's parts are all shown by `if` and placed, so they pass on no size and
+// the contents stay alive through a switch.
 export component WindowChrome inherits Rectangle {
+    in property <string> title;
+    in property <string> minimize-label;
+    in property <string> maximize-label;
+    in property <string> restore-label;
+    in property <string> close-label;
     property <bool> aero: Look.aero;
     // A window starts in the flat skin and the std widgets' own setting,
     // which follows the system; Look.skin is set only once it exists.
@@ -22,6 +126,23 @@ export component WindowChrome inherits Rectangle {
     changed aero => {
         Palette.color-scheme = root.aero ? ColorScheme.light : ColorScheme.unknown;
     }
+    if Look.chrome: GlassLayers {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+    }
+    if Look.chrome: CaptionBar {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: Look.caption-height;
+        title: root.title;
+        minimize-label: root.minimize-label;
+        maximize-label: root.maximize-label;
+        restore-label: root.restore-label;
+        close-label: root.close-label;
+    }
     VerticalLayout {
         padding-left: Look.frame;
         padding-right: Look.frame;
@@ -32,5 +153,11 @@ export component WindowChrome inherits Rectangle {
             clip: Look.chrome;
             @children
         }
+    }
+    if Look.chrome && !Look.maximized: FrameEdges {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
     }
 }

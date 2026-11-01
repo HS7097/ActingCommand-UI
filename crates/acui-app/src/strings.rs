@@ -442,12 +442,11 @@ pub struct Labels {
     pub caption_restore: &'static str,
     pub caption_close: &'static str,
     /// At the top of an Aero window whose own frame, or whose glass, did not
-    /// come up: what the window is drawn with instead. Not said yet: no window
-    /// draws a frame of its own so far.
-    #[allow(dead_code)]
+    /// come up: what the window is drawn with instead. Then the frame's close
+    /// button not getting through to the window.
     pub chrome_failed: &'static str,
-    #[allow(dead_code)]
     pub glass_failed: &'static str,
+    pub close_failed: &'static str,
     /// The settings file: the variables its directory comes from; file, error;
     /// file, line, key, value; file, line; file; file, error.
     pub settings_no_dir: &'static str,
@@ -822,6 +821,7 @@ pub const ZH: Labels = Labels {
     caption_close: "关闭",
     chrome_failed: "Aero 外框没有生效，这个窗口改用系统标题栏。详情见技术日志。",
     glass_failed: "Aero 玻璃没有生效，这个窗口改用实心外观。详情见技术日志。",
+    close_failed: "这个窗口没能关闭。详情见技术日志。",
     settings_no_dir: "找不到存放设置文件的目录（{} 未设置）：本次按默认设置运行，改了的设置也存不下来",
     settings_unreadable: "设置文件 {} 读不出：{}。本次按默认设置运行；为免覆盖原文件，本次不保存设置",
     settings_unknown_value: "设置文件 {} 第 {} 行的取值认不出（{} = {}），本次按默认处理；这一行原样保留",
@@ -1192,6 +1192,7 @@ pub const EN: Labels = Labels {
     caption_close: "Close",
     chrome_failed: "The Aero frame did not take effect: this window uses the system title bar instead. The technical log has the details.",
     glass_failed: "The Aero glass did not take effect: this window uses a solid look instead. The technical log has the details.",
+    close_failed: "This window could not be closed. The technical log has the details.",
     settings_no_dir: "No directory for the settings file ({} not set): this run uses the default settings, and a changed setting cannot be saved",
     settings_unreadable: "The settings file {} could not be read: {}. This run uses the default settings and saves none, so the file is never written over",
     settings_unknown_value: "The settings file {}, line {}: the value is not recognized ({} = {}); the default is used, and the line is kept as it is",

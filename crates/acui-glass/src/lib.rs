@@ -76,6 +76,9 @@ pub struct Fade {
 #[derive(Debug)]
 pub enum FrameEvent {
     Maximized(bool),
+    /// For the technical log, and no failure: something optional this Windows
+    /// does not offer.
+    Info(String),
     Failed(GlassError),
 }
 
