@@ -20,11 +20,14 @@
 //! what it has to print goes to the console it was started from, if any.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
+// The native window work is acui-glass's; `report` is the one exception here.
+#![deny(unsafe_code)]
 
 mod install;
 mod launcher;
 mod ledger;
 mod phrase;
+#[allow(unsafe_code)]
 mod report;
 mod settings;
 mod skin;

@@ -53,7 +53,7 @@ pub struct Ui {
     pub text_size: Cell<TextSize>,
     pub theme: Cell<Theme>,
     /// Each window's look, by the theme.
-    skins: Skins,
+    pub skins: Skins,
     /// The settings file the boxes save to.
     pub settings: SettingsFile,
     pub notices: RefCell<Notices>,
@@ -100,7 +100,7 @@ impl Ui {
             language: Cell::new(language),
             text_size: Cell::new(stored.text_size),
             theme: Cell::new(stored.theme),
-            skins: Skins,
+            skins: Skins::detect(),
             settings,
             notices: RefCell::new(Notices { settings: issues, save: None, window: None }),
             launcher,
