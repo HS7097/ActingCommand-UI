@@ -22,7 +22,8 @@
 //! resume of the one scheduling pause a status read reported (`resume_paused`).
 //! Every connection a session keeps is rebuilt after the client latched it
 //! (see `Rebuilding`); what a person does goes out on a fresh connection each
-//! time.
+//! time. The workbench's own reads, which follow the Runtime across restarts,
+//! are in `workbench`.
 
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::BTreeMap;
@@ -45,8 +46,9 @@ use acui_rows::{
 };
 use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
-    FactValue, InstancePauseStage, OwnerEpoch, RuntimeFactRecord, RuntimeFactScope,
-    RuntimeFactSnapshot, RuntimeResult, SchedulingPauseExpectation, SchedulingPauseScope,
+    FactValue, InstancePauseStage, InstancePauseState, OwnerEpoch, RuntimeFactRecord,
+    RuntimeFactScope, RuntimeFactSnapshot, RuntimeResult, SchedulingPauseExpectation,
+    SchedulingPauseScope, SchedulingPauseState,
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
@@ -58,6 +60,8 @@ use actingcommand_runtime_client::{
     RuntimeMaterialCompleteResult, RuntimeMaterialSelection,
 };
 use anyhow::{anyhow, bail, Result};
+
+pub mod workbench;
 
 /// The console's cap on one material, on either face: 8 MiB, the bound it kept
 /// while it still assembled 64 KiB online ranges itself (128 of them). Both
@@ -1245,16 +1249,7 @@ fn read_instances(main: &Rebuilding, root: &Path) -> Result<RuntimeInstances, Cl
     // Every pause names the owner epoch of this one status read, with its own
     // scope's revision, so a resume of it lifts only what this read saw.
     let owner_epoch = status.owner_epoch();
-    let global_pause = status.scheduling_pause().map(|pause| PauseFact {
-        reason: pause.pause_reason.as_str().to_owned(),
-        revision: pause.revision,
-        since_unix_ms: pause.since_unix_ms,
-        stage: None,
-        target: PauseTarget {
-            scope: SchedulingPauseScope::Global,
-            expected: SchedulingPauseExpectation { owner_epoch, revision: pause.revision },
-        },
-    });
+    let global_pause = status.scheduling_pause().map(|pause| global_pause_fact(pause, owner_epoch));
     let mut instances: Vec<RuntimeInstance> = status
         .instances()
         .iter()
@@ -1266,25 +1261,9 @@ fn read_instances(main: &Rebuilding, root: &Path) -> Result<RuntimeInstances, Cl
                 lease_active: instance.lease_active(),
                 takeover_cooldown_active: instance.takeover_cooldown_active(),
                 queued_request_count: instance.queued_request_count(),
-                pause: instance.pause().map(|pause| PauseFact {
-                    reason: pause.pause_reason.as_str().to_owned(),
-                    revision: pause.revision,
-                    since_unix_ms: pause.since_unix_ms,
-                    stage: Some(match pause.stage {
-                        InstancePauseStage::Draining => PauseStage::Draining,
-                        InstancePauseStage::Paused => PauseStage::Paused,
-                        InstancePauseStage::Released => PauseStage::Released,
-                    }),
-                    target: PauseTarget {
-                        scope: SchedulingPauseScope::Instance {
-                            instance_alias: instance.instance_alias().to_string(),
-                        },
-                        expected: SchedulingPauseExpectation {
-                            owner_epoch,
-                            revision: pause.revision,
-                        },
-                    },
-                }),
+                pause: instance
+                    .pause()
+                    .map(|pause| instance_pause_fact(instance.instance_alias(), pause, owner_epoch)),
             }),
             game: None,
             server: None,
@@ -1298,6 +1277,43 @@ fn read_instances(main: &Rebuilding, root: &Path) -> Result<RuntimeInstances, Cl
         global_pause,
         instances,
     })
+}
+
+/// The global pause one status read reported, naming that read's owner epoch.
+fn global_pause_fact(pause: &SchedulingPauseState, owner_epoch: OwnerEpoch) -> PauseFact {
+    PauseFact {
+        reason: pause.pause_reason.as_str().to_owned(),
+        revision: pause.revision,
+        since_unix_ms: pause.since_unix_ms,
+        stage: None,
+        target: PauseTarget {
+            scope: SchedulingPauseScope::Global,
+            expected: SchedulingPauseExpectation { owner_epoch, revision: pause.revision },
+        },
+    }
+}
+
+/// The pause of the instance `alias` one status read reported, naming that
+/// read's owner epoch.
+fn instance_pause_fact(
+    alias: &str,
+    pause: &InstancePauseState,
+    owner_epoch: OwnerEpoch,
+) -> PauseFact {
+    PauseFact {
+        reason: pause.pause_reason.as_str().to_owned(),
+        revision: pause.revision,
+        since_unix_ms: pause.since_unix_ms,
+        stage: Some(match pause.stage {
+            InstancePauseStage::Draining => PauseStage::Draining,
+            InstancePauseStage::Paused => PauseStage::Paused,
+            InstancePauseStage::Released => PauseStage::Released,
+        }),
+        target: PauseTarget {
+            scope: SchedulingPauseScope::Instance { instance_alias: alias.to_string() },
+            expected: SchedulingPauseExpectation { owner_epoch, revision: pause.revision },
+        },
+    }
 }
 
 /// Folds a snapshot's instance-scoped `task.game` / `task.server` / `task.page`
