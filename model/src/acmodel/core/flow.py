@@ -62,10 +62,13 @@ whose dual slack at the exact optimal point of S3's dual is above 0 runs in no o
 **The joint price vector** (#424 ACM-PRICE addendum 2.1 §2.2, ruling 127 iii; PRICE-2b-1). The exported prices are
 one point of D*, never a pick per pool. Steps:
 1. the dual of S3's program, generated from its rows (`_dual`): a variable per row (free for an equality, as the
-   difference of two non-negative ones), one per variable with an upper bound, a row per column; D* adds the
-   strong-duality row, the dual's cost at V0 (`FACE`). That HiGHS's least cost is V0 is checked exactly
-   (`duality`), and so is every solution on the dual against every dual row and the face
-   (`lp_numeric_check_failed`, stage `dual`, which blocks the steady state: no price without the whole vector);
+   difference of two non-negative ones), one per variable with an upper bound, a row per column; D*, its optimal face,
+   is its points at the cost V0 (the strong-duality row `FACE`). That HiGHS's least cost is V0 is checked exactly
+   (`duality`). Every LP on D* is solved on its complementary-slackness form with S3's exact optimum, which needs no
+   strong-duality row (`_restricted`; PRICE-2c, and PRICE-2e for the selection), every solution checked exactly against
+   its rows, and the vector also at the strong-duality row (`lp_numeric_check_failed`, stage `dual`, which blocks the
+   steady state: no price without the whole vector). S3's own optimal face, where `most` and the ties are probed, is
+   likewise in its complementary-slackness form with that dual point, with no row V ≥ V0 (`_optimal_face`, PRICE-2e);
 2. the projection: a pool's coordinate is the mean over the cycle's steps of its balance rows' duals, and its
    interval `[low, high]` its least and greatest value on D*, an unbounded end null;
 3. the selection (`joint`), each step an exact LP: (1) a pool bounded below only that a main goal values is fixed
@@ -197,6 +200,9 @@ NO_BASIS, SOLVE_FAILED = "no_basis", "solve_failed"
 # HiGHS's simplex strategies (`SimplexStrategy`): the dual simplex, which `linprog` sets for every solve, and the primal
 # simplex, which goes on from a feasible basis when only the objective changes (`_highs_again`, PRICE-2c).
 DUAL_SIMPLEX, PRIMAL_SIMPLEX = 1, 4
+# The faces whose LPs are warm-started, each from its own HiGHS instance (`_Solver.warm`, PRICE-2e): D* and S3's optimal
+# face. It bounds the instances held; it chooses where HiGHS starts only, never a value.
+WARM_FACES = 2
 
 
 @dataclass(frozen=True)
@@ -1440,7 +1446,9 @@ class _Dual:
 
     def face(self, optimum: Fraction) -> tuple[_Row, ...]:
         """Its rows and the strong-duality row, its cost at the program's optimum (`FACE`): their solutions are D*,
-        the dual's optimal face."""
+        the dual's optimal face, in its dense form. Since PRICE-2e no LP of the steady state is solved on it (each is
+        solved on D*'s complementary-slackness form, `_restricted`, the same set); the vector's exact check still
+        reads the strong-duality row (`_Solver.joint`)."""
         return (*self.rows, _Row(FACE, dict(self.cost), "eq", optimum, None))
 
 
@@ -1804,6 +1812,47 @@ def _highs(arrays: _Arrays, presolve: bool) -> _Run:
     then the equalities; the same options), through the HiGHS bindings scipy bundles and `linprog` calls
     (`scipy.optimize._highspy._core`; scipy is pinned in requirements.txt), so that the basis statuses can be read too
     (PRICE-2c): the exact vertex is rebuilt from them (`core.exact`)."""
+    from scipy.optimize._highspy import _core as highs
+
+    lp, n, m = _highs_lp(arrays)
+    solver = highs._Highs()
+    if solver.passOptions(_options(presolve, DUAL_SIMPLEX)) == highs.HighsStatus.kError:
+        return _Run(4, "passOptions")
+    if solver.passModel(lp) == highs.HighsStatus.kError:
+        return _Run(2, solver.modelStatusToString(highs.HighsModelStatus.kModelError))
+    return _highs_run(solver, n, m)
+
+
+def _highs_seeded(arrays: _Arrays, seed: _Seed) -> _Run:
+    """An LP on S3's optimal face (`_optimal_face`, PRICE-2e) solved by HiGHS from S3's basis (`seed`), restricted to
+    the face: each column and each of S3's rows starts at the status S3 ended at, and each row S3 lacks is basic.
+    S3's vertex lies on the face (complementary slackness) and meets the rows the caller adds (`_meets`), so that basis
+    is primal feasible there, and HiGHS's primal simplex goes on from it without presolve (which would set it aside),
+    instead of solving from scratch. Where HiGHS does not take the basis, it solves from scratch as `_highs` does. Only
+    where HiGHS starts differs: the exact vertex and its certificate are the LP's own."""
+    from scipy.optimize._highspy import _core as highs
+
+    if any(key not in seed.columns for key in arrays.columns):  # not S3's columns: no basis of S3's to start from
+        return _highs(arrays, True)
+    lp, n, m = _highs_lp(arrays)
+    solver = highs._Highs()
+    failed = highs.HighsStatus.kError
+    basis = highs.HighsBasis()
+    basis.col_status = [seed.columns[key] for key in arrays.columns]
+    basis.row_status = [seed.rows.get(row.key, highs.HighsBasisStatus.kBasic) for row in (*arrays.le, *arrays.eq)]
+    basis.valid = True
+    if solver.passOptions(_options(False, PRIMAL_SIMPLEX)) == failed:
+        return _Run(4, "passOptions")
+    if solver.passModel(lp) == failed:
+        return _Run(2, solver.modelStatusToString(highs.HighsModelStatus.kModelError))
+    if solver.setBasis(basis) == failed:  # not taken: from scratch, as `_highs`
+        if solver.passOptions(_options(True, DUAL_SIMPLEX)) == failed:
+            return _Run(4, "passOptions")
+    return _highs_run(solver, n, m)
+
+
+def _highs_lp(arrays: _Arrays) -> tuple[Any, int, int]:
+    """The LP of `arrays` as HiGHS takes it (`_highs`), with its numbers of columns and rows."""
     import numpy as np
     from scipy import sparse
     from scipy.optimize._highspy import _core as highs
@@ -1828,12 +1877,7 @@ def _highs(arrays: _Arrays, presolve: bool) -> _Run:
     lp.a_matrix_.start_ = matrix.indptr
     lp.a_matrix_.index_ = matrix.indices
     lp.a_matrix_.value_ = matrix.data
-    solver = highs._Highs()
-    if solver.passOptions(_options(presolve, DUAL_SIMPLEX)) == highs.HighsStatus.kError:
-        return _Run(4, "passOptions")
-    if solver.passModel(lp) == highs.HighsStatus.kError:
-        return _Run(2, solver.modelStatusToString(highs.HighsModelStatus.kModelError))
-    return _highs_run(solver, n, matrix.shape[0])
+    return lp, n, matrix.shape[0]
 
 
 def _options(presolve: bool, strategy: int) -> Any:
@@ -1849,18 +1893,59 @@ def _options(presolve: bool, strategy: int) -> Any:
     return options
 
 
-def _highs_again(solver: Any, arrays: _Arrays) -> _Run:
+def _highs_again(solver: Any, arrays: _Arrays, added: tuple[_Row, ...] = ()) -> _Run:
     """The LP that HiGHS instance `solver` holds, with the objective of `arrays` instead (PRICE-2c): the same rows and
     bounds, so the basis of its last solve is still primal feasible, and HiGHS's primal simplex goes on from it,
-    without presolve (which would set the basis aside), instead of solving from scratch."""
+    without presolve (which would set the basis aside), instead of solving from scratch.
+
+    With `added` (PRICE-2e: the selection's rows that fix a coordinate), those equality rows come after the rows it
+    holds (`arrays` lists them last), each basic in the basis, so the basis stays a basis. It stays primal feasible when
+    the last solution meets them (a pool fixed at the extreme the last LP found there); else HiGHS's primal simplex
+    first restores feasibility. Either way only where HiGHS starts differs."""
     import numpy as np
     from scipy.optimize._highspy import _core as highs
 
     n = len(arrays.columns)
-    if solver.passOptions(_options(False, PRIMAL_SIMPLEX)) == highs.HighsStatus.kError:
+    failed = highs.HighsStatus.kError
+    if added:
+        block = _matrix(list(added), arrays.columns)
+        ends = np.array([_float(row.rhs) for row in added], dtype=np.float64)
+        starts = block.indptr[:-1].astype(np.int32)
+        if solver.addRows(len(added), ends, ends, int(block.nnz), starts, block.indices.astype(np.int32),
+                          block.data.astype(np.float64)) == failed:
+            return _Run(4, "addRows")
+    if solver.passOptions(_options(False, PRIMAL_SIMPLEX)) == failed:
         return _Run(4, "passOptions")
     solver.changeColsCost(n, np.arange(n, dtype=np.int32), np.asarray(arrays.c, dtype=np.float64))
     return _highs_run(solver, n, len(arrays.le) + len(arrays.eq))
+
+
+def _added(held: tuple[_Row, ...], rows: tuple[_Row, ...]) -> tuple[_Row, ...] | None:
+    """The rows that `rows` adds after the rows a HiGHS instance holds (`held`), for a warm start (`_highs_again`): ()
+    for the same rows, the rest when `rows` begins with `held`'s rows, the same objects, and adds equalities only; else
+    None (a new instance)."""
+    if rows is held:
+        return ()
+    if len(rows) < len(held) or any(mine is not theirs for mine, theirs in zip(held, rows)):
+        return None
+    extra = rows[len(held):]
+    return extra if all(row.sense == "eq" for row in extra) else None
+
+
+def _extended(arrays: _Arrays, program: _Program, added: tuple[_Row, ...]) -> _Arrays:
+    """`arrays`, of the rows a HiGHS instance holds, with `program`'s objective and the equality rows `added` after
+    them, in the order the instance holds its rows (`_highs_again`): the at-most rows, the equalities, then the added
+    ones."""
+    import numpy as np
+    from scipy import sparse
+
+    c = _costs(program, arrays.columns)
+    if not added:
+        return replace(arrays, c=c)
+    block = _matrix(list(added), arrays.columns)
+    a_eq = block if arrays.a_eq is None else sparse.csr_array(sparse.vstack([arrays.a_eq, block]))
+    b_eq = np.concatenate((arrays.b_eq, np.array([_float(row.rhs) for row in added], dtype=np.float64)))
+    return replace(arrays, c=c, rows=[*arrays.rows, *added], eq=[*arrays.eq, *added], a_eq=a_eq, b_eq=b_eq)
 
 
 def _highs_run(solver: Any, n: int, m: int) -> _Run:
@@ -2004,12 +2089,16 @@ def _restricted(dual: _Dual, program: _Program, x: dict[Key, Fraction]) -> tuple
 
     A dual feasible point is optimal exactly when it is complementary to one primal optimum (c·x* ≤ (Aᵀy + w)·x* =
     y·(Ax*) + w·x* ≤ b·y + u·w holds with equality exactly then, `_never`), so these are D*'s points, with no
-    strong-duality row: a set HiGHS solves on far faster than the face, whose dense cost row it can take minutes on. x*
-    must be an exact optimum: S3's (exactly feasible, and exactly optimal once `duality` has found a dual point of the
-    same cost), or for a forcing cost an optimum of S3 that runs the activity its `most` (the solution of its `most`
-    probe, exactly feasible on S3's optimal face; S3's own when complementary slackness gave `most` 0). The LPs that
-    read only a value on D* (the projections, the intervals, the ranges, the forcing costs) are solved on it; the
-    selection and its exact check keep the face."""
+    strong-duality row: a set HiGHS solves on far faster than the face, whose dense cost row it can take minutes on. In
+    the dual's own terms (its variables y, w ≥ 0 and its rows Aᵀy + w ≥ c), these are its complementary-slackness
+    conditions with x*, the dual of its dual: a dual variable whose reduced cost (its primal row's slack b_i − a_i·x*,
+    or for a `w` the bound's slack u_j − x*_j) is above 0 sits at its bound 0, and a dual row whose dual (x*_j) is above
+    0 is tight. x* must be an exact optimum: S3's (exactly feasible, and exactly optimal once `duality` has found a dual
+    point of the same cost), or for a forcing cost an optimum of S3 that runs the activity its `most` (the solution of
+    its `most` probe, exactly feasible on S3's optimal face; S3's own when complementary slackness gave `most` 0). Every
+    LP on D* is solved on it: the projections, the intervals, the ranges, the forcing costs (PRICE-2c), and since
+    PRICE-2e each step of the selection and its exact check (`_Solver.joint`), whose dense form held the 31-minute LP of
+    a large model."""
     zero = Fraction(0)
     variables: dict[Key, Any] = dict(dual.variables)
     for row in program.rows:
@@ -2024,6 +2113,83 @@ def _restricted(dual: _Dual, program: _Program, x: dict[Key, Fraction]) -> tuple
         row = dual.by_column[key]
         rows.append(replace(row, sense="eq") if x[key] > low else row)
     return variables, tuple(rows)
+
+
+def _optimal_face(
+    dual: _Dual, program: _Program, point: dict[Key, Fraction]
+) -> tuple[dict[Key, Any], tuple[_Row, ...]]:
+    """S3's optimal face (its optima), in the form complementary slackness with an exact optimal point (y*, w*) of its
+    dual gives it (PRICE-2e): the program's variables and rows, with each variable whose reduced cost is not 0 fixed at
+    the bound that reduced cost names, and each at-most row whose dual is not 0 an equality. No row V ≥ V0 (`_floor`:
+    the dense row of every term of the objective) is needed.
+
+    The argument (`_never`'s, read for a whole face). The program maximises c·x over its rows (at-most and equalities)
+    with 0 ≤ x ≤ u; (y, w) is dual feasible: y ≥ 0 on the at-most rows, w ≥ 0, and each column's dual slack
+    s_j = (Aᵀy + w − c)_j ≥ 0. For any feasible x,
+        c·x = (Aᵀy + w − s)·x = y·(Ax) + w·x − s·x
+            = b·y + u·w − Σ_i y_i·(b_i − a_i·x) − Σ_j w_j·(u_j − x_j) − Σ_j s_j·x_j,
+    the sum over the at-most rows only (an equality's b_i − a_i·x is 0 whatever its free dual). Each product is of two
+    factors at least 0, and b·y + u·w is V0 (strong duality, which `duality` checks exactly). So a feasible x is
+    optimal, c·x = V0, exactly when every product is 0. With the reduced cost d_j = c_j − (Aᵀy)_j = w_j − s_j of a
+    maximum:
+    - a column whose dual slack s_j is above 0 is at its lower bound 0 (for a column without an upper bound, w_j is
+      absent and s_j = −d_j: a reduced cost below 0);
+    - a variable with an upper bound whose w_j, its bound's dual, is above 0 is at its upper bound u_j (a reduced cost
+      above 0 where s_j is 0). Both above 0 would ask x_j = 0 and x_j = u_j; S3's optimum meets every condition, so
+      that happens only with u_j = 0, where the two say the same;
+    - an at-most row whose dual y_i is above 0 is tight: an equality.
+    A product whose dual is 0 asks nothing. These conditions with the program's rows and bounds are the optima, the
+    same set as the program with the row V ≥ V0: an LP on either gives the same optimal value. (y*, w*) must be an exact
+    optimal dual point: `duality`'s, exactly dual feasible at the cost V0. S3's own optimum meets every condition, so
+    S3's basis is primal feasible on the face (`_highs_seeded`)."""
+    zero = Fraction(0)
+    variables: dict[Key, Any] = dict(program.variables)
+    for key in sorted(program.variables):
+        low, high, integer = program.variables[key]
+        if high is not None and point[("w", _token(key), 0)] > 0:
+            variables[key] = (high, high, integer)
+            continue
+        row = dual.by_column[key]
+        if row.rhs - sum((value * point[name] for name, value in row.coefficients.items()), zero) > 0:
+            variables[key] = (low, low, integer)
+    rows = tuple(
+        replace(row, sense="eq") if row.sense == "le" and point[("y", _token(row.key), 0)] > 0 else row
+        for row in program.rows
+    )
+    return variables, rows
+
+
+def _meets(rows: tuple[_Row, ...], x: dict[Key, Fraction]) -> bool:
+    """Whether `x` meets every one of `rows`, exactly."""
+    for row in rows:
+        lhs = sum((value * x[key] for key, value in row.coefficients.items() if x[key]), Fraction(0))
+        if (lhs != row.rhs) if row.sense == "eq" else (lhs > row.rhs):
+            return False
+    return True
+
+
+@dataclass(frozen=True)
+class _Seed:
+    """S3's basis as HiGHS ended at it (PRICE-2e), each column's and each row's status by key, and S3's exact optimum
+    `x`: a start for an LP on S3's optimal face (`_highs_seeded`), valid when `x` meets the rows the LP adds."""
+
+    columns: dict[Key, Any]
+    rows: dict[Key, Any]
+    x: dict[Key, Fraction]
+
+
+def _seed(base: _Solution) -> _Seed | None:
+    """S3's basis (`_Seed`) from its HiGHS instance; None when S3's optimum is not certified (so its arrays, the order
+    of the statuses, are not held) or HiGHS holds no valid basis."""
+    if base.basis is None or base.solver is None:
+        return None
+    arrays = base.basis[2]
+    basis = base.solver.getBasis()
+    columns, rows = list(basis.col_status), list(basis.row_status)
+    ordered = (*arrays.le, *arrays.eq)
+    if not getattr(basis, "valid", True) or len(columns) != len(arrays.columns) or len(rows) != len(ordered):
+        return None
+    return _Seed(dict(zip(arrays.columns, columns)), {row.key: status for row, status in zip(ordered, rows)}, base.x)
 
 
 def _one(pair: _Pair) -> bool:
@@ -2082,6 +2248,8 @@ class _Tiers:
     ties: tuple[str, ...]  # `objective_tier_tie`
     dual: _Dual  # S3's dual (PRICE-2b-1), checked exactly (`duality`)
     point: dict[Key, Fraction]  # an exact optimal point of it: the dual slacks of complementary slackness (PRICE-2c)
+    optimal: tuple[dict[Key, Any], tuple[_Row, ...]]  # S3's optimal face by complementary slackness (`_optimal_face`)
+    seed: _Seed | None  # S3's basis, a start for an LP on that face (PRICE-2e)
     unverified: tuple[dict[str, Any], ...] = ()  # `lp_probe_unverified` of the tie probes (PRICE-2c)
 
 
@@ -2090,8 +2258,10 @@ class _Solver:
         self.model = model
         self.settings = settings
         # PRICE-2c: the last LP solved with `warm` (its variables and rows, held so that they stay the objects they are;
-        # its arrays; the HiGHS instance that holds it), for the next LP on the same rows with another objective
-        self.warm: tuple[Any, Any, _Arrays, Any] | None = None
+        # its arrays; the HiGHS instance that holds it), for the next LP on the same rows with another objective.
+        # PRICE-2e: one per face (by its variables: D* and S3's optimal face, `WARM_FACES`), so that LPs on the two that
+        # alternate (an activity's `most`, then its range) each go on from their own; and the next LP may add equalities
+        self.warm: dict[int, tuple[Any, tuple[_Row, ...], _Arrays, Any]] = {}
         self.last_problem: exact.Problem | None = None  # the last LP's program as `core.exact` read it (`vertex`)
         self.grained: _Grained | None = None  # PRICE-2d: S3, held for its re-solves at ±grain (`regrain`)
         # PRICE-2d: the most variables an update may let enter S3's basis, and the seconds of the new rebuilds so far
@@ -2152,25 +2322,35 @@ class _Solver:
 
     def lp(
         self, program: _Program, stage: str, *, check: bool = True, unbounded: bool = False, warm: bool = False,
-        keep: bool = False,
+        keep: bool = False, seed: _Seed | None = None,
     ) -> _Solution:
         """An LP, solved by HiGHS (`_highs`) and made exact from its basis (`vertex`). With `unbounded`, an objective
         without a maximum is the status `unbounded` (an end of a projection that is null, PRICE-2b-1); else it is
         `lp_solve_failed`. With `keep` (S3, PRICE-2d), the solution holds the HiGHS instance that solved it.
 
-        With `warm` (the LPs on one face of the dual, which differ only in their objective: the projections, the
-        intervals, the ranges; PRICE-2c), an LP whose variables and rows are those of the last such LP, the same
-        objects, is given to the HiGHS instance that solved it, with its objective changed, so HiGHS starts from the
-        basis it ended at. Only where HiGHS starts differs: the exact vertex and its certificate are the new LP's own."""
+        With `warm` (the LPs on one face, which differ only in their objective: the projections, the intervals, the
+        ranges on D*, PRICE-2c; and since PRICE-2e the `most` probes on S3's optimal face, and the selection on D*,
+        which adds a row per coordinate it fixes), an LP whose variables are those of the last such LP on its face, the
+        same object, and whose rows are its rows, the same objects, and maybe equality rows after them (`_added`), is
+        given to the HiGHS instance that solved that one, with its objective changed and those rows added
+        (`_highs_again`), so HiGHS starts from the basis it ended at. With `seed` (PRICE-2e: an LP on S3's optimal face
+        that S3's optimum meets), a new instance starts from S3's basis (`_highs_seeded`). Only where HiGHS starts
+        differs: the exact vertex and its certificate are the new LP's own."""
         result = None
-        if warm and self.warm is not None and self.warm[0] is program.variables and self.warm[1] is program.rows:
-            arrays = replace(self.warm[2], c=_costs(program, self.warm[2].columns))
-            result = _highs_again(self.warm[3], arrays)
+        held = self.warm.pop(id(program.variables), None) if warm else None
+        added = None if held is None else _added(held[1], program.rows)
+        if added is not None:
+            arrays = _extended(held[2], program, added)
+            result = _highs_again(held[3], arrays, added)
+            if result.solver is not None:  # it ran: the instance holds these rows now (else it is dropped)
+                self.warm[id(program.variables)] = (program.variables, program.rows, arrays, held[3])
         else:
             arrays = _arrays(program)
-            result = _highs(arrays, True)
+            result = _highs(arrays, True) if seed is None else _highs_seeded(arrays, seed)
             if warm and result.solver is not None:
-                self.warm = (program.variables, program.rows, arrays, result.solver)
+                self.warm[id(program.variables)] = (program.variables, program.rows, arrays, result.solver)
+                while len(self.warm) > WARM_FACES:  # the face whose LPs came longest ago
+                    self.warm.pop(next(iter(self.warm)))
         if result.status not in (0, 2, 3):  # "unbounded or infeasible" from presolve, or numerical trouble
             result = _highs(arrays, False)
         if result.status == 2:
@@ -2199,13 +2379,13 @@ class _Solver:
         )
 
     def probe(
-        self, program: _Program, stage: str, *, unbounded: bool = False, warm: bool = False
+        self, program: _Program, stage: str, *, unbounded: bool = False, warm: bool = False, seed: _Seed | None = None
     ) -> _Solution | _Unverified:
         """The LP of a per-activity probe (PRICE-2c): its solution, certified or not (`lp`), or `_Unverified` when it
         could not be solved and checked (`solve_failed`, with the error it raised: what blocked the whole steady state
         before PRICE-2c), or HiGHS finds the probe infeasible although an optimum meets it."""
         try:
-            found = self.lp(program, stage, unbounded=unbounded, warm=warm)
+            found = self.lp(program, stage, unbounded=unbounded, warm=warm, seed=seed)
         except Failure as failure:
             first = failure.errors[0]
             detail: dict[str, Any] = {"reason": SOLVE_FAILED, "stage": stage, "error": first["code"]}
@@ -2617,10 +2797,13 @@ class _Solver:
     def joint(
         self, dual: _Dual, point: dict[Key, Fraction], optimum: Fraction, prices: dict[str, list[_Pair]],
         on_face: tuple[dict[Key, Any], tuple[_Row, ...]], optimal: dict[Key, Fraction],
+        primal: tuple[dict[Key, Any], tuple[_Row, ...]], seed: _Seed | None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """The joint price vector and the activity judgements (addendum 2.1 §2.2 steps 3-5; ruling 127 iii): the
         steady state's `joint`, and the warnings of its probes. `prices` are the projections per step (`steady`),
-        `on_face` D* as the intervals and the ranges read it (`_restricted`), and `optimal` S3's optimum.
+        `on_face` D* in its complementary-slackness form (`_restricted`), on which every LP here on D* is solved,
+        `optimal` S3's optimum, `primal` S3's optimal face in its complementary-slackness form (`_optimal_face`), on
+        which each `most` is probed, and `seed` S3's basis, the first such probe's start (PRICE-2e).
 
         - **The projection.** A pool's coordinate is the mean over the cycle of its balance rows' duals; its
           `interval` is its least and greatest value on D*, an unbounded end null.
@@ -2634,7 +2817,16 @@ class _Solver:
           then each pool still free, which the selection withholds (`withheld`), by id, at its low end on the face
           left (`one_more`), else at its high end (`one_less`: a pool without a low end, mirroring step 1), else at
           0 (`zero`). Being free through the max-min, a withheld coordinate never moves an exported one. The
-          vector is checked exactly as a point of D*.
+          vector is checked exactly as a point of D*: an LP's exactly checked solution with every coordinate fixed,
+          and its cost at the strong-duality row, V0.
+        - **Without the dense row** (PRICE-2e): every step is an LP on D* in its complementary-slackness form
+          (`on_face`, the same set; `_restricted`) with the rows that fix the coordinates so far, never on the dense
+          face (`_Dual.face`), whose strong-duality row held one withheld pool's LP of a large model for over 30
+          minutes; each step's value is an optimal value, the same on either. Steps 1 and 3 and the check go on, warm,
+          from the instance of the last LP on D* with the fixing rows added (`_highs_again`): each fixes a pool at
+          the extreme the last LP found, which its solution meets. Each `most` is probed on S3's optimal face in its
+          complementary-slackness form (`primal`; `_optimal_face`), the first from S3's basis (`seed`), the others
+          warm from the last.
         - **The judgements** of each activity: its `value` at the vector and its `range` on D* (null for one that
           moves out of or into a store: what it moves depends on what the store holds); `most`, the most an optimum
           of S3 runs it over the cycle (null when unbounded), and `in_optimum`, whether that is above 0;
@@ -2653,7 +2845,7 @@ class _Solver:
           an optimum's is not known), and its component is a structural gap (`core.coverage`). `forcing_cost` reads
           `most`, so it is unverified with it."""
         model, steps, zero, one = self.model, self.model.steps, Fraction(0), Fraction(1)
-        variables, face = dual.variables, dual.face(optimum)
+        variables = on_face[0]
         warnings: list[dict[str, Any]] = []
         unverified: dict[str, list[str]] = {activity: [] for activity in model.activities}
 
@@ -2675,7 +2867,6 @@ class _Solver:
                 intervals[resource] = (mean, mean)
             else:
                 intervals[resource] = self.ends(*on_face, pools[resource])
-        floor = _floor(VALUE, total_value(model), optimum)  # S3's optimal face
         most: dict[str, Fraction | None] = {}
         runs: dict[str, dict[Key, Fraction]] = {}  # activity -> its `most` probe's solution
         worth: dict[str, dict[Key, Fraction]] = {}
@@ -2684,9 +2875,10 @@ class _Solver:
             counts = {("x", activity, step): one for step in range(steps)}
             if _never(dual, point, list(counts)):  # complementary slackness: no optimum runs it
                 most[activity] = zero
-            else:
+            else:  # on S3's optimal face (PRICE-2e: in its complementary-slackness form, no row V ≥ V0)
+                program = _Program(*primal, counts)
                 found = self.certain(
-                    self.probe(_program(model, objective=counts, added=floor), JUDGEMENT, unbounded=True), JUDGEMENT
+                    self.probe(program, JUDGEMENT, unbounded=True, warm=True, seed=seed), JUDGEMENT
                 )
                 if isinstance(found, _Unverified):
                     most[activity] = None
@@ -2714,7 +2906,7 @@ class _Solver:
                 note(RANGE, activity, ends)
             else:
                 ranges[activity] = ends
-        rows = list(face)
+        rows = list(on_face[1])  # D* without the strong-duality row (PRICE-2e), and the fixing rows after it
         chosen: dict[str, tuple[Fraction, str]] = {}
         goals = {resource for _, resource, _ in model.goals}
 
@@ -2753,7 +2945,7 @@ class _Solver:
                 continue
             high = self.extreme(variables, rows, pools[resource], 1)
             fix(resource, high if high is not None else zero, ONE_LESS if high is not None else ZERO)
-        self.optimal(_Program(variables, tuple(rows), {}), DUAL)  # the vector is a point of D*, checked exactly
+        self.member(dual, _Program(variables, tuple(rows), {}), optimum)  # the vector is a point of D*, checked exactly
         vector = {resource: chosen[resource][0] for resource in model.resources}
         prices = {
             resource: {
@@ -2800,6 +2992,21 @@ class _Solver:
                 "unverified": list(doubtful),
             }
         return {"prices": prices, "max_min": stages, "activities": activities}, warnings
+
+    def member(self, dual: _Dual, program: _Program, optimum: Fraction) -> None:
+        """The joint vector's exact check (PRICE-2e): a solution of `program` (D* in its complementary-slackness form
+        with every coordinate fixed; `joint`), solved warm from the selection's last LP and checked exactly against its
+        every bound and row as every solution is, then at the strong-duality row, which that form leaves out: its cost
+        must be V0 exactly (complementary slackness makes it so; anything else is a defect). A failed check is
+        `lp_numeric_check_failed` (stage `dual`), and a program HiGHS finds infeasible `lp_solve_failed`, as before."""
+        found = self.lp(program, DUAL, warm=True)
+        if found.status != "optimal":
+            raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2)
+        cost = sum((value * found.x[key] for key, value in dual.cost.items() if found.x[key]), Fraction(0))
+        if cost != optimum:
+            raise self.failure(
+                LP_NUMERIC_CHECK_FAILED, stage=DUAL, constraint=_token(FACE), found=str(cost), bound=f"={optimum}"
+            )
 
     def withheld(self, resource: str, interval: _Pair, goals: set[str]) -> dict[str, Any] | None:
         """Why the selection withholds a pool's coordinate, or None (addendum 2.1 §2.2 step 4.1 and its mirror):
@@ -2848,19 +3055,23 @@ class _Solver:
         `lp_infeasible`, and its optimum V0 is the objective. S1 maximises A, giving A*; S2 maximises V with A ≥ A*,
         giving V*. When A has no term, A* is 0 and S2 is S3. V* above V0 cannot be (S3 relaxes S2) and is
         `lp_numeric_check_failed`; V0 above V*, exactly, is `objective_tier_conflict`. Then S3's dual, checked exactly
-        (`duality`; PRICE-2c moves it before the ties, which read its optimal point), and the ties."""
+        (`duality`; PRICE-2c moves it before the ties, which read its optimal point), S3's optimal face in the form
+        complementary slackness with that point gives it (`_optimal_face`) and S3's basis (`_seed`; PRICE-2e), and the
+        ties."""
         model = self.model
         value, acquired = total_value(model), acquisition(model)
         program = _program(model)
         base = self.lp(program, "optimum", keep=True)
         if base.status != "optimal":
             raise Failure(self.conflict())
+        seed = _seed(base)  # before any re-solve moves S3's instance
         records = acquirers(model)
         if not acquired:
             face = _floor(VALUE, value, base.value)
             dual = _dual(program)
             point = self.duality(dual, base.value)
-            return _Tiers(program, base, Fraction(0), base, (), face, records, (), dual, point)
+            optimal = _optimal_face(dual, program, point)
+            return _Tiers(program, base, Fraction(0), base, (), face, records, (), dual, point, optimal, seed)
         first = self.optimal(_program(model, objective=acquired), ACQUISITION)
         floors = _floor(ACQUISITION, acquired, first.value)
         second = self.optimal(_program(model, added=floors), VALUE)
@@ -2873,9 +3084,11 @@ class _Solver:
         face = floors + _floor(VALUE, value, second.value)
         dual = _dual(program)
         point = self.duality(dual, base.value)
-        ties, unverified = self.ties(face, _floor(VALUE, value, base.value), second, base, dual, point)
+        optimal = _optimal_face(dual, program, point)
+        ties, unverified = self.ties(floors, optimal, seed, second, base, dual, point)
         return _Tiers(
-            program, base, first.value, second, floors, face, records, tuple(ties), dual, point, tuple(unverified)
+            program, base, first.value, second, floors, face, records, tuple(ties), dual, point, optimal, seed,
+            tuple(unverified),
         )
 
     def tier_conflict(
@@ -2909,8 +3122,8 @@ class _Solver:
         return error(OBJECTIVE_TIER_CONFLICT, detail)
 
     def ties(
-        self, face: tuple[_Row, ...], unconstrained: tuple[_Row, ...], second: _Solution, base: _Solution,
-        dual: _Dual, point: dict[Key, Fraction],
+        self, floors: tuple[_Row, ...], optimal: tuple[dict[Key, Any], tuple[_Row, ...]], seed: _Seed | None,
+        second: _Solution, base: _Solution, dual: _Dual, point: dict[Key, Fraction],
     ) -> tuple[list[str], list[dict[str, Any]]]:
         """`objective_tier_tie` (§4.2): the activities that some optimum of S3 uses and no optimum of S2 does. By
         value alone they are as good as the acquisition, and they would lower A. Returns them, and the warnings of the
@@ -2920,14 +3133,18 @@ class _Solver:
           optimal point of S3's dual is above 0 in every step runs in no optimum of S3, so in none of S2 either (V* =
           V0: S2's optima are optima of S3): it is no tie.
         - **The probes.** Any other activity that the optimum of S2 found does not use: the most of it, at most 1 a
-          cycle (so the probe is bounded), on the optima of S2 (`face`: A ≥ A*, V ≥ V*) and then, when that is 0, on
-          those of S3 (V ≥ V0). An answer above 0 holds exactly for any exact feasible point (a point of the face that
-          runs it); an answer of 0 only for a certified optimum (`core.exact`). The tie is decided when the answers
-          that decide it are exact: a probe on S2 above 0 (no tie); one on S3 at a certified 0 (no tie); one on S3
-          above 0, or the optimum of S3 using it, with one on S2 at a certified 0 (a tie). Otherwise it is
-          unverified: the warning `lp_probe_unverified` (`probe` tie), never "no tie", and its component counts as a
-          structural gap (`core.coverage`)."""
+          cycle (so the probe is bounded), on the optima of S2 and then, when that is 0, on those of S3. An answer
+          above 0 holds exactly for any exact feasible point (a point of the face that runs it); an answer of 0 only
+          for a certified optimum (`core.exact`). The tie is decided when the answers that decide it are exact: a probe
+          on S2 above 0 (no tie); one on S3 at a certified 0 (no tie); one on S3 above 0, or the optimum of S3 using
+          it, with one on S2 at a certified 0 (a tie). Otherwise it is unverified: the warning `lp_probe_unverified`
+          (`probe` tie), never "no tie", and its component counts as a structural gap (`core.coverage`).
+        - **The faces without the dense row** (PRICE-2e). S3's optima are its optimal face in the form complementary
+          slackness gives it (`optimal`, `_optimal_face`), with no row V ≥ V0; S2's are those with A ≥ A* (`floors`),
+          since V* = V0 here, so the row V ≥ V* is not needed either: the same sets as before, so the same answers. A
+          probe that S3's optimum meets (on S3 always: it does not run the activity) starts from S3's basis (`seed`)."""
         model, one = self.model, Fraction(1)
+        variables, rows = optimal
         found: list[str] = []
         warnings: list[dict[str, Any]] = []
         for activity in model.activities:
@@ -2938,14 +3155,16 @@ class _Solver:
                 continue
             probe = (_Row(("probe", activity, 0), {key: one for key in keys}, "le", one, None),)
             objective = {key: one for key in keys}
-            on_second = self.probe(_program(model, objective=objective, added=face + probe), TIE)
+            start = seed if seed is not None and _meets(floors + probe, seed.x) else None
+            on_second = self.probe(_Program(variables, (*rows, *floors, *probe), objective), TIE, seed=start)
             if isinstance(on_second, _Solution) and on_second.value > 0:
                 continue  # an optimum of S2 runs it
             second_zero = isinstance(on_second, _Solution) and on_second.certified
             used = any(base.x[key] > 0 for key in keys)
             on_base: _Solution | _Unverified | None = None
             if not used:
-                on_base = self.probe(_program(model, objective=objective, added=unconstrained + probe), TIE)
+                start = seed if seed is not None and _meets(probe, seed.x) else None
+                on_base = self.probe(_Program(variables, (*rows, *probe), objective), TIE, seed=start)
                 if isinstance(on_base, _Solution) and on_base.value > 0:
                     used = True
                 elif isinstance(on_base, _Solution) and on_base.certified:
@@ -2969,8 +3188,7 @@ class _Solver:
         warnings = [error(OBJECTIVE_TIER_TIE, {"path": model.path, "activity": activity}) for activity in tiers.ties]
         warnings += tiers.unverified
         dual = tiers.dual  # S3's, which every price re-solve changes, checked exactly (`duality`)
-        face = dual.face(optimum)
-        on_face = _restricted(dual, program, base.x)  # D*, for the LPs that read only a value on it
+        on_face = _restricted(dual, program, base.x)  # D*, for every LP on it (PRICE-2e: the selection's too)
         self.grained = self.hold(program, base)  # S3 with its basis factorised, for the re-solves at ±grain (PRICE-2d)
         prices: dict[str, list[_Pair]] = {}
         grains: dict[str, list[_Pair]] = {}
@@ -3009,7 +3227,7 @@ class _Solver:
                 values[activity] = None
                 continue
             values[activity] = [_price(self.value(activity, prices, step)) for step in range(steps)]
-        joint, judged = self.joint(dual, tiers.point, optimum, prices, on_face, base.x)
+        joint, judged = self.joint(dual, tiers.point, optimum, prices, on_face, base.x, tiers.optimal, tiers.seed)
         warnings += judged
         data = {
             "cycle": {"steps": steps, "step_seconds": STEP_SECONDS},

@@ -93,8 +93,16 @@ class Evaluator:
 # solved by updating S3's factorised basis where HiGHS ends near it, else by a new elimination). Each is the exact
 # optimum, as a re-solve whose basis was certified gave it before; a re-solve whose new LP was not certified gave a
 # feasible value that need not be the optimum, so a value can change there, and version 8's entries are not reused.
+# PRICE-2e: `economy` 10: every LP on D* (the selection's steps and the vector's check too, which also reads the
+# strong-duality row exactly) is solved on D*'s complementary-slackness form, and each probe of S3's optima (`most`,
+# the ties) on S3's optimal face in its complementary-slackness form at the exact optimal dual, neither with the dense
+# row of the objective; the selection and the `most` probes are warm-started; an LP's basis solves its primal and its
+# dual with one elimination. Every optimal value is the same set's, so a certified one is the same; but an LP of the
+# selection whose basis is not certified gives a feasible value that need not be the optimum, and a probe may be
+# certified on one form and not on the other (`lp_probe_unverified`), so a value can change there, and version 9's
+# entries are not reused.
 EVALUATORS: dict[str, Evaluator] = {
-    "economy": Evaluator(9, ("numpy", "python", "scipy")),
+    "economy": Evaluator(10, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
     "flow": Evaluator(3),
     "general": Evaluator(3),

@@ -414,18 +414,20 @@ def optimum(problem: Problem, statuses: Sequence[int], cap: int) -> Vertex | Ref
             row = problem.rows[i]
             equations.append({j: a for j, a in row.items() if j in chosen and a})
             rhs.append(at[n + i] - sum((a * at[j] for j, a in row.items() if at.get(j)), Fraction(0)))
-        x_basic = solve(equations, rhs, structural)
-        if x_basic is None:
+        # PRICE-2e: the primal and the dual system are one matrix and its transpose, so one elimination (`factor`, the
+        # elimination of `solve` with its pivots, recorded) solves both: B·z_B by its steps, Bᵀ·y by them transposed.
+        # Each is the one exact solution of its system, the same as two eliminations give; singular exactly as before.
+        recorded = factor(equations, structural)
+        if recorded is None:
             return Refused(SINGULAR, pivots)
+        solved = recorded.solve({e: value for e, value in enumerate(rhs) if value})
+        x_basic = {k: solved.get(k, Fraction(0)) for k in structural}
         z = {**at, **x_basic}
         for k in basic:
             if k >= n:  # the terms at 0 add nothing (the sums skip them, exactly)
                 z[k] = sum((a * z[j] for j, a in problem.rows[k - n].items() if z[j]), Fraction(0))
-        held = set(tight)
-        transposed = [{i: a for i, a in columns[j].items() if i in held} for j in structural]
-        y_tight = solve(transposed, [cost[j] for j in structural], tight)
-        if y_tight is None:
-            return Refused(SINGULAR, pivots)
+        transposed = recorded.solve_transposed({j: cost[j] for j in structural if cost[j]})
+        y_tight = {tight[e]: value for e, value in transposed.items()}
         y = [y_tight.get(i, Fraction(0)) for i in everything]
 
         def reduced(k: int) -> Fraction:
