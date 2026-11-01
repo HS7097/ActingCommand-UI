@@ -102,6 +102,17 @@ component DashedBox inherits Rectangle {
     }
 }
 
+// One account on the workbench: its alias and game, the colour of its band, what
+// it does or waits for now, red when that says a failure, and the small print.
+export struct AccountCard {
+    alias: string,
+    game-line: string,
+    tone: StatusTone,
+    main: string,
+    main-failed: bool,
+    note: string,
+}
+
 export struct OverlayItem {
     kind: string,
     x: float,
@@ -1012,6 +1023,51 @@ export component LedgerWindow inherits Window {
     }
 }
 
+// One account's card in the workbench's left column.
+component AccountCardView {
+    in property <AccountCard> account;
+    vertical-stretch: 0;
+    Card {
+        strip: root.account.tone;
+        VerticalLayout {
+            padding: 10px;
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 4px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: root.account.alias;
+                    font-size: Scale.body-font;
+                    font-weight: 700;
+                    color: Look.text;
+                    overflow: elide;
+                    min-width: 0px;
+                    horizontal-stretch: 0;
+                }
+                Caption {
+                    text: root.account.game-line;
+                    overflow: elide;
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                }
+            }
+            // As tall as its wrapped lines, as a Notice is, for the same reason.
+            Text {
+                text: root.account.main;
+                font-size: Scale.body-font;
+                color: root.account.main-failed ? Severity.error : Look.text;
+                wrap: word-wrap;
+                min-height: self.preferred-height;
+                vertical-stretch: 0;
+            }
+            if root.account.note != "": Notice {
+                text: root.account.note;
+            }
+        }
+    }
+}
+
 // The main window. At the top the bar: the Runtime's lamp and its state in plain
 // words, Start, and at the far end the way into the ledger window. Under it what
 // became of the last request, and what this window could not read. Then two
@@ -1058,8 +1114,10 @@ export component WorkbenchWindow inherits Window {
     in property <string> launcher-line;
     in property <bool> launcher-failed;
     in property <string> start-log-path;
-    // Why the left column has no account to show, when it has none.
+    // Why the left column has no account to show, when it has none; and the
+    // accounts.
     in property <string> accounts-note;
+    in property <[AccountCard]> account-cards;
     // The Runtime's configuration file an instance is added to by hand,
     // selectable so it can be copied; or why there is none.
     in property <string> config-path;
@@ -1177,6 +1235,9 @@ export component WorkbenchWindow inherits Window {
                         spacing: 8px;
                         if root.accounts-note != "": Notice {
                             text: root.accounts-note;
+                        }
+                        for item in root.account-cards: AccountCardView {
+                            account: item;
                         }
                         Card {
                             vertical-stretch: 0;

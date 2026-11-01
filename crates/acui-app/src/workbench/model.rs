@@ -5,12 +5,14 @@
 //! lands after it says nothing, and a slice read of a new Runtime that lands before
 //! `Status` saw it is read again, since `Status` seeing it pokes the slow thread.
 
+use std::collections::BTreeSet;
 use std::mem;
 use std::time::Instant;
 
 use acui_source::workbench::{ExplainRead, InstanceLive, LiveRead, LiveSnapshot};
 use acui_source::{ClientFailure, PauseFact};
 
+use super::card::{self, CardView, Down};
 use super::read::Lane;
 use crate::strings::{fill, Labels};
 
@@ -89,6 +91,8 @@ pub struct Model {
     epoch: Option<String>,
     live_fault: Option<Fault>,
     slow_fault: Option<Fault>,
+    /// The codes the log was told it has no words for: once each.
+    told_codes: BTreeSet<String>,
 }
 
 /// What a `Status` read changed, for what the event loop does next.
@@ -128,6 +132,7 @@ impl Model {
             epoch: None,
             live_fault: None,
             slow_fault: None,
+            told_codes: BTreeSet::new(),
         }
     }
 
@@ -153,6 +158,27 @@ impl Model {
                 AccountsNote::Nothing
             }
         }
+    }
+
+    /// The accounts of the left column: as `Status` listed them while the Runtime
+    /// answers; otherwise every alias seen this run, with nothing an earlier answer
+    /// said of it.
+    pub fn cards(&self) -> Vec<CardView> {
+        match Down::of(&self.link) {
+            None => self
+                .instances
+                .iter()
+                .map(|instance| card::card_view(instance, self.global_pause.as_ref()))
+                .collect(),
+            Some(down) => {
+                self.seen_aliases.iter().map(|alias| card::down_view(alias, down)).collect()
+            }
+        }
+    }
+
+    /// Whether the log has yet to hear of `code`; it has from now on.
+    pub fn first_told(&mut self, code: &str) -> bool {
+        self.told_codes.insert(code.to_owned())
     }
 
     /// One `Status` read: a new owner epoch lets go of everything read of the old

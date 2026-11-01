@@ -14,7 +14,9 @@
 //! happens, so a failure that repeats every few seconds is one line, and its end
 //! another.
 
+pub mod card;
 pub mod model;
+pub mod paint;
 pub mod read;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -116,6 +118,7 @@ fn lane_failed(ui: &Ui, lane: Lane, error: String) {
     }
     ui.paint_notices();
     ui.paint_accounts_note();
+    paint::cards(ui);
     launcher::paint(ui);
 }
 
@@ -171,6 +174,7 @@ fn live_landed(ui: &Ui, read: LiveRead) {
     if note_changed {
         ui.paint_accounts_note();
     }
+    paint::cards(ui);
     if landed.fault_cleared {
         ui.paint_notices();
     }

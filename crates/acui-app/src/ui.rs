@@ -403,7 +403,8 @@ impl Ui {
 
     /// The workbench's lines that only the language changes: why this run has
     /// no state root, and the Runtime's configuration file, where an instance
-    /// is added by hand for now. And the accounts note, which reads change too.
+    /// is added by hand for now. And the accounts note and the cards, which reads
+    /// change too.
     pub fn paint_workbench(&self) {
         let Some(window) = self.workbench() else {
             return;
@@ -424,6 +425,7 @@ impl Ui {
         window.set_config_path(path.into());
         window.set_config_note(note.into());
         self.paint_accounts_note();
+        workbench::paint::cards(self);
     }
 
     /// Why the workbench's left column has no account to show, if it has none.
