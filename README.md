@@ -465,6 +465,18 @@ made, and a ledger window opened later comes up with the current language, text 
   says. The startup failure window is always Modern Flat, as it comes before the theme does. On a system other than Windows the second option is named
   Win7 Aero (Solid).
 
+  On Windows, Win7 Aero draws the window's own frame: a caption band and an 8px edge of see-through glass,
+  Win7's caption buttons, and a window that fades in over 250 ms and out over 180 ms. Moving, snapping,
+  resizing from all eight sides, double-click to maximize and the system menu stay the system's. The glass is
+  a second window with no input, kept right under the first, on which Windows.UI.Composition draws what lies
+  behind through a Gaussian blur of strength `AeroConst.sigma`; that is 0 today, so what lies behind shows
+  plainly, and changing the blur means changing that one value. What cannot be drawn falls one step, says so
+  in red in that window and in the technical log, and is tried again when a theme is picked: without the
+  glass the frame stays over solid glass, and without the frame the Aero page sits in the system's frame. A
+  window never moves to Modern Flat by itself. The technical log (kind `acui-glass`) has a line for each glass
+  built and each gone, `垫底窗已建立` and `垫底窗已销毁`, with the main window's and the glass window's
+  rectangles and the running count of both; a run that ends with the two counts equal left none behind.
+
 Two-layer labels: the upper layer is the name for a person to read, and the grey lower layer is the
 verbatim form used in the program — the raw `event_type`, module names, ids of every kind,
 `payload_schema` and sha256 are never translated. The dictionary is in `crates/acui-rows/src/display.rs`
@@ -1063,6 +1075,16 @@ Windows only, `windows` 0.62 (`Win32_Foundation`, `Win32_System_Com`, `Win32_Sys
 through `IShellLinkW` + `IPersistFile`, and the Restart Manager to find the processes that still hold a
 slot's files; the version Slint already locks, so the lock gains no crate).
 
+The console's Win7 Aero frame adds this repository's `acui-glass` crate and no other crate to the lock. It
+turns on Slint's `raw-window-handle-06` feature to reach the native window, and `acui-glass` uses
+`raw-window-handle` 0.6 (the window as its face takes it, on every platform) and, on Windows only,
+`windows` 0.62 (on top of the features above: `Foundation`, `Graphics_Effects`, `System`, `UI_Composition`,
+`UI_Composition_Desktop`, `Win32_Graphics_Dwm`, `Win32_Graphics_Gdi`, `Win32_System_WinRT`,
+`Win32_System_WinRT_Composition`, `Win32_System_WinRT_Graphics_Direct2D`, `Win32_UI_HiDpi` and
+`Win32_UI_WindowsAndMessaging`: the subclass and hit test, the DWM attributes, the glass's window, Composition
+and its Direct2D interop), `windows-core` (which the `#[implement]` macro names) and `windows-numerics`
+(Composition's vectors), all at the versions Slint already locks.
+
 ## MCP for agents
 
 The console has no MCP server of its own. The Runtime's command line serves one: `actingctl mcp-serve`
@@ -1144,7 +1166,9 @@ in progress, the frame request) is reset: never a panic on the event loop. A sta
 start launches nothing, and the line says so. A child that was killed but could not be reaped is
 said as that, not as a kill that failed.
 
-Two more crates sit outside these four layers. `acui-setup` (binary `acsetup`) is the setup wizard; it
+Three more crates sit outside these four layers. `acui-glass` is the native half of the Win7 Aero frame,
+used by `acui-app` through a safe face that knows nothing of Slint: all the console's Win32 and WinRT window
+code and its unsafe code for them are there, and off Windows it only says it cannot. `acui-setup` (binary `acsetup`) is the setup wizard; it
 depends on none of the four layers; besides `acui-installation` it uses Slint, `serde`, `serde_json`,
 `anyhow` and the dependencies listed under "Setup wizard acsetup", the shared contract and
 execution-kernel's offline package qualifications among them.

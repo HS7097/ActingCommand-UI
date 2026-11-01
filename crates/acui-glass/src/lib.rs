@@ -10,7 +10,8 @@
 //!
 //! Everything here stays on the window's own thread (`Frame` is not `Send`);
 //! only `FrameEvent` may cross threads, so a sink can post it instead of
-//! touching a UI from inside a window procedure.
+//! touching a UI from inside a window procedure. The glass is built only when
+//! `show_glass` asks, and says so to the sink when it comes and when it goes.
 
 #![deny(unsafe_code)]
 
@@ -71,13 +72,14 @@ pub struct Fade {
     pub easing: Easing,
 }
 
-/// What a frame reports after `attach` returned: from inside the window
-/// procedure, so a sink must only post it onward.
+/// What a frame reports after `attach` returned: maybe from inside the window
+/// procedure, so a sink must not touch a UI, only post the event onward.
 #[derive(Debug)]
 pub enum FrameEvent {
     Maximized(bool),
     /// For the technical log, and no failure: something optional this Windows
-    /// does not offer.
+    /// does not offer, or the glass built, gone or at a new DPI. Written as it
+    /// comes, these lines reach the log even as the event loop ends.
     Info(String),
     Failed(GlassError),
 }

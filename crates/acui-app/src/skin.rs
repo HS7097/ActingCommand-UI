@@ -18,13 +18,19 @@
 //! once its frame is on, and goes out before it closes. Whatever becomes of the
 //! frame, the window comes into sight. A window in the system's frame is left
 //! to the system. A switch of theme does not fade.
+//!
+//! The glass is the native layer's second window under a window's frame, built
+//! once the frame is on: `Look.glass` says it stands, and the frame's glass area
+//! is clear only then. It fades with the window, in the same turn of the loop.
+//! Its coming and going are in the log, so a run can be checked from there. A
+//! window whose glass fails is drawn solid, and never quietly goes without.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use acui_glass::{Capability, Frame, FrameEvent, Geometry, GlassError, Step};
+use acui_glass::{Capability, Easing, Fade, Frame, FrameEvent, Geometry, GlassError, Step};
 use slint::platform::WindowEvent;
 use slint::{ComponentHandle, SharedString, Timer};
 
@@ -107,6 +113,15 @@ impl Failure {
     }
 }
 
+/// How a window's glass comes up once its frame is on.
+#[derive(Debug, Clone, Copy)]
+enum Showing {
+    /// With the window, which is fading in.
+    Opening,
+    /// A switch of theme, which does not fade.
+    AtOnce,
+}
+
 /// How a window's close goes on, as `Skins::begin_close` found it.
 #[derive(Debug, Clone, Copy)]
 pub enum Closing {
@@ -161,7 +176,7 @@ impl Skins {
     /// switching back and forth does not put it on and off.
     pub fn switch(&self, ui: &Ui, key: WindowKey, theme: Theme) {
         let wanted = self.frame_wanted(theme);
-        {
+        let hidden = {
             let mut windows = self.windows.borrow_mut();
             // A window on its way out takes no more of it.
             let Some(window) = windows.get_mut(&key).filter(|window| !window.closing) else {
@@ -170,22 +185,28 @@ impl Skins {
             window.level = level_of(theme, wanted);
             window.failure = None;
             window.reported.clear();
-            if !wanted {
-                if let Some(frame) = &window.frame {
+            match window.frame.as_ref().filter(|_| !wanted) {
+                Some(frame) => {
+                    let hidden = frame.hide_glass();
                     frame.set_chrome(false);
+                    hidden
                 }
+                None => Ok(()),
             }
+        };
+        if let Err(error) = hidden {
+            self.failed(ui, key, error);
         }
         key.with(ui, |_, look, _| {
             look.set_failure(SharedString::default());
             look.set_skin(skin_of(theme));
-            look.set_glass(wanted);
+            look.set_glass(false);
             look.set_chrome(wanted);
             // One still waiting for its frame need not wait any more.
             look.set_appear(true);
         });
         if wanted {
-            self.try_attach(ui, key, ATTACH_RETRIES);
+            self.try_attach(ui, key, ATTACH_RETRIES, Showing::AtOnce);
         }
     }
 
@@ -197,16 +218,16 @@ impl Skins {
         }
         Timer::single_shot(Duration::ZERO, move || {
             if let Some(ui) = current() {
-                ui.skins.try_attach(&ui, key, ATTACH_RETRIES);
+                ui.skins.try_attach(&ui, key, ATTACH_RETRIES, Showing::Opening);
             }
         });
     }
 
-    /// Puts the frame on and its hit test on, or looks again shortly for a
-    /// handle that is not there yet. Out of tries, the window falls to the
-    /// system's frame. Either way that is the end of the wait: the window comes
-    /// into sight.
-    fn try_attach(&self, ui: &Ui, key: WindowKey, retries_left: u32) {
+    /// Puts the frame on and its hit test on, then the glass behind it, or looks
+    /// again shortly for a handle that is not there yet. Out of tries, the window
+    /// falls to the system's frame. Either way that is the end of the wait: the
+    /// window comes into sight, in the same turn as its glass starts to fade in.
+    fn try_attach(&self, ui: &Ui, key: WindowKey, retries_left: u32, showing: Showing) {
         // The theme changed, or the window is closing or went, since this was
         // asked for. A switch of theme brought it into sight itself.
         if !self.has_chrome_level(key) {
@@ -216,12 +237,13 @@ impl Skins {
         match attached {
             None => {}
             Some(Ok(())) => {
+                self.put_glass(ui, key, showing);
                 key.with(ui, |_, look, _| look.set_appear(true));
             }
             Some(Err(error)) if error.step == Step::WindowHandle && retries_left > 0 => {
                 Timer::single_shot(ATTACH_RETRY_EVERY, move || {
                     if let Some(ui) = current() {
-                        ui.skins.try_attach(&ui, key, retries_left - 1);
+                        ui.skins.try_attach(&ui, key, retries_left - 1, showing);
                     }
                 });
             }
@@ -262,6 +284,36 @@ impl Skins {
         Ok(())
     }
 
+    /// The glass behind a frame just put on, for a window that wants it: one
+    /// that has fallen to solid glass stays so until a theme is picked. Only a
+    /// glass that stands makes the frame's glass area clear.
+    fn put_glass(&self, ui: &Ui, key: WindowKey, showing: Showing) {
+        let fade = key.with(ui, |_, _, aero| match showing {
+            Showing::Opening => Some(fade_in(&aero)),
+            Showing::AtOnce => None,
+        });
+        let Some(fade) = fade else {
+            return;
+        };
+        let shown = {
+            let windows = self.windows.borrow();
+            let frame = windows
+                .get(&key)
+                .filter(|window| window.level == Level::AeroGlass)
+                .and_then(|window| window.frame.as_ref());
+            match frame {
+                Some(frame) => frame.show_glass(fade),
+                None => return,
+            }
+        };
+        match shown {
+            Ok(()) => {
+                key.with(ui, |_, look, _| look.set_glass(true));
+            }
+            Err(error) => self.failed(ui, key, error),
+        }
+    }
+
     /// The frame's measures changed: the text size, or maximizing.
     pub fn geometry_changed(&self, ui: &Ui, key: WindowKey) {
         let windows = self.windows.borrow();
@@ -274,8 +326,9 @@ impl Skins {
     }
 
     /// A person asked this window to close. With a frame of its own it begins
-    /// to fade out, and stays until the time this answers has passed; asked
-    /// again meanwhile, it answers that the close is under way.
+    /// to fade out, its glass with it, and stays until the time this answers has
+    /// passed; asked again meanwhile, it answers that the close is under way. A
+    /// glass that does not fade is in the log, and the window closes all the same.
     pub fn begin_close(&self, ui: &Ui, key: WindowKey) -> Closing {
         {
             let mut windows = self.windows.borrow_mut();
@@ -285,15 +338,26 @@ impl Skins {
                 _ => return Closing::AtOnce,
             };
         }
-        let fade = key.with(ui, |_, look, aero| {
+        let fading = key.with(ui, |_, look, aero| {
             look.set_appear(false);
-            Duration::from_millis(aero.get_vanish_time().max(0) as u64) + CLOSE_AFTER_FADE
+            (fade_out(&aero), Duration::from_millis(aero.get_vanish_time().max(0) as u64) + CLOSE_AFTER_FADE)
         });
-        fade.map_or(Closing::AtOnce, Closing::FadingFor)
+        let Some((fade, stays_for)) = fading else {
+            return Closing::AtOnce;
+        };
+        let faded = match self.windows.borrow().get(&key).and_then(|window| window.frame.as_ref()) {
+            Some(frame) => frame.fade_out(fade),
+            None => Ok(()),
+        };
+        if let Err(error) = faded {
+            self.failed(ui, key, error);
+        }
+        Closing::FadingFor(stays_for)
     }
 
     /// A close begun that must not end after all: the window stays, in the theme
-    /// picked while it was fading if one was, and comes back into sight.
+    /// picked while it was fading if one was, and comes back into sight, its glass
+    /// at once and whatever its fade had reached.
     pub fn close_called_off(&self, ui: &Ui, key: WindowKey) {
         if let Some(window) = self.windows.borrow_mut().get_mut(&key) {
             window.closing = false;
@@ -340,7 +404,7 @@ impl Skins {
                 key.with(ui, |_, look, _| look.set_maximized(maximized));
                 self.geometry_changed(ui, key);
             }
-            FrameEvent::Info(text) => report::log(LOG_KIND, &format!("{key:?}: {text}")),
+            FrameEvent::Info(text) => log_info(key, &text),
             FrameEvent::Failed(error) => self.failed(ui, key, error),
         }
     }
@@ -372,8 +436,8 @@ impl Skins {
         }
     }
 
-    /// The system's frame after all: the hit test goes off before the window
-    /// asks for that frame back.
+    /// The system's frame after all: the glass goes, and the hit test goes off
+    /// before the window asks for that frame back.
     fn fall_to_system_frame(&self, ui: &Ui, key: WindowKey) {
         self.fell(key, Level::AeroSystemFrame, Failure::Chrome);
         key.with(ui, |_, look, _| {
@@ -383,6 +447,8 @@ impl Skins {
         paint_failure(ui, key, Failure::Chrome);
     }
 
+    /// The window's own frame stays, over solid glass; what is left of the glass
+    /// that failed goes.
     fn fall_to_solid_glass(&self, ui: &Ui, key: WindowKey) {
         self.fell(key, Level::AeroChromeSolid, Failure::Glass);
         key.with(ui, |_, look, _| look.set_glass(false));
@@ -393,8 +459,11 @@ impl Skins {
         if let Some(window) = self.windows.borrow_mut().get_mut(&key) {
             window.level = level;
             window.failure = Some(failure);
-            if level == Level::AeroSystemFrame {
-                if let Some(frame) = &window.frame {
+            if let Some(frame) = &window.frame {
+                if let Err(error) = frame.hide_glass() {
+                    report::log(LOG_KIND, &format!("{key:?}: {error}"));
+                }
+                if level == Level::AeroSystemFrame {
                     frame.set_chrome(false);
                 }
             }
@@ -423,8 +492,8 @@ pub fn apply_before_show(look: Look<'_>, ui: &Ui, key: WindowKey) {
     let theme = ui.theme.get();
     let wanted = ui.skins.frame_wanted(theme);
     look.set_skin(skin_of(theme));
-    // No glass is built yet: see-through is what the clear window already is.
-    look.set_glass(wanted);
+    // No glass stands yet: it is built, and this set, once the frame is on.
+    look.set_glass(false);
     look.set_chrome(wanted);
     look.set_appear(!wanted);
     let window = WindowSkin {
@@ -459,10 +528,20 @@ fn request_close(key: WindowKey) {
     });
 }
 
+fn log_info(key: WindowKey, text: &str) {
+    report::log(LOG_KIND, &format!("{key:?}: {text}"));
+}
+
 /// Where the native layer's reports go: back to the event loop, with nothing of
-/// the window touched from inside its window procedure.
+/// the window touched from inside its window procedure. A line for the log only
+/// is written as it comes, touching no window: the glass's last lines come as
+/// the loop ends, when a post would be lost and the count of them wrong.
 fn sink(key: WindowKey) -> Rc<dyn Fn(FrameEvent)> {
     Rc::new(move |event: FrameEvent| {
+        if let FrameEvent::Info(text) = &event {
+            log_info(key, text);
+            return;
+        }
         let posted = slint::invoke_from_event_loop(move || {
             if let Some(ui) = current() {
                 ui.skins.frame_event(&ui, key, event);
@@ -483,6 +562,24 @@ fn detach_loudly(key: WindowKey, frame: Frame) {
 fn paint_failure(ui: &Ui, key: WindowKey, failure: Failure) {
     let text = failure.text(ui.labels());
     key.with(ui, |_, look, _| look.set_failure(text.into()));
+}
+
+/// The glass's part of a window opening.
+fn fade_in(aero: &AeroConst<'_>) -> Fade {
+    Fade {
+        millis: aero.get_appear_time().max(0) as u32,
+        from_scale: aero.get_zoom_from(),
+        easing: Easing::EaseOut,
+    }
+}
+
+/// The glass's part of a window closing.
+fn fade_out(aero: &AeroConst<'_>) -> Fade {
+    Fade {
+        millis: aero.get_vanish_time().max(0) as u32,
+        from_scale: aero.get_zoom_from(),
+        easing: Easing::EaseIn,
+    }
 }
 
 /// The frame's measures as this window's look has them now.

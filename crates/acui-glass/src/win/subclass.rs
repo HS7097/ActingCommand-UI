@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The subclass on a window, and what the native layer holds for it.
+//! The subclass on a window, and what the native layer holds for it: its glass
+//! among the rest, which comes and goes here and follows the window from here.
 //!
 //! The state is in a table by window handle, on the window's own thread; the
 //! subclass carries no pointer to it. Only `SetWindowSubclass` is used, never
@@ -26,11 +27,12 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, IsZoomed, SIZE_MAXIMIZED, SIZE_RESTORED, SWP_NOSIZE, WINDOWPOS, WM_NCDESTROY, WM_NCHITTEST,
-    WM_SIZE, WM_WINDOWPOSCHANGING,
+    WM_SIZE, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING,
 };
 
+use super::underlay::{self, Layer, Placed};
 use super::{dwm, hittest, hwnd};
-use crate::{FrameEvent, Geometry, GlassError, Step};
+use crate::{Fade, FrameEvent, Geometry, GlassError, Step};
 
 /// This code's subclass among others on the same window: "ACUI".
 const ID_ACUI: usize = 0x4143_5549;
@@ -41,10 +43,17 @@ struct Entry {
     chrome: Cell<bool>,
     geometry: Cell<Geometry>,
     maximized: Cell<bool>,
+    /// The blur of the glass, in logical px.
+    sigma: f32,
+    /// The glass, while it stands. Borrowed mutably only to put it in or take it
+    /// out, with no call made meanwhile, so a message arriving inside a call that
+    /// reads it still finds it.
+    layer: RefCell<Option<Layer>>,
     sink: Rc<dyn Fn(FrameEvent)>,
-    /// Each said once for the window: the DWM corner attribute is missing, the
-    /// hit test could not be worked out, the maximized size could not be checked.
+    /// Each said once for the window: a DWM attribute is missing, the hit test
+    /// could not be worked out, the maximized size could not be checked.
     corners_noted: Cell<bool>,
+    border_noted: Cell<bool>,
     hit_test_failed: Cell<bool>,
     size_guard_failed: Cell<bool>,
 }
@@ -80,7 +89,7 @@ fn subclass_failed(detail: impl Into<String>) -> GlassError {
 pub fn attach(
     window: &impl HasWindowHandle,
     geometry: Geometry,
-    _sigma: f32,
+    sigma: f32,
     sink: Rc<dyn Fn(FrameEvent)>,
 ) -> Result<isize, GlassError> {
     let hwnd = hwnd::of_window(window)?;
@@ -94,8 +103,11 @@ pub fn attach(
         chrome: Cell::new(false),
         geometry: Cell::new(geometry),
         maximized: Cell::new(zoomed),
+        sigma,
+        layer: RefCell::new(None),
         sink,
         corners_noted: Cell::new(false),
+        border_noted: Cell::new(false),
         hit_test_failed: Cell::new(false),
         size_guard_failed: Cell::new(false),
     });
@@ -118,6 +130,7 @@ pub fn same_window(key: isize, window: &impl HasWindowHandle) -> bool {
 pub fn set_geometry(key: isize, geometry: Geometry) {
     if let Some(entry) = entry(key) {
         entry.geometry.set(geometry);
+        follow(&entry);
     }
 }
 
@@ -144,20 +157,137 @@ fn remove_subclass(hwnd: HWND) -> Result<(), GlassError> {
     }
 }
 
-/// Takes the subclass off. A frame whose window has gone already, or that was
+/// Takes the glass and the subclass off a window out of the table, trying both.
+fn take_down(hwnd: HWND, state: &Entry) -> Result<(), GlassError> {
+    match (destroy_layer(state), remove_subclass(hwnd)) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(layer), Err(subclass)) => {
+            Err(GlassError { step: Step::Destroy, detail: format!("{}; {subclass}", layer.detail) })
+        }
+    }
+}
+
+/// Takes everything off. A frame whose window has gone already, or that was
 /// detached before, has nothing left to do.
 pub fn detach(key: isize) -> Result<(), GlassError> {
     match take_entry(key) {
-        Some(_) => remove_subclass(hwnd::from_key(key)),
+        Some(state) => take_down(hwnd::from_key(key), &state),
         None => Ok(()),
     }
 }
 
 /// `detach` with nobody to answer to: what went wrong goes to the sink.
 pub fn detach_to_sink(key: isize) {
-    if let Some(entry) = take_entry(key) {
-        if let Err(error) = remove_subclass(hwnd::from_key(key)) {
-            (entry.sink)(FrameEvent::Failed(error));
+    if let Some(state) = take_entry(key) {
+        if let Err(error) = take_down(hwnd::from_key(key), &state) {
+            (state.sink)(FrameEvent::Failed(error));
+        }
+    }
+}
+
+fn step_failed(step: Step) -> impl Fn(String) -> GlassError {
+    move |detail| GlassError { step, detail }
+}
+
+/// A new layer's first showing.
+fn first_show(layer: &Layer, fade: Option<Fade>, corner: f32) -> Result<(), GlassError> {
+    if let Some(fade) = fade {
+        layer.fade_in(fade).map_err(step_failed(Step::Animate))?;
+    }
+    layer.place(corner).map_err(step_failed(Step::Place))?;
+    Ok(())
+}
+
+/// Builds the glass if the window has none, and shows it: with `fade` when it is
+/// new, at once when it was standing, however it was left. A layer that cannot
+/// be shown does not stay.
+pub fn show_glass(key: isize, fade: Option<Fade>) -> Result<(), GlassError> {
+    let Some(state) = entry(key) else {
+        return Err(GlassError { step: Step::UnderlayWindow, detail: "the frame's window has gone".to_owned() });
+    };
+    let corner = state.geometry.get().corner;
+    let busy = || "the window's glass is busy".to_owned();
+    let standing = state.layer.try_borrow().map_err(|_| step_failed(Step::UnderlayWindow)(busy()))?;
+    if let Some(layer) = standing.as_ref() {
+        layer.show_at_once().map_err(step_failed(Step::Animate))?;
+        layer.place(corner).map_err(step_failed(Step::Place))?;
+        return Ok(());
+    }
+    drop(standing);
+    let layer = Layer::build(hwnd::from_key(key), state.sigma)?;
+    if let Err(detail) = dwm::set_no_border(layer.window()) {
+        if !state.border_noted.replace(true) {
+            (state.sink)(FrameEvent::Info(format!("the DWM border attribute was not set: {detail}")));
+        }
+    }
+    if let Err(error) = first_show(&layer, fade, corner) {
+        return Err(underlay::with_cleanup(error, layer.destroy()));
+    }
+    let line = underlay::note_built(&layer);
+    *state.layer.try_borrow_mut().map_err(|_| step_failed(Step::UnderlayWindow)(busy()))? = Some(layer);
+    (state.sink)(FrameEvent::Info(line));
+    Ok(())
+}
+
+/// The glass fades out with the closing window; a window without glass has
+/// nothing to fade.
+pub fn fade_out(key: isize, fade: Fade) -> Result<(), GlassError> {
+    let Some(state) = entry(key) else {
+        return Ok(());
+    };
+    let failed = step_failed(Step::Animate);
+    let standing = state.layer.try_borrow().map_err(|_| failed("the window's glass is busy".to_owned()))?;
+    match standing.as_ref() {
+        Some(layer) => layer.fade_out(fade).map_err(failed),
+        None => Ok(()),
+    }
+}
+
+pub fn hide_glass(key: isize) -> Result<(), GlassError> {
+    match entry(key) {
+        Some(state) => destroy_layer(&state),
+        None => Ok(()),
+    }
+}
+
+/// The glass gone, if it stood, with the log's line on that.
+fn destroy_layer(state: &Entry) -> Result<(), GlassError> {
+    let failed = step_failed(Step::Destroy);
+    let taken = state.layer.try_borrow_mut().map_err(|_| failed("the window's glass is busy".to_owned()))?.take();
+    let Some(layer) = taken else {
+        return Ok(());
+    };
+    let summary = layer.summary();
+    layer.destroy().map_err(failed)?;
+    (state.sink)(FrameEvent::Info(underlay::note_destroyed(&summary)));
+    Ok(())
+}
+
+/// The glass follows its window. A failure is said once, and counted for the
+/// line on its going; a new DPI is said for the log to show the new rectangles.
+fn follow(state: &Entry) {
+    let Ok(held) = state.layer.try_borrow() else {
+        // Nothing holds it mutably across a call, so this does not happen.
+        (state.sink)(FrameEvent::Failed(step_failed(Step::Place)("the window's glass is busy".to_owned())));
+        return;
+    };
+    let Some(layer) = held.as_ref() else {
+        return;
+    };
+    let dpi_before = layer.dpi();
+    match layer.place(state.geometry.get().corner) {
+        Ok(placed) => {
+            if let Placed::At { dpi, .. } = placed {
+                if dpi != dpi_before {
+                    (state.sink)(FrameEvent::Info(format!("垫底窗到了新 DPI：{placed}")));
+                }
+            }
+        }
+        Err(detail) => {
+            if layer.place_failed() == 1 {
+                (state.sink)(FrameEvent::Failed(step_failed(Step::Place)(detail)));
+            }
         }
     }
 }
@@ -237,10 +367,12 @@ fn handle_message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
     if message == WM_NCDESTROY {
         // Nobody detached this window before it went.
         let state = take_entry(key);
-        if let Err(error) = remove_subclass(hwnd) {
-            if let Some(state) = state {
-                (state.sink)(FrameEvent::Failed(error));
-            }
+        let taken_down = match &state {
+            Some(state) => take_down(hwnd, state),
+            None => remove_subclass(hwnd),
+        };
+        if let (Err(error), Some(state)) = (taken_down, &state) {
+            (state.sink)(FrameEvent::Failed(error));
         }
         return forward(hwnd, message, wparam, lparam);
     }
@@ -264,6 +396,12 @@ fn handle_message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                 }
             }
             forward(hwnd, message, wparam, lparam)
+        }
+        WM_WINDOWPOSCHANGED => {
+            let result = forward(hwnd, message, wparam, lparam);
+            // Moved, resized, raised, shown or hidden.
+            follow(&state);
+            result
         }
         WM_SIZE => {
             let result = forward(hwnd, message, wparam, lparam);
