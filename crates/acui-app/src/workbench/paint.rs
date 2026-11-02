@@ -3,15 +3,16 @@
 //! the list the workbench already shows: a row changes only when its words do, and
 //! rows come and go only when the accounts do, so a read every few seconds costs
 //! nothing and moves nothing. And the top bar's writes, its performance preset and the
-//! stepper under it, from their views; and which page shows.
+//! stepper under it, from their views; which page shows; and the settings page's rows of
+//! the Runtime's settings, the same way as the cards.
 
 use std::time::Instant;
 
 use acui_rows::format_minute;
 use acui_rows::outcome::explain;
 use acui_source::workbench::{
-    PresetMember, PresetSetting, RefusalWhy, SettingSource, SettingValue, ValueProblem,
-    CONSOLE_PAUSE_ALL, MODE_FULL, MODE_OBSERVE, MODE_PACE,
+    PresetMember, PresetSetting, RefusalWhy, SettingName, SettingSource, SettingValue,
+    ValueProblem, CONSOLE_PAUSE_ALL, MODE_FULL, MODE_OBSERVE, MODE_PACE,
 };
 use slint::{Model as _, ModelRc, VecModel};
 
@@ -21,12 +22,16 @@ use super::actions::{
 };
 use super::card::{Band, CardView, Down, Line, ReasonClass};
 use super::model::Page;
+use super::settings::{self, SettingLine, SettingsView};
 use crate::ledger::paint::models;
 use crate::ledger::resume::Lifter;
 use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
-use crate::{AccountCard, PresetChoice, StatusTone, WorkbenchPage};
+use crate::{AccountCard, PresetChoice, SettingItem, StatusTone, WorkbenchPage};
+
+/// What the technical log's lines about the settings page are under.
+const SETTINGS_LOG: &str = "acui-settings";
 
 /// Which page shows.
 pub fn page(ui: &Ui) {
@@ -215,6 +220,105 @@ fn value_text(labels: &Labels, value: &SettingValue) -> String {
             MODE_FULL => labels.setting_mode_full.to_owned(),
             other => other.to_owned(),
         },
+    }
+}
+
+/// The settings page's rows of the Runtime's settings, in their two groups, and what is said
+/// instead of them, or besides. A setting without a name here and a snapshot that reports no
+/// configuration each go to the log once; rows that do not read, each by its key and why,
+/// once for each owner epoch.
+pub fn settings(ui: &Ui) {
+    let Some(window) = ui.workbench() else {
+        return;
+    };
+    let labels = ui.labels();
+    // With no state root nothing reads the Runtime, so nothing is on its way either.
+    let view = match &ui.launcher {
+        Ok(_) => ui.model.borrow().settings_view(),
+        Err(_) => SettingsView::Unreachable,
+    };
+    let (note, failed) = match &view {
+        SettingsView::NotRunning => (labels.settings_table_not_running.to_owned(), false),
+        SettingsView::Unreachable => (labels.settings_table_unreachable.to_owned(), false),
+        SettingsView::Reading => (labels.settings_table_reading.to_owned(), false),
+        // The read's failure is in the log already, with the snapshot's (`config_landed`).
+        SettingsView::Failed => (labels.settings_table_unreadable.to_owned(), true),
+        SettingsView::Unreported => {
+            tell_once(ui, "the fact snapshot has no config.parameters record", true);
+            (labels.settings_table_unreadable.to_owned(), true)
+        }
+        SettingsView::Read { unread, .. } if unread.is_empty() => (String::new(), false),
+        SettingsView::Read { unread, .. } => {
+            let count = unread.len().to_string();
+            // Each row by its key and why, with the owner epoch: a Runtime started again
+            // that reports the same rows is said again.
+            let epoch = ui
+                .model
+                .borrow()
+                .config_read()
+                .map_or_else(|| "-".to_owned(), |read| read.epoch.clone());
+            let rows: Vec<String> = unread.iter().map(|row| row.line()).collect();
+            let line = format!(
+                "owner epoch {epoch}: {count} config.parameters rows do not read: {}",
+                rows.join("; ")
+            );
+            tell_once(ui, &line, true);
+            (fill(labels.settings_table_rows_unreadable, &[&count]), true)
+        }
+    };
+    let (daily, advanced) = match &view {
+        SettingsView::Read { daily, advanced, .. } => {
+            (setting_items(ui, labels, daily), setting_items(ui, labels, advanced))
+        }
+        SettingsView::NotRunning
+        | SettingsView::Unreachable
+        | SettingsView::Reading
+        | SettingsView::Failed
+        | SettingsView::Unreported => (Vec::new(), Vec::new()),
+    };
+    window.set_runtime_settings_note(note.into());
+    window.set_runtime_settings_failed(failed);
+    sync(window.get_daily_settings(), daily, |rows| window.set_daily_settings(rows));
+    sync(window.get_advanced_settings(), advanced, |rows| window.set_advanced_settings(rows));
+}
+
+fn setting_items(ui: &Ui, labels: &Labels, lines: &[SettingLine]) -> Vec<SettingItem> {
+    lines.iter().map(|line| setting_item(ui, labels, line)).collect()
+}
+
+/// One row: its name, with the account of an instance's own setting; its value; and in
+/// grey where the value comes from, how it is changed and when a change takes effect.
+fn setting_item(ui: &Ui, labels: &Labels, line: &SettingLine) -> SettingItem {
+    if let SettingName::Unnamed(key) = &line.name {
+        tell_once(ui, &format!("no words for setting {key}"), false);
+    }
+    let name = settings::name_words(labels, &line.name);
+    let name = match &line.account {
+        Some(account) => fill(labels.setting_of_account, &[name, account]),
+        None => name.to_owned(),
+    };
+    let mut note = vec![
+        fill(labels.setting_source_line, &[source_text(labels, line.source)]),
+        settings::change_words(labels, line.change).to_owned(),
+    ];
+    note.extend(settings::effect_words(labels, &line.name).map(str::to_owned));
+    SettingItem {
+        name: name.into(),
+        value: settings::value_words(labels, &line.name, &line.value).into(),
+        note: note.join(" · ").into(),
+    }
+}
+
+/// `line` into the log, the first time this run: a problem shows where the log is, a gap in
+/// the words here does not.
+fn tell_once(ui: &Ui, line: &str, problem: bool) {
+    if !ui.model.borrow_mut().first_told(line) {
+        return;
+    }
+    if problem {
+        report::log(SETTINGS_LOG, line);
+    } else {
+        report::log_quiet(SETTINGS_LOG, line);
     }
 }
 

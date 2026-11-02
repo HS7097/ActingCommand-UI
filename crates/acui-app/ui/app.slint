@@ -124,6 +124,15 @@ export struct PresetChoice {
 // Which of the workbench's two pages shows: the accounts, or the settings.
 export enum WorkbenchPage { main, settings }
 
+// One of the Runtime's settings on the settings page, in words: its name, with the
+// account of an instance's own; its value; and in grey where the value comes from, how
+// it is changed and when a change takes effect.
+export struct SettingItem {
+    name: string,
+    value: string,
+    note: string,
+}
+
 export struct OverlayItem {
     kind: string,
     x: float,
@@ -230,6 +239,8 @@ export global Strings {
     // The top bar's way to the settings page and back; the settings page's groups.
     in property <string> open-settings;
     in property <string> back-to-workbench;
+    in property <string> settings-daily;
+    in property <string> settings-advanced;
     in property <string> settings-runtime;
     in property <string> settings-appearance;
     // The Aero frame's caption buttons, by the names a screen reader says.
@@ -1131,6 +1142,44 @@ component WindowNotes {
     }
 }
 
+// One of the Runtime's settings on the settings page: its name, and beside it its value;
+// under them, in grey, where the value comes from, how it is changed and when a change
+// takes effect. The names keep one width, so the values line up. Every part wraps rather
+// than being cut short, a path or an alias included, and is as tall as its wrapped lines,
+// as a Notice is, for the same reason.
+component SettingLine {
+    in property <SettingItem> setting;
+    vertical-stretch: 0;
+    VerticalLayout {
+        spacing: 2px;
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                text: root.setting.name;
+                font-size: Scale.body-font;
+                color: Look.text;
+                wrap: word-wrap;
+                width: 240px * Scale.factor;
+                min-height: self.preferred-height;
+            }
+            Text {
+                text: root.setting.value;
+                font-size: Scale.body-font;
+                font-weight: 700;
+                color: Look.text;
+                wrap: word-wrap;
+                min-width: 40px * Scale.factor;
+                min-height: self.preferred-height;
+                horizontal-stretch: 1;
+            }
+        }
+        Notice {
+            text: root.setting.note;
+            font-size: Scale.grey-font;
+        }
+    }
+}
+
 // The main window. At the top the bar: the Runtime's lamp and its state in plain
 // words, Start, the two writes on every account's scheduling, the way into the ledger
 // window, and at the far end the way to the settings page and back; on a second row
@@ -1139,9 +1188,10 @@ component WindowNotes {
 // pause means, and what this window could not read. Then one of two pages. The main
 // one has two columns: on the left the accounts, and where one is added for now; on
 // the right the settings file's problems, what falls short of the theme and where the
-// technical log is. The settings page has those same lines, then Request Shutdown,
-// then the display settings. No code, pid or wire name shows here; those stay in the
-// ledger window's technical lines. Closing it ends the program.
+// technical log is. The settings page has those same lines, then the Runtime's
+// settings as it reads them, then Request Shutdown, then the display settings. No code,
+// pid or wire name shows here; those stay in the ledger window's technical lines.
+// Closing it ends the program.
 export component WorkbenchWindow inherits Window {
     title: Strings.window-title;
     icon: @image-url("../assets/acui-256.png");
@@ -1230,6 +1280,13 @@ export component WorkbenchWindow inherits Window {
     // The page shown. A press on the top bar asks for the other one; the console says
     // which shows.
     in property <WorkbenchPage> page;
+    // The settings page's rows of the Runtime's settings, as the newest fact snapshot has
+    // them, in its two tiers; and what is said instead of them, or besides, red when it
+    // says a failure.
+    in property <[SettingItem]> daily-settings;
+    in property <[SettingItem]> advanced-settings;
+    in property <string> runtime-settings-note;
+    in property <bool> runtime-settings-failed;
 
     in-out property <int> text-size-index <=> text-size-box.current-index;
     in-out property <int> language-index <=> language-box.current-index;
@@ -1575,7 +1632,8 @@ export component WorkbenchWindow inherits Window {
                     }
                 }
 
-                // the settings page: the Runtime, then how this window looks
+                // the settings page: the Runtime's settings, the Runtime, then how this
+                // window looks
                 Rectangle {
                     visible: root.page == WorkbenchPage.settings;
                     ScrollView {
@@ -1587,6 +1645,49 @@ export component WorkbenchWindow inherits Window {
                                 settings-warnings: root.settings-warnings;
                                 log-note: root.log-note;
                                 log-failed: root.log-failed;
+                            }
+                            // The Runtime's settings in its two tiers, each with how it is
+                            // changed; and the configuration file the file's are changed in.
+                            Card {
+                                vertical-stretch: 0;
+                                VerticalLayout {
+                                    padding: 10px;
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    spacing: 8px;
+                                    if root.runtime-settings-note != "": Notice {
+                                        text: root.runtime-settings-note;
+                                        failed: root.runtime-settings-failed;
+                                    }
+                                    if root.daily-settings.length > 0: CardTitle {
+                                        text: Strings.settings-daily;
+                                    }
+                                    for item in root.daily-settings: SettingLine {
+                                        setting: item;
+                                    }
+                                    if root.advanced-settings.length > 0: CardTitle {
+                                        text: Strings.settings-advanced;
+                                    }
+                                    for item in root.advanced-settings: SettingLine {
+                                        setting: item;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 14px;
+                                        Caption { text: Strings.config-file; }
+                                        if root.config-path != "": LineEdit {
+                                            text: root.config-path;
+                                            read-only: true;
+                                            font-size: Scale.body-font;
+                                            min-width: 160px * Scale.factor;
+                                            horizontal-stretch: 1;
+                                        }
+                                        if root.config-path == "": Notice {
+                                            text: root.config-note;
+                                            min-width: 40px * Scale.factor;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                }
                             }
                             Card {
                                 vertical-stretch: 0;

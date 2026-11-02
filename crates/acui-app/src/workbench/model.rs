@@ -19,6 +19,7 @@ use acui_source::{ClientFailure, PauseFact};
 use super::actions::{self, Actions, ActionsView, PresetView};
 use super::card::{self, CardView, Down, Schedule};
 use super::read::{Lane, Read, EXPLAIN_TOO_OLD};
+use super::settings::{self, SettingsView};
 use super::tools::{NameTable, NamesRead};
 use crate::strings::{fill, Labels, Language};
 
@@ -270,6 +271,12 @@ impl Model {
             self.config_failed(),
             &self.actions,
         )
+    }
+
+    /// The settings page's rows of the Runtime's settings.
+    pub fn settings_view(&self) -> SettingsView {
+        let read = self.config.value.as_ref();
+        settings::view(&self.link, read, self.config_failed(), &self.instances)
     }
 
     /// Whether the fact snapshot reads since the last that came failed. A thread that does

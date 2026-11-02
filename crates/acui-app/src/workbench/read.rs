@@ -7,7 +7,8 @@
 //! its lock for a whole exchange, `ScheduleExplanation` waits on the policy lock and
 //! `RuntimeFactSnapshot` on the fact write gate and the settings' gate, so the
 //! Runtime's lamp must not share a connection with them. `acui-slow` reads those two
-//! one after the other, and a poke reads both.
+//! one after the other, and a poke reads both, or the one it names: going to the settings
+//! page reads the fact snapshot alone.
 //!
 //! A thread reads what is due, hands each result to the event loop, and sleeps
 //! until the next is due or it is poked. It ends once the event loop lets its
@@ -122,8 +123,23 @@ impl Lane {
     }
 }
 
-/// Reads what the thread reads now, without waiting for its time.
-pub struct Poke;
+/// Reads now, without waiting for their time: every read of the thread, or only the one
+/// named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Poke {
+    All,
+    Only(Read),
+}
+
+impl Poke {
+    /// Whether it asks for `read`.
+    pub fn asks(self, read: Read) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(only) => only == read,
+        }
+    }
+}
 
 /// What a read came to, for the event loop.
 pub enum Landing {
@@ -234,21 +250,20 @@ fn run(
         let is_shown = shown.load(Ordering::SeqCst);
         let next = plan.iter().filter_map(|due| due.at(is_shown, now)).min();
         let wait = next.map_or(NOTHING_DUE, |at| at.saturating_duration_since(now));
-        let mut poked = match commands.recv_timeout(wait) {
-            Ok(Poke) => true,
-            Err(RecvTimeoutError::Timeout) => false,
+        match commands.recv_timeout(wait) {
+            Ok(poke) => mark(&mut plan, poke),
+            Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
-        };
-        // Pokes queued behind that one ask for the same reads.
+        }
+        // Pokes queued behind that one ask for their reads in the same round.
         loop {
             match commands.try_recv() {
-                Ok(Poke) => poked = true,
+                Ok(poke) => mark(&mut plan, poke),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             }
         }
         for due in &mut plan {
-            due.poked |= poked;
             let now = Instant::now();
             let is_due = due.at(shown.load(Ordering::SeqCst), now).is_some_and(|at| at <= now);
             if !is_due {
@@ -274,6 +289,13 @@ fn run(
             due.poked = false;
             report::post(lane.name(), move || super::landed(landing, generation));
         }
+    }
+}
+
+/// The reads of `plan` that `poke` asks for are due now.
+fn mark(plan: &mut [Due], poke: Poke) {
+    for due in plan {
+        due.poked |= poke.asks(due.cadence.read);
     }
 }
 

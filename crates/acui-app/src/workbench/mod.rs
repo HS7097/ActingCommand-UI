@@ -19,7 +19,8 @@
 //! longer counts: it is let go, and read again.
 //!
 //! Which of the workbench's two pages shows, the accounts or the settings, is the
-//! `Model`'s too (`show_page`).
+//! `Model`'s too (`show_page`). The settings page shows the Runtime's settings as the
+//! fact snapshot has them (`settings`), so going there reads it at once.
 //!
 //! A read that fails is no event to log each time: the log gets a change, as it
 //! happens, so a failure that repeats every few seconds is one line, and its end
@@ -30,6 +31,7 @@ pub mod card;
 pub mod model;
 pub mod paint;
 pub mod read;
+pub mod settings;
 pub mod tools;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -69,12 +71,12 @@ pub struct Reading {
 
 impl Reading {
     /// Whether `lane`'s thread turned out to be gone.
-    fn poke(&mut self, lane: Lane) -> bool {
+    fn poke(&mut self, lane: Lane, poke: Poke) -> bool {
         let slot = match lane {
             Lane::Live => &mut self.live,
             Lane::Slow => &mut self.slow,
         };
-        let gone = slot.as_ref().is_some_and(|sender| sender.send(Poke).is_err());
+        let gone = slot.as_ref().is_some_and(|sender| sender.send(poke).is_err());
         if gone {
             *slot = None;
         }
@@ -90,7 +92,7 @@ impl Reading {
         }
         self.names_owed = false;
         let sender = self.tools.as_ref().map_err(String::clone)?;
-        if sender.send(Poke).is_err() {
+        if sender.send(Poke::All).is_err() {
             let why = format!("{} ended", tools::THREAD);
             self.tools = Err(why.clone());
             return Err(why);
@@ -148,13 +150,18 @@ pub fn stop(ui: &Ui) {
 }
 
 /// A page picked on the top bar, or by `--page` before the window is up: then the
-/// window's first paint shows it.
+/// window's first paint shows it, and the threads' first round reads for it. Going to
+/// the settings reads the fact snapshot now, since the page shows what it says, and only
+/// that: the schedule explanation, which waits on the policy lock, is no read of a page.
 pub fn show_page(ui: &Ui, page: Page) {
     if ui.model.borrow().page() == page {
         return;
     }
     ui.model.borrow_mut().set_page(page);
     paint::page(ui);
+    if page == Page::Settings {
+        ask(ui, Read::Config.lane(), Poke::Only(Read::Config));
+    }
 }
 
 /// A `Status` read now: a request of the launcher's is over.
@@ -177,11 +184,17 @@ pub fn wrote(ui: &Ui) {
     poke(ui, Lane::Slow);
 }
 
+/// Every read of `lane`'s thread now.
 fn poke(ui: &Ui, lane: Lane) {
-    if lane == Lane::Slow {
+    ask(ui, lane, Poke::All);
+}
+
+/// What `poke` asks of `lane`'s thread, now.
+fn ask(ui: &Ui, lane: Lane, poke: Poke) {
+    if lane == Read::Explain.lane() && poke.asks(Read::Explain) {
         ui.model.borrow_mut().explain_asked(Instant::now());
     }
-    let gone = ui.reading.borrow_mut().as_mut().is_some_and(|reading| reading.poke(lane));
+    let gone = ui.reading.borrow_mut().as_mut().is_some_and(|reading| reading.poke(lane, poke));
     if gone {
         lane_failed(ui, lane, format!("{} ended", lane.name()));
     }
@@ -209,6 +222,7 @@ fn lane_failed(ui: &Ui, lane: Lane, error: String) {
     paint::cards(ui);
     paint::actions(ui);
     paint::preset(ui);
+    paint::settings(ui);
     launcher::paint(ui);
 }
 
@@ -291,6 +305,7 @@ fn live_landed(ui: &Ui, read: LiveRead) {
     paint::cards(ui);
     paint::actions(ui);
     paint::preset(ui);
+    paint::settings(ui);
     if landed.fault_cleared {
         ui.paint_notices();
     }
@@ -312,8 +327,8 @@ fn explain_landed(ui: &Ui, read: Result<ExplainRead, ClientFailure>) {
 }
 
 /// The servers are on the cards, the version says whether the finishing count holds,
-/// and the preset is on the top bar. A read that answers is no event for the log, only
-/// a change of how it went.
+/// the preset is on the top bar, and the rest of the settings on the settings page. A
+/// read that answers is no event for the log, only a change of how it went.
 fn config_landed(ui: &Ui, read: Result<ConfigRead, ClientFailure>) {
     let landed = ui.model.borrow_mut().apply_config(read, Instant::now());
     let thread = Lane::Slow.name();
@@ -337,6 +352,7 @@ fn config_landed(ui: &Ui, read: Result<ConfigRead, ClientFailure>) {
     paint::cards(ui);
     paint::actions(ui);
     paint::preset(ui);
+    paint::settings(ui);
 }
 
 fn panicked(ui: &Ui, read: Read, message: String) {
@@ -347,6 +363,7 @@ fn panicked(ui: &Ui, read: Read, message: String) {
         paint::cards(ui);
         paint::actions(ui);
         paint::preset(ui);
+        paint::settings(ui);
     }
 }
 

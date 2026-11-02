@@ -167,7 +167,7 @@ fn run(paths: &Result<ToolPaths, ToolIssue>, commands: &Receiver<Poke>) {
     while commands.recv().is_ok() {
         loop {
             match commands.try_recv() {
-                Ok(Poke) => {}
+                Ok(_) => {}
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             }

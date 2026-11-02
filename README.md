@@ -387,9 +387,16 @@ The main window is the **workbench**. Its top bar has a lamp with the Runtime in
 the last press. Then one of two pages. The main page has two columns: the left one is for the accounts,
 with an "Add Account or Device" button that is off (see "Instance configuration"); the right one has the
 settings file's problems, what falls short of the theme and where the technical log is. Settings switches
-to the settings page, where the same button reads "Back to Workbench": first those same lines, then
-"Runtime" (Request Shutdown) and "Appearance" (the text size, the language and the theme). Both pages are
-always there and only one shows at a time, so what the boxes hold stays when you switch away and back.
+to the settings page, where the same button reads "Back to Workbench": first those same lines, then the
+Runtime's settings, then "Runtime" (Request Shutdown) and "Appearance" (the text size, the language and the
+theme). The Runtime's settings come from the running Runtime (read again on going to the page), in two
+groups, "Everyday" and "Advanced": which keys show and in which group is the Runtime's own tiering, and the
+four settings of the performance preset are only on the top bar. Each says its value, where it comes
+from, how it is changed (all of them only shown in this version: shown only for now, changed in the
+configuration file with a Runtime restart, or set by the installer) and when a change takes effect; one
+the file does not name and that has no default says "not set" rather than being left out. While the
+Runtime does not answer, no older value is shown. Both pages are always there and only one shows at a
+time, so what the boxes hold stays when you switch away and back.
 The ledger window,
 "Advanced Troubleshooting and Ledger History", opens only when asked: from that button, or at the start
 when `--tab` or `--source` is given. There is at most one per source (the default `auto`, `online`,

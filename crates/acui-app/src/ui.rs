@@ -440,8 +440,8 @@ impl Ui {
 
     /// The workbench's lines that only the language changes: why this run has
     /// no state root, and the Runtime's configuration file, where an instance
-    /// is added by hand for now. And the accounts note and the cards, which reads
-    /// change too; and which page shows, which only a press changes.
+    /// is added by hand for now. And the accounts note, the cards and the Runtime's
+    /// settings, which reads change too; and which page shows, which only a press changes.
     pub fn paint_workbench(&self) {
         let Some(window) = self.workbench() else {
             return;
@@ -467,6 +467,7 @@ impl Ui {
         workbench::paint::cards(self);
         workbench::paint::actions(self);
         workbench::paint::preset(self);
+        workbench::paint::settings(self);
     }
 
     /// Why the workbench's left column has no account to show, if it has none.
@@ -718,6 +719,8 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_start_log(labels.start_log.into());
     global.set_open_settings(labels.open_settings.into());
     global.set_back_to_workbench(labels.back_to_workbench.into());
+    global.set_settings_daily(labels.settings_daily.into());
+    global.set_settings_advanced(labels.settings_advanced.into());
     global.set_settings_runtime(labels.settings_runtime.into());
     global.set_settings_appearance(labels.settings_appearance.into());
     global.set_caption_minimize(labels.caption_minimize.into());
