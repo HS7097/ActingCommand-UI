@@ -541,7 +541,8 @@ impl Model {
     }
 
     fn online(&mut self, snapshot: LiveSnapshot, fault_cleared: bool) -> LiveLanded {
-        let LiveSnapshot { pid, epoch, global_pause, instances } = snapshot;
+        // The ledger's head is for the picture's lookup (UI-3c), which does not read yet.
+        let LiveSnapshot { pid, epoch, global_pause, instances, ledger_head: _ } = snapshot;
         let epoch_changed = self.epoch.as_deref() != Some(epoch.as_str());
         if epoch_changed {
             // Started again, not for the first time this run: what the watchdog said is of
