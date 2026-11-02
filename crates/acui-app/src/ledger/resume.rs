@@ -42,14 +42,14 @@ const DEPLOY_REASONS: [&str; 2] = ["acsetup_update", "install_restart"];
 const DEPLOY_PREFIX: &str = "deploy-";
 
 /// Who lifts a pause.
-enum Lifter {
+pub(crate) enum Lifter {
     /// Another tool set it: this window may resume it.
     Window,
     Alice,
     Installer,
 }
 
-fn lifter(reason: &str) -> Lifter {
+pub(crate) fn lifter(reason: &str) -> Lifter {
     if reason == ALICE_STOP {
         Lifter::Alice
     } else if DEPLOY_REASONS.contains(&reason) || reason.starts_with(DEPLOY_PREFIX) {

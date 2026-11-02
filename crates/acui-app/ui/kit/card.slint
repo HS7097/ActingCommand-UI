@@ -13,6 +13,22 @@ export component StatusStrip inherits Rectangle {
         : transparent;
 }
 
+// A round lamp in one of the five status colours, in the middle of the height
+// it is given; `none` draws nothing. Colour alone says little: whoever uses it
+// puts its words beside it.
+export component StatusDot {
+    in property <StatusTone> tone;
+    VerticalLayout {
+        alignment: center;
+        StatusStrip {
+            tone: root.tone;
+            width: 10px * Scale.factor;
+            height: 10px * Scale.factor;
+            border-radius: 5px * Scale.factor;
+        }
+    }
+}
+
 // A card: one framed group on the page. What goes in it, and the padding
 // around that, is the caller's. `strip` draws a 4px status band down its left
 // edge. A `pinned` card, the one held at the top of a page to say what

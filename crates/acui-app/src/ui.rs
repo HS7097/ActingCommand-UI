@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! What the windows of this process share, on the event loop only: the
 //! language shown, the text size, the theme, what the settings file holds that
-//! this run could not take, the launcher and its view, and the windows
-//! themselves — the workbench, which is the main window, and the ledger windows
-//! opened from it, at most one per source. A window takes its words from here
+//! this run could not take, the launcher and its view, the workbench's reads and
+//! what they left, and the windows themselves — the workbench, which is the main
+//! window, and the ledger windows opened from it, at most one per source. A window
+//! takes its words from here
 //! at the moment it paints, and a language, text size or theme picked in any
 //! window is applied to every window at once.
 //!
@@ -30,6 +31,8 @@ use crate::report;
 use crate::settings::{Settings, SettingsFile, SettingsIssue, TextSize, Theme};
 use crate::skin::{self, Closing, Skins, WindowKey};
 use crate::strings::{fill, Labels, Language};
+use crate::workbench::model::{AccountsNote, Model};
+use crate::workbench::{self, Reading};
 use crate::{LedgerWindow, Look, Scale, Strings, WorkbenchWindow};
 
 /// The shared look on one window, of either kind: the words of the language
@@ -61,6 +64,10 @@ pub struct Ui {
     /// the workbench says so in red, and Start and the ledger window are off.
     pub launcher: Result<Launcher, InstallIssue>,
     pub launcher_view: RefCell<LauncherView>,
+    /// What the workbench's reads left.
+    pub model: RefCell<Model>,
+    /// The workbench's reading threads, while they run.
+    pub reading: RefCell<Option<Reading>>,
     /// The main window, from just before it shows until the event loop is over.
     workbench: RefCell<Option<WorkbenchWindow>>,
     /// The ledger windows open now, by id.
@@ -105,6 +112,8 @@ impl Ui {
             notices: RefCell::new(Notices { settings: issues, save: None, window: None }),
             launcher,
             launcher_view: RefCell::new(launcher_view),
+            model: RefCell::new(Model::new()),
+            reading: RefCell::new(None),
             workbench: RefCell::new(None),
             ledgers: RefCell::new(BTreeMap::new()),
             next_id: Cell::new(1),
@@ -266,10 +275,11 @@ impl Ui {
         drop(removed);
     }
 
-    /// After the event loop: every native frame off, then every window hidden
-    /// and let go, before the shared state itself goes. A window that does not
-    /// hide is said in the log.
+    /// After the event loop: the reading threads told to end, every native frame
+    /// off, then every window hidden and let go, before the shared state itself
+    /// goes. A window that does not hide is said in the log.
     pub fn close_all(&self) {
+        workbench::stop(self);
         self.skins.detach_all();
         let ledgers = std::mem::take(&mut *self.ledgers.borrow_mut());
         for handle in ledgers.values() {
@@ -373,7 +383,7 @@ impl Ui {
     }
 
     /// The top of every window: the settings file's problems, errors first; on
-    /// the workbench, what it could not do itself; and where the technical log
+    /// the workbench, what it could not do itself or read; and where the technical log
     /// is. A save's failure stays until a save succeeds; one that only repeats
     /// a problem found at the start is not said twice.
     pub fn paint_notices(&self) {
@@ -397,6 +407,9 @@ impl Ui {
             if self.close_refused.get() {
                 own.push(labels.close_unlock_busy.to_owned());
             }
+            own.extend(self.model.borrow().faults().map(|fault| fault.text(labels)));
+            // Both reading threads failing alike is said once.
+            own.dedup();
             (errors.join("\n"), warnings.join("\n"), own.join("\n"))
         };
         if let Some(window) = self.workbench() {
@@ -427,7 +440,8 @@ impl Ui {
 
     /// The workbench's lines that only the language changes: why this run has
     /// no state root, and the Runtime's configuration file, where an instance
-    /// is added by hand for now.
+    /// is added by hand for now. And the accounts note and the cards, which reads
+    /// change too.
     pub fn paint_workbench(&self) {
         let Some(window) = self.workbench() else {
             return;
@@ -447,6 +461,34 @@ impl Ui {
         };
         window.set_config_path(path.into());
         window.set_config_note(note.into());
+        self.paint_accounts_note();
+        self.paint_names_note();
+        workbench::paint::cards(self);
+    }
+
+    /// Why the workbench's left column has no account to show, if it has none.
+    pub fn paint_accounts_note(&self) {
+        let Some(window) = self.workbench() else {
+            return;
+        };
+        let labels = self.labels();
+        let note = match self.model.borrow().accounts_note() {
+            AccountsNote::Nothing => "",
+            AccountsNote::NoneConfigured => labels.accounts_none,
+            AccountsNote::NotRunning => labels.accounts_not_running,
+            AccountsNote::Unreachable => labels.accounts_unreachable,
+        };
+        window.set_accounts_note(note.into());
+    }
+
+    /// Under the accounts: the tasks' names could not be read.
+    pub fn paint_names_note(&self) {
+        let Some(window) = self.workbench() else {
+            return;
+        };
+        let unreadable = self.model.borrow().names_unreadable();
+        let note = if unreadable { self.labels().names_unreadable } else { "" };
+        window.set_names_note(note.into());
     }
 }
 
@@ -607,6 +649,7 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_add_instance(labels.add_instance.into());
     global.set_add_instance_note(labels.add_instance_note.into());
     global.set_config_file(labels.config_file.into());
+    global.set_start_log(labels.start_log.into());
     global.set_caption_minimize(labels.caption_minimize.into());
     global.set_caption_maximize(labels.caption_maximize.into());
     global.set_caption_restore(labels.caption_restore.into());
