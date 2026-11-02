@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! What the workbench's top bar writes: "pause all" and "put all on duty".
+//! What the workbench's top bar writes: "pause all", "put all on duty" and the
+//! performance preset.
 //!
 //! A press takes a ticket for its slot, one out per slot, and the buttons are off
 //! meanwhile. It goes out once, on a thread of its own, over a fresh person's
@@ -15,16 +16,23 @@
 //! (`lifter`): the rest stay off and say who lifts them. A pause another tool set
 //! takes two presses, and the first only asks; one pressed here takes one.
 //!
+//! Picking a preset, or going back to the file's setting, is one change of settings
+//! (`ConfigFlow`). It names the version of the newest snapshot, and only a snapshot or an
+//! answer that it took moves that version. An answer that says nothing, or that another
+//! end got there first, leaves the writes off until a snapshot read after it has come,
+//! and only then says what became of it, so a person decides on what they see. Leaving a
+//! learning mode the file holds takes two presses, as lifting another tool's pause does.
+//!
 //! `view` and `preset_view` are pure functions of what the reads and the presses left,
-//! without words; `paint` makes the words. The performance preset is only shown so far.
+//! without words; `paint` makes the words.
 
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 
 use acui_source::workbench::{
-    pause_global, ActivityKind, ConfigRead, InstanceLive, PauseOutcome, PresetMember,
-    CONSOLE_PAUSE_ALL,
+    configure, pause_global, ActivityKind, ConfigEdit, ConfigOutcome, ConfigRead, InstanceLive,
+    PauseOutcome, PresetMember, RefusalWhy, SettingSource, CONSOLE_PAUSE_ALL,
 };
 use acui_source::{resume_paused, ClientFailure, PauseFact, PauseTarget, ResumeOutcome};
 
@@ -66,9 +74,11 @@ enum Scope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Kind {
     Scheduling,
+    Settings,
 }
 
 const GLOBAL_SCHEDULING: (Scope, Kind) = (Scope::Global, Kind::Scheduling);
+const GLOBAL_SETTINGS: (Scope, Kind) = (Scope::Global, Kind::Settings);
 
 /// The name of one press's request: an answer counts only under the ticket still out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +89,8 @@ pub struct Ticket(u64);
 pub enum Write {
     PauseAll,
     ResumeAll,
+    /// A change of settings, based on this version of them when there is one.
+    Configure { based_on: Option<u64> },
 }
 
 impl Write {
@@ -87,8 +99,40 @@ impl Write {
         match self {
             Self::PauseAll => "acui-act-pause",
             Self::ResumeAll => "acui-act-resume",
+            Self::Configure { .. } => CONFIG_THREAD,
         }
     }
+
+    fn slot(self) -> (Scope, Kind) {
+        match self {
+            Self::PauseAll | Self::ResumeAll => GLOBAL_SCHEDULING,
+            Self::Configure { .. } => GLOBAL_SETTINGS,
+        }
+    }
+}
+
+const CONFIG_THREAD: &str = "acui-act-config";
+
+/// Where a change of settings stands, on top of the ticket that says one is out.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum ConfigFlow {
+    #[default]
+    Idle,
+    /// The first press on a preset that leaves the learning mode the file holds asked
+    /// about this preset.
+    Confirming { name: String },
+    InFlight,
+    /// The writes stay off until a snapshot read after the answer has come.
+    Rereading(Reread),
+}
+
+/// Why a snapshot is awaited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reread {
+    /// The settings had moved on, and nothing changed.
+    Conflict,
+    /// Nothing says what became of the change based on this version.
+    Unconfirmed { based_on: Option<u64> },
 }
 
 /// What the last press came to, before its words.
@@ -110,6 +154,22 @@ pub enum Said {
     NoThread { error: String },
     /// A write was out across a restart.
     Restarted,
+    /// The settings changed as asked. What is shown of them is still a read's.
+    ConfigApplied,
+    /// Nothing changed, for this reason; any other refusal is `Refused`.
+    ConfigRefused(RefusalWhy),
+    /// The table read no longer has the preset pressed: nothing was sent.
+    PresetGone,
+    /// A snapshot is awaited (`ConfigFlow::Rereading`).
+    Rereading(Reread),
+    /// A snapshot came: the settings had moved on, and it shows how.
+    ConflictRefreshed,
+    /// A snapshot came, at the version the change was based on: it did not happen.
+    NotApplied,
+    /// A snapshot came at another version: the settings changed, perhaps by this press.
+    UnconfirmedChanged,
+    /// A snapshot came without a version to judge by.
+    UnconfirmedSeeNow,
 }
 
 /// The workbench's writes, on the event loop only.
@@ -119,40 +179,81 @@ pub struct Actions {
     out: BTreeMap<(Scope, Kind), Ticket>,
     /// The pause a first press asks to confirm.
     confirming: Option<PauseTarget>,
+    flow: ConfigFlow,
     said: Option<Said>,
 }
 
 impl Actions {
-    /// A new ticket, unless one of that slot is out. A confirmation ends here.
-    fn begin(&mut self, slot: (Scope, Kind), write: Write) -> Option<Ticket> {
+    /// A new ticket, unless one of its slot is out. Its slot's confirmation ends here.
+    fn begin(&mut self, write: Write) -> Option<Ticket> {
+        let slot = write.slot();
         if self.out.contains_key(&slot) {
             return None;
         }
         self.issued += 1;
         let ticket = Ticket(self.issued);
         self.out.insert(slot, ticket);
-        self.confirming = None;
+        match write {
+            Write::PauseAll | Write::ResumeAll => self.confirming = None,
+            Write::Configure { .. } => self.flow = ConfigFlow::InFlight,
+        }
         self.said = Some(Said::Sending(write));
         Some(ticket)
     }
 
     /// An answer: whether `ticket` was the one out, which is all that makes it count.
+    /// A change of settings that needs a read before anything more goes out says so.
     fn settle(&mut self, slot: (Scope, Kind), ticket: Ticket, said: Said) -> bool {
         if self.out.get(&slot) != Some(&ticket) {
             return false;
         }
         self.out.remove(&slot);
+        if slot == GLOBAL_SETTINGS {
+            self.flow = match said {
+                Said::Rereading(reread) => ConfigFlow::Rereading(reread),
+                _ => ConfigFlow::Idle,
+            };
+        }
         self.said = Some(said);
         true
     }
 
     /// Another owner epoch: no ticket holds across it, and no line says anything of
-    /// the old one but that a write was out.
+    /// the old one but that a write was out or had not been settled.
     pub fn new_epoch(&mut self) {
-        let was_out = !self.out.is_empty();
+        let was_open = !self.out.is_empty() || matches!(self.flow, ConfigFlow::Rereading(_));
         self.out.clear();
         self.confirming = None;
-        self.said = was_out.then_some(Said::Restarted);
+        self.flow = ConfigFlow::Idle;
+        self.said = was_open.then_some(Said::Restarted);
+    }
+
+    /// A fact snapshot that counts: of this epoch, and read after any write that landed.
+    /// That is what a change of settings left waiting was waiting for. A confirmation
+    /// goes when what it asks about is no longer so.
+    pub fn snapshot_read(&mut self, read: &ConfigRead) {
+        match &self.flow {
+            ConfigFlow::Rereading(reread) => {
+                self.said = Some(match *reread {
+                    Reread::Conflict => Said::ConflictRefreshed,
+                    Reread::Unconfirmed { based_on } => match (read.version, based_on) {
+                        (None, _) => Said::UnconfirmedSeeNow,
+                        (Some(now), Some(based_on)) if now == based_on => Said::NotApplied,
+                        (Some(_), _) => Said::UnconfirmedChanged,
+                    },
+                });
+                self.flow = ConfigFlow::Idle;
+            }
+            ConfigFlow::Confirming { name } => {
+                let still_asked = read.preset.as_ref().is_ok_and(|preset| {
+                    preset.file_holds_full() && preset.names().any(|known| known == name.as_str())
+                });
+                if !still_asked {
+                    self.flow = ConfigFlow::Idle;
+                }
+            }
+            ConfigFlow::Idle | ConfigFlow::InFlight => {}
+        }
     }
 
     /// A `Status` read that counts. A confirmation is of one pause, and goes with it.
@@ -175,6 +276,15 @@ impl Actions {
     /// No `Status` answers: nothing to confirm against.
     pub fn status_lost(&mut self) {
         self.confirming = None;
+        if matches!(self.flow, ConfigFlow::Confirming { .. }) {
+            self.flow = ConfigFlow::Idle;
+        }
+    }
+
+    /// A press found nothing to send.
+    fn preset_gone(&mut self) {
+        self.flow = ConfigFlow::Idle;
+        self.said = Some(Said::PresetGone);
     }
 }
 
@@ -210,16 +320,23 @@ pub struct ActionsView {
     /// snapshot of this Runtime with a version says its `Status` names activities, and
     /// a count of none means none.
     pub finishing: Option<usize>,
+    /// A snapshot is awaited before anything more is saved, and none can come: the reads
+    /// fail, or no Runtime answers (the same epoch answering again reads one).
+    pub reread_failed: bool,
 }
 
+/// `config_failed`: the fact snapshot reads since the last one that came did not succeed.
+/// Not online, nothing records a failed read, so the link says it.
 pub fn view(
     link: &Link,
     global: Option<&PauseFact>,
     instances: &[InstanceLive],
     actions: &Actions,
     config: Option<&ConfigRead>,
+    config_failed: bool,
 ) -> ActionsView {
-    let open = matches!(link, Link::Online { .. }) && !actions.out.contains_key(&GLOBAL_SCHEDULING);
+    let online = matches!(link, Link::Online { .. });
+    let open = online && !actions.out.contains_key(&GLOBAL_SCHEDULING);
     let resume = match global {
         Some(pause) if open && lifter(&pause.reason) == Lifter::Window => {
             if actions.confirming.as_ref() == Some(&pause.target) {
@@ -254,6 +371,8 @@ pub fn view(
                 })
                 .count()
         }),
+        reread_failed: matches!(actions.flow, ConfigFlow::Rereading(_))
+            && (config_failed || !online),
     }
 }
 
@@ -265,7 +384,16 @@ pub enum PresetView {
     /// The read failed, or what it read tells no preset. There is no second table here
     /// to show instead.
     Unreadable,
-    Read { options: Vec<PresetOption>, state: PresetState },
+    Read {
+        options: Vec<PresetOption>,
+        state: PresetState,
+        /// Whether a change of settings can go out now.
+        can_write: bool,
+        /// Whether a setting of a preset holds an online value, which the file's replaces.
+        back_to_file: bool,
+        /// The preset a first press asks to confirm.
+        confirming: Option<String>,
+    },
 }
 
 /// One preset of the table.
@@ -289,7 +417,12 @@ pub enum PresetState {
 
 /// `read` of the Runtime `link` names, unless the reads since failed (`failed`): an
 /// older preset would pose as the present.
-pub fn preset_view(link: &Link, read: Option<&ConfigRead>, failed: bool) -> PresetView {
+pub fn preset_view(
+    link: &Link,
+    read: Option<&ConfigRead>,
+    failed: bool,
+    actions: &Actions,
+) -> PresetView {
     if !matches!(link, Link::Online { .. }) {
         return PresetView::NotRead;
     }
@@ -321,13 +454,20 @@ pub fn preset_view(link: &Link, read: Option<&ConfigRead>, failed: bool) -> Pres
         None if preset.file_fixes_concurrency() => PresetState::CustomFileConcurrency,
         None => PresetState::Custom(preset.members.clone()),
     };
-    PresetView::Read { options, state }
+    let (can_write, confirming) = match &actions.flow {
+        ConfigFlow::Idle => (true, None),
+        ConfigFlow::Confirming { name } => (true, Some(name.clone())),
+        ConfigFlow::InFlight | ConfigFlow::Rereading(_) => (false, None),
+    };
+    let back_to_file = preset.members.iter().any(|member| member.source == SettingSource::Online);
+    PresetView::Read { options, state, can_write, back_to_file, confirming }
 }
 
 /// What a write's thread hands back.
 enum Written {
     Pause(PauseOutcome),
     Resume(ResumeOutcome),
+    Config(ConfigOutcome),
     /// The write panicked: whether it got out is not known.
     Panicked(String),
     NoThread(String),
@@ -360,9 +500,31 @@ impl Written {
                 Said::NotSent
             }
             Self::Pause(PauseOutcome::Unconfirmed(_))
-            | Self::Resume(ResumeOutcome::Unconfirmed(_))
-            | Self::Panicked(_) => Said::Unconfirmed,
+            | Self::Resume(ResumeOutcome::Unconfirmed(_)) => Said::Unconfirmed,
+            Self::Config(ConfigOutcome::Applied { .. }) => Said::ConfigApplied,
+            Self::Config(ConfigOutcome::Conflict { .. }) => Said::Rereading(Reread::Conflict),
+            Self::Config(ConfigOutcome::Refused(refused)) => match refused.why {
+                RefusalWhy::Other => {
+                    Said::Refused { write, code: refusal(&refused.failure).to_owned() }
+                }
+                why => Said::ConfigRefused(why),
+            },
+            Self::Config(ConfigOutcome::NotSent(_)) => Said::NotSent,
+            Self::Config(ConfigOutcome::Unconfirmed(_)) | Self::Panicked(_) => match write {
+                Write::Configure { based_on } => {
+                    Said::Rereading(Reread::Unconfirmed { based_on })
+                }
+                Write::PauseAll | Write::ResumeAll => Said::Unconfirmed,
+            },
             Self::NoThread(error) => Said::NoThread { error },
+        }
+    }
+
+    /// The settings' version a change of them answered with.
+    fn applied_version(&self) -> Option<u64> {
+        match self {
+            Self::Config(ConfigOutcome::Applied { version }) => *version,
+            _ => None,
         }
     }
 
@@ -391,12 +553,31 @@ impl Written {
                 }
             }
             Self::Pause(PauseOutcome::NotSent(failure))
-            | Self::Resume(ResumeOutcome::NotSent(failure)) => report::log(
+            | Self::Resume(ResumeOutcome::NotSent(failure))
+            | Self::Config(ConfigOutcome::NotSent(failure)) => report::log(
                 write.thread(),
                 &format!("{prefix}: not sent: {}", failure_line(failure)),
             ),
+            Self::Config(ConfigOutcome::Applied { version }) => report::log_quiet(
+                write.thread(),
+                &format!("{prefix}: settings changed, version {version:?}"),
+            ),
+            Self::Config(ConfigOutcome::Conflict { current }) => report::log_quiet(
+                write.thread(),
+                &format!("{prefix}: settings moved on, version now {current:?}; nothing changed"),
+            ),
+            Self::Config(ConfigOutcome::Refused(refused)) => report::log(
+                write.thread(),
+                &format!(
+                    "{prefix}: refused: {}, key {:?}, {:?}",
+                    failure_line(&refused.failure),
+                    refused.key,
+                    refused.why,
+                ),
+            ),
             Self::Pause(PauseOutcome::Unconfirmed(failure))
-            | Self::Resume(ResumeOutcome::Unconfirmed(failure)) => report::log(
+            | Self::Resume(ResumeOutcome::Unconfirmed(failure))
+            | Self::Config(ConfigOutcome::Unconfirmed(failure)) => report::log(
                 write.thread(),
                 &format!("{prefix}: unconfirmed, not sent again: {}", failure_line(failure)),
             ),
@@ -456,6 +637,70 @@ fn send_resume(ui: &Ui, target: PauseTarget) {
     send(ui, Write::ResumeAll, move |root| Written::Resume(resume_paused(root, &target)));
 }
 
+/// A preset's segment: at once, or, leaving the learning mode the file holds, the first
+/// of two presses. The press may land after the read that made it the one in effect.
+pub fn preset_pressed(ui: &Ui, name: &str) {
+    let view = ui.model.borrow().preset_view();
+    let PresetView::Read { options, state, can_write: true, .. } = view else {
+        return;
+    };
+    if options.iter().any(|option| option.current && option.name == name) {
+        return;
+    }
+    if matches!(state, PresetState::CustomFileFull) {
+        ui.model.borrow_mut().actions_mut().flow = ConfigFlow::Confirming { name: name.to_owned() };
+        paint::preset(ui);
+    } else {
+        send_preset(ui, name);
+    }
+}
+
+/// The confirming press: of the preset the first press asked about, if a snapshot since
+/// has not ended the confirmation.
+pub fn preset_confirmed(ui: &Ui) {
+    let view = ui.model.borrow().preset_view();
+    if let PresetView::Read { can_write: true, confirming: Some(name), .. } = view {
+        send_preset(ui, &name);
+    }
+}
+
+/// The "back to the file's setting" button.
+pub fn back_to_file_pressed(ui: &Ui) {
+    let view = ui.model.borrow().preset_view();
+    if matches!(view, PresetView::Read { can_write: true, back_to_file: true, .. }) {
+        send_config(ui, ConfigEdit::preset_back_to_file());
+    }
+}
+
+/// The table is read once at the Runtime's start, so a preset shown is in it: a preset
+/// that is not says this program lost track, and nothing goes out.
+fn send_preset(ui: &Ui, name: &str) {
+    let edit =
+        ui.model.borrow().config_read().and_then(|read| ConfigEdit::apply_preset(read, name));
+    match edit {
+        Some(edit) => send_config(ui, edit),
+        None => {
+            report::log(CONFIG_THREAD, &format!("preset {name} is not in the table read"));
+            ui.model.borrow_mut().actions_mut().preset_gone();
+            repaint(ui);
+            ui.paint_log_notes();
+        }
+    }
+}
+
+fn send_config(ui: &Ui, edit: ConfigEdit) {
+    let based_on = ui.model.borrow().config_version();
+    send(ui, Write::Configure { based_on }, move |root| {
+        Written::Config(configure(root, &edit, based_on))
+    });
+}
+
+/// What a press or an answer may have changed: both rows of the top bar's writes.
+fn repaint(ui: &Ui) {
+    paint::actions(ui);
+    paint::preset(ui);
+}
+
 /// One write, once, on a thread of its own. A thread the system refuses is that
 /// press's answer at once, in red. A panic in the write is an answer as well: with no
 /// answer at all the buttons would stay off for good.
@@ -463,7 +708,7 @@ fn send(ui: &Ui, write: Write, work: impl FnOnce(&Path) -> Written + Send + 'sta
     let Ok(launcher) = &ui.launcher else {
         return;
     };
-    let Some(ticket) = ui.model.borrow_mut().actions_mut().begin(GLOBAL_SCHEDULING, write) else {
+    let Some(ticket) = ui.model.borrow_mut().actions_mut().begin(write) else {
         return;
     };
     let root = launcher.state_root.clone();
@@ -480,7 +725,7 @@ fn send(ui: &Ui, write: Write, work: impl FnOnce(&Path) -> Written + Send + 'sta
         });
     });
     match spawned {
-        Ok(()) => paint::actions(ui),
+        Ok(()) => repaint(ui),
         Err(error) => {
             let written = Written::NoThread(error.to_string());
             written.log(write, ticket);
@@ -492,11 +737,19 @@ fn send(ui: &Ui, write: Write, work: impl FnOnce(&Path) -> Written + Send + 'sta
 /// An answer, on the event loop. One whose ticket a restart let go changes nothing
 /// shown: only the log had it.
 fn landed(ui: &Ui, write: Write, ticket: Ticket, written: Written) {
+    let version = written.applied_version();
     let said = written.said(write);
-    let counted = ui.model.borrow_mut().actions_mut().settle(GLOBAL_SCHEDULING, ticket, said);
+    let counted = {
+        let mut model = ui.model.borrow_mut();
+        let counted = model.actions_mut().settle(write.slot(), ticket, said);
+        if let (true, Some(version)) = (counted, version) {
+            model.config_applied(version);
+        }
+        counted
+    };
     if counted {
         super::wrote(ui);
-        paint::actions(ui);
+        repaint(ui);
     } else {
         report::log_quiet(
             write.thread(),

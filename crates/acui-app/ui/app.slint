@@ -113,9 +113,10 @@ export struct AccountCard {
     note: string,
 }
 
-// One performance preset on the top bar: its name in words, and whether it is the one
-// in effect.
+// One performance preset on the top bar: what a press names it by, its name in words, and
+// whether it is the one in effect.
 export struct PresetChoice {
+    name: string,
     label: string,
     current: bool,
 }
@@ -208,6 +209,8 @@ export global Strings {
     in property <string> pause-all;
     in property <string> resume-all;
     in property <string> performance-preset;
+    in property <string> back-to-file;
+    in property <string> preset-confirm;
     in property <string> request-shutdown;
     // The workbench's own: the way into the ledger window, the instance entry
     // that waits for the Runtime, the file to edit by hand meanwhile, and the
@@ -1086,7 +1089,7 @@ component AccountCardView {
 
 // The main window. At the top the bar: the Runtime's lamp and its state in plain
 // words, Start, the two writes on every account's scheduling, and at the far end the
-// way into the ledger window; on a second row the performance preset in effect. Under
+// way into the ledger window; on a second row the performance presets. Under
 // it what became of the last request, what a global
 // pause means, and what this window could not read. Then two columns: on the left the accounts, and where one is added for now; on the right
 // the settings file's problems, what falls short of the theme, where the technical
@@ -1142,11 +1145,16 @@ export component WorkbenchWindow inherits Window {
     in property <string> action-line;
     in property <bool> action-failed;
     // The top bar's second row, while there is a Runtime to say it of: the presets, and
-    // what is in effect in words, red when they say it cannot be read.
+    // what is in effect in words, red when they say it cannot be read. Whether a change
+    // can go out now, whether there is an online value to go back from to the file's, and
+    // what the first press on a preset asks to confirm, when it asks.
     in property <bool> preset-shown;
     in property <[PresetChoice]> presets;
     in property <string> preset-note;
     in property <bool> preset-failed;
+    in property <bool> preset-writable;
+    in property <bool> preset-back-offered;
+    in property <string> preset-statement;
     // Why the left column has no account to show, when it has none; and the
     // accounts.
     in property <string> accounts-note;
@@ -1166,6 +1174,9 @@ export component WorkbenchWindow inherits Window {
     callback pause-all();
     callback resume-all();
     callback resume-all-confirmed();
+    callback preset-picked(string);
+    callback preset-confirmed();
+    callback preset-back-to-file();
     callback request-shutdown();
     callback open-ledger();
     callback text-size-changed(int);
@@ -1249,7 +1260,6 @@ export component WorkbenchWindow inherits Window {
                             }
                         }
                     }
-                    // Only shown so far: a preset cannot be picked here yet.
                     if root.preset-shown: HorizontalLayout {
                         spacing: 10px;
                         Caption { text: Strings.performance-preset; }
@@ -1259,7 +1269,11 @@ export component WorkbenchWindow inherits Window {
                             for choice in root.presets: SkinSegment {
                                 label: choice.label;
                                 selected: choice.current;
-                                enabled: false;
+                                // Picking the one in effect would only write it again.
+                                enabled: root.preset-writable && !choice.current;
+                                clicked => {
+                                    root.preset-picked(choice.name);
+                                }
                             }
                         }
                         Notice {
@@ -1269,6 +1283,13 @@ export component WorkbenchWindow inherits Window {
                             min-width: 40px * Scale.factor;
                             horizontal-stretch: 1;
                         }
+                        if root.preset-back-offered: SkinButton {
+                            text: Strings.back-to-file;
+                            enabled: root.preset-writable;
+                            clicked => {
+                                root.preset-back-to-file();
+                            }
+                        }
                     }
                 }
             }
@@ -1277,7 +1298,7 @@ export component WorkbenchWindow inherits Window {
             // could not be read
             if root.errors != "" || root.launcher-line != "" || root.start-log-path != ""
                     || root.pause-note != "" || root.action-line != ""
-                    || root.resume-all-statement != "": Card {
+                    || root.resume-all-statement != "" || root.preset-statement != "": Card {
                 vertical-stretch: 0;
                 VerticalLayout {
                     padding: 8px;
@@ -1306,6 +1327,22 @@ export component WorkbenchWindow inherits Window {
                             text: Strings.resume-confirm;
                             clicked => {
                                 root.resume-all-confirmed();
+                            }
+                        }
+                    }
+                    if root.preset-statement != "": HorizontalLayout {
+                        spacing: 14px;
+                        Notice {
+                            text: root.preset-statement;
+                            warning: true;
+                            vertical-alignment: center;
+                            min-width: 40px * Scale.factor;
+                            horizontal-stretch: 1;
+                        }
+                        SkinButton {
+                            text: Strings.preset-confirm;
+                            clicked => {
+                                root.preset-confirmed();
                             }
                         }
                     }

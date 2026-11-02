@@ -10,14 +10,14 @@ use std::time::Instant;
 use acui_rows::format_minute;
 use acui_rows::outcome::explain;
 use acui_source::workbench::{
-    PresetMember, PresetSetting, SettingSource, SettingValue, CONSOLE_PAUSE_ALL, MODE_FULL,
-    MODE_OBSERVE, MODE_PACE,
+    PresetMember, PresetSetting, RefusalWhy, SettingSource, SettingValue, ValueProblem,
+    CONSOLE_PAUSE_ALL, MODE_FULL, MODE_OBSERVE, MODE_PACE,
 };
 use slint::{Model as _, ModelRc, VecModel};
 
 use super::actions::{
-    ActionsView, PresetState, PresetView, ResumeEntry, Said, Write, PRESET_ADAPTIVE, PRESET_LIGHT,
-    PRESET_STANDARD,
+    ActionsView, PresetState, PresetView, Reread, ResumeEntry, Said, Write, PRESET_ADAPTIVE,
+    PRESET_LIGHT, PRESET_STANDARD,
 };
 use super::card::{Band, CardView, Down, Line, ReasonClass};
 use crate::ledger::paint::models;
@@ -38,8 +38,9 @@ pub fn cards(ui: &Ui) {
     sync(window.get_account_cards(), cards, |rows| window.set_account_cards(rows));
 }
 
-/// The top bar's second row: the presets, the one in effect marked, and what is in
-/// effect in words; nothing while there is no Runtime to say it of.
+/// The top bar's second row: the presets, the one in effect marked, what is in effect in
+/// words, and whether they can be pressed; nothing while there is no Runtime to say it of.
+/// And what a first press on a preset asks to confirm.
 pub fn preset(ui: &Ui) {
     let Some(window) = ui.workbench() else {
         return;
@@ -49,10 +50,11 @@ pub fn preset(ui: &Ui) {
     let (choices, note, failed) = match &view {
         PresetView::NotRead => (Vec::new(), String::new(), false),
         PresetView::Unreadable => (Vec::new(), labels.preset_unreadable.to_owned(), true),
-        PresetView::Read { options, state } => {
+        PresetView::Read { options, state, .. } => {
             let choices: Vec<PresetChoice> = options
                 .iter()
                 .map(|option| PresetChoice {
+                    name: option.name.as_str().into(),
                     label: preset_label(labels, &option.name).into(),
                     current: option.current,
                 })
@@ -60,7 +62,20 @@ pub fn preset(ui: &Ui) {
             (choices, preset_note(labels, state), false)
         }
     };
+    let (writable, back_to_file, statement) = match &view {
+        PresetView::NotRead | PresetView::Unreadable => (false, false, String::new()),
+        PresetView::Read { can_write, back_to_file, confirming, .. } => {
+            let statement = match confirming {
+                Some(name) => fill(labels.preset_leave_full, &[preset_label(labels, name)]),
+                None => String::new(),
+            };
+            (*can_write, *back_to_file, statement)
+        }
+    };
     window.set_preset_shown(!matches!(view, PresetView::NotRead));
+    window.set_preset_writable(writable);
+    window.set_preset_back_offered(back_to_file);
+    window.set_preset_statement(statement.into());
     sync(window.get_presets(), choices, |rows| window.set_presets(rows));
     window.set_preset_note(note.into());
     window.set_preset_failed(failed);
@@ -171,12 +186,16 @@ fn pause_note(labels: &Labels, view: &ActionsView) -> String {
 
 /// What the last press came to, and whether that is a failure; nothing before one.
 fn said_text(labels: &Labels, view: &ActionsView) -> (String, bool) {
+    if view.reread_failed {
+        return (labels.config_reread_failed.to_owned(), true);
+    }
     let Some(said) = &view.said else {
         return (String::new(), false);
     };
     match said {
         Said::Sending(Write::PauseAll) => (labels.pause_all_sending.to_owned(), false),
         Said::Sending(Write::ResumeAll) => (labels.resume_all_sending.to_owned(), false),
+        Said::Sending(Write::Configure { .. }) => (labels.config_sending.to_owned(), false),
         Said::PauseApplied => (labels.pause_all_applied.to_owned(), false),
         Said::AlreadyPaused => (labels.pause_all_already.to_owned(), false),
         Said::Resumed if view.still_paused == 0 => (labels.resume_all_done.to_owned(), false),
@@ -193,6 +212,7 @@ fn said_text(labels: &Labels, view: &ActionsView) -> (String, bool) {
             let template = match write {
                 Write::PauseAll => labels.pause_all_refused,
                 Write::ResumeAll => labels.resume_all_refused,
+                Write::Configure { .. } => labels.config_refused,
             };
             let words = outcome_short(labels, code)
                 .unwrap_or_else(|| labels.outcome_unknown_short.to_owned());
@@ -206,6 +226,45 @@ fn said_text(labels: &Labels, view: &ActionsView) -> (String, bool) {
             (fill(labels.write_no_thread, &[why.as_str()]), true)
         }
         Said::Restarted => (labels.write_restarted.to_owned(), false),
+        Said::ConfigApplied => (labels.config_applied.to_owned(), false),
+        Said::ConfigRefused(why) => (refusal_text(labels, why), true),
+        Said::PresetGone => (labels.preset_gone.to_owned(), true),
+        Said::Rereading(Reread::Conflict) => (labels.config_conflict_rereading.to_owned(), false),
+        Said::Rereading(Reread::Unconfirmed { .. }) => {
+            (labels.config_unconfirmed_rereading.to_owned(), true)
+        }
+        Said::ConflictRefreshed => (labels.config_conflict_refreshed.to_owned(), false),
+        Said::NotApplied => (labels.config_not_applied.to_owned(), true),
+        Said::UnconfirmedChanged => (labels.config_unconfirmed_changed.to_owned(), true),
+        Said::UnconfirmedSeeNow => (labels.config_unconfirmed_see_now.to_owned(), true),
+    }
+}
+
+/// Why the Runtime took none of a change of settings. It names no key: only the log does.
+fn refusal_text(labels: &Labels, why: &RefusalWhy) -> String {
+    match why {
+        RefusalWhy::Value { problem, range } => {
+            let problem = match problem {
+                ValueProblem::WrongType => labels.config_problem_wrong_type,
+                ValueProblem::OutOfRange => labels.config_problem_out_of_range,
+                ValueProblem::SectionCheck => labels.config_problem_section,
+                ValueProblem::RepeatedKey => labels.config_problem_repeated,
+                ValueProblem::Other => labels.config_problem_other,
+            };
+            let mut text = fill(labels.config_value_refused, &[problem]);
+            if let Some((min, max)) = range {
+                let (min, max) = (min.to_string(), max.to_string());
+                text.push_str(&fill(labels.config_value_range, &[&min, &max]));
+            }
+            text
+        }
+        RefusalWhy::NotSettable => labels.config_key_not_settable.to_owned(),
+        RefusalWhy::UnknownKey => labels.config_key_unknown.to_owned(),
+        RefusalWhy::BadRequest => labels.config_request_invalid.to_owned(),
+        RefusalWhy::NotSaved => labels.config_not_saved.to_owned(),
+        RefusalWhy::Unsupported => labels.config_unsupported.to_owned(),
+        // `Written::said` keeps these as `Said::Refused`, with their code's words.
+        RefusalWhy::Other => labels.outcome_unknown_short.to_owned(),
     }
 }
 

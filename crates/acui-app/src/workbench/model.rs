@@ -227,16 +227,44 @@ impl Model {
             &self.instances,
             &self.actions,
             self.config.value.as_ref(),
+            self.config_failed(),
         )
     }
 
-    /// The top bar's performance preset. A thread that does not read counts as a read
-    /// that failed, as it does for the schedule (`schedule`).
+    /// The top bar's performance preset.
     pub fn preset_view(&self) -> PresetView {
-        let failed = self.config.error.is_some()
+        actions::preset_view(
+            &self.link,
+            self.config.value.as_ref(),
+            self.config_failed(),
+            &self.actions,
+        )
+    }
+
+    /// Whether the fact snapshot reads since the last that came failed. A thread that does
+    /// not read counts as a read that failed, as it does for the schedule (`schedule`).
+    fn config_failed(&self) -> bool {
+        self.config.error.is_some()
             || self.config_fault.is_some()
-            || matches!(self.slow_fault, Some(Fault::NoThread(_)));
-        actions::preset_view(&self.link, self.config.value.as_ref(), failed)
+            || matches!(self.slow_fault, Some(Fault::NoThread(_)))
+    }
+
+    /// The newest fact snapshot of this owner epoch.
+    pub fn config_read(&self) -> Option<&ConfigRead> {
+        self.config.value.as_ref()
+    }
+
+    /// The settings' version a write is based on: of the newest snapshot, or of a write's
+    /// answer since. Never a refusal's, which comes without the values.
+    pub fn config_version(&self) -> Option<u64> {
+        self.config.value.as_ref().and_then(|read| read.version)
+    }
+
+    /// A change of settings answered with this version.
+    pub fn config_applied(&mut self, version: u64) {
+        if let Some(read) = &mut self.config.value {
+            read.version = Some(version);
+        }
     }
 
     pub fn actions_mut(&mut self) -> &mut Actions {
@@ -419,7 +447,11 @@ impl Model {
             return ConfigLanded { news: News::Nothing, preset: News::Nothing, fault_cleared };
         };
         let before = preset_problem(self.config.value.as_ref());
+        let counts = matches!(&read, Ok(read) if read.epoch == *epoch);
         let news = self.config.take(read, |read| read.epoch.as_str(), epoch, now);
+        if let (true, Some(read)) = (counts, &self.config.value) {
+            self.actions.snapshot_read(read);
+        }
         let after = preset_problem(self.config.value.as_ref());
         let preset = match after {
             problem if problem == before => News::Nothing,

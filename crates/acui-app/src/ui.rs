@@ -542,6 +542,21 @@ fn install_workbench(window: &WorkbenchWindow) {
             workbench::actions::resume_confirmed(&ui);
         }
     });
+    window.on_preset_picked(|name| {
+        if let Some(ui) = current() {
+            workbench::actions::preset_pressed(&ui, &name);
+        }
+    });
+    window.on_preset_confirmed(|| {
+        if let Some(ui) = current() {
+            workbench::actions::preset_confirmed(&ui);
+        }
+    });
+    window.on_preset_back_to_file(|| {
+        if let Some(ui) = current() {
+            workbench::actions::back_to_file_pressed(&ui);
+        }
+    });
     window.on_request_shutdown(|| {
         if let Some(ui) = current() {
             launcher::shutdown(&ui);
@@ -664,6 +679,8 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_pause_all(labels.pause_all.into());
     global.set_resume_all(labels.resume_all.into());
     global.set_performance_preset(labels.performance_preset.into());
+    global.set_back_to_file(labels.back_to_file.into());
+    global.set_preset_confirm(labels.preset_confirm.into());
     global.set_request_shutdown(labels.request_shutdown.into());
     global.set_open_ledger(labels.open_ledger.into());
     global.set_add_instance(labels.add_instance.into());

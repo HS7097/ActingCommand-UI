@@ -18,16 +18,18 @@
 //!
 //! The configuration's key table and the performance presets are the Runtime's, read
 //! through its crate and only here: which preset is in effect is its function, and
-//! what comes out of this file names neither a key nor a wire type.
+//! what comes out of this file names neither a key nor a wire type, but for the key a
+//! refusal named, which is for the log.
 //!
 //! Left out on purpose: `player_hold` and `control` (the hold's read face is
 //! UI-3d's); `emulator_state` (read only at discovery and control, and `off` may
 //! be the idle action's doing, so showing it would mislead); `request_id` (nothing
 //! here stops a run); a fence's recheck counts.
 //!
-//! The one write here is a person's global pause ([`pause_global`]). Like the
-//! conditional resume beside it (`resume_paused`) it goes out once on a fresh
-//! person's connection, and never again by itself, whatever comes back.
+//! The writes here are a person's global pause ([`pause_global`]) and a person's change
+//! of settings ([`configure`]). Like the conditional resume beside them (`resume_paused`)
+//! each goes out once on a fresh person's connection, and never again by itself,
+//! whatever comes back.
 
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
@@ -36,9 +38,10 @@ use std::time::Duration;
 
 use crate::Spelling;
 use acui_rows::{code, EventActor, EventSource};
+use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
-    config_parameters_fact_key, ConfigParameter, ConfigParameterSource, FactScalar, FactValue,
-    InstanceActivity, InstanceActivityKind, OwnerEpoch, RuntimeControlPlaneStatus,
+    config_parameters_fact_key, ConfigParameter, ConfigParameterSource, ConfigSettingChange,
+    FactScalar, FactValue, InstanceActivity, InstanceActivityKind, OwnerEpoch, RuntimeControlPlaneStatus,
     RuntimeErrorCode, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
     RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation, ScheduleDispatchState,
     ScheduleExplanationInstance, SchedulingPauseReason, SchedulingPauseScope,
@@ -49,7 +52,7 @@ use actingcommand_runtime_client::{
 };
 use actingcommand_runtime_config::performance::presets::{self, CurrentMember, PresetTable};
 use actingcommand_runtime_config::performance::{self, pacing};
-use actingcommand_runtime_config::scheduling;
+use actingcommand_runtime_config::{scheduling, ConfigCode, ConfigValueProblem};
 
 use super::{
     global_pause_fact, instance_pause_fact, ClientFailure, OnlineSource, PauseFact,
@@ -314,6 +317,182 @@ pub fn pause_global(root: &Path) -> PauseOutcome {
             }
         }
     }
+}
+
+/// The settings to change in one `ConfigureSettings`, all of them or none. Only this file
+/// can spell one, so nothing outside it holds a key or the wire's shape.
+#[derive(Debug, Clone)]
+pub struct ConfigEdit(Vec<ConfigSettingChange>);
+
+impl ConfigEdit {
+    /// Every setting of the preset `name` of the table `read` holds; `None` when it holds
+    /// none by that name. A setting the preset leaves unwritten is a change without a
+    /// value, which the crate's `changes` decides.
+    pub fn apply_preset(read: &ConfigRead, name: &str) -> Option<Self> {
+        let preset = read.preset.as_ref().ok()?;
+        Some(Self(preset.table.get(name)?.changes()))
+    }
+
+    /// Every setting a preset sets, back to its value in the configuration file: a change
+    /// without a value drops the online one.
+    pub fn preset_back_to_file() -> Self {
+        Self(
+            presets::MEMBERS
+                .iter()
+                .map(|member| ConfigSettingChange { key: member.key.to_owned(), value: None })
+                .collect(),
+        )
+    }
+}
+
+/// What became of one [`configure`].
+#[derive(Debug, Clone)]
+pub enum ConfigOutcome {
+    /// The changes hold. `version` is the settings' version after them, absent from a
+    /// Runtime before 0.12.36. The values to show are a read's, not this answer's: a
+    /// cleared key without a file value comes back as the text "null".
+    Applied { version: Option<u64> },
+    /// The settings are at another version than the one named, and nothing changed.
+    /// `current` is only for the log: it comes without the values, so what is sent next
+    /// is based on a snapshot read, which has both.
+    Conflict { current: Option<u64> },
+    /// The Runtime answered and changed nothing.
+    Refused(ConfigRefusal),
+    /// No connection, so nothing was sent.
+    NotSent(ClientFailure),
+    /// Sent, or perhaps sent, and nothing says what became of it. It is not sent again.
+    Unconfirmed(ClientFailure),
+}
+
+/// One refusal: why, for its words, and for the log only what the Runtime said and the key
+/// it named.
+#[derive(Debug, Clone)]
+pub struct ConfigRefusal {
+    pub why: RefusalWhy,
+    pub failure: ClientFailure,
+    pub key: Option<String>,
+}
+
+/// Why the Runtime refused a change of settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefusalWhy {
+    /// The value does not do: how, and the range of a bounded key.
+    Value { problem: ValueProblem, range: Option<(i64, i64)> },
+    /// The key cannot change while the Runtime runs.
+    NotSettable,
+    /// This Runtime has no such key.
+    UnknownKey,
+    /// The request's shape is wrong: this program's fault.
+    BadRequest,
+    /// The Runtime could not save the change.
+    NotSaved,
+    /// This Runtime does not take a change made this way.
+    Unsupported,
+    /// Any other refusal: its code is in the failure.
+    Other,
+}
+
+/// How a value does not do; the rest of the Runtime's list concerns sections nothing here
+/// writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueProblem {
+    WrongType,
+    OutOfRange,
+    SectionCheck,
+    RepeatedKey,
+    Other,
+}
+
+const VALUE_INVALID: &str = ConfigCode::ConfigValueInvalid.as_str();
+const KEY_NOT_SETTABLE: &str = ConfigCode::ConfigKeyNotSettable.as_str();
+const KEY_UNKNOWN: &str = ConfigCode::ConfigKeyUnknown.as_str();
+const WRONG_TYPE: &str = ConfigValueProblem::WrongType.as_str();
+const OUT_OF_RANGE: &str = ConfigValueProblem::OutOfRange.as_str();
+const SECTION_CHECK: &str = ConfigValueProblem::SectionCheck.as_str();
+const REPEATED_KEY: &str = ConfigValueProblem::RepeatedKey.as_str();
+/// The contract's and the host's own spellings, of crates this one does not use.
+const INVALID_CONFIGURE_SETTINGS: &str = "invalid_configure_settings";
+const OVERRIDES_PERSIST_FAILED: &str = "host_config_overrides_persist_failed";
+const NOT_IMPLEMENTED: &str = "not_implemented";
+const VERSION_CONFLICT: &str = "fact_observation_version_conflict";
+/// What a refusal's outcome says beyond its code.
+const CURRENT_VERSION: &str = "current_version";
+const CONFIG_KEY: &str = "config_key";
+const VALUE_PROBLEM: &str = "config_value_problem";
+const RANGE_MIN: &str = "range_min";
+const RANGE_MAX: &str = "range_max";
+
+/// One person's change of settings: a fresh person's connection, one `ConfigureSettings`
+/// based on the settings' version `expected` when there is one, and the connection let
+/// go. Sent once, whatever comes back.
+///
+/// Only this connection asks for the full receipt: the console's default keeps no key, no
+/// problem and no range.
+pub fn configure(root: &Path, edit: &ConfigEdit, expected: Option<u64>) -> ConfigOutcome {
+    let connected = RuntimeClient::connect(
+        RuntimeClientConfig::new(root, RuntimeChannel::Ui, EventActor::User, EventSource::Ui)
+            .with_detail(Detail::Full),
+    );
+    let client = match connected {
+        Ok(client) => client,
+        Err(error) => return ConfigOutcome::NotSent(ClientFailure::from(error)),
+    };
+    match client.configure_settings(edit.0.clone(), expected) {
+        Ok(configured) => ConfigOutcome::Applied { version: configured.config_version },
+        Err(error) => configure_failed(error),
+    }
+}
+
+/// A failure after the connection that is no refusal counts as unconfirmed, as for
+/// [`pause_global`]: a failed write may have got the frame out. So does a refusal that
+/// halted the host: a change the ledger took and the section record it then refused stops
+/// the Runtime, and the next start restores it.
+fn configure_failed(error: RuntimeClientError) -> ConfigOutcome {
+    if !error.projection().is_some_and(|refusal| !refusal.fatal) {
+        return ConfigOutcome::Unconfirmed(ClientFailure::from(error));
+    }
+    let answer = error.receipt_outcome();
+    let top = answer.map_or("", |outcome| outcome.code().as_str());
+    if top == VERSION_CONFLICT {
+        let current = answer
+            .and_then(|outcome| outcome.value(CURRENT_VERSION))
+            .and_then(|value| value.as_u64());
+        return ConfigOutcome::Conflict { current };
+    }
+    let why = match top {
+        VALUE_INVALID => RefusalWhy::Value {
+            problem: value_problem(answer),
+            range: receipt_integer(answer, RANGE_MIN).zip(receipt_integer(answer, RANGE_MAX)),
+        },
+        KEY_NOT_SETTABLE => RefusalWhy::NotSettable,
+        KEY_UNKNOWN => RefusalWhy::UnknownKey,
+        INVALID_CONFIGURE_SETTINGS => RefusalWhy::BadRequest,
+        OVERRIDES_PERSIST_FAILED => RefusalWhy::NotSaved,
+        NOT_IMPLEMENTED => RefusalWhy::Unsupported,
+        _ => RefusalWhy::Other,
+    };
+    let key = answer
+        .and_then(|outcome| outcome.value(CONFIG_KEY))
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
+    ConfigOutcome::Refused(ConfigRefusal { why, failure: ClientFailure::from(error), key })
+}
+
+fn value_problem(answer: Option<&Outcome>) -> ValueProblem {
+    let problem = answer
+        .and_then(|outcome| outcome.value(VALUE_PROBLEM))
+        .and_then(|value| value.as_str());
+    match problem {
+        Some(WRONG_TYPE) => ValueProblem::WrongType,
+        Some(OUT_OF_RANGE) => ValueProblem::OutOfRange,
+        Some(SECTION_CHECK) => ValueProblem::SectionCheck,
+        Some(REPEATED_KEY) => ValueProblem::RepeatedKey,
+        Some(_) | None => ValueProblem::Other,
+    }
+}
+
+fn receipt_integer(answer: Option<&Outcome>, key: &str) -> Option<i64> {
+    answer?.value(key)?.as_i64()
 }
 
 /// One answered `Status`. `epoch` and `pid` are of the connection's

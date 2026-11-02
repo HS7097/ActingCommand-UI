@@ -332,6 +332,7 @@ fn panicked(ui: &Ui, read: Read, message: String) {
         report::log(read.lane().name(), &line);
         ui.paint_notices();
         paint::cards(ui);
+        paint::actions(ui);
         paint::preset(ui);
     }
 }
