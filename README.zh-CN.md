@@ -337,6 +337,14 @@ Runtime 宿主，留下一个小的 v0.12 状态根（带端口的实例绑定�
   现代扁平跟随系统的浅色或深色设置；Win7 Aero 的窗口里面固定浅色，不随系统变。启动失败窗固定用现代扁平，
 它出现在主题生效之前。Windows 以外的系统上，第二项叫「Win7 Aero（实心）」。
 
+  Windows 上，Win7 Aero 自己画窗口外框：标题带和 8px 边框是透明玻璃，配 Win7 的标题按钮，开窗 250 毫秒淡入、
+  关窗 180 毫秒淡出。移动、贴边、八向缩放、双击最大化和系统菜单仍由系统提供。玻璃是紧贴在主窗下面的第二个窗口，
+  不接收输入，由 Windows.UI.Composition 把背后的内容经高斯模糊画在上面，模糊强度是 `AeroConst.sigma`；现在为 0，
+  背后清楚透出，要改模糊只改这一个值。画不出来的部分降一级，在该窗口标红并写进技术日志，下次选主题时再试：
+  没有玻璃就保留外框、画实心玻璃，没有外框就把 Aero 页面放进系统标题栏的窗口。窗口不会自己改回现代扁平。技术日志
+  （类别 `acui-glass`）每建一个玻璃窗写一行 `垫底窗已建立`，每销毁一个写一行 `垫底窗已销毁`，都带主窗和玻璃窗的
+  矩形以及两者的累计数；运行结束时两个累计数相等，就是没有遗留。
+
 两层标签：上层是给人看的名字，下层灰色的是程序里的原样写法——原始 `event_type`、模块名、
 各种 id、`payload_schema`、sha256 一律不翻译。字典在 `crates/acui-rows/src/display.rs`，覆盖
 契约里全部 121 个 `event_type` 与 20 个 `origin.module`；**表里没有的一律照原样显示，不猜**。
@@ -731,6 +739,14 @@ Runtime 的看门狗是一个计划任务，所以 acsetup 不替人设置。要
 `IShellLinkW` + `IPersistFile` 写快捷方式，经重启管理器（Restart Manager）找出仍占着某个槽里文件的进程；与 Slint
 已锁定的同一版本，锁文件不新增 crate）。
 
+监控台的 Win7 Aero 外框在锁文件里只多本仓的 `acui-glass` 一个 crate。它打开 Slint 的 `raw-window-handle-06` 特性
+以取得原生窗口，`acui-glass` 用 `raw-window-handle` 0.6（所有平台，接口按它接收窗口），以及仅限 Windows 的
+`windows` 0.62（在上面的特性之外加 `Foundation`、`Graphics_Effects`、`System`、`UI_Composition`、
+`UI_Composition_Desktop`、`Win32_Graphics_Dwm`、`Win32_Graphics_Gdi`、`Win32_System_WinRT`、
+`Win32_System_WinRT_Composition`、`Win32_System_WinRT_Graphics_Direct2D`、`Win32_UI_HiDpi`、
+`Win32_UI_WindowsAndMessaging`：子类化与命中测试、DWM 属性、玻璃窗、Composition 及其 Direct2D 互操作）、
+`windows-core`（`#[implement]` 宏按名引用）和 `windows-numerics`（Composition 的向量），版本都是 Slint 已锁定的。
+
 ## 智能体用的 MCP
 
 监控台自己没有 MCP 服务。MCP 服务由 Runtime 的命令行提供：`actingctl mcp-serve`（Runtime v0.11.0 起）是 stdio 上的
@@ -792,7 +808,8 @@ Runtime 的看门狗是一个计划任务，所以 acsetup 不替人设置。要
 绝不在事件循环里 panic。启动的线程起不来时什么也没拉起，结果行直说。子进程终止了但
 回收失败时照实写，不说成终止失败。
 
-另有两个 crate 在这四层之外。`acui-setup`（二进制 `acsetup`）是安装向导，不依赖上面任何一层；除
+另有三个 crate 在这四层之外。`acui-glass` 是 Win7 Aero 外框的原生一半，`acui-app` 经它不认识 Slint 的安全接口
+使用；监控台窗口的 Win32、WinRT 代码及其 unsafe 都在这里，Windows 以外只回答做不到。`acui-setup`（二进制 `acsetup`）是安装向导，不依赖上面任何一层；除
 `acui-installation` 外，它用 Slint、`serde`、`serde_json`、`anyhow` 以及「安装向导 acsetup」一节列出的依赖，其中
 包括共享契约与 execution-kernel 的离线任务包资格核对。`acui-installation` 为监控台和向导提供共享的安装选择消费者，
 并生成二进制 `acforward`，即固定入口。

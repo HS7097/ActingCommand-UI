@@ -4,6 +4,7 @@ members = [
     "crates/acui-source",
     "crates/acui-model",
     "crates/acui-app",
+    "crates/acui-glass",
     # crates/acui-setup (acsetup) is out of the workspace from UI-0a until UI-2a
     # (Workflow #429 v5 F, C.1): its bundle and maintenance code predates bundle
     # v4 and option 丙, so no compile-only fix keeps its behaviour. Its
@@ -24,6 +25,7 @@ license = "GPL-3.0-only"
 acui-rows = { path = "crates/acui-rows" }
 acui-source = { path = "crates/acui-source" }
 acui-model = { path = "crates/acui-model" }
+acui-glass = { path = "crates/acui-glass" }
 acui-installation = { path = "crates/acui-installation" }
 anyhow = "1"
 # Only the PNG decoder: the console decodes exactly two kinds of image, a
@@ -45,13 +47,18 @@ actingcommand-execution-kernel = { git = "https://github.com/HS7097/ActingComman
 # frames it reads through the material read face and verifies whole against
 # their committed sha256, plus its own compile-time embedded application icon
 # (Window.icon). Nothing else is ever fed to an Image element.
+# raw-window-handle-06 opens Window::window_handle(), which acui-glass takes.
 slint = { version = "1.17.1", default-features = false, features = [
     "std",
     "backend-winit",
     "renderer-femtovg",
     "compat-1-2",
     "accessibility",
+    "raw-window-handle-06",
 ] }
+# acui-glass's face takes a window as HasWindowHandle: Slint's window implements
+# it, and Slint does not re-export it. The version Slint already locks.
+raw-window-handle = "0.6"
 slint-build = "1.17.1"
 # The wizard's network paths: the umbrella Releases, and a resource package URL
 # a person gives, over HTTPS. Blocking, rustls with the Mozilla root set
@@ -73,3 +80,7 @@ getrandom = "0.4"
 # OneDrive desktop), and shortcuts written through the shell's own IShellLink.
 # The same windows version Slint already locks, so the lock gains no crate.
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_RestartManager", "Win32_UI_Shell"] }
+# acui-glass only, each locked already through windows: what its #[implement]
+# macro names, and Composition's vector types.
+windows-core = "0.62"
+windows-numerics = "0.3"
