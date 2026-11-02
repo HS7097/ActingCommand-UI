@@ -42,6 +42,7 @@ const DEPLOY_REASONS: [&str; 2] = ["acsetup_update", "install_restart"];
 const DEPLOY_PREFIX: &str = "deploy-";
 
 /// Who lifts a pause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Lifter {
     /// Another tool set it: this window may resume it.
     Window,

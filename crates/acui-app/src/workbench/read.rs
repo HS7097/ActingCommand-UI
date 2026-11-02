@@ -4,13 +4,18 @@
 //! estimates, and only here.
 //!
 //! `acui-live` reads `Status` alone, on a connection of its own: the client holds
-//! its lock for a whole exchange, and `ScheduleExplanation` waits on the policy
-//! lock, so the Runtime's lamp must not share a connection with it.
+//! its lock for a whole exchange, `ScheduleExplanation` waits on the policy lock and
+//! `RuntimeFactSnapshot` on the fact write gate and the settings' gate, so the
+//! Runtime's lamp must not share a connection with them. `acui-slow` reads those two
+//! one after the other, and a poke reads both.
 //!
 //! A thread reads what is due, hands each result to the event loop, and sleeps
 //! until the next is due or it is poked. It ends once the event loop lets its
 //! sender go; nothing joins it, since it may be stuck in a read. A panic in a read
 //! costs that read and the connection, is said in red, and the next round goes on.
+//!
+//! Every read states how many writes had landed when it began (`super::wrote`): one
+//! begun before a write landed may say what that write changed, and does not count.
 //!
 //! Two lines of the technical log are what a limit on reads is checked by: a read
 //! that took long, as it happens, and every read's count and longest time at the
@@ -25,19 +30,20 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acui_source::workbench::{ExplainRead, LiveRead, ReadLane};
+use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, ReadLane};
 use acui_source::ClientFailure;
 
 use crate::launcher::spawn_worker;
 use crate::report;
 
 /// `READS` has one row for each `Read`, in its order: `Tally` counts by it.
-const READ_KINDS: usize = 2;
+const READ_KINDS: usize = 3;
 
 #[rustfmt::skip]
 static READS: [Cadence; READ_KINDS] = [
     Cadence { read: Read::Status,  lane: Lane::Live, shown: secs(3),  minimized: Some(secs(30)), failed: secs(5) },
     Cadence { read: Read::Explain, lane: Lane::Slow, shown: secs(15), minimized: None,           failed: secs(30) },
+    Cadence { read: Read::Config,  lane: Lane::Slow, shown: secs(30), minimized: None,           failed: secs(30) },
 ];
 
 /// A read longer than this leaves a line in the technical log.
@@ -70,9 +76,10 @@ struct Cadence {
 
 /// One kind of read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Read {
+pub enum Read {
     Status,
     Explain,
+    Config,
 }
 
 impl Read {
@@ -80,7 +87,13 @@ impl Read {
         match self {
             Self::Status => "status",
             Self::Explain => "schedule explanation",
+            Self::Config => "fact snapshot",
         }
+    }
+
+    /// The thread that makes this read.
+    pub fn lane(self) -> Lane {
+        READS[self as usize].lane
     }
 }
 
@@ -116,13 +129,14 @@ pub struct Poke;
 pub enum Landing {
     Live(LiveRead),
     Explain(Result<ExplainRead, ClientFailure>),
+    Config(Result<ConfigRead, ClientFailure>),
     /// The read panicked: the panic's message, for the log.
-    Panicked { lane: Lane, message: String },
+    Panicked { read: Read, message: String },
 }
 
 impl Landing {
     fn failed(&self) -> bool {
-        !matches!(self, Self::Live(LiveRead::Read(_)) | Self::Explain(Ok(_)))
+        !matches!(self, Self::Live(LiveRead::Read(_)) | Self::Explain(Ok(_)) | Self::Config(Ok(_)))
     }
 }
 
@@ -194,13 +208,21 @@ pub fn spawn(
     root: PathBuf,
     shown: Arc<AtomicBool>,
     tally: Arc<Tally>,
+    write_gen: Arc<AtomicU64>,
 ) -> io::Result<Sender<Poke>> {
     let (sender, commands) = mpsc::channel();
-    spawn_worker(lane.name(), move || run(lane, root, &commands, &shown, &tally))?;
+    spawn_worker(lane.name(), move || run(lane, root, &commands, &shown, &tally, &write_gen))?;
     Ok(sender)
 }
 
-fn run(lane: Lane, root: PathBuf, commands: &Receiver<Poke>, shown: &AtomicBool, tally: &Tally) {
+fn run(
+    lane: Lane,
+    root: PathBuf,
+    commands: &Receiver<Poke>,
+    shown: &AtomicBool,
+    tally: &Tally,
+    write_gen: &AtomicU64,
+) {
     let mut connection = ReadLane::new(root.clone(), lane.io());
     let mut plan: Vec<Due> = READS
         .iter()
@@ -233,11 +255,13 @@ fn run(lane: Lane, root: PathBuf, commands: &Receiver<Poke>, shown: &AtomicBool,
                 continue;
             }
             let read = due.cadence.read;
+            // Before the read: the event loop lets it go if a write lands meanwhile.
+            let generation = write_gen.load(Ordering::SeqCst);
             let landing = match catch_unwind(AssertUnwindSafe(|| read_on(read, &mut connection))) {
                 Ok(landing) => landing,
                 Err(panic) => {
                     connection = ReadLane::new(root.clone(), lane.io());
-                    Landing::Panicked { lane, message: panic_message(&*panic) }
+                    Landing::Panicked { read, message: panic_message(&*panic) }
                 }
             };
             let took = now.elapsed();
@@ -248,7 +272,7 @@ fn run(lane: Lane, root: PathBuf, commands: &Receiver<Poke>, shown: &AtomicBool,
             due.last = Some(Instant::now());
             due.failed = landing.failed();
             due.poked = false;
-            report::post(lane.name(), move || super::landed(landing));
+            report::post(lane.name(), move || super::landed(landing, generation));
         }
     }
 }
@@ -257,6 +281,7 @@ fn read_on(read: Read, connection: &mut ReadLane) -> Landing {
     match read {
         Read::Status => Landing::Live(connection.read_live()),
         Read::Explain => Landing::Explain(connection.read_explain()),
+        Read::Config => Landing::Config(connection.read_config()),
     }
 }
 

@@ -11,33 +11,70 @@
 //! epoch that is gone is the caller's.
 //!
 //! Lanes ask only what is answered from memory or takes no ledger record:
-//! `Status`, and `ScheduleExplanation` without its candidate rows. How often is
-//! the caller's, too: a lane keeps no clock, and asks again by itself in one case
-//! only, a schedule explanation on a connection that turns out to have ended
-//! ([`ReadLane::read_explain`]).
+//! `Status`, `ScheduleExplanation` without its candidate rows, and
+//! `RuntimeFactSnapshot`. How often is the caller's, too: a lane keeps no clock, and
+//! asks again by itself in one case only, a slow read on a connection that turns out
+//! to have ended (`ReadLane::asked_once_more`).
+//!
+//! The configuration's key table and the performance presets are the Runtime's, read
+//! through its crate and only here: which preset is in effect is its function, and
+//! what comes out of this file names neither a key nor a wire type, but for the key a
+//! refusal named, which is for the log.
 //!
 //! Left out on purpose: `player_hold` and `control` (the hold's read face is
 //! UI-3d's); `emulator_state` (read only at discovery and control, and `off` may
 //! be the idle action's doing, so showing it would mislead); `request_id` (nothing
 //! here stops a run); a fence's recheck counts.
+//!
+//! The writes here are a person's global pause ([`pause_global`]) and a person's change
+//! of settings ([`configure`]). Like the conditional resume beside them (`resume_paused`)
+//! each goes out once on a fresh person's connection, and never again by itself,
+//! whatever comes back.
 
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::Spelling;
 use acui_rows::{code, EventActor, EventSource};
+use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
-    InstanceActivity, InstanceActivityKind, OwnerEpoch, RuntimeControlPlaneStatus,
-    RuntimeErrorCode, RuntimeInstanceStatus, RuntimeScheduleExplanation,
-    ScheduleDispatchState, ScheduleExplanationInstance,
+    config_parameters_fact_key, ConfigParameter, ConfigParameterSource, ConfigSettingChange,
+    FactScalar, FactValue, InstanceActivity, InstanceActivityKind, OwnerEpoch, RuntimeControlPlaneStatus,
+    RuntimeErrorCode, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
+    RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation, ScheduleDispatchState,
+    ScheduleExplanationInstance, SchedulingPauseReason, SchedulingPauseScope,
+    MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
 };
 use actingcommand_runtime_client::{
     RuntimeChannel, RuntimeClient, RuntimeClientConfig, RuntimeClientError,
 };
+use actingcommand_runtime_config::performance::presets::{self, CurrentMember, PresetTable};
+use actingcommand_runtime_config::performance::{self, pacing};
+use actingcommand_runtime_config::{scheduling, ConfigCode, ConfigValueProblem};
 
-use super::{global_pause_fact, instance_pause_fact, ClientFailure, PauseFact};
+use super::{
+    global_pause_fact, instance_pause_fact, ClientFailure, OnlineSource, PauseFact,
+    RUNTIME_RESULT_UNEXPECTED,
+};
+
+/// The reason this console's "pause all" gives, a free name of the pause, no outcome
+/// code. A pause of this reason is one a person pressed here, so lifting it asks for
+/// no second press.
+pub const CONSOLE_PAUSE_ALL: &str = "console_pause_all";
+
+/// The client's own spelling of the pause's operation
+/// (`ContractLocation::PauseScheduling`).
+const PAUSE_SCHEDULING: &str = "pause_scheduling";
+
+/// The pacing mode's words, for what they are said in (`SettingValue::Word`).
+pub const MODE_OBSERVE: &str = pacing::OBSERVE;
+pub const MODE_PACE: &str = pacing::PACE;
+pub const MODE_FULL: &str = pacing::FULL;
+
+/// The instance fact of the server the last admitted package declared.
+const TASK_SERVER: &str = "task.server";
 
 /// One reading thread's connection: actor `ui`, source `ui`, channel `ui`, at its
 /// own io timeout. The client holds its lock for a whole exchange and latches the
@@ -70,6 +107,17 @@ impl ReadLane {
     }
 
     /// One `ScheduleExplanation` of every instance, without candidate rows.
+    pub fn read_explain(&mut self) -> Result<ExplainRead, ClientFailure> {
+        self.asked_once_more(Self::ask_explain)
+    }
+
+    /// One `RuntimeFactSnapshot`, and the settings' version read under the same gate,
+    /// so what it says of the configuration is of that version.
+    pub fn read_config(&mut self) -> Result<ConfigRead, ClientFailure> {
+        self.asked_once_more(Self::ask_config)
+    }
+
+    /// `ask`, on the connection this lane kept or a new one.
     ///
     /// This lane reads seldom, and not at all while the workbench is minimized, so
     /// the connection it kept may have ended with the Runtime it was made to, and
@@ -77,11 +125,15 @@ impl ReadLane {
     /// nothing, so it goes once more on a new connection, and only that answer
     /// counts: the restart costs no failure and no wait for the next read. A
     /// connection made for this read is not asked again, and neither is anything
-    /// that may be a Runtime busy with the first request (`connection_ended`).
-    pub fn read_explain(&mut self) -> Result<ExplainRead, ClientFailure> {
+    /// that may be a Runtime busy with the first request (`connection_ended`). Only
+    /// reads go through here.
+    fn asked_once_more<T>(
+        &mut self,
+        ask: fn(&mut Self) -> Result<T, RuntimeClientError>,
+    ) -> Result<T, ClientFailure> {
         let kept = self.client.is_some();
-        let asked = match self.ask_explain() {
-            Err(error) if kept && connection_ended(&error) => self.ask_explain(),
+        let asked = match ask(self) {
+            Err(error) if kept && connection_ended(&error) => ask(self),
             asked => asked,
         };
         asked.map_err(ClientFailure::from)
@@ -92,6 +144,15 @@ impl ReadLane {
         let epoch = code(&client.runtime_info().owner_epoch());
         match client.schedule_explanation(None, false) {
             Ok(explanation) => Ok(explain_read(epoch, &explanation)),
+            Err(error) => Err(self.settled(error)),
+        }
+    }
+
+    fn ask_config(&mut self) -> Result<ConfigRead, RuntimeClientError> {
+        let client = self.connection()?;
+        let epoch = code(&client.runtime_info().owner_epoch());
+        match client.runtime_fact_snapshot_versioned() {
+            Ok((snapshot, version)) => Ok(config_read(epoch, &snapshot, version)),
             Err(error) => Err(self.settled(error)),
         }
     }
@@ -193,6 +254,277 @@ fn connection_ended(error: &RuntimeClientError) -> bool {
     })
 }
 
+/// What became of one person's global pause ([`pause_global`]).
+#[derive(Debug, Clone)]
+pub enum PauseOutcome {
+    /// The pause holds, at this revision of the global scope.
+    Applied { revision: u64 },
+    /// The Runtime answered and set nothing. Its code is the host's, in `host`:
+    /// `runtime_code` is only the receipt's class. One pause already holding is
+    /// `scheduling_already_paused`, and keeps its own reason.
+    Refused(ClientFailure),
+    /// No connection, so nothing was sent.
+    NotSent(ClientFailure),
+    /// Sent, or perhaps sent, and nothing says what became of it. It is not sent again.
+    Unconfirmed(ClientFailure),
+}
+
+/// One person's global pause: a fresh person's connection, one `PauseScheduling`,
+/// and the connection let go. The global pause drains nothing and answers at once,
+/// and the Runtime does not use its drain timeout, which it still validates: the
+/// lowest it takes keeps the wait for a receipt that does not come the shortest
+/// (that timeout, the checkpoint grace and the io timeout). Sent once, whatever comes
+/// back; what to show after it is a read on another connection.
+///
+/// Every failure after the connection that is no refusal counts as unconfirmed, not
+/// only those the client calls uncertain: a failed write may have got the frame out.
+pub fn pause_global(root: &Path) -> PauseOutcome {
+    let reason = match SchedulingPauseReason::new(CONSOLE_PAUSE_ALL) {
+        Ok(reason) => reason,
+        Err(error) => {
+            return PauseOutcome::NotSent(ClientFailure {
+                code: error.code().spelling(),
+                operation: PAUSE_SCHEDULING,
+                runtime_code: None,
+                host: None,
+            })
+        }
+    };
+    let client = match OnlineSource::connect_as_person(root) {
+        Ok(client) => client,
+        Err(error) => return PauseOutcome::NotSent(ClientFailure::from(error)),
+    };
+    let answer = client.pause_scheduling(
+        SchedulingPauseScope::Global,
+        reason,
+        MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
+    );
+    match answer {
+        Ok(RuntimeResult::SchedulingPaused { revision, .. }) => PauseOutcome::Applied { revision },
+        // The client checks the result itself and gives back no other.
+        Ok(_) => PauseOutcome::Unconfirmed(ClientFailure {
+            code: RUNTIME_RESULT_UNEXPECTED,
+            operation: PAUSE_SCHEDULING,
+            runtime_code: None,
+            host: None,
+        }),
+        Err(error) => {
+            let failure = ClientFailure::from(error);
+            if failure.runtime_code.is_some() {
+                PauseOutcome::Refused(failure)
+            } else {
+                PauseOutcome::Unconfirmed(failure)
+            }
+        }
+    }
+}
+
+/// The settings to change in one `ConfigureSettings`, all of them or none. Only this file
+/// can spell one, so nothing outside it holds a key or the wire's shape.
+#[derive(Debug, Clone)]
+pub struct ConfigEdit(Vec<ConfigSettingChange>);
+
+impl ConfigEdit {
+    /// Every setting of the preset `name` of the table `read` holds; `None` when it holds
+    /// none by that name. A setting the preset leaves unwritten is a change without a
+    /// value, which the crate's `changes` decides.
+    pub fn apply_preset(read: &ConfigRead, name: &str) -> Option<Self> {
+        let preset = read.preset.as_ref().ok()?;
+        Some(Self(preset.table.get(name)?.changes()))
+    }
+
+    /// Every setting a preset sets, back to its value in the configuration file: a change
+    /// without a value drops the online one.
+    pub fn preset_back_to_file() -> Self {
+        Self(
+            presets::MEMBERS
+                .iter()
+                .map(|member| ConfigSettingChange { key: member.key.to_owned(), value: None })
+                .collect(),
+        )
+    }
+
+    /// How many tasks run at once, as an online value. The Runtime alone knows the range,
+    /// and says it when it refuses one.
+    pub fn concurrent_runs(runs: i64) -> Self {
+        Self(vec![ConfigSettingChange {
+            key: pacing::MAX_CONCURRENT_RUNS.to_owned(),
+            value: Some(runs.into()),
+        }])
+    }
+
+    /// How many tasks run at once, back to the configuration file's value, or to no limit
+    /// when the file names none: the key has no default.
+    pub fn concurrent_runs_back_to_file() -> Self {
+        Self(vec![ConfigSettingChange {
+            key: pacing::MAX_CONCURRENT_RUNS.to_owned(),
+            value: None,
+        }])
+    }
+
+    /// What it changes, keys and values as the wire has them: for the log only.
+    pub fn line(&self) -> String {
+        self.0
+            .iter()
+            .map(|change| match &change.value {
+                Some(value) => format!("{} = {value}", change.key),
+                None => format!("{} back to the file", change.key),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// What became of one [`configure`].
+#[derive(Debug, Clone)]
+pub enum ConfigOutcome {
+    /// The changes hold. `version` is the settings' version after them, absent from a
+    /// Runtime before 0.12.36. The values to show are a read's, not this answer's: a
+    /// cleared key without a file value comes back as the text "null".
+    Applied { version: Option<u64> },
+    /// The settings are at another version than the one named, and nothing changed.
+    /// `current` is only for the log: it comes without the values, so what is sent next
+    /// is based on a snapshot read, which has both.
+    Conflict { current: Option<u64> },
+    /// The Runtime answered and changed nothing.
+    Refused(ConfigRefusal),
+    /// No connection, so nothing was sent.
+    NotSent(ClientFailure),
+    /// Sent, or perhaps sent, and nothing says what became of it. It is not sent again.
+    Unconfirmed(ClientFailure),
+}
+
+/// One refusal: why, for its words, and for the log only what the Runtime said and the key
+/// it named.
+#[derive(Debug, Clone)]
+pub struct ConfigRefusal {
+    pub why: RefusalWhy,
+    pub failure: ClientFailure,
+    pub key: Option<String>,
+}
+
+/// Why the Runtime refused a change of settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefusalWhy {
+    /// The value does not do: how, and the range of a bounded key.
+    Value { problem: ValueProblem, range: Option<(i64, i64)> },
+    /// The key cannot change while the Runtime runs.
+    NotSettable,
+    /// This Runtime has no such key.
+    UnknownKey,
+    /// The request's shape is wrong: this program's fault.
+    BadRequest,
+    /// The Runtime could not save the change.
+    NotSaved,
+    /// This Runtime does not take a change made this way.
+    Unsupported,
+    /// Any other refusal: its code is in the failure.
+    Other,
+}
+
+/// How a value does not do; the rest of the Runtime's list concerns sections nothing here
+/// writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueProblem {
+    WrongType,
+    OutOfRange,
+    SectionCheck,
+    RepeatedKey,
+    Other,
+}
+
+const VALUE_INVALID: &str = ConfigCode::ConfigValueInvalid.as_str();
+const KEY_NOT_SETTABLE: &str = ConfigCode::ConfigKeyNotSettable.as_str();
+const KEY_UNKNOWN: &str = ConfigCode::ConfigKeyUnknown.as_str();
+const WRONG_TYPE: &str = ConfigValueProblem::WrongType.as_str();
+const OUT_OF_RANGE: &str = ConfigValueProblem::OutOfRange.as_str();
+const SECTION_CHECK: &str = ConfigValueProblem::SectionCheck.as_str();
+const REPEATED_KEY: &str = ConfigValueProblem::RepeatedKey.as_str();
+/// The contract's and the host's own spellings, of crates this one does not use.
+const INVALID_CONFIGURE_SETTINGS: &str = "invalid_configure_settings";
+const OVERRIDES_PERSIST_FAILED: &str = "host_config_overrides_persist_failed";
+const NOT_IMPLEMENTED: &str = "not_implemented";
+const VERSION_CONFLICT: &str = "fact_observation_version_conflict";
+/// What a refusal's outcome says beyond its code.
+const CURRENT_VERSION: &str = "current_version";
+const CONFIG_KEY: &str = "config_key";
+const VALUE_PROBLEM: &str = "config_value_problem";
+const RANGE_MIN: &str = "range_min";
+const RANGE_MAX: &str = "range_max";
+
+/// One person's change of settings: a fresh person's connection, one `ConfigureSettings`
+/// based on the settings' version `expected` when there is one, and the connection let
+/// go. Sent once, whatever comes back.
+///
+/// Only this connection asks for the full receipt: the console's default keeps no key, no
+/// problem and no range.
+pub fn configure(root: &Path, edit: &ConfigEdit, expected: Option<u64>) -> ConfigOutcome {
+    let connected = RuntimeClient::connect(
+        RuntimeClientConfig::new(root, RuntimeChannel::Ui, EventActor::User, EventSource::Ui)
+            .with_detail(Detail::Full),
+    );
+    let client = match connected {
+        Ok(client) => client,
+        Err(error) => return ConfigOutcome::NotSent(ClientFailure::from(error)),
+    };
+    match client.configure_settings(edit.0.clone(), expected) {
+        Ok(configured) => ConfigOutcome::Applied { version: configured.config_version },
+        Err(error) => configure_failed(error),
+    }
+}
+
+/// A failure after the connection that is no refusal counts as unconfirmed, as for
+/// [`pause_global`]: a failed write may have got the frame out. So does a refusal that
+/// halted the host: a change the ledger took and the section record it then refused stops
+/// the Runtime, and the next start restores it.
+fn configure_failed(error: RuntimeClientError) -> ConfigOutcome {
+    if !error.projection().is_some_and(|refusal| !refusal.fatal) {
+        return ConfigOutcome::Unconfirmed(ClientFailure::from(error));
+    }
+    let answer = error.receipt_outcome();
+    let top = answer.map_or("", |outcome| outcome.code().as_str());
+    if top == VERSION_CONFLICT {
+        let current = answer
+            .and_then(|outcome| outcome.value(CURRENT_VERSION))
+            .and_then(|value| value.as_u64());
+        return ConfigOutcome::Conflict { current };
+    }
+    let why = match top {
+        VALUE_INVALID => RefusalWhy::Value {
+            problem: value_problem(answer),
+            range: receipt_integer(answer, RANGE_MIN).zip(receipt_integer(answer, RANGE_MAX)),
+        },
+        KEY_NOT_SETTABLE => RefusalWhy::NotSettable,
+        KEY_UNKNOWN => RefusalWhy::UnknownKey,
+        INVALID_CONFIGURE_SETTINGS => RefusalWhy::BadRequest,
+        OVERRIDES_PERSIST_FAILED => RefusalWhy::NotSaved,
+        NOT_IMPLEMENTED => RefusalWhy::Unsupported,
+        _ => RefusalWhy::Other,
+    };
+    let key = answer
+        .and_then(|outcome| outcome.value(CONFIG_KEY))
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
+    ConfigOutcome::Refused(ConfigRefusal { why, failure: ClientFailure::from(error), key })
+}
+
+fn value_problem(answer: Option<&Outcome>) -> ValueProblem {
+    let problem = answer
+        .and_then(|outcome| outcome.value(VALUE_PROBLEM))
+        .and_then(|value| value.as_str());
+    match problem {
+        Some(WRONG_TYPE) => ValueProblem::WrongType,
+        Some(OUT_OF_RANGE) => ValueProblem::OutOfRange,
+        Some(SECTION_CHECK) => ValueProblem::SectionCheck,
+        Some(REPEATED_KEY) => ValueProblem::RepeatedKey,
+        Some(_) | None => ValueProblem::Other,
+    }
+}
+
+fn receipt_integer(answer: Option<&Outcome>, key: &str) -> Option<i64> {
+    answer?.value(key)?.as_i64()
+}
+
 /// One answered `Status`. `epoch` and `pid` are of the connection's
 /// `runtime-info.json`, `epoch` as the wire spells it.
 #[derive(Debug, Clone)]
@@ -267,6 +599,219 @@ pub struct InstanceExplain {
     pub next_wake: Option<u64>,
     /// A task is selected and its dispatch has not ended.
     pub preparing: bool,
+}
+
+/// One answered `RuntimeFactSnapshot`, as far as the workbench reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigRead {
+    pub epoch: String,
+    /// The settings' version read with it. Absent from a Runtime before 0.12.36: not
+    /// an error, and also how to tell that its `Status` names no activity.
+    pub version: Option<u64>,
+    pub preset: Result<PresetRead, PresetProblem>,
+    /// The server the last admitted package declared, as it wrote it, by instance id.
+    /// Only a package's admission records it, and an emulator's stop withdraws it, so
+    /// most of the time an instance has none.
+    pub servers: BTreeMap<String, String>,
+}
+
+/// Which performance preset is in effect, of the table the Runtime holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresetRead {
+    table: PresetTable,
+    /// `None`: no preset's every member equals what is in effect (`custom`).
+    pub current: Option<String>,
+    /// Every setting a preset sets, as it is in effect.
+    pub members: Vec<PresetMember>,
+}
+
+impl PresetRead {
+    /// The presets' names, in the table's order.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.table.presets().iter().map(|preset| preset.name())
+    }
+
+    /// The configuration file holds the learning mode, which no preset can be.
+    pub fn file_holds_full(&self) -> bool {
+        self.members.iter().any(|member| {
+            member.setting == PresetSetting::Mode
+                && member.source == SettingSource::File
+                && matches!(&member.value, Some(SettingValue::Word(word)) if word == MODE_FULL)
+        })
+    }
+
+    /// The configuration file names how many tasks run at once.
+    pub fn file_fixes_concurrency(&self) -> bool {
+        self.members.iter().any(|member| {
+            member.setting == PresetSetting::MaxConcurrentRuns
+                && member.source == SettingSource::File
+        })
+    }
+}
+
+/// One of the settings a performance preset sets: its value in effect (`None`: it
+/// has none) and where that comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresetMember {
+    pub setting: PresetSetting,
+    pub value: Option<SettingValue>,
+    pub source: SettingSource,
+}
+
+/// `performance::presets::MEMBERS`, without their keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresetSetting {
+    Mode,
+    MaxConcurrentRuns,
+    HeavyDispatchLimit,
+    ParallelEnabled,
+}
+
+/// A setting's value, without the wire's types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingValue {
+    Flag(bool),
+    Number(i64),
+    Word(String),
+}
+
+/// Where a setting's value comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingSource {
+    /// The configuration file.
+    File,
+    Default,
+    /// Learned at the Runtime's start.
+    Discovered,
+    /// Changed while the Runtime runs.
+    Online,
+}
+
+/// Why a snapshot that came back tells no performance preset. It is said once as one
+/// sentence on the workbench; these are for the log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PresetProblem {
+    /// It has no record of that section's settings.
+    SectionMissing(&'static str),
+    /// That section's record is not a list of settings it can read.
+    SectionUnreadable(&'static str),
+    /// Those sections have no table of presets.
+    TableMissing,
+    /// The table does not pass the crate's check: how it says so.
+    TableRefused(String),
+    /// The crate judged the preset by a setting this file does not know.
+    MemberUnknown(&'static str),
+}
+
+impl PresetProblem {
+    /// For the technical log.
+    pub fn line(&self) -> String {
+        match self {
+            Self::SectionMissing(section) => format!("no record of section {section}"),
+            Self::SectionUnreadable(section) => format!("section {section} does not read back"),
+            Self::TableMissing => format!("no {} row", presets::PRESETS),
+            Self::TableRefused(failure) => format!("{} refused: {failure}", presets::PRESETS),
+            Self::MemberUnknown(key) => format!("preset member {key} is not known here"),
+        }
+    }
+}
+
+fn config_read(epoch: String, snapshot: &RuntimeFactSnapshot, version: Option<u64>) -> ConfigRead {
+    ConfigRead {
+        epoch,
+        version,
+        preset: preset_read(&snapshot.records),
+        servers: servers(&snapshot.records),
+    }
+}
+
+/// The rows of the two sections the presets' keys are in, the table's row among them,
+/// and the crate's own judgement of them, the same `actingctl perf-preset get` makes.
+fn preset_read(records: &[RuntimeFactRecord]) -> Result<PresetRead, PresetProblem> {
+    let mut parameters = Vec::new();
+    for section in [performance::SECTION, scheduling::SECTION] {
+        section_parameters(records, section, &mut parameters)?;
+    }
+    let table = match presets::table_of(&parameters) {
+        None => return Err(PresetProblem::TableMissing),
+        Some(Err(failure)) => return Err(PresetProblem::TableRefused(format!("{failure:?}"))),
+        Some(Ok(table)) => table,
+    };
+    let judged = presets::current_preset(&table, &parameters);
+    let members = judged.members.iter().map(preset_member).collect::<Result<Vec<_>, _>>()?;
+    let current = (judged.preset != presets::CUSTOM).then_some(judged.preset);
+    Ok(PresetRead { table, current, members })
+}
+
+fn section_parameters(
+    records: &[RuntimeFactRecord],
+    section: &'static str,
+    parameters: &mut Vec<ConfigParameter>,
+) -> Result<(), PresetProblem> {
+    let key = config_parameters_fact_key(section);
+    let record = records
+        .iter()
+        .find(|record| record.scope == RuntimeFactScope::Runtime && record.key == key)
+        .ok_or(PresetProblem::SectionMissing(section))?;
+    let FactValue::RecordList(rows) = &record.value else {
+        return Err(PresetProblem::SectionUnreadable(section));
+    };
+    for row in rows {
+        let parameter = presets::parameter_of_row(row)
+            .ok_or(PresetProblem::SectionUnreadable(section))?;
+        parameters.push(parameter);
+    }
+    Ok(())
+}
+
+fn preset_member(member: &CurrentMember) -> Result<PresetMember, PresetProblem> {
+    let setting = match member.key {
+        pacing::MODE => PresetSetting::Mode,
+        pacing::MAX_CONCURRENT_RUNS => PresetSetting::MaxConcurrentRuns,
+        pacing::HEAVY_DISPATCH_LIMIT_NORMAL => PresetSetting::HeavyDispatchLimit,
+        scheduling::PARALLEL_ENABLED => PresetSetting::ParallelEnabled,
+        other => return Err(PresetProblem::MemberUnknown(other)),
+    };
+    Ok(PresetMember {
+        setting,
+        value: member.value.as_ref().map(setting_value),
+        source: match member.source {
+            ConfigParameterSource::Explicit => SettingSource::File,
+            ConfigParameterSource::Default => SettingSource::Default,
+            ConfigParameterSource::Discovered => SettingSource::Discovered,
+            ConfigParameterSource::Instruction => SettingSource::Online,
+        },
+    })
+}
+
+fn setting_value(value: &FactScalar) -> SettingValue {
+    match value {
+        FactScalar::Boolean(flag) => SettingValue::Flag(*flag),
+        FactScalar::Integer(number) => SettingValue::Number(*number),
+        FactScalar::String(word) => SettingValue::Word(word.clone()),
+        FactScalar::TimestampMs(ms) | FactScalar::DurationMs(ms) => {
+            SettingValue::Word(ms.to_string())
+        }
+    }
+}
+
+/// The `task.server` records. A string by contract; any other value is kept as the
+/// wire states it, as `fold_task_facts` keeps it, not dropped.
+fn servers(records: &[RuntimeFactRecord]) -> BTreeMap<String, String> {
+    records
+        .iter()
+        .filter(|record| record.key == TASK_SERVER)
+        .filter_map(|record| {
+            let RuntimeFactScope::Instance { instance_id } = &record.scope else {
+                return None;
+            };
+            let server = match &record.value {
+                FactValue::String(text) => text.clone(),
+                other => code(other),
+            };
+            Some((code(instance_id), server))
+        })
+        .collect()
 }
 
 fn live_snapshot(pid: u32, epoch: String, status: &RuntimeControlPlaneStatus) -> LiveSnapshot {

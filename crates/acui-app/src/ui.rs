@@ -464,6 +464,8 @@ impl Ui {
         self.paint_accounts_note();
         self.paint_names_note();
         workbench::paint::cards(self);
+        workbench::paint::actions(self);
+        workbench::paint::preset(self);
     }
 
     /// Why the workbench's left column has no account to show, if it has none.
@@ -516,13 +518,63 @@ fn language_index(language: Language) -> i32 {
 
 /// The workbench's controls. Start and Request Shutdown are the launcher's;
 /// "troubleshooting and ledger" opens the window of the default source; the
-/// three boxes apply to every window. Closing it ends the program, after its
-/// fade if it has a frame of its own, unless an unlock runs: then it stays and
-/// says why, without fading.
+/// write buttons are `workbench::actions`'; the three boxes apply to every
+/// window. Closing it ends the program, after its fade if it has a frame of its
+/// own, unless an unlock runs: then it stays and says why, without fading.
 fn install_workbench(window: &WorkbenchWindow) {
     window.on_start_runtime(|| {
         if let Some(ui) = current() {
             launcher::start(&ui);
+        }
+    });
+    window.on_pause_all(|| {
+        if let Some(ui) = current() {
+            workbench::actions::pause_pressed(&ui);
+        }
+    });
+    window.on_resume_all(|| {
+        if let Some(ui) = current() {
+            workbench::actions::resume_pressed(&ui);
+        }
+    });
+    window.on_resume_all_confirmed(|| {
+        if let Some(ui) = current() {
+            workbench::actions::resume_confirmed(&ui);
+        }
+    });
+    window.on_preset_picked(|name| {
+        if let Some(ui) = current() {
+            workbench::actions::preset_pressed(&ui, &name);
+        }
+    });
+    window.on_preset_confirmed(|| {
+        if let Some(ui) = current() {
+            workbench::actions::preset_confirmed(&ui);
+        }
+    });
+    window.on_preset_back_to_file(|| {
+        if let Some(ui) = current() {
+            workbench::actions::back_to_file_pressed(&ui);
+        }
+    });
+    window.on_concurrency_edited(|text| {
+        if let Some(ui) = current() {
+            workbench::actions::concurrency_edited(&ui, &text);
+        }
+    });
+    window.on_concurrency_stepped(|step| {
+        if let Some(ui) = current() {
+            workbench::actions::concurrency_stepped(&ui, step);
+        }
+    });
+    window.on_concurrency_apply(|| {
+        if let Some(ui) = current() {
+            workbench::actions::concurrency_apply(&ui);
+        }
+    });
+    window.on_concurrency_back_to_file(|| {
+        if let Some(ui) = current() {
+            workbench::actions::concurrency_back_to_file(&ui);
         }
     });
     window.on_request_shutdown(|| {
@@ -644,6 +696,13 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_resume_statement(labels.resume_statement.into());
     global.set_resume_confirm(labels.resume_confirm.into());
     global.set_start(labels.start.into());
+    global.set_pause_all(labels.pause_all.into());
+    global.set_resume_all(labels.resume_all.into());
+    global.set_performance_preset(labels.performance_preset.into());
+    global.set_back_to_file(labels.back_to_file.into());
+    global.set_preset_confirm(labels.preset_confirm.into());
+    global.set_concurrent_runs(labels.setting_concurrent_runs.into());
+    global.set_apply(labels.apply.into());
     global.set_request_shutdown(labels.request_shutdown.into());
     global.set_open_ledger(labels.open_ledger.into());
     global.set_add_instance(labels.add_instance.into());

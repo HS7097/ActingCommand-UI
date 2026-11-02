@@ -11,8 +11,8 @@
 //! thread that could not start, panicked or was gone, the answer of a person's
 //! resume whose ledger window closed before it came back, and of the workbench's
 //! reads (`workbench`) what changed about them, a read that took long and their
-//! count at the end of the run, and what each run of `actingctl packs` came to. No
-//! read itself goes there. Once it exists the
+//! count at the end of the run, what each run of `actingctl packs` came to, and what
+//! each of its writes came to. No read itself goes there. Once it exists the
 //! windows show where it is, and when it cannot be written they say that instead.
 //!
 //! A start that fails is said everywhere it can be: the log, the console (this

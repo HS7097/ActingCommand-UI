@@ -40,6 +40,7 @@ actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtim
 actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "6b430f419fc7fe1a28510a9ba100c05da5e58391" }
 actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "6b430f419fc7fe1a28510a9ba100c05da5e58391" }
 actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "6b430f419fc7fe1a28510a9ba100c05da5e58391" }
+actingcommand-runtime-config = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "6b430f419fc7fe1a28510a9ba100c05da5e58391" }
 actingcommand-execution-kernel = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "6b430f419fc7fe1a28510a9ba100c05da5e58391" }
 # Only what the console needs: the trim drops the renderers and backends this
 # program never uses (software renderer, testing backend, Linux system tray).
