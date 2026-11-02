@@ -504,7 +504,7 @@ pub struct Labels {
     pub preset_leave_full: &'static str,
     pub preset_confirm: &'static str,
     pub preset_gone: &'static str,
-    /// The stepper of how many tasks run at once, beside the presets: where the value in
+    /// The stepper of how many tasks run at once, under the presets: where the value in
     /// effect comes from; that and the value while the field holds something else; what an
     /// empty field stands for; the button that sends it; and what is typed that is no whole
     /// number, which is not sent. Its caption is `setting_concurrent_runs`, its value when

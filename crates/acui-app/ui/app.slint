@@ -1093,8 +1093,8 @@ component AccountCardView {
 
 // The main window. At the top the bar: the Runtime's lamp and its state in plain
 // words, Start, the two writes on every account's scheduling, and at the far end the
-// way into the ledger window; on a second row the performance presets, and how many
-// tasks run at once. Under
+// way into the ledger window; on a second row the performance presets, under them what
+// is in effect, and on a row of its own how many tasks run at once. Under
 // it what became of the last request, what a global
 // pause means, and what this window could not read. Then two columns: on the left the accounts, and where one is added for now; on the right
 // the settings file's problems, what falls short of the theme, where the technical
@@ -1149,8 +1149,12 @@ export component WorkbenchWindow inherits Window {
     in property <string> pause-note;
     in property <string> action-line;
     in property <bool> action-failed;
+    // What became of the last change of settings, a preset's or the stepper's, red when
+    // it says a failure: its own line, as both may be out at once.
+    in property <string> config-write-line;
+    in property <bool> config-write-failed;
     // The top bar's second row, while there is a Runtime to say it of: the presets, and
-    // what is in effect in words, red when they say it cannot be read. Whether a change
+    // under them what is in effect in words, red when they say it cannot be read. Whether a change
     // can go out now, whether there is an online value to go back from to the file's, and
     // what the first press on a preset asks to confirm, when it asks.
     in property <bool> preset-shown;
@@ -1160,7 +1164,7 @@ export component WorkbenchWindow inherits Window {
     in property <bool> preset-writable;
     in property <bool> preset-back-offered;
     in property <string> preset-statement;
-    // Beside the presets, while the snapshot names it: how many tasks run at once. The
+    // Under the presets, while the snapshot names it: how many tasks run at once. The
     // field holds what is typed or stepped to, else the value in effect, both ways with
     // the field; what it says when empty; where the value comes from, and the value too
     // while the field holds something else; whether "apply" would change anything; and
@@ -1281,6 +1285,8 @@ export component WorkbenchWindow inherits Window {
                             }
                         }
                     }
+                    // Each row only as wide as its buttons need, so all of it shows in
+                    // the narrowest window at the largest text.
                     if root.preset-shown: HorizontalLayout {
                         spacing: 10px;
                         Caption { text: Strings.performance-preset; }
@@ -1297,13 +1303,6 @@ export component WorkbenchWindow inherits Window {
                                 }
                             }
                         }
-                        Notice {
-                            text: root.preset-note;
-                            failed: root.preset-failed;
-                            vertical-alignment: center;
-                            min-width: 40px * Scale.factor;
-                            horizontal-stretch: 1;
-                        }
                         if root.preset-back-offered: SkinButton {
                             text: Strings.back-to-file;
                             enabled: root.preset-writable;
@@ -1311,40 +1310,52 @@ export component WorkbenchWindow inherits Window {
                                 root.preset-back-to-file();
                             }
                         }
-                        // Its own group, so its "back to the file's setting" reads as its
-                        // one setting's.
-                        if root.concurrency-shown: HorizontalLayout {
-                            spacing: 6px;
-                            horizontal-stretch: 0;
-                            Caption { text: Strings.concurrent-runs; }
-                            SkinStepper {
-                                label: Strings.concurrent-runs;
-                                text <=> root.concurrency-text;
-                                placeholder: root.concurrency-placeholder;
-                                enabled: root.preset-writable;
-                                edited(text) => {
-                                    root.concurrency-edited(text);
-                                }
-                                stepped(step) => {
-                                    root.concurrency-stepped(step);
-                                }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    // What is in effect, across the card: a custom one names every
+                    // setting, too long to share a row with buttons.
+                    if root.preset-note != "": Notice {
+                        text: root.preset-note;
+                        failed: root.preset-failed;
+                    }
+                    // A row of its own, so its "back to the file's setting" reads as its
+                    // one setting's.
+                    if root.concurrency-shown: HorizontalLayout {
+                        spacing: 6px;
+                        Caption { text: Strings.concurrent-runs; }
+                        SkinStepper {
+                            label: Strings.concurrent-runs;
+                            text <=> root.concurrency-text;
+                            placeholder: root.concurrency-placeholder;
+                            enabled: root.preset-writable;
+                            edited(text) => {
+                                root.concurrency-edited(text);
                             }
-                            Caption { text: root.concurrency-note; }
-                            SkinButton {
-                                text: Strings.apply;
-                                enabled: root.concurrency-ready;
-                                clicked => {
-                                    root.concurrency-apply();
-                                }
-                            }
-                            if root.concurrency-back-offered: SkinButton {
-                                text: Strings.back-to-file;
-                                enabled: root.preset-writable;
-                                clicked => {
-                                    root.concurrency-back-to-file();
-                                }
+                            stepped(step) => {
+                                root.concurrency-stepped(step);
                             }
                         }
+                        // Where the value comes from: what gives way first.
+                        Caption {
+                            text: root.concurrency-note;
+                            overflow: elide;
+                            min-width: 0px;
+                        }
+                        SkinButton {
+                            text: Strings.apply;
+                            enabled: root.concurrency-ready;
+                            clicked => {
+                                root.concurrency-apply();
+                            }
+                        }
+                        if root.concurrency-back-offered: SkinButton {
+                            text: Strings.back-to-file;
+                            enabled: root.preset-writable;
+                            clicked => {
+                                root.concurrency-back-to-file();
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
                     }
                 }
             }
@@ -1353,7 +1364,8 @@ export component WorkbenchWindow inherits Window {
             // could not be read
             if root.errors != "" || root.launcher-line != "" || root.start-log-path != ""
                     || root.pause-note != "" || root.action-line != ""
-                    || root.resume-all-statement != "" || root.preset-statement != "": Card {
+                    || root.resume-all-statement != "" || root.config-write-line != ""
+                    || root.preset-statement != "": Card {
                 vertical-stretch: 0;
                 VerticalLayout {
                     padding: 8px;
@@ -1384,6 +1396,10 @@ export component WorkbenchWindow inherits Window {
                                 root.resume-all-confirmed();
                             }
                         }
+                    }
+                    if root.config-write-line != "": Notice {
+                        text: root.config-write-line;
+                        failed: root.config-write-failed;
                     }
                     if root.preset-statement != "": HorizontalLayout {
                         spacing: 14px;

@@ -11,6 +11,9 @@
 //! have happened, and the next `Status` says which. Every answer goes in the log,
 //! from the thread, so one that lands after the event loop is not lost.
 //!
+//! The two slots may both be out at once, so each keeps what its last press came to,
+//! and the window says both: an answer of one never hides what the other said.
+//!
 //! Putting all on duty lifts exactly the pause the newest `Status` showed, by its
 //! owner epoch and revision (`resume_paused`), and only one a person may lift here
 //! (`lifter`): the rest stay off and say who lifts them. A pause another tool set
@@ -23,7 +26,7 @@
 //! and only then says what became of it, so a person decides on what they see. Leaving a
 //! learning mode the file holds takes two presses, as lifting another tool's pause does.
 //!
-//! How many tasks run at once has a stepper beside the presets. Typing and its two buttons
+//! How many tasks run at once has a stepper under the presets. Typing and its two buttons
 //! change only a draft, and only "apply" sends it, as one more change of settings: an empty
 //! draft goes back to the file's setting, a whole number is sent as it is, with no range
 //! here (the Runtime's refusal says it), and anything else is not sent. The draft stays
@@ -144,7 +147,7 @@ pub enum Reread {
     Unconfirmed { based_on: Option<u64> },
 }
 
-/// What the last press came to, before its words.
+/// What the last press of a slot came to, before its words.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Said {
     Sending(Write),
@@ -223,7 +226,9 @@ pub struct Actions {
     flow: ConfigFlow,
     /// The stepper's, of how many tasks run at once.
     draft: Option<Draft>,
-    said: Option<Said>,
+    /// What the last press of each slot came to: only its own press, answer or read
+    /// changes it.
+    said: BTreeMap<(Scope, Kind), Said>,
 }
 
 impl Actions {
@@ -240,7 +245,7 @@ impl Actions {
             Write::PauseAll | Write::ResumeAll => self.confirming = None,
             Write::Configure { .. } => self.flow = ConfigFlow::InFlight,
         }
-        self.said = Some(Said::Sending(write));
+        self.said.insert(slot, Said::Sending(write));
         Some(ticket)
     }
 
@@ -263,20 +268,24 @@ impl Actions {
                 }
             }
         }
-        self.said = Some(said);
+        self.said.insert(slot, said);
         true
     }
 
     /// Another owner epoch: no ticket holds across it, and no line says anything of
-    /// the old one but that a write was out or had not been settled. A draft goes too:
-    /// what holds is to be seen afresh.
+    /// the old one but, in its slot, that a write was out or had not been settled. A
+    /// draft goes too: what holds is to be seen afresh.
     pub fn new_epoch(&mut self) {
-        let was_open = !self.out.is_empty() || matches!(self.flow, ConfigFlow::Rereading(_));
+        let mut said: BTreeMap<(Scope, Kind), Said> =
+            self.out.keys().map(|slot| (*slot, Said::Restarted)).collect();
+        if matches!(self.flow, ConfigFlow::Rereading(_)) {
+            said.insert(GLOBAL_SETTINGS, Said::Restarted);
+        }
         self.out.clear();
         self.confirming = None;
         self.flow = ConfigFlow::Idle;
         self.draft = None;
-        self.said = was_open.then_some(Said::Restarted);
+        self.said = said;
     }
 
     /// A fact snapshot that counts: of this epoch, and read after any write that landed.
@@ -289,7 +298,8 @@ impl Actions {
         }
         match &self.flow {
             ConfigFlow::Rereading(reread) => {
-                let said = match *reread {
+                let reread = *reread;
+                let said = match reread {
                     Reread::Conflict => Said::ConflictRefreshed,
                     Reread::Unconfirmed { based_on } => match (read.version, based_on) {
                         (None, _) => Said::UnconfirmedSeeNow,
@@ -301,7 +311,8 @@ impl Actions {
                 if said == Said::UnconfirmedChanged {
                     self.draft = None;
                 }
-                self.said = Some(said);
+                log_verdict(reread, read.version, &said);
+                self.said.insert(GLOBAL_SETTINGS, said);
                 self.flow = ConfigFlow::Idle;
             }
             ConfigFlow::Confirming { name } => {
@@ -323,13 +334,13 @@ impl Actions {
         if self.confirming.as_ref() != global.map(|pause| &pause.target) {
             self.confirming = None;
         }
-        let overtaken = match self.said {
+        let overtaken = match self.said.get(&GLOBAL_SCHEDULING) {
             Some(Said::PauseApplied) => global.is_none(),
             Some(Said::Resumed) => global.is_some(),
             _ => false,
         };
         if overtaken {
-            self.said = None;
+            self.said.remove(&GLOBAL_SCHEDULING);
         }
     }
 
@@ -344,7 +355,18 @@ impl Actions {
     /// A press found nothing to send.
     fn preset_gone(&mut self) {
         self.flow = ConfigFlow::Idle;
-        self.said = Some(Said::PresetGone);
+        self.said.insert(GLOBAL_SETTINGS, Said::PresetGone);
+    }
+}
+
+/// What the snapshot awaited after an answer came to, into the log as well: the window's
+/// line goes with the next press of its slot, the log's stays. Only the settings having
+/// moved on, which changed nothing, is no problem.
+fn log_verdict(reread: Reread, version: Option<u64>, said: &Said) {
+    let line = format!("snapshot read after {reread:?}, version now {version:?}: {said:?}");
+    match said {
+        Said::ConflictRefreshed => report::log_quiet(CONFIG_THREAD, &line),
+        _ => report::log(CONFIG_THREAD, &line),
     }
 }
 
@@ -369,7 +391,10 @@ pub struct ActionsView {
     pub resume: ResumeEntry,
     /// Who lifts the global pause, while one holds.
     pub holding: Option<Lifter>,
-    pub said: Option<Said>,
+    /// What the last press came to: of "pause all" or "put all on duty", and of a change
+    /// of settings, each on its own line.
+    pub scheduling_said: Option<Said>,
+    pub settings_said: Option<Said>,
     /// Accounts under a pause of their own, which lifting the global one leaves, and
     /// whether Alice lifts any of those.
     pub still_paused: usize,
@@ -417,7 +442,8 @@ pub fn view(
         can_pause: open && global.is_none(),
         resume,
         holding: global.map(|pause| lifter(&pause.reason)),
-        said: actions.said.clone(),
+        scheduling_said: actions.said.get(&GLOBAL_SCHEDULING).cloned(),
+        settings_said: actions.said.get(&GLOBAL_SETTINGS).cloned(),
         still_paused: paused().count(),
         alice_holds: paused().any(|pause| lifter(&pause.reason) == Lifter::Alice),
         finishing: config.is_some_and(|read| read.version.is_some()).then(|| {
@@ -815,7 +841,7 @@ pub fn concurrency_apply(ui: &Ui) {
         Typed::Empty => send_config(ui, ConfigEdit::concurrent_runs_back_to_file()),
         Typed::Whole(runs) => send_config(ui, ConfigEdit::concurrent_runs(runs)),
         Typed::NotWhole => {
-            ui.model.borrow_mut().actions_mut().said = Some(Said::NotWhole);
+            ui.model.borrow_mut().actions_mut().said.insert(GLOBAL_SETTINGS, Said::NotWhole);
             repaint(ui);
         }
     }

@@ -3,7 +3,7 @@
 //! the list the workbench already shows: a row changes only when its words do, and
 //! rows come and go only when the accounts do, so a read every few seconds costs
 //! nothing and moves nothing. And the top bar's writes, its performance preset and the
-//! stepper beside it, from their views.
+//! stepper under it, from their views.
 
 use std::time::Instant;
 
@@ -38,8 +38,8 @@ pub fn cards(ui: &Ui) {
     sync(window.get_account_cards(), cards, |rows| window.set_account_cards(rows));
 }
 
-/// The top bar's second row: the presets, the one in effect marked, what is in effect in
-/// words, and whether they can be pressed; nothing while there is no Runtime to say it of.
+/// The top bar's presets: the one in effect marked, what is in effect in words under them,
+/// and whether they can be pressed; nothing while there is no Runtime to say it of.
 /// And what a first press on a preset asks to confirm, and the stepper of how many tasks run
 /// at once, which goes by the same "can be pressed".
 pub fn preset(ui: &Ui) {
@@ -208,6 +208,7 @@ fn source_text(labels: &Labels, source: SettingSource) -> &'static str {
 
 /// What the top bar's two write buttons offer, and what is said about them: the global
 /// pause while one holds, the confirmation asked for, and what the last press came to.
+/// And, on a line of its own, what the last change of settings came to.
 pub fn actions(ui: &Ui) {
     let Some(window) = ui.workbench() else {
         return;
@@ -227,9 +228,27 @@ pub fn actions(ui: &Ui) {
     };
     window.set_resume_all_statement(statement.into());
     window.set_pause_note(pause_note(labels, &view).into());
-    let (line, failed) = said_text(labels, &view);
+    let (line, failed) = match &view.scheduling_said {
+        Some(said) => said_text(labels, &view, said),
+        None => (String::new(), false),
+    };
     window.set_action_line(line.into());
     window.set_action_failed(failed);
+    let (line, failed) = settings_text(labels, &view);
+    window.set_config_write_line(line.into());
+    window.set_config_write_failed(failed);
+}
+
+/// What the last change of settings came to, and whether that is a failure; nothing
+/// before one. A restart both slots were open across is said once, on the first line.
+fn settings_text(labels: &Labels, view: &ActionsView) -> (String, bool) {
+    if view.reread_failed {
+        return (labels.config_reread_failed.to_owned(), true);
+    }
+    match (&view.settings_said, &view.scheduling_said) {
+        (Some(Said::Restarted), Some(Said::Restarted)) | (None, _) => (String::new(), false),
+        (Some(said), _) => said_text(labels, view, said),
+    }
 }
 
 /// While a global pause holds: what it means, how many tasks still finish when that
@@ -252,14 +271,8 @@ fn pause_note(labels: &Labels, view: &ActionsView) -> String {
     note.join("\n")
 }
 
-/// What the last press came to, and whether that is a failure; nothing before one.
-fn said_text(labels: &Labels, view: &ActionsView) -> (String, bool) {
-    if view.reread_failed {
-        return (labels.config_reread_failed.to_owned(), true);
-    }
-    let Some(said) = &view.said else {
-        return (String::new(), false);
-    };
+/// What a press came to in words, and whether that is a failure.
+fn said_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, bool) {
     match said {
         Said::Sending(Write::PauseAll) => (labels.pause_all_sending.to_owned(), false),
         Said::Sending(Write::ResumeAll) => (labels.resume_all_sending.to_owned(), false),
