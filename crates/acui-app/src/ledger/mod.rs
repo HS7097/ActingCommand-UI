@@ -229,8 +229,13 @@ impl LedgerHandle {
     /// A new session on the same state root and face: the reader of the old
     /// one stops at its next page, and the new one opens the read face again,
     /// from the tab and filters the boxes show, without a time bound. The
-    /// last resume's line goes with the old session (`Resume::reopened`).
+    /// last resume's line goes with the old session (`Resume::reopened`). A
+    /// closed window starts nothing: its entry can still be pressed through
+    /// the fade, and no later close would let that session go.
     pub fn reopen(&self, ui: &Ui) {
+        if self.closed.get() {
+            return;
+        }
         self.follow.stop();
         self.cursor_rest.stop();
         self.window.set_following(false);
@@ -350,8 +355,12 @@ impl LedgerHandle {
 
     /// The bound and its label follow the handle at once; the reload waits
     /// until the handle rests, so a drag is one reload, not one per step. A
-    /// time bound reads down from the past: following stops at once.
+    /// time bound reads down from the past: following stops at once. A closed
+    /// window's timers stay stopped.
     pub fn cursor_moved(&self, ui: &Ui, value: f32) {
+        if self.closed.get() {
+            return;
+        }
         let bound = {
             let mut state = self.lock();
             let Some(model) = state.live_mut() else {
@@ -396,8 +405,12 @@ impl LedgerHandle {
 
     /// Turning following on catches up on the reader and starts the ticks, one
     /// every `FOLLOW_INTERVAL`; what an earlier following failed at goes.
-    /// Turning it off stops the ticks and leaves the view as it is.
+    /// Turning it off stops the ticks and leaves the view as it is. A closed
+    /// window's timers stay stopped.
     pub fn set_following(&self, ui: &Ui, on: bool) {
+        if self.closed.get() {
+            return;
+        }
         if !on {
             self.stop_following();
             self.refresh(ui);

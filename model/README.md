@@ -111,6 +111,10 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   - **the plan** of one account: a MILP from the state's readings over `economy.plan_horizon` days, with integer
     counts and read caps that block collections at or above them, its final stocks priced by the steady state,
     stopped only by `search.milp_node_limit` (then `proven: false`).
+  `economy --steady-only --quick` is for iteration only: while a model is being written, it stops after the three solves
+  and the least losses and shows the coverage, V0, A\*, the ties and one optimal dual per balance row in `data.quick`,
+  under its own cache node, which nothing else reads. Acceptance reads the full run (`contracts/formats.md`, "The quick
+  look").
   Every solution, the dual's too, is made exact and checked exactly (`lp_numeric_check_failed`); contradictory rules are named
   (`lp_infeasible`); what the programs do not model yet is refused, never approximated.
 - **`explain`** prints the provenance tree of one output (`rule:<id>`, `general_logic:<id>` or
@@ -187,6 +191,9 @@ default:
   holds the cache (`cache/`) and the runs' outputs (`runs/`), never inside a repository.
 - **Cache size.** `cache.max_bytes` (default 2 GiB) caps the cache; the least recently used entries are
   evicted after a run.
+- **Cache lock.** Several commands may share a state root: a run writes the index only at its end. `cache.wait_ms`
+  (default 60000) is how long a command waits for that lock; past it the command is `cache_unavailable`, with the wait
+  in `wait_ms`, and it never computes without its cache.
 - **External datasets.** `paths.datasets` (default `%LOCALAPPDATA%\ActingCommand\acmodel\datasets`) holds
   the local copies of large datasets, each the file named by its sha256. `check` verifies them and never
   fetches.

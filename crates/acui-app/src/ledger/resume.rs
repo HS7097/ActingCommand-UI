@@ -359,8 +359,12 @@ pub fn asked(ledger: &LedgerHandle, index: i32) {
 
 /// The confirming press: the one resume of the pause the line showed, on
 /// `acui-resume`, if it is the pause the first press asked about and no other
-/// press is out. The line says it is resuming until the answer comes.
+/// press is out. The line says it is resuming until the answer comes. A
+/// closed window sends none: the press can still land during its fade.
 pub fn confirmed(ledger: &LedgerHandle, index: i32) {
+    if ledger.is_closed() {
+        return;
+    }
     let target = picked(ledger, index);
     let open = matches!(ledger.lock().phase, Phase::Opening { .. } | Phase::Open(_));
     let mut resume = ledger.resume.borrow_mut();

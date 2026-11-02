@@ -182,17 +182,22 @@ def run_economy(
     economy: EconomySettings = EconomySettings(),
     cache: Session | None = None,
     steady_only: bool = False,
+    quick: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """`acmodel economy`: the model checked as `run` checks it, then the steady state and the plan
     (`core.flow`) and only the graph nodes they read. Returns `data` (`steady` and `plan`), the errors that
     block them, each with `needed_by`, and the warnings of the solves (`lp_dual_disagrees`,
     `search_budget_exhausted`). With `cache`, it computes incrementally, `data` also holds `run_id` and `work`,
     and the outputs are kept under `runs/<run id>/`. With `steady_only` (`--steady-only`) it computes the steady
-    state alone: the plan is never computed, so neither it nor its errors are in the answer."""
+    state alone: the plan is never computed, so neither it nor its errors are in the answer. With `quick` too
+    (`--quick`, #424 PRICE-2f) it computes the node ("economy", "quick") instead (`core.flow`, "The quick look"): `data`
+    holds `quick` and neither `steady` nor `plan`, and the steady state's node is neither computed nor read."""
     checker, graph, folder, exports, head, prefs = _graph(
         path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns, economy=economy, cache=cache
     )
     solves = {name: key for name, key in flow.NODES.items() if name == flow.STEADY or not steady_only}
+    if quick:
+        solves = {flow.QUICK: flow.QUICK_NODE}
     keys = list(solves.values())
     solve(keys, graph.compute if cache is None else graph.cached, graph.results)
     needed_by: dict[int, list[str]] = {index: [] for index in range(len(graph.errors))}
@@ -211,7 +216,7 @@ def run_economy(
     inputs = _run_inputs(checker, graph, folder, exports, head, prefs[-1] if prefs else None, max_bits, unknowns)
     inputs["config"]["economy"] = economy.keyed()
     # Never the run id of `run` with the same inputs, nor of the other form of `economy`.
-    inputs["command"] = "economy --steady-only" if steady_only else "economy"
+    inputs["command"] = "economy --steady-only --quick" if quick else "economy --steady-only" if steady_only else "economy"
     run_id = cache.run_id(inputs)
     outputs = {
         "schema_version": RUN_SCHEMA, "run_id": run_id, "data": {**head, **data}, "errors": errors, "warnings": warnings,

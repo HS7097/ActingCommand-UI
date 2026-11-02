@@ -36,6 +36,11 @@ export global AeroConst {
     out property <length> radius: 7px;
     out property <color> frame-outer: #000000a0;
     out property <color> frame-inner: #ffffff99;
+    // The caption buttons as a group, at the window's top edge: fixed sizes
+    // that the text size does not change.
+    out property <length> caption-buttons-width: 101px;
+    out property <length> caption-buttons-height: 20px;
+    out property <length> caption-buttons-inset: 6px;
     // The glass drawn solid, where nothing can be seen through it.
     out property <color> glass-solid: #c0c0c0;
     // The tint over the glass, by Win7's formula as the sample has it; fully
@@ -45,6 +50,185 @@ export global AeroConst {
     out property <float> tint-alpha: clamp(1 - root.blur-balance, 0, 1);
     out property <float> behind-luma: 0.5;
     out property <color> tint: root.glass-color.mix(#000000, clamp((root.color-balance + root.afterglow-balance * root.behind-luma) / max(0.001, root.tint-alpha), 0, 1)).with-alpha(root.tint-alpha);
+}
+
+// The caption text's soft white glow, which Win7 drew behind every title on
+// glass. It takes no more width than its text unless made to, and elides when
+// the width runs out.
+export component GlowText inherits Rectangle {
+    in property <string> text;
+    in property <length> size: 12px;
+    preferred-width: t.preferred-width + 20px;
+    preferred-height: t.preferred-height + 8px;
+    horizontal-stretch: 0;
+    Rectangle {
+        x: 2px;
+        y: 1px;
+        width: parent.width - 4px;
+        height: parent.height - 2px;
+        border-radius: self.height / 2;
+        background: #ffffff70;
+    }
+    Rectangle {
+        x: 6px;
+        y: 3px;
+        width: parent.width - 12px;
+        height: parent.height - 6px;
+        border-radius: self.height / 2;
+        background: #ffffff60;
+    }
+    t := Text {
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+        text: root.text;
+        font-size: root.size;
+        color: #000000;
+    }
+}
+
+// One caption button, in Win7's red or glass blue. The keyboard reaches these
+// through the system menu (Alt+Space, Alt+F4) and not by Tab, as with any
+// window's own buttons; a screen reader can name and press them.
+component CaptionButton inherits Rectangle {
+    // 0 minimise, 1 maximise, 2 close
+    in property <int> kind;
+    in property <bool> maximized;
+    in property <string> label;
+    callback clicked();
+    // A maximized window's middle button restores it, and shows two windows.
+    property <string> glyph: root.kind == 0 ? "M 1 7 L 9 7"
+        : root.kind == 2 ? "M 0 0 L 8 8 M 8 0 L 0 8"
+        : root.maximized ? "M 0.5 2.5 L 7.5 2.5 L 7.5 8.5 L 0.5 8.5 Z M 2.5 2.5 L 2.5 0.5 L 9.5 0.5 L 9.5 6.5 L 7.5 6.5"
+        : "M 0.5 0.5 L 9.5 0.5 L 9.5 7.5 L 0.5 7.5 Z";
+    width: root.kind == 2 ? 45px : 26px;
+    height: 20px;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+    // The group's rounded bottom corners belong to the end buttons: a clip on
+    // the group made femtovg draw a stray copy of the minimise glyph.
+    border-bottom-left-radius: root.kind == 0 ? 4px : 0px;
+    border-bottom-right-radius: root.kind == 2 ? 4px : 0px;
+    background: root.kind == 2
+        ? (ta.pressed ? @linear-gradient(180deg, #d58776 0%, #b53f22 50%, #9c2f15 51%, #b9462a 100%)
+            : ta.has-hover ? @linear-gradient(180deg, #f6b3a3 0%, #e8654a 50%, #cf3d1d 51%, #e9694c 100%)
+            : @linear-gradient(180deg, #e8a99b 0%, #d4705a 50%, #c04a2e 51%, #d0644a 100%))
+        : (ta.pressed ? @linear-gradient(180deg, #a5c8ea 0%, #5d93cf 50%, #3c75b8 51%, #6aa0d8 100%)
+            : ta.has-hover ? @linear-gradient(180deg, #e9f3fd 0%, #b8d6f3 50%, #84b3e5 51%, #b3d4f5 100%)
+            : @linear-gradient(180deg, #ffffff80 0%, #ffffff4d 50%, #ffffff1f 51%, #ffffff47 100%));
+    Rectangle {
+        x: 1px;
+        y: 1px;
+        width: parent.width - 2px;
+        height: parent.height - 2px;
+        border-bottom-left-radius: root.kind == 0 ? 3px : 0px;
+        border-bottom-right-radius: root.kind == 2 ? 3px : 0px;
+        border-width: 1px;
+        border-color: #ffffff59;
+    }
+    // A dark outline under the white glyph, as Win7 drew it.
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-x: root.kind == 2 ? -18 : -8;
+        viewbox-y: -6;
+        viewbox-width: root.kind == 2 ? 45 : 26;
+        viewbox-height: 20;
+        stroke: #00000080;
+        stroke-width: 3.6px;
+        commands: root.glyph;
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-x: root.kind == 2 ? -18 : -8;
+        viewbox-y: -6;
+        viewbox-width: root.kind == 2 ? 45 : 26;
+        viewbox-height: 20;
+        stroke: #ffffff;
+        stroke-width: root.kind == 1 ? 1.6px : 2px;
+        commands: root.glyph;
+    }
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// Win7's group of three caption buttons, of AeroConst's size. It has no clip
+// (see CaptionButton).
+export component CaptionButtons inherits Rectangle {
+    in property <bool> maximized;
+    in property <string> minimize-label;
+    in property <string> maximize-label;
+    in property <string> restore-label;
+    in property <string> close-label;
+    callback minimize();
+    callback toggle-maximize();
+    callback close-window();
+    width: AeroConst.caption-buttons-width;
+    height: AeroConst.caption-buttons-height;
+    border-bottom-left-radius: 5px;
+    border-bottom-right-radius: 5px;
+    border-width: 1px;
+    border-color: #00000099;
+    HorizontalLayout {
+        padding: 1px;
+        spacing: 0px;
+        CaptionButton {
+            kind: 0;
+            label: root.minimize-label;
+            clicked => {
+                root.minimize();
+            }
+        }
+        Rectangle {
+            width: 1px;
+            background: #00000066;
+        }
+        CaptionButton {
+            kind: 1;
+            maximized: root.maximized;
+            label: root.maximized ? root.restore-label : root.maximize-label;
+            clicked => {
+                root.toggle-maximize();
+            }
+        }
+        Rectangle {
+            width: 1px;
+            background: #00000066;
+        }
+        CaptionButton {
+            kind: 2;
+            label: root.close-label;
+            clicked => {
+                root.close-window();
+            }
+        }
+    }
+}
+
+// The faint diagonal streaks across the glass: the sample's three, every 760px
+// across, the first lot where the screenshot has them.
+export component Streaks inherits Rectangle {
+    for tile in ceil(root.width / 760px) + 1: Path {
+        x: tile * 760px;
+        y: 0px;
+        width: 760px;
+        height: 600px;
+        viewbox-width: 760;
+        viewbox-height: 600;
+        fill: Colors.white.with-alpha(AeroConst.streaks);
+        commands: "M 120 0 L 210 0 L 60 600 L -30 600 Z M 330 0 L 370 0 L 220 600 L 180 600 Z M 640 0 L 760 0 L 610 600 L 490 600 Z";
+    }
 }
 
 // The face of a Win7 push button, after the sample's AeroButton: grey, edged

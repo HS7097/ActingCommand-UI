@@ -1354,10 +1354,40 @@ two has `status` and `per_account`; a blocked one has only `status`.
   amount per step), `end` (the final stocks), `unread`, `excluded` and `relaxed`.
 - With `--steady-only` (`contracts/cli.md`), `data` holds `steady` and no `plan`: the plan is not computed, and none
   of its errors is reported.
+- With `--steady-only --quick`, `data` holds `quick`, and neither `steady` nor `plan` (see "The quick look").
 
 A number is a string holding an exact rational. The errors name the outputs they block in `needed_by`:
 `economy:steady` and `economy:plan` (the graph outputs `price:` and `activity_value:` are blocked with the steady
-state). The warnings are those of the solves.
+state), and with `--quick` `economy:quick`. The warnings are those of the solves.
+
+### The quick look
+
+`economy --steady-only --quick` is **for iteration only**, while a model is being written: it answers what an edit did to
+the coverage, V0, A\*, conflicts and ties in a fraction of the time. **Acceptance reads the full run, never this.**
+
+It builds the steady state's program as `--steady-only` does, runs the three solves (S3 with its checked dual, S1, S2 and
+the tie probes) and the least losses, and stops before the re-solves at ±grain, the projections, the prices of the
+rules, the activities' values and the joint vector.
+
+`data.quick` holds:
+- `status`: `quick`. A blocked one holds only `status`, `blocked`, as `steady` does, with the same errors, needed by
+  `economy:quick`;
+- `objective`, `acquisition`, `protected`, `conversions`, `losses`, `excluded` and `relaxed`, as `steady` writes them;
+- `dual_prices`, resource to one exact rational per step: the dual on its balance row at the exact optimal dual point of
+  S3 that the strong-duality check found, the same point `steady` reads as `dual`. **This is one optimal dual, neither
+  the joint selection (`joint.prices`) nor a price interval (`prices`).** It lies inside that step's interval of `prices`;
+  where the interval is wide, which point it is depends on the solver's path, so a change in it alone says nothing;
+- `coverage`, as in `steady` (see "Coverage"), from what these solves know;
+- `coverage_unknown`, the reasons they cannot rule out: `["probe_unverified"]`. A `probe_unverified` in `coverage` holds
+  (from a tie probe); one that is absent may still come from the judgements' probes (`most`, the range, the forcing
+  cost) in the full run, and turn a component into a structural gap with its prices provisional.
+
+The warnings are `objective_tier_tie` and the tie probes' `lp_probe_unverified`; the later stages' are not run.
+
+**It can never be taken for a steady state.** It is its own cache node (`economy:quick`) under its own key and its own
+run id. It neither fills nor reuses the node `economy:steady`, so a later full run computes that node as if it had never
+run. No other node, `explain`, export, binding or acceptance reads it. It has the `economy` kind, so it shares that
+kind's evaluator version, and it adds no version: the full run's output is unchanged.
 
 ## Outputs: provenance, `explain`, `thresholds.json`, the tables and the scoring documents
 

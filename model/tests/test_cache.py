@@ -13,13 +13,14 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from acmodel import cli, environment
+from acmodel import cli, config, environment
 from acmodel.cache import EVALUATORS, Session, canonical, open_store
 from acmodel.core import run_model
 from acmodel.core.provenance import assemble, outputs as output_nodes
@@ -339,3 +340,101 @@ def test_run_outputs_are_byte_identical_under_two_hash_seeds(example, tmp_path, 
     assert hash_0 != hash_1  # the two seeds took effect
     assert stdout_0 == stdout_1
     assert kept_0 == kept_1
+
+
+# PRICE-2f: a run holds no lock while it computes, and a connection waits a bounded time for one -----------------------
+
+
+def index_of(state_root: Path) -> Path:
+    return state_root / "cache" / "index.sqlite"
+
+
+def write_lock(state_root: Path) -> sqlite3.Connection:
+    """A second connection, which fails at once if another holds the write lock, and then holds it itself."""
+    holder = sqlite3.connect(index_of(state_root), timeout=0, check_same_thread=False)
+    holder.execute("BEGIN IMMEDIATE")
+    return holder
+
+
+def test_a_run_holds_no_lock_while_it_computes_and_a_run_it_does_not_finish_leaves_nothing(example, tmp_path):
+    """After every node a run keeps, and through to the end of its work, another connection takes the write lock at
+    once. What a run keeps reaches the index when it finishes; a run that does not finish leaves no trace there."""
+    state_root = tmp_path / "state"
+    locks = []
+
+    class Probing(Session):
+        def save(self, *args):
+            value = super().save(*args)
+            write_lock(state_root).close()
+            locks.append(value)
+            return value
+
+    def traces() -> int:
+        with closing(sqlite3.connect(index_of(state_root))) as index:
+            return index.execute("SELECT count(*) FROM nodes").fetchone()[0]
+
+    with open_store(state_root, max_bytes=2**31) as store:
+        evaluate_model(example / MODEL, example / STATE, datasets=tmp_path / "datasets", max_bits=127,
+                       cache=Probing(store, libraries=LIBRARIES))
+    assert locks and traces() == 0
+
+    with open_store(state_root, max_bytes=2**31) as store:
+        session = Probing(store, libraries=LIBRARIES)
+        run_model(example / MODEL, example / STATE, datasets=tmp_path / "datasets", max_bits=127, cache=session)
+        write_lock(state_root).close()
+    assert traces() == session.work()["computed"] > 0
+
+
+def test_a_short_hold_of_the_lock_is_waited_through(tmp_path):
+    state_root = tmp_path / "state"
+    open_store(state_root, max_bytes=2**31).close()
+    holder = write_lock(state_root)
+    released = threading.Event()
+
+    def release() -> None:
+        released.set()
+        holder.rollback()
+
+    timer = threading.Timer(0.2, release)
+    timer.start()
+    try:
+        with open_store(state_root, max_bytes=2**31, wait_ms=30_000) as store:  # opening writes to the index
+            assert released.is_set()
+            assert store.wait_ms == 30_000
+    finally:
+        timer.join()
+        holder.close()
+
+
+def test_a_hold_past_the_wait_is_cache_unavailable_with_the_wait(example, tmp_path, make_system, app_dir, write_config):
+    state_root = tmp_path / "state"
+    open_store(state_root, max_bytes=2**31).close()
+    write_config({"schema_version": "acmodel.config.v1", "paths": {"state_root": str(state_root)}, "cache": {"wait_ms": 50}})
+    holder = write_lock(state_root)
+    try:
+        system = make_system(prefix=app_dir / "venv")
+        status = cli.main(["run", str(example / MODEL), "--state", str(example / STATE)], system)
+    finally:
+        holder.close()
+
+    doc = json.loads(system.stdout.getvalue())
+    valid(doc, status)
+    assert (status, doc["data"]) == (1, {})
+    [entry] = doc["errors"]
+    assert entry["code"] == "cache_unavailable"
+    assert (entry["detail"]["stage"], entry["detail"]["path"]) == ("open", str(index_of(state_root)))
+    assert entry["detail"]["wait_ms"] == 50
+    assert entry["detail"]["exception_type"] == "OperationalError"
+
+
+@pytest.mark.parametrize(("value", "status"), [(0, 1), ("60000", 1), (1, 0)], ids=["zero", "text", "least"])
+def test_cache_wait_ms_is_a_positive_integer_of_60_s_by_default(tmp_path, make_system, app_dir, write_config, value, status):
+    system = make_system(prefix=app_dir / "venv")
+    assert config.load(system.environ).cache_wait_ms == 60_000
+
+    write_config({"schema_version": "acmodel.config.v1", "paths": {"state_root": str(tmp_path / "state")},
+                  "cache": {"wait_ms": value}})
+    assert cli.main(["cache", "stats"], system) == status
+    if status:
+        [entry] = json.loads(system.stdout.getvalue())["errors"]
+        assert (entry["code"], entry["ref"]) == ("config_invalid", "/cache/wait_ms")

@@ -227,6 +227,7 @@ dependencies = [
 name = "acui-app"
 version = "0.1.0"
 dependencies = [
+ "acui-glass",
  "acui-installation",
  "acui-model",
  "acui-rows",
@@ -238,6 +239,16 @@ dependencies = [
  "slint",
  "slint-build",
  "winresource",
+]
+
+[[package]]
+name = "acui-glass"
+version = "0.1.0"
+dependencies = [
+ "raw-window-handle",
+ "windows",
+ "windows-core",
+ "windows-numerics",
 ]
 
 [[package]]
@@ -4605,6 +4616,7 @@ dependencies = [
  "num-traits",
  "once_cell",
  "pin-weak",
+ "raw-window-handle",
  "slint-macros",
  "unicode-segmentation",
  "vtable",

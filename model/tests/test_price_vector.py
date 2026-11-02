@@ -33,8 +33,10 @@ from test_economy import (
     model_path,
     regen,
     resource,
+    shared_fixture,
     steady,
     training,
+    write,
 )
 
 EXACT_V = {"value": "1", "interval": "1", "by": "exact", "withheld": None}  # res.v, the main goal worth 1
@@ -805,3 +807,143 @@ def test_a_judgement_probe_that_cannot_be_verified_is_unverified_and_a_structura
         resource: {"status": "provisional", "reasons": ["probe_unverified"]} for resource in ("res.g", "res.m", "res.s")
     }
     assert found["status"] == "provisional"
+
+
+# PRICE-2f: `economy --steady-only --quick`, the quick look ----------------------------------------------------------
+
+
+QUICK = ("--steady-only", "--quick")
+
+
+def economy_work(doc: dict[str, Any]) -> dict[str, int]:
+    return doc["data"]["work"]["by_kind"]["economy"]
+
+
+def test_the_quick_look_shows_its_own_member_and_stops_before_the_later_stages(tmp_path, economy, monkeypatch):
+    """The fixture of the tie (test_economy.py): by hand V0 = A* = 100, act.train a tie, and s worth 1, g 1, m 10, one
+    value each, so its one optimal dual is known. What `quick` shares with `steady` is as `steady` writes it, the tie
+    warning is there, and no later stage runs. A later stage's `probe_unverified` is named as not known, not absent."""
+    folder = shared_fixture(tmp_path, "10", most="10")
+    with monkeypatch.context() as patched:
+        for stage in ("hold", "chords", "price", "joint"):
+            patched.setattr(economy_flow._Solver, stage, lambda *args, **kwargs: pytest.fail("a later stage ran"))
+        status, doc = economy(folder, *QUICK)
+
+    assert (status, doc["errors"]) == (0, [])
+    assert sorted(doc["data"]) == ["model_id", "path", "quick", "run_id", "state", "work"]
+    found = doc["data"]["quick"]
+    assert sorted(found) == [
+        "acquisition", "conversions", "coverage", "coverage_unknown", "dual_prices", "excluded", "losses", "objective",
+        "protected", "relaxed", "status",
+    ]
+    assert (found["status"], found["objective"], found["acquisition"]) == ("quick", "100", "100")
+    assert found["dual_prices"] == {"res.g": ["1"], "res.m": ["10"], "res.s": ["1"]}
+    assert found["coverage_unknown"] == ["probe_unverified"]
+    assert found["coverage"]["components"]["act.get"]["gaps"] == {"objective_tier_tie": ["act.train"]}
+
+    _, full = economy(folder, "--steady-only")
+
+    whole = full["data"]["steady"]
+    for member in ("objective", "acquisition", "protected", "conversions", "losses", "excluded", "relaxed", "coverage"):
+        assert found[member] == whole[member], member
+    assert doc["warnings"] == full["warnings"] == [
+        {"code": "objective_tier_tie", "detail": {"path": model_path(folder), "activity": "act.train"}}
+    ]
+
+
+def test_the_quick_looks_dual_is_one_point_of_the_interval(tmp_path, economy):
+    """EX1: D* is π_v = 1 and π_a + π_b + π_c = 1, each at least 0, so each interval is [0, 1], which the full run
+    shows. The quick look shows one point of D*, whichever HiGHS ends at: it meets those conditions, and no interval."""
+    folder = ex1(tmp_path)
+
+    status, doc = economy(folder, *QUICK)
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    point = doc["data"]["quick"]["dual_prices"]
+    assert sorted(point) == ["res.a", "res.b", "res.c", "res.v"]
+    assert all(len(steps) == 1 and isinstance(steps[0], str) for steps in point.values())
+    values = {pool: Fraction(steps[0]) for pool, steps in point.items()}
+    assert values["res.v"] == 1 and min(values.values()) >= 0
+    assert values["res.a"] + values["res.b"] + values["res.c"] == 1
+
+
+def test_a_blocked_quick_look_blocks_as_the_steady_state_does(tmp_path, economy):
+    """The conflict of test_economy.py (V0 200 > V* 150): the same error, needed by `economy:quick`."""
+    folder = shared_fixture(tmp_path, "20", income="50")
+
+    status, doc = economy(folder, *QUICK)
+
+    assert status == CODES["objective_tier_conflict"]["exit"]
+    assert doc["data"]["quick"] == {"status": "blocked"} and "steady" not in doc["data"]
+    assert [(entry["code"], entry["needed_by"]) for entry in doc["errors"]] == [("objective_tier_conflict", ["economy:quick"])]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [("economy", "M", "--state", "S", "--quick"), ("run", "M", "--state", "S", "--quick"), ("check", "M", "--quick")],
+    ids=["economy_without_steady_only", "run", "check"],
+)
+def test_quick_anywhere_else_is_refused_as_a_bad_argument(make_system, app_dir, extra):
+    system = make_system(prefix=app_dir / "venv")
+
+    status = cli.main(list(extra), system)
+
+    doc = json.loads(system.stdout.getvalue())
+    assert status == CODES["usage_invalid"]["exit"]
+    assert [(entry["code"], entry["detail"]) for entry in doc["errors"]] == [
+        ("usage_invalid", {"reason": "argument_unexpected", "argument": "--quick"})
+    ]
+
+
+def test_a_quick_run_neither_fills_nor_reuses_the_steady_state(tmp_path, economy):
+    """Own node, own key, own run id: after a quick run a full run computes the steady state, to what a clean cache
+    gives it; the quick look is reused by itself only, and a steady state in the cache gives it nothing."""
+    folder = ex2(tmp_path / "fixture")
+    _, clean = economy(folder, "--steady-only", paths={"state_root": str(tmp_path / "clean")})
+
+    _, quick = economy(folder, *QUICK, paths={"state_root": str(tmp_path / "shared")})
+    assert economy_work(quick) == {"computed": 1, "reused": 0, "cutoff": 0}
+    assert quick["data"]["run_id"] != clean["data"]["run_id"]
+
+    _, full = economy(folder, "--steady-only")
+    assert economy_work(full) == {"computed": 1, "reused": 0, "cutoff": 0}
+    assert full["data"]["run_id"] == clean["data"]["run_id"]
+    assert full["data"]["steady"] == clean["data"]["steady"]
+    assert "quick" not in full["data"]
+
+    _, again = economy(folder, *QUICK)
+    assert economy_work(again) == {"computed": 0, "reused": 1, "cutoff": 0}
+    assert again["data"]["quick"] == quick["data"]["quick"]
+
+    _, first = economy(folder, *QUICK, paths={"state_root": str(tmp_path / "clean")})  # it holds a steady state only
+    assert economy_work(first) == {"computed": 1, "reused": 0, "cutoff": 0}
+
+
+def test_an_export_and_explain_after_a_quick_run_behave_as_if_it_never_ran(tmp_path, economy, explain, make_system, app_dir):
+    """An export reads no cache and delivers no economy output: a template that names a price is refused, with no steady
+    state as after a quick run, by the same error. `explain` computes the steady state itself, from no cache either."""
+    folder = ex2(tmp_path / "fixture")
+    base = folder / "ours" / "model"
+    placeholder = {"$model": "price:res.a", "scale": 1000, "round": "floor"}
+    write(base / "scoring.template.json", {"schema_version": "example.selection.v1", "weight_milli": placeholder})
+    exports = json.loads((base / "exports.json").read_text(encoding="utf-8"))
+    write(base / "exports.json", {**exports, "scoring": [{"id": "pick", "template": "scoring.template.json"}]})
+
+    def export() -> tuple[int, dict[str, Any]]:
+        system = make_system(prefix=app_dir / "venv")
+        status = cli.main(["export", "scoring", str(base), "--state", str(folder / "state.json")], system)
+        return status, json.loads(system.stdout.getvalue())
+
+    before, explained = export(), explain(folder, "price:res.a")
+
+    status, doc = economy(folder, *QUICK, paths={"state_root": str(tmp_path / "state")})
+    assert (status, doc["data"]["quick"]["status"]) == (0, "quick")
+
+    assert export() == before
+    assert before[0] == CODES["model_file_invalid"]["exit"]
+    assert [(entry["code"], entry["detail"]["literal"]) for entry in before[1]["errors"]] == [
+        ("model_file_invalid", "price:res.a")
+    ]
+    assert explain(folder, "price:res.a") == explained
+    assert explained[0] == 0
+    assert "economy:quick" not in explained[1]["data"]["provenance"]["nodes"]

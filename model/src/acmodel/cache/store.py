@@ -10,6 +10,13 @@
 Only the main process writes. A blob is used only after its bytes hash to its name; otherwise it is a
 `CorruptEntry`. Eviction removes the least recently used traces, then the blobs that no trace names any
 more, inside the cache folder only. Every other failure is `cache_unavailable`.
+
+**The index is written at the ends of a run, never across a computation** (#424 PRICE-2f). SQLite has one writer, and
+Python's sqlite3 opens a transaction at the first INSERT, UPDATE or DELETE that lasts until the commit. So what a run
+keeps as it goes (`put`, `touch`, `drop`) is queued here, and `commit` (or `evict`) writes it in one short transaction:
+another process's run waits for that write at most, not for the whole of this run. What is never committed is lost, as
+a rolled-back transaction was: a run that fails leaves no trace of itself in the index. A connection that finds the
+index locked waits `cache.wait_ms`; past it the statement fails, and that is `cache_unavailable` with `wait_ms`.
 """
 
 from __future__ import annotations
@@ -38,6 +45,7 @@ HASH = re.compile(r"[0-9a-f]{64}")
 SHARD = re.compile(r"[0-9a-f]{2}")
 # What `tempfile.mkstemp` names when a blob is written: `<value hash>.<random>.tmp`.
 TEMP = re.compile(r"[0-9a-f]{64}\.[a-z0-9_]+\.tmp")
+DEFAULT_WAIT_MS = 60_000  # `cache.wait_ms`: how long a connection waits for a lock on the index
 
 _TABLES = (
     "CREATE TABLE IF NOT EXISTS meta (name TEXT PRIMARY KEY, value TEXT NOT NULL)",
@@ -123,22 +131,24 @@ def _write_file(path: Path, data: bytes) -> None:
         raise unavailable("write", path, exc) from exc
 
 
-def _connect(index: Path) -> sqlite3.Connection:
+def _connect(index: Path, wait_ms: int) -> sqlite3.Connection:
     try:
-        return sqlite3.connect(index)
+        return sqlite3.connect(index, timeout=wait_ms / 1000)
     except sqlite3.Error as exc:
         raise unavailable("open", index, exc) from exc
 
 
 class Store:
-    def __init__(self, state_root: Path, connection: sqlite3.Connection, max_bytes: int) -> None:
+    def __init__(self, state_root: Path, connection: sqlite3.Connection, max_bytes: int, wait_ms: int) -> None:
         self.root = state_root / CACHE
         self.index = self.root / INDEX
         self.blobs = self.root / BLOBS
         self.runs = state_root / RUNS
         self.max_bytes = max_bytes
+        self.wait_ms = wait_ms
         self._connection = connection
         self._valid: set[str] = set()  # blobs this process read or wrote whose bytes hash to their name
+        self._queued: list[tuple[str, tuple[Any, ...]]] = []  # what the next `commit` writes, in order
 
     def __enter__(self) -> Store:
         return self
@@ -147,23 +157,36 @@ class Store:
         self.close()
 
     def close(self) -> None:
-        """Close the index; what was not committed is rolled back."""
+        """Close the index; what was not committed is lost: the queue, and a transaction still open is rolled back."""
         try:
             self._connection.close()
         except sqlite3.Error as exc:
-            raise unavailable("write", self.index, exc) from exc
+            raise self._failed("write", exc) from exc
+
+    def _failed(self, stage: str, exc: sqlite3.Error) -> Failure:
+        """`cache_unavailable` of the index; for a lock that outlasted the wait, with the wait it used."""
+        busy = getattr(exc, "sqlite_errorcode", 0) & 0xFF == sqlite3.SQLITE_BUSY
+        return unavailable(stage, self.index, exc, **({"wait_ms": self.wait_ms} if busy else {}))
 
     def sql(self, stage: str, statement: str, parameters: Iterable[Any] = ()) -> list[tuple[Any, ...]]:
         try:
             return self._connection.execute(statement, tuple(parameters)).fetchall()
         except sqlite3.Error as exc:
-            raise unavailable(stage, self.index, exc) from exc
+            raise self._failed(stage, exc) from exc
+
+    def flush(self) -> None:
+        """Write what is queued in this connection's transaction, which takes the index's write lock until the commit
+        (module docstring): call it only at the end of a run's work, right before a commit."""
+        queued, self._queued = self._queued, []
+        for statement, parameters in queued:
+            self.sql("write", statement, parameters)
 
     def commit(self, stage: str = "write") -> None:
+        self.flush()
         try:
             self._connection.commit()
         except sqlite3.Error as exc:
-            raise unavailable(stage, self.index, exc) from exc
+            raise self._failed(stage, exc) from exc
 
     def check_schema(self) -> None:
         rows = self.sql("open", "SELECT value FROM meta WHERE name = 'schema'")
@@ -212,7 +235,8 @@ class Store:
         self, *, key: str, spec: str, kind: str, node: str, value: str, deps: str, blob: bytes, used: int,
         compute_us: int,
     ) -> None:
-        """Keep a trace and its value; a blob already there with the right bytes is kept as it is."""
+        """Keep a trace and its value; a blob already there with the right bytes is kept as it is. The blob is written
+        now, its trace at the next `commit`."""
         if value not in self._valid:
             path = self.blob_path(value)
             try:
@@ -224,19 +248,18 @@ class Store:
             if current is None or digest(current) != value:
                 _write_file(path, blob)
             self._valid.add(value)
-        self.sql(
-            "write",
+        self._queued.append((
             "INSERT OR REPLACE INTO nodes (key, spec, kind, node, value, deps, size, used, compute_us) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (key, spec, kind, node, value, deps, len(blob), used, compute_us),
-        )
+        ))
 
     def touch(self, key: str, used: int) -> None:
-        self.sql("write", "UPDATE nodes SET used = ? WHERE key = ?", (used, key))
+        self._queued.append(("UPDATE nodes SET used = ? WHERE key = ?", (used, key)))
 
     def drop(self, key: str) -> None:
         """Remove one trace whose row does not read; the node is recomputed."""
-        self.sql("write", "DELETE FROM nodes WHERE key = ?", (key,))
+        self._queued.append(("DELETE FROM nodes WHERE key = ?", (key,)))
 
     def run_path(self, run_id: str) -> Path:
         return self.runs / run_id / OUTPUTS
@@ -283,7 +306,7 @@ class Store:
         try:
             self._connection.executemany("DELETE FROM nodes WHERE key = ?", [(key,) for key in keys])
         except sqlite3.Error as exc:
-            raise unavailable("evict", self.index, exc) from exc
+            raise self._failed("evict", exc) from exc
         self.commit("evict")
         for path in files:
             self._valid.discard(path.name)
@@ -295,6 +318,7 @@ class Store:
                 raise unavailable("evict", path, exc) from exc
 
     def evict(self, keep: int) -> dict[str, int]:
+        self.flush()  # the run's own traces count, and the run's commit follows
         plan = self.plan(keep)
         if plan.keys:
             self.remove(plan.keys, [self.blob_path(value) for value in plan.blobs])
@@ -325,14 +349,14 @@ class Store:
         return found, other
 
 
-def open_store(state_root: Path, *, max_bytes: int) -> Store:
+def open_store(state_root: Path, *, max_bytes: int, wait_ms: int = DEFAULT_WAIT_MS) -> Store:
     """The cache under `state_root` for a run; it is created when absent."""
     index = state_root / CACHE / INDEX
     try:
         (state_root / CACHE / BLOBS).mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise unavailable("open", index, exc) from exc
-    store = Store(state_root, _connect(index), max_bytes)
+    store = Store(state_root, _connect(index, wait_ms), max_bytes, wait_ms)
     try:
         [(mode,)] = store.sql("open", "PRAGMA journal_mode=WAL")
         if mode != "wal":
@@ -349,12 +373,12 @@ def open_store(state_root: Path, *, max_bytes: int) -> Store:
     return store
 
 
-def existing_store(state_root: Path, *, max_bytes: int) -> Store | None:
+def existing_store(state_root: Path, *, max_bytes: int, wait_ms: int = DEFAULT_WAIT_MS) -> Store | None:
     """The cache under `state_root` for inspection, or None when there is none. Nothing is created."""
     index = state_root / CACHE / INDEX
     if not index.is_file():
         return None
-    store = Store(state_root, _connect(index), max_bytes)
+    store = Store(state_root, _connect(index, wait_ms), max_bytes, wait_ms)
     try:
         store.check_schema()
     except BaseException:
