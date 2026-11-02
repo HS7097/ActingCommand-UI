@@ -20,6 +20,10 @@
 //!
 //! And what the start report of this owner epoch says of the settings changed while a Runtime
 //! ran: which this start did not restore, and which it kept over a default that changed.
+//!
+//! And, under the Runtime, whether it is started again when it is gone without a formal close,
+//! as the last run of `watchdog status` has it (`tools`): only shown, since registering the
+//! task is an installation's step and no setting of the Runtime.
 
 use acui_source::workbench::{
     ConfigRead, InstanceLive, ReportedName, ReportedSetting, SettingName, SettingSource,
@@ -29,6 +33,8 @@ use acui_source::workbench::{
 
 use super::actions::{self, Actions, EvidenceView};
 use super::model::Link;
+use super::tools::{TaskState, WatchdogRead};
+use crate::install::ToolIssue;
 use crate::strings::{fill, Labels};
 
 /// The settings page's rows of the Runtime's settings now, or why there are none.
@@ -224,6 +230,47 @@ pub fn start_view(
         },
         None if gave_up => StartView::Unreadable,
         None => StartView::Nothing,
+    }
+}
+
+/// Whether the Runtime is started again when it is gone, as the settings page says it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutostartView {
+    /// This run has no state root, so nothing runs `actingctl` (`paint`'s to tell).
+    Unreachable,
+    /// A run is out, or about to be.
+    Reading,
+    /// The Runtime started again since the last answer, which is read again when the page is
+    /// next gone to.
+    LetGo,
+    On,
+    Off,
+    /// The task is there, and turned off or not as it was set up: it may not start anything.
+    Differs,
+    /// It cannot be told: the run failed, or the watchdog could not read the task or the root.
+    Unreadable,
+    /// This run cannot tell where `actingctl` is: the settings file names no Runtime, or
+    /// names one not laid out as an installation is.
+    NoPaths,
+    NotInstalledLayout,
+}
+
+/// What a run of `watchdog status` came to, as the settings page says it.
+pub fn autostart_of(read: &WatchdogRead) -> AutostartView {
+    match read {
+        WatchdogRead::Report(report) => match report.task {
+            TaskState::On => AutostartView::On,
+            TaskState::Missing => AutostartView::Off,
+            TaskState::Differs => AutostartView::Differs,
+            TaskState::Unread => AutostartView::Unreadable,
+        },
+        WatchdogRead::NoTool(ToolIssue::NoActingdExe | ToolIssue::NoActingdConfig) => {
+            AutostartView::NoPaths
+        }
+        WatchdogRead::NoTool(ToolIssue::NotUnderRuntime(_) | ToolIssue::OtherConfig { .. }) => {
+            AutostartView::NotInstalledLayout
+        }
+        WatchdogRead::Failed(_) => AutostartView::Unreadable,
     }
 }
 

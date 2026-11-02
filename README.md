@@ -388,8 +388,8 @@ the last press. Then one of two pages. The main page has two columns: the left o
 with an "Add Account or Device" button that is off (see "Instance configuration"); the right one has the
 settings file's problems, what falls short of the theme and where the technical log is. Settings switches
 to the settings page, where the same button reads "Back to Workbench": first those same lines, then the
-Runtime's settings, then "Runtime" (Request Shutdown) and "Appearance" (the text size, the language and the
-theme). The Runtime's settings come from the running Runtime (read again on going to the page), in two
+Runtime's settings, then "Runtime" (Request Shutdown, "Start the Runtime again automatically") and
+"Appearance" (the text size, the language and the theme). The Runtime's settings come from the running Runtime (read again on going to the page), in two
 groups, "Everyday" and "Advanced": which keys show and in which group is the Runtime's own tiering, and the
 four settings of the performance preset are only on the top bar. Each says its value, where it comes
 from, how it is changed (shown only for now, changed in the configuration file with a Runtime restart,
@@ -403,7 +403,13 @@ ever sent again by itself. After every start of the Runtime its start report is 
 or a rollback reset settings changed online, the line under the top bar and the settings page say which;
 "Got It" hides that line for this start. Online settings kept over a default that changed are said in
 small print on the settings page only. A report that cannot be read is tried at most 3 times for a start,
-then the settings page says so in red. While the Runtime does not answer, no older value is shown. Both pages are always there and only one shows at a
+then the settings page says so in red. While the Runtime does not answer, no older value is shown.
+"Start the Runtime again automatically" is only shown: each time the settings page is opened,
+`actingctl watchdog status` runs once in the background (read-only; `install`, `uninstall` and
+`run-once` are never run), and the page says "On", "Off", "May not work" or "Cannot be read" of the
+watchdog's scheduled task as it reports it, the last two with the reason in the technical log. After
+the Runtime started again it is read again the next time the page is opened. It is not the wizard's
+"Start at boot" option; how the watchdog is set up is at the end of "Setup wizard acsetup". Both pages are always there and only one shows at a
 time, so what the boxes hold stays when you switch away and back.
 The ledger window,
 "Advanced Troubleshooting and Ledger History", opens only when asked: from that button, or at the start

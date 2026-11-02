@@ -1197,8 +1197,9 @@ component SettingLine {
 // the right the settings file's problems, what falls short of the theme and where the
 // technical log is. The settings page has those same lines, then the Runtime's
 // settings as it reads them, with what its start report says of them and a field for the
-// one it changes, then Request Shutdown, then the display settings. No code,
-// pid or wire name shows here; those stay in the ledger window's technical lines.
+// one it changes, then Request Shutdown and whether a Runtime gone is started again, then
+// the display settings. No code, pid or wire name shows here; those stay in the ledger
+// window's technical lines.
 // Closing it ends the program.
 export component WorkbenchWindow inherits Window {
     title: Strings.window-title;
@@ -1318,6 +1319,14 @@ export component WorkbenchWindow inherits Window {
     in property <string> start-note;
     in property <bool> start-note-failed;
     in property <string> start-base-note;
+    // Under the Runtime, laid out as one of its settings: whether a Runtime gone without a
+    // formal close is started again, only shown. Under it why that cannot be told, red, or
+    // why it may not work, amber; or, grey, that it is read again when the page is next
+    // gone to.
+    in property <SettingItem> autostart;
+    in property <string> autostart-problem;
+    in property <bool> autostart-failed;
+    in property <bool> autostart-warning;
 
     in-out property <int> text-size-index <=> text-size-box.current-index;
     in-out property <int> language-index <=> language-box.current-index;
@@ -1688,8 +1697,8 @@ export component WorkbenchWindow inherits Window {
                     }
                 }
 
-                // the settings page: the Runtime's settings, the Runtime, then how this
-                // window looks
+                // the settings page: the Runtime's settings, the Runtime (Request Shutdown,
+                // and whether it is started again when gone), then how this window looks
                 Rectangle {
                     visible: root.page == WorkbenchPage.settings;
                     ScrollView {
@@ -1825,6 +1834,14 @@ export component WorkbenchWindow inherits Window {
                                                 root.request-shutdown();
                                             }
                                         }
+                                    }
+                                    SettingLine {
+                                        setting: root.autostart;
+                                    }
+                                    if root.autostart-problem != "": Notice {
+                                        text: root.autostart-problem;
+                                        failed: root.autostart-failed;
+                                        warning: root.autostart-warning;
                                     }
                                 }
                             }

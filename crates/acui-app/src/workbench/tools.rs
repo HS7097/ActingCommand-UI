@@ -1,33 +1,44 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Runtime's `actingctl`, run as a child on `acui-tools`: no window of its own,
 //! its output captured, killed after `TOOL_TIMEOUT`, and no more of its answer kept
-//! than `MAX_STDOUT`.
+//! than `MAX_STDOUT`. Two things are asked of it, each only when asked, one after the
+//! other.
 //!
-//! The one thing asked of it so far is `packs`, for the task names: the only reader
-//! of a game's `ui.json` a client has. It reads the selected configuration from
-//! disk, so it neither connects to the Runtime nor writes to the ledger, and it runs
-//! only when asked: at the start of the run and when another Runtime comes up. What
-//! it says is of the selected configuration, which a running Runtime may not have
-//! loaded yet; good enough for a name. So a run of it names no owner epoch, and one
-//! that was out across a restart counts until the run the restart asked for lands.
+//! `packs`, for the task names: the only reader of a game's `ui.json` a client has. It
+//! reads the selected configuration from disk, so it neither connects to the Runtime
+//! nor writes to the ledger, and it runs at the start of the run and when another
+//! Runtime comes up. What it says is of the selected configuration, which a running
+//! Runtime may not have loaded yet; good enough for a name. So a run of it names no
+//! owner epoch, and one that was out across a restart counts until the run the restart
+//! asked for lands.
 //!
 //! A task without a name shows its package id: that is ordinary while a game root has
 //! no `ui.json`, and says nothing. An answer that could not be had, or that came with
 //! warnings, gives no names at all: every task shows its package id, one line on the
 //! workbench says so, and the details are in the log.
+//!
+//! `watchdog status`, for the settings page: whether the scheduled task is there that
+//! starts a Runtime gone without a formal close again. It only reads: it writes nothing,
+//! takes no lock but a moment's shared probe of the installer's writer lock, and asks a
+//! Runtime it finds for its health, which records nothing. It runs as the settings page
+//! is gone to, and at no other time; `install`, `uninstall` and `run-once` are never run.
+//! It prints its report whatever it decided and exits by the decision's category, so a
+//! report is taken at any exit, and only a child that gave none failed. The page shows
+//! what the report says of the task; the rest of it goes in the log, so that the window
+//! shows where the log is when the rest says something is wrong.
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, Read};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::read::{panic_message, Poke};
+use super::read::panic_message;
 use crate::install::{ToolIssue, ToolPaths};
 use crate::launcher::spawn_worker;
 use crate::report;
@@ -49,6 +60,14 @@ const MAX_STDOUT: u64 = 8 * 1024 * 1024;
 const MAX_STDERR: u64 = 64 * 1024;
 /// The most of a child's words one line of the log takes.
 const LOG_EXCERPT: usize = 2000;
+/// `watchdog`'s one stdout line, and the two attention outcomes of its `status` that say
+/// the task is not there, or not as `install` writes it.
+const WATCHDOG_REPORT: &str = "actingcommand.watchdog.report.v2";
+const TASK_MISSING: &str = "watchdog_task_missing";
+const TASK_MISMATCH: &str = "watchdog_task_mismatch";
+/// The categories of a decision that says nothing is wrong. `error` and `fatal` exit 1 and 2;
+/// `warning` exits 0, as an installer operation left unfinished does when it is the decision.
+const ROUTINE: [&str; 2] = ["info", "success"];
 
 /// The locales a language tries, in order, before `en` and then the first written.
 /// `ui.json` treats locale names as opaque: these are the spellings expected.
@@ -112,6 +131,105 @@ impl NamesRead {
     }
 }
 
+/// What one run of `watchdog status` came to.
+pub enum WatchdogRead {
+    /// It answered.
+    Report(WatchdogReport),
+    /// This run cannot tell where `actingctl` is.
+    NoTool(ToolIssue),
+    Failed(ToolFailure),
+}
+
+impl WatchdogRead {
+    /// The line the technical log gets about it.
+    pub fn log_line(&self) -> String {
+        match self {
+            Self::Report(report) => {
+                let exit = report.exit.map_or_else(|| "-".to_owned(), |exit| exit.to_string());
+                let mut line = format!(
+                    "watchdog status: {} ({}, exit {exit}), attention [{}], task {}",
+                    report.decision,
+                    report.category,
+                    report.attention.join(", "),
+                    report.task.word(),
+                );
+                if let Some(detail) = &report.detail {
+                    line.push_str(": ");
+                    line.push_str(detail);
+                }
+                line
+            }
+            Self::NoTool(issue) => format!("no watchdog status: {issue}"),
+            Self::Failed(failure) => format!("no watchdog status: {failure}"),
+        }
+    }
+
+    /// Whether something is wrong, so that its line in the log has the window show where the
+    /// log is: the settings page says so of the task, or the report says so of the rest,
+    /// which the page does not show.
+    pub fn is_problem(&self) -> bool {
+        match self {
+            Self::Report(report) => {
+                matches!(report.task, TaskState::Differs | TaskState::Unread) || report.says_wrong()
+            }
+            Self::NoTool(_) | Self::Failed(_) => true,
+        }
+    }
+}
+
+/// What a report says of the task, and the rest of it, for the log.
+pub struct WatchdogReport {
+    pub task: TaskState,
+    /// The decision's code, its category, and the exit it made.
+    decision: String,
+    category: String,
+    exit: Option<i32>,
+    /// Each attention outcome's code.
+    attention: Vec<String>,
+    /// Of a task that differs, what differs; of one the report could not tell, what it
+    /// said of why.
+    detail: Option<String>,
+}
+
+impl WatchdogReport {
+    /// Whether the report says something is wrong besides what it says of the task: a
+    /// decision that exited other than 0 or is of another category than `ROUTINE` (a fatal
+    /// hold, say, which starts no Runtime until something outside fixes it), or an attention
+    /// outcome other than the task's own (a last start that failed, a shutdown's evidence
+    /// that cannot be read, …). With the task registered the page still says it is on.
+    fn says_wrong(&self) -> bool {
+        let of_the_task = |code: &String| [TASK_MISSING, TASK_MISMATCH].contains(&code.as_str());
+        self.exit != Some(0)
+            || !ROUTINE.contains(&self.category.as_str())
+            || !self.attention.iter().all(of_the_task)
+    }
+}
+
+/// The scheduled task that starts the Runtime again, as a report has it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskState {
+    /// Registered, as `install` writes it.
+    On,
+    /// Not registered.
+    Missing,
+    /// Registered, and turned off or not as `install` writes it.
+    Differs,
+    /// The report cannot tell: the task's query failed, or the report ended before the
+    /// task, the watchdog not being able to read the root.
+    Unread,
+}
+
+impl TaskState {
+    fn word(self) -> &'static str {
+        match self {
+            Self::On => "registered",
+            Self::Missing => "missing",
+            Self::Differs => "differs",
+            Self::Unread => "not read",
+        }
+    }
+}
+
 /// Why a child gave no answer to use.
 pub enum ToolFailure {
     /// The command could not be put together.
@@ -154,31 +272,71 @@ impl fmt::Display for ToolFailure {
     }
 }
 
-/// The thread: each poke is one run of `packs`, and pokes queued behind it ask for
-/// the same one. The sender is what keeps it there. Nothing joins it: letting the
-/// sender go while a child runs leaves that child to end on its own.
-pub fn spawn(paths: Result<ToolPaths, ToolIssue>) -> io::Result<Sender<Poke>> {
+/// What the thread is asked to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Job {
+    /// `packs`.
+    Names,
+    /// `watchdog status`, under the number of its ask: an answer to an ask the event loop
+    /// has since let go of is told apart by it.
+    Watchdog(u64),
+}
+
+/// What one round runs: asks queued behind the first ask for the same runs.
+#[derive(Default)]
+struct Round {
+    names: bool,
+    /// The newest ask's number.
+    watchdog: Option<u64>,
+}
+
+impl Round {
+    fn add(&mut self, job: Job) {
+        match job {
+            Job::Names => self.names = true,
+            Job::Watchdog(ask) => self.watchdog = self.watchdog.max(Some(ask)),
+        }
+    }
+}
+
+/// The thread: each round runs what was asked since the last, `packs` first. The sender
+/// is what keeps it there. Nothing joins it: letting the sender go while a child runs
+/// leaves that child to end on its own.
+pub fn spawn(paths: Result<ToolPaths, ToolIssue>) -> io::Result<Sender<Job>> {
     let (sender, commands) = mpsc::channel();
     spawn_worker(THREAD, move || run(&paths, &commands))?;
     Ok(sender)
 }
 
-fn run(paths: &Result<ToolPaths, ToolIssue>, commands: &Receiver<Poke>) {
-    while commands.recv().is_ok() {
+fn run(paths: &Result<ToolPaths, ToolIssue>, commands: &Receiver<Job>) {
+    while let Ok(job) = commands.recv() {
+        let mut round = Round::default();
+        round.add(job);
         loop {
             match commands.try_recv() {
-                Ok(_) => {}
+                Ok(job) => round.add(job),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             }
         }
-        let started = Instant::now();
-        let read = match catch_unwind(AssertUnwindSafe(|| read_names(paths))) {
-            Ok(read) => read,
-            Err(panic) => NamesRead::Failed(ToolFailure::Panicked(panic_message(&*panic))),
-        };
-        let took = started.elapsed();
-        report::post(THREAD, move || super::names_read(read, took));
+        if round.names {
+            let started = Instant::now();
+            let read = match catch_unwind(AssertUnwindSafe(|| read_names(paths))) {
+                Ok(read) => read,
+                Err(panic) => NamesRead::Failed(ToolFailure::Panicked(panic_message(&*panic))),
+            };
+            let took = started.elapsed();
+            report::post(THREAD, move || super::names_read(read, took));
+        }
+        if let Some(ask) = round.watchdog {
+            let started = Instant::now();
+            let read = match catch_unwind(AssertUnwindSafe(|| read_watchdog(paths))) {
+                Ok(read) => read,
+                Err(panic) => WatchdogRead::Failed(ToolFailure::Panicked(panic_message(&*panic))),
+            };
+            let took = started.elapsed();
+            report::post(THREAD, move || super::watchdog_read(ask, read, took));
+        }
     }
 }
 
@@ -209,8 +367,69 @@ fn packs_answer(paths: &ToolPaths) -> Result<Vec<u8>, ToolFailure> {
     run_tool(command, &paths.actingctl)
 }
 
+fn read_watchdog(paths: &Result<ToolPaths, ToolIssue>) -> WatchdogRead {
+    let paths = match paths {
+        Ok(paths) => paths,
+        Err(issue) => return WatchdogRead::NoTool(issue.clone()),
+    };
+    match watchdog_answer(paths) {
+        Ok(report) => WatchdogRead::Report(report),
+        Err(failure) => WatchdogRead::Failed(failure),
+    }
+}
+
+/// `watchdog status --root <root>`, which the command requires. An installed run hands the
+/// child its own selection, as for `packs`, and names its installation's root, the one the
+/// selection is of; otherwise `--root` names the root that was checked (`install`). A report
+/// is taken at any exit; a child that exits with a failure and no report refused.
+fn watchdog_answer(paths: &ToolPaths) -> Result<WatchdogReport, ToolFailure> {
+    let mut command = Command::new(&paths.actingctl);
+    let root = match (&paths.installation, &paths.root) {
+        (Some(snapshot), _) => {
+            snapshot.apply_to(&mut command).map_err(ToolFailure::NotPrepared)?;
+            snapshot.root.clone()
+        }
+        (None, Some(root)) => root.clone(),
+        (None, None) => return Err(ToolFailure::NotPrepared("no root to name".to_owned())),
+    };
+    command.arg("watchdog").arg("status").arg("--root").arg(root);
+    let ran = run_child(command, &paths.actingctl)?;
+    match parse_watchdog(&ran.stdout) {
+        Ok(report) => Ok(WatchdogReport { exit: ran.status.code(), ..report }),
+        Err(_) if !ran.status.success() => Err(ran.refused()),
+        Err(what) => Err(ToolFailure::Malformed(what)),
+    }
+}
+
 /// The child's stdout when it exits 0.
-fn run_tool(mut command: Command, program: &Path) -> Result<Vec<u8>, ToolFailure> {
+fn run_tool(command: Command, program: &Path) -> Result<Vec<u8>, ToolFailure> {
+    let ran = run_child(command, program)?;
+    if !ran.status.success() {
+        return Err(ran.refused());
+    }
+    Ok(ran.stdout)
+}
+
+/// A child run to its end: how it exited, and what it wrote, as much as is kept.
+struct Ran {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl Ran {
+    /// It exited with a failure: `{outcome}` on stdout, a developer line on stderr.
+    fn refused(&self) -> ToolFailure {
+        ToolFailure::Refused {
+            exit: self.status.code(),
+            stdout: excerpt(&self.stdout),
+            stderr: excerpt(&self.stderr),
+        }
+    }
+}
+
+/// The child, run to its end within `TOOL_TIMEOUT`, its stdout within `MAX_STDOUT`.
+fn run_child(mut command: Command, program: &Path) -> Result<Ran, ToolFailure> {
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     {
@@ -248,14 +467,7 @@ fn run_tool(mut command: Command, program: &Path) -> Result<Vec<u8>, ToolFailure
     if stdout.more {
         return Err(ToolFailure::TooMuchOutput);
     }
-    if !status.success() {
-        return Err(ToolFailure::Refused {
-            exit: status.code(),
-            stdout: excerpt(&stdout.kept),
-            stderr: excerpt(&stderr.kept),
-        });
-    }
-    Ok(stdout.kept)
+    Ok(Ran { status, stdout: stdout.kept, stderr: stderr.kept })
 }
 
 /// One pipe's output: what was kept, and whether there was more.
@@ -361,4 +573,53 @@ fn pack_titles(pack: &Value) -> Result<(&str, Vec<(String, String)>), String> {
         titles.push((locale.clone(), text.to_owned()));
     }
     Ok((package, titles))
+}
+
+/// `watchdog status`' one line: the decision as `outcome`, with its category, the
+/// `attention` outcomes, and the `task` section. Its attention says a task that is missing
+/// or differs; a section with an `error` is a query that failed, one with `registered` true
+/// a task as `install` writes it. A report without the section ended before the task, at a
+/// root the watchdog could not read: its decision says why.
+fn parse_watchdog(stdout: &[u8]) -> Result<WatchdogReport, String> {
+    let document: Value =
+        serde_json::from_slice(stdout).map_err(|error| format!("not JSON: {error}"))?;
+    if document.get("schema_version").and_then(Value::as_str) != Some(WATCHDOG_REPORT) {
+        return Err("not a watchdog report".to_owned());
+    }
+    let decision = document
+        .pointer("/outcome/code")
+        .and_then(Value::as_str)
+        .ok_or("the report's `outcome` has no code")?
+        .to_owned();
+    let category = document
+        .pointer("/outcome/category")
+        .and_then(Value::as_str)
+        .ok_or("the report's `outcome` has no category")?
+        .to_owned();
+    let attention = document
+        .get("attention")
+        .and_then(Value::as_array)
+        .ok_or("`attention` is not a list")?
+        .iter()
+        .map(|outcome| {
+            let code = outcome.get("code").and_then(Value::as_str);
+            code.map(str::to_owned).ok_or("an `attention` outcome has no code")
+        })
+        .collect::<Result<Vec<String>, &str>>()?;
+    let named = |code: &str| attention.iter().any(|said| said == code);
+    let (task, detail) = match document.get("task") {
+        None => (TaskState::Unread, Some(excerpt(document["outcome"].to_string().as_bytes()))),
+        Some(_) if named(TASK_MISSING) => (TaskState::Missing, None),
+        Some(section) if named(TASK_MISMATCH) => {
+            (TaskState::Differs, section.get("mismatches").map(Value::to_string))
+        }
+        Some(section) => match (section.get("error"), section.get("registered")) {
+            (Some(error), _) => (TaskState::Unread, Some(excerpt(error.to_string().as_bytes()))),
+            (None, Some(Value::Bool(true))) => (TaskState::On, None),
+            (None, _) => {
+                return Err("`task` is neither registered nor named by an attention".to_owned())
+            }
+        },
+    };
+    Ok(WatchdogReport { task, decision, category, exit: None, attention, detail })
 }

@@ -5,7 +5,8 @@
 //! nothing and moves nothing. And the top bar's writes, its performance preset and the
 //! stepper under it, from their views; which page shows; the settings page's rows of
 //! the Runtime's settings, the same way as the cards, with the field of the evidence days
-//! among them; and what the start report says of the settings.
+//! among them; what the start report says of the settings; and whether the Runtime is started
+//! again when it is gone.
 
 use std::time::Instant;
 
@@ -24,7 +25,7 @@ use super::actions::{
 use super::card::{Band, CardView, Down, Line, ReasonClass};
 use super::model::Page;
 use super::settings::{
-    self, ReportedAccount, ReportedLine, SettingLine, SettingsView, StartView,
+    self, AutostartView, ReportedAccount, ReportedLine, SettingLine, SettingsView, StartView,
 };
 use crate::ledger::paint::models;
 use crate::ledger::resume::Lifter;
@@ -359,6 +360,52 @@ pub fn start(ui: &Ui) {
     window.set_start_note(note.into());
     window.set_start_note_failed(failed);
     window.set_start_base_note(base.into());
+}
+
+/// Under the Runtime on the settings page, as one of its settings: whether the Runtime is
+/// started again when it is gone, in grey that it is only shown, what that does and when;
+/// and under it why it cannot be told, red, or why it may not work, amber, both pointing at
+/// the log; or, in grey, that it is read again when the page is next gone to. With no state
+/// root nothing runs it, and the red bar at the top says why.
+pub fn autostart(ui: &Ui) {
+    let Some(window) = ui.workbench() else {
+        return;
+    };
+    let labels = ui.labels();
+    let view = match &ui.launcher {
+        Ok(_) => ui.model.borrow().autostart_view(),
+        Err(_) => AutostartView::Unreachable,
+    };
+    // The value, and the line under it: its words, red, amber.
+    let (value, problem, failed, warning) = match view {
+        AutostartView::Unreachable => (labels.autostart_unreadable, "", false, false),
+        AutostartView::Reading => (labels.autostart_reading, "", false, false),
+        AutostartView::LetGo => {
+            (labels.autostart_let_go, labels.autostart_let_go_note, false, false)
+        }
+        AutostartView::On => (labels.autostart_on, "", false, false),
+        AutostartView::Off => (labels.autostart_off, "", false, false),
+        AutostartView::Differs => {
+            (labels.autostart_differs, labels.autostart_differs_note, false, true)
+        }
+        AutostartView::Unreadable => {
+            (labels.autostart_unreadable, labels.autostart_unreadable_note, true, false)
+        }
+        AutostartView::NoPaths => {
+            (labels.autostart_unreadable, labels.autostart_no_paths, false, true)
+        }
+        AutostartView::NotInstalledLayout => {
+            (labels.autostart_unreadable, labels.autostart_not_installed, false, true)
+        }
+    };
+    window.set_autostart(SettingItem {
+        name: labels.autostart.into(),
+        value: value.into(),
+        note: [labels.setting_view_only, labels.autostart_note].join(" · ").into(),
+    });
+    window.set_autostart_problem(problem.into());
+    window.set_autostart_failed(failed);
+    window.set_autostart_warning(warning);
 }
 
 /// `template` with the settings `lines` names, each name once; nothing when it names none.

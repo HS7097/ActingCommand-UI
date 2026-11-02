@@ -626,6 +626,26 @@ pub struct Labels {
     pub start_unreadable: &'static str,
     pub name_list: &'static str,
     pub start_account_gone: &'static str,
+    /// Under the Runtime on the settings page, as one of its settings: whether a Runtime gone
+    /// without a formal close is started again, which only the Runtime's watchdog tells. Its
+    /// name, and in grey after `setting_view_only` what it does and when. Its value: being
+    /// read; read again when the page is next gone to, after the Runtime started again; on;
+    /// off; there and turned off or not as set up; cannot be told. And under it why: the
+    /// Runtime started again; the task may not work; the watchdog could not be asked or could
+    /// not tell; the settings file names no Runtime; the Runtime is not laid out as installed.
+    pub autostart: &'static str,
+    pub autostart_note: &'static str,
+    pub autostart_reading: &'static str,
+    pub autostart_let_go: &'static str,
+    pub autostart_on: &'static str,
+    pub autostart_off: &'static str,
+    pub autostart_differs: &'static str,
+    pub autostart_unreadable: &'static str,
+    pub autostart_let_go_note: &'static str,
+    pub autostart_differs_note: &'static str,
+    pub autostart_unreadable_note: &'static str,
+    pub autostart_no_paths: &'static str,
+    pub autostart_not_installed: &'static str,
     /// What an account's card says it does or waits for. Draining: the task, or
     /// `card_draining_any` when none is named. Paused: by whom it is lifted, the
     /// other tool's own reason as it wrote it and where it is resumed: an instance's
@@ -1197,6 +1217,19 @@ pub const ZH: Labels = Labels {
     start_unreadable: "读不到 Runtime 这次启动的报告，不知道有没有设置被重置；详情在技术日志里",
     name_list: "、",
     start_account_gone: "已不在配置里的账号",
+    autostart: "自动拉起 Runtime",
+    autostart_note: "没有正常关闭就不在了的 Runtime（崩溃、关窗、电脑重启）会被重新拉起；登录后才运行，重启或登录后第一次拉起要等约 5 分钟",
+    autostart_reading: "正在读取…",
+    autostart_let_go: "待重新读取",
+    autostart_on: "已开启",
+    autostart_off: "未开启",
+    autostart_differs: "可能不起作用",
+    autostart_unreadable: "读不到",
+    autostart_let_go_note: "Runtime 重新启动过；下次进入设置页时再读这一项",
+    autostart_differs_note: "系统里登记的这项计划任务被停用了，或和设定时不一样，Runtime 不在了时可能不会被拉起；详情在技术日志里",
+    autostart_unreadable_note: "读不到 Runtime 会不会被自动拉起；详情在技术日志里",
+    autostart_no_paths: "设置文件没有写 Runtime 的程序或配置文件在哪，看不到这一项；详情在技术日志里",
+    autostart_not_installed: "这个 Runtime 不是按安装时的布局放的，看不到这一项；详情在技术日志里",
     card_draining: "收尾中：{}",
     card_draining_any: "等当前任务结束",
     card_handing_back: "交还设备中",
@@ -1750,6 +1783,19 @@ pub const EN: Labels = Labels {
     start_unreadable: "The Runtime's report of this start cannot be read, so whether any setting was reset is not known; the technical log has the details",
     name_list: ", ",
     start_account_gone: "an account no longer configured",
+    autostart: "Start the Runtime again automatically",
+    autostart_note: "A Runtime gone without a proper shutdown (a crash, a closed window, a restart of the computer) is started again; this runs only once you are signed in, and the first start after a restart or a sign-in takes about 5 minutes",
+    autostart_reading: "Reading…",
+    autostart_let_go: "To be read again",
+    autostart_on: "On",
+    autostart_off: "Off",
+    autostart_differs: "May not work",
+    autostart_unreadable: "Cannot be read",
+    autostart_let_go_note: "The Runtime has started again; this is read again the next time this page is opened",
+    autostart_differs_note: "The scheduled task for this is turned off, or is not as it was set up, so a Runtime that is gone may not be started again; the technical log has the details",
+    autostart_unreadable_note: "Whether the Runtime is started again automatically cannot be read; the technical log has the details",
+    autostart_no_paths: "The settings file does not say where the Runtime's program or configuration file is, so this cannot be seen; the technical log has the details",
+    autostart_not_installed: "This Runtime is not laid out as an installation is, so this cannot be seen; the technical log has the details",
     card_draining: "Finishing up: {}",
     card_draining_any: "waiting for the current task to end",
     card_handing_back: "Handing the device back",

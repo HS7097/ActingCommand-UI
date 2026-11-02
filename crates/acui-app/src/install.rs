@@ -77,7 +77,8 @@ pub struct ToolPaths {
     pub actingctl: PathBuf,
     /// `--root`, for a run without an installation selection.
     pub root: Option<PathBuf>,
-    /// Handed to the child, which then takes no `--root`: it finds the same selection.
+    /// Handed to the child, which then finds the same selection: `packs` takes no `--root`,
+    /// and `watchdog`, which requires one, takes this installation's root.
     pub installation: Option<Snapshot>,
 }
 

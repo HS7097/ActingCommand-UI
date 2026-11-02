@@ -11,8 +11,9 @@
 //!    candidates and `RuntimeFactSnapshot`, none of which walks the ledger or takes a
 //!    ledger record.
 //!
-//! A third thread runs the Runtime's `actingctl` for the task names (`tools`): that
-//! is no read of the running Runtime, and it runs only when asked.
+//! A third thread runs the Runtime's `actingctl` (`tools`), only when asked: `packs` for the
+//! task names, and `watchdog status` as the settings page is gone to, for whether the Runtime
+//! is started again when it is gone. Neither is a read of the running Runtime's state.
 //!
 //! What a person writes from the top bar is in `actions`: each write on a thread and
 //! a connection of its own, sent once. Once one lands, a read begun before that no
@@ -20,7 +21,8 @@
 //!
 //! Which of the workbench's two pages shows, the accounts or the settings, is the
 //! `Model`'s too (`show_page`). The settings page shows the Runtime's settings as the
-//! fact snapshot has them (`settings`), so going there reads it at once.
+//! fact snapshot has them (`settings`), so going there reads it at once; and whether the
+//! Runtime is started again when it is gone, which going there asks `watchdog status` once.
 //!
 //! The start report is read once for each owner epoch (`ask_start`): what it says of the
 //! settings an update or a rollback reset is said on the notice, until a person says they
@@ -49,7 +51,7 @@ use slint::{ComponentHandle, Timer, TimerMode};
 
 use self::model::{Link, News, Page};
 use self::read::{Lane, Landing, Poke, Read, Tally, START_RETRY, START_TRIES};
-use self::tools::NamesRead;
+use self::tools::{Job, NamesRead, ToolFailure, WatchdogRead};
 use crate::launcher;
 use crate::report;
 use crate::ui::Ui;
@@ -62,9 +64,11 @@ pub struct Reading {
     live: Option<Sender<Poke>>,
     slow: Option<Sender<Poke>>,
     /// The thread that runs `actingctl`, or why there is none.
-    tools: Result<Sender<Poke>, String>,
-    /// A run of it was asked for while minimized: it runs when the window is back.
+    tools: Result<Sender<Job>, String>,
+    /// A run of `packs` was asked for while minimized: it runs when the window is back.
     names_owed: bool,
+    /// So was one of `watchdog status`: it runs then if the settings page still shows.
+    autostart_owed: bool,
     /// Whether the workbench is not minimized; `SHOWN_CHECK` keeps it.
     shown: Arc<AtomicBool>,
     tally: Arc<Tally>,
@@ -95,8 +99,13 @@ impl Reading {
             return Ok(());
         }
         self.names_owed = false;
+        self.send_tools(Job::Names)
+    }
+
+    /// `job` to the thread that runs `actingctl`; the error says why no thread can run it.
+    fn send_tools(&mut self, job: Job) -> Result<(), String> {
         let sender = self.tools.as_ref().map_err(String::clone)?;
-        if sender.send(Poke::All).is_err() {
+        if sender.send(job).is_err() {
             let why = format!("{} ended", tools::THREAD);
             self.tools = Err(why.clone());
             return Err(why);
@@ -135,12 +144,17 @@ pub fn start(ui: &Ui) {
         slow,
         tools,
         names_owed: false,
+        autostart_owed: false,
         shown,
         tally,
         write_gen,
         _shown_check: shown_check,
     });
     ask_names(ui);
+    // `--page settings`: the page was gone to before there was a thread to ask.
+    if ui.model.borrow().page() == Page::Settings {
+        ask_autostart(ui);
+    }
 }
 
 /// After the event loop: the threads are told to end, and the log gets how many
@@ -157,6 +171,7 @@ pub fn stop(ui: &Ui) {
 /// window's first paint shows it, and the threads' first round reads for it. Going to
 /// the settings reads the fact snapshot now, since the page shows what it says, and only
 /// that: the schedule explanation, which waits on the policy lock, is no read of a page.
+/// It also runs `watchdog status` once, the only time that runs.
 pub fn show_page(ui: &Ui, page: Page) {
     if ui.model.borrow().page() == page {
         return;
@@ -165,6 +180,7 @@ pub fn show_page(ui: &Ui, page: Page) {
     paint::page(ui);
     if page == Page::Settings {
         ask(ui, Read::Config.lane(), Poke::Only(Read::Config));
+        ask_autostart(ui);
     }
 }
 
@@ -208,8 +224,38 @@ fn ask(ui: &Ui, lane: Lane, poke: Poke) {
 fn ask_names(ui: &Ui) {
     let asked = ui.reading.borrow_mut().as_mut().map_or(Ok(()), |reading| reading.ask_names());
     if let Err(why) = asked {
-        let failure = tools::ToolFailure::NoThread(why);
+        let failure = ToolFailure::NoThread(why);
         names_landed(ui, NamesRead::Failed(failure), Duration::ZERO);
+    }
+}
+
+/// A run of `actingctl watchdog status`, the settings page being gone to: not while one is
+/// out, whose answer is on its way; not before there is a thread, when `start` asks; and not
+/// while the workbench is minimized, when it is owed until the window is back. With no thread
+/// to run it, that is its answer.
+fn ask_autostart(ui: &Ui) {
+    if !ui.model.borrow().autostart_due() {
+        return;
+    }
+    let sent = {
+        let mut reading = ui.reading.borrow_mut();
+        let Some(reading) = reading.as_mut() else {
+            return;
+        };
+        if !reading.shown.load(Ordering::SeqCst) {
+            reading.autostart_owed = true;
+            return;
+        }
+        reading.autostart_owed = false;
+        let ask = ui.model.borrow_mut().autostart_asked();
+        reading.send_tools(Job::Watchdog(ask)).map_err(|why| (ask, why))
+    };
+    match sent {
+        Ok(()) => paint::autostart(ui),
+        Err((ask, why)) => {
+            let read = WatchdogRead::Failed(ToolFailure::NoThread(why));
+            autostart_landed(ui, ask, read, Duration::ZERO);
+        }
     }
 }
 
@@ -252,6 +298,10 @@ fn check_shown() {
         let owed = ui.reading.borrow().as_ref().is_some_and(|reading| reading.names_owed);
         if owed {
             ask_names(&ui);
+        }
+        let owed = ui.reading.borrow().as_ref().is_some_and(|reading| reading.autostart_owed);
+        if owed && ui.model.borrow().page() == Page::Settings {
+            ask_autostart(&ui);
         }
     }
 }
@@ -321,6 +371,10 @@ fn live_landed(ui: &Ui, read: LiveRead) {
     paint::preset(ui);
     paint::settings(ui);
     paint::start(ui);
+    // A Runtime started again lets go of what the watchdog said.
+    if landed.epoch_changed {
+        paint::autostart(ui);
+    }
     if landed.fault_cleared {
         ui.paint_notices();
     }
@@ -442,6 +496,33 @@ fn names_landed(ui: &Ui, read: NamesRead, took: Duration) {
     ui.model.borrow_mut().apply_names(read);
     ui.paint_names_note();
     paint::cards(ui);
+    ui.paint_log_notes();
+}
+
+/// A run of `actingctl watchdog status` is over, on the event loop.
+fn watchdog_read(ask: u64, read: WatchdogRead, took: Duration) {
+    if let Some(ui) = crate::ui::current() {
+        autostart_landed(&ui, ask, read, took);
+    }
+}
+
+/// Every run goes in the log too, as few as they are: quietly when nothing is wrong, and
+/// otherwise so that the window shows where the log is, whether the settings page points there
+/// or the report says something is wrong that the page does not show (`is_problem`). One asked
+/// before the Runtime started again says nothing on the page.
+fn autostart_landed(ui: &Ui, ask: u64, read: WatchdogRead, took: Duration) {
+    let line = format!("{} ({} ms)", read.log_line(), took.as_millis());
+    let problem = read.is_problem();
+    if !ui.model.borrow_mut().apply_autostart(ask, read) {
+        report::log_quiet(tools::THREAD, &format!("{line}; asked before the Runtime started again"));
+        return;
+    }
+    if problem {
+        report::log(tools::THREAD, &line);
+    } else {
+        report::log_quiet(tools::THREAD, &line);
+    }
+    paint::autostart(ui);
     ui.paint_log_notes();
 }
 

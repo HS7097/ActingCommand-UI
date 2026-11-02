@@ -441,8 +441,9 @@ impl Ui {
     /// The workbench's lines that only the language changes: why this run has
     /// no state root, and the Runtime's configuration file, where an instance
     /// is added by hand for now. And the accounts note, the cards, the Runtime's
-    /// settings and what its start report says of them, which reads change too; and which
-    /// page shows, which only a press changes.
+    /// settings and what its start report says of them, which reads change too, and whether
+    /// the Runtime is started again when it is gone; and which page shows, which only a press
+    /// changes.
     pub fn paint_workbench(&self) {
         let Some(window) = self.workbench() else {
             return;
@@ -470,6 +471,7 @@ impl Ui {
         workbench::paint::preset(self);
         workbench::paint::settings(self);
         workbench::paint::start(self);
+        workbench::paint::autostart(self);
     }
 
     /// Why the workbench's left column has no account to show, if it has none.
