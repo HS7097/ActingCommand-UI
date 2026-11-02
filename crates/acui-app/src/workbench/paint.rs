@@ -6,7 +6,7 @@
 //! stepper under it, from their views; which page shows; the settings page's rows of
 //! the Runtime's settings, the same way as the cards, with the field of the evidence days
 //! among them; what the start report says of the settings; and whether the Runtime is started
-//! again when it is gone.
+//! again when it is gone. And the right column's live view, from its view.
 
 use std::time::Instant;
 
@@ -24,6 +24,7 @@ use super::actions::{
 };
 use super::card::{Band, CardView, Down, Line, ReasonClass};
 use super::model::Page;
+use super::picture::{picture_view, EmptyWhy, PictureView};
 use super::settings::{
     self, AutostartView, ReportedAccount, ReportedLine, SettingLine, SettingsView, StartView,
 };
@@ -66,6 +67,26 @@ pub fn cards(ui: &Ui) {
     let views = ui.model.borrow().cards(Instant::now());
     let cards = views.iter().map(|view| account_card(ui, labels, view)).collect();
     sync(window.get_account_cards(), cards, |rows| window.set_account_cards(rows));
+}
+
+/// The right column's live view: whose picture it is, beside the title, and what it says
+/// while no frame shows.
+pub fn picture(ui: &Ui) {
+    let Some(window) = ui.workbench() else {
+        return;
+    };
+    let labels = ui.labels();
+    let (account, view) = {
+        let model = ui.model.borrow();
+        let account = model.picture_account();
+        (account.map(str::to_owned).unwrap_or_default(), picture_view(account))
+    };
+    let empty = match view {
+        PictureView::NoAccount => labels.picture_no_account,
+        PictureView::Empty { why: EmptyWhy::Looking } => labels.picture_looking,
+    };
+    window.set_picture_account(account.into());
+    window.set_picture_empty(empty.into());
 }
 
 /// The top bar's presets: the one in effect marked, what is in effect in words under them,
@@ -698,6 +719,7 @@ fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
         main: line_text(ui, labels, &view.main).into(),
         main_failed: matches!(view.main, Line::ScheduleUnreadable),
         note: notes.join(" · ").into(),
+        selected: view.selected,
     }
 }
 

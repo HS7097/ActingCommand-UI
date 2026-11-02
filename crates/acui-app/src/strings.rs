@@ -701,6 +701,12 @@ pub struct Labels {
     pub card_why_benefit_nonpositive: &'static str,
     pub card_why_no_progress: &'static str,
     pub card_why_no_task: &'static str,
+    /// The workbench's live view, in its right column: its title, beside which the alias of
+    /// the account picked shows. What it says while no frame shows: the account's latest
+    /// frame is being looked for; there is no account to show the picture of.
+    pub picture_title: &'static str,
+    pub picture_looking: &'static str,
+    pub picture_no_account: &'static str,
     /// The workbench refused to close while an unlock runs.
     pub close_unlock_busy: &'static str,
     /// The Aero frame's caption buttons, by the names a screen reader says.
@@ -733,7 +739,7 @@ pub const ZH: Labels = Labels {
     tongue: Language::Zh,
     window_title: "ActingCommand 监控台",
     ledger_window_title: "高级排障与历史账本",
-    usage: "用法：acui [--state-root <状态根>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--lang <zh|en>]\n不给 --state-root 时取 acui.toml 的 state_root；两处都没有时，「启动」「请求关闭」和「排障与账本」不能用。\n--page 只决定开窗时工作台显示哪一页：main 是账号，settings 是设置。",
+    usage: "用法：acui [--state-root <状态根>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--account <别名>] [--lang <zh|en>]\n不给 --state-root 时取 acui.toml 的 state_root；两处都没有时，「启动」「请求关闭」和「排障与账本」不能用。\n--page 只决定开窗时工作台显示哪一页：main 是账号，settings 是设置。\n--account 只决定开窗时工作台显示哪个号的实时画面；没有这个别名的号时显示第一个号的。",
     data_source: "数据来源：本机账本（只读）",
     data_source_online: "数据来源：运行中的 Runtime（只读）",
     ledger_dir: "账本目录",
@@ -1277,6 +1283,9 @@ pub const ZH: Labels = Labels {
     card_why_benefit_nonpositive: "现在不划算",
     card_why_no_progress: "最近没有进展，先放一放",
     card_why_no_task: "现在没有要做的任务",
+    picture_title: "实时画面",
+    picture_looking: "正在找这个号最近的画面…",
+    picture_no_account: "还没有账号",
     close_unlock_busy: "解锁还在进行：等它结束再关闭监控台",
     caption_minimize: "最小化",
     caption_maximize: "最大化",
@@ -1300,7 +1309,7 @@ pub const EN: Labels = Labels {
     tongue: Language::En,
     window_title: "ActingCommand Console",
     ledger_window_title: "Advanced Troubleshooting and Ledger History",
-    usage: "Usage: acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--lang <zh|en>]\nWithout --state-root the state_root key of acui.toml is used; with neither, Start, Request Shutdown and Troubleshooting and Ledger are off.\n--page only picks the workbench page the window opens on: main for the accounts, settings for the settings.",
+    usage: "Usage: acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--account <alias>] [--lang <zh|en>]\nWithout --state-root the state_root key of acui.toml is used; with neither, Start, Request Shutdown and Troubleshooting and Ledger are off.\n--page only picks the workbench page the window opens on: main for the accounts, settings for the settings.\n--account only picks the account whose live view the workbench shows when it opens; with no account of that alias, the first account's shows.",
     data_source: "Data Source: Local Ledger (Read-Only)",
     data_source_online: "Data Source: Running Runtime (Read-Only)",
     ledger_dir: "Ledger Directory",
@@ -1844,6 +1853,9 @@ pub const EN: Labels = Labels {
     card_why_benefit_nonpositive: "Not worth running right now",
     card_why_no_progress: "No progress lately; set aside for now",
     card_why_no_task: "Nothing to do right now",
+    picture_title: "Live View",
+    picture_looking: "Looking for this account's latest picture…",
+    picture_no_account: "No accounts yet",
     close_unlock_busy: "The unlock is still running: close the console once it has ended",
     caption_minimize: "Minimize",
     caption_maximize: "Maximize",

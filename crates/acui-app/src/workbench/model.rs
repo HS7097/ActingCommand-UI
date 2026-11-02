@@ -18,6 +18,7 @@ use acui_source::{ClientFailure, PauseFact};
 
 use super::actions::{self, Actions, ActionsView, PresetView};
 use super::card::{self, CardView, Down, Schedule};
+use super::picture::Pictures;
 use super::read::{Lane, Read, EXPLAIN_TOO_OLD, START_TRIES};
 use super::settings::{self, AutostartView, SettingsView, StartView};
 use super::tools::{NameTable, NamesRead, WatchdogRead};
@@ -206,6 +207,8 @@ pub struct Model {
     autostart: Autostart,
     /// How many runs of `watchdog status` were asked for.
     autostart_asks: u64,
+    /// Which account's picture the right column shows.
+    pictures: Pictures,
 }
 
 /// What a `Status` read changed, for what the event loop does next.
@@ -219,6 +222,9 @@ pub struct LiveLanded {
     pub names_stale: bool,
     /// The thread's fault is over.
     pub fault_cleared: bool,
+    /// The alias `--account` named, which no account this read lists has: the first
+    /// one's picture shows instead.
+    pub unknown_account: Option<String>,
 }
 
 /// What a schedule explanation read changed, for what the event loop does next.
@@ -267,6 +273,7 @@ impl Model {
             page: Page::Main,
             autostart: Autostart::NotAsked,
             autostart_asks: 0,
+            pictures: Pictures::default(),
         }
     }
 
@@ -440,26 +447,54 @@ impl Model {
 
     /// The accounts of the left column: as `Status` listed them while the Runtime
     /// answers; otherwise every alias seen this run, with nothing an earlier answer
-    /// said of it.
+    /// said of it. The one whose picture shows is marked.
     pub fn cards(&self, now: Instant) -> Vec<CardView> {
+        let picked = self.picture_account();
         match Down::of(&self.link) {
             None => {
                 let schedule = self.schedule(now);
                 let servers = self.config.value.as_ref().map(|read| &read.servers);
+                let global = self.global_pause.as_ref();
                 self.instances
                     .iter()
                     .map(|instance| {
                         let server = servers
                             .and_then(|servers| servers.get(&instance.instance_id))
                             .map(String::as_str);
-                        card::card_view(instance, server, self.global_pause.as_ref(), schedule)
+                        let selected = picked == Some(instance.alias.as_str());
+                        card::card_view(instance, server, global, schedule, selected)
                     })
                     .collect()
             }
-            Some(down) => {
-                self.seen_aliases.iter().map(|alias| card::down_view(alias, down)).collect()
-            }
+            Some(down) => self
+                .seen_aliases
+                .iter()
+                .map(|alias| card::down_view(alias, down, picked == Some(alias.as_str())))
+                .collect(),
         }
+    }
+
+    /// The account whose picture the right column shows, of the cards `cards` lists:
+    /// the one picked while it is among them, else the first; none while there is none.
+    pub fn picture_account(&self) -> Option<&str> {
+        let aliases: Vec<&str> = match Down::of(&self.link) {
+            None => self.instances.iter().map(|instance| instance.alias.as_str()).collect(),
+            Some(_) => self.seen_aliases.iter().map(String::as_str).collect(),
+        };
+        self.pictures.shown(&aliases)
+    }
+
+    /// `--account`, before the window is up: that account's picture shows once a `Status`
+    /// lists it.
+    pub fn name_account(&mut self, alias: String) {
+        self.pictures.name(alias);
+    }
+
+    /// An account picked on its card: whether that changed whose picture shows.
+    pub fn pick_account(&mut self, alias: &str) -> bool {
+        let before = self.picture_account().map(str::to_owned);
+        self.pictures.pick(alias);
+        self.picture_account() != before.as_deref()
     }
 
     /// What the schedule explanation reads leave now. A thread that does not read
@@ -537,6 +572,7 @@ impl Model {
             epoch_changed: false,
             names_stale: false,
             fault_cleared,
+            unknown_account: None,
         }
     }
 
@@ -563,6 +599,9 @@ impl Model {
             }
         }
         self.instances = instances;
+        let aliases: Vec<&str> =
+            self.instances.iter().map(|instance| instance.alias.as_str()).collect();
+        let unknown_account = self.pictures.settle(&aliases);
         self.global_pause = global_pause;
         self.actions.status_read(self.global_pause.as_ref());
         let previous = mem::replace(&mut self.link, Link::Online { pid, epoch });
@@ -573,7 +612,14 @@ impl Model {
         if names_stale {
             self.names = Names::NotAsked;
         }
-        LiveLanded { previous, connected, epoch_changed, names_stale, fault_cleared }
+        LiveLanded {
+            previous,
+            connected,
+            epoch_changed,
+            names_stale,
+            fault_cleared,
+            unknown_account,
+        }
     }
 
     /// One schedule explanation read. With no epoch to hold it to, a read says

@@ -9,6 +9,9 @@
 //! `fault` and `held` are not colours of a card yet: nothing the reads carry says a
 //! self-check failed or an emulator closed unexpectedly, and a player's hold is
 //! UI-3d's. So a card is green, amber or grey.
+//!
+//! Whether a card is the one picked, whose picture the right column shows, is no read's:
+//! the caller says (`picture`).
 
 use std::collections::BTreeMap;
 
@@ -31,6 +34,8 @@ pub struct CardView {
     pub band: Band,
     pub main: Line,
     pub notes: Vec<Line>,
+    /// Its picture is the one the right column shows.
+    pub selected: bool,
 }
 
 /// The colour of a card's band.
@@ -197,7 +202,7 @@ pub enum Line {
 
 /// An account no Runtime answers about now: grey, with nothing an earlier answer
 /// said.
-pub fn down_view(alias: &str, down: Down) -> CardView {
+pub fn down_view(alias: &str, down: Down, selected: bool) -> CardView {
     CardView {
         alias: alias.to_owned(),
         game: None,
@@ -205,6 +210,7 @@ pub fn down_view(alias: &str, down: Down) -> CardView {
         band: Band::Offline,
         main: Line::Down(down),
         notes: Vec::new(),
+        selected,
     }
 }
 
@@ -215,6 +221,7 @@ pub fn card_view(
     server: Option<&str>,
     global: Option<&PauseFact>,
     schedule: Schedule<'_>,
+    selected: bool,
 ) -> CardView {
     let (band, main, notes) = said(instance, global, schedule);
     CardView {
@@ -224,6 +231,7 @@ pub fn card_view(
         band,
         main,
         notes,
+        selected,
     }
 }
 

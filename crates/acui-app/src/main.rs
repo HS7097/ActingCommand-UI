@@ -3,7 +3,8 @@
 //! workbench (`ui`): the Runtime in plain words with the launcher's Start and
 //! Request Shutdown (`launcher`), the latter on its settings page with the
 //! language, the text size and the theme (`skin`); `--page` opens it on that
-//! page. And the way into the advanced troubleshooting and ledger window
+//! page, and `--account` with that account's picture. And the way into the
+//! advanced troubleshooting and ledger window
 //! (`ledger`) — a read-only window over this run's state root, opened through
 //! the formal ledger read face, offline over the files or online through the
 //! typed client of the running Runtime, with the launcher's technical lines and
@@ -65,6 +66,9 @@ struct Args {
     source: Option<SourceMode>,
     /// `--page`: the workbench's page the window opens on; the accounts when not given.
     page: Option<Page>,
+    /// `--account`: the alias of the account whose picture the workbench shows when it
+    /// opens; the first account's when not given, or when no account has it.
+    account: Option<String>,
     help: bool,
 }
 
@@ -117,6 +121,10 @@ fn parse_args() -> Result<Args> {
                     None => bail!("未知的 --page 取值 / unknown --page value: {name}"),
                 };
             }
+            "--account" => match argv.next() {
+                Some(alias) => args.account = Some(alias),
+                None => bail!("--account 缺少别名 / --account needs an alias"),
+            },
             "--help" | "-h" => args.help = true,
             other => bail!("未知参数 / unknown argument: {other}"),
         }
@@ -159,7 +167,8 @@ fn main() -> ExitCode {
 }
 
 /// The workbench comes up whatever this run's paths are, on the page `--page`
-/// names: a state root it cannot find is said on it in red, and only Start,
+/// names and with the picture of the account `--account` names, once a `Status` lists
+/// it: a state root it cannot find is said on it in red, and only Start,
 /// Request Shutdown and the ledger window are off. Then the reading threads,
 /// whose first `Status` read is the first word on the Runtime. A ledger window opens at the
 /// start only for `--tab` or `--source`: the fixed entry passes `--state-root`
@@ -176,6 +185,9 @@ fn run(args: Args, loaded: settings::Loaded, language: Language) -> Result<(), F
     let ui = Ui::new(language, &stored, loaded.file, loaded.issues, launcher);
     if let Some(page) = args.page {
         workbench::show_page(&ui, page);
+    }
+    if let Some(alias) = args.account {
+        ui.model.borrow_mut().name_account(alias);
     }
     let window_failed =
         |error: slint::PlatformError| Fatal::failed(fill(labels.window_failed, &[&error.to_string()]));

@@ -28,6 +28,10 @@
 //! settings an update or a rollback reset is said on the notice, until a person says they
 //! read it, and on the settings page.
 //!
+//! Which account's picture the main page's right column shows is the `Model`'s too
+//! (`picture`): the one picked on its card (`account_picked`) or named by `--account`, else
+//! the first.
+//!
 //! A read that fails is no event to log each time: the log gets a change, as it
 //! happens, so a failure that repeats every few seconds is one line, and its end
 //! another.
@@ -36,6 +40,7 @@ pub mod actions;
 pub mod card;
 pub mod model;
 pub mod paint;
+pub mod picture;
 pub mod read;
 pub mod settings;
 pub mod tools;
@@ -184,6 +189,16 @@ pub fn show_page(ui: &Ui, page: Page) {
     }
 }
 
+/// A card picked, by a click or from the keyboard: its picture is the one the right column
+/// shows from now on.
+pub fn account_picked(ui: &Ui, alias: &str) {
+    let changed = ui.model.borrow_mut().pick_account(alias);
+    if changed {
+        paint::cards(ui);
+        paint::picture(ui);
+    }
+}
+
 /// A `Status` read now: a request of the launcher's is over.
 pub fn poke_live(ui: &Ui) {
     poke(ui, Lane::Live);
@@ -270,6 +285,7 @@ fn lane_failed(ui: &Ui, lane: Lane, error: String) {
     ui.paint_notices();
     ui.paint_accounts_note();
     paint::cards(ui);
+    paint::picture(ui);
     paint::actions(ui);
     paint::preset(ui);
     paint::settings(ui);
@@ -361,12 +377,20 @@ fn live_landed(ui: &Ui, read: LiveRead) {
         ask_names(ui);
         ui.paint_names_note();
     }
+    // What was asked for on the command line and cannot be had is said, not passed over.
+    if let Some(alias) = &landed.unknown_account {
+        report::log(
+            "acui-picture",
+            &format!("--account {alias}: no account has that alias; the first one's picture shows"),
+        );
+    }
     // Before the cards: the explanation's clock starts here, and they go by it.
     if landed.connected || landed.epoch_changed {
         poke(ui, Lane::Slow);
         ask_start(ui);
     }
     paint::cards(ui);
+    paint::picture(ui);
     paint::actions(ui);
     paint::preset(ui);
     paint::settings(ui);
