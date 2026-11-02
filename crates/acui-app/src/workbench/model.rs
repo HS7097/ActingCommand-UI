@@ -14,7 +14,8 @@ use acui_source::{ClientFailure, PauseFact};
 
 use super::card::{self, CardView, Down, Schedule};
 use super::read::{Lane, EXPLAIN_TOO_OLD};
-use crate::strings::{fill, Labels};
+use super::tools::{NameTable, NamesRead};
+use crate::strings::{fill, Labels, Language};
 
 /// The Runtime as the newest `Status` read found it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +77,17 @@ pub enum AccountsNote {
     Unreachable,
 }
 
+/// The task names, as the newest run of `actingctl packs` left them. Why one gave
+/// none is in the log.
+enum Names {
+    NotAsked,
+    /// It answered, without warnings.
+    Ready(NameTable),
+    /// It did not answer, it answered with warnings, or this run cannot tell how to
+    /// run it. No task has a name, which is what the line on the workbench says.
+    Unreadable,
+}
+
 pub struct Model {
     link: Link,
     /// As the newest `Status` listed them; none while `link` is not `Online`:
@@ -89,6 +101,7 @@ pub struct Model {
     /// When the slow thread was last told to read now: no answer can be asked of
     /// it sooner, so a long gap before that says nothing against the explanation.
     explain_asked_at: Option<Instant>,
+    names: Names,
     /// Whether the workbench is not minimized. The slow thread does not read while
     /// it is, so no read is late then.
     shown: bool,
@@ -108,6 +121,8 @@ pub struct LiveLanded {
     pub connected: bool,
     /// `link` names another owner epoch than the last one online, or the first.
     pub epoch_changed: bool,
+    /// The task names were let go with that epoch, and are to be read again.
+    pub names_stale: bool,
     /// The thread's fault is over.
     pub fault_cleared: bool,
 }
@@ -136,6 +151,7 @@ impl Model {
             seen_aliases: Vec::new(),
             explain: Slice::empty(),
             explain_asked_at: None,
+            names: Names::NotAsked,
             shown: true,
             epoch: None,
             live_fault: None,
@@ -222,6 +238,29 @@ impl Model {
         self.told_codes.insert(line.to_owned())
     }
 
+    /// `package`'s task name in `language`, when the names have one.
+    pub fn task_title(&self, package: &str, language: Language) -> Option<&str> {
+        match &self.names {
+            Names::Ready(table) => table.title(package, language),
+            Names::NotAsked | Names::Unreadable => None,
+        }
+    }
+
+    /// Whether names are missing for a reason other than the file not having them.
+    pub fn names_unreadable(&self) -> bool {
+        matches!(self.names, Names::Unreadable)
+    }
+
+    /// One run of `actingctl packs`.
+    pub fn apply_names(&mut self, read: NamesRead) {
+        self.names = match read {
+            NamesRead::Table { table, warnings } if warnings.is_empty() => Names::Ready(table),
+            NamesRead::Table { .. } | NamesRead::NoTool(_) | NamesRead::Failed(_) => {
+                Names::Unreadable
+            }
+        };
+    }
+
     /// One `Status` read: a new owner epoch lets go of everything read of the old
     /// one, but not of the aliases seen.
     pub fn apply_live(&mut self, read: LiveRead) -> LiveLanded {
@@ -234,7 +273,13 @@ impl Model {
         };
         self.leave_online();
         let previous = mem::replace(&mut self.link, down);
-        LiveLanded { previous, connected: false, epoch_changed: false, fault_cleared }
+        LiveLanded {
+            previous,
+            connected: false,
+            epoch_changed: false,
+            names_stale: false,
+            fault_cleared,
+        }
     }
 
     fn online(&mut self, snapshot: LiveSnapshot, fault_cleared: bool) -> LiveLanded {
@@ -253,7 +298,13 @@ impl Model {
         self.global_pause = global_pause;
         let previous = mem::replace(&mut self.link, Link::Online { pid, epoch });
         let connected = !matches!(previous, Link::Online { .. });
-        LiveLanded { previous, connected, epoch_changed, fault_cleared }
+        // The run's first answer comes as its first run of `packs` is out or just in:
+        // nothing has changed since then.
+        let names_stale = epoch_changed && previous != Link::Unknown;
+        if names_stale {
+            self.names = Names::NotAsked;
+        }
+        LiveLanded { previous, connected, epoch_changed, names_stale, fault_cleared }
     }
 
     /// One schedule explanation read. With no epoch to hold it to, a read says

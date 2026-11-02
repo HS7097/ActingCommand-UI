@@ -67,8 +67,11 @@ fn line_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
     match line {
         Line::Down(down) => down_text(labels, *down).to_owned(),
         Line::Draining { package } => {
-            let task = package.as_deref().unwrap_or(labels.card_draining_any);
-            fill(labels.card_draining, &[task])
+            let task = match package {
+                Some(package) => package_name(ui, labels, package),
+                None => labels.card_draining_any.to_owned(),
+            };
+            fill(labels.card_draining, &[&task])
         }
         Line::HandingBack => labels.card_handing_back.to_owned(),
         Line::Paused { everyone, by, reason } => {
@@ -83,8 +86,10 @@ fn line_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
                 said
             }
         }
-        Line::Running { package } => fill(labels.card_running, &[task_name(labels, package)]),
-        Line::Finishing { package } => fill(labels.card_finishing, &[task_name(labels, package)]),
+        Line::Running { package } => fill(labels.card_running, &[&task_name(ui, labels, package)]),
+        Line::Finishing { package } => {
+            fill(labels.card_finishing, &[&task_name(ui, labels, package)])
+        }
         Line::HostRun => labels.card_host_run.to_owned(),
         Line::Reconnecting => labels.card_reconnecting.to_owned(),
         Line::SelfChecking => labels.card_self_checking.to_owned(),
@@ -120,8 +125,16 @@ fn down_text(labels: &Labels, down: Down) -> &'static str {
     }
 }
 
-fn task_name<'a>(labels: &Labels, package: &'a Option<String>) -> &'a str {
-    package.as_deref().unwrap_or(labels.card_task_unnamed)
+fn task_name(ui: &Ui, labels: &Labels, package: &Option<String>) -> String {
+    match package {
+        Some(package) => package_name(ui, labels, package),
+        None => labels.card_task_unnamed.to_owned(),
+    }
+}
+
+/// A package's task name in the language shown, or its id when there is none.
+fn package_name(ui: &Ui, labels: &Labels, package: &str) -> String {
+    ui.model.borrow().task_title(package, labels.tongue).unwrap_or(package).to_owned()
 }
 
 /// A reason in plain words. One the card has no sentence for still says something:

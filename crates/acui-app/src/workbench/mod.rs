@@ -10,6 +10,9 @@
 //!    `monitor_status`: the reads are `Status` and `ScheduleExplanation` without
 //!    candidates, neither of which walks the ledger or takes a ledger record.
 //!
+//! A third thread runs the Runtime's `actingctl` for the task names (`tools`): that
+//! is no read of the running Runtime, and it runs only when asked.
+//!
 //! A read that fails is no event to log each time: the log gets a change, as it
 //! happens, so a failure that repeats every few seconds is one line, and its end
 //! another.
@@ -18,6 +21,7 @@ pub mod card;
 pub mod model;
 pub mod paint;
 pub mod read;
+pub mod tools;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -30,6 +34,7 @@ use slint::{ComponentHandle, Timer, TimerMode};
 
 use self::model::{ExplainNews, Link};
 use self::read::{Lane, Landing, Poke, Tally};
+use self::tools::NamesRead;
 use crate::launcher;
 use crate::report;
 use crate::ui::Ui;
@@ -41,6 +46,10 @@ const SHOWN_CHECK: Duration = Duration::from_secs(1);
 pub struct Reading {
     live: Option<Sender<Poke>>,
     slow: Option<Sender<Poke>>,
+    /// The thread that runs `actingctl`, or why there is none.
+    tools: Result<Sender<Poke>, String>,
+    /// A run of it was asked for while minimized: it runs when the window is back.
+    names_owed: bool,
     /// Whether the workbench is not minimized; `SHOWN_CHECK` keeps it.
     shown: Arc<AtomicBool>,
     tally: Arc<Tally>,
@@ -59,6 +68,23 @@ impl Reading {
             *slot = None;
         }
         gone
+    }
+
+    /// A run of `actingctl packs`, now or once the window is back; the error says
+    /// why no thread can do it.
+    fn ask_names(&mut self) -> Result<(), String> {
+        if !self.shown.load(Ordering::SeqCst) {
+            self.names_owed = true;
+            return Ok(());
+        }
+        self.names_owed = false;
+        let sender = self.tools.as_ref().map_err(String::clone)?;
+        if sender.send(Poke).is_err() {
+            let why = format!("{} ended", tools::THREAD);
+            self.tools = Err(why.clone());
+            return Err(why);
+        }
+        Ok(())
     }
 }
 
@@ -81,9 +107,19 @@ pub fn start(ui: &Ui) {
         }
     };
     let (live, slow) = (spawned(Lane::Live), spawned(Lane::Slow));
+    let tools = tools::spawn(launcher.tool_paths()).map_err(|error| error.to_string());
     let shown_check = Timer::default();
     shown_check.start(TimerMode::Repeated, SHOWN_CHECK, check_shown);
-    *ui.reading.borrow_mut() = Some(Reading { live, slow, shown, tally, _shown_check: shown_check });
+    *ui.reading.borrow_mut() = Some(Reading {
+        live,
+        slow,
+        tools,
+        names_owed: false,
+        shown,
+        tally,
+        _shown_check: shown_check,
+    });
+    ask_names(ui);
 }
 
 /// After the event loop: the threads are told to end, and the log gets how many
@@ -108,6 +144,15 @@ fn poke(ui: &Ui, lane: Lane) {
     let gone = ui.reading.borrow_mut().as_mut().is_some_and(|reading| reading.poke(lane));
     if gone {
         lane_failed(ui, lane, format!("{} ended", lane.name()));
+    }
+}
+
+/// A run of `actingctl packs`; with no thread to do it, that is its answer.
+fn ask_names(ui: &Ui) {
+    let asked = ui.reading.borrow_mut().as_mut().map_or(Ok(()), |reading| reading.ask_names());
+    if let Err(why) = asked {
+        let failure = tools::ToolFailure::NoThread(why);
+        names_landed(ui, NamesRead::Failed(failure), Duration::ZERO);
     }
 }
 
@@ -143,6 +188,10 @@ fn check_shown() {
     if came_back {
         poke(&ui, Lane::Live);
         poke(&ui, Lane::Slow);
+        let owed = ui.reading.borrow().as_ref().is_some_and(|reading| reading.names_owed);
+        if owed {
+            ask_names(&ui);
+        }
     }
 }
 
@@ -178,6 +227,10 @@ fn live_landed(ui: &Ui, read: LiveRead) {
     if note_changed {
         ui.paint_accounts_note();
     }
+    if landed.names_stale {
+        ask_names(ui);
+        ui.paint_names_note();
+    }
     // Before the cards: the explanation's clock starts here, and they go by it.
     if landed.connected || landed.epoch_changed {
         poke(ui, Lane::Slow);
@@ -210,6 +263,22 @@ fn panicked(ui: &Ui, lane: Lane, message: String) {
         ui.paint_notices();
         paint::cards(ui);
     }
+}
+
+/// A run of `actingctl packs` is over, on the event loop.
+fn names_read(read: NamesRead, took: Duration) {
+    if let Some(ui) = crate::ui::current() {
+        names_landed(&ui, read, took);
+    }
+}
+
+/// Every run goes in the log: they are few, and the limit on them is checked there.
+fn names_landed(ui: &Ui, read: NamesRead, took: Duration) {
+    report::log(tools::THREAD, &format!("{} ({} ms)", read.log_line(), took.as_millis()));
+    ui.model.borrow_mut().apply_names(read);
+    ui.paint_names_note();
+    paint::cards(ui);
+    ui.paint_log_notes();
 }
 
 /// What the launcher takes from a `Status` read.

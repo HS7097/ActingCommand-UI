@@ -1118,6 +1118,8 @@ export component WorkbenchWindow inherits Window {
     // accounts.
     in property <string> accounts-note;
     in property <[AccountCard]> account-cards;
+    // Under the accounts, when the tasks' names could not be read.
+    in property <string> names-note;
     // The Runtime's configuration file an instance is added to by hand,
     // selectable so it can be copied; or why there is none.
     in property <string> config-path;
@@ -1268,6 +1270,11 @@ export component WorkbenchWindow inherits Window {
                                     text: root.config-note;
                                 }
                             }
+                        }
+                        if root.names-note != "": Notice {
+                            text: root.names-note;
+                            warning: true;
+                            font-size: Scale.grey-font;
                         }
                         Rectangle { }
                     }

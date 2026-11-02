@@ -56,7 +56,7 @@ use acui_source::{
 };
 use serde_json::Value;
 
-use crate::install::InstallPaths;
+use crate::install::{self, InstallPaths, ToolIssue, ToolPaths};
 use crate::phrase::{phrase, verbatim, Line, Phrase};
 use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
@@ -130,6 +130,15 @@ impl Launcher {
             unlocking: Arc::new(AtomicBool::new(false)),
             shutting_down: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// How to run the Runtime's `actingctl` for this run.
+    pub fn tool_paths(&self) -> Result<ToolPaths, ToolIssue> {
+        install::tool_paths(
+            self.installation.as_ref(),
+            self.actingd_config.as_deref(),
+            self.actingd_exe.as_deref(),
+        )
     }
 
     /// Whether unlock-owner runs now.

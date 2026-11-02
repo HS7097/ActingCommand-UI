@@ -425,6 +425,7 @@ impl Ui {
         window.set_config_path(path.into());
         window.set_config_note(note.into());
         self.paint_accounts_note();
+        self.paint_names_note();
         workbench::paint::cards(self);
     }
 
@@ -441,6 +442,16 @@ impl Ui {
             AccountsNote::Unreachable => labels.accounts_unreachable,
         };
         window.set_accounts_note(note.into());
+    }
+
+    /// Under the accounts: the tasks' names could not be read.
+    pub fn paint_names_note(&self) {
+        let Some(window) = self.workbench() else {
+            return;
+        };
+        let unreadable = self.model.borrow().names_unreadable();
+        let note = if unreadable { self.labels().names_unreadable } else { "" };
+        window.set_names_note(note.into());
     }
 }
 

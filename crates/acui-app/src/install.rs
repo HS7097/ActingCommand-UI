@@ -4,14 +4,21 @@
 //! which `--state-root` may only repeat; otherwise `--state-root`, else
 //! acui.toml. Neither is a silent default: with both missing the usage is the
 //! answer. One function, so that what replaces this derivation replaces it whole.
+//! So too for where the Runtime's `actingctl` is, and how it is pointed at this
+//! run's configuration (`tool_paths`).
 
-use std::path::PathBuf;
+use std::fmt;
+use std::path::{Path, PathBuf};
 
 use acui_installation::Snapshot;
 
 use crate::settings::Settings;
 use crate::strings::{fill, Labels};
 use crate::Args;
+
+const ACTINGCTL: &str = "actingctl.exe";
+/// The configuration of a root without an installation selection, as `actingctl` finds it.
+const ROOT_CONFIG: &str = "actingd.config.json";
 
 /// What the launcher and the read face start from.
 pub struct InstallPaths {
@@ -49,6 +56,77 @@ impl InstallIssue {
             Self::NoStateRoot => labels.usage.to_owned(),
         }
     }
+}
+
+/// How to run the Runtime's `actingctl` for this run.
+pub struct ToolPaths {
+    pub actingctl: PathBuf,
+    /// `--root`, for a run without an installation selection.
+    pub root: Option<PathBuf>,
+    /// Handed to the child, which then takes no `--root`: it finds the same selection.
+    pub installation: Option<Snapshot>,
+}
+
+/// Why this run cannot tell how to run `actingctl`; for the log.
+#[derive(Clone)]
+pub enum ToolIssue {
+    NoActingdExe,
+    /// The actingd executable is not at `<absolute root>\runtime\<file>`.
+    NotUnderRuntime(PathBuf),
+    NoActingdConfig,
+    /// The actingd configuration is not the one `--root` would read.
+    OtherConfig { config: PathBuf, expected: PathBuf },
+}
+
+impl fmt::Display for ToolIssue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoActingdExe => write!(formatter, "no actingd executable is set"),
+            Self::NotUnderRuntime(exe) => {
+                write!(formatter, "{} is not in a runtime folder of a root", exe.display())
+            }
+            Self::NoActingdConfig => write!(formatter, "no actingd configuration is set"),
+            Self::OtherConfig { config, expected } => {
+                write!(formatter, "{} is not {}", config.display(), expected.display())
+            }
+        }
+    }
+}
+
+/// An installed run uses its own slot's `actingctl`, with its own selection. Any
+/// other run goes by where its actingd is: `<root>\runtime\`, `actingctl` beside it,
+/// and only when the configuration set is the one `--root <root>` reads, so that the
+/// answer is about the configuration this run starts the Runtime with.
+pub fn tool_paths(
+    installation: Option<&Snapshot>,
+    actingd_config: Option<&Path>,
+    actingd_exe: Option<&Path>,
+) -> Result<ToolPaths, ToolIssue> {
+    if let Some(snapshot) = installation {
+        return Ok(ToolPaths {
+            actingctl: snapshot.slot_root().join("runtime").join(ACTINGCTL),
+            root: None,
+            installation: Some(snapshot.clone()),
+        });
+    }
+    let exe = actingd_exe.ok_or(ToolIssue::NoActingdExe)?;
+    let runtime = exe
+        .parent()
+        .filter(|folder| folder.file_name().is_some_and(|name| name.eq_ignore_ascii_case("runtime")));
+    let root = runtime
+        .and_then(Path::parent)
+        .filter(|root| root.is_absolute())
+        .ok_or_else(|| ToolIssue::NotUnderRuntime(exe.to_path_buf()))?;
+    let config = actingd_config.ok_or(ToolIssue::NoActingdConfig)?;
+    let expected = root.join(ROOT_CONFIG);
+    if config != expected.as_path() {
+        return Err(ToolIssue::OtherConfig { config: config.to_path_buf(), expected });
+    }
+    Ok(ToolPaths {
+        actingctl: exe.with_file_name(ACTINGCTL),
+        root: Some(root.to_path_buf()),
+        installation: None,
+    })
 }
 
 pub fn resolve(args: &Args, settings: &Settings) -> Result<InstallPaths, InstallIssue> {

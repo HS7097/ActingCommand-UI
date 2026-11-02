@@ -448,6 +448,8 @@ pub struct Labels {
     pub accounts_none: &'static str,
     pub accounts_not_running: &'static str,
     pub accounts_unreachable: &'static str,
+    /// Under the accounts: the tasks' names could not be read, so their ids show.
+    pub names_unreadable: &'static str,
     /// What an account's card says it does or waits for. Draining: the task, or
     /// `card_draining_any` when none is named. Paused: by whom it is lifted, the
     /// other tool's own reason as it wrote it, and `card_all_accounts` round the
@@ -885,6 +887,7 @@ pub const ZH: Labels = Labels {
     accounts_none: "这个配置里还没有账号。怎么添加见下方说明",
     accounts_not_running: "Runtime 没有运行，看不到账号",
     accounts_unreachable: "现在读不到 Runtime，看不到账号",
+    names_unreadable: "任务名称读不到，先显示编号",
     card_draining: "收尾中：{}",
     card_draining_any: "等当前任务结束",
     card_handing_back: "交还设备中",
@@ -1304,6 +1307,7 @@ pub const EN: Labels = Labels {
     accounts_none: "This configuration has no accounts yet. See below for how to add one",
     accounts_not_running: "The Runtime is not running, so no accounts can be seen",
     accounts_unreachable: "The Runtime cannot be read right now, so no accounts can be seen",
+    names_unreadable: "Task names cannot be read; showing their IDs for now",
     card_draining: "Finishing up: {}",
     card_draining_any: "waiting for the current task to end",
     card_handing_back: "Handing the device back",

@@ -261,7 +261,7 @@ fn read_on(read: Read, connection: &mut ReadLane) -> Landing {
 }
 
 /// A panic's message when it gave one as text.
-fn panic_message(panic: &(dyn Any + Send)) -> String {
+pub fn panic_message(panic: &(dyn Any + Send)) -> String {
     panic
         .downcast_ref::<&str>()
         .map(|text| (*text).to_owned())
