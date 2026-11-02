@@ -243,8 +243,10 @@ pub enum AutostartView {
     /// The Runtime started again since the last answer, which is read again when the page is
     /// next gone to.
     LetGo,
-    On,
-    Off,
+    /// The task as the report has it; `warned` when the report says something else is wrong
+    /// (a fatal hold, a start that failed, …), which the page only points at in the log.
+    On { warned: bool },
+    Off { warned: bool },
     /// The task is there, and turned off or not as it was set up: it may not start anything.
     Differs,
     /// It cannot be told: the run failed, or the watchdog could not read the task or the root.
@@ -259,8 +261,8 @@ pub enum AutostartView {
 pub fn autostart_of(read: &WatchdogRead) -> AutostartView {
     match read {
         WatchdogRead::Report(report) => match report.task {
-            TaskState::On => AutostartView::On,
-            TaskState::Missing => AutostartView::Off,
+            TaskState::On => AutostartView::On { warned: report.says_wrong() },
+            TaskState::Missing => AutostartView::Off { warned: report.says_wrong() },
             TaskState::Differs => AutostartView::Differs,
             TaskState::Unread => AutostartView::Unreadable,
         },

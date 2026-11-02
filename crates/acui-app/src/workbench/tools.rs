@@ -196,8 +196,8 @@ impl WatchdogReport {
     /// decision that exited other than 0 or is of another category than `ROUTINE` (a fatal
     /// hold, say, which starts no Runtime until something outside fixes it), or an attention
     /// outcome other than the task's own (a last start that failed, a shutdown's evidence
-    /// that cannot be read, …). With the task registered the page still says it is on.
-    fn says_wrong(&self) -> bool {
+    /// that cannot be read, …). The page says the task as it is, with an amber line under it.
+    pub fn says_wrong(&self) -> bool {
         let of_the_task = |code: &String| [TASK_MISSING, TASK_MISMATCH].contains(&code.as_str());
         self.exit != Some(0)
             || !ROUTINE.contains(&self.category.as_str())

@@ -383,8 +383,14 @@ pub fn autostart(ui: &Ui) {
         AutostartView::LetGo => {
             (labels.autostart_let_go, labels.autostart_let_go_note, false, false)
         }
-        AutostartView::On => (labels.autostart_on, "", false, false),
-        AutostartView::Off => (labels.autostart_off, "", false, false),
+        AutostartView::On { warned: false } => (labels.autostart_on, "", false, false),
+        AutostartView::On { warned: true } => {
+            (labels.autostart_on, labels.autostart_reported_note, false, true)
+        }
+        AutostartView::Off { warned: false } => (labels.autostart_off, "", false, false),
+        AutostartView::Off { warned: true } => {
+            (labels.autostart_off, labels.autostart_reported_note, false, true)
+        }
         AutostartView::Differs => {
             (labels.autostart_differs, labels.autostart_differs_note, false, true)
         }
