@@ -26,6 +26,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::Spelling;
 use acui_rows::{code, EventActor, EventSource};
 use actingcommand_contract::{
     InstanceActivity, InstanceActivityKind, OwnerEpoch, RuntimeControlPlaneStatus,
