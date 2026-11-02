@@ -7,8 +7,9 @@
 //!    again.
 //! 3. `acui-app` uses no Runtime crate: wire types end in `acui-source`.
 //! 4. Nothing here calls `Session::open`, `OnlineSource::pin`, `source.query` or
-//!    `monitor_status`: the reads are `Status` and `ScheduleExplanation` without
-//!    candidates, neither of which walks the ledger or takes a ledger record.
+//!    `monitor_status`: the reads are `Status`, `ScheduleExplanation` without
+//!    candidates and `RuntimeFactSnapshot`, none of which walks the ledger or takes a
+//!    ledger record.
 //!
 //! A third thread runs the Runtime's `actingctl` for the task names (`tools`): that
 //! is no read of the running Runtime, and it runs only when asked.
@@ -33,12 +34,12 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acui_source::workbench::{ExplainRead, LiveRead};
+use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead};
 use acui_source::{ClientFailure, RuntimeFacts};
 use slint::{ComponentHandle, Timer, TimerMode};
 
-use self::model::{ExplainNews, Link};
-use self::read::{Lane, Landing, Poke, Tally};
+use self::model::{Link, News};
+use self::read::{Lane, Landing, Poke, Read, Tally};
 use self::tools::NamesRead;
 use crate::launcher;
 use crate::report;
@@ -151,7 +152,10 @@ pub fn poke_live(ui: &Ui) {
 /// A write's answer landed. A read begun before this no longer counts, whatever it
 /// found: it may say what the write changed. Counted here and not at the press, since
 /// a read begun after the press and before the Runtime acted would otherwise count
-/// and lay the old state over the new. The reads poked now are all of after it.
+/// and lay the old state over the new. The reads poked now are all of after it, and
+/// they are the only reads asked for: `landed` lets an old one go without asking again,
+/// which would read the whole lane a second time (a write counts before it pokes, so
+/// nothing these pokes start can be old on account of it).
 pub fn wrote(ui: &Ui) {
     if let Some(reading) = ui.reading.borrow().as_ref() {
         reading.write_gen.fetch_add(1, Ordering::SeqCst);
@@ -191,6 +195,7 @@ fn lane_failed(ui: &Ui, lane: Lane, error: String) {
     ui.paint_accounts_note();
     paint::cards(ui);
     paint::actions(ui);
+    paint::preset(ui);
     launcher::paint(ui);
 }
 
@@ -231,21 +236,14 @@ fn landed(landing: Landing, generation: u64) {
         .borrow()
         .as_ref()
         .map_or(0, |reading| reading.write_gen.load(Ordering::SeqCst));
-    if generation < writes {
-        let lane = match &landing {
-            Landing::Live(_) => Some(Lane::Live),
-            Landing::Explain(_) => Some(Lane::Slow),
-            Landing::Panicked { .. } => None,
-        };
-        if let Some(lane) = lane {
-            poke(&ui, lane);
-            return;
-        }
+    if generation < writes && !matches!(landing, Landing::Panicked { .. }) {
+        return;
     }
     match landing {
         Landing::Live(read) => live_landed(&ui, read),
         Landing::Explain(read) => explain_landed(&ui, read),
-        Landing::Panicked { lane, message } => panicked(&ui, lane, message),
+        Landing::Config(read) => config_landed(&ui, read),
+        Landing::Panicked { read, message } => panicked(&ui, read, message),
     }
     // A thread may have just made the log, with a long read.
     ui.paint_log_notes();
@@ -279,6 +277,7 @@ fn live_landed(ui: &Ui, read: LiveRead) {
     }
     paint::cards(ui);
     paint::actions(ui);
+    paint::preset(ui);
     if landed.fault_cleared {
         ui.paint_notices();
     }
@@ -287,11 +286,11 @@ fn live_landed(ui: &Ui, read: LiveRead) {
 fn explain_landed(ui: &Ui, read: Result<ExplainRead, ClientFailure>) {
     let landed = ui.model.borrow_mut().apply_explain(read, Instant::now());
     match &landed.news {
-        ExplainNews::Nothing => {}
-        ExplainNews::Failed(failure) => {
+        News::Nothing => {}
+        News::Failed(failure) => {
             report::log(Lane::Slow.name(), &format!("explanation failed: {}", failure_line(failure)));
         }
-        ExplainNews::Recovered => report::log(Lane::Slow.name(), "explanation read again"),
+        News::Recovered => report::log(Lane::Slow.name(), "explanation read again"),
     }
     if landed.fault_cleared {
         ui.paint_notices();
@@ -299,12 +298,41 @@ fn explain_landed(ui: &Ui, read: Result<ExplainRead, ClientFailure>) {
     paint::cards(ui);
 }
 
-fn panicked(ui: &Ui, lane: Lane, message: String) {
+/// The servers are on the cards, the version says whether the finishing count holds,
+/// and the preset is on the top bar. A read that answers is no event for the log, only
+/// a change of how it went.
+fn config_landed(ui: &Ui, read: Result<ConfigRead, ClientFailure>) {
+    let landed = ui.model.borrow_mut().apply_config(read, Instant::now());
+    let thread = Lane::Slow.name();
+    match &landed.news {
+        News::Nothing => {}
+        News::Failed(failure) => {
+            report::log(thread, &format!("fact snapshot failed: {}", failure_line(failure)));
+        }
+        News::Recovered => report::log_quiet(thread, "fact snapshot read again"),
+    }
+    match &landed.preset {
+        News::Nothing => {}
+        News::Failed(problem) => {
+            report::log(thread, &format!("performance presets unreadable: {}", problem.line()));
+        }
+        News::Recovered => report::log_quiet(thread, "performance presets read again"),
+    }
+    if landed.fault_cleared {
+        ui.paint_notices();
+    }
+    paint::cards(ui);
+    paint::actions(ui);
+    paint::preset(ui);
+}
+
+fn panicked(ui: &Ui, read: Read, message: String) {
     let line = format!("read panicked: {message}");
-    if ui.model.borrow_mut().read_panicked(lane, message) {
-        report::log(lane.name(), &line);
+    if ui.model.borrow_mut().read_panicked(read, message) {
+        report::log(read.lane().name(), &line);
         ui.paint_notices();
         paint::cards(ui);
+        paint::preset(ui);
     }
 }
 

@@ -140,7 +140,7 @@ Runtime 在运行，就给出「重新打开」并写明可以改为在线读取
 rev = "6b430f419fc7fe1a28510a9ba100c05da5e58391"
 ```
 
-五个 crate（contract / ledger / ledger-forensics / runtime-client / execution-kernel）共用这一个 rev。
+六个 crate（contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
 内嵌 typed client 读取在线 lifecycle-failure 页中的可选 `resource_dispositions` 分组；离线 ledger
 reader 支持完整 failure 与 `ResourceQuiescence` 记录中的该分组。未含该字段的历史记录按原语义读取，
 严格校验和显式读取错误保持。
@@ -864,4 +864,4 @@ Runtime 的看门狗是一个计划任务，所以 acsetup 不替人设置。要
 
 `GPL-3.0-only`。仓库附 LICENSE 全文；工作区 `license` 字段与每个 `.rs` / `.slint` 文件的 SPDX 头与之一致。界面由
 [Slint](https://slint.dev) 渲染，按其 GPLv3 许可选项使用。依赖的 Runtime crate（contract / ledger /
-ledger-forensics / runtime-client / execution-kernel）为 `AGPL-3.0-only`，两者按 GPLv3 第 13 条合并。
+ledger-forensics / runtime-client / runtime-config / execution-kernel）为 `AGPL-3.0-only`，两者按 GPLv3 第 13 条合并。

@@ -11,12 +11,14 @@ use std::collections::BTreeSet;
 use std::mem;
 use std::time::Instant;
 
-use acui_source::workbench::{ExplainRead, InstanceLive, LiveRead, LiveSnapshot};
+use acui_source::workbench::{
+    ConfigRead, ExplainRead, InstanceLive, LiveRead, LiveSnapshot, PresetProblem,
+};
 use acui_source::{ClientFailure, PauseFact};
 
-use super::actions::{self, Actions, ActionsView};
+use super::actions::{self, Actions, ActionsView, PresetView};
 use super::card::{self, CardView, Down, Schedule};
-use super::read::{Lane, EXPLAIN_TOO_OLD};
+use super::read::{Lane, Read, EXPLAIN_TOO_OLD};
 use super::tools::{NameTable, NamesRead};
 use crate::strings::{fill, Labels, Language};
 
@@ -47,6 +49,38 @@ pub struct Slice<T> {
 impl<T> Slice<T> {
     fn empty() -> Self {
         Self { value: None, read_at: None, error: None }
+    }
+
+    /// One read, held to the owner epoch online: one of another epoch says nothing. A
+    /// failure names no epoch: one of a read that was out across a restart is taken for
+    /// now, and the read that the restart poked, queued behind it, settles it next. That
+    /// read does not itself fail for finding its connection over, since the lane asks
+    /// again on a new one.
+    fn take(
+        &mut self,
+        read: Result<T, ClientFailure>,
+        epoch_of: impl Fn(&T) -> &str,
+        online: &str,
+        now: Instant,
+    ) -> News<ClientFailure> {
+        match read {
+            Ok(value) if epoch_of(&value) != online => News::Nothing,
+            Ok(value) => {
+                let recovered = self.error.take().is_some();
+                self.value = Some(value);
+                self.read_at = Some(now);
+                if recovered {
+                    News::Recovered
+                } else {
+                    News::Nothing
+                }
+            }
+            Err(failure) if self.error.as_ref() == Some(&failure) => News::Nothing,
+            Err(failure) => {
+                self.error = Some(failure.clone());
+                News::Failed(failure)
+            }
+        }
     }
 }
 
@@ -104,6 +138,7 @@ pub struct Model {
     /// When the slow thread was last told to read now: no answer can be asked of
     /// it sooner, so a long gap before that says nothing against the explanation.
     explain_asked_at: Option<Instant>,
+    config: Slice<ConfigRead>,
     names: Names,
     /// Whether the workbench is not minimized. The slow thread does not read while
     /// it is, so no read is late then.
@@ -112,7 +147,11 @@ pub struct Model {
     /// has not restarted, so what was read of it stands.
     epoch: Option<String>,
     live_fault: Option<Fault>,
+    /// The schedule explanation read's, and the thread's.
     slow_fault: Option<Fault>,
+    /// The fact snapshot read's. It shares a thread with the explanation and fails on
+    /// its own: neither read's success says the other's panic is over.
+    config_fault: Option<Fault>,
     /// The lines the log got about codes the cards have no words for: once each.
     told_codes: BTreeSet<String>,
     actions: Actions,
@@ -133,16 +172,25 @@ pub struct LiveLanded {
 
 /// What a schedule explanation read changed, for what the event loop does next.
 pub struct ExplainLanded {
-    pub news: ExplainNews,
-    /// The thread's fault is over.
+    pub news: News<ClientFailure>,
+    /// The read's fault is over.
     pub fault_cleared: bool,
 }
 
-/// What the log gets about a schedule explanation read: only a change, so a
-/// failure that repeats is one line, and its end another.
-pub enum ExplainNews {
+/// What a fact snapshot read changed, for what the event loop does next.
+pub struct ConfigLanded {
+    pub news: News<ClientFailure>,
+    /// Of the performance presets in what it read.
+    pub preset: News<PresetProblem>,
+    /// The read's fault is over.
+    pub fault_cleared: bool,
+}
+
+/// What the log gets about a slow read: only a change, so a failure that repeats is
+/// one line, and its end another.
+pub enum News<F> {
     Nothing,
-    Failed(ClientFailure),
+    Failed(F),
     Recovered,
 }
 
@@ -155,11 +203,13 @@ impl Model {
             seen_aliases: Vec::new(),
             explain: Slice::empty(),
             explain_asked_at: None,
+            config: Slice::empty(),
             names: Names::NotAsked,
             shown: true,
             epoch: None,
             live_fault: None,
             slow_fault: None,
+            config_fault: None,
             told_codes: BTreeSet::new(),
             actions: Actions::default(),
         }
@@ -171,7 +221,22 @@ impl Model {
 
     /// The top bar's writes as they stand.
     pub fn actions_view(&self) -> ActionsView {
-        actions::view(&self.link, self.global_pause.as_ref(), &self.instances, &self.actions)
+        actions::view(
+            &self.link,
+            self.global_pause.as_ref(),
+            &self.instances,
+            &self.actions,
+            self.config.value.as_ref(),
+        )
+    }
+
+    /// The top bar's performance preset. A thread that does not read counts as a read
+    /// that failed, as it does for the schedule (`schedule`).
+    pub fn preset_view(&self) -> PresetView {
+        let failed = self.config.error.is_some()
+            || self.config_fault.is_some()
+            || matches!(self.slow_fault, Some(Fault::NoThread(_)));
+        actions::preset_view(&self.link, self.config.value.as_ref(), failed)
     }
 
     pub fn actions_mut(&mut self) -> &mut Actions {
@@ -179,7 +244,7 @@ impl Model {
     }
 
     pub fn faults(&self) -> impl Iterator<Item = &Fault> {
-        self.live_fault.iter().chain(self.slow_fault.iter())
+        self.live_fault.iter().chain(self.slow_fault.iter()).chain(self.config_fault.iter())
     }
 
     pub fn accounts_note(&self) -> AccountsNote {
@@ -205,10 +270,14 @@ impl Model {
         match Down::of(&self.link) {
             None => {
                 let schedule = self.schedule(now);
+                let servers = self.config.value.as_ref().map(|read| &read.servers);
                 self.instances
                     .iter()
                     .map(|instance| {
-                        card::card_view(instance, self.global_pause.as_ref(), schedule)
+                        let server = servers
+                            .and_then(|servers| servers.get(&instance.instance_id))
+                            .map(String::as_str);
+                        card::card_view(instance, server, self.global_pause.as_ref(), schedule)
                     })
                     .collect()
             }
@@ -301,6 +370,7 @@ impl Model {
         let epoch_changed = self.epoch.as_deref() != Some(epoch.as_str());
         if epoch_changed {
             self.explain = Slice::empty();
+            self.config = Slice::empty();
             self.epoch = Some(epoch.clone());
             self.actions.new_epoch();
         }
@@ -324,11 +394,7 @@ impl Model {
     }
 
     /// One schedule explanation read. With no epoch to hold it to, a read says
-    /// nothing, and a failure neither: `Status` already said why. A failure names
-    /// no epoch: one of a read that was out across a restart is taken for now, and
-    /// the read that the restart poked, queued behind it, settles it next. That read
-    /// does not itself fail for finding its connection over, since the lane asks
-    /// again on a new one (`ReadLane::read_explain`).
+    /// nothing, and a failure neither: `Status` already said why.
     pub fn apply_explain(
         &mut self,
         read: Result<ExplainRead, ClientFailure>,
@@ -336,33 +402,41 @@ impl Model {
     ) -> ExplainLanded {
         let fault_cleared = self.slow_fault.take().is_some();
         let Link::Online { epoch, .. } = &self.link else {
-            return ExplainLanded { news: ExplainNews::Nothing, fault_cleared };
+            return ExplainLanded { news: News::Nothing, fault_cleared };
         };
-        let news = match read {
-            Ok(explain) if explain.epoch != *epoch => ExplainNews::Nothing,
-            Ok(explain) => {
-                let recovered = self.explain.error.take().is_some();
-                self.explain.value = Some(explain);
-                self.explain.read_at = Some(now);
-                if recovered {
-                    ExplainNews::Recovered
-                } else {
-                    ExplainNews::Nothing
-                }
-            }
-            Err(failure) if self.explain.error.as_ref() == Some(&failure) => ExplainNews::Nothing,
-            Err(failure) => {
-                self.explain.error = Some(failure.clone());
-                ExplainNews::Failed(failure)
-            }
-        };
+        let news = self.explain.take(read, |read| read.epoch.as_str(), epoch, now);
         ExplainLanded { news, fault_cleared }
     }
 
-    /// `lane`'s read panicked; whether that is news for the log and the window.
-    pub fn read_panicked(&mut self, lane: Lane, message: String) -> bool {
+    /// One fact snapshot read, on the same terms.
+    pub fn apply_config(
+        &mut self,
+        read: Result<ConfigRead, ClientFailure>,
+        now: Instant,
+    ) -> ConfigLanded {
+        let fault_cleared = self.config_fault.take().is_some();
+        let Link::Online { epoch, .. } = &self.link else {
+            return ConfigLanded { news: News::Nothing, preset: News::Nothing, fault_cleared };
+        };
+        let before = preset_problem(self.config.value.as_ref());
+        let news = self.config.take(read, |read| read.epoch.as_str(), epoch, now);
+        let after = preset_problem(self.config.value.as_ref());
+        let preset = match after {
+            problem if problem == before => News::Nothing,
+            Some(problem) => News::Failed(problem),
+            None => News::Recovered,
+        };
+        ConfigLanded { news, preset, fault_cleared }
+    }
+
+    /// `read` panicked; whether that is news for the log and the window.
+    pub fn read_panicked(&mut self, read: Read, message: String) -> bool {
         let fault = Some(Fault::Panicked(message));
-        let slot = self.fault_slot(lane);
+        let slot = match read {
+            Read::Status => &mut self.live_fault,
+            Read::Explain => &mut self.slow_fault,
+            Read::Config => &mut self.config_fault,
+        };
         let news = *slot != fault;
         *slot = fault;
         news
@@ -390,6 +464,11 @@ impl Model {
         self.instances.clear();
         self.global_pause = None;
         self.explain.error = None;
+        self.config.error = None;
         self.actions.status_lost();
     }
+}
+
+fn preset_problem(read: Option<&ConfigRead>) -> Option<PresetProblem> {
+    read.and_then(|read| read.preset.as_ref().err().cloned())
 }

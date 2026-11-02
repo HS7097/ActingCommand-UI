@@ -25,6 +25,9 @@ pub struct CardView {
     /// Absent when the host runs without policy inputs, and for an account no
     /// Runtime answers about.
     pub game: Option<String>,
+    /// The server its last admitted package declared, as it wrote it, when the newest
+    /// fact snapshot has one.
+    pub server: Option<String>,
     pub band: Band,
     pub main: Line,
     pub notes: Vec<Line>,
@@ -198,21 +201,30 @@ pub fn down_view(alias: &str, down: Down) -> CardView {
     CardView {
         alias: alias.to_owned(),
         game: None,
+        server: None,
         band: Band::Offline,
         main: Line::Down(down),
         notes: Vec::new(),
     }
 }
 
-/// An account of the newest `Status`, that read's global pause, and what the
-/// schedule explanation reads leave.
+/// An account of the newest `Status`, its server in the newest fact snapshot, that
+/// read's global pause, and what the schedule explanation reads leave.
 pub fn card_view(
     instance: &InstanceLive,
+    server: Option<&str>,
     global: Option<&PauseFact>,
     schedule: Schedule<'_>,
 ) -> CardView {
     let (band, main, notes) = said(instance, global, schedule);
-    CardView { alias: instance.alias.clone(), game: instance.game_id.clone(), band, main, notes }
+    CardView {
+        alias: instance.alias.clone(),
+        game: instance.game_id.clone(),
+        server: server.map(str::to_owned),
+        band,
+        main,
+        notes,
+    }
 }
 
 /// The band, the main line and the small print: the first case that applies.

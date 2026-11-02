@@ -2,23 +2,30 @@
 //! The account cards, from their views and the table of the language shown, into
 //! the list the workbench already shows: a row changes only when its words do, and
 //! rows come and go only when the accounts do, so a read every few seconds costs
-//! nothing and moves nothing. And the top bar's writes, from their view.
+//! nothing and moves nothing. And the top bar's writes and its performance preset,
+//! from their views.
 
 use std::time::Instant;
 
 use acui_rows::format_minute;
 use acui_rows::outcome::explain;
-use acui_source::workbench::CONSOLE_PAUSE_ALL;
-use slint::{Model as _, VecModel};
+use acui_source::workbench::{
+    PresetMember, PresetSetting, SettingSource, SettingValue, CONSOLE_PAUSE_ALL, MODE_FULL,
+    MODE_OBSERVE, MODE_PACE,
+};
+use slint::{Model as _, ModelRc, VecModel};
 
-use super::actions::{ActionsView, ResumeEntry, Said, Write};
+use super::actions::{
+    ActionsView, PresetState, PresetView, ResumeEntry, Said, Write, PRESET_ADAPTIVE, PRESET_LIGHT,
+    PRESET_STANDARD,
+};
 use super::card::{Band, CardView, Down, Line, ReasonClass};
 use crate::ledger::paint::models;
 use crate::ledger::resume::Lifter;
 use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
-use crate::{AccountCard, StatusTone, WorkbenchWindow};
+use crate::{AccountCard, PresetChoice, StatusTone};
 
 /// What the newest reads say of every account.
 pub fn cards(ui: &Ui) {
@@ -28,7 +35,92 @@ pub fn cards(ui: &Ui) {
     let labels = ui.labels();
     let views = ui.model.borrow().cards(Instant::now());
     let cards = views.iter().map(|view| account_card(ui, labels, view)).collect();
-    sync(&window, cards);
+    sync(window.get_account_cards(), cards, |rows| window.set_account_cards(rows));
+}
+
+/// The top bar's second row: the presets, the one in effect marked, and what is in
+/// effect in words; nothing while there is no Runtime to say it of.
+pub fn preset(ui: &Ui) {
+    let Some(window) = ui.workbench() else {
+        return;
+    };
+    let labels = ui.labels();
+    let view = ui.model.borrow().preset_view();
+    let (choices, note, failed) = match &view {
+        PresetView::NotRead => (Vec::new(), String::new(), false),
+        PresetView::Unreadable => (Vec::new(), labels.preset_unreadable.to_owned(), true),
+        PresetView::Read { options, state } => {
+            let choices: Vec<PresetChoice> = options
+                .iter()
+                .map(|option| PresetChoice {
+                    label: preset_label(labels, &option.name).into(),
+                    current: option.current,
+                })
+                .collect();
+            (choices, preset_note(labels, state), false)
+        }
+    };
+    window.set_preset_shown(!matches!(view, PresetView::NotRead));
+    sync(window.get_presets(), choices, |rows| window.set_presets(rows));
+    window.set_preset_note(note.into());
+    window.set_preset_failed(failed);
+}
+
+/// A preset's name in words; one the words here do not know, by its own name.
+fn preset_label<'a>(labels: &Labels, name: &'a str) -> &'a str {
+    match name {
+        PRESET_STANDARD => labels.preset_standard,
+        PRESET_ADAPTIVE => labels.preset_adaptive,
+        PRESET_LIGHT => labels.preset_light,
+        other => other,
+    }
+}
+
+fn preset_note(labels: &Labels, state: &PresetState) -> String {
+    match state {
+        PresetState::Named(name) => match name.as_str() {
+            PRESET_STANDARD => labels.preset_standard_note.to_owned(),
+            PRESET_ADAPTIVE => labels.preset_adaptive_note.to_owned(),
+            PRESET_LIGHT => labels.preset_light_note.to_owned(),
+            _ => String::new(),
+        },
+        PresetState::CustomFileFull => labels.preset_custom_file_full.to_owned(),
+        PresetState::CustomFileConcurrency => labels.preset_custom_file_concurrency.to_owned(),
+        PresetState::Custom(members) => {
+            let members: Vec<String> =
+                members.iter().map(|member| member_text(labels, member)).collect();
+            fill(labels.preset_custom, &[&members.join(" · ")])
+        }
+    }
+}
+
+/// One setting of a preset: what it is, its value in effect and where that comes from.
+fn member_text(labels: &Labels, member: &PresetMember) -> String {
+    let name = match member.setting {
+        PresetSetting::Mode => labels.setting_mode,
+        PresetSetting::MaxConcurrentRuns => labels.setting_concurrent_runs,
+        PresetSetting::HeavyDispatchLimit => labels.setting_heavy_runs,
+        PresetSetting::ParallelEnabled => labels.setting_parallel,
+    };
+    let value = match &member.value {
+        None => labels.setting_unset.to_owned(),
+        Some(SettingValue::Flag(true)) => labels.setting_on.to_owned(),
+        Some(SettingValue::Flag(false)) => labels.setting_off.to_owned(),
+        Some(SettingValue::Number(number)) => number.to_string(),
+        Some(SettingValue::Word(word)) => match word.as_str() {
+            MODE_OBSERVE => labels.setting_mode_observe.to_owned(),
+            MODE_PACE => labels.setting_mode_pace.to_owned(),
+            MODE_FULL => labels.setting_mode_full.to_owned(),
+            other => other.to_owned(),
+        },
+    };
+    let source = match member.source {
+        SettingSource::File => labels.setting_source_file,
+        SettingSource::Default => labels.setting_source_default,
+        SettingSource::Discovered => labels.setting_source_discovered,
+        SettingSource::Online => labels.setting_source_online,
+    };
+    fill(labels.preset_member, &[name, &value, source])
 }
 
 /// What the top bar's two write buttons offer, and what is said about them: the global
@@ -57,13 +149,18 @@ pub fn actions(ui: &Ui) {
     window.set_action_failed(failed);
 }
 
-/// While a global pause holds: what it means, and who lifts it when not this window.
-/// `Status` has no member for how many runs still finish, so no number here.
+/// While a global pause holds: what it means, how many tasks still finish when that
+/// can be told (`ActionsView::finishing`), and who lifts it when not this window.
 fn pause_note(labels: &Labels, view: &ActionsView) -> String {
     let Some(by) = view.holding else {
         return String::new();
     };
-    let mut note = vec![labels.pause_note, labels.pause_note_no_update];
+    let meaning = match view.finishing {
+        None => labels.pause_note.to_owned(),
+        Some(0) => labels.pause_note_all_finished.to_owned(),
+        Some(finishing) => fill(labels.pause_note_finishing, &[&finishing.to_string()]),
+    };
+    let mut note = vec![meaning.as_str(), labels.pause_note_no_update];
     match by {
         Lifter::Alice => note.push(labels.resume_barred_alice),
         Lifter::Installer => note.push(labels.resume_barred_installer),
@@ -112,29 +209,36 @@ fn said_text(labels: &Labels, view: &ActionsView) -> (String, bool) {
     }
 }
 
-fn sync(window: &WorkbenchWindow, cards: Vec<AccountCard>) {
-    let current = window.get_account_cards();
-    let Some(rows) = current.as_any().downcast_ref::<VecModel<AccountCard>>() else {
-        window.set_account_cards(models(cards));
+/// Puts `items` into the list the window already shows, a row at a time; only the
+/// list it starts with is replaced.
+fn sync<T: Clone + PartialEq + 'static>(
+    current: ModelRc<T>,
+    items: Vec<T>,
+    replace: impl FnOnce(ModelRc<T>),
+) {
+    let Some(rows) = current.as_any().downcast_ref::<VecModel<T>>() else {
+        replace(models(items));
         return;
     };
-    while rows.row_count() > cards.len() {
+    while rows.row_count() > items.len() {
         rows.remove(rows.row_count() - 1);
     }
-    for (index, card) in cards.into_iter().enumerate() {
+    for (index, item) in items.into_iter().enumerate() {
         if index == rows.row_count() {
-            rows.push(card);
-        } else if rows.row_data(index).as_ref() != Some(&card) {
-            rows.set_row_data(index, card);
+            rows.push(item);
+        } else if rows.row_data(index).as_ref() != Some(&item) {
+            rows.set_row_data(index, item);
         }
     }
 }
 
 fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
     let notes: Vec<String> = view.notes.iter().map(|line| line_text(ui, labels, line)).collect();
+    let game_line: Vec<&str> =
+        [view.game.as_deref(), view.server.as_deref()].into_iter().flatten().collect();
     AccountCard {
         alias: view.alias.as_str().into(),
-        game_line: view.game.as_deref().unwrap_or_default().into(),
+        game_line: game_line.join(" · ").into(),
         tone: match view.band {
             Band::Ok => StatusTone::Ok,
             Band::Attention => StatusTone::Attention,

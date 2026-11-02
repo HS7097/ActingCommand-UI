@@ -192,7 +192,7 @@ revision 5):
 rev = "6b430f419fc7fe1a28510a9ba100c05da5e58391"
 ```
 
-The five crates (contract / ledger / ledger-forensics / runtime-client / execution-kernel) share this one rev.
+The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
 The embedded typed client reads optional `resource_dispositions` groups in online lifecycle-failure
 pages; the offline ledger reader accepts them in full failure and `ResourceQuiescence` records.
 Historical records without the field keep their meaning. Strict validation and explicit read errors
@@ -1242,5 +1242,5 @@ to the Runtime source at the pinned rev.
 `GPL-3.0-only`. The repository includes the full LICENSE text; the workspace `license` field and the SPDX
 header of every `.rs` / `.slint` file agree with it. The interface is rendered by
 [Slint](https://slint.dev), used under its GPLv3 licensing option. The Runtime crates depended on
-(contract / ledger / ledger-forensics / runtime-client / execution-kernel) are `AGPL-3.0-only`, and the
+(contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) are `AGPL-3.0-only`, and the
 two combine under GPLv3 section 13.

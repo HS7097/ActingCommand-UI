@@ -201,6 +201,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-runtime-config"
+version = "0.1.0"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=6b430f419fc7fe1a28510a9ba100c05da5e58391#6b430f419fc7fe1a28510a9ba100c05da5e58391"
+dependencies = [
+ "actingcommand-contract",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "actingcommand-runtime-database"
 version = "0.1.0"
 source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=6b430f419fc7fe1a28510a9ba100c05da5e58391#6b430f419fc7fe1a28510a9ba100c05da5e58391"
@@ -287,6 +298,7 @@ dependencies = [
  "actingcommand-ledger",
  "actingcommand-ledger-forensics",
  "actingcommand-runtime-client",
+ "actingcommand-runtime-config",
  "acui-rows",
  "anyhow",
 ]

@@ -465,6 +465,7 @@ impl Ui {
         self.paint_names_note();
         workbench::paint::cards(self);
         workbench::paint::actions(self);
+        workbench::paint::preset(self);
     }
 
     /// Why the workbench's left column has no account to show, if it has none.
@@ -662,6 +663,7 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_start(labels.start.into());
     global.set_pause_all(labels.pause_all.into());
     global.set_resume_all(labels.resume_all.into());
+    global.set_performance_preset(labels.performance_preset.into());
     global.set_request_shutdown(labels.request_shutdown.into());
     global.set_open_ledger(labels.open_ledger.into());
     global.set_add_instance(labels.add_instance.into());

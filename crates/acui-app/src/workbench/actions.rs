@@ -15,14 +15,17 @@
 //! (`lifter`): the rest stay off and say who lifts them. A pause another tool set
 //! takes two presses, and the first only asks; one pressed here takes one.
 //!
-//! `view` is a pure function of what the reads and the presses left, without words;
-//! `paint` makes the words.
+//! `view` and `preset_view` are pure functions of what the reads and the presses left,
+//! without words; `paint` makes the words. The performance preset is only shown so far.
 
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 
-use acui_source::workbench::{pause_global, InstanceLive, PauseOutcome, CONSOLE_PAUSE_ALL};
+use acui_source::workbench::{
+    pause_global, ActivityKind, ConfigRead, InstanceLive, PauseOutcome, PresetMember,
+    CONSOLE_PAUSE_ALL,
+};
 use acui_source::{resume_paused, ClientFailure, PauseFact, PauseTarget, ResumeOutcome};
 
 use super::model::Link;
@@ -32,6 +35,14 @@ use crate::launcher::spawn_worker;
 use crate::ledger::resume::{lifter, Lifter};
 use crate::report;
 use crate::ui::{self, Ui};
+
+/// The presets of the Runtime's defaults file, which have words here, in the order
+/// they are shown: from least to most held back, not the table's order by name. Any
+/// other preset a configuration file names follows, by its own name.
+pub const PRESET_STANDARD: &str = "standard";
+pub const PRESET_ADAPTIVE: &str = "adaptive";
+pub const PRESET_LIGHT: &str = "light";
+const PRESET_ORDER: [&str; 3] = [PRESET_STANDARD, PRESET_ADAPTIVE, PRESET_LIGHT];
 
 /// A pause already holds: it keeps its reason, and this press set nothing.
 const ALREADY_PAUSED: &str = "scheduling_already_paused";
@@ -193,6 +204,12 @@ pub struct ActionsView {
     /// whether Alice lifts any of those.
     pub still_paused: usize,
     pub alice_holds: bool,
+    /// How many accounts still finish a scheduled run. `None` when that cannot be told:
+    /// no answer of `Status` carries a version to judge it by, but the activity that is
+    /// counted and the settings' version both came in 0.12.36 (R-0b, R-4), so a fact
+    /// snapshot of this Runtime with a version says its `Status` names activities, and
+    /// a count of none means none.
+    pub finishing: Option<usize>,
 }
 
 pub fn view(
@@ -200,6 +217,7 @@ pub fn view(
     global: Option<&PauseFact>,
     instances: &[InstanceLive],
     actions: &Actions,
+    config: Option<&ConfigRead>,
 ) -> ActionsView {
     let open = matches!(link, Link::Online { .. }) && !actions.out.contains_key(&GLOBAL_SCHEDULING);
     let resume = match global {
@@ -225,7 +243,85 @@ pub fn view(
         said: actions.said.clone(),
         still_paused: paused().count(),
         alice_holds: paused().any(|pause| lifter(&pause.reason) == Lifter::Alice),
+        finishing: config.is_some_and(|read| read.version.is_some()).then(|| {
+            instances
+                .iter()
+                .filter(|instance| {
+                    instance
+                        .activity
+                        .as_ref()
+                        .is_some_and(|activity| activity.kind == ActivityKind::PolicyRun)
+                })
+                .count()
+        }),
     }
+}
+
+/// The top bar's performance preset now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PresetView {
+    /// No Runtime answers, or no fact snapshot of this one has come yet.
+    NotRead,
+    /// The read failed, or what it read tells no preset. There is no second table here
+    /// to show instead.
+    Unreadable,
+    Read { options: Vec<PresetOption>, state: PresetState },
+}
+
+/// One preset of the table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresetOption {
+    pub name: String,
+    pub current: bool,
+}
+
+/// What is in effect, the first that applies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PresetState {
+    Named(String),
+    /// No preset, and the configuration file holds the learning mode.
+    CustomFileFull,
+    /// No preset, and the configuration file names how many tasks run at once.
+    CustomFileConcurrency,
+    /// No preset otherwise: every setting as it is in effect.
+    Custom(Vec<PresetMember>),
+}
+
+/// `read` of the Runtime `link` names, unless the reads since failed (`failed`): an
+/// older preset would pose as the present.
+pub fn preset_view(link: &Link, read: Option<&ConfigRead>, failed: bool) -> PresetView {
+    if !matches!(link, Link::Online { .. }) {
+        return PresetView::NotRead;
+    }
+    if failed {
+        return PresetView::Unreadable;
+    }
+    let Some(read) = read else {
+        return PresetView::NotRead;
+    };
+    let Ok(preset) = &read.preset else {
+        return PresetView::Unreadable;
+    };
+    let mut options: Vec<PresetOption> = preset
+        .names()
+        .map(|name| PresetOption {
+            name: name.to_owned(),
+            current: preset.current.as_deref() == Some(name),
+        })
+        .collect();
+    options.sort_by_key(|option| {
+        PRESET_ORDER
+            .iter()
+            .position(|name| *name == option.name)
+            .unwrap_or(PRESET_ORDER.len())
+    });
+    let state = match &preset.current {
+        Some(name) => PresetState::Named(name.clone()),
+        None if preset.file_holds_full() => PresetState::CustomFileFull,
+        None if preset.file_fixes_concurrency() => PresetState::CustomFileConcurrency,
+        None => PresetState::Custom(preset.members.clone()),
+    };
+    PresetView::Read { options, state }
 }
 
 /// What a write's thread hands back.
