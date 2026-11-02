@@ -23,7 +23,7 @@ use super::picture::{LinkNow, Offline, PictureView, Pictures, PreviewGate};
 use super::preview::{Order, Target};
 use super::read::{Lane, Read, EXPLAIN_TOO_OLD, START_TRIES};
 use super::settings::{self, AutostartView, SettingsView, StartView};
-use super::tools::{NameTable, NamesRead, WatchdogRead};
+use super::tools::{Displays, NameTable, NamesRead, WatchdogRead};
 use crate::strings::{fill, Labels, Language};
 
 /// The Runtime as the newest `Status` read found it.
@@ -189,6 +189,9 @@ pub struct Model {
     config: Slice<ConfigRead>,
     start: StartSlice,
     names: Names,
+    /// The picture proportions each game declares, from the same run of `packs` as the
+    /// names; none while it did not answer.
+    displays: Option<Displays>,
     /// Whether the workbench is not minimized. The slow thread does not read while
     /// it is, so no read is late then.
     shown: bool,
@@ -268,6 +271,7 @@ impl Model {
             config: Slice::empty(),
             start: StartSlice::default(),
             names: Names::NotAsked,
+            displays: None,
             shown: true,
             epoch: None,
             live_fault: None,
@@ -589,7 +593,12 @@ impl Model {
             }
         };
         let gate = account.map_or(PreviewGate::Open, |alias| self.preview_gate(alias));
-        self.pictures.view(account, link, gate, now_ms)
+        // The proportions the account's game declares, while `Status` names its game.
+        let ratios = account
+            .and_then(|alias| self.instances.iter().find(|instance| instance.alias == alias))
+            .and_then(|instance| instance.game_id.as_deref())
+            .and_then(|game| self.displays.as_ref()?.ratios(game));
+        self.pictures.view(account, link, gate, ratios, now_ms)
     }
 
     /// What the schedule explanation reads leave now. A thread that does not read
@@ -639,14 +648,18 @@ impl Model {
         matches!(self.names, Names::Unreadable)
     }
 
-    /// One run of `actingctl packs`.
+    /// One run of `actingctl packs`: the names, and the picture proportions, which its
+    /// warnings do not take away (`NamesRead::Table`).
     pub fn apply_names(&mut self, read: NamesRead) {
-        self.names = match read {
-            NamesRead::Table { table, warnings } if warnings.is_empty() => Names::Ready(table),
-            NamesRead::Table { .. } | NamesRead::NoTool(_) | NamesRead::Failed(_) => {
-                Names::Unreadable
+        let (names, displays) = match read {
+            NamesRead::Table { table, displays, warnings } if warnings.is_empty() => {
+                (Names::Ready(table), Some(displays))
             }
+            NamesRead::Table { displays, .. } => (Names::Unreadable, Some(displays)),
+            NamesRead::NoTool(_) | NamesRead::Failed(_) => (Names::Unreadable, None),
         };
+        self.names = names;
+        self.displays = displays;
     }
 
     /// One `Status` read: a new owner epoch lets go of everything read of the old
@@ -706,6 +719,7 @@ impl Model {
         let names_stale = epoch_changed && previous != Link::Unknown;
         if names_stale {
             self.names = Names::NotAsked;
+            self.displays = None;
         }
         LiveLanded {
             previous,

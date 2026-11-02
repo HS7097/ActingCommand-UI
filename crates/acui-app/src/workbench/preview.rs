@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The workbench's picture thread (UI-3c), `acui-preview`, and the one table of how often it
 //! reads: the frames the right column's live view shows come from here. How much one page
-//! or one lookup may read is `acui-source`'s (`PREVIEW_IO`, `POLL_ROWS`, `LOOKUP_WINDOWS`,
-//! `LOOKUP_PAGES`), the read side of the same table; how often is this file's, and only
-//! here. The Runtime states no frequency for any of it: the numbers are estimates.
+//! or one lookup may read is `acui-source`'s (`PREVIEW_IO`, `POLL_ROWS`, `MARK_ROWS`,
+//! `LOOKUP_WINDOWS`, `LOOKUP_PAGES`), the read side of the same table; how often is this
+//! file's, and only here. The Runtime states no frequency for any of it: the numbers are
+//! estimates.
 //!
 //! The thread follows one account at a time, the one the event loop names, and nothing while
 //! it names none (`sync`): not on the settings page, not minimized, not while no Runtime
@@ -13,6 +14,12 @@
 //! only, decodes it, and hands it to the event loop with its pixels ready, so the event loop
 //! does no I/O and no decoding. It never writes, and never subscribes. A frame it could not
 //! read is not read again: a failed read takes a record in the Runtime's ledger.
+//!
+//! What a task recognized and meant on a frame comes with the polls, after the frame's own
+//! record; for a task's frame a lookup found, or an order carried, one page more reads what
+//! came of it before the position the polls go on after (`mark_page`). The thread keeps it
+//! only of the frame shown and the one waiting to be read, hands it over with the frame, and
+//! what comes of the frame shown later, as it comes.
 //!
 //! Every order to follow another account, or none, states a generation (`Pictures::sync`);
 //! what the thread hands over states the one it was for, and one of another generation is
@@ -33,14 +40,15 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use acui_source::workbench::preview::{
-    CaptureFailure, FrameRead, FrameSeen, Latest, LookupStopped, Poll, PreviewLane, LOOKUP_PAGES,
+    CaptureFailure, FrameKey, FrameMarks, FrameOrigin, FrameRead, FrameSeen, Latest, LookupStopped,
+    Overlay, Poll, PreviewLane, LOOKUP_PAGES,
 };
 use acui_source::workbench::{InstanceKey, Unreached};
 use acui_source::MAX_FRAME_BYTES;
 use slint::{Rgba8Pixel, SharedPixelBuffer};
 
 use super::paint;
-use super::picture::Unread;
+use super::picture::{Mismatch, Unread};
 use super::read::panic_message;
 use crate::launcher::spawn_worker;
 use crate::report;
@@ -125,8 +133,9 @@ pub enum Start {
 /// What the event loop tells the thread.
 pub enum Order {
     /// Follow `target` from now on, under `generation`. `shown`: the frame of it the window
-    /// shows, which a frame read must be newer than.
-    Follow { generation: u64, target: Target, start: Start, shown: Option<u64> },
+    /// shows, by its position, which a frame read must be newer than, and its key, which what
+    /// is recognized on it later goes by.
+    Follow { generation: u64, target: Target, start: Start, shown: Option<(u64, FrameKey)> },
     /// Follow nothing.
     Stop,
     /// The account followed runs a task or climbs its ladder, or no longer.
@@ -146,8 +155,17 @@ pub enum Seen {
         newest: Option<FrameSeen>,
         failure: Option<CaptureFailure>,
     },
-    /// A frame read and decoded.
-    Frame { alias: String, epoch: String, frame: FrameSeen, pixels: SharedPixelBuffer<Rgba8Pixel> },
+    /// A frame read and decoded, and what its task recognized and meant on it, as far as that
+    /// is known.
+    Frame {
+        alias: String,
+        epoch: String,
+        frame: FrameSeen,
+        pixels: SharedPixelBuffer<Rgba8Pixel>,
+        overlay: Option<Overlay>,
+    },
+    /// What a task recognized and meant on the frame `key`, the one shown, known now.
+    Marks { alias: String, epoch: String, key: FrameKey, overlay: Option<Overlay> },
     /// A frame not shown, and why; it is not read again.
     Unreadable { alias: String, epoch: String, sequence: u64, why: Unread },
     /// A round did not reach the Runtime; it is tried again a while later.
@@ -165,6 +183,7 @@ pub struct PreviewTally {
     lookups: AtomicU64,
     lookup_pages: AtomicU64,
     lookups_capped: AtomicU64,
+    mark_pages: AtomicU64,
     reads: AtomicU64,
     read_bytes: AtomicU64,
     reads_missing: AtomicU64,
@@ -196,6 +215,11 @@ impl PreviewTally {
         self.lookup_pages.fetch_add(1, Ordering::SeqCst);
     }
 
+    /// A page of a frame's marks.
+    fn mark_page(&self) {
+        self.mark_pages.fetch_add(1, Ordering::SeqCst);
+    }
+
     /// A material read that went to the Runtime, and what it came to.
     fn read(&self, took: Duration, bytes: Option<usize>, missing: bool, failed: bool) {
         self.reads.fetch_add(1, Ordering::SeqCst);
@@ -222,7 +246,7 @@ impl PreviewTally {
         let count = |counter: &AtomicU64| counter.load(Ordering::SeqCst);
         format!(
             "polls {} (fast {}, longest {} ms); lookups {} (pages {}, capped {}); \
-             frame reads {} (bytes {}, missing {}, failed {}, longest {} ms); \
+             mark pages {}; frame reads {} (bytes {}, missing {}, failed {}, longest {} ms); \
              decodes {} (longest {} ms)",
             count(&self.polls),
             count(&self.polls_fast),
@@ -230,6 +254,7 @@ impl PreviewTally {
             count(&self.lookups),
             count(&self.lookup_pages),
             count(&self.lookups_capped),
+            count(&self.mark_pages),
             count(&self.reads),
             count(&self.read_bytes),
             count(&self.reads_missing),
@@ -399,14 +424,23 @@ struct Line {
     saw_new: bool,
     /// A round failed since the last that went well: the next that does says so.
     troubled: bool,
+    /// What tasks recognized and meant, of the frame shown and the one waiting only.
+    marks: FrameMarks,
+    /// The key of the frame shown, and what the event loop was last told was recognized and
+    /// meant on it.
+    shown_key: Option<FrameKey>,
+    told: Option<Overlay>,
+    /// A task's frame the order carried: what came of it before `after` is still to be read.
+    marks_owed: Option<FrameSeen>,
 }
 
 impl Line {
-    fn new(generation: u64, target: Target, start: Start, shown: Option<u64>) -> Self {
+    fn new(generation: u64, target: Target, start: Start, shown: Option<(u64, FrameKey)>) -> Self {
         let (after, known) = match start {
             Start::Lookup => (None, None),
             Start::Known { after, newest } => (Some(after), newest),
         };
+        let (shown, shown_key) = shown.unzip();
         let mut line = Self {
             generation,
             target,
@@ -419,9 +453,17 @@ impl Line {
             failures: 0,
             saw_new: false,
             troubled: false,
+            marks: FrameMarks::default(),
+            shown_key,
+            told: None,
+            marks_owed: None,
         };
         if let Some(frame) = known {
+            let owed = is_task(&frame).then(|| frame.clone());
             line.offer(frame, true);
+            if line.waiting.is_some() {
+                line.marks_owed = owed;
+            }
         }
         line
     }
@@ -468,12 +510,18 @@ impl Line {
         }
     }
 
-    /// A lookup until one went well, then a poll.
+    /// A lookup until one went well, then a poll; before the first poll, what came of a
+    /// task's frame the order carried.
     fn round(&mut self, lane: &mut PreviewLane, tally: &PreviewTally) -> Result<(), Halt> {
-        match self.after {
-            None => self.look_up(lane, tally),
-            Some(after) => self.poll(lane, tally, after),
+        let Some(after) = self.after else {
+            return self.look_up(lane, tally);
+        };
+        if let Some(frame) = self.marks_owed.clone() {
+            self.mark_page(lane, tally, &frame, after)?;
+            self.marks_owed = None;
+            self.tell_marks();
         }
+        self.poll(lane, tally, after)
     }
 
     fn went_well(&mut self) {
@@ -531,6 +579,9 @@ impl Line {
             }
         };
         let found = self.latest(lane, tally, head)?;
+        if let Some(frame) = &found {
+            self.marks_of_found(lane, tally, frame, head)?;
+        }
         self.after = Some(head);
         if let Some(frame) = &found {
             self.offer(frame.clone(), true);
@@ -542,7 +593,84 @@ impl Line {
             after: head,
         };
         post(self.generation, seen);
+        self.tell_marks();
         Ok(())
+    }
+
+    /// What came of `frame`, which a lookup found at or below `head`, before `head`: one page,
+    /// for a task's frame that is shown, or is to be read, which one too old, cleaned up or too
+    /// large to read is not.
+    fn marks_of_found(
+        &mut self,
+        lane: &mut PreviewLane,
+        tally: &PreviewTally,
+        frame: &FrameSeen,
+        head: u64,
+    ) -> Result<(), Halt> {
+        let readable = !frame.evicted && frame.byte_count <= MAX_FRAME_BYTES;
+        let current = self.shown.map_or(true, |shown| frame.sequence >= shown);
+        if is_task(frame) && readable && current {
+            self.mark_page(lane, tally, frame, head)?;
+        }
+        Ok(())
+    }
+
+    /// What a task recognized on `frame` and meant on it, recorded up to `at`: one page,
+    /// counted and timed whether it came back or not. None is asked of a frame that names no
+    /// frame id, or of an observation's.
+    fn mark_page(
+        &mut self,
+        lane: &mut PreviewLane,
+        tally: &PreviewTally,
+        frame: &FrameSeen,
+        at: u64,
+    ) -> Result<(), Halt> {
+        if !is_task(frame) {
+            return Ok(());
+        }
+        let started = Instant::now();
+        let asked = lane.marks(self.target.key, frame, at);
+        let took = started.elapsed();
+        if matches!(asked, Ok(None)) {
+            return Ok(());
+        }
+        tally.mark_page();
+        slow(&format!("the marks of frame {} of {}", frame.sequence, self.target.alias), took);
+        let Some(reach) = asked? else {
+            return Ok(());
+        };
+        self.same_epoch(&reach.epoch)?;
+        if reach.value.cut() {
+            let line = format!(
+                "the marks of frame {} of {} were not whole at {at}; some may not be drawn",
+                frame.sequence, self.target.alias
+            );
+            report::log_quiet(THREAD, &line);
+        }
+        self.marks.absorb(reach.value);
+        Ok(())
+    }
+
+    /// The event loop hears what is now known to be recognized and meant on the frame shown,
+    /// when that changed; and the thread lets go of what it keeps of frames other than that
+    /// one and the one waiting.
+    fn tell_marks(&mut self) {
+        if let Some(key) = &self.shown_key {
+            let overlay = self.marks.overlay(key);
+            if overlay != self.told {
+                self.told = overlay.clone();
+                let seen = Seen::Marks {
+                    alias: self.target.alias.clone(),
+                    epoch: self.target.epoch.clone(),
+                    key: key.clone(),
+                    overlay,
+                };
+                post(self.generation, seen);
+            }
+        }
+        let waiting = self.waiting.as_ref().map(|frame| &frame.key);
+        let keys: Vec<&FrameKey> = self.shown_key.iter().chain(waiting).collect();
+        self.marks.keep(&keys);
     }
 
     /// The newest frame at or below `head`. One that ran out of pages says so in the log,
@@ -601,16 +729,20 @@ impl Line {
         slow(&format!("a poll for {}", self.target.alias), took);
         let reach = polled?;
         self.same_epoch(&reach.epoch)?;
-        let Poll { snapshot, complete, frames, failures } = reach.value;
-        let (newest, failure) = if complete {
-            (frames.into_iter().last(), failures.into_iter().last())
+        let Poll { snapshot, complete, frames, failures, marks } = reach.value;
+        let (newest, failure, marks) = if complete {
+            (frames.into_iter().last(), failures.into_iter().last(), Some(marks))
         } else {
             let line = format!(
                 "a poll for {} after {after} was not whole at {snapshot}; looking up its newest frame",
                 self.target.alias
             );
             report::log_quiet(THREAD, &line);
-            (self.latest(lane, tally, snapshot)?, None)
+            let found = self.latest(lane, tally, snapshot)?;
+            if let Some(frame) = &found {
+                self.marks_of_found(lane, tally, frame, snapshot)?;
+            }
+            (found, None, None)
         };
         self.after = Some(snapshot);
         let known = self.newest;
@@ -619,6 +751,10 @@ impl Line {
         if let Some(frame) = &fresh {
             self.offer(frame.clone(), false);
         }
+        if let Some(marks) = marks {
+            self.marks.absorb(marks);
+        }
+        self.tell_marks();
         if fresh.is_some() || failure.is_some() || self.troubled {
             let seen = Seen::Polled {
                 alias: self.target.alias.clone(),
@@ -681,13 +817,19 @@ impl Line {
                     Ok(pixels) => {
                         self.shown = Some(frame.sequence);
                         reads.last_unread = None;
+                        let overlay = self.marks.overlay(&frame.key);
+                        self.shown_key = Some(frame.key.clone());
+                        self.told = overlay.clone();
                         let seen = Seen::Frame {
                             alias: self.target.alias.clone(),
                             epoch: self.target.epoch.clone(),
                             frame,
                             pixels,
+                            overlay,
                         };
                         hand_over(waiting, ours, seen);
+                        // Nothing of the frames before it is kept.
+                        self.tell_marks();
                     }
                     Err((why, detail)) => self.unreadable(reads, &frame, why, &detail),
                 }
@@ -738,6 +880,11 @@ impl Line {
         };
         post(self.generation, seen);
     }
+}
+
+/// Whether a task took `frame`: only on such a frame is anything recognized or meant.
+fn is_task(frame: &FrameSeen) -> bool {
+    matches!(frame.origin, FrameOrigin::Task { .. })
 }
 
 /// A read that took long, in the log as it happens.
@@ -861,9 +1008,18 @@ fn landed(generation: u64, seen: Seen) {
                 report::log_quiet(THREAD, &line);
             }
         }
-        Seen::Frame { alias, epoch, frame, pixels: frame_pixels } if of_now(epoch.as_str()) => {
-            if ui.model.borrow_mut().pictures_mut().frame_shown(alias, epoch, frame) {
+        Seen::Frame { alias, epoch, frame, pixels: frame_pixels, overlay }
+            if of_now(epoch.as_str()) =>
+        {
+            let size = (frame_pixels.width(), frame_pixels.height());
+            let mut model = ui.model.borrow_mut();
+            if model.pictures_mut().frame_shown(alias, epoch, frame, size, overlay) {
                 pixels = Some(frame_pixels);
+            }
+        }
+        Seen::Marks { alias, epoch, key, overlay } if of_now(epoch.as_str()) => {
+            if !ui.model.borrow_mut().pictures_mut().marks_landed(&alias, &key, overlay) {
+                return;
             }
         }
         Seen::Unreadable { alias, epoch, sequence, why } if of_now(epoch.as_str()) => {
@@ -872,6 +1028,7 @@ fn landed(generation: u64, seen: Seen) {
         Seen::Looked { .. }
         | Seen::Polled { .. }
         | Seen::Frame { .. }
+        | Seen::Marks { .. }
         | Seen::Unreadable { .. } => {
             return;
         }
@@ -894,10 +1051,27 @@ fn landed(generation: u64, seen: Seen) {
             }
         }
     }
+    // Records that state another size than the frame's: drawn nowhere, and said once a frame.
+    let mismatch = ui.model.borrow_mut().pictures_mut().untold_mismatch();
+    if let Some(Mismatch { alias, sequence, extent: (width, height), size }) = mismatch {
+        let line = format!(
+            "frame {sequence} of {alias} is {} x {} pixels, and its recognition states {width} x \
+             {height}: nothing drawn on it",
+            size.0, size.1
+        );
+        report::log_quiet(THREAD, &line);
+    }
     if let Some(pixels) = pixels {
         paint::picture_pixels(&ui, pixels);
     }
     paint::picture(&ui);
     // The thread may have just made the log.
     ui.paint_log_notes();
+}
+
+/// The recognition's boxes and the inputs' points turned on or off on the window, for this
+/// run: only what is drawn changes.
+pub fn overlays_toggled(ui: &Ui, on: bool) {
+    ui.model.borrow_mut().pictures_mut().set_overlays(on);
+    paint::picture(ui);
 }

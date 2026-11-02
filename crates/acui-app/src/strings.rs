@@ -749,6 +749,15 @@ pub struct Labels {
     /// The picture's thread did not start (the OS error), or a read of it went wrong.
     pub picture_no_thread: &'static str,
     pub picture_panicked: &'static str,
+    /// Beside the live view's title: the box that draws, on a task's frame, the targets its
+    /// recognition evaluated and the points its inputs were meant at. Under the frame, in
+    /// amber, why nothing is drawn: nothing is recorded of the frame; the size the records
+    /// state is not the frame's. And that the account's game's standard pack declares no
+    /// picture of the frame's proportions (`<w>:<h>`).
+    pub picture_overlays: &'static str,
+    pub picture_marks_none: &'static str,
+    pub picture_marks_mismatch: &'static str,
+    pub picture_aspect_undeclared: &'static str,
     /// The workbench refused to close while an unlock runs.
     pub close_unlock_busy: &'static str,
     /// The Aero frame's caption buttons, by the names a screen reader says.
@@ -1358,6 +1367,10 @@ pub const ZH: Labels = Labels {
     picture_handing_over_empty: "正在交接设备，暂不读画面",
     picture_no_thread: "画面线程没有起来：{}",
     picture_panicked: "画面读取出错（详情见技术日志）",
+    picture_overlays: "识别框和点击点",
+    picture_marks_none: "这张画面没有识别记录",
+    picture_marks_mismatch: "识别记录的尺寸与画面不符，没有画识别框",
+    picture_aspect_undeclared: "这个标准包没有声明支持 {} 的画面，任务可能跑不准",
     close_unlock_busy: "解锁还在进行：等它结束再关闭监控台",
     caption_minimize: "最小化",
     caption_maximize: "最大化",
@@ -1958,6 +1971,10 @@ pub const EN: Labels = Labels {
     picture_handing_over_empty: "Handing over the device; the picture is not read meanwhile",
     picture_no_thread: "The picture thread did not start: {}",
     picture_panicked: "Reading the picture went wrong (see the technical log)",
+    picture_overlays: "Recognition boxes and taps",
+    picture_marks_none: "No recognition was recorded on this picture",
+    picture_marks_mismatch: "The recognition's size differs from the picture's; no boxes drawn",
+    picture_aspect_undeclared: "This standard pack does not declare {} pictures; tasks may misread them",
     close_unlock_busy: "The unlock is still running: close the console once it has ended",
     caption_minimize: "Minimize",
     caption_maximize: "Maximize",

@@ -19,8 +19,9 @@
 //!    nothing the picture does counts as one.
 //!
 //! Another thread runs the Runtime's `actingctl` (`tools`), only when asked: `packs` for the
-//! task names, and `watchdog status` as the settings page is gone to, for whether the Runtime
-//! is started again when it is gone. Neither is a read of the running Runtime's state.
+//! task names and the picture proportions each game's standard pack declares, and `watchdog
+//! status` as the settings page is gone to, for whether the Runtime is started again when it
+//! is gone. Neither is a read of the running Runtime's state.
 //!
 //! What a person writes from the top bar is in `actions`: each write on a thread and
 //! a connection of its own, sent once. Once one lands, a read begun before that no
@@ -568,12 +569,14 @@ fn names_read(read: NamesRead, took: Duration) {
     }
 }
 
-/// Every run goes in the log: they are few, and the limit on them is checked there.
+/// Every run goes in the log: they are few, and the limit on them is checked there. The
+/// picture's hint of its proportions goes by the same run.
 fn names_landed(ui: &Ui, read: NamesRead, took: Duration) {
     report::log_quiet(tools::THREAD, &format!("{} ({} ms)", read.log_line(), took.as_millis()));
     ui.model.borrow_mut().apply_names(read);
     ui.paint_names_note();
     paint::cards(ui);
+    paint::picture(ui);
     ui.paint_log_notes();
 }
 

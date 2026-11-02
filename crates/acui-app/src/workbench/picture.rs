@@ -11,7 +11,15 @@
 //! What the thread hands over counts only under the generation of the order it was for:
 //! `sync` counts one for every other account to follow, or none, and is the only one that
 //! does. Then only for the owner epoch online (`preview::landed`), and a frame only when it is
-//! newer than the one shown: a picture never goes back in time.
+//! newer than the one shown: a picture never goes back in time. What a task recognized and
+//! meant on a frame goes only to that frame, by its key.
+//!
+//! On a task's frame the window draws the targets its recognition found, solid, and those it
+//! did not, dashed, and the points its inputs were meant at, unless a person turned that off
+//! for this run; never on an observation's, which has none. It draws none where the frame's
+//! size the recognition states is not the frame's own: they would land on the wrong pixels.
+//! And under the frame it hints that the account's game's standard pack declares no picture
+//! of the frame's proportions, when the pack declares any (`ASPECT_TOLERANCE`).
 
 use std::collections::BTreeMap;
 use std::mem;
@@ -19,11 +27,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use acui_source::workbench::preview::{CaptureFailure, FrameFailure, FrameOrigin, FrameSeen};
+use acui_source::workbench::preview::{
+    CaptureFailure, FrameFailure, FrameKey, FrameOrigin, FrameSeen, Overlay,
+};
 use acui_source::workbench::Unreached;
 
 use super::model::Fault;
 use super::preview::{Order, Start, Target, LOOKUP_AGAIN, STALE_AFTER};
+
+/// How far a frame's proportions may be from one its standard pack declares and still be
+/// that one, as a fraction of it: 1920 x 1080, 1280 x 720 and 2560 x 1440 are all 16:9, and a
+/// frame a few pixels short of it too. Landscape and portrait are told apart.
+const ASPECT_TOLERANCE: f64 = 0.01;
 
 /// Which account's picture shows, and what is known of each.
 #[derive(Default)]
@@ -43,6 +58,8 @@ pub struct Pictures {
     generation: Arc<AtomicU64>,
     /// The account the thread was last told to follow, if any.
     sent: Option<Target>,
+    /// A person turned the recognition's boxes and the inputs' points off, for this run.
+    overlays_off: bool,
 }
 
 /// The frame the window shows.
@@ -51,6 +68,20 @@ struct Shown {
     /// The owner epoch it was read in.
     epoch: String,
     frame: FrameSeen,
+    /// Its size in pixels, decoded.
+    size: (u32, u32),
+    /// What its task recognized and meant on it, as far as that is known.
+    overlay: Option<Overlay>,
+    /// The log heard that the size the recognition states is not the frame's.
+    mismatch_told: bool,
+}
+
+/// The size the records of a frame state, which is not the frame's own: for the log.
+pub struct Mismatch {
+    pub alias: String,
+    pub sequence: u64,
+    pub extent: (f32, f32),
+    pub size: (u32, u32),
 }
 
 /// What was found of one account.
@@ -190,7 +221,7 @@ pub enum Offline {
 }
 
 /// What the picture area shows, before its words.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PictureView {
     /// There is no card to show the picture of.
     NoAccount,
@@ -199,8 +230,31 @@ pub enum PictureView {
     /// No frame shows, and why.
     Empty { why: EmptyWhy },
     /// A frame shows: when it was captured; how long ago, in seconds, once that is longer
-    /// than `STALE_AFTER`; what took it; and why it is dimmed, if it is.
-    Frame { captured_at_ms: u64, age: Option<u64>, origin: Origin, dim: Option<DimWhy> },
+    /// than `STALE_AFTER`; what took it; and why it is dimmed, if it is. What is drawn on
+    /// it; and the frame's proportions, in lowest terms, when the account's game's standard
+    /// pack declares others and not these.
+    Frame {
+        captured_at_ms: u64,
+        age: Option<u64>,
+        origin: Origin,
+        dim: Option<DimWhy>,
+        overlay: OverlayView,
+        aspect: Option<(u32, u32)>,
+    },
+}
+
+/// What is drawn on the frame shown.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OverlayView {
+    /// Turned off.
+    Off,
+    /// What its task recognized and meant on it.
+    Shown(Overlay),
+    /// Nothing is recorded of it: an observation's frame, or a task's before its
+    /// recognition is.
+    NotOnThisFrame,
+    /// The size the records state is not the frame's: nothing is drawn.
+    Mismatch,
 }
 
 /// Why no frame shows.
@@ -343,8 +397,18 @@ impl Pictures {
                 Start::Known { .. } => Follow::Following,
             };
         }
-        let shown = self.shown.as_ref().map(|shown| shown.frame.sequence);
+        let shown =
+            self.shown.as_ref().map(|shown| (shown.frame.sequence, shown.frame.key.clone()));
         Some(Order::Follow { generation, target, start, shown })
+    }
+
+    /// Whether the recognition's boxes and the inputs' points are drawn, as a person left it.
+    pub fn overlays_on(&self) -> bool {
+        !self.overlays_off
+    }
+
+    pub fn set_overlays(&mut self, on: bool) {
+        self.overlays_off = !on;
     }
 
     /// Following goes on: whether it had stopped short before, for the log.
@@ -405,9 +469,17 @@ impl Pictures {
         (self.resume(), failure)
     }
 
-    /// A frame of `alias` read in `epoch`, and decoded: whether it shows, which it does when
-    /// it is newer than the one shown. Then the window takes its pixels.
-    pub fn frame_shown(&mut self, alias: String, epoch: String, frame: FrameSeen) -> bool {
+    /// A frame of `alias` read in `epoch`, and decoded to `size`, with what its task
+    /// recognized and meant on it as far as that is known: whether it shows, which it does
+    /// when it is newer than the one shown. Then the window takes its pixels.
+    pub fn frame_shown(
+        &mut self,
+        alias: String,
+        epoch: String,
+        frame: FrameSeen,
+        size: (u32, u32),
+        overlay: Option<Overlay>,
+    ) -> bool {
         if self.shown_sequence(&alias).is_some_and(|shown| shown >= frame.sequence) {
             return false;
         }
@@ -420,9 +492,39 @@ impl Pictures {
         if known.capture_failed.as_ref().is_some_and(|failed| failed.sequence < frame.sequence) {
             known.capture_failed = None;
         }
-        self.shown = Some(Shown { alias, epoch, frame });
+        self.shown = Some(Shown { alias, epoch, frame, size, overlay, mismatch_told: false });
         self.resume();
         true
+    }
+
+    /// What `alias`'s task recognized and meant on its frame `key`, as known now: whether
+    /// that changed what is drawn, which it does only on that frame while it shows.
+    pub fn marks_landed(&mut self, alias: &str, key: &FrameKey, overlay: Option<Overlay>) -> bool {
+        let Some(shown) = self.shown.as_mut() else {
+            return false;
+        };
+        if shown.alias != alias || shown.frame.key != *key || shown.overlay == overlay {
+            return false;
+        }
+        shown.overlay = overlay;
+        true
+    }
+
+    /// The frame shown, when the size its records state is not its own and the log has not
+    /// heard so: once for each frame.
+    pub fn untold_mismatch(&mut self) -> Option<Mismatch> {
+        let shown = self.shown.as_mut()?;
+        let extent = shown.overlay.as_ref()?.extent?;
+        if shown.mismatch_told || fits(extent, shown.size) {
+            return None;
+        }
+        shown.mismatch_told = true;
+        Some(Mismatch {
+            alias: shown.alias.clone(),
+            sequence: shown.frame.sequence,
+            extent,
+            size: shown.size,
+        })
     }
 
     /// The frame of `alias` at `sequence` will not show, and why.
@@ -481,12 +583,14 @@ impl Pictures {
     }
 
     /// The picture area of `account`, the one `account` gave, or of none, with the Runtime as
-    /// `link` tells it and its gate, at `now_ms`.
+    /// `link` tells it and its gate, at `now_ms`; `ratios`, the picture proportions its game's
+    /// standard pack declares, if it declares any.
     pub fn view(
         &self,
         account: Option<&str>,
         link: LinkNow<'_>,
         gate: PreviewGate,
+        ratios: Option<&[(u32, u32)]>,
         now_ms: u64,
     ) -> PictureView {
         let Some(alias) = account else {
@@ -549,8 +653,49 @@ impl Pictures {
         } else {
             known.and_then(|known| newer(known, shown.frame.sequence))
         };
-        PictureView::Frame { captured_at_ms, age, origin, dim }
+        let overlay = match &shown.overlay {
+            _ if self.overlays_off => OverlayView::Off,
+            // Only a task recognizes, and only on a task's frame is anything drawn.
+            _ if origin == Origin::Observation => OverlayView::NotOnThisFrame,
+            None => OverlayView::NotOnThisFrame,
+            Some(overlay) if overlay.extent.map_or(true, |extent| fits(extent, shown.size)) => {
+                OverlayView::Shown(overlay.clone())
+            }
+            Some(_) => OverlayView::Mismatch,
+        };
+        let aspect = ratios.and_then(|ratios| undeclared(shown.size, ratios));
+        PictureView::Frame { captured_at_ms, age, origin, dim, overlay, aspect }
     }
+}
+
+/// Whether `extent`, the size a frame's records state, is `size`, the frame's own.
+fn fits((width, height): (f32, f32), size: (u32, u32)) -> bool {
+    (width - size.0 as f32).abs() < 0.5 && (height - size.1 as f32).abs() < 0.5
+}
+
+/// A frame of `size`'s proportions in lowest terms, when they are none of `ratios` within
+/// `ASPECT_TOLERANCE`; none when they are one, or there are none to compare with.
+fn undeclared((width, height): (u32, u32), ratios: &[(u32, u32)]) -> Option<(u32, u32)> {
+    if width == 0 || height == 0 || ratios.is_empty() {
+        return None;
+    }
+    let frame = f64::from(width) / f64::from(height);
+    let declared = ratios.iter().any(|&(ratio_width, ratio_height)| {
+        let ratio = f64::from(ratio_width) / f64::from(ratio_height);
+        (frame / ratio - 1.0).abs() <= ASPECT_TOLERANCE
+    });
+    if declared {
+        return None;
+    }
+    let divisor = gcd(width, height);
+    Some((width / divisor, height / divisor))
+}
+
+fn gcd(mut a: u32, mut b: u32) -> u32 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
 }
 
 /// What is known of an account past the frame shown, at `shown`: the newer of a capture that

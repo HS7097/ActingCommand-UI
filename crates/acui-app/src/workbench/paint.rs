@@ -13,6 +13,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use acui_rows::outcome::explain;
 use acui_rows::{format_minute, format_second};
+use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::{
     PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
     SettingValue, ValueProblem, CONSOLE_PAUSE_ALL, MODE_FULL, MODE_OBSERVE, MODE_PACE,
@@ -25,7 +26,7 @@ use super::actions::{
 };
 use super::card::{Band, CardView, Down, Line, ReasonClass};
 use super::model::{Fault, Page};
-use super::picture::{DimWhy, EmptyWhy, Offline, Origin, PictureView, Unread};
+use super::picture::{DimWhy, EmptyWhy, Offline, Origin, OverlayView, PictureView, Unread};
 use super::preview;
 use super::settings::{
     self, AutostartView, ReportedAccount, ReportedLine, SettingLine, SettingsView, StartView,
@@ -35,7 +36,10 @@ use crate::ledger::resume::Lifter;
 use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
-use crate::{AccountCard, PresetChoice, SettingItem, StatusTone, WorkbenchPage, WorkbenchWindow};
+use crate::{
+    AccountCard, OverlayItem, PresetChoice, SettingItem, StatusTone, TargetItem, WorkbenchPage,
+    WorkbenchWindow,
+};
 
 /// What the technical log's lines about the settings page are under.
 const SETTINGS_LOG: &str = "acui-settings";
@@ -76,19 +80,26 @@ pub fn cards(ui: &Ui) {
 /// The right column's live view: whose picture it is, beside the title; the frame, with when
 /// it was captured on its corner, why it is dimmed across its top, and what took it under it;
 /// or what it says while no frame shows, red when that is a failure. The frame's pixels are
-/// the window's from when it landed (`picture_pixels`), let go here once no frame shows.
+/// the window's from when it landed (`picture_pixels`), let go here once no frame shows. On
+/// a task's frame, unless turned off, the boxes its recognition evaluated and the points its
+/// inputs were meant at, which the box beside the title turns off and on; under the frame in
+/// amber why nothing is drawn on it, and that its proportions are not among those its game's
+/// standard pack declares.
 pub fn picture(ui: &Ui) {
     let Some(window) = ui.workbench() else {
         return;
     };
     let labels = ui.labels();
-    let (account, view) = {
+    let (account, view, overlays_on) = {
         let model = ui.model.borrow();
         let account = model.picture_account().map(str::to_owned).unwrap_or_default();
-        (account, model.picture_view(now_ms()))
+        (account, model.picture_view(now_ms()), model.pictures().overlays_on())
     };
     window.set_picture_account(account.into());
     window.set_picture_withdrawn(matches!(view, PictureView::Withdrawn));
+    if window.get_picture_overlays_on() != overlays_on {
+        window.set_picture_overlays_on(overlays_on);
+    }
     let (empty, empty_failed) = match &view {
         PictureView::NoAccount => (labels.picture_no_account.to_owned(), false),
         // UI-3d says why it was taken down.
@@ -97,7 +108,7 @@ pub fn picture(ui: &Ui) {
     };
     window.set_picture_empty(empty.into());
     window.set_picture_empty_failed(empty_failed);
-    let PictureView::Frame { captured_at_ms, age, origin, dim } = &view else {
+    let PictureView::Frame { captured_at_ms, age, origin, dim, overlay, aspect } = &view else {
         if window.get_picture_ready() {
             window.set_picture_ready(false);
             window.set_picture_image(Image::default());
@@ -107,12 +118,15 @@ pub fn picture(ui: &Ui) {
         window.set_picture_dimmed(false);
         window.set_picture_banner(SharedString::new());
         window.set_picture_origin(SharedString::new());
+        picture_overlay(&window, None);
+        window.set_picture_overlays_offered(false);
+        window.set_picture_hint(SharedString::new());
         return;
     };
     let at = format_second(*captured_at_ms);
     let (corner, warn) = corner_text(labels, &at, *age);
     let banner = dim.as_ref().map_or_else(String::new, |dim| dim_text(ui, labels, dim, &at));
-    let origin = match origin {
+    let origin_text = match origin {
         Origin::Task => labels.picture_from_task,
         Origin::Observation => labels.picture_from_observation,
     };
@@ -120,8 +134,63 @@ pub fn picture(ui: &Ui) {
     window.set_picture_corner_warn(warn);
     window.set_picture_dimmed(dim.is_some());
     window.set_picture_banner(banner.into());
-    window.set_picture_origin(origin.into());
+    window.set_picture_origin(origin_text.into());
+    let drawn = match overlay {
+        OverlayView::Shown(overlay) => Some(overlay),
+        OverlayView::Off | OverlayView::NotOnThisFrame | OverlayView::Mismatch => None,
+    };
+    picture_overlay(&window, drawn);
+    // Nothing is recognized on an observation's frame: the box has nothing to turn on.
+    window.set_picture_overlays_offered(*origin == Origin::Task);
+    let mut hint = Vec::new();
+    match overlay {
+        OverlayView::NotOnThisFrame => hint.push(labels.picture_marks_none.to_owned()),
+        OverlayView::Mismatch => hint.push(labels.picture_marks_mismatch.to_owned()),
+        OverlayView::Off | OverlayView::Shown(_) => {}
+    }
+    if let Some((width, height)) = aspect {
+        hint.push(fill(labels.picture_aspect_undeclared, &[&format!("{width}:{height}")]));
+    }
+    window.set_picture_hint(hint.join("\n").into());
     window.set_picture_ready(true);
+}
+
+/// What is drawn on the frame: its targets' boxes, without words, and its inputs' points as
+/// tap marks; nothing with no `overlay`. The rows change only where they differ.
+fn picture_overlay(window: &WorkbenchWindow, overlay: Option<&Overlay>) {
+    let (targets, points): (Vec<TargetItem>, Vec<OverlayItem>) = match overlay {
+        Some(overlay) => (
+            overlay
+                .boxes
+                .iter()
+                .map(|target| TargetItem {
+                    label: SharedString::new(),
+                    x: target.x,
+                    y: target.y,
+                    width: target.width,
+                    height: target.height,
+                    passed: target.passed,
+                })
+                .collect(),
+            overlay
+                .points
+                .iter()
+                .map(|&(x, y)| OverlayItem {
+                    kind: SharedString::new(),
+                    x,
+                    y,
+                    width: 0.0,
+                    height: 0.0,
+                    point: true,
+                    mark: true,
+                })
+                .collect(),
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
+    window.set_picture_overlay_shown(overlay.is_some());
+    sync(window.get_picture_targets(), targets, |rows| window.set_picture_targets(rows));
+    sync(window.get_picture_points(), points, |rows| window.set_picture_points(rows));
 }
 
 /// A frame that landed, into the window: its pixels, decoded off the event loop, and its

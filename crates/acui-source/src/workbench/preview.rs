@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! What the workbench's picture reads (UI-3c): the newest frame of one instance, and
-//! that frame's material, on a connection of its own ([`PreviewLane`]). Nothing out of
-//! here names a wire type: a frame is a [`FrameSeen`], whose reference into the ledger
-//! only this file reads.
+//! What the workbench's picture reads (UI-3c): the newest frame of one instance, what its
+//! task recognized and meant on it, and that frame's material, on a connection of its own
+//! ([`PreviewLane`]). Nothing out of here names a wire type: a frame is a [`FrameSeen`],
+//! whose reference into the ledger only this file reads, and what was recognized and meant
+//! on it is an [`Overlay`] of plain numbers, which [`FrameMarks`] folds out of the records
+//! by the view model's own reading of a frame (`acui_model::frame_group`).
 //!
 //! The lane follows the Runtime across restarts as a [`ReadLane`] does, on its own
 //! connection (actor `ui`, source `ui`, channel `ui`) at [`PREVIEW_IO`]. It asks two
@@ -10,7 +12,8 @@
 //!
 //! - ledger pages (`QueryEvents`), which the Runtime's reader pool answers off the
 //!   ledger's writer and which take no record: a poll after a known position, a lookup
-//!   down from the head, and the head itself when a status did not state it;
+//!   down from the head, the marks of one frame found by a lookup, and the head itself
+//!   when a status did not state it;
 //! - one frame's material whole (`ReadMaterial`, through [`MaterialReader`]), which takes
 //!   no record when it is read or found gone, and one for any other failure.
 //!
@@ -33,7 +36,7 @@ use acui_rows::{
     RuntimeMaterialReadState as State, MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 use actingcommand_contract::outcome::Code;
-use actingcommand_contract::EventType;
+use actingcommand_contract::{EventType, FrameId};
 use actingcommand_runtime_client::RuntimeClientError;
 
 use super::{connection_ended, InstanceKey, ReadLane, Unreached};
@@ -42,10 +45,13 @@ use crate::{ClientFailure, MaterialOutcome, MaterialReader, Spelling, MAX_FRAME_
 /// The lane's io timeout: how long a page or a material range waits for its receipt,
 /// and the bound of its connect, as for the ledger window's page connection.
 pub const PREVIEW_IO: Duration = Duration::from_secs(20);
-/// The rows of one poll. The two kinds of record it asks for come nowhere near this many
+/// The rows of one poll. The four kinds of record it asks for come nowhere near this many
 /// in the seconds between two polls; a page that holds more is not used
 /// ([`Poll::complete`]).
 pub const POLL_ROWS: u16 = 64;
+/// The rows of the one page of a frame's marks: its recognition and the inputs meant on
+/// it come nowhere near this many.
+pub const MARK_ROWS: u16 = 16;
 /// The windows a lookup reads down from the head, each just below the one before: 512
 /// positions, then four times as many each time.
 pub const LOOKUP_WINDOWS: [u64; 5] = [512, 2_048, 8_192, 32_768, 131_072];
@@ -67,7 +73,7 @@ pub struct Reach<T> {
 }
 
 /// One poll's page: the frames and capture failures of the instance after the position
-/// asked from, in ledger order.
+/// asked from, in ledger order, and what its tasks recognized and meant on frames.
 #[derive(Debug, Clone)]
 pub struct Poll {
     /// The position the Runtime answered at: where the next poll asks from, once this
@@ -79,6 +85,89 @@ pub struct Poll {
     pub complete: bool,
     pub frames: Vec<FrameSeen>,
     pub failures: Vec<CaptureFailure>,
+    pub marks: FrameMarks,
+}
+
+/// The records of what tasks recognized on frames of the instance and the inputs they meant
+/// on them, as they came, which only [`FrameMarks::overlay`] reads. A frame's come after its
+/// own `artifact.verified` record: a task recognizes a frame once it is captured and kept.
+#[derive(Debug, Clone, Default)]
+pub struct FrameMarks {
+    events: Vec<ProjectedEvent>,
+    /// The page they came on was not whole: a frame's may lack some.
+    cut: bool,
+}
+
+impl FrameMarks {
+    /// Whether the page they came on was not whole.
+    pub fn cut(&self) -> bool {
+        self.cut
+    }
+
+    /// Takes in `other`'s records, each once.
+    pub fn absorb(&mut self, other: FrameMarks) {
+        for event in other.events {
+            if !self.events.iter().any(|held| held.sequence == event.sequence) {
+                self.events.push(event);
+            }
+        }
+        self.cut |= other.cut;
+    }
+
+    /// Keeps only the records of the frames `keys` names.
+    pub fn keep(&mut self, keys: &[&FrameKey]) {
+        self.events.retain(|event| {
+            let key = event.links.frame_id().map(|frame| FrameKey::Frame(code(frame)));
+            key.is_some_and(|key| keys.contains(&&key))
+        });
+    }
+
+    /// What the records say was recognized and meant on the frame `key` names; none when
+    /// they say nothing of it, and always for a frame that names no frame id. The targets'
+    /// names are left out: the picture draws no words on a frame.
+    pub fn overlay(&self, key: &FrameKey) -> Option<Overlay> {
+        let FrameKey::Frame(frame) = key else {
+            return None;
+        };
+        let group = acui_model::frame_group(frame, &self.events);
+        if group.recognition.is_none() && group.marks.is_empty() {
+            return None;
+        }
+        let boxes = group
+            .boxes
+            .iter()
+            .map(|target| MarkBox {
+                x: target.x,
+                y: target.y,
+                width: target.width,
+                height: target.height,
+                passed: target.passed,
+            })
+            .collect();
+        let points = group.marks.iter().flat_map(|mark| mark.points.iter().copied()).collect();
+        Some(Overlay { extent: group.extent, boxes, points })
+    }
+}
+
+/// What a task recognized and meant on one frame, in the frame's pixels: the frame's size
+/// as the recognition or an input's intent states it, if either does; the targets of the
+/// latest recognition that have a region, each with whether it passed; and every point an
+/// input was meant at.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Overlay {
+    pub extent: Option<(f32, f32)>,
+    pub boxes: Vec<MarkBox>,
+    pub points: Vec<(f32, f32)>,
+}
+
+/// A target's region on a frame, and whether the recognition found it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MarkBox {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub passed: bool,
 }
 
 /// What a lookup found.
@@ -136,11 +225,13 @@ pub enum FrameOrigin {
     Observation,
 }
 
-/// Where a frame's material is: its record and its artifact.
+/// Where a frame's material is: its record and its artifact; and the frame's id, which its
+/// marks are asked by.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FrameRef {
     event: LedgerEventPosition,
     artifact: ProjectedArtifactReference,
+    frame: Option<FrameId>,
 }
 
 /// A capture of the instance that failed. `code` is the outcome its record states, for
@@ -206,20 +297,27 @@ impl PreviewLane {
         Ok(Reach { epoch, value: page.snapshot_ledger_position(), pages: 1 })
     }
 
-    /// The instance's frames and capture failures recorded after `after`, at the
-    /// Runtime's latest position: one page of at most [`POLL_ROWS`] rows, asked without
-    /// a snapshot.
+    /// The instance's frames, capture failures, recognitions and inputs meant recorded after
+    /// `after`, at the Runtime's latest position: one page of at most [`POLL_ROWS`] rows,
+    /// asked without a snapshot.
     pub fn poll(&mut self, instance: InstanceKey, after: u64) -> Result<Reach<Poll>, Unreached> {
         let query = EventQuery {
             instance_id: Some(instance.0),
-            event_types: vec![EventType::ArtifactVerified, EventType::CaptureFailed],
+            event_types: vec![
+                EventType::ArtifactVerified,
+                EventType::CaptureFailed,
+                EventType::TaskRecognitionCompleted,
+                EventType::TaskEffectIntent,
+            ],
             from_sequence: Some(after.saturating_add(1)),
             ..EventQuery::default()
         };
         let request = page_request(POLL_ROWS, None)?.without_run_recovery();
         let (epoch, page) = self.page(&query, &request)?;
+        let complete = !page.has_more() && page_source_complete(&page);
         let mut frames = Vec::new();
         let mut failures = Vec::new();
+        let mut marks = FrameMarks { events: Vec::new(), cut: !complete };
         for event in page.events() {
             if let Some(frame) = frame_seen(event) {
                 frames.push(frame);
@@ -229,15 +327,44 @@ impl PreviewLane {
                     at_ms: event.timestamp_unix_ms,
                     code: failure_code(event),
                 });
+            } else if is_mark(event) {
+                marks.events.push(event.clone());
             }
         }
-        let poll = Poll {
-            snapshot: page.snapshot_ledger_position(),
-            complete: !page.has_more() && page_source_complete(&page),
-            frames,
-            failures,
-        };
+        let poll =
+            Poll { snapshot: page.snapshot_ledger_position(), complete, frames, failures, marks };
         Ok(Reach { epoch, value: poll, pages: 1 })
+    }
+
+    /// What tasks recognized on `frame`, a frame a lookup found, and the inputs meant on it,
+    /// recorded after it up to `head`, the position the lookup read at: one page of at most
+    /// [`MARK_ROWS`] rows at that snapshot, as polls after `head` bring the rest. `None` for
+    /// a frame that names no frame id, which nothing names: no page is asked.
+    pub fn marks(
+        &mut self,
+        instance: InstanceKey,
+        frame: &FrameSeen,
+        head: u64,
+    ) -> Result<Option<Reach<FrameMarks>>, Unreached> {
+        let Some(frame_id) = frame.reference.frame else {
+            return Ok(None);
+        };
+        let query = EventQuery {
+            instance_id: Some(instance.0),
+            frame_id: Some(frame_id),
+            event_types: vec![EventType::TaskRecognitionCompleted, EventType::TaskEffectIntent],
+            from_sequence: Some(frame.sequence),
+            ..EventQuery::default()
+        };
+        let request = page_request(MARK_ROWS, None)?
+            .at_snapshot(head)
+            .map_err(|error| request_refused(error.code()))?
+            .without_run_recovery();
+        let (epoch, page) = self.page(&query, &request)?;
+        let complete = !page.has_more() && page_source_complete(&page);
+        let events = page.events().iter().filter(|event| is_mark(event)).cloned().collect();
+        let marks = FrameMarks { events, cut: !complete };
+        Ok(Some(Reach { epoch, value: marks, pages: 1 }))
     }
 
     /// The instance's newest frame at or below `head`, a position the Runtime stated.
@@ -465,8 +592,14 @@ fn frame_seen(event: &ProjectedEvent) -> Option<FrameSeen> {
         reference: FrameRef {
             event: LedgerEventPosition { event_id: event.event_id, sequence: event.sequence },
             artifact: artifact.clone(),
+            frame: event.links.frame_id().copied(),
         },
     })
+}
+
+/// Whether a record is one of what a task recognized on a frame, or an input it meant on one.
+fn is_mark(event: &ProjectedEvent) -> bool {
+    matches!(event.event_type, EventType::TaskRecognitionCompleted | EventType::TaskEffectIntent)
 }
 
 /// The outcome code a `capture.failed` record states, codes only in the `Ui` profile.

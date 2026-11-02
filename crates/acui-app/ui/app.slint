@@ -245,8 +245,10 @@ export global Strings {
     in property <string> settings-advanced;
     in property <string> settings-runtime;
     in property <string> settings-appearance;
-    // The title of the workbench's live view, in its right column.
+    // The title of the workbench's live view, in its right column, and the box beside it that
+    // draws the recognition's boxes and the inputs' points on a task's frame.
     in property <string> picture-title;
+    in property <string> picture-overlays;
     // The settings page's field of the evidence days: its name, which also names the field
     // for a screen reader, the unit after it and the button that sends it. The button that
     // hides the start report's notice.
@@ -1160,16 +1162,22 @@ component AccountCardView {
 
 // The live view's frame on the workbench, in its right column; the ledger window's frame
 // viewer is its own. The frame keeps its proportions: it is scaled by the smaller of the
-// two ratios and centred, on a dark ground that suits either theme. On its lower corner,
-// when it was captured, amber once it is an old picture; across the top, over a dimmed
-// frame, why it is not the newest. With no frame, in its place why there is none, red when
-// that is a failure. A screen reader hears the same words.
+// two ratios and centred, on a dark ground that suits either theme. On it, in its own
+// pixels and so scaled and placed with it, the targets the recognition found, solid, and
+// those it did not, dashed, without words; and the points the inputs were meant at, as tap
+// marks. On its lower corner, when it was captured, amber once it is an old picture; across
+// the top, over a dimmed frame, why it is not the newest. With no frame, in its place why
+// there is none, red when that is a failure. A screen reader hears the same words.
 component FrameCanvas inherits Rectangle {
     // The decoded frame, and its size in pixels.
     in property <image> source;
     in property <bool> ready;
     in property <float> extent-width;
     in property <float> extent-height;
+    // What is drawn on it, in the frame's pixels, while it is.
+    in property <[TargetItem]> targets;
+    in property <[OverlayItem]> points;
+    in property <bool> overlay-shown;
     in property <string> corner;
     in property <bool> corner-warn;
     in property <bool> dimmed;
@@ -1196,6 +1204,38 @@ component FrameCanvas inherits Rectangle {
         image-fit: fill;
         source: root.source;
         accessible-role: none;
+    }
+    // Over the frame, under the dimming, so a frame that is not the newest dims with what is
+    // drawn on it.
+    if root.ready && root.overlay-shown: Rectangle {
+        x: root.frame-x;
+        y: root.frame-y;
+        width: root.frame-width;
+        height: root.frame-height;
+        for target in root.targets: Rectangle {
+            x: target.x * root.fit * 1px;
+            y: target.y * root.fit * 1px;
+            width: max(target.width * root.fit * 1px, 2px);
+            height: max(target.height * root.fit * 1px, 2px);
+            if target.passed: Rectangle {
+                border-color: #4cd964;
+                border-width: 2px;
+            }
+            if !target.passed: DashedBox {
+                stroke: #ffb020;
+            }
+        }
+        // A tap mark: ringed, so it reads on any frame.
+        for point in root.points: Rectangle {
+            x: point.x * root.fit * 1px - 9px;
+            y: point.y * root.fit * 1px - 9px;
+            width: 18px;
+            height: 18px;
+            border-radius: 9px;
+            background: #ff6a3d;
+            border-color: #ffffff;
+            border-width: 2px;
+        }
     }
     if root.ready && root.dimmed: Rectangle {
         x: root.frame-x;
@@ -1445,6 +1485,17 @@ export component WorkbenchWindow inherits Window {
     in property <string> picture-empty;
     in property <bool> picture-empty-failed;
     in property <bool> picture-withdrawn;
+    // On a task's frame, in its pixels: the targets its recognition evaluated, without words,
+    // and the points its inputs were meant at, while drawn. The box beside the title that
+    // draws them, both ways, and whether it can be pressed: only on a task's frame. Under the
+    // frame, in amber, why nothing is drawn on it, and that its proportions are not among
+    // those its game's standard pack declares.
+    in property <[TargetItem]> picture-targets;
+    in property <[OverlayItem]> picture-points;
+    in property <bool> picture-overlay-shown;
+    in-out property <bool> picture-overlays-on: true;
+    in property <bool> picture-overlays-offered;
+    in property <string> picture-hint;
     // The Runtime's configuration file an instance is added to by hand,
     // selectable so it can be copied; or why there is none.
     in property <string> config-path;
@@ -1492,6 +1543,8 @@ export component WorkbenchWindow inherits Window {
     callback page-picked(WorkbenchPage);
     // By the card's alias.
     callback account-picked(string);
+    // The box beside the picture's title, as it is now.
+    callback picture-overlays-toggled(bool);
     callback start-runtime();
     callback pause-all();
     callback resume-all();
@@ -1854,12 +1907,14 @@ export component WorkbenchWindow inherits Window {
                                     log-note: root.log-note;
                                     log-failed: root.log-failed;
                                 }
-                                // The title, and whose picture this is: what gives way.
+                                // The title, and whose picture this is: what gives way. At the
+                                // end, the box that draws on the frame.
                                 HorizontalLayout {
                                     spacing: 8px;
                                     vertical-stretch: 0;
                                     CardTitle {
                                         text: Strings.picture-title;
+                                        vertical-alignment: center;
                                         horizontal-stretch: 0;
                                     }
                                     Caption {
@@ -1867,6 +1922,15 @@ export component WorkbenchWindow inherits Window {
                                         overflow: elide;
                                         min-width: 0px;
                                         horizontal-stretch: 1;
+                                    }
+                                    SkinCheckBox {
+                                        text: Strings.picture-overlays;
+                                        enabled: root.picture-overlays-offered;
+                                        checked <=> root.picture-overlays-on;
+                                        horizontal-stretch: 0;
+                                        toggled => {
+                                            root.picture-overlays-toggled(self.checked);
+                                        }
                                     }
                                 }
                                 // UI-3e1's rescue bar goes here, between the title and the
@@ -1879,6 +1943,9 @@ export component WorkbenchWindow inherits Window {
                                     ready: root.picture-ready;
                                     extent-width: root.picture-width;
                                     extent-height: root.picture-height;
+                                    targets: root.picture-targets;
+                                    points: root.picture-points;
+                                    overlay-shown: root.picture-overlay-shown;
                                     corner: root.picture-corner;
                                     corner-warn: root.picture-corner-warn;
                                     dimmed: root.picture-dimmed;
@@ -1899,6 +1966,12 @@ export component WorkbenchWindow inherits Window {
                                     wrap: word-wrap;
                                     min-height: self.preferred-height;
                                     vertical-stretch: 0;
+                                }
+                                // Why nothing is drawn on it, and its proportions, in amber.
+                                if root.picture-hint != "": Notice {
+                                    text: root.picture-hint;
+                                    warning: true;
+                                    font-size: Scale.grey-font;
                                 }
                             }
                         }
