@@ -1244,11 +1244,13 @@ component FrameCanvas inherits Rectangle {
         height: root.frame-height;
         background: #000000a0;
     }
-    // As wide as its words, at most the frame's width, where it wraps.
+    // As wide as its words, where it wraps; from the frame's corner to the canvas's edge at
+    // most, so on a narrow frame, a portrait one in a short window, it reaches over the dark
+    // ground beside the frame rather than standing many lines tall over it.
     if root.ready && root.corner != "": Rectangle {
         x: root.frame-x + 4px;
         y: root.frame-y + root.frame-height - self.height - 4px;
-        width: min(corner-text.preferred-width + 8px, max(root.frame-width - 8px, 0px));
+        width: min(corner-text.preferred-width + 8px, max(root.width - root.frame-x - 8px, 0px));
         height: corner-text.preferred-height + 4px;
         background: #000000a0;
         border-radius: 2px;
@@ -1893,85 +1895,94 @@ export component WorkbenchWindow inherits Window {
                         }
 
                         // right: the window itself, then the live view of the account
-                        // picked on the left
+                        // picked on the left. The frame takes what the column can spare;
+                        // all of it scrolls only when the column is too short for it with
+                        // the frame at its least, as in the smallest window at the largest
+                        // text with lines above it, rather than its foot being cut off.
                         Card {
                             horizontal-stretch: 1;
-                            VerticalLayout {
-                                padding: 10px;
-                                padding-left: 12px;
-                                padding-right: 12px;
-                                spacing: 6px;
-                                WindowNotes {
-                                    settings-errors: root.settings-errors;
-                                    settings-warnings: root.settings-warnings;
-                                    log-note: root.log-note;
-                                    log-failed: root.log-failed;
-                                }
-                                // The title, and whose picture this is: what gives way. At the
-                                // end, the box that draws on the frame.
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    vertical-stretch: 0;
-                                    CardTitle {
-                                        text: Strings.picture-title;
-                                        vertical-alignment: center;
-                                        horizontal-stretch: 0;
+                            // As tall as the card, or as the least all of it needs, whichever
+                            // is taller: a scroll view's own default.
+                            ScrollView {
+                                viewport-width: self.visible-width;
+                                VerticalLayout {
+                                    padding: 10px;
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    spacing: 6px;
+                                    WindowNotes {
+                                        settings-errors: root.settings-errors;
+                                        settings-warnings: root.settings-warnings;
+                                        log-note: root.log-note;
+                                        log-failed: root.log-failed;
                                     }
-                                    Caption {
-                                        text: root.picture-account;
-                                        overflow: elide;
-                                        min-width: 0px;
-                                        horizontal-stretch: 1;
-                                    }
-                                    SkinCheckBox {
-                                        text: Strings.picture-overlays;
-                                        enabled: root.picture-overlays-offered;
-                                        checked <=> root.picture-overlays-on;
-                                        horizontal-stretch: 0;
-                                        toggled => {
-                                            root.picture-overlays-toggled(self.checked);
+                                    // The title, and whose picture this is: what gives way. At the
+                                    // end, the box that draws on the frame.
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        vertical-stretch: 0;
+                                        CardTitle {
+                                            text: Strings.picture-title;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 0;
+                                        }
+                                        Caption {
+                                            text: root.picture-account;
+                                            overflow: elide;
+                                            min-width: 0px;
+                                            horizontal-stretch: 1;
+                                        }
+                                        SkinCheckBox {
+                                            text: Strings.picture-overlays;
+                                            enabled: root.picture-overlays-offered;
+                                            checked <=> root.picture-overlays-on;
+                                            horizontal-stretch: 0;
+                                            toggled => {
+                                                root.picture-overlays-toggled(self.checked);
+                                            }
                                         }
                                     }
-                                }
-                                // UI-3e1's rescue bar goes here, between the title and the
-                                // picture.
-                                // The frame takes every pixel the column can spare.
-                                if !root.picture-withdrawn: FrameCanvas {
-                                    min-height: 160px;
-                                    vertical-stretch: 1;
-                                    source: root.picture-image;
-                                    ready: root.picture-ready;
-                                    extent-width: root.picture-width;
-                                    extent-height: root.picture-height;
-                                    targets: root.picture-targets;
-                                    points: root.picture-points;
-                                    overlay-shown: root.picture-overlay-shown;
-                                    corner: root.picture-corner;
-                                    corner-warn: root.picture-corner-warn;
-                                    dimmed: root.picture-dimmed;
-                                    banner: root.picture-banner;
-                                    empty: root.picture-empty;
-                                    empty-failed: root.picture-empty-failed;
-                                }
-                                // Taken down: UI-3d says why here, and offers to resume.
-                                if root.picture-withdrawn: Rectangle {
-                                    min-height: 160px;
-                                    vertical-stretch: 1;
-                                }
-                                // What took the frame shown, in grey.
-                                if root.picture-origin != "": Text {
-                                    text: root.picture-origin;
-                                    font-size: Scale.grey-font;
-                                    color: Look.text-caption;
-                                    wrap: word-wrap;
-                                    min-height: self.preferred-height;
-                                    vertical-stretch: 0;
-                                }
-                                // Why nothing is drawn on it, and its proportions, in amber.
-                                if root.picture-hint != "": Notice {
-                                    text: root.picture-hint;
-                                    warning: true;
-                                    font-size: Scale.grey-font;
+                                    // UI-3e1's rescue bar goes here, between the title and the
+                                    // picture.
+                                    // The frame takes every pixel the column can spare, and never
+                                    // less than its least.
+                                    if !root.picture-withdrawn: FrameCanvas {
+                                        min-height: 160px;
+                                        vertical-stretch: 1;
+                                        source: root.picture-image;
+                                        ready: root.picture-ready;
+                                        extent-width: root.picture-width;
+                                        extent-height: root.picture-height;
+                                        targets: root.picture-targets;
+                                        points: root.picture-points;
+                                        overlay-shown: root.picture-overlay-shown;
+                                        corner: root.picture-corner;
+                                        corner-warn: root.picture-corner-warn;
+                                        dimmed: root.picture-dimmed;
+                                        banner: root.picture-banner;
+                                        empty: root.picture-empty;
+                                        empty-failed: root.picture-empty-failed;
+                                    }
+                                    // Taken down: UI-3d says why here, and offers to resume.
+                                    if root.picture-withdrawn: Rectangle {
+                                        min-height: 160px;
+                                        vertical-stretch: 1;
+                                    }
+                                    // What took the frame shown, in grey.
+                                    if root.picture-origin != "": Text {
+                                        text: root.picture-origin;
+                                        font-size: Scale.grey-font;
+                                        color: Look.text-caption;
+                                        wrap: word-wrap;
+                                        min-height: self.preferred-height;
+                                        vertical-stretch: 0;
+                                    }
+                                    // Why nothing is drawn on it, and its proportions, in amber.
+                                    if root.picture-hint != "": Notice {
+                                        text: root.picture-hint;
+                                        warning: true;
+                                        font-size: Scale.grey-font;
+                                    }
                                 }
                             }
                         }
