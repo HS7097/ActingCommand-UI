@@ -214,10 +214,6 @@ impl PreviewTally {
         }
     }
 
-    fn head_page(&self) {
-        self.lookup_pages.fetch_add(1, Ordering::SeqCst);
-    }
-
     /// A page of a frame's marks.
     fn mark_page(&self) {
         self.mark_pages.fetch_add(1, Ordering::SeqCst);
@@ -567,21 +563,14 @@ impl Line {
         }
     }
 
-    /// The account's newest frame, down from the head `Status` stated, or from the one a
-    /// page states when it did not; polls go on after that head.
+    /// The account's newest frame, down from the head `Status` stated; polls go on after
+    /// that head. A status that states no head asks for nothing: every page names the
+    /// instance and a position to read from (the ledger's rule since 10-26), and a page
+    /// asked for the head alone would name neither, so the next round waits for a status
+    /// that states one.
     fn look_up(&mut self, lane: &mut PreviewLane, tally: &PreviewTally) -> Result<(), Halt> {
-        let head = match self.target.head {
-            Some(head) => head,
-            None => {
-                // Counted and timed whether it came back or not.
-                let started = Instant::now();
-                let reached = lane.head();
-                tally.head_page();
-                slow(&format!("the ledger's head for {}", self.target.alias), started.elapsed());
-                let reach = reached?;
-                self.same_epoch(&reach.epoch)?;
-                reach.value
-            }
+        let Some(head) = self.target.head else {
+            return Ok(());
         };
         let found = self.latest(lane, tally, head)?;
         if let Some(frame) = &found {

@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use acui_rows::{
-    code, page_source_complete, ArtifactKind, EventQuery, LedgerEventPosition, LedgerView,
+    code, page_source_complete, ArtifactKind, EventQuery, LedgerEventPosition,
     ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
     PublicEventPayload, RuntimeEventQueryCursor, RuntimeEventQueryPage,
     RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit as Limit,
@@ -286,15 +286,6 @@ pub struct PreviewLane {
 impl PreviewLane {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { lane: ReadLane::new(root, PREVIEW_IO) }
-    }
-
-    /// The ledger's committed head, for when a status did not state it: a page of one
-    /// row, asked without a snapshot, states the position the Runtime answered at.
-    pub fn head(&mut self) -> Result<Reach<u64>, Unreached> {
-        let query = EventQuery { view: Some(LedgerView::Events), ..EventQuery::default() };
-        let request = page_request(1, None)?.without_run_recovery();
-        let (epoch, page) = self.page(&query, &request)?;
-        Ok(Reach { epoch, value: page.snapshot_ledger_position(), pages: 1 })
     }
 
     /// The instance's frames, capture failures, recognitions and inputs meant recorded after
