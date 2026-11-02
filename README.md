@@ -378,7 +378,7 @@ On the frame, beside the event's own geometry:
 ## Running
 
 ```
-acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--lang <zh|en>]
+acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--account <alias>] [--lang <zh|en>]
 acui --help
 ```
 
@@ -428,7 +428,9 @@ program from the installation's selection instead, and refuses a `--state-root` 
 the same red bar). `--source` selects the ledger window's read face (see above).
 `--tab` specifies the ledger window's startup tab (for screenshots and review), and its values are the
 views' own wire names. `--page` is of the same kind: it only picks the workbench page the window opens on,
-`main` (the default) or `settings` (for screenshots). `--lang` applies to **this run only**, overrides the language in the settings
+`main` (the default) or `settings` (for screenshots). `--account` is of the same kind too: the account card
+selected when the window opens (the first card otherwise, and when no account of that alias is listed, which
+the technical log says). `--lang` applies to **this run only**, overrides the language in the settings
 file, and is not written back to the settings file.
 
 Started directly — `acui.exe`, or a shortcut that points at it — the console opens no black console
@@ -532,6 +534,9 @@ theme = "flat"
 state_root = '<install root>\state'
 actingd_config = '<install root>\actingd.config.json'
 actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'
+# optional, whole seconds 2–60, default 10: the live picture reads a task frame at most this often.
+# Reading a frame runs on the Runtime's ledger writer thread, so keep it slow outside a joint test.
+preview_frame_gap_seconds = 10
 ```
 
 It is read once at startup, and a dropdown change writes its one key: the file is read again, the last
@@ -1151,7 +1156,8 @@ agents is `skills/actingcommand/` in the
 
 ## Four layers, four crates
 
-One Cargo workspace, dependency direction app → model → rows ← source:
+One Cargo workspace, dependency direction app → model → rows ← source, and source → model for the
+one frame-grouping function the live picture shares with the ledger window:
 
 - `acui-rows`: the only place that names contract types for the view model; it re-exports the contract
   types, and adds display functions, the display-name dictionary, and two flattened structures filled by
