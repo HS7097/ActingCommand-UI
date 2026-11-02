@@ -12,13 +12,15 @@ use std::mem;
 use std::time::Instant;
 
 use acui_source::workbench::{
-    ConfigRead, ExplainRead, InstanceLive, LiveRead, LiveSnapshot, PresetProblem, StartRead,
+    ActivityKind, ConfigRead, ExplainRead, InstanceLive, LiveRead, LiveSnapshot, PresetProblem,
+    StartRead,
 };
 use acui_source::{ClientFailure, PauseFact};
 
 use super::actions::{self, Actions, ActionsView, PresetView};
 use super::card::{self, CardView, Down, Schedule};
-use super::picture::Pictures;
+use super::picture::{LinkNow, Offline, PictureView, Pictures, PreviewGate};
+use super::preview::{Order, Target};
 use super::read::{Lane, Read, EXPLAIN_TOO_OLD, START_TRIES};
 use super::settings::{self, AutostartView, SettingsView, StartView};
 use super::tools::{NameTable, NamesRead, WatchdogRead};
@@ -207,8 +209,11 @@ pub struct Model {
     autostart: Autostart,
     /// How many runs of `watchdog status` were asked for.
     autostart_asks: u64,
-    /// Which account's picture the right column shows.
+    /// Which account's picture the right column shows, and what the picture thread found.
     pictures: Pictures,
+    /// The ledger's committed head as the newest `Status` stated it, while online: where the
+    /// picture's lookup starts down from.
+    ledger_head: Option<u64>,
 }
 
 /// What a `Status` read changed, for what the event loop does next.
@@ -274,11 +279,24 @@ impl Model {
             autostart: Autostart::NotAsked,
             autostart_asks: 0,
             pictures: Pictures::default(),
+            ledger_head: None,
         }
     }
 
     pub fn link(&self) -> &Link {
         &self.link
+    }
+
+    /// The owner epoch online, as the wire spells it.
+    pub fn online_epoch(&self) -> Option<&str> {
+        match &self.link {
+            Link::Online { epoch, .. } => Some(epoch.as_str()),
+            Link::Unknown
+            | Link::Absent(_)
+            | Link::NoAnswer(_)
+            | Link::Trouble(_)
+            | Link::ThreadFailed => None,
+        }
     }
 
     /// The page shown, or to be shown once the window is up.
@@ -481,7 +499,7 @@ impl Model {
             None => self.instances.iter().map(|instance| instance.alias.as_str()).collect(),
             Some(_) => self.seen_aliases.iter().map(String::as_str).collect(),
         };
-        self.pictures.shown(&aliases)
+        self.pictures.account(&aliases)
     }
 
     /// `--account`, before the window is up: that account's picture shows once a `Status`
@@ -495,6 +513,83 @@ impl Model {
         let before = self.picture_account().map(str::to_owned);
         self.pictures.pick(alias);
         self.picture_account() != before.as_deref()
+    }
+
+    pub fn pictures(&self) -> &Pictures {
+        &self.pictures
+    }
+
+    pub fn pictures_mut(&mut self) -> &mut Pictures {
+        &mut self.pictures
+    }
+
+    /// Whether the picture may read `alias` now. UI-3d writes this from the account's player
+    /// hold and its own ask for the device; nothing that asks it changes then.
+    pub fn preview_gate(&self, alias: &str) -> PreviewGate {
+        if self.pictures.halted(alias) {
+            PreviewGate::Freeze { since_ms: None }
+        } else {
+            PreviewGate::Open
+        }
+    }
+
+    /// The account the picture thread is to follow now, if any: the one whose picture shows,
+    /// on the main page of a window not minimized, while the Runtime answers and lists it, and
+    /// its gate is open. Fast while it runs a task or its recovery ladder climbs.
+    pub fn preview_target(&self) -> Option<Target> {
+        if self.page != Page::Main || !self.shown {
+            return None;
+        }
+        let Link::Online { epoch, .. } = &self.link else {
+            return None;
+        };
+        let alias = self.picture_account()?;
+        let instance = self.instances.iter().find(|instance| instance.alias == alias)?;
+        if self.preview_gate(alias) != PreviewGate::Open {
+            return None;
+        }
+        let fast = instance.activity.as_ref().is_some_and(|activity| {
+            matches!(
+                activity.kind,
+                ActivityKind::PolicyRun
+                    | ActivityKind::DirectRun
+                    | ActivityKind::HostRun
+                    | ActivityKind::Ladder
+            )
+        });
+        Some(Target {
+            alias: alias.to_owned(),
+            key: instance.key,
+            instance_id: instance.instance_id.clone(),
+            epoch: epoch.clone(),
+            head: self.ledger_head,
+            fast,
+        })
+    }
+
+    /// What the picture thread is to do now (`preview::sync`).
+    pub fn preview_sync(&mut self, now: Instant) -> Option<Order> {
+        let target = self.preview_target();
+        let account = self.picture_account().map(str::to_owned);
+        let withdrawn = account
+            .as_deref()
+            .is_some_and(|alias| self.preview_gate(alias) == PreviewGate::Withdrawn);
+        self.pictures.sync(account.as_deref(), target, withdrawn, now)
+    }
+
+    /// What the picture area shows at `now_ms`.
+    pub fn picture_view(&self, now_ms: u64) -> PictureView {
+        let account = self.picture_account();
+        let link = match &self.link {
+            Link::Unknown => LinkNow::Pending,
+            Link::Online { epoch, .. } => LinkNow::Online(epoch.as_str()),
+            Link::Absent(_) => LinkNow::Offline(Offline::NotRunning),
+            Link::NoAnswer(_) | Link::Trouble(_) | Link::ThreadFailed => {
+                LinkNow::Offline(Offline::Unreachable)
+            }
+        };
+        let gate = account.map_or(PreviewGate::Open, |alias| self.preview_gate(alias));
+        self.pictures.view(account, link, gate, now_ms)
     }
 
     /// What the schedule explanation reads leave now. A thread that does not read
@@ -521,9 +616,9 @@ impl Model {
         self.explain_asked_at = Some(now);
     }
 
-    /// Whether the workbench is not minimized, as last looked at.
-    pub fn set_shown(&mut self, shown: bool) {
-        self.shown = shown;
+    /// Whether the workbench is not minimized, as last looked at: whether that changed.
+    pub fn set_shown(&mut self, shown: bool) -> bool {
+        mem::replace(&mut self.shown, shown) != shown
     }
 
     /// Whether the log has yet to hear `line`; it has from now on.
@@ -577,8 +672,8 @@ impl Model {
     }
 
     fn online(&mut self, snapshot: LiveSnapshot, fault_cleared: bool) -> LiveLanded {
-        // The ledger's head is for the picture's lookup (UI-3c), which does not read yet.
-        let LiveSnapshot { pid, epoch, global_pause, instances, ledger_head: _ } = snapshot;
+        let LiveSnapshot { pid, epoch, global_pause, instances, ledger_head } = snapshot;
+        self.ledger_head = ledger_head;
         let epoch_changed = self.epoch.as_deref() != Some(epoch.as_str());
         if epoch_changed {
             // Started again, not for the first time this run: what the watchdog said is of
@@ -699,6 +794,7 @@ impl Model {
     fn leave_online(&mut self) {
         self.instances.clear();
         self.global_pause = None;
+        self.ledger_head = None;
         self.explain.error = None;
         self.config.error = None;
         self.actions.status_lost();

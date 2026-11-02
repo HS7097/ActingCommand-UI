@@ -92,6 +92,14 @@ pub enum Latest {
     NoneWithin { from: u64 },
 }
 
+/// A lookup that stopped short: why, and how many pages it asked by then, the one that
+/// failed included, so that its reads count as those of one that did not.
+#[derive(Debug, Clone)]
+pub struct LookupStopped {
+    pub failure: Unreached,
+    pub pages: u32,
+}
+
 /// One captured frame, as its `artifact.verified` record states it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameSeen {
@@ -239,10 +247,27 @@ impl PreviewLane {
     /// position, or after [`LOOKUP_PAGES`] pages, with the newest frame it read by then.
     /// The reach is the first page's: the ledger's positions run on across a restart, so a
     /// page on either side of one tells the same history, and a caller already at the new
-    /// owner drops the reach and looks again.
-    pub fn latest(&mut self, instance: InstanceKey, head: u64) -> Result<Reach<Latest>, Unreached> {
-        let mut answered: Option<String> = None;
+    /// owner drops the reach and looks again. One that stops short states the pages it
+    /// asked by then.
+    pub fn latest(
+        &mut self,
+        instance: InstanceKey,
+        head: u64,
+    ) -> Result<Reach<Latest>, LookupStopped> {
         let mut pages = 0;
+        let looked = self.look_down(instance, head, &mut pages);
+        looked.map_err(|failure| LookupStopped { failure, pages })
+    }
+
+    /// [`Self::latest`], counting in `pages` every page it asks, the one that fails
+    /// included.
+    fn look_down(
+        &mut self,
+        instance: InstanceKey,
+        head: u64,
+        pages: &mut u32,
+    ) -> Result<Reach<Latest>, Unreached> {
+        let mut answered: Option<String> = None;
         let mut newest: Option<FrameSeen> = None;
         let mut capped = false;
         // Every position from here up to the head has been read.
@@ -262,7 +287,7 @@ impl PreviewLane {
             };
             let mut cursor = None;
             loop {
-                if pages == LOOKUP_PAGES {
+                if *pages == LOOKUP_PAGES {
                     capped = true;
                     break 'windows;
                 }
@@ -270,8 +295,8 @@ impl PreviewLane {
                     .at_snapshot(head)
                     .map_err(|error| request_refused(error.code()))?
                     .without_run_recovery();
+                *pages += 1;
                 let (epoch, page) = self.page(&query, &request)?;
-                pages += 1;
                 if answered.is_none() {
                     answered = Some(epoch);
                 }
@@ -298,7 +323,7 @@ impl PreviewLane {
             Some(frame) => Latest::Found { frame, capped },
             None => Latest::NoneWithin { from: read_from },
         };
-        Ok(Reach { epoch, value, pages })
+        Ok(Reach { epoch, value, pages: *pages })
     }
 
     /// `frame`'s material whole, through the client's complete read under the console's

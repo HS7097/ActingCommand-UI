@@ -1427,9 +1427,24 @@ export component WorkbenchWindow inherits Window {
     // Under the accounts, when the tasks' names could not be read.
     in property <string> names-note;
     // The right column's live view: the account whose picture it is, the one picked on its
-    // card or else the first, beside the title; and what it says while no frame shows.
+    // card or else the first, beside the title. The frame, decoded off the event loop, and its
+    // size in pixels, while one shows; on its corner when it was captured, amber once it is an
+    // old picture; across its top, dimmed, why it is not the newest; under it what took it.
+    // Else what it says, red when that is a failure. Taken down, in place of all that, UI-3d's
+    // line.
     in property <string> picture-account;
+    in property <image> picture-image;
+    in property <bool> picture-ready;
+    in property <float> picture-width;
+    in property <float> picture-height;
+    in property <string> picture-corner;
+    in property <bool> picture-corner-warn;
+    in property <bool> picture-dimmed;
+    in property <string> picture-banner;
+    in property <string> picture-origin;
     in property <string> picture-empty;
+    in property <bool> picture-empty-failed;
+    in property <bool> picture-withdrawn;
     // The Runtime's configuration file an instance is added to by hand,
     // selectable so it can be copied; or why there is none.
     in property <string> config-path;
@@ -1857,10 +1872,33 @@ export component WorkbenchWindow inherits Window {
                                 // UI-3e1's rescue bar goes here, between the title and the
                                 // picture.
                                 // The frame takes every pixel the column can spare.
-                                FrameCanvas {
+                                if !root.picture-withdrawn: FrameCanvas {
                                     min-height: 160px;
                                     vertical-stretch: 1;
+                                    source: root.picture-image;
+                                    ready: root.picture-ready;
+                                    extent-width: root.picture-width;
+                                    extent-height: root.picture-height;
+                                    corner: root.picture-corner;
+                                    corner-warn: root.picture-corner-warn;
+                                    dimmed: root.picture-dimmed;
+                                    banner: root.picture-banner;
                                     empty: root.picture-empty;
+                                    empty-failed: root.picture-empty-failed;
+                                }
+                                // Taken down: UI-3d says why here, and offers to resume.
+                                if root.picture-withdrawn: Rectangle {
+                                    min-height: 160px;
+                                    vertical-stretch: 1;
+                                }
+                                // What took the frame shown, in grey.
+                                if root.picture-origin != "": Text {
+                                    text: root.picture-origin;
+                                    font-size: Scale.grey-font;
+                                    color: Look.text-caption;
+                                    wrap: word-wrap;
+                                    min-height: self.preferred-height;
+                                    vertical-stretch: 0;
                                 }
                             }
                         }

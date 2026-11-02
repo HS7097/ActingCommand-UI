@@ -193,7 +193,7 @@ fn run(args: Args, loaded: settings::Loaded, language: Language) -> Result<(), F
         |error: slint::PlatformError| Fatal::failed(fill(labels.window_failed, &[&error.to_string()]));
     let workbench = WorkbenchWindow::new().map_err(window_failed)?;
     ui.show_workbench(workbench).map_err(window_failed)?;
-    workbench::start(&ui);
+    workbench::start(&ui, stored.preview_frame_gap);
     if args.tab.is_some() || args.source.is_some() {
         ui.open_ledger(args.source.unwrap_or_default(), args.tab);
     }
