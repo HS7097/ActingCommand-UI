@@ -162,7 +162,7 @@ fn reason_words(ui: &Ui, labels: &Labels, class: ReasonClass, why: &str) -> Stri
         ReasonClass::Unlisted => {
             let line = format!("no sentence for not-running reason {why}");
             if ui.model.borrow_mut().first_told(&line) {
-                report::log("acui-cards", &line);
+                report::log_quiet("acui-cards", &line);
             }
             return outcome_short(labels, why)
                 .unwrap_or_else(|| labels.outcome_unknown_short.to_owned());
@@ -179,7 +179,7 @@ fn cause_words(ui: &Ui, labels: &Labels, cause: &str) -> String {
         Ok(None) => {
             let line = format!("no words for fence cause {cause}");
             if ui.model.borrow_mut().first_told(&line) {
-                report::log("acui-cards", &line);
+                report::log_quiet("acui-cards", &line);
             }
             labels.card_cause_unknown.to_owned()
         }

@@ -243,7 +243,7 @@ fn run(lane: Lane, root: PathBuf, commands: &Receiver<Poke>, shown: &AtomicBool,
             let took = now.elapsed();
             tally.note(read, took);
             if took >= LONG_READ {
-                report::log(lane.name(), &format!("{} took {} ms", read.name(), took.as_millis()));
+                report::log_quiet(lane.name(), &format!("{} took {} ms", read.name(), took.as_millis()));
             }
             due.last = Some(Instant::now());
             due.failed = landing.failed();

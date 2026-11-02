@@ -128,7 +128,7 @@ pub fn start(ui: &Ui) {
 pub fn stop(ui: &Ui) {
     let reading = ui.reading.borrow_mut().take();
     if let Some(reading) = reading {
-        report::log("acui-reads", &reading.tally.line());
+        report::log_quiet("acui-reads", &reading.tally.line());
     }
 }
 
@@ -274,7 +274,7 @@ fn names_read(read: NamesRead, took: Duration) {
 
 /// Every run goes in the log: they are few, and the limit on them is checked there.
 fn names_landed(ui: &Ui, read: NamesRead, took: Duration) {
-    report::log(tools::THREAD, &format!("{} ({} ms)", read.log_line(), took.as_millis()));
+    report::log_quiet(tools::THREAD, &format!("{} ({} ms)", read.log_line(), took.as_millis()));
     ui.model.borrow_mut().apply_names(read);
     ui.paint_names_note();
     paint::cards(ui);
@@ -301,8 +301,14 @@ fn log_link(previous: &Link, link: &Link) {
     }
     let line = match (previous, link) {
         (Link::Unknown, Link::Online { .. } | Link::Absent(_)) => return,
-        (_, Link::Online { pid, epoch }) => format!("online: pid {pid}, owner epoch {epoch}"),
-        (_, Link::Absent(failure)) => format!("no Runtime: {}", failure_line(failure)),
+        (_, Link::Online { pid, epoch }) => {
+            report::log_quiet(Lane::Live.name(), &format!("online: pid {pid}, owner epoch {epoch}"));
+            return;
+        }
+        (_, Link::Absent(failure)) => {
+            report::log_quiet(Lane::Live.name(), &format!("no Runtime: {}", failure_line(failure)));
+            return;
+        }
         (_, Link::NoAnswer(failure)) => format!("no answer: {}", failure_line(failure)),
         (_, Link::Trouble(failure)) => format!("trouble: {}", failure_line(failure)),
         (_, Link::Unknown | Link::ThreadFailed) => return,

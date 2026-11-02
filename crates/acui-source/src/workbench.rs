@@ -261,7 +261,8 @@ pub struct ExplainRead {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceExplain {
     pub why: String,
-    /// That row's own wake (`not_running.next_wake_unix_ms`), in unix ms.
+    /// That row's own wake in unix ms; with no due row (`due_task_missing`) the
+    /// instance's earliest wake, which is the only one there is then.
     pub next_wake: Option<u64>,
     /// A task is selected and its dispatch has not ended.
     pub preparing: bool,
@@ -327,7 +328,7 @@ fn explain_read(epoch: String, explanation: &RuntimeScheduleExplanation) -> Expl
 fn instance_explain(entry: &ScheduleExplanationInstance) -> InstanceExplain {
     InstanceExplain {
         why: entry.not_running.why.code().as_str().to_owned(),
-        next_wake: entry.not_running.next_wake_unix_ms,
+        next_wake: entry.not_running.next_wake_unix_ms.or(entry.next_wake_unix_ms),
         preparing: entry.selected.as_ref().is_some_and(|selected| {
             match selected.dispatch_state {
                 ScheduleDispatchState::Pending
