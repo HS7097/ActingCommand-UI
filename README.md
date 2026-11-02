@@ -392,10 +392,18 @@ Runtime's settings, then "Runtime" (Request Shutdown) and "Appearance" (the text
 theme). The Runtime's settings come from the running Runtime (read again on going to the page), in two
 groups, "Everyday" and "Advanced": which keys show and in which group is the Runtime's own tiering, and the
 four settings of the performance preset are only on the top bar. Each says its value, where it comes
-from, how it is changed (all of them only shown in this version: shown only for now, changed in the
-configuration file with a Runtime restart, or set by the installer) and when a change takes effect; one
-the file does not name and that has no default says "not set" rather than being left out. While the
-Runtime does not answer, no older value is shown. Both pages are always there and only one shows at a
+from, how it is changed (shown only for now, changed in the configuration file with a Runtime restart,
+or set by the installer) and when a change takes effect; one the file does not name and that has no
+default says "not set" rather than being left out. In this version only "Days to keep unconfirmed
+evidence frames" is changed here: type a whole number and press Save, or empty the field and save to go
+back to the configuration file's value (or the default). Only the Runtime judges the range, and a refusal
+says what it said; the result has a line of its own under the top bar, naming the setting. A save is
+sent once: when its result is unknown, what holds is read again before anything is said, and nothing is
+ever sent again by itself. After every start of the Runtime its start report is read once: when an update
+or a rollback reset settings changed online, the line under the top bar and the settings page say which;
+"Got It" hides that line for this start. Online settings kept over a default that changed are said in
+small print on the settings page only. A report that cannot be read is tried at most 3 times for a start,
+then the settings page says so in red. While the Runtime does not answer, no older value is shown. Both pages are always there and only one shows at a
 time, so what the boxes hold stays when you switch away and back.
 The ledger window,
 "Advanced Troubleshooting and Ledger History", opens only when asked: from that button, or at the start

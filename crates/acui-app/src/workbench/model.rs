@@ -12,14 +12,14 @@ use std::mem;
 use std::time::Instant;
 
 use acui_source::workbench::{
-    ConfigRead, ExplainRead, InstanceLive, LiveRead, LiveSnapshot, PresetProblem,
+    ConfigRead, ExplainRead, InstanceLive, LiveRead, LiveSnapshot, PresetProblem, StartRead,
 };
 use acui_source::{ClientFailure, PauseFact};
 
 use super::actions::{self, Actions, ActionsView, PresetView};
 use super::card::{self, CardView, Down, Schedule};
-use super::read::{Lane, Read, EXPLAIN_TOO_OLD};
-use super::settings::{self, SettingsView};
+use super::read::{Lane, Read, EXPLAIN_TOO_OLD, START_TRIES};
+use super::settings::{self, SettingsView, StartView};
 use super::tools::{NameTable, NamesRead};
 use crate::strings::{fill, Labels, Language};
 
@@ -134,6 +134,19 @@ pub enum AccountsNote {
     Unreachable,
 }
 
+/// What this owner epoch's start report came to. It is asked once, and again after a
+/// failure while tries are left (`START_TRIES`).
+#[derive(Default)]
+struct StartSlice {
+    read: Option<StartRead>,
+    /// One is out.
+    asked: bool,
+    /// How many of this epoch's failed.
+    failures: u8,
+    /// A person said they read the notice of the settings it reset.
+    acknowledged: bool,
+}
+
 /// The task names, as the newest run of `actingctl packs` left them. Why one gave
 /// none is in the log.
 enum Names {
@@ -159,6 +172,7 @@ pub struct Model {
     /// it sooner, so a long gap before that says nothing against the explanation.
     explain_asked_at: Option<Instant>,
     config: Slice<ConfigRead>,
+    start: StartSlice,
     names: Names,
     /// Whether the workbench is not minimized. The slow thread does not read while
     /// it is, so no read is late then.
@@ -226,6 +240,7 @@ impl Model {
             explain: Slice::empty(),
             explain_asked_at: None,
             config: Slice::empty(),
+            start: StartSlice::default(),
             names: Names::NotAsked,
             shown: true,
             epoch: None,
@@ -273,10 +288,55 @@ impl Model {
         )
     }
 
-    /// The settings page's rows of the Runtime's settings.
+    /// The settings page's rows of the Runtime's settings, and its field of the one it changes.
     pub fn settings_view(&self) -> SettingsView {
         let read = self.config.value.as_ref();
-        settings::view(&self.link, read, self.config_failed(), &self.instances)
+        settings::view(&self.link, read, self.config_failed(), &self.instances, &self.actions)
+    }
+
+    /// What this owner epoch's start report says of the settings.
+    pub fn start_view(&self) -> StartView {
+        let start = &self.start;
+        let gave_up = start.failures >= START_TRIES;
+        let read = start.read.as_ref();
+        settings::start_view(&self.link, read, gave_up, start.acknowledged, &self.instances)
+    }
+
+    /// Whether the start report is to be asked for now: online, and none of this epoch read
+    /// or out, with tries left.
+    pub fn start_due(&self) -> bool {
+        matches!(self.link, Link::Online { .. })
+            && self.start.read.is_none()
+            && !self.start.asked
+            && self.start.failures < START_TRIES
+    }
+
+    pub fn start_asked(&mut self) {
+        self.start.asked = true;
+    }
+
+    /// A start report read: whether it counts, which one of another epoch does not (the epoch
+    /// it is of asks its own when `Status` sees it).
+    pub fn apply_start(&mut self, read: StartRead) -> bool {
+        if self.epoch.as_deref() != Some(read.epoch.as_str()) {
+            return false;
+        }
+        self.start.asked = false;
+        self.start.read = Some(read);
+        true
+    }
+
+    /// The start report asked for failed: how many of this epoch's tries are gone. A failure
+    /// names no epoch, so one of a read out across a restart counts for the new epoch.
+    pub fn start_failed(&mut self) -> u8 {
+        self.start.asked = false;
+        self.start.failures = self.start.failures.saturating_add(1);
+        self.start.failures
+    }
+
+    /// The notice of the settings this start reset was read: it goes, for this epoch.
+    pub fn start_acknowledged(&mut self) {
+        self.start.acknowledged = true;
     }
 
     /// Whether the fact snapshot reads since the last that came failed. A thread that does
@@ -437,6 +497,7 @@ impl Model {
         if epoch_changed {
             self.explain = Slice::empty();
             self.config = Slice::empty();
+            self.start = StartSlice::default();
             self.epoch = Some(epoch.clone());
             self.actions.new_epoch();
         }
@@ -506,6 +567,9 @@ impl Model {
             Read::Status => &mut self.live_fault,
             Read::Explain => &mut self.slow_fault,
             Read::Config => &mut self.config_fault,
+            // A start report's panic is one of its failures (`start_failed`), not a fault
+            // of a read that a later one of its kind clears: there is no later one.
+            Read::Start => return false,
         };
         let news = *slot != fault;
         *slot = fault;

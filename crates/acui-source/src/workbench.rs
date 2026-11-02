@@ -11,16 +11,17 @@
 //! epoch that is gone is the caller's.
 //!
 //! Lanes ask only what is answered from memory or takes no ledger record:
-//! `Status`, `ScheduleExplanation` without its candidate rows, and
-//! `RuntimeFactSnapshot`. How often is the caller's, too: a lane keeps no clock, and
+//! `Status`, `ScheduleExplanation` without its candidate rows, `RuntimeFactSnapshot`
+//! and `StartReport`. How often is the caller's, too: a lane keeps no clock, and
 //! asks again by itself in one case only, a slow read on a connection that turns out
 //! to have ended (`ReadLane::asked_once_more`).
 //!
 //! The configuration's key table, the console's tiers of its keys and the performance
 //! presets are the Runtime's, read through its crate and only here: which preset is in
 //! effect and which settings the console shows are its functions, and what comes out of
-//! this file names neither a key nor a wire type, but for the key a refusal named and that
-//! of a setting this file has no name for, both for the log.
+//! this file names neither a key nor a wire type, but for the key a refusal named, that
+//! of a setting this file has no name for and those a start report names, all for the
+//! log.
 //!
 //! Left out on purpose: `player_hold` and `control` (the hold's read face is
 //! UI-3d's); `emulator_state` (read only at discovery and control, and `off` may
@@ -44,7 +45,8 @@ use actingcommand_contract::{
     config_parameters_fact_key, ConfigParameter, ConfigParameterSource, ConfigSettingChange,
     FactScalar, FactValue, InstanceActivity, InstanceActivityKind, OwnerEpoch, RuntimeControlPlaneStatus,
     RuntimeErrorCode, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
-    RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation, ScheduleDispatchState,
+    RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation, RuntimeStartReport,
+    ScheduleDispatchState,
     ScheduleExplanationInstance, SchedulingPauseReason, SchedulingPauseScope,
     CONFIG_PARAMETERS_FACT_PREFIX, MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
 };
@@ -142,6 +144,12 @@ impl ReadLane {
         self.asked_once_more(Self::ask_config)
     }
 
+    /// One `StartReport`: which settings changed online this start did not restore, and
+    /// which it restored over a default that changed.
+    pub fn read_start(&mut self) -> Result<StartRead, ClientFailure> {
+        self.asked_once_more(Self::ask_start)
+    }
+
     /// `ask`, on the connection this lane kept or a new one.
     ///
     /// This lane reads seldom, and not at all while the workbench is minimized, so
@@ -178,6 +186,15 @@ impl ReadLane {
         let epoch = code(&client.runtime_info().owner_epoch());
         match client.runtime_fact_snapshot_versioned() {
             Ok((snapshot, version)) => Ok(config_read(epoch, &snapshot, version)),
+            Err(error) => Err(self.settled(error)),
+        }
+    }
+
+    fn ask_start(&mut self) -> Result<StartRead, RuntimeClientError> {
+        let client = self.connection()?;
+        let epoch = code(&client.runtime_info().owner_epoch());
+        match client.start_report() {
+            Ok(report) => Ok(start_read(epoch, &report)),
             Err(error) => Err(self.settled(error)),
         }
     }
@@ -385,6 +402,21 @@ impl ConfigEdit {
             key: pacing::MAX_CONCURRENT_RUNS.to_owned(),
             value: None,
         }])
+    }
+
+    /// How many days an evidence frame nobody confirmed reading is kept, as an online value.
+    /// The Runtime alone knows the range, and says it when it refuses one.
+    pub fn evidence_days(days: i64) -> Self {
+        Self(vec![ConfigSettingChange {
+            key: EVIDENCE_MAX_AGE_DAYS.to_owned(),
+            value: Some(days.into()),
+        }])
+    }
+
+    /// The same, back to the configuration file's value, or to the default when the file
+    /// names none.
+    pub fn evidence_days_back_to_file() -> Self {
+        Self(vec![ConfigSettingChange { key: EVIDENCE_MAX_AGE_DAYS.to_owned(), value: None }])
     }
 
     /// What it changes, keys and values as the wire has them: for the log only.
@@ -626,6 +658,76 @@ pub struct InstanceExplain {
     pub preparing: bool,
 }
 
+/// What one answered `StartReport` says of the settings changed while a Runtime ran, as far as
+/// the console reads it. Each is said once, by key, in the Runtime's order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartRead {
+    pub epoch: String,
+    /// The ones this start did not restore: an update or a rollback dropped them, or the
+    /// configuration file now names them itself.
+    pub dropped: Vec<ReportedSetting>,
+    /// The ones it restored although the default they change has itself changed.
+    pub base_changed: Vec<ReportedSetting>,
+}
+
+impl StartRead {
+    /// Both lists by key: for the log only.
+    pub fn line(&self) -> String {
+        format!(
+            "dropped [{}], base changed [{}]",
+            reported_keys(&self.dropped),
+            reported_keys(&self.base_changed),
+        )
+    }
+}
+
+fn reported_keys(settings: &[ReportedSetting]) -> String {
+    settings.iter().map(|setting| setting.key.as_str()).collect::<Vec<_>>().join(", ")
+}
+
+/// One setting a start report names: which it is, for its words, and the instance of an
+/// instance's own. Its key stays here, for the log (`StartRead::line`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportedSetting {
+    pub name: ReportedName,
+    /// The instance id of an instance's own setting.
+    pub instance: Option<String>,
+    key: String,
+}
+
+/// Which setting a start report names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReportedName {
+    /// One the performance preset sets.
+    Preset(PresetSetting),
+    /// Any other, by the settings page's name: `SettingName::Unnamed` for one without a name
+    /// here, a key this Runtime's key table does not have included (its key, then).
+    Setting(SettingName),
+}
+
+fn start_read(epoch: String, report: &RuntimeStartReport) -> StartRead {
+    StartRead {
+        epoch,
+        dropped: reported_settings(&report.instructions_dropped),
+        base_changed: reported_settings(&report.instructions_base_changed),
+    }
+}
+
+fn reported_settings(keys: &[String]) -> Vec<ReportedSetting> {
+    keys.iter().map(|key| reported_setting(key)).collect()
+}
+
+fn reported_setting(key: &str) -> ReportedSetting {
+    let (name, instance) = match (preset_setting(key), find_row(key)) {
+        (Some(setting), _) => (ReportedName::Preset(setting), None),
+        (None, Some((row, instance))) => {
+            (ReportedName::Setting(setting_name(row.name)), instance.map(str::to_owned))
+        }
+        (None, None) => (ReportedName::Setting(SettingName::Unnamed(key.to_owned())), None),
+    };
+    ReportedSetting { name, instance, key: key.to_owned() }
+}
+
 /// One answered `RuntimeFactSnapshot`, as far as the workbench reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigRead {
@@ -845,7 +947,8 @@ pub enum SettingName {
     LabAuthoring,
     LabDebugging,
     /// A key of the tiers this file has no name for: its key-table name (a per-instance
-    /// one's member), for the log only.
+    /// one's member), for the log only. A start report's key the key table does not have is
+    /// one too, by the key itself.
     Unnamed(String),
 }
 
@@ -1121,14 +1224,19 @@ fn section_parameters(
     Ok(())
 }
 
+/// The setting of a preset `key` is, if it is one this file knows.
+fn preset_setting(key: &str) -> Option<PresetSetting> {
+    match key {
+        pacing::MODE => Some(PresetSetting::Mode),
+        pacing::MAX_CONCURRENT_RUNS => Some(PresetSetting::MaxConcurrentRuns),
+        pacing::HEAVY_DISPATCH_LIMIT_NORMAL => Some(PresetSetting::HeavyDispatchLimit),
+        scheduling::PARALLEL_ENABLED => Some(PresetSetting::ParallelEnabled),
+        _ => None,
+    }
+}
+
 fn preset_member(member: &CurrentMember) -> Result<PresetMember, PresetProblem> {
-    let setting = match member.key {
-        pacing::MODE => PresetSetting::Mode,
-        pacing::MAX_CONCURRENT_RUNS => PresetSetting::MaxConcurrentRuns,
-        pacing::HEAVY_DISPATCH_LIMIT_NORMAL => PresetSetting::HeavyDispatchLimit,
-        scheduling::PARALLEL_ENABLED => PresetSetting::ParallelEnabled,
-        other => return Err(PresetProblem::MemberUnknown(other)),
-    };
+    let setting = preset_setting(member.key).ok_or(PresetProblem::MemberUnknown(member.key))?;
     Ok(PresetMember {
         setting,
         value: member.value.as_ref().map(setting_value),

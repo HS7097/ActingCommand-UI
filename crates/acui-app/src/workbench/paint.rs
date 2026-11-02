@@ -3,32 +3,35 @@
 //! the list the workbench already shows: a row changes only when its words do, and
 //! rows come and go only when the accounts do, so a read every few seconds costs
 //! nothing and moves nothing. And the top bar's writes, its performance preset and the
-//! stepper under it, from their views; which page shows; and the settings page's rows of
-//! the Runtime's settings, the same way as the cards.
+//! stepper under it, from their views; which page shows; the settings page's rows of
+//! the Runtime's settings, the same way as the cards, with the field of the evidence days
+//! among them; and what the start report says of the settings.
 
 use std::time::Instant;
 
 use acui_rows::format_minute;
 use acui_rows::outcome::explain;
 use acui_source::workbench::{
-    PresetMember, PresetSetting, RefusalWhy, SettingName, SettingSource, SettingValue,
-    ValueProblem, CONSOLE_PAUSE_ALL, MODE_FULL, MODE_OBSERVE, MODE_PACE,
+    PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
+    SettingValue, ValueProblem, CONSOLE_PAUSE_ALL, MODE_FULL, MODE_OBSERVE, MODE_PACE,
 };
 use slint::{Model as _, ModelRc, VecModel};
 
 use super::actions::{
-    ActionsView, PresetState, PresetView, Reread, ResumeEntry, Said, StepperView, Write,
-    PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
+    ActionsView, EvidenceView, Field, PresetState, PresetView, Reread, ResumeEntry, Said,
+    StepperView, Write, PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
 };
 use super::card::{Band, CardView, Down, Line, ReasonClass};
 use super::model::Page;
-use super::settings::{self, SettingLine, SettingsView};
+use super::settings::{
+    self, ReportedAccount, ReportedLine, SettingLine, SettingsView, StartView,
+};
 use crate::ledger::paint::models;
 use crate::ledger::resume::Lifter;
 use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
-use crate::{AccountCard, PresetChoice, SettingItem, StatusTone, WorkbenchPage};
+use crate::{AccountCard, PresetChoice, SettingItem, StatusTone, WorkbenchPage, WorkbenchWindow};
 
 /// What the technical log's lines about the settings page are under.
 const SETTINGS_LOG: &str = "acui-settings";
@@ -196,17 +199,21 @@ fn preset_note(labels: &Labels, state: &PresetState) -> String {
 
 /// One setting of a preset: what it is, its value in effect and where that comes from.
 fn member_text(labels: &Labels, member: &PresetMember) -> String {
-    let name = match member.setting {
-        PresetSetting::Mode => labels.setting_mode,
-        PresetSetting::MaxConcurrentRuns => labels.setting_concurrent_runs,
-        PresetSetting::HeavyDispatchLimit => labels.setting_heavy_runs,
-        PresetSetting::ParallelEnabled => labels.setting_parallel,
-    };
+    let name = preset_setting_name(labels, member.setting);
     let value = match &member.value {
         None => labels.setting_unset.to_owned(),
         Some(value) => value_text(labels, value),
     };
     fill(labels.preset_member, &[name, &value, source_text(labels, member.source)])
+}
+
+fn preset_setting_name(labels: &Labels, setting: PresetSetting) -> &'static str {
+    match setting {
+        PresetSetting::Mode => labels.setting_mode,
+        PresetSetting::MaxConcurrentRuns => labels.setting_concurrent_runs,
+        PresetSetting::HeavyDispatchLimit => labels.setting_heavy_runs,
+        PresetSetting::ParallelEnabled => labels.setting_parallel,
+    }
 }
 
 fn value_text(labels: &Labels, value: &SettingValue) -> String {
@@ -223,7 +230,8 @@ fn value_text(labels: &Labels, value: &SettingValue) -> String {
     }
 }
 
-/// The settings page's rows of the Runtime's settings, in their two groups, and what is said
+/// The settings page's rows of the Runtime's settings, in their two groups, with the field of
+/// the evidence days in its place among the advanced ones (`evidence_field`), and what is said
 /// instead of them, or besides. A setting without a name here and a snapshot that reports no
 /// configuration each go to the log once; rows that do not read, each by its key and why,
 /// once for each owner epoch.
@@ -266,20 +274,121 @@ pub fn settings(ui: &Ui) {
             (fill(labels.settings_table_rows_unreadable, &[&count]), true)
         }
     };
-    let (daily, advanced) = match &view {
-        SettingsView::Read { daily, advanced, .. } => {
-            (setting_items(ui, labels, daily), setting_items(ui, labels, advanced))
-        }
+    let (daily, advanced, after, evidence) = match &view {
+        SettingsView::Read { daily, advanced, evidence, advanced_after, .. } => (
+            setting_items(ui, labels, daily),
+            setting_items(ui, labels, advanced),
+            setting_items(ui, labels, advanced_after),
+            evidence.as_ref(),
+        ),
         SettingsView::NotRunning
         | SettingsView::Unreachable
         | SettingsView::Reading
         | SettingsView::Failed
-        | SettingsView::Unreported => (Vec::new(), Vec::new()),
+        | SettingsView::Unreported => (Vec::new(), Vec::new(), Vec::new(), None),
     };
     window.set_runtime_settings_note(note.into());
     window.set_runtime_settings_failed(failed);
     sync(window.get_daily_settings(), daily, |rows| window.set_daily_settings(rows));
     sync(window.get_advanced_settings(), advanced, |rows| window.set_advanced_settings(rows));
+    evidence_field(&window, labels, evidence);
+    sync(window.get_advanced_settings_after(), after, |rows| {
+        window.set_advanced_settings_after(rows);
+    });
+}
+
+/// The evidence days' field, while it shows: the draft, or the value in effect; what it
+/// says when empty; and in grey the value too while the field holds something else, where
+/// it comes from and when a change takes effect. Whether it and "save" can be pressed.
+fn evidence_field(window: &WorkbenchWindow, labels: &Labels, view: Option<&EvidenceView>) {
+    window.set_evidence_shown(view.is_some());
+    let Some(view) = view else {
+        return;
+    };
+    let source = source_text(labels, view.source);
+    let mut note = Vec::new();
+    let (text, placeholder) = match &view.draft {
+        Some(draft) => {
+            let value = match view.days {
+                Some(days) => fill(labels.setting_days, &[&days.to_string()]),
+                None => labels.setting_unset.to_owned(),
+            };
+            note.push(fill(labels.concurrency_now, &[&value, source]));
+            (draft.clone(), labels.concurrency_empty)
+        }
+        None => {
+            note.push(fill(labels.setting_source_line, &[source]));
+            (view.days.map_or_else(String::new, |days| days.to_string()), labels.setting_unset)
+        }
+    };
+    let effect = settings::effect_words(labels, &SettingName::EvidenceMaxAgeDays);
+    note.extend(effect.map(str::to_owned));
+    // The field is the person's while they type: it is set only when it says otherwise.
+    if window.get_evidence_text() != text.as_str() {
+        window.set_evidence_text(text.into());
+    }
+    window.set_evidence_placeholder(placeholder.into());
+    window.set_evidence_note(note.join(" · ").into());
+    window.set_evidence_writable(view.can_write);
+    window.set_evidence_ready(view.can_write && view.can_save);
+}
+
+/// What this owner epoch's start report says of the settings: those it reset, on the
+/// notice until a person says they read it, and on the settings page; those it kept over a
+/// changed default, on the settings page in grey; or, on the settings page in red, that it
+/// cannot be read. A setting without a name here goes to the log once, as on the page.
+pub fn start(ui: &Ui) {
+    let Some(window) = ui.workbench() else {
+        return;
+    };
+    let labels = ui.labels();
+    let view = ui.model.borrow().start_view();
+    let (alert, note, failed, base) = match &view {
+        StartView::Nothing => (String::new(), String::new(), false, String::new()),
+        StartView::Unreadable => {
+            (String::new(), labels.start_unreadable.to_owned(), true, String::new())
+        }
+        StartView::Read { dropped, base_changed, acknowledged } => {
+            let dropped = reported_text(ui, labels, labels.start_dropped, dropped);
+            let base = reported_text(ui, labels, labels.start_base_changed, base_changed);
+            let alert = if *acknowledged { String::new() } else { dropped.clone() };
+            (alert, dropped, false, base)
+        }
+    };
+    window.set_start_alert(alert.into());
+    window.set_start_note(note.into());
+    window.set_start_note_failed(failed);
+    window.set_start_base_note(base.into());
+}
+
+/// `template` with the settings `lines` names, each name once; nothing when it names none.
+fn reported_text(ui: &Ui, labels: &Labels, template: &str, lines: &[ReportedLine]) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+    let mut names: Vec<String> = Vec::new();
+    for line in lines {
+        let name = match &line.name {
+            ReportedName::Preset(setting) => preset_setting_name(labels, *setting),
+            ReportedName::Setting(name) => {
+                if let SettingName::Unnamed(key) = name {
+                    tell_once(ui, &format!("no words for setting {key}"), false);
+                }
+                settings::name_words(labels, name)
+            }
+        };
+        let name = match &line.account {
+            Some(ReportedAccount::Alias(alias)) => fill(labels.setting_of_account, &[name, alias]),
+            Some(ReportedAccount::NotListed) => {
+                fill(labels.setting_of_account, &[name, labels.start_account_gone])
+            }
+            None => name.to_owned(),
+        };
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    fill(template, &[&names.join(labels.name_list)])
 }
 
 fn setting_items(ui: &Ui, labels: &Labels, lines: &[SettingLine]) -> Vec<SettingItem> {
@@ -333,7 +442,8 @@ fn source_text(labels: &Labels, source: SettingSource) -> &'static str {
 
 /// What the top bar's two write buttons offer, and what is said about them: the global
 /// pause while one holds, the confirmation asked for, and what the last press came to.
-/// And, on a line of its own, what the last change of settings came to.
+/// And, on a line of its own, what the last change of settings from the top bar came to,
+/// and on another what the last from the evidence days' field did.
 pub fn actions(ui: &Ui) {
     let Some(window) = ui.workbench() else {
         return;
@@ -359,20 +469,40 @@ pub fn actions(ui: &Ui) {
     };
     window.set_action_line(line.into());
     window.set_action_failed(failed);
-    let (line, failed) = settings_text(labels, &view);
+    let (line, failed) = settings_text(labels, &view, Field::TopBar);
     window.set_config_write_line(line.into());
     window.set_config_write_failed(failed);
+    let (line, failed) = settings_text(labels, &view, Field::EvidenceDays);
+    window.set_evidence_write_line(line.into());
+    window.set_evidence_write_failed(failed);
 }
 
-/// What the last change of settings came to, and whether that is a failure; nothing
-/// before one. A restart both slots were open across is said once, on the first line.
-fn settings_text(labels: &Labels, view: &ActionsView) -> (String, bool) {
-    if view.reread_failed {
-        return (labels.config_reread_failed.to_owned(), true);
-    }
-    match (&view.settings_said, &view.scheduling_said) {
-        (Some(Said::Restarted), Some(Said::Restarted)) | (None, _) => (String::new(), false),
-        (Some(said), _) => said_text(labels, view, said),
+/// What the last change of settings from `field` came to, and whether that is a failure;
+/// nothing before one. A restart open across this and the first line is said once, on the
+/// first line. The evidence days' line names its setting: the others are the top bar's.
+fn settings_text(labels: &Labels, view: &ActionsView, field: Field) -> (String, bool) {
+    let said = match field {
+        Field::TopBar => &view.settings_said,
+        Field::EvidenceDays => &view.evidence_said,
+    };
+    let (text, failed) = if view.reread_failed == Some(field) {
+        (labels.config_reread_failed.to_owned(), true)
+    } else {
+        match (said, &view.scheduling_said) {
+            (Some(Said::Restarted), Some(Said::Restarted)) | (None, _) => {
+                return (String::new(), false)
+            }
+            (Some(Said::NotWhole), _) if field == Field::EvidenceDays => {
+                (labels.evidence_not_whole.to_owned(), true)
+            }
+            (Some(said), _) => said_text(labels, view, said),
+        }
+    };
+    match field {
+        Field::TopBar => (text, failed),
+        Field::EvidenceDays => {
+            (fill(labels.evidence_said, &[labels.setting_evidence_days, &text]), failed)
+        }
     }
 }
 

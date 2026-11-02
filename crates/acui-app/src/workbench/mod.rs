@@ -22,6 +22,10 @@
 //! `Model`'s too (`show_page`). The settings page shows the Runtime's settings as the
 //! fact snapshot has them (`settings`), so going there reads it at once.
 //!
+//! The start report is read once for each owner epoch (`ask_start`): what it says of the
+//! settings an update or a rollback reset is said on the notice, until a person says they
+//! read it, and on the settings page.
+//!
 //! A read that fails is no event to log each time: the log gets a change, as it
 //! happens, so a failure that repeats every few seconds is one line, and its end
 //! another.
@@ -39,12 +43,12 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead};
+use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, StartRead};
 use acui_source::{ClientFailure, RuntimeFacts};
 use slint::{ComponentHandle, Timer, TimerMode};
 
 use self::model::{Link, News, Page};
-use self::read::{Lane, Landing, Poke, Read, Tally};
+use self::read::{Lane, Landing, Poke, Read, Tally, START_RETRY, START_TRIES};
 use self::tools::NamesRead;
 use crate::launcher;
 use crate::report;
@@ -223,6 +227,7 @@ fn lane_failed(ui: &Ui, lane: Lane, error: String) {
     paint::actions(ui);
     paint::preset(ui);
     paint::settings(ui);
+    paint::start(ui);
     launcher::paint(ui);
 }
 
@@ -253,7 +258,8 @@ fn check_shown() {
 
 /// A reading thread's result, on the event loop. `generation` is what `wrote` had
 /// counted when the read began. A panic is no finding about the Runtime, so no write
-/// makes it old.
+/// makes it old; nor does a write change what the start report says of the start, and
+/// that read is not asked again by a write.
 fn landed(landing: Landing, generation: u64) {
     let Some(ui) = crate::ui::current() else {
         return;
@@ -263,13 +269,20 @@ fn landed(landing: Landing, generation: u64) {
         .borrow()
         .as_ref()
         .map_or(0, |reading| reading.write_gen.load(Ordering::SeqCst));
-    if generation < writes && !matches!(landing, Landing::Panicked { .. }) {
+    let ageless = matches!(landing, Landing::Panicked { .. } | Landing::Start(_));
+    if generation < writes && !ageless {
         return;
     }
     match landing {
         Landing::Live(read) => live_landed(&ui, read),
         Landing::Explain(read) => explain_landed(&ui, read),
         Landing::Config(read) => config_landed(&ui, read),
+        Landing::Start(read) => {
+            start_landed(&ui, read.map_err(|failure| failure_line(&failure)));
+        }
+        Landing::Panicked { read: Read::Start, message } => {
+            start_landed(&ui, Err(format!("read panicked: {message}")));
+        }
         Landing::Panicked { read, message } => panicked(&ui, read, message),
     }
     // A thread may have just made the log, with a long read.
@@ -301,14 +314,63 @@ fn live_landed(ui: &Ui, read: LiveRead) {
     // Before the cards: the explanation's clock starts here, and they go by it.
     if landed.connected || landed.epoch_changed {
         poke(ui, Lane::Slow);
+        ask_start(ui);
     }
     paint::cards(ui);
     paint::actions(ui);
     paint::preset(ui);
     paint::settings(ui);
+    paint::start(ui);
     if landed.fault_cleared {
         ui.paint_notices();
     }
+}
+
+/// The start report of this owner epoch, when it is due (`Model::start_due`): after a
+/// connection or a new epoch, and once more a while after one that failed.
+fn ask_start(ui: &Ui) {
+    let due = ui.model.borrow().start_due();
+    if due {
+        ui.model.borrow_mut().start_asked();
+        ask(ui, Lane::Slow, Poke::Only(Read::Start));
+    }
+}
+
+/// The start report a person read the notice of: the notice goes, for this epoch.
+pub fn start_acknowledged(ui: &Ui) {
+    ui.model.borrow_mut().start_acknowledged();
+    paint::start(ui);
+}
+
+/// A start report, or why there is none. What it names goes in the log quietly: an update's
+/// or a rollback's doing, no fault here. Every failure goes in the log, a few at most for an
+/// epoch: one with tries left is asked again after a while, and after the last the settings
+/// page says the report cannot be read.
+fn start_landed(ui: &Ui, read: Result<StartRead, String>) {
+    let thread = Lane::Slow.name();
+    match read {
+        Ok(read) => {
+            let line = format!("start report of owner epoch {}: {}", read.epoch, read.line());
+            if ui.model.borrow_mut().apply_start(read) {
+                report::log_quiet(thread, &line);
+            }
+        }
+        Err(why) => {
+            let tries = ui.model.borrow_mut().start_failed();
+            let again = tries < START_TRIES;
+            let then = if again { "asked again later" } else { "not asked again this owner epoch" };
+            let line = format!("start report failed ({tries} of {START_TRIES}), {then}: {why}");
+            report::log(thread, &line);
+            if again {
+                Timer::single_shot(START_RETRY, || {
+                    if let Some(ui) = crate::ui::current() {
+                        ask_start(&ui);
+                    }
+                });
+            }
+        }
+    }
+    paint::start(ui);
 }
 
 fn explain_landed(ui: &Ui, read: Result<ExplainRead, ClientFailure>) {

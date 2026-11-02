@@ -243,6 +243,13 @@ export global Strings {
     in property <string> settings-advanced;
     in property <string> settings-runtime;
     in property <string> settings-appearance;
+    // The settings page's field of the evidence days: its name, which also names the field
+    // for a screen reader, the unit after it and the button that sends it. The button that
+    // hides the start report's notice.
+    in property <string> evidence-days;
+    in property <string> days;
+    in property <string> save;
+    in property <string> acknowledge;
     // The Aero frame's caption buttons, by the names a screen reader says.
     in property <string> caption-minimize;
     in property <string> caption-maximize;
@@ -1189,7 +1196,8 @@ component SettingLine {
 // one has two columns: on the left the accounts, and where one is added for now; on
 // the right the settings file's problems, what falls short of the theme and where the
 // technical log is. The settings page has those same lines, then the Runtime's
-// settings as it reads them, then Request Shutdown, then the display settings. No code,
+// settings as it reads them, with what its start report says of them and a field for the
+// one it changes, then Request Shutdown, then the display settings. No code,
 // pid or wire name shows here; those stay in the ledger window's technical lines.
 // Closing it ends the program.
 export component WorkbenchWindow inherits Window {
@@ -1241,9 +1249,15 @@ export component WorkbenchWindow inherits Window {
     in property <string> action-line;
     in property <bool> action-failed;
     // What became of the last change of settings, a preset's or the stepper's, red when
-    // it says a failure: its own line, as both may be out at once.
+    // it says a failure: its own line, as both may be out at once. And of the last from the
+    // evidence days' field on the settings page, on a line of its own that names it.
     in property <string> config-write-line;
     in property <bool> config-write-failed;
+    in property <string> evidence-write-line;
+    in property <bool> evidence-write-failed;
+    // The settings an update or a rollback reset at this start, until a person says they
+    // read it.
+    in property <string> start-alert;
     // The top bar's second row, while there is a Runtime to say it of: the presets, and
     // under them what is in effect in words, red when they say it cannot be read. Whether a change
     // can go out now, whether there is an online value to go back from to the file's, and
@@ -1287,6 +1301,23 @@ export component WorkbenchWindow inherits Window {
     in property <[SettingItem]> advanced-settings;
     in property <string> runtime-settings-note;
     in property <bool> runtime-settings-failed;
+    // Among the advanced ones, while the Runtime takes a change of it: the field of the
+    // evidence days, then the advanced rows after it. The field holds what is typed, else the
+    // value in effect, both ways; what it says when empty; in grey the value while the field
+    // holds something else, where it comes from and when a change takes effect; whether it
+    // can be edited now, and whether "save" would change anything.
+    in property <bool> evidence-shown;
+    in-out property <string> evidence-text;
+    in property <string> evidence-placeholder;
+    in property <string> evidence-note;
+    in property <bool> evidence-writable;
+    in property <bool> evidence-ready;
+    in property <[SettingItem]> advanced-settings-after;
+    // What this start's report says of the settings: those it reset, amber, or that it cannot
+    // be read, red; and in grey those it kept over a default that changed.
+    in property <string> start-note;
+    in property <bool> start-note-failed;
+    in property <string> start-base-note;
 
     in-out property <int> text-size-index <=> text-size-box.current-index;
     in-out property <int> language-index <=> language-box.current-index;
@@ -1304,6 +1335,9 @@ export component WorkbenchWindow inherits Window {
     callback concurrency-stepped(int);
     callback concurrency-apply();
     callback concurrency-back-to-file();
+    callback evidence-edited(string);
+    callback evidence-save();
+    callback start-acknowledged();
     callback request-shutdown();
     callback open-ledger();
     callback text-size-changed(int);
@@ -1474,7 +1508,8 @@ export component WorkbenchWindow inherits Window {
             if root.errors != "" || root.launcher-line != "" || root.start-log-path != ""
                     || root.pause-note != "" || root.action-line != ""
                     || root.resume-all-statement != "" || root.config-write-line != ""
-                    || root.preset-statement != "": Card {
+                    || root.evidence-write-line != "" || root.preset-statement != ""
+                    || root.start-alert != "": Card {
                 vertical-stretch: 0;
                 VerticalLayout {
                     padding: 8px;
@@ -1510,6 +1545,10 @@ export component WorkbenchWindow inherits Window {
                         text: root.config-write-line;
                         failed: root.config-write-failed;
                     }
+                    if root.evidence-write-line != "": Notice {
+                        text: root.evidence-write-line;
+                        failed: root.evidence-write-failed;
+                    }
                     if root.preset-statement != "": HorizontalLayout {
                         spacing: 14px;
                         Notice {
@@ -1529,6 +1568,23 @@ export component WorkbenchWindow inherits Window {
                     if root.pause-note != "": Notice {
                         text: root.pause-note;
                         warning: true;
+                    }
+                    // Until "got it", for this start; the settings page keeps saying it.
+                    if root.start-alert != "": HorizontalLayout {
+                        spacing: 14px;
+                        Notice {
+                            text: root.start-alert;
+                            warning: true;
+                            vertical-alignment: center;
+                            min-width: 40px * Scale.factor;
+                            horizontal-stretch: 1;
+                        }
+                        SkinButton {
+                            text: Strings.acknowledge;
+                            clicked => {
+                                root.start-acknowledged();
+                            }
+                        }
                     }
                     if root.launcher-line != "": Notice {
                         text: root.launcher-line;
@@ -1659,16 +1715,79 @@ export component WorkbenchWindow inherits Window {
                                         text: root.runtime-settings-note;
                                         failed: root.runtime-settings-failed;
                                     }
+                                    if root.start-note != "": Notice {
+                                        text: root.start-note;
+                                        failed: root.start-note-failed;
+                                        warning: !root.start-note-failed;
+                                    }
+                                    if root.start-base-note != "": Notice {
+                                        text: root.start-base-note;
+                                        font-size: Scale.grey-font;
+                                    }
                                     if root.daily-settings.length > 0: CardTitle {
                                         text: Strings.settings-daily;
                                     }
                                     for item in root.daily-settings: SettingLine {
                                         setting: item;
                                     }
-                                    if root.advanced-settings.length > 0: CardTitle {
+                                    if root.advanced-settings.length > 0 || root.evidence-shown
+                                            || root.advanced-settings-after.length > 0: CardTitle {
                                         text: Strings.settings-advanced;
                                     }
                                     for item in root.advanced-settings: SettingLine {
+                                        setting: item;
+                                    }
+                                    // Laid out as a SettingLine, with the field and "save" where
+                                    // the value is; the name keeps its width, so the rows line up.
+                                    if root.evidence-shown: VerticalLayout {
+                                        spacing: 2px;
+                                        vertical-stretch: 0;
+                                        HorizontalLayout {
+                                            spacing: 12px;
+                                            Text {
+                                                text: Strings.evidence-days;
+                                                font-size: Scale.body-font;
+                                                color: Look.text;
+                                                wrap: word-wrap;
+                                                vertical-alignment: center;
+                                                width: 240px * Scale.factor;
+                                                min-height: self.preferred-height;
+                                            }
+                                            HorizontalLayout {
+                                                spacing: 6px;
+                                                horizontal-stretch: 1;
+                                                LineEdit {
+                                                    text <=> root.evidence-text;
+                                                    placeholder-text: root.evidence-placeholder;
+                                                    enabled: root.evidence-writable;
+                                                    accessible-label: Strings.evidence-days;
+                                                    font-size: Scale.body-font;
+                                                    // The std field asks for 160px; a number
+                                                    // needs far less.
+                                                    min-width: 64px * Scale.factor;
+                                                    preferred-width: 80px * Scale.factor;
+                                                    horizontal-stretch: 0;
+                                                    edited(text) => {
+                                                        root.evidence-edited(text);
+                                                    }
+                                                }
+                                                Caption { text: Strings.days; }
+                                                SkinButton {
+                                                    text: Strings.save;
+                                                    enabled: root.evidence-ready;
+                                                    clicked => {
+                                                        root.evidence-save();
+                                                    }
+                                                }
+                                                Rectangle { horizontal-stretch: 1; }
+                                            }
+                                        }
+                                        Notice {
+                                            text: root.evidence-note;
+                                            font-size: Scale.grey-font;
+                                        }
+                                    }
+                                    for item in root.advanced-settings-after: SettingLine {
                                         setting: item;
                                     }
                                     HorizontalLayout {

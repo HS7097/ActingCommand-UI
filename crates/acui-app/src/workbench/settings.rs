@@ -12,14 +12,22 @@
 //! Only an answer of the Runtime online counts: while none comes, none of its settings
 //! shows, since an older read would pose as the present.
 //!
-//! Nothing here is written. Every row says how its value is changed: in the configuration
-//! file with a restart, by the installer, or not on this page for now.
+//! One setting is changed here: how many days an evidence frame nobody confirmed reading is
+//! kept, the one the Runtime tiers advanced and takes while it runs. Its row is a field and
+//! "save" (`actions::evidence_view`), in its place among the others. Every other row says how
+//! its value is changed: in the configuration file with a restart, by the installer, or not on
+//! this page for now.
+//!
+//! And what the start report of this owner epoch says of the settings changed while a Runtime
+//! ran: which this start did not restore, and which it kept over a default that changed.
 
 use acui_source::workbench::{
-    ConfigRead, InstanceLive, SettingName, SettingSource, SettingTier, ShownValue, UnreadRow,
-    IDLE_CLOSE_APP, IDLE_NONE, IDLE_STOP_EMULATOR, PRIORITY_LOW, PRIORITY_NORMAL,
+    ConfigRead, InstanceLive, ReportedName, ReportedSetting, SettingName, SettingSource,
+    SettingTier, ShownValue, StartRead, UnreadRow, IDLE_CLOSE_APP, IDLE_NONE, IDLE_STOP_EMULATOR,
+    PRIORITY_LOW, PRIORITY_NORMAL,
 };
 
+use super::actions::{self, Actions, EvidenceView};
 use super::model::Link;
 use crate::strings::{fill, Labels};
 
@@ -39,7 +47,11 @@ pub enum SettingsView {
     Unreported,
     Read {
         daily: Vec<SettingLine>,
+        /// The advanced rows before the field of the evidence days, when it shows, and
+        /// those after it; all of them otherwise.
         advanced: Vec<SettingLine>,
+        evidence: Option<EvidenceView>,
+        advanced_after: Vec<SettingLine>,
         /// Rows of the snapshot that may be of a setting shown here and do not read: the
         /// window says how many, the log which and why.
         unread: Vec<UnreadRow>,
@@ -70,12 +82,15 @@ pub enum Change {
 }
 
 /// `read` of the Runtime `link` names, unless the reads since failed (`failed`); its
-/// instances' own settings by the accounts `instances` lists, in that order.
+/// instances' own settings by the accounts `instances` lists, in that order. The evidence
+/// days are a field while the Runtime takes a change of them and tiers them advanced, with
+/// what `actions` left of it; otherwise a row as any other.
 pub fn view(
     link: &Link,
     read: Option<&ConfigRead>,
     failed: bool,
     instances: &[InstanceLive],
+    actions: &Actions,
 ) -> SettingsView {
     match link {
         Link::Online { .. } => {}
@@ -95,14 +110,23 @@ pub fn view(
         return SettingsView::Unreported;
     };
     let ids: Vec<&str> = instances.iter().map(|instance| instance.instance_id.as_str()).collect();
-    let (mut daily, mut advanced) = (Vec::new(), Vec::new());
+    let (mut daily, mut advanced, mut advanced_after) = (Vec::new(), Vec::new(), Vec::new());
+    let mut evidence = None;
     for row in settings.rows(&ids) {
-        let account = row.instance.map(|id| {
-            instances
-                .iter()
-                .find(|instance| instance.instance_id == id)
-                .map_or(id, |instance| instance.alias.clone())
-        });
+        let days = match row.value {
+            ShownValue::Number(days) => Some(Some(days)),
+            ShownValue::Unset => Some(None),
+            ShownValue::Set | ShownValue::Flag(_) | ShownValue::Word(_) => None,
+        };
+        let editable = row.name == SettingName::EvidenceMaxAgeDays
+            && row.tier == SettingTier::Advanced
+            && row.settable
+            && evidence.is_none();
+        if let (true, Some(days)) = (editable, days) {
+            evidence = Some(actions::evidence_view(days, row.source, actions));
+            continue;
+        }
+        let account = row.instance.map(|id| account_of(instances, id));
         let change = change_of(&row.name, row.settable);
         let line = SettingLine {
             name: row.name,
@@ -113,10 +137,94 @@ pub fn view(
         };
         match row.tier {
             SettingTier::Daily => daily.push(line),
+            SettingTier::Advanced if evidence.is_some() => advanced_after.push(line),
             SettingTier::Advanced => advanced.push(line),
         }
     }
-    SettingsView::Read { daily, advanced, unread: settings.unread().to_vec() }
+    let unread = settings.unread().to_vec();
+    SettingsView::Read { daily, advanced, evidence, advanced_after, unread }
+}
+
+/// The account of an instance's own setting: its alias, or its instance id when the newest
+/// `Status` does not list it.
+fn account_of(instances: &[InstanceLive], id: String) -> String {
+    instances
+        .iter()
+        .find(|instance| instance.instance_id == id)
+        .map_or(id, |instance| instance.alias.clone())
+}
+
+/// What this owner epoch's start report says of the settings changed while a Runtime ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartView {
+    /// Nothing to say: no Runtime answers, or none has come yet.
+    Nothing,
+    /// Every try of this epoch failed: whether any setting was reset is not known.
+    Unreadable,
+    Read {
+        /// Not restored: an update or a rollback reset them.
+        dropped: Vec<ReportedLine>,
+        /// Kept over a default that changed.
+        base_changed: Vec<ReportedLine>,
+        /// The notice of the ones reset was read; the settings page still says them.
+        acknowledged: bool,
+    },
+}
+
+/// One setting a start report names, with the account of an instance's own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportedLine {
+    pub name: ReportedName,
+    pub account: Option<ReportedAccount>,
+}
+
+/// The account of an instance's own setting a start report names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReportedAccount {
+    Alias(String),
+    /// The newest `Status` does not list its instance: most likely one the configuration no
+    /// longer has, which is one reason a setting is not restored. Its id is in the log.
+    NotListed,
+}
+
+/// `read`, the start report of the Runtime `link` names, while it answers; `gave_up` when every
+/// try of this epoch failed.
+pub fn start_view(
+    link: &Link,
+    read: Option<&StartRead>,
+    gave_up: bool,
+    acknowledged: bool,
+    instances: &[InstanceLive],
+) -> StartView {
+    if !matches!(link, Link::Online { .. }) {
+        return StartView::Nothing;
+    }
+    let account = |id: &str| {
+        instances
+            .iter()
+            .find(|instance| instance.instance_id == id)
+            .map_or(ReportedAccount::NotListed, |instance| {
+                ReportedAccount::Alias(instance.alias.clone())
+            })
+    };
+    let lines = |settings: &[ReportedSetting]| -> Vec<ReportedLine> {
+        settings
+            .iter()
+            .map(|setting| ReportedLine {
+                name: setting.name.clone(),
+                account: setting.instance.as_deref().map(account),
+            })
+            .collect()
+    };
+    match read {
+        Some(read) => StartView::Read {
+            dropped: lines(read.dropped.as_slice()),
+            base_changed: lines(read.base_changed.as_slice()),
+            acknowledged,
+        },
+        None if gave_up => StartView::Unreadable,
+        None => StartView::Nothing,
+    }
 }
 
 /// The Lab's options are the installer's, whatever the Runtime takes; any other setting the

@@ -440,8 +440,9 @@ impl Ui {
 
     /// The workbench's lines that only the language changes: why this run has
     /// no state root, and the Runtime's configuration file, where an instance
-    /// is added by hand for now. And the accounts note, the cards and the Runtime's
-    /// settings, which reads change too; and which page shows, which only a press changes.
+    /// is added by hand for now. And the accounts note, the cards, the Runtime's
+    /// settings and what its start report says of them, which reads change too; and which
+    /// page shows, which only a press changes.
     pub fn paint_workbench(&self) {
         let Some(window) = self.workbench() else {
             return;
@@ -468,6 +469,7 @@ impl Ui {
         workbench::paint::actions(self);
         workbench::paint::preset(self);
         workbench::paint::settings(self);
+        workbench::paint::start(self);
     }
 
     /// Why the workbench's left column has no account to show, if it has none.
@@ -521,7 +523,8 @@ fn language_index(language: Language) -> i32 {
 /// The workbench's controls. The top bar's page button switches between the
 /// accounts and the settings; Start and Request Shutdown are the launcher's;
 /// "troubleshooting and ledger" opens the window of the default source; the
-/// write buttons are `workbench::actions`'; the three boxes apply to every
+/// write buttons and the evidence days' field are `workbench::actions`'; "got it"
+/// on the start report's notice is `workbench`'s; the three boxes apply to every
 /// window. Closing it ends the program, after its fade if it has a frame of its
 /// own, unless an unlock runs: then it stays and says why, without fading.
 fn install_workbench(window: &WorkbenchWindow) {
@@ -583,6 +586,21 @@ fn install_workbench(window: &WorkbenchWindow) {
     window.on_concurrency_back_to_file(|| {
         if let Some(ui) = current() {
             workbench::actions::concurrency_back_to_file(&ui);
+        }
+    });
+    window.on_evidence_edited(|text| {
+        if let Some(ui) = current() {
+            workbench::actions::evidence_edited(&ui, &text);
+        }
+    });
+    window.on_evidence_save(|| {
+        if let Some(ui) = current() {
+            workbench::actions::evidence_save(&ui);
+        }
+    });
+    window.on_start_acknowledged(|| {
+        if let Some(ui) = current() {
+            workbench::start_acknowledged(&ui);
         }
     });
     window.on_request_shutdown(|| {
@@ -723,6 +741,10 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_settings_advanced(labels.settings_advanced.into());
     global.set_settings_runtime(labels.settings_runtime.into());
     global.set_settings_appearance(labels.settings_appearance.into());
+    global.set_evidence_days(labels.setting_evidence_days.into());
+    global.set_days(labels.days_unit.into());
+    global.set_save(labels.save.into());
+    global.set_acknowledge(labels.acknowledge.into());
     global.set_caption_minimize(labels.caption_minimize.into());
     global.set_caption_maximize(labels.caption_maximize.into());
     global.set_caption_restore(labels.caption_restore.into());

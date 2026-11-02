@@ -527,7 +527,8 @@ pub struct Labels {
     /// effect comes from; that and the value while the field holds something else; what an
     /// empty field stands for; the button that sends it; and what is typed that is no whole
     /// number, which is not sent. Its caption is `setting_concurrent_runs`, its value when
-    /// it has none `setting_unset`.
+    /// it has none `setting_unset`. The evidence days' field on the settings page says the
+    /// value while it holds something else, and what it stands for empty, in the same words.
     pub concurrency_source: &'static str,
     pub concurrency_now: &'static str,
     pub concurrency_empty: &'static str,
@@ -606,6 +607,25 @@ pub struct Labels {
     pub setting_effect_idle: &'static str,
     pub setting_effect_frames: &'static str,
     pub setting_effect_start: &'static str,
+    /// The evidence days' field on the settings page: the unit after it and the button that
+    /// sends it (its name is `setting_evidence_days`); what is typed that is no whole number,
+    /// which is not sent; and what a change from it came to, after its name, on a line of
+    /// its own.
+    pub days_unit: &'static str,
+    pub save: &'static str,
+    pub evidence_not_whole: &'static str,
+    pub evidence_said: &'static str,
+    /// What the start report says of the settings changed while a Runtime ran: those this
+    /// start reset, on the notice with the button that hides it for this start, and on the
+    /// settings page; those it kept over a default that changed; that it cannot be read.
+    /// The names are joined by `name_list`; an instance's own setting takes its account by
+    /// `setting_of_account`, or, when `Status` does not list it, `start_account_gone`.
+    pub start_dropped: &'static str,
+    pub acknowledge: &'static str,
+    pub start_base_changed: &'static str,
+    pub start_unreadable: &'static str,
+    pub name_list: &'static str,
+    pub start_account_gone: &'static str,
     /// What an account's card says it does or waits for. Draining: the task, or
     /// `card_draining_any` when none is named. Paused: by whom it is lifted, the
     /// other tool's own reason as it wrote it and where it is resumed: an instance's
@@ -1167,6 +1187,16 @@ pub const ZH: Labels = Labels {
     setting_effect_idle: "改动在下一次空闲检查时生效",
     setting_effect_frames: "改动在下一次清理证据帧时生效",
     setting_effect_start: "Runtime 启动时读取",
+    days_unit: "天",
+    save: "保存",
+    evidence_not_whole: "只能填整数；什么都没发",
+    evidence_said: "{}：{}",
+    start_dropped: "以下设置因更新或回退被重置：{}",
+    acknowledge: "知道了",
+    start_base_changed: "以下在线设置保留了，但它们覆盖的默认值已经变了：{}",
+    start_unreadable: "读不到 Runtime 这次启动的报告，不知道有没有设置被重置；详情在技术日志里",
+    name_list: "、",
+    start_account_gone: "已不在配置里的账号",
     card_draining: "收尾中：{}",
     card_draining_any: "等当前任务结束",
     card_handing_back: "交还设备中",
@@ -1710,6 +1740,16 @@ pub const EN: Labels = Labels {
     setting_effect_idle: "A change applies at the next idle check",
     setting_effect_frames: "A change applies at the next clean-up of evidence frames",
     setting_effect_start: "Read when the Runtime starts",
+    days_unit: "days",
+    save: "Save",
+    evidence_not_whole: "Takes a whole number; nothing was sent",
+    evidence_said: "{}: {}",
+    start_dropped: "These settings were reset by an update or a rollback: {}",
+    acknowledge: "Got It",
+    start_base_changed: "These online settings were kept, though the defaults under them have changed: {}",
+    start_unreadable: "The Runtime's report of this start cannot be read, so whether any setting was reset is not known; the technical log has the details",
+    name_list: ", ",
+    start_account_gone: "an account no longer configured",
     card_draining: "Finishing up: {}",
     card_draining_any: "waiting for the current task to end",
     card_handing_back: "Handing the device back",

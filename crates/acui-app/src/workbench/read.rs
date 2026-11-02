@@ -10,6 +10,10 @@
 //! one after the other, and a poke reads both, or the one it names: going to the settings
 //! page reads the fact snapshot alone.
 //!
+//! `acui-slow` also reads the `StartReport`, which only a new start changes: once for each
+//! owner epoch, when the event loop names it, and never on a clock of its own. One that
+//! fails is named again `START_RETRY` later, `START_TRIES` times in all for the epoch.
+//!
 //! A thread reads what is due, hands each result to the event loop, and sleeps
 //! until the next is due or it is poked. It ends once the event loop lets its
 //! sender go; nothing joins it, since it may be stuck in a read. A panic in a read
@@ -31,21 +35,28 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, ReadLane};
+use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, ReadLane, StartRead};
 use acui_source::ClientFailure;
 
 use crate::launcher::spawn_worker;
 use crate::report;
 
 /// `READS` has one row for each `Read`, in its order: `Tally` counts by it.
-const READ_KINDS: usize = 3;
+const READ_KINDS: usize = 4;
 
 #[rustfmt::skip]
 static READS: [Cadence; READ_KINDS] = [
-    Cadence { read: Read::Status,  lane: Lane::Live, shown: secs(3),  minimized: Some(secs(30)), failed: secs(5) },
-    Cadence { read: Read::Explain, lane: Lane::Slow, shown: secs(15), minimized: None,           failed: secs(30) },
-    Cadence { read: Read::Config,  lane: Lane::Slow, shown: secs(30), minimized: None,           failed: secs(30) },
+    Cadence { read: Read::Status,  lane: Lane::Live, every: Some(Every { shown: secs(3),  minimized: Some(secs(30)), failed: secs(5) }) },
+    Cadence { read: Read::Explain, lane: Lane::Slow, every: Some(Every { shown: secs(15), minimized: None,           failed: secs(30) }) },
+    Cadence { read: Read::Config,  lane: Lane::Slow, every: Some(Every { shown: secs(30), minimized: None,           failed: secs(30) }) },
+    // Once for each owner epoch, when the event loop names it.
+    Cadence { read: Read::Start,   lane: Lane::Slow, every: None },
 ];
+
+/// How many times in one owner epoch the start report is asked for, and how long after a
+/// failure it is asked again.
+pub const START_TRIES: u8 = 3;
+pub const START_RETRY: Duration = secs(30);
 
 /// A read longer than this leaves a line in the technical log.
 const LONG_READ: Duration = secs(2);
@@ -66,10 +77,15 @@ const fn secs(seconds: u64) -> Duration {
 struct Cadence {
     read: Read,
     lane: Lane,
-    /// How often while the workbench is not minimized.
+    /// How often; `None`: only when a poke names it.
+    every: Option<Every>,
+}
+
+/// How often a read is made by its thread's own clock.
+struct Every {
+    /// While the workbench is not minimized.
     shown: Duration,
-    /// How often while it is; `None`: not at all, until a window coming back
-    /// pokes the thread.
+    /// While it is; `None`: not at all, until a window coming back pokes the thread.
     minimized: Option<Duration>,
     /// How soon after a failed read, while the workbench is not minimized.
     failed: Duration,
@@ -81,6 +97,7 @@ pub enum Read {
     Status,
     Explain,
     Config,
+    Start,
 }
 
 impl Read {
@@ -89,6 +106,7 @@ impl Read {
             Self::Status => "status",
             Self::Explain => "schedule explanation",
             Self::Config => "fact snapshot",
+            Self::Start => "start report",
         }
     }
 
@@ -123,8 +141,8 @@ impl Lane {
     }
 }
 
-/// Reads now, without waiting for their time: every read of the thread, or only the one
-/// named.
+/// Reads now, without waiting for their time: every read of the thread its clock makes, or
+/// only the one named.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Poke {
     All,
@@ -132,10 +150,10 @@ pub enum Poke {
 }
 
 impl Poke {
-    /// Whether it asks for `read`.
+    /// Whether it asks for `read`. The start report is asked for by name only.
     pub fn asks(self, read: Read) -> bool {
         match self {
-            Self::All => true,
+            Self::All => READS[read as usize].every.is_some(),
             Self::Only(only) => only == read,
         }
     }
@@ -146,13 +164,20 @@ pub enum Landing {
     Live(LiveRead),
     Explain(Result<ExplainRead, ClientFailure>),
     Config(Result<ConfigRead, ClientFailure>),
+    Start(Result<StartRead, ClientFailure>),
     /// The read panicked: the panic's message, for the log.
     Panicked { read: Read, message: String },
 }
 
 impl Landing {
     fn failed(&self) -> bool {
-        !matches!(self, Self::Live(LiveRead::Read(_)) | Self::Explain(Ok(_)) | Self::Config(Ok(_)))
+        !matches!(
+            self,
+            Self::Live(LiveRead::Read(_))
+                | Self::Explain(Ok(_))
+                | Self::Config(Ok(_))
+                | Self::Start(Ok(_))
+        )
     }
 }
 
@@ -204,12 +229,16 @@ struct Due {
 
 impl Due {
     /// When this read is next due; `None` while the table stops it. A poke waits
-    /// out a stop: the window coming back reads it anyway.
+    /// out a stop: the window coming back reads it anyway. One without a clock is due
+    /// only when poked, minimized or not.
     fn at(&self, shown: bool, now: Instant) -> Option<Instant> {
+        let Some(clock) = &self.cadence.every else {
+            return self.poked.then_some(now);
+        };
         let every = match (shown, self.failed) {
-            (true, false) => self.cadence.shown,
-            (true, true) => self.cadence.failed,
-            (false, _) => self.cadence.minimized?,
+            (true, false) => clock.shown,
+            (true, true) => clock.failed,
+            (false, _) => clock.minimized?,
         };
         match self.last {
             Some(last) if !self.poked => Some(last + every),
@@ -304,6 +333,7 @@ fn read_on(read: Read, connection: &mut ReadLane) -> Landing {
         Read::Status => Landing::Live(connection.read_live()),
         Read::Explain => Landing::Explain(connection.read_explain()),
         Read::Config => Landing::Config(connection.read_config()),
+        Read::Start => Landing::Start(connection.read_start()),
     }
 }
 
