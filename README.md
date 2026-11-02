@@ -183,13 +183,13 @@ filters the boxes show now, without a time bound. When a read reaches a Runtime 
 now. A time span read follows the cursor for at most 64 pages; with still no event it stops, as
 `console_time_span_page_limit`, rather than keep the window reading.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), the head of Runtime
-PR #1469 (Workflow #429 114-A: the not-run history shapes and ledger revision 5, on top of R-7a; it keeps
-v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 4, ledger
-revision 5). The Runtime merges pull requests with a merge commit, so this head stays on its main:
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.36
+(with Workflow #429 R-0b, R-4 and R-11, which the workbench's account cards read, on top of R-7a and 114-A; it
+keeps v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 4, ledger
+revision 5):
 
 ```
-rev = "7f654bfa598db7a1cab29f88b449bd4dbc7cb8e4"
+rev = "6b430f419fc7fe1a28510a9ba100c05da5e58391"
 ```
 
 The five crates (contract / ledger / ledger-forensics / runtime-client / execution-kernel) share this one rev.
