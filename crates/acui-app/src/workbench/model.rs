@@ -4,6 +4,8 @@
 //! and only a `Status` read changes that epoch: a slice read before a restart that
 //! lands after it says nothing, and a slice read of a new Runtime that lands before
 //! `Status` saw it is read again, since `Status` seeing it pokes the slow thread.
+//! A read begun before a write landed is let go before it gets here (`super::landed`),
+//! and a write's answer counts only under its ticket (`actions`).
 
 use std::collections::BTreeSet;
 use std::mem;
@@ -12,6 +14,7 @@ use std::time::Instant;
 use acui_source::workbench::{ExplainRead, InstanceLive, LiveRead, LiveSnapshot};
 use acui_source::{ClientFailure, PauseFact};
 
+use super::actions::{self, Actions, ActionsView};
 use super::card::{self, CardView, Down, Schedule};
 use super::read::{Lane, EXPLAIN_TOO_OLD};
 use super::tools::{NameTable, NamesRead};
@@ -112,6 +115,7 @@ pub struct Model {
     slow_fault: Option<Fault>,
     /// The lines the log got about codes the cards have no words for: once each.
     told_codes: BTreeSet<String>,
+    actions: Actions,
 }
 
 /// What a `Status` read changed, for what the event loop does next.
@@ -157,11 +161,21 @@ impl Model {
             live_fault: None,
             slow_fault: None,
             told_codes: BTreeSet::new(),
+            actions: Actions::default(),
         }
     }
 
     pub fn link(&self) -> &Link {
         &self.link
+    }
+
+    /// The top bar's writes as they stand.
+    pub fn actions_view(&self) -> ActionsView {
+        actions::view(&self.link, self.global_pause.as_ref(), &self.instances, &self.actions)
+    }
+
+    pub fn actions_mut(&mut self) -> &mut Actions {
+        &mut self.actions
     }
 
     pub fn faults(&self) -> impl Iterator<Item = &Fault> {
@@ -288,6 +302,7 @@ impl Model {
         if epoch_changed {
             self.explain = Slice::empty();
             self.epoch = Some(epoch.clone());
+            self.actions.new_epoch();
         }
         for instance in &instances {
             if !self.seen_aliases.contains(&instance.alias) {
@@ -296,6 +311,7 @@ impl Model {
         }
         self.instances = instances;
         self.global_pause = global_pause;
+        self.actions.status_read(self.global_pause.as_ref());
         let previous = mem::replace(&mut self.link, Link::Online { pid, epoch });
         let connected = !matches!(previous, Link::Online { .. });
         // The run's first answer comes as its first run of `packs` is out or just in:
@@ -374,5 +390,6 @@ impl Model {
         self.instances.clear();
         self.global_pause = None;
         self.explain.error = None;
+        self.actions.status_lost();
     }
 }

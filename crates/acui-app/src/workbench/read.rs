@@ -12,6 +12,9 @@
 //! sender go; nothing joins it, since it may be stuck in a read. A panic in a read
 //! costs that read and the connection, is said in red, and the next round goes on.
 //!
+//! Every read states how many writes had landed when it began (`super::wrote`): one
+//! begun before a write landed may say what that write changed, and does not count.
+//!
 //! Two lines of the technical log are what a limit on reads is checked by: a read
 //! that took long, as it happens, and every read's count and longest time at the
 //! end of the run (`Tally`).
@@ -194,13 +197,21 @@ pub fn spawn(
     root: PathBuf,
     shown: Arc<AtomicBool>,
     tally: Arc<Tally>,
+    write_gen: Arc<AtomicU64>,
 ) -> io::Result<Sender<Poke>> {
     let (sender, commands) = mpsc::channel();
-    spawn_worker(lane.name(), move || run(lane, root, &commands, &shown, &tally))?;
+    spawn_worker(lane.name(), move || run(lane, root, &commands, &shown, &tally, &write_gen))?;
     Ok(sender)
 }
 
-fn run(lane: Lane, root: PathBuf, commands: &Receiver<Poke>, shown: &AtomicBool, tally: &Tally) {
+fn run(
+    lane: Lane,
+    root: PathBuf,
+    commands: &Receiver<Poke>,
+    shown: &AtomicBool,
+    tally: &Tally,
+    write_gen: &AtomicU64,
+) {
     let mut connection = ReadLane::new(root.clone(), lane.io());
     let mut plan: Vec<Due> = READS
         .iter()
@@ -233,6 +244,8 @@ fn run(lane: Lane, root: PathBuf, commands: &Receiver<Poke>, shown: &AtomicBool,
                 continue;
             }
             let read = due.cadence.read;
+            // Before the read: the event loop lets it go if a write lands meanwhile.
+            let generation = write_gen.load(Ordering::SeqCst);
             let landing = match catch_unwind(AssertUnwindSafe(|| read_on(read, &mut connection))) {
                 Ok(landing) => landing,
                 Err(panic) => {
@@ -248,7 +261,7 @@ fn run(lane: Lane, root: PathBuf, commands: &Receiver<Poke>, shown: &AtomicBool,
             due.last = Some(Instant::now());
             due.failed = landing.failed();
             due.poked = false;
-            report::post(lane.name(), move || super::landed(landing));
+            report::post(lane.name(), move || super::landed(landing, generation));
         }
     }
 }

@@ -2,14 +2,16 @@
 //! The account cards, from their views and the table of the language shown, into
 //! the list the workbench already shows: a row changes only when its words do, and
 //! rows come and go only when the accounts do, so a read every few seconds costs
-//! nothing and moves nothing.
+//! nothing and moves nothing. And the top bar's writes, from their view.
 
 use std::time::Instant;
 
 use acui_rows::format_minute;
 use acui_rows::outcome::explain;
+use acui_source::workbench::CONSOLE_PAUSE_ALL;
 use slint::{Model as _, VecModel};
 
+use super::actions::{ActionsView, ResumeEntry, Said, Write};
 use super::card::{Band, CardView, Down, Line, ReasonClass};
 use crate::ledger::paint::models;
 use crate::ledger::resume::Lifter;
@@ -27,6 +29,87 @@ pub fn cards(ui: &Ui) {
     let views = ui.model.borrow().cards(Instant::now());
     let cards = views.iter().map(|view| account_card(ui, labels, view)).collect();
     sync(&window, cards);
+}
+
+/// What the top bar's two write buttons offer, and what is said about them: the global
+/// pause while one holds, the confirmation asked for, and what the last press came to.
+pub fn actions(ui: &Ui) {
+    let Some(window) = ui.workbench() else {
+        return;
+    };
+    let labels = ui.labels();
+    let view = ui.model.borrow().actions_view();
+    window.set_pause_offered(view.can_pause);
+    window.set_resume_offered(matches!(
+        view.resume,
+        ResumeEntry::OnePress(_) | ResumeEntry::TwoSteps(_)
+    ));
+    let statement = match &view.resume {
+        ResumeEntry::Confirming { reason, .. } => {
+            fill(labels.resume_all_statement, &[reason.as_str()])
+        }
+        ResumeEntry::Off | ResumeEntry::OnePress(_) | ResumeEntry::TwoSteps(_) => String::new(),
+    };
+    window.set_resume_all_statement(statement.into());
+    window.set_pause_note(pause_note(labels, &view).into());
+    let (line, failed) = said_text(labels, &view);
+    window.set_action_line(line.into());
+    window.set_action_failed(failed);
+}
+
+/// While a global pause holds: what it means, and who lifts it when not this window.
+/// `Status` has no member for how many runs still finish, so no number here.
+fn pause_note(labels: &Labels, view: &ActionsView) -> String {
+    let Some(by) = view.holding else {
+        return String::new();
+    };
+    let mut note = vec![labels.pause_note, labels.pause_note_no_update];
+    match by {
+        Lifter::Alice => note.push(labels.resume_barred_alice),
+        Lifter::Installer => note.push(labels.resume_barred_installer),
+        Lifter::Window => {}
+    }
+    note.join("\n")
+}
+
+/// What the last press came to, and whether that is a failure; nothing before one.
+fn said_text(labels: &Labels, view: &ActionsView) -> (String, bool) {
+    let Some(said) = &view.said else {
+        return (String::new(), false);
+    };
+    match said {
+        Said::Sending(Write::PauseAll) => (labels.pause_all_sending.to_owned(), false),
+        Said::Sending(Write::ResumeAll) => (labels.resume_all_sending.to_owned(), false),
+        Said::PauseApplied => (labels.pause_all_applied.to_owned(), false),
+        Said::AlreadyPaused => (labels.pause_all_already.to_owned(), false),
+        Said::Resumed if view.still_paused == 0 => (labels.resume_all_done.to_owned(), false),
+        Said::Resumed => {
+            let mut text =
+                fill(labels.resume_all_still_paused, &[&view.still_paused.to_string()]);
+            if view.alice_holds {
+                text.push_str(labels.resume_all_alice_decides);
+            }
+            (text, false)
+        }
+        Said::PauseMoved => (labels.resume_all_moved.to_owned(), false),
+        Said::Refused { write, code } => {
+            let template = match write {
+                Write::PauseAll => labels.pause_all_refused,
+                Write::ResumeAll => labels.resume_all_refused,
+            };
+            let words = outcome_short(labels, code)
+                .unwrap_or_else(|| labels.outcome_unknown_short.to_owned());
+            (fill(template, &[words.as_str()]), true)
+        }
+        Said::Unsupported => (labels.resume_all_unsupported.to_owned(), true),
+        Said::Unconfirmed => (labels.write_unconfirmed.to_owned(), true),
+        Said::NotSent => (labels.write_not_sent.to_owned(), true),
+        Said::NoThread { error } => {
+            let why = fill(labels.thread_failed, &[error.as_str()]);
+            (fill(labels.write_no_thread, &[why.as_str()]), true)
+        }
+        Said::Restarted => (labels.write_restarted.to_owned(), false),
+    }
 }
 
 fn sync(window: &WorkbenchWindow, cards: Vec<AccountCard>) {
@@ -78,7 +161,13 @@ fn line_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
             let said = match by {
                 Lifter::Alice => labels.card_paused_alice.to_owned(),
                 Lifter::Installer => labels.card_paused_installer.to_owned(),
-                Lifter::Window => fill(labels.card_paused_other, &[reason]),
+                Lifter::Window if *everyone && reason.as_str() == CONSOLE_PAUSE_ALL => {
+                    labels.card_paused_console.to_owned()
+                }
+                Lifter::Window if *everyone => {
+                    fill(labels.card_paused_other_all, &[reason.as_str()])
+                }
+                Lifter::Window => fill(labels.card_paused_other, &[reason.as_str()]),
             };
             if *everyone {
                 fill(labels.card_all_accounts, &[&said])

@@ -20,24 +20,41 @@
 //! UI-3d's); `emulator_state` (read only at discovery and control, and `off` may
 //! be the idle action's doing, so showing it would mislead); `request_id` (nothing
 //! here stops a run); a fence's recheck counts.
+//!
+//! The one write here is a person's global pause ([`pause_global`]). Like the
+//! conditional resume beside it (`resume_paused`) it goes out once on a fresh
+//! person's connection, and never again by itself, whatever comes back.
 
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::Spelling;
 use acui_rows::{code, EventActor, EventSource};
 use actingcommand_contract::{
     InstanceActivity, InstanceActivityKind, OwnerEpoch, RuntimeControlPlaneStatus,
-    RuntimeErrorCode, RuntimeInstanceStatus, RuntimeScheduleExplanation,
-    ScheduleDispatchState, ScheduleExplanationInstance,
+    RuntimeErrorCode, RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation,
+    ScheduleDispatchState, ScheduleExplanationInstance, SchedulingPauseReason,
+    SchedulingPauseScope, MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
 };
 use actingcommand_runtime_client::{
     RuntimeChannel, RuntimeClient, RuntimeClientConfig, RuntimeClientError,
 };
 
-use super::{global_pause_fact, instance_pause_fact, ClientFailure, PauseFact};
+use super::{
+    global_pause_fact, instance_pause_fact, ClientFailure, OnlineSource, PauseFact,
+    RUNTIME_RESULT_UNEXPECTED,
+};
+
+/// The reason this console's "pause all" gives, a free name of the pause, no outcome
+/// code. A pause of this reason is one a person pressed here, so lifting it asks for
+/// no second press.
+pub const CONSOLE_PAUSE_ALL: &str = "console_pause_all";
+
+/// The client's own spelling of the pause's operation
+/// (`ContractLocation::PauseScheduling`).
+const PAUSE_SCHEDULING: &str = "pause_scheduling";
 
 /// One reading thread's connection: actor `ui`, source `ui`, channel `ui`, at its
 /// own io timeout. The client holds its lock for a whole exchange and latches the
@@ -191,6 +208,71 @@ fn connection_ended(error: &RuntimeClientError) -> bool {
             ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted
         )
     })
+}
+
+/// What became of one person's global pause ([`pause_global`]).
+#[derive(Debug, Clone)]
+pub enum PauseOutcome {
+    /// The pause holds, at this revision of the global scope.
+    Applied { revision: u64 },
+    /// The Runtime answered and set nothing. Its code is the host's, in `host`:
+    /// `runtime_code` is only the receipt's class. One pause already holding is
+    /// `scheduling_already_paused`, and keeps its own reason.
+    Refused(ClientFailure),
+    /// No connection, so nothing was sent.
+    NotSent(ClientFailure),
+    /// Sent, or perhaps sent, and nothing says what became of it. It is not sent again.
+    Unconfirmed(ClientFailure),
+}
+
+/// One person's global pause: a fresh person's connection, one `PauseScheduling`,
+/// and the connection let go. The global pause drains nothing and answers at once,
+/// and the Runtime does not use its drain timeout, which it still validates: the
+/// lowest it takes keeps the wait for a receipt that does not come the shortest
+/// (that timeout, the checkpoint grace and the io timeout). Sent once, whatever comes
+/// back; what to show after it is a read on another connection.
+///
+/// Every failure after the connection that is no refusal counts as unconfirmed, not
+/// only those the client calls uncertain: a failed write may have got the frame out.
+pub fn pause_global(root: &Path) -> PauseOutcome {
+    let reason = match SchedulingPauseReason::new(CONSOLE_PAUSE_ALL) {
+        Ok(reason) => reason,
+        Err(error) => {
+            return PauseOutcome::NotSent(ClientFailure {
+                code: error.code().spelling(),
+                operation: PAUSE_SCHEDULING,
+                runtime_code: None,
+                host: None,
+            })
+        }
+    };
+    let client = match OnlineSource::connect_as_person(root) {
+        Ok(client) => client,
+        Err(error) => return PauseOutcome::NotSent(ClientFailure::from(error)),
+    };
+    let answer = client.pause_scheduling(
+        SchedulingPauseScope::Global,
+        reason,
+        MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
+    );
+    match answer {
+        Ok(RuntimeResult::SchedulingPaused { revision, .. }) => PauseOutcome::Applied { revision },
+        // The client checks the result itself and gives back no other.
+        Ok(_) => PauseOutcome::Unconfirmed(ClientFailure {
+            code: RUNTIME_RESULT_UNEXPECTED,
+            operation: PAUSE_SCHEDULING,
+            runtime_code: None,
+            host: None,
+        }),
+        Err(error) => {
+            let failure = ClientFailure::from(error);
+            if failure.runtime_code.is_some() {
+                PauseOutcome::Refused(failure)
+            } else {
+                PauseOutcome::Unconfirmed(failure)
+            }
+        }
+    }
 }
 
 /// One answered `Status`. `epoch` and `pid` are of the connection's

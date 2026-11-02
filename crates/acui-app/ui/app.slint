@@ -198,6 +198,8 @@ export global Strings {
     in property <string> resume-statement;
     in property <string> resume-confirm;
     in property <string> start;
+    in property <string> pause-all;
+    in property <string> resume-all;
     in property <string> request-shutdown;
     // The workbench's own: the way into the ledger window, the instance entry
     // that waits for the Runtime, the file to edit by hand meanwhile, and the
@@ -1075,9 +1077,9 @@ component AccountCardView {
 }
 
 // The main window. At the top the bar: the Runtime's lamp and its state in plain
-// words, Start, and at the far end the way into the ledger window. Under it what
-// became of the last request, and what this window could not read. Then two
-// columns: on the left the accounts, and where one is added for now; on the right
+// words, Start, the two writes on every account's scheduling, and at the far end the
+// way into the ledger window. Under it what became of the last request, what a global
+// pause means, and what this window could not read. Then two columns: on the left the accounts, and where one is added for now; on the right
 // the settings file's problems, what falls short of the theme, where the technical
 // log is, the display settings and Request Shutdown. No code, pid or wire name
 // shows here; those stay in the ledger window's technical lines. Closing it ends
@@ -1121,6 +1123,15 @@ export component WorkbenchWindow inherits Window {
     in property <string> launcher-line;
     in property <bool> launcher-failed;
     in property <string> start-log-path;
+    // Whether the two writes can be pressed now; what the first press of "put all
+    // on duty" asks to confirm, when it asks; what a global pause means and who lifts
+    // it; and what became of the last press, red when it says a failure.
+    in property <bool> pause-offered;
+    in property <bool> resume-offered;
+    in property <string> resume-all-statement;
+    in property <string> pause-note;
+    in property <string> action-line;
+    in property <bool> action-failed;
     // Why the left column has no account to show, when it has none; and the
     // accounts.
     in property <string> accounts-note;
@@ -1137,6 +1148,9 @@ export component WorkbenchWindow inherits Window {
     in-out property <int> theme-index <=> theme-box.current-index;
 
     callback start-runtime();
+    callback pause-all();
+    callback resume-all();
+    callback resume-all-confirmed();
     callback request-shutdown();
     callback open-ledger();
     callback text-size-changed(int);
@@ -1195,6 +1209,20 @@ export component WorkbenchWindow inherits Window {
                             root.start-runtime();
                         }
                     }
+                    SkinButton {
+                        text: Strings.pause-all;
+                        enabled: root.pause-offered;
+                        clicked => {
+                            root.pause-all();
+                        }
+                    }
+                    SkinButton {
+                        text: Strings.resume-all;
+                        enabled: root.resume-offered;
+                        clicked => {
+                            root.resume-all();
+                        }
+                    }
                     Rectangle { horizontal-stretch: 1; }
                     SkinButton {
                         text: Strings.open-ledger;
@@ -1206,8 +1234,11 @@ export component WorkbenchWindow inherits Window {
                 }
             }
 
-            // what became of the last request, and what could not be read
-            if root.errors != "" || root.launcher-line != "" || root.start-log-path != "": Card {
+            // what became of the last request, what a global pause means, and what
+            // could not be read
+            if root.errors != "" || root.launcher-line != "" || root.start-log-path != ""
+                    || root.pause-note != "" || root.action-line != ""
+                    || root.resume-all-statement != "": Card {
                 vertical-stretch: 0;
                 VerticalLayout {
                     padding: 8px;
@@ -1217,6 +1248,31 @@ export component WorkbenchWindow inherits Window {
                     if root.errors != "": Notice {
                         text: root.errors;
                         failed: true;
+                    }
+                    if root.action-line != "": Notice {
+                        text: root.action-line;
+                        failed: root.action-failed;
+                    }
+                    // In two steps, as the ledger window's resume entry has.
+                    if root.resume-all-statement != "": HorizontalLayout {
+                        spacing: 14px;
+                        Notice {
+                            text: root.resume-all-statement;
+                            warning: true;
+                            vertical-alignment: center;
+                            min-width: 40px * Scale.factor;
+                            horizontal-stretch: 1;
+                        }
+                        SkinButton {
+                            text: Strings.resume-confirm;
+                            clicked => {
+                                root.resume-all-confirmed();
+                            }
+                        }
+                    }
+                    if root.pause-note != "": Notice {
+                        text: root.pause-note;
+                        warning: true;
                     }
                     if root.launcher-line != "": Notice {
                         text: root.launcher-line;
