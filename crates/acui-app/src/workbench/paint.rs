@@ -2,8 +2,8 @@
 //! The account cards, from their views and the table of the language shown, into
 //! the list the workbench already shows: a row changes only when its words do, and
 //! rows come and go only when the accounts do, so a read every few seconds costs
-//! nothing and moves nothing. And the top bar's writes and its performance preset,
-//! from their views.
+//! nothing and moves nothing. And the top bar's writes, its performance preset and the
+//! stepper beside it, from their views.
 
 use std::time::Instant;
 
@@ -16,8 +16,8 @@ use acui_source::workbench::{
 use slint::{Model as _, ModelRc, VecModel};
 
 use super::actions::{
-    ActionsView, PresetState, PresetView, Reread, ResumeEntry, Said, Write, PRESET_ADAPTIVE,
-    PRESET_LIGHT, PRESET_STANDARD,
+    ActionsView, PresetState, PresetView, Reread, ResumeEntry, Said, StepperView, Write,
+    PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
 };
 use super::card::{Band, CardView, Down, Line, ReasonClass};
 use crate::ledger::paint::models;
@@ -40,7 +40,8 @@ pub fn cards(ui: &Ui) {
 
 /// The top bar's second row: the presets, the one in effect marked, what is in effect in
 /// words, and whether they can be pressed; nothing while there is no Runtime to say it of.
-/// And what a first press on a preset asks to confirm.
+/// And what a first press on a preset asks to confirm, and the stepper of how many tasks run
+/// at once, which goes by the same "can be pressed".
 pub fn preset(ui: &Ui) {
     let Some(window) = ui.workbench() else {
         return;
@@ -79,6 +80,64 @@ pub fn preset(ui: &Ui) {
     sync(window.get_presets(), choices, |rows| window.set_presets(rows));
     window.set_preset_note(note.into());
     window.set_preset_failed(failed);
+    let stepper = match &view {
+        PresetView::Read { stepper: Some(stepper), .. } => Some(stepper_lines(labels, stepper)),
+        PresetView::Read { stepper: None, .. } | PresetView::NotRead | PresetView::Unreadable => {
+            None
+        }
+    };
+    window.set_concurrency_shown(stepper.is_some());
+    if let Some(lines) = stepper {
+        // The field is the person's while they type: it is set only when it says otherwise.
+        if window.get_concurrency_text() != lines.text.as_str() {
+            window.set_concurrency_text(lines.text.into());
+        }
+        window.set_concurrency_placeholder(lines.placeholder.into());
+        window.set_concurrency_note(lines.note.into());
+        window.set_concurrency_ready(writable && lines.ready);
+        window.set_concurrency_back_offered(lines.back_to_file);
+    }
+}
+
+/// What the stepper shows.
+struct StepperLines {
+    /// The draft, or the value in effect; empty when there is none.
+    text: String,
+    /// In the empty field: that a draft left empty goes back to the file's setting, or
+    /// that there is no value.
+    placeholder: &'static str,
+    /// Where the value in effect comes from, and the value too while the field holds a draft.
+    note: String,
+    ready: bool,
+    back_to_file: bool,
+}
+
+fn stepper_lines(labels: &Labels, stepper: &StepperView) -> StepperLines {
+    let source = source_text(labels, stepper.source);
+    let (text, placeholder, note) = match &stepper.draft {
+        Some(draft) => {
+            let value = match &stepper.value {
+                Some(value) => value_text(labels, value),
+                None => labels.setting_unset.to_owned(),
+            };
+            let note = fill(labels.concurrency_now, &[&value, source]);
+            (draft.clone(), labels.concurrency_empty, note)
+        }
+        None => {
+            let value = match &stepper.value {
+                Some(value) => value_text(labels, value),
+                None => String::new(),
+            };
+            (value, labels.setting_unset, fill(labels.concurrency_source, &[source]))
+        }
+    };
+    StepperLines {
+        text,
+        placeholder,
+        note,
+        ready: stepper.can_apply,
+        back_to_file: stepper.back_to_file,
+    }
 }
 
 /// A preset's name in words; one the words here do not know, by its own name.
@@ -119,23 +178,32 @@ fn member_text(labels: &Labels, member: &PresetMember) -> String {
     };
     let value = match &member.value {
         None => labels.setting_unset.to_owned(),
-        Some(SettingValue::Flag(true)) => labels.setting_on.to_owned(),
-        Some(SettingValue::Flag(false)) => labels.setting_off.to_owned(),
-        Some(SettingValue::Number(number)) => number.to_string(),
-        Some(SettingValue::Word(word)) => match word.as_str() {
+        Some(value) => value_text(labels, value),
+    };
+    fill(labels.preset_member, &[name, &value, source_text(labels, member.source)])
+}
+
+fn value_text(labels: &Labels, value: &SettingValue) -> String {
+    match value {
+        SettingValue::Flag(true) => labels.setting_on.to_owned(),
+        SettingValue::Flag(false) => labels.setting_off.to_owned(),
+        SettingValue::Number(number) => number.to_string(),
+        SettingValue::Word(word) => match word.as_str() {
             MODE_OBSERVE => labels.setting_mode_observe.to_owned(),
             MODE_PACE => labels.setting_mode_pace.to_owned(),
             MODE_FULL => labels.setting_mode_full.to_owned(),
             other => other.to_owned(),
         },
-    };
-    let source = match member.source {
+    }
+}
+
+fn source_text(labels: &Labels, source: SettingSource) -> &'static str {
+    match source {
         SettingSource::File => labels.setting_source_file,
         SettingSource::Default => labels.setting_source_default,
         SettingSource::Discovered => labels.setting_source_discovered,
         SettingSource::Online => labels.setting_source_online,
-    };
-    fill(labels.preset_member, &[name, &value, source])
+    }
 }
 
 /// What the top bar's two write buttons offer, and what is said about them: the global
@@ -237,6 +305,7 @@ fn said_text(labels: &Labels, view: &ActionsView) -> (String, bool) {
         Said::NotApplied => (labels.config_not_applied.to_owned(), true),
         Said::UnconfirmedChanged => (labels.config_unconfirmed_changed.to_owned(), true),
         Said::UnconfirmedSeeNow => (labels.config_unconfirmed_see_now.to_owned(), true),
+        Said::NotWhole => (labels.concurrency_not_whole.to_owned(), true),
     }
 }
 

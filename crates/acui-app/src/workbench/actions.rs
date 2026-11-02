@@ -23,6 +23,14 @@
 //! and only then says what became of it, so a person decides on what they see. Leaving a
 //! learning mode the file holds takes two presses, as lifting another tool's pause does.
 //!
+//! How many tasks run at once has a stepper beside the presets. Typing and its two buttons
+//! change only a draft, and only "apply" sends it, as one more change of settings: an empty
+//! draft goes back to the file's setting, a whole number is sent as it is, with no range
+//! here (the Runtime's refusal says it), and anything else is not sent. The draft stays
+//! while nothing changed, and goes once what it asked for may have happened: with the
+//! snapshot read after an answer that says it did, or after one that says nothing, when that
+//! snapshot shows another version.
+//!
 //! `view` and `preset_view` are pure functions of what the reads and the presses left,
 //! without words; `paint` makes the words.
 
@@ -32,7 +40,8 @@ use std::path::Path;
 
 use acui_source::workbench::{
     configure, pause_global, ActivityKind, ConfigEdit, ConfigOutcome, ConfigRead, InstanceLive,
-    PauseOutcome, PresetMember, RefusalWhy, SettingSource, CONSOLE_PAUSE_ALL,
+    PauseOutcome, PresetMember, PresetSetting, RefusalWhy, SettingSource, SettingValue,
+    CONSOLE_PAUSE_ALL,
 };
 use acui_source::{resume_paused, ClientFailure, PauseFact, PauseTarget, ResumeOutcome};
 
@@ -170,6 +179,38 @@ pub enum Said {
     UnconfirmedChanged,
     /// A snapshot came without a version to judge by.
     UnconfirmedSeeNow,
+    /// "Apply" found no whole number in the stepper's field: nothing was sent.
+    NotWhole,
+}
+
+/// What the stepper's field holds that is not yet in effect: as typed, or as a step left it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Draft {
+    text: String,
+    /// A change of settings was taken since, this draft or another: it shows until the
+    /// snapshot read after that answer, which shows what holds instead, and is not sent
+    /// meanwhile.
+    applied: bool,
+}
+
+/// What a draft asks for.
+enum Typed {
+    /// The configuration file's value.
+    Empty,
+    Whole(i64),
+    /// Not sent.
+    NotWhole,
+}
+
+impl Typed {
+    fn of(text: &str) -> Self {
+        let text = text.trim();
+        if text.is_empty() {
+            Self::Empty
+        } else {
+            text.parse::<i64>().map_or(Self::NotWhole, Self::Whole)
+        }
+    }
 }
 
 /// The workbench's writes, on the event loop only.
@@ -180,6 +221,8 @@ pub struct Actions {
     /// The pause a first press asks to confirm.
     confirming: Option<PauseTarget>,
     flow: ConfigFlow,
+    /// The stepper's, of how many tasks run at once.
+    draft: Option<Draft>,
     said: Option<Said>,
 }
 
@@ -213,35 +256,52 @@ impl Actions {
                 Said::Rereading(reread) => ConfigFlow::Rereading(reread),
                 _ => ConfigFlow::Idle,
             };
+            // Whatever changed, a preset included, may have changed what the draft asked for.
+            if said == Said::ConfigApplied {
+                if let Some(draft) = &mut self.draft {
+                    draft.applied = true;
+                }
+            }
         }
         self.said = Some(said);
         true
     }
 
     /// Another owner epoch: no ticket holds across it, and no line says anything of
-    /// the old one but that a write was out or had not been settled.
+    /// the old one but that a write was out or had not been settled. A draft goes too:
+    /// what holds is to be seen afresh.
     pub fn new_epoch(&mut self) {
         let was_open = !self.out.is_empty() || matches!(self.flow, ConfigFlow::Rereading(_));
         self.out.clear();
         self.confirming = None;
         self.flow = ConfigFlow::Idle;
+        self.draft = None;
         self.said = was_open.then_some(Said::Restarted);
     }
 
     /// A fact snapshot that counts: of this epoch, and read after any write that landed.
-    /// That is what a change of settings left waiting was waiting for. A confirmation
-    /// goes when what it asks about is no longer so.
+    /// That is what a change of settings left waiting was waiting for, and what a draft
+    /// that was applied waited for. A confirmation goes when what it asks about is no
+    /// longer so.
     pub fn snapshot_read(&mut self, read: &ConfigRead) {
+        if self.draft.as_ref().is_some_and(|draft| draft.applied) {
+            self.draft = None;
+        }
         match &self.flow {
             ConfigFlow::Rereading(reread) => {
-                self.said = Some(match *reread {
+                let said = match *reread {
                     Reread::Conflict => Said::ConflictRefreshed,
                     Reread::Unconfirmed { based_on } => match (read.version, based_on) {
                         (None, _) => Said::UnconfirmedSeeNow,
                         (Some(now), Some(based_on)) if now == based_on => Said::NotApplied,
                         (Some(_), _) => Said::UnconfirmedChanged,
                     },
-                });
+                };
+                // The settings changed, perhaps by this press: what shows is what holds.
+                if said == Said::UnconfirmedChanged {
+                    self.draft = None;
+                }
+                self.said = Some(said);
                 self.flow = ConfigFlow::Idle;
             }
             ConfigFlow::Confirming { name } => {
@@ -393,7 +453,47 @@ pub enum PresetView {
         back_to_file: bool,
         /// The preset a first press asks to confirm.
         confirming: Option<String>,
+        /// How many tasks run at once; `None` when the snapshot does not name it.
+        stepper: Option<StepperView>,
     },
+}
+
+/// The stepper of how many tasks run at once. It is pressed when a change of settings can
+/// go out (`PresetView::Read::can_write`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepperView {
+    /// The value in effect, `None` when it has none (no limit), and where it comes from.
+    pub value: Option<SettingValue>,
+    pub source: SettingSource,
+    /// What the field holds instead of the value, as typed or stepped to.
+    pub draft: Option<String>,
+    /// Whether "apply" would change anything: an empty draft only over an online value,
+    /// which it drops, a whole number only when it is not the value in effect. Text that is
+    /// no whole number may be pressed, to be told so; a draft already applied may not.
+    pub can_apply: bool,
+    /// Whether the value is an online one, which going back to the file drops.
+    pub back_to_file: bool,
+}
+
+fn stepper_view(members: &[PresetMember], draft: Option<&Draft>) -> Option<StepperView> {
+    let member =
+        members.iter().find(|member| member.setting == PresetSetting::MaxConcurrentRuns)?;
+    let online = member.source == SettingSource::Online;
+    let can_apply = draft.is_some_and(|draft| {
+        !draft.applied
+            && match Typed::of(&draft.text) {
+                Typed::Empty => online,
+                Typed::Whole(runs) => member.value != Some(SettingValue::Number(runs)),
+                Typed::NotWhole => true,
+            }
+    });
+    Some(StepperView {
+        value: member.value.clone(),
+        source: member.source,
+        draft: draft.map(|draft| draft.text.clone()),
+        can_apply,
+        back_to_file: online,
+    })
 }
 
 /// One preset of the table.
@@ -460,7 +560,8 @@ pub fn preset_view(
         ConfigFlow::InFlight | ConfigFlow::Rereading(_) => (false, None),
     };
     let back_to_file = preset.members.iter().any(|member| member.source == SettingSource::Online);
-    PresetView::Read { options, state, can_write, back_to_file, confirming }
+    let stepper = stepper_view(&preset.members, actions.draft.as_ref());
+    PresetView::Read { options, state, can_write, back_to_file, confirming, stepper }
 }
 
 /// What a write's thread hands back.
@@ -672,6 +773,70 @@ pub fn back_to_file_pressed(ui: &Ui) {
     }
 }
 
+/// The stepper's field as the person typed it: the draft, whatever it says.
+pub fn concurrency_edited(ui: &Ui, text: &str) {
+    ui.model.borrow_mut().actions_mut().draft =
+        Some(Draft { text: text.to_owned(), applied: false });
+    paint::preset(ui);
+}
+
+/// One of the stepper's buttons: one off or one on, from the whole number the field holds,
+/// else from the value in effect, else from none. Only the draft changes: there is no range
+/// here to stop at.
+pub fn concurrency_stepped(ui: &Ui, step: i32) {
+    let view = ui.model.borrow().preset_view();
+    let PresetView::Read { can_write: true, stepper: Some(stepper), .. } = view else {
+        return;
+    };
+    let typed = stepper.draft.as_deref().map(Typed::of);
+    let from = match (typed, stepper.value) {
+        (Some(Typed::Whole(runs)), _) | (_, Some(SettingValue::Number(runs))) => runs,
+        _ => 0,
+    };
+    let text = from.saturating_add(i64::from(step)).to_string();
+    ui.model.borrow_mut().actions_mut().draft = Some(Draft { text, applied: false });
+    paint::preset(ui);
+}
+
+/// The stepper's "apply": what the draft asks for, once, or, when it is no whole number,
+/// nothing but saying so.
+pub fn concurrency_apply(ui: &Ui) {
+    let view = ui.model.borrow().preset_view();
+    let PresetView::Read { can_write: true, stepper: Some(stepper), .. } = view else {
+        return;
+    };
+    if !stepper.can_apply {
+        return;
+    }
+    let Some(draft) = stepper.draft else {
+        return;
+    };
+    match Typed::of(&draft) {
+        Typed::Empty => send_config(ui, ConfigEdit::concurrent_runs_back_to_file()),
+        Typed::Whole(runs) => send_config(ui, ConfigEdit::concurrent_runs(runs)),
+        Typed::NotWhole => {
+            ui.model.borrow_mut().actions_mut().said = Some(Said::NotWhole);
+            repaint(ui);
+        }
+    }
+}
+
+/// The stepper's "back to the file's setting": its one setting only.
+pub fn concurrency_back_to_file(ui: &Ui) {
+    let view = ui.model.borrow().preset_view();
+    let offered = matches!(
+        view,
+        PresetView::Read {
+            can_write: true,
+            stepper: Some(StepperView { back_to_file: true, .. }),
+            ..
+        }
+    );
+    if offered {
+        send_config(ui, ConfigEdit::concurrent_runs_back_to_file());
+    }
+}
+
 /// The table is read once at the Runtime's start, so a preset shown is in it: a preset
 /// that is not says this program lost track, and nothing goes out.
 fn send_preset(ui: &Ui, name: &str) {
@@ -688,9 +853,14 @@ fn send_preset(ui: &Ui, name: &str) {
     }
 }
 
+/// What it sends goes in the log first, keys and all: the answer's line does not say.
 fn send_config(ui: &Ui, edit: ConfigEdit) {
     let based_on = ui.model.borrow().config_version();
     send(ui, Write::Configure { based_on }, move |root| {
+        report::log_quiet(
+            CONFIG_THREAD,
+            &format!("sending, based on version {based_on:?}: {}", edit.line()),
+        );
         Written::Config(configure(root, &edit, based_on))
     });
 }

@@ -504,6 +504,16 @@ pub struct Labels {
     pub preset_leave_full: &'static str,
     pub preset_confirm: &'static str,
     pub preset_gone: &'static str,
+    /// The stepper of how many tasks run at once, beside the presets: where the value in
+    /// effect comes from; that and the value while the field holds something else; what an
+    /// empty field stands for; the button that sends it; and what is typed that is no whole
+    /// number, which is not sent. Its caption is `setting_concurrent_runs`, its value when
+    /// it has none `setting_unset`.
+    pub concurrency_source: &'static str,
+    pub concurrency_now: &'static str,
+    pub concurrency_empty: &'static str,
+    pub apply: &'static str,
+    pub concurrency_not_whole: &'static str,
     /// What a change of settings came to. The waiting lines hold until a snapshot has been
     /// read, then the lines after them say what it showed; and until one can be read,
     /// nothing is saved. A refusal names no key; `config_value_range` follows
@@ -1026,6 +1036,11 @@ pub const ZH: Labels = Labels {
     preset_leave_full: "确认：配置文件设定的是学习模式（full）。切到「{}」将离开文件设定的 full；之后可以用「回到文件设定」回来",
     preset_confirm: "确认切换",
     preset_gone: "这一档已不在 Runtime 的档位表里，什么都没发",
+    concurrency_source: "（{}）",
+    concurrency_now: "现在 {}（{}）",
+    concurrency_empty: "文件设定",
+    apply: "应用",
+    concurrency_not_whole: "同时执行任务数只能填整数；什么都没发",
     config_sending: "正在保存设置…",
     config_applied: "设置已保存；显示以重新读到的为准",
     config_conflict_rereading: "设置已被其他地方改动，正在刷新…",
@@ -1525,6 +1540,11 @@ pub const EN: Labels = Labels {
     preset_leave_full: "Confirm: the configuration file sets learning mode (full). Switching to {} leaves the file's full; Back to File Setting returns to it",
     preset_confirm: "Confirm and Switch",
     preset_gone: "That preset is no longer in the Runtime's table; nothing was sent",
+    concurrency_source: "({})",
+    concurrency_now: "now {} ({})",
+    concurrency_empty: "from file",
+    apply: "Apply",
+    concurrency_not_whole: "Tasks at once takes a whole number; nothing was sent",
     config_sending: "Saving the settings…",
     config_applied: "Settings saved; what is shown is what is read back",
     config_conflict_rereading: "The settings were changed elsewhere; refreshing…",

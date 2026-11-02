@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { Button, LineEdit, ListView, ScrollView, Slider, TextEdit } from "std-widgets.slint";
-import { AeroConst, Card, CardTitle, CardTone, Look, Scale, Severity, SkinButton, SkinCheckBox, SkinComboBox, SkinSegment, SkinTab, StatusDot, StatusTone, WindowChrome } from "kit/lib.slint";
+import { AeroConst, Card, CardTitle, CardTone, Look, Scale, Severity, SkinButton, SkinCheckBox, SkinComboBox, SkinSegment, SkinStepper, SkinTab, StatusDot, StatusTone, WindowChrome } from "kit/lib.slint";
 
 // The kit's globals the Rust side reaches, each window's own copy.
 export { Scale, Look, AeroConst }
@@ -211,6 +211,10 @@ export global Strings {
     in property <string> performance-preset;
     in property <string> back-to-file;
     in property <string> preset-confirm;
+    // The stepper beside the presets: its caption, which also names its field for a
+    // screen reader, and the button that sends it.
+    in property <string> concurrent-runs;
+    in property <string> apply;
     in property <string> request-shutdown;
     // The workbench's own: the way into the ledger window, the instance entry
     // that waits for the Runtime, the file to edit by hand meanwhile, and the
@@ -1089,7 +1093,8 @@ component AccountCardView {
 
 // The main window. At the top the bar: the Runtime's lamp and its state in plain
 // words, Start, the two writes on every account's scheduling, and at the far end the
-// way into the ledger window; on a second row the performance presets. Under
+// way into the ledger window; on a second row the performance presets, and how many
+// tasks run at once. Under
 // it what became of the last request, what a global
 // pause means, and what this window could not read. Then two columns: on the left the accounts, and where one is added for now; on the right
 // the settings file's problems, what falls short of the theme, where the technical
@@ -1155,6 +1160,18 @@ export component WorkbenchWindow inherits Window {
     in property <bool> preset-writable;
     in property <bool> preset-back-offered;
     in property <string> preset-statement;
+    // Beside the presets, while the snapshot names it: how many tasks run at once. The
+    // field holds what is typed or stepped to, else the value in effect, both ways with
+    // the field; what it says when empty; where the value comes from, and the value too
+    // while the field holds something else; whether "apply" would change anything; and
+    // whether there is an online value to go back from. It can be pressed when a preset
+    // can (`preset-writable`).
+    in property <bool> concurrency-shown;
+    in-out property <string> concurrency-text;
+    in property <string> concurrency-placeholder;
+    in property <string> concurrency-note;
+    in property <bool> concurrency-ready;
+    in property <bool> concurrency-back-offered;
     // Why the left column has no account to show, when it has none; and the
     // accounts.
     in property <string> accounts-note;
@@ -1177,6 +1194,10 @@ export component WorkbenchWindow inherits Window {
     callback preset-picked(string);
     callback preset-confirmed();
     callback preset-back-to-file();
+    callback concurrency-edited(string);
+    callback concurrency-stepped(int);
+    callback concurrency-apply();
+    callback concurrency-back-to-file();
     callback request-shutdown();
     callback open-ledger();
     callback text-size-changed(int);
@@ -1288,6 +1309,40 @@ export component WorkbenchWindow inherits Window {
                             enabled: root.preset-writable;
                             clicked => {
                                 root.preset-back-to-file();
+                            }
+                        }
+                        // Its own group, so its "back to the file's setting" reads as its
+                        // one setting's.
+                        if root.concurrency-shown: HorizontalLayout {
+                            spacing: 6px;
+                            horizontal-stretch: 0;
+                            Caption { text: Strings.concurrent-runs; }
+                            SkinStepper {
+                                label: Strings.concurrent-runs;
+                                text <=> root.concurrency-text;
+                                placeholder: root.concurrency-placeholder;
+                                enabled: root.preset-writable;
+                                edited(text) => {
+                                    root.concurrency-edited(text);
+                                }
+                                stepped(step) => {
+                                    root.concurrency-stepped(step);
+                                }
+                            }
+                            Caption { text: root.concurrency-note; }
+                            SkinButton {
+                                text: Strings.apply;
+                                enabled: root.concurrency-ready;
+                                clicked => {
+                                    root.concurrency-apply();
+                                }
+                            }
+                            if root.concurrency-back-offered: SkinButton {
+                                text: Strings.back-to-file;
+                                enabled: root.preset-writable;
+                                clicked => {
+                                    root.concurrency-back-to-file();
+                                }
                             }
                         }
                     }

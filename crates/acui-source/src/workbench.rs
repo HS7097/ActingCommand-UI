@@ -343,6 +343,36 @@ impl ConfigEdit {
                 .collect(),
         )
     }
+
+    /// How many tasks run at once, as an online value. The Runtime alone knows the range,
+    /// and says it when it refuses one.
+    pub fn concurrent_runs(runs: i64) -> Self {
+        Self(vec![ConfigSettingChange {
+            key: pacing::MAX_CONCURRENT_RUNS.to_owned(),
+            value: Some(runs.into()),
+        }])
+    }
+
+    /// How many tasks run at once, back to the configuration file's value, or to no limit
+    /// when the file names none: the key has no default.
+    pub fn concurrent_runs_back_to_file() -> Self {
+        Self(vec![ConfigSettingChange {
+            key: pacing::MAX_CONCURRENT_RUNS.to_owned(),
+            value: None,
+        }])
+    }
+
+    /// What it changes, keys and values as the wire has them: for the log only.
+    pub fn line(&self) -> String {
+        self.0
+            .iter()
+            .map(|change| match &change.value {
+                Some(value) => format!("{} = {value}", change.key),
+                None => format!("{} back to the file", change.key),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// What became of one [`configure`].

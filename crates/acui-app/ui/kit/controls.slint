@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { Button, CheckBox, ComboBox } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit } from "std-widgets.slint";
 import { AeroButtonFace, AeroCheckFace } from "aero.slint";
 import { Look, Scale } from "tokens.slint";
 
@@ -211,6 +211,55 @@ export component SkinButton {
                     height: parent.height - 4px;
                     border-radius: max(0px, Look.radius - 2px);
                 }
+            }
+        }
+    }
+}
+
+// A whole number to edit: a field, with a button on each side that takes one off or
+// adds one, each a SkinButton in either skin. Unlike the std SpinBox the field may be
+// left empty, and it holds whatever is typed: what the text means, where a step starts
+// from and whether it may go on are the caller's, so a button only asks for its step.
+// The field's text is the caller's as much as the person's, both ways. Tab reaches the
+// three in turn. Laid out as SkinButton is.
+export component SkinStepper {
+    in-out property <string> text;
+    in property <string> placeholder;
+    // What the number is, for a screen reader.
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback edited(string);
+    // -1 or 1.
+    callback stepped(int);
+    HorizontalLayout {
+        padding: 0;
+        spacing: 2px;
+        SkinButton {
+            text: "−";
+            enabled: root.enabled;
+            clicked => {
+                root.stepped(-1);
+            }
+        }
+        LineEdit {
+            text <=> root.text;
+            placeholder-text: root.placeholder;
+            enabled: root.enabled;
+            accessible-label: root.label;
+            font-size: Scale.body-font;
+            // The std field asks for 160px; a number needs far less.
+            min-width: 64px * Scale.factor;
+            preferred-width: 80px * Scale.factor;
+            horizontal-stretch: 0;
+            edited(text) => {
+                root.edited(text);
+            }
+        }
+        SkinButton {
+            text: "+";
+            enabled: root.enabled;
+            clicked => {
+                root.stepped(1);
             }
         }
     }
