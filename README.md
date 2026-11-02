@@ -378,14 +378,39 @@ On the frame, beside the event's own geometry:
 ## Running
 
 ```
-acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]
+acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--lang <zh|en>]
 acui --help
 ```
 
-The main window is the **workbench**. Its top bar has a lamp with the Runtime in plain words, Start, and a
-"Troubleshooting and Ledger" button; under it is the plain-words result of the last press. Then two
-columns: the left one is for the accounts, with an "Add Account or Device" button that is off (see
-"Instance configuration"); the right one has the language, the text size, the theme and Request Shutdown.
+The main window is the **workbench**. Its top bar has a lamp with the Runtime in plain words, Start, a
+"Troubleshooting and Ledger" button and, at its far end, Settings; under it is the plain-words result of
+the last press. Then one of two pages. The main page has two columns: the left one is for the accounts,
+with an "Add Account or Device" button that is off (see "Instance configuration"); the right one has the
+settings file's problems, what falls short of the theme and where the technical log is. Settings switches
+to the settings page, where the same button reads "Back to Workbench": first those same lines, then the
+Runtime's settings, then "Runtime" (Request Shutdown, "Start the Runtime again automatically") and
+"Appearance" (the text size, the language and the theme). The Runtime's settings come from the running Runtime (read again on going to the page), in two
+groups, "Everyday" and "Advanced": which keys show and in which group is the Runtime's own tiering, and the
+four settings of the performance preset are only on the top bar. Each says its value, where it comes
+from, how it is changed (shown only for now, changed in the configuration file with a Runtime restart,
+or set by the installer) and when a change takes effect; one the file does not name and that has no
+default says "not set" rather than being left out. In this version only "Days to keep unconfirmed
+evidence frames" is changed here: type a whole number and press Save, or empty the field and save to go
+back to the configuration file's value (or the default). Only the Runtime judges the range, and a refusal
+says what it said; the result has a line of its own under the top bar, naming the setting. A save is
+sent once: when its result is unknown, what holds is read again before anything is said, and nothing is
+ever sent again by itself. After every start of the Runtime its start report is read once: when an update
+or a rollback reset settings changed online, the line under the top bar and the settings page say which;
+"Got It" hides that line for this start. Online settings kept over a default that changed are said in
+small print on the settings page only. A report that cannot be read is tried at most 3 times for a start,
+then the settings page says so in red. While the Runtime does not answer, no older value is shown.
+"Start the Runtime again automatically" is only shown: each time the settings page is opened,
+`actingctl watchdog status` runs once in the background (read-only; `install`, `uninstall` and
+`run-once` are never run), and the page says "On", "Off", "May not work" or "Cannot be read" of the
+watchdog's scheduled task as it reports it, the last two with the reason in the technical log. After
+the Runtime started again it is read again the next time the page is opened. It is not the wizard's
+"Start at boot" option; how the watchdog is set up is at the end of "Setup wizard acsetup". Both pages are always there and only one shows at a
+time, so what the boxes hold stays when you switch away and back.
 The ledger window,
 "Advanced Troubleshooting and Ledger History", opens only when asked: from that button, or at the start
 when `--tab` or `--source` is given. There is at most one per source (the default `auto`, `online`,
@@ -395,14 +420,15 @@ window's reader stops after the page in hand; opening it again is a new window a
 the workbench ends the program, except while an unlock runs (see "Launcher").
 
 `--state-root` applies to this run only and overrides `state_root` in the settings file; if neither is
-present the workbench still opens, with a red bar at its top that says there is no state root to use and
-gives the usage, and Start, Request Shutdown and "Troubleshooting and Ledger" are off; no default is
-guessed. Started through an A/B installation's fixed
+present the workbench still opens, with a red bar at its top that says in plain words that there is no
+state root to use and what to do (the usage and the key names go to the technical log only), and Start,
+Request Shutdown and "Troubleshooting and Ledger" are off; no default is guessed. Started through an A/B installation's fixed
 entry `<install root>\ui\acui.exe`, the console takes the state root, the configuration and the Runtime
 program from the installation's selection instead, and refuses a `--state-root` that differs from it (in
 the same red bar). `--source` selects the ledger window's read face (see above).
 `--tab` specifies the ledger window's startup tab (for screenshots and review), and its values are the
-views' own wire names. `--lang` applies to **this run only**, overrides the language in the settings
+views' own wire names. `--page` is of the same kind: it only picks the workbench page the window opens on,
+`main` (the default) or `settings` (for screenshots). `--lang` applies to **this run only**, overrides the language in the settings
 file, and is not written back to the settings file.
 
 Started directly — `acui.exe`, or a shortcut that points at it — the console opens no black console
@@ -430,7 +456,8 @@ and 1 otherwise. When not even that window can be made, a system message box say
 usage on that console, or shows it in the same window when there is none, and exits 0. An installation
 selection it cannot read, a `--state-root` that differs from it, a `state_root` that is not absolute, or no
 state root at all is no failed start: the workbench opens with a red bar, plain words first and then the
-original, and the technical log has it too.
+original, and the technical log has it too; for no state root at all the red bar has the plain words
+only, and the usage with its key names goes to the technical log.
 
 The technical log is `%LOCALAPPDATA%\ActingCommand\logs\acui-<start unix ms>.log` (elsewhere under
 `$XDG_STATE_HOME`, else `$HOME/.local/state`), beside actingd's start logs. It is created by its first
@@ -443,7 +470,7 @@ cannot be written, the windows say that instead.
 
 ## Interface language, text size and theme
 
-Three dropdowns in the workbench's right column and at the right of every ledger window's top bar; a choice made in
+Three dropdowns under "Appearance" on the workbench's settings page and at the right of every ledger window's top bar; a choice made in
 any window applies at once to every open window and is written into the settings file as soon as it is
 made, and a ledger window opened later comes up with the current language, text size and theme:
 
@@ -530,7 +557,7 @@ On the workbench the top bar has a lamp and the Runtime state from the newest st
 then the Start button, on only while the Runtime is not running and no start is out; it is off while the
 lamp says the Runtime is stopping or not answering, or that connecting to it went wrong, since one may still
 be there. It is also on when the status reads themselves fail, since a start probes first. Request Shutdown
-is in the right column. The line under the top bar is the result of the last press, in plain words only (no key,
+is under "Runtime" on the settings page. The line under the top bar is the result of the last press, in plain words only (no key,
 code, PID or path; an outcome code shows only as its short words; a failure only the technical text states
 adds "details in Troubleshooting and Ledger"). A start that launched a daemon and got no Runtime from it
 also shows that daemon's log path there, selectable to copy. Every ledger window's top bar has the technical

@@ -2,8 +2,9 @@
 //! Where this run's state root, actingd configuration and actingd executable
 //! come from: an installed console takes them from its installation selection,
 //! which `--state-root` may only repeat; otherwise `--state-root`, else
-//! acui.toml. Neither is a silent default: with both missing the usage is the
-//! answer. One function, so that what replaces this derivation replaces it whole.
+//! acui.toml. Neither is a silent default: with both missing the workbench says so
+//! in plain words, and the technical log gets the usage. One function, so that what
+//! replaces this derivation replaces it whole.
 //! So too for where the Runtime's `actingctl` is, and how it is pointed at this
 //! run's configuration (`tool_paths`).
 
@@ -43,6 +44,8 @@ pub enum InstallIssue {
 }
 
 impl InstallIssue {
+    /// What the workbench's red bar says of it. No state root at all is said in plain
+    /// words; the command line and the keys that name one are the log's (`log_text`).
     pub fn text(&self, labels: &Labels) -> String {
         match self {
             Self::Selection(error) => fill(labels.install_selection_failed, &[error]),
@@ -53,7 +56,18 @@ impl InstallIssue {
             Self::StateRootNotAbsolute(root) => {
                 fill(labels.state_root_not_absolute, &[&root.display().to_string()])
             }
-            Self::NoStateRoot => labels.usage.to_owned(),
+            Self::NoStateRoot => labels.no_state_root.to_owned(),
+        }
+    }
+
+    /// What the technical log gets: the same, and the usage too when no state root
+    /// is named at all.
+    pub fn log_text(&self, labels: &Labels) -> String {
+        match self {
+            Self::NoStateRoot => format!("{}\n{}", labels.no_state_root, labels.usage),
+            Self::Selection(_) | Self::StateRootDiffers { .. } | Self::StateRootNotAbsolute(_) => {
+                self.text(labels)
+            }
         }
     }
 }
@@ -63,7 +77,8 @@ pub struct ToolPaths {
     pub actingctl: PathBuf,
     /// `--root`, for a run without an installation selection.
     pub root: Option<PathBuf>,
-    /// Handed to the child, which then takes no `--root`: it finds the same selection.
+    /// Handed to the child, which then finds the same selection: `packs` takes no `--root`,
+    /// and `watchdog`, which requires one, takes this installation's root.
     pub installation: Option<Snapshot>,
 }
 

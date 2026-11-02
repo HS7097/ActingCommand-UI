@@ -440,8 +440,10 @@ impl Ui {
 
     /// The workbench's lines that only the language changes: why this run has
     /// no state root, and the Runtime's configuration file, where an instance
-    /// is added by hand for now. And the accounts note and the cards, which reads
-    /// change too.
+    /// is added by hand for now. And the accounts note, the cards, the Runtime's
+    /// settings and what its start report says of them, which reads change too, and whether
+    /// the Runtime is started again when it is gone; and which page shows, which only a press
+    /// changes.
     pub fn paint_workbench(&self) {
         let Some(window) = self.workbench() else {
             return;
@@ -463,9 +465,13 @@ impl Ui {
         window.set_config_note(note.into());
         self.paint_accounts_note();
         self.paint_names_note();
+        workbench::paint::page(self);
         workbench::paint::cards(self);
         workbench::paint::actions(self);
         workbench::paint::preset(self);
+        workbench::paint::settings(self);
+        workbench::paint::start(self);
+        workbench::paint::autostart(self);
     }
 
     /// Why the workbench's left column has no account to show, if it has none.
@@ -516,12 +522,19 @@ fn language_index(language: Language) -> i32 {
     }
 }
 
-/// The workbench's controls. Start and Request Shutdown are the launcher's;
+/// The workbench's controls. The top bar's page button switches between the
+/// accounts and the settings; Start and Request Shutdown are the launcher's;
 /// "troubleshooting and ledger" opens the window of the default source; the
-/// write buttons are `workbench::actions`'; the three boxes apply to every
+/// write buttons and the evidence days' field are `workbench::actions`'; "got it"
+/// on the start report's notice is `workbench`'s; the three boxes apply to every
 /// window. Closing it ends the program, after its fade if it has a frame of its
 /// own, unless an unlock runs: then it stays and says why, without fading.
 fn install_workbench(window: &WorkbenchWindow) {
+    window.on_page_picked(|page| {
+        if let Some(ui) = current() {
+            workbench::show_page(&ui, workbench::paint::page_picked(page));
+        }
+    });
     window.on_start_runtime(|| {
         if let Some(ui) = current() {
             launcher::start(&ui);
@@ -575,6 +588,21 @@ fn install_workbench(window: &WorkbenchWindow) {
     window.on_concurrency_back_to_file(|| {
         if let Some(ui) = current() {
             workbench::actions::concurrency_back_to_file(&ui);
+        }
+    });
+    window.on_evidence_edited(|text| {
+        if let Some(ui) = current() {
+            workbench::actions::evidence_edited(&ui, &text);
+        }
+    });
+    window.on_evidence_save(|| {
+        if let Some(ui) = current() {
+            workbench::actions::evidence_save(&ui);
+        }
+    });
+    window.on_start_acknowledged(|| {
+        if let Some(ui) = current() {
+            workbench::start_acknowledged(&ui);
         }
     });
     window.on_request_shutdown(|| {
@@ -709,6 +737,16 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_add_instance_note(labels.add_instance_note.into());
     global.set_config_file(labels.config_file.into());
     global.set_start_log(labels.start_log.into());
+    global.set_open_settings(labels.open_settings.into());
+    global.set_back_to_workbench(labels.back_to_workbench.into());
+    global.set_settings_daily(labels.settings_daily.into());
+    global.set_settings_advanced(labels.settings_advanced.into());
+    global.set_settings_runtime(labels.settings_runtime.into());
+    global.set_settings_appearance(labels.settings_appearance.into());
+    global.set_evidence_days(labels.setting_evidence_days.into());
+    global.set_days(labels.days_unit.into());
+    global.set_save(labels.save.into());
+    global.set_acknowledge(labels.acknowledge.into());
     global.set_caption_minimize(labels.caption_minimize.into());
     global.set_caption_maximize(labels.caption_maximize.into());
     global.set_caption_restore(labels.caption_restore.into());

@@ -11,15 +11,17 @@
 //! epoch that is gone is the caller's.
 //!
 //! Lanes ask only what is answered from memory or takes no ledger record:
-//! `Status`, `ScheduleExplanation` without its candidate rows, and
-//! `RuntimeFactSnapshot`. How often is the caller's, too: a lane keeps no clock, and
+//! `Status`, `ScheduleExplanation` without its candidate rows, `RuntimeFactSnapshot`
+//! and `StartReport`. How often is the caller's, too: a lane keeps no clock, and
 //! asks again by itself in one case only, a slow read on a connection that turns out
 //! to have ended (`ReadLane::asked_once_more`).
 //!
-//! The configuration's key table and the performance presets are the Runtime's, read
-//! through its crate and only here: which preset is in effect is its function, and
-//! what comes out of this file names neither a key nor a wire type, but for the key a
-//! refusal named, which is for the log.
+//! The configuration's key table, the console's tiers of its keys and the performance
+//! presets are the Runtime's, read through its crate and only here: which preset is in
+//! effect and which settings the console shows are its functions, and what comes out of
+//! this file names neither a key nor a wire type, but for the key a refusal named, that
+//! of a setting this file has no name for and those a start report names, all for the
+//! log.
 //!
 //! Left out on purpose: `player_hold` and `control` (the hold's read face is
 //! UI-3d's); `emulator_state` (read only at discovery and control, and `off` may
@@ -31,7 +33,7 @@
 //! each goes out once on a fresh person's connection, and never again by itself,
 //! whatever comes back.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -43,16 +45,24 @@ use actingcommand_contract::{
     config_parameters_fact_key, ConfigParameter, ConfigParameterSource, ConfigSettingChange,
     FactScalar, FactValue, InstanceActivity, InstanceActivityKind, OwnerEpoch, RuntimeControlPlaneStatus,
     RuntimeErrorCode, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
-    RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation, ScheduleDispatchState,
+    RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation, RuntimeStartReport,
+    ScheduleDispatchState,
     ScheduleExplanationInstance, SchedulingPauseReason, SchedulingPauseScope,
-    MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
+    CONFIG_PARAMETERS_FACT_PREFIX, MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
 };
 use actingcommand_runtime_client::{
     RuntimeChannel, RuntimeClient, RuntimeClientConfig, RuntimeClientError,
 };
+use actingcommand_runtime_config::frame_retention::EVIDENCE_MAX_AGE_DAYS;
+use actingcommand_runtime_config::host::{PROCESS_IO_PRIORITY, PROCESS_MEMORY_PRIORITY};
+use actingcommand_runtime_config::lab_module::{AUTHORING, DEBUGGING};
 use actingcommand_runtime_config::performance::presets::{self, CurrentMember, PresetTable};
 use actingcommand_runtime_config::performance::{self, pacing};
-use actingcommand_runtime_config::{scheduling, ConfigCode, ConfigValueProblem};
+use actingcommand_runtime_config::{
+    find_row, idle, instance_key, scalar_json, scheduling, ui_tier, ConfigCode,
+    ConfigValueProblem, IdleAction, KeyName, ProcessPriorityLevel, UiTier, ValueType,
+    START_EMULATOR, UI_TIERS,
+};
 
 use super::{
     global_pause_fact, instance_pause_fact, ClientFailure, OnlineSource, PauseFact,
@@ -75,6 +85,23 @@ pub const MODE_FULL: &str = pacing::FULL;
 
 /// The instance fact of the server the last admitted package declared.
 const TASK_SERVER: &str = "task.server";
+
+/// The words of an instance's idle action (`idle.action`), for what they are said in
+/// (`ShownValue::Word`).
+pub const IDLE_NONE: &str = IdleAction::None.as_str();
+pub const IDLE_CLOSE_APP: &str = IdleAction::CloseApp.as_str();
+pub const IDLE_STOP_EMULATOR: &str = IdleAction::StopEmulator.as_str();
+
+/// The words of the Runtime process's two priorities (`host.*`), likewise.
+pub const PRIORITY_NORMAL: &str = ProcessPriorityLevel::Normal.token();
+pub const PRIORITY_LOW: &str = ProcessPriorityLevel::Low.token();
+
+/// The MuMu root actingd discovers the emulator from: a key of the console's tiers, whose
+/// spelling the crate keeps to itself (a key of the start-up assembly).
+const MUMU_ROOT: &str = "mumu_root";
+
+/// A row of `config.parameters` names its key here.
+const ROW_KEY: &str = "key";
 
 /// One reading thread's connection: actor `ui`, source `ui`, channel `ui`, at its
 /// own io timeout. The client holds its lock for a whole exchange and latches the
@@ -117,6 +144,12 @@ impl ReadLane {
         self.asked_once_more(Self::ask_config)
     }
 
+    /// One `StartReport`: which settings changed online this start did not restore, and
+    /// which it restored over a default that changed.
+    pub fn read_start(&mut self) -> Result<StartRead, ClientFailure> {
+        self.asked_once_more(Self::ask_start)
+    }
+
     /// `ask`, on the connection this lane kept or a new one.
     ///
     /// This lane reads seldom, and not at all while the workbench is minimized, so
@@ -153,6 +186,15 @@ impl ReadLane {
         let epoch = code(&client.runtime_info().owner_epoch());
         match client.runtime_fact_snapshot_versioned() {
             Ok((snapshot, version)) => Ok(config_read(epoch, &snapshot, version)),
+            Err(error) => Err(self.settled(error)),
+        }
+    }
+
+    fn ask_start(&mut self) -> Result<StartRead, RuntimeClientError> {
+        let client = self.connection()?;
+        let epoch = code(&client.runtime_info().owner_epoch());
+        match client.start_report() {
+            Ok(report) => Ok(start_read(epoch, &report)),
             Err(error) => Err(self.settled(error)),
         }
     }
@@ -360,6 +402,21 @@ impl ConfigEdit {
             key: pacing::MAX_CONCURRENT_RUNS.to_owned(),
             value: None,
         }])
+    }
+
+    /// How many days an evidence frame nobody confirmed reading is kept, as an online value.
+    /// The Runtime alone knows the range, and says it when it refuses one.
+    pub fn evidence_days(days: i64) -> Self {
+        Self(vec![ConfigSettingChange {
+            key: EVIDENCE_MAX_AGE_DAYS.to_owned(),
+            value: Some(days.into()),
+        }])
+    }
+
+    /// The same, back to the configuration file's value, or to the default when the file
+    /// names none.
+    pub fn evidence_days_back_to_file() -> Self {
+        Self(vec![ConfigSettingChange { key: EVIDENCE_MAX_AGE_DAYS.to_owned(), value: None }])
     }
 
     /// What it changes, keys and values as the wire has them: for the log only.
@@ -601,6 +658,76 @@ pub struct InstanceExplain {
     pub preparing: bool,
 }
 
+/// What one answered `StartReport` says of the settings changed while a Runtime ran, as far as
+/// the console reads it. Each is said once, by key, in the Runtime's order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartRead {
+    pub epoch: String,
+    /// The ones this start did not restore: an update or a rollback dropped them, or the
+    /// configuration file now names them itself.
+    pub dropped: Vec<ReportedSetting>,
+    /// The ones it restored although the default they change has itself changed.
+    pub base_changed: Vec<ReportedSetting>,
+}
+
+impl StartRead {
+    /// Both lists by key: for the log only.
+    pub fn line(&self) -> String {
+        format!(
+            "dropped [{}], base changed [{}]",
+            reported_keys(&self.dropped),
+            reported_keys(&self.base_changed),
+        )
+    }
+}
+
+fn reported_keys(settings: &[ReportedSetting]) -> String {
+    settings.iter().map(|setting| setting.key.as_str()).collect::<Vec<_>>().join(", ")
+}
+
+/// One setting a start report names: which it is, for its words, and the instance of an
+/// instance's own. Its key stays here, for the log (`StartRead::line`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportedSetting {
+    pub name: ReportedName,
+    /// The instance id of an instance's own setting.
+    pub instance: Option<String>,
+    key: String,
+}
+
+/// Which setting a start report names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReportedName {
+    /// One the performance preset sets.
+    Preset(PresetSetting),
+    /// Any other, by the settings page's name: `SettingName::Unnamed` for one without a name
+    /// here, a key this Runtime's key table does not have included (its key, then).
+    Setting(SettingName),
+}
+
+fn start_read(epoch: String, report: &RuntimeStartReport) -> StartRead {
+    StartRead {
+        epoch,
+        dropped: reported_settings(&report.instructions_dropped),
+        base_changed: reported_settings(&report.instructions_base_changed),
+    }
+}
+
+fn reported_settings(keys: &[String]) -> Vec<ReportedSetting> {
+    keys.iter().map(|key| reported_setting(key)).collect()
+}
+
+fn reported_setting(key: &str) -> ReportedSetting {
+    let (name, instance) = match (preset_setting(key), find_row(key)) {
+        (Some(setting), _) => (ReportedName::Preset(setting), None),
+        (None, Some((row, instance))) => {
+            (ReportedName::Setting(setting_name(row.name)), instance.map(str::to_owned))
+        }
+        (None, None) => (ReportedName::Setting(SettingName::Unnamed(key.to_owned())), None),
+    };
+    ReportedSetting { name, instance, key: key.to_owned() }
+}
+
 /// One answered `RuntimeFactSnapshot`, as far as the workbench reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigRead {
@@ -613,6 +740,338 @@ pub struct ConfigRead {
     /// Only a package's admission records it, and an emulator's stop withdraws it, so
     /// most of the time an instance has none.
     pub servers: BTreeMap<String, String>,
+    /// The settings the console shows. `None` when the snapshot has no `config.parameters`
+    /// record at all: a Runtime that reports no configuration, whose settings are then not
+    /// known, rather than unset.
+    pub settings: Option<SettingsRead>,
+}
+
+/// What a snapshot says of the settings the console shows, by the Runtime's own tiers of
+/// them (`ui_tier`): every `config.parameters` row of a tier other than hidden, but for the
+/// four settings of the performance preset, which are shown through the preset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingsRead {
+    /// By key, as `config.parameters` names it.
+    parameters: BTreeMap<String, ShownParameter>,
+    /// The rows that do not read and may be of such a setting: of a tier other than hidden,
+    /// or naming no key; a section that is no list of rows counts as one. Said, not dropped:
+    /// a key among them is not shown, rather than as unset.
+    unread: Vec<UnreadRow>,
+}
+
+/// A `config.parameters` row of a setting the console shows, or naming no key, that does
+/// not read; or a whole section that is no list of rows. Only the log says which and why
+/// (`line`): the window counts them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadRow {
+    /// The section's record key.
+    section: String,
+    why: Unread,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Unread {
+    /// The section is no list of rows.
+    Section,
+    /// A row naming no key.
+    Keyless,
+    /// A row of this key whose members are not those of a parameter.
+    Shape(String),
+    /// A row of this key whose value is not of the key's type: a row the Runtime would
+    /// not report.
+    Value { key: String, value_type: ValueType, value: FactScalar },
+}
+
+impl UnreadRow {
+    /// The key of the setting it is the row of, if it names one.
+    fn key(&self) -> Option<&str> {
+        match &self.why {
+            Unread::Shape(key) | Unread::Value { key, .. } => Some(key.as_str()),
+            Unread::Section | Unread::Keyless => None,
+        }
+    }
+
+    /// Which row it is and why it does not read, keys and all: for the log only.
+    pub fn line(&self) -> String {
+        let section = &self.section;
+        match &self.why {
+            Unread::Section => format!("{section} is no list of rows"),
+            Unread::Keyless => format!("a row of {section} names no key"),
+            Unread::Shape(key) => {
+                format!("the row of {key} in {section} lacks a value, a known source or a settable flag")
+            }
+            Unread::Value { key, value_type, value } => {
+                format!("the value of {key} in {section} is no {value_type:?}: {value:?}")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShownParameter {
+    value: ShownValue,
+    source: SettingSource,
+    settable: bool,
+}
+
+impl SettingsRead {
+    /// Every setting to show, in the order of the Runtime's tiers: an exact key once, a
+    /// per-instance key for each of `instances` (instance ids, in their order). A key with no
+    /// row, which a key without a default has while the file does not name it, is unset at
+    /// its default, and settable as its key-table row says, so it is not left off; a key
+    /// whose row does not read is (`unread` has it). Then every row of a shown tier none of
+    /// those named, of an instance `instances` does not list.
+    pub fn rows(&self, instances: &[&str]) -> Vec<SettingRow> {
+        let mut rows = Vec::new();
+        let mut named = BTreeSet::new();
+        for &(name, _) in UI_TIERS {
+            let keys: Vec<(String, Option<&str>)> = match name {
+                KeyName::Exact(key) => vec![(key.to_owned(), None)],
+                KeyName::PerInstance(member) => instances
+                    .iter()
+                    .map(|instance| (instance_key(instance, member), Some(*instance)))
+                    .collect(),
+            };
+            for (key, instance) in keys {
+                let Some(tier) = shown_tier(&key) else {
+                    continue;
+                };
+                if self.unread.iter().any(|row| row.key() == Some(key.as_str())) {
+                    continue;
+                }
+                rows.push(self.row(&key, name, tier, instance));
+                named.insert(key);
+            }
+        }
+        for key in self.parameters.keys().filter(|key| !named.contains(*key)) {
+            let (Some(tier), Some((row, instance))) = (shown_tier(key), find_row(key)) else {
+                continue;
+            };
+            rows.push(self.row(key, row.name, tier, instance));
+        }
+        rows
+    }
+
+    fn row(
+        &self,
+        key: &str,
+        name: KeyName,
+        tier: SettingTier,
+        instance: Option<&str>,
+    ) -> SettingRow {
+        let (value, source, settable) = match self.parameters.get(key) {
+            Some(shown) => (shown.value.clone(), shown.source, shown.settable),
+            None => (
+                ShownValue::Unset,
+                SettingSource::Default,
+                find_row(key).is_some_and(|(row, _)| row.settable.is_settable()),
+            ),
+        };
+        SettingRow {
+            name: setting_name(name),
+            tier,
+            instance: instance.map(str::to_owned),
+            value,
+            source,
+            settable,
+        }
+    }
+
+    /// The rows that do not read, in the snapshot's order: none of them is shown.
+    pub fn unread(&self) -> &[UnreadRow] {
+        &self.unread
+    }
+
+    /// A row of `section`. One whose value is not of its key's type does not read, as one of
+    /// another shape does not: shown as some other value, it would say what the Runtime
+    /// does not.
+    fn take(&mut self, section: &str, parameter: ConfigParameter) {
+        // A key the key table does not have is hidden (`ui_tier`), as is one of no shown tier.
+        let (Some((row, _)), Some(_)) = (find_row(&parameter.key), shown_tier(&parameter.key))
+        else {
+            return;
+        };
+        let Some(value) = shown_value(row.value_type, &parameter.value) else {
+            self.unread.push(UnreadRow {
+                section: section.to_owned(),
+                why: Unread::Value {
+                    key: parameter.key,
+                    value_type: row.value_type,
+                    value: parameter.value,
+                },
+            });
+            return;
+        };
+        let shown = ShownParameter {
+            value,
+            source: setting_source(parameter.source),
+            settable: parameter.settable,
+        };
+        self.parameters.insert(parameter.key, shown);
+    }
+}
+
+/// One setting the console shows, as read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingRow {
+    pub name: SettingName,
+    pub tier: SettingTier,
+    /// The instance id of an instance's own setting.
+    pub instance: Option<String>,
+    pub value: ShownValue,
+    pub source: SettingSource,
+    /// Whether the Runtime takes a change of it while it runs.
+    pub settable: bool,
+}
+
+/// Which setting it is, for its words. Of the console's tiers' keys, without the keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingName {
+    /// The quiet times of every instance.
+    QuietTimesHost,
+    /// An instance's own quiet times.
+    QuietTimes,
+    /// Whether the Runtime starts an instance's emulator at its start.
+    StartEmulator,
+    /// What the Runtime does with an instance that has no task soon.
+    IdleAction,
+    /// Where the MuMu emulator is.
+    MumuRoot,
+    /// How many days an evidence frame nobody confirmed reading is kept.
+    EvidenceMaxAgeDays,
+    /// The Runtime process's memory priority.
+    MemoryPriority,
+    /// The Runtime process's I/O priority.
+    IoPriority,
+    /// The Lab's two options, authoring and debugging.
+    LabAuthoring,
+    LabDebugging,
+    /// A key of the tiers this file has no name for: its key-table name (a per-instance
+    /// one's member), for the log only. A start report's key the key table does not have is
+    /// one too, by the key itself.
+    Unnamed(String),
+}
+
+/// The console's two tiers that show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingTier {
+    Daily,
+    Advanced,
+}
+
+/// A setting's value as the settings page has it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShownValue {
+    /// None in effect: there is no row, or a list or object has no entry.
+    Unset,
+    /// A list or object with entries: which they are is not said.
+    Set,
+    Flag(bool),
+    Number(i64),
+    /// A word of the key's range, a path, or a number of another type, as written.
+    Word(String),
+}
+
+/// The page's tier of `key`: the Runtime's own, but none for the settings of the
+/// performance preset, which are all exact keys.
+fn shown_tier(key: &str) -> Option<SettingTier> {
+    if presets::MEMBERS.iter().any(|member| member.key == key) {
+        return None;
+    }
+    match ui_tier(key) {
+        UiTier::Daily => Some(SettingTier::Daily),
+        UiTier::Advanced => Some(SettingTier::Advanced),
+        UiTier::Hidden => None,
+    }
+}
+
+fn setting_name(name: KeyName) -> SettingName {
+    match name {
+        KeyName::Exact(scheduling::BLACKOUT_HOST) => SettingName::QuietTimesHost,
+        KeyName::PerInstance(scheduling::INSTANCE_BLACKOUT) => SettingName::QuietTimes,
+        KeyName::PerInstance(START_EMULATOR) => SettingName::StartEmulator,
+        KeyName::PerInstance(idle::ACTION) => SettingName::IdleAction,
+        KeyName::Exact(MUMU_ROOT) => SettingName::MumuRoot,
+        KeyName::Exact(EVIDENCE_MAX_AGE_DAYS) => SettingName::EvidenceMaxAgeDays,
+        KeyName::Exact(PROCESS_MEMORY_PRIORITY) => SettingName::MemoryPriority,
+        KeyName::Exact(PROCESS_IO_PRIORITY) => SettingName::IoPriority,
+        KeyName::Exact(AUTHORING) => SettingName::LabAuthoring,
+        KeyName::Exact(DEBUGGING) => SettingName::LabDebugging,
+        KeyName::Exact(other) | KeyName::PerInstance(other) => {
+            SettingName::Unnamed(other.to_owned())
+        }
+    }
+}
+
+/// A value of type `value_type` as the page has it: a list or object, reported as JSON text,
+/// set or not by its entries; the rest the scalar it is. `None` when it is not of that type
+/// (`scalar_json`), JSON text of a list, object or decimal included.
+fn shown_value(value_type: ValueType, value: &FactScalar) -> Option<ShownValue> {
+    let json = scalar_json(value_type, value)?;
+    let entries = match value_type {
+        ValueType::List => Some(json.as_array()?.len()),
+        ValueType::Object => Some(json.as_object()?.len()),
+        ValueType::Decimal if !json.is_number() => return None,
+        ValueType::Decimal
+        | ValueType::Boolean
+        | ValueType::Integer
+        | ValueType::DurationMs
+        | ValueType::String => None,
+    };
+    let shown = match (entries, value) {
+        (Some(0), _) => ShownValue::Unset,
+        (Some(_), _) => ShownValue::Set,
+        (None, FactScalar::Boolean(flag)) => ShownValue::Flag(*flag),
+        (None, FactScalar::Integer(number)) => ShownValue::Number(*number),
+        (None, FactScalar::String(word)) => ShownValue::Word(word.clone()),
+        (None, FactScalar::TimestampMs(ms) | FactScalar::DurationMs(ms)) => {
+            ShownValue::Word(ms.to_string())
+        }
+    };
+    Some(shown)
+}
+
+fn setting_source(source: ConfigParameterSource) -> SettingSource {
+    match source {
+        ConfigParameterSource::Explicit => SettingSource::File,
+        ConfigParameterSource::Default => SettingSource::Default,
+        ConfigParameterSource::Discovered => SettingSource::Discovered,
+        ConfigParameterSource::Instruction => SettingSource::Online,
+    }
+}
+
+/// Every `config.parameters` section of the snapshot.
+fn settings_read(records: &[RuntimeFactRecord]) -> Option<SettingsRead> {
+    let mut sections = records
+        .iter()
+        .filter(|record| {
+            record.scope == RuntimeFactScope::Runtime
+                && record.key.starts_with(CONFIG_PARAMETERS_FACT_PREFIX)
+        })
+        .peekable();
+    sections.peek()?;
+    let mut read = SettingsRead { parameters: BTreeMap::new(), unread: Vec::new() };
+    for record in sections {
+        let section = record.key.as_str();
+        let unread = |why| UnreadRow { section: section.to_owned(), why };
+        let FactValue::RecordList(rows) = &record.value else {
+            read.unread.push(unread(Unread::Section));
+            continue;
+        };
+        for row in rows {
+            match presets::parameter_of_row(row) {
+                Some(parameter) => read.take(section, parameter),
+                None => match row.get(ROW_KEY) {
+                    Some(FactScalar::String(key)) if shown_tier(key).is_none() => {}
+                    Some(FactScalar::String(key)) => {
+                        read.unread.push(unread(Unread::Shape(key.clone())));
+                    }
+                    Some(_) | None => read.unread.push(unread(Unread::Keyless)),
+                },
+            }
+        }
+    }
+    Some(read)
 }
 
 /// Which performance preset is in effect, of the table the Runtime holds.
@@ -722,6 +1181,7 @@ fn config_read(epoch: String, snapshot: &RuntimeFactSnapshot, version: Option<u6
         version,
         preset: preset_read(&snapshot.records),
         servers: servers(&snapshot.records),
+        settings: settings_read(&snapshot.records),
     }
 }
 
@@ -764,23 +1224,23 @@ fn section_parameters(
     Ok(())
 }
 
+/// The setting of a preset `key` is, if it is one this file knows.
+fn preset_setting(key: &str) -> Option<PresetSetting> {
+    match key {
+        pacing::MODE => Some(PresetSetting::Mode),
+        pacing::MAX_CONCURRENT_RUNS => Some(PresetSetting::MaxConcurrentRuns),
+        pacing::HEAVY_DISPATCH_LIMIT_NORMAL => Some(PresetSetting::HeavyDispatchLimit),
+        scheduling::PARALLEL_ENABLED => Some(PresetSetting::ParallelEnabled),
+        _ => None,
+    }
+}
+
 fn preset_member(member: &CurrentMember) -> Result<PresetMember, PresetProblem> {
-    let setting = match member.key {
-        pacing::MODE => PresetSetting::Mode,
-        pacing::MAX_CONCURRENT_RUNS => PresetSetting::MaxConcurrentRuns,
-        pacing::HEAVY_DISPATCH_LIMIT_NORMAL => PresetSetting::HeavyDispatchLimit,
-        scheduling::PARALLEL_ENABLED => PresetSetting::ParallelEnabled,
-        other => return Err(PresetProblem::MemberUnknown(other)),
-    };
+    let setting = preset_setting(member.key).ok_or(PresetProblem::MemberUnknown(member.key))?;
     Ok(PresetMember {
         setting,
         value: member.value.as_ref().map(setting_value),
-        source: match member.source {
-            ConfigParameterSource::Explicit => SettingSource::File,
-            ConfigParameterSource::Default => SettingSource::Default,
-            ConfigParameterSource::Discovered => SettingSource::Discovered,
-            ConfigParameterSource::Instruction => SettingSource::Online,
-        },
+        source: setting_source(member.source),
     })
 }
 

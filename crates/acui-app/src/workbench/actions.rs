@@ -34,8 +34,14 @@
 //! snapshot read after an answer that says it did, or after one that says nothing, when that
 //! snapshot shows another version.
 //!
-//! `view` and `preset_view` are pure functions of what the reads and the presses left,
-//! without words; `paint` makes the words.
+//! The settings page's field of how many days an evidence frame nobody confirmed reading is
+//! kept is one more of the same: a draft of its own, and "save" sends it as "apply" does the
+//! stepper's. It is a change of settings like the top bar's, so one of them is out at a time
+//! and each waits for the snapshot the others wait for; but what it came to is said on a line
+//! of its own (`Field`), so neither answer hides the other's.
+//!
+//! `view`, `preset_view` and `evidence_view` are pure functions of what the reads and the
+//! presses left, without words; `paint` makes the words.
 
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -50,6 +56,7 @@ use acui_source::{resume_paused, ClientFailure, PauseFact, PauseTarget, ResumeOu
 
 use super::model::Link;
 use super::read::panic_message;
+use super::settings::SettingsView;
 use super::{failure_line, paint};
 use crate::launcher::spawn_worker;
 use crate::ledger::resume::{lifter, Lifter};
@@ -92,6 +99,22 @@ enum Kind {
 const GLOBAL_SCHEDULING: (Scope, Kind) = (Scope::Global, Kind::Scheduling);
 const GLOBAL_SETTINGS: (Scope, Kind) = (Scope::Global, Kind::Settings);
 
+/// Where a change of settings was asked for, which is where what it came to is said: the
+/// top bar's presets and stepper, or the settings page's field of the evidence days.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Field {
+    TopBar,
+    EvidenceDays,
+}
+
+/// The line what a press came to is said on: one for pausing and resuming, and one for each
+/// field a change of settings is asked from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SaidAt {
+    Scheduling,
+    Settings(Field),
+}
+
 /// The name of one press's request: an answer counts only under the ticket still out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ticket(u64);
@@ -101,8 +124,9 @@ pub struct Ticket(u64);
 pub enum Write {
     PauseAll,
     ResumeAll,
-    /// A change of settings, based on this version of them when there is one.
-    Configure { based_on: Option<u64> },
+    /// A change of settings asked from `field`, based on this version of them when there
+    /// is one.
+    Configure { based_on: Option<u64>, field: Field },
 }
 
 impl Write {
@@ -121,6 +145,13 @@ impl Write {
             Self::Configure { .. } => GLOBAL_SETTINGS,
         }
     }
+
+    fn said_at(self) -> SaidAt {
+        match self {
+            Self::PauseAll | Self::ResumeAll => SaidAt::Scheduling,
+            Self::Configure { field, .. } => SaidAt::Settings(field),
+        }
+    }
 }
 
 const CONFIG_THREAD: &str = "acui-act-config";
@@ -133,9 +164,26 @@ enum ConfigFlow {
     /// The first press on a preset that leaves the learning mode the file holds asked
     /// about this preset.
     Confirming { name: String },
-    InFlight,
-    /// The writes stay off until a snapshot read after the answer has come.
-    Rereading(Reread),
+    /// One asked from `field` is out.
+    InFlight(Field),
+    /// The writes stay off until a snapshot read after the answer to the one asked from
+    /// `field` has come.
+    Rereading(Reread, Field),
+}
+
+impl ConfigFlow {
+    /// The field of the change out or awaiting its snapshot.
+    fn field(&self) -> Option<Field> {
+        match self {
+            Self::InFlight(field) | Self::Rereading(_, field) => Some(*field),
+            Self::Idle | Self::Confirming { .. } => None,
+        }
+    }
+
+    /// Whether a change of settings can go out now: none is out or awaits its snapshot.
+    fn open(&self) -> bool {
+        matches!(self, Self::Idle | Self::Confirming { .. })
+    }
 }
 
 /// Why a snapshot is awaited.
@@ -186,13 +234,13 @@ pub enum Said {
     NotWhole,
 }
 
-/// What the stepper's field holds that is not yet in effect: as typed, or as a step left it.
+/// What a field holds that is not yet in effect: as typed, or as a step left it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Draft {
     text: String,
-    /// A change of settings was taken since, this draft or another: it shows until the
-    /// snapshot read after that answer, which shows what holds instead, and is not sent
-    /// meanwhile.
+    /// A change of settings asked from this field was taken since, this draft or another (a
+    /// preset's, for the stepper): it shows until the snapshot read after that answer, which
+    /// shows what holds instead, and is not sent meanwhile.
     applied: bool,
 }
 
@@ -226,9 +274,11 @@ pub struct Actions {
     flow: ConfigFlow,
     /// The stepper's, of how many tasks run at once.
     draft: Option<Draft>,
-    /// What the last press of each slot came to: only its own press, answer or read
+    /// The settings page's, of the evidence days.
+    evidence_draft: Option<Draft>,
+    /// What the last press said on each line came to: only its own press, answer or read
     /// changes it.
-    said: BTreeMap<(Scope, Kind), Said>,
+    said: BTreeMap<SaidAt, Said>,
 }
 
 impl Actions {
@@ -243,48 +293,60 @@ impl Actions {
         self.out.insert(slot, ticket);
         match write {
             Write::PauseAll | Write::ResumeAll => self.confirming = None,
-            Write::Configure { .. } => self.flow = ConfigFlow::InFlight,
+            Write::Configure { field, .. } => self.flow = ConfigFlow::InFlight(field),
         }
-        self.said.insert(slot, Said::Sending(write));
+        self.said.insert(write.said_at(), Said::Sending(write));
         Some(ticket)
     }
 
     /// An answer: whether `ticket` was the one out, which is all that makes it count.
     /// A change of settings that needs a read before anything more goes out says so.
-    fn settle(&mut self, slot: (Scope, Kind), ticket: Ticket, said: Said) -> bool {
+    fn settle(&mut self, write: Write, ticket: Ticket, said: Said) -> bool {
+        let slot = write.slot();
         if self.out.get(&slot) != Some(&ticket) {
             return false;
         }
         self.out.remove(&slot);
-        if slot == GLOBAL_SETTINGS {
+        if let Write::Configure { field, .. } = write {
             self.flow = match said {
-                Said::Rereading(reread) => ConfigFlow::Rereading(reread),
+                Said::Rereading(reread) => ConfigFlow::Rereading(reread, field),
                 _ => ConfigFlow::Idle,
             };
-            // Whatever changed, a preset included, may have changed what the draft asked for.
+            // What changed may have changed what the field's draft asked for: from the top
+            // bar, a preset included.
             if said == Said::ConfigApplied {
-                if let Some(draft) = &mut self.draft {
+                if let Some(draft) = self.draft_mut(field) {
                     draft.applied = true;
                 }
             }
         }
-        self.said.insert(slot, said);
+        self.said.insert(write.said_at(), said);
         true
     }
 
+    fn draft_mut(&mut self, field: Field) -> Option<&mut Draft> {
+        match field {
+            Field::TopBar => self.draft.as_mut(),
+            Field::EvidenceDays => self.evidence_draft.as_mut(),
+        }
+    }
+
     /// Another owner epoch: no ticket holds across it, and no line says anything of
-    /// the old one but, in its slot, that a write was out or had not been settled. A
-    /// draft goes too: what holds is to be seen afresh.
+    /// the old one but, on its own, that a write was out or had not been settled. The
+    /// drafts go too: what holds is to be seen afresh.
     pub fn new_epoch(&mut self) {
-        let mut said: BTreeMap<(Scope, Kind), Said> =
-            self.out.keys().map(|slot| (*slot, Said::Restarted)).collect();
-        if matches!(self.flow, ConfigFlow::Rereading(_)) {
-            said.insert(GLOBAL_SETTINGS, Said::Restarted);
+        let mut said = BTreeMap::new();
+        if self.out.contains_key(&GLOBAL_SCHEDULING) {
+            said.insert(SaidAt::Scheduling, Said::Restarted);
+        }
+        if let Some(field) = self.flow.field() {
+            said.insert(SaidAt::Settings(field), Said::Restarted);
         }
         self.out.clear();
         self.confirming = None;
         self.flow = ConfigFlow::Idle;
         self.draft = None;
+        self.evidence_draft = None;
         self.said = said;
     }
 
@@ -293,12 +355,14 @@ impl Actions {
     /// that was applied waited for. A confirmation goes when what it asks about is no
     /// longer so.
     pub fn snapshot_read(&mut self, read: &ConfigRead) {
-        if self.draft.as_ref().is_some_and(|draft| draft.applied) {
-            self.draft = None;
+        for draft in [&mut self.draft, &mut self.evidence_draft] {
+            if draft.as_ref().is_some_and(|draft| draft.applied) {
+                *draft = None;
+            }
         }
         match &self.flow {
-            ConfigFlow::Rereading(reread) => {
-                let reread = *reread;
+            ConfigFlow::Rereading(reread, field) => {
+                let (reread, field) = (*reread, *field);
                 let said = match reread {
                     Reread::Conflict => Said::ConflictRefreshed,
                     Reread::Unconfirmed { based_on } => match (read.version, based_on) {
@@ -309,10 +373,13 @@ impl Actions {
                 };
                 // The settings changed, perhaps by this press: what shows is what holds.
                 if said == Said::UnconfirmedChanged {
-                    self.draft = None;
+                    match field {
+                        Field::TopBar => self.draft = None,
+                        Field::EvidenceDays => self.evidence_draft = None,
+                    }
                 }
-                log_verdict(reread, read.version, &said);
-                self.said.insert(GLOBAL_SETTINGS, said);
+                log_verdict(reread, field, read.version, &said);
+                self.said.insert(SaidAt::Settings(field), said);
                 self.flow = ConfigFlow::Idle;
             }
             ConfigFlow::Confirming { name } => {
@@ -323,7 +390,7 @@ impl Actions {
                     self.flow = ConfigFlow::Idle;
                 }
             }
-            ConfigFlow::Idle | ConfigFlow::InFlight => {}
+            ConfigFlow::Idle | ConfigFlow::InFlight(_) => {}
         }
     }
 
@@ -334,13 +401,13 @@ impl Actions {
         if self.confirming.as_ref() != global.map(|pause| &pause.target) {
             self.confirming = None;
         }
-        let overtaken = match self.said.get(&GLOBAL_SCHEDULING) {
+        let overtaken = match self.said.get(&SaidAt::Scheduling) {
             Some(Said::PauseApplied) => global.is_none(),
             Some(Said::Resumed) => global.is_some(),
             _ => false,
         };
         if overtaken {
-            self.said.remove(&GLOBAL_SCHEDULING);
+            self.said.remove(&SaidAt::Scheduling);
         }
     }
 
@@ -355,15 +422,16 @@ impl Actions {
     /// A press found nothing to send.
     fn preset_gone(&mut self) {
         self.flow = ConfigFlow::Idle;
-        self.said.insert(GLOBAL_SETTINGS, Said::PresetGone);
+        self.said.insert(SaidAt::Settings(Field::TopBar), Said::PresetGone);
     }
 }
 
 /// What the snapshot awaited after an answer came to, into the log as well: the window's
-/// line goes with the next press of its slot, the log's stays. Only the settings having
+/// line goes with the next press of its field, the log's stays. Only the settings having
 /// moved on, which changed nothing, is no problem.
-fn log_verdict(reread: Reread, version: Option<u64>, said: &Said) {
-    let line = format!("snapshot read after {reread:?}, version now {version:?}: {said:?}");
+fn log_verdict(reread: Reread, field: Field, version: Option<u64>, said: &Said) {
+    let line =
+        format!("snapshot read after {reread:?} from {field:?}, version now {version:?}: {said:?}");
     match said {
         Said::ConflictRefreshed => report::log_quiet(CONFIG_THREAD, &line),
         _ => report::log(CONFIG_THREAD, &line),
@@ -391,10 +459,12 @@ pub struct ActionsView {
     pub resume: ResumeEntry,
     /// Who lifts the global pause, while one holds.
     pub holding: Option<Lifter>,
-    /// What the last press came to: of "pause all" or "put all on duty", and of a change
-    /// of settings, each on its own line.
+    /// What the last press came to: of "pause all" or "put all on duty", of a change of
+    /// settings from the top bar, and of one from the evidence days' field, each on its own
+    /// line.
     pub scheduling_said: Option<Said>,
     pub settings_said: Option<Said>,
+    pub evidence_said: Option<Said>,
     /// Accounts under a pause of their own, which lifting the global one leaves, and
     /// whether Alice lifts any of those.
     pub still_paused: usize,
@@ -406,8 +476,9 @@ pub struct ActionsView {
     /// a count of none means none.
     pub finishing: Option<usize>,
     /// A snapshot is awaited before anything more is saved, and none can come: the reads
-    /// fail, or no Runtime answers (the same epoch answering again reads one).
-    pub reread_failed: bool,
+    /// fail, or no Runtime answers (the same epoch answering again reads one). On the line
+    /// of the field whose change awaits it.
+    pub reread_failed: Option<Field>,
 }
 
 /// `config_failed`: the fact snapshot reads since the last one that came did not succeed.
@@ -442,8 +513,9 @@ pub fn view(
         can_pause: open && global.is_none(),
         resume,
         holding: global.map(|pause| lifter(&pause.reason)),
-        scheduling_said: actions.said.get(&GLOBAL_SCHEDULING).cloned(),
-        settings_said: actions.said.get(&GLOBAL_SETTINGS).cloned(),
+        scheduling_said: actions.said.get(&SaidAt::Scheduling).cloned(),
+        settings_said: actions.said.get(&SaidAt::Settings(Field::TopBar)).cloned(),
+        evidence_said: actions.said.get(&SaidAt::Settings(Field::EvidenceDays)).cloned(),
         still_paused: paused().count(),
         alice_holds: paused().any(|pause| lifter(&pause.reason) == Lifter::Alice),
         finishing: config.is_some_and(|read| read.version.is_some()).then(|| {
@@ -457,8 +529,10 @@ pub fn view(
                 })
                 .count()
         }),
-        reread_failed: matches!(actions.flow, ConfigFlow::Rereading(_))
-            && (config_failed || !online),
+        reread_failed: match actions.flow {
+            ConfigFlow::Rereading(_, field) if config_failed || !online => Some(field),
+            _ => None,
+        },
     }
 }
 
@@ -505,21 +579,61 @@ fn stepper_view(members: &[PresetMember], draft: Option<&Draft>) -> Option<Stepp
     let member =
         members.iter().find(|member| member.setting == PresetSetting::MaxConcurrentRuns)?;
     let online = member.source == SettingSource::Online;
-    let can_apply = draft.is_some_and(|draft| {
-        !draft.applied
-            && match Typed::of(&draft.text) {
-                Typed::Empty => online,
-                Typed::Whole(runs) => member.value != Some(SettingValue::Number(runs)),
-                Typed::NotWhole => true,
-            }
-    });
+    let value = match member.value {
+        Some(SettingValue::Number(runs)) => Some(runs),
+        Some(SettingValue::Flag(_) | SettingValue::Word(_)) | None => None,
+    };
     Some(StepperView {
         value: member.value.clone(),
         source: member.source,
         draft: draft.map(|draft| draft.text.clone()),
-        can_apply,
+        can_apply: changes_anything(draft, value, online),
         back_to_file: online,
     })
+}
+
+/// Whether sending `draft` would change a value `value` from `online` or not: an empty draft
+/// only over an online value, which it drops; a whole number only when it is not the value
+/// in effect. Text that is no whole number may be pressed, to be told so; a draft already
+/// applied may not.
+fn changes_anything(draft: Option<&Draft>, value: Option<i64>, online: bool) -> bool {
+    draft.is_some_and(|draft| {
+        !draft.applied
+            && match Typed::of(&draft.text) {
+                Typed::Empty => online,
+                Typed::Whole(number) => value != Some(number),
+                Typed::NotWhole => true,
+            }
+    })
+}
+
+/// The settings page's field of how many days an evidence frame nobody confirmed reading is
+/// kept. "Save" goes by the same rules as the stepper's "apply"; both can be pressed when a
+/// change of settings can go out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvidenceView {
+    /// The value in effect, `None` when it has none, and where it comes from.
+    pub days: Option<i64>,
+    pub source: SettingSource,
+    /// What the field holds instead of the value, as typed.
+    pub draft: Option<String>,
+    /// Whether a change of settings can go out now.
+    pub can_write: bool,
+    /// Whether "save" would change anything (`changes_anything`).
+    pub can_save: bool,
+}
+
+/// The evidence days in effect, `days` from `source`, as the field shows them with what the
+/// presses left.
+pub fn evidence_view(days: Option<i64>, source: SettingSource, actions: &Actions) -> EvidenceView {
+    let draft = actions.evidence_draft.as_ref();
+    EvidenceView {
+        days,
+        source,
+        draft: draft.map(|draft| draft.text.clone()),
+        can_write: actions.flow.open(),
+        can_save: changes_anything(draft, days, source == SettingSource::Online),
+    }
 }
 
 /// One preset of the table.
@@ -583,7 +697,7 @@ pub fn preset_view(
     let (can_write, confirming) = match &actions.flow {
         ConfigFlow::Idle => (true, None),
         ConfigFlow::Confirming { name } => (true, Some(name.clone())),
-        ConfigFlow::InFlight | ConfigFlow::Rereading(_) => (false, None),
+        ConfigFlow::InFlight(_) | ConfigFlow::Rereading(..) => (false, None),
     };
     let back_to_file = preset.members.iter().any(|member| member.source == SettingSource::Online);
     let stepper = stepper_view(&preset.members, actions.draft.as_ref());
@@ -638,7 +752,7 @@ impl Written {
             },
             Self::Config(ConfigOutcome::NotSent(_)) => Said::NotSent,
             Self::Config(ConfigOutcome::Unconfirmed(_)) | Self::Panicked(_) => match write {
-                Write::Configure { based_on } => {
+                Write::Configure { based_on, .. } => {
                     Said::Rereading(Reread::Unconfirmed { based_on })
                 }
                 Write::PauseAll | Write::ResumeAll => Said::Unconfirmed,
@@ -795,7 +909,7 @@ pub fn preset_confirmed(ui: &Ui) {
 pub fn back_to_file_pressed(ui: &Ui) {
     let view = ui.model.borrow().preset_view();
     if matches!(view, PresetView::Read { can_write: true, back_to_file: true, .. }) {
-        send_config(ui, ConfigEdit::preset_back_to_file());
+        send_config(ui, ConfigEdit::preset_back_to_file(), Field::TopBar);
     }
 }
 
@@ -838,13 +952,16 @@ pub fn concurrency_apply(ui: &Ui) {
         return;
     };
     match Typed::of(&draft) {
-        Typed::Empty => send_config(ui, ConfigEdit::concurrent_runs_back_to_file()),
-        Typed::Whole(runs) => send_config(ui, ConfigEdit::concurrent_runs(runs)),
-        Typed::NotWhole => {
-            ui.model.borrow_mut().actions_mut().said.insert(GLOBAL_SETTINGS, Said::NotWhole);
-            repaint(ui);
-        }
+        Typed::Empty => send_config(ui, ConfigEdit::concurrent_runs_back_to_file(), Field::TopBar),
+        Typed::Whole(runs) => send_config(ui, ConfigEdit::concurrent_runs(runs), Field::TopBar),
+        Typed::NotWhole => not_whole(ui, Field::TopBar),
     }
+}
+
+/// A field's text that is no whole number: nothing is sent, and its line says so.
+fn not_whole(ui: &Ui, field: Field) {
+    ui.model.borrow_mut().actions_mut().said.insert(SaidAt::Settings(field), Said::NotWhole);
+    repaint(ui);
 }
 
 /// The stepper's "back to the file's setting": its one setting only.
@@ -859,7 +976,36 @@ pub fn concurrency_back_to_file(ui: &Ui) {
         }
     );
     if offered {
-        send_config(ui, ConfigEdit::concurrent_runs_back_to_file());
+        send_config(ui, ConfigEdit::concurrent_runs_back_to_file(), Field::TopBar);
+    }
+}
+
+/// The evidence days' field as the person typed it: the draft, whatever it says.
+pub fn evidence_edited(ui: &Ui, text: &str) {
+    ui.model.borrow_mut().actions_mut().evidence_draft =
+        Some(Draft { text: text.to_owned(), applied: false });
+    paint::settings(ui);
+}
+
+/// The evidence days' "save": what the draft asks for, once, as the stepper's "apply" sends
+/// its own; an empty draft goes back to the file's value, or the default.
+pub fn evidence_save(ui: &Ui) {
+    let view = ui.model.borrow().settings_view();
+    let SettingsView::Read { evidence: Some(evidence), .. } = view else {
+        return;
+    };
+    if !(evidence.can_write && evidence.can_save) {
+        return;
+    }
+    let Some(draft) = evidence.draft else {
+        return;
+    };
+    match Typed::of(&draft) {
+        Typed::Empty => {
+            send_config(ui, ConfigEdit::evidence_days_back_to_file(), Field::EvidenceDays);
+        }
+        Typed::Whole(days) => send_config(ui, ConfigEdit::evidence_days(days), Field::EvidenceDays),
+        Typed::NotWhole => not_whole(ui, Field::EvidenceDays),
     }
 }
 
@@ -869,7 +1015,7 @@ fn send_preset(ui: &Ui, name: &str) {
     let edit =
         ui.model.borrow().config_read().and_then(|read| ConfigEdit::apply_preset(read, name));
     match edit {
-        Some(edit) => send_config(ui, edit),
+        Some(edit) => send_config(ui, edit, Field::TopBar),
         None => {
             report::log(CONFIG_THREAD, &format!("preset {name} is not in the table read"));
             ui.model.borrow_mut().actions_mut().preset_gone();
@@ -880,9 +1026,9 @@ fn send_preset(ui: &Ui, name: &str) {
 }
 
 /// What it sends goes in the log first, keys and all: the answer's line does not say.
-fn send_config(ui: &Ui, edit: ConfigEdit) {
+fn send_config(ui: &Ui, edit: ConfigEdit, field: Field) {
     let based_on = ui.model.borrow().config_version();
-    send(ui, Write::Configure { based_on }, move |root| {
+    send(ui, Write::Configure { based_on, field }, move |root| {
         report::log_quiet(
             CONFIG_THREAD,
             &format!("sending, based on version {based_on:?}: {}", edit.line()),
@@ -891,10 +1037,12 @@ fn send_config(ui: &Ui, edit: ConfigEdit) {
     });
 }
 
-/// What a press or an answer may have changed: both rows of the top bar's writes.
+/// What a press or an answer may have changed: both rows of the top bar's writes, what came
+/// of them, and the settings page's field, which a change of settings out turns off.
 fn repaint(ui: &Ui) {
     paint::actions(ui);
     paint::preset(ui);
+    paint::settings(ui);
 }
 
 /// One write, once, on a thread of its own. A thread the system refuses is that
@@ -937,7 +1085,7 @@ fn landed(ui: &Ui, write: Write, ticket: Ticket, written: Written) {
     let said = written.said(write);
     let counted = {
         let mut model = ui.model.borrow_mut();
-        let counted = model.actions_mut().settle(write.slot(), ticket, said);
+        let counted = model.actions_mut().settle(write, ticket, said);
         if let (true, Some(version)) = (counted, version) {
             model.config_applied(version);
         }

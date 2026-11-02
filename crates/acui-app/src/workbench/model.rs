@@ -12,14 +12,15 @@ use std::mem;
 use std::time::Instant;
 
 use acui_source::workbench::{
-    ConfigRead, ExplainRead, InstanceLive, LiveRead, LiveSnapshot, PresetProblem,
+    ConfigRead, ExplainRead, InstanceLive, LiveRead, LiveSnapshot, PresetProblem, StartRead,
 };
 use acui_source::{ClientFailure, PauseFact};
 
 use super::actions::{self, Actions, ActionsView, PresetView};
 use super::card::{self, CardView, Down, Schedule};
-use super::read::{Lane, Read, EXPLAIN_TOO_OLD};
-use super::tools::{NameTable, NamesRead};
+use super::read::{Lane, Read, EXPLAIN_TOO_OLD, START_TRIES};
+use super::settings::{self, AutostartView, SettingsView, StartView};
+use super::tools::{NameTable, NamesRead, WatchdogRead};
 use crate::strings::{fill, Labels, Language};
 
 /// The Runtime as the newest `Status` read found it.
@@ -102,6 +103,25 @@ impl Fault {
     }
 }
 
+/// Which of the workbench's two pages shows: the accounts, or the settings. Only which:
+/// both are always there, so what a box on the hidden one holds stays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Page {
+    Main,
+    Settings,
+}
+
+impl Page {
+    /// As `--page` spells it.
+    pub fn from_wire(text: &str) -> Option<Self> {
+        match text {
+            "main" => Some(Self::Main),
+            "settings" => Some(Self::Settings),
+            _ => None,
+        }
+    }
+}
+
 /// Why the left column has no account to show, when no read has left one there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountsNote {
@@ -114,6 +134,19 @@ pub enum AccountsNote {
     Unreachable,
 }
 
+/// What this owner epoch's start report came to. It is asked once, and again after a
+/// failure while tries are left (`START_TRIES`).
+#[derive(Default)]
+struct StartSlice {
+    read: Option<StartRead>,
+    /// One is out.
+    asked: bool,
+    /// How many of this epoch's failed.
+    failures: u8,
+    /// A person said they read the notice of the settings it reset.
+    acknowledged: bool,
+}
+
 /// The task names, as the newest run of `actingctl packs` left them. Why one gave
 /// none is in the log.
 enum Names {
@@ -123,6 +156,18 @@ enum Names {
     /// It did not answer, it answered with warnings, or this run cannot tell how to
     /// run it. No task has a name, which is what the line on the workbench says.
     Unreadable,
+}
+
+/// What the last run of `watchdog status` left for the settings page: whether the Runtime
+/// is started again when it is gone. It runs as the page is gone to, and at no other time.
+enum Autostart {
+    NotAsked,
+    /// A run is out, under the number of its ask: an answer to another is let go of.
+    Asked(u64),
+    /// The Runtime started again since: what was read is of before, and is read again when
+    /// the page is next gone to.
+    LetGo,
+    Read(WatchdogRead),
 }
 
 pub struct Model {
@@ -139,6 +184,7 @@ pub struct Model {
     /// it sooner, so a long gap before that says nothing against the explanation.
     explain_asked_at: Option<Instant>,
     config: Slice<ConfigRead>,
+    start: StartSlice,
     names: Names,
     /// Whether the workbench is not minimized. The slow thread does not read while
     /// it is, so no read is late then.
@@ -155,6 +201,11 @@ pub struct Model {
     /// The lines the log got about codes the cards have no words for: once each.
     told_codes: BTreeSet<String>,
     actions: Actions,
+    /// Picked on the top bar, or by `--page` at the start.
+    page: Page,
+    autostart: Autostart,
+    /// How many runs of `watchdog status` were asked for.
+    autostart_asks: u64,
 }
 
 /// What a `Status` read changed, for what the event loop does next.
@@ -204,6 +255,7 @@ impl Model {
             explain: Slice::empty(),
             explain_asked_at: None,
             config: Slice::empty(),
+            start: StartSlice::default(),
             names: Names::NotAsked,
             shown: true,
             epoch: None,
@@ -212,11 +264,23 @@ impl Model {
             config_fault: None,
             told_codes: BTreeSet::new(),
             actions: Actions::default(),
+            page: Page::Main,
+            autostart: Autostart::NotAsked,
+            autostart_asks: 0,
         }
     }
 
     pub fn link(&self) -> &Link {
         &self.link
+    }
+
+    /// The page shown, or to be shown once the window is up.
+    pub fn page(&self) -> Page {
+        self.page
+    }
+
+    pub fn set_page(&mut self, page: Page) {
+        self.page = page;
     }
 
     /// The top bar's writes as they stand.
@@ -239,6 +303,89 @@ impl Model {
             self.config_failed(),
             &self.actions,
         )
+    }
+
+    /// The settings page's rows of the Runtime's settings, and its field of the one it changes.
+    pub fn settings_view(&self) -> SettingsView {
+        let read = self.config.value.as_ref();
+        settings::view(&self.link, read, self.config_failed(), &self.instances, &self.actions)
+    }
+
+    /// What this owner epoch's start report says of the settings.
+    pub fn start_view(&self) -> StartView {
+        let start = &self.start;
+        let gave_up = start.failures >= START_TRIES;
+        let read = start.read.as_ref();
+        settings::start_view(&self.link, read, gave_up, start.acknowledged, &self.instances)
+    }
+
+    /// Whether the start report is to be asked for now: online, and none of this epoch read
+    /// or out, with tries left.
+    pub fn start_due(&self) -> bool {
+        matches!(self.link, Link::Online { .. })
+            && self.start.read.is_none()
+            && !self.start.asked
+            && self.start.failures < START_TRIES
+    }
+
+    pub fn start_asked(&mut self) {
+        self.start.asked = true;
+    }
+
+    /// A start report read: whether it counts, which one of another epoch does not (the epoch
+    /// it is of asks its own when `Status` sees it).
+    pub fn apply_start(&mut self, read: StartRead) -> bool {
+        if self.epoch.as_deref() != Some(read.epoch.as_str()) {
+            return false;
+        }
+        self.start.asked = false;
+        self.start.read = Some(read);
+        true
+    }
+
+    /// The start report asked for failed: how many of this epoch's tries are gone. A failure
+    /// names no epoch, so one of a read out across a restart counts for the new epoch.
+    pub fn start_failed(&mut self) -> u8 {
+        self.start.asked = false;
+        self.start.failures = self.start.failures.saturating_add(1);
+        self.start.failures
+    }
+
+    /// The notice of the settings this start reset was read: it goes, for this epoch.
+    pub fn start_acknowledged(&mut self) {
+        self.start.acknowledged = true;
+    }
+
+    /// What the settings page says of the Runtime being started again when it is gone.
+    pub fn autostart_view(&self) -> AutostartView {
+        match &self.autostart {
+            Autostart::NotAsked | Autostart::Asked(_) => AutostartView::Reading,
+            Autostart::LetGo => AutostartView::LetGo,
+            Autostart::Read(read) => settings::autostart_of(read),
+        }
+    }
+
+    /// Whether a run of `watchdog status` may be asked for, the settings page being gone to:
+    /// not while one is out, whose answer is on its way.
+    pub fn autostart_due(&self) -> bool {
+        !matches!(self.autostart, Autostart::Asked(_))
+    }
+
+    /// A run of it was asked for: the number of the ask.
+    pub fn autostart_asked(&mut self) -> u64 {
+        self.autostart_asks += 1;
+        self.autostart = Autostart::Asked(self.autostart_asks);
+        self.autostart_asks
+    }
+
+    /// The run asked for under `ask` is over: whether it counts, which it does only while it is
+    /// the one out.
+    pub fn apply_autostart(&mut self, ask: u64, read: WatchdogRead) -> bool {
+        if !matches!(self.autostart, Autostart::Asked(out) if out == ask) {
+            return false;
+        }
+        self.autostart = Autostart::Read(read);
+        true
     }
 
     /// Whether the fact snapshot reads since the last that came failed. A thread that does
@@ -397,8 +544,15 @@ impl Model {
         let LiveSnapshot { pid, epoch, global_pause, instances } = snapshot;
         let epoch_changed = self.epoch.as_deref() != Some(epoch.as_str());
         if epoch_changed {
+            // Started again, not for the first time this run: what the watchdog said is of
+            // before, and a run out now answers for before too. Nothing reads it again until
+            // the settings page is next gone to.
+            if self.epoch.is_some() && !matches!(self.autostart, Autostart::NotAsked) {
+                self.autostart = Autostart::LetGo;
+            }
             self.explain = Slice::empty();
             self.config = Slice::empty();
+            self.start = StartSlice::default();
             self.epoch = Some(epoch.clone());
             self.actions.new_epoch();
         }
@@ -468,6 +622,9 @@ impl Model {
             Read::Status => &mut self.live_fault,
             Read::Explain => &mut self.slow_fault,
             Read::Config => &mut self.config_fault,
+            // A start report's panic is one of its failures (`start_failed`), not a fault
+            // of a read that a later one of its kind clears: there is no later one.
+            Read::Start => return false,
         };
         let news = *slot != fault;
         *slot = fault;

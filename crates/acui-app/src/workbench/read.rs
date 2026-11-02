@@ -7,7 +7,12 @@
 //! its lock for a whole exchange, `ScheduleExplanation` waits on the policy lock and
 //! `RuntimeFactSnapshot` on the fact write gate and the settings' gate, so the
 //! Runtime's lamp must not share a connection with them. `acui-slow` reads those two
-//! one after the other, and a poke reads both.
+//! one after the other, and a poke reads both, or the one it names: going to the settings
+//! page reads the fact snapshot alone.
+//!
+//! `acui-slow` also reads the `StartReport`, which only a new start changes: once for each
+//! owner epoch, when the event loop names it, and never on a clock of its own. One that
+//! fails is named again `START_RETRY` later, `START_TRIES` times in all for the epoch.
 //!
 //! A thread reads what is due, hands each result to the event loop, and sleeps
 //! until the next is due or it is poked. It ends once the event loop lets its
@@ -30,21 +35,28 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, ReadLane};
+use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, ReadLane, StartRead};
 use acui_source::ClientFailure;
 
 use crate::launcher::spawn_worker;
 use crate::report;
 
 /// `READS` has one row for each `Read`, in its order: `Tally` counts by it.
-const READ_KINDS: usize = 3;
+const READ_KINDS: usize = 4;
 
 #[rustfmt::skip]
 static READS: [Cadence; READ_KINDS] = [
-    Cadence { read: Read::Status,  lane: Lane::Live, shown: secs(3),  minimized: Some(secs(30)), failed: secs(5) },
-    Cadence { read: Read::Explain, lane: Lane::Slow, shown: secs(15), minimized: None,           failed: secs(30) },
-    Cadence { read: Read::Config,  lane: Lane::Slow, shown: secs(30), minimized: None,           failed: secs(30) },
+    Cadence { read: Read::Status,  lane: Lane::Live, every: Some(Every { shown: secs(3),  minimized: Some(secs(30)), failed: secs(5) }) },
+    Cadence { read: Read::Explain, lane: Lane::Slow, every: Some(Every { shown: secs(15), minimized: None,           failed: secs(30) }) },
+    Cadence { read: Read::Config,  lane: Lane::Slow, every: Some(Every { shown: secs(30), minimized: None,           failed: secs(30) }) },
+    // Once for each owner epoch, when the event loop names it.
+    Cadence { read: Read::Start,   lane: Lane::Slow, every: None },
 ];
+
+/// How many times in one owner epoch the start report is asked for, and how long after a
+/// failure it is asked again.
+pub const START_TRIES: u8 = 3;
+pub const START_RETRY: Duration = secs(30);
 
 /// A read longer than this leaves a line in the technical log.
 const LONG_READ: Duration = secs(2);
@@ -65,10 +77,15 @@ const fn secs(seconds: u64) -> Duration {
 struct Cadence {
     read: Read,
     lane: Lane,
-    /// How often while the workbench is not minimized.
+    /// How often; `None`: only when a poke names it.
+    every: Option<Every>,
+}
+
+/// How often a read is made by its thread's own clock.
+struct Every {
+    /// While the workbench is not minimized.
     shown: Duration,
-    /// How often while it is; `None`: not at all, until a window coming back
-    /// pokes the thread.
+    /// While it is; `None`: not at all, until a window coming back pokes the thread.
     minimized: Option<Duration>,
     /// How soon after a failed read, while the workbench is not minimized.
     failed: Duration,
@@ -80,6 +97,7 @@ pub enum Read {
     Status,
     Explain,
     Config,
+    Start,
 }
 
 impl Read {
@@ -88,6 +106,7 @@ impl Read {
             Self::Status => "status",
             Self::Explain => "schedule explanation",
             Self::Config => "fact snapshot",
+            Self::Start => "start report",
         }
     }
 
@@ -122,21 +141,43 @@ impl Lane {
     }
 }
 
-/// Reads what the thread reads now, without waiting for its time.
-pub struct Poke;
+/// Reads now, without waiting for their time: every read of the thread its clock makes, or
+/// only the one named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Poke {
+    All,
+    Only(Read),
+}
+
+impl Poke {
+    /// Whether it asks for `read`. The start report is asked for by name only.
+    pub fn asks(self, read: Read) -> bool {
+        match self {
+            Self::All => READS[read as usize].every.is_some(),
+            Self::Only(only) => only == read,
+        }
+    }
+}
 
 /// What a read came to, for the event loop.
 pub enum Landing {
     Live(LiveRead),
     Explain(Result<ExplainRead, ClientFailure>),
     Config(Result<ConfigRead, ClientFailure>),
+    Start(Result<StartRead, ClientFailure>),
     /// The read panicked: the panic's message, for the log.
     Panicked { read: Read, message: String },
 }
 
 impl Landing {
     fn failed(&self) -> bool {
-        !matches!(self, Self::Live(LiveRead::Read(_)) | Self::Explain(Ok(_)) | Self::Config(Ok(_)))
+        !matches!(
+            self,
+            Self::Live(LiveRead::Read(_))
+                | Self::Explain(Ok(_))
+                | Self::Config(Ok(_))
+                | Self::Start(Ok(_))
+        )
     }
 }
 
@@ -188,12 +229,16 @@ struct Due {
 
 impl Due {
     /// When this read is next due; `None` while the table stops it. A poke waits
-    /// out a stop: the window coming back reads it anyway.
+    /// out a stop: the window coming back reads it anyway. One without a clock is due
+    /// only when poked, minimized or not.
     fn at(&self, shown: bool, now: Instant) -> Option<Instant> {
+        let Some(clock) = &self.cadence.every else {
+            return self.poked.then_some(now);
+        };
         let every = match (shown, self.failed) {
-            (true, false) => self.cadence.shown,
-            (true, true) => self.cadence.failed,
-            (false, _) => self.cadence.minimized?,
+            (true, false) => clock.shown,
+            (true, true) => clock.failed,
+            (false, _) => clock.minimized?,
         };
         match self.last {
             Some(last) if !self.poked => Some(last + every),
@@ -234,21 +279,20 @@ fn run(
         let is_shown = shown.load(Ordering::SeqCst);
         let next = plan.iter().filter_map(|due| due.at(is_shown, now)).min();
         let wait = next.map_or(NOTHING_DUE, |at| at.saturating_duration_since(now));
-        let mut poked = match commands.recv_timeout(wait) {
-            Ok(Poke) => true,
-            Err(RecvTimeoutError::Timeout) => false,
+        match commands.recv_timeout(wait) {
+            Ok(poke) => mark(&mut plan, poke),
+            Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
-        };
-        // Pokes queued behind that one ask for the same reads.
+        }
+        // Pokes queued behind that one ask for their reads in the same round.
         loop {
             match commands.try_recv() {
-                Ok(Poke) => poked = true,
+                Ok(poke) => mark(&mut plan, poke),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             }
         }
         for due in &mut plan {
-            due.poked |= poked;
             let now = Instant::now();
             let is_due = due.at(shown.load(Ordering::SeqCst), now).is_some_and(|at| at <= now);
             if !is_due {
@@ -277,11 +321,19 @@ fn run(
     }
 }
 
+/// The reads of `plan` that `poke` asks for are due now.
+fn mark(plan: &mut [Due], poke: Poke) {
+    for due in plan {
+        due.poked |= poke.asks(due.cadence.read);
+    }
+}
+
 fn read_on(read: Read, connection: &mut ReadLane) -> Landing {
     match read {
         Read::Status => Landing::Live(connection.read_live()),
         Read::Explain => Landing::Explain(connection.read_explain()),
         Read::Config => Landing::Config(connection.read_config()),
+        Read::Start => Landing::Start(connection.read_start()),
     }
 }
 
