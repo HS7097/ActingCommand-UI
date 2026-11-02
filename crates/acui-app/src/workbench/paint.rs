@@ -262,11 +262,13 @@ fn pause_note(labels: &Labels, view: &ActionsView) -> String {
         Some(0) => labels.pause_note_all_finished.to_owned(),
         Some(finishing) => fill(labels.pause_note_finishing, &[&finishing.to_string()]),
     };
-    let mut note = vec![meaning.as_str(), labels.pause_note_no_update];
+    // The installer's own pause is the update under way: telling the person an update
+    // waits for the pause to lift would be the wrong way round.
+    let mut note = vec![meaning.as_str()];
     match by {
-        Lifter::Alice => note.push(labels.resume_barred_alice),
+        Lifter::Alice => note.extend([labels.pause_note_no_update, labels.resume_barred_alice]),
         Lifter::Installer => note.push(labels.resume_barred_installer),
-        Lifter::Window => {}
+        Lifter::Window => note.push(labels.pause_note_no_update),
     }
     note.join("\n")
 }
