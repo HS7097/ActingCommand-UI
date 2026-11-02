@@ -69,7 +69,10 @@ const POLL_FAILED: [Duration; 3] =
 /// The least time between two frames read, unless the settings file says otherwise
 /// (`preview_frame_gap_seconds`, `frame_gap`), in whole seconds from `FRAME_GAP_LEAST` to
 /// `FRAME_GAP_MOST`. Each range of a frame's material asks the ledger's writer twice, so this
-/// is kept slow until a joint test says otherwise. A frame a lookup found reads at once.
+/// is kept slow until a joint test says otherwise. Only while the window shows no frame of
+/// the account followed does one a lookup found, or the order carried, read at once: following
+/// the same account again, after the settings page, a minimized window or a Runtime that did
+/// not answer for a moment, waits the gap like any other.
 pub const MIN_FRAME_GAP: Duration = Duration::from_secs(10);
 const FRAME_GAP_LEAST: u64 = 2;
 const FRAME_GAP_MOST: u64 = 60;
@@ -414,7 +417,7 @@ struct Line {
     /// The newest frame shown or read since: a frame read must be newer.
     shown: Option<u64>,
     /// The newest frame not read yet, and whether it reads now rather than after the gap: one
-    /// a lookup found, or the order carried, does.
+    /// a lookup found, or the order carried, does while no frame of the account is shown.
     waiting: Option<FrameSeen>,
     read_now: bool,
     next_poll: Instant,
@@ -488,8 +491,10 @@ impl Line {
         self.read_at(reads, now).map_or(self.next_poll, |at| at.min(self.next_poll))
     }
 
-    /// `frame`, newer than the one shown and the one waiting, waits to be read.
-    fn offer(&mut self, frame: FrameSeen, now: bool) {
+    /// `frame`, newer than the one shown and the one waiting, waits to be read: at once while
+    /// no frame of the account is shown, when a lookup found it or the order carried it
+    /// (`found`), or it takes the place of one that was to; else the gap after the last read.
+    fn offer(&mut self, frame: FrameSeen, found: bool) {
         let sequence = frame.sequence;
         if self.newest.map_or(true, |newest| sequence > newest) {
             self.newest = Some(sequence);
@@ -498,7 +503,7 @@ impl Line {
             && self.waiting.as_ref().map_or(true, |waiting| sequence > waiting.sequence);
         if newer {
             self.waiting = Some(frame);
-            self.read_now = now;
+            self.read_now = self.shown.is_none() && (found || self.read_now);
         }
     }
 
