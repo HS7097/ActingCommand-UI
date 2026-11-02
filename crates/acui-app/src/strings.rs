@@ -423,14 +423,16 @@ pub struct Labels {
     pub usage_title: &'static str,
     pub close: &'static str,
     pub window_failed: &'static str,
-    /// Where the paths come from: error; requested root, selected root; root.
+    /// Where the paths come from: error; requested root, selected root; root. Then
+    /// no state root named at all, in plain words: the usage goes to the log only.
     pub install_selection_failed: &'static str,
     pub state_root_differs: &'static str,
     pub state_root_not_absolute: &'static str,
+    pub no_state_root: &'static str,
     /// The read face refused to open at the start: error.
     pub ledger_open_failed: &'static str,
-    /// The workbench's red bar when this run has no state root: the original
-    /// words of why.
+    /// The workbench's red bar when this run has no state root: why, as
+    /// `InstallIssue::text` says it.
     pub install_issue: &'static str,
     /// The workbench: the way into the ledger window; the instance entry that
     /// waits for the Runtime and what to do meanwhile; the caption of the
@@ -442,6 +444,12 @@ pub struct Labels {
     pub config_file: &'static str,
     pub config_path_missing: &'static str,
     pub start_log: &'static str,
+    /// The top bar's button to the settings page, and the same button there, back;
+    /// the settings page's groups: the Runtime, and how the windows look.
+    pub open_settings: &'static str,
+    pub back_to_workbench: &'static str,
+    pub settings_runtime: &'static str,
+    pub settings_appearance: &'static str,
     /// Why the workbench's left column shows no account: the Runtime answers and
     /// has none; none was seen this run and no Runtime runs; none was seen this
     /// run and the Runtime cannot be read.
@@ -640,7 +648,7 @@ pub const ZH: Labels = Labels {
     tongue: Language::Zh,
     window_title: "ActingCommand 监控台",
     ledger_window_title: "高级排障与历史账本",
-    usage: "用法：acui [--state-root <状态根>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]\n不给 --state-root 时取 acui.toml 的 state_root；两处都没有就不开台。",
+    usage: "用法：acui [--state-root <状态根>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--lang <zh|en>]\n不给 --state-root 时取 acui.toml 的 state_root；两处都没有时，「启动」「请求关闭」和「排障与账本」不能用。\n--page 只决定开窗时工作台显示哪一页：main 是账号，settings 是设置。",
     data_source: "数据来源：本机账本（只读）",
     data_source_online: "数据来源：运行中的 Runtime（只读）",
     ledger_dir: "账本目录",
@@ -984,14 +992,19 @@ pub const ZH: Labels = Labels {
     install_selection_failed: "读取本安装的选择失败：{}",
     state_root_differs: "--state-root 与本安装选定的配置不一致：给的是 {}，安装选定的是 {}",
     state_root_not_absolute: "acui.toml 的 state_root 不是绝对路径：{}",
+    no_state_root: "没有指定状态根，请按安装说明配置，或用设置文件指定",
     ledger_open_failed: "账本读面打不开：{}",
-    install_issue: "这次运行没有可用的状态根：「启动」和「排障与账本」暂时不能用，语言、字号和主题仍可修改。\n原因：{}",
+    install_issue: "这次运行没有可用的状态根：「启动」「请求关闭」和「排障与账本」暂时不能用，语言、字号和主题仍可在「设置」里修改。\n原因：{}",
     open_ledger: "排障与账本",
     add_instance: "+ 添加账号/设备",
     add_instance_note: "等 Runtime 支持；现在请按安装说明手工编辑配置文件",
     config_file: "配置文件",
     config_path_missing: "还没有配置 Runtime 的配置文件：请按安装说明填写设置文件",
     start_log: "启动日志",
+    open_settings: "设置",
+    back_to_workbench: "返回工作台",
+    settings_runtime: "Runtime",
+    settings_appearance: "外观",
     accounts_none: "这个配置里还没有账号。怎么添加见下方说明",
     accounts_not_running: "Runtime 没有运行，看不到账号",
     accounts_unreachable: "现在读不到 Runtime，看不到账号",
@@ -1144,7 +1157,7 @@ pub const EN: Labels = Labels {
     tongue: Language::En,
     window_title: "ActingCommand Console",
     ledger_window_title: "Advanced Troubleshooting and Ledger History",
-    usage: "Usage: acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--lang <zh|en>]\nWithout --state-root the state_root key of acui.toml is used; with neither, the console does not open.",
+    usage: "Usage: acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--lang <zh|en>]\nWithout --state-root the state_root key of acui.toml is used; with neither, Start, Request Shutdown and Troubleshooting and Ledger are off.\n--page only picks the workbench page the window opens on: main for the accounts, settings for the settings.",
     data_source: "Data Source: Local Ledger (Read-Only)",
     data_source_online: "Data Source: Running Runtime (Read-Only)",
     ledger_dir: "Ledger Directory",
@@ -1488,14 +1501,19 @@ pub const EN: Labels = Labels {
     install_selection_failed: "Reading this installation's selection failed: {}",
     state_root_differs: "--state-root differs from this installation's selected configuration: given {}, selected {}",
     state_root_not_absolute: "state_root in acui.toml is not an absolute path: {}",
+    no_state_root: "No state root is named; set one up as the installation guide says, or name it in the settings file",
     ledger_open_failed: "The ledger's read face could not be opened: {}",
-    install_issue: "This run has no state root to use: Start and Troubleshooting and Ledger are off for now, and the language, the text size and the theme still work.\nWhy: {}",
+    install_issue: "This run has no state root to use: Start, Request Shutdown and Troubleshooting and Ledger are off for now, and the language, the text size and the theme can still be changed under Settings.\nWhy: {}",
     open_ledger: "Troubleshooting and Ledger",
     add_instance: "+ Add Account or Device",
     add_instance_note: "Waits for Runtime support; for now, edit the configuration file by hand as the installation guide says",
     config_file: "Configuration File",
     config_path_missing: "No Runtime configuration file is set: fill in the settings file as the installation guide says",
     start_log: "Start Log",
+    open_settings: "Settings",
+    back_to_workbench: "Back to Workbench",
+    settings_runtime: "Runtime",
+    settings_appearance: "Appearance",
     accounts_none: "This configuration has no accounts yet. See below for how to add one",
     accounts_not_running: "The Runtime is not running, so no accounts can be seen",
     accounts_unreachable: "The Runtime cannot be read right now, so no accounts can be seen",

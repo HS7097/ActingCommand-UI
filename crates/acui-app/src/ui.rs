@@ -441,7 +441,7 @@ impl Ui {
     /// The workbench's lines that only the language changes: why this run has
     /// no state root, and the Runtime's configuration file, where an instance
     /// is added by hand for now. And the accounts note and the cards, which reads
-    /// change too.
+    /// change too; and which page shows, which only a press changes.
     pub fn paint_workbench(&self) {
         let Some(window) = self.workbench() else {
             return;
@@ -463,6 +463,7 @@ impl Ui {
         window.set_config_note(note.into());
         self.paint_accounts_note();
         self.paint_names_note();
+        workbench::paint::page(self);
         workbench::paint::cards(self);
         workbench::paint::actions(self);
         workbench::paint::preset(self);
@@ -516,12 +517,18 @@ fn language_index(language: Language) -> i32 {
     }
 }
 
-/// The workbench's controls. Start and Request Shutdown are the launcher's;
+/// The workbench's controls. The top bar's page button switches between the
+/// accounts and the settings; Start and Request Shutdown are the launcher's;
 /// "troubleshooting and ledger" opens the window of the default source; the
 /// write buttons are `workbench::actions`'; the three boxes apply to every
 /// window. Closing it ends the program, after its fade if it has a frame of its
 /// own, unless an unlock runs: then it stays and says why, without fading.
 fn install_workbench(window: &WorkbenchWindow) {
+    window.on_page_picked(|page| {
+        if let Some(ui) = current() {
+            workbench::show_page(&ui, workbench::paint::page_picked(page));
+        }
+    });
     window.on_start_runtime(|| {
         if let Some(ui) = current() {
             launcher::start(&ui);
@@ -709,6 +716,10 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_add_instance_note(labels.add_instance_note.into());
     global.set_config_file(labels.config_file.into());
     global.set_start_log(labels.start_log.into());
+    global.set_open_settings(labels.open_settings.into());
+    global.set_back_to_workbench(labels.back_to_workbench.into());
+    global.set_settings_runtime(labels.settings_runtime.into());
+    global.set_settings_appearance(labels.settings_appearance.into());
     global.set_caption_minimize(labels.caption_minimize.into());
     global.set_caption_maximize(labels.caption_maximize.into());
     global.set_caption_restore(labels.caption_restore.into());

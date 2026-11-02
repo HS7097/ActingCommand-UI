@@ -3,7 +3,7 @@
 //! the list the workbench already shows: a row changes only when its words do, and
 //! rows come and go only when the accounts do, so a read every few seconds costs
 //! nothing and moves nothing. And the top bar's writes, its performance preset and the
-//! stepper under it, from their views.
+//! stepper under it, from their views; and which page shows.
 
 use std::time::Instant;
 
@@ -20,12 +20,33 @@ use super::actions::{
     PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
 };
 use super::card::{Band, CardView, Down, Line, ReasonClass};
+use super::model::Page;
 use crate::ledger::paint::models;
 use crate::ledger::resume::Lifter;
 use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
-use crate::{AccountCard, PresetChoice, StatusTone};
+use crate::{AccountCard, PresetChoice, StatusTone, WorkbenchPage};
+
+/// Which page shows.
+pub fn page(ui: &Ui) {
+    let Some(window) = ui.workbench() else {
+        return;
+    };
+    let page = match ui.model.borrow().page() {
+        Page::Main => WorkbenchPage::Main,
+        Page::Settings => WorkbenchPage::Settings,
+    };
+    window.set_page(page);
+}
+
+/// The page a press on the top bar asks for.
+pub fn page_picked(page: WorkbenchPage) -> Page {
+    match page {
+        WorkbenchPage::Main => Page::Main,
+        WorkbenchPage::Settings => Page::Settings,
+    }
+}
 
 /// What the newest reads say of every account.
 pub fn cards(ui: &Ui) {

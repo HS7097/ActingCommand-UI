@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! ActingCommand 监控台 / ActingCommand Console. Its main window is the
 //! workbench (`ui`): the Runtime in plain words with the launcher's Start and
-//! Request Shutdown (`launcher`), the language, the text size and the theme
-//! (`skin`), and the way into the advanced troubleshooting and ledger window
+//! Request Shutdown (`launcher`), the latter on its settings page with the
+//! language, the text size and the theme (`skin`); `--page` opens it on that
+//! page. And the way into the advanced troubleshooting and ledger window
 //! (`ledger`) — a read-only window over this run's state root, opened through
 //! the formal ledger read face, offline over the files or online through the
 //! typed client of the running Runtime, with the launcher's technical lines and
@@ -12,7 +13,8 @@
 //! While it is up two threads read the Runtime for the workbench (`workbench`).
 //!
 //! A start that fails is shown in a window of its own (`report`); a state root
-//! this run cannot find is said in red on the workbench, which stays. Every
+//! this run cannot find is said in red on the workbench, which stays, in plain
+//! words: the usage, with the keys that name one, goes to the technical log. Every
 //! word is put together when it is painted, in the language shown then (`ui`,
 //! `phrase`), so a language, a text size or a theme picked in any window takes
 //! effect at once in every window. A ledger window comes up first; its own reader
@@ -48,6 +50,7 @@ use launcher::Launcher;
 use report::Fatal;
 use strings::{fill, Language};
 use ui::Ui;
+use workbench::model::Page;
 
 slint::include_modules!();
 
@@ -60,6 +63,8 @@ struct Args {
     /// `--source`, when given; a ledger window of no source asked for reads
     /// the default one, `auto`.
     source: Option<SourceMode>,
+    /// `--page`: the workbench's page the window opens on; the accounts when not given.
+    page: Option<Page>,
     help: bool,
 }
 
@@ -100,6 +105,16 @@ fn parse_args() -> Result<Args> {
                 args.source = match SourceMode::from_wire(&name) {
                     Some(mode) => Some(mode),
                     None => bail!("未知的 --source 取值 / unknown --source value: {name}"),
+                };
+            }
+            "--page" => {
+                let name = match argv.next() {
+                    Some(name) => name,
+                    None => bail!("--page 缺少取值 / --page needs a value"),
+                };
+                args.page = match Page::from_wire(&name) {
+                    Some(page) => Some(page),
+                    None => bail!("未知的 --page 取值 / unknown --page value: {name}"),
                 };
             }
             "--help" | "-h" => args.help = true,
@@ -143,10 +158,10 @@ fn main() -> ExitCode {
     }
 }
 
-/// The workbench comes up whatever this run's paths are: a state root it
-/// cannot find is said on it in red, and only Start, Request Shutdown and the
-/// ledger window are off. Then the reading threads, whose first `Status` read
-/// is the first word on the Runtime. A ledger window opens at the
+/// The workbench comes up whatever this run's paths are, on the page `--page`
+/// names: a state root it cannot find is said on it in red, and only Start,
+/// Request Shutdown and the ledger window are off. Then the reading threads,
+/// whose first `Status` read is the first word on the Runtime. A ledger window opens at the
 /// start only for `--tab` or `--source`: the fixed entry passes `--state-root`
 /// on every start, and that alone opens none. Once the event loop is over the
 /// reading threads are told to end, the windows are hidden and let go, and then
@@ -156,9 +171,12 @@ fn run(args: Args, loaded: settings::Loaded, language: Language) -> Result<(), F
     let stored = loaded.settings;
     let launcher = install::resolve(&args, &stored).map(Launcher::new);
     if let Err(issue) = &launcher {
-        report::log("startup", &issue.text(labels));
+        report::log("startup", &issue.log_text(labels));
     }
     let ui = Ui::new(language, &stored, loaded.file, loaded.issues, launcher);
+    if let Some(page) = args.page {
+        workbench::show_page(&ui, page);
+    }
     let window_failed =
         |error: slint::PlatformError| Fatal::failed(fill(labels.window_failed, &[&error.to_string()]));
     let workbench = WorkbenchWindow::new().map_err(window_failed)?;

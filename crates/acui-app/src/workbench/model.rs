@@ -102,6 +102,25 @@ impl Fault {
     }
 }
 
+/// Which of the workbench's two pages shows: the accounts, or the settings. Only which:
+/// both are always there, so what a box on the hidden one holds stays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Page {
+    Main,
+    Settings,
+}
+
+impl Page {
+    /// As `--page` spells it.
+    pub fn from_wire(text: &str) -> Option<Self> {
+        match text {
+            "main" => Some(Self::Main),
+            "settings" => Some(Self::Settings),
+            _ => None,
+        }
+    }
+}
+
 /// Why the left column has no account to show, when no read has left one there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountsNote {
@@ -155,6 +174,8 @@ pub struct Model {
     /// The lines the log got about codes the cards have no words for: once each.
     told_codes: BTreeSet<String>,
     actions: Actions,
+    /// Picked on the top bar, or by `--page` at the start.
+    page: Page,
 }
 
 /// What a `Status` read changed, for what the event loop does next.
@@ -212,11 +233,21 @@ impl Model {
             config_fault: None,
             told_codes: BTreeSet::new(),
             actions: Actions::default(),
+            page: Page::Main,
         }
     }
 
     pub fn link(&self) -> &Link {
         &self.link
+    }
+
+    /// The page shown, or to be shown once the window is up.
+    pub fn page(&self) -> Page {
+        self.page
+    }
+
+    pub fn set_page(&mut self, page: Page) {
+        self.page = page;
     }
 
     /// The top bar's writes as they stand.

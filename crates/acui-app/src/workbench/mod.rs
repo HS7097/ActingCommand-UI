@@ -18,6 +18,9 @@
 //! a connection of its own, sent once. Once one lands, a read begun before that no
 //! longer counts: it is let go, and read again.
 //!
+//! Which of the workbench's two pages shows, the accounts or the settings, is the
+//! `Model`'s too (`show_page`).
+//!
 //! A read that fails is no event to log each time: the log gets a change, as it
 //! happens, so a failure that repeats every few seconds is one line, and its end
 //! another.
@@ -38,7 +41,7 @@ use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead};
 use acui_source::{ClientFailure, RuntimeFacts};
 use slint::{ComponentHandle, Timer, TimerMode};
 
-use self::model::{Link, News};
+use self::model::{Link, News, Page};
 use self::read::{Lane, Landing, Poke, Read, Tally};
 use self::tools::NamesRead;
 use crate::launcher;
@@ -142,6 +145,16 @@ pub fn stop(ui: &Ui) {
     if let Some(reading) = reading {
         report::log_quiet("acui-reads", &reading.tally.line());
     }
+}
+
+/// A page picked on the top bar, or by `--page` before the window is up: then the
+/// window's first paint shows it.
+pub fn show_page(ui: &Ui, page: Page) {
+    if ui.model.borrow().page() == page {
+        return;
+    }
+    ui.model.borrow_mut().set_page(page);
+    paint::page(ui);
 }
 
 /// A `Status` read now: a request of the launcher's is over.
