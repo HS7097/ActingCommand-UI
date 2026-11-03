@@ -132,12 +132,13 @@ Runtime 在运行，就给出「重新打开」并写明可以改为在线读取
 `console_runtime_owner_changed`）时，顶栏同样提示按「重新打开」改读现在运行的 Runtime。时间跨度的
 读取跟着游标最多 64 页，仍没有读到事件就停下并报 `console_time_span_page_limit`，不让窗口一直读下去。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.37
-（含 Workflow #432 AGT-1b 给 Status 加的可选成员 `agent_wake`，控制台读得上、不显示；建在 #429 R-0b、R-4、
-R-11、R-7a、114-A 之上；v0.12.32 的有界离线打开照旧），说 0.12 协议（`runtime-client` 修订 5、账本修订 5）：
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.38
+（读帧的账本查找改由读者池在写线程外回答，#422 RA-1；含 Workflow #432 AGT-1b 给 Status 加的可选成员
+`agent_wake`，控制台读得上、不显示；建在 #429 R-0b、R-4、R-11、R-7a、114-A 之上；v0.12.32 的有界离线打开
+照旧），说 0.12 协议（`runtime-client` 修订 5、账本修订 5）：
 
 ```
-rev = "65a67127f060d34fdaccc3d80be2c83102370ae1"
+rev = "0b773899443923be8122d7f4615d094d449a1146"
 ```
 
 六个 crate（contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
@@ -184,8 +185,8 @@ CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译
   开始。这么宽的一窗里事件不多于一页的条数上限，一次查询就能读完，各项过滤都由账本做。一窗读回的
   事件少于 64 条时，下一窗宽度加倍，最宽 4096 个位置；读回 128 条以上就回到 256。更宽的窗，以及
   回复被字节上限拆页的窗，都跟着游标整窗读完——所以一次填充可能多于目标行数。在线时每次页查询
-  都在 Runtime 的账本写线程上做（Runtime `71db072d` 起只复核头部、边界与新增尾部，一万条时一页约
-  15 ms；此前要把整本账读一遍、校验一遍），所以一次填充至少读一窗，多出 256 行、读到位置 1、读满 16 窗或已过 1 秒之后，就不再开始新的一窗。行按**最新在上**排列；底部
+  都由 Runtime 账本的读者池回答，不占写线程（#422 QR-1；v0.12.38 起读帧的素材查找也是，RA-1），
+  但每页仍要 Runtime 读一次、校验一次，所以一次填充至少读一窗，多出 256 行、读到位置 1、读满 16 窗或已过 1 秒之后，就不再开始新的一窗。行按**最新在上**排列；底部
   的「读更早」接着往下读。顶栏常驻已读窗口覆盖
   的位置（「已读序号 A–B」），有窗口的页说读取不完整时追加「源不完整」——只因 Runtime 的读预算停下的
   页不算（#411 A51）：它的游标接着往下读，窗口会跟着读完。
@@ -385,9 +386,9 @@ theme = "flat"
 state_root = '<install root>\state'
 actingd_config = '<install root>\actingd.config.json'
 actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'
-# 可选，整数秒 2–60，默认 10：实时画面跟任务时，最快多久读一张帧。
-# 读帧占 Runtime 的账本写线程，除联验外别调快。
-preview_frame_gap_seconds = 10
+# 可选，整数秒 2–60（缺省、越界、写错都用 5）：实时画面跟任务时，最快多久读一张帧。
+# 读帧由 Runtime 的读者池回答，不占账本写线程（v0.12.38）；默认 5；C7 联验实测前别调快。
+preview_frame_gap_seconds = 5
 ```
 
 开台时读一次；下拉框一改，就只写这一个键：先重读文件，换掉这个键的最后一行（没有就追加一行），其余

@@ -183,13 +183,14 @@ filters the boxes show now, without a time bound. When a read reaches a Runtime 
 now. A time span read follows the cursor for at most 64 pages; with still no event it stops, as
 `console_time_span_page_limit`, rather than keep the window reading.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.37
-(with Workflow #432 AGT-1b's optional status member `agent_wake`, which the console reads and does not show, on
-top of #429 R-0b, R-4, R-11, R-7a and 114-A; it keeps v0.12.32's bounded offline opening), which speaks the 0.12
-protocols (`runtime-client` revision 5, ledger revision 5):
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.38
+(its reader pool now answers a frame read's artifact lookups off the ledger writer, #422 RA-1; with Workflow #432
+AGT-1b's optional status member `agent_wake`, which the console reads and does not show, on top of #429 R-0b, R-4,
+R-11, R-7a and 114-A; it keeps v0.12.32's bounded offline opening), which speaks the 0.12 protocols
+(`runtime-client` revision 5, ledger revision 5):
 
 ```
-rev = "65a67127f060d34fdaccc3d80be2c83102370ae1"
+rev = "0b773899443923be8122d7f4615d094d449a1146"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -253,9 +254,9 @@ version exists only in the tag.
   window that comes back with fewer than 64 events doubles the next one's span, up to 4096 positions; one
   with 128 or more puts it back to 256. A wider window, and any the reply's byte limit splits, is read by
   following the cursor, whole — so one fill can add more rows than it aims for. Online, every page query
-  is served on the Runtime's ledger writer (since Runtime `71db072d` it re-verifies only the head, the
-  boundary and a new tail, about 15 ms a page at ten thousand events, where it used to read and verify
-  the whole ledger), so one fill reads at least one window
+  is answered by the Runtime's ledger reader pool, off its writer (#422 QR-1; a frame's artifact lookups
+  too since v0.12.38, RA-1), and still costs the Runtime a read and a verification per page, so one fill
+  reads at least one window
   and starts no further window once it has 256 more rows, has read position 1, has read 16 windows or has
   run for one second. Rows are listed
   **newest first**; "read earlier" at the bottom continues below what is loaded. The top bar permanently
@@ -534,9 +535,10 @@ theme = "flat"
 state_root = '<install root>\state'
 actingd_config = '<install root>\actingd.config.json'
 actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'
-# optional, whole seconds 2–60, default 10: the live picture reads a task frame at most this often.
-# Reading a frame runs on the Runtime's ledger writer thread, so keep it slow outside a joint test.
-preview_frame_gap_seconds = 10
+# optional, whole seconds 2–60 (missing, out of range or not a number: 5): the live picture
+# reads a task frame at most this often. A frame read is answered by the Runtime's reader pool,
+# off the ledger writer (v0.12.38); default 5; do not set it faster before the C7 joint test.
+preview_frame_gap_seconds = 5
 ```
 
 It is read once at startup, and a dropdown change writes its one key: the file is read again, the last

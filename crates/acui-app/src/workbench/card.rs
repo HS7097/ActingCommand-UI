@@ -29,8 +29,12 @@ pub struct CardView {
     /// Runtime answers about.
     pub game: Option<String>,
     /// The server its last admitted package declared, as it wrote it, when the newest
-    /// fact snapshot has one.
+    /// fact snapshot has one; else the one a snapshot of this owner epoch last had, if any
+    /// did (`server_last_seen`).
     pub server: Option<String>,
+    /// `server` is not the newest snapshot's but remembered from an earlier one of this
+    /// owner epoch: the card says so after it.
+    pub server_last_seen: bool,
     pub band: Band,
     pub main: Line,
     pub notes: Vec<Line>,
@@ -207,6 +211,7 @@ pub fn down_view(alias: &str, down: Down, selected: bool) -> CardView {
         alias: alias.to_owned(),
         game: None,
         server: None,
+        server_last_seen: false,
         band: Band::Offline,
         main: Line::Down(down),
         notes: Vec::new(),
@@ -214,11 +219,13 @@ pub fn down_view(alias: &str, down: Down, selected: bool) -> CardView {
     }
 }
 
-/// An account of the newest `Status`, its server in the newest fact snapshot, that
-/// read's global pause, and what the schedule explanation reads leave.
+/// An account of the newest `Status`, its server in the newest fact snapshot or, when that
+/// names none, the one last seen this owner epoch (`server_last_seen`), that read's global
+/// pause, and what the schedule explanation reads leave.
 pub fn card_view(
     instance: &InstanceLive,
     server: Option<&str>,
+    server_last_seen: bool,
     global: Option<&PauseFact>,
     schedule: Schedule<'_>,
     selected: bool,
@@ -228,6 +235,7 @@ pub fn card_view(
         alias: instance.alias.clone(),
         game: instance.game_id.clone(),
         server: server.map(str::to_owned),
+        server_last_seen,
         band,
         main,
         notes,

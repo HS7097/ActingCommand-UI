@@ -12,16 +12,18 @@
 //!
 //! - ledger pages (`QueryEvents`), which the Runtime's reader pool answers off the
 //!   ledger's writer and which take no record: a poll after a known position, a lookup
-//!   down from the head, the marks of one frame found by a lookup, and the head itself
-//!   when a status did not state it;
+//!   down from the head a status stated, and the marks of one frame found by a lookup;
 //! - one frame's material whole (`ReadMaterial`, through [`MaterialReader`]), which takes
-//!   no record when it is read or found gone, and one for any other failure.
+//!   no record when it is read or found gone, and one for any other failure; its artifact
+//!   lookups the same reader pool answers, off the writer (Runtime 0.12.38, #422 RA-1).
 //!
-//! It never subscribes (`SubscribeEvents`): at the pinned Runtime a subscription that
-//! falls behind halts the whole Runtime, while a page asks nothing of the writer. How
-//! often it reads is the caller's; how much one page or one lookup may read is this
-//! file's, in the table below, the read side of the picture's one table (its pace is the
-//! console's).
+//! It never subscribes (`SubscribeEvents`): a poll is one page of a bounded number of
+//! rows, asked when the caller says and over once it is answered, so what the picture
+//! reads stays counted and in the caller's hands, where a subscription is held open and
+//! delivered at the ledger's pace. (Since Runtime 0.12.37 a subscription that falls
+//! behind ends only its own request, #419 SUB-LAG-1.) How often it reads is the caller's;
+//! how much one page or one lookup may read is this file's, in the table below, the read
+//! side of the picture's one table (its pace is the console's).
 //!
 //! The one write beside the lane, never on it, is a person's refresh of the picture
 //! ([`observe_frame`], UI-3c-2): one `ObserveReadonly` on a fresh person's connection

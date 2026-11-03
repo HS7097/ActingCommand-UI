@@ -151,7 +151,13 @@ pub fn picture(ui: &Ui) {
     window.set_picture_overlays_offered(*origin == Origin::Task);
     let mut hint = Vec::new();
     match overlay {
-        OverlayView::NotOnThisFrame => hint.push(labels.picture_marks_none.to_owned()),
+        // A task's frame whose recognition is not recorded yet says so. An observation's
+        // never has any: its greyed box and the source line say that already, and an amber
+        // line under every observed frame would read as something wrong.
+        OverlayView::NotOnThisFrame if *origin == Origin::Task => {
+            hint.push(labels.picture_marks_none.to_owned());
+        }
+        OverlayView::NotOnThisFrame => {}
         OverlayView::Mismatch => hint.push(labels.picture_marks_mismatch.to_owned()),
         OverlayView::Off | OverlayView::Shown(_) => {}
     }
@@ -1054,8 +1060,16 @@ fn sync<T: Clone + PartialEq + 'static>(
 
 fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
     let notes: Vec<String> = view.notes.iter().map(|line| line_text(ui, labels, line)).collect();
+    // A server remembered from an earlier snapshot says so after it, in the same small print.
+    let server = view.server.as_deref().map(|server| {
+        if view.server_last_seen {
+            fill(labels.card_server_last_seen, &[server])
+        } else {
+            server.to_owned()
+        }
+    });
     let game_line: Vec<&str> =
-        [view.game.as_deref(), view.server.as_deref()].into_iter().flatten().collect();
+        [view.game.as_deref(), server.as_deref()].into_iter().flatten().collect();
     AccountCard {
         alias: view.alias.as_str().into(),
         game_line: game_line.join(" · ").into(),

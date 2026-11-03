@@ -287,10 +287,14 @@ pub fn load() -> Loaded {
             "state_root" => settings.state_root = path_value(value),
             "actingd_config" => settings.actingd_config = path_value(value),
             "actingd_exe" => settings.actingd_exe = path_value(value),
-            // A whole number of seconds in range, or the default and an issue.
+            // A whole number of seconds in range, or the default (`MIN_FRAME_GAP`, 5 s) and an
+            // issue: also when an earlier line of the key was in range.
             "preview_frame_gap_seconds" => match preview::frame_gap(value) {
                 Some(gap) => settings.preview_frame_gap = gap,
-                None => issues.push(unknown("preview_frame_gap_seconds")),
+                None => {
+                    settings.preview_frame_gap = MIN_FRAME_GAP;
+                    issues.push(unknown("preview_frame_gap_seconds"));
+                }
             },
             _ => {}
         }
