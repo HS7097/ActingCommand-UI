@@ -144,7 +144,13 @@ pub fn picture(ui: &Ui) {
     window.set_picture_overlays_offered(*origin == Origin::Task);
     let mut hint = Vec::new();
     match overlay {
-        OverlayView::NotOnThisFrame => hint.push(labels.picture_marks_none.to_owned()),
+        // A task's frame whose recognition is not recorded yet says so. An observation's
+        // never has any: its greyed box and the source line say that already, and an amber
+        // line under every observed frame would read as something wrong.
+        OverlayView::NotOnThisFrame if *origin == Origin::Task => {
+            hint.push(labels.picture_marks_none.to_owned());
+        }
+        OverlayView::NotOnThisFrame => {}
         OverlayView::Mismatch => hint.push(labels.picture_marks_mismatch.to_owned()),
         OverlayView::Off | OverlayView::Shown(_) => {}
     }
