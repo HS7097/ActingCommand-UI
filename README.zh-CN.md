@@ -386,9 +386,9 @@ theme = "flat"
 state_root = '<install root>\state'
 actingd_config = '<install root>\actingd.config.json'
 actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'
-# 可选，整数秒 2–60，默认 10：实时画面跟任务时，最快多久读一张帧。
-# 读帧占 Runtime 的账本写线程，除联验外别调快。
-preview_frame_gap_seconds = 10
+# 可选，整数秒 2–60（缺省、越界、写错都用 5）：实时画面跟任务时，最快多久读一张帧。
+# 读帧由 Runtime 的读者池回答，不占账本写线程（v0.12.38）；默认 5；C7 联验实测前别调快。
+preview_frame_gap_seconds = 5
 ```
 
 开台时读一次；下拉框一改，就只写这一个键：先重读文件，换掉这个键的最后一行（没有就追加一行），其余

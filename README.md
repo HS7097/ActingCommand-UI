@@ -535,9 +535,10 @@ theme = "flat"
 state_root = '<install root>\state'
 actingd_config = '<install root>\actingd.config.json'
 actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'
-# optional, whole seconds 2–60, default 10: the live picture reads a task frame at most this often.
-# Reading a frame runs on the Runtime's ledger writer thread, so keep it slow outside a joint test.
-preview_frame_gap_seconds = 10
+# optional, whole seconds 2–60 (missing, out of range or not a number: 5): the live picture
+# reads a task frame at most this often. A frame read is answered by the Runtime's reader pool,
+# off the ledger writer (v0.12.38); default 5; do not set it faster before the C7 joint test.
+preview_frame_gap_seconds = 5
 ```
 
 It is read once at startup, and a dropdown change writes its one key: the file is read again, the last

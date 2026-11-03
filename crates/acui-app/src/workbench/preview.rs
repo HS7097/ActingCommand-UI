@@ -68,12 +68,14 @@ const POLL_FAILED: [Duration; 3] =
     [Duration::from_secs(5), Duration::from_secs(15), Duration::from_secs(30)];
 /// The least time between two frames read, unless the settings file says otherwise
 /// (`preview_frame_gap_seconds`, `frame_gap`), in whole seconds from `FRAME_GAP_LEAST` to
-/// `FRAME_GAP_MOST`. Each range of a frame's material asks the ledger's writer twice, so this
-/// is kept slow until a joint test says otherwise. Only while the window shows no frame of
-/// the account followed does one a lookup found, or the order carried, read at once: following
-/// the same account again, after the settings page, a minimized window or a Runtime that did
-/// not answer for a moment, waits the gap like any other.
-pub const MIN_FRAME_GAP: Duration = Duration::from_secs(10);
+/// `FRAME_GAP_MOST`; a value missing, out of range or not a whole number is this. Each range
+/// of a frame's material makes two artifact lookups, which the ledger's reader pool answers
+/// off its writer (Runtime 0.12.38, #422 RA-1); the default is not made faster until the C7
+/// joint test has measured a faster one. Only while the window shows no frame of the account
+/// followed does one a lookup found, or the order carried, read at once: following the same
+/// account again, after the settings page, a minimized window or a Runtime that did not
+/// answer for a moment, waits the gap like any other.
+pub const MIN_FRAME_GAP: Duration = Duration::from_secs(5);
 const FRAME_GAP_LEAST: u64 = 2;
 const FRAME_GAP_MOST: u64 = 60;
 /// An account looked up this recently, in the same owner epoch, is not looked up again when

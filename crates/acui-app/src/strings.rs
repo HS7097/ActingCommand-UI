@@ -676,6 +676,9 @@ pub struct Labels {
     pub card_cause_unknown: &'static str,
     pub card_recovering: &'static str,
     pub card_ladder_hold: &'static str,
+    /// A server the newest fact snapshot does not name, which one of this owner epoch did:
+    /// on the card's game line, the server as it was written, then these small words.
+    pub card_server_last_seen: &'static str,
     /// What the schedule explanation adds, and why an account does not run; a
     /// reason, then the time of its row's wake.
     pub card_schedule_unreadable: &'static str,
@@ -1311,6 +1314,7 @@ pub const ZH: Labels = Labels {
     card_cause_unknown: "设备没确认关好",
     card_recovering: "设备没确认关好，正在自动恢复",
     card_ladder_hold: "恢复等待中",
+    card_server_last_seen: "{}（上次读到）",
     card_schedule_unreadable: "运行原因暂时读不到",
     card_preparing: "正在准备运行",
     card_schedule_updating: "调度说明更新中",
@@ -1915,6 +1919,7 @@ pub const EN: Labels = Labels {
     card_cause_unknown: "the device was not confirmed closed",
     card_recovering: "The device was not confirmed closed; recovering automatically",
     card_ladder_hold: "Waiting to recover",
+    card_server_last_seen: "{} (last seen)",
     card_schedule_unreadable: "Why it is not running cannot be read right now",
     card_preparing: "Getting ready to run",
     card_schedule_updating: "The schedule explanation is being updated",

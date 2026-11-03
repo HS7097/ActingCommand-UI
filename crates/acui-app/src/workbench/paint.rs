@@ -952,8 +952,16 @@ fn sync<T: Clone + PartialEq + 'static>(
 
 fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
     let notes: Vec<String> = view.notes.iter().map(|line| line_text(ui, labels, line)).collect();
+    // A server remembered from an earlier snapshot says so after it, in the same small print.
+    let server = view.server.as_deref().map(|server| {
+        if view.server_last_seen {
+            fill(labels.card_server_last_seen, &[server])
+        } else {
+            server.to_owned()
+        }
+    });
     let game_line: Vec<&str> =
-        [view.game.as_deref(), view.server.as_deref()].into_iter().flatten().collect();
+        [view.game.as_deref(), server.as_deref()].into_iter().flatten().collect();
     AccountCard {
         alias: view.alias.as_str().into(),
         game_line: game_line.join(" · ").into(),

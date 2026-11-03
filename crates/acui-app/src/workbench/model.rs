@@ -7,7 +7,7 @@
 //! A read begun before a write landed is let go before it gets here (`super::landed`),
 //! and a write's answer counts only under its ticket (`actions`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 use std::time::Instant;
 
@@ -187,6 +187,11 @@ pub struct Model {
     /// it sooner, so a long gap before that says nothing against the explanation.
     explain_asked_at: Option<Instant>,
     config: Slice<ConfigRead>,
+    /// The server a fact snapshot of this owner epoch last named for each instance, by
+    /// instance id, an empty one not taken. `task.server` is a task's fact, there and gone
+    /// again as the Lab works: a card whose newest snapshot names none shows this one, said
+    /// to be last seen. Let go of with the epoch.
+    servers_seen: BTreeMap<String, String>,
     start: StartSlice,
     names: Names,
     /// The picture proportions each game declares, from the same run of `packs` as the
@@ -269,6 +274,7 @@ impl Model {
             explain: Slice::empty(),
             explain_asked_at: None,
             config: Slice::empty(),
+            servers_seen: BTreeMap::new(),
             start: StartSlice::default(),
             names: Names::NotAsked,
             displays: None,
@@ -480,11 +486,19 @@ impl Model {
                 self.instances
                     .iter()
                     .map(|instance| {
-                        let server = servers
+                        // The newest snapshot's server, else the one last seen this epoch.
+                        let named = servers
                             .and_then(|servers| servers.get(&instance.instance_id))
-                            .map(String::as_str);
+                            .filter(|server| !server.is_empty());
+                        let (server, last_seen) = match named {
+                            Some(server) => (Some(server.as_str()), false),
+                            None => match self.servers_seen.get(&instance.instance_id) {
+                                Some(server) => (Some(server.as_str()), true),
+                                None => (None, false),
+                            },
+                        };
                         let selected = picked == Some(instance.alias.as_str());
-                        card::card_view(instance, server, global, schedule, selected)
+                        card::card_view(instance, server, last_seen, global, schedule, selected)
                     })
                     .collect()
             }
@@ -697,6 +711,7 @@ impl Model {
             }
             self.explain = Slice::empty();
             self.config = Slice::empty();
+            self.servers_seen.clear();
             self.start = StartSlice::default();
             self.epoch = Some(epoch.clone());
             self.actions.new_epoch();
@@ -761,6 +776,12 @@ impl Model {
         let news = self.config.take(read, |read| read.epoch.as_str(), epoch, now);
         if let (true, Some(read)) = (counts, &self.config.value) {
             self.actions.snapshot_read(read);
+            // What it names now stands for the snapshots after it that name none.
+            for (instance_id, server) in &read.servers {
+                if !server.is_empty() {
+                    self.servers_seen.insert(instance_id.clone(), server.clone());
+                }
+            }
         }
         let after = preset_problem(self.config.value.as_ref());
         let preset = match after {
