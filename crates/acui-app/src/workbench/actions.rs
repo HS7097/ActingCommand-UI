@@ -265,6 +265,10 @@ pub enum Said {
     NotWhole,
     /// The Runtime refused a change of a device's backends, and said more of it than its class.
     BackendRefused(BackendRefusal),
+    /// A device's "use the file's value" changed the settings as asked: the file's value is in
+    /// effect. Its receipt is the same whether the device switched or not: the Runtime switches
+    /// nothing when the file's value is the one already in effect.
+    BackToFile,
     /// A snapshot came after a `Status` showed an unconfirmed switch over: what its version
     /// says of it, and the device's backends and self-check as that snapshot has them.
     SwitchOver { version: SwitchVersion, now: Option<InstanceBackends> },
@@ -342,8 +346,9 @@ pub struct Actions {
     /// The settings page's, of each device's backends, by instance id.
     backend_drafts: BTreeMap<String, BackendDraft>,
     /// The switch of backends out: what it was sent to, and when it was pressed, which an
-    /// answer that says nothing makes an `UnconfirmedSwitch` of.
-    backend_out: Option<(BackendTarget, Instant)>,
+    /// answer that says nothing makes an `UnconfirmedSwitch` of; and whether it was a "use the
+    /// file's value", which a change taken is said as.
+    backend_out: Option<(BackendTarget, Instant, bool)>,
     /// The instance id of the device the backends' line speaks of: the last one switched.
     backend_said_of: Option<String>,
     /// The switch whose answer was lost, while `ConfigFlow::Rereading(Reread::Switch, _)`.
@@ -407,13 +412,17 @@ impl Actions {
     fn backends_settled(&mut self, based_on: Option<u64>, said: Said) -> Said {
         let out = self.backend_out.take();
         match (said, out) {
-            (Said::ConfigApplied, Some((target, _))) => {
+            (Said::ConfigApplied, Some((target, _, to_file))) => {
                 if let Some(draft) = self.backend_drafts.get_mut(target.instance_id()) {
                     draft.applied = true;
                 }
-                Said::ConfigApplied
+                if to_file {
+                    Said::BackToFile
+                } else {
+                    Said::ConfigApplied
+                }
             }
-            (Said::Rereading(Reread::Switch), Some((target, sent))) => {
+            (Said::Rereading(Reread::Switch), Some((target, sent, _))) => {
                 let switch = UnconfirmedSwitch::new(&target, based_on, sent);
                 self.switch = Some(PendingSwitch { switch, over: false });
                 Said::Rereading(Reread::Switch)
@@ -1697,7 +1706,8 @@ fn unoffered(instance: &str, which: &str, index: i32) {
 
 /// One switch of the device `backends` reads: what is sent goes in the log first, keys and
 /// all, as any change of settings (`send_config`). The device and when it was pressed are kept
-/// for the answer: an answer that says nothing is judged as that switch's.
+/// for the answer: an answer that says nothing is judged as that switch's. So is whether it only
+/// goes back to the file's values, which a change taken is said as.
 fn send_backends(
     ui: &Ui,
     backends: &InstanceBackends,
@@ -1715,11 +1725,13 @@ fn send_backends(
         report::log(CONFIG_THREAD, &line);
         return;
     };
+    let to_file =
+        !matches!(touch, BackendChange::To(_)) && !matches!(capture, BackendChange::To(_));
     {
         let mut model = ui.model.borrow_mut();
         let actions = model.actions_mut();
         actions.backend_said_of = Some(instance.to_owned());
-        actions.backend_out = Some((target, Instant::now()));
+        actions.backend_out = Some((target, Instant::now(), to_file));
     }
     send_config(ui, edit, Field::Backends);
 }

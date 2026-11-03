@@ -665,17 +665,22 @@ pub struct Labels {
     pub backend_row_unread: &'static str,
     pub backend_rereading: &'static str,
     /// What a switch came to, on the line under the top bar after its account
-    /// (`backend_said`): switched; nothing changed, as the device has no such backend, for the
+    /// (`backend_said`): switched; back to the file's value, the device switched or not (the
+    /// receipt does not say); nothing changed, as the device has no such backend, for the
     /// pair, by this console's own fault, or as the Runtime does not know the backend; busy, by
     /// what and for how many seconds, or not said how long; played; fenced; not running or not
     /// bound; did not open and is back; neither came back; not recorded, and back; opened, not
     /// taken, and the previous ones did not come back; any other problem. What held the device,
     /// by its claim's kind, a ladder's two as one. Why backends did not open: the step, why a
-    /// capture did not open, no MuMu app index, no cause said; joined by `backend_cause_join`.
+    /// capture did not open, no MuMu app index found, no cause said; joined by
+    /// `backend_cause_join`. Why MuMu's own pair found no app index, each alone: the configured
+    /// game package not installed, the game not running, MuMuManager not answering, its answer
+    /// not read.
     /// An unconfirmed switch: waiting for it to end; then, with the device's self-check now,
     /// that it did not take effect, that the settings changed, or to go by what shows.
     pub backend_said: &'static str,
     pub backend_switched: &'static str,
+    pub backend_back_to_file: &'static str,
     pub backend_kind_unsupported: &'static str,
     pub backend_pair_required: &'static str,
     pub backend_not_alone: &'static str,
@@ -711,6 +716,10 @@ pub struct Labels {
     pub backend_cause_touch_check: &'static str,
     pub backend_cause_capture_check: &'static str,
     pub backend_cause_app_index: &'static str,
+    pub backend_app_not_installed: &'static str,
+    pub backend_app_not_running: &'static str,
+    pub backend_app_info_unavailable: &'static str,
+    pub backend_app_info_malformed: &'static str,
     pub backend_why_app_not_running: &'static str,
     pub backend_why_unreachable: &'static str,
     pub backend_why_other: &'static str,
@@ -1450,6 +1459,7 @@ pub const ZH: Labels = Labels {
     backend_rereading: "正在读取现状，读到前不能再改",
     backend_said: "{}的设备后端：{}",
     backend_switched: "已切换，这台已用新后端重连并自检通过",
+    backend_back_to_file: "已恢复为文件值",
     backend_kind_unsupported: "这台设备没有这个后端，什么都没改",
     backend_pair_required: "MuMu 原生触控必须配 MuMu 原生截图，什么都没改",
     backend_not_alone: "界面出错：这次请求混进了别的设置，什么都没改；详情在技术日志里",
@@ -1484,7 +1494,11 @@ pub const ZH: Labels = Labels {
     backend_cause_nemu_open: "MuMu 原生连接打不开",
     backend_cause_touch_check: "触控自检没通过",
     backend_cause_capture_check: "截图自检没通过",
-    backend_cause_app_index: "这台没有设定 MuMu 应用编号",
+    backend_cause_app_index: "没取到这台的 MuMu 应用编号",
+    backend_app_not_installed: "这台没装配置的游戏包",
+    backend_app_not_running: "游戏没在跑，先启动游戏",
+    backend_app_info_unavailable: "MuMu 管理器没回答游戏在不在跑",
+    backend_app_info_malformed: "MuMu 管理器回答的游戏状态读不懂",
     backend_why_app_not_running: "游戏没在运行",
     backend_why_unreachable: "连不上模拟器",
     backend_why_other: "其他原因",
@@ -2162,6 +2176,7 @@ pub const EN: Labels = Labels {
     backend_rereading: "Reading what holds now; no change until then",
     backend_said: "Device backends of {}: {}",
     backend_switched: "Switched: the device reconnected and passed its self-check on the new backends",
+    backend_back_to_file: "Back to the file's value",
     backend_kind_unsupported: "This device has no such backend; nothing changed",
     backend_pair_required: "MuMu native touch needs MuMu native capture; nothing changed",
     backend_not_alone: "The console made a wrong request that mixed in other settings; nothing changed. See the technical log",
@@ -2196,7 +2211,11 @@ pub const EN: Labels = Labels {
     backend_cause_nemu_open: "the MuMu native connection did not open",
     backend_cause_touch_check: "the touch self-check failed",
     backend_cause_capture_check: "the capture self-check failed",
-    backend_cause_app_index: "no MuMu app index is set for this device",
+    backend_cause_app_index: "no MuMu app index was found for this device",
+    backend_app_not_installed: "the game package configured for this device is not installed",
+    backend_app_not_running: "the game is not running; start the game first",
+    backend_app_info_unavailable: "MuMu Manager did not say whether the game is running",
+    backend_app_info_malformed: "MuMu Manager's answer about the game could not be read",
     backend_why_app_not_running: "the game is not running",
     backend_why_unreachable: "the emulator could not be reached",
     backend_why_other: "another reason",

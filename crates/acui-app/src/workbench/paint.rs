@@ -15,8 +15,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use acui_rows::outcome::explain;
 use acui_rows::{format_minute, format_second};
 use acui_source::workbench::backends::{
-    unnamed_backend_words, BackendRefusal, BackendRow, BackendWhy, CaptureCause, CheckStatus,
-    FailedStep, Holder, InEffect, InstanceBackends, OpenFailure, SwitchRefusal, SwitchVersion,
+    unnamed_backend_words, AppIndexProblem, BackendRefusal, BackendRow, BackendWhy, CaptureCause,
+    CheckStatus, FailedStep, Holder, InEffect, InstanceBackends, OpenFailure, SwitchRefusal,
+    SwitchVersion,
 };
 use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::{
@@ -1271,6 +1272,8 @@ fn switch_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, boo
     match said {
         Said::Sending(_) => (labels.backend_switching.to_owned(), false),
         Said::ConfigApplied => (labels.backend_switched.to_owned(), false),
+        // Whether the device switched or, the file's value being the one in effect, did not.
+        Said::BackToFile => (labels.backend_back_to_file.to_owned(), false),
         Said::ConfigRefused(RefusalWhy::Value { problem: ValueProblem::OutOfRange, .. }) => {
             (labels.backend_out_of_range.to_owned(), true)
         }
@@ -1338,6 +1341,8 @@ fn said_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, bool)
         }
         Said::Restarted => (labels.write_restarted.to_owned(), false),
         Said::ConfigApplied => (labels.config_applied.to_owned(), false),
+        // Only the backends' line says it (`switch_text`).
+        Said::BackToFile => (labels.backend_back_to_file.to_owned(), false),
         Said::ConfigRefused(why) => (refusal_text(labels, why), true),
         Said::PresetGone => (labels.preset_gone.to_owned(), true),
         Said::Rereading(Reread::Conflict) => (labels.config_conflict_rereading.to_owned(), false),
@@ -1446,9 +1451,23 @@ fn cause_or_unknown(labels: &Labels, failure: Option<&OpenFailure>) -> String {
 }
 
 /// Why backends did not open: the step that failed, why a capture did not open when that is
-/// said, and that the device has no MuMu app index when that is under it. A step that is none
-/// of the self-check's own takes its code's category words, as any refusal's.
+/// said, and that MuMu's own pair found no MuMu app index when that is under it. A step that is
+/// none of the self-check's own takes its code's category words, as any refusal's. Why the app
+/// index was not found (#402 HS-3), when the Runtime says so in a word known here, says all: the
+/// pair's step and its capture's cause, which then names none, add nothing to it.
 fn cause_text(labels: &Labels, failure: &OpenFailure) -> String {
+    let app_index = failure.app_index.as_ref().map(|problem| match problem {
+        AppIndexProblem::PackageNotInstalled => Some(labels.backend_app_not_installed),
+        AppIndexProblem::ApplicationNotRunning => Some(labels.backend_app_not_running),
+        AppIndexProblem::InfoUnavailable => Some(labels.backend_app_info_unavailable),
+        AppIndexProblem::InfoMalformed => Some(labels.backend_app_info_malformed),
+        // No problem said, or one without words here: the log has it, with the receipt's whole
+        // outcome.
+        AppIndexProblem::Other(_) => None,
+    });
+    if let Some(Some(words)) = app_index {
+        return words.to_owned();
+    }
     let step = match &failure.step {
         FailedStep::TouchOpen => labels.backend_cause_touch_open.to_owned(),
         FailedStep::CaptureOpen => labels.backend_cause_capture_open.to_owned(),
@@ -1471,7 +1490,7 @@ fn cause_text(labels: &Labels, failure: &OpenFailure) -> String {
             fill(labels.backend_paren, &[&step, why])
         }
     };
-    if failure.app_index_missing {
+    if app_index.is_some() {
         [with_why.as_str(), labels.backend_cause_app_index].join(labels.backend_cause_join)
     } else {
         with_why

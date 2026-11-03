@@ -417,10 +417,12 @@ once if it is free (waiting at most 3 seconds): it reconnects and self-checks on
 takes up to about 65 seconds, and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
-switch too (both rows together when clearing one alone could break that pair). The result has a line of
-its own under the top bar, naming the account, and a refusal says why in words: the device is busy (with
-what), played, fenced, not running, or the new backend did not open (and why) and the previous one is
-back or did not come back either. Nothing is sent again by itself: when a switch's result is unknown the
+switch too (both rows together when clearing one alone could break that pair), unless the file's value is
+the one in effect: then the device is left as it is, and the line says only that the file's value is back.
+The result has a line of its own under the top bar, naming the account, and a refusal says why in words:
+the device is busy (with what), played, fenced, not running, or the new backend did not open (and why: for
+MuMu native touch, say, the game package configured for the device is not installed, or the game is not
+running) and the previous one is back or did not come back either. Nothing is sent again by itself: when a switch's result is unknown the
 console waits until the Runtime shows the device no longer switching, then says what holds now, with the
 device's self-check. A Runtime before 0.12.39 has no such settings, and then no group shows. After every start of the Runtime its start report is read once: when an update
 or a rollback reset settings changed online, the line under the top bar and the settings page say which;

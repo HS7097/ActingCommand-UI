@@ -75,8 +75,9 @@ const SELFCHECK_SELECTED: &str = "selected";
 /// What a refusal of a change of an instance's backends says. The value problems are the key
 /// table's; the host's code of a switch it refused and its problems are runtime-host's
 /// (`backend_switch_refused`, vocabulary `backend_switch_problem`), as are the code of a missing
-/// MuMu app index and the causes of a failed capture open (vocabulary `capture_open_cause`): all
-/// of crates the console does not link, spelled as the outcome catalog has them.
+/// MuMu app index with why it is missing (vocabulary `nemu_app_index_problem`, #402 HS-3) and the
+/// causes of a failed capture open (vocabulary `capture_open_cause`): all of crates the console
+/// does not link, spelled as the outcome catalog has them.
 const KIND_UNSUPPORTED: &str = ConfigValueProblem::BackendKindUnsupported.as_str();
 const PAIR_REQUIRED: &str = ConfigValueProblem::BackendPairRequired.as_str();
 const NOT_ALONE: &str = ConfigValueProblem::BackendSwitchNotAlone.as_str();
@@ -100,6 +101,11 @@ const CAPTURE_OPEN_CAUSE: &str = "capture_open_cause";
 const DISPLAY_MISSING: &str = "display_missing";
 const CONNECTION_FAILED: &str = "connection_failed";
 const NEMU_APP_INDEX_MISSING: &str = "nemu_app_index_missing";
+const NEMU_APP_INDEX_PROBLEM: &str = "nemu_app_index_problem";
+const PACKAGE_NOT_INSTALLED: &str = "package_not_installed";
+const APPLICATION_NOT_RUNNING: &str = "application_not_running";
+const INFO_UNAVAILABLE: &str = "info_unavailable";
+const INFO_MALFORMED: &str = "info_malformed";
 const CAUSED_BY: &str = CauseRelation::CausedBy.as_str();
 const NOTE: &str = CauseRelation::Note.as_str();
 
@@ -393,7 +399,8 @@ pub enum BackendChange<T> {
     Keep,
     To(T),
     /// Back to the configuration file's value: the online one is dropped, which switches the
-    /// device as well.
+    /// device as well unless the file's value is the one in effect (the Runtime then takes the
+    /// change without a switch).
     BackToFile,
 }
 
@@ -895,8 +902,26 @@ pub struct OpenFailure {
     pub step: FailedStep,
     /// Why a capture open, or MuMu's own pair's, failed (`capture_open_cause`).
     pub capture: Option<CaptureCause>,
-    /// `nemu_app_index_missing` anywhere under it: the device's entry names no MuMu app index.
-    pub app_index_missing: bool,
+    /// `nemu_app_index_missing` anywhere under it: MuMu's own pair found no MuMu app index to
+    /// open with, and why, as its `nemu_app_index_problem` says.
+    pub app_index: Option<AppIndexProblem>,
+}
+
+/// Why MuMu's own pair found no MuMu app index (#402 HS-3, vocabulary `nemu_app_index_problem`):
+/// the configuration names none, and the Runtime asked MuMuManager whether the device's game runs
+/// before it opened the pair. A switch it refuses for that leaves the previous backends back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppIndexProblem {
+    /// `package_not_installed`: the game package configured for the device is not installed on it.
+    PackageNotInstalled,
+    /// `application_not_running`: the game is installed and not running.
+    ApplicationNotRunning,
+    /// `info_unavailable`: MuMuManager gave no answer.
+    InfoUnavailable,
+    /// `info_malformed`: MuMuManager answered something that does not read.
+    InfoMalformed,
+    /// A problem this file does not know, as the wire spells it, empty when there is none.
+    Other(String),
 }
 
 /// The step of a device's preparation that failed: the self-check's own failures, the first
@@ -1027,15 +1052,19 @@ fn found<'a>(outcome: &'a Outcome, wanted: &dyn Fn(&Outcome) -> bool) -> Option<
     links(outcome, CAUSED_BY).find_map(|cause| found(cause, wanted))
 }
 
-/// Whether `code` is `outcome`'s or any linked outcome's, by any relation.
-fn anywhere(outcome: &Outcome, code: &str) -> bool {
-    outcome.code().as_str() == code
-        || outcome.causes().iter().any(|link| anywhere(link.outcome(), code))
+/// The first of `outcome` and the outcomes it links, by any relation, depth first, whose code is
+/// `code`.
+fn anywhere<'a>(outcome: &'a Outcome, code: &str) -> Option<&'a Outcome> {
+    if outcome.code().as_str() == code {
+        return Some(outcome);
+    }
+    outcome.causes().iter().find_map(|link| anywhere(link.outcome(), code))
 }
 
 /// One failure of backends to open: its failing step, the first of the self-check's own found
 /// down its causes, else its own code; why the capture did not open, of that step or else the
-/// first cause that says; and whether a missing MuMu app index is anywhere under it.
+/// first cause that says; and why a missing MuMu app index is missing, when one is anywhere under
+/// it.
 fn open_failure(failure: &Outcome) -> OpenFailure {
     let step_of =
         found(failure, &|outcome: &Outcome| failed_step(outcome.code().as_str()).is_some());
@@ -1046,7 +1075,22 @@ fn open_failure(failure: &Outcome) -> OpenFailure {
         found(failure, &|outcome: &Outcome| outcome.value(CAPTURE_OPEN_CAUSE).is_some())
             .and_then(capture_cause)
     });
-    OpenFailure { step, capture, app_index_missing: anywhere(failure, NEMU_APP_INDEX_MISSING) }
+    let app_index = anywhere(failure, NEMU_APP_INDEX_MISSING).map(app_index_problem);
+    OpenFailure { step, capture, app_index }
+}
+
+fn app_index_problem(missing: &Outcome) -> AppIndexProblem {
+    let word = missing
+        .value(NEMU_APP_INDEX_PROBLEM)
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    match word {
+        PACKAGE_NOT_INSTALLED => AppIndexProblem::PackageNotInstalled,
+        APPLICATION_NOT_RUNNING => AppIndexProblem::ApplicationNotRunning,
+        INFO_UNAVAILABLE => AppIndexProblem::InfoUnavailable,
+        INFO_MALFORMED => AppIndexProblem::InfoMalformed,
+        other => AppIndexProblem::Other(other.to_owned()),
+    }
 }
 
 fn failed_step(code: &str) -> Option<FailedStep> {
