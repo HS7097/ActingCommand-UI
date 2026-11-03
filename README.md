@@ -184,17 +184,20 @@ now. A time span read follows the cursor for at most 64 pages; with still no eve
 `console_time_span_page_limit`, rather than keep the window reading.
 
 Dependencies are pinned to one exact Runtime source (`Cargo.toml`): a merge commit on the Runtime's main
-branch, not a release tag. It is Runtime v0.12.38 with Workflow #402 HS-1, HS-2 and HS-4 on top (each device
+branch, not a release tag. It is Runtime v0.12.38 with Workflow #402 HS-1 to HS-4 on top (each device
 instance's touch and capture backends are settings, and a change switches the device while the Runtime runs;
-Nemu touch gains reset, long tap and swipe) and #433 RH-1 (a request's own recovery package is judged as the
-return-home package is); 0.12.39, which will carry them, is not released yet. v0.12.38 itself answers a frame
-read's artifact lookups from its reader pool off the ledger writer (#422 RA-1), has Workflow #432 AGT-1b's
+Nemu touch gains reset, long tap and swipe; without a `nemu_app_index` in the file, Nemu touch asks MuMuManager
+once whether the game runs, and a switch to it is refused, the previous backends back, when the game is not
+installed or not running), #433 RH-1 (a request's own recovery package is judged as the return-home package
+is), and Workflow #429 BX-1 (a quiet-time entry's parser and shape for clients) and R-3 (each instance's
+`start_emulator` settable while the Runtime runs); 0.12.39, which will carry them, is not released yet.
+v0.12.38 itself answers a frame read's artifact lookups from its reader pool off the ledger writer (#422 RA-1), has Workflow #432 AGT-1b's
 optional status member `agent_wake`, which the console reads and does not show, on top of #429 R-0b, R-4, R-11,
 R-7a and 114-A, and keeps v0.12.32's bounded offline opening. It speaks the 0.12 protocols (`runtime-client`
 revision 5, ledger revision 5):
 
 ```
-rev = "e7e9a48eb794a6f03a8a0a73968d0e3ebb424044"
+rev = "9cf1ce5ee447b8a432b900aa31b0e5c584a6764c"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.

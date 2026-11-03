@@ -133,15 +133,18 @@ Runtime 在运行，就给出「重新打开」并写明可以改为在线读取
 读取跟着游标最多 64 页，仍没有读到事件就停下并报 `console_time_span_page_limit`，不让窗口一直读下去。
 
 依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`）：Runtime main 分支上的一个合并提交，不是发版标签。
-它是 Runtime v0.12.38 再加 Workflow #402 HS-1、HS-2、HS-4（每台设备实例的触控后端和截图后端成为设置，
-Runtime 运行中改了就切换设备；Nemu 触控新增复位、长按和滑动）和 #433 RH-1（请求自带的恢复包按回家包的
-同一规则判定）；带上它们的 0.12.39 还没发布。v0.12.38 本身：读帧的账本查找改由读者池在写线程外回答
+它是 Runtime v0.12.38 再加 Workflow #402 HS-1 到 HS-4（每台设备实例的触控后端和截图后端成为设置，
+Runtime 运行中改了就切换设备；Nemu 触控新增复位、长按和滑动；文件没写 `nemu_app_index` 时，Nemu 触控先问
+一次 MuMuManager 游戏在不在跑，游戏没装或没在跑就拒绝切换、换回原来的后端）、#433 RH-1（请求自带的恢复包
+按回家包的同一规则判定），以及 Workflow #429 BX-1（给客户端用的免打扰条目解析和形状）和 R-3（每台实例的
+`start_emulator` 可在 Runtime 运行中改）；带上它们的 0.12.39 还没发布。
+v0.12.38 本身：读帧的账本查找改由读者池在写线程外回答
 （#422 RA-1）；含 Workflow #432 AGT-1b 给 Status 加的可选成员 `agent_wake`，控制台读得上、不显示；建在
 #429 R-0b、R-4、R-11、R-7a、114-A 之上；v0.12.32 的有界离线打开照旧。说 0.12 协议（`runtime-client`
 修订 5、账本修订 5）：
 
 ```
-rev = "e7e9a48eb794a6f03a8a0a73968d0e3ebb424044"
+rev = "9cf1ce5ee447b8a432b900aa31b0e5c584a6764c"
 ```
 
 六个 crate（contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
