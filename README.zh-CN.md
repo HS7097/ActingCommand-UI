@@ -276,7 +276,7 @@ CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译
 ## 运行
 
 ```
-acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--lang <zh|en>]
+acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--account <alias>] [--lang <zh|en>]
 acui --help
 ```
 
@@ -306,7 +306,7 @@ Runtime 重启过就等下次进设置页再读。它和安装向导的「开机
 `<安装根>\ui\acui.exe` 启动时，状态根、配置与 Runtime 程序改取自安装的选择，`--state-root` 与之不同就拒绝
 （同样写在红条里）。`--source` 选账本窗口的读面（见上）。`--tab` 指定账本窗口的启动页签（截图与复核用），
 取值就是视图自己的 wire 名。`--page` 同类：只决定开窗时工作台显示哪一页，`main` 是主页（默认），`settings`
-是设置页（截图用）。`--lang` 只对**这一次运行**有效，覆盖设置文件里的语言，不写回设置文件。
+是设置页（截图用）。`--account` 也同类：开窗时选中哪张账号卡（不给时选第一张；列出的账号里没有这个别名时也选第一张，并写进技术日志）。`--lang` 只对**这一次运行**有效，覆盖设置文件里的语言，不写回设置文件。
 
 直接启动 `acui.exe`（或直接指向它的快捷方式）不再带黑色控制台窗口；从命令行启动时，`--help` 与启动
 失败的原因照旧印在那个控制台上。经固定入口 `acforward.exe` 启动目前仍会有控制台窗口。
@@ -386,6 +386,9 @@ theme = "flat"
 state_root = '<install root>\state'
 actingd_config = '<install root>\actingd.config.json'
 actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'
+# 可选，整数秒 2–60（缺省、越界、写错都用 5）：实时画面跟任务时，最快多久读一张帧。
+# 读帧由 Runtime 的读者池回答，不占账本写线程（v0.12.38）；默认 5；C7 联验实测前别调快。
+preview_frame_gap_seconds = 5
 ```
 
 开台时读一次；下拉框一改，就只写这一个键：先重读文件，换掉这个键的最后一行（没有就追加一行），其余
@@ -794,7 +797,7 @@ Runtime 的看门狗是一个计划任务，所以 acsetup 不替人设置。要
 
 ## 四层四 crate
 
-同一个 Cargo workspace，依赖方向 app → model → rows ← source：
+同一个 Cargo workspace，依赖方向 app → model → rows ← source；另有 source → model，只为实时画面和账本窗口共用的那一个帧分组函数：
 
 - `acui-rows`：唯一为视图模型命名契约类型的地方；再导出契约类型，外加显示用函数、显示名
   字典，与两个由 `acui-source` 填、`acui-model` 读的平铺结构。

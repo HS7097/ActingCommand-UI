@@ -9,6 +9,9 @@
 //! `fault` and `held` are not colours of a card yet: nothing the reads carry says a
 //! self-check failed or an emulator closed unexpectedly, and a player's hold is
 //! UI-3d's. So a card is green, amber or grey.
+//!
+//! Whether a card is the one picked, whose picture the right column shows, is no read's:
+//! the caller says (`picture`).
 
 use std::collections::BTreeMap;
 
@@ -26,11 +29,17 @@ pub struct CardView {
     /// Runtime answers about.
     pub game: Option<String>,
     /// The server its last admitted package declared, as it wrote it, when the newest
-    /// fact snapshot has one.
+    /// fact snapshot has one; else the one a snapshot of this owner epoch last had, if any
+    /// did (`server_last_seen`).
     pub server: Option<String>,
+    /// `server` is not the newest snapshot's but remembered from an earlier one of this
+    /// owner epoch: the card says so after it.
+    pub server_last_seen: bool,
     pub band: Band,
     pub main: Line,
     pub notes: Vec<Line>,
+    /// Its picture is the one the right column shows.
+    pub selected: bool,
 }
 
 /// The colour of a card's band.
@@ -197,33 +206,40 @@ pub enum Line {
 
 /// An account no Runtime answers about now: grey, with nothing an earlier answer
 /// said.
-pub fn down_view(alias: &str, down: Down) -> CardView {
+pub fn down_view(alias: &str, down: Down, selected: bool) -> CardView {
     CardView {
         alias: alias.to_owned(),
         game: None,
         server: None,
+        server_last_seen: false,
         band: Band::Offline,
         main: Line::Down(down),
         notes: Vec::new(),
+        selected,
     }
 }
 
-/// An account of the newest `Status`, its server in the newest fact snapshot, that
-/// read's global pause, and what the schedule explanation reads leave.
+/// An account of the newest `Status`, its server in the newest fact snapshot or, when that
+/// names none, the one last seen this owner epoch (`server_last_seen`), that read's global
+/// pause, and what the schedule explanation reads leave.
 pub fn card_view(
     instance: &InstanceLive,
     server: Option<&str>,
+    server_last_seen: bool,
     global: Option<&PauseFact>,
     schedule: Schedule<'_>,
+    selected: bool,
 ) -> CardView {
     let (band, main, notes) = said(instance, global, schedule);
     CardView {
         alias: instance.alias.clone(),
         game: instance.game_id.clone(),
         server: server.map(str::to_owned),
+        server_last_seen,
         band,
         main,
         notes,
+        selected,
     }
 }
 

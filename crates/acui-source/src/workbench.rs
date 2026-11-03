@@ -12,9 +12,12 @@
 //!
 //! Lanes ask only what is answered from memory or takes no ledger record:
 //! `Status`, `ScheduleExplanation` without its candidate rows, `RuntimeFactSnapshot`
-//! and `StartReport`. How often is the caller's, too: a lane keeps no clock, and
-//! asks again by itself in one case only, a slow read on a connection that turns out
-//! to have ended (`ReadLane::asked_once_more`).
+//! and `StartReport`. The picture's lane ([`preview::PreviewLane`], UI-3c) is the one
+//! exception: it reads ledger pages, which take no record either but are read from the
+//! ledger, and frames' material, whose read takes no record when it succeeds or finds the
+//! file gone, and one for any other failure. How often is the caller's, too: a lane keeps
+//! no clock, and asks again by itself in one case only, a read on a connection that turns
+//! out to have ended (`ReadLane::asked_once_more`; the picture lane's pages likewise).
 //!
 //! The configuration's key table, the console's tiers of its keys and the performance
 //! presets are the Runtime's, read through its crate and only here: which preset is in
@@ -43,7 +46,8 @@ use acui_rows::{code, EventActor, EventSource};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     config_parameters_fact_key, ConfigParameter, ConfigParameterSource, ConfigSettingChange,
-    FactScalar, FactValue, InstanceActivity, InstanceActivityKind, OwnerEpoch, RuntimeControlPlaneStatus,
+    FactScalar, FactValue, InstanceActivity, InstanceActivityKind, InstanceId, OwnerEpoch,
+    RuntimeControlPlaneStatus,
     RuntimeErrorCode, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
     RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation, RuntimeStartReport,
     ScheduleDispatchState,
@@ -68,6 +72,8 @@ use super::{
     global_pause_fact, instance_pause_fact, ClientFailure, OnlineSource, PauseFact,
     RUNTIME_RESULT_UNEXPECTED,
 };
+
+pub mod preview;
 
 /// The reason this console's "pause all" gives, a free name of the pause, no outcome
 /// code. A pause of this reason is one a person pressed here, so lifting it asks for
@@ -262,21 +268,49 @@ const RUNTIME_SILENT_CODES: &[&str] = &[
     "runtime_owner_epoch_changed",
 ];
 
-/// Of the Runtime's own refusals only `runtime_unavailable` passes, and only when
-/// the host has not halted: a halted host keeps the code of what halted it, which
-/// may be this one, and says so by the refusal being fatal. `ClientFailure` does
-/// not carry that, so this looks at the client's error.
 fn live_failure(error: RuntimeClientError) -> LiveRead {
-    let unavailable = error.projection().is_some_and(|refusal| {
-        refusal.code == RuntimeErrorCode::RuntimeUnavailable && !refusal.fatal
-    });
-    let failure = ClientFailure::from(error);
-    if unavailable || RUNTIME_SILENT_CODES.contains(&failure.code) {
-        LiveRead::NoAnswer(failure)
-    } else if RUNTIME_ABSENT_CODES.contains(&failure.code) {
-        LiveRead::NotConnected(failure)
-    } else {
-        LiveRead::Trouble(failure)
+    match Unreached::of(error) {
+        Unreached::NotConnected(failure) => LiveRead::NotConnected(failure),
+        Unreached::NoAnswer(failure) => LiveRead::NoAnswer(failure),
+        Unreached::Trouble(failure) => LiveRead::Trouble(failure),
+    }
+}
+
+/// A read that did not come back, told apart as a failed `Status` is: see
+/// [`LiveRead`] for each. The picture's reads ([`preview::PreviewLane`]) fail so.
+#[derive(Debug, Clone)]
+pub enum Unreached {
+    NotConnected(ClientFailure),
+    NoAnswer(ClientFailure),
+    Trouble(ClientFailure),
+}
+
+impl Unreached {
+    /// Of the Runtime's own refusals only `runtime_unavailable` passes, and only when
+    /// the host has not halted: a halted host keeps the code of what halted it, which
+    /// may be this one, and says so by the refusal being fatal. `ClientFailure` does
+    /// not carry that, so this looks at the client's error.
+    fn of(error: RuntimeClientError) -> Self {
+        let unavailable = error.projection().is_some_and(|refusal| {
+            refusal.code == RuntimeErrorCode::RuntimeUnavailable && !refusal.fatal
+        });
+        let failure = ClientFailure::from(error);
+        if unavailable || RUNTIME_SILENT_CODES.contains(&failure.code) {
+            Self::NoAnswer(failure)
+        } else if RUNTIME_ABSENT_CODES.contains(&failure.code) {
+            Self::NotConnected(failure)
+        } else {
+            Self::Trouble(failure)
+        }
+    }
+
+    /// The client's failure, whichever it is: for the log.
+    pub fn failure(&self) -> &ClientFailure {
+        match self {
+            Self::NotConnected(failure) | Self::NoAnswer(failure) | Self::Trouble(failure) => {
+                failure
+            }
+        }
     }
 }
 
@@ -590,6 +624,11 @@ pub struct LiveSnapshot {
     pub epoch: String,
     pub global_pause: Option<PauseFact>,
     pub instances: Vec<InstanceLive>,
+    /// The ledger's committed head when the Runtime sampled the status
+    /// (`ledger_committed_head`, 0 for an empty ledger): where the picture's lookup
+    /// starts down from. Absent when the status states no source; asking it is then
+    /// the picture lane's (`PreviewLane::head`).
+    pub ledger_head: Option<u64>,
 }
 
 /// One registered instance as that `Status` reported it.
@@ -597,6 +636,10 @@ pub struct LiveSnapshot {
 pub struct InstanceLive {
     pub alias: String,
     pub instance_id: String,
+    /// The same id in the wire's own type, which nothing outside this crate reads:
+    /// what the picture's pages ask by ([`preview::PreviewLane`]). The contract gives
+    /// the id no reading from text, so it is kept as the status gave it.
+    pub key: InstanceKey,
     /// Absent when the host runs without policy inputs.
     pub game_id: Option<String>,
     pub pause: Option<PauseFact>,
@@ -607,6 +650,10 @@ pub struct InstanceLive {
     /// Runtime before 0.12.36: not an error.
     pub activity: Option<ActivityFact>,
 }
+
+/// An instance's id as the wire types it, opaque outside this crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstanceKey(InstanceId);
 
 /// An instance's resource fence: the code of the failure behind it, and whether it
 /// now waits for a person.
@@ -1285,6 +1332,7 @@ fn live_snapshot(pid: u32, epoch: String, status: &RuntimeControlPlaneStatus) ->
             .iter()
             .map(|instance| instance_live(instance, owner_epoch))
             .collect(),
+        ledger_head: status.source().map(|source| source.ledger_committed_head),
     }
 }
 
@@ -1293,6 +1341,7 @@ fn instance_live(instance: &RuntimeInstanceStatus, owner_epoch: OwnerEpoch) -> I
     InstanceLive {
         alias: alias.to_string(),
         instance_id: code(&instance.instance_id()),
+        key: InstanceKey(instance.instance_id()),
         game_id: instance.game_id().map(str::to_owned),
         pause: instance.pause().map(|pause| instance_pause_fact(alias, pause, owner_epoch)),
         fence: instance.resource_fence().map(|fence| FenceFact {

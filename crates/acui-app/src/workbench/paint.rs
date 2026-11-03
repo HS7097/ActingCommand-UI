@@ -6,24 +6,28 @@
 //! stepper under it, from their views; which page shows; the settings page's rows of
 //! the Runtime's settings, the same way as the cards, with the field of the evidence days
 //! among them; what the start report says of the settings; and whether the Runtime is started
-//! again when it is gone.
+//! again when it is gone. And the right column's live view, from its view, the frame's pixels
+//! once when it lands.
 
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use acui_rows::format_minute;
 use acui_rows::outcome::explain;
+use acui_rows::{format_minute, format_second};
+use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::{
     PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
     SettingValue, ValueProblem, CONSOLE_PAUSE_ALL, MODE_FULL, MODE_OBSERVE, MODE_PACE,
 };
-use slint::{Model as _, ModelRc, VecModel};
+use slint::{Image, Model as _, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
 use super::actions::{
     ActionsView, EvidenceView, Field, PresetState, PresetView, Reread, ResumeEntry, Said,
     StepperView, Write, PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
 };
 use super::card::{Band, CardView, Down, Line, ReasonClass};
-use super::model::Page;
+use super::model::{Fault, Page};
+use super::picture::{DimWhy, EmptyWhy, Offline, Origin, OverlayView, PictureView, Unread};
+use super::preview;
 use super::settings::{
     self, AutostartView, ReportedAccount, ReportedLine, SettingLine, SettingsView, StartView,
 };
@@ -32,10 +36,15 @@ use crate::ledger::resume::Lifter;
 use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
-use crate::{AccountCard, PresetChoice, SettingItem, StatusTone, WorkbenchPage, WorkbenchWindow};
+use crate::{
+    AccountCard, OverlayItem, PresetChoice, SettingItem, StatusTone, TargetItem, WorkbenchPage,
+    WorkbenchWindow,
+};
 
 /// What the technical log's lines about the settings page are under.
 const SETTINGS_LOG: &str = "acui-settings";
+/// And those about the live view.
+const PICTURE_LOG: &str = preview::THREAD;
 
 /// Which page shows.
 pub fn page(ui: &Ui) {
@@ -66,6 +75,264 @@ pub fn cards(ui: &Ui) {
     let views = ui.model.borrow().cards(Instant::now());
     let cards = views.iter().map(|view| account_card(ui, labels, view)).collect();
     sync(window.get_account_cards(), cards, |rows| window.set_account_cards(rows));
+}
+
+/// The right column's live view: whose picture it is, beside the title; the frame, with when
+/// it was captured on its corner, why it is dimmed across its top, and what took it under it;
+/// or what it says while no frame shows, red when that is a failure. The frame's pixels are
+/// the window's from when it landed (`picture_pixels`), let go here once no frame shows. On
+/// a task's frame, unless turned off, the boxes its recognition evaluated and the points its
+/// inputs were meant at, which the box beside the title turns off and on; under the frame in
+/// amber why nothing is drawn on it, and that its proportions are not among those its game's
+/// standard pack declares.
+pub fn picture(ui: &Ui) {
+    let Some(window) = ui.workbench() else {
+        return;
+    };
+    let labels = ui.labels();
+    let (account, view, overlays_on) = {
+        let model = ui.model.borrow();
+        let account = model.picture_account().map(str::to_owned).unwrap_or_default();
+        (account, model.picture_view(now_ms()), model.pictures().overlays_on())
+    };
+    window.set_picture_account(account.into());
+    window.set_picture_withdrawn(matches!(view, PictureView::Withdrawn));
+    if window.get_picture_overlays_on() != overlays_on {
+        window.set_picture_overlays_on(overlays_on);
+    }
+    let (empty, empty_failed) = match &view {
+        PictureView::NoAccount => (labels.picture_no_account.to_owned(), false),
+        // UI-3d says why it was taken down.
+        PictureView::Withdrawn | PictureView::Frame { .. } => (String::new(), false),
+        PictureView::Empty { why } => empty_text(labels, why),
+    };
+    window.set_picture_empty(empty.into());
+    window.set_picture_empty_failed(empty_failed);
+    let PictureView::Frame { captured_at_ms, age, origin, dim, overlay, aspect } = &view else {
+        if window.get_picture_ready() {
+            window.set_picture_ready(false);
+            window.set_picture_image(Image::default());
+        }
+        window.set_picture_corner(SharedString::new());
+        window.set_picture_corner_warn(false);
+        window.set_picture_dimmed(false);
+        window.set_picture_banner(SharedString::new());
+        window.set_picture_origin(SharedString::new());
+        picture_overlay(&window, None);
+        window.set_picture_overlays_offered(false);
+        window.set_picture_hint(SharedString::new());
+        return;
+    };
+    let at = format_second(*captured_at_ms);
+    let (corner, warn) = corner_text(labels, &at, *age);
+    let banner = dim.as_ref().map_or_else(String::new, |dim| dim_text(ui, labels, dim, &at));
+    let origin_text = match origin {
+        Origin::Task => labels.picture_from_task,
+        Origin::Observation => labels.picture_from_observation,
+    };
+    window.set_picture_corner(corner.into());
+    window.set_picture_corner_warn(warn);
+    window.set_picture_dimmed(dim.is_some());
+    window.set_picture_banner(banner.into());
+    window.set_picture_origin(origin_text.into());
+    let drawn = match overlay {
+        OverlayView::Shown(overlay) => Some(overlay),
+        OverlayView::Off | OverlayView::NotOnThisFrame | OverlayView::Mismatch => None,
+    };
+    picture_overlay(&window, drawn);
+    // Nothing is recognized on an observation's frame: the box has nothing to turn on.
+    window.set_picture_overlays_offered(*origin == Origin::Task);
+    let mut hint = Vec::new();
+    match overlay {
+        // A task's frame whose recognition is not recorded yet says so. An observation's
+        // never has any: its greyed box and the source line say that already, and an amber
+        // line under every observed frame would read as something wrong.
+        OverlayView::NotOnThisFrame if *origin == Origin::Task => {
+            hint.push(labels.picture_marks_none.to_owned());
+        }
+        OverlayView::NotOnThisFrame => {}
+        OverlayView::Mismatch => hint.push(labels.picture_marks_mismatch.to_owned()),
+        OverlayView::Off | OverlayView::Shown(_) => {}
+    }
+    if let Some((width, height)) = aspect {
+        hint.push(fill(labels.picture_aspect_undeclared, &[&format!("{width}:{height}")]));
+    }
+    window.set_picture_hint(hint.join("\n").into());
+    window.set_picture_ready(true);
+}
+
+/// What is drawn on the frame: its targets' boxes, without words, and its inputs' points as
+/// tap marks; nothing with no `overlay`. The rows change only where they differ.
+fn picture_overlay(window: &WorkbenchWindow, overlay: Option<&Overlay>) {
+    let (targets, points): (Vec<TargetItem>, Vec<OverlayItem>) = match overlay {
+        Some(overlay) => (
+            overlay
+                .boxes
+                .iter()
+                .map(|target| TargetItem {
+                    label: SharedString::new(),
+                    x: target.x,
+                    y: target.y,
+                    width: target.width,
+                    height: target.height,
+                    passed: target.passed,
+                })
+                .collect(),
+            overlay
+                .points
+                .iter()
+                .map(|&(x, y)| OverlayItem {
+                    kind: SharedString::new(),
+                    x,
+                    y,
+                    width: 0.0,
+                    height: 0.0,
+                    point: true,
+                    mark: true,
+                })
+                .collect(),
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
+    window.set_picture_overlay_shown(overlay.is_some());
+    sync(window.get_picture_targets(), targets, |rows| window.set_picture_targets(rows));
+    sync(window.get_picture_points(), points, |rows| window.set_picture_points(rows));
+}
+
+/// A frame that landed, into the window: its pixels, decoded off the event loop, and its
+/// size, which the frame keeps its proportions by.
+pub fn picture_pixels(ui: &Ui, pixels: SharedPixelBuffer<Rgba8Pixel>) {
+    let Some(window) = ui.workbench() else {
+        return;
+    };
+    let (width, height) = (pixels.width(), pixels.height());
+    window.set_picture_image(Image::from_rgba8(pixels));
+    window.set_picture_width(width as f32);
+    window.set_picture_height(height as f32);
+}
+
+/// Every second the main page shows: the frame's corner says how old it is once it is an old
+/// picture. Set only when its words change.
+pub fn picture_age(ui: &Ui) {
+    let Some(window) = ui.workbench() else {
+        return;
+    };
+    let view = {
+        let model = ui.model.borrow();
+        if model.page() != Page::Main {
+            return;
+        }
+        model.picture_view(now_ms())
+    };
+    let PictureView::Frame { captured_at_ms, age, .. } = view else {
+        return;
+    };
+    let (corner, warn) = corner_text(ui.labels(), &format_second(captured_at_ms), age);
+    if window.get_picture_corner() != corner.as_str() {
+        window.set_picture_corner(corner.into());
+    }
+    if window.get_picture_corner_warn() != warn {
+        window.set_picture_corner_warn(warn);
+    }
+}
+
+/// Now, in the milliseconds a frame's capture is stated in.
+fn now_ms() -> u64 {
+    let since = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The frame's corner: when it was captured, or, once it is an old picture, how long ago, in
+/// amber. Never a count of anything.
+fn corner_text(labels: &Labels, at: &str, age: Option<u64>) -> (String, bool) {
+    let Some(seconds) = age else {
+        return (fill(labels.picture_captured, &[at]), false);
+    };
+    let minutes = seconds / 60;
+    let text = match minutes {
+        0 => labels.picture_old_half.to_owned(),
+        1..=59 => fill(labels.picture_old_minutes, &[&minutes.to_string()]),
+        60..=1439 => fill(labels.picture_old_hours, &[&(minutes / 60).to_string()]),
+        _ => fill(labels.picture_old_days, &[&(minutes / 1440).to_string()]),
+    };
+    (text, true)
+}
+
+/// Why no frame shows, and whether that is a failure.
+fn empty_text(labels: &Labels, why: &EmptyWhy) -> (String, bool) {
+    match why {
+        EmptyWhy::Looking => (labels.picture_looking.to_owned(), false),
+        EmptyWhy::NoneRecent => (labels.picture_none_recent.to_owned(), false),
+        EmptyWhy::Unreadable(why) => (unread_text(labels, *why).to_owned(), why.is_problem()),
+        EmptyWhy::Offline(Offline::NotRunning) => {
+            (labels.picture_not_running_empty.to_owned(), false)
+        }
+        EmptyWhy::Offline(Offline::Unreachable) => {
+            (labels.picture_unreachable_empty.to_owned(), false)
+        }
+        EmptyWhy::Interrupted => (labels.picture_interrupted_empty.to_owned(), false),
+        EmptyWhy::Freeze => (labels.picture_handing_over_empty.to_owned(), false),
+        EmptyWhy::Fault(fault) => (fault_text(labels, fault), true),
+    }
+}
+
+/// Why the frame shown is dimmed, with when it was captured, `at`.
+fn dim_text(ui: &Ui, labels: &Labels, dim: &DimWhy, at: &str) -> String {
+    match dim {
+        DimWhy::Offline(Offline::NotRunning) => fill(labels.picture_not_running, &[at]),
+        DimWhy::Offline(Offline::Unreachable) => fill(labels.picture_unreachable, &[at]),
+        DimWhy::Freeze => fill(labels.picture_handing_over, &[at]),
+        DimWhy::Fault(fault) => fault_text(labels, fault),
+        DimWhy::Interrupted => fill(labels.picture_interrupted, &[at]),
+        DimWhy::Restarted => labels.picture_restarted.to_owned(),
+        DimWhy::CaptureFailed(code) => {
+            let words = capture_words(ui, labels, code.as_deref());
+            fill(labels.picture_capture_failed, &[at, &words])
+        }
+        DimWhy::NewerUnreadable(why) => {
+            fill(labels.picture_newer_unreadable, &[unread_text(labels, *why), at])
+        }
+    }
+}
+
+fn fault_text(labels: &Labels, fault: &Fault) -> String {
+    match fault {
+        Fault::Panicked(_) => labels.picture_panicked.to_owned(),
+        Fault::NoThread(error) => fill(labels.picture_no_thread, &[error]),
+    }
+}
+
+fn unread_text(labels: &Labels, why: Unread) -> &'static str {
+    match why {
+        Unread::Missing => labels.picture_gone,
+        Unread::Evicted => labels.picture_evicted,
+        Unread::TimedOut => labels.picture_timed_out,
+        Unread::Integrity => labels.picture_integrity,
+        Unread::Busy => labels.picture_busy,
+        Unread::TooLarge => labels.picture_too_large,
+        Unread::Undecodable => labels.picture_undecodable,
+        Unread::Failed => labels.picture_read_failed,
+    }
+}
+
+/// Why a capture failed in plain words, by its outcome code. The picture never shows the
+/// code: one the tables do not know, or none, gets a general sentence, and an unknown one goes
+/// to the log once.
+fn capture_words(ui: &Ui, labels: &Labels, code: Option<&str>) -> String {
+    let Some(code) = code else {
+        return labels.picture_cause_unknown.to_owned();
+    };
+    match explain(code, labels.tongue.outcome_tongue()) {
+        Ok(Some(words)) => words.short.to_owned(),
+        Ok(None) => {
+            let line = format!("no words for capture failure {code}");
+            if ui.model.borrow_mut().first_told(&line) {
+                report::log_quiet(PICTURE_LOG, &line);
+            }
+            labels.picture_cause_unknown.to_owned()
+        }
+        Err(error) => fill(labels.outcome_table_unusable, &[&error.to_string()]),
+    }
 }
 
 /// The top bar's presets: the one in effect marked, what is in effect in words under them,
@@ -685,8 +952,16 @@ fn sync<T: Clone + PartialEq + 'static>(
 
 fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
     let notes: Vec<String> = view.notes.iter().map(|line| line_text(ui, labels, line)).collect();
+    // A server remembered from an earlier snapshot says so after it, in the same small print.
+    let server = view.server.as_deref().map(|server| {
+        if view.server_last_seen {
+            fill(labels.card_server_last_seen, &[server])
+        } else {
+            server.to_owned()
+        }
+    });
     let game_line: Vec<&str> =
-        [view.game.as_deref(), view.server.as_deref()].into_iter().flatten().collect();
+        [view.game.as_deref(), server.as_deref()].into_iter().flatten().collect();
     AccountCard {
         alias: view.alias.as_str().into(),
         game_line: game_line.join(" · ").into(),
@@ -698,6 +973,7 @@ fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
         main: line_text(ui, labels, &view.main).into(),
         main_failed: matches!(view.main, Line::ScheduleUnreadable),
         note: notes.join(" · ").into(),
+        selected: view.selected,
     }
 }
 

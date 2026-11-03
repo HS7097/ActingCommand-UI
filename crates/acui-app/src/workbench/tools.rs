@@ -4,12 +4,14 @@
 //! than `MAX_STDOUT`. Two things are asked of it, each only when asked, one after the
 //! other.
 //!
-//! `packs`, for the task names: the only reader of a game's `ui.json` a client has. It
+//! `packs`, for the task names, and the picture proportions each game's standard pack
+//! declares it supports (`display.aspect_ratios`, which the live view's hint compares a
+//! frame with): the only reader of a game's `ui.json` a client has. It
 //! reads the selected configuration from disk, so it neither connects to the Runtime
 //! nor writes to the ledger, and it runs at the start of the run and when another
 //! Runtime comes up. What it says is of the selected configuration, which a running
-//! Runtime may not have loaded yet; good enough for a name. So a run of it names no
-//! owner epoch, and one that was out across a restart counts until the run the restart
+//! Runtime may not have loaded yet; good enough for a name or a hint. So a run of it names
+//! no owner epoch, and one that was out across a restart counts until the run the restart
 //! asked for lands.
 //!
 //! A task without a name shows its package id: that is ordinary while a game root has
@@ -102,11 +104,28 @@ fn title_in<'a>(titles: &'a [(String, String)], locale: &str) -> Option<&'a str>
     titles.iter().find(|(name, _)| name == locale).map(|(_, title)| title.as_str())
 }
 
+/// The picture proportions of one `packs` answer: by game, each `<w>:<h>` its `ui.json`
+/// declares, in the file's order. A game without the file, or whose file declares no
+/// `display`, has none, and no hint is given for it.
+pub struct Displays(BTreeMap<String, Vec<(u32, u32)>>);
+
+impl Displays {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// The proportions `game` declares; `None` when it declares none.
+    pub fn ratios(&self, game: &str) -> Option<&[(u32, u32)]> {
+        self.0.get(game).map(Vec::as_slice)
+    }
+}
+
 /// What one run of `packs` came to.
 pub enum NamesRead {
     /// It answered. `warnings`: each as it wrote it, for the log; with any, the model
-    /// uses none of the table.
-    Table { table: NameTable, warnings: Vec<String> },
+    /// uses none of the table. The proportions are used all the same: one is there only
+    /// from a `ui.json` that keeps its rules, and a warning says nothing against it.
+    Table { table: NameTable, displays: Displays, warnings: Vec<String> },
     /// This run cannot tell where `actingctl` is.
     NoTool(ToolIssue),
     Failed(ToolFailure),
@@ -116,12 +135,13 @@ impl NamesRead {
     /// The line the technical log gets about it.
     pub fn log_line(&self) -> String {
         match self {
-            Self::Table { table, warnings } if warnings.is_empty() => {
-                format!("name table: {} entries", table.len())
+            Self::Table { table, displays, warnings } if warnings.is_empty() => {
+                format!("name table: {} entries; displays of {} games", table.len(), displays.len())
             }
-            Self::Table { table, warnings } => format!(
-                "name table: {} entries, {} warnings: {}",
+            Self::Table { table, displays, warnings } => format!(
+                "name table: {} entries; displays of {} games; {} warnings: {}",
                 table.len(),
+                displays.len(),
                 warnings.len(),
                 excerpt(warnings.join(" ").as_bytes()),
             ),
@@ -348,7 +368,7 @@ fn read_names(paths: &Result<ToolPaths, ToolIssue>) -> NamesRead {
     match packs_answer(paths).and_then(|stdout| {
         parse_packs(&stdout).map_err(ToolFailure::Malformed)
     }) {
-        Ok((table, warnings)) => NamesRead::Table { table, warnings },
+        Ok((table, displays, warnings)) => NamesRead::Table { table, displays, warnings },
         Err(failure) => NamesRead::Failed(failure),
     }
 }
@@ -527,11 +547,13 @@ fn excerpt(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).trim().chars().take(LOG_EXCERPT).collect()
 }
 
-/// `packs`' one line: `standard_packs.games[].ui.packs[]`, by `package_id`, and its
-/// `warnings`. No `standard_packs` is a configuration without that root, and a game
-/// without `ui` one without the file: both are ordinary. Anything else not of this
-/// shape is not an answer this build understands.
-fn parse_packs(stdout: &[u8]) -> Result<(NameTable, Vec<String>), String> {
+/// `packs`' one line: `standard_packs.games[].ui.packs[]`, by `package_id`, and
+/// `standard_packs.games[].display.aspect_ratios`, by `game`, and its `warnings`. No
+/// `standard_packs` is a configuration without that root, and a game without `ui` or
+/// `display` one without the file, or whose file declares no proportions, as a `packs` from
+/// before they were listed answers: all ordinary. Anything else not of this shape is not
+/// an answer this build understands.
+fn parse_packs(stdout: &[u8]) -> Result<(NameTable, Displays, Vec<String>), String> {
     let document: Value =
         serde_json::from_slice(stdout).map_err(|error| format!("not JSON: {error}"))?;
     if !document.is_object() {
@@ -543,12 +565,18 @@ fn parse_packs(stdout: &[u8]) -> Result<(NameTable, Vec<String>), String> {
         Some(_) => return Err("`warnings` is not a list".to_owned()),
     };
     let mut names = BTreeMap::new();
+    let mut displays = BTreeMap::new();
     if let Some(section) = document.get("standard_packs") {
         let games = section
             .get("games")
             .and_then(Value::as_array)
             .ok_or("`standard_packs.games` is not a list")?;
         for game in games {
+            if let Some(display) = game.get("display") {
+                let name =
+                    game.get("game").and_then(Value::as_str).ok_or("a game has no `game`")?;
+                displays.entry(name.to_owned()).or_insert(display_ratios(display)?);
+            }
             let Some(ui) = game.get("ui") else {
                 continue;
             };
@@ -560,7 +588,26 @@ fn parse_packs(stdout: &[u8]) -> Result<(NameTable, Vec<String>), String> {
             }
         }
     }
-    Ok((NameTable(names), warnings))
+    Ok((NameTable(names), Displays(displays), warnings))
+}
+
+/// A game's `display.aspect_ratios`, each `<w>:<h>` as two whole numbers above zero, which is
+/// all the Runtime checks of them.
+fn display_ratios(display: &Value) -> Result<Vec<(u32, u32)>, String> {
+    let ratios = display
+        .get("aspect_ratios")
+        .and_then(Value::as_array)
+        .ok_or("a game's `display.aspect_ratios` is not a list")?;
+    ratios
+        .iter()
+        .map(|ratio| {
+            let sides = ratio.as_str().and_then(|text| text.split_once(':'));
+            let side = |text: &str| text.parse::<u32>().ok().filter(|side| *side > 0);
+            sides
+                .and_then(|(width, height)| Some((side(width)?, side(height)?)))
+                .ok_or_else(|| format!("an aspect ratio is not `<w>:<h>`: {ratio}"))
+        })
+        .collect()
 }
 
 fn pack_titles(pack: &Value) -> Result<(&str, Vec<(String, String)>), String> {

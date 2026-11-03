@@ -440,7 +440,7 @@ impl Ui {
 
     /// The workbench's lines that only the language changes: why this run has
     /// no state root, and the Runtime's configuration file, where an instance
-    /// is added by hand for now. And the accounts note, the cards, the Runtime's
+    /// is added by hand for now. And the accounts note, the cards, the live view, the Runtime's
     /// settings and what its start report says of them, which reads change too, and whether
     /// the Runtime is started again when it is gone; and which page shows, which only a press
     /// changes.
@@ -467,6 +467,7 @@ impl Ui {
         self.paint_names_note();
         workbench::paint::page(self);
         workbench::paint::cards(self);
+        workbench::paint::picture(self);
         workbench::paint::actions(self);
         workbench::paint::preset(self);
         workbench::paint::settings(self);
@@ -523,7 +524,9 @@ fn language_index(language: Language) -> i32 {
 }
 
 /// The workbench's controls. The top bar's page button switches between the
-/// accounts and the settings; Start and Request Shutdown are the launcher's;
+/// accounts and the settings; a card picked is the account whose picture shows (`workbench`),
+/// and the box beside the picture's title draws on it or not (`workbench::preview`);
+/// Start and Request Shutdown are the launcher's;
 /// "troubleshooting and ledger" opens the window of the default source; the
 /// write buttons and the evidence days' field are `workbench::actions`'; "got it"
 /// on the start report's notice is `workbench`'s; the three boxes apply to every
@@ -533,6 +536,16 @@ fn install_workbench(window: &WorkbenchWindow) {
     window.on_page_picked(|page| {
         if let Some(ui) = current() {
             workbench::show_page(&ui, workbench::paint::page_picked(page));
+        }
+    });
+    window.on_account_picked(|alias| {
+        if let Some(ui) = current() {
+            workbench::account_picked(&ui, &alias);
+        }
+    });
+    window.on_picture_overlays_toggled(|on| {
+        if let Some(ui) = current() {
+            workbench::preview::overlays_toggled(&ui, on);
         }
     });
     window.on_start_runtime(|| {
@@ -743,6 +756,8 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_settings_advanced(labels.settings_advanced.into());
     global.set_settings_runtime(labels.settings_runtime.into());
     global.set_settings_appearance(labels.settings_appearance.into());
+    global.set_picture_title(labels.picture_title.into());
+    global.set_picture_overlays(labels.picture_overlays.into());
     global.set_evidence_days(labels.setting_evidence_days.into());
     global.set_days(labels.days_unit.into());
     global.set_save(labels.save.into());

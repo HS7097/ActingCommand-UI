@@ -6,7 +6,9 @@
 //!
 //! `<config_dir>/ActingCommand/acui.toml`, with `lang`, `text_size` and
 //! `theme`, and the optional `state_root`, `actingd_config` and `actingd_exe`
-//! (absolute paths, written as TOML literal strings in single quotes).
+//! (absolute paths, written as TOML literal strings in single quotes), and
+//! `preview_frame_gap_seconds`, the least time between two frames the workbench's
+//! picture reads (`workbench::preview::frame_gap`), which no box here writes.
 //!
 //! The file is kept line by line: a save reads it again, changes the last line
 //! of its one key (or appends one), keeps every other line byte for byte —
@@ -17,8 +19,10 @@
 
 use std::io::ErrorKind;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::strings::{fill, Labels, Language};
+use crate::workbench::preview::{self, MIN_FRAME_GAP};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextSize {
@@ -124,6 +128,8 @@ pub struct Settings {
     pub actingd_config: Option<PathBuf>,
     /// The actingd executable the launcher spawns.
     pub actingd_exe: Option<PathBuf>,
+    /// The least time between two frames the workbench's picture reads.
+    pub preview_frame_gap: Duration,
 }
 
 impl Default for Settings {
@@ -135,6 +141,7 @@ impl Default for Settings {
             state_root: None,
             actingd_config: None,
             actingd_exe: None,
+            preview_frame_gap: MIN_FRAME_GAP,
         }
     }
 }
@@ -280,6 +287,15 @@ pub fn load() -> Loaded {
             "state_root" => settings.state_root = path_value(value),
             "actingd_config" => settings.actingd_config = path_value(value),
             "actingd_exe" => settings.actingd_exe = path_value(value),
+            // A whole number of seconds in range, or the default (`MIN_FRAME_GAP`, 5 s) and an
+            // issue: also when an earlier line of the key was in range.
+            "preview_frame_gap_seconds" => match preview::frame_gap(value) {
+                Some(gap) => settings.preview_frame_gap = gap,
+                None => {
+                    settings.preview_frame_gap = MIN_FRAME_GAP;
+                    issues.push(unknown("preview_frame_gap_seconds"));
+                }
+            },
             _ => {}
         }
     }

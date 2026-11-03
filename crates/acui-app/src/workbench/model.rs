@@ -7,20 +7,23 @@
 //! A read begun before a write landed is let go before it gets here (`super::landed`),
 //! and a write's answer counts only under its ticket (`actions`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 use std::time::Instant;
 
 use acui_source::workbench::{
-    ConfigRead, ExplainRead, InstanceLive, LiveRead, LiveSnapshot, PresetProblem, StartRead,
+    ActivityKind, ConfigRead, ExplainRead, InstanceLive, LiveRead, LiveSnapshot, PresetProblem,
+    StartRead,
 };
 use acui_source::{ClientFailure, PauseFact};
 
 use super::actions::{self, Actions, ActionsView, PresetView};
 use super::card::{self, CardView, Down, Schedule};
+use super::picture::{LinkNow, Offline, PictureView, Pictures, PreviewGate};
+use super::preview::{Order, Target};
 use super::read::{Lane, Read, EXPLAIN_TOO_OLD, START_TRIES};
 use super::settings::{self, AutostartView, SettingsView, StartView};
-use super::tools::{NameTable, NamesRead, WatchdogRead};
+use super::tools::{Displays, NameTable, NamesRead, WatchdogRead};
 use crate::strings::{fill, Labels, Language};
 
 /// The Runtime as the newest `Status` read found it.
@@ -184,8 +187,16 @@ pub struct Model {
     /// it sooner, so a long gap before that says nothing against the explanation.
     explain_asked_at: Option<Instant>,
     config: Slice<ConfigRead>,
+    /// The server a fact snapshot of this owner epoch last named for each instance, by
+    /// instance id, an empty one not taken. `task.server` is a task's fact, there and gone
+    /// again as the Lab works: a card whose newest snapshot names none shows this one, said
+    /// to be last seen. Let go of with the epoch.
+    servers_seen: BTreeMap<String, String>,
     start: StartSlice,
     names: Names,
+    /// The picture proportions each game declares, from the same run of `packs` as the
+    /// names; none while it did not answer.
+    displays: Option<Displays>,
     /// Whether the workbench is not minimized. The slow thread does not read while
     /// it is, so no read is late then.
     shown: bool,
@@ -206,6 +217,11 @@ pub struct Model {
     autostart: Autostart,
     /// How many runs of `watchdog status` were asked for.
     autostart_asks: u64,
+    /// Which account's picture the right column shows, and what the picture thread found.
+    pictures: Pictures,
+    /// The ledger's committed head as the newest `Status` stated it, while online: where the
+    /// picture's lookup starts down from.
+    ledger_head: Option<u64>,
 }
 
 /// What a `Status` read changed, for what the event loop does next.
@@ -219,6 +235,9 @@ pub struct LiveLanded {
     pub names_stale: bool,
     /// The thread's fault is over.
     pub fault_cleared: bool,
+    /// The alias `--account` named, which no account this read lists has: the first
+    /// one's picture shows instead.
+    pub unknown_account: Option<String>,
 }
 
 /// What a schedule explanation read changed, for what the event loop does next.
@@ -255,8 +274,10 @@ impl Model {
             explain: Slice::empty(),
             explain_asked_at: None,
             config: Slice::empty(),
+            servers_seen: BTreeMap::new(),
             start: StartSlice::default(),
             names: Names::NotAsked,
+            displays: None,
             shown: true,
             epoch: None,
             live_fault: None,
@@ -267,11 +288,25 @@ impl Model {
             page: Page::Main,
             autostart: Autostart::NotAsked,
             autostart_asks: 0,
+            pictures: Pictures::default(),
+            ledger_head: None,
         }
     }
 
     pub fn link(&self) -> &Link {
         &self.link
+    }
+
+    /// The owner epoch online, as the wire spells it.
+    pub fn online_epoch(&self) -> Option<&str> {
+        match &self.link {
+            Link::Online { epoch, .. } => Some(epoch.as_str()),
+            Link::Unknown
+            | Link::Absent(_)
+            | Link::NoAnswer(_)
+            | Link::Trouble(_)
+            | Link::ThreadFailed => None,
+        }
     }
 
     /// The page shown, or to be shown once the window is up.
@@ -440,26 +475,144 @@ impl Model {
 
     /// The accounts of the left column: as `Status` listed them while the Runtime
     /// answers; otherwise every alias seen this run, with nothing an earlier answer
-    /// said of it.
+    /// said of it. The one whose picture shows is marked.
     pub fn cards(&self, now: Instant) -> Vec<CardView> {
+        let picked = self.picture_account();
         match Down::of(&self.link) {
             None => {
                 let schedule = self.schedule(now);
                 let servers = self.config.value.as_ref().map(|read| &read.servers);
+                let global = self.global_pause.as_ref();
                 self.instances
                     .iter()
                     .map(|instance| {
-                        let server = servers
+                        // The newest snapshot's server, else the one last seen this epoch.
+                        let named = servers
                             .and_then(|servers| servers.get(&instance.instance_id))
-                            .map(String::as_str);
-                        card::card_view(instance, server, self.global_pause.as_ref(), schedule)
+                            .filter(|server| !server.is_empty());
+                        let (server, last_seen) = match named {
+                            Some(server) => (Some(server.as_str()), false),
+                            None => match self.servers_seen.get(&instance.instance_id) {
+                                Some(server) => (Some(server.as_str()), true),
+                                None => (None, false),
+                            },
+                        };
+                        let selected = picked == Some(instance.alias.as_str());
+                        card::card_view(instance, server, last_seen, global, schedule, selected)
                     })
                     .collect()
             }
-            Some(down) => {
-                self.seen_aliases.iter().map(|alias| card::down_view(alias, down)).collect()
-            }
+            Some(down) => self
+                .seen_aliases
+                .iter()
+                .map(|alias| card::down_view(alias, down, picked == Some(alias.as_str())))
+                .collect(),
         }
+    }
+
+    /// The account whose picture the right column shows, of the cards `cards` lists:
+    /// the one picked while it is among them, else the first; none while there is none.
+    pub fn picture_account(&self) -> Option<&str> {
+        let aliases: Vec<&str> = match Down::of(&self.link) {
+            None => self.instances.iter().map(|instance| instance.alias.as_str()).collect(),
+            Some(_) => self.seen_aliases.iter().map(String::as_str).collect(),
+        };
+        self.pictures.account(&aliases)
+    }
+
+    /// `--account`, before the window is up: that account's picture shows once a `Status`
+    /// lists it.
+    pub fn name_account(&mut self, alias: String) {
+        self.pictures.name(alias);
+    }
+
+    /// An account picked on its card: whether that changed whose picture shows.
+    pub fn pick_account(&mut self, alias: &str) -> bool {
+        let before = self.picture_account().map(str::to_owned);
+        self.pictures.pick(alias);
+        self.picture_account() != before.as_deref()
+    }
+
+    pub fn pictures(&self) -> &Pictures {
+        &self.pictures
+    }
+
+    pub fn pictures_mut(&mut self) -> &mut Pictures {
+        &mut self.pictures
+    }
+
+    /// Whether the picture may read `alias` now. UI-3d writes this from the account's player
+    /// hold and its own ask for the device; nothing that asks it changes then.
+    pub fn preview_gate(&self, alias: &str) -> PreviewGate {
+        if self.pictures.halted(alias) {
+            PreviewGate::Freeze { since_ms: None }
+        } else {
+            PreviewGate::Open
+        }
+    }
+
+    /// The account the picture thread is to follow now, if any: the one whose picture shows,
+    /// on the main page of a window not minimized, while the Runtime answers and lists it, and
+    /// its gate is open. Fast while it runs a task or its recovery ladder climbs.
+    pub fn preview_target(&self) -> Option<Target> {
+        if self.page != Page::Main || !self.shown {
+            return None;
+        }
+        let Link::Online { epoch, .. } = &self.link else {
+            return None;
+        };
+        let alias = self.picture_account()?;
+        let instance = self.instances.iter().find(|instance| instance.alias == alias)?;
+        if self.preview_gate(alias) != PreviewGate::Open {
+            return None;
+        }
+        let fast = instance.activity.as_ref().is_some_and(|activity| {
+            matches!(
+                activity.kind,
+                ActivityKind::PolicyRun
+                    | ActivityKind::DirectRun
+                    | ActivityKind::HostRun
+                    | ActivityKind::Ladder
+            )
+        });
+        Some(Target {
+            alias: alias.to_owned(),
+            key: instance.key,
+            instance_id: instance.instance_id.clone(),
+            epoch: epoch.clone(),
+            head: self.ledger_head,
+            fast,
+        })
+    }
+
+    /// What the picture thread is to do now (`preview::sync`).
+    pub fn preview_sync(&mut self, now: Instant) -> Option<Order> {
+        let target = self.preview_target();
+        let account = self.picture_account().map(str::to_owned);
+        let withdrawn = account
+            .as_deref()
+            .is_some_and(|alias| self.preview_gate(alias) == PreviewGate::Withdrawn);
+        self.pictures.sync(account.as_deref(), target, withdrawn, now)
+    }
+
+    /// What the picture area shows at `now_ms`.
+    pub fn picture_view(&self, now_ms: u64) -> PictureView {
+        let account = self.picture_account();
+        let link = match &self.link {
+            Link::Unknown => LinkNow::Pending,
+            Link::Online { epoch, .. } => LinkNow::Online(epoch.as_str()),
+            Link::Absent(_) => LinkNow::Offline(Offline::NotRunning),
+            Link::NoAnswer(_) | Link::Trouble(_) | Link::ThreadFailed => {
+                LinkNow::Offline(Offline::Unreachable)
+            }
+        };
+        let gate = account.map_or(PreviewGate::Open, |alias| self.preview_gate(alias));
+        // The proportions the account's game declares, while `Status` names its game.
+        let ratios = account
+            .and_then(|alias| self.instances.iter().find(|instance| instance.alias == alias))
+            .and_then(|instance| instance.game_id.as_deref())
+            .and_then(|game| self.displays.as_ref()?.ratios(game));
+        self.pictures.view(account, link, gate, ratios, now_ms)
     }
 
     /// What the schedule explanation reads leave now. A thread that does not read
@@ -486,9 +639,9 @@ impl Model {
         self.explain_asked_at = Some(now);
     }
 
-    /// Whether the workbench is not minimized, as last looked at.
-    pub fn set_shown(&mut self, shown: bool) {
-        self.shown = shown;
+    /// Whether the workbench is not minimized, as last looked at: whether that changed.
+    pub fn set_shown(&mut self, shown: bool) -> bool {
+        mem::replace(&mut self.shown, shown) != shown
     }
 
     /// Whether the log has yet to hear `line`; it has from now on.
@@ -509,14 +662,18 @@ impl Model {
         matches!(self.names, Names::Unreadable)
     }
 
-    /// One run of `actingctl packs`.
+    /// One run of `actingctl packs`: the names, and the picture proportions, which its
+    /// warnings do not take away (`NamesRead::Table`).
     pub fn apply_names(&mut self, read: NamesRead) {
-        self.names = match read {
-            NamesRead::Table { table, warnings } if warnings.is_empty() => Names::Ready(table),
-            NamesRead::Table { .. } | NamesRead::NoTool(_) | NamesRead::Failed(_) => {
-                Names::Unreadable
+        let (names, displays) = match read {
+            NamesRead::Table { table, displays, warnings } if warnings.is_empty() => {
+                (Names::Ready(table), Some(displays))
             }
+            NamesRead::Table { displays, .. } => (Names::Unreadable, Some(displays)),
+            NamesRead::NoTool(_) | NamesRead::Failed(_) => (Names::Unreadable, None),
         };
+        self.names = names;
+        self.displays = displays;
     }
 
     /// One `Status` read: a new owner epoch lets go of everything read of the old
@@ -537,11 +694,13 @@ impl Model {
             epoch_changed: false,
             names_stale: false,
             fault_cleared,
+            unknown_account: None,
         }
     }
 
     fn online(&mut self, snapshot: LiveSnapshot, fault_cleared: bool) -> LiveLanded {
-        let LiveSnapshot { pid, epoch, global_pause, instances } = snapshot;
+        let LiveSnapshot { pid, epoch, global_pause, instances, ledger_head } = snapshot;
+        self.ledger_head = ledger_head;
         let epoch_changed = self.epoch.as_deref() != Some(epoch.as_str());
         if epoch_changed {
             // Started again, not for the first time this run: what the watchdog said is of
@@ -552,6 +711,7 @@ impl Model {
             }
             self.explain = Slice::empty();
             self.config = Slice::empty();
+            self.servers_seen.clear();
             self.start = StartSlice::default();
             self.epoch = Some(epoch.clone());
             self.actions.new_epoch();
@@ -562,6 +722,9 @@ impl Model {
             }
         }
         self.instances = instances;
+        let aliases: Vec<&str> =
+            self.instances.iter().map(|instance| instance.alias.as_str()).collect();
+        let unknown_account = self.pictures.settle(&aliases);
         self.global_pause = global_pause;
         self.actions.status_read(self.global_pause.as_ref());
         let previous = mem::replace(&mut self.link, Link::Online { pid, epoch });
@@ -571,8 +734,16 @@ impl Model {
         let names_stale = epoch_changed && previous != Link::Unknown;
         if names_stale {
             self.names = Names::NotAsked;
+            self.displays = None;
         }
-        LiveLanded { previous, connected, epoch_changed, names_stale, fault_cleared }
+        LiveLanded {
+            previous,
+            connected,
+            epoch_changed,
+            names_stale,
+            fault_cleared,
+            unknown_account,
+        }
     }
 
     /// One schedule explanation read. With no epoch to hold it to, a read says
@@ -605,6 +776,12 @@ impl Model {
         let news = self.config.take(read, |read| read.epoch.as_str(), epoch, now);
         if let (true, Some(read)) = (counts, &self.config.value) {
             self.actions.snapshot_read(read);
+            // What it names now stands for the snapshots after it that name none.
+            for (instance_id, server) in &read.servers {
+                if !server.is_empty() {
+                    self.servers_seen.insert(instance_id.clone(), server.clone());
+                }
+            }
         }
         let after = preset_problem(self.config.value.as_ref());
         let preset = match after {
@@ -652,6 +829,7 @@ impl Model {
     fn leave_online(&mut self) {
         self.instances.clear();
         self.global_pause = None;
+        self.ledger_head = None;
         self.explain.error = None;
         self.config.error = None;
         self.actions.status_lost();

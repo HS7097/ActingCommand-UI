@@ -1,19 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The workbench's reads of the running Runtime. Two threads read (`read`), their
-//! results land on the event loop, and what counts of them goes into the `Model`.
+//! The workbench's reads of the running Runtime. Two threads read for the cards and the top
+//! bar (`read`), a third for the picture (`preview`); their results land on the event loop,
+//! and what counts of them goes into the `Model`.
 //!
 //! 1. `Model` is the workbench's only state, and changes only on the event loop.
 //! 2. Neither `Model` nor any view of it holds words: a language switch only paints
 //!    again.
 //! 3. `acui-app` uses no Runtime crate: wire types end in `acui-source`.
 //! 4. Nothing here calls `Session::open`, `OnlineSource::pin`, `source.query` or
-//!    `monitor_status`: the reads are `Status`, `ScheduleExplanation` without
-//!    candidates and `RuntimeFactSnapshot`, none of which walks the ledger or takes a
-//!    ledger record.
+//!    `monitor_status`. The two reading threads read `Status`, `ScheduleExplanation`
+//!    without candidates and `RuntimeFactSnapshot`, none of which walks the ledger or takes
+//!    a ledger record. The picture's thread is the one exception: it reads ledger pages,
+//!    which take no record either, and frames' material, whose read takes none when it
+//!    succeeds or finds the file gone and one for any other failure; so a frame it failed
+//!    to read is not read again, and it reads only while the picture shows (`preview`).
+//! 5. How many writes have landed (`wrote`) is no concern of the picture: a frame is
+//!    history, which no write changes, so no picture read is let go for a write, and
+//!    nothing the picture does counts as one.
 //!
-//! A third thread runs the Runtime's `actingctl` (`tools`), only when asked: `packs` for the
-//! task names, and `watchdog status` as the settings page is gone to, for whether the Runtime
-//! is started again when it is gone. Neither is a read of the running Runtime's state.
+//! Another thread runs the Runtime's `actingctl` (`tools`), only when asked: `packs` for the
+//! task names and the picture proportions each game's standard pack declares, and `watchdog
+//! status` as the settings page is gone to, for whether the Runtime is started again when it
+//! is gone. Neither is a read of the running Runtime's state.
 //!
 //! What a person writes from the top bar is in `actions`: each write on a thread and
 //! a connection of its own, sent once. Once one lands, a read begun before that no
@@ -28,6 +36,12 @@
 //! settings an update or a rollback reset is said on the notice, until a person says they
 //! read it, and on the settings page.
 //!
+//! Which account's picture the main page's right column shows is the `Model`'s too
+//! (`picture`): the one picked on its card (`account_picked`) or named by `--account`, else
+//! the first. Whether the picture thread follows it, and which, is told the thread in one
+//! place (`preview::sync`), each time that may change: a `Status` read, a page gone to, the
+//! window minimized or back, a card picked, the reading thread gone.
+//!
 //! A read that fails is no event to log each time: the log gets a change, as it
 //! happens, so a failure that repeats every few seconds is one line, and its end
 //! another.
@@ -36,6 +50,8 @@ pub mod actions;
 pub mod card;
 pub mod model;
 pub mod paint;
+pub mod picture;
+pub mod preview;
 pub mod read;
 pub mod settings;
 pub mod tools;
@@ -50,6 +66,7 @@ use acui_source::{ClientFailure, RuntimeFacts};
 use slint::{ComponentHandle, Timer, TimerMode};
 
 use self::model::{Link, News, Page};
+use self::preview::{Order, PreviewTally};
 use self::read::{Lane, Landing, Poke, Read, Tally, START_RETRY, START_TRIES};
 use self::tools::{Job, NamesRead, ToolFailure, WatchdogRead};
 use crate::launcher;
@@ -65,6 +82,9 @@ pub struct Reading {
     slow: Option<Sender<Poke>>,
     /// The thread that runs `actingctl`, or why there is none.
     tools: Result<Sender<Job>, String>,
+    /// The picture's thread, or why there is none; and what it read.
+    preview: Result<Sender<Order>, String>,
+    preview_tally: Arc<PreviewTally>,
     /// A run of `packs` was asked for while minimized: it runs when the window is back.
     names_owed: bool,
     /// So was one of `watchdog status`: it runs then if the settings page still shows.
@@ -112,11 +132,25 @@ impl Reading {
         }
         Ok(())
     }
+
+    /// `order` to the picture's thread. The error says that thread is gone, once: one that
+    /// never started was said when it did not, and nothing is sent to it.
+    fn send_preview(&mut self, order: Order) -> Result<(), String> {
+        let Ok(sender) = &self.preview else {
+            return Ok(());
+        };
+        if sender.send(order).is_err() {
+            let why = format!("{} ended", preview::THREAD);
+            self.preview = Err(why.clone());
+            return Err(why);
+        }
+        Ok(())
+    }
 }
 
-/// The reading threads, once the workbench is up. With no state root there is
-/// nothing to read: the workbench says so on its own.
-pub fn start(ui: &Ui) {
+/// The reading threads, once the workbench is up, the picture's reading a frame at most every
+/// `frame_gap`. With no state root there is nothing to read: the workbench says so on its own.
+pub fn start(ui: &Ui, frame_gap: Duration) {
     let Ok(launcher) = &ui.launcher else {
         return;
     };
@@ -137,12 +171,22 @@ pub fn start(ui: &Ui) {
     };
     let (live, slow) = (spawned(Lane::Live), spawned(Lane::Slow));
     let tools = tools::spawn(launcher.tool_paths()).map_err(|error| error.to_string());
+    let preview_tally = Arc::new(PreviewTally::default());
+    let generation = ui.model.borrow().pictures().generation();
+    let root = launcher.state_root.clone();
+    let preview = preview::spawn(root, generation, Arc::clone(&preview_tally), frame_gap)
+        .map_err(|error| error.to_string());
+    if let Err(why) = &preview {
+        preview::thread_failed(ui, why.clone());
+    }
     let shown_check = Timer::default();
     shown_check.start(TimerMode::Repeated, SHOWN_CHECK, check_shown);
     *ui.reading.borrow_mut() = Some(Reading {
         live,
         slow,
         tools,
+        preview,
+        preview_tally,
         names_owed: false,
         autostart_owed: false,
         shown,
@@ -164,6 +208,7 @@ pub fn stop(ui: &Ui) {
     let reading = ui.reading.borrow_mut().take();
     if let Some(reading) = reading {
         report::log_quiet("acui-reads", &reading.tally.line());
+        report::log_quiet(preview::THREAD, &reading.preview_tally.line());
     }
 }
 
@@ -171,16 +216,30 @@ pub fn stop(ui: &Ui) {
 /// window's first paint shows it, and the threads' first round reads for it. Going to
 /// the settings reads the fact snapshot now, since the page shows what it says, and only
 /// that: the schedule explanation, which waits on the policy lock, is no read of a page.
-/// It also runs `watchdog status` once, the only time that runs.
+/// It also runs `watchdog status` once, the only time that runs. The picture reads only on the
+/// main page.
 pub fn show_page(ui: &Ui, page: Page) {
     if ui.model.borrow().page() == page {
         return;
     }
     ui.model.borrow_mut().set_page(page);
     paint::page(ui);
+    preview::sync(ui);
+    paint::picture(ui);
     if page == Page::Settings {
         ask(ui, Read::Config.lane(), Poke::Only(Read::Config));
         ask_autostart(ui);
+    }
+}
+
+/// A card picked, by a click or from the keyboard: its picture is the one the right column
+/// shows from now on, and the one the picture thread follows.
+pub fn account_picked(ui: &Ui, alias: &str) {
+    let changed = ui.model.borrow_mut().pick_account(alias);
+    if changed {
+        preview::sync(ui);
+        paint::cards(ui);
+        paint::picture(ui);
     }
 }
 
@@ -266,10 +325,13 @@ fn lane_failed(ui: &Ui, lane: Lane, error: String) {
     ui.model.borrow_mut().lane_lost(lane, error.clone());
     if lane == Lane::Live {
         ui.launcher_view.borrow_mut().reading_failed(error);
+        // No `Status` says what is online any more: the picture stops.
+        preview::sync(ui);
     }
     ui.paint_notices();
     ui.paint_accounts_note();
     paint::cards(ui);
+    paint::picture(ui);
     paint::actions(ui);
     paint::preset(ui);
     paint::settings(ui);
@@ -277,7 +339,8 @@ fn lane_failed(ui: &Ui, lane: Lane, error: String) {
     launcher::paint(ui);
 }
 
-/// A minimized workbench reads less (`read`); one that comes back reads at once.
+/// A minimized workbench reads less (`read`), and the picture nothing; one that comes back
+/// reads at once. Each second the picture shows, its corner says how old the frame is.
 fn check_shown() {
     let Some(ui) = crate::ui::current() else {
         return;
@@ -286,7 +349,13 @@ fn check_shown() {
         return;
     };
     let shown = !window.window().is_minimized();
-    ui.model.borrow_mut().set_shown(shown);
+    let changed = ui.model.borrow_mut().set_shown(shown);
+    if changed {
+        preview::sync(&ui);
+        paint::picture(&ui);
+    } else if shown {
+        paint::picture_age(&ui);
+    }
     let came_back = ui
         .reading
         .borrow()
@@ -361,12 +430,22 @@ fn live_landed(ui: &Ui, read: LiveRead) {
         ask_names(ui);
         ui.paint_names_note();
     }
+    // What was asked for on the command line and cannot be had is said, not passed over.
+    if let Some(alias) = &landed.unknown_account {
+        report::log(
+            "acui-picture",
+            &format!("--account {alias}: no account has that alias; the first one's picture shows"),
+        );
+    }
     // Before the cards: the explanation's clock starts here, and they go by it.
     if landed.connected || landed.epoch_changed {
         poke(ui, Lane::Slow);
         ask_start(ui);
     }
+    // Online or not, another epoch, the account gone, a task begun or over.
+    preview::sync(ui);
     paint::cards(ui);
+    paint::picture(ui);
     paint::actions(ui);
     paint::preset(ui);
     paint::settings(ui);
@@ -490,12 +569,14 @@ fn names_read(read: NamesRead, took: Duration) {
     }
 }
 
-/// Every run goes in the log: they are few, and the limit on them is checked there.
+/// Every run goes in the log: they are few, and the limit on them is checked there. The
+/// picture's hint of its proportions goes by the same run.
 fn names_landed(ui: &Ui, read: NamesRead, took: Duration) {
     report::log_quiet(tools::THREAD, &format!("{} ({} ms)", read.log_line(), took.as_millis()));
     ui.model.borrow_mut().apply_names(read);
     ui.paint_names_note();
     paint::cards(ui);
+    paint::picture(ui);
     ui.paint_log_notes();
 }
 
