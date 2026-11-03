@@ -135,6 +135,44 @@ export struct SettingItem {
     note: string,
 }
 
+// One device's group of its touch and capture backends on the settings page, in words: the
+// device a press names (never shown), the title with its account. Each row while it reads: the
+// box's choices, the one shown (the box's own, both ways), whether it can be changed, and in
+// grey where the value comes from; whether "use the file's value" shows. MuMu's own pair, the
+// device's self-check, amber when one failed. The question a capture under MuMu's own touch
+// asks, its box and whether "apply both" can be pressed. "Apply", where it shows and whether
+// it can be pressed, and beside it where the group stands, red when that says a failure.
+export struct BackendGroupItem {
+    instance: string,
+    title: string,
+    touch-shown: bool,
+    touch-options: [string],
+    touch-index: int,
+    touch-enabled: bool,
+    touch-note: string,
+    touch-back: bool,
+    touch-back-enabled: bool,
+    capture-shown: bool,
+    capture-options: [string],
+    capture-index: int,
+    capture-enabled: bool,
+    capture-note: string,
+    capture-back: bool,
+    capture-back-enabled: bool,
+    paired: bool,
+    selfcheck: string,
+    selfcheck-warning: bool,
+    asking: bool,
+    ask-options: [string],
+    ask-index: int,
+    ask-enabled: bool,
+    ask-ready: bool,
+    apply-shown: bool,
+    apply-ready: bool,
+    status: string,
+    status-failed: bool,
+}
+
 export struct OverlayItem {
     kind: string,
     x: float,
@@ -260,6 +298,17 @@ export global Strings {
     in property <string> days;
     in property <string> save;
     in property <string> acknowledge;
+    // A device's group of its backends: its two rows' names, which also name their boxes for a
+    // screen reader; "use the file's value"; when a change takes effect; MuMu's own pair; the
+    // question a capture under MuMu's own touch asks and its two buttons.
+    in property <string> touch-backend;
+    in property <string> capture-backend;
+    in property <string> use-file-value;
+    in property <string> backend-effect;
+    in property <string> backend-pair-note;
+    in property <string> backend-ask;
+    in property <string> apply-both;
+    in property <string> cancel;
     // The Aero frame's caption buttons, by the names a screen reader says.
     in property <string> caption-minimize;
     in property <string> caption-maximize;
@@ -1381,8 +1430,8 @@ component SettingLine {
 // added for now; on the right the settings file's problems, what falls short of the theme
 // and where the technical log is, then the live view of the account picked. The settings page has those same lines, then the Runtime's
 // settings as it reads them, with what its start report says of them and a field for the
-// one it changes, then Request Shutdown and whether a Runtime gone is started again, then
-// the display settings. No code, pid or wire name shows here; those stay in the ledger
+// one it changes, and each device's backends in boxes, then Request Shutdown and whether a
+// Runtime gone is started again, then the display settings. No code, pid or wire name shows here; those stay in the ledger
 // window's technical lines.
 // Closing it ends the program.
 export component WorkbenchWindow inherits Window {
@@ -1440,6 +1489,10 @@ export component WorkbenchWindow inherits Window {
     in property <bool> config-write-failed;
     in property <string> evidence-write-line;
     in property <bool> evidence-write-failed;
+    // And of the last switch of a device's backends from the settings page, on a line of its
+    // own that names the device's account.
+    in property <string> backend-write-line;
+    in property <bool> backend-write-failed;
     // The settings an update or a rollback reset at this start, until a person says they
     // read it.
     in property <string> start-alert;
@@ -1536,6 +1589,9 @@ export component WorkbenchWindow inherits Window {
     in property <bool> evidence-writable;
     in property <bool> evidence-ready;
     in property <[SettingItem]> advanced-settings-after;
+    // After them, each device's group of its backends, as the newest fact snapshot has them
+    // with what the presses left; none while there is none.
+    in property <[BackendGroupItem]> backend-groups;
     // What this start's report says of the settings: those it reset, amber, or that it cannot
     // be read, red; and in grey those it kept over a default that changed.
     in property <string> start-note;
@@ -1574,6 +1630,16 @@ export component WorkbenchWindow inherits Window {
     callback concurrency-back-to-file();
     callback evidence-edited(string);
     callback evidence-save();
+    // A device's group, by the device it names: a box picked, at its choice's index; "apply";
+    // the question's box, "apply both" and "cancel"; "use the file's value" of the touch row
+    // (true) or of the capture row.
+    callback backend-touch-picked(string, int);
+    callback backend-capture-picked(string, int);
+    callback backend-apply(string);
+    callback backend-asked(string, int);
+    callback backend-apply-both(string);
+    callback backend-cancel(string);
+    callback backend-file-value(string, bool);
     callback start-acknowledged();
     callback request-shutdown();
     callback open-ledger();
@@ -1745,8 +1811,8 @@ export component WorkbenchWindow inherits Window {
             if root.errors != "" || root.launcher-line != "" || root.start-log-path != ""
                     || root.pause-note != "" || root.action-line != ""
                     || root.resume-all-statement != "" || root.config-write-line != ""
-                    || root.evidence-write-line != "" || root.preset-statement != ""
-                    || root.start-alert != "": Card {
+                    || root.evidence-write-line != "" || root.backend-write-line != ""
+                    || root.preset-statement != "" || root.start-alert != "": Card {
                 vertical-stretch: 0;
                 VerticalLayout {
                     padding: 8px;
@@ -1785,6 +1851,10 @@ export component WorkbenchWindow inherits Window {
                     if root.evidence-write-line != "": Notice {
                         text: root.evidence-write-line;
                         failed: root.evidence-write-failed;
+                    }
+                    if root.backend-write-line != "": Notice {
+                        text: root.backend-write-line;
+                        failed: root.backend-write-failed;
                     }
                     if root.preset-statement != "": HorizontalLayout {
                         spacing: 14px;
@@ -2138,6 +2208,171 @@ export component WorkbenchWindow inherits Window {
                                     }
                                     for item in root.advanced-settings-after: SettingLine {
                                         setting: item;
+                                    }
+                                    // Each device's backends: a row as a SettingLine is, with a
+                                    // box where the value is, the names keeping their width.
+                                    // Each box's index is the item's both ways, so a pick shows
+                                    // at once and a paint can put it back.
+                                    for group in root.backend-groups: VerticalLayout {
+                                        spacing: 4px;
+                                        vertical-stretch: 0;
+                                        CardTitle { text: group.title; }
+                                        if group.touch-shown: VerticalLayout {
+                                            spacing: 2px;
+                                            HorizontalLayout {
+                                                spacing: 12px;
+                                                Text {
+                                                    text: Strings.touch-backend;
+                                                    font-size: Scale.body-font;
+                                                    color: Look.text;
+                                                    wrap: word-wrap;
+                                                    vertical-alignment: center;
+                                                    width: 240px * Scale.factor;
+                                                    min-height: self.preferred-height;
+                                                }
+                                                HorizontalLayout {
+                                                    spacing: 6px;
+                                                    horizontal-stretch: 1;
+                                                    SkinComboBox {
+                                                        model: group.touch-options;
+                                                        current-index <=> group.touch-index;
+                                                        enabled: group.touch-enabled;
+                                                        accessible-label: Strings.touch-backend;
+                                                        min-width: 150px * Scale.factor;
+                                                        preferred-width: 200px * Scale.factor;
+                                                        horizontal-stretch: 0;
+                                                        selected => {
+                                                            root.backend-touch-picked(group.instance, self.current-index);
+                                                        }
+                                                    }
+                                                    if group.touch-back: SkinButton {
+                                                        text: Strings.use-file-value;
+                                                        enabled: group.touch-back-enabled;
+                                                        clicked => {
+                                                            root.backend-file-value(group.instance, true);
+                                                        }
+                                                    }
+                                                    Rectangle { horizontal-stretch: 1; }
+                                                }
+                                            }
+                                            Notice {
+                                                text: group.touch-note;
+                                                font-size: Scale.grey-font;
+                                            }
+                                        }
+                                        if group.capture-shown: VerticalLayout {
+                                            spacing: 2px;
+                                            HorizontalLayout {
+                                                spacing: 12px;
+                                                Text {
+                                                    text: Strings.capture-backend;
+                                                    font-size: Scale.body-font;
+                                                    color: Look.text;
+                                                    wrap: word-wrap;
+                                                    vertical-alignment: center;
+                                                    width: 240px * Scale.factor;
+                                                    min-height: self.preferred-height;
+                                                }
+                                                HorizontalLayout {
+                                                    spacing: 6px;
+                                                    horizontal-stretch: 1;
+                                                    SkinComboBox {
+                                                        model: group.capture-options;
+                                                        current-index <=> group.capture-index;
+                                                        enabled: group.capture-enabled;
+                                                        accessible-label: Strings.capture-backend;
+                                                        min-width: 150px * Scale.factor;
+                                                        preferred-width: 200px * Scale.factor;
+                                                        horizontal-stretch: 0;
+                                                        selected => {
+                                                            root.backend-capture-picked(group.instance, self.current-index);
+                                                        }
+                                                    }
+                                                    if group.capture-back: SkinButton {
+                                                        text: Strings.use-file-value;
+                                                        enabled: group.capture-back-enabled;
+                                                        clicked => {
+                                                            root.backend-file-value(group.instance, false);
+                                                        }
+                                                    }
+                                                    Rectangle { horizontal-stretch: 1; }
+                                                }
+                                            }
+                                            Notice {
+                                                text: group.capture-note;
+                                                font-size: Scale.grey-font;
+                                            }
+                                        }
+                                        Notice {
+                                            text: Strings.backend-effect;
+                                            font-size: Scale.grey-font;
+                                        }
+                                        if group.paired: Notice {
+                                            text: Strings.backend-pair-note;
+                                            warning: true;
+                                        }
+                                        if group.selfcheck != "": Notice {
+                                            text: group.selfcheck;
+                                            warning: group.selfcheck-warning;
+                                        }
+                                        // Asked in place of "apply": the question wraps, its box
+                                        // and two buttons keep their size.
+                                        if group.asking: HorizontalLayout {
+                                            spacing: 6px;
+                                            Notice {
+                                                text: Strings.backend-ask;
+                                                warning: true;
+                                                vertical-alignment: center;
+                                                min-width: 40px * Scale.factor;
+                                                horizontal-stretch: 1;
+                                            }
+                                            SkinComboBox {
+                                                model: group.ask-options;
+                                                current-index <=> group.ask-index;
+                                                enabled: group.ask-enabled;
+                                                accessible-label: Strings.backend-ask;
+                                                min-width: 150px * Scale.factor;
+                                                preferred-width: 200px * Scale.factor;
+                                                horizontal-stretch: 0;
+                                                selected => {
+                                                    root.backend-asked(group.instance, self.current-index);
+                                                }
+                                            }
+                                            SkinButton {
+                                                text: Strings.apply-both;
+                                                enabled: group.ask-ready;
+                                                clicked => {
+                                                    root.backend-apply-both(group.instance);
+                                                }
+                                            }
+                                            SkinButton {
+                                                text: Strings.cancel;
+                                                clicked => {
+                                                    root.backend-cancel(group.instance);
+                                                }
+                                            }
+                                        }
+                                        if group.apply-shown: HorizontalLayout {
+                                            spacing: 12px;
+                                            SkinButton {
+                                                text: Strings.apply;
+                                                enabled: group.apply-ready;
+                                                clicked => {
+                                                    root.backend-apply(group.instance);
+                                                }
+                                            }
+                                            Notice {
+                                                text: group.status;
+                                                failed: group.status-failed;
+                                                vertical-alignment: center;
+                                                min-width: 40px * Scale.factor;
+                                                horizontal-stretch: 1;
+                                            }
+                                        }
+                                        if !group.apply-shown && group.status != "": Notice {
+                                            text: group.status;
+                                            failed: group.status-failed;
+                                        }
                                     }
                                     HorizontalLayout {
                                         spacing: 14px;

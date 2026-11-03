@@ -240,6 +240,9 @@ pub struct LiveLanded {
     /// The alias `--account` named, which no account this read lists has: the first
     /// one's picture shows instead.
     pub unknown_account: Option<String>,
+    /// It showed an unconfirmed switch of a device's backends over: the writes are counted
+    /// once more, so that the snapshot that judges it is read after this.
+    pub switch_over: bool,
 }
 
 /// What a schedule explanation read changed, for what the event loop does next.
@@ -746,6 +749,7 @@ impl Model {
             names_stale: false,
             fault_cleared,
             unknown_account: None,
+            switch_over: false,
         }
     }
 
@@ -777,7 +781,8 @@ impl Model {
             self.instances.iter().map(|instance| instance.alias.as_str()).collect();
         let unknown_account = self.pictures.settle(&aliases);
         self.global_pause = global_pause;
-        self.actions.status_read(self.global_pause.as_ref());
+        let switch_over =
+            self.actions.status_read(self.global_pause.as_ref(), &self.instances, Instant::now());
         let previous = mem::replace(&mut self.link, Link::Online { pid, epoch });
         let connected = !matches!(previous, Link::Online { .. });
         // The run's first answer comes as its first run of `packs` is out or just in:
@@ -794,6 +799,7 @@ impl Model {
             names_stale,
             fault_cleared,
             unknown_account,
+            switch_over,
         }
     }
 

@@ -12,11 +12,11 @@
 //! Only an answer of the Runtime online counts: while none comes, none of its settings
 //! shows, since an older read would pose as the present.
 //!
-//! One setting is changed here: how many days an evidence frame nobody confirmed reading is
-//! kept, the one the Runtime tiers advanced and takes while it runs. Its row is a field and
+//! One row's setting is changed here: how many days an evidence frame nobody confirmed reading
+//! is kept, the one the Runtime tiers advanced and takes while it runs. Its row is a field and
 //! "save" (`actions::evidence_view`), in its place among the others. Every other row says how
 //! its value is changed: in the configuration file with a restart, by the installer, or not on
-//! this page for now.
+//! this page for now. Each device's backends are changed in its group, below the rows.
 //!
 //! And what the start report of this owner epoch says of the settings changed while a Runtime
 //! ran: which this start did not restore, and which it kept over a default that changed.
@@ -24,14 +24,24 @@
 //! And, under the Runtime, whether it is started again when it is gone without a formal close,
 //! as the last run of `watchdog status` has it (`tools`): only shown, since registering the
 //! task is an installation's step and no setting of the Runtime.
+//!
+//! And after the advanced rows, a group for each device the newest `Status` lists whose
+//! backends the snapshot names (HS-U): its touch and capture backends, each in a box of the
+//! backends that kind of device has, with where its value comes from, and the device's newest
+//! self-check by the entries its touch backend opens. A fixture names no backend, nor does a
+//! Runtime before 0.12.39: no group then, and that is no error. How a group is changed is
+//! `actions::backend_edit`'s.
 
+use acui_source::workbench::backends::{
+    CaptureBackend, CheckStatus, EntryCheck, InEffect, InstanceBackends, Through, TouchBackend,
+};
 use acui_source::workbench::{
     ConfigRead, InstanceLive, ReportedName, ReportedSetting, SettingName, SettingSource,
     SettingTier, ShownValue, StartRead, UnreadRow, IDLE_CLOSE_APP, IDLE_NONE, IDLE_STOP_EMULATOR,
     PRIORITY_LOW, PRIORITY_NORMAL,
 };
 
-use super::actions::{self, Actions, EvidenceView};
+use super::actions::{self, Actions, BackendEdit, EvidenceView};
 use super::model::Link;
 use super::tools::{TaskState, WatchdogRead};
 use crate::install::ToolIssue;
@@ -58,10 +68,60 @@ pub enum SettingsView {
         advanced: Vec<SettingLine>,
         evidence: Option<EvidenceView>,
         advanced_after: Vec<SettingLine>,
+        /// Each device's backends, in the order of the newest `Status`.
+        backends: Vec<BackendGroup>,
+        /// The instance ids of devices whose backends the snapshot names and the newest
+        /// `Status` does not list: not shown, and said in the log.
+        unlisted: Vec<String>,
         /// Rows of the snapshot that may be of a setting shown here and do not read: the
         /// window says how many, the log which and why.
         unread: Vec<UnreadRow>,
     },
+}
+
+/// One device's group of its backends: its account's alias, what the snapshot says of them,
+/// and how it can be changed now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendGroup {
+    pub account: String,
+    pub backends: InstanceBackends,
+    pub edit: BackendEdit,
+}
+
+/// Which of a device's self-check entries a group says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckEntry {
+    Touch,
+    Capture,
+    /// MuMu's own pair, which opens both at once.
+    Nemu,
+}
+
+/// A device's newest self-check, of the entries its touch backend in effect opens: MuMu's own
+/// pair under MuMu's own touch, else the touch and the capture backends' own. An entry another
+/// configuration left is not said. When the newest of them was checked, if any says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelfCheckView {
+    pub entries: Vec<(CheckEntry, CheckStatus)>,
+    pub at: Option<u64>,
+}
+
+pub fn selfcheck_of(backends: &InstanceBackends) -> SelfCheckView {
+    let check = &backends.selfcheck;
+    let nemu = backends
+        .touch
+        .as_ref()
+        .is_some_and(|row| row.value == InEffect::Named(TouchBackend::Nemu));
+    let entries: Vec<(CheckEntry, &EntryCheck)> = if nemu {
+        check.nemu.iter().map(|entry| (CheckEntry::Nemu, entry)).collect()
+    } else {
+        let touch = check.input.iter().map(|entry| (CheckEntry::Touch, entry));
+        touch.chain(check.capture.iter().map(|entry| (CheckEntry::Capture, entry))).collect()
+    };
+    SelfCheckView {
+        at: entries.iter().filter_map(|(_, entry)| entry.checked_at).max(),
+        entries: entries.into_iter().map(|(which, entry)| (which, entry.status.clone())).collect(),
+    }
 }
 
 /// One row of the page.
@@ -147,8 +207,20 @@ pub fn view(
             SettingTier::Advanced => advanced.push(line),
         }
     }
+    let backends = instances
+        .iter()
+        .filter_map(|instance| {
+            let backends = read.backends.get(&instance.instance_id)?;
+            Some(BackendGroup {
+                account: instance.alias.clone(),
+                backends: backends.clone(),
+                edit: actions::backend_edit(backends, actions),
+            })
+        })
+        .collect();
+    let unlisted = read.backends.keys().filter(|id| !ids.contains(&id.as_str())).cloned().collect();
     let unread = settings.unread().to_vec();
-    SettingsView::Read { daily, advanced, evidence, advanced_after, unread }
+    SettingsView::Read { daily, advanced, evidence, advanced_after, backends, unlisted, unread }
 }
 
 /// The account of an instance's own setting: its alias, or its instance id when the newest
@@ -299,7 +371,51 @@ pub fn name_words(labels: &Labels, name: &SettingName) -> &'static str {
         SettingName::IoPriority => labels.setting_io_priority,
         SettingName::LabAuthoring => labels.setting_lab_authoring,
         SettingName::LabDebugging => labels.setting_lab_debugging,
+        SettingName::TouchBackend => labels.backend_touch,
+        SettingName::CaptureBackend => labels.backend_capture,
         SettingName::Unnamed(_) => labels.setting_unnamed,
+    }
+}
+
+/// A touch backend's name, as the contract's table has it (HS-M 6).
+pub fn touch_words(labels: &Labels, backend: TouchBackend) -> &'static str {
+    match backend {
+        TouchBackend::AdbInput => labels.backend_touch_adb,
+        TouchBackend::MaaTouch => labels.backend_touch_maatouch,
+        TouchBackend::Minitouch => labels.backend_touch_minitouch,
+        TouchBackend::Nemu => labels.backend_nemu,
+    }
+}
+
+/// A capture backend's name, likewise.
+pub fn capture_words(labels: &Labels, backend: CaptureBackend) -> &'static str {
+    match backend {
+        CaptureBackend::Adb => labels.backend_capture_adb,
+        CaptureBackend::DroidCast => labels.backend_capture_droidcast,
+        CaptureBackend::Nemu => labels.backend_nemu,
+        CaptureBackend::Scrcpy => labels.backend_capture_scrcpy,
+    }
+}
+
+/// A backend in effect in words: a word without a name here as it is written.
+pub fn in_effect_words<T: Copy>(
+    value: &InEffect<T>,
+    words: impl Fn(T) -> &'static str,
+) -> String {
+    match value {
+        InEffect::Named(backend) => words(*backend).to_owned(),
+        InEffect::Word(word) => word.clone(),
+    }
+}
+
+/// The way an online value came in.
+pub fn through_words(labels: &Labels, through: Through) -> &'static str {
+    match through {
+        Through::CommandLine => labels.backend_through_cli,
+        Through::Mcp => labels.backend_through_mcp,
+        Through::Console => labels.backend_through_console,
+        Through::Lab => labels.backend_through_lab,
+        Through::Other => labels.backend_through_other,
     }
 }
 
@@ -347,6 +463,7 @@ pub fn effect_words(labels: &Labels, name: &SettingName) -> Option<&'static str>
         SettingName::QuietTimesHost | SettingName::QuietTimes => Some(labels.setting_effect_round),
         SettingName::IdleAction => Some(labels.setting_effect_idle),
         SettingName::EvidenceMaxAgeDays => Some(labels.setting_effect_frames),
+        SettingName::TouchBackend | SettingName::CaptureBackend => Some(labels.backend_effect),
         SettingName::StartEmulator
         | SettingName::MumuRoot
         | SettingName::MemoryPriority

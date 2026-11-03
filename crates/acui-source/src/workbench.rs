@@ -74,7 +74,7 @@ use actingcommand_runtime_config::performance::{self, pacing};
 use actingcommand_runtime_config::{
     find_row, idle, instance_key, scalar_json, scheduling, ui_tier, ConfigCode,
     ConfigValueProblem, IdleAction, KeyName, ProcessPriorityLevel, UiTier, ValueType,
-    START_EMULATOR, UI_TIERS,
+    CAPTURE_BACKEND, START_EMULATOR, TOUCH_BACKEND, UI_TIERS,
 };
 
 use super::{
@@ -1050,6 +1050,10 @@ pub enum SettingName {
     /// The Lab's two options, authoring and debugging.
     LabAuthoring,
     LabDebugging,
+    /// An instance's touch and capture backends (HS-U). The settings page shows them as the
+    /// instance's device backends group, never as rows (`backends`): a start report names them.
+    TouchBackend,
+    CaptureBackend,
     /// A key of the tiers this file has no name for: its key-table name (a per-instance
     /// one's member), for the log only. A start report's key the key table does not have is
     /// one too, by the key itself.
@@ -1101,6 +1105,8 @@ fn setting_name(name: KeyName) -> SettingName {
         KeyName::Exact(PROCESS_IO_PRIORITY) => SettingName::IoPriority,
         KeyName::Exact(AUTHORING) => SettingName::LabAuthoring,
         KeyName::Exact(DEBUGGING) => SettingName::LabDebugging,
+        KeyName::PerInstance(TOUCH_BACKEND) => SettingName::TouchBackend,
+        KeyName::PerInstance(CAPTURE_BACKEND) => SettingName::CaptureBackend,
         KeyName::Exact(other) | KeyName::PerInstance(other) => {
             SettingName::Unnamed(other.to_owned())
         }

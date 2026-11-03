@@ -40,23 +40,42 @@
 //! and each waits for the snapshot the others wait for; but what it came to is said on a line
 //! of its own (`Field`), so neither answer hides the other's.
 //!
-//! `view`, `preset_view` and `evidence_view` are pure functions of what the reads and the
-//! presses left, without words; `paint` makes the words.
+//! The settings page's group of each device's touch and capture backends (HS-U) is one more:
+//! its boxes change a draft of that device's own, and "apply" sends the device's two backend
+//! keys that change, one or both, as one change of settings (`Field::Backends`), which
+//! switches that device before the Runtime answers. MuMu's own touch goes only with MuMu's own
+//! capture: picking it brings that capture along, and picking another capture under it asks
+//! which touch goes along before both are sent. "Use the file's value" sends a clear, which is
+//! a switch as well. The answer takes as long as the switch, up to about 65 seconds, and its
+//! group says it is switching meanwhile; what it came to is said on a line of its own, naming
+//! the account. An answer lost is no other change's (`Reread::Switch`): the device may still be
+//! switching, and the settings' version moves only at the switch's end, so nothing is judged
+//! until a `Status` shows the switch over, and then a snapshot read after that `Status` says
+//! what came of it, with the device's self-check as it then stands. Nothing is sent again by
+//! itself, whatever comes back.
+//!
+//! `view`, `preset_view`, `evidence_view` and `backend_edit` are pure functions of what the
+//! reads and the presses left, without words; `paint` makes the words.
 
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
+use std::time::Instant;
 
+use acui_source::workbench::backends::{
+    BackendChange, BackendRefusal, BackendTarget, BackendWhy, CaptureBackend, DeviceKind,
+    InEffect, InstanceBackends, SwitchSeen, SwitchVersion, TouchBackend, UnconfirmedSwitch,
+};
 use acui_source::workbench::{
-    configure, pause_global, ActivityKind, ConfigEdit, ConfigOutcome, ConfigRead, InstanceLive,
-    PauseOutcome, PresetMember, PresetSetting, RefusalWhy, SettingSource, SettingValue,
-    CONSOLE_PAUSE_ALL,
+    configure, pause_global, ActivityKind, ConfigEdit, ConfigOutcome, ConfigRead, ConfigRefusal,
+    InstanceLive, PauseOutcome, PresetMember, PresetSetting, RefusalWhy, SettingSource,
+    SettingValue, CONSOLE_PAUSE_ALL,
 };
 use acui_source::{resume_paused, ClientFailure, PauseFact, PauseTarget, ResumeOutcome};
 
 use super::model::Link;
 use super::read::panic_message;
-use super::settings::SettingsView;
+use super::settings::{BackendGroup, SettingsView};
 use super::{failure_line, paint};
 use crate::launcher::spawn_worker;
 use crate::ledger::resume::{lifter, Lifter};
@@ -100,11 +119,13 @@ const GLOBAL_SCHEDULING: (Scope, Kind) = (Scope::Global, Kind::Scheduling);
 const GLOBAL_SETTINGS: (Scope, Kind) = (Scope::Global, Kind::Settings);
 
 /// Where a change of settings was asked for, which is where what it came to is said: the
-/// top bar's presets and stepper, or the settings page's field of the evidence days.
+/// top bar's presets and stepper, the settings page's field of the evidence days, or its
+/// group of one device's backends (`Actions::backend_said_of` names which).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Field {
     TopBar,
     EvidenceDays,
+    Backends,
 }
 
 /// The line what a press came to is said on: one for pausing and resuming, and one for each
@@ -152,9 +173,16 @@ impl Write {
             Self::Configure { field, .. } => SaidAt::Settings(field),
         }
     }
+
+    /// Whether it is a switch of a device's backends.
+    fn switches_backends(self) -> bool {
+        matches!(self, Self::Configure { field: Field::Backends, .. })
+    }
 }
 
 const CONFIG_THREAD: &str = "acui-act-config";
+/// What the technical log's lines about the settings page's boxes are under, as `paint`'s.
+const SETTINGS_LOG: &str = "acui-settings";
 
 /// Where a change of settings stands, on top of the ticket that says one is out.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -193,6 +221,9 @@ pub enum Reread {
     Conflict,
     /// Nothing says what became of the change based on this version.
     Unconfirmed { based_on: Option<u64> },
+    /// Nothing says what became of a switch of a device's backends, which may still go on
+    /// (`Actions::switch` holds it): a snapshot judges it only once a `Status` shows it over.
+    Switch,
 }
 
 /// What the last press of a slot came to, before its words.
@@ -232,6 +263,38 @@ pub enum Said {
     UnconfirmedSeeNow,
     /// "Apply" found no whole number in the stepper's field: nothing was sent.
     NotWhole,
+    /// The Runtime refused a change of a device's backends, and said more of it than its class.
+    BackendRefused(BackendRefusal),
+    /// A snapshot came after a `Status` showed an unconfirmed switch over: what its version
+    /// says of it, and the device's backends and self-check as that snapshot has them.
+    SwitchOver { version: SwitchVersion, now: Option<InstanceBackends> },
+}
+
+/// One device's draft of its backends: what its boxes were set to, which is not in effect.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct BackendDraft {
+    touch: Option<TouchBackend>,
+    /// The capture picked. MuMu's own touch picked brings MuMu's own capture along whatever
+    /// this says, and taking another touch again shows this once more.
+    capture: Option<CaptureBackend>,
+    /// The touch picked in the question a capture under MuMu's own touch asks.
+    asked: Option<TouchBackend>,
+    /// A switch of this device was taken since: the draft shows until the snapshot read after
+    /// that answer, and is not sent meanwhile.
+    applied: bool,
+}
+
+impl BackendDraft {
+    fn is_empty(&self) -> bool {
+        self.touch.is_none() && self.capture.is_none()
+    }
+}
+
+/// A switch whose answer was lost, and whether a `Status` showed it over since.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingSwitch {
+    switch: UnconfirmedSwitch,
+    over: bool,
 }
 
 /// What a field holds that is not yet in effect: as typed, or as a step left it.
@@ -276,6 +339,15 @@ pub struct Actions {
     draft: Option<Draft>,
     /// The settings page's, of the evidence days.
     evidence_draft: Option<Draft>,
+    /// The settings page's, of each device's backends, by instance id.
+    backend_drafts: BTreeMap<String, BackendDraft>,
+    /// The switch of backends out: what it was sent to, and when it was pressed, which an
+    /// answer that says nothing makes an `UnconfirmedSwitch` of.
+    backend_out: Option<(BackendTarget, Instant)>,
+    /// The instance id of the device the backends' line speaks of: the last one switched.
+    backend_said_of: Option<String>,
+    /// The switch whose answer was lost, while `ConfigFlow::Rereading(Reread::Switch, _)`.
+    switch: Option<PendingSwitch>,
     /// What the last press said on each line came to: only its own press, answer or read
     /// changes it.
     said: BTreeMap<SaidAt, Said>,
@@ -307,7 +379,11 @@ impl Actions {
             return false;
         }
         self.out.remove(&slot);
-        if let Write::Configure { field, .. } = write {
+        let mut said = said;
+        if let Write::Configure { based_on, field } = write {
+            if field == Field::Backends {
+                said = self.backends_settled(based_on, said);
+            }
             self.flow = match said {
                 Said::Rereading(reread) => ConfigFlow::Rereading(reread, field),
                 _ => ConfigFlow::Idle,
@@ -324,10 +400,42 @@ impl Actions {
         true
     }
 
+    /// A switch of backends answered: the device's draft was taken when the switch was; an
+    /// answer that says nothing is held as the switch it may still be. With no switch to hold
+    /// (this program lost track of what it sent), it is judged as any other change's, said in
+    /// the log as the fault it is.
+    fn backends_settled(&mut self, based_on: Option<u64>, said: Said) -> Said {
+        let out = self.backend_out.take();
+        match (said, out) {
+            (Said::ConfigApplied, Some((target, _))) => {
+                if let Some(draft) = self.backend_drafts.get_mut(target.instance_id()) {
+                    draft.applied = true;
+                }
+                Said::ConfigApplied
+            }
+            (Said::Rereading(Reread::Switch), Some((target, sent))) => {
+                let switch = UnconfirmedSwitch::new(&target, based_on, sent);
+                self.switch = Some(PendingSwitch { switch, over: false });
+                Said::Rereading(Reread::Switch)
+            }
+            (Said::Rereading(Reread::Switch), None) => {
+                report::log(
+                    CONFIG_THREAD,
+                    "an unconfirmed switch of backends whose target this console no longer \
+                     holds: judged by the settings' version, as any other change",
+                );
+                Said::Rereading(Reread::Unconfirmed { based_on })
+            }
+            (said, _) => said,
+        }
+    }
+
     fn draft_mut(&mut self, field: Field) -> Option<&mut Draft> {
         match field {
             Field::TopBar => self.draft.as_mut(),
             Field::EvidenceDays => self.evidence_draft.as_mut(),
+            // Each device's own, by its instance (`backends_settled`).
+            Field::Backends => None,
         }
     }
 
@@ -342,11 +450,18 @@ impl Actions {
         if let Some(field) = self.flow.field() {
             said.insert(SaidAt::Settings(field), Said::Restarted);
         }
+        // The backends' line names its device while it says the restart.
+        if !said.contains_key(&SaidAt::Settings(Field::Backends)) {
+            self.backend_said_of = None;
+        }
         self.out.clear();
         self.confirming = None;
         self.flow = ConfigFlow::Idle;
         self.draft = None;
         self.evidence_draft = None;
+        self.backend_drafts.clear();
+        self.backend_out = None;
+        self.switch = None;
         self.said = said;
     }
 
@@ -360,6 +475,9 @@ impl Actions {
                 *draft = None;
             }
         }
+        // A device's draft goes with the switch taken, and with the device's group.
+        self.backend_drafts
+            .retain(|instance, draft| !draft.applied && read.backends.contains_key(instance));
         match &self.flow {
             ConfigFlow::Rereading(reread, field) => {
                 let (reread, field) = (*reread, *field);
@@ -370,12 +488,22 @@ impl Actions {
                         (Some(now), Some(based_on)) if now == based_on => Said::NotApplied,
                         (Some(_), _) => Said::UnconfirmedChanged,
                     },
+                    Reread::Switch => {
+                        self.switch_judged(read, field);
+                        return;
+                    }
                 };
                 // The settings changed, perhaps by this press: what shows is what holds.
                 if said == Said::UnconfirmedChanged {
                     match field {
                         Field::TopBar => self.draft = None,
                         Field::EvidenceDays => self.evidence_draft = None,
+                        // Only when the switch's target was lost (`backends_settled`).
+                        Field::Backends => {
+                            if let Some(instance) = &self.backend_said_of {
+                                self.backend_drafts.remove(instance);
+                            }
+                        }
                     }
                 }
                 log_verdict(reread, field, read.version, &said);
@@ -394,10 +522,53 @@ impl Actions {
         }
     }
 
-    /// A `Status` read that counts. A confirmation is of one pause, and goes with it.
-    /// A line saying a press worked goes once `Status` says otherwise: the reads begun
-    /// before that press were let go, so this says someone changed it since.
-    pub fn status_read(&mut self, global: Option<&PauseFact>) {
+    /// A snapshot that counts while an unconfirmed switch is awaited: nothing yet while no
+    /// `Status` has shown it over, since the settings' version moves only at its end; once one
+    /// has, this snapshot was read after it, and what it says of the switch is said, with the
+    /// device's self-check as it has it. A switch nobody holds is this program's fault: said in
+    /// the log, and the line says to go by what shows.
+    fn switch_judged(&mut self, read: &ConfigRead, field: Field) {
+        let Some(pending) = &self.switch else {
+            report::log(
+                CONFIG_THREAD,
+                "a switch's verdict was awaited with no switch held: nothing more is awaited",
+            );
+            self.said.insert(SaidAt::Settings(field), Said::UnconfirmedSeeNow);
+            self.flow = ConfigFlow::Idle;
+            return;
+        };
+        if !pending.over {
+            return;
+        }
+        let verdict = pending.switch.verdict(read);
+        let instance = pending.switch.instance_id().to_owned();
+        // The settings changed, perhaps by this switch: what shows is what holds.
+        if verdict.version == SwitchVersion::Changed {
+            self.backend_drafts.remove(&instance);
+        }
+        let line = format!(
+            "snapshot read after the unconfirmed switch of instance {instance} was over, \
+             version now {:?}: {verdict:?}",
+            read.version,
+        );
+        report::log(CONFIG_THREAD, &line);
+        let said = Said::SwitchOver { version: verdict.version, now: verdict.now };
+        self.said.insert(SaidAt::Settings(field), said);
+        self.switch = None;
+        self.flow = ConfigFlow::Idle;
+    }
+
+    /// A `Status` read that counts, landed at `now` with these `instances`. A confirmation is
+    /// of one pause, and goes with it. A line saying a press worked goes once `Status` says
+    /// otherwise: the reads begun before that press were let go, so this says someone changed
+    /// it since. Whether it shows an unconfirmed switch over: then the writes are to be counted
+    /// once more (`super::wrote`), so that the snapshot that judges it is read after this.
+    pub fn status_read(
+        &mut self,
+        global: Option<&PauseFact>,
+        instances: &[InstanceLive],
+        now: Instant,
+    ) -> bool {
         if self.confirming.as_ref() != global.map(|pause| &pause.target) {
             self.confirming = None;
         }
@@ -408,6 +579,44 @@ impl Actions {
         };
         if overtaken {
             self.said.remove(&SaidAt::Scheduling);
+        }
+        self.switch_seen(instances, now)
+    }
+
+    /// What a `Status` says of the unconfirmed switch awaited, if one is and it may still go
+    /// on: whether it shows it over now.
+    fn switch_seen(&mut self, instances: &[InstanceLive], now: Instant) -> bool {
+        if !matches!(self.flow, ConfigFlow::Rereading(Reread::Switch, _)) {
+            return false;
+        }
+        let Some(pending) = self.switch.as_mut().filter(|pending| !pending.over) else {
+            return false;
+        };
+        let instance = pending.switch.instance_id().to_owned();
+        match pending.switch.seen(now, instances) {
+            SwitchSeen::MayGoOn => false,
+            SwitchSeen::Over => {
+                pending.over = true;
+                report::log_quiet(
+                    CONFIG_THREAD,
+                    &format!(
+                        "the unconfirmed switch of instance {instance} is over, as a Status \
+                         shows: what came of it is read next"
+                    ),
+                );
+                true
+            }
+            SwitchSeen::Unlisted => {
+                pending.over = true;
+                report::log(
+                    CONFIG_THREAD,
+                    &format!(
+                        "the Status lists no instance {instance}, whose switch is unconfirmed: \
+                         taken as over, in a state this console does not know"
+                    ),
+                );
+                true
+            }
         }
     }
 
@@ -465,6 +674,10 @@ pub struct ActionsView {
     pub scheduling_said: Option<Said>,
     pub settings_said: Option<Said>,
     pub evidence_said: Option<Said>,
+    /// And of the last switch of a device's backends, on a line of its own that names the
+    /// device's account: its alias, `None` when the newest `Status` does not list it.
+    pub backends_said: Option<Said>,
+    pub backends_account: Option<String>,
     /// Accounts under a pause of their own, which lifting the global one leaves, and
     /// whether Alice lifts any of those.
     pub still_paused: usize,
@@ -477,7 +690,8 @@ pub struct ActionsView {
     pub finishing: Option<usize>,
     /// A snapshot is awaited before anything more is saved, and none can come: the reads
     /// fail, or no Runtime answers (the same epoch answering again reads one). On the line
-    /// of the field whose change awaits it.
+    /// of the field whose change awaits it. Not while an unconfirmed switch may still go on,
+    /// which no snapshot judges yet: its line keeps saying that.
     pub reread_failed: Option<Field>,
 }
 
@@ -516,6 +730,13 @@ pub fn view(
         scheduling_said: actions.said.get(&SaidAt::Scheduling).cloned(),
         settings_said: actions.said.get(&SaidAt::Settings(Field::TopBar)).cloned(),
         evidence_said: actions.said.get(&SaidAt::Settings(Field::EvidenceDays)).cloned(),
+        backends_said: actions.said.get(&SaidAt::Settings(Field::Backends)).cloned(),
+        backends_account: actions.backend_said_of.as_ref().and_then(|id| {
+            instances
+                .iter()
+                .find(|instance| instance.instance_id == *id)
+                .map(|instance| instance.alias.clone())
+        }),
         still_paused: paused().count(),
         alice_holds: paused().any(|pause| lifter(&pause.reason) == Lifter::Alice),
         finishing: config.is_some_and(|read| read.version.is_some()).then(|| {
@@ -530,6 +751,11 @@ pub fn view(
                 .count()
         }),
         reread_failed: match actions.flow {
+            ConfigFlow::Rereading(Reread::Switch, _)
+                if actions.switch.as_ref().is_some_and(|pending| !pending.over) =>
+            {
+                None
+            }
             ConfigFlow::Rereading(_, field) if config_failed || !online => Some(field),
             _ => None,
         },
@@ -633,6 +859,304 @@ pub fn evidence_view(days: Option<i64>, source: SettingSource, actions: &Actions
         draft: draft.map(|draft| draft.text.clone()),
         can_write: actions.flow.open(),
         can_save: changes_anything(draft, days, source == SettingSource::Online),
+    }
+}
+
+/// What the settings page's group of one device's backends offers now: each box's choices and
+/// the one it shows, whether it can be changed, "use the file's value", the pair, the question,
+/// "apply", and where the group stands. Its words are `paint`'s.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendEdit {
+    /// `None`: that row does not read, and the group does not show it.
+    pub touch: Option<RowEdit<TouchBackend>>,
+    pub capture: Option<RowEdit<CaptureBackend>>,
+    /// MuMu's own touch is picked over another capture in effect: both change together.
+    pub paired: bool,
+    /// A capture picked under MuMu's own touch in effect would leave that touch without its
+    /// pair: which touch goes with it is asked before both are sent, and "apply" is off.
+    pub question: Option<Question>,
+    /// What "apply" sends, while it would change anything and can be pressed.
+    pub apply: Option<(BackendChange<TouchBackend>, BackendChange<CaptureBackend>)>,
+    pub state: GroupState,
+}
+
+/// One of a device's two boxes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowEdit<T> {
+    pub choices: Vec<Choice<T>>,
+    /// The choice shown: the draft's, else the one in effect.
+    pub shown: usize,
+    /// The choice of what is in effect, when the box has it.
+    in_effect: Option<usize>,
+    /// The box shows another than what is in effect.
+    pub drafted: bool,
+    /// The box can be changed now.
+    pub enabled: bool,
+    /// "Use the file's value", while the value in effect is an online one.
+    pub file_value: Option<UseFileValue>,
+}
+
+impl<T: Copy> RowEdit<T> {
+    /// What picking the choice at `index` leaves the box's draft: `Some(None)` for what is in
+    /// effect, `None` for a choice the box does not have.
+    fn pick(&self, index: i32) -> Option<Option<T>> {
+        let index = usize::try_from(index).ok()?;
+        let choice = self.choices.get(index)?;
+        if Some(index) == self.in_effect {
+            return Some(None);
+        }
+        Some(match choice {
+            Choice::Backend(backend) => Some(*backend),
+            Choice::Word(_) => None,
+        })
+    }
+}
+
+/// One choice of a box.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Choice<T> {
+    Backend(T),
+    /// What is in effect, a word of the key's range without a name here, as it is written:
+    /// picking it keeps it.
+    Word(String),
+}
+
+impl<T: PartialEq> Choice<T> {
+    fn is(&self, now: &InEffect<T>) -> bool {
+        match (self, now) {
+            (Self::Backend(choice), InEffect::Named(now)) => choice == now,
+            (Self::Word(choice), InEffect::Word(now)) => choice == now,
+            (Self::Backend(_), InEffect::Word(_)) | (Self::Word(_), InEffect::Named(_)) => false,
+        }
+    }
+}
+
+/// "Use the file's value" of one row: the clear it sends, of that row's key alone, or of both
+/// (`both`) when clearing it alone might leave MuMu's own touch without MuMu's own capture, or
+/// the file's value under the other online one does not read. Whether it can be pressed now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UseFileValue {
+    pub both: bool,
+    pub touch: BackendChange<TouchBackend>,
+    pub capture: BackendChange<CaptureBackend>,
+    pub enabled: bool,
+}
+
+/// The question a capture picked under MuMu's own touch asks: which touch goes with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Question {
+    /// Every touch backend of the device but MuMu's own.
+    pub choices: Vec<TouchBackend>,
+    pub picked: Option<usize>,
+    /// What "apply both" sends, once a touch is picked and it can be pressed.
+    pub apply: Option<(BackendChange<TouchBackend>, BackendChange<CaptureBackend>)>,
+}
+
+/// Where a device's group stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupState {
+    /// Its boxes can be changed.
+    Open,
+    /// Its kind of device does not read: shown only.
+    KindUnread,
+    /// One of its rows does not read: shown only.
+    RowUnread,
+    /// Its switch is out.
+    Switching,
+    /// Its switch's answer was lost: it may still go on, or (`over`) a `Status` showed it over
+    /// and the snapshot that tells what came of it is awaited.
+    Unconfirmed { over: bool },
+    /// The settings had moved on when it was sent: a snapshot is awaited.
+    Rereading,
+    /// Another change of settings is out or awaits its snapshot.
+    OtherWrite,
+}
+
+/// The group of `backends` as the presses left it. A box offers the backends its kind of
+/// device has, and what is in effect first when that is none of them; a box set to what is in
+/// effect asks for nothing. MuMu's own touch picked leaves its capture only MuMu's own. "Apply"
+/// sends what the boxes ask for, one key or both, unless a capture picked under MuMu's own touch
+/// in effect waits for the question's touch. A draft whose switch was taken is not sent again.
+pub fn backend_edit(backends: &InstanceBackends, actions: &Actions) -> BackendEdit {
+    let state = group_state(backends, actions);
+    let open = state == GroupState::Open;
+    let draft = actions.backend_drafts.get(backends.instance_id());
+    let sendable = open && !draft.is_some_and(|draft| draft.applied);
+    let kind = backends.kind.as_ref().ok().copied();
+    let touch_offered = kind.map_or_else(Vec::new, DeviceKind::touch_backends);
+    let (touch_choices, touch_wanted) = match &backends.touch {
+        Some(row) => {
+            let choices = choices(touch_offered.clone(), &row.value);
+            let wanted = draft
+                .and_then(|draft| draft.touch)
+                .filter(|touch| changes(&choices, &row.value, *touch));
+            (Some(choices), wanted)
+        }
+        None => (None, None),
+    };
+    let nemu_picked = touch_wanted == Some(TouchBackend::Nemu);
+    let (capture_choices, capture_wanted) = match &backends.capture {
+        Some(row) if nemu_picked => {
+            let choices = vec![Choice::Backend(CaptureBackend::Nemu)];
+            let wanted = Some(CaptureBackend::Nemu)
+                .filter(|capture| changes(&choices, &row.value, *capture));
+            (Some(choices), wanted)
+        }
+        Some(row) => {
+            let offered = kind.map_or_else(Vec::new, DeviceKind::capture_backends);
+            let choices = choices(offered, &row.value);
+            let wanted = draft
+                .and_then(|draft| draft.capture)
+                .filter(|capture| changes(&choices, &row.value, *capture));
+            (Some(choices), wanted)
+        }
+        None => (None, None),
+    };
+    let touch_change = touch_wanted.map_or(BackendChange::Keep, BackendChange::To);
+    let capture_change = capture_wanted.map_or(BackendChange::Keep, BackendChange::To);
+    let nemu_touch_now = backends
+        .touch
+        .as_ref()
+        .is_some_and(|row| row.value == InEffect::Named(TouchBackend::Nemu));
+    let unpaired = touch_wanted.is_none()
+        && nemu_touch_now
+        && capture_wanted.is_some_and(|capture| capture != CaptureBackend::Nemu);
+    let (touch_file, capture_file) = use_file_value(backends, open);
+    let touch = backends.touch.as_ref().zip(touch_choices).map(|(row, choices)| {
+        row_edit(choices, &row.value, touch_wanted, open && row.settable, touch_file)
+    });
+    let capture = backends.capture.as_ref().zip(capture_choices).map(|(row, choices)| {
+        row_edit(choices, &row.value, capture_wanted, open && row.settable, capture_file)
+    });
+    let question = unpaired.then(|| {
+        let choices: Vec<TouchBackend> = touch_offered
+            .iter()
+            .copied()
+            .filter(|touch| *touch != TouchBackend::Nemu)
+            .collect();
+        let asked = draft.and_then(|draft| draft.asked).filter(|asked| choices.contains(asked));
+        Question {
+            picked: asked.and_then(|asked| choices.iter().position(|touch| *touch == asked)),
+            apply: asked
+                .filter(|_| sendable)
+                .map(|asked| (BackendChange::To(asked), capture_change)),
+            choices,
+        }
+    });
+    let anything = touch_wanted.is_some() || capture_wanted.is_some();
+    BackendEdit {
+        touch,
+        capture,
+        paired: nemu_picked && capture_wanted == Some(CaptureBackend::Nemu),
+        question,
+        apply: (sendable && anything && !unpaired).then_some((touch_change, capture_change)),
+        state,
+    }
+}
+
+/// The choices of a box: the backends `offered`, after what is in effect when that is none of
+/// them, a word without a name here included.
+fn choices<T: Copy + PartialEq>(offered: Vec<T>, now: &InEffect<T>) -> Vec<Choice<T>> {
+    let mut choices = Vec::new();
+    match now {
+        InEffect::Named(backend) if !offered.contains(backend) => {
+            choices.push(Choice::Backend(*backend));
+        }
+        InEffect::Word(word) => choices.push(Choice::Word(word.clone())),
+        InEffect::Named(_) => {}
+    }
+    choices.extend(offered.into_iter().map(Choice::Backend));
+    choices
+}
+
+/// Whether a box asking for `wanted` changes anything: a backend it offers, not the one in
+/// effect.
+fn changes<T: Copy + PartialEq>(choices: &[Choice<T>], now: &InEffect<T>, wanted: T) -> bool {
+    choices.contains(&Choice::Backend(wanted)) && *now != InEffect::Named(wanted)
+}
+
+fn row_edit<T: Copy + PartialEq>(
+    choices: Vec<Choice<T>>,
+    now: &InEffect<T>,
+    wanted: Option<T>,
+    enabled: bool,
+    file_value: Option<UseFileValue>,
+) -> RowEdit<T> {
+    let in_effect = choices.iter().position(|choice| choice.is(now));
+    let drafted = wanted.and_then(|wanted| {
+        choices.iter().position(|choice| *choice == Choice::Backend(wanted))
+    });
+    RowEdit {
+        shown: drafted.or(in_effect).unwrap_or(0),
+        drafted: drafted.is_some(),
+        choices,
+        in_effect,
+        enabled,
+        file_value,
+    }
+}
+
+/// "Use the file's value" of each row whose value is an online one. Clearing only the one
+/// online row brings back the file's pair, which actingd checked. With both online, clearing
+/// one leaves the other's online value beside the first's file value: when that could leave
+/// MuMu's own touch without MuMu's own capture, or the file's value under it does not read,
+/// both are cleared.
+fn use_file_value(
+    backends: &InstanceBackends,
+    open: bool,
+) -> (Option<UseFileValue>, Option<UseFileValue>) {
+    let (Some(touch), Some(capture)) = (&backends.touch, &backends.capture) else {
+        return (None, None);
+    };
+    let touch_online = touch.source == SettingSource::Online;
+    let capture_online = capture.source == SettingSource::Online;
+    let nemu_touch = InEffect::Named(TouchBackend::Nemu);
+    let nemu_capture = InEffect::Named(CaptureBackend::Nemu);
+    let touch_file = touch.online.as_ref().and_then(|online| online.file_value.as_ref());
+    let capture_file = capture.online.as_ref().and_then(|online| online.file_value.as_ref());
+    let touch_alone = !capture_online
+        || touch_file.is_some_and(|file| *file != nemu_touch || capture.value == nemu_capture);
+    let capture_alone = !touch_online
+        || capture_file.is_some_and(|file| touch.value != nemu_touch || *file == nemu_capture);
+    let touch_offer = touch_online.then(|| UseFileValue {
+        both: !touch_alone,
+        touch: BackendChange::BackToFile,
+        capture: if touch_alone { BackendChange::Keep } else { BackendChange::BackToFile },
+        enabled: open && touch.settable && (touch_alone || capture.settable),
+    });
+    let capture_offer = capture_online.then(|| UseFileValue {
+        both: !capture_alone,
+        touch: if capture_alone { BackendChange::Keep } else { BackendChange::BackToFile },
+        capture: BackendChange::BackToFile,
+        enabled: open && capture.settable && (capture_alone || touch.settable),
+    });
+    (touch_offer, capture_offer)
+}
+
+/// Where the group of `backends` stands: its own switch out or awaited first, then what keeps
+/// it shown only, then another change of settings out.
+fn group_state(backends: &InstanceBackends, actions: &Actions) -> GroupState {
+    let ours = actions.flow.field() == Some(Field::Backends)
+        && actions.backend_said_of.as_deref() == Some(backends.instance_id());
+    if ours {
+        match actions.flow {
+            ConfigFlow::InFlight(_) => return GroupState::Switching,
+            ConfigFlow::Rereading(Reread::Switch, _) => {
+                let over = actions.switch.as_ref().is_some_and(|pending| pending.over);
+                return GroupState::Unconfirmed { over };
+            }
+            ConfigFlow::Rereading(..) => return GroupState::Rereading,
+            ConfigFlow::Idle | ConfigFlow::Confirming { .. } => {}
+        }
+    }
+    if backends.kind.is_err() {
+        GroupState::KindUnread
+    } else if backends.target().is_none() {
+        GroupState::RowUnread
+    } else if !actions.flow.open() {
+        GroupState::OtherWrite
+    } else {
+        GroupState::Open
     }
 }
 
@@ -744,6 +1268,12 @@ impl Written {
             | Self::Resume(ResumeOutcome::Unconfirmed(_)) => Said::Unconfirmed,
             Self::Config(ConfigOutcome::Applied { .. }) => Said::ConfigApplied,
             Self::Config(ConfigOutcome::Conflict { .. }) => Said::Rereading(Reread::Conflict),
+            // What a refusal of a switch says of the backends comes before its class.
+            Self::Config(ConfigOutcome::Refused(ConfigRefusal { backend: Some(backend), .. }))
+                if write.switches_backends() =>
+            {
+                Said::BackendRefused(backend)
+            }
             Self::Config(ConfigOutcome::Refused(refused)) => match refused.why {
                 RefusalWhy::Other => {
                     Said::Refused { write, code: refusal(&refused.failure).to_owned() }
@@ -751,7 +1281,10 @@ impl Written {
                 why => Said::ConfigRefused(why),
             },
             Self::Config(ConfigOutcome::NotSent(_)) => Said::NotSent,
+            // A switch may still go on: only a `Status` that shows it over lets a snapshot
+            // judge it. The thread's panic too, which brings no answer at all.
             Self::Config(ConfigOutcome::Unconfirmed(_)) | Self::Panicked(_) => match write {
+                Write::Configure { field: Field::Backends, .. } => Said::Rereading(Reread::Switch),
                 Write::Configure { based_on, .. } => {
                     Said::Rereading(Reread::Unconfirmed { based_on })
                 }
@@ -807,15 +1340,41 @@ impl Written {
                 write.thread(),
                 &format!("{prefix}: settings moved on, version now {current:?}; nothing changed"),
             ),
-            Self::Config(ConfigOutcome::Refused(refused)) => report::log(
-                write.thread(),
-                &format!(
+            Self::Config(ConfigOutcome::Refused(refused)) => {
+                let mut line = format!(
                     "{prefix}: refused: {}, key {:?}, {:?}",
                     failure_line(&refused.failure),
                     refused.key,
                     refused.why,
-                ),
-            ),
+                );
+                // The backends' part, the receipt's whole outcome with it; a request that mixed
+                // in anything else is this console's own fault.
+                if let Some(backend) = &refused.backend {
+                    line.push_str(&format!(
+                        "; backends: {:?}, not restored {:?}; outcome: {}",
+                        backend.why,
+                        backend.not_restored,
+                        backend.line(),
+                    ));
+                    if backend.why == Some(BackendWhy::NotAlone) {
+                        line.push_str(
+                            "; this console's own fault: its switch mixed in another setting or \
+                             another instance's",
+                        );
+                    }
+                }
+                report::log(write.thread(), &line);
+            }
+            Self::Config(ConfigOutcome::Unconfirmed(failure)) if write.switches_backends() => {
+                report::log(
+                    write.thread(),
+                    &format!(
+                        "{prefix}: switch unconfirmed, not sent again; the device may still be \
+                         switching, so a Status is to show it over first: {}",
+                        failure_line(failure)
+                    ),
+                );
+            }
             Self::Pause(PauseOutcome::Unconfirmed(failure))
             | Self::Resume(ResumeOutcome::Unconfirmed(failure))
             | Self::Config(ConfigOutcome::Unconfirmed(failure)) => report::log(
@@ -1007,6 +1566,162 @@ pub fn evidence_save(ui: &Ui) {
         Typed::Whole(days) => send_config(ui, ConfigEdit::evidence_days(days), Field::EvidenceDays),
         Typed::NotWhole => not_whole(ui, Field::EvidenceDays),
     }
+}
+
+/// The settings page's group of one device's backends as it stands, by its instance id.
+fn backend_group(ui: &Ui, instance: &str) -> Option<BackendGroup> {
+    let view = ui.model.borrow().settings_view();
+    let SettingsView::Read { backends, .. } = view else {
+        return None;
+    };
+    backends.into_iter().find(|group| group.backends.instance_id() == instance)
+}
+
+/// A device's touch box set to the choice at `index`: its draft, whatever it was. A question a
+/// capture asked goes with it: the touch picked here answers it. A pick on a box that is not
+/// open changes nothing, and the box goes back to what it shows; one of a choice the box does
+/// not have is this program's fault as well, in the log.
+pub fn backend_touch_picked(ui: &Ui, instance: &str, index: i32) {
+    let picked = backend_group(ui, instance)
+        .and_then(|group| group.edit.touch)
+        .filter(|row| row.enabled)
+        .map(|row| row.pick(index));
+    match picked {
+        Some(Some(touch)) => backend_draft(ui, instance, |draft| {
+            draft.touch = touch;
+            draft.asked = None;
+        }),
+        Some(None) => unoffered(instance, "touch", index),
+        None => {}
+    }
+    paint::settings(ui);
+}
+
+/// The same of a device's capture box. A question it asked before goes with it.
+pub fn backend_capture_picked(ui: &Ui, instance: &str, index: i32) {
+    let picked = backend_group(ui, instance)
+        .and_then(|group| group.edit.capture)
+        .filter(|row| row.enabled)
+        .map(|row| row.pick(index));
+    match picked {
+        Some(Some(capture)) => backend_draft(ui, instance, |draft| {
+            draft.capture = capture;
+            draft.asked = None;
+        }),
+        Some(None) => unoffered(instance, "capture", index),
+        None => {}
+    }
+    paint::settings(ui);
+}
+
+/// The question's box set to the choice at `index`, the first being "pick one".
+pub fn backend_asked(ui: &Ui, instance: &str, index: i32) {
+    let picked = backend_group(ui, instance)
+        .filter(|group| group.edit.state == GroupState::Open)
+        .and_then(|group| group.edit.question)
+        .map(|question| match usize::try_from(index) {
+            Ok(0) => Some(None),
+            Ok(at) => question.choices.get(at - 1).copied().map(Some),
+            Err(_) => None,
+        });
+    match picked {
+        Some(Some(asked)) => backend_draft(ui, instance, |draft| draft.asked = asked),
+        Some(None) => unoffered(instance, "question's touch", index),
+        None => {}
+    }
+    paint::settings(ui);
+}
+
+/// "Apply": what the boxes ask for, once.
+pub fn backend_apply(ui: &Ui, instance: &str) {
+    let Some(group) = backend_group(ui, instance) else {
+        return;
+    };
+    if let Some((touch, capture)) = group.edit.apply {
+        send_backends(ui, &group.backends, touch, capture);
+    }
+}
+
+/// "Apply both": the question's touch with the capture that asked it, once.
+pub fn backend_apply_both(ui: &Ui, instance: &str) {
+    let Some(group) = backend_group(ui, instance) else {
+        return;
+    };
+    if let Some((touch, capture)) = group.edit.question.and_then(|question| question.apply) {
+        send_backends(ui, &group.backends, touch, capture);
+    }
+}
+
+/// "Cancel" on the question: the device's draft goes, and its boxes show what is in effect.
+pub fn backend_cancel(ui: &Ui, instance: &str) {
+    ui.model.borrow_mut().actions_mut().backend_drafts.remove(instance);
+    paint::settings(ui);
+}
+
+/// "Use the file's value" of the touch row, or of the capture row: its clear, once, and the
+/// other's with it when the offer says both.
+pub fn backend_file_value(ui: &Ui, instance: &str, touch_row: bool) {
+    let Some(group) = backend_group(ui, instance) else {
+        return;
+    };
+    let offer = if touch_row {
+        group.edit.touch.and_then(|row| row.file_value)
+    } else {
+        group.edit.capture.and_then(|row| row.file_value)
+    };
+    if let Some(offer) = offer.filter(|offer| offer.enabled) {
+        send_backends(ui, &group.backends, offer.touch, offer.capture);
+    }
+}
+
+/// A device's draft, changed; one that asks for nothing goes. Whatever it asks for now was not
+/// taken yet.
+fn backend_draft(ui: &Ui, instance: &str, change: impl FnOnce(&mut BackendDraft)) {
+    let mut model = ui.model.borrow_mut();
+    let drafts = &mut model.actions_mut().backend_drafts;
+    let draft = drafts.entry(instance.to_owned()).or_default();
+    change(draft);
+    draft.applied = false;
+    let empty = draft.is_empty();
+    if empty {
+        drafts.remove(instance);
+    }
+}
+
+/// A box's pick of a choice it does not have: the box went out of step with what it shows.
+fn unoffered(instance: &str, which: &str, index: i32) {
+    let line =
+        format!("instance {instance}: the {which} box picked choice {index}, which it has not");
+    report::log(SETTINGS_LOG, &line);
+}
+
+/// One switch of the device `backends` reads: what is sent goes in the log first, keys and
+/// all, as any change of settings (`send_config`). The device and when it was pressed are kept
+/// for the answer: an answer that says nothing is judged as that switch's.
+fn send_backends(
+    ui: &Ui,
+    backends: &InstanceBackends,
+    touch: BackendChange<TouchBackend>,
+    capture: BackendChange<CaptureBackend>,
+) {
+    let instance = backends.instance_id();
+    let Some(target) = backends.target() else {
+        let line = format!("instance {instance}: no switch of its backends can be sent");
+        report::log(CONFIG_THREAD, &line);
+        return;
+    };
+    let Some(edit) = ConfigEdit::backends(&target, touch, capture) else {
+        let line = format!("instance {instance}: a switch that changes nothing; not sent");
+        report::log(CONFIG_THREAD, &line);
+        return;
+    };
+    {
+        let mut model = ui.model.borrow_mut();
+        let actions = model.actions_mut();
+        actions.backend_said_of = Some(instance.to_owned());
+        actions.backend_out = Some((target, Instant::now()));
+    }
+    send_config(ui, edit, Field::Backends);
 }
 
 /// The table is read once at the Runtime's start, so a preset shown is in it: a preset

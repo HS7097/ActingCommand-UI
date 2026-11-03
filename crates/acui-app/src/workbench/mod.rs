@@ -26,7 +26,9 @@
 //!
 //! What a person writes from the top bar is in `actions`: each write on a thread and
 //! a connection of its own, sent once. Once one lands, a read begun before that no
-//! longer counts: it is let go, and read again. A person's refresh of the picture is sent
+//! longer counts: it is let go, and read again. So it is once a `Status` shows over a
+//! switch of a device's backends whose answer was lost, which only a snapshot read after
+//! that may judge. A person's refresh of the picture is sent
 //! the same way, on a ticket of the account's own (`refresh`), and lets no read go.
 //!
 //! Which of the workbench's two pages shows, the accounts or the settings, is the
@@ -448,6 +450,10 @@ fn live_landed(ui: &Ui, read: LiveRead) {
     // No refresh of the picture out holds across a restart.
     if landed.epoch_changed {
         refresh::restarted(ui);
+    }
+    // An unconfirmed switch shown over: only a snapshot begun after this says what came of it.
+    if landed.switch_over {
+        wrote(ui);
     }
     // Online or not, another epoch, the account gone, a task begun or over.
     preview::sync(ui);
