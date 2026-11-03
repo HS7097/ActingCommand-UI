@@ -7,7 +7,7 @@
 //! the Runtime's settings, the same way as the cards, with the field of the evidence days
 //! among them; what the start report says of the settings; and whether the Runtime is started
 //! again when it is gone. And the right column's live view, from its view, the frame's pixels
-//! once when it lands.
+//! once when it lands; and under it the picture's refresh, painted with it.
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -26,7 +26,10 @@ use super::actions::{
 };
 use super::card::{Band, CardView, Down, Line, ReasonClass};
 use super::model::{Fault, Page};
-use super::picture::{DimWhy, EmptyWhy, Offline, Origin, OverlayView, PictureView, Unread};
+use super::picture::{
+    DimWhy, Doing, EmptyWhy, Offline, Origin, OverlayView, PictureView, RefreshHold, RefreshWhyNot,
+    Refreshed, Unread,
+};
 use super::preview;
 use super::settings::{
     self, AutostartView, ReportedAccount, ReportedLine, SettingLine, SettingsView, StartView,
@@ -43,8 +46,9 @@ use crate::{
 
 /// What the technical log's lines about the settings page are under.
 const SETTINGS_LOG: &str = "acui-settings";
-/// And those about the live view.
+/// And those about the live view, and its refresh.
 const PICTURE_LOG: &str = preview::THREAD;
+const REFRESH_LOG: &str = super::refresh::THREAD;
 
 /// Which page shows.
 pub fn page(ui: &Ui) {
@@ -84,8 +88,10 @@ pub fn cards(ui: &Ui) {
 /// a task's frame, unless turned off, the boxes its recognition evaluated and the points its
 /// inputs were meant at, which the box beside the title turns off and on; under the frame in
 /// amber why nothing is drawn on it, and that its proportions are not among those its game's
-/// standard pack declares.
+/// standard pack declares. Under all that the picture's refresh, which goes by what changes the
+/// picture (`refresh`).
 pub fn picture(ui: &Ui) {
+    refresh(ui);
     let Some(window) = ui.workbench() else {
         return;
     };
@@ -129,6 +135,7 @@ pub fn picture(ui: &Ui) {
     let origin_text = match origin {
         Origin::Task => labels.picture_from_task,
         Origin::Observation => labels.picture_from_observation,
+        Origin::OwnRefresh => labels.picture_from_refresh,
     };
     window.set_picture_corner(corner.into());
     window.set_picture_corner_warn(warn);
@@ -237,7 +244,7 @@ pub fn picture_age(ui: &Ui) {
 }
 
 /// Now, in the milliseconds a frame's capture is stated in.
-fn now_ms() -> u64 {
+pub(super) fn now_ms() -> u64 {
     let since = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
 }
@@ -333,6 +340,107 @@ fn capture_words(ui: &Ui, labels: &Labels, code: Option<&str>) -> String {
         }
         Err(error) => fill(labels.outcome_table_unusable, &[&error.to_string()]),
     }
+}
+
+/// Under the live view, while an account's picture shows: the button that refreshes it
+/// (UI-3c-2), pressed only when it may be; beside it why it may not, and while it cools down
+/// that it was just refreshed, never for how long; under it, on a line of its own so that
+/// neither hides the other, what the last refresh of that account came to, red when it failed.
+/// What a refresh costs is the window's own, in grey.
+pub fn refresh(ui: &Ui) {
+    let Some(window) = ui.workbench() else {
+        return;
+    };
+    let labels = ui.labels();
+    let view = ui.model.borrow().refresh_view();
+    let Some(view) = view else {
+        window.set_refresh_shown(false);
+        window.set_refresh_offered(false);
+        window.set_refresh_reason(SharedString::new());
+        window.set_refresh_line(SharedString::new());
+        window.set_refresh_failed(false);
+        return;
+    };
+    let reason = view.why_not.map_or_else(String::new, |why| refresh_why_not(labels, why));
+    let (line, failed) = match &view.said {
+        Some(said) => refreshed_text(ui, labels, said),
+        None => (String::new(), false),
+    };
+    window.set_refresh_shown(true);
+    window.set_refresh_offered(view.offered);
+    window.set_refresh_reason(reason.into());
+    window.set_refresh_line(line.into());
+    window.set_refresh_failed(failed);
+}
+
+/// Why the refresh's button cannot be pressed now; nothing while the page does not show.
+fn refresh_why_not(labels: &Labels, why: RefreshWhyNot) -> String {
+    let hold = match why {
+        RefreshWhyNot::CoolingDown => return labels.refresh_cooling.to_owned(),
+        RefreshWhyNot::Hold(hold) => hold,
+    };
+    match hold {
+        RefreshHold::Hidden => String::new(),
+        RefreshHold::NotOnline => labels.refresh_not_online.to_owned(),
+        RefreshHold::GateShut => labels.refresh_gate_shut.to_owned(),
+        RefreshHold::Running => labels.refresh_running.to_owned(),
+        RefreshHold::Busy(doing) => fill(labels.refresh_busy, &[doing_text(labels, doing)]),
+        RefreshHold::EmulatorOff { at_ms } => {
+            fill(labels.refresh_emulator_off, &[&format_second(at_ms)])
+        }
+        RefreshHold::Fault => labels.refresh_fault.to_owned(),
+    }
+}
+
+/// The same words the card has for it.
+fn doing_text(labels: &Labels, doing: Doing) -> &'static str {
+    match doing {
+        Doing::Reconnecting => labels.card_reconnecting,
+        Doing::SelfChecking => labels.card_self_checking,
+        Doing::ControllingEmulator => labels.card_controlling_emulator,
+        Doing::Climbing => labels.card_climbing,
+    }
+}
+
+/// What a refresh came to in words, and whether that is a failure.
+fn refreshed_text(ui: &Ui, labels: &Labels, said: &Refreshed) -> (String, bool) {
+    match said {
+        Refreshed::Sending => (labels.refresh_sending.to_owned(), false),
+        Refreshed::Observed { at_ms } => {
+            (fill(labels.refresh_observed, &[&format_second(*at_ms)]), false)
+        }
+        Refreshed::Unread => (labels.refresh_unread.to_owned(), false),
+        Refreshed::Refused { host, class } => {
+            let words = refusal_words(ui, labels, host.as_deref(), class.as_deref());
+            (fill(labels.refresh_refused, &[&words]), true)
+        }
+        Refreshed::Unconfirmed => (labels.refresh_unconfirmed.to_owned(), true),
+        Refreshed::NotSent => (labels.refresh_not_sent.to_owned(), true),
+        Refreshed::NoThread { error } => {
+            let why = fill(labels.thread_failed, &[error.as_str()]);
+            (fill(labels.refresh_no_thread, &[why.as_str()]), true)
+        }
+        Refreshed::Restarted => (labels.refresh_restarted.to_owned(), false),
+    }
+}
+
+/// Why the Runtime captured nothing, in plain words: by the host's own code, which says why,
+/// else by the Runtime's, whose category speaks for a code the tables give no words of its
+/// own. The refresh never shows a code: with words for neither it says so, and the log hears
+/// of them once (the refusal itself is in the log already, codes and all).
+fn refusal_words(ui: &Ui, labels: &Labels, host: Option<&str>, class: Option<&str>) -> String {
+    for code in [host, class].into_iter().flatten() {
+        match explain(code, labels.tongue.outcome_tongue()) {
+            Ok(Some(words)) => return words.short.to_owned(),
+            Ok(None) => {}
+            Err(error) => return fill(labels.outcome_table_unusable, &[&error.to_string()]),
+        }
+    }
+    let line = format!("no words for a refresh refused with host code {host:?}, code {class:?}");
+    if ui.model.borrow_mut().first_told(&line) {
+        report::log_quiet(REFRESH_LOG, &line);
+    }
+    labels.refresh_cause_unknown.to_owned()
 }
 
 /// The top bar's presets: the one in effect marked, what is in effect in words under them,

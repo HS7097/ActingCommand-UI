@@ -249,6 +249,10 @@ export global Strings {
     // draws the recognition's boxes and the inputs' points on a task's frame.
     in property <string> picture-title;
     in property <string> picture-overlays;
+    // Under the live view: the button that refreshes the picture of the account picked, and in
+    // grey what a refresh costs.
+    in property <string> refresh-frame;
+    in property <string> refresh-cost;
     // The settings page's field of the evidence days: its name, which also names the field
     // for a screen reader, the unit after it and the button that sends it. The button that
     // hides the start report's notice.
@@ -1498,6 +1502,14 @@ export component WorkbenchWindow inherits Window {
     in-out property <bool> picture-overlays-on: true;
     in property <bool> picture-overlays-offered;
     in property <string> picture-hint;
+    // Under all that, while an account's picture shows: its refresh's button, whether it can be
+    // pressed now, and beside it why not when it cannot; under it what the last refresh of that
+    // account came to, red when it failed.
+    in property <bool> refresh-shown;
+    in property <bool> refresh-offered;
+    in property <string> refresh-reason;
+    in property <string> refresh-line;
+    in property <bool> refresh-failed;
     // The Runtime's configuration file an instance is added to by hand,
     // selectable so it can be copied; or why there is none.
     in property <string> config-path;
@@ -1547,6 +1559,8 @@ export component WorkbenchWindow inherits Window {
     callback account-picked(string);
     // The box beside the picture's title, as it is now.
     callback picture-overlays-toggled(bool);
+    // The button under the picture that refreshes it.
+    callback refresh-frame();
     callback start-runtime();
     callback pause-all();
     callback resume-all();
@@ -1982,6 +1996,40 @@ export component WorkbenchWindow inherits Window {
                                         text: root.picture-hint;
                                         warning: true;
                                         font-size: Scale.grey-font;
+                                    }
+                                    // Its refresh: the button, here rather than beside the title,
+                                    // which has no room left for it in the narrowest window at the
+                                    // largest text; beside it why it cannot be pressed now. Under
+                                    // it what the last refresh came to, on a line of its own so
+                                    // neither hides the other, and in grey what a refresh costs.
+                                    if root.refresh-shown: HorizontalLayout {
+                                        spacing: 14px;
+                                        vertical-stretch: 0;
+                                        SkinButton {
+                                            text: Strings.refresh-frame;
+                                            enabled: root.refresh-offered;
+                                            clicked => {
+                                                root.refresh-frame();
+                                            }
+                                        }
+                                        Notice {
+                                            text: root.refresh-reason;
+                                            vertical-alignment: center;
+                                            min-width: 40px * Scale.factor;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    if root.refresh-shown && root.refresh-line != "": Notice {
+                                        text: root.refresh-line;
+                                        failed: root.refresh-failed;
+                                    }
+                                    if root.refresh-shown: Text {
+                                        text: Strings.refresh-cost;
+                                        font-size: Scale.grey-font;
+                                        color: Look.text-caption;
+                                        wrap: word-wrap;
+                                        min-height: self.preferred-height;
+                                        vertical-stretch: 0;
                                     }
                                 }
                             }

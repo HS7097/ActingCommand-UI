@@ -12,8 +12,7 @@
 //!
 //! - ledger pages (`QueryEvents`), which the Runtime's reader pool answers off the
 //!   ledger's writer and which take no record: a poll after a known position, a lookup
-//!   down from the head, the marks of one frame found by a lookup, and the head itself
-//!   when a status did not state it;
+//!   down from the head a status stated, and the marks of one frame found by a lookup;
 //! - one frame's material whole (`ReadMaterial`, through [`MaterialReader`]), which takes
 //!   no record when it is read or found gone, and one for any other failure; its artifact
 //!   lookups the same reader pool answers, off the writer (Runtime 0.12.38, #422 RA-1).
@@ -25,8 +24,14 @@
 //! behind ends only its own request, #419 SUB-LAG-1.) How often it reads is the caller's;
 //! how much one page or one lookup may read is this file's, in the table below, the read
 //! side of the picture's one table (its pace is the console's).
+//!
+//! The one write beside the lane, never on it, is a person's refresh of the picture
+//! ([`observe_frame`], UI-3c-2): one `ObserveReadonly` on a fresh person's connection
+//! (actor `user`, source `ui`), sent once whatever comes back, and the connection let go.
+//! The Runtime captures a frame and records it; the frame its records state is handed to
+//! the lane, which reads and shows it as any other, so the picture has one way in.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,11 +44,14 @@ use acui_rows::{
     RuntimeMaterialReadState as State, MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 use actingcommand_contract::outcome::Code;
-use actingcommand_contract::{EventType, FrameId};
-use actingcommand_runtime_client::RuntimeClientError;
+use actingcommand_contract::{EventType, FrameId, RuntimeResult};
+use actingcommand_runtime_client::{RuntimeClientError, RuntimeFlowOutput};
 
 use super::{connection_ended, InstanceKey, ReadLane, Unreached};
-use crate::{ClientFailure, MaterialOutcome, MaterialReader, Spelling, MAX_FRAME_BYTES};
+use crate::{
+    ClientFailure, MaterialOutcome, MaterialReader, OnlineSource, Spelling, MAX_FRAME_BYTES,
+    RUNTIME_RESULT_UNEXPECTED,
+};
 
 /// The lane's io timeout: how long a page or a material range waits for its receipt,
 /// and the bound of its connect, as for the ledger window's page connection.
@@ -65,6 +73,8 @@ const LOOKUP_ROWS: u16 = MAX_RUNTIME_EVENT_QUERY_EVENTS;
 
 /// The contract's own spelling of a page's operation (`ContractLocation::QueryRuntimeEvents`).
 const QUERY_RUNTIME_EVENTS: &str = "query_runtime_events";
+/// The contract's own spelling of the refresh's operation (`ContractLocation::ObserveReadonly`).
+const OBSERVE_READONLY: &str = "observe_readonly";
 
 /// One read, the owner epoch of the Runtime that answered it as the wire spells it, and
 /// how many ledger pages it took.
@@ -536,6 +546,108 @@ impl PreviewLane {
         let client = self.lane.connection().map_err(Unreached::of)?;
         Ok(code(&client.runtime_info().owner_epoch()))
     }
+}
+
+/// What became of one person's refresh of the picture ([`observe_frame`]).
+#[derive(Debug, Clone)]
+pub enum ObserveOutcome {
+    /// The Runtime captured a frame of the instance and recorded it, `width` by `height` as
+    /// the observation states it. `request` is the request as the wire spells it, which the
+    /// frame's record names too ([`FrameSeen::request`]). `frame` is the frame as that record
+    /// states it, in the shape a poll gives, for the picture's lane to read; absent when none
+    /// of the records the client read back after the receipt carries it.
+    Observed { frame: Option<FrameSeen>, request: String, width: u32, height: u32 },
+    /// The Runtime captured and recorded a frame, as its committed receipt says, and the
+    /// client's read-back of the request's records after it failed
+    /// (`runtime_projection_failed_after_terminal`,
+    /// `runtime_official_ocr_projection_failed_after_terminal`): the frame is in the ledger,
+    /// where the picture's polls find it.
+    ObservedUnread(ClientFailure),
+    /// The Runtime answered that the observation did not succeed: its code in
+    /// `runtime_code`, the host's behind it in `host`. A capture that failed has taken its
+    /// records; a request refused at the door, as a fixture instance's is, none.
+    Refused(ClientFailure),
+    /// No connection, so nothing was sent.
+    NotSent(ClientFailure),
+    /// Sent, or perhaps sent, and nothing says what became of it. It is not sent again.
+    Unconfirmed(ClientFailure),
+}
+
+/// One person's refresh of the picture: a fresh person's connection
+/// (`OnlineSource::connect_as_person`), one `ObserveReadonly` of the instance `alias` names,
+/// and the connection let go. The client waits for the receipt up to its backend-open timeout
+/// (60 s by default), then reads the request's records back itself, by its correlation in the
+/// `Forensic` profile: the frame comes from those. Sent once, whatever comes back; showing the
+/// frame is the picture lane's, which reads its material.
+///
+/// Every failure after the connection that is neither a refusal nor a read-back failed after
+/// a committed receipt counts as unconfirmed, as for the global pause (`pause_global`): a
+/// failed write may have got the request out.
+pub fn observe_frame(root: &Path, alias: &str) -> ObserveOutcome {
+    let client = match OnlineSource::connect_as_person(root) {
+        Ok(client) => client,
+        Err(error) => return ObserveOutcome::NotSent(ClientFailure::from(error)),
+    };
+    match client.observe_readonly(alias) {
+        Ok(flow) => observed(&flow),
+        Err(error) => observe_failed(error),
+    }
+}
+
+/// What a completed observation's receipt and the records read back with it say.
+fn observed(flow: &RuntimeFlowOutput) -> ObserveOutcome {
+    let receipt = flow.receipt();
+    // The client checks the result itself and gives back no other.
+    let Some(RuntimeResult::ReadonlyObservationCompleted { observation }) = receipt.result() else {
+        return ObserveOutcome::Unconfirmed(ClientFailure {
+            code: RUNTIME_RESULT_UNEXPECTED,
+            operation: OBSERVE_READONLY,
+            runtime_code: None,
+            host: None,
+        });
+    };
+    ObserveOutcome::Observed {
+        frame: observed_frame(flow.events(), observation.artifact()),
+        request: code(&receipt.request_id()),
+        width: observation.width(),
+        height: observation.height(),
+    }
+}
+
+/// A refusal carries the Runtime's code. A failure after a receipt the client committed that
+/// reports a completed observation is a read-back that failed: the client's own, which
+/// carries no refusal.
+fn observe_failed(error: RuntimeClientError) -> ObserveOutcome {
+    let captured = error.committed_receipt().is_some_and(|receipt| {
+        matches!(receipt.result(), Some(RuntimeResult::ReadonlyObservationCompleted { .. }))
+    });
+    let failure = ClientFailure::from(error);
+    if failure.runtime_code.is_some() {
+        ObserveOutcome::Refused(failure)
+    } else if captured {
+        ObserveOutcome::ObservedUnread(failure)
+    } else {
+        ObserveOutcome::Unconfirmed(failure)
+    }
+}
+
+/// The frame an observation reports, as the `artifact.verified` record among `events` that
+/// carries its artifact states it (by id, digest and size: the observation records exactly
+/// one). The read-back is in the `Forensic` profile, whose artifact references also name the
+/// store's key of the file; a `Ui` page leaves that out and nothing here reads it, so it is
+/// left out, and the frame is the one a poll of the same record gives.
+fn observed_frame(
+    events: &[ProjectedEvent],
+    artifact: &ProjectedArtifactReference,
+) -> Option<FrameSeen> {
+    let mut frame = events.iter().filter_map(frame_seen).find(|frame| {
+        let carried = &frame.reference.artifact;
+        carried.artifact_id == artifact.artifact_id
+            && carried.sha256 == artifact.sha256
+            && carried.byte_count == artifact.byte_count
+    })?;
+    frame.reference.artifact.object_key = None;
+    Some(frame)
 }
 
 /// A page request of `limit` rows on from `cursor`. The contract's refusal of one, which

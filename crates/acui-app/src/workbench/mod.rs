@@ -16,7 +16,8 @@
 //!    to read is not read again, and it reads only while the picture shows (`preview`).
 //! 5. How many writes have landed (`wrote`) is no concern of the picture: a frame is
 //!    history, which no write changes, so no picture read is let go for a write, and
-//!    nothing the picture does counts as one.
+//!    nothing the picture does counts as one, not even its refresh (`refresh`): the frame
+//!    that captures is one more record for the picture to read.
 //!
 //! Another thread runs the Runtime's `actingctl` (`tools`), only when asked: `packs` for the
 //! task names and the picture proportions each game's standard pack declares, and `watchdog
@@ -25,7 +26,8 @@
 //!
 //! What a person writes from the top bar is in `actions`: each write on a thread and
 //! a connection of its own, sent once. Once one lands, a read begun before that no
-//! longer counts: it is let go, and read again.
+//! longer counts: it is let go, and read again. A person's refresh of the picture is sent
+//! the same way, on a ticket of the account's own (`refresh`), and lets no read go.
 //!
 //! Which of the workbench's two pages shows, the accounts or the settings, is the
 //! `Model`'s too (`show_page`). The settings page shows the Runtime's settings as the
@@ -53,6 +55,7 @@ pub mod paint;
 pub mod picture;
 pub mod preview;
 pub mod read;
+pub mod refresh;
 pub mod settings;
 pub mod tools;
 
@@ -441,6 +444,10 @@ fn live_landed(ui: &Ui, read: LiveRead) {
     if landed.connected || landed.epoch_changed {
         poke(ui, Lane::Slow);
         ask_start(ui);
+    }
+    // No refresh of the picture out holds across a restart.
+    if landed.epoch_changed {
+        refresh::restarted(ui);
     }
     // Online or not, another epoch, the account gone, a task begun or over.
     preview::sync(ui);

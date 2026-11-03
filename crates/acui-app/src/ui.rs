@@ -525,7 +525,8 @@ fn language_index(language: Language) -> i32 {
 
 /// The workbench's controls. The top bar's page button switches between the
 /// accounts and the settings; a card picked is the account whose picture shows (`workbench`),
-/// and the box beside the picture's title draws on it or not (`workbench::preview`);
+/// the box beside the picture's title draws on it or not (`workbench::preview`), and the
+/// button under it refreshes it (`workbench::refresh`);
 /// Start and Request Shutdown are the launcher's;
 /// "troubleshooting and ledger" opens the window of the default source; the
 /// write buttons and the evidence days' field are `workbench::actions`'; "got it"
@@ -546,6 +547,11 @@ fn install_workbench(window: &WorkbenchWindow) {
     window.on_picture_overlays_toggled(|on| {
         if let Some(ui) = current() {
             workbench::preview::overlays_toggled(&ui, on);
+        }
+    });
+    window.on_refresh_frame(|| {
+        if let Some(ui) = current() {
+            workbench::refresh::pressed(&ui);
         }
     });
     window.on_start_runtime(|| {
@@ -758,6 +764,8 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_settings_appearance(labels.settings_appearance.into());
     global.set_picture_title(labels.picture_title.into());
     global.set_picture_overlays(labels.picture_overlays.into());
+    global.set_refresh_frame(labels.refresh_frame.into());
+    global.set_refresh_cost(labels.refresh_cost.into());
     global.set_evidence_days(labels.setting_evidence_days.into());
     global.set_days(labels.days_unit.into());
     global.set_save(labels.save.into());

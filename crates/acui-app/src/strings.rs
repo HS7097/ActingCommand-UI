@@ -719,9 +719,11 @@ pub struct Labels {
     pub picture_old_minutes: &'static str,
     pub picture_old_hours: &'static str,
     pub picture_old_days: &'static str,
-    /// Under the frame, in grey: what took it.
+    /// Under the frame, in grey: what took it: a task, an observation, or the person's own
+    /// refresh here.
     pub picture_from_task: &'static str,
     pub picture_from_observation: &'static str,
+    pub picture_from_refresh: &'static str,
     /// Across a dimmed frame, why it is not the newest, mostly with when it was captured
     /// (time): no Runtime runs; it cannot be reached; it started again; following paused;
     /// a capture failed (time, words of its code; the words when there are none); a newer
@@ -761,6 +763,32 @@ pub struct Labels {
     pub picture_marks_none: &'static str,
     pub picture_marks_mismatch: &'static str,
     pub picture_aspect_undeclared: &'static str,
+    /// Under the live view, its refresh: the button, and in grey what a refresh costs. Beside
+    /// the button why it cannot be pressed now: no Runtime online; the device is being handed
+    /// over; a task runs; the account does something else (the card's words for that); its
+    /// emulator was last seen not running (time); it is fenced, or its ladder holds; it was
+    /// just refreshed. Under it what the last refresh came to: one is out; a frame captured
+    /// (time); captured and not read back; nothing captured (the words of the Runtime's code;
+    /// the words when this console has none); unconfirmed; not sent; no thread
+    /// (`thread_failed` filled in); out across a restart.
+    pub refresh_frame: &'static str,
+    pub refresh_cost: &'static str,
+    pub refresh_not_online: &'static str,
+    pub refresh_gate_shut: &'static str,
+    pub refresh_running: &'static str,
+    pub refresh_busy: &'static str,
+    pub refresh_emulator_off: &'static str,
+    pub refresh_fault: &'static str,
+    pub refresh_cooling: &'static str,
+    pub refresh_sending: &'static str,
+    pub refresh_observed: &'static str,
+    pub refresh_unread: &'static str,
+    pub refresh_refused: &'static str,
+    pub refresh_cause_unknown: &'static str,
+    pub refresh_unconfirmed: &'static str,
+    pub refresh_not_sent: &'static str,
+    pub refresh_no_thread: &'static str,
+    pub refresh_restarted: &'static str,
     /// The workbench refused to close while an unlock runs.
     pub close_unlock_busy: &'static str,
     /// The Aero frame's caption buttons, by the names a screen reader says.
@@ -1349,6 +1377,7 @@ pub const ZH: Labels = Labels {
     picture_old_days: "旧画面 · {} 天前，不是设备现在的样子",
     picture_from_task: "任务画面",
     picture_from_observation: "观察截图",
+    picture_from_refresh: "你刚刷新的画面",
     picture_not_running: "Runtime 没有运行，画面停在 {}",
     picture_unreachable: "暂时连不上 Runtime，画面停在 {}",
     picture_not_running_empty: "Runtime 没有运行，看不到画面",
@@ -1375,6 +1404,24 @@ pub const ZH: Labels = Labels {
     picture_marks_none: "这张画面没有识别记录",
     picture_marks_mismatch: "识别记录的尺寸与画面不符，没有画识别框",
     picture_aspect_undeclared: "这个标准包没有声明支持 {} 的画面，任务可能跑不准",
+    refresh_frame: "刷新一帧",
+    refresh_cost: "每次刷新会截一张图存进账本（约 1–3 MB），按留存规则自动清理；截图时会短暂占用设备",
+    refresh_not_online: "Runtime 在线时才能刷新",
+    refresh_gate_shut: "正在交接设备，不能刷新",
+    refresh_running: "任务运行中，画面会自动跟随",
+    refresh_busy: "这个号{}，稍后再刷新",
+    refresh_emulator_off: "模拟器没开（{} 看到的），刷新不了",
+    refresh_fault: "这个号有待处理的故障，先别刷新",
+    refresh_cooling: "刚刷新过，稍等几秒",
+    refresh_sending: "正在刷新…",
+    refresh_observed: "已刷新（{}）",
+    refresh_unread: "已采集，但这张画面暂时读不到",
+    refresh_refused: "没能采集画面：{}",
+    refresh_cause_unknown: "这里认不出原因（详情见技术日志）",
+    refresh_unconfirmed: "结果未确认：可能已经采集，稍后会出现在画面里；不会自动重发",
+    refresh_not_sent: "没有发出：连不上 Runtime",
+    refresh_no_thread: "没有发出：{}",
+    refresh_restarted: "Runtime 重启了，这次刷新的结果不明",
     close_unlock_busy: "解锁还在进行：等它结束再关闭监控台",
     caption_minimize: "最小化",
     caption_maximize: "最大化",
@@ -1954,6 +2001,7 @@ pub const EN: Labels = Labels {
     picture_old_days: "Old picture · {} d ago, not the device now",
     picture_from_task: "From a task",
     picture_from_observation: "From an observation",
+    picture_from_refresh: "From your refresh",
     picture_not_running: "The Runtime is not running; the picture stopped at {}",
     picture_unreachable: "The Runtime cannot be reached for now; the picture stopped at {}",
     picture_not_running_empty: "The Runtime is not running; no picture to show",
@@ -1980,6 +2028,24 @@ pub const EN: Labels = Labels {
     picture_marks_none: "No recognition was recorded on this picture",
     picture_marks_mismatch: "The recognition's size differs from the picture's; no boxes drawn",
     picture_aspect_undeclared: "This standard pack does not declare {} pictures; tasks may misread them",
+    refresh_frame: "Capture One Frame",
+    refresh_cost: "Each refresh saves a screenshot in the ledger (about 1–3 MB), cleaned up by the retention rules; taking it briefly occupies the device",
+    refresh_not_online: "A refresh needs the Runtime online",
+    refresh_gate_shut: "The device is being handed over: no refresh",
+    refresh_running: "A task is running: the picture follows it by itself",
+    refresh_busy: "{}: refresh it later",
+    refresh_emulator_off: "The emulator was not running when last seen ({}): no refresh",
+    refresh_fault: "This account has a fault to deal with: do not refresh it yet",
+    refresh_cooling: "Just refreshed: wait a few seconds",
+    refresh_sending: "Refreshing…",
+    refresh_observed: "Refreshed ({})",
+    refresh_unread: "Captured, but this picture cannot be read for now",
+    refresh_refused: "No picture captured: {}",
+    refresh_cause_unknown: "a reason this console does not know (see the technical log)",
+    refresh_unconfirmed: "The result is not confirmed: a picture may have been captured, and will then show here. Not sent again",
+    refresh_not_sent: "Not sent: the Runtime cannot be reached",
+    refresh_no_thread: "Not sent: {}",
+    refresh_restarted: "The Runtime restarted: what came of this refresh is not known",
     close_unlock_busy: "The unlock is still running: close the console once it has ended",
     caption_minimize: "Minimize",
     caption_maximize: "Maximize",

@@ -19,7 +19,9 @@ use acui_source::{ClientFailure, PauseFact};
 
 use super::actions::{self, Actions, ActionsView, PresetView};
 use super::card::{self, CardView, Down, Schedule};
-use super::picture::{LinkNow, Offline, PictureView, Pictures, PreviewGate};
+use super::picture::{
+    Doing, LinkNow, Offline, PictureView, Pictures, PreviewGate, RefreshHold, RefreshView,
+};
 use super::preview::{Order, Target};
 use super::read::{Lane, Read, EXPLAIN_TOO_OLD, START_TRIES};
 use super::settings::{self, AutostartView, SettingsView, StartView};
@@ -613,6 +615,55 @@ impl Model {
             .and_then(|instance| instance.game_id.as_deref())
             .and_then(|game| self.displays.as_ref()?.ratios(game));
         self.pictures.view(account, link, gate, ratios, now_ms)
+    }
+
+    /// What the refresh under the picture offers now (UI-3c-2): none while no account's picture
+    /// shows, when there is no button.
+    pub fn refresh_view(&self) -> Option<RefreshView> {
+        let alias = self.picture_account()?;
+        Some(self.pictures.refresh_view(alias, self.refresh_hold(alias)))
+    }
+
+    /// Why `alias`, whose picture shows, cannot be refreshed now, as the reads say: the first of
+    /// these that does not hold. Its picture is followed (`preview_target`): the Runtime answers
+    /// and lists it, and its gate is open. It does nothing the Runtime names, whatever that is.
+    /// Its emulator was not last read as off: a reading of `unknown` lets it, and one of `off`
+    /// may be stale. It is not fenced, and its ladder does not hold. A pause holds nothing back:
+    /// a refresh under one takes the device a moment, which the cost under the button says.
+    fn refresh_hold(&self, alias: &str) -> Option<RefreshHold> {
+        if self.preview_target().is_none() {
+            let hold = if self.page != Page::Main || !self.shown {
+                RefreshHold::Hidden
+            } else if self.online_epoch().is_none() {
+                RefreshHold::NotOnline
+            } else {
+                // Online, the picture is of an account `Status` lists: its gate is shut.
+                RefreshHold::GateShut
+            };
+            return Some(hold);
+        }
+        let Some(instance) = self.instances.iter().find(|instance| instance.alias == alias) else {
+            return Some(RefreshHold::NotOnline);
+        };
+        if let Some(activity) = &instance.activity {
+            let hold = match activity.kind {
+                ActivityKind::PolicyRun | ActivityKind::DirectRun | ActivityKind::HostRun => {
+                    RefreshHold::Running
+                }
+                ActivityKind::Reconnect => RefreshHold::Busy(Doing::Reconnecting),
+                ActivityKind::Selfcheck => RefreshHold::Busy(Doing::SelfChecking),
+                ActivityKind::EmulatorControl => RefreshHold::Busy(Doing::ControllingEmulator),
+                ActivityKind::Ladder => RefreshHold::Busy(Doing::Climbing),
+            };
+            return Some(hold);
+        }
+        if let Some(at_ms) = instance.emulator_off {
+            return Some(RefreshHold::EmulatorOff { at_ms });
+        }
+        if instance.fence.is_some() || instance.ladder_busy {
+            return Some(RefreshHold::Fault);
+        }
+        None
     }
 
     /// What the schedule explanation reads leave now. A thread that does not read

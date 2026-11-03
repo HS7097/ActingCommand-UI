@@ -27,14 +27,17 @@
 //! log.
 //!
 //! Left out on purpose: `player_hold` and `control` (the hold's read face is
-//! UI-3d's); `emulator_state` (read only at discovery and control, and `off` may
-//! be the idle action's doing, so showing it would mislead); `request_id` (nothing
-//! here stops a run); a fence's recheck counts.
+//! UI-3d's); `request_id` (nothing here stops a run); a fence's recheck counts.
+//! `emulator_state` is read for one thing only and never shown: an `off` reading holds
+//! the picture's refresh back ([`InstanceLive::emulator_off`], UI-3c-2). The Runtime
+//! reads it only at discovery and at an emulator's control, never polling, and `off`
+//! may be the idle action's doing, so it may be stale, and showing it would mislead.
 //!
 //! The writes here are a person's global pause ([`pause_global`]) and a person's change
-//! of settings ([`configure`]). Like the conditional resume beside them (`resume_paused`)
-//! each goes out once on a fresh person's connection, and never again by itself,
-//! whatever comes back.
+//! of settings ([`configure`]), and in the picture's file a person's refresh of the
+//! picture ([`preview::observe_frame`]). Like the conditional resume beside them
+//! (`resume_paused`) each goes out once on a fresh person's connection, and never again
+//! by itself, whatever comes back.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
@@ -46,7 +49,8 @@ use acui_rows::{code, EventActor, EventSource};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     config_parameters_fact_key, ConfigParameter, ConfigParameterSource, ConfigSettingChange,
-    FactScalar, FactValue, InstanceActivity, InstanceActivityKind, InstanceId, OwnerEpoch,
+    EmulatorRunningState, FactScalar, FactValue, InstanceActivity, InstanceActivityKind,
+    InstanceId, OwnerEpoch,
     RuntimeControlPlaneStatus,
     RuntimeErrorCode, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
     RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation, RuntimeStartReport,
@@ -626,8 +630,8 @@ pub struct LiveSnapshot {
     pub instances: Vec<InstanceLive>,
     /// The ledger's committed head when the Runtime sampled the status
     /// (`ledger_committed_head`, 0 for an empty ledger): where the picture's lookup
-    /// starts down from. Absent when the status states no source; asking it is then
-    /// the picture lane's (`PreviewLane::head`).
+    /// starts down from. Absent when the status states no source; the picture then
+    /// asks nothing until a status states one.
     pub ledger_head: Option<u64>,
 }
 
@@ -649,6 +653,11 @@ pub struct InstanceLive {
     /// Absent while it does nothing the vocabulary names, and always from a
     /// Runtime before 0.12.36: not an error.
     pub activity: Option<ActivityFact>,
+    /// When the Runtime last read the instance's emulator as not running, in unix ms;
+    /// absent when it last read it running or holds no reading (`unknown`). Read only at
+    /// discovery and at an emulator's control, never polled, so it may be stale: only a
+    /// condition of the picture's refresh, never shown.
+    pub emulator_off: Option<u64>,
 }
 
 /// An instance's id as the wire types it, opaque outside this crate.
@@ -1350,6 +1359,10 @@ fn instance_live(instance: &RuntimeInstanceStatus, owner_epoch: OwnerEpoch) -> I
         }),
         ladder_busy: instance.ladder_busy_hold().is_some(),
         activity: instance.activity().map(activity_fact),
+        emulator_off: match instance.emulator_state() {
+            EmulatorRunningState::Off { observed_at_unix_ms } => Some(observed_at_unix_ms),
+            EmulatorRunningState::On { .. } | EmulatorRunningState::Unknown => None,
+        },
     }
 }
 

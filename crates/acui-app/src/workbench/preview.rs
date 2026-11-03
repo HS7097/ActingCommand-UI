@@ -27,6 +27,13 @@
 //! asks between its ranges whether its generation is still the one, so stopping is quick.
 //! No write concerns the picture (`super::wrote`): a frame is history.
 //!
+//! A person's refresh of the picture (`super::refresh`, UI-3c-2) is no read of this thread's:
+//! it goes out on a thread of its own. The frame it captured, when its record came back with the
+//! answer, is handed to this thread for the account it follows under the generation the refresh
+//! was pressed under (`offer`), and read like a frame a poll found, at most every gap; one a poll
+//! found already is not read twice. So the picture has one way in. How soon a refresh may follow
+//! the last is in this table too (`REFRESH_COOLDOWN`).
+//!
 //! What a limit on its reads is checked by is in the technical log: a read that took long,
 //! as it happens, and every read's count at the end of the run (`PreviewTally`).
 
@@ -94,6 +101,10 @@ const MAX_DECODED_PIXELS: u64 = 16_777_216;
 const LONG_READ: Duration = Duration::from_secs(2);
 /// How long the thread sleeps with nothing to follow: an order wakes it.
 const NOTHING_DUE: Duration = Duration::from_secs(3600);
+/// How long after a refresh of an account lands, whatever it came to, or a restart lets it go,
+/// before the next may be pressed. Its button is off meanwhile, as it is while one is out, and
+/// says it was just refreshed, never how long is left.
+pub const REFRESH_COOLDOWN: Duration = Duration::from_secs(5);
 
 /// The least time between two frames read that `value`, as the settings file has it, says;
 /// `None` when it is not a whole number of seconds in range.
@@ -145,6 +156,9 @@ pub enum Order {
     Stop,
     /// The account followed runs a task or climbs its ladder, or no longer.
     Pace(bool),
+    /// A frame a person's refresh captured of the account followed under `generation`: read
+    /// as one a poll found, and not twice when a poll found it too.
+    Offer { generation: u64, frame: FrameSeen },
 }
 
 /// What the thread hands to the event loop, under the generation it was for.
@@ -196,6 +210,26 @@ pub struct PreviewTally {
     read_longest_ms: AtomicU64,
     decodes: AtomicU64,
     decode_longest_ms: AtomicU64,
+    offers: AtomicU64,
+    refreshes: AtomicU64,
+    refreshes_observed: AtomicU64,
+    refreshes_refused: AtomicU64,
+    refreshes_unconfirmed: AtomicU64,
+    refreshes_unread: AtomicU64,
+    refreshes_not_sent: AtomicU64,
+}
+
+/// What a person's refresh came to, as the end-of-run count tells them apart.
+#[derive(Debug, Clone, Copy)]
+pub enum RefreshCount {
+    Observed,
+    Refused,
+    /// Unconfirmed, or its thread panicked.
+    Unconfirmed,
+    /// Captured, and its records not read back.
+    Unread,
+    /// No connection, or no thread.
+    NotSent,
 }
 
 impl PreviewTally {
@@ -242,13 +276,32 @@ impl PreviewTally {
         self.decode_longest_ms.fetch_max(millis(took), Ordering::SeqCst);
     }
 
+    /// A frame a refresh captured, taken for the account followed.
+    fn offer(&self) {
+        self.offers.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// A person's refresh, and what it came to.
+    pub fn refreshed(&self, count: RefreshCount) {
+        self.refreshes.fetch_add(1, Ordering::SeqCst);
+        let counter = match count {
+            RefreshCount::Observed => &self.refreshes_observed,
+            RefreshCount::Refused => &self.refreshes_refused,
+            RefreshCount::Unconfirmed => &self.refreshes_unconfirmed,
+            RefreshCount::Unread => &self.refreshes_unread,
+            RefreshCount::NotSent => &self.refreshes_not_sent,
+        };
+        counter.fetch_add(1, Ordering::SeqCst);
+    }
+
     /// The line the technical log gets at the end of the run.
     pub fn line(&self) -> String {
         let count = |counter: &AtomicU64| counter.load(Ordering::SeqCst);
         format!(
             "polls {} (fast {}, longest {} ms); lookups {} (pages {}, capped {}); \
              mark pages {}; frame reads {} (bytes {}, missing {}, failed {}, longest {} ms); \
-             decodes {} (longest {} ms)",
+             decodes {} (longest {} ms); offers {}; refreshes {} (observed {}, refused {}, \
+             unconfirmed {}, unread {}, not sent {})",
             count(&self.polls),
             count(&self.polls_fast),
             count(&self.poll_longest_ms),
@@ -263,6 +316,13 @@ impl PreviewTally {
             count(&self.read_longest_ms),
             count(&self.decodes),
             count(&self.decode_longest_ms),
+            count(&self.offers),
+            count(&self.refreshes),
+            count(&self.refreshes_observed),
+            count(&self.refreshes_refused),
+            count(&self.refreshes_unconfirmed),
+            count(&self.refreshes_unread),
+            count(&self.refreshes_not_sent),
         )
     }
 }
@@ -313,14 +373,14 @@ fn run(
             .as_ref()
             .map_or(NOTHING_DUE, |line| line.due(&reads, now).saturating_duration_since(now));
         let mut followed = match orders.recv_timeout(wait) {
-            Ok(order) => take(&mut line, order),
+            Ok(order) => take(&mut line, order, tally),
             Err(RecvTimeoutError::Timeout) => false,
             Err(RecvTimeoutError::Disconnected) => return,
         };
         // Orders queued behind that one count in the same round.
         loop {
             match orders.try_recv() {
-                Ok(order) => followed |= take(&mut line, order),
+                Ok(order) => followed |= take(&mut line, order, tally),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return,
             }
@@ -329,7 +389,7 @@ fn run(
         while followed {
             match orders.recv_timeout(SELECT_SETTLE) {
                 Ok(order) => {
-                    take(&mut line, order);
+                    take(&mut line, order, tally);
                 }
                 Err(RecvTimeoutError::Timeout) => followed = false,
                 Err(RecvTimeoutError::Disconnected) => return,
@@ -365,7 +425,7 @@ fn run(
 }
 
 /// `order` taken: whether it is one to follow an account.
-fn take(line: &mut Option<Line>, order: Order) -> bool {
+fn take(line: &mut Option<Line>, order: Order, tally: &PreviewTally) -> bool {
     match order {
         Order::Follow { generation, target, start, shown } => {
             *line = Some(Line::new(generation, target, start, shown));
@@ -382,6 +442,14 @@ fn take(line: &mut Option<Line>, order: Order) -> bool {
                     line.next_poll = line.next_poll.min(Instant::now() + POLL_FAST);
                 }
                 line.target.fast = fast;
+            }
+            false
+        }
+        // One for an account no longer followed under that generation is the polls' to find.
+        Order::Offer { generation, frame } => {
+            if let Some(line) = line.as_mut().filter(|line| line.generation == generation) {
+                tally.offer();
+                line.offer(frame, false);
             }
             false
         }
@@ -928,13 +996,35 @@ fn hand_over(waiting: &Waiting, generation: u64, seen: Seen) {
 }
 
 /// Starts or stops the thread on what the window shows now: the account it follows, if any
-/// (`Model::preview_target`). The only way an order goes to the thread. Painting is the
-/// caller's.
+/// (`Model::preview_target`). The only way an order to follow, or to stop, goes to the thread
+/// (`offer` hands it a frame). Painting is the caller's.
 pub fn sync(ui: &Ui) {
     let order = ui.model.borrow_mut().preview_sync(Instant::now());
     let Some(order) = order else {
         return;
     };
+    let sent =
+        ui.reading.borrow_mut().as_mut().map_or(Ok(()), |reading| reading.send_preview(order));
+    if let Err(why) = sent {
+        thread_failed(ui, why);
+    }
+}
+
+/// A frame a person's refresh of `alias` captured, pressed under `generation`, to the thread
+/// that reads frames: only while it follows that account under that generation still. Otherwise
+/// the window shows something else, or will look the account up when it shows it again, and its
+/// polls find the frame then. The one order besides `sync`'s, and it starts and stops nothing.
+pub fn offer(ui: &Ui, alias: &str, generation: u64, frame: FrameSeen) {
+    if !ui.model.borrow().pictures().follows(alias, generation) {
+        let line = format!(
+            "the frame refreshed of {alias} ({}) is not handed over: the picture follows \
+             something else now",
+            frame.sequence
+        );
+        report::log_quiet(THREAD, &line);
+        return;
+    }
+    let order = Order::Offer { generation, frame };
     let sent =
         ui.reading.borrow_mut().as_mut().map_or(Ok(()), |reading| reading.send_preview(order));
     if let Err(why) = sent {

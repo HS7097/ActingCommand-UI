@@ -20,6 +20,12 @@
 //! size the recognition states is not the frame's own: they would land on the wrong pixels.
 //! And under the frame it hints that the account's game's standard pack declares no picture
 //! of the frame's proportions, when the pack declares any (`ASPECT_TOLERANCE`).
+//!
+//! Under all that, the picked account's refresh (UI-3c-2, `refresh`): whether its button can be
+//! pressed, why not when it cannot, and what its last refresh came to, as a pure function of
+//! what the reads say of the account (`RefreshHold`, the model's) and of each account's own
+//! ticket here. A frame the Runtime captured for a refresh of this run is said to be one when it
+//! shows, by the request its record names.
 
 use std::collections::BTreeMap;
 use std::mem;
@@ -60,6 +66,8 @@ pub struct Pictures {
     sent: Option<Target>,
     /// A person turned the recognition's boxes and the inputs' points off, for this run.
     overlays_off: bool,
+    /// How many refreshes were pressed this run: the last one's ticket.
+    refreshes_issued: u64,
 }
 
 /// The frame the window shows.
@@ -103,6 +111,102 @@ struct Known {
     capture_failed: Option<CaptureFailure>,
     /// UI-3d asked for its device: the picture does not read it (`preview::halt`).
     halted: bool,
+    /// Its refresh: the one out, what the last came to, and its cooldown.
+    refresh: RefreshSlot,
+    /// The request of its last refresh that captured a frame, as the wire spells it: the frame
+    /// whose record names it is the person's refresh.
+    refreshed: Option<String>,
+}
+
+/// The name of one refresh of an account's picture: its answer counts only under the ticket
+/// still out for that account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefreshTicket(u64);
+
+impl RefreshTicket {
+    /// For the log.
+    pub fn number(self) -> u64 {
+        self.0
+    }
+}
+
+/// One account's refresh: the one out, if any, with the generation it was pressed under; what
+/// the last came to; and the one whose cooldown runs, which its timer ends (`refresh_cooled`).
+#[derive(Default)]
+struct RefreshSlot {
+    out: Option<(RefreshTicket, u64)>,
+    said: Option<Refreshed>,
+    cooling: Option<RefreshTicket>,
+}
+
+/// What the last refresh of an account came to, before its words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refreshed {
+    /// One is out.
+    Sending,
+    /// The Runtime captured a frame: when, as its record states it, else when the answer came.
+    Observed { at_ms: u64 },
+    /// It captured one, and its records were not read back: the polls find it.
+    Unread,
+    /// It captured none: the host's code and the Runtime's, for their words.
+    Refused { host: Option<String>, class: Option<String> },
+    /// Nothing says what became of it: it may have captured one. It is not sent again.
+    Unconfirmed,
+    /// No connection: nothing was sent.
+    NotSent,
+    /// The system refused the thread: nothing was sent. The error is the system's.
+    NoThread { error: String },
+    /// One was out across a restart.
+    Restarted,
+}
+
+/// Why the reads say the account picked cannot be refreshed now: the first of these that
+/// applies, in this order (`Model::refresh_view`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshHold {
+    /// The main page does not show, or the window is minimized: nothing to say.
+    Hidden,
+    /// No Runtime answers, or none has yet.
+    NotOnline,
+    /// Its gate is shut (UI-3d).
+    GateShut,
+    /// It runs a task, whose frames the picture follows by itself.
+    Running,
+    /// It does something else the Runtime names.
+    Busy(Doing),
+    /// The Runtime last read its emulator as not running, at this time (unix ms). That reading
+    /// may be stale: an `unknown` one holds nothing back.
+    EmulatorOff { at_ms: u64 },
+    /// It is fenced, or its recovery ladder holds.
+    Fault,
+}
+
+/// What an account does, other than run a task, that holds its refresh back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Doing {
+    Reconnecting,
+    SelfChecking,
+    ControllingEmulator,
+    Climbing,
+}
+
+/// Why the refresh's button cannot be pressed: of the reads, or of its own last press, which
+/// cools down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshWhyNot {
+    Hold(RefreshHold),
+    CoolingDown,
+}
+
+/// What the picked account's refresh offers now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefreshView {
+    /// The button can be pressed.
+    pub offered: bool,
+    /// Why it cannot; nothing while one is out, which `said` says.
+    pub why_not: Option<RefreshWhyNot>,
+    /// What the account's last refresh came to, if one was pressed this run.
+    pub said: Option<Refreshed>,
 }
 
 impl Known {
@@ -294,6 +398,8 @@ pub enum DimWhy {
 pub enum Origin {
     Task,
     Observation,
+    /// An observation a person's refresh here asked for, this run.
+    OwnRefresh,
 }
 
 impl Pictures {
@@ -578,6 +684,97 @@ impl Pictures {
         self.known.entry(alias.to_owned()).or_default().halted = halted;
     }
 
+    /// Whether the thread follows `alias` still under `generation`.
+    pub fn follows(&self, alias: &str, generation: u64) -> bool {
+        self.generation_now() == generation
+            && self.sent.as_ref().is_some_and(|sent| sent.alias == alias)
+    }
+
+    /// A refresh of `alias` pressed: its ticket, under the generation now, unless one of it is
+    /// out or cools down. What it came to is, for now, that it is being sent.
+    pub fn refresh_begin(&mut self, alias: &str) -> Option<RefreshTicket> {
+        let generation = self.generation_now();
+        let slot = &mut self.known.entry(alias.to_owned()).or_default().refresh;
+        if slot.out.is_some() || slot.cooling.is_some() {
+            return None;
+        }
+        self.refreshes_issued += 1;
+        let ticket = RefreshTicket(self.refreshes_issued);
+        slot.out = Some((ticket, generation));
+        slot.said = Some(Refreshed::Sending);
+        Some(ticket)
+    }
+
+    /// What the refresh of `alias` under `ticket` came to: the generation it was pressed under,
+    /// when that ticket is still the one out, which is all that makes it count. Its cooldown runs
+    /// from now, whatever it came to. `request`: of one that captured a frame, which shows as the
+    /// person's refresh when its record names it.
+    pub fn refresh_settle(
+        &mut self,
+        alias: &str,
+        ticket: RefreshTicket,
+        said: Refreshed,
+        request: Option<String>,
+    ) -> Option<u64> {
+        let known = self.known.get_mut(alias)?;
+        let (out, generation) = known.refresh.out?;
+        if out != ticket {
+            return None;
+        }
+        known.refresh = RefreshSlot { out: None, said: Some(said), cooling: Some(ticket) };
+        if request.is_some() {
+            known.refreshed = request;
+        }
+        Some(generation)
+    }
+
+    /// The cooldown of `alias`'s refresh under `ticket` ran out: whether it was the one that ran.
+    pub fn refresh_cooled(&mut self, alias: &str, ticket: RefreshTicket) -> bool {
+        let Some(known) = self.known.get_mut(alias) else {
+            return false;
+        };
+        if known.refresh.cooling != Some(ticket) {
+            return false;
+        }
+        known.refresh.cooling = None;
+        true
+    }
+
+    /// The Runtime started again: no refresh out holds across that. Each is let go, says it was
+    /// out across a restart, and cools down from now. The ones let go, by alias, for the log and
+    /// their cooldowns.
+    pub fn refresh_restarted(&mut self) -> Vec<(String, RefreshTicket)> {
+        let mut released = Vec::new();
+        for (alias, known) in &mut self.known {
+            if let Some((ticket, _)) = known.refresh.out.take() {
+                known.refresh.said = Some(Refreshed::Restarted);
+                known.refresh.cooling = Some(ticket);
+                released.push((alias.clone(), ticket));
+            }
+        }
+        released
+    }
+
+    /// What `alias`'s refresh offers now, `hold` being why the reads say it cannot be, if they
+    /// do: the first of those, then one out, then one cooling down.
+    pub fn refresh_view(&self, alias: &str, hold: Option<RefreshHold>) -> RefreshView {
+        let slot = self.known.get(alias).map(|known| &known.refresh);
+        let out = slot.is_some_and(|slot| slot.out.is_some());
+        let cooling = slot.is_some_and(|slot| slot.cooling.is_some());
+        let why_not = match hold {
+            Some(hold) => Some(RefreshWhyNot::Hold(hold)),
+            // The line of what it came to says that one is out.
+            None if out => None,
+            None if cooling => Some(RefreshWhyNot::CoolingDown),
+            None => None,
+        };
+        RefreshView {
+            offered: hold.is_none() && !out && !cooling,
+            why_not,
+            said: slot.and_then(|slot| slot.said.clone()),
+        }
+    }
+
     fn shown_sequence(&self, alias: &str) -> Option<u64> {
         self.shown.as_ref().filter(|shown| shown.alias == alias).map(|shown| shown.frame.sequence)
     }
@@ -634,8 +831,14 @@ impl Pictures {
         let captured_at_ms = shown.frame.captured_at_ms;
         let age_ms = now_ms.saturating_sub(captured_at_ms);
         let age = (u128::from(age_ms) > STALE_AFTER.as_millis()).then_some(age_ms / 1000);
+        let refreshed = known.and_then(|known| known.refreshed.as_deref());
         let origin = match shown.frame.origin {
             FrameOrigin::Task { .. } => Origin::Task,
+            FrameOrigin::Observation
+                if refreshed.is_some() && shown.frame.request.as_deref() == refreshed =>
+            {
+                Origin::OwnRefresh
+            }
             FrameOrigin::Observation => Origin::Observation,
         };
         let restarted = matches!(self.follow, Follow::Looking)
@@ -656,7 +859,7 @@ impl Pictures {
         let overlay = match &shown.overlay {
             _ if self.overlays_off => OverlayView::Off,
             // Only a task recognizes, and only on a task's frame is anything drawn.
-            _ if origin == Origin::Observation => OverlayView::NotOnThisFrame,
+            _ if origin != Origin::Task => OverlayView::NotOnThisFrame,
             None => OverlayView::NotOnThisFrame,
             Some(overlay) if overlay.extent.map_or(true, |extent| fits(extent, shown.size)) => {
                 OverlayView::Shown(overlay.clone())
