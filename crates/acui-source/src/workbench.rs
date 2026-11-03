@@ -630,8 +630,8 @@ pub struct LiveSnapshot {
     pub instances: Vec<InstanceLive>,
     /// The ledger's committed head when the Runtime sampled the status
     /// (`ledger_committed_head`, 0 for an empty ledger): where the picture's lookup
-    /// starts down from. Absent when the status states no source; asking it is then
-    /// the picture lane's (`PreviewLane::head`).
+    /// starts down from. Absent when the status states no source; the picture then
+    /// asks nothing until a status states one.
     pub ledger_head: Option<u64>,
 }
 
