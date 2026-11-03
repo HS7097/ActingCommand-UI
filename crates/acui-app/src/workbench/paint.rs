@@ -1018,7 +1018,8 @@ fn evidence_field(window: &WorkbenchWindow, labels: &Labels, view: Option<&Evide
             (view.days.map_or_else(String::new, |days| days.to_string()), labels.setting_unset)
         }
     };
-    let effect = settings::effect_words(labels, &SettingName::EvidenceMaxAgeDays);
+    // The field shows only while the Runtime takes a change of the days.
+    let effect = settings::effect_words(labels, &SettingName::EvidenceMaxAgeDays, true);
     note.extend(effect.map(str::to_owned));
     // The field is the person's while they type: it is set only when it says otherwise.
     if window.get_evidence_text() != text.as_str() {
@@ -1159,7 +1160,8 @@ fn setting_item(ui: &Ui, labels: &Labels, line: &SettingLine) -> SettingItem {
         fill(labels.setting_source_line, &[source_text(labels, line.source)]),
         settings::change_words(labels, line.change).to_owned(),
     ];
-    note.extend(settings::effect_words(labels, &line.name).map(str::to_owned));
+    let settable = line.change == settings::Change::ViewOnly;
+    note.extend(settings::effect_words(labels, &line.name, settable).map(str::to_owned));
     SettingItem {
         name: name.into(),
         value: settings::value_words(labels, &line.name, &line.value).into(),

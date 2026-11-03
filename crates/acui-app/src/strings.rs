@@ -607,6 +607,7 @@ pub struct Labels {
     pub setting_effect_idle: &'static str,
     pub setting_effect_frames: &'static str,
     pub setting_effect_start: &'static str,
+    pub setting_effect_autostart: &'static str,
     /// The evidence days' field on the settings page: the unit after it and the button that
     /// sends it (its name is `setting_evidence_days`); what is typed that is no whole number,
     /// which is not sent; and what a change from it came to, after its name, on a line of
@@ -1411,6 +1412,7 @@ pub const ZH: Labels = Labels {
     setting_effect_idle: "改动在下一次空闲检查时生效",
     setting_effect_frames: "改动在下一次清理证据帧时生效",
     setting_effect_start: "Runtime 启动时读取",
+    setting_effect_autostart: "每次自动启动模拟器前读取",
     days_unit: "天",
     save: "保存",
     evidence_not_whole: "只能填整数；什么都没发",
@@ -2128,6 +2130,7 @@ pub const EN: Labels = Labels {
     setting_effect_idle: "A change applies at the next idle check",
     setting_effect_frames: "A change applies at the next clean-up of evidence frames",
     setting_effect_start: "Read when the Runtime starts",
+    setting_effect_autostart: "Read before each automatic emulator start",
     days_unit: "days",
     save: "Save",
     evidence_not_whole: "Takes a whole number; nothing was sent",

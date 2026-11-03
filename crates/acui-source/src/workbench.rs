@@ -912,11 +912,12 @@ impl SettingsRead {
     /// Every setting to show, in the order of the Runtime's tiers: an exact key once, a
     /// per-instance key for each of `instances` (instance ids, in their order). A key with no
     /// row, which a key without a default has while the file does not name it, is unset at
-    /// its default, and settable as its key-table row says, so it is not left off; a key
-    /// whose row does not read is (`unread` has it). Then every row of a shown tier none of
-    /// those named, of an instance `instances` does not list. An instance's two backends are
-    /// none of them: they are its device backends group's (`ConfigRead::backends`), and a key
-    /// without a row there is no unset setting but a fixture's, or a Runtime's without them.
+    /// its default, and settable as its key-table row says (but `unreported_settable`), so it
+    /// is not left off; a key whose row does not read is (`unread` has it). Then every row of a
+    /// shown tier none of those named, of an instance `instances` does not list. An instance's
+    /// two backends are none of them: they are its device backends group's
+    /// (`ConfigRead::backends`), and a key without a row there is no unset setting but a
+    /// fixture's, or a Runtime's without them.
     pub fn rows(&self, instances: &[&str]) -> Vec<SettingRow> {
         let mut rows = Vec::new();
         let mut named = BTreeSet::new();
@@ -963,7 +964,7 @@ impl SettingsRead {
             None => (
                 ShownValue::Unset,
                 SettingSource::Default,
-                find_row(key).is_some_and(|(row, _)| row.settable.is_settable()),
+                self.unreported_settable(key, name),
             ),
         };
         SettingRow {
@@ -974,6 +975,25 @@ impl SettingsRead {
             source,
             settable,
         }
+    }
+
+    /// Whether the Runtime takes a change while it runs of `key`, which has no row: as its
+    /// key-table row says, but for an instance's `start_emulator`. That one is settable only
+    /// since 0.12.39 (Workflow #429 R-3), and the Runtime that answers may be an older one than
+    /// the key table here: another instance's row of it says which, and with none it is not,
+    /// as before 0.12.39 (a change in the file with a restart is taken on 0.12.39 too).
+    fn unreported_settable(&self, key: &str, name: KeyName) -> bool {
+        if name != KeyName::PerInstance(START_EMULATOR) {
+            return find_row(key).is_some_and(|(row, _)| row.settable.is_settable());
+        }
+        self.parameters
+            .iter()
+            .find_map(|(other, shown)| {
+                find_row(other)
+                    .is_some_and(|(row, _)| row.name == name)
+                    .then_some(shown.settable)
+            })
+            .unwrap_or(false)
     }
 
     /// The rows that do not read, in the snapshot's order: none of them is shown.
