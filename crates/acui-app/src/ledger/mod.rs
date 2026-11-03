@@ -48,8 +48,8 @@ use state::{
 use worker::{Command, Opening};
 
 /// How often "follow latest" asks where the ledger is: one fact snapshot,
-/// which reads no ledger and writes nothing. A page query, served on the
-/// Runtime's ledger writer, follows only when the ledger moved.
+/// which reads no ledger and writes nothing. A page query, which the Runtime's
+/// ledger reader pool answers and verifies, follows only when the ledger moved.
 const FOLLOW_INTERVAL: Duration = Duration::from_secs(5);
 /// How long the time cursor's handle must rest before the view reloads.
 const CURSOR_REST: Duration = Duration::from_millis(400);

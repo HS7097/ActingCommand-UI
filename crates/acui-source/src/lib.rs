@@ -555,7 +555,7 @@ impl LedgerPages {
     /// One page exchange, `call` on the page connection, rebuilt first when an
     /// earlier exchange latched it. A page query only reads; it writes nothing
     /// into the ledger, so asking it again is safe. But the query that timed
-    /// out may still be running on the Runtime's ledger writer thread, so a
+    /// out may still be running on the Runtime's ledger reader pool, so a
     /// timeout (see `page_timed_out`) is retried once only, after
     /// `LEDGER_PAGE_RETRY_BACKOFF`, on a rebuilt connection, and not at all
     /// when the rebuilt connection reaches a Runtime of another owner epoch:
