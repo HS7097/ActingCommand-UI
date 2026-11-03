@@ -129,7 +129,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-artifact-store"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=0b773899443923be8122d7f4615d094d449a1146#0b773899443923be8122d7f4615d094d449a1146"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=e7e9a48eb794a6f03a8a0a73968d0e3ebb424044#e7e9a48eb794a6f03a8a0a73968d0e3ebb424044"
 dependencies = [
  "actingcommand-contract",
  "serde",
@@ -141,7 +141,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-contract"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=0b773899443923be8122d7f4615d094d449a1146#0b773899443923be8122d7f4615d094d449a1146"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=e7e9a48eb794a6f03a8a0a73968d0e3ebb424044#e7e9a48eb794a6f03a8a0a73968d0e3ebb424044"
 dependencies = [
  "serde",
  "serde_json",
@@ -151,7 +151,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-ledger"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=0b773899443923be8122d7f4615d094d449a1146#0b773899443923be8122d7f4615d094d449a1146"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=e7e9a48eb794a6f03a8a0a73968d0e3ebb424044#e7e9a48eb794a6f03a8a0a73968d0e3ebb424044"
 dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
@@ -166,7 +166,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-ledger-forensics"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=0b773899443923be8122d7f4615d094d449a1146#0b773899443923be8122d7f4615d094d449a1146"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=e7e9a48eb794a6f03a8a0a73968d0e3ebb424044#e7e9a48eb794a6f03a8a0a73968d0e3ebb424044"
 dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
@@ -178,7 +178,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-policy"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=0b773899443923be8122d7f4615d094d449a1146#0b773899443923be8122d7f4615d094d449a1146"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=e7e9a48eb794a6f03a8a0a73968d0e3ebb424044#e7e9a48eb794a6f03a8a0a73968d0e3ebb424044"
 dependencies = [
  "actingcommand-contract",
  "actingcommand-selection-policy",
@@ -190,7 +190,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-runtime-client"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=0b773899443923be8122d7f4615d094d449a1146#0b773899443923be8122d7f4615d094d449a1146"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=e7e9a48eb794a6f03a8a0a73968d0e3ebb424044#e7e9a48eb794a6f03a8a0a73968d0e3ebb424044"
 dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
@@ -203,7 +203,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-runtime-config"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=0b773899443923be8122d7f4615d094d449a1146#0b773899443923be8122d7f4615d094d449a1146"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=e7e9a48eb794a6f03a8a0a73968d0e3ebb424044#e7e9a48eb794a6f03a8a0a73968d0e3ebb424044"
 dependencies = [
  "actingcommand-contract",
  "serde",
@@ -214,7 +214,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-runtime-database"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=0b773899443923be8122d7f4615d094d449a1146#0b773899443923be8122d7f4615d094d449a1146"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=e7e9a48eb794a6f03a8a0a73968d0e3ebb424044#e7e9a48eb794a6f03a8a0a73968d0e3ebb424044"
 dependencies = [
  "actingcommand-contract",
  "rusqlite",
@@ -226,7 +226,7 @@ dependencies = [
 [[package]]
 name = "actingcommand-selection-policy"
 version = "0.1.0"
-source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=0b773899443923be8122d7f4615d094d449a1146#0b773899443923be8122d7f4615d094d449a1146"
+source = "git+https://github.com/HS7097/ActingCommand-Runtime.git?rev=e7e9a48eb794a6f03a8a0a73968d0e3ebb424044#e7e9a48eb794a6f03a8a0a73968d0e3ebb424044"
 dependencies = [
  "actingcommand-contract",
  "serde",
