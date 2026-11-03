@@ -38,6 +38,11 @@
 //! picture ([`preview::observe_frame`]). Like the conditional resume beside them
 //! (`resume_paused`) each goes out once on a fresh person's connection, and never again
 //! by itself, whatever comes back.
+//!
+//! An instance's touch and capture backends (HS-U, Runtime 0.12.39's #402 HS-2) are settings
+//! too, but not rows of the page's tiers: [`backends`] reads them as each device instance's
+//! group, out of the same snapshot, and spells the one change of them, which switches that
+//! device before the Runtime answers.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
@@ -48,9 +53,9 @@ use crate::Spelling;
 use acui_rows::{code, EventActor, EventSource};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
-    config_parameters_fact_key, ConfigParameter, ConfigParameterSource, ConfigSettingChange,
-    EmulatorRunningState, FactScalar, FactValue, InstanceActivity, InstanceActivityKind,
-    InstanceId, OwnerEpoch,
+    config_parameters_fact_key, is_instance_backend_key, ConfigParameter, ConfigParameterSource,
+    ConfigSettingChange, EmulatorRunningState, FactScalar, FactValue, InstanceActivity,
+    InstanceActivityKind, InstanceId, OwnerEpoch,
     RuntimeControlPlaneStatus,
     RuntimeErrorCode, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
     RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation, RuntimeStartReport,
@@ -77,6 +82,7 @@ use super::{
     RUNTIME_RESULT_UNEXPECTED,
 };
 
+pub mod backends;
 pub mod preview;
 
 /// The reason this console's "pause all" gives, a free name of the pause, no outcome
@@ -457,6 +463,14 @@ impl ConfigEdit {
         Self(vec![ConfigSettingChange { key: EVIDENCE_MAX_AGE_DAYS.to_owned(), value: None }])
     }
 
+    /// Whether it changes an instance's backends ([`ConfigEdit::backends`]): the Runtime switches
+    /// that device before it answers, so the answer takes as long as the switch, which the
+    /// client waits `BACKEND_SWITCH_WAIT_MS` and its io timeout for, and an answer lost is an
+    /// [`backends::UnconfirmedSwitch`]'s, not another change's.
+    pub fn switches_backends(&self) -> bool {
+        self.0.iter().any(|change| is_instance_backend_key(&change.key))
+    }
+
     /// What it changes, keys and values as the wire has them: for the log only.
     pub fn line(&self) -> String {
         self.0
@@ -486,6 +500,11 @@ pub enum ConfigOutcome {
     /// No connection, so nothing was sent.
     NotSent(ClientFailure),
     /// Sent, or perhaps sent, and nothing says what became of it. It is not sent again.
+    ///
+    /// Of a change that [`ConfigEdit::switches_backends`] the Runtime may still be switching
+    /// the device, and moves the settings' version only once it commits, at the switch's end:
+    /// a snapshot at the version it was based on then says nothing yet. That is a
+    /// [`backends::UnconfirmedSwitch`], judged as its own says, never as any other change.
     Unconfirmed(ClientFailure),
 }
 
@@ -496,6 +515,9 @@ pub struct ConfigRefusal {
     pub why: RefusalWhy,
     pub failure: ClientFailure,
     pub key: Option<String>,
+    /// HS-U: of a change of an instance's backends, what the refusal says of them beyond `why`.
+    /// `None` for any other change, and for a refusal that says nothing of them.
+    pub backend: Option<backends::BackendRefusal>,
 }
 
 /// Why the Runtime refused a change of settings.
@@ -552,7 +574,15 @@ const RANGE_MAX: &str = "range_max";
 /// go. Sent once, whatever comes back.
 ///
 /// Only this connection asks for the full receipt: the console's default keeps no key, no
-/// problem and no range.
+/// problem and no range, and no cause of a refused switch of backends.
+///
+/// A change of an instance's backends switches that device before the Runtime answers: the
+/// client then waits for the receipt `BACKEND_SWITCH_WAIT_MS` (63 s) and the io timeout (5 s by
+/// default), where any other change answers at once. It waits on the caller's thread, so that is
+/// never the event loop's. That wait is the Runtime's bound of the switch's claim and its two
+/// preparations, not of the closes, the emulator's reading and the records around them: the
+/// client may give up, or its connection fail, while the switch goes on, and its unconfirmed
+/// answer is then a [`backends::UnconfirmedSwitch`]'s.
 pub fn configure(root: &Path, edit: &ConfigEdit, expected: Option<u64>) -> ConfigOutcome {
     let connected = RuntimeClient::connect(
         RuntimeClientConfig::new(root, RuntimeChannel::Ui, EventActor::User, EventSource::Ui)
@@ -564,15 +594,18 @@ pub fn configure(root: &Path, edit: &ConfigEdit, expected: Option<u64>) -> Confi
     };
     match client.configure_settings(edit.0.clone(), expected) {
         Ok(configured) => ConfigOutcome::Applied { version: configured.config_version },
-        Err(error) => configure_failed(error),
+        Err(error) => configure_failed(error, edit.switches_backends()),
     }
 }
 
 /// A failure after the connection that is no refusal counts as unconfirmed, as for
 /// [`pause_global`]: a failed write may have got the frame out. So does a refusal that
 /// halted the host: a change the ledger took and the section record it then refused stops
-/// the Runtime, and the next start restores it.
-fn configure_failed(error: RuntimeClientError) -> ConfigOutcome {
+/// the Runtime, and the next start restores it. A refusal of a change that `switches_backends`
+/// says what it says of them too. Its unconfirmed answer is the caller's to judge as a switch
+/// ([`backends::UnconfirmedSwitch`]): the caller knows what it asked for, and has to judge so
+/// as well a switch whose write's thread panicked, which brings no answer here at all.
+fn configure_failed(error: RuntimeClientError, switches_backends: bool) -> ConfigOutcome {
     if !error.projection().is_some_and(|refusal| !refusal.fatal) {
         return ConfigOutcome::Unconfirmed(ClientFailure::from(error));
     }
@@ -600,7 +633,8 @@ fn configure_failed(error: RuntimeClientError) -> ConfigOutcome {
         .and_then(|outcome| outcome.value(CONFIG_KEY))
         .and_then(|value| value.as_str())
         .map(str::to_owned);
-    ConfigOutcome::Refused(ConfigRefusal { why, failure: ClientFailure::from(error), key })
+    let backend = if switches_backends { backends::refusal(top, answer) } else { None };
+    ConfigOutcome::Refused(ConfigRefusal { why, failure: ClientFailure::from(error), key, backend })
 }
 
 fn value_problem(answer: Option<&Outcome>) -> ValueProblem {
@@ -800,6 +834,10 @@ pub struct ConfigRead {
     /// record at all: a Runtime that reports no configuration, whose settings are then not
     /// known, rather than unset.
     pub settings: Option<SettingsRead>,
+    /// HS-U: each device instance's touch and capture backends, by instance id: every instance a
+    /// backend row names. Empty from a Runtime before 0.12.39, which has no such keys, and of a
+    /// fixture, whose file names none: neither is an error.
+    pub backends: BTreeMap<String, backends::InstanceBackends>,
 }
 
 /// What a snapshot says of the settings the console shows, by the Runtime's own tiers of
@@ -876,11 +914,16 @@ impl SettingsRead {
     /// row, which a key without a default has while the file does not name it, is unset at
     /// its default, and settable as its key-table row says, so it is not left off; a key
     /// whose row does not read is (`unread` has it). Then every row of a shown tier none of
-    /// those named, of an instance `instances` does not list.
+    /// those named, of an instance `instances` does not list. An instance's two backends are
+    /// none of them: they are its device backends group's (`ConfigRead::backends`), and a key
+    /// without a row there is no unset setting but a fixture's, or a Runtime's without them.
     pub fn rows(&self, instances: &[&str]) -> Vec<SettingRow> {
         let mut rows = Vec::new();
         let mut named = BTreeSet::new();
         for &(name, _) in UI_TIERS {
+            if backends::is_backend_name(name) {
+                continue;
+            }
             let keys: Vec<(String, Option<&str>)> = match name {
                 KeyName::Exact(key) => vec![(key.to_owned(), None)],
                 KeyName::PerInstance(member) => instances
@@ -958,6 +1001,11 @@ impl SettingsRead {
             });
             return;
         };
+        // HS-U: an instance's backends are read as its group (`backends::read`); one whose row
+        // does not read is counted above as any other.
+        if backends::is_backend_name(row.name) {
+            return;
+        }
         let shown = ShownParameter {
             value,
             source: setting_source(parameter.source),
@@ -1238,6 +1286,7 @@ fn config_read(epoch: String, snapshot: &RuntimeFactSnapshot, version: Option<u6
         preset: preset_read(&snapshot.records),
         servers: servers(&snapshot.records),
         settings: settings_read(&snapshot.records),
+        backends: backends::read(&snapshot.records),
     }
 }
 
