@@ -254,9 +254,9 @@ version exists only in the tag.
   window that comes back with fewer than 64 events doubles the next one's span, up to 4096 positions; one
   with 128 or more puts it back to 256. A wider window, and any the reply's byte limit splits, is read by
   following the cursor, whole — so one fill can add more rows than it aims for. Online, every page query
-  is served on the Runtime's ledger writer (since Runtime `71db072d` it re-verifies only the head, the
-  boundary and a new tail, about 15 ms a page at ten thousand events, where it used to read and verify
-  the whole ledger), so one fill reads at least one window
+  is answered by the Runtime's ledger reader pool, off its writer (#422 QR-1; a frame's artifact lookups
+  too since v0.12.38, RA-1), and still costs the Runtime a read and a verification per page, so one fill
+  reads at least one window
   and starts no further window once it has 256 more rows, has read position 1, has read 16 windows or has
   run for one second. Rows are listed
   **newest first**; "read earlier" at the bottom continues below what is loaded. The top bar permanently

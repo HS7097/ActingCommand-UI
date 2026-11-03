@@ -368,9 +368,9 @@ impl Worker {
     /// Fills the timeline from the latest end at the pinned snapshot: backward
     /// windows, each read whole, until `FILL_ROWS` more rows show, position 1
     /// is read, `FILL_WINDOWS` windows were read, or `FILL_BUDGET` has passed —
-    /// at least one window each time. Every page query is served on the
-    /// Runtime's ledger writer (online), so what the budget leaves is for "read
-    /// earlier"; the top bar states what was read. `earlier` continues below
+    /// at least one window each time. Every page query costs the Runtime a
+    /// read and a verification (online, on its ledger reader pool), so what the
+    /// budget leaves is for "read earlier"; the top bar states what was read. `earlier` continues below
     /// what is loaded; otherwise the view starts over from the pin, or from
     /// where a time bound is estimated to fall. Each window read is painted.
     fn reload(&self, source: &ReadSource, tag: RequestTag, earlier: bool) -> Result<(), Superseded> {
