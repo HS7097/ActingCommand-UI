@@ -132,12 +132,13 @@ Runtime 在运行，就给出「重新打开」并写明可以改为在线读取
 `console_runtime_owner_changed`）时，顶栏同样提示按「重新打开」改读现在运行的 Runtime。时间跨度的
 读取跟着游标最多 64 页，仍没有读到事件就停下并报 `console_time_span_page_limit`，不让窗口一直读下去。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.37
-（含 Workflow #432 AGT-1b 给 Status 加的可选成员 `agent_wake`，控制台读得上、不显示；建在 #429 R-0b、R-4、
-R-11、R-7a、114-A 之上；v0.12.32 的有界离线打开照旧），说 0.12 协议（`runtime-client` 修订 5、账本修订 5）：
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.38
+（读帧的账本查找改由读者池在写线程外回答，#422 RA-1；含 Workflow #432 AGT-1b 给 Status 加的可选成员
+`agent_wake`，控制台读得上、不显示；建在 #429 R-0b、R-4、R-11、R-7a、114-A 之上；v0.12.32 的有界离线打开
+照旧），说 0.12 协议（`runtime-client` 修订 5、账本修订 5）：
 
 ```
-rev = "65a67127f060d34fdaccc3d80be2c83102370ae1"
+rev = "0b773899443923be8122d7f4615d094d449a1146"
 ```
 
 六个 crate（contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
