@@ -199,6 +199,14 @@ pub fn format_second(timestamp_unix_ms: u64) -> String {
     }
 }
 
+/// This computer's clock's offset from UTC now, in minutes east of it: the clock a weekly quiet
+/// time a person adds is written in (UI-3e1-b). Where the clock changes for summer, the offset
+/// does too, and such an entry keeps the one it was written in.
+pub fn local_utc_offset_minutes() -> i16 {
+    // A fixed offset is less than a day either way, so its minutes fit.
+    (Local::now().offset().local_minus_utc() / 60) as i16
+}
+
 /// Whole seconds from a committed timestamp to now; negative if it is ahead.
 pub fn seconds_since(timestamp_unix_ms: u64) -> i64 {
     Local::now().timestamp_millis().saturating_sub(timestamp_unix_ms as i64) / 1000

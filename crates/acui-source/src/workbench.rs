@@ -50,6 +50,11 @@
 //! too, but not rows of the page's tiers: [`backends`] reads them as each device instance's
 //! group, out of the same snapshot, and spells the one change of them, which switches that
 //! device before the Runtime answers.
+//!
+//! An account's automatic rules (UI-3e1-b), its quiet times, its idle action and its emulator's
+//! start, are rows of the page's tiers that the main page changes: [`rules`] reads them out of the
+//! same snapshot, a blackout list's entries through the Runtime's own parser (BX-1, 0.12.39), and
+//! spells their changes, a list's in the shape that parser reads.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
@@ -92,6 +97,7 @@ use super::{
 pub mod backends;
 pub mod device;
 pub mod preview;
+pub mod rules;
 
 /// The reason this console's "pause all" gives, a free name of the pause, no outcome
 /// code. A pause of this reason is one a person pressed here, so lifting it asks for
@@ -555,6 +561,9 @@ pub enum ValueProblem {
     OutOfRange,
     SectionCheck,
     RepeatedKey,
+    /// `start_emulator` on for an instance whose emulator the Runtime cannot start: one not bound
+    /// by discovery (Workflow #429 R-3, 0.12.39).
+    DiscoveryBindingRequired,
     Other,
 }
 
@@ -565,6 +574,7 @@ const WRONG_TYPE: &str = ConfigValueProblem::WrongType.as_str();
 const OUT_OF_RANGE: &str = ConfigValueProblem::OutOfRange.as_str();
 const SECTION_CHECK: &str = ConfigValueProblem::SectionCheck.as_str();
 const REPEATED_KEY: &str = ConfigValueProblem::RepeatedKey.as_str();
+const DISCOVERY_BINDING_REQUIRED: &str = ConfigValueProblem::DiscoveryBindingRequired.as_str();
 /// The contract's and the host's own spellings, of crates this one does not use.
 const INVALID_CONFIGURE_SETTINGS: &str = "invalid_configure_settings";
 const OVERRIDES_PERSIST_FAILED: &str = "host_config_overrides_persist_failed";
@@ -666,6 +676,7 @@ fn value_problem(answer: Option<&Outcome>) -> ValueProblem {
         Some(OUT_OF_RANGE) => ValueProblem::OutOfRange,
         Some(SECTION_CHECK) => ValueProblem::SectionCheck,
         Some(REPEATED_KEY) => ValueProblem::RepeatedKey,
+        Some(DISCOVERY_BINDING_REQUIRED) => ValueProblem::DiscoveryBindingRequired,
         Some(_) | None => ValueProblem::Other,
     }
 }
@@ -911,6 +922,12 @@ pub struct SettingsRead {
     /// or naming no key; a section that is no list of rows counts as one. Said, not dropped:
     /// a key among them is not shown, rather than as unset.
     unread: Vec<UnreadRow>,
+    /// UI-3e1-b: the entries of each blackout list's row `parameters` has, the host's and each
+    /// instance's own, by key, as the Runtime's parser reads them ([`rules`]).
+    quiet: BTreeMap<String, rules::ListRead>,
+    /// The snapshot has a row of an instance's touch or capture backend: its Runtime is 0.12.39
+    /// or later, which has those keys (HS-1), and takes a change of `start_emulator` (R-3).
+    backend_rows: bool,
 }
 
 /// A `config.parameters` row of a setting the console shows, or naming no key, that does
@@ -1040,8 +1057,10 @@ impl SettingsRead {
     /// Whether the Runtime takes a change while it runs of `key`, which has no row: as its
     /// key-table row says, but for an instance's `start_emulator`. That one is settable only
     /// since 0.12.39 (Workflow #429 R-3), and the Runtime that answers may be an older one than
-    /// the key table here: another instance's row of it says which, and with none it is not,
-    /// as before 0.12.39 (a change in the file with a restart is taken on 0.12.39 too).
+    /// the key table here: another instance's row of it says which. With none, a row of any
+    /// instance's touch or capture backend does: those keys are 0.12.39's too (HS-1), and a device
+    /// instance's file names both. With neither it is not, as before 0.12.39 (a change in the file
+    /// with a restart is taken on 0.12.39 too).
     fn unreported_settable(&self, key: &str, name: KeyName) -> bool {
         if name != KeyName::PerInstance(START_EMULATOR) {
             return find_row(key).is_some_and(|(row, _)| row.settable.is_settable());
@@ -1053,7 +1072,7 @@ impl SettingsRead {
                     .is_some_and(|(row, _)| row.name == name)
                     .then_some(shown.settable)
             })
-            .unwrap_or(false)
+            .unwrap_or(self.backend_rows)
     }
 
     /// The rows that do not read, in the snapshot's order: none of them is shown.
@@ -1084,7 +1103,8 @@ impl SettingsRead {
     /// does not.
     fn take(&mut self, section: &str, parameter: ConfigParameter) {
         // A key the key table does not have is hidden (`ui_tier`), as is one of no shown tier.
-        let (Some((row, _)), Some(_)) = (find_row(&parameter.key), shown_tier(&parameter.key))
+        let (Some((row, instance)), Some(_)) =
+            (find_row(&parameter.key), shown_tier(&parameter.key))
         else {
             return;
         };
@@ -1099,9 +1119,15 @@ impl SettingsRead {
             });
             return;
         };
+        // UI-3e1-b: a blackout list's entries are read as well, by the Runtime's own parser, for
+        // an account's rules; the page shows the list only as set or not.
+        if let Some(entries) = rules::list_read(row.name, instance, &parameter.value) {
+            self.quiet.insert(parameter.key.clone(), entries);
+        }
         // HS-U: an instance's backends are read as its group (`backends::read`); one whose row
         // does not read is counted above as any other.
         if backends::is_backend_name(row.name) {
+            self.backend_rows = true;
             return;
         }
         let shown = ShownParameter {
@@ -1258,7 +1284,12 @@ fn settings_read(records: &[RuntimeFactRecord]) -> Option<SettingsRead> {
         })
         .peekable();
     sections.peek()?;
-    let mut read = SettingsRead { parameters: BTreeMap::new(), unread: Vec::new() };
+    let mut read = SettingsRead {
+        parameters: BTreeMap::new(),
+        unread: Vec::new(),
+        quiet: BTreeMap::new(),
+        backend_rows: false,
+    };
     for record in sections {
         let section = record.key.as_str();
         let unread = |why| UnreadRow { section: section.to_owned(), why };

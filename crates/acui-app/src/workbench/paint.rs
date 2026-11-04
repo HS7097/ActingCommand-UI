@@ -1989,6 +1989,7 @@ fn refusal_text(labels: &Labels, why: &RefusalWhy) -> String {
                 ValueProblem::OutOfRange => labels.config_problem_out_of_range,
                 ValueProblem::SectionCheck => labels.config_problem_section,
                 ValueProblem::RepeatedKey => labels.config_problem_repeated,
+                ValueProblem::DiscoveryBindingRequired => labels.config_problem_other,
                 ValueProblem::Other => labels.config_problem_other,
             };
             let mut text = fill(labels.config_value_refused, &[problem]);
