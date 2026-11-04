@@ -28,16 +28,23 @@
 //!
 //! Left out on purpose: `player_hold` and `control` (the hold's read face is
 //! UI-3d's); `request_id` (nothing here stops a run); a fence's recheck counts.
-//! `emulator_state` is read for one thing only and never shown: an `off` reading holds
-//! the picture's refresh back ([`InstanceLive::emulator_off`], UI-3c-2). The Runtime
-//! reads it only at discovery and at an emulator's control, never polling, and `off`
-//! may be the idle action's doing, so it may be stale, and showing it would mislead.
+//! `emulator_state` is a condition of the picture's refresh and of the device's buttons, whose
+//! reason says when it was seen, and never shown as what holds now
+//! ([`InstanceLive::emulator_off`], [`InstanceLive::emulator_on`]; UI-3c-2, UI-3e1-a). The
+//! Runtime reads it at discovery, at an emulator's control and, while its emulator watch is on,
+//! at the watch's poll of a discovery-bound instance, a minute apart by default (EMU-W R2), and
+//! `off` may be the idle action's doing: a reading may be a minute old, or older. What the
+//! device's buttons are drawn for is the status's too: whether an instance drives a device of
+//! its own, and which of its emulator's controls its capability profile has available
+//! ([`InstanceLive::physical`], [`InstanceLive::emulator_controls`]).
 //!
 //! The writes here are a person's global pause ([`pause_global`]) and a person's change
-//! of settings ([`configure`]), and in the picture's file a person's refresh of the
-//! picture ([`preview::observe_frame`]). Like the conditional resume beside them
-//! (`resume_paused`) each goes out once on a fresh person's connection, and never again
-//! by itself, whatever comes back.
+//! of settings ([`configure`]), in the picture's file a person's refresh of the picture
+//! ([`preview::observe_frame`]), and in the device's a person's operation of a device: its
+//! reconnect and self-check, its emulator's control, its game's launch and restart
+//! ([`device::operate`], UI-3e1-a). Like the conditional resume beside them (`resume_paused`)
+//! each goes out once on a fresh person's connection, and never again by itself, whatever
+//! comes back.
 //!
 //! An instance's touch and capture backends (HS-U, Runtime 0.12.39's #402 HS-2) are settings
 //! too, but not rows of the page's tiers: [`backends`] reads them as each device instance's
@@ -54,8 +61,8 @@ use acui_rows::{code, EventActor, EventSource};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     config_parameters_fact_key, is_instance_backend_key, ConfigParameter, ConfigParameterSource,
-    ConfigSettingChange, EmulatorRunningState, FactScalar, FactValue, InstanceActivity,
-    InstanceActivityKind, InstanceId, OwnerEpoch,
+    ConfigSettingChange, EmulatorCapability, EmulatorRunningState, ExecutionBackendProvenance,
+    FactScalar, FactValue, InstanceActivity, InstanceActivityKind, InstanceId, OwnerEpoch,
     RuntimeControlPlaneStatus,
     RuntimeErrorCode, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
     RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation, RuntimeStartReport,
@@ -83,6 +90,7 @@ use super::{
 };
 
 pub mod backends;
+pub mod device;
 pub mod preview;
 
 /// The reason this console's "pause all" gives, a free name of the pause, no outcome
@@ -596,7 +604,8 @@ pub fn configure(root: &Path, edit: &ConfigEdit, expected: Option<u64>) -> Confi
 }
 
 /// The client configuration of [`configure`]'s connection: a person's, asking for the full
-/// receipt, at the client's default io timeout.
+/// receipt, at the client's default io timeout. A device's operation takes the same, at its own
+/// io timeout ([`device::DEVICE_IO`]).
 fn configure_config(root: &Path) -> RuntimeClientConfig {
     RuntimeClientConfig::new(root, RuntimeChannel::Ui, EventActor::User, EventSource::Ui)
         .with_detail(Detail::Full)
@@ -699,10 +708,46 @@ pub struct InstanceLive {
     /// Runtime before 0.12.36: not an error.
     pub activity: Option<ActivityFact>,
     /// When the Runtime last read the instance's emulator as not running, in unix ms;
-    /// absent when it last read it running or holds no reading (`unknown`). Read only at
-    /// discovery and at an emulator's control, never polled, so it may be stale: only a
-    /// condition of the picture's refresh, never shown.
+    /// absent when it last read it running or holds no reading (`unknown`). A reading of
+    /// discovery, of an emulator's control or of the emulator watch's poll, so it may be
+    /// stale: a condition of the picture's refresh and of the device's buttons, whose reason
+    /// says when it was seen, never shown as what holds now.
     pub emulator_off: Option<u64>,
+    /// When the Runtime last read the instance's emulator as running, in unix ms, read as
+    /// `emulator_off` is: absent when it last read it not running or holds no reading.
+    pub emulator_on: Option<u64>,
+    /// It drives a device of its own (`backend_provenance` `physical_device`), an emulator or a
+    /// handset, where a fixture's simulation does not: what the self-check and the game's
+    /// buttons are drawn for. A status that states no provenance counts as none (`unstated`).
+    pub physical: bool,
+    /// Which of its emulator's controls the Runtime offers: those its capability profile has
+    /// available. Only a discovery-bound MuMu instance has a profile; one without, a handset, an
+    /// emulator named by its address or a fixture, is offered none (`unstated`).
+    pub emulator_controls: EmulatorControls,
+    /// What the status left out of what `physical` and `emulator_controls` are read from.
+    pub unstated: Unstated,
+}
+
+/// Which of an instance's emulator's controls the Runtime offers (`instance.start`,
+/// `instance.stop`, `instance.restart` of its capability profile): each of the emulator's
+/// buttons by its own ([`device::DeviceOp`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EmulatorControls {
+    pub start: bool,
+    pub stop: bool,
+    pub restart: bool,
+}
+
+/// What a status left out of what [`InstanceLive::physical`] and
+/// [`InstanceLive::emulator_controls`] are read from, so that it counts as no device, or no
+/// control: for the log only. A Runtime states every instance's provenance, and a capability
+/// profile only of a discovery-bound MuMu instance, so only the first is out of the ordinary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Unstated {
+    /// No `backend_provenance`.
+    pub provenance: bool,
+    /// No `capabilities`.
+    pub capabilities: bool,
 }
 
 /// An instance's id as the wire types it, opaque outside this crate.
@@ -1010,6 +1055,24 @@ impl SettingsRead {
     /// The rows that do not read, in the snapshot's order: none of them is shown.
     pub fn unread(&self) -> &[UnreadRow] {
         &self.unread
+    }
+
+    /// Whether the instance of `instance_id` has `start_emulator` on in effect, the file's value
+    /// or an instruction's, as the emulator watch reads it at every poll: it starts a stopped
+    /// emulator of an instance that has it on, unless that instance's own pause holds it (EMU-W
+    /// R3, Runtime 0.12.39). With no row it is off: the Runtime reports the key only of an
+    /// instance that names it or that an instruction sets it for, and it has no default. `None`
+    /// when that does not read: its row does not, or a row or section naming no key may be it.
+    pub fn start_emulator(&self, instance_id: &str) -> Option<bool> {
+        let key = instance_key(instance_id, START_EMULATOR);
+        if self.unread.iter().any(|row| row.key().map_or(true, |unread| unread == key)) {
+            return None;
+        }
+        match self.parameters.get(&key) {
+            Some(ShownParameter { value: ShownValue::Flag(on), .. }) => Some(*on),
+            Some(_) => None,
+            None => Some(false),
+        }
     }
 
     /// A row of `section`. One whose value is not of its key's type does not read, as one of
@@ -1433,6 +1496,12 @@ fn live_snapshot(pid: u32, epoch: String, status: &RuntimeControlPlaneStatus) ->
 
 fn instance_live(instance: &RuntimeInstanceStatus, owner_epoch: OwnerEpoch) -> InstanceLive {
     let alias = instance.instance_alias();
+    let (emulator_on, emulator_off) = match instance.emulator_state() {
+        EmulatorRunningState::On { observed_at_unix_ms } => (Some(observed_at_unix_ms), None),
+        EmulatorRunningState::Off { observed_at_unix_ms } => (None, Some(observed_at_unix_ms)),
+        EmulatorRunningState::Unknown => (None, None),
+    };
+    let provenance = instance.backend_provenance();
     InstanceLive {
         alias: alias.to_string(),
         instance_id: code(&instance.instance_id()),
@@ -1445,10 +1514,27 @@ fn instance_live(instance: &RuntimeInstanceStatus, owner_epoch: OwnerEpoch) -> I
         }),
         ladder_busy: instance.ladder_busy_hold().is_some(),
         activity: instance.activity().map(activity_fact),
-        emulator_off: match instance.emulator_state() {
-            EmulatorRunningState::Off { observed_at_unix_ms } => Some(observed_at_unix_ms),
-            EmulatorRunningState::On { .. } | EmulatorRunningState::Unknown => None,
+        emulator_off,
+        emulator_on,
+        physical: provenance == Some(ExecutionBackendProvenance::PhysicalDevice),
+        emulator_controls: emulator_controls(instance),
+        unstated: Unstated {
+            provenance: provenance.is_none(),
+            capabilities: instance.capabilities().is_none(),
         },
+    }
+}
+
+/// The emulator's controls the instance's capability profile has available; none without one.
+fn emulator_controls(instance: &RuntimeInstanceStatus) -> EmulatorControls {
+    let Some(profile) = instance.capabilities() else {
+        return EmulatorControls::default();
+    };
+    let offered = |capability: EmulatorCapability| profile.capability(capability).is_ok();
+    EmulatorControls {
+        start: offered(EmulatorCapability::InstanceStart),
+        stop: offered(EmulatorCapability::InstanceStop),
+        restart: offered(EmulatorCapability::InstanceRestart),
     }
 }
 
