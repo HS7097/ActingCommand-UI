@@ -475,6 +475,24 @@ impl Actions {
         self.said = said;
     }
 
+    /// The device a switch of backends sent from here may be acting on now, by instance id: the
+    /// one out, or the one whose answer was lost while no `Status` has shown it over. Not one
+    /// shown over that awaits its snapshot, nor a change that met the settings moved on, which
+    /// switched nothing (`Model::device_busy`).
+    pub fn switching(&self) -> Option<&str> {
+        match &self.flow {
+            ConfigFlow::InFlight(Field::Backends) => {
+                self.backend_out.as_ref().map(|(target, _, _)| target.instance_id())
+            }
+            ConfigFlow::Rereading(Reread::Switch, _) => self
+                .switch
+                .as_ref()
+                .filter(|pending| !pending.over)
+                .map(|pending| pending.switch.instance_id()),
+            _ => None,
+        }
+    }
+
     /// A fact snapshot that counts: of this epoch, and read after any write that landed.
     /// That is what a change of settings left waiting was waiting for, and what a draft
     /// that was applied waited for. A confirmation goes when what it asks about is no

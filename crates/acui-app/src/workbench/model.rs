@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 use std::time::Instant;
 
+use acui_source::workbench::device::DeviceOp;
 use acui_source::workbench::{
     ActivityKind, ConfigRead, ExplainRead, InstanceLive, LiveRead, LiveSnapshot, PresetProblem,
     StartRead,
@@ -24,6 +25,7 @@ use super::picture::{
 };
 use super::preview::{Order, Target};
 use super::read::{Lane, Read, EXPLAIN_TOO_OLD, START_TRIES};
+use super::rescue::{Rescue, RescueHold, RescueView};
 use super::settings::{self, AutostartView, SettingsView, StartView};
 use super::tools::{Displays, NameTable, NamesRead, WatchdogRead};
 use crate::strings::{fill, Labels, Language};
@@ -221,9 +223,23 @@ pub struct Model {
     autostart_asks: u64,
     /// Which account's picture the right column shows, and what the picture thread found.
     pictures: Pictures,
+    /// Each account's operations of its device, and the confirmation asked (UI-3e1-a).
+    rescue: Rescue,
     /// The ledger's committed head as the newest `Status` stated it, while online: where the
     /// picture's lookup starts down from.
     ledger_head: Option<u64>,
+}
+
+/// What of an account's device is out from here (`Model::device_busy`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceBusy {
+    /// An operation of it, from its rescue bar (`rescue`).
+    Rescue(DeviceOp),
+    /// A switch of its backends from the settings page, out or with its answer lost while no
+    /// `Status` has shown it over (`Actions::switching`).
+    BackendSwitch,
+    /// A refresh of its picture (`refresh`).
+    Refresh,
 }
 
 /// What a `Status` read changed, for what the event loop does next.
@@ -294,6 +310,7 @@ impl Model {
             autostart: Autostart::NotAsked,
             autostart_asks: 0,
             pictures: Pictures::default(),
+            rescue: Rescue::default(),
             ledger_head: None,
         }
     }
@@ -319,7 +336,11 @@ impl Model {
         self.page
     }
 
+    /// A confirmation asked on the page left goes with it (`rescue`).
     pub fn set_page(&mut self, page: Page) {
+        if self.page != page {
+            self.rescue.unconfirm();
+        }
         self.page = page;
     }
 
@@ -531,11 +552,16 @@ impl Model {
         self.pictures.name(alias);
     }
 
-    /// An account picked on its card: whether that changed whose picture shows.
+    /// An account picked on its card: whether that changed whose picture shows. A confirmation
+    /// asked goes when it did (`rescue`).
     pub fn pick_account(&mut self, alias: &str) -> bool {
         let before = self.picture_account().map(str::to_owned);
         self.pictures.pick(alias);
-        self.picture_account() != before.as_deref()
+        let changed = self.picture_account() != before.as_deref();
+        if changed {
+            self.rescue.unconfirm();
+        }
+        changed
     }
 
     pub fn pictures(&self) -> &Pictures {
@@ -544,6 +570,34 @@ impl Model {
 
     pub fn pictures_mut(&mut self) -> &mut Pictures {
         &mut self.pictures
+    }
+
+    pub fn rescue_mut(&mut self) -> &mut Rescue {
+        &mut self.rescue
+    }
+
+    /// Which of its device's works out from here holds `alias`'s device, if any: an operation of
+    /// it, a switch of its backends, a refresh of its picture, said in that order. The one place
+    /// where each of them keeps the others from going out for an account: the Runtime names none
+    /// of them while it waits its turn in the instance's queue, nor a game's operation at all,
+    /// and a `Status` comes every few seconds. One account's work holds no other's.
+    pub fn device_busy(&self, alias: &str) -> Option<DeviceBusy> {
+        if let Some(op) = self.rescue.out(alias) {
+            return Some(DeviceBusy::Rescue(op));
+        }
+        // The switch names its device by instance id: this `Status` gives the account's.
+        let id = self
+            .instances
+            .iter()
+            .find(|instance| instance.alias == alias)
+            .map(|instance| instance.instance_id.as_str());
+        if id.is_some() && self.actions.switching() == id {
+            return Some(DeviceBusy::BackendSwitch);
+        }
+        if self.pictures.refresh_out(alias) {
+            return Some(DeviceBusy::Refresh);
+        }
+        None
     }
 
     /// Whether the picture may read `alias` now. UI-3d writes this from the account's player
@@ -629,10 +683,11 @@ impl Model {
 
     /// Why `alias`, whose picture shows, cannot be refreshed now, as the reads say: the first of
     /// these that does not hold. Its picture is followed (`preview_target`): the Runtime answers
-    /// and lists it, and its gate is open. It does nothing the Runtime names, whatever that is.
-    /// Its emulator was not last read as off: a reading of `unknown` lets it, and one of `off`
-    /// may be stale. It is not fenced, and its ladder does not hold. A pause holds nothing back:
-    /// a refresh under one takes the device a moment, which the cost under the button says.
+    /// and lists it, and its gate is open. No operation of its device, nor a switch of its
+    /// backends, is out from here (`device_busy`). It does nothing the Runtime names, whatever
+    /// that is. Its emulator was not last read as off: a reading of `unknown` lets it, and one of
+    /// `off` may be stale. It is not fenced, and its ladder does not hold. A pause holds nothing
+    /// back: a refresh under one takes the device a moment, which the cost under the button says.
     fn refresh_hold(&self, alias: &str) -> Option<RefreshHold> {
         if self.preview_target().is_none() {
             let hold = if self.page != Page::Main || !self.shown {
@@ -648,6 +703,12 @@ impl Model {
         let Some(instance) = self.instances.iter().find(|instance| instance.alias == alias) else {
             return Some(RefreshHold::NotOnline);
         };
+        if matches!(
+            self.device_busy(alias),
+            Some(DeviceBusy::Rescue(_) | DeviceBusy::BackendSwitch)
+        ) {
+            return Some(RefreshHold::Busy(Doing::OperatingDevice));
+        }
         if let Some(activity) = &instance.activity {
             let hold = match activity.kind {
                 ActivityKind::PolicyRun | ActivityKind::DirectRun | ActivityKind::HostRun => {
@@ -667,6 +728,76 @@ impl Model {
             return Some(RefreshHold::Fault);
         }
         None
+    }
+
+    /// What `alias`'s rescue bar offers now (UI-3e1-a), as the reads and the account's own
+    /// presses leave it: none while the main page does not show, the window is minimized, no
+    /// `Status` has answered yet, or the one online does not list the account; while no Runtime
+    /// answers, only that no device can be operated.
+    pub fn rescue_view(&self, alias: &str) -> Option<RescueView> {
+        if self.page != Page::Main || !self.shown {
+            return None;
+        }
+        match &self.link {
+            Link::Online { .. } => {}
+            Link::Unknown => return None,
+            Link::Absent(_) | Link::NoAnswer(_) | Link::Trouble(_) | Link::ThreadFailed => {
+                return Some(RescueView::Offline)
+            }
+        }
+        let instance = self.instances.iter().find(|instance| instance.alias == alias)?;
+        let gate = self.preview_gate(alias);
+        let hold = self.rescue_hold(instance, gate);
+        let rows = self.rescue.view(instance, gate == PreviewGate::Withdrawn, hold);
+        Some(RescueView::Online(rows))
+    }
+
+    /// Why every device button of `instance`, which the newest `Status` lists, is off now, under
+    /// its gate `gate`: the first of these that holds. Its gate is shut. Its device's work is out
+    /// from here (`device_busy`): an operation, a refresh of its picture, a switch of its
+    /// backends. Its last operation cools down. It runs a task. Its recovery ladder climbs or
+    /// holds. It does something else the Runtime names: claiming the device now would only wait
+    /// in its queue and be refused. A pause holds nothing back, whoever's, nor a quiet time, nor
+    /// a change of settings out.
+    fn rescue_hold(&self, instance: &InstanceLive, gate: PreviewGate) -> Option<RescueHold> {
+        if matches!(gate, PreviewGate::Freeze { .. }) {
+            return Some(RescueHold::GateShut);
+        }
+        match self.device_busy(&instance.alias) {
+            Some(DeviceBusy::Rescue(op)) => return Some(RescueHold::Out(op)),
+            Some(DeviceBusy::Refresh) => return Some(RescueHold::Refreshing),
+            Some(DeviceBusy::BackendSwitch) => return Some(RescueHold::Switching),
+            None => {}
+        }
+        if self.rescue.cooling(&instance.alias) {
+            return Some(RescueHold::CoolingDown);
+        }
+        let kind = instance.activity.as_ref().map(|activity| activity.kind);
+        let hold = match kind {
+            Some(ActivityKind::PolicyRun | ActivityKind::DirectRun | ActivityKind::HostRun) => {
+                RescueHold::Running
+            }
+            Some(ActivityKind::Ladder) => RescueHold::Recovering,
+            _ if instance.ladder_busy => RescueHold::Recovering,
+            Some(ActivityKind::Reconnect) => RescueHold::Busy(Doing::Reconnecting),
+            Some(ActivityKind::Selfcheck) => RescueHold::Busy(Doing::SelfChecking),
+            Some(ActivityKind::EmulatorControl) => RescueHold::Busy(Doing::ControllingEmulator),
+            None => return None,
+        };
+        Some(hold)
+    }
+
+    /// The confirmation asked goes for good once its button cannot be pressed, as a `Status` read
+    /// leaves it, the window minimized included: one that came back later would ask about what
+    /// may no longer hold.
+    fn rescue_reviewed(&mut self) {
+        let Some((alias, op)) = self.rescue.asked() else {
+            return;
+        };
+        let offered = self.rescue_view(alias).is_some_and(|view| view.offers(op));
+        if !offered {
+            self.rescue.unconfirm();
+        }
     }
 
     /// What the schedule explanation reads leave now. A thread that does not read
@@ -792,6 +923,7 @@ impl Model {
             self.names = Names::NotAsked;
             self.displays = None;
         }
+        self.rescue_reviewed();
         LiveLanded {
             previous,
             connected,
@@ -882,7 +1014,8 @@ impl Model {
     }
 
     /// What is shown of a Runtime that no longer answers. The last value read
-    /// stays, for the same epoch coming back.
+    /// stays, for the same epoch coming back. No device can be operated then, so the
+    /// confirmation asked goes.
     fn leave_online(&mut self) {
         self.instances.clear();
         self.global_pause = None;
@@ -890,6 +1023,7 @@ impl Model {
         self.explain.error = None;
         self.config.error = None;
         self.actions.status_lost();
+        self.rescue.unconfirm();
     }
 }
 

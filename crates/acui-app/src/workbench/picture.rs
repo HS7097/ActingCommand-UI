@@ -172,7 +172,7 @@ pub enum RefreshHold {
     GateShut,
     /// It runs a task, whose frames the picture follows by itself.
     Running,
-    /// It does something else the Runtime names.
+    /// It does something else the Runtime names, or this console has its device's work out.
     Busy(Doing),
     /// The Runtime last read its emulator as not running, at this time (unix ms). That reading
     /// may be stale: an `unknown` one holds nothing back.
@@ -188,6 +188,10 @@ pub enum Doing {
     SelfChecking,
     ControllingEmulator,
     Climbing,
+    /// An operation of its device, or a switch of its backends, is out from here
+    /// (`Model::device_busy`): the Runtime names neither while it waits its turn, nor a game's
+    /// launch or restart at all.
+    OperatingDevice,
 }
 
 /// Why the refresh's button cannot be pressed: of the reads, or of its own last press, which
@@ -753,6 +757,12 @@ impl Pictures {
             }
         }
         released
+    }
+
+    /// Whether a refresh of `alias` is out: no other work of its device goes out from here
+    /// meanwhile (`Model::device_busy`).
+    pub fn refresh_out(&self, alias: &str) -> bool {
+        self.known.get(alias).is_some_and(|known| known.refresh.out.is_some())
     }
 
     /// What `alias`'s refresh offers now, `hold` being why the reads say it cannot be, if they

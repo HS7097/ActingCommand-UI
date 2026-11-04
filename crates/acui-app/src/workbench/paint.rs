@@ -400,13 +400,15 @@ fn refresh_why_not(labels: &Labels, why: RefreshWhyNot) -> String {
     }
 }
 
-/// The same words the card has for it.
+/// The same words the card has for it; for this console's own work with the device, which no
+/// card says, words of its own.
 fn doing_text(labels: &Labels, doing: Doing) -> &'static str {
     match doing {
         Doing::Reconnecting => labels.card_reconnecting,
         Doing::SelfChecking => labels.card_self_checking,
         Doing::ControllingEmulator => labels.card_controlling_emulator,
         Doing::Climbing => labels.card_climbing,
+        Doing::OperatingDevice => labels.refresh_operating_device,
     }
 }
 

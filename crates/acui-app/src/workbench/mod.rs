@@ -18,6 +18,11 @@
 //!    history, which no write changes, so no picture read is let go for a write, and
 //!    nothing the picture does counts as one, not even its refresh (`refresh`): the frame
 //!    that captures is one more record for the picture to read.
+//! 6. A person's operation of a device (`rescue`) is a write: its answer counts one (`wrote`),
+//!    since it changes what the reads show of the account, its activity, its emulator's
+//!    reading and its fence. Rule 5 stands: a refresh is still none. Neither goes out while
+//!    the other, or a switch of that device's backends, is out for the same account
+//!    (`Model::device_busy`, the one place that says so).
 //!
 //! Another thread runs the Runtime's `actingctl` (`tools`), only when asked: `packs` for the
 //! task names and the picture proportions each game's standard pack declares, and `watchdog
@@ -58,6 +63,7 @@ pub mod picture;
 pub mod preview;
 pub mod read;
 pub mod refresh;
+pub mod rescue;
 pub mod settings;
 pub mod tools;
 
@@ -447,9 +453,10 @@ fn live_landed(ui: &Ui, read: LiveRead) {
         poke(ui, Lane::Slow);
         ask_start(ui);
     }
-    // No refresh of the picture out holds across a restart.
+    // No refresh of the picture out holds across a restart, nor any operation of a device.
     if landed.epoch_changed {
         refresh::restarted(ui);
+        rescue::restarted(ui);
     }
     // An unconfirmed switch shown over: only a snapshot begun after this says what came of it.
     if landed.switch_over {

@@ -883,11 +883,12 @@ pub struct Labels {
     pub picture_aspect_undeclared: &'static str,
     /// Under the live view, its refresh: the button, and in grey what a refresh costs. Beside
     /// the button why it cannot be pressed now: no Runtime online; the device is being handed
-    /// over; a task runs; the account does something else (the card's words for that); its
-    /// emulator was last seen not running (time); it is fenced, or its ladder holds; it was
-    /// just refreshed. Under it what the last refresh came to: one is out; a frame captured
-    /// (time); captured and not read back; nothing captured (the words of the Runtime's code;
-    /// the words when this console has none); unconfirmed; not sent; no thread
+    /// over; a task runs; the account does something else (the card's words for that, or
+    /// `refresh_operating_device` while this console operates its device or switches its
+    /// backends); its emulator was last seen not running (time); it is fenced, or its ladder
+    /// holds; it was just refreshed. Under it what the last refresh came to: one is out; a
+    /// frame captured (time); captured and not read back; nothing captured (the words of the
+    /// Runtime's code; the words when this console has none); unconfirmed; not sent; no thread
     /// (`thread_failed` filled in); out across a restart.
     pub refresh_frame: &'static str,
     pub refresh_cost: &'static str,
@@ -895,6 +896,7 @@ pub struct Labels {
     pub refresh_gate_shut: &'static str,
     pub refresh_running: &'static str,
     pub refresh_busy: &'static str,
+    pub refresh_operating_device: &'static str,
     pub refresh_emulator_off: &'static str,
     pub refresh_fault: &'static str,
     pub refresh_cooling: &'static str,
@@ -1622,6 +1624,7 @@ pub const ZH: Labels = Labels {
     refresh_gate_shut: "正在交接设备，不能刷新",
     refresh_running: "任务运行中，画面会自动跟随",
     refresh_busy: "这个号{}，稍后再刷新",
+    refresh_operating_device: "正在操作设备",
     refresh_emulator_off: "模拟器没开（{} 看到的），刷新不了",
     refresh_fault: "这个号有待处理的故障，先别刷新",
     refresh_cooling: "刚刷新过，稍等几秒",
@@ -2340,6 +2343,7 @@ pub const EN: Labels = Labels {
     refresh_gate_shut: "The device is being handed over: no refresh",
     refresh_running: "A task is running: the picture follows it by itself",
     refresh_busy: "{}: refresh it later",
+    refresh_operating_device: "Operating the device",
     refresh_emulator_off: "The emulator was not running when last seen ({}): no refresh",
     refresh_fault: "This account has a fault to deal with: do not refresh it yet",
     refresh_cooling: "Just refreshed: wait a few seconds",
