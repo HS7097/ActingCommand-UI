@@ -530,7 +530,8 @@ fn language_index(language: Language) -> i32 {
 /// that account's device, its confirmation's two buttons included (`workbench::rescue`);
 /// Start and Request Shutdown are the launcher's;
 /// "troubleshooting and ledger" opens the window of the default source; the
-/// write buttons, the evidence days' field and each device's backends' boxes and buttons are
+/// write buttons, the evidence days' field, each device's backends' boxes and buttons, and the
+/// rescue bar's "auto rules" with every control of the rules panel it opens, are
 /// `workbench::actions`'; "got it"
 /// on the start report's notice is `workbench`'s; the three boxes apply to every
 /// window. Closing it ends the program, after its fade if it has a frame of its
@@ -569,6 +570,81 @@ fn install_workbench(window: &WorkbenchWindow) {
     window.on_rescue_cancelled(|| {
         if let Some(ui) = current() {
             workbench::rescue::cancelled(&ui);
+        }
+    });
+    window.on_rules_toggled(|| {
+        if let Some(ui) = current() {
+            workbench::actions::rules_toggled(&ui);
+        }
+    });
+    window.on_quiet_form_opened(|| {
+        if let Some(ui) = current() {
+            workbench::actions::quiet_form_opened(&ui);
+        }
+    });
+    window.on_quiet_day_toggled(|day, on| {
+        if let Some(ui) = current() {
+            workbench::actions::quiet_day_toggled(&ui, day, on);
+        }
+    });
+    window.on_quiet_start_edited(|text| {
+        if let Some(ui) = current() {
+            workbench::actions::quiet_start_edited(&ui, &text);
+        }
+    });
+    window.on_quiet_end_edited(|text| {
+        if let Some(ui) = current() {
+            workbench::actions::quiet_end_edited(&ui, &text);
+        }
+    });
+    window.on_quiet_add(|| {
+        if let Some(ui) = current() {
+            workbench::actions::quiet_add(&ui);
+        }
+    });
+    window.on_quiet_delete(|index| {
+        if let Some(ui) = current() {
+            workbench::actions::quiet_delete(&ui, index);
+        }
+    });
+    window.on_quiet_clear(|| {
+        if let Some(ui) = current() {
+            workbench::actions::quiet_clear(&ui);
+        }
+    });
+    window.on_quiet_clear_confirmed(|| {
+        if let Some(ui) = current() {
+            workbench::actions::quiet_clear_confirmed(&ui);
+        }
+    });
+    window.on_quiet_clear_cancelled(|| {
+        if let Some(ui) = current() {
+            workbench::actions::quiet_clear_cancelled(&ui);
+        }
+    });
+    window.on_quiet_back_to_file(|| {
+        if let Some(ui) = current() {
+            workbench::actions::quiet_back_to_file(&ui);
+        }
+    });
+    window.on_idle_picked(|pick| {
+        if let Some(ui) = current() {
+            workbench::actions::idle_picked(&ui, workbench::paint::idle_picked(pick));
+        }
+    });
+    window.on_idle_back_to_file(|| {
+        if let Some(ui) = current() {
+            workbench::actions::idle_back_to_file(&ui);
+        }
+    });
+    window.on_start_picked(|on| {
+        if let Some(ui) = current() {
+            workbench::actions::start_picked(&ui, on);
+        }
+    });
+    window.on_start_back_to_file(|| {
+        if let Some(ui) = current() {
+            workbench::actions::start_back_to_file(&ui);
         }
     });
     window.on_start_runtime(|| {
@@ -827,6 +903,34 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_rescue_game_launch(labels.rescue_game_launch.into());
     global.set_rescue_game_restart(labels.rescue_game_restart.into());
     global.set_rescue_close_task(labels.rescue_close_task.into());
+    global.set_rescue_rules(labels.rescue_rules.into());
+    global.set_rules_close(labels.rules_close.into());
+    global.set_rules_quiet(labels.setting_quiet.into());
+    global.set_rules_quiet_note(labels.rules_quiet_note.into());
+    global.set_rules_add_open(labels.rules_add_open.into());
+    global.set_weekday_0(labels.rules_weekdays[0].into());
+    global.set_weekday_1(labels.rules_weekdays[1].into());
+    global.set_weekday_2(labels.rules_weekdays[2].into());
+    global.set_weekday_3(labels.rules_weekdays[3].into());
+    global.set_weekday_4(labels.rules_weekdays[4].into());
+    global.set_weekday_5(labels.rules_weekdays[5].into());
+    global.set_weekday_6(labels.rules_weekdays[6].into());
+    global.set_rules_from(labels.rules_from.into());
+    global.set_rules_to(labels.rules_to.into());
+    global.set_rules_start_placeholder(labels.rules_start_placeholder.into());
+    global.set_rules_end_placeholder(labels.rules_end_placeholder.into());
+    global.set_rules_add(labels.rules_add.into());
+    global.set_rules_form_note(labels.rules_form_note.into());
+    global.set_rules_delete(labels.rules_delete.into());
+    global.set_rules_clear(labels.rules_clear.into());
+    global.set_rules_clear_confirm(labels.rules_clear_confirm.into());
+    global.set_rules_idle(labels.setting_idle_action.into());
+    global.set_rules_idle_nothing(labels.rules_idle_nothing.into());
+    global.set_rules_idle_close(labels.rules_idle_close.into());
+    global.set_rules_start(labels.setting_start_emulator.into());
+    global.set_rules_on(labels.rules_on.into());
+    global.set_rules_off(labels.rules_off.into());
+    global.set_rules_start_note(labels.rules_start_note.into());
     global.set_evidence_days(labels.setting_evidence_days.into());
     global.set_days(labels.days_unit.into());
     global.set_save(labels.save.into());

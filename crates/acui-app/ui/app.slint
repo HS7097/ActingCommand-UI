@@ -180,7 +180,8 @@ export struct BackendGroupItem {
 // be pressed, and at the row's end why one cannot. The game's row, its two buttons, and why not.
 // "Close this task", always off, and why, while the account does something. The question a press
 // that closes the game asks, and its confirming button's words. What the last operation came to,
-// red when it failed.
+// red when it failed. "Auto rules" at the first row's end (UI-3e1-b), and whether the account's
+// rules panel is open in the picture's place.
 export struct RescueBar {
     shown: bool,
     reason: string,
@@ -206,10 +207,77 @@ export struct RescueBar {
     confirm-label: string,
     line: string,
     failed: bool,
+    rules-shown: bool,
+    rules-open: bool,
 }
 
 // Which of the rescue bar's buttons was pressed.
 export enum RescueOp { check, emulator-start, emulator-stop, emulator-restart, game-launch, game-restart }
+
+// One of an account's own quiet times on its rules panel, in words: when it is, and in grey the
+// clock it is of when that is not this computer's.
+export struct QuietLine {
+    text: string,
+    zone: string,
+}
+
+// An account's rules panel (UI-3e1-b), in words: its title; why nothing on it can be changed now,
+// red when that says a failure; whether its rules show.
+// Its own quiet times: where they come from and when a change takes effect; that it has none; why
+// they cannot be changed; whether they can be now; whether the form of a time to add is open, and
+// why its last "add" sent nothing; whether "delete all" can be pressed, and the question its first
+// press asks; whether "back to the file's setting" shows; what every account's own add to them;
+// what the last change came to, red when it failed.
+// Its idle action: which of the two choices is in effect, whether they can be pressed, where it
+// comes from and when a change takes effect, what it is in effect when it is neither, why it
+// cannot be changed, what it does; "back to the file's setting"; what the last change came to.
+// Whether the Runtime starts and watches its emulator, of a discovery-bound MuMu instance only:
+// on or off in effect, whether each can be pressed, where it comes from and when a change takes
+// effect, why it cannot be changed or turned off; "back to the file's setting", and whether it
+// can be pressed; what the last change came to.
+export struct RulesData {
+    title: string,
+    hold: string,
+    hold-failed: bool,
+    shown: bool,
+    quiet-source: string,
+    quiet-empty: string,
+    quiet-why: string,
+    quiet-can-write: bool,
+    quiet-form-open: bool,
+    quiet-problem: string,
+    quiet-can-clear: bool,
+    quiet-confirm: string,
+    quiet-back: bool,
+    quiet-host: string,
+    quiet-line: string,
+    quiet-failed: bool,
+    idle-nothing: bool,
+    idle-close: bool,
+    idle-can-write: bool,
+    idle-source: string,
+    idle-now: string,
+    idle-why: string,
+    idle-note: string,
+    idle-back: bool,
+    idle-line: string,
+    idle-failed: bool,
+    start-shown: bool,
+    start-on: bool,
+    start-off: bool,
+    start-can-on: bool,
+    start-can-off: bool,
+    start-source: string,
+    start-why: string,
+    start-back: bool,
+    start-back-offered: bool,
+    start-line: string,
+    start-failed: bool,
+}
+
+// Which of the idle action's two choices was pressed on the rules panel: stopping the emulator
+// is not one (Alice's ruling 157).
+export enum IdlePick { do-nothing, close-game }
 
 export struct OverlayItem {
     kind: string,
@@ -341,6 +409,40 @@ export global Strings {
     in property <string> rescue-game-launch;
     in property <string> rescue-game-restart;
     in property <string> rescue-close-task;
+    // "Auto rules" at the end of the rescue bar's first row, and on the rules panel that opens:
+    // "close"; the quiet times' title and what they do; the button that opens the form of one to
+    // add, its days' boxes Monday first, "from" and "to" its two fields and what they say empty,
+    // "add" and how a time is read; "delete" and "delete all", and the confirming button of the
+    // latter. The idle action's title and two choices. The emulator's start's title, "on" and
+    // "off", and what it does.
+    in property <string> rescue-rules;
+    in property <string> rules-close;
+    in property <string> rules-quiet;
+    in property <string> rules-quiet-note;
+    in property <string> rules-add-open;
+    in property <string> weekday-0;
+    in property <string> weekday-1;
+    in property <string> weekday-2;
+    in property <string> weekday-3;
+    in property <string> weekday-4;
+    in property <string> weekday-5;
+    in property <string> weekday-6;
+    in property <string> rules-from;
+    in property <string> rules-to;
+    in property <string> rules-start-placeholder;
+    in property <string> rules-end-placeholder;
+    in property <string> rules-add;
+    in property <string> rules-form-note;
+    in property <string> rules-delete;
+    in property <string> rules-clear;
+    in property <string> rules-clear-confirm;
+    in property <string> rules-idle;
+    in property <string> rules-idle-nothing;
+    in property <string> rules-idle-close;
+    in property <string> rules-start;
+    in property <string> rules-on;
+    in property <string> rules-off;
+    in property <string> rules-start-note;
     // The settings page's field of the evidence days: its name, which also names the field
     // for a screen reader, the unit after it and the button that sends it. The button that
     // hides the start report's notice.
@@ -1400,6 +1502,433 @@ component FrameCanvas inherits Rectangle {
     }
 }
 
+// An account's rules panel (UI-3e1-b), in the picture's place while it is open: its title and the
+// button that closes it; why nothing on it can be changed now. Then, while its rules show, each
+// rule under its name, with where its value comes from beside it and what the last change of it
+// came to under it, red when it failed. Its own quiet times, each with "delete"; the form of a
+// time to add, its seven boxes and two fields the window's own both ways, so that a paint puts
+// back only what Rust holds; "delete all", which asks first, and "back to the file's setting";
+// what every account's own add. Its idle action's two choices, the one in effect marked. Whether
+// the Runtime starts and watches its emulator, of a discovery-bound MuMu instance only. Every
+// press is reported to the window; nothing here changes a rule by itself.
+component RulesPanel {
+    in property <RulesData> rules;
+    in property <[QuietLine]> quiet-lines;
+    in-out property <bool> day-0;
+    in-out property <bool> day-1;
+    in-out property <bool> day-2;
+    in-out property <bool> day-3;
+    in-out property <bool> day-4;
+    in-out property <bool> day-5;
+    in-out property <bool> day-6;
+    in-out property <string> start-text;
+    in-out property <string> end-text;
+    callback rules-toggled();
+    callback quiet-form-opened();
+    callback quiet-day-toggled(int, bool);
+    callback quiet-start-edited(string);
+    callback quiet-end-edited(string);
+    callback quiet-add();
+    callback quiet-delete(int);
+    callback quiet-clear();
+    callback quiet-clear-confirmed();
+    callback quiet-clear-cancelled();
+    callback quiet-back-to-file();
+    callback idle-picked(IdlePick);
+    callback idle-back-to-file();
+    callback start-picked(bool);
+    callback start-back-to-file();
+    vertical-stretch: 0;
+    VerticalLayout {
+        spacing: 6px;
+        HorizontalLayout {
+            spacing: 8px;
+            vertical-stretch: 0;
+            Text {
+                text: root.rules.title;
+                font-size: Scale.body-font;
+                font-weight: 700;
+                color: Look.text;
+                vertical-alignment: center;
+                overflow: elide;
+                min-width: 0px;
+                horizontal-stretch: 1;
+            }
+            SkinButton {
+                text: Strings.rules-close;
+                clicked => {
+                    root.rules-toggled();
+                }
+            }
+        }
+        if root.rules.hold != "": Notice {
+            text: root.rules.hold;
+            failed: root.rules.hold-failed;
+        }
+        if root.rules.shown: VerticalLayout {
+            spacing: 6px;
+            vertical-stretch: 0;
+            // The account's own quiet times.
+            HorizontalLayout {
+                spacing: 8px;
+                vertical-stretch: 0;
+                Text {
+                    text: Strings.rules-quiet;
+                    font-size: Scale.body-font;
+                    font-weight: 700;
+                    color: Look.text;
+                    vertical-alignment: center;
+                    min-width: self.preferred-width;
+                    horizontal-stretch: 0;
+                }
+                Caption {
+                    text: root.rules.quiet-source;
+                    overflow: elide;
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                }
+            }
+            Notice {
+                text: Strings.rules-quiet-note;
+                font-size: Scale.grey-font;
+            }
+            for line[index] in root.quiet-lines: HorizontalLayout {
+                spacing: 8px;
+                vertical-stretch: 0;
+                Text {
+                    text: line.text;
+                    font-size: Scale.body-font;
+                    color: Look.text;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                    min-width: 40px * Scale.factor;
+                    min-height: self.preferred-height;
+                    horizontal-stretch: 1;
+                }
+                if line.zone != "": Caption {
+                    text: line.zone;
+                    horizontal-stretch: 0;
+                }
+                SkinButton {
+                    text: Strings.rules-delete;
+                    enabled: root.rules.quiet-can-write;
+                    clicked => {
+                        root.quiet-delete(index);
+                    }
+                }
+            }
+            if root.rules.quiet-empty != "": Notice {
+                text: root.rules.quiet-empty;
+            }
+            if root.rules.quiet-why != "": Notice {
+                text: root.rules.quiet-why;
+                warning: true;
+            }
+            // The days a time starts on, its start and end, and "add"; then how a time is read,
+            // and why the last "add" sent nothing.
+            if root.rules.quiet-form-open: VerticalLayout {
+                spacing: 4px;
+                vertical-stretch: 0;
+                HorizontalLayout {
+                    spacing: 6px;
+                    vertical-stretch: 0;
+                    SkinCheckBox {
+                        text: Strings.weekday-0;
+                        enabled: root.rules.quiet-can-write;
+                        checked <=> root.day-0;
+                        toggled => {
+                            root.quiet-day-toggled(0, self.checked);
+                        }
+                    }
+                    SkinCheckBox {
+                        text: Strings.weekday-1;
+                        enabled: root.rules.quiet-can-write;
+                        checked <=> root.day-1;
+                        toggled => {
+                            root.quiet-day-toggled(1, self.checked);
+                        }
+                    }
+                    SkinCheckBox {
+                        text: Strings.weekday-2;
+                        enabled: root.rules.quiet-can-write;
+                        checked <=> root.day-2;
+                        toggled => {
+                            root.quiet-day-toggled(2, self.checked);
+                        }
+                    }
+                    SkinCheckBox {
+                        text: Strings.weekday-3;
+                        enabled: root.rules.quiet-can-write;
+                        checked <=> root.day-3;
+                        toggled => {
+                            root.quiet-day-toggled(3, self.checked);
+                        }
+                    }
+                    SkinCheckBox {
+                        text: Strings.weekday-4;
+                        enabled: root.rules.quiet-can-write;
+                        checked <=> root.day-4;
+                        toggled => {
+                            root.quiet-day-toggled(4, self.checked);
+                        }
+                    }
+                    SkinCheckBox {
+                        text: Strings.weekday-5;
+                        enabled: root.rules.quiet-can-write;
+                        checked <=> root.day-5;
+                        toggled => {
+                            root.quiet-day-toggled(5, self.checked);
+                        }
+                    }
+                    SkinCheckBox {
+                        text: Strings.weekday-6;
+                        enabled: root.rules.quiet-can-write;
+                        checked <=> root.day-6;
+                        toggled => {
+                            root.quiet-day-toggled(6, self.checked);
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    vertical-stretch: 0;
+                    Caption { text: Strings.rules-from; }
+                    LineEdit {
+                        text <=> root.start-text;
+                        placeholder-text: Strings.rules-start-placeholder;
+                        enabled: root.rules.quiet-can-write;
+                        accessible-label: Strings.rules-from;
+                        font-size: Scale.body-font;
+                        // The std field asks for 160px; a time needs far less.
+                        min-width: 64px * Scale.factor;
+                        preferred-width: 80px * Scale.factor;
+                        horizontal-stretch: 0;
+                        edited(text) => {
+                            root.quiet-start-edited(text);
+                        }
+                    }
+                    Caption { text: Strings.rules-to; }
+                    LineEdit {
+                        text <=> root.end-text;
+                        placeholder-text: Strings.rules-end-placeholder;
+                        enabled: root.rules.quiet-can-write;
+                        accessible-label: Strings.rules-to;
+                        font-size: Scale.body-font;
+                        min-width: 64px * Scale.factor;
+                        preferred-width: 80px * Scale.factor;
+                        horizontal-stretch: 0;
+                        edited(text) => {
+                            root.quiet-end-edited(text);
+                        }
+                    }
+                    SkinButton {
+                        text: Strings.rules-add;
+                        enabled: root.rules.quiet-can-write;
+                        clicked => {
+                            root.quiet-add();
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Notice {
+                    text: Strings.rules-form-note;
+                    font-size: Scale.grey-font;
+                }
+                if root.rules.quiet-problem != "": Notice {
+                    text: root.rules.quiet-problem;
+                    failed: true;
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                vertical-stretch: 0;
+                if !root.rules.quiet-form-open: SkinButton {
+                    text: Strings.rules-add-open;
+                    enabled: root.rules.quiet-can-write;
+                    clicked => {
+                        root.quiet-form-opened();
+                    }
+                }
+                if root.quiet-lines.length > 0: SkinButton {
+                    text: Strings.rules-clear;
+                    enabled: root.rules.quiet-can-clear;
+                    clicked => {
+                        root.quiet-clear();
+                    }
+                }
+                if root.rules.quiet-back: SkinButton {
+                    text: Strings.back-to-file;
+                    enabled: root.rules.quiet-can-write;
+                    clicked => {
+                        root.quiet-back-to-file();
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            // In two steps: only the confirmation sends it.
+            if root.rules.quiet-confirm != "": HorizontalLayout {
+                spacing: 14px;
+                vertical-stretch: 0;
+                Notice {
+                    text: root.rules.quiet-confirm;
+                    warning: true;
+                    vertical-alignment: center;
+                    min-width: 40px * Scale.factor;
+                    horizontal-stretch: 1;
+                }
+                SkinButton {
+                    text: Strings.rules-clear-confirm;
+                    clicked => {
+                        root.quiet-clear-confirmed();
+                    }
+                }
+                SkinButton {
+                    text: Strings.cancel;
+                    clicked => {
+                        root.quiet-clear-cancelled();
+                    }
+                }
+            }
+            if root.rules.quiet-host != "": Notice {
+                text: root.rules.quiet-host;
+                font-size: Scale.grey-font;
+            }
+            if root.rules.quiet-line != "": Notice {
+                text: root.rules.quiet-line;
+                failed: root.rules.quiet-failed;
+            }
+            // Its idle action.
+            HorizontalLayout {
+                spacing: 8px;
+                vertical-stretch: 0;
+                Text {
+                    text: Strings.rules-idle;
+                    font-size: Scale.body-font;
+                    font-weight: 700;
+                    color: Look.text;
+                    vertical-alignment: center;
+                    min-width: self.preferred-width;
+                    horizontal-stretch: 0;
+                }
+                Caption {
+                    text: root.rules.idle-source;
+                    overflow: elide;
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                }
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                vertical-stretch: 0;
+                SkinSegment {
+                    label: Strings.rules-idle-nothing;
+                    selected: root.rules.idle-nothing;
+                    enabled: root.rules.idle-can-write;
+                    clicked => {
+                        root.idle-picked(IdlePick.do-nothing);
+                    }
+                }
+                SkinSegment {
+                    label: Strings.rules-idle-close;
+                    selected: root.rules.idle-close;
+                    enabled: root.rules.idle-can-write;
+                    clicked => {
+                        root.idle-picked(IdlePick.close-game);
+                    }
+                }
+                if root.rules.idle-back: SkinButton {
+                    text: Strings.back-to-file;
+                    enabled: root.rules.idle-can-write;
+                    clicked => {
+                        root.idle-back-to-file();
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            if root.rules.idle-now != "": Notice {
+                text: root.rules.idle-now;
+            }
+            if root.rules.idle-why != "": Notice {
+                text: root.rules.idle-why;
+                warning: true;
+            }
+            Notice {
+                text: root.rules.idle-note;
+                font-size: Scale.grey-font;
+            }
+            if root.rules.idle-line != "": Notice {
+                text: root.rules.idle-line;
+                failed: root.rules.idle-failed;
+            }
+            // Whether the Runtime starts and watches its emulator.
+            if root.rules.start-shown: VerticalLayout {
+                spacing: 6px;
+                vertical-stretch: 0;
+                HorizontalLayout {
+                    spacing: 8px;
+                    vertical-stretch: 0;
+                    Text {
+                        text: Strings.rules-start;
+                        font-size: Scale.body-font;
+                        font-weight: 700;
+                        color: Look.text;
+                        vertical-alignment: center;
+                        min-width: self.preferred-width;
+                        horizontal-stretch: 0;
+                    }
+                    Caption {
+                        text: root.rules.start-source;
+                        overflow: elide;
+                        min-width: 0px;
+                        horizontal-stretch: 1;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    vertical-stretch: 0;
+                    SkinSegment {
+                        label: Strings.rules-on;
+                        selected: root.rules.start-on;
+                        enabled: root.rules.start-can-on;
+                        clicked => {
+                            root.start-picked(true);
+                        }
+                    }
+                    SkinSegment {
+                        label: Strings.rules-off;
+                        selected: root.rules.start-off;
+                        enabled: root.rules.start-can-off;
+                        clicked => {
+                            root.start-picked(false);
+                        }
+                    }
+                    if root.rules.start-back: SkinButton {
+                        text: Strings.back-to-file;
+                        enabled: root.rules.start-back-offered;
+                        clicked => {
+                            root.start-back-to-file();
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                if root.rules.start-why != "": Notice {
+                    text: root.rules.start-why;
+                    warning: true;
+                }
+                Notice {
+                    text: Strings.rules-start-note;
+                    font-size: Scale.grey-font;
+                }
+                if root.rules.start-line != "": Notice {
+                    text: root.rules.start-line;
+                    failed: root.rules.start-failed;
+                }
+            }
+        }
+    }
+}
+
 // What the settings file holds that the console could not take, or why a setting was
 // not saved, errors then warnings; why the window's look falls short of its theme, and
 // what it fell back to, the details being in the technical log; and where that log is,
@@ -1478,7 +2007,8 @@ component SettingLine {
 // pause means, and what this window could not read. Then one of two pages. The main
 // one has two columns: on the left the accounts, one of them picked, and where one is
 // added for now; on the right the settings file's problems, what falls short of the theme
-// and where the technical log is, then the live view of the account picked. The settings page has those same lines, then the Runtime's
+// and where the technical log is, then the live view of the account picked, with its rescue bar,
+// and while that bar says so the account's rules panel in its picture's place. The settings page has those same lines, then the Runtime's
 // settings as it reads them, with what its start report says of them and a field for the
 // one it changes, and each device's backends in boxes, then Request Shutdown and whether a
 // Runtime gone is started again, then the display settings. No code, pid or wire name shows here; those stay in the ledger
@@ -1616,6 +2146,20 @@ export component WorkbenchWindow inherits Window {
     // Between the title and the frame, while the main page shows that account's picture: its
     // rescue bar, in words.
     in property <RescueBar> rescue;
+    // While the rescue bar says it is open, in the picture's place: that account's rules panel
+    // (UI-3e1-b), in words; its own quiet times; and its form of a time to add, the days' boxes
+    // Monday first and the two fields, both ways, set from Rust only when they say otherwise.
+    in property <RulesData> rules;
+    in property <[QuietLine]> quiet-lines;
+    in-out property <bool> quiet-day-0;
+    in-out property <bool> quiet-day-1;
+    in-out property <bool> quiet-day-2;
+    in-out property <bool> quiet-day-3;
+    in-out property <bool> quiet-day-4;
+    in-out property <bool> quiet-day-5;
+    in-out property <bool> quiet-day-6;
+    in-out property <string> quiet-start;
+    in-out property <string> quiet-end;
     // The Runtime's configuration file an instance is added to by hand,
     // selectable so it can be copied; or why there is none.
     in property <string> config-path;
@@ -1674,6 +2218,26 @@ export component WorkbenchWindow inherits Window {
     callback rescue-pressed(RescueOp);
     callback rescue-confirmed();
     callback rescue-cancelled();
+    // The rescue bar's "auto rules", and the panel's "close". On the panel: the quiet times'
+    // form opened, a day's box ticked or not (0 Monday through 6 Sunday), its two fields as
+    // typed, "add"; a time's "delete" (its index); "delete all", its confirmation and "cancel";
+    // "back to the file's setting". The idle action's choice, and its "back to the file's
+    // setting". The emulator's start on or off, and its "back to the file's setting".
+    callback rules-toggled();
+    callback quiet-form-opened();
+    callback quiet-day-toggled(int, bool);
+    callback quiet-start-edited(string);
+    callback quiet-end-edited(string);
+    callback quiet-add();
+    callback quiet-delete(int);
+    callback quiet-clear();
+    callback quiet-clear-confirmed();
+    callback quiet-clear-cancelled();
+    callback quiet-back-to-file();
+    callback idle-picked(IdlePick);
+    callback idle-back-to-file();
+    callback start-picked(bool);
+    callback start-back-to-file();
     callback start-runtime();
     callback pause-all();
     callback resume-all();
@@ -2088,11 +2652,13 @@ export component WorkbenchWindow inherits Window {
                                     // saying at its end why one cannot, cut short where the column
                                     // is narrow. Then why all are off, or the question a press
                                     // that closes the game asks, and what the last operation came
-                                    // to, which wrap.
-                                    if root.rescue.shown && root.rescue.check-shown: HorizontalLayout {
+                                    // to, which wrap. At the first row's end, a fixture's account's
+                                    // as well, "auto rules" (UI-3e1-b), marked while its panel is
+                                    // open; UI-3d's way to take over goes before it.
+                                    if root.rescue.shown && (root.rescue.check-shown || root.rescue.rules-shown): HorizontalLayout {
                                         spacing: 14px;
                                         vertical-stretch: 0;
-                                        SkinButton {
+                                        if root.rescue.check-shown: SkinButton {
                                             text: Strings.rescue-check;
                                             enabled: root.rescue.check-offered;
                                             clicked => {
@@ -2107,6 +2673,13 @@ export component WorkbenchWindow inherits Window {
                                             overflow: elide;
                                             min-width: 0px;
                                             horizontal-stretch: 1;
+                                        }
+                                        if root.rescue.rules-shown: SkinSegment {
+                                            label: Strings.rescue-rules;
+                                            selected: root.rescue.rules-open;
+                                            clicked => {
+                                                root.rules-toggled();
+                                            }
                                         }
                                     }
                                     if root.rescue.shown && root.rescue.emulator-shown: HorizontalLayout {
@@ -2235,9 +2808,74 @@ export component WorkbenchWindow inherits Window {
                                         text: root.rescue.line;
                                         failed: root.rescue.failed;
                                     }
+                                    // While open, the account's rules panel takes the place of the
+                                    // picture and of its refresh (UI-3e1-b), its rows at the top and
+                                    // what the column spares under them; the whole card scrolls
+                                    // when it is too short for them.
+                                    if root.rescue.rules-open: RulesPanel {
+                                        rules: root.rules;
+                                        quiet-lines: root.quiet-lines;
+                                        day-0 <=> root.quiet-day-0;
+                                        day-1 <=> root.quiet-day-1;
+                                        day-2 <=> root.quiet-day-2;
+                                        day-3 <=> root.quiet-day-3;
+                                        day-4 <=> root.quiet-day-4;
+                                        day-5 <=> root.quiet-day-5;
+                                        day-6 <=> root.quiet-day-6;
+                                        start-text <=> root.quiet-start;
+                                        end-text <=> root.quiet-end;
+                                        rules-toggled => {
+                                            root.rules-toggled();
+                                        }
+                                        quiet-form-opened => {
+                                            root.quiet-form-opened();
+                                        }
+                                        quiet-day-toggled(day, on) => {
+                                            root.quiet-day-toggled(day, on);
+                                        }
+                                        quiet-start-edited(text) => {
+                                            root.quiet-start-edited(text);
+                                        }
+                                        quiet-end-edited(text) => {
+                                            root.quiet-end-edited(text);
+                                        }
+                                        quiet-add => {
+                                            root.quiet-add();
+                                        }
+                                        quiet-delete(index) => {
+                                            root.quiet-delete(index);
+                                        }
+                                        quiet-clear => {
+                                            root.quiet-clear();
+                                        }
+                                        quiet-clear-confirmed => {
+                                            root.quiet-clear-confirmed();
+                                        }
+                                        quiet-clear-cancelled => {
+                                            root.quiet-clear-cancelled();
+                                        }
+                                        quiet-back-to-file => {
+                                            root.quiet-back-to-file();
+                                        }
+                                        idle-picked(pick) => {
+                                            root.idle-picked(pick);
+                                        }
+                                        idle-back-to-file => {
+                                            root.idle-back-to-file();
+                                        }
+                                        start-picked(on) => {
+                                            root.start-picked(on);
+                                        }
+                                        start-back-to-file => {
+                                            root.start-back-to-file();
+                                        }
+                                    }
+                                    if root.rescue.rules-open: Rectangle {
+                                        vertical-stretch: 1;
+                                    }
                                     // The frame takes every pixel the column can spare, and never
                                     // less than its least.
-                                    if !root.picture-withdrawn: FrameCanvas {
+                                    if !root.rescue.rules-open && !root.picture-withdrawn: FrameCanvas {
                                         min-height: 160px;
                                         vertical-stretch: 1;
                                         source: root.picture-image;
@@ -2255,12 +2893,12 @@ export component WorkbenchWindow inherits Window {
                                         empty-failed: root.picture-empty-failed;
                                     }
                                     // Taken down: UI-3d says why here, and offers to resume.
-                                    if root.picture-withdrawn: Rectangle {
+                                    if !root.rescue.rules-open && root.picture-withdrawn: Rectangle {
                                         min-height: 160px;
                                         vertical-stretch: 1;
                                     }
                                     // What took the frame shown, in grey.
-                                    if root.picture-origin != "": Text {
+                                    if !root.rescue.rules-open && root.picture-origin != "": Text {
                                         text: root.picture-origin;
                                         font-size: Scale.grey-font;
                                         color: Look.text-caption;
@@ -2269,7 +2907,7 @@ export component WorkbenchWindow inherits Window {
                                         vertical-stretch: 0;
                                     }
                                     // Why nothing is drawn on it, and its proportions, in amber.
-                                    if root.picture-hint != "": Notice {
+                                    if !root.rescue.rules-open && root.picture-hint != "": Notice {
                                         text: root.picture-hint;
                                         warning: true;
                                         font-size: Scale.grey-font;
@@ -2279,7 +2917,7 @@ export component WorkbenchWindow inherits Window {
                                     // largest text; beside it why it cannot be pressed now. Under
                                     // it what the last refresh came to, on a line of its own so
                                     // neither hides the other, and in grey what a refresh costs.
-                                    if root.refresh-shown: HorizontalLayout {
+                                    if !root.rescue.rules-open && root.refresh-shown: HorizontalLayout {
                                         spacing: 14px;
                                         vertical-stretch: 0;
                                         SkinButton {
@@ -2296,11 +2934,11 @@ export component WorkbenchWindow inherits Window {
                                             horizontal-stretch: 1;
                                         }
                                     }
-                                    if root.refresh-shown && root.refresh-line != "": Notice {
+                                    if !root.rescue.rules-open && root.refresh-shown && root.refresh-line != "": Notice {
                                         text: root.refresh-line;
                                         failed: root.refresh-failed;
                                     }
-                                    if root.refresh-shown: Text {
+                                    if !root.rescue.rules-open && root.refresh-shown: Text {
                                         text: Strings.refresh-cost;
                                         font-size: Scale.grey-font;
                                         color: Look.text-caption;
