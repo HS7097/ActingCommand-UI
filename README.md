@@ -186,10 +186,10 @@ now. A time span read follows the cursor for at most 64 pages; with still no eve
 Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.39
 (ledger revision 6, #402 HS-2b: the console reads the lifecycle record `device.backend_switched` the Runtime
 writes when it switches an instance's touch and capture backends while it runs, which a console built on revision 5
-cannot read; this console switches no backends; with v0.12.38's frame reads off the ledger writer, #422 RA-1, and
-Workflow #432 AGT-1b's optional status member `agent_wake`, which the console reads and does not show, on top of
-#429 R-0b, R-4, R-11, R-7a and 114-A; it keeps v0.12.32's bounded offline opening), which speaks the 0.12
-protocols (`runtime-client` revision 5, ledger revision 6):
+cannot read; the settings page shows each instance's two backends as rows that are shown only, and switches none;
+with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 AGT-1b's optional status member
+`agent_wake`, which the console reads and does not show, on top of #429 R-0b, R-4, R-11, R-7a and 114-A; it keeps
+v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 5, ledger revision 6):
 
 ```
 rev = "690984664d51fabed87643ae9cf310757e8035e3"
