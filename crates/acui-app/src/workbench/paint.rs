@@ -904,10 +904,10 @@ fn rescue_own_words(labels: &Labels, code: &str) -> Option<&'static str> {
     Some(words)
 }
 
-/// What the status left out of an account's rows, into the log once for each account: no
-/// provenance, which a Runtime states of every instance, so no device button is drawn, as the
-/// problem it is; no capability profile of an instance that drives a device of its own, so no
-/// emulator's row, which is so for all but a discovery-bound MuMu instance's, quietly.
+/// What the status left out of an account's rows, into the log once for each account, each as
+/// the problem it is: no provenance, which a Runtime states of every instance, so no device
+/// button is drawn; no capability profile of an instance that drives a device of its own, which
+/// a Runtime states of every such instance (only a fixture has none), so no emulator's row.
 fn rescue_told(ui: &Ui, alias: &str, rows: &RescueRows) {
     if rows.unstated.provenance {
         let line = format!("{alias}: its status states no backend provenance: no device button");
@@ -918,7 +918,7 @@ fn rescue_told(ui: &Ui, alias: &str, rows: &RescueRows) {
     if rows.unstated.capabilities && rows.check.is_some() {
         let line = format!("{alias}: its status states no capability profile: no emulator's row");
         if ui.model.borrow_mut().first_told(&line) {
-            report::log_quiet(RESCUE_LOG, &line);
+            report::log(RESCUE_LOG, &line);
         }
     }
 }

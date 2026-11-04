@@ -721,8 +721,11 @@ pub struct InstanceLive {
     /// buttons are drawn for. A status that states no provenance counts as none (`unstated`).
     pub physical: bool,
     /// Which of its emulator's controls the Runtime offers: those its capability profile has
-    /// available. Only a discovery-bound MuMu instance has a profile; one without, a handset, an
-    /// emulator named by its address or a fixture, is offered none (`unstated`).
+    /// available. Every instance that drives a device of its own has a profile, but only a
+    /// discovery-bound MuMu instance's has `instance.start`, `instance.stop` and
+    /// `instance.restart` available; a handset's and an emulator's named by its address have
+    /// them unavailable, and a fixture has no profile: each is offered none. A status that
+    /// states no profile counts as offering none (`unstated`).
     pub emulator_controls: EmulatorControls,
     /// What the status left out of what `physical` and `emulator_controls` are read from.
     pub unstated: Unstated,
@@ -741,7 +744,8 @@ pub struct EmulatorControls {
 /// What a status left out of what [`InstanceLive::physical`] and
 /// [`InstanceLive::emulator_controls`] are read from, so that it counts as no device, or no
 /// control: for the log only. A Runtime states every instance's provenance, and a capability
-/// profile only of a discovery-bound MuMu instance, so only the first is out of the ordinary.
+/// profile of every instance that drives a device of its own (only a fixture has none), so
+/// either left out of such an instance is out of the ordinary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Unstated {
     /// No `backend_provenance`.
