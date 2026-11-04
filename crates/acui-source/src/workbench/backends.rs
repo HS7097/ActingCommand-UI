@@ -1118,15 +1118,22 @@ fn app_index_problem(missing: &Outcome) -> AppIndexProblem {
 }
 
 impl FenceFact {
-    /// Whether the fence's cause is the instance's own backend open that failed, its touch's,
-    /// its capture's or MuMu's own pair's, as the self-check's failures spell them (#402 HS-5c,
-    /// Runtime 0.12.40). Other backends remedy such a fence: a switch of the instance's backends,
-    /// a clear back to the file's values included, goes through it, and the new backends'
-    /// passing self-check lifts it. A fence of any other cause still refuses a switch
-    /// (`instance_fenced`), and a Runtime 0.12.39 or earlier, after a rollback, refuses one of
-    /// every fenced instance.
-    pub fn of_backend_open(&self) -> bool {
-        matches!(self.cause.as_str(), TOUCH_OPEN | CAPTURE_OPEN | PAIR_OPEN)
+    /// The instance's own backend open whose failure is the fence's cause: its touch's
+    /// (`TouchOpen`), its capture's (`CaptureOpen`) or MuMu's own pair's (`NemuOpen`), as the
+    /// self-check's failures spell them (#402 HS-5c, Runtime 0.12.40); `None` for any other
+    /// cause. Other backends remedy such a fence: a switch of the instance's backends goes
+    /// through it, and the new backends' passing self-check lifts it. A clear back to the file's
+    /// values switches only when it changes a backend in effect: one back to the same values
+    /// commits at once, with no switch, and the fence stays. A fence of any other cause still
+    /// refuses a switch (`instance_fenced`), and a Runtime 0.12.39 or earlier, after a rollback,
+    /// refuses one of every fenced instance.
+    pub fn failed_open(&self) -> Option<FailedStep> {
+        match self.cause.as_str() {
+            TOUCH_OPEN => Some(FailedStep::TouchOpen),
+            CAPTURE_OPEN => Some(FailedStep::CaptureOpen),
+            PAIR_OPEN => Some(FailedStep::NemuOpen),
+            _ => None,
+        }
     }
 }
 

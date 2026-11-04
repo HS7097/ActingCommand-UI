@@ -85,8 +85,9 @@ use std::time::Instant;
 
 use acui_rows::local_utc_offset_minutes;
 use acui_source::workbench::backends::{
-    BackendChange, BackendRefusal, BackendTarget, BackendWhy, CaptureBackend, DeviceKind,
-    InEffect, InstanceBackends, SwitchSeen, SwitchVersion, TouchBackend, UnconfirmedSwitch,
+    BackendChange, BackendRefusal, BackendRow, BackendTarget, BackendWhy, CaptureBackend,
+    DeviceKind, FailedStep, InEffect, InstanceBackends, SwitchSeen, SwitchVersion, TouchBackend,
+    UnconfirmedSwitch,
 };
 use acui_source::workbench::rules::{
     IdleChoice, IdleNow, NewWeekly, QuietNotSent, QuietRead, RuleSetting,
@@ -1341,11 +1342,36 @@ fn row_edit<T: Copy + PartialEq>(
     }
 }
 
-/// Whether the group of `backends` has "Use the file's value" on a row: what the rescue bar
-/// asks before it points to it for a fence a switch lifts (#402 HS-5c, `Model::rescue_view`).
-pub fn offers_file_value(backends: &InstanceBackends) -> bool {
-    let (touch, capture) = use_file_value(backends, true);
-    touch.is_some() || capture.is_some()
+/// Whether "Use the file's value" on a row of the group of `backends` switches the backend whose
+/// open `failed`: what the rescue bar asks before it points to it for a fence a switch lifts
+/// (#402 HS-5c, `Model::rescue_view`). The touch for the touch's open, the capture for the
+/// capture's, either for MuMu's own pair, which is both. Each row's offer is the group's own
+/// (`use_file_value`): it clears that row, and the other too when it clears both. A cleared row
+/// switches when the file's value under it is not the one in effect, or does not read; a clear
+/// back to the same values the Runtime commits at once, with no switch, and the fence stays.
+pub fn file_value_switches(backends: &InstanceBackends, failed: &FailedStep) -> bool {
+    let (Some(touch), Some(capture)) = (&backends.touch, &backends.capture) else {
+        return false;
+    };
+    let (touch_offer, capture_offer) = use_file_value(backends, true);
+    [touch_offer, capture_offer].into_iter().flatten().any(|offer| {
+        let touch_switched =
+            matches!(offer.touch, BackendChange::BackToFile) && file_value_differs(touch);
+        let capture_switched =
+            matches!(offer.capture, BackendChange::BackToFile) && file_value_differs(capture);
+        match failed {
+            FailedStep::TouchOpen => touch_switched,
+            FailedStep::CaptureOpen => capture_switched,
+            FailedStep::NemuOpen => touch_switched || capture_switched,
+            FailedStep::TouchCheck | FailedStep::CaptureCheck | FailedStep::Other(_) => false,
+        }
+    })
+}
+
+/// Whether clearing `row`'s online value brings back another backend than the one in effect:
+/// the file's value under it is not that one, or does not read.
+fn file_value_differs<T: PartialEq>(row: &BackendRow<T>) -> bool {
+    row.online.as_ref().and_then(|online| online.file_value.as_ref()) != Some(&row.value)
 }
 
 /// "Use the file's value" of each row whose value is an online one. Clearing only the one

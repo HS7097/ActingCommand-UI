@@ -942,10 +942,11 @@ pub struct Labels {
     pub rescue_busy_doing: &'static str,
     /// At a row's end. The check's: what it does; that it is the thing to do first, the device
     /// being fenced, and under it, when the fence is one the device's own backend open caused
-    /// and its device backends group on the settings page has Use the file's value to press,
-    /// that this lifts the fence too (#402 HS-5c); that the emulator was seen off (time), so to
-    /// start it first, which the game's row says too. The emulator's: seen running (time); seen
-    /// off (time), and with Start to press, to use it. The game's: a fault to deal with first.
+    /// and Use the file's value of its device backends group on the settings page switches the
+    /// backend that did not open, that this lifts the fence too, which a Runtime 0.12.40 or later
+    /// does, as it says (#402 HS-5c); that the emulator was seen off (time), so to start it
+    /// first, which the game's row says too. The emulator's: seen running (time); seen off
+    /// (time), and with Start to press, to use it. The game's: a fault to deal with first.
     pub rescue_check_note: &'static str,
     pub rescue_check_first: &'static str,
     pub rescue_check_or_file_value: &'static str,
@@ -1867,7 +1868,7 @@ pub const ZH: Labels = Labels {
     rescue_busy_doing: "这个号{}，等它结束再操作设备",
     rescue_check_note: "会先断开再重连这台；没通过时 Runtime 可能自动进入恢复流程",
     rescue_check_first: "这台被隔离了，先体检",
-    rescue_check_or_file_value: "也可以到「设置」页这台的「设备后端」组按「恢复为文件值」：换回配置文件里的后端，它们体检通过就解除隔离",
+    rescue_check_or_file_value: "也可以到「设置」页这台的「设备后端」组按「恢复为文件值」（Runtime 0.12.40 起）：换回配置文件里的后端，它们体检通过就解除隔离",
     rescue_emulator_off_first: "模拟器没开（{} 看到的），先启动模拟器",
     rescue_seen_on: "已在运行（{} 看到的）",
     rescue_seen_off: "已经关着（{} 看到的）",
@@ -2730,7 +2731,7 @@ pub const EN: Labels = Labels {
     rescue_busy_doing: "{}: operate the device once that is over",
     rescue_check_note: "Disconnects and reconnects it; if it fails the Runtime may start recovering it",
     rescue_check_first: "This device is fenced: check it first",
-    rescue_check_or_file_value: "Or press Use File Value in this device's Device Backends group on the Settings page: once the file's backends pass their check, the fence is lifted",
+    rescue_check_or_file_value: "Or press Use File Value in this device's Device Backends group on the Settings page (Runtime 0.12.40 or later): once the file's backends pass their check, the fence is lifted",
     rescue_emulator_off_first: "The emulator was off when last seen ({}): start it first",
     rescue_seen_on: "Running when last seen ({})",
     rescue_seen_off: "Off when last seen ({})",

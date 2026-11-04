@@ -186,8 +186,10 @@ now. A time span read follows the cursor for at most 64 pages; with still no eve
 Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.40
 (#402 HS-5: a switch to MuMu native touch no longer needs the game running, and a fence that the device's own
 backend open caused no longer refuses a switch, so "Use File Value" on the settings page can lift it once the
-file's backends pass their self-check; the Runtime crates the console links and the interfaces it speaks are
-those of v0.12.39, whose ledger revision 6, #402 HS-2b, lets the console read the lifecycle record
+file's backends pass their self-check; the sources of the Runtime crates the console links and the interface
+declarations are those of v0.12.39, and only the outcome-code catalog the contract crate embeds at build time
+changed a few descriptions with HS-5, its categories and vocabulary unchanged; v0.12.39's ledger revision 6,
+#402 HS-2b, lets the console read the lifecycle record
 `device.backend_switched` the Runtime writes when it switches an instance's touch and capture backends while it
 runs, which a console built on revision 5 cannot read; the settings page's "Device Backends" group of each
 device switches its two backends while the Runtime runs, #402 HS-1 to HS-4, and waits for a switch's answer as
