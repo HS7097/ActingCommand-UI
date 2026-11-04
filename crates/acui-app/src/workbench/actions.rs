@@ -339,6 +339,11 @@ impl BackendDraft {
     }
 }
 
+/// What the form's two fields hold as it opens: a night, as text in them, not a hint over an
+/// empty field, so that ticking a day and pressing "add" adds what they show.
+const QUIET_FORM_START: &str = "23:00";
+const QUIET_FORM_END: &str = "07:00";
+
 /// The rules panel's form of a quiet time to add, of one account at a time: what its boxes and
 /// its two fields hold, which is not in effect. Closed while it has no owner.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -347,7 +352,8 @@ struct QuietForm {
     owner: Option<String>,
     /// The days the time starts on, `days[0]` Monday through `days[6]` Sunday.
     days: [bool; 7],
-    /// Its start and end as typed, hours and minutes.
+    /// Its start and end, hours and minutes: `QUIET_FORM_START` and `QUIET_FORM_END` as it
+    /// opens, then as typed.
     start: String,
     end: String,
     /// What the last "add" found in it, which nothing was sent for; it goes once the form is
@@ -2239,8 +2245,10 @@ fn rules_pressed(ui: &Ui) -> Option<AccountRules> {
     rules_shown(ui)
 }
 
-/// "Add a time…": the form of a quiet time to add opens, empty, for the account shown, while its
-/// list reads and the Runtime takes a change of it; one open for it already stays as it is.
+/// "Add a time…": the form of a quiet time to add opens for the account shown, while its list
+/// reads and the Runtime takes a change of it: no day ticked, and its fields holding
+/// `QUIET_FORM_START` and `QUIET_FORM_END`. One open for it already stays as it is; one closed by
+/// a time added opens so again.
 pub fn quiet_form_opened(ui: &Ui) {
     let rules = rules_pressed(ui);
     if let Some(rules) = rules.filter(|rules| {
@@ -2249,7 +2257,12 @@ pub fn quiet_form_opened(ui: &Ui) {
         let mut model = ui.model.borrow_mut();
         let form = &mut model.actions_mut().quiet_form;
         if form.owner.as_deref() != Some(rules.instance_id.as_str()) {
-            *form = QuietForm { owner: Some(rules.instance_id), ..QuietForm::default() };
+            *form = QuietForm {
+                owner: Some(rules.instance_id),
+                start: QUIET_FORM_START.to_owned(),
+                end: QUIET_FORM_END.to_owned(),
+                ..QuietForm::default()
+            };
         }
     }
     paint::rescue(ui);
