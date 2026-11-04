@@ -82,6 +82,12 @@ const EMULATOR_CONTROL_UNSUPPORTED: &str = "emulator_control_unsupported";
 const INSTANCE_NOT_RUNNING: &str = "instance_not_running";
 const APPLICATION_BACKEND_FAILED: &str = "application_backend_operation_failed";
 const APPLICATION_NOT_ASSIGNED: &str = "application_effect_requires_assigned_application";
+/// A self-check's own failures, in the settings page's words for the same step
+/// (`backend_cause_*`): the code table has only their category's.
+const INPUT_BACKEND_OPEN_FAILED: &str = "input_backend_open_failed";
+const CAPTURE_BACKEND_OPEN_FAILED: &str = "capture_backend_open_failed";
+const INPUT_CHECK_FAILED: &str = "input_check_failed";
+const CAPTURE_CHECK_FAILED: &str = "capture_check_failed";
 /// A self-check of MuMu's own pair whose configuration names no app index fails so while the
 /// game is not running too (#402 HS-3): the check's answer carries only this code.
 const PAIRED_BACKEND_OPEN_FAILED: &str = "paired_backend_open_failed";
@@ -888,6 +894,11 @@ fn rescue_own_words(labels: &Labels, code: &str) -> Option<&'static str> {
         INSTANCE_NOT_RUNNING => labels.rescue_instance_not_running,
         APPLICATION_BACKEND_FAILED => labels.rescue_game_command_failed,
         APPLICATION_NOT_ASSIGNED => labels.rescue_no_game,
+        INPUT_BACKEND_OPEN_FAILED => labels.backend_cause_touch_open,
+        CAPTURE_BACKEND_OPEN_FAILED => labels.backend_cause_capture_open,
+        PAIRED_BACKEND_OPEN_FAILED => labels.backend_cause_nemu_open,
+        INPUT_CHECK_FAILED => labels.backend_cause_touch_check,
+        CAPTURE_CHECK_FAILED => labels.backend_cause_capture_check,
         _ => return None,
     };
     Some(words)
