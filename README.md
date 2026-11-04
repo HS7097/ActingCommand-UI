@@ -186,7 +186,9 @@ now. A time span read follows the cursor for at most 64 pages; with still no eve
 Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.39
 (ledger revision 6, #402 HS-2b: the console reads the lifecycle record `device.backend_switched` the Runtime
 writes when it switches an instance's touch and capture backends while it runs, which a console built on revision 5
-cannot read; the settings page shows each instance's two backends as rows that are shown only, and switches none;
+cannot read; the settings page's "Device Backends" group of each device switches its two backends while the
+Runtime runs, #402 HS-1 to HS-4, and waits for a switch's answer as long as the contract's `BACKEND_SWITCH_WAIT_MS`
+and the client's IO margin say;
 with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 AGT-1b's optional status member
 `agent_wake`, which the console reads and does not show, on top of #429 R-0b, R-4, R-11, R-7a and 114-A; it keeps
 v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 5, ledger revision 6):
@@ -397,12 +399,31 @@ groups, "Everyday" and "Advanced": which keys show and in which group is the Run
 four settings of the performance preset are only on the top bar. Each says its value, where it comes
 from, how it is changed (shown only for now, changed in the configuration file with a Runtime restart,
 or set by the installer) and when a change takes effect; one the file does not name and that has no
-default says "not set" rather than being left out. In this version only "Days to keep unconfirmed
+default says "not set" rather than being left out. Of the rows, only "Days to keep unconfirmed
 evidence frames" is changed here: type a whole number and press Save, or empty the field and save to go
 back to the configuration file's value (or the default). Only the Runtime judges the range, and a refusal
 says what it said; the result has a line of its own under the top bar, naming the setting. A save is
 sent once: when its result is unknown, what holds is read again before anything is said, and nothing is
-ever sent again by itself. After every start of the Runtime its start report is read once: when an update
+ever sent again by itself. After the rows, each device the Runtime drives (an emulator or a handset
+entry, not a fixture) has a "Device Backends" group with its touch backend and its capture backend, each
+in a drop-down of the backends that kind of device has (ADB input, MaaTouch, minitouch and, on an
+emulator, MuMu native (Nemu IPC) for touch; ADB screenshot and, on an emulator, DroidCast and MuMu native,
+or on a handset scrcpy, for capture), with where the value comes from (the configuration file, or set
+online, when and through which way) and the device's latest self-check. Apply switches that device at
+once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
+reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.39, plus the client's 5 s IO margin; the page takes
+both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
+MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
+which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
+switch too (both rows together when clearing one alone could break that pair), unless the file's value is
+the one in effect: then the device is left as it is, and the line says only that the file's value is back.
+The result has a line of its own under the top bar, naming the account, and a refusal says why in words:
+the device is busy (with what), played, fenced, not running, or the new backend did not open (and why: for
+MuMu native touch, say, the game package configured for the device is not installed, or the game is not
+running) and the previous one is back or did not come back either. Nothing is sent again by itself: when a switch's result is unknown the
+console waits out that whole wait and until the Runtime shows the device no longer switching, then says what holds now, with the
+device's self-check. A Runtime before 0.12.39 has no such settings, and then no group shows. After every start of the Runtime its start report is read once: when an update
 or a rollback reset settings changed online, the line under the top bar and the settings page say which;
 "Got It" hides that line for this start. Online settings kept over a default that changed are said in
 small print on the settings page only. A report that cannot be read is tried at most 3 times for a start,

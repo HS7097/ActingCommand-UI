@@ -5,14 +5,20 @@
 //! nothing and moves nothing. And the top bar's writes, its performance preset and the
 //! stepper under it, from their views; which page shows; the settings page's rows of
 //! the Runtime's settings, the same way as the cards, with the field of the evidence days
-//! among them; what the start report says of the settings; and whether the Runtime is started
-//! again when it is gone. And the right column's live view, from its view, the frame's pixels
-//! once when it lands; and under it the picture's refresh, painted with it.
+//! among them and each device's group of its backends after them; what the start report says
+//! of the settings; and whether the Runtime is started again when it is gone. And the right
+//! column's live view, from its view, the frame's pixels once when it lands; and under it the
+//! picture's refresh, painted with it.
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use acui_rows::outcome::explain;
 use acui_rows::{format_minute, format_second};
+use acui_source::workbench::backends::{
+    unnamed_backend_words, AppIndexProblem, BackendRefusal, BackendRow, BackendWhy, CaptureCause,
+    CheckStatus, FailedStep, Holder, InEffect, InstanceBackends, OpenFailure, SwitchRefusal,
+    SwitchVersion,
+};
 use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::{
     PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
@@ -21,8 +27,9 @@ use acui_source::workbench::{
 use slint::{Image, Model as _, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
 use super::actions::{
-    ActionsView, EvidenceView, Field, PresetState, PresetView, Reread, ResumeEntry, Said,
-    StepperView, Write, PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
+    ActionsView, Choice, EvidenceView, Field, GroupState, PresetState, PresetView, Reread,
+    ResumeEntry, RowEdit, Said, StepperView, Write, PRESET_ADAPTIVE, PRESET_LIGHT,
+    PRESET_STANDARD,
 };
 use super::card::{Band, CardView, Down, Line, ReasonClass};
 use super::model::{Fault, Page};
@@ -32,7 +39,8 @@ use super::picture::{
 };
 use super::preview;
 use super::settings::{
-    self, AutostartView, ReportedAccount, ReportedLine, SettingLine, SettingsView, StartView,
+    self, AutostartView, BackendGroup, CheckEntry, ReportedAccount, ReportedLine, SelfCheckView,
+    SettingLine, SettingsView, StartView,
 };
 use crate::ledger::paint::models;
 use crate::ledger::resume::Lifter;
@@ -40,8 +48,8 @@ use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
 use crate::{
-    AccountCard, OverlayItem, PresetChoice, SettingItem, StatusTone, TargetItem, WorkbenchPage,
-    WorkbenchWindow,
+    AccountCard, BackendGroupItem, OverlayItem, PresetChoice, SettingItem, StatusTone, TargetItem,
+    WorkbenchPage, WorkbenchWindow,
 };
 
 /// What the technical log's lines about the settings page are under.
@@ -663,6 +671,23 @@ pub fn settings(ui: &Ui) {
         | SettingsView::Failed
         | SettingsView::Unreported => (Vec::new(), Vec::new(), Vec::new(), None),
     };
+    let groups: &[BackendGroup] = match &view {
+        SettingsView::Read { backends, unlisted, .. } => {
+            for instance in unlisted {
+                let line = format!(
+                    "instance {instance}: the snapshot names its backends and the Status lists \
+                     no such instance; no group for it"
+                );
+                tell_once(ui, &line, false);
+            }
+            backends.as_slice()
+        }
+        SettingsView::NotRunning
+        | SettingsView::Unreachable
+        | SettingsView::Reading
+        | SettingsView::Failed
+        | SettingsView::Unreported => &[],
+    };
     window.set_runtime_settings_note(note.into());
     window.set_runtime_settings_failed(failed);
     sync(window.get_daily_settings(), daily, |rows| window.set_daily_settings(rows));
@@ -671,6 +696,307 @@ pub fn settings(ui: &Ui) {
     sync(window.get_advanced_settings_after(), after, |rows| {
         window.set_advanced_settings_after(rows);
     });
+    backend_groups(ui, &window, labels, groups);
+}
+
+/// Each device's group of its backends, a row of the list the window shows at a time. A box's
+/// choices keep the list they had while their words do not change, and a row whose words do
+/// not change is left as it is: a paint every few seconds neither closes an open box nor takes
+/// its focus. What the log is to know of them goes there once: a word without a name here, a
+/// kind of device or a self-check that does not read, an online value with no record of it.
+fn backend_groups(ui: &Ui, window: &WorkbenchWindow, labels: &Labels, groups: &[BackendGroup]) {
+    if !groups.is_empty() {
+        let words = unnamed_backend_words();
+        if !words.is_empty() {
+            let line = format!("no words for backends {}: not offered", words.join(", "));
+            tell_once(ui, &line, false);
+        }
+    }
+    let shown = window.get_backend_groups();
+    let old = |at: usize| -> Option<BackendGroupItem> {
+        shown.as_any().downcast_ref::<VecModel<BackendGroupItem>>()?.row_data(at)
+    };
+    let items = groups
+        .iter()
+        .enumerate()
+        .map(|(at, group)| backend_item(ui, labels, group, old(at).as_ref()))
+        .collect();
+    sync(window.get_backend_groups(), items, |rows| window.set_backend_groups(rows));
+}
+
+/// One device's group: its title; each row that reads, its box's choices and the one shown, and
+/// in grey where the value comes from, with the value while the box shows another, the file's
+/// value under an online one, that a change needs the file, and that "use the file's value"
+/// takes the other along; the pair; the self-check, but while its switch is out or unconfirmed;
+/// the question; where the group stands.
+fn backend_item(
+    ui: &Ui,
+    labels: &Labels,
+    group: &BackendGroup,
+    old: Option<&BackendGroupItem>,
+) -> BackendGroupItem {
+    let backends = &group.backends;
+    let edit = &group.edit;
+    let instance = backends.instance_id();
+    backend_told(ui, backends);
+    let touch_words = |backend| settings::touch_words(labels, backend);
+    let capture_words = |backend| settings::capture_words(labels, backend);
+    let touch = backends.touch.as_ref().zip(edit.touch.as_ref()).map(|(row, edit)| {
+        let options = choice_words(edit, touch_words);
+        let note = row_note(labels, row, edit, touch_words, labels.backend_with_capture);
+        (options, edit, note)
+    });
+    let capture = backends.capture.as_ref().zip(edit.capture.as_ref()).map(|(row, edit)| {
+        let options = choice_words(edit, capture_words);
+        let note = row_note(labels, row, edit, capture_words, labels.backend_with_touch);
+        (options, edit, note)
+    });
+    let selfcheck_view = settings::selfcheck_of(backends);
+    for (_, status) in &selfcheck_view.entries {
+        if let CheckStatus::Unread(word) = status {
+            let line = format!("instance {instance}: a self-check status does not read: {word}");
+            tell_once(ui, &line, true);
+        }
+    }
+    let (selfcheck, selfcheck_warning) = match edit.state {
+        GroupState::Switching | GroupState::Unconfirmed { .. } => (String::new(), false),
+        GroupState::Open
+        | GroupState::KindUnread
+        | GroupState::RowUnread
+        | GroupState::Rereading
+        | GroupState::OtherWrite => (
+            fill(labels.backend_selfcheck, &[&selfcheck_words(labels, &selfcheck_view)]),
+            selfcheck_view.entries.iter().any(|(_, status)| *status == CheckStatus::Failed),
+        ),
+    };
+    // The client's whole wait, in seconds, only while a switch is out.
+    let switching = match edit.state {
+        GroupState::Switching => settings::switching_words(labels),
+        _ => String::new(),
+    };
+    let (status, status_failed) = match edit.state {
+        GroupState::Open => ("", false),
+        GroupState::KindUnread => (labels.backend_kind_unread, true),
+        GroupState::RowUnread => (labels.backend_row_unread, true),
+        GroupState::Switching => (switching.as_str(), false),
+        GroupState::Unconfirmed { over: false } => (labels.backend_unconfirmed, true),
+        GroupState::Unconfirmed { over: true } | GroupState::Rereading => {
+            (labels.backend_rereading, false)
+        }
+        GroupState::OtherWrite => (labels.backend_other_write, false),
+    };
+    let ask_words: Vec<SharedString> = match &edit.question {
+        Some(question) => std::iter::once(labels.backend_ask_pick)
+            .chain(question.choices.iter().map(|touch| touch_words(*touch)))
+            .map(SharedString::from)
+            .collect(),
+        None => Vec::new(),
+    };
+    let open = edit.state == GroupState::Open;
+    BackendGroupItem {
+        instance: instance.into(),
+        title: fill(labels.backend_group, &[&group.account]).into(),
+        touch_shown: touch.is_some(),
+        touch_options: options(old.map(|item| &item.touch_options), options_of(&touch)),
+        touch_index: touch.as_ref().map_or(0, |(_, edit, _)| index(edit.shown)),
+        touch_enabled: touch.as_ref().is_some_and(|(_, edit, _)| edit.enabled),
+        touch_note: touch.as_ref().map_or_else(String::new, |(_, _, note)| note.clone()).into(),
+        touch_back: edit.touch.as_ref().is_some_and(|row| row.file_value.is_some()),
+        touch_back_enabled: edit
+            .touch
+            .as_ref()
+            .and_then(|row| row.file_value)
+            .is_some_and(|offer| offer.enabled),
+        capture_shown: capture.is_some(),
+        capture_options: options(old.map(|item| &item.capture_options), options_of(&capture)),
+        capture_index: capture.as_ref().map_or(0, |(_, edit, _)| index(edit.shown)),
+        capture_enabled: capture.as_ref().is_some_and(|(_, edit, _)| edit.enabled),
+        capture_note: capture
+            .as_ref()
+            .map_or_else(String::new, |(_, _, note)| note.clone())
+            .into(),
+        capture_back: edit.capture.as_ref().is_some_and(|row| row.file_value.is_some()),
+        capture_back_enabled: edit
+            .capture
+            .as_ref()
+            .and_then(|row| row.file_value)
+            .is_some_and(|offer| offer.enabled),
+        paired: edit.paired,
+        selfcheck: selfcheck.into(),
+        selfcheck_warning,
+        asking: edit.question.is_some(),
+        ask_options: options(old.map(|item| &item.ask_options), ask_words),
+        ask_index: edit
+            .question
+            .as_ref()
+            .and_then(|question| question.picked)
+            .map_or(0, |picked| index(picked + 1)),
+        ask_enabled: open,
+        ask_ready: edit.question.as_ref().is_some_and(|question| question.apply.is_some()),
+        apply_shown: !matches!(edit.state, GroupState::KindUnread | GroupState::RowUnread),
+        apply_ready: edit.apply.is_some(),
+        status: status.into(),
+        status_failed,
+    }
+}
+
+/// What the log is to know of a device's backends, once each: a kind of device that does not
+/// read, a value in effect without a name here, an online value with no record of it.
+fn backend_told(ui: &Ui, backends: &InstanceBackends) {
+    let instance = backends.instance_id();
+    if backends.kind.is_err() {
+        let line = format!(
+            "instance {instance}: its kind of device does not read, so its backends are only \
+             shown: {}",
+            backends.line()
+        );
+        tell_once(ui, &line, true);
+    }
+    let touch = backends.touch.as_ref().map(|row| (word_of(&row.value), row_unstamped(row)));
+    let capture = backends.capture.as_ref().map(|row| (word_of(&row.value), row_unstamped(row)));
+    for (which, row) in [("touch", touch), ("capture", capture)] {
+        let Some((word, unstamped)) = row else {
+            continue;
+        };
+        if let Some(word) = word {
+            let line = format!("instance {instance}: no words for its {which} backend {word}");
+            tell_once(ui, &line, false);
+        }
+        if unstamped {
+            let line = format!(
+                "instance {instance}: its {which} backend is set online and host.config_overrides \
+                 has no record of it"
+            );
+            tell_once(ui, &line, false);
+        }
+    }
+}
+
+/// A word in effect without a name here.
+fn word_of<T>(value: &InEffect<T>) -> Option<&str> {
+    match value {
+        InEffect::Word(word) => Some(word.as_str()),
+        InEffect::Named(_) => None,
+    }
+}
+
+/// An online value the snapshot holds no record of.
+fn row_unstamped<T>(row: &BackendRow<T>) -> bool {
+    row.source == SettingSource::Online && row.online.is_none()
+}
+
+/// The words of a box's choices.
+fn choice_words<T: Copy>(
+    edit: &RowEdit<T>,
+    words: impl Fn(T) -> &'static str,
+) -> Vec<SharedString> {
+    edit.choices
+        .iter()
+        .map(|choice| match choice {
+            Choice::Backend(backend) => SharedString::from(words(*backend)),
+            Choice::Word(word) => SharedString::from(word.as_str()),
+        })
+        .collect()
+}
+
+/// A row's choices in words, none for a row that does not show.
+fn options_of<E, N>(row: &Option<(Vec<SharedString>, E, N)>) -> Vec<SharedString> {
+    row.as_ref().map_or_else(Vec::new, |(options, _, _)| options.clone())
+}
+
+/// A box's list: the one it has while its words are the same, so the box keeps its state.
+fn options(old: Option<&ModelRc<SharedString>>, words: Vec<SharedString>) -> ModelRc<SharedString> {
+    let same = old.is_some_and(|old| {
+        old.row_count() == words.len()
+            && words.iter().enumerate().all(|(at, word)| old.row_data(at).as_ref() == Some(word))
+    });
+    match old {
+        Some(old) if same => old.clone(),
+        Some(_) | None => models(words),
+    }
+}
+
+/// A box's index as the window types it; a box has a handful of choices.
+fn index(at: usize) -> i32 {
+    i32::try_from(at).unwrap_or(i32::MAX)
+}
+
+/// A row's grey line: where its value comes from, with the value first while the box shows
+/// another; the file's value under an online one; that only the file changes it; and that "use
+/// the file's value" takes the other row along (`along`).
+fn row_note<T: Copy>(
+    labels: &Labels,
+    row: &BackendRow<T>,
+    edit: &RowEdit<T>,
+    words: impl Fn(T) -> &'static str + Copy,
+    along: &str,
+) -> String {
+    let source = backend_source(labels, row);
+    let mut note = Vec::new();
+    if edit.drafted {
+        let value = settings::in_effect_words(&row.value, words);
+        note.push(fill(labels.concurrency_now, &[&value, &source]));
+    } else {
+        note.push(fill(labels.setting_source_line, &[&source]));
+    }
+    if let Some(file) = row.online.as_ref().and_then(|online| online.file_value.as_ref()) {
+        note.push(fill(labels.backend_file_value, &[&settings::in_effect_words(file, words)]));
+    }
+    if !row.settable {
+        note.push(labels.setting_file_restart.to_owned());
+    }
+    if edit.file_value.is_some_and(|offer| offer.both) {
+        note.push(along.to_owned());
+    }
+    note.join(" · ")
+}
+
+/// Where a backend's value comes from: the file, or set online, when and through which way.
+fn backend_source<T>(labels: &Labels, row: &BackendRow<T>) -> String {
+    let online = match (row.source, &row.online) {
+        (SettingSource::Online, Some(online)) => online,
+        (source, _) => return source_text(labels, source).to_owned(),
+    };
+    let mut text = match online.set_unix_ms {
+        Some(ms) => fill(labels.backend_online_at, &[&format_minute(ms)]),
+        None => labels.setting_source_online.to_owned(),
+    };
+    if let Some(through) = online.through {
+        let through = settings::through_words(labels, through);
+        text.push(' ');
+        text.push_str(&fill(labels.backend_online_through, &[through]));
+    }
+    text
+}
+
+/// A device's self-check in words: each entry with what it came to, and when the newest was.
+fn selfcheck_words(labels: &Labels, view: &SelfCheckView) -> String {
+    if view.entries.is_empty() {
+        return labels.backend_check_none.to_owned();
+    }
+    let entries: Vec<String> = view
+        .entries
+        .iter()
+        .map(|(which, status)| {
+            let template = match which {
+                CheckEntry::Touch => labels.backend_check_touch,
+                CheckEntry::Capture => labels.backend_check_capture,
+                CheckEntry::Nemu => labels.backend_check_nemu,
+            };
+            let status = match status {
+                CheckStatus::Passed => labels.backend_check_passed,
+                CheckStatus::Failed => labels.backend_check_failed,
+                CheckStatus::Unsure => labels.backend_check_unsure,
+                CheckStatus::Unread(_) => labels.backend_check_unread,
+            };
+            fill(template, &[status])
+        })
+        .collect();
+    let entries = entries.join(" · ");
+    match view.at {
+        Some(at) => fill(labels.backend_paren, &[&entries, &format_minute(at)]),
+        None => entries,
+    }
 }
 
 /// The evidence days' field, while it shows: the draft, or the value in effect; what it
@@ -905,15 +1231,22 @@ pub fn actions(ui: &Ui) {
     let (line, failed) = settings_text(labels, &view, Field::EvidenceDays);
     window.set_evidence_write_line(line.into());
     window.set_evidence_write_failed(failed);
+    let (line, failed) = settings_text(labels, &view, Field::Backends);
+    window.set_backend_write_line(line.into());
+    window.set_backend_write_failed(failed);
 }
 
 /// What the last change of settings from `field` came to, and whether that is a failure;
 /// nothing before one. A restart open across this and the first line is said once, on the
-/// first line. The evidence days' line names its setting: the others are the top bar's.
+/// first line. The evidence days' line names its setting, and the backends' line the account
+/// of the device it switched: the others are the top bar's. A switch says it switches while it
+/// is out, that the device is switched once it is, and a refusal of a backend in a switch's
+/// own words.
 fn settings_text(labels: &Labels, view: &ActionsView, field: Field) -> (String, bool) {
     let said = match field {
         Field::TopBar => &view.settings_said,
         Field::EvidenceDays => &view.evidence_said,
+        Field::Backends => &view.backends_said,
     };
     let (text, failed) = if view.reread_failed == Some(field) {
         (labels.config_reread_failed.to_owned(), true)
@@ -925,6 +1258,7 @@ fn settings_text(labels: &Labels, view: &ActionsView, field: Field) -> (String, 
             (Some(Said::NotWhole), _) if field == Field::EvidenceDays => {
                 (labels.evidence_not_whole.to_owned(), true)
             }
+            (Some(said), _) if field == Field::Backends => switch_text(labels, view, said),
             (Some(said), _) => said_text(labels, view, said),
         }
     };
@@ -933,6 +1267,25 @@ fn settings_text(labels: &Labels, view: &ActionsView, field: Field) -> (String, 
         Field::EvidenceDays => {
             (fill(labels.evidence_said, &[labels.setting_evidence_days, &text]), failed)
         }
+        Field::Backends => {
+            let account = view.backends_account.as_deref().unwrap_or(labels.start_account_gone);
+            (fill(labels.backend_said, &[account, &text]), failed)
+        }
+    }
+}
+
+/// What a switch of a device's backends came to, where that differs from any change's words.
+fn switch_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, bool) {
+    match said {
+        Said::Sending(_) => (settings::switching_words(labels), false),
+        Said::ConfigApplied => (labels.backend_switched.to_owned(), false),
+        // Whether the device switched or, the file's value being the one in effect, did not.
+        Said::BackToFile => (labels.backend_back_to_file.to_owned(), false),
+        Said::ConfigRefused(RefusalWhy::Value { problem: ValueProblem::OutOfRange, .. }) => {
+            (labels.backend_out_of_range.to_owned(), true)
+        }
+        Said::ConfigRefused(RefusalWhy::NotSaved) => (labels.backend_not_saved.to_owned(), true),
+        other => said_text(labels, view, other),
     }
 }
 
@@ -995,6 +1348,8 @@ fn said_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, bool)
         }
         Said::Restarted => (labels.write_restarted.to_owned(), false),
         Said::ConfigApplied => (labels.config_applied.to_owned(), false),
+        // Only the backends' line says it (`switch_text`).
+        Said::BackToFile => (labels.backend_back_to_file.to_owned(), false),
         Said::ConfigRefused(why) => (refusal_text(labels, why), true),
         Said::PresetGone => (labels.preset_gone.to_owned(), true),
         Said::Rereading(Reread::Conflict) => (labels.config_conflict_rereading.to_owned(), false),
@@ -1006,6 +1361,146 @@ fn said_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, bool)
         Said::UnconfirmedChanged => (labels.config_unconfirmed_changed.to_owned(), true),
         Said::UnconfirmedSeeNow => (labels.config_unconfirmed_see_now.to_owned(), true),
         Said::NotWhole => (labels.concurrency_not_whole.to_owned(), true),
+        Said::Rereading(Reread::Switch) => (labels.backend_unconfirmed.to_owned(), true),
+        Said::BackendRefused(refusal) => (backend_refusal_text(labels, refusal), true),
+        Said::SwitchOver { version, now } => {
+            let check = now.as_ref().map_or_else(
+                || labels.backend_check_none.to_owned(),
+                |now| selfcheck_words(labels, &settings::selfcheck_of(now)),
+            );
+            let template = match version {
+                SwitchVersion::Unchanged => labels.backend_not_applied,
+                SwitchVersion::Changed => labels.backend_changed,
+                SwitchVersion::Unknown => labels.backend_see_now,
+            };
+            (fill(template, &[&check]), true)
+        }
+    }
+}
+
+/// Why the Runtime switched nothing, in its own words for each problem and with what the
+/// causes say; and, when the new backends opened and the previous ones did not come back after
+/// the Runtime took none of it, that the device is unavailable.
+fn backend_refusal_text(labels: &Labels, refusal: &BackendRefusal) -> String {
+    let why = refusal.why.as_ref().map(|why| match why {
+        BackendWhy::KindUnsupported => labels.backend_kind_unsupported.to_owned(),
+        BackendWhy::PairRequired => labels.backend_pair_required.to_owned(),
+        BackendWhy::NotAlone => labels.backend_not_alone.to_owned(),
+        BackendWhy::Switch(refused) => switch_refused_text(labels, refused),
+    });
+    let not_restored = refusal
+        .not_restored
+        .as_ref()
+        .map(|failure| fill(labels.backend_not_restored, &[&cause_text(labels, failure)]));
+    match (why, not_restored) {
+        (Some(why), Some(not_restored)) => format!("{why} {not_restored}"),
+        (Some(text), None) | (None, Some(text)) => text,
+        (None, None) => labels.outcome_unknown_short.to_owned(),
+    }
+}
+
+fn switch_refused_text(labels: &Labels, refused: &SwitchRefusal) -> String {
+    match refused {
+        SwitchRefusal::Busy { holder, waited_ms } => {
+            let holder = holder.as_ref().map_or(labels.backend_holder_other, |holder| {
+                holder_words(labels, holder)
+            });
+            match waited_ms {
+                Some(ms) => {
+                    fill(labels.backend_busy, &[holder, &ms.div_ceil(1000).to_string()])
+                }
+                None => fill(labels.backend_busy_untimed, &[holder]),
+            }
+        }
+        SwitchRefusal::PlayerHeld => labels.backend_player_held.to_owned(),
+        SwitchRefusal::Fenced => labels.backend_fenced.to_owned(),
+        SwitchRefusal::EndpointUnavailable => labels.backend_endpoint_unavailable.to_owned(),
+        SwitchRefusal::OpenFailed(failure) => {
+            fill(labels.backend_open_failed, &[&cause_or_unknown(labels, failure.as_ref())])
+        }
+        SwitchRefusal::RestoreFailed { new, restore } => {
+            let new = cause_or_unknown(labels, new.as_ref());
+            let restore = cause_or_unknown(labels, restore.as_ref());
+            fill(labels.backend_restore_failed, &[&new, &restore])
+        }
+        // The log has its problem, with the receipt's whole outcome.
+        SwitchRefusal::Other(_) => labels.backend_switch_other.to_owned(),
+    }
+}
+
+/// What held the device a switch waited for; a claim this console has no words for is "other
+/// work", which the log has by its word with the refusal.
+fn holder_words(labels: &Labels, holder: &Holder) -> &'static str {
+    match holder {
+        Holder::PolicyDispatch => labels.backend_holder_policy_dispatch,
+        Holder::Ladder | Holder::LadderContinuation => labels.backend_holder_ladder,
+        Holder::StartupPackage => labels.backend_holder_startup_package,
+        Holder::Autostart => labels.backend_holder_autostart,
+        Holder::DirectTaskRun => labels.backend_holder_direct_task_run,
+        Holder::EmulatorControl => labels.backend_holder_emulator_control,
+        Holder::InputLifecycle => labels.backend_holder_input_lifecycle,
+        Holder::ResumeReconnect => labels.backend_holder_resume_reconnect,
+        Holder::SelfCheck => labels.backend_holder_self_check,
+        Holder::BackendSwitch => labels.backend_holder_backend_switch,
+        Holder::DaemonStartPreparation => labels.backend_holder_start_preparation,
+        Holder::LabOperation => labels.backend_holder_lab_operation,
+        Holder::ClientLease => labels.backend_holder_client_lease,
+        Holder::ResourceClose => labels.backend_holder_resource_close,
+        Holder::Other(_) => labels.backend_holder_other,
+    }
+}
+
+fn cause_or_unknown(labels: &Labels, failure: Option<&OpenFailure>) -> String {
+    match failure {
+        Some(failure) => cause_text(labels, failure),
+        None => labels.backend_cause_unknown.to_owned(),
+    }
+}
+
+/// Why backends did not open: the step that failed, why a capture did not open when that is
+/// said, and that MuMu's own pair found no MuMu app index when that is under it. A step that is
+/// none of the self-check's own takes its code's category words, as any refusal's. Why the app
+/// index was not found (#402 HS-3), when the Runtime says so in a word known here, says all: the
+/// pair's step and its capture's cause, which then names none, add nothing to it.
+fn cause_text(labels: &Labels, failure: &OpenFailure) -> String {
+    let app_index = failure.app_index.as_ref().map(|problem| match problem {
+        AppIndexProblem::PackageNotInstalled => Some(labels.backend_app_not_installed),
+        AppIndexProblem::ApplicationNotRunning => Some(labels.backend_app_not_running),
+        AppIndexProblem::InfoUnavailable => Some(labels.backend_app_info_unavailable),
+        AppIndexProblem::InfoMalformed => Some(labels.backend_app_info_malformed),
+        // No problem said, or one without words here: the log has it, with the receipt's whole
+        // outcome.
+        AppIndexProblem::Other(_) => None,
+    });
+    if let Some(Some(words)) = app_index {
+        return words.to_owned();
+    }
+    let step = match &failure.step {
+        FailedStep::TouchOpen => labels.backend_cause_touch_open.to_owned(),
+        FailedStep::CaptureOpen => labels.backend_cause_capture_open.to_owned(),
+        FailedStep::NemuOpen => labels.backend_cause_nemu_open.to_owned(),
+        FailedStep::TouchCheck => labels.backend_cause_touch_check.to_owned(),
+        FailedStep::CaptureCheck => labels.backend_cause_capture_check.to_owned(),
+        FailedStep::Other(code) => {
+            outcome_short(labels, code).unwrap_or_else(|| labels.outcome_unknown_short.to_owned())
+        }
+    };
+    let with_why = match (&failure.step, failure.capture) {
+        (FailedStep::TouchOpen | FailedStep::TouchCheck | FailedStep::CaptureCheck, _)
+        | (_, None) => step,
+        (FailedStep::CaptureOpen | FailedStep::NemuOpen | FailedStep::Other(_), Some(why)) => {
+            let why = match why {
+                CaptureCause::AppNotRunning => labels.backend_why_app_not_running,
+                CaptureCause::Unreachable => labels.backend_why_unreachable,
+                CaptureCause::Other => labels.backend_why_other,
+            };
+            fill(labels.backend_paren, &[&step, why])
+        }
+    };
+    if app_index.is_some() {
+        [with_why.as_str(), labels.backend_cause_app_index].join(labels.backend_cause_join)
+    } else {
+        with_why
     }
 }
 

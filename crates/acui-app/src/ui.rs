@@ -529,7 +529,8 @@ fn language_index(language: Language) -> i32 {
 /// button under it refreshes it (`workbench::refresh`);
 /// Start and Request Shutdown are the launcher's;
 /// "troubleshooting and ledger" opens the window of the default source; the
-/// write buttons and the evidence days' field are `workbench::actions`'; "got it"
+/// write buttons, the evidence days' field and each device's backends' boxes and buttons are
+/// `workbench::actions`'; "got it"
 /// on the start report's notice is `workbench`'s; the three boxes apply to every
 /// window. Closing it ends the program, after its fade if it has a frame of its
 /// own, unless an unlock runs: then it stays and says why, without fading.
@@ -617,6 +618,41 @@ fn install_workbench(window: &WorkbenchWindow) {
     window.on_evidence_save(|| {
         if let Some(ui) = current() {
             workbench::actions::evidence_save(&ui);
+        }
+    });
+    window.on_backend_touch_picked(|instance, index| {
+        if let Some(ui) = current() {
+            workbench::actions::backend_touch_picked(&ui, &instance, index);
+        }
+    });
+    window.on_backend_capture_picked(|instance, index| {
+        if let Some(ui) = current() {
+            workbench::actions::backend_capture_picked(&ui, &instance, index);
+        }
+    });
+    window.on_backend_apply(|instance| {
+        if let Some(ui) = current() {
+            workbench::actions::backend_apply(&ui, &instance);
+        }
+    });
+    window.on_backend_asked(|instance, index| {
+        if let Some(ui) = current() {
+            workbench::actions::backend_asked(&ui, &instance, index);
+        }
+    });
+    window.on_backend_apply_both(|instance| {
+        if let Some(ui) = current() {
+            workbench::actions::backend_apply_both(&ui, &instance);
+        }
+    });
+    window.on_backend_cancel(|instance| {
+        if let Some(ui) = current() {
+            workbench::actions::backend_cancel(&ui, &instance);
+        }
+    });
+    window.on_backend_file_value(|instance, touch_row| {
+        if let Some(ui) = current() {
+            workbench::actions::backend_file_value(&ui, &instance, touch_row);
         }
     });
     window.on_start_acknowledged(|| {
@@ -770,6 +806,15 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_days(labels.days_unit.into());
     global.set_save(labels.save.into());
     global.set_acknowledge(labels.acknowledge.into());
+    global.set_touch_backend(labels.backend_touch.into());
+    global.set_capture_backend(labels.backend_capture.into());
+    global.set_use_file_value(labels.backend_use_file_value.into());
+    // Its seconds are the contract's and the client's, filled in here.
+    global.set_backend_effect(workbench::settings::backend_effect_words(labels).into());
+    global.set_backend_pair_note(labels.backend_pair_note.into());
+    global.set_backend_ask(labels.backend_ask.into());
+    global.set_apply_both(labels.backend_apply_both.into());
+    global.set_cancel(labels.cancel.into());
     global.set_caption_minimize(labels.caption_minimize.into());
     global.set_caption_maximize(labels.caption_maximize.into());
     global.set_caption_restore(labels.caption_restore.into());
