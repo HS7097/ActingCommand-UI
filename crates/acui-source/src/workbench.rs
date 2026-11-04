@@ -69,7 +69,7 @@ use actingcommand_runtime_config::performance::{self, pacing};
 use actingcommand_runtime_config::{
     find_row, idle, instance_key, scalar_json, scheduling, ui_tier, ConfigCode,
     ConfigValueProblem, IdleAction, KeyName, ProcessPriorityLevel, UiTier, ValueType,
-    START_EMULATOR, UI_TIERS,
+    CAPTURE_BACKEND, START_EMULATOR, TOUCH_BACKEND, UI_TIERS,
 };
 
 use super::{
@@ -105,6 +105,18 @@ pub const IDLE_STOP_EMULATOR: &str = IdleAction::StopEmulator.as_str();
 /// The words of the Runtime process's two priorities (`host.*`), likewise.
 pub const PRIORITY_NORMAL: &str = ProcessPriorityLevel::Normal.token();
 pub const PRIORITY_LOW: &str = ProcessPriorityLevel::Low.token();
+
+/// The words of an instance's touch and capture backends (`touch_backend`, `capture_backend`,
+/// Runtime 0.12.39's #402 HS-1), likewise: words of the key table's two ranges
+/// (`TOUCH_BACKEND_TOKENS`, `CAPTURE_BACKEND_TOKENS`), which the Runtime's configuration crate
+/// spells only inside those lists. MuMu's own, Nemu IPC, is a word of both.
+pub const TOUCH_ADB_SHELL_INPUT: &str = "adb_shell_input";
+pub const TOUCH_MAATOUCH: &str = "maatouch";
+pub const TOUCH_MINITOUCH: &str = "minitouch";
+pub const CAPTURE_ADB: &str = "adb";
+pub const CAPTURE_DROIDCAST_RAW: &str = "droidcast_raw";
+pub const CAPTURE_SCRCPY: &str = "scrcpy";
+pub const BACKEND_NEMU_IPC: &str = "nemu_ipc";
 
 /// The MuMu root actingd discovers the emulator from: a key of the console's tiers, whose
 /// spelling the crate keeps to itself (a key of the start-up assembly).
@@ -1002,6 +1014,10 @@ pub enum SettingName {
     /// The Lab's two options, authoring and debugging.
     LabAuthoring,
     LabDebugging,
+    /// An instance's touch and capture backends (Runtime 0.12.39, #402 HS-1). The settings
+    /// page only shows them: it switches no device's backends.
+    TouchBackend,
+    CaptureBackend,
     /// A key of the tiers this file has no name for: its key-table name (a per-instance
     /// one's member), for the log only. A start report's key the key table does not have is
     /// one too, by the key itself.
@@ -1053,6 +1069,8 @@ fn setting_name(name: KeyName) -> SettingName {
         KeyName::Exact(PROCESS_IO_PRIORITY) => SettingName::IoPriority,
         KeyName::Exact(AUTHORING) => SettingName::LabAuthoring,
         KeyName::Exact(DEBUGGING) => SettingName::LabDebugging,
+        KeyName::PerInstance(TOUCH_BACKEND) => SettingName::TouchBackend,
+        KeyName::PerInstance(CAPTURE_BACKEND) => SettingName::CaptureBackend,
         KeyName::Exact(other) | KeyName::PerInstance(other) => {
             SettingName::Unnamed(other.to_owned())
         }
