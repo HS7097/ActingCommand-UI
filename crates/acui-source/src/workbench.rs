@@ -770,7 +770,8 @@ pub struct Unstated {
 pub struct InstanceKey(InstanceId);
 
 /// An instance's resource fence: the code of the failure behind it, and whether it
-/// now waits for a person.
+/// now waits for a person. Whether a switch of the instance's backends lifts it is
+/// [`FenceFact::of_backend_open`] (`backends`, which spells the self-check's failures).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FenceFact {
     pub cause: String,

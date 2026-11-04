@@ -1341,6 +1341,13 @@ fn row_edit<T: Copy + PartialEq>(
     }
 }
 
+/// Whether the group of `backends` has "Use the file's value" on a row: what the rescue bar
+/// asks before it points to it for a fence a switch lifts (#402 HS-5c, `Model::rescue_view`).
+pub fn offers_file_value(backends: &InstanceBackends) -> bool {
+    let (touch, capture) = use_file_value(backends, true);
+    touch.is_some() || capture.is_some()
+}
+
 /// "Use the file's value" of each row whose value is an online one. Clearing only the one
 /// online row brings back the file's pair, which actingd checked. With both online, clearing
 /// one leaves the other's online value beside the first's file value: when that could leave

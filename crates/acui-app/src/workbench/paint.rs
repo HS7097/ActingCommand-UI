@@ -568,6 +568,9 @@ fn rescue_bar(ui: &Ui, labels: &Labels, alias: &str, rows: &RescueRows) -> Rescu
         Some(_) | None => String::new(),
     };
     let (check_words, check_urgent) = check_note(labels, rows);
+    // HS-5c: the fence a switch lifts, while the check is the thing to do first.
+    let check_hint =
+        if check_urgent && rows.file_value_lifts { labels.rescue_check_or_file_value } else { "" };
     let emulator = rows.emulator;
     let (confirm, confirm_label) = confirm_text(labels, alias, rows);
     let (line, failed) = match &rows.said {
@@ -581,6 +584,7 @@ fn rescue_bar(ui: &Ui, labels: &Labels, alias: &str, rows: &RescueRows) -> Rescu
         check_offered: offered(rows.check),
         check_note: check_words.into(),
         check_urgent,
+        check_hint: check_hint.into(),
         emulator_shown: emulator.is_some(),
         start_shown: emulator.is_some_and(|row| row.start.is_some()),
         start_offered: offered(emulator.and_then(|row| row.start)),

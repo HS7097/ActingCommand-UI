@@ -13,8 +13,8 @@ use std::time::Instant;
 
 use acui_source::workbench::device::DeviceOp;
 use acui_source::workbench::{
-    ActivityKind, ConfigRead, ExplainRead, InstanceLive, LiveRead, LiveSnapshot, PresetProblem,
-    StartRead,
+    ActivityKind, ConfigRead, ExplainRead, FenceFact, InstanceLive, LiveRead, LiveSnapshot,
+    PresetProblem, StartRead,
 };
 use acui_source::{ClientFailure, PauseFact};
 
@@ -761,8 +761,27 @@ impl Model {
         let gate = self.preview_gate(alias);
         let hold = self.rescue_hold(instance, gate);
         let watch = self.watch(instance);
-        let rows = self.rescue.view(instance, gate == PreviewGate::Withdrawn, hold, watch);
+        let file_value = self.file_value_lifts(instance);
+        let withdrawn = gate == PreviewGate::Withdrawn;
+        let rows = self.rescue.view(instance, withdrawn, hold, watch, file_value);
         Some(RescueView::Online(rows))
+    }
+
+    /// Whether "Use the file's value" of `instance`'s device backends group would lift its fence
+    /// (#402 HS-5c, Runtime 0.12.40): the fence's cause is the instance's own backend open that
+    /// failed, which a switch goes through, and the newest snapshot of this epoch has an online
+    /// value of its touch or capture backend, which the group offers to clear. Not while the rows
+    /// are behind a change of settings taken since, which may have just cleared it.
+    fn file_value_lifts(&self, instance: &InstanceLive) -> bool {
+        let fence = instance.fence.as_ref().is_some_and(FenceFact::of_backend_open);
+        if !fence || self.actions.rows_behind() {
+            return false;
+        }
+        self.config
+            .value
+            .as_ref()
+            .and_then(|read| read.backends.get(&instance.instance_id))
+            .is_some_and(actions::offers_file_value)
     }
 
     /// Whether the emulator's watch would start `instance`'s emulator again once it is stopped,

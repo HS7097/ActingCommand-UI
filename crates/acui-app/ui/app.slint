@@ -175,8 +175,9 @@ export struct BackendGroupItem {
 
 // The rescue bar of the account whose picture shows (UI-3e1-a), in words: whether it shows; why
 // every device button is off, or that no Runtime answers. "Reconnect and check", whether it can be
-// pressed, and at its row's end why not or what it does, amber when it is the thing to do first.
-// The emulator's row, each of its three buttons where its control is offered and whether it can
+// pressed, and at its row's end why not or what it does, amber when it is the thing to do first;
+// under that row, when the device's backends group can lift its fence too (#402 HS-5c), so. The
+// emulator's row, each of its three buttons where its control is offered and whether it can
 // be pressed, and at the row's end why one cannot. The game's row, its two buttons, and why not.
 // "Close this task", always off, and why, while the account does something. The question a press
 // that closes the game asks, and its confirming button's words. What the last operation came to,
@@ -189,6 +190,7 @@ export struct RescueBar {
     check-offered: bool,
     check-note: string,
     check-urgent: bool,
+    check-hint: string,
     emulator-shown: bool,
     start-shown: bool,
     start-offered: bool,
@@ -2681,6 +2683,11 @@ export component WorkbenchWindow inherits Window {
                                                 root.rules-toggled();
                                             }
                                         }
+                                    }
+                                    // Under the check's row, which cuts its note short: the other
+                                    // way to lift the fence (#402 HS-5c), which wraps.
+                                    if root.rescue.shown && root.rescue.check-hint != "": Notice {
+                                        text: root.rescue.check-hint;
                                     }
                                     if root.rescue.shown && root.rescue.emulator-shown: HorizontalLayout {
                                         spacing: 8px;

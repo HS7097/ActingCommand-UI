@@ -53,8 +53,8 @@ use actingcommand_runtime_config::{
 };
 
 use super::{
-    setting_source, ActivityKind, ConfigEdit, ConfigRead, InstanceLive, SettingSource, ROW_KEY,
-    VALUE_INVALID, VALUE_PROBLEM,
+    setting_source, ActivityKind, ConfigEdit, ConfigRead, FenceFact, InstanceLive, SettingSource,
+    ROW_KEY, VALUE_INVALID, VALUE_PROBLEM,
 };
 
 /// The two words of `DEVICE_KIND_TOKENS`.
@@ -1114,6 +1114,19 @@ fn app_index_problem(missing: &Outcome) -> AppIndexProblem {
         INFO_UNAVAILABLE => AppIndexProblem::InfoUnavailable,
         INFO_MALFORMED => AppIndexProblem::InfoMalformed,
         other => AppIndexProblem::Other(other.to_owned()),
+    }
+}
+
+impl FenceFact {
+    /// Whether the fence's cause is the instance's own backend open that failed, its touch's,
+    /// its capture's or MuMu's own pair's, as the self-check's failures spell them (#402 HS-5c,
+    /// Runtime 0.12.40). Other backends remedy such a fence: a switch of the instance's backends,
+    /// a clear back to the file's values included, goes through it, and the new backends'
+    /// passing self-check lifts it. A fence of any other cause still refuses a switch
+    /// (`instance_fenced`), and a Runtime 0.12.39 or earlier, after a rollback, refuses one of
+    /// every fenced instance.
+    pub fn of_backend_open(&self) -> bool {
+        matches!(self.cause.as_str(), TOUCH_OPEN | CAPTURE_OPEN | PAIR_OPEN)
     }
 }
 
