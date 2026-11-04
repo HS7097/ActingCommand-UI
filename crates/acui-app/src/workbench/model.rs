@@ -25,7 +25,7 @@ use super::picture::{
 };
 use super::preview::{Order, Target};
 use super::read::{Lane, Read, EXPLAIN_TOO_OLD, START_TRIES};
-use super::rescue::{Rescue, RescueHold, RescueView};
+use super::rescue::{Rescue, RescueHold, RescueView, Watch};
 use super::settings::{self, AutostartView, SettingsView, StartView};
 use super::tools::{Displays, NameTable, NamesRead, WatchdogRead};
 use crate::strings::{fill, Labels, Language};
@@ -751,8 +751,29 @@ impl Model {
         let instance = self.instances.iter().find(|instance| instance.alias == alias)?;
         let gate = self.preview_gate(alias);
         let hold = self.rescue_hold(instance, gate);
-        let rows = self.rescue.view(instance, gate == PreviewGate::Withdrawn, hold);
+        let watch = self.watch(instance);
+        let rows = self.rescue.view(instance, gate == PreviewGate::Withdrawn, hold, watch);
         Some(RescueView::Online(rows))
+    }
+
+    /// Whether the emulator's watch would start `instance`'s emulator again once it is stopped,
+    /// as the newest snapshot of this epoch has `start_emulator` in effect: the instance's own
+    /// pause holds the watch whatever that is; no snapshot, or no settings in it, does not read.
+    fn watch(&self, instance: &InstanceLive) -> Watch {
+        if instance.pause.is_some() {
+            return Watch::Stays;
+        }
+        let on = self
+            .config
+            .value
+            .as_ref()
+            .and_then(|read| read.settings.as_ref())
+            .and_then(|settings| settings.start_emulator(&instance.instance_id));
+        match on {
+            Some(true) => Watch::Restarts,
+            Some(false) => Watch::Stays,
+            None => Watch::Unknown,
+        }
     }
 
     /// Why every device button of `instance`, which the newest `Status` lists, is off now, under

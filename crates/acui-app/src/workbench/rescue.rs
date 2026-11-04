@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use acui_source::workbench::backends::Holder;
 use acui_source::workbench::device::{operate, DeviceDone, DeviceOp, DeviceOutcome};
-use acui_source::workbench::{ActivityKind, InstanceLive};
+use acui_source::workbench::{ActivityKind, InstanceLive, Unstated};
 use slint::Timer;
 
 use super::failure_line;
@@ -114,7 +114,6 @@ impl RescueTicket {
 
 /// What the last operation of an account came to, before its words.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // Its words are the rescue bar's (UI-3e1-a's window part).
 pub enum Rescued {
     /// It is out.
     Sending(DeviceOp),
@@ -144,7 +143,6 @@ pub enum Rescued {
 /// Why every device button of an account is off now: the first of these that holds, in this
 /// order (`Model::rescue_view`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Its words are the rescue bar's (UI-3e1-a's window part).
 pub enum RescueHold {
     /// Its gate is shut: its device is being handed over (UI-3d).
     GateShut,
@@ -187,7 +185,6 @@ impl RescueView {
 /// The bar's rows of an account the newest `Status` lists. A row or a button that is `None` is
 /// not drawn, which is not the same as drawn and off.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // Its words are the rescue bar's (UI-3e1-a's window part).
 pub struct RescueRows {
     /// "Reconnect and check": of an instance that drives a device of its own.
     pub check: Option<Button>,
@@ -206,6 +203,25 @@ pub struct RescueRows {
     pub confirming: Option<DeviceOp>,
     /// What the account's last operation came to, if one was pressed this run.
     pub said: Option<Rescued>,
+    /// Whether the emulator's watch would start the emulator again after a stop: what the
+    /// stop's confirmation says.
+    pub watch: Watch,
+    /// What the status left out of what the rows are drawn by: for the log.
+    pub unstated: Unstated,
+}
+
+/// Whether the Runtime's emulator watch starts an account's emulator again once it is stopped
+/// (EMU-W R3, Runtime 0.12.39): it reads `start_emulator` in effect, the file's value or an
+/// instruction's, at every poll, and only the account's own pause holds it; a global pause, the
+/// 116 stop included, does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Watch {
+    /// It is on, and the account's own pause does not hold it.
+    Restarts,
+    /// Whether it is on does not read: no snapshot of this epoch, or not its row.
+    Unknown,
+    /// It is off, or the account's own pause holds it.
+    Stays,
 }
 
 impl RescueRows {
@@ -240,7 +256,6 @@ pub struct GameRow {
 /// One drawn button: whether it can be pressed now, and, while nothing holds every button
 /// (`RescueRows::hold`), its own reason when it cannot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Its words are the rescue bar's (UI-3e1-a's window part).
 pub struct Button {
     pub offered: bool,
     pub why_not: Option<ButtonWhy>,
@@ -249,7 +264,6 @@ pub struct Button {
 /// Why one button cannot be pressed, of the account's own readings. A reading of the emulator
 /// may be stale, so its time is said with it, and one of `unknown` holds nothing back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Its words are the rescue bar's (UI-3e1-a's window part).
 pub enum ButtonWhy {
     /// The emulator was last read not running, at this time (unix ms): no stop, no restart (a
     /// start is the way), and of a discovery-bound instance no check and no game.
@@ -373,12 +387,13 @@ impl Rescue {
     /// own readings only while nothing holds them all. A pause holds none back, whoever's, nor
     /// does a quiet time: an operator's claim goes through a closed gate, and these buttons are a
     /// person's maintenance. A fence holds back only the game's: the check lifts it, and so does
-    /// a start of the emulator that succeeds.
+    /// a start of the emulator that succeeds. `watch` is what a stop of its emulator would meet.
     pub fn view(
         &self,
         instance: &InstanceLive,
         withdrawn: bool,
         hold: Option<RescueHold>,
+        watch: Watch,
     ) -> RescueRows {
         let alias = instance.alias.as_str();
         let drawn = instance.physical && !withdrawn;
@@ -416,6 +431,8 @@ impl Rescue {
             hold,
             confirming: None,
             said: self.said(alias).cloned(),
+            watch,
+            unstated: instance.unstated,
         };
         let confirming = self.confirming(alias).filter(|op| rows.offers(*op));
         RescueRows { confirming, ..rows }
@@ -494,7 +511,6 @@ impl Landing {
 }
 
 /// A button of the rescue bar, of the account whose picture shows.
-#[allow(dead_code)] // The rescue bar's (UI-3e1-a's window part).
 pub fn pressed(ui: &Ui, op: DeviceOp) {
     let alias = ui.model.borrow().picture_account().map(str::to_owned);
     if let Some(alias) = alias {
@@ -520,7 +536,6 @@ pub fn press(ui: &Ui, alias: &str, op: DeviceOp) {
 
 /// The confirmation's button: the operation it asked about goes out once, when its button can
 /// still be pressed; the question goes either way.
-#[allow(dead_code)] // The rescue bar's (UI-3e1-a's window part).
 pub fn confirmed(ui: &Ui) {
     let asked = ui.model.borrow_mut().rescue_mut().take_asked();
     let Some((alias, op)) = asked else {
@@ -535,7 +550,6 @@ pub fn confirmed(ui: &Ui) {
 }
 
 /// The confirmation's "cancel": the question goes, and nothing is sent.
-#[allow(dead_code)] // The rescue bar's (UI-3e1-a's window part).
 pub fn cancelled(ui: &Ui) {
     ui.model.borrow_mut().rescue_mut().unconfirm();
     repaint(ui);
@@ -628,8 +642,8 @@ fn cool_down(alias: String, ticket: RescueTicket) {
     });
 }
 
-/// What a press, an answer or a cooldown may have changed in the window: the picture's refresh,
-/// which an operation out holds back.
+/// What a press, an answer or a cooldown may have changed in the window: the rescue bar, and the
+/// picture's refresh, which an operation out holds back; `paint::refresh` paints both.
 fn repaint(ui: &Ui) {
     paint::refresh(ui);
 }
