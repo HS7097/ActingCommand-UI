@@ -625,7 +625,8 @@ pub struct Labels {
     /// buttons; "use the file's value", and that it takes the other along; the device's
     /// self-check, each entry with what it came to, when in `backend_paren`; where the group
     /// stands, a switch out with the client's whole wait in whole seconds
-    /// (`settings::switching_words`).
+    /// (`settings::switching_words`), and that the device is operated from the main page, or
+    /// its picture refreshed, so no switch until that is over (UI-3e1-a).
     pub backend_group: &'static str,
     pub backend_touch: &'static str,
     pub backend_capture: &'static str,
@@ -668,6 +669,8 @@ pub struct Labels {
     pub backend_kind_unread: &'static str,
     pub backend_row_unread: &'static str,
     pub backend_rereading: &'static str,
+    pub backend_rescuing: &'static str,
+    pub backend_refreshing: &'static str,
     /// What a switch came to, on the line under the top bar after its account
     /// (`backend_said`): switched; back to the file's value, the device switched or not (the
     /// receipt does not say); nothing changed, as the device has no such backend, for the
@@ -1464,6 +1467,8 @@ pub const ZH: Labels = Labels {
     backend_kind_unread: "这台设备的种类读不懂，这一组只能看",
     backend_row_unread: "这一组有一行读不懂，只能看",
     backend_rereading: "正在读取现状，读到前不能再改",
+    backend_rescuing: "这台正在主页上做设备操作（体检、模拟器或游戏），等它结束再切",
+    backend_refreshing: "这台正在刷新画面，稍后再切",
     backend_said: "{}的设备后端：{}",
     backend_switched: "已切换，这台已用新后端重连并自检通过",
     backend_back_to_file: "已恢复为文件值",
@@ -2183,6 +2188,8 @@ pub const EN: Labels = Labels {
     backend_kind_unread: "This device's kind does not read; this group is shown only",
     backend_row_unread: "A row of this group does not read; it is shown only",
     backend_rereading: "Reading what holds now; no change until then",
+    backend_rescuing: "This device is being operated from the main page (check, emulator or game); switch once that is over",
+    backend_refreshing: "Its picture is being refreshed; switch afterwards",
     backend_said: "Device backends of {}: {}",
     backend_switched: "Switched: the device reconnected and passed its self-check on the new backends",
     backend_back_to_file: "Back to the file's value",

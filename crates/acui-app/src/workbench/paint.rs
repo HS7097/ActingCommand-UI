@@ -766,6 +766,8 @@ fn backend_item(
         | GroupState::KindUnread
         | GroupState::RowUnread
         | GroupState::Rereading
+        | GroupState::Rescuing
+        | GroupState::Refreshing
         | GroupState::OtherWrite => (
             fill(labels.backend_selfcheck, &[&selfcheck_words(labels, &selfcheck_view)]),
             selfcheck_view.entries.iter().any(|(_, status)| *status == CheckStatus::Failed),
@@ -785,6 +787,8 @@ fn backend_item(
         GroupState::Unconfirmed { over: true } | GroupState::Rereading => {
             (labels.backend_rereading, false)
         }
+        GroupState::Rescuing => (labels.backend_rescuing, false),
+        GroupState::Refreshing => (labels.backend_refreshing, false),
         GroupState::OtherWrite => (labels.backend_other_write, false),
     };
     let ask_words: Vec<SharedString> = match &edit.question {

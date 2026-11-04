@@ -45,7 +45,7 @@ use acui_source::workbench::{
 };
 
 use super::actions::{self, Actions, BackendEdit, EvidenceView};
-use super::model::Link;
+use super::model::{DeviceBusy, Link};
 use super::tools::{TaskState, WatchdogRead};
 use crate::install::ToolIssue;
 use crate::strings::{fill, Labels};
@@ -153,13 +153,15 @@ pub enum Change {
 /// `read` of the Runtime `link` names, unless the reads since failed (`failed`); its
 /// instances' own settings by the accounts `instances` lists, in that order. The evidence
 /// days are a field while the Runtime takes a change of them and tiers them advanced, with
-/// what `actions` left of it; otherwise a row as any other.
+/// what `actions` left of it; otherwise a row as any other. Each device's group goes by what
+/// else of that device is out from here, by its account (`busy`, `Model::device_busy`).
 pub fn view(
     link: &Link,
     read: Option<&ConfigRead>,
     failed: bool,
     instances: &[InstanceLive],
     actions: &Actions,
+    busy: &dyn Fn(&str) -> Option<DeviceBusy>,
 ) -> SettingsView {
     match link {
         Link::Online { .. } => {}
@@ -217,7 +219,7 @@ pub fn view(
             Some(BackendGroup {
                 account: instance.alias.clone(),
                 backends: backends.clone(),
-                edit: actions::backend_edit(backends, actions),
+                edit: actions::backend_edit(backends, actions, busy(instance.alias.as_str())),
             })
         })
         .collect();

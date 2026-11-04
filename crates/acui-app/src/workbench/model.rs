@@ -366,10 +366,13 @@ impl Model {
         )
     }
 
-    /// The settings page's rows of the Runtime's settings, and its field of the one it changes.
+    /// The settings page's rows of the Runtime's settings, and its field of the one it changes;
+    /// each device's group of its backends by what else of the device is out (`device_busy`).
     pub fn settings_view(&self) -> SettingsView {
         let read = self.config.value.as_ref();
-        settings::view(&self.link, read, self.config_failed(), &self.instances, &self.actions)
+        let busy = |alias: &str| self.device_busy(alias);
+        let failed = self.config_failed();
+        settings::view(&self.link, read, failed, &self.instances, &self.actions, &busy)
     }
 
     /// What this owner epoch's start report says of the settings.

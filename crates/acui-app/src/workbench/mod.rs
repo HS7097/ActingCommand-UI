@@ -238,6 +238,9 @@ pub fn show_page(ui: &Ui, page: Page) {
     preview::sync(ui);
     paint::picture(ui);
     if page == Page::Settings {
+        // A device's operation or refresh just pressed on the main page holds its group's switch
+        // now, not only from the next `Status`'s paint on.
+        paint::settings(ui);
         ask(ui, Read::Config.lane(), Poke::Only(Read::Config));
         ask_autostart(ui);
     }
