@@ -90,8 +90,6 @@ const INPUT_BACKEND_OPEN_FAILED: &str = "input_backend_open_failed";
 const CAPTURE_BACKEND_OPEN_FAILED: &str = "capture_backend_open_failed";
 const INPUT_CHECK_FAILED: &str = "input_check_failed";
 const CAPTURE_CHECK_FAILED: &str = "capture_check_failed";
-/// A self-check of MuMu's own pair whose configuration names no app index fails so while the
-/// game is not running too (#402 HS-3): the check's answer carries only this code.
 const PAIRED_BACKEND_OPEN_FAILED: &str = "paired_backend_open_failed";
 
 /// Which page shows.
@@ -758,11 +756,12 @@ fn op_text(labels: &Labels, op: DeviceOp) -> &'static str {
 }
 
 /// What a done operation came to, as it answered at `at`, and whether that is a failure. A check
-/// that did not pass says why, and of a discovery-bound MuMu instance what may help: a pair that
-/// did not open may only want the game started. An emulator's control the Runtime carried out
-/// says what came of its startup run, unless the emulator's state it read after is not what was
-/// asked, which the card then shows. A game's says the command went out: the picture shows where
-/// the game is.
+/// that did not pass says why, and of a discovery-bound MuMu instance what may help: a restart
+/// of its emulator. Since Runtime 0.12.40 (#402 HS-5) a game that does not run fails no open of
+/// MuMu's own pair, so a pair that did not open gets no word of the game. An emulator's control
+/// the Runtime carried out says what came of its startup run, unless the emulator's state it
+/// read after is not what was asked, which the card then shows. A game's says the command went
+/// out: the picture shows where the game is.
 fn done_text(
     ui: &Ui,
     labels: &Labels,
@@ -790,12 +789,7 @@ fn done_text(
             if rows.emulator.is_none() {
                 return (text, true);
             }
-            let hint = if failure.as_deref() == Some(PAIRED_BACKEND_OPEN_FAILED) {
-                labels.rescue_check_try_game
-            } else {
-                labels.rescue_check_try_restart
-            };
-            (fill(labels.rescue_then, &[&text, hint]), true)
+            (fill(labels.rescue_then, &[&text, labels.rescue_check_try_restart]), true)
         }
         DeviceDone::Emulator { running, startup } => {
             let stopping = op == DeviceOp::EmulatorStop;

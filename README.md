@@ -423,8 +423,9 @@ switch too (both rows together when clearing one alone could break that pair), u
 the one in effect: then the device is left as it is, and the line says only that the file's value is back.
 The result has a line of its own under the top bar, naming the account, and a refusal says why in words:
 the device is busy (with what), played, fenced, not running, or the new backend did not open (and why: for
-MuMu native touch, say, the game package configured for the device is not installed, or the game is not
-running) and the previous one is back or did not come back either. Nothing is sent again by itself: when a switch's result is unknown the
+MuMu native touch, say, the game package configured for the device is not installed; since v0.12.40 a game
+that is not running is no reason, and only a Runtime rolled back to v0.12.39 or earlier still gives it) and the
+previous one is back or did not come back either. Nothing is sent again by itself: when a switch's result is unknown the
 console waits out that whole wait and until the Runtime shows the device no longer switching, then says what holds now, with the
 device's self-check. A Runtime before 0.12.39 has no such settings, and then no group shows. After every start of the Runtime its start report is read once: when an update
 or a rollback reset settings changed online, the line under the top bar and the settings page say which;

@@ -683,8 +683,10 @@ pub struct Labels {
     /// by its claim's kind, a ladder's two as one. Why backends did not open: the step, why a
     /// capture did not open, no MuMu app index found, no cause said; joined by
     /// `backend_cause_join`. Why MuMu's own pair found no app index, each alone: the configured
-    /// game package not installed, the game not running, MuMuManager not answering, its answer
-    /// not read.
+    /// game package not installed, the game not running, MuMuManager not answering about the
+    /// game's state, its answer not read. The game not running, as that and as why a capture did
+    /// not open, comes only from a Runtime 0.12.39 or earlier, after a rollback (#402 HS-5a,
+    /// HS-5b), and its words say so.
     /// An unconfirmed switch: waiting for it to end; then, with the device's self-check now,
     /// that it did not take effect, that the settings changed, or to go by what shows.
     pub backend_said: &'static str,
@@ -972,14 +974,12 @@ pub struct Labels {
     pub rescue_sending_launch: &'static str,
     pub rescue_sending_game_restart: &'static str,
     /// A check passed (the capture's size, the time; or the time); failed (why); why, when no
-    /// code says it; what may help a discovery-bound MuMu instance, and one whose pair did not
-    /// open, which the game not running does too.
+    /// code says it; what may help a discovery-bound MuMu instance.
     pub rescue_check_passed: &'static str,
     pub rescue_check_passed_unsized: &'static str,
     pub rescue_check_failed: &'static str,
     pub rescue_check_unverified: &'static str,
     pub rescue_check_try_restart: &'static str,
-    pub rescue_check_try_game: &'static str,
     /// The emulator started, stopped, restarted (time); done, and the emulator still runs, or
     /// does not (time). After a start or a restart, what came of the startup run: it follows;
     /// the account's own pause holds it; the global pause holds it; there is none.
@@ -1711,10 +1711,10 @@ pub const ZH: Labels = Labels {
     backend_cause_capture_check: "截图自检没通过",
     backend_cause_app_index: "没取到这台的 MuMu 应用编号",
     backend_app_not_installed: "这台没装配置的游戏包",
-    backend_app_not_running: "游戏没在跑，先启动游戏",
-    backend_app_info_unavailable: "MuMu 管理器没回答游戏在不在跑",
+    backend_app_not_running: "游戏没在跑，先启动游戏（只有回退到 0.12.39 或更早的 Runtime 会这样拒绝）",
+    backend_app_info_unavailable: "MuMu 管理器没回答游戏的状态",
     backend_app_info_malformed: "MuMu 管理器回答的游戏状态读不懂",
-    backend_why_app_not_running: "游戏没在运行",
+    backend_why_app_not_running: "游戏没在运行，只有回退到 0.12.39 或更早的 Runtime 会这样说",
     backend_why_unreachable: "连不上模拟器",
     backend_why_other: "其他原因",
     backend_cause_unknown: "没有说明原因",
@@ -1890,7 +1890,6 @@ pub const ZH: Labels = Labels {
     rescue_check_failed: "设备连接检查没过：{}",
     rescue_check_unverified: "截图或触控没有验证通过",
     rescue_check_try_restart: "可以试试重启模拟器",
-    rescue_check_try_game: "游戏没开时也会这样：可以先点游戏的「启动」，不行再重启模拟器",
     rescue_done_started: "模拟器已启动（{}）",
     rescue_done_stopped: "模拟器已关闭（{}）",
     rescue_done_restarted: "模拟器已重启（{}）",
@@ -2574,10 +2573,10 @@ pub const EN: Labels = Labels {
     backend_cause_capture_check: "the capture self-check failed",
     backend_cause_app_index: "no MuMu app index was found for this device",
     backend_app_not_installed: "the game package configured for this device is not installed",
-    backend_app_not_running: "the game is not running; start the game first",
-    backend_app_info_unavailable: "MuMu Manager did not say whether the game is running",
+    backend_app_not_running: "the game is not running; start the game first (only a Runtime rolled back to 0.12.39 or earlier refuses so)",
+    backend_app_info_unavailable: "MuMu Manager did not say what state the game is in",
     backend_app_info_malformed: "MuMu Manager's answer about the game could not be read",
-    backend_why_app_not_running: "the game is not running",
+    backend_why_app_not_running: "the game is not running, which only a Runtime rolled back to 0.12.39 or earlier says",
     backend_why_unreachable: "the emulator could not be reached",
     backend_why_other: "another reason",
     backend_cause_unknown: "no cause given",
@@ -2753,7 +2752,6 @@ pub const EN: Labels = Labels {
     rescue_check_failed: "The device's connection check failed: {}",
     rescue_check_unverified: "capture or touch was not verified",
     rescue_check_try_restart: "Restarting the emulator may help",
-    rescue_check_try_game: "This also happens while the game is not running: try the game's Launch first, then restarting the emulator",
     rescue_done_started: "The emulator started ({})",
     rescue_done_stopped: "The emulator stopped ({})",
     rescue_done_restarted: "The emulator restarted ({})",

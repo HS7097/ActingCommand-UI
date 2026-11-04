@@ -77,7 +77,10 @@ const SELFCHECK_SELECTED: &str = "selected";
 /// (`backend_switch_refused`, vocabulary `backend_switch_problem`), as are the code of a missing
 /// MuMu app index with why it is missing (vocabulary `nemu_app_index_problem`, #402 HS-3) and the
 /// causes of a failed capture open (vocabulary `capture_open_cause`): all of crates the console
-/// does not link, spelled as the outcome catalog has them.
+/// does not link, spelled as the outcome catalog has them. Two of those words stay in the
+/// vocabulary and come only from a Runtime 0.12.39 or earlier, after a rollback: since 0.12.40
+/// (#402 HS-5a, HS-5b) a game that does not run fails no open, so no paired open says
+/// `display_missing` and no app index read says `application_not_running`.
 const KIND_UNSUPPORTED: &str = ConfigValueProblem::BackendKindUnsupported.as_str();
 const PAIR_REQUIRED: &str = ConfigValueProblem::BackendPairRequired.as_str();
 const NOT_ALONE: &str = ConfigValueProblem::BackendSwitchNotAlone.as_str();
@@ -924,13 +927,16 @@ pub struct OpenFailure {
 }
 
 /// Why MuMu's own pair found no MuMu app index (#402 HS-3, vocabulary `nemu_app_index_problem`):
-/// the configuration names none, and the Runtime asked MuMuManager whether the device's game runs
-/// before it opened the pair. A switch it refuses for that leaves the previous backends back.
+/// the configuration names none, and the Runtime read the state of the device's game from
+/// MuMuManager before it opened the pair. A switch it refuses for that leaves the previous
+/// backends back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppIndexProblem {
     /// `package_not_installed`: the game package configured for the device is not installed on it.
     PackageNotInstalled,
-    /// `application_not_running`: the game is installed and not running.
+    /// `application_not_running`: the game is installed and not running. Only a Runtime 0.12.39
+    /// or earlier, after a rollback, refuses so: since 0.12.40 (#402 HS-5b) a stopped game
+    /// resolves the index as a running one does.
     ApplicationNotRunning,
     /// `info_unavailable`: MuMuManager gave no answer.
     InfoUnavailable,
@@ -961,7 +967,9 @@ pub enum FailedStep {
 /// Why a capture open failed (`capture_open_cause`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureCause {
-    /// `display_missing`: the game is not running.
+    /// `display_missing`: the game is not running. Only a Runtime 0.12.39 or earlier, after a
+    /// rollback, says it: since 0.12.40 (#402 HS-5a) a paired session without the game's display
+    /// takes the main display.
     AppNotRunning,
     /// `connection_failed`: the emulator could not be reached.
     Unreachable,
