@@ -19,6 +19,7 @@ use acui_source::workbench::backends::{
     CheckStatus, FailedStep, Holder, InEffect, InstanceBackends, OpenFailure, SwitchRefusal,
     SwitchVersion,
 };
+use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
 use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::{
     PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
@@ -38,6 +39,9 @@ use super::picture::{
     Refreshed, Unread,
 };
 use super::preview;
+use super::rescue::{
+    Button, ButtonWhy, CloseWhy, RescueHold, RescueRows, RescueView, Rescued, Watch,
+};
 use super::settings::{
     self, AutostartView, BackendGroup, CheckEntry, ReportedAccount, ReportedLine, SelfCheckView,
     SettingLine, SettingsView, StartView,
@@ -48,8 +52,8 @@ use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
 use crate::{
-    AccountCard, BackendGroupItem, OverlayItem, PresetChoice, SettingItem, StatusTone, TargetItem,
-    WorkbenchPage, WorkbenchWindow,
+    AccountCard, BackendGroupItem, OverlayItem, PresetChoice, RescueBar, RescueOp, SettingItem,
+    StatusTone, TargetItem, WorkbenchPage, WorkbenchWindow,
 };
 
 /// What the technical log's lines about the settings page are under.
@@ -57,6 +61,36 @@ const SETTINGS_LOG: &str = "acui-settings";
 /// And those about the live view, and its refresh.
 const PICTURE_LOG: &str = preview::THREAD;
 const REFRESH_LOG: &str = super::refresh::THREAD;
+/// And those about the rescue bar's words (each operation's own are under its thread's name).
+const RESCUE_LOG: &str = "acui-rescue";
+
+/// The codes a device's operation is refused or fails with that the rescue bar has words of its
+/// own for, before the code table's (`rescue_code_words`); only looked up, never shown. A request
+/// that waited its turn in vain names what held the instance (`rescue_busy`).
+const LEASE_QUEUE_EXPIRED: &str = "lease_queue_expired";
+const EMULATOR_CONTROL_BUSY: &str = "emulator_control_busy";
+const EMULATOR_CONTROL_WAIT_TIMEOUT: &str = "emulator_control_wait_timeout";
+const MUMU_MANAGER_WAIT_TIMEOUT: &str = "mumu_manager_wait_timeout";
+const EMULATOR_CONTROL_ADB_NOT_READY: &str = "emulator_control_adb_not_ready";
+const EMULATOR_RESTART_STOP_FAILED: &str = "emulator_restart_stop_failed";
+const EMULATOR_RESTART_START_FAILED: &str = "emulator_restart_start_failed";
+const EMULATOR_RESTART_PREVIOUS_RUNNING: &str = "emulator_restart_previous_instance_running";
+/// Of an instance whose capability profile offers no such control, which the bar draws no
+/// button for: the log hears of one, once.
+const EMULATOR_CONTROL_UNAVAILABLE: &str = "emulator_control_unavailable";
+const EMULATOR_CONTROL_UNSUPPORTED: &str = "emulator_control_unsupported";
+const INSTANCE_NOT_RUNNING: &str = "instance_not_running";
+const APPLICATION_BACKEND_FAILED: &str = "application_backend_operation_failed";
+const APPLICATION_NOT_ASSIGNED: &str = "application_effect_requires_assigned_application";
+/// A self-check's own failures, in the settings page's words for the same step
+/// (`backend_cause_*`): the code table has only their category's.
+const INPUT_BACKEND_OPEN_FAILED: &str = "input_backend_open_failed";
+const CAPTURE_BACKEND_OPEN_FAILED: &str = "capture_backend_open_failed";
+const INPUT_CHECK_FAILED: &str = "input_check_failed";
+const CAPTURE_CHECK_FAILED: &str = "capture_check_failed";
+/// A self-check of MuMu's own pair whose configuration names no app index fails so while the
+/// game is not running too (#402 HS-3): the check's answer carries only this code.
+const PAIRED_BACKEND_OPEN_FAILED: &str = "paired_backend_open_failed";
 
 /// Which page shows.
 pub fn page(ui: &Ui) {
@@ -75,6 +109,18 @@ pub fn page_picked(page: WorkbenchPage) -> Page {
     match page {
         WorkbenchPage::Main => Page::Main,
         WorkbenchPage::Settings => Page::Settings,
+    }
+}
+
+/// The operation a button of the rescue bar names.
+pub fn rescue_picked(op: RescueOp) -> DeviceOp {
+    match op {
+        RescueOp::Check => DeviceOp::SelfCheck,
+        RescueOp::EmulatorStart => DeviceOp::EmulatorStart,
+        RescueOp::EmulatorStop => DeviceOp::EmulatorStop,
+        RescueOp::EmulatorRestart => DeviceOp::EmulatorRestart,
+        RescueOp::GameLaunch => DeviceOp::GameLaunch,
+        RescueOp::GameRestart => DeviceOp::GameRestart,
     }
 }
 
@@ -97,7 +143,7 @@ pub fn cards(ui: &Ui) {
 /// inputs were meant at, which the box beside the title turns off and on; under the frame in
 /// amber why nothing is drawn on it, and that its proportions are not among those its game's
 /// standard pack declares. Under all that the picture's refresh, which goes by what changes the
-/// picture (`refresh`).
+/// picture (`refresh`), and over the frame the rescue bar, which `refresh` paints with it.
 pub fn picture(ui: &Ui) {
     refresh(ui);
     let Some(window) = ui.workbench() else {
@@ -354,8 +400,11 @@ fn capture_words(ui: &Ui, labels: &Labels, code: Option<&str>) -> String {
 /// (UI-3c-2), pressed only when it may be; beside it why it may not, and while it cools down
 /// that it was just refreshed, never for how long; under it, on a line of its own so that
 /// neither hides the other, what the last refresh of that account came to, red when it failed.
-/// What a refresh costs is the window's own, in grey.
+/// What a refresh costs is the window's own, in grey. First the rescue bar (`rescue`): whatever
+/// holds one back may hold the other, and so a refresh pressed, landed or cooled down, an
+/// operation of the device as well, paints both.
 pub fn refresh(ui: &Ui) {
+    rescue(ui);
     let Some(window) = ui.workbench() else {
         return;
     };
@@ -400,13 +449,15 @@ fn refresh_why_not(labels: &Labels, why: RefreshWhyNot) -> String {
     }
 }
 
-/// The same words the card has for it.
+/// The same words the card has for it; for this console's own work with the device, which no
+/// card says, words of its own.
 fn doing_text(labels: &Labels, doing: Doing) -> &'static str {
     match doing {
         Doing::Reconnecting => labels.card_reconnecting,
         Doing::SelfChecking => labels.card_self_checking,
         Doing::ControllingEmulator => labels.card_controlling_emulator,
         Doing::Climbing => labels.card_climbing,
+        Doing::OperatingDevice => labels.refresh_operating_device,
     }
 }
 
@@ -449,6 +500,427 @@ fn refusal_words(ui: &Ui, labels: &Labels, host: Option<&str>, class: Option<&st
         report::log_quiet(REFRESH_LOG, &line);
     }
     labels.refresh_cause_unknown.to_owned()
+}
+
+/// Under the live view's title, while an account's picture shows on the main page: its rescue
+/// bar (UI-3e1-a), from its view. While no Runtime answers, only that no device can be operated.
+/// Else, of an account that drives a device of its own, its reconnect and check, its emulator's
+/// row while the Runtime offers its control, and its game's: each button pressed only when it may
+/// be, and at the row's end why one may not, or what the check does. While the account does
+/// something, "close this task", always off, and why. Then why every device button is off, or the
+/// question a press that closes the game asks; and what the account's last operation came to,
+/// red when it failed. Set only when anything in it changed.
+pub fn rescue(ui: &Ui) {
+    let Some(window) = ui.workbench() else {
+        return;
+    };
+    let labels = ui.labels();
+    let (alias, view) = {
+        let model = ui.model.borrow();
+        let alias = model.picture_account().map(str::to_owned);
+        let view = alias.as_deref().and_then(|alias| model.rescue_view(alias));
+        (alias, view)
+    };
+    let bar = match (alias, view) {
+        (Some(alias), Some(RescueView::Online(rows))) => {
+            rescue_told(ui, &alias, &rows);
+            rescue_bar(ui, labels, &alias, &rows)
+        }
+        (_, Some(RescueView::Offline)) => RescueBar {
+            shown: true,
+            reason: labels.rescue_offline.into(),
+            ..RescueBar::default()
+        },
+        (_, None) | (None, Some(RescueView::Online(_))) => RescueBar::default(),
+    };
+    if window.get_rescue() != bar {
+        window.set_rescue(bar);
+    }
+}
+
+/// The bar's words for the rows of `alias`'s view. Why every device button is off stands only
+/// over device buttons: a fixture's account has none, only "close this task" with its own reason.
+fn rescue_bar(ui: &Ui, labels: &Labels, alias: &str, rows: &RescueRows) -> RescueBar {
+    let offered = |button: Option<Button>| button.is_some_and(|button| button.offered);
+    let devices = rows.check.is_some() || rows.emulator.is_some() || rows.game.is_some();
+    let reason = match rows.hold {
+        Some(hold) if devices => hold_text(labels, hold),
+        Some(_) | None => String::new(),
+    };
+    let (check_words, check_urgent) = check_note(labels, rows);
+    let emulator = rows.emulator;
+    let (confirm, confirm_label) = confirm_text(labels, alias, rows);
+    let (line, failed) = match &rows.said {
+        Some(said) => rescued_text(ui, labels, rows, said),
+        None => (String::new(), false),
+    };
+    RescueBar {
+        shown: true,
+        reason: reason.into(),
+        check_shown: rows.check.is_some(),
+        check_offered: offered(rows.check),
+        check_note: check_words.into(),
+        check_urgent,
+        emulator_shown: emulator.is_some(),
+        start_shown: emulator.is_some_and(|row| row.start.is_some()),
+        start_offered: offered(emulator.and_then(|row| row.start)),
+        stop_shown: emulator.is_some_and(|row| row.stop.is_some()),
+        stop_offered: offered(emulator.and_then(|row| row.stop)),
+        restart_shown: emulator.is_some_and(|row| row.restart.is_some()),
+        restart_offered: offered(emulator.and_then(|row| row.restart)),
+        emulator_note: emulator_note(labels, rows).into(),
+        game_shown: rows.game.is_some(),
+        launch_offered: offered(rows.game.map(|row| row.launch)),
+        game_restart_offered: offered(rows.game.map(|row| row.restart)),
+        game_note: game_note(labels, rows).into(),
+        close_shown: rows.close.is_some(),
+        close_reason: rows.close.map_or("", |why| close_text(labels, why)).into(),
+        confirm: confirm.into(),
+        confirm_label: confirm_label.into(),
+        line: line.into(),
+        failed,
+    }
+}
+
+/// Why every device button of the account is off. An operation out says so on the line of what
+/// it came to; the account's doing is in the card's words.
+fn hold_text(labels: &Labels, hold: RescueHold) -> String {
+    match hold {
+        RescueHold::GateShut => labels.rescue_handing_over.to_owned(),
+        RescueHold::Out(_) => String::new(),
+        RescueHold::Refreshing => labels.rescue_refreshing.to_owned(),
+        RescueHold::Switching => labels.rescue_switching.to_owned(),
+        RescueHold::CoolingDown => labels.rescue_cooling.to_owned(),
+        RescueHold::Running => labels.rescue_running.to_owned(),
+        RescueHold::Recovering => labels.rescue_recovering.to_owned(),
+        RescueHold::Busy(doing) => fill(labels.rescue_busy_doing, &[doing_text(labels, doing)]),
+    }
+}
+
+/// Beside the check, and whether in amber: why it cannot be pressed, by its own reading, with
+/// when that was seen; that it is the thing to do first, the device being fenced; or what it
+/// does. Nothing while every button is off: the reason line says why.
+fn check_note(labels: &Labels, rows: &RescueRows) -> (String, bool) {
+    let Some(button) = rows.check else {
+        return (String::new(), false);
+    };
+    match button.why_not {
+        Some(ButtonWhy::EmulatorOff { at_ms }) => {
+            (fill(labels.rescue_emulator_off_first, &[&format_minute(at_ms)]), false)
+        }
+        // The check has no other reason of its own.
+        Some(ButtonWhy::EmulatorOn { .. } | ButtonWhy::Fault) => (String::new(), false),
+        None if !button.offered => (String::new(), false),
+        None if rows.check_urgent => (labels.rescue_check_first.to_owned(), true),
+        None => (labels.rescue_check_note.to_owned(), false),
+    }
+}
+
+/// Beside the emulator's buttons: why one cannot be pressed, as the emulator was last read, and
+/// when; off, that a start is the way, while one can be pressed.
+fn emulator_note(labels: &Labels, rows: &RescueRows) -> String {
+    let Some(row) = rows.emulator else {
+        return String::new();
+    };
+    let why = [row.start, row.stop, row.restart]
+        .into_iter()
+        .flatten()
+        .find_map(|button| button.why_not);
+    match why {
+        Some(ButtonWhy::EmulatorOn { at_ms }) => {
+            fill(labels.rescue_seen_on, &[&format_minute(at_ms)])
+        }
+        Some(ButtonWhy::EmulatorOff { at_ms }) => {
+            let start = row.start.is_some_and(|button| button.offered);
+            let template = if start { labels.rescue_seen_off_start } else { labels.rescue_seen_off };
+            fill(template, &[&format_minute(at_ms)])
+        }
+        Some(ButtonWhy::Fault) | None => String::new(),
+    }
+}
+
+/// Beside the game's buttons, which share their reason: the emulator seen off, or a fault to deal
+/// with first.
+fn game_note(labels: &Labels, rows: &RescueRows) -> String {
+    match rows.game.and_then(|row| row.launch.why_not) {
+        Some(ButtonWhy::EmulatorOff { at_ms }) => {
+            fill(labels.rescue_emulator_off_first, &[&format_minute(at_ms)])
+        }
+        Some(ButtonWhy::Fault) => labels.rescue_game_fault.to_owned(),
+        Some(ButtonWhy::EmulatorOn { .. }) | None => String::new(),
+    }
+}
+
+fn close_text(labels: &Labels, why: CloseWhy) -> &'static str {
+    match why {
+        CloseWhy::NotHere => labels.rescue_close_not_here,
+        CloseWhy::SystemFlow => labels.rescue_close_system,
+        CloseWhy::NoTask => labels.rescue_close_no_task,
+    }
+}
+
+/// The question a press that closes the game asks, naming the account, and its confirming
+/// button's words. A stop says too when the emulator's watch starts the emulator again, by the
+/// setting's own name, or that it may when that does not read.
+fn confirm_text(labels: &Labels, alias: &str, rows: &RescueRows) -> (String, &'static str) {
+    match rows.confirming {
+        Some(DeviceOp::EmulatorStop) => {
+            let setting = labels.setting_start_emulator;
+            let text = match rows.watch {
+                Watch::Restarts => fill(labels.rescue_confirm_stop_watched, &[alias, setting]),
+                Watch::Unknown => fill(labels.rescue_confirm_stop_maybe_watched, &[alias, setting]),
+                Watch::Stays => fill(labels.rescue_confirm_stop, &[alias]),
+            };
+            (text, labels.rescue_confirm_stop_button)
+        }
+        Some(DeviceOp::EmulatorRestart) => {
+            (fill(labels.rescue_confirm_restart, &[alias]), labels.rescue_confirm_restart_button)
+        }
+        Some(DeviceOp::GameRestart) => {
+            let text = fill(labels.rescue_confirm_game_restart, &[alias]);
+            (text, labels.rescue_confirm_restart_button)
+        }
+        // These go out at the first press.
+        Some(DeviceOp::SelfCheck | DeviceOp::EmulatorStart | DeviceOp::GameLaunch) | None => {
+            (String::new(), "")
+        }
+    }
+}
+
+/// What the account's last operation came to in words, and whether that is a failure.
+fn rescued_text(ui: &Ui, labels: &Labels, rows: &RescueRows, said: &Rescued) -> (String, bool) {
+    match said {
+        Rescued::Sending(op) => (sending_text(labels, *op).to_owned(), false),
+        Rescued::Done { op, at_ms, done, .. } => {
+            done_text(ui, labels, rows, *op, &format_second(*at_ms), done)
+        }
+        Rescued::Refused { op, host, class, holder, denied } => {
+            let codes = (host.as_deref(), class.as_deref());
+            (refused_text(ui, labels, *op, codes, holder.as_ref(), *denied), true)
+        }
+        Rescued::Unconfirmed(_) => (labels.rescue_unconfirmed.to_owned(), true),
+        Rescued::NotSent(_) => (labels.rescue_not_sent.to_owned(), true),
+        Rescued::NoThread { error } => {
+            let why = fill(labels.thread_failed, &[error.as_str()]);
+            (fill(labels.rescue_no_thread, &[why.as_str()]), true)
+        }
+        Rescued::Restarted => (labels.rescue_runtime_restarted.to_owned(), false),
+    }
+}
+
+fn sending_text(labels: &Labels, op: DeviceOp) -> &'static str {
+    match op {
+        DeviceOp::SelfCheck => labels.rescue_sending_check,
+        DeviceOp::EmulatorStart => labels.rescue_sending_start,
+        DeviceOp::EmulatorStop => labels.rescue_sending_stop,
+        DeviceOp::EmulatorRestart => labels.rescue_sending_restart,
+        DeviceOp::GameLaunch => labels.rescue_sending_launch,
+        DeviceOp::GameRestart => labels.rescue_sending_game_restart,
+    }
+}
+
+/// The operation, as a refusal names it.
+fn op_text(labels: &Labels, op: DeviceOp) -> &'static str {
+    match op {
+        DeviceOp::SelfCheck => labels.rescue_op_check,
+        DeviceOp::EmulatorStart => labels.rescue_op_start,
+        DeviceOp::EmulatorStop => labels.rescue_op_stop,
+        DeviceOp::EmulatorRestart => labels.rescue_op_restart,
+        DeviceOp::GameLaunch => labels.rescue_op_launch,
+        DeviceOp::GameRestart => labels.rescue_op_game_restart,
+    }
+}
+
+/// What a done operation came to, as it answered at `at`, and whether that is a failure. A check
+/// that did not pass says why, and of a discovery-bound MuMu instance what may help: a pair that
+/// did not open may only want the game started. An emulator's control the Runtime carried out
+/// says what came of its startup run, unless the emulator's state it read after is not what was
+/// asked, which the card then shows. A game's says the command went out: the picture shows where
+/// the game is.
+fn done_text(
+    ui: &Ui,
+    labels: &Labels,
+    rows: &RescueRows,
+    op: DeviceOp,
+    at: &str,
+    done: &DeviceDone,
+) -> (String, bool) {
+    match done {
+        DeviceDone::SelfCheck { passed: true, size, .. } => {
+            let text = match size {
+                Some((width, height)) => {
+                    fill(labels.rescue_check_passed, &[&format!("{width}×{height}"), at])
+                }
+                None => fill(labels.rescue_check_passed_unsized, &[at]),
+            };
+            (text, false)
+        }
+        DeviceDone::SelfCheck { passed: false, failure, .. } => {
+            let words = match failure.as_deref() {
+                Some(code) => rescue_code_words(ui, labels, op, (Some(code), None)),
+                None => labels.rescue_check_unverified.to_owned(),
+            };
+            let text = fill(labels.rescue_check_failed, &[&words]);
+            if rows.emulator.is_none() {
+                return (text, true);
+            }
+            let hint = if failure.as_deref() == Some(PAIRED_BACKEND_OPEN_FAILED) {
+                labels.rescue_check_try_game
+            } else {
+                labels.rescue_check_try_restart
+            };
+            (fill(labels.rescue_then, &[&text, hint]), true)
+        }
+        DeviceDone::Emulator { running, startup } => {
+            let stopping = op == DeviceOp::EmulatorStop;
+            if *running == stopping {
+                let template = if *running {
+                    labels.rescue_done_still_running
+                } else {
+                    labels.rescue_done_not_running
+                };
+                return (fill(template, &[at]), true);
+            }
+            if stopping {
+                return (fill(labels.rescue_done_stopped, &[at]), false);
+            }
+            let template = if op == DeviceOp::EmulatorRestart {
+                labels.rescue_done_restarted
+            } else {
+                labels.rescue_done_started
+            };
+            let startup = match startup {
+                Startup::Scheduled => labels.rescue_startup_scheduled,
+                Startup::HeldByOwnPause => labels.rescue_startup_own_pause,
+                Startup::HeldByAllPause => labels.rescue_startup_all_pause,
+                Startup::None => labels.rescue_startup_none,
+            };
+            (fill(labels.rescue_then, &[&fill(template, &[at]), startup]), false)
+        }
+        DeviceDone::Game => {
+            let template = if op == DeviceOp::GameRestart {
+                labels.rescue_done_game_restarted
+            } else {
+                labels.rescue_done_launched
+            };
+            (fill(template, &[at]), false)
+        }
+    }
+}
+
+/// Why the Runtime did not do it, with the host's code and the Runtime's (`codes`): that the
+/// account was busy, and with what, for a request that waited its turn in vain, and that nothing
+/// was done; else the operation, why in plain words, and that nothing was done when the Runtime
+/// denied it, or that the card says how the device is when it failed on the way.
+fn refused_text(
+    ui: &Ui,
+    labels: &Labels,
+    op: DeviceOp,
+    codes: (Option<&str>, Option<&str>),
+    holder: Option<&Holder>,
+    denied: bool,
+) -> String {
+    let (host, class) = codes;
+    if holder.is_some() || host == Some(LEASE_QUEUE_EXPIRED) || class == Some(LEASE_QUEUE_EXPIRED) {
+        // "Another backend switch" is a switch's word for it: here it is the only one.
+        let holder = match holder {
+            Some(Holder::BackendSwitch) => labels.rescue_holder_backend_switch,
+            Some(holder) => holder_words(labels, holder),
+            None => labels.backend_holder_other,
+        };
+        return fill(labels.rescue_busy, &[holder]);
+    }
+    let words = rescue_code_words(ui, labels, op, codes);
+    let end = if denied { labels.rescue_nothing_done } else { labels.rescue_see_card };
+    fill(labels.rescue_refused, &[op_text(labels, op), &words, end])
+}
+
+/// A refused or failed operation's reason in plain words, never its code: the bar's own words for
+/// a code it knows, by the host's code first and then the Runtime's (`codes`); else the code
+/// table's, whose category speaks for a code it gives no words of its own; else that it is not
+/// known here, which the log hears of once (the operation's own line has the codes already). A
+/// refusal of an emulator's control the capability profile offers is out of the ordinary, as the
+/// bar drew its button by that profile: the log hears of it once, as the problem it is.
+fn rescue_code_words(
+    ui: &Ui,
+    labels: &Labels,
+    op: DeviceOp,
+    codes: (Option<&str>, Option<&str>),
+) -> String {
+    let (host, class) = codes;
+    let known: Vec<&str> = [host, class].into_iter().flatten().collect();
+    for code in known.iter().copied() {
+        if code == EMULATOR_CONTROL_UNAVAILABLE || code == EMULATOR_CONTROL_UNSUPPORTED {
+            let line = format!(
+                "{op:?} refused with {code}, although the instance's capability profile offers \
+                 its emulator's control"
+            );
+            if ui.model.borrow_mut().first_told(&line) {
+                report::log(RESCUE_LOG, &line);
+            }
+        }
+        if let Some(words) = rescue_own_words(labels, code) {
+            return words.to_owned();
+        }
+    }
+    for code in known.iter().copied() {
+        match explain(code, labels.tongue.outcome_tongue()) {
+            Ok(Some(words)) => return words.short.to_owned(),
+            Ok(None) => {}
+            Err(error) => return fill(labels.outcome_table_unusable, &[&error.to_string()]),
+        }
+    }
+    let line = format!("no words for {op:?} refused or failed with host code {host:?}, code {class:?}");
+    if ui.model.borrow_mut().first_told(&line) {
+        report::log_quiet(RESCUE_LOG, &line);
+    }
+    labels.rescue_cause_unknown.to_owned()
+}
+
+/// The bar's own words for `code`, when it has any.
+fn rescue_own_words(labels: &Labels, code: &str) -> Option<&'static str> {
+    let words = match code {
+        EMULATOR_CONTROL_BUSY => labels.rescue_emulator_busy,
+        EMULATOR_CONTROL_WAIT_TIMEOUT | MUMU_MANAGER_WAIT_TIMEOUT => {
+            labels.rescue_emulator_not_ready
+        }
+        EMULATOR_CONTROL_ADB_NOT_READY => labels.rescue_adb_not_ready,
+        EMULATOR_RESTART_STOP_FAILED => labels.rescue_old_not_stopped,
+        EMULATOR_RESTART_START_FAILED => labels.rescue_new_not_started,
+        EMULATOR_RESTART_PREVIOUS_RUNNING => labels.rescue_old_still_running,
+        EMULATOR_CONTROL_UNAVAILABLE | EMULATOR_CONTROL_UNSUPPORTED => {
+            labels.rescue_not_discovered
+        }
+        INSTANCE_NOT_RUNNING => labels.rescue_instance_not_running,
+        APPLICATION_BACKEND_FAILED => labels.rescue_game_command_failed,
+        APPLICATION_NOT_ASSIGNED => labels.rescue_no_game,
+        INPUT_BACKEND_OPEN_FAILED => labels.backend_cause_touch_open,
+        CAPTURE_BACKEND_OPEN_FAILED => labels.backend_cause_capture_open,
+        PAIRED_BACKEND_OPEN_FAILED => labels.backend_cause_nemu_open,
+        INPUT_CHECK_FAILED => labels.backend_cause_touch_check,
+        CAPTURE_CHECK_FAILED => labels.backend_cause_capture_check,
+        _ => return None,
+    };
+    Some(words)
+}
+
+/// What the status left out of an account's rows, into the log once for each account: no
+/// provenance, which a Runtime states of every instance, so no device button is drawn, as the
+/// problem it is; no capability profile of an instance that drives a device of its own, so no
+/// emulator's row, which is so for all but a discovery-bound MuMu instance's, quietly.
+fn rescue_told(ui: &Ui, alias: &str, rows: &RescueRows) {
+    if rows.unstated.provenance {
+        let line = format!("{alias}: its status states no backend provenance: no device button");
+        if ui.model.borrow_mut().first_told(&line) {
+            report::log(RESCUE_LOG, &line);
+        }
+    }
+    if rows.unstated.capabilities && rows.check.is_some() {
+        let line = format!("{alias}: its status states no capability profile: no emulator's row");
+        if ui.model.borrow_mut().first_told(&line) {
+            report::log_quiet(RESCUE_LOG, &line);
+        }
+    }
 }
 
 /// The top bar's presets: the one in effect marked, what is in effect in words under them,
@@ -764,6 +1236,8 @@ fn backend_item(
         | GroupState::KindUnread
         | GroupState::RowUnread
         | GroupState::Rereading
+        | GroupState::Rescuing
+        | GroupState::Refreshing
         | GroupState::OtherWrite => (
             fill(labels.backend_selfcheck, &[&selfcheck_words(labels, &selfcheck_view)]),
             selfcheck_view.entries.iter().any(|(_, status)| *status == CheckStatus::Failed),
@@ -783,6 +1257,8 @@ fn backend_item(
         GroupState::Unconfirmed { over: true } | GroupState::Rereading => {
             (labels.backend_rereading, false)
         }
+        GroupState::Rescuing => (labels.backend_rescuing, false),
+        GroupState::Refreshing => (labels.backend_refreshing, false),
         GroupState::OtherWrite => (labels.backend_other_write, false),
     };
     let ask_words: Vec<SharedString> = match &edit.question {

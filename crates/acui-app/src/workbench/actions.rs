@@ -74,7 +74,7 @@ use acui_source::workbench::{
 };
 use acui_source::{resume_paused, ClientFailure, PauseFact, PauseTarget, ResumeOutcome};
 
-use super::model::Link;
+use super::model::{DeviceBusy, Link};
 use super::read::panic_message;
 use super::settings::{BackendGroup, SettingsView};
 use super::{failure_line, paint};
@@ -473,6 +473,24 @@ impl Actions {
         self.backend_out = None;
         self.switch = None;
         self.said = said;
+    }
+
+    /// The device a switch of backends sent from here may be acting on now, by instance id: the
+    /// one out, or the one whose answer was lost while no `Status` has shown it over. Not one
+    /// shown over that awaits its snapshot, nor a change that met the settings moved on, which
+    /// switched nothing (`Model::device_busy`).
+    pub fn switching(&self) -> Option<&str> {
+        match &self.flow {
+            ConfigFlow::InFlight(Field::Backends) => {
+                self.backend_out.as_ref().map(|(target, _, _)| target.instance_id())
+            }
+            ConfigFlow::Rereading(Reread::Switch, _) => self
+                .switch
+                .as_ref()
+                .filter(|pending| !pending.over)
+                .map(|pending| pending.switch.instance_id()),
+            _ => None,
+        }
     }
 
     /// A fact snapshot that counts: of this epoch, and read after any write that landed.
@@ -978,6 +996,10 @@ pub enum GroupState {
     Unconfirmed { over: bool },
     /// The settings had moved on when it was sent: a snapshot is awaited.
     Rereading,
+    /// An operation of the device is out from the main page (UI-3e1-a): no switch meanwhile.
+    Rescuing,
+    /// A refresh of its account's picture is out: no switch meanwhile.
+    Refreshing,
     /// Another change of settings is out or awaits its snapshot.
     OtherWrite,
 }
@@ -987,8 +1009,14 @@ pub enum GroupState {
 /// effect asks for nothing. MuMu's own touch picked leaves its capture only MuMu's own. "Apply"
 /// sends what the boxes ask for, one key or both, unless a capture picked under MuMu's own touch
 /// in effect waits for the question's touch. A draft whose switch was taken is not sent again.
-pub fn backend_edit(backends: &InstanceBackends, actions: &Actions) -> BackendEdit {
-    let state = group_state(backends, actions);
+/// Nothing is sent while another work of the same device is out from here (`device`,
+/// `Model::device_busy`).
+pub fn backend_edit(
+    backends: &InstanceBackends,
+    actions: &Actions,
+    device: Option<DeviceBusy>,
+) -> BackendEdit {
+    let state = group_state(backends, actions, device);
     let open = state == GroupState::Open;
     let draft = actions.backend_drafts.get(backends.instance_id());
     let sendable = open && !draft.is_some_and(|draft| draft.applied);
@@ -1144,8 +1172,14 @@ fn use_file_value(
 }
 
 /// Where the group of `backends` stands: its own switch out or awaited first, then what keeps
-/// it shown only, then another change of settings out.
-fn group_state(backends: &InstanceBackends, actions: &Actions) -> GroupState {
+/// it shown only, then the device's operation or its picture's refresh out from here
+/// (`device`), then another change of settings out. Of a switch, `device` names only this
+/// group's own, which the first already said.
+fn group_state(
+    backends: &InstanceBackends,
+    actions: &Actions,
+    device: Option<DeviceBusy>,
+) -> GroupState {
     let ours = actions.flow.field() == Some(Field::Backends)
         && actions.backend_said_of.as_deref() == Some(backends.instance_id());
     if ours {
@@ -1163,6 +1197,10 @@ fn group_state(backends: &InstanceBackends, actions: &Actions) -> GroupState {
         GroupState::KindUnread
     } else if backends.target().is_none() {
         GroupState::RowUnread
+    } else if let Some(DeviceBusy::Rescue(_)) = device {
+        GroupState::Rescuing
+    } else if device == Some(DeviceBusy::Refresh) {
+        GroupState::Refreshing
     } else if !actions.flow.open() {
         GroupState::OtherWrite
     } else {

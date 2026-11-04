@@ -18,6 +18,11 @@
 //!    history, which no write changes, so no picture read is let go for a write, and
 //!    nothing the picture does counts as one, not even its refresh (`refresh`): the frame
 //!    that captures is one more record for the picture to read.
+//! 6. A person's operation of a device (`rescue`) is a write: its answer counts one (`wrote`),
+//!    since it changes what the reads show of the account, its activity, its emulator's
+//!    reading and its fence. Rule 5 stands: a refresh is still none. Neither goes out while
+//!    the other, or a switch of that device's backends, is out for the same account
+//!    (`Model::device_busy`, the one place that says so).
 //!
 //! Another thread runs the Runtime's `actingctl` (`tools`), only when asked: `packs` for the
 //! task names and the picture proportions each game's standard pack declares, and `watchdog
@@ -44,7 +49,9 @@
 //! (`picture`): the one picked on its card (`account_picked`) or named by `--account`, else
 //! the first. Whether the picture thread follows it, and which, is told the thread in one
 //! place (`preview::sync`), each time that may change: a `Status` read, a page gone to, the
-//! window minimized or back, a card picked, the reading thread gone.
+//! window minimized or back, a card picked, the reading thread gone. Over that picture, the same
+//! account's rescue bar (`rescue`), painted with the picture's refresh whenever that is, and once
+//! more as a fact snapshot lands, which its question before an emulator's stop reads.
 //!
 //! A read that fails is no event to log each time: the log gets a change, as it
 //! happens, so a failure that repeats every few seconds is one line, and its end
@@ -58,6 +65,7 @@ pub mod picture;
 pub mod preview;
 pub mod read;
 pub mod refresh;
+pub mod rescue;
 pub mod settings;
 pub mod tools;
 
@@ -232,6 +240,9 @@ pub fn show_page(ui: &Ui, page: Page) {
     preview::sync(ui);
     paint::picture(ui);
     if page == Page::Settings {
+        // A device's operation or refresh just pressed on the main page holds its group's switch
+        // now, not only from the next `Status`'s paint on.
+        paint::settings(ui);
         ask(ui, Read::Config.lane(), Poke::Only(Read::Config));
         ask_autostart(ui);
     }
@@ -447,9 +458,10 @@ fn live_landed(ui: &Ui, read: LiveRead) {
         poke(ui, Lane::Slow);
         ask_start(ui);
     }
-    // No refresh of the picture out holds across a restart.
+    // No refresh of the picture out holds across a restart, nor any operation of a device.
     if landed.epoch_changed {
         refresh::restarted(ui);
+        rescue::restarted(ui);
     }
     // An unconfirmed switch shown over: only a snapshot begun after this says what came of it.
     if landed.switch_over {
@@ -535,8 +547,9 @@ fn explain_landed(ui: &Ui, read: Result<ExplainRead, ClientFailure>) {
 }
 
 /// The servers are on the cards, the version says whether the finishing count holds,
-/// the preset is on the top bar, and the rest of the settings on the settings page. A
-/// read that answers is no event for the log, only a change of how it went.
+/// the preset is on the top bar, and the rest of the settings on the settings page; and
+/// whether the emulator's watch starts an emulator again, on the rescue bar's question before
+/// a stop. A read that answers is no event for the log, only a change of how it went.
 fn config_landed(ui: &Ui, read: Result<ConfigRead, ClientFailure>) {
     let landed = ui.model.borrow_mut().apply_config(read, Instant::now());
     let thread = Lane::Slow.name();
@@ -561,6 +574,7 @@ fn config_landed(ui: &Ui, read: Result<ConfigRead, ClientFailure>) {
     paint::actions(ui);
     paint::preset(ui);
     paint::settings(ui);
+    paint::rescue(ui);
 }
 
 fn panicked(ui: &Ui, read: Read, message: String) {

@@ -173,6 +173,44 @@ export struct BackendGroupItem {
     status-failed: bool,
 }
 
+// The rescue bar of the account whose picture shows (UI-3e1-a), in words: whether it shows; why
+// every device button is off, or that no Runtime answers. "Reconnect and check", whether it can be
+// pressed, and at its row's end why not or what it does, amber when it is the thing to do first.
+// The emulator's row, each of its three buttons where its control is offered and whether it can
+// be pressed, and at the row's end why one cannot. The game's row, its two buttons, and why not.
+// "Close this task", always off, and why, while the account does something. The question a press
+// that closes the game asks, and its confirming button's words. What the last operation came to,
+// red when it failed.
+export struct RescueBar {
+    shown: bool,
+    reason: string,
+    check-shown: bool,
+    check-offered: bool,
+    check-note: string,
+    check-urgent: bool,
+    emulator-shown: bool,
+    start-shown: bool,
+    start-offered: bool,
+    stop-shown: bool,
+    stop-offered: bool,
+    restart-shown: bool,
+    restart-offered: bool,
+    emulator-note: string,
+    game-shown: bool,
+    launch-offered: bool,
+    game-restart-offered: bool,
+    game-note: string,
+    close-shown: bool,
+    close-reason: string,
+    confirm: string,
+    confirm-label: string,
+    line: string,
+    failed: bool,
+}
+
+// Which of the rescue bar's buttons was pressed.
+export enum RescueOp { check, emulator-start, emulator-stop, emulator-restart, game-launch, game-restart }
+
 export struct OverlayItem {
     kind: string,
     x: float,
@@ -291,6 +329,18 @@ export global Strings {
     // grey what a refresh costs.
     in property <string> refresh-frame;
     in property <string> refresh-cost;
+    // The rescue bar under the live view's title: "reconnect and check"; the emulator's row, its
+    // caption and its three buttons; the game's row, its caption and its two buttons; "close
+    // this task".
+    in property <string> rescue-check;
+    in property <string> rescue-emulator;
+    in property <string> rescue-emulator-start;
+    in property <string> rescue-emulator-stop;
+    in property <string> rescue-emulator-restart;
+    in property <string> rescue-game;
+    in property <string> rescue-game-launch;
+    in property <string> rescue-game-restart;
+    in property <string> rescue-close-task;
     // The settings page's field of the evidence days: its name, which also names the field
     // for a screen reader, the unit after it and the button that sends it. The button that
     // hides the start report's notice.
@@ -1563,6 +1613,9 @@ export component WorkbenchWindow inherits Window {
     in property <string> refresh-reason;
     in property <string> refresh-line;
     in property <bool> refresh-failed;
+    // Between the title and the frame, while the main page shows that account's picture: its
+    // rescue bar, in words.
+    in property <RescueBar> rescue;
     // The Runtime's configuration file an instance is added to by hand,
     // selectable so it can be copied; or why there is none.
     in property <string> config-path;
@@ -1617,6 +1670,10 @@ export component WorkbenchWindow inherits Window {
     callback picture-overlays-toggled(bool);
     // The button under the picture that refreshes it.
     callback refresh-frame();
+    // A button of the rescue bar; its confirmation's button, and "cancel".
+    callback rescue-pressed(RescueOp);
+    callback rescue-confirmed();
+    callback rescue-cancelled();
     callback start-runtime();
     callback pause-all();
     callback resume-all();
@@ -2026,8 +2083,158 @@ export component WorkbenchWindow inherits Window {
                                             }
                                         }
                                     }
-                                    // UI-3e1's rescue bar goes here, between the title and the
-                                    // picture.
+                                    // The account's rescue bar (UI-3e1-a), between the title and the
+                                    // frame: each button pressed only when it can be, each row
+                                    // saying at its end why one cannot, cut short where the column
+                                    // is narrow. Then why all are off, or the question a press
+                                    // that closes the game asks, and what the last operation came
+                                    // to, which wrap.
+                                    if root.rescue.shown && root.rescue.check-shown: HorizontalLayout {
+                                        spacing: 14px;
+                                        vertical-stretch: 0;
+                                        SkinButton {
+                                            text: Strings.rescue-check;
+                                            enabled: root.rescue.check-offered;
+                                            clicked => {
+                                                root.rescue-pressed(RescueOp.check);
+                                            }
+                                        }
+                                        Text {
+                                            text: root.rescue.check-note;
+                                            font-size: Scale.body-font;
+                                            color: root.rescue.check-urgent ? Severity.warning : Look.text-secondary;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            min-width: 0px;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    if root.rescue.shown && root.rescue.emulator-shown: HorizontalLayout {
+                                        spacing: 8px;
+                                        vertical-stretch: 0;
+                                        Text {
+                                            text: Strings.rescue-emulator;
+                                            font-size: Scale.body-font;
+                                            color: Look.text;
+                                            vertical-alignment: center;
+                                            min-width: self.preferred-width;
+                                            horizontal-stretch: 0;
+                                        }
+                                        if root.rescue.start-shown: SkinButton {
+                                            text: Strings.rescue-emulator-start;
+                                            enabled: root.rescue.start-offered;
+                                            clicked => {
+                                                root.rescue-pressed(RescueOp.emulator-start);
+                                            }
+                                        }
+                                        if root.rescue.stop-shown: SkinButton {
+                                            text: Strings.rescue-emulator-stop;
+                                            enabled: root.rescue.stop-offered;
+                                            clicked => {
+                                                root.rescue-pressed(RescueOp.emulator-stop);
+                                            }
+                                        }
+                                        if root.rescue.restart-shown: SkinButton {
+                                            text: Strings.rescue-emulator-restart;
+                                            enabled: root.rescue.restart-offered;
+                                            clicked => {
+                                                root.rescue-pressed(RescueOp.emulator-restart);
+                                            }
+                                        }
+                                        Text {
+                                            text: root.rescue.emulator-note;
+                                            font-size: Scale.body-font;
+                                            color: Look.text-secondary;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            min-width: 0px;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    if root.rescue.shown && root.rescue.game-shown: HorizontalLayout {
+                                        spacing: 8px;
+                                        vertical-stretch: 0;
+                                        Text {
+                                            text: Strings.rescue-game;
+                                            font-size: Scale.body-font;
+                                            color: Look.text;
+                                            vertical-alignment: center;
+                                            min-width: self.preferred-width;
+                                            horizontal-stretch: 0;
+                                        }
+                                        SkinButton {
+                                            text: Strings.rescue-game-launch;
+                                            enabled: root.rescue.launch-offered;
+                                            clicked => {
+                                                root.rescue-pressed(RescueOp.game-launch);
+                                            }
+                                        }
+                                        SkinButton {
+                                            text: Strings.rescue-game-restart;
+                                            enabled: root.rescue.game-restart-offered;
+                                            clicked => {
+                                                root.rescue-pressed(RescueOp.game-restart);
+                                            }
+                                        }
+                                        Text {
+                                            text: root.rescue.game-note;
+                                            font-size: Scale.body-font;
+                                            color: Look.text-secondary;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            min-width: 0px;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    // Never pressed in this version: shown so that why is said.
+                                    if root.rescue.shown && root.rescue.close-shown: HorizontalLayout {
+                                        spacing: 14px;
+                                        vertical-stretch: 0;
+                                        SkinButton {
+                                            text: Strings.rescue-close-task;
+                                            enabled: false;
+                                        }
+                                        Text {
+                                            text: root.rescue.close-reason;
+                                            font-size: Scale.body-font;
+                                            color: Look.text-secondary;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            min-width: 0px;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    if root.rescue.shown && root.rescue.reason != "": Notice {
+                                        text: root.rescue.reason;
+                                    }
+                                    // In two steps: only the confirmation sends it.
+                                    if root.rescue.shown && root.rescue.confirm != "": HorizontalLayout {
+                                        spacing: 14px;
+                                        vertical-stretch: 0;
+                                        Notice {
+                                            text: root.rescue.confirm;
+                                            warning: true;
+                                            vertical-alignment: center;
+                                            min-width: 40px * Scale.factor;
+                                            horizontal-stretch: 1;
+                                        }
+                                        SkinButton {
+                                            text: root.rescue.confirm-label;
+                                            clicked => {
+                                                root.rescue-confirmed();
+                                            }
+                                        }
+                                        SkinButton {
+                                            text: Strings.cancel;
+                                            clicked => {
+                                                root.rescue-cancelled();
+                                            }
+                                        }
+                                    }
+                                    if root.rescue.shown && root.rescue.line != "": Notice {
+                                        text: root.rescue.line;
+                                        failed: root.rescue.failed;
+                                    }
                                     // The frame takes every pixel the column can spare, and never
                                     // less than its least.
                                     if !root.picture-withdrawn: FrameCanvas {

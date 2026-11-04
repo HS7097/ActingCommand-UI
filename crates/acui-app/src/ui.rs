@@ -525,8 +525,9 @@ fn language_index(language: Language) -> i32 {
 
 /// The workbench's controls. The top bar's page button switches between the
 /// accounts and the settings; a card picked is the account whose picture shows (`workbench`),
-/// the box beside the picture's title draws on it or not (`workbench::preview`), and the
-/// button under it refreshes it (`workbench::refresh`);
+/// the box beside the picture's title draws on it or not (`workbench::preview`), the
+/// button under it refreshes it (`workbench::refresh`), and the rescue bar over it operates
+/// that account's device, its confirmation's two buttons included (`workbench::rescue`);
 /// Start and Request Shutdown are the launcher's;
 /// "troubleshooting and ledger" opens the window of the default source; the
 /// write buttons, the evidence days' field and each device's backends' boxes and buttons are
@@ -553,6 +554,21 @@ fn install_workbench(window: &WorkbenchWindow) {
     window.on_refresh_frame(|| {
         if let Some(ui) = current() {
             workbench::refresh::pressed(&ui);
+        }
+    });
+    window.on_rescue_pressed(|op| {
+        if let Some(ui) = current() {
+            workbench::rescue::pressed(&ui, workbench::paint::rescue_picked(op));
+        }
+    });
+    window.on_rescue_confirmed(|| {
+        if let Some(ui) = current() {
+            workbench::rescue::confirmed(&ui);
+        }
+    });
+    window.on_rescue_cancelled(|| {
+        if let Some(ui) = current() {
+            workbench::rescue::cancelled(&ui);
         }
     });
     window.on_start_runtime(|| {
@@ -802,6 +818,15 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_picture_overlays(labels.picture_overlays.into());
     global.set_refresh_frame(labels.refresh_frame.into());
     global.set_refresh_cost(labels.refresh_cost.into());
+    global.set_rescue_check(labels.rescue_check.into());
+    global.set_rescue_emulator(labels.rescue_emulator.into());
+    global.set_rescue_emulator_start(labels.rescue_emulator_start.into());
+    global.set_rescue_emulator_stop(labels.rescue_emulator_stop.into());
+    global.set_rescue_emulator_restart(labels.rescue_emulator_restart.into());
+    global.set_rescue_game(labels.rescue_game.into());
+    global.set_rescue_game_launch(labels.rescue_game_launch.into());
+    global.set_rescue_game_restart(labels.rescue_game_restart.into());
+    global.set_rescue_close_task(labels.rescue_close_task.into());
     global.set_evidence_days(labels.setting_evidence_days.into());
     global.set_days(labels.days_unit.into());
     global.set_save(labels.save.into());

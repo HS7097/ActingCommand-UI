@@ -1030,7 +1030,7 @@ fn switch_refusal(answer: &Outcome) -> SwitchRefusal {
     }
 }
 
-fn holder(word: &str) -> Holder {
+pub(super) fn holder(word: &str) -> Holder {
     match word {
         "policy_dispatch" => Holder::PolicyDispatch,
         "ladder" => Holder::Ladder,
