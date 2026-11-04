@@ -112,6 +112,18 @@ pub const IDLE_STOP_EMULATOR: &str = IdleAction::StopEmulator.as_str();
 pub const PRIORITY_NORMAL: &str = ProcessPriorityLevel::Normal.token();
 pub const PRIORITY_LOW: &str = ProcessPriorityLevel::Low.token();
 
+/// The words of an instance's touch and capture backends (`touch_backend`, `capture_backend`,
+/// Runtime 0.12.39's #402 HS-1), likewise: words of the key table's two ranges
+/// (`TOUCH_BACKEND_TOKENS`, `CAPTURE_BACKEND_TOKENS`), which the Runtime's configuration crate
+/// spells only inside those lists. MuMu's own, Nemu IPC, is a word of both.
+pub const TOUCH_ADB_SHELL_INPUT: &str = "adb_shell_input";
+pub const TOUCH_MAATOUCH: &str = "maatouch";
+pub const TOUCH_MINITOUCH: &str = "minitouch";
+pub const CAPTURE_ADB: &str = "adb";
+pub const CAPTURE_DROIDCAST_RAW: &str = "droidcast_raw";
+pub const CAPTURE_SCRCPY: &str = "scrcpy";
+pub const BACKEND_NEMU_IPC: &str = "nemu_ipc";
+
 /// The MuMu root actingd discovers the emulator from: a key of the console's tiers, whose
 /// spelling the crate keeps to itself (a key of the start-up assembly).
 const MUMU_ROOT: &str = "mumu_root";

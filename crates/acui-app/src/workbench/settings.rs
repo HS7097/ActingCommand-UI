@@ -37,8 +37,9 @@ use acui_source::workbench::backends::{
 };
 use acui_source::workbench::{
     ConfigRead, InstanceLive, ReportedName, ReportedSetting, SettingName, SettingSource,
-    SettingTier, ShownValue, StartRead, UnreadRow, IDLE_CLOSE_APP, IDLE_NONE, IDLE_STOP_EMULATOR,
-    PRIORITY_LOW, PRIORITY_NORMAL,
+    SettingTier, ShownValue, StartRead, UnreadRow, BACKEND_NEMU_IPC, CAPTURE_ADB,
+    CAPTURE_DROIDCAST_RAW, CAPTURE_SCRCPY, IDLE_CLOSE_APP, IDLE_NONE, IDLE_STOP_EMULATOR,
+    PRIORITY_LOW, PRIORITY_NORMAL, TOUCH_ADB_SHELL_INPUT, TOUCH_MAATOUCH, TOUCH_MINITOUCH,
 };
 
 use super::actions::{self, Actions, BackendEdit, EvidenceView};
@@ -442,6 +443,23 @@ pub fn value_words(labels: &Labels, name: &SettingName, value: &ShownValue) -> S
             }
             (SettingName::MemoryPriority | SettingName::IoPriority, PRIORITY_LOW) => {
                 labels.setting_priority_low.to_owned()
+            }
+            (SettingName::TouchBackend, TOUCH_ADB_SHELL_INPUT) => {
+                labels.backend_touch_adb.to_owned()
+            }
+            (SettingName::TouchBackend, TOUCH_MAATOUCH) => labels.backend_touch_maatouch.to_owned(),
+            (SettingName::TouchBackend, TOUCH_MINITOUCH) => {
+                labels.backend_touch_minitouch.to_owned()
+            }
+            (SettingName::TouchBackend | SettingName::CaptureBackend, BACKEND_NEMU_IPC) => {
+                labels.backend_nemu.to_owned()
+            }
+            (SettingName::CaptureBackend, CAPTURE_ADB) => labels.backend_capture_adb.to_owned(),
+            (SettingName::CaptureBackend, CAPTURE_DROIDCAST_RAW) => {
+                labels.backend_capture_droidcast.to_owned()
+            }
+            (SettingName::CaptureBackend, CAPTURE_SCRCPY) => {
+                labels.backend_capture_scrcpy.to_owned()
             }
             (_, other) => other.to_owned(),
         },
