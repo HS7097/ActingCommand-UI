@@ -190,6 +190,10 @@ pub struct RescueRows {
     pub check: Option<Button>,
     /// The check is the thing to do first: the instance is fenced, and it lifts the fence.
     pub check_urgent: bool,
+    /// "Use the file's value" of the instance's device backends group would lift the fence too
+    /// (#402 HS-5c, `Model::rescue_view`): said beside the check's note while that says to check
+    /// first.
+    pub file_value_lifts: bool,
     /// The emulator's: of such an instance whose capability profile has any of its controls
     /// available, a discovery-bound MuMu instance's, each button by its own.
     pub emulator: Option<EmulatorRow>,
@@ -387,13 +391,15 @@ impl Rescue {
     /// own readings only while nothing holds them all. A pause holds none back, whoever's, nor
     /// does a quiet time: an operator's claim goes through a closed gate, and these buttons are a
     /// person's maintenance. A fence holds back only the game's: the check lifts it, and so does
-    /// a start of the emulator that succeeds. `watch` is what a stop of its emulator would meet.
+    /// a start of the emulator that succeeds. `watch` is what a stop of its emulator would meet;
+    /// `file_value_lifts`, that a switch back to the file's backends lifts the fence too.
     pub fn view(
         &self,
         instance: &InstanceLive,
         withdrawn: bool,
         hold: Option<RescueHold>,
         watch: Watch,
+        file_value_lifts: bool,
     ) -> RescueRows {
         let alias = instance.alias.as_str();
         let drawn = instance.physical && !withdrawn;
@@ -421,6 +427,7 @@ impl Rescue {
         let rows = RescueRows {
             check: drawn.then(|| button(off(discovered))),
             check_urgent: instance.fence.is_some(),
+            file_value_lifts,
             emulator: (drawn && discovered).then(|| EmulatorRow {
                 start: controls.start.then(|| button(on)),
                 stop: controls.stop.then(|| button(off(true))),

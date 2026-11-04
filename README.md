@@ -183,18 +183,23 @@ filters the boxes show now, without a time bound. When a read reaches a Runtime 
 now. A time span read follows the cursor for at most 64 pages; with still no event it stops, as
 `console_time_span_page_limit`, rather than keep the window reading.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.39
-(ledger revision 6, #402 HS-2b: the console reads the lifecycle record `device.backend_switched` the Runtime
-writes when it switches an instance's touch and capture backends while it runs, which a console built on revision 5
-cannot read; the settings page's "Device Backends" group of each device switches its two backends while the
-Runtime runs, #402 HS-1 to HS-4, and waits for a switch's answer as long as the contract's `BACKEND_SWITCH_WAIT_MS`
-and the client's IO margin say;
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.40
+(#402 HS-5: a switch to MuMu native touch no longer needs the game running, and a fence that the device's own
+backend open caused no longer refuses a switch, so "Use File Value" on the settings page can lift it once the
+file's backends pass their self-check; the sources of the Runtime crates the console links and the interface
+declarations are those of v0.12.39, and only the outcome-code catalog the contract crate embeds at build time
+changed a few descriptions with HS-5, its categories and vocabulary unchanged; v0.12.39's ledger revision 6,
+#402 HS-2b, lets the console read the lifecycle record
+`device.backend_switched` the Runtime writes when it switches an instance's touch and capture backends while it
+runs, which a console built on revision 5 cannot read; the settings page's "Device Backends" group of each
+device switches its two backends while the Runtime runs, #402 HS-1 to HS-4, and waits for a switch's answer as
+long as the contract's `BACKEND_SWITCH_WAIT_MS` and the client's IO margin say;
 with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 AGT-1b's optional status member
 `agent_wake`, which the console reads and does not show, on top of #429 R-0b, R-4, R-11, R-7a and 114-A; it keeps
 v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 5, ledger revision 6):
 
 ```
-rev = "690984664d51fabed87643ae9cf310757e8035e3"
+rev = "232b3ed8cbf81848c20c0d3659f30de0f7ab4277"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -412,7 +417,7 @@ or on a handset scrcpy, for capture), with where the value comes from (the confi
 online, when and through which way) and the device's latest self-check. Apply switches that device at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.39, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.40, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -420,8 +425,9 @@ switch too (both rows together when clearing one alone could break that pair), u
 the one in effect: then the device is left as it is, and the line says only that the file's value is back.
 The result has a line of its own under the top bar, naming the account, and a refusal says why in words:
 the device is busy (with what), played, fenced, not running, or the new backend did not open (and why: for
-MuMu native touch, say, the game package configured for the device is not installed, or the game is not
-running) and the previous one is back or did not come back either. Nothing is sent again by itself: when a switch's result is unknown the
+MuMu native touch, say, the game package configured for the device is not installed; since v0.12.40 a game
+that is not running is no reason, and only a Runtime rolled back to v0.12.39 or earlier still gives it) and the
+previous one is back or did not come back either. Nothing is sent again by itself: when a switch's result is unknown the
 console waits out that whole wait and until the Runtime shows the device no longer switching, then says what holds now, with the
 device's self-check. A Runtime before 0.12.39 has no such settings, and then no group shows. After every start of the Runtime its start report is read once: when an update
 or a rollback reset settings changed online, the line under the top bar and the settings page say which;
