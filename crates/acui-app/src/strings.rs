@@ -1053,7 +1053,8 @@ pub struct Labels {
     /// time (its days, start and end), one that ends the next day (its end), one of a whole day
     /// (its days and start); a time once (from, until); the clock a time is of when it is not this
     /// computer's (`UTC+9`); none of its own; its list not read. The form of a time to add: the
-    /// button that opens it, "from" and "to" its two fields, what each says when empty, "add",
+    /// button that opens it, "from" and "to" its two fields, what each says when emptied (how a
+    /// time is written, not a time: the form opens with real times in them), "add",
     /// how a time is read; why "add" sent nothing: no day ticked, a time not hours and minutes,
     /// too long to save, not taken by the Runtime's own check. "Delete", and why it sent nothing:
     /// the list without that time still too long to save. "Delete all", the question its first
@@ -1951,8 +1952,8 @@ pub const ZH: Labels = Labels {
     rules_add_open: "添加一段…",
     rules_from: "从",
     rules_to: "到",
-    rules_start_placeholder: "23:00",
-    rules_end_placeholder: "07:00",
+    rules_start_placeholder: "时:分",
+    rules_end_placeholder: "时:分",
     rules_add: "添加",
     rules_form_note: "按这台电脑的时间；结束早于开始就是到第二天，相同就是整整一天",
     rules_form_no_day: "请至少选一天",
@@ -2814,8 +2815,8 @@ pub const EN: Labels = Labels {
     rules_add_open: "Add a Time…",
     rules_from: "From",
     rules_to: "to",
-    rules_start_placeholder: "23:00",
-    rules_end_placeholder: "07:00",
+    rules_start_placeholder: "hh:mm",
+    rules_end_placeholder: "hh:mm",
     rules_add: "Add",
     rules_form_note: "By this computer's clock; an end before the start is on the next day, and the same time makes a whole day",
     rules_form_no_day: "Pick at least one day",
