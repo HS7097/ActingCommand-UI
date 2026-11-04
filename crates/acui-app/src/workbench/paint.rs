@@ -8,12 +8,13 @@
 //! among them and each device's group of its backends after them; what the start report says
 //! of the settings; and whether the Runtime is started again when it is gone. And the right
 //! column's live view, from its view, the frame's pixels once when it lands; and under it the
-//! picture's refresh, painted with it.
+//! picture's refresh, painted with it. And over the picture the account's rescue bar, and while
+//! it says so the account's rules panel in the picture's place (UI-3e1-b).
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use acui_rows::outcome::explain;
-use acui_rows::{format_minute, format_second};
+use acui_rows::{format_minute, format_second, local_utc_offset_minutes};
 use acui_source::workbench::backends::{
     unnamed_backend_words, AppIndexProblem, BackendRefusal, BackendRow, BackendWhy, CaptureCause,
     CheckStatus, FailedStep, Holder, InEffect, InstanceBackends, OpenFailure, SwitchRefusal,
@@ -21,6 +22,7 @@ use acui_source::workbench::backends::{
 };
 use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
 use acui_source::workbench::preview::Overlay;
+use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietRead, QuietShown};
 use acui_source::workbench::{
     PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
     SettingValue, ValueProblem, CONSOLE_PAUSE_ALL, MODE_FULL, MODE_OBSERVE, MODE_PACE,
@@ -28,9 +30,9 @@ use acui_source::workbench::{
 use slint::{Image, Model as _, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
 use super::actions::{
-    ActionsView, Choice, EvidenceView, Field, GroupState, PresetState, PresetView, Reread,
-    ResumeEntry, RowEdit, Said, StepperView, Write, PRESET_ADAPTIVE, PRESET_LIGHT,
-    PRESET_STANDARD,
+    AccountRules, ActionsView, Choice, EvidenceView, Field, FormProblem, GroupState, PresetState,
+    PresetView, QuietFormView, Reread, ResumeEntry, RowEdit, RuleItem, RulesHold, RulesView,
+    Said, StartRule, StepperView, Write, PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
 };
 use super::card::{Band, CardView, Down, Line, ReasonClass};
 use super::model::{Fault, Page};
@@ -52,8 +54,8 @@ use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
 use crate::{
-    AccountCard, BackendGroupItem, OverlayItem, PresetChoice, RescueBar, RescueOp, SettingItem,
-    StatusTone, TargetItem, WorkbenchPage, WorkbenchWindow,
+    AccountCard, BackendGroupItem, IdlePick, OverlayItem, PresetChoice, QuietLine, RescueBar,
+    RescueOp, RulesData, SettingItem, StatusTone, TargetItem, WorkbenchPage, WorkbenchWindow,
 };
 
 /// What the technical log's lines about the settings page are under.
@@ -121,6 +123,14 @@ pub fn rescue_picked(op: RescueOp) -> DeviceOp {
         RescueOp::EmulatorRestart => DeviceOp::EmulatorRestart,
         RescueOp::GameLaunch => DeviceOp::GameLaunch,
         RescueOp::GameRestart => DeviceOp::GameRestart,
+    }
+}
+
+/// The idle action's choice a segment of the rules panel names.
+pub fn idle_picked(pick: IdlePick) -> IdleChoice {
+    match pick {
+        IdlePick::DoNothing => IdleChoice::Nothing,
+        IdlePick::CloseGame => IdleChoice::CloseGame,
     }
 }
 
@@ -510,21 +520,29 @@ fn refusal_words(ui: &Ui, labels: &Labels, host: Option<&str>, class: Option<&st
 /// something, "close this task", always off, and why. Then why every device button is off, or the
 /// question a press that closes the game asks; and what the account's last operation came to,
 /// red when it failed. Set only when anything in it changed.
+///
+/// While the bar has rows, a fixture's account's as well, "auto rules" at the end of its first
+/// row; while that is open, the account's rules panel in the picture's place (`rules_panel`),
+/// painted with the bar, since any change of settings out or landed holds or frees both.
 pub fn rescue(ui: &Ui) {
     let Some(window) = ui.workbench() else {
         return;
     };
     let labels = ui.labels();
-    let (alias, view) = {
+    let (alias, view, rules) = {
         let model = ui.model.borrow();
         let alias = model.picture_account().map(str::to_owned);
         let view = alias.as_deref().and_then(|alias| model.rescue_view(alias));
-        (alias, view)
+        let rules = alias
+            .as_deref()
+            .filter(|_| model.rules_open())
+            .and_then(|alias| model.rules_view(alias));
+        (alias, view, rules)
     };
-    let bar = match (alias, view) {
+    let mut bar = match (alias.as_deref(), view) {
         (Some(alias), Some(RescueView::Online(rows))) => {
-            rescue_told(ui, &alias, &rows);
-            rescue_bar(ui, labels, &alias, &rows)
+            rescue_told(ui, alias, &rows);
+            rescue_bar(ui, labels, alias, &rows)
         }
         (_, Some(RescueView::Offline)) => RescueBar {
             shown: true,
@@ -533,6 +551,10 @@ pub fn rescue(ui: &Ui) {
         },
         (_, None) | (None, Some(RescueView::Online(_))) => RescueBar::default(),
     };
+    // The panel shows only under a bar with rows: none while no Runtime answers.
+    let rules = rules.filter(|_| bar.rules_shown);
+    bar.rules_open = rules.is_some();
+    rules_panel(ui, &window, labels, alias.as_deref().unwrap_or(""), rules.as_ref());
     if window.get_rescue() != bar {
         window.set_rescue(bar);
     }
@@ -579,6 +601,10 @@ fn rescue_bar(ui: &Ui, labels: &Labels, alias: &str, rows: &RescueRows) -> Rescu
         confirm_label: confirm_label.into(),
         line: line.into(),
         failed,
+        // Every account the newest `Status` lists has rules; whether their panel is open is the
+        // bar's caller's to say.
+        rules_shown: true,
+        rules_open: false,
     }
 }
 
@@ -904,10 +930,10 @@ fn rescue_own_words(labels: &Labels, code: &str) -> Option<&'static str> {
     Some(words)
 }
 
-/// What the status left out of an account's rows, into the log once for each account: no
-/// provenance, which a Runtime states of every instance, so no device button is drawn, as the
-/// problem it is; no capability profile of an instance that drives a device of its own, so no
-/// emulator's row, which is so for all but a discovery-bound MuMu instance's, quietly.
+/// What the status left out of an account's rows, into the log once for each account, each as
+/// the problem it is: no provenance, which a Runtime states of every instance, so no device
+/// button is drawn; no capability profile of an instance that drives a device of its own, which
+/// a Runtime states of every such instance (only a fixture has none), so no emulator's row.
 fn rescue_told(ui: &Ui, alias: &str, rows: &RescueRows) {
     if rows.unstated.provenance {
         let line = format!("{alias}: its status states no backend provenance: no device button");
@@ -918,8 +944,387 @@ fn rescue_told(ui: &Ui, alias: &str, rows: &RescueRows) {
     if rows.unstated.capabilities && rows.check.is_some() {
         let line = format!("{alias}: its status states no capability profile: no emulator's row");
         if ui.model.borrow_mut().first_told(&line) {
-            report::log_quiet(RESCUE_LOG, &line);
+            report::log(RESCUE_LOG, &line);
         }
+    }
+}
+
+/// The rules panel of `alias` (UI-3e1-b) while it is open (`view`): its words, its own quiet
+/// times, and its form's boxes and fields, each set only when it says otherwise, so that a paint
+/// every few seconds neither moves a row nor takes a field from the person typing in it. Closed,
+/// it holds nothing, and its boxes and fields are as empty as the form is then.
+fn rules_panel(
+    ui: &Ui,
+    window: &WorkbenchWindow,
+    labels: &Labels,
+    alias: &str,
+    view: Option<&RulesView>,
+) {
+    let (data, lines, form) = match view {
+        Some(view) => rules_data(ui, labels, alias, view),
+        None => (RulesData::default(), Vec::new(), None),
+    };
+    sync(window.get_quiet_lines(), lines, |rows| window.set_quiet_lines(rows));
+    quiet_form_fields(window, form.as_ref());
+    if window.get_rules() != data {
+        window.set_rules(data);
+    }
+}
+
+/// The panel's words for `view`, its quiet times' lines and its form while open. While the rules
+/// cannot be read, only why: nothing an older snapshot said of them shows.
+fn rules_data(
+    ui: &Ui,
+    labels: &Labels,
+    alias: &str,
+    view: &RulesView,
+) -> (RulesData, Vec<QuietLine>, Option<QuietFormView>) {
+    let title: SharedString = fill(labels.rules_title, &[alias]).into();
+    let (hold, failed) = match view {
+        RulesView::Read(rules) => return rules_read(ui, labels, alias, title, rules),
+        RulesView::Reading => (labels.rules_reading, false),
+        RulesView::ReadFailed { rereading: false } => (labels.rules_read_failed, true),
+        RulesView::ReadFailed { rereading: true } => (labels.rules_reread_failed, true),
+        // The same line the settings page tells the log, so it is told once.
+        RulesView::Unreported => {
+            tell_once(ui, "the fact snapshot has no config.parameters record", true);
+            (labels.rules_read_failed, true)
+        }
+    };
+    let data = RulesData { title, hold: hold.into(), hold_failed: failed, ..RulesData::default() };
+    (data, Vec::new(), None)
+}
+
+/// The panel of an account whose rules read. Why none can be changed now, if anything holds them
+/// all: a change of its own out says so on its own line, as one saved does until the newest
+/// settings show it. Each rule: where its value comes from and when a change takes effect; why it
+/// cannot be changed when it cannot, whatever holds the others; what the last change of it came
+/// to. A list or an idle action that does not read, or the host's list, goes to the log once,
+/// why with it.
+fn rules_read(
+    ui: &Ui,
+    labels: &Labels,
+    alias: &str,
+    title: SharedString,
+    rules: &AccountRules,
+) -> (RulesData, Vec<QuietLine>, Option<QuietFormView>) {
+    let view = ui.model.borrow().actions_view();
+    let id = rules.instance_id.as_str();
+    let quiet = &rules.quiet;
+    let idle = &rules.idle;
+    let start = rules.start.as_ref();
+    let start_said = start.and_then(|start| start.said.as_ref());
+    let saved = [quiet.said.as_ref(), idle.said.as_ref(), start_said]
+        .into_iter()
+        .flatten()
+        .any(|said| matches!(said, Said::ConfigApplied | Said::BackToFile));
+    let hold = match &rules.hold {
+        None | Some(RulesHold::OwnWrite) => String::new(),
+        Some(RulesHold::Switching { account }) => {
+            fill(labels.rules_switching, &[account.as_deref().unwrap_or(labels.start_account_gone)])
+        }
+        Some(RulesHold::OtherWrite) => labels.rules_other_write.to_owned(),
+        Some(RulesHold::RowsBehind) if saved => String::new(),
+        Some(RulesHold::RowsBehind) => labels.rules_rows_behind.to_owned(),
+    };
+
+    let (lines, quiet_source, quiet_empty, quiet_why) = match &quiet.read {
+        QuietRead::Read { list, source, settable } => {
+            let local = local_utc_offset_minutes();
+            let lines: Vec<QuietLine> =
+                list.entries().map(|entry| quiet_entry(labels, entry, local)).collect();
+            let empty = if list.is_empty() { labels.rules_quiet_none } else { "" };
+            let why = if *settable { "" } else { labels.rules_file_restart };
+            (lines, source_effect(labels, *source, labels.setting_effect_round), empty, why)
+        }
+        QuietRead::Unread(why) => {
+            if let Some(why) = why {
+                let line = format!("instance {id}: its quiet times are shown, not changed: {why}");
+                tell_once(ui, &line, true);
+            }
+            (Vec::new(), String::new(), "", labels.rules_quiet_unread)
+        }
+    };
+    let form = quiet.form.clone();
+    let problem = form
+        .as_ref()
+        .and_then(|form| form.problem)
+        .map_or("", |problem| form_problem_text(labels, problem));
+    let confirm =
+        if quiet.confirming { fill(labels.rules_clear_ask, &[alias]) } else { String::new() };
+    let host = match &rules.host_quiet {
+        Some(Ok(0)) => labels.rules_host_none,
+        Some(Ok(_)) => labels.rules_host_some,
+        Some(Err(why)) => {
+            tell_once(ui, &format!("the quiet times of every instance do not read: {why}"), true);
+            labels.rules_host_unread
+        }
+        None => "",
+    };
+    let (quiet_line, quiet_failed) =
+        rule_said_text(ui, labels, &view, id, RuleItem::Quiet, quiet.said.as_ref());
+
+    let (idle_nothing, idle_close, idle_source, idle_now, idle_why) = match &idle.now {
+        Some(now) => {
+            let (nothing, close, words) = match &now.value {
+                IdleNow::Nothing => (true, false, None),
+                IdleNow::CloseGame => (false, true, None),
+                IdleNow::StopEmulator => (false, false, Some(labels.rules_idle_stop)),
+                IdleNow::Other(word) => {
+                    let line = format!("instance {id}: no words for idle action {word:?}");
+                    tell_once(ui, &line, false);
+                    (false, false, Some(labels.rules_idle_other))
+                }
+            };
+            // Either choice replaces it, while the Runtime takes a change.
+            let now_text = match words {
+                Some(words) if now.settable => {
+                    fill(labels.rescue_then, &[words, labels.rules_idle_replace])
+                }
+                Some(words) => words.to_owned(),
+                None => String::new(),
+            };
+            let why = if now.settable { "" } else { labels.rules_file_restart };
+            let source = source_effect(labels, now.source, labels.setting_effect_idle);
+            (nothing, close, source, now_text, why)
+        }
+        None => (false, false, String::new(), String::new(), labels.rules_idle_unread),
+    };
+    let mut idle_note = labels.rules_idle_note.to_owned();
+    if idle.paused {
+        idle_note = fill(labels.rescue_then, &[&idle_note, labels.rules_idle_paused]);
+    }
+    if idle.no_device {
+        idle_note = fill(labels.rescue_then, &[&idle_note, labels.rules_idle_no_device]);
+    }
+    let (idle_line, idle_failed) =
+        rule_said_text(ui, labels, &view, id, RuleItem::Idle, idle.said.as_ref());
+
+    let (start_on, start_off, start_source, start_why) = match start {
+        None => (false, false, String::new(), ""),
+        Some(StartRule { now: None, .. }) => {
+            (false, false, String::new(), labels.rules_start_unread)
+        }
+        Some(StartRule { now: Some(now), held_on, .. }) => {
+            let why = if !now.settable {
+                labels.rules_file_restart
+            } else if *held_on {
+                labels.rules_start_held
+            } else {
+                ""
+            };
+            let source = source_effect(labels, now.source, labels.setting_effect_autostart);
+            (now.value, !now.value, source, why)
+        }
+    };
+    let (start_line, start_failed) = match start {
+        Some(start) => rule_said_text(ui, labels, &view, id, RuleItem::Start, start.said.as_ref()),
+        None => (String::new(), false),
+    };
+    let start_can_write = start.is_some_and(|start| start.can_write);
+    // Off, or back to the file's value, which may be off, not while the idle action needs it on.
+    let start_can_off = start_can_write && !start.is_some_and(|start| start.held_on);
+
+    let data = RulesData {
+        title,
+        hold: hold.into(),
+        hold_failed: false,
+        shown: true,
+        quiet_source: quiet_source.into(),
+        quiet_empty: quiet_empty.into(),
+        quiet_why: quiet_why.into(),
+        quiet_can_write: quiet.can_write,
+        quiet_form_open: form.is_some(),
+        quiet_problem: problem.into(),
+        quiet_can_clear: quiet.can_clear,
+        quiet_confirm: confirm.into(),
+        quiet_back: quiet.back_to_file,
+        quiet_host: host.into(),
+        quiet_line: quiet_line.into(),
+        quiet_failed,
+        idle_nothing,
+        idle_close,
+        idle_can_write: idle.can_write,
+        idle_source: idle_source.into(),
+        idle_now: idle_now.into(),
+        idle_why: idle_why.into(),
+        idle_note: idle_note.into(),
+        idle_back: idle.back_to_file,
+        idle_line: idle_line.into(),
+        idle_failed,
+        start_shown: start.is_some(),
+        start_on,
+        start_off,
+        start_can_on: start_can_write,
+        start_can_off,
+        start_source: start_source.into(),
+        start_why: start_why.into(),
+        start_back: start.is_some_and(|start| start.back_to_file),
+        start_back_offered: start_can_off,
+        start_line: start_line.into(),
+        start_failed,
+    };
+    (data, lines, form)
+}
+
+/// One quiet time in words. A weekly one by its days, Monday first, and its start and end of its
+/// own clock, an end the next day or a whole day said so, and that clock beside it when it is not
+/// this computer's (`local`); one once by when it starts and ends, of this computer's clock.
+fn quiet_entry(labels: &Labels, entry: QuietShown, local: i16) -> QuietLine {
+    match entry {
+        QuietShown::Weekly { days, start_minute, end_minute, utc_offset_minutes } => {
+            let names: Vec<&str> = days
+                .iter()
+                .zip(labels.rules_weekdays)
+                .filter(|(on, _)| **on)
+                .map(|(_, name)| name)
+                .collect();
+            let days = names.join(labels.name_list);
+            let start = clock_words(start_minute);
+            let text = if end_minute == start_minute {
+                fill(labels.rules_quiet_weekly_whole, &[&days, &start])
+            } else {
+                let end = clock_words(end_minute);
+                let end = if end_minute < start_minute {
+                    fill(labels.rules_next_day, &[&end])
+                } else {
+                    end
+                };
+                fill(labels.rules_quiet_weekly, &[&days, &start, &end])
+            };
+            let zone = if utc_offset_minutes == local {
+                String::new()
+            } else {
+                fill(labels.rules_quiet_zone, &[&utc_words(utc_offset_minutes)])
+            };
+            QuietLine { text: text.into(), zone: zone.into() }
+        }
+        QuietShown::Once { from_ms, until_ms } => {
+            let (from, until) = (format_minute(from_ms), format_minute(until_ms));
+            QuietLine {
+                text: fill(labels.rules_quiet_once, &[&from, &until]).into(),
+                zone: SharedString::new(),
+            }
+        }
+    }
+}
+
+/// A minute of the day as `hh:mm`.
+fn clock_words(minute: u16) -> String {
+    format!("{:02}:{:02}", minute / 60, minute % 60)
+}
+
+/// A clock `offset` minutes east of UTC, as `UTC+9`, `UTC+5:30` or `UTC-3`.
+fn utc_words(offset: i16) -> String {
+    let sign = if offset < 0 { '-' } else { '+' };
+    let minutes = offset.unsigned_abs();
+    match (minutes / 60, minutes % 60) {
+        (0, 0) => "UTC".to_owned(),
+        (hours, 0) => format!("UTC{sign}{hours}"),
+        (hours, minutes) => format!("UTC{sign}{hours}:{minutes:02}"),
+    }
+}
+
+/// Where a rule's value comes from, and when a change of it takes effect.
+fn source_effect(labels: &Labels, source: SettingSource, effect: &str) -> String {
+    let source = fill(labels.setting_source_line, &[source_text(labels, source)]);
+    format!("{source} · {effect}")
+}
+
+/// Why the form's "add" sent nothing.
+fn form_problem_text(labels: &Labels, problem: FormProblem) -> &'static str {
+    match problem {
+        FormProblem::NoDay => labels.rules_form_no_day,
+        FormProblem::NotTime => labels.rules_form_not_time,
+        FormProblem::TooBig => labels.rules_form_too_big,
+        FormProblem::NotTaken => labels.rules_form_not_taken,
+    }
+}
+
+/// What the last change of the rule `item` of `instance` came to, on its own line, and whether
+/// that is a failure; nothing before one. Saved, that the newest settings are being read, until
+/// they show it (D-28). The refusals only these rules meet in their own words: an emulator's
+/// start on for an instance not bound by discovery; the check that holds the emulator's start on
+/// while the idle action stops the emulator, from either side; and the whole section's check of
+/// quiet times, which the console's own check of them passed, so the log hears of it as the
+/// problem it is. Anything else as any change of settings is said.
+fn rule_said_text(
+    ui: &Ui,
+    labels: &Labels,
+    view: &ActionsView,
+    instance: &str,
+    item: RuleItem,
+    said: Option<&Said>,
+) -> (String, bool) {
+    let Some(said) = said else {
+        return (String::new(), false);
+    };
+    let problem = match said {
+        Said::ConfigApplied | Said::BackToFile => {
+            return (labels.rules_saved_reading.to_owned(), false);
+        }
+        Said::ConfigRefused(RefusalWhy::Value { problem, .. }) => Some(*problem),
+        _ => None,
+    };
+    let own = match (item, problem) {
+        (RuleItem::Start, Some(ValueProblem::DiscoveryBindingRequired)) => {
+            Some(labels.rules_start_not_discovered)
+        }
+        (RuleItem::Start, Some(ValueProblem::SectionCheck)) => {
+            Some(labels.rules_start_held_refused)
+        }
+        (RuleItem::Idle, Some(ValueProblem::SectionCheck)) => Some(labels.rules_idle_section),
+        (RuleItem::Quiet, Some(ValueProblem::SectionCheck)) => {
+            let line = format!(
+                "instance {instance}: the Runtime refused its quiet times by a check of the whole \
+                 section, which the same parser passed here: the Runtime is not the pinned one, or \
+                 another check of the section refused them"
+            );
+            tell_once(ui, &line, true);
+            Some(labels.rules_quiet_refused)
+        }
+        _ => None,
+    };
+    match own {
+        Some(words) => (words.to_owned(), true),
+        None => said_text(labels, view, said),
+    }
+}
+
+/// The form's seven boxes and two fields as `form` holds them, or empty while it is not open:
+/// each set only when it says otherwise, as the box flips itself and the field holds what is
+/// typed before Rust hears of it.
+fn quiet_form_fields(window: &WorkbenchWindow, form: Option<&QuietFormView>) {
+    let (days, start, end) = match form {
+        Some(form) => (form.days, form.start.as_str(), form.end.as_str()),
+        None => ([false; 7], "", ""),
+    };
+    if window.get_quiet_day_0() != days[0] {
+        window.set_quiet_day_0(days[0]);
+    }
+    if window.get_quiet_day_1() != days[1] {
+        window.set_quiet_day_1(days[1]);
+    }
+    if window.get_quiet_day_2() != days[2] {
+        window.set_quiet_day_2(days[2]);
+    }
+    if window.get_quiet_day_3() != days[3] {
+        window.set_quiet_day_3(days[3]);
+    }
+    if window.get_quiet_day_4() != days[4] {
+        window.set_quiet_day_4(days[4]);
+    }
+    if window.get_quiet_day_5() != days[5] {
+        window.set_quiet_day_5(days[5]);
+    }
+    if window.get_quiet_day_6() != days[6] {
+        window.set_quiet_day_6(days[6]);
+    }
+    if window.get_quiet_start() != start {
+        window.set_quiet_start(start.into());
+    }
+    if window.get_quiet_end() != end {
+        window.set_quiet_end(end.into());
     }
 }
 
@@ -1641,7 +2046,8 @@ fn setting_item(ui: &Ui, labels: &Labels, line: &SettingLine) -> SettingItem {
         fill(labels.setting_source_line, &[source_text(labels, line.source)]),
         settings::change_words(labels, line.change).to_owned(),
     ];
-    let settable = line.change == settings::Change::ViewOnly;
+    let settable =
+        matches!(line.change, settings::Change::ViewOnly | settings::Change::OnMainPage);
     note.extend(settings::effect_words(labels, &line.name, settable).map(str::to_owned));
     SettingItem {
         name: name.into(),
@@ -1723,6 +2129,8 @@ fn settings_text(labels: &Labels, view: &ActionsView, field: Field) -> (String, 
         Field::TopBar => &view.settings_said,
         Field::EvidenceDays => &view.evidence_said,
         Field::Backends => &view.backends_said,
+        // A rule's line is its panel's, never one of these.
+        Field::Rules(_) => return (String::new(), false),
     };
     let (text, failed) = if view.reread_failed == Some(field) {
         (labels.config_reread_failed.to_owned(), true)
@@ -1747,6 +2155,7 @@ fn settings_text(labels: &Labels, view: &ActionsView, field: Field) -> (String, 
             let account = view.backends_account.as_deref().unwrap_or(labels.start_account_gone);
             (fill(labels.backend_said, &[account, &text]), failed)
         }
+        Field::Rules(_) => (String::new(), false),
     }
 }
 
@@ -1837,6 +2246,8 @@ fn said_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, bool)
         Said::UnconfirmedChanged => (labels.config_unconfirmed_changed.to_owned(), true),
         Said::UnconfirmedSeeNow => (labels.config_unconfirmed_see_now.to_owned(), true),
         Said::NotWhole => (labels.concurrency_not_whole.to_owned(), true),
+        // Only the quiet times' line says it: only their "delete" comes to it.
+        Said::QuietTooBig => (labels.rules_delete_too_big.to_owned(), true),
         Said::Rereading(Reread::Switch) => (labels.backend_unconfirmed.to_owned(), true),
         Said::BackendRefused(refusal) => (backend_refusal_text(labels, refusal), true),
         Said::SwitchOver { version, now } => {
@@ -1989,6 +2400,7 @@ fn refusal_text(labels: &Labels, why: &RefusalWhy) -> String {
                 ValueProblem::OutOfRange => labels.config_problem_out_of_range,
                 ValueProblem::SectionCheck => labels.config_problem_section,
                 ValueProblem::RepeatedKey => labels.config_problem_repeated,
+                ValueProblem::DiscoveryBindingRequired => labels.config_problem_other,
                 ValueProblem::Other => labels.config_problem_other,
             };
             let mut text = fill(labels.config_value_refused, &[problem]);

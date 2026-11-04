@@ -18,7 +18,7 @@ use acui_source::workbench::{
 };
 use acui_source::{ClientFailure, PauseFact};
 
-use super::actions::{self, Actions, ActionsView, PresetView};
+use super::actions::{self, Actions, ActionsView, PresetView, RulesView};
 use super::card::{self, CardView, Down, Schedule};
 use super::picture::{
     Doing, LinkNow, Offline, PictureView, Pictures, PreviewGate, RefreshHold, RefreshView,
@@ -228,6 +228,10 @@ pub struct Model {
     /// The ledger's committed head as the newest `Status` stated it, while online: where the
     /// picture's lookup starts down from.
     ledger_head: Option<u64>,
+    /// Whether the rules panel shows in the picture's place (UI-3e1-b), of whichever account's
+    /// picture shows: it stays so across accounts and pages, and shows only while that
+    /// account's rescue bar does (`rules_view`).
+    rules_open: bool,
 }
 
 /// What of an account's device is out from here (`Model::device_busy`).
@@ -312,6 +316,7 @@ impl Model {
             pictures: Pictures::default(),
             rescue: Rescue::default(),
             ledger_head: None,
+            rules_open: false,
         }
     }
 
@@ -336,10 +341,12 @@ impl Model {
         self.page
     }
 
-    /// A confirmation asked on the page left goes with it (`rescue`).
+    /// A confirmation asked on the page left goes with it (`rescue`), and so do the rules panel's
+    /// form and confirmation (`Actions::rules_reset`).
     pub fn set_page(&mut self, page: Page) {
         if self.page != page {
             self.rescue.unconfirm();
+            self.actions.rules_reset();
         }
         self.page = page;
     }
@@ -556,13 +563,15 @@ impl Model {
     }
 
     /// An account picked on its card: whether that changed whose picture shows. A confirmation
-    /// asked goes when it did (`rescue`).
+    /// asked goes when it did (`rescue`), and so do the rules panel's form and confirmation; the
+    /// panel itself stays open or closed.
     pub fn pick_account(&mut self, alias: &str) -> bool {
         let before = self.picture_account().map(str::to_owned);
         self.pictures.pick(alias);
         let changed = self.picture_account() != before.as_deref();
         if changed {
             self.rescue.unconfirm();
+            self.actions.rules_reset();
         }
         changed
     }
@@ -758,10 +767,15 @@ impl Model {
 
     /// Whether the emulator's watch would start `instance`'s emulator again once it is stopped,
     /// as the newest snapshot of this epoch has `start_emulator` in effect: the instance's own
-    /// pause holds the watch whatever that is; no snapshot, or no settings in it, does not read.
+    /// pause holds the watch whatever that is; no snapshot, or no settings in it, does not read,
+    /// nor do rows behind a change of settings taken since, which may have just turned it on or
+    /// off from the rules panel (D-20).
     fn watch(&self, instance: &InstanceLive) -> Watch {
         if instance.pause.is_some() {
             return Watch::Stays;
+        }
+        if self.actions.rows_behind() {
+            return Watch::Unknown;
         }
         let on = self
             .config
@@ -821,6 +835,63 @@ impl Model {
         let offered = self.rescue_view(alias).is_some_and(|view| view.offers(op));
         if !offered {
             self.rescue.unconfirm();
+        }
+    }
+
+    /// Whether the rules panel is open, which it shows only while the rescue bar does.
+    pub fn rules_open(&self) -> bool {
+        self.rules_open
+    }
+
+    /// The rescue bar's "auto rules": the panel opens, or closes, and then its form and its
+    /// confirmation asked go.
+    pub fn rules_toggled(&mut self) {
+        self.rules_open = !self.rules_open;
+        if !self.rules_open {
+            self.actions.rules_reset();
+        }
+    }
+
+    /// What `alias`'s rules panel shows now (UI-3e1-b), as the reads and the presses leave it: none
+    /// while its rescue bar has no rows (`rescue_view`), which is also while no Runtime answers.
+    /// Nothing of the account's device holds its rules back, nor its gate, its doing or a pause:
+    /// only another change of settings, and rows behind one taken (`actions::rules_view`).
+    pub fn rules_view(&self, alias: &str) -> Option<RulesView> {
+        if self.page != Page::Main || !self.shown || self.online_epoch().is_none() {
+            return None;
+        }
+        let instance = self.instances.iter().find(|instance| instance.alias == alias)?;
+        let paused = instance.pause.is_some() || self.global_pause.is_some();
+        Some(actions::rules_view(
+            self.config.value.as_ref(),
+            self.config_failed(),
+            instance,
+            &self.instances,
+            paused,
+            &self.actions,
+        ))
+    }
+
+    /// The rules panel's form and confirmation are of the account whose picture shows, which a
+    /// `Status` may have changed: those of another go. The confirmation goes for good, too, once
+    /// "delete all" cannot be pressed, as a read leaves it: one that came back later would ask
+    /// about what may no longer hold.
+    fn rules_reviewed(&mut self) {
+        let shown = self
+            .picture_account()
+            .and_then(|alias| self.instances.iter().find(|instance| instance.alias == alias))
+            .map(|instance| (instance.alias.clone(), instance.instance_id.clone()));
+        self.actions.rules_follow(shown.as_ref().map(|(_, id)| id.as_str()));
+        if self.actions.rules_confirm().is_none() {
+            return;
+        }
+        let offered = shown.is_some_and(|(alias, _)| match self.rules_view(&alias) {
+            Some(RulesView::Read(rules)) => rules.quiet.confirming,
+            Some(RulesView::Reading | RulesView::ReadFailed { .. } | RulesView::Unreported)
+            | None => false,
+        });
+        if !offered {
+            self.actions.rules_unconfirm();
         }
     }
 
@@ -948,6 +1019,7 @@ impl Model {
             self.displays = None;
         }
         self.rescue_reviewed();
+        self.rules_reviewed();
         LiveLanded {
             previous,
             connected,
@@ -1002,6 +1074,8 @@ impl Model {
             Some(problem) => News::Failed(problem),
             None => News::Recovered,
         };
+        // A read that failed holds the rules as well as one that came changes them.
+        self.rules_reviewed();
         ConfigLanded { news, preset, fault_cleared }
     }
 

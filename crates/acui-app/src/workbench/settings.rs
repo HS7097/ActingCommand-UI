@@ -15,8 +15,10 @@
 //! One row's setting is changed here: how many days an evidence frame nobody confirmed reading
 //! is kept, the one the Runtime tiers advanced and takes while it runs. Its row is a field and
 //! "save" (`actions::evidence_view`), in its place among the others. Every other row says how
-//! its value is changed: in the configuration file with a restart, by the installer, or not on
-//! this page for now. Each device's backends are changed in its group, below the rows.
+//! its value is changed: in the configuration file with a restart, by the installer, on the
+//! main page's rules panel of its account (UI-3e1-b: an account's own quiet times and idle
+//! action, and whether the Runtime starts and watches the emulator of one bound by discovery),
+//! or not on this page for now. Each device's backends are changed in its group, below the rows.
 //!
 //! And what the start report of this owner epoch says of the settings changed while a Runtime
 //! ran: which this start did not restore, and which it kept over a default that changed.
@@ -148,6 +150,9 @@ pub enum Change {
     FileAndRestart,
     /// The installer sets it.
     Installer,
+    /// The Runtime takes a change while it runs, and the main page's rules panel of the
+    /// setting's account offers one (UI-3e1-b).
+    OnMainPage,
 }
 
 /// `read` of the Runtime `link` names, unless the reads since failed (`failed`); its
@@ -197,8 +202,20 @@ pub fn view(
             evidence = Some(actions::evidence_view(days, row.source, actions));
             continue;
         }
+        // An account the newest `Status` lists has a rules panel, fixtures' included; only one
+        // bound by discovery has its emulator started by the Runtime, which no other may have on.
+        let on_main_page = row.instance.as_deref().is_some_and(|id| {
+            instances.iter().any(|instance| {
+                instance.instance_id == id
+                    && match &row.name {
+                        SettingName::QuietTimes | SettingName::IdleAction => true,
+                        SettingName::StartEmulator => instance.emulator_controls.start,
+                        _ => false,
+                    }
+            })
+        });
         let account = row.instance.map(|id| account_of(instances, id));
-        let change = change_of(&row.name, row.settable);
+        let change = change_of(&row.name, row.settable, on_main_page);
         let line = SettingLine {
             name: row.name,
             account,
@@ -354,11 +371,13 @@ pub fn autostart_of(read: &WatchdogRead) -> AutostartView {
 }
 
 /// The Lab's options are the installer's, whatever the Runtime takes; any other setting the
-/// Runtime does not take while it runs is the file's.
-fn change_of(name: &SettingName, settable: bool) -> Change {
+/// Runtime does not take while it runs is the file's; one it takes is changed on the main page
+/// when its account's rules panel offers it (`on_main_page`).
+fn change_of(name: &SettingName, settable: bool, on_main_page: bool) -> Change {
     match name {
         SettingName::LabAuthoring | SettingName::LabDebugging => Change::Installer,
         _ if !settable => Change::FileAndRestart,
+        _ if on_main_page => Change::OnMainPage,
         _ => Change::ViewOnly,
     }
 }
@@ -458,6 +477,7 @@ pub fn change_words(labels: &Labels, change: Change) -> &'static str {
         Change::ViewOnly => labels.setting_view_only,
         Change::FileAndRestart => labels.setting_file_restart,
         Change::Installer => labels.setting_by_installer,
+        Change::OnMainPage => labels.setting_on_main_page,
     }
 }
 
