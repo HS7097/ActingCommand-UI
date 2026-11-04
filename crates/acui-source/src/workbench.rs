@@ -112,18 +112,6 @@ pub const IDLE_STOP_EMULATOR: &str = IdleAction::StopEmulator.as_str();
 pub const PRIORITY_NORMAL: &str = ProcessPriorityLevel::Normal.token();
 pub const PRIORITY_LOW: &str = ProcessPriorityLevel::Low.token();
 
-/// The words of an instance's touch and capture backends (`touch_backend`, `capture_backend`,
-/// Runtime 0.12.39's #402 HS-1), likewise: words of the key table's two ranges
-/// (`TOUCH_BACKEND_TOKENS`, `CAPTURE_BACKEND_TOKENS`), which the Runtime's configuration crate
-/// spells only inside those lists. MuMu's own, Nemu IPC, is a word of both.
-pub const TOUCH_ADB_SHELL_INPUT: &str = "adb_shell_input";
-pub const TOUCH_MAATOUCH: &str = "maatouch";
-pub const TOUCH_MINITOUCH: &str = "minitouch";
-pub const CAPTURE_ADB: &str = "adb";
-pub const CAPTURE_DROIDCAST_RAW: &str = "droidcast_raw";
-pub const CAPTURE_SCRCPY: &str = "scrcpy";
-pub const BACKEND_NEMU_IPC: &str = "nemu_ipc";
-
 /// The MuMu root actingd discovers the emulator from: a key of the console's tiers, whose
 /// spelling the crate keeps to itself (a key of the start-up assembly).
 const MUMU_ROOT: &str = "mumu_root";
@@ -477,8 +465,8 @@ impl ConfigEdit {
 
     /// Whether it changes an instance's backends ([`ConfigEdit::backends`]): the Runtime switches
     /// that device before it answers, so the answer takes as long as the switch, which the
-    /// client waits `BACKEND_SWITCH_WAIT_MS` and its io timeout for, and an answer lost is an
-    /// [`backends::UnconfirmedSwitch`]'s, not another change's.
+    /// client waits `BACKEND_SWITCH_WAIT_MS` and its io timeout for ([`backends::switch_wait`]),
+    /// and an answer lost is an [`backends::UnconfirmedSwitch`]'s, not another change's.
     pub fn switches_backends(&self) -> bool {
         self.0.iter().any(|change| is_instance_backend_key(&change.key))
     }
@@ -589,17 +577,14 @@ const RANGE_MAX: &str = "range_max";
 /// problem and no range, and no cause of a refused switch of backends.
 ///
 /// A change of an instance's backends switches that device before the Runtime answers: the
-/// client then waits for the receipt `BACKEND_SWITCH_WAIT_MS` (63 s) and the io timeout (5 s by
-/// default), where any other change answers at once. It waits on the caller's thread, so that is
-/// never the event loop's. That wait is the Runtime's bound of the switch's claim and its two
-/// preparations, not of the closes, the emulator's reading and the records around them: the
-/// client may give up, or its connection fail, while the switch goes on, and its unconfirmed
-/// answer is then a [`backends::UnconfirmedSwitch`]'s.
+/// client then waits for the receipt the contract's `BACKEND_SWITCH_WAIT_MS` and the io timeout
+/// ([`backends::switch_wait`]), where any other change answers at once. It waits on the caller's
+/// thread, so that is never the event loop's. That wait is the Runtime's worst case of the whole
+/// switch, but a session close has no source bound and a ledger writer may be configured above
+/// its default: the client may give up, or its connection fail, while the switch goes on, and its
+/// unconfirmed answer is then a [`backends::UnconfirmedSwitch`]'s.
 pub fn configure(root: &Path, edit: &ConfigEdit, expected: Option<u64>) -> ConfigOutcome {
-    let connected = RuntimeClient::connect(
-        RuntimeClientConfig::new(root, RuntimeChannel::Ui, EventActor::User, EventSource::Ui)
-            .with_detail(Detail::Full),
-    );
+    let connected = RuntimeClient::connect(configure_config(root));
     let client = match connected {
         Ok(client) => client,
         Err(error) => return ConfigOutcome::NotSent(ClientFailure::from(error)),
@@ -608,6 +593,20 @@ pub fn configure(root: &Path, edit: &ConfigEdit, expected: Option<u64>) -> Confi
         Ok(configured) => ConfigOutcome::Applied { version: configured.config_version },
         Err(error) => configure_failed(error, edit.switches_backends()),
     }
+}
+
+/// The client configuration of [`configure`]'s connection: a person's, asking for the full
+/// receipt, at the client's default io timeout.
+fn configure_config(root: &Path) -> RuntimeClientConfig {
+    RuntimeClientConfig::new(root, RuntimeChannel::Ui, EventActor::User, EventSource::Ui)
+        .with_detail(Detail::Full)
+}
+
+/// The io timeout of [`configure`]'s connection, which the client adds to the receipt wait of a
+/// switch of backends ([`backends::switch_wait`]): read from the same configuration, whose state
+/// root plays no part in it, so that it is the client's default and not a copy of it.
+fn configure_io_timeout() -> Duration {
+    configure_config(Path::new("")).io_timeout()
 }
 
 /// A failure after the connection that is no refusal counts as unconfirmed, as for

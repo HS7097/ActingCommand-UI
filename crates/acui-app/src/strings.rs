@@ -619,10 +619,13 @@ pub struct Labels {
     /// The settings page's group of one device's backends (HS-U): its title, with the account;
     /// its two rows' names; each backend's name as the contract's table has them, MuMu's own
     /// one name for both; an online value's when and through which way, and the file's value
-    /// under it; when a change takes effect; the pair; the question a capture under MuMu's own
-    /// touch asks, the first choice of its box and its two buttons; "use the file's value",
-    /// and that it takes the other along; the device's self-check, each entry with what it came
-    /// to, when in `backend_paren`; where the group stands.
+    /// under it; when a change takes effect, with the switch claim's wait and the client's whole
+    /// wait for the switch in whole seconds (`settings::backend_effect_words`); the pair; the
+    /// question a capture under MuMu's own touch asks, the first choice of its box and its two
+    /// buttons; "use the file's value", and that it takes the other along; the device's
+    /// self-check, each entry with what it came to, when in `backend_paren`; where the group
+    /// stands, a switch out with the client's whole wait in whole seconds
+    /// (`settings::switching_words`).
     pub backend_group: &'static str,
     pub backend_touch: &'static str,
     pub backend_capture: &'static str,
@@ -1435,7 +1438,7 @@ pub const ZH: Labels = Labels {
     backend_through_lab: "Lab",
     backend_through_other: "其他入口",
     backend_file_value: "文件里是 {}",
-    backend_effect: "实例空闲时立刻生效（最多等 3 秒）；切换时这台会重连并自检一次，最长约 65 秒",
+    backend_effect: "实例空闲时立刻生效（最多等 {} 秒）；切换时这台会重连并自检一次，最长约 {} 秒",
     backend_pair_note: "MuMu 原生触控只能配 MuMu 原生截图，两项会一起改",
     backend_ask: "截图不再用 MuMu 原生，触控也要一起改成哪个？",
     backend_ask_pick: "请选择触控后端",
@@ -1454,7 +1457,7 @@ pub const ZH: Labels = Labels {
     backend_check_failed: "没通过",
     backend_check_unsure: "不确定",
     backend_check_unread: "读不懂",
-    backend_switching: "切换中…（最长约 65 秒），不会重发",
+    backend_switching: "切换中…（最长约 {} 秒），不会重发",
     backend_other_write: "另一项设置正在保存，稍后再改",
     backend_kind_unread: "这台设备的种类读不懂，这一组只能看",
     backend_row_unread: "这一组有一行读不懂，只能看",
@@ -2153,7 +2156,7 @@ pub const EN: Labels = Labels {
     backend_through_lab: "the Lab",
     backend_through_other: "another way",
     backend_file_value: "the file has {}",
-    backend_effect: "Takes effect at once on a free device (waiting at most 3 seconds); the device reconnects and self-checks once, up to about 65 seconds",
+    backend_effect: "Takes effect at once on a free device (waiting at most {} seconds); the device reconnects and self-checks once, up to about {} seconds",
     backend_pair_note: "MuMu native touch goes only with MuMu native capture; both change together",
     backend_ask: "Capture no longer uses MuMu native: which touch backend goes with it?",
     backend_ask_pick: "Pick a touch backend",
@@ -2172,7 +2175,7 @@ pub const EN: Labels = Labels {
     backend_check_failed: "failed",
     backend_check_unsure: "not sure",
     backend_check_unread: "unreadable",
-    backend_switching: "Switching… (up to about 65 seconds); not sent again",
+    backend_switching: "Switching… (up to about {} seconds); not sent again",
     backend_other_write: "Another setting is being saved; change this afterwards",
     backend_kind_unread: "This device's kind does not read; this group is shown only",
     backend_row_unread: "A row of this group does not read; it is shown only",

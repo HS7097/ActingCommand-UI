@@ -809,7 +809,8 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_touch_backend(labels.backend_touch.into());
     global.set_capture_backend(labels.backend_capture.into());
     global.set_use_file_value(labels.backend_use_file_value.into());
-    global.set_backend_effect(labels.backend_effect.into());
+    // Its seconds are the contract's and the client's, filled in here.
+    global.set_backend_effect(workbench::settings::backend_effect_words(labels).into());
     global.set_backend_pair_note(labels.backend_pair_note.into());
     global.set_backend_ask(labels.backend_ask.into());
     global.set_apply_both(labels.backend_apply_both.into());

@@ -46,7 +46,8 @@
 //! switches that device before the Runtime answers. MuMu's own touch goes only with MuMu's own
 //! capture: picking it brings that capture along, and picking another capture under it asks
 //! which touch goes along before both are sent. "Use the file's value" sends a clear, which is
-//! a switch as well. The answer takes as long as the switch, up to about 65 seconds, and its
+//! a switch as well. The answer takes as long as the switch, at most the client's whole wait
+//! (the contract's `BACKEND_SWITCH_WAIT_MS` and the io timeout, `backends::switch_wait`), and its
 //! group says it is switching meanwhile; what it came to is said on a line of its own, naming
 //! the account. An answer lost is no other change's (`Reread::Switch`): the device may still be
 //! switching, and the settings' version moves only at the switch's end, so nothing is judged

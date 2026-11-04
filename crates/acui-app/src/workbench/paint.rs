@@ -769,11 +769,16 @@ fn backend_item(
             selfcheck_view.entries.iter().any(|(_, status)| *status == CheckStatus::Failed),
         ),
     };
+    // The client's whole wait, in seconds, only while a switch is out.
+    let switching = match edit.state {
+        GroupState::Switching => settings::switching_words(labels),
+        _ => String::new(),
+    };
     let (status, status_failed) = match edit.state {
         GroupState::Open => ("", false),
         GroupState::KindUnread => (labels.backend_kind_unread, true),
         GroupState::RowUnread => (labels.backend_row_unread, true),
-        GroupState::Switching => (labels.backend_switching, false),
+        GroupState::Switching => (switching.as_str(), false),
         GroupState::Unconfirmed { over: false } => (labels.backend_unconfirmed, true),
         GroupState::Unconfirmed { over: true } | GroupState::Rereading => {
             (labels.backend_rereading, false)
@@ -1272,7 +1277,7 @@ fn settings_text(labels: &Labels, view: &ActionsView, field: Field) -> (String, 
 /// What a switch of a device's backends came to, where that differs from any change's words.
 fn switch_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, bool) {
     match said {
-        Said::Sending(_) => (labels.backend_switching.to_owned(), false),
+        Said::Sending(_) => (settings::switching_words(labels), false),
         Said::ConfigApplied => (labels.backend_switched.to_owned(), false),
         // Whether the device switched or, the file's value being the one in effect, did not.
         Said::BackToFile => (labels.backend_back_to_file.to_owned(), false),

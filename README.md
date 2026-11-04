@@ -410,8 +410,10 @@ in a drop-down of the backends that kind of device has (ADB input, MaaTouch, min
 emulator, MuMu native (Nemu IPC) for touch; ADB screenshot and, on an emulator, DroidCast and MuMu native,
 or on a handset scrcpy, for capture), with where the value comes from (the configuration file, or set
 online, when and through which way) and the device's latest self-check. Apply switches that device at
-once if it is free (waiting at most 3 seconds): it reconnects and self-checks on the new backends, which
-takes up to about 65 seconds, and the group says "Switching…" meanwhile. MuMu native touch goes only with
+once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
+reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.39, plus the client's 5 s IO margin; the page takes
+both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
 switch too (both rows together when clearing one alone could break that pair), unless the file's value is
@@ -420,7 +422,7 @@ The result has a line of its own under the top bar, naming the account, and a re
 the device is busy (with what), played, fenced, not running, or the new backend did not open (and why: for
 MuMu native touch, say, the game package configured for the device is not installed, or the game is not
 running) and the previous one is back or did not come back either. Nothing is sent again by itself: when a switch's result is unknown the
-console waits until the Runtime shows the device no longer switching, then says what holds now, with the
+console waits out that whole wait and until the Runtime shows the device no longer switching, then says what holds now, with the
 device's self-check. A Runtime before 0.12.39 has no such settings, and then no group shows. After every start of the Runtime its start report is read once: when an update
 or a rollback reset settings changed online, the line under the top bar and the settings page say which;
 "Got It" hides that line for this start. Online settings kept over a default that changed are said in

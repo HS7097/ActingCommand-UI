@@ -26,8 +26,8 @@
 //! or both, in one request based on the snapshot's version. The Runtime switches that device
 //! before it answers, all of it or nothing, and refuses a request that mixes in anything else
 //! (`backend_switch_not_alone`). The client waits for that answer itself: a `ConfigureSettings`
-//! that names a backend key waits `BACKEND_SWITCH_WAIT_MS` (63 s) and its io timeout for the
-//! receipt, on the thread that sends it. It goes once, whatever comes back.
+//! that names a backend key waits the contract's `BACKEND_SWITCH_WAIT_MS` and its io timeout for
+//! the receipt ([`switch_wait`]), on the thread that sends it. It goes once, whatever comes back.
 //!
 //! An answer lost on the way is no answer of any other change ([`UnconfirmedSwitch`]): the
 //! Runtime may still be switching the device, and the settings' version stays as it was until
@@ -42,7 +42,7 @@ use actingcommand_contract::outcome::{CauseRelation, Outcome};
 use actingcommand_contract::{
     is_instance_backend_key, ConfigSettingChange, DeviceSelfCheckEntry, DeviceSelfCheckStatus,
     FactScalar, FactValue, RuntimeFactRecord, RuntimeFactScope, BACKEND_SWITCH_WAIT_MS,
-    CONFIG_OVERRIDES_FACT_KEY, CONFIG_PARAMETERS_FACT_PREFIX,
+    CONFIG_OVERRIDES_FACT_KEY, CONFIG_PARAMETERS_FACT_PREFIX, CONNECTION_PREPARATION_CLAIM_WAIT_MS,
 };
 use actingcommand_runtime_client::RuntimeChannel;
 use actingcommand_runtime_config::performance::presets;
@@ -438,12 +438,27 @@ fn backend_change<T: BackendWord>(
     })
 }
 
-/// The longest the Runtime says it takes to answer a switch of an instance's backends
-/// (`BACKEND_SWITCH_WAIT_MS`: the switch claim's wait in the instance's queue, and the
-/// preparations of the new backends and of the previous ones after a failed candidate). The
-/// closes of the device's session, the emulator's reading and the records come on top of it, so
-/// it bounds no switch: it is only the earliest an unconfirmed one may be over.
-pub const SWITCH_WAIT: Duration = Duration::from_millis(BACKEND_SWITCH_WAIT_MS);
+/// The longest a switch's claim waits for its turn in the instance's queue: the contract's
+/// `CONNECTION_PREPARATION_CLAIM_WAIT_MS`, the first term of `BACKEND_SWITCH_WAIT_MS`. A device
+/// free within it switches; one still busy then is refused (`backend_busy`). The settings page
+/// says it in whole seconds.
+pub const CLAIM_WAIT: Duration = Duration::from_millis(CONNECTION_PREPARATION_CLAIM_WAIT_MS);
+
+/// How long the client waits for the answer to a switch of an instance's backends, as
+/// runtime-client reckons it: the receipt wait of a `ConfigureSettings` that names a backend key
+/// is `BACKEND_SWITCH_WAIT_MS` plus the connection's io timeout (`receipt_response_timeout`,
+/// crates/runtime-client/src/client.rs:6766-6779 at v0.12.39). [`super::configure`] leaves that
+/// io timeout at the client's default (`DEFAULT_RUNTIME_IO_TIMEOUT`, client.rs:86), which is read
+/// back from the same configuration (`configure_io_timeout`), not spelled here.
+///
+/// The contract's constant is the switch's worst case (#402 HS-2b, register §1.274: the claim,
+/// the two session closes, the two preparations and the commit's ledger write). A close slower
+/// than its allowance, or a ledger writer configured above its default, can outlast it, so this
+/// bounds no switch: it is the earliest an unconfirmed one may be over. The settings page says it
+/// in whole seconds.
+pub fn switch_wait() -> Duration {
+    Duration::from_millis(BACKEND_SWITCH_WAIT_MS).saturating_add(super::configure_io_timeout())
+}
 
 /// A switch of an instance's backends whose answer was lost: the
 /// [`super::ConfigOutcome::Unconfirmed`] of a change that `switches_backends` (the client's wait
@@ -454,11 +469,12 @@ pub const SWITCH_WAIT: Duration = Duration::from_millis(BACKEND_SWITCH_WAIT_MS);
 /// changes no setting before it commits, at the switch's very end (the device's steps run
 /// outside the settings' gate), so a snapshot at the version the switch was based on says
 /// nothing of it while it may go on: neither that it did not happen nor that it may be asked
-/// again. It is over ([`UnconfirmedSwitch::seen`]) once [`SWITCH_WAIT`] has passed since it was
+/// again. It is over ([`UnconfirmedSwitch::seen`]) once [`switch_wait`] has passed since it was
 /// sent and a `Status` shows the instance doing anything but a self-check: the switch shows as
 /// one from its claim's grant until it answers, after its commit, and its claim waits at most
-/// 3 s of that wait, so one not shown by then never began. Only a snapshot read after that
-/// `Status` tells what came of it ([`UnconfirmedSwitch::verdict`]). Nothing here sends it again.
+/// [`CLAIM_WAIT`] of that wait, so one not shown by then never began. Only a snapshot read after
+/// that `Status` tells what came of it ([`UnconfirmedSwitch::verdict`]). Nothing here sends it
+/// again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnconfirmedSwitch {
     instance: String,
@@ -481,7 +497,7 @@ impl UnconfirmedSwitch {
 
     /// What a `Status` that landed at `now` says of it, `instances` being that status's.
     pub fn seen(&self, now: Instant, instances: &[InstanceLive]) -> SwitchSeen {
-        if now.saturating_duration_since(self.sent) < SWITCH_WAIT {
+        if now.saturating_duration_since(self.sent) < switch_wait() {
             return SwitchSeen::MayGoOn;
         }
         let Some(instance) = instances.iter().find(|instance| instance.instance_id == self.instance)
@@ -514,7 +530,7 @@ impl UnconfirmedSwitch {
 /// What a `Status` says of an unconfirmed switch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SwitchSeen {
-    /// It may still go on: not [`SWITCH_WAIT`] since it was sent, or the instance shows a
+    /// It may still go on: not [`switch_wait`] since it was sent, or the instance shows a
     /// self-check, the switch's or another's. Nothing is to be said of it but that, and nothing
     /// of a version.
     MayGoOn,
