@@ -120,13 +120,28 @@ const GLOBAL_SCHEDULING: (Scope, Kind) = (Scope::Global, Kind::Scheduling);
 const GLOBAL_SETTINGS: (Scope, Kind) = (Scope::Global, Kind::Settings);
 
 /// Where a change of settings was asked for, which is where what it came to is said: the
-/// top bar's presets and stepper, the settings page's field of the evidence days, or its
-/// group of one device's backends (`Actions::backend_said_of` names which).
+/// top bar's presets and stepper, the settings page's field of the evidence days, its
+/// group of one device's backends (`Actions::backend_said_of` names which), or one of an
+/// account's rules on the main page's rules panel (UI-3e1-b).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Field {
     TopBar,
     EvidenceDays,
     Backends,
+    Rules(RuleItem),
+}
+
+/// Which of an account's rules a change from its rules panel is of. The account is not part
+/// of it: the line of each speaks of the account last written from the panel, as the
+/// backends' line does of its device, so that `Field` stays a plain value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RuleItem {
+    /// Its own quiet times.
+    Quiet,
+    /// What is done with it when it has no task soon.
+    Idle,
+    /// Whether the Runtime starts and watches its emulator.
+    Start,
 }
 
 /// The line what a press came to is said on: one for pausing and resuming, and one for each
@@ -446,6 +461,8 @@ impl Actions {
             Field::EvidenceDays => self.evidence_draft.as_mut(),
             // Each device's own, by its instance (`backends_settled`).
             Field::Backends => None,
+            // A rule's change is sent as it is pressed, from no draft.
+            Field::Rules(_) => None,
         }
     }
 
@@ -532,6 +549,7 @@ impl Actions {
                                 self.backend_drafts.remove(instance);
                             }
                         }
+                        Field::Rules(_) => {}
                     }
                 }
                 log_verdict(reread, field, read.version, &said);

@@ -1723,6 +1723,8 @@ fn settings_text(labels: &Labels, view: &ActionsView, field: Field) -> (String, 
         Field::TopBar => &view.settings_said,
         Field::EvidenceDays => &view.evidence_said,
         Field::Backends => &view.backends_said,
+        // A rule's line is its panel's, never one of these.
+        Field::Rules(_) => return (String::new(), false),
     };
     let (text, failed) = if view.reread_failed == Some(field) {
         (labels.config_reread_failed.to_owned(), true)
@@ -1747,6 +1749,7 @@ fn settings_text(labels: &Labels, view: &ActionsView, field: Field) -> (String, 
             let account = view.backends_account.as_deref().unwrap_or(labels.start_account_gone);
             (fill(labels.backend_said, &[account, &text]), failed)
         }
+        Field::Rules(_) => (String::new(), false),
     }
 }
 
