@@ -69,10 +69,11 @@
 //! and the rows are still of before it, so a list derived from them would undo that change and
 //! the Runtime would take it. Deleting every quiet time takes two presses. A time typed into the
 //! form to add that does not say a day and two times of day, or a list too long for one value or
-//! that the Runtime's parser does not take, is said there and not sent. Stopping the emulator when
-//! idle cannot be picked here (Alice's ruling 157), and the emulator's start is not turned off,
-//! nor gone back to the file's value, while the idle action in effect stops the emulator, which
-//! the Runtime takes only with it on: the person changes the idle action first.
+//! that the Runtime's parser does not take, is said there and not sent; a delete that leaves a
+//! list still too long for one value is said on the quiet times' line, and not sent. Stopping the
+//! emulator when idle cannot be picked here (Alice's ruling 157), and the emulator's start is not
+//! turned off, nor gone back to the file's value, while the idle action in effect stops the
+//! emulator, which the Runtime takes only with it on: the person changes the idle action first.
 //!
 //! `view`, `preset_view`, `evidence_view`, `backend_edit` and `rules_view` are pure functions of
 //! what the reads and the presses left, without words; `paint` makes the words.
@@ -304,6 +305,9 @@ pub enum Said {
     UnconfirmedSeeNow,
     /// "Apply" found no whole number in the stepper's field: nothing was sent.
     NotWhole,
+    /// A quiet time's "delete" left a list still longer than one value of a setting may be:
+    /// nothing was sent. "Add" says the same in its form (`FormProblem::TooBig`).
+    QuietTooBig,
     /// The Runtime refused a change of a device's backends, and said more of it than its class.
     BackendRefused(BackendRefusal),
     /// A device's "use the file's value" changed the settings as asked: the file's value is in
@@ -430,8 +434,8 @@ pub struct Actions {
     /// changes it.
     said: BTreeMap<SaidAt, Said>,
     /// The instance id of the account the rules' lines speak of: the last one a rule was
-    /// written for from its panel. Another account's write lets go of every line of the one
-    /// before (`send_rules`).
+    /// written for from its panel, or whose "delete" was stopped here (`Said::QuietTooBig`).
+    /// Another account's lets go of every line of the one before (`Actions::rules_speak_of`).
     rules_target: Option<String>,
     /// The rules panel's form of a quiet time to add.
     quiet_form: QuietForm,
@@ -624,6 +628,15 @@ impl Actions {
             return None;
         }
         self.said.get(&SaidAt::Settings(Field::Rules(item)))
+    }
+
+    /// The rules' lines speak of the account of `instance` from now on: what they said of
+    /// another goes.
+    fn rules_speak_of(&mut self, instance: &str) {
+        if self.rules_target.as_deref() != Some(instance) {
+            self.said.retain(|at, _| !matches!(at, SaidAt::Settings(Field::Rules(_))));
+            self.rules_target = Some(instance.to_owned());
+        }
     }
 
     /// The instance id of the account whose "delete all" quiet times asked to confirm.
@@ -2340,8 +2353,9 @@ fn quiet_problem(ui: &Ui, instance: &str, problem: FormProblem) {
 }
 
 /// A quiet time's "delete": the account's list without the one at `index`, every other as it
-/// is, sent once as a whole list. One of an entry the list has not is this program's fault, in
-/// the log.
+/// is, sent once as a whole list. A list still too long for one value is said on the quiet
+/// times' line, and not sent. One of an entry the list has not is this program's fault, in the
+/// log.
 pub fn quiet_delete(ui: &Ui, index: i32) {
     let Some(rules) = rules_pressed(ui) else {
         paint::rescue(ui);
@@ -2362,12 +2376,25 @@ pub fn quiet_delete(ui: &Ui, index: i32) {
     };
     match ConfigEdit::quiet_times(&list) {
         Ok(edit) => send_rules(ui, id, RuleItem::Quiet, edit),
-        // One entry fewer of a list the Runtime's parser took, so neither is to be: this
-        // console's fault, and nothing goes out.
-        Err(not_sent) => {
-            let line = format!(
-                "instance {id}: the quiet times with one deleted were not sent: {not_sent:?}"
-            );
+        // The list read may be the file's, which the bound on one online value does not hold,
+        // and each entry goes back as the parser writes it, which may be longer than as it was
+        // read: one entry fewer may still be too long. That is said, as "add"'s form says it,
+        // and nothing goes out.
+        Err(QuietNotSent::TooBig) => {
+            {
+                let mut model = ui.model.borrow_mut();
+                let actions = model.actions_mut();
+                actions.rules_speak_of(id);
+                let at = SaidAt::Settings(Field::Rules(RuleItem::Quiet));
+                actions.said.insert(at, Said::QuietTooBig);
+            }
+            paint::rescue(ui);
+        }
+        // One entry fewer of a list the Runtime's parser took: that it does not take it is this
+        // console's fault, in the log, and nothing goes out.
+        Err(QuietNotSent::NotTaken(why)) => {
+            let line =
+                format!("instance {id}: the quiet times with one deleted were not sent: {why}");
             report::log(CONFIG_THREAD, &line);
             paint::rescue(ui);
             ui.paint_log_notes();
@@ -2494,14 +2521,7 @@ pub fn start_back_to_file(ui: &Ui) {
 /// snapshot lands between that press and this on the event loop. The rules' lines speak of this
 /// account from now on: what they said of another goes.
 fn send_rules(ui: &Ui, instance: &str, item: RuleItem, edit: ConfigEdit) {
-    {
-        let mut model = ui.model.borrow_mut();
-        let actions = model.actions_mut();
-        if actions.rules_target.as_deref() != Some(instance) {
-            actions.said.retain(|at, _| !matches!(at, SaidAt::Settings(Field::Rules(_))));
-            actions.rules_target = Some(instance.to_owned());
-        }
-    }
+    ui.model.borrow_mut().actions_mut().rules_speak_of(instance);
     send_config(ui, edit, Field::Rules(item));
 }
 

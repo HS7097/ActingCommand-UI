@@ -1055,9 +1055,10 @@ pub struct Labels {
     /// computer's (`UTC+9`); none of its own; its list not read. The form of a time to add: the
     /// button that opens it, "from" and "to" its two fields, what each says when empty, "add",
     /// how a time is read; why "add" sent nothing: no day ticked, a time not hours and minutes,
-    /// too long to save, not taken by the Runtime's own check. "Delete", "delete all", the
-    /// question its first press asks (the account) and its confirming button. The Runtime
-    /// refused the list. Every account's own quiet times: some, none, not read.
+    /// too long to save, not taken by the Runtime's own check. "Delete", and why it sent nothing:
+    /// the list without that time still too long to save. "Delete all", the question its first
+    /// press asks (the account) and its confirming button. The Runtime refused the list. Every
+    /// account's own quiet times: some, none, not read.
     pub rules_quiet_note: &'static str,
     pub rules_weekdays: [&'static str; 7],
     pub rules_quiet_weekly: &'static str,
@@ -1079,6 +1080,7 @@ pub struct Labels {
     pub rules_form_too_big: &'static str,
     pub rules_form_not_taken: &'static str,
     pub rules_delete: &'static str,
+    pub rules_delete_too_big: &'static str,
     pub rules_clear: &'static str,
     pub rules_clear_ask: &'static str,
     pub rules_clear_confirm: &'static str,
@@ -1958,6 +1960,7 @@ pub const ZH: Labels = Labels {
     rules_form_too_big: "时段太多或太长，存不下；先删掉几段",
     rules_form_not_taken: "时段太多，或这一段 Runtime 不认，没有存；先删掉几段（详情见技术日志）",
     rules_delete: "删除",
+    rules_delete_too_big: "删掉这一段后仍然太长，存不下；可以先「全部删除」，再逐段添加",
     rules_clear: "全部删除",
     rules_clear_ask: "全部删除 {} 的免打扰时段？会在线设成「没有免打扰」，配置文件里写的也不再用；要用回文件里的，点「回到文件设定」。",
     rules_clear_confirm: "确认删除",
@@ -2794,7 +2797,7 @@ pub const EN: Labels = Labels {
     rules_reading: "Reading the settings…",
     rules_read_failed: "The settings cannot be read; nothing can be changed for now",
     rules_reread_failed: "The settings cannot be read, and what came of the last change is not known yet; nothing can be changed for now",
-    rules_switching: "The settings page is switching {}'s touch and capture backends; change these once that is over",
+    rules_switching: "The settings page is switching the touch and capture backends of {}; change these once that is over",
     rules_other_write: "Another setting is being saved; wait a moment",
     rules_rows_behind: "Reading the newest settings…",
     rules_saved_reading: "Saved; reading the newest settings…",
@@ -2820,6 +2823,7 @@ pub const EN: Labels = Labels {
     rules_form_too_big: "Too many times to save; remove some first",
     rules_form_not_taken: "Too many times, or one the Runtime does not take; nothing was saved. Remove some first (see the technical log)",
     rules_delete: "Delete",
+    rules_delete_too_big: "Even without this time, the list is too long to save; Delete All first, then add the times one by one",
     rules_clear: "Delete All",
     rules_clear_ask: "Delete all of {}'s quiet times? They are set online to none, and the configuration file's are no longer used; Back to File Setting brings those back.",
     rules_clear_confirm: "Confirm and Delete",

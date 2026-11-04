@@ -2246,6 +2246,8 @@ fn said_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, bool)
         Said::UnconfirmedChanged => (labels.config_unconfirmed_changed.to_owned(), true),
         Said::UnconfirmedSeeNow => (labels.config_unconfirmed_see_now.to_owned(), true),
         Said::NotWhole => (labels.concurrency_not_whole.to_owned(), true),
+        // Only the quiet times' line says it: only their "delete" comes to it.
+        Said::QuietTooBig => (labels.rules_delete_too_big.to_owned(), true),
         Said::Rereading(Reread::Switch) => (labels.backend_unconfirmed.to_owned(), true),
         Said::BackendRefused(refusal) => (backend_refusal_text(labels, refusal), true),
         Said::SwitchOver { version, now } => {
