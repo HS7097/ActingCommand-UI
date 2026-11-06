@@ -136,7 +136,7 @@ Runtime 在运行，就给出「重新打开」并写明可以改为在线读取
 （#404 FS-3：账本修订 7 给 `task.selection_evaluated` 记录加了两种确认 `tracked`、`track_lost`，只有声明了
 `confirm: "track"` 的包的 select 步才写；建在修订 6 上的控制台读不了，含这种记录的账本页整页失败。
 v0.12.40 以来 contract crate 别的只多了性能状态的可选成员 `memory`、`vision`（#407 PERF-READ，`runtime-client`
-修订 6，控制台不发这个请求），嵌入的结果码目录多了警告 `perf_memory_unavailable` 和值键 `confirm`、`shift_px`；
+修订 6，控制台不发这个请求），嵌入的结果码目录多了警告 `perf_memory_unavailable`、值键 `confirm`、`shift_px` 和新词表 `selection_confirm`；
 artifact-store 的帧库为这个状态记下自己占的内存；控制台链接的其他 Runtime crate 都没改。
 v0.12.40 起 #402 HS-5：切到 MuMu 原生触控不再要求游戏在跑；这台自己的后端没打开而起的围栏不再挡切换，设置页的
 「恢复为文件值」切回文件里的后端、自检通过就解除它。

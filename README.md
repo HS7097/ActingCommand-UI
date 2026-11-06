@@ -189,7 +189,7 @@ record, which only a select step of a package declaring `confirm: "track"` write
 revision 6 cannot read, so the ledger page that holds one fails whole; since v0.12.40 the contract crate
 otherwise only gained the performance status's optional members `memory` and `vision`, #407 PERF-READ,
 `runtime-client` revision 6, a status the console never asks for, and in the outcome-code catalog it embeds the
-warning `perf_memory_unavailable` and the value keys `confirm` and `shift_px`; artifact-store's frame stores
+warning `perf_memory_unavailable`, the value keys `confirm` and `shift_px` and the new vocabulary `selection_confirm`; artifact-store's frame stores
 count what they hold for that status, and the other Runtime crates the console links are unchanged;
 v0.12.40's #402 HS-5: a switch to MuMu native touch no longer needs the game running, and a fence that the
 device's own backend open caused no longer refuses a switch, so "Use File Value" on the settings page can lift
