@@ -10,9 +10,11 @@ host's keys (`compute.workers.*`, `engine.*`, `engines.*`) by `acmodel.engine.se
 generic search's (the other keys under `search`) are `SearchSettings`, and the validator of the exports is
 `paths.actinglab` (no default: an export that needs it refuses without it) and `export.validator_timeout_ms`.
 
-`paths.state_root`, as configured or by default, is checked last: a state root that is a Runtime install root or lies
-inside one (`acmodel.location`) is `config_invalid` (`runtime_install_root`, or `runtime_install_unchecked` when a level
-cannot be looked at) at `/paths/state_root`, so no command writes anything there (#424, 2026-11-09).
+`paths.state_root` and `paths.venv`, as configured or by default, are checked last (`OUTSIDE_RUNTIME`): each that is a
+Runtime install root or lies inside one (`acmodel.location`) is one `config_invalid` (`runtime_install_root`, or
+`runtime_install_unchecked` when a level cannot be looked at) at `/paths/<key>`, the state root first, so no command
+runs: nothing is written under the state root, `setup` makes no venv there, and no command runs the venv's Python
+(#424, 2026-11-09).
 """
 
 from __future__ import annotations
@@ -61,6 +63,13 @@ _MEMBERS = {
     "export": {"validator_timeout_ms"},
     "watch": watch_settings.MEMBERS,
 }
+# The configured folders that may be neither a Runtime install root nor inside one (`acmodel.location`), in the order
+# they are checked: the state root, under which the commands write, and the venv, which `setup` makes and installs into
+# and whose Python every other command runs. The other paths are only read: `paths.datasets` (`check` hashes the
+# copies), `paths.actinglab` (run as the exports' validator), `host.pause_file` (whether it exists) and `engines.roots`
+# (the engines' code and data; the worker's guards refuse an engine's write outside its scratch folder, which lies
+# under the state root).
+OUTSIDE_RUNTIME = ("state_root", "venv")
 # `unknowns.drop_z`: a positive decimal string, so that no float reaches the Wilson bounds.
 DECIMAL_Z = re.compile(r"(0|[1-9][0-9]*)(\.[0-9]+)?")
 
@@ -360,14 +369,21 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         validator_timeout_ms=timeout_ms,
         watch=watch_settings.read(_section(doc, "watch", path), invalid),
     )
-    _outside_runtime(cfg.state_root, path)
+    _outside_runtime(cfg, path)
     return cfg
 
 
-def _outside_runtime(state_root: Path, path: Path) -> None:
-    """The state root is neither a Runtime install root nor inside one (`acmodel.location`); otherwise
-    `config_invalid` with the level and the mark found, before anything is written."""
-    found = location.install_root(state_root)
-    if found is not None:
-        reason = found.pop("reason")
-        raise _invalid(reason, path, _pointer("paths", "state_root"), key="state_root", folder=str(state_root), **found)
+def _outside_runtime(cfg: Config, path: Path) -> None:
+    """Neither the state root nor the venv (`OUTSIDE_RUNTIME`) is a Runtime install root or inside one
+    (`acmodel.location`); otherwise one `config_invalid` per such folder, in that order, with the level and the mark
+    found, before anything is written or run."""
+    errors = []
+    for key in OUTSIDE_RUNTIME:
+        folder = getattr(cfg, key)
+        found = location.install_root(folder)
+        if found is not None:
+            reason = found.pop("reason")
+            detail = {"reason": reason, "path": str(path), "key": key, "folder": str(folder), **found}
+            errors.append(error(CONFIG_INVALID, detail, _pointer("paths", key)))
+    if errors:
+        raise Failure(*errors)
