@@ -1394,6 +1394,12 @@ kind's evaluator version, and it adds no version: the full run's output is uncha
 
 ## Outputs: provenance, `explain`, `thresholds.json`, the tables and the scoring documents
 
+**Where they are written** (#424, 2026-11-09). The exports and `bindings apply` write into the model folder (and
+`export tables` into its `--repo`), and the shared trees go under `paths.state_root`. None of these may be a Runtime
+install root or lie inside one: a model folder or repository that does is refused before anything is computed
+(`location_refused`), and such a state root is `config_invalid` (`runtime_install_root`) when the configuration is
+read (cli.md, "Never in a Runtime install root").
+
 ### Provenance (`acmodel.provenance.v1`)
 
 The provenance document of one output holds what its value rests on (#424 design 6.4). It is assembled from
