@@ -88,6 +88,14 @@ one point of D*, never a pick per pool. Steps:
    it (`in_optimum` when above 0), and the loss per execution of running it more (`forcing_cost`, from the dual of
    S3 with that most as a floor; `input_bound` when that dual is unbounded: nothing is left to run it again).
 
+**The vector** (#424 ACM-PRICE addendum 2.1 §3.4, PRICE-4a; `_Solver.vector`). A fourth node, ("economy", "vector"), that
+only the impact assessment computes (`core.impact`), each pass in its own graph with some estimates moved: the steady
+state's program read as the steady state reads it, the three solves, the projections and the selection, exactly as
+`steady` finds them, so its joint vector is the steady state's for that model; it skips what the vector does not read
+(the prices of the rules, the least losses, HiGHS's marginals, the forcing costs, and the range of an activity that some
+optimum runs, which is never in the max-min's K). It shows each pool's coordinate and each activity's value at the
+vector, nothing else, and nothing else reads it.
+
 **The re-solves at ±grain** (PRICE-2d, `_Solver.regrain`). One grain more or less of a resource's income moves only right
 sides of S3's program, so each re-solve starts from S3: S3's basis proves it where it stays primal feasible
 (`exact.shifted`, `exact.ranging`); else HiGHS's instance of S3 gets only the moved row ends and goes on from S3's
@@ -151,7 +159,11 @@ NODES = {STEADY: ("economy", STEADY), PLAN: ("economy", PLAN)}
 # The quick look (module docstring): its own node and output, kept out of `NODES`, the economy's two solves.
 QUICK = "quick"
 QUICK_NODE = ("economy", QUICK)
-OUTPUTS = {STEADY: "economy:steady", PLAN: "economy:plan", QUICK: "economy:quick"}
+# One pass of the impact assessment (module docstring, "The vector"; PRICE-4a): the steady state's joint price vector
+# and the activities' values at it, and nothing else. Only `core.impact` computes it, in its own graph of the pass.
+VECTOR = "vector"
+VECTOR_NODE = ("economy", VECTOR)
+OUTPUTS = {STEADY: "economy:steady", PLAN: "economy:plan", QUICK: "economy:quick", VECTOR: "economy:vector"}
 # The rule kinds the economy reads, and of them the kinds it does not model yet. A pool's declared zero (`no_use`)
 # is read by the coverage section only (`core.coverage`, PRICE-2b-2).
 RULE_KINDS = ("cap", "cooldown", "exchange", "flow", "gate", "limit", "no_use", "objective", "regen")
@@ -236,7 +248,7 @@ class Economy:
 def spec_keys(settings: EconomySettings, solve: str) -> dict[str, int]:
     """The configuration keys a node's value depends on, for its spec in the cache."""
     keys = {"max_denominator": settings.max_denominator, "grain": settings.grain}
-    if solve in (STEADY, QUICK):
+    if solve in (STEADY, QUICK, VECTOR):
         keys["max_cycle_steps"] = settings.max_cycle_steps
         keys["max_pivots"] = settings.max_pivots  # PRICE-2c: which probes are verified
     if solve == PLAN:
@@ -2807,7 +2819,7 @@ class _Solver:
     def joint(
         self, dual: _Dual, point: dict[Key, Fraction], optimum: Fraction, prices: dict[str, list[_Pair]],
         on_face: tuple[dict[Key, Any], tuple[_Row, ...]], optimal: dict[Key, Fraction],
-        primal: tuple[dict[Key, Any], tuple[_Row, ...]], seed: _Seed | None,
+        primal: tuple[dict[Key, Any], tuple[_Row, ...]], seed: _Seed | None, *, lean: bool = False,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """The joint price vector and the activity judgements (addendum 2.1 §2.2 steps 3-5; ruling 127 iii): the
         steady state's `joint`, and the warnings of its probes. `prices` are the projections per step (`steady`),
@@ -2853,7 +2865,11 @@ class _Solver:
           optimum is `lp_probe_unverified` (returned with the section), its members null and its name listed in the
           activity's `unverified`; an activity whose `most` or `range` is unverified is left out of K (whether it is
           an optimum's is not known), and its component is a structural gap (`core.coverage`). `forcing_cost` reads
-          `most`, so it is unverified with it."""
+          `most`, so it is unverified with it.
+        - **`lean`** (the vector, PRICE-4a): only what the vector reads. The range of an activity is probed only when no
+          optimum runs it (`most` 0: only such an activity is in K), and no forcing cost is computed; the activities'
+          other judgements are then null. The vector is the same: every step of the selection is an LP's optimal
+          value over the same K."""
         model, steps, zero, one = self.model, self.model.steps, Fraction(0), Fraction(1)
         variables = on_face[0]
         warnings: list[dict[str, Any]] = []
@@ -2911,6 +2927,8 @@ class _Solver:
                 constant = sum((model.net[(activity, resource)] * intervals[resource][0] for resource in read), zero)
                 ranges[activity] = (constant, constant)  # every pool it reads is constant on D*, so is its value
                 continue
+            if lean and most[activity] != 0:  # some optimum runs it, or that is not known: never in K
+                continue
             ends = self.probed_ends(*on_face, worth[activity])
             if isinstance(ends, _Unverified):
                 note(RANGE, activity, ends)
@@ -2967,7 +2985,9 @@ class _Solver:
         activities: dict[str, Any] = {}
         for activity in model.activities:
             count, cost = most[activity], zero
-            if MOST in unverified[activity]:  # the forcing cost reads `most`
+            if lean:  # the vector reads no forcing cost
+                cost = None
+            elif MOST in unverified[activity]:  # the forcing cost reads `most`
                 unverified[activity].append(FORCING)
                 cost = None
             elif count is not None:
@@ -3196,31 +3216,7 @@ class _Solver:
         warnings = self.tier_warnings(tiers)
         dual = tiers.dual  # S3's, which every price re-solve changes, checked exactly (`duality`)
         on_face = _restricted(dual, program, base.x)  # D*, for every LP on it (PRICE-2e: the selection's too)
-        self.grained = self.hold(program, base)  # S3 with its basis factorised, for the re-solves at ±grain (PRICE-2d)
-        prices: dict[str, list[_Pair]] = {}
-        grains: dict[str, list[_Pair]] = {}
-        marginals: dict[str, list[Fraction]] = {}
-        for resource in model.resources:
-            prices[resource], grains[resource], marginals[resource] = [], [], []
-            for step in range(steps):
-                known, sides = self.chords(resource, step)
-                for side in known:
-                    if side is not None:
-                        self.grain_way("basis")
-                grain = self.price(optimum, lambda delta: self.regrain(resource, step, delta), known)
-                if _pinned(model, resource, grain):
-                    price = grain  # the chords pin the projection (PRICE-2c): no LP on D*
-                else:  # each end that S3's basis does not prove is an LP on D*
-                    function = dual.duals[("balance", resource, step)]
-                    low = sides[0] if sides[0] is not None else self.extreme(*on_face, function, -1)
-                    high = sides[1] if sides[1] is not None else self.extreme(*on_face, function, 1)
-                    price = (low, high)
-                marginal = self.marginal(-base.eq[("balance", resource, step)])
-                warnings += self.disagrees(resource, step, marginal, price)
-                warnings += self.outside(resource, step, price, grain)
-                prices[resource].append(price)
-                grains[resource].append(grain)
-                marginals[resource].append(marginal)
+        prices, grains, marginals = self.projections(tiers, on_face, warnings)
         rule_prices: dict[str, tuple[Fraction, Fraction | None]] = {}
         rule_marginals: dict[str, Fraction] = {}
         for rule, value in model.priced():
@@ -3253,6 +3249,59 @@ class _Solver:
             "relaxed": model.shown_relaxed(),
         }
         return data, warnings
+
+    def projections(
+        self, tiers: _Tiers, on_face: tuple[dict[Key, Any], tuple[_Row, ...]], warnings: list[dict[str, Any]] | None,
+    ) -> tuple[dict[str, list[_Pair]], dict[str, list[_Pair]], dict[str, list[Fraction]]]:
+        """Each resource's price per step, the projection of its balance row's dual on D* (`on_face`), with its
+        re-solves at plus and minus one grain and HiGHS's marginal. With `warnings`, the two cross-checks are added to
+        it (`steady`); without (the vector), they are not made and no marginal is read."""
+        model, program, base, optimum, dual = self.model, tiers.program, tiers.base, tiers.base.value, tiers.dual
+        self.grained = self.hold(program, base)  # S3 with its basis factorised, for the re-solves at ±grain (PRICE-2d)
+        prices: dict[str, list[_Pair]] = {}
+        grains: dict[str, list[_Pair]] = {}
+        marginals: dict[str, list[Fraction]] = {}
+        for resource in model.resources:
+            prices[resource], grains[resource], marginals[resource] = [], [], []
+            for step in range(model.steps):
+                known, sides = self.chords(resource, step)
+                for side in known:
+                    if side is not None:
+                        self.grain_way("basis")
+                grain = self.price(optimum, lambda delta: self.regrain(resource, step, delta), known)
+                if _pinned(model, resource, grain):
+                    price = grain  # the chords pin the projection (PRICE-2c): no LP on D*
+                else:  # each end that S3's basis does not prove is an LP on D*
+                    function = dual.duals[("balance", resource, step)]
+                    low = sides[0] if sides[0] is not None else self.extreme(*on_face, function, -1)
+                    high = sides[1] if sides[1] is not None else self.extreme(*on_face, function, 1)
+                    price = (low, high)
+                if warnings is not None:
+                    marginal = self.marginal(-base.eq[("balance", resource, step)])
+                    warnings += self.disagrees(resource, step, marginal, price)
+                    warnings += self.outside(resource, step, price, grain)
+                    marginals[resource].append(marginal)
+                prices[resource].append(price)
+                grains[resource].append(grain)
+        return prices, grains, marginals
+
+    def vector(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """One pass of the impact assessment (module docstring, "The vector"; PRICE-4a): the joint price vector as
+        `steady` finds it, each pool's coordinate (`prices`) and each activity's value at it (`activities`, null for
+        one that moves out of or into a store), and nothing else. Its warnings are not the steady state's and are not
+        returned: a probe this pass cannot verify only leaves its activity out of K here, as `steady` does."""
+        tiers = self.tiers()
+        on_face = _restricted(tiers.dual, tiers.program, tiers.base.x)
+        prices, _, _ = self.projections(tiers, on_face, None)
+        joint, _ = self.joint(
+            tiers.dual, tiers.point, tiers.base.value, prices, on_face, tiers.base.x, tiers.optimal, tiers.seed,
+            lean=True,
+        )
+        data = {
+            "prices": {resource: entry["value"] for resource, entry in joint["prices"].items()},
+            "activities": {activity: entry["value"] for activity, entry in joint["activities"].items()},
+        }
+        return data, []
 
     def quick(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """The quick look (module docstring; PRICE-2f): the three solves and the least losses, as `steady` has them, and
@@ -3360,10 +3409,10 @@ class _Solver:
 
 
 def compute(graph: Graph, solve: str) -> Economy:
-    """The economy node `solve` (steady, plan or quick) of `graph`. It raises `Need` until every node it reads is
-    computed, as every graph node does. The quick look reads and builds the steady state's program."""
+    """The economy node `solve` (steady, plan, quick or vector) of `graph`. It raises `Need` until every node it reads is
+    computed, as every graph node does. The quick look and the vector read and build the steady state's program."""
     graph.depend(("economy_model",))
-    built = STEADY if solve == QUICK else solve
+    built = STEADY if solve in (QUICK, VECTOR) else solve
     shape = _shape(graph, built)
     reader = _Reader(graph, shape, built)
     model = reader.model(graph.economy)
@@ -3371,10 +3420,13 @@ def compute(graph: Graph, solve: str) -> Economy:
         return Economy(blocked_by=graph.register(reader.refused) | frozenset(reader.blocked))
     status = reader.inputs()
     solver = _Solver(model, graph.economy)
+    solves = {QUICK: solver.quick, VECTOR: solver.vector, STEADY: solver.steady, PLAN: solver.plan}
     try:
-        data, warnings = solver.quick() if solve == QUICK else solver.steady() if solve == STEADY else solver.plan()
+        data, warnings = solves[solve]()
     except Failure as failure:
         return Economy(blocked_by=graph.register(failure.errors))
+    if solve == VECTOR:  # one pass of the impact assessment: nothing but the vector (`core.impact`)
+        return Economy(data, status, False, (), reads=tuple(reader.reads))
     if solve == QUICK:
         # Its status says what it is, never the worst of what it read: no reader takes it for a steady state's. The
         # coverage is the steady state's as far as these solves know it (`coverage.NEEDS_LATER_STAGES`).

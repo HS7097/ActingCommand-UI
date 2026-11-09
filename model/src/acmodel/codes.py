@@ -65,6 +65,11 @@ NO_USE_CONDITION_INCOMPLETE = "no_use_condition_incomplete"  # acmodel check: a 
 ESTIMATE_OUTSIDE_RANGE = "estimate_outside_range"  # acmodel run: a point value outside its estimate
 ESTIMATE_BASIS_INVALID = "estimate_basis_invalid"  # acmodel check: an estimate that lacks what its basis needs
 ESTIMATE_SCOPE_EXCEEDED = "estimate_scope_exceeded"  # acmodel check: an activity that reads it is not covered
+# #424 ACM-PRICE PRICE-4a: why `export prices` leaves a price pending, and a stale prices.json (warnings, never errors).
+ESTIMATE_MISSING = "estimate_missing"  # export prices: a provisional derive the steady state read has no estimate
+ACCEPTANCE_STALE = "acceptance_stale"  # export prices: an acceptance binds another provenance document
+ACCEPTANCE_INCOMPLETE = "acceptance_incomplete"  # export prices: an acceptance leaves out a flip
+PRICES_STALE = "prices_stale"  # bindings check: out/prices.json is of other versions of the model
 
 EXIT_OK = 0
 
@@ -131,4 +136,8 @@ EXIT_STATUS = {
     ESTIMATE_OUTSIDE_RANGE: 1,
     ESTIMATE_BASIS_INVALID: 1,
     ESTIMATE_SCOPE_EXCEEDED: 1,
+    ESTIMATE_MISSING: 0,
+    ACCEPTANCE_STALE: 0,
+    ACCEPTANCE_INCOMPLETE: 0,
+    PRICES_STALE: 0,
 }

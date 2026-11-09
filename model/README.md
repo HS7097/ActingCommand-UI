@@ -8,7 +8,7 @@ This folder holds the launcher, `setup`, `version`, the output envelope, the dep
 readers of the model files, the expression language, the static check (`check`), the derivation graph
 (`run`) with its unknowns and their sensitivity and its random processes (exact pity chains, Wilson bounds of
 rates from samples), its cache with incremental recompute (`cache`), provenance
-(`explain`), the exports (`export thresholds`, `export tables`, `export scoring`) with their export policy, the
+(`explain`), the exports (`export thresholds`, `export prices`, `export tables`, `export scoring`) with their export policy, the
 bindings of thresholds to the schedule (`bindings check`, `bindings apply`), the economy's LP and MILP
 (`economy`), the engine host, which runs engines kept outside this repository in worker processes of its own,
 the generic search for teams over those engines (no command runs it yet) and the automatic refresh (`watch`).
@@ -43,6 +43,7 @@ model\acmodel.cmd run <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd economy <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd explain <resource repo>\ours\model threshold:<id> --state <state snapshot>
 model\acmodel.cmd export thresholds <resource repo>\ours\model --state <state snapshot>
+model\acmodel.cmd export prices <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd export tables <resource repo>\ours\model --state <state snapshot> --repo <resource repo>
 model\acmodel.cmd export scoring <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd bindings check <resource repo>\ours\model --state <state snapshot> --strict
@@ -126,6 +127,15 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   values go into these shared files: a threshold that read the account state, is not confirmed, is not an
   integer, or is blocked is refused (`export_refused`, exit 5), and then nothing is written
   (`contracts/formats.md`, "Outputs").
+- **`export prices`** (#424 ACM-PRICE PRICE-4a) writes `out/prices.json` and one provenance file per pool: each pool's
+  price from the joint vector, or `pending` with why, by its coverage class (covered, structural gap, verified zero,
+  unknown), in the game's own unit `prices.unit_milli` of exports.json (κ; never compared across games). It assesses the
+  impact of the estimates: each moved to its ends or variants, the joint vector computed again, each pool's price range
+  and the activities whose sign flips reported. A provisional price is exported only under an acceptance that binds the
+  digest of its provenance file (`acceptance_stale` when it changed) and lists every flip (`acceptance_incomplete`), and a
+  verified zero under its `accept_zero`; a component that read a provisional derive without an estimate stays pending
+  (`estimate_missing`). It computes the steady state once and a vector per moved pass, so it is a heavy computation on a
+  real model (`contracts/formats.md`, "`acmodel export prices`").
 - **The export policy** decides what a delivered file takes from an output: a confirmed value as it is; a
   provisional one only when `acceptances` of exports.json accept it (a table cell is `null` otherwise, the
   others are refused); a blocked or per-account one never. A number is scaled and rounded as declared
@@ -143,8 +153,9 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   or a pool of the repository's `schedule.json` or in a pack file, with the value `export thresholds` would
   write. With `--strict` it also refuses every number of a `fact` or `resource_projection` predicate of
   `schedule.json`, and every quantity of its pools (capacity, regeneration amount and period), that is neither
-  bound nor listed as fixed with a reason, so no number without provenance reaches the schedule. It writes
-  nothing.
+  bound nor listed as fixed with a reason, so no number without provenance reaches the schedule. It also reports
+  the coverage of the prices `export prices` delivered, as `schedule.json` meets it (`data.coverage`; `prices_stale`
+  when `out/prices.json` is of another version of the model), without computing a steady state. It writes nothing.
 - **`bindings apply`** writes the bound literals that differ, and changes only their bytes: line ends
   (CRLF files stay CRLF) and formatting are kept. It refuses what `check` refuses, other than a differing
   value, and then writes nothing (`contracts/formats.md`, "Bindings").
@@ -271,10 +282,10 @@ src/acmodel/          the package: model/ the strict readers, expr/ the expressi
                       check/ the static check, ids.py the id grammars they share, core/ the
                       run (its model checks, the derivation graph, the unknowns, provenance and the
                       versions of the inputs, flow.py the economy's LP and MILP, and search.py the
-                      generic search for teams), cache/ the
+                      generic search for teams, impact.py the impact assessment of the estimates), cache/ the
                       cache (keys, sqlite3 index and blobs, verifying traces, run ids,
                       stats/verify/gc), export/ the exports (thresholds, tables with their JCS
-                      writer and validator call, scoring templates, the export policy), bindings/
+                      writer and validator call, scoring templates, the prices, the export policy), bindings/
                       the bindings check and apply with their position-tracking scanner, host/ the
                       host caps (priority, Job object, memory gates, quiet windows, PAUSE file),
                       engine/ the engine host (manifest and fingerprint, workers, guards, the cached

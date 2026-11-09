@@ -27,9 +27,10 @@ name are not `inputs`. A component that holds no gap keeps its own status, whate
 - `covered`: it reaches a goal sink (its grounds: `goal`, `costs`, `use`);
 - `unknown`: anything else (`not_covered`, and `zero_uses` when its only uses lead to declared zeros).
 
-**For PRICE-4** (not here): a covered pool whose price is 0 names the constraint that makes it 0 (an LP fact); a
-verified zero is exported only with its acceptance and `scope`; a pool of `schedule.json` that the model lacks is
-unknown; `estimate_missing` is each provisional derive under `estimates` whose `estimate` is null.
+**For PRICE-4** (not here; PRICE-4a, `export.prices`, `core.impact`, `bindings.commands`): a verified zero is exported
+only with its acceptance and `scope`; a pool of `schedule.json` that the model lacks is unknown; `estimate_missing` is
+each provisional derive the steady state read whose `estimate` is absent (`node_of` places what read it). Later: a
+covered pool whose price is 0 naming the constraint that makes it 0 (an LP fact).
 """
 
 from __future__ import annotations
@@ -61,7 +62,7 @@ NEEDS_LATER_STAGES = (PROBE_UNVERIFIED,)
 REFERENCE = "reference"
 
 
-def _node(checker: Checker, secondary: Entry | None, key: tuple[str, ...]) -> str | None:
+def node_of(checker: Checker, secondary: Entry | None, key: tuple[str, ...]) -> str | None:
     """The node of the static flow graph an item of the steady state is about: a flow amount and a gate, the flow's
     activity; a regen member, a cap or a limit, its subject; an objective member, the objective's sink; a demand or
     costs row, the secondary objective's sink."""
@@ -110,7 +111,7 @@ def report(graph: Graph, reader: Any, model: Any, warnings: list[dict[str, Any]]
     for key, (found, unresolved) in reader.statuses.items():
         if key[0] in ("flow", "requires") and key[1] in left_out:
             continue  # a left-out flow counts as excluded_pending only
-        node = _node(checker, static.secondary, key)
+        node = node_of(checker, static.secondary, key)
         if node is None or node not in component:
             continue
         name = component[node]

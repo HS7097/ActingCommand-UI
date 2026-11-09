@@ -554,6 +554,8 @@ PREFS_DEFAULTS = Format(
 ROUND = Choice("floor", "ceil", "half_even")
 # An output of the run: `rule:<id>`, `general_logic:<id>` or `threshold:<id>`.
 OUTPUT_ID = Text(r"(rule|general_logic|threshold):" + ids.ID, "id_invalid")
+# What an acceptance may accept: an output of the run, or the price of a pool (`price:<id>`, PRICE-4a).
+ACCEPTED_ID = Text(r"(rule|general_logic|threshold|price):" + ids.ID, "id_invalid")
 # Where a delivered value comes from: `{"$model": "<output id>"}`. A table's column declares how a number is
 # scaled and rounded; a scoring template's placeholder declares it itself (`export.scoring`).
 MODEL_CELL = Object({"$model": OUTPUT_ID})
@@ -594,6 +596,45 @@ EXPORT_TABLE = Object(
     _export_rows,
 )
 
+PRICE_OUTPUT = "price:"
+# Where an acceptance holds (#424 ACM-PRICE addendum 2.1 §3.2, §3.4; PRICE-4a): the whole game, or the aliases of the
+# instances the condition was verified on.
+SCOPE = Either(string=Choice("game"), array=ListOf(ID, min_items=1))
+# The members an acceptance of a price adds to its `accept_provisional`: the digest of the price's provenance file it
+# binds, its scope and the activities whose class flips in the impact assessment.
+PRICE_ACCEPTANCE = {"binds": SHA256, "scope": SCOPE, "flips": ListOf(ID)}
+
+
+def _acceptance(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """An acceptance (#424 design 6.6; addendum 2.1 §3.2, §3.4, PRICE-4a): exactly one of `accept_provisional` and
+    `accept_zero`. Of a price (`price:<pool>`), `accept_provisional` holds `binds`, `scope` and `flips` too, and
+    `accept_zero` may stand instead; of any other output, `accept_provisional` holds `ref` and `until` only."""
+    if not exactly_one("accept_provisional", "accept_zero")(value, ref, ctx):
+        return False
+    price = value["output"].startswith(PRICE_OUTPUT)
+    if not price and "accept_zero" in value:
+        return ctx.refuse("member_unknown", pointer(ref, "accept_zero"), key="accept_zero")
+    if "accept_provisional" not in value:
+        return True
+    where, accepted, ok = pointer(ref, "accept_provisional"), value["accept_provisional"], True
+    for name in PRICE_ACCEPTANCE:
+        if price and name not in accepted:
+            ok = ctx.refuse("member_missing", pointer(where, name), key=name)
+        elif not price and name in accepted:
+            ok = ctx.refuse("member_unknown", pointer(where, name), key=name)
+    return ok
+
+
+ACCEPTANCE = Object(
+    {"output": ACCEPTED_ID},
+    {
+        "accept_provisional": Object({"ref": TEXT, "until": TEXT}, PRICE_ACCEPTANCE),
+        "accept_zero": Object({"ref": TEXT, "scope": SCOPE, "until": TEXT}),
+        **NOTE,
+    },
+    _acceptance,
+)
+
 EXPORTS = Format(
     "acmodel.exports.v1",
     "acmodel.exports.v1",
@@ -610,9 +651,10 @@ EXPORTS = Format(
             "scoring": ListOf(Object({"id": ID, "template": Text(SEGMENTS)}, NOTE)),
         },
         {
-            "acceptances": ListOf(
-                Object({"output": OUTPUT_ID, "accept_provisional": Object({"ref": TEXT, "until": TEXT})}, NOTE)
-            ),
+            "acceptances": ListOf(ACCEPTANCE),
+            # The game's price unit (#424 ACM-PRICE 4.2, PRICE-4a): one value unit is `unit_milli` thousandths of a
+            # priority. One per game; prices of two games are never compared (137 K2).
+            "prices": Object({"unit_milli": Integer(1, MAX)}, NOTE),
             **NOTE,
         },
     ),
@@ -653,6 +695,40 @@ BINDINGS = Format(
             ),
         },
         NOTE,
+    ),
+)
+
+# `out/prices.json` (`acmodel.prices.v1`, #424 ACM-PRICE PRICE-4a), which `export prices` writes and `bindings check`
+# reads back for its coverage. The members it reads are checked; the analysis it only passes on is any JSON.
+POOL_CLASSES = ("covered", "structural_gap", "verified_zero", "unknown")
+PENDING_REASONS = (
+    "structural_gap", "unknown", "withheld", "estimate_missing", "not_accepted", "acceptance_stale",
+    "acceptance_incomplete", "scope_partial",
+)
+NULLABLE_TEXT = Either(string=TEXT, null=ANY)
+PRICES = Format(
+    "acmodel.prices.v1",
+    "acmodel.prices.v1",
+    Object(
+        {
+            "schema_version": ANY,
+            "model_id": ID,
+            "versions": Object({"rules": SHA256, "data": SHA256, "tool": VERSION}),
+            "unit_milli": Integer(1, MAX),
+            "prices": ListOf(
+                Object({
+                    "pool": ID, "class": Choice(*POOL_CLASSES), "status": Choice("confirmed", "provisional"),
+                    "reasons": ListOf(TEXT), "component": ID, "price": TEXT, "milli": NULLABLE_TEXT,
+                    "pending": ListOf(Choice(*PENDING_REASONS)), "joint": ANY, "degenerate": BOOLEAN,
+                    "varies_by_step": BOOLEAN, "estimates": ListOf(ID), "impact": ANY, "flips": ListOf(ID),
+                    "binds": SHA256, "acceptance": ANY, "provenance": TEXT,
+                })
+            ),
+            "slots": ListOf(ID),
+            "estimates": ANY,
+            "impact": ANY,
+            "counts": ANY,
+        }
     ),
 )
 
@@ -706,6 +782,11 @@ def read_exports(path: Path | str) -> dict[str, Any]:
     """`exports.json` (`acmodel.exports.v1`): the thresholds, the tables and the scoring templates the model
     delivers, and the acceptances of provisional outputs."""
     return _read(path, EXPORTS)
+
+
+def read_prices(path: Path | str) -> dict[str, Any]:
+    """`out/prices.json` (`acmodel.prices.v1`), as `export prices` wrote it: the members `bindings check` reads."""
+    return _read(path, PRICES)
 
 
 def read_bindings(path: Path | str) -> dict[str, Any]:

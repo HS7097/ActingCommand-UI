@@ -15,7 +15,7 @@ from acmodel.codes import COMMAND_CRASHED, USAGE_INVALID
 from acmodel.core import run_economy, run_model
 from acmodel.core.provenance import explain
 from acmodel.envelope import Failure, build, error, write
-from acmodel.export import Validator, export_scoring, export_tables, export_thresholds
+from acmodel.export import Validator, export_prices, export_scoring, export_tables, export_thresholds
 from acmodel.host import windows
 from acmodel.system import System
 from acmodel.watch.watcher import Watcher
@@ -30,6 +30,7 @@ COMMANDS = {
     "economy": (("model",), ("--state",)),
     "explain": (("model", "output"), ("--state",)),
     "export thresholds": (("model",), ("--state",)),
+    "export prices": (("model",), ("--state",)),
     "export tables": (("model",), ("--state", "--repo")),
     "export scoring": (("model",), ("--state",)),
     "bindings check": (("model",), ("--state",)),
@@ -57,6 +58,7 @@ USAGE = (
     "          economy <model folder or model.json> --state <state file> [--steady-only [--quick]],\n"
     "          explain <model folder or model.json> <output id> --state <state file>,\n"
     "          export thresholds <model folder or model.json> --state <state file>,\n"
+    "          export prices <model folder or model.json> --state <state file>,\n"
     "          export tables <model folder or model.json> --state <state file> --repo <repository>,\n"
     "          export scoring <model folder or model.json> --state <state file>,\n"
     "          bindings check <model folder or model.json> --state <state file> [--strict],\n"
@@ -231,9 +233,19 @@ def _export_scoring(args: list[str], cfg: config.Config, system: System) -> dict
     )
 
 
-def _bindings(command: str, args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
-    """`bindings check [--strict]` compares the bound literals with their thresholds; `bindings apply`
-    writes the ones that differ."""
+def _export_prices(args: list[str], cfg: config.Config, system: System) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The prices of the steady state, with the keys under `lp` and `economy`, and the impact assessment of its
+    estimates (#424 ACM-PRICE PRICE-4a); the warnings say why a price is pending."""
+    _dependencies(system)
+    return export_prices(
+        Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits, unknowns=cfg.unknowns,
+        economy=cfg.economy,
+    )
+
+
+def _bindings(command: str, args: list[str], cfg: config.Config, system: System) -> Any:
+    """`bindings check [--strict]` compares the bound literals with their thresholds, and reports the coverage of
+    the prices with its warnings; `bindings apply` writes the ones that differ."""
     _dependencies(system)
     model, state = Path(args[0]), Path(args[1])
     if command == "bindings check":
@@ -279,8 +291,12 @@ def main(argv: Sequence[str], system: System) -> int:
             data, errors, warnings = _economy(args, cfg, system)
         elif command == "explain":
             data = _explain(args, cfg, system)
-        elif command in ("bindings check", "bindings apply"):
+        elif command == "bindings check":
+            data, warnings = _bindings(command, args, cfg, system)
+        elif command == "bindings apply":
             data = _bindings(command, args, cfg, system)
+        elif command == "export prices":
+            data, warnings = _export_prices(args, cfg, system)
         elif command == "export thresholds":
             data = _export_thresholds(args, cfg, system)
         elif command == "export tables":

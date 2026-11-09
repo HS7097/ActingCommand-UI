@@ -90,7 +90,8 @@ def threshold_entry(run: Run, index: int, threshold: dict[str, Any], files: dict
     return entry
 
 
-def _write(target: Path, data: bytes) -> None:
+def write_file(target: Path, data: bytes) -> None:
+    """Write one file of an export, its folder made first; a failure is `export_write_failed`."""
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
@@ -128,6 +129,6 @@ def export_thresholds(
     written = []
     for name, data in build(run).items():  # thresholds.json last
         target = run.folder / name
-        _write(target, data)
+        write_file(target, data)
         written.append(str(target))
     return {**run.head, "written": sorted(written)}
