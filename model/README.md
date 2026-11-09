@@ -209,6 +209,11 @@ default:
 - **State root.** The default for `paths.state_root` is `%LOCALAPPDATA%\ActingCommand\acmodel\state`. It
   holds the cache (`cache/`), the runs' outputs (`runs/`) and the steady-state trees the price provenance files share
   (`provenance/`, PRICE-4a2), never inside a repository.
+- **Never in a Runtime install root.** A state root that is a Runtime install root or lies inside one (the folder or
+  one above it holds `actingd.config.json`, `runtime/BUILD-MANIFEST.json` or `install/active.json`) is refused when
+  the configuration is read (`config_invalid`, `runtime_install_root`); so is a model folder, or the `--repo` of
+  `export tables`, that a command would write into (`location_refused`). See `contracts/cli.md`, "Never in a Runtime
+  install root".
 - **Cache size.** `cache.max_bytes` (default 2 GiB) caps the cache; the least recently used entries are
   evicted after a run.
 - **Cache lock.** Several commands may share a state root: a run writes the index only at its end. `cache.wait_ms`
@@ -299,7 +304,8 @@ src/acmodel/          the package: model/ the strict readers, expr/ the expressi
                       host caps (priority, Job object, memory gates, quiet windows, PAUSE file),
                       engine/ the engine host (manifest and fingerprint, workers, guards, the cached
                       call and the verify sample), watch/ the automatic refresh (scan, import hook,
-                      event log and watch.json, delivery candidates, warm workers)
+                      event log and watch.json, delivery candidates, warm workers), location.py
+                      the check that no folder written into is in a Runtime install root
 tests/                pytest tests with fakes; fakes/ holds the neutral fake engines and the fake
                       validator script
 ```

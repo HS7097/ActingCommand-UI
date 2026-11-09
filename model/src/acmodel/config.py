@@ -9,6 +9,10 @@ host's keys (`compute.workers.*`, `engine.*`, `engines.*`) by `acmodel.engine.se
 `Unknowns`; the economy's keys (`lp.*`, `search.milp_node_limit`, `economy.*`) are `EconomySettings`, the
 generic search's (the other keys under `search`) are `SearchSettings`, and the validator of the exports is
 `paths.actinglab` (no default: an export that needs it refuses without it) and `export.validator_timeout_ms`.
+
+`paths.state_root`, as configured or by default, is checked last: a state root that is a Runtime install root or lies
+inside one (`acmodel.location`) is `config_invalid` (`runtime_install_root`, or `runtime_install_unchecked` when a level
+cannot be looked at) at `/paths/state_root`, so no command writes anything there (#424, 2026-11-09).
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Mapping
 
+from acmodel import location
 from acmodel.cache.store import DEFAULT_WAIT_MS as DEFAULT_CACHE_WAIT_MS
 from acmodel.codes import CONFIG_INVALID
 from acmodel.engine import settings as engine_settings
@@ -337,7 +342,7 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
     engine = engine_settings.read(
         compute, _section(doc, "engine", path), _section(doc, "engines", path), host.worker_memory_mib, invalid
     )
-    return Config(
+    cfg = Config(
         path=path,
         venv=_absolute(paths, "venv", root / "venv", path),
         state_root=state_root,
@@ -355,3 +360,14 @@ def _build(doc: Any, path: Path, root: Path) -> Config:
         validator_timeout_ms=timeout_ms,
         watch=watch_settings.read(_section(doc, "watch", path), invalid),
     )
+    _outside_runtime(cfg.state_root, path)
+    return cfg
+
+
+def _outside_runtime(state_root: Path, path: Path) -> None:
+    """The state root is neither a Runtime install root nor inside one (`acmodel.location`); otherwise
+    `config_invalid` with the level and the mark found, before anything is written."""
+    found = location.install_root(state_root)
+    if found is not None:
+        reason = found.pop("reason")
+        raise _invalid(reason, path, _pointer("paths", "state_root"), key="state_root", folder=str(state_root), **found)

@@ -1,6 +1,7 @@
-"""One run: parse, read the configuration, then `setup`, a re-dispatch into the venv,
-or the dependency check and the command. Every run ends in one envelope, except a
-re-dispatch, whose child prints it."""
+"""One run: parse, read the configuration, check that no folder the command writes into is
+in a Runtime install root, then `setup`, a re-dispatch into the venv, or the dependency
+check and the command. Every run ends in one envelope, except a re-dispatch, whose child
+prints it."""
 
 from __future__ import annotations
 
@@ -8,10 +9,11 @@ import traceback
 from pathlib import Path
 from typing import Any, Sequence
 
-from acmodel import TOOL, __version__, cache, config, deps, environment
+from acmodel import TOOL, __version__, cache, config, deps, environment, location
 from acmodel.bindings import apply_bindings, check_bindings
 from acmodel.check import check_model
-from acmodel.codes import COMMAND_CRASHED, USAGE_INVALID
+from acmodel.check.files import manifest_path
+from acmodel.codes import COMMAND_CRASHED, LOCATION_REFUSED, USAGE_INVALID
 from acmodel.core import run_economy, run_model
 from acmodel.core.provenance import explain
 from acmodel.envelope import Failure, build, error, write
@@ -51,6 +53,18 @@ FLAGS = {
 }
 # A flag that is only valid together with another of its command's; without it, it is `argument_unexpected`.
 FLAG_NEEDS = {"--quick": "--steady-only"}
+# The folders each command writes into, by the argument that names them (`model`: the model folder, or the folder of the
+# model.json given), each checked before anything is computed or written: none may be a Runtime install root or lie
+# inside one (`location`; #424, 2026-11-09). `bindings apply` writes into the repository two folders above the model
+# folder, which the model folder's walk passes. The other commands write nothing there; whatever they write is under
+# `paths.state_root`, which `config.load` checks.
+WRITES = {
+    "export thresholds": ("model",),
+    "export prices": ("model",),
+    "export tables": ("model", "--repo"),
+    "export scoring": ("model",),
+    "bindings apply": ("model",),
+}
 USAGE = (
     "usage: acmodel.py <command> [<argument>] [--<option> <value>]\n"
     "commands: setup, version,\n"
@@ -114,6 +128,23 @@ def parse(argv: Sequence[str]) -> tuple[str, list[str]]:
         if flag in set_flags and FLAG_NEEDS.get(flag, flag) not in set_flags:
             raise _usage("argument_unexpected", flag)
     return command, positional + [given[option] for option in options] + [flag for flag in flags if flag in set_flags]
+
+
+def _outside_runtime(command: str, args: list[str]) -> None:
+    """Each folder `command` writes into (`WRITES`) is neither a Runtime install root nor inside one; otherwise one
+    `location_refused` per such folder, in the order of `WRITES`, and nothing is computed or written."""
+    names, options = COMMANDS[command]
+    given = dict(zip(names + options, args))
+    errors = []
+    for argument in WRITES.get(command, ()):
+        folder = Path(given[argument])
+        if argument == "model":
+            folder = manifest_path(folder).parent
+        found = location.install_root(folder)
+        if found is not None:
+            errors.append(error(LOCATION_REFUSED, {"argument": argument, "folder": str(folder), **found}))
+    if errors:
+        raise Failure(*errors)
 
 
 def _dependencies(system: System) -> dict[str, str]:
@@ -289,6 +320,7 @@ def main(argv: Sequence[str], system: System) -> int:
     try:
         command, args = parse(argv)
         cfg = config.load(system.environ)
+        _outside_runtime(command, args)
         environment.set_blas_threads(system.environ, cfg.blas_threads)
         if command == "setup":
             data = environment.setup(cfg, system)

@@ -74,6 +74,9 @@ PRICES_STALE = "prices_stale"  # bindings check: out/prices.json is of other ver
 # named in out/prices.json by its digest and the versions that compute it again (`acmodel verify prices`).
 SHARED_TREE_STALE = "shared_tree_stale"  # verify prices: the recorded versions are not the model's
 SHARED_TREE_MISMATCH = "shared_tree_mismatch"  # verify prices: the tree computed again, or a price's, is another
+# #424, 2026-11-09: a folder a command would write into is a Runtime install root or lies inside one (`location`); the
+# state root is `config_invalid` instead, when the configuration is read.
+LOCATION_REFUSED = "location_refused"
 
 EXIT_OK = 0
 
@@ -146,4 +149,5 @@ EXIT_STATUS = {
     PRICES_STALE: 0,
     SHARED_TREE_STALE: 6,
     SHARED_TREE_MISMATCH: 6,
+    LOCATION_REFUSED: 5,
 }

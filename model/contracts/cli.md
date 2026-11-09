@@ -51,6 +51,29 @@ argument and option a command names is required, and an option takes one value. 
 `--steady-only` and `--quick` of `economy`, `--quick` only with `--steady-only`, `--strict` of `bindings check`, `--apply` of `cache gc`) takes no value, is optional and may be given once. A state root without a cache is reported by the `cache`
 commands as `exists: false`; they create nothing.
 
+**Never in a Runtime install root** (#424, 2026-11-09; `src/acmodel/location.py`). The tool never writes into a
+Runtime install root. `paths.state_root`, and every folder a command writes into, must be neither one nor inside one:
+- **What marks one.** The folder itself, or any folder above it up to its drive, share or `/`, holds one of the
+  marks the Runtime's install layout puts at an install root: `actingd.config.json` (the root's one configuration
+  file, in either layout), `runtime/BUILD-MANIFEST.json` (a single-location root) or `install/active.json` (an A/B
+  root's install selection). Only whether something is at a mark's name is looked at, never what it holds.
+- **The state root** is checked when the configuration is read, as configured or by default: one in an install root
+  is `config_invalid` (`runtime_install_root`, ref `/paths/state_root`), before anything else, so no command runs.
+- **The folders written into** are checked before anything is computed: the model folder of `export thresholds`,
+  `export prices`, `export tables`, `export scoring` and `bindings apply` (which writes into the repository two
+  folders above it, on the model folder's way up), and the `--repo` of `export tables`. Each one in an install root
+  is one `location_refused` error (exit 5; `argument` `model` or `--repo`), and nothing is written.
+- **Not checked:** the model folder of the commands that only read it (`check`, `run`, `economy`, `explain`,
+  `verify prices`, `bindings check`, `watch`). Reading changes nothing there, and whatever they write is under the
+  state root, which is checked.
+- **How a folder is walked.** It is made absolute (`os.path.abspath`, which folds `.` and `..` by their text) and
+  walked up; then its resolved form (`pathlib`'s `resolve()`, which follows symbolic links and junctions) is walked
+  too, so a link into an install root is refused. A level that does not exist holds no mark. The file system compares
+  the names: on Windows a mark is found whatever its case. A UNC path is walked up to its share. A level that cannot
+  be looked at (an error other than "not found") is refused as well (`runtime_install_unchecked`, with the
+  exception): it cannot be shown not to be an install root.
+- Each refusal names the folder (`folder`), the level that holds the mark (`root`) and the mark (`marker`).
+
 **Dependency check.** It runs before every command except `setup`:
 - the interpreter must be Python 3.13;
 - numpy and scipy must be installed at the pins of `requirements.txt`.
@@ -114,7 +137,7 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 |---|---|---|
 | `schema_version` | (required in a file) | `acmodel.config.v1` |
 | `paths.venv` | `%LOCALAPPDATA%\ActingCommand\acmodel\venv` | the venv; an absolute path |
-| `paths.state_root` | `%LOCALAPPDATA%\ActingCommand\acmodel\state` | the state root: the cache, the runs' outputs and the trees the price provenance files share (see Cache); an absolute path, never inside a repository |
+| `paths.state_root` | `%LOCALAPPDATA%\ActingCommand\acmodel\state` | the state root: the cache, the runs' outputs and the trees the price provenance files share (see Cache); an absolute path, never inside a repository, and never a Runtime install root nor inside one (`config_invalid`, `runtime_install_root`; see "Never in a Runtime install root") |
 | `paths.datasets` | `%LOCALAPPDATA%\ActingCommand\acmodel\datasets` | the local copies of external datasets, each the file named by its sha256 (`check` verifies them); an absolute path |
 | `paths.actinglab` | (none) | the Runtime's validator that `export tables` runs on every table it writes: an `actinglab` from a Runtime build or release, never compiled here; an absolute path. Without it, `export tables` is `export_validator_missing` |
 | `export.validator_timeout_ms` | 120000 | the most time one run of the validator may take; past it, it is stopped and the export is `export_validator_missing` (`timeout`) |
