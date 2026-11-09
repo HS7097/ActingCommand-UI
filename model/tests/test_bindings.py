@@ -8,6 +8,9 @@ P80 (#424 6457254776), the tests after the CRLF one: `--strict` also counts the 
 predicates, and a binding names a pool of `schedule.json` by `pool_id` and a pointer into the pool.
 
 ACM-POOL (#424), the last test: `--strict` also scans the quantities of the pools of `schedule.json`.
+
+RL-M1 (#424), the three tests at the end: a pool's two water lines, `stop_line` and `hard_line` (the Runtime's
+SS-2h), are quantities too, each a fact reference's offset or a constant.
 """
 
 from __future__ import annotations
@@ -463,3 +466,136 @@ def test_a_slot_resource_cannot_be_bound_as_a_pool(example, acmodel):
 
         assert (status, doc["data"], errors(doc)) == (6, {}, expected)
     assert (example / SCHEDULE).read_bytes() == before
+
+
+# RL-M1 (#424): a pool with its two water lines (the Runtime's SS-2h, "Pool lines"), each a fact reference to the
+# read cap with a negative offset: the stop line 40 below the cap, the hard line 76 below it (the stop line less one
+# run of 36). Its capacity's offset 0 is the read cap itself, fixed with its reason; it does not regenerate.
+CAP_FACT = {"type": "fact", "fact_key": "resource.a_capacity"}
+LINES_POOL = {"id": "pool.l", "capacity": {**CAP_FACT, "offset": 0},
+              "stop_line": {**CAP_FACT, "offset": -40}, "hard_line": {**CAP_FACT, "offset": -76},
+              "projection": {"kind": "none"}, "observation": {"kind": "fact", "fact_key": "resource.a"},
+              "value_source": {"kind": "ledger_fact", "minimum_confidence_milli": 1}, "group_delay": None}
+STOP, HARD = "/stop_line/offset", "/hard_line/offset"  # relative to the pool
+CAP_FIXED = {"file": SCHEDULE, "pool_id": "pool.l", "path": "/capacity/offset",
+             "reason": "the read cap itself, without a margin", "ref": "fixture"}
+# The model's two rules for them (formats.md, "Stop lines and hard lines"), exported as constant thresholds.
+STOP_RULE = {"id": "stop_line.a", "kind": "derive", "subject": "res.a", "logic": {"value": "-40"},
+             "provenance": [{"kind": "logic", "ref": "fixture"}], "status": "confirmed"}
+HARD_RULE = {"id": "hard_line.a", "kind": "derive", "subject": "res.a", "logic": {"value": "rule:stop_line.a - 36"},
+             "provenance": [{"kind": "logic", "ref": "fixture"}], "status": "confirmed"}
+
+
+def test_strict_scans_the_two_lines_of_a_pool(example, acmodel):
+    """Neither bound nor fixed, the offsets of both lines are refused, each at its own pointer."""
+    edit(example / SCHEDULE, lambda doc: doc.update(pools=[LINES_POOL]))
+    edit(example / MODEL / "bindings.json", lambda doc: doc["fixed"].append(CAP_FIXED))
+
+    assert bindings(acmodel, example, "check")[0] == 0
+    status, doc = bindings(acmodel, example, "check", "--strict")
+
+    assert status == 6
+    assert errors(doc) == [
+        ("binding_unbound_literal", "/pools/0" + pointer, {
+            "path": str(example / SCHEDULE), "pool_id": "pool.l", "pointer": pointer, "literal": literal})
+        for pointer, literal in ((STOP, "-40"), (HARD, "-76"))
+    ]
+
+
+# The example's schedule.json in CRLF, its rules as SCHEDULE_LINES writes them, with the pool of the lines.
+LINES_SCHEDULE_LINES = [
+    *SCHEDULE_LINES[:2],
+    '  "requires": ["fact_reference", "pool_fact_reference", "pool_lines"],',
+    *SCHEDULE_LINES[3:-2],
+    "  ],",
+    '  "pools": [',
+    '    {"id": "pool.l",',
+    '     "capacity": {"type": "fact", "fact_key": "resource.a_capacity", "offset": 0},',
+    '     "stop_line": {"type": "fact", "fact_key": "resource.a_capacity", "offset": @STOP@},',
+    '     "hard_line": {"type": "fact", "fact_key": "resource.a_capacity", "offset": @HARD@},',
+    '     "projection": {"kind": "none"},',
+    '     "observation": {"kind": "fact", "fact_key": "resource.a"},',
+    '     "value_source": {"kind": "ledger_fact", "minimum_confidence_milli": 1}, "group_delay": null}',
+    "  ]",
+    "}",
+]
+
+
+def test_the_two_lines_of_a_pool_bind_to_constant_thresholds(example, acmodel):
+    """Each line's offset takes a constant threshold (formats.md, "Where a literal may sit"). In a CRLF file, `apply`
+    changes the bytes of the two offsets and nothing else; `--strict` then passes, the lines counted."""
+    model = example / MODEL
+    add_threshold(model, STOP_RULE, "thr.stop_line.a")
+    add_threshold(model, HARD_RULE, "thr.hard_line.a")
+
+    def bind(doc):
+        doc["bindings"].extend([
+            {"threshold": "thr.stop_line.a", "file": SCHEDULE, "pool_id": "pool.l", "path": STOP},
+            {"threshold": "thr.hard_line.a", "file": SCHEDULE, "pool_id": "pool.l", "path": HARD}])
+        doc["fixed"].append(CAP_FIXED)
+
+    edit(model / "bindings.json", bind)
+    (example / SCHEDULE).write_bytes(crlf(LINES_SCHEDULE_LINES, RUN=-250, DAILY=215, STOP=-4, HARD=-760))
+    schedule = crlf(LINES_SCHEDULE_LINES, RUN=-250, DAILY=215, STOP=-40, HARD=-76)
+    assert schedule.count(b"\n") == schedule.count(b"\r\n")
+    stop, hard = (
+        {"entry": f"/bindings/{index}", "threshold": threshold, "file": SCHEDULE, "pool_id": "pool.l", "path": path}
+        for index, threshold, path in ((3, "thr.stop_line.a", STOP), (4, "thr.hard_line.a", HARD))
+    )
+
+    status, doc = bindings(acmodel, example, "apply")
+
+    assert (status, doc["errors"]) == (0, [])
+    assert (example / SCHEDULE).read_bytes() == schedule
+    assert doc["data"]["changed"] == [{**stop, "from": -4, "to": -40}, {**hard, "from": -760, "to": -76}]
+    assert doc["data"]["written"] == [str(example / SCHEDULE)]
+
+    status, doc = bindings(acmodel, example, "check", "--strict")
+
+    assert (status, doc["errors"]) == (0, [])
+    assert doc["data"]["literals"] == 6  # three of the rules; the capacity's offset and the two lines of the pool
+    assert doc["data"]["bindings"][3:] == [
+        {**stop, "form": "constant", "literal": -40}, {**hard, "form": "constant", "literal": -76}]
+
+
+# The other form of the lines: constants, the lines themselves. A pool of a written cap of 180, its stop line 140 and
+# its hard line 104 (140 less one run of 36); the cap is fixed with its reason.
+CONSTANT_POOL = {**LINES_POOL, "id": "pool.c", "capacity": 180, "stop_line": 140, "hard_line": 104}
+STOP_CONSTANT_RULE = {**STOP_RULE, "id": "stop_line.c", "logic": {"value": "140"}}
+HARD_CONSTANT_RULE = {**HARD_RULE, "id": "hard_line.c", "logic": {"value": "rule:stop_line.c - 36"}}
+
+
+def test_the_two_lines_of_a_pool_as_constants(example, acmodel):
+    """Constant lines are the literals at `/stop_line` and `/hard_line`: unbound, both are refused; bound to their
+    constant thresholds, they pass."""
+    model = example / MODEL
+    edit(example / SCHEDULE, lambda doc: doc.update(pools=[CONSTANT_POOL]))
+    edit(model / "bindings.json", lambda doc: doc["fixed"].append(
+        {"file": SCHEDULE, "pool_id": "pool.c", "path": "/capacity", "reason": "the fixture's written cap",
+         "ref": "fixture"}))
+
+    status, doc = bindings(acmodel, example, "check", "--strict")
+
+    assert status == 6
+    assert errors(doc) == [
+        ("binding_unbound_literal", "/pools/0" + pointer, {
+            "path": str(example / SCHEDULE), "pool_id": "pool.c", "pointer": pointer, "literal": literal})
+        for pointer, literal in (("/stop_line", "140"), ("/hard_line", "104"))
+    ]
+
+    add_threshold(model, STOP_CONSTANT_RULE, "thr.stop_line.c")
+    add_threshold(model, HARD_CONSTANT_RULE, "thr.hard_line.c")
+    edit(model / "bindings.json", lambda doc: doc["bindings"].extend([
+        {"threshold": "thr.stop_line.c", "file": SCHEDULE, "pool_id": "pool.c", "path": "/stop_line"},
+        {"threshold": "thr.hard_line.c", "file": SCHEDULE, "pool_id": "pool.c", "path": "/hard_line"}]))
+
+    status, doc = bindings(acmodel, example, "check", "--strict")
+
+    assert (status, doc["errors"]) == (0, [])
+    assert doc["data"]["literals"] == 6  # three of the rules; the cap and the two lines of the pool
+    assert doc["data"]["bindings"][3:] == [
+        {"entry": "/bindings/3", "threshold": "thr.stop_line.c", "form": "constant", "file": SCHEDULE,
+         "pool_id": "pool.c", "path": "/stop_line", "literal": 140},
+        {"entry": "/bindings/4", "threshold": "thr.hard_line.c", "form": "constant", "file": SCHEDULE,
+         "pool_id": "pool.c", "path": "/hard_line", "literal": 104},
+    ]
