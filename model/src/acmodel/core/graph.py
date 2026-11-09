@@ -24,7 +24,9 @@
 - ("regen", id, "amount" | "every"): a regen's amount and interval, which the economy reads;
 - ("objective", id, "value" | "horizon"): an objective's value and a secondary objective's horizon, which the
   economy's steady state reads in the reference state (#424 ACM-PRICE PRICE-2a);
-- ("economy", "steady" | "plan"): the economy's two solves (`core.flow`), computed only when asked for.
+- ("economy", "steady" | "plan"): the economy's two solves (`core.flow`), computed only when asked for; and
+  ("economy", "vector"), one pass of the impact assessment, computed only in a `Moved` graph (#424 ACM-PRICE PRICE-4a:
+  some provisional derives moved to a value of their estimate, `core.impact`).
 
 **Scenarios.** A node that reads a discrete unknown (variants, empirical) has one value per point of it. The
 choices are found as the evaluation reaches them, so a node depends only on the unknowns its value actually
@@ -245,6 +247,12 @@ def _rounded(mode: str | None, value: Value) -> Value:
     number = _magnitude(value)
     whole = Fraction(_ROUNDING[mode](number))
     return Duration(whole) if type(value) is Duration else whole
+
+
+def rounded(rule: Entry, value: Value) -> Value:
+    """`value` rounded as the derive `rule` rounds its own (its `round`; absent means exact): the value a moved
+    estimate stands at (`Moved`, PRICE-4a)."""
+    return _rounded(rule.doc["logic"].get("round"), value)
 
 
 def _text(value: Value) -> str:
@@ -892,6 +900,33 @@ class Graph:
             ))
         return Result(tuple(sorted(scenarios, key=lambda scenario: scenario.unknowns)))
 
+    def evaluated(self, entry: Entry, ref: str, general: str | None) -> Result:
+        """The value of the expression at `ref` of `entry` (in the environment `general` names), outside any node,
+        once each node it reads is computed (`Need`). The impact assessment reads an estimate's `of`, `low` and `high`
+        so (#424 ACM-PRICE addendum 2.1 §3.4, PRICE-4a; `core.impact`)."""
+        while True:
+            try:
+                return self.expression(entry, _at(ref), CONFIRMED, general=general)
+            except Need as need:
+                solve([need.key], self.compute, self.results)
+
+    def readers_of(self, keys: set[tuple[str, ...]]) -> set[tuple[str, ...]]:
+        """The computed nodes that read any of `keys`, through any node in between, and `keys` themselves."""
+        read_by: dict[tuple[str, ...], set[tuple[str, ...]]] = {}
+        for key, result in self.results.items():
+            found = result.reads if isinstance(result, flow.Economy) else (
+                item for scenario in getattr(result, "scenarios", ()) for item in scenario.reads
+            )
+            for item in found:
+                read_by.setdefault(item, set()).add(key)
+        tainted, todo = set(keys), list(keys)
+        while todo:
+            for reader in read_by.get(todo.pop(), ()):
+                if reader not in tainted:
+                    tainted.add(reader)
+                    todo.append(reader)
+        return tainted
+
     def estimated(self, rule: Entry, value: Result, general: str | None) -> Result:
         """A provisional derive's value, once its point lies in the range of its `estimate` (#424 ACM-PRICE addendum
         2.1 §3.7, check 2; PRICE-2b-2). The range is computed beside the value in the same environment, and read by
@@ -1276,3 +1311,47 @@ class _SubGraph(Graph):
         if item[0] in NODE_KINDS and item not in self.copied:
             return  # computed in this graph, which forwards what it reads as it reads it
         self.main.depend(item)
+
+
+class Moved(Graph):
+    """One pass of the impact assessment (#424 ACM-PRICE addendum 2.1 §3.4, PRICE-4a; `core.impact`): the graph with some
+    provisional derives `moved` to a value of their estimate, each in every environment (`rule:<id>` as the run, the
+    general logic and the reference state read it), and every other rule at its point value. A rule that reads a moved
+    one moves with it; nothing else does.
+
+    The nodes that read none of the moved derives, through any node, are the main graph's (`base`), and are not computed
+    again; neither is any economy node, which this graph computes afresh. It computes without the cache, registers its
+    errors among the main graph's, and reads the keys under `lp` and `economy` as the main graph does."""
+
+    def __init__(self, main: Graph, base: dict[tuple[str, ...], Result], moved: dict[str, Value]) -> None:
+        super().__init__(
+            main.checker, main.typed, main.state, main.exports, max_bits=main.max_bits, settings=main.settings,
+            economy=main.economy,
+        )
+        self.results = dict(base)
+        self.errors, self._seen = main.errors, main._seen
+        self.moved = moved
+
+    @staticmethod
+    def keys(rules: set[str]) -> set[tuple[str, ...]]:
+        """The nodes of `rules`' values in every environment."""
+        return {(*prefix, "rule", rule) for rule in rules for prefix in ((), (GENERAL,), (REFERENCE,))}
+
+    @staticmethod
+    def base(main: Graph, rules: set[str]) -> dict[tuple[str, ...], Result]:
+        """The computed nodes of `main` that a pass moving `rules` takes over: those that read none of them, through
+        any node, and are no economy, impacts or sampled node."""
+        tainted = main.readers_of({key for key in Moved.keys(rules) if key in main.results})
+        return {
+            key: result for key, result in main.results.items()
+            if key not in tainted and isinstance(result, Result)
+        }
+
+    def compute(self, key: tuple[str, ...]) -> Result | Sampled | Impacts | flow.Economy:
+        node = key[1:] if key[0] in _ENVIRONMENTS else key
+        if node[0] != "rule" or node[1] not in self.moved:
+            return super().compute(key)
+        found = super().compute(key)  # what it reads and its status stay; only its value moves
+        if not isinstance(found, Result) or found.blocked or found.needs_state:
+            return found
+        return Result(tuple(replace(scenario, value=self.moved[node[1]]) for scenario in found.scenarios))

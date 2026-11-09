@@ -20,6 +20,11 @@ quantity of a `schedule.json` pool (#424 ACM-POOL), that is neither bound nor fi
 `apply` writes each bound literal that differs, changing only the literal's bytes; it refuses everything `check`
 refuses but a differing value, and then writes nothing. Neither binds a pool that is a slot resource of the model
 (`binding_mismatch`, `slot`; #424 ACM-PRICE 3.1): a slot is no Runtime pool.
+
+`check` also reports the coverage of the prices (#424 ACM-PRICE PRICE-4a; addendum 2.1 §3.1) in `data.coverage`: what
+`export prices` delivered in `out/prices.json`, read back, as the repository's schedule.json meets it (each pool by its
+class, each rule that declares effects by the worst class of its pools, the counts). It computes no steady state: that
+is the export's. Without the file it is null; a file of other versions of the model is the warning `prices_stale`.
 """
 
 from __future__ import annotations
@@ -48,19 +53,24 @@ from acmodel.codes import (
     EXPORT_REFUSED,
     EXPORT_WRITE_FAILED,
     MODEL_ID_DUPLICATE,
+    PRICES_STALE,
     RULE_REFERENCE_MISSING,
 )
 from acmodel.config import Unknowns
 from acmodel.core.flow import slots
 from acmodel.core.provenance import STATE_NODES, assemble
 from acmodel.core.run import Run, evaluate_model
+from acmodel.core.versions import versions
 from acmodel.envelope import Failure, error
 from acmodel.export.thresholds import threshold_entry
-from acmodel.model import read_bindings
+from acmodel.model import read_bindings, read_prices
+from acmodel.model.jsonfile import refusal
+from acmodel.model.readers import PRICES as PRICES_FORMAT
 from acmodel.model.readers import SCHEDULE_FILE
 from acmodel.model.shape import json_type
 
 BINDINGS = "bindings.json"
+PRICES = "out/prices.json"  # what `export prices` writes (`export.prices`)
 
 
 def _raise(errors: list[dict[str, Any]]) -> None:
@@ -239,6 +249,78 @@ def _unbound(schedule: Target, bindings: File) -> tuple[int, list[dict[str, Any]
     return count, errors
 
 
+# The four classes of a pool (#424 ACM-PRICE addendum 2.1 §3.1), from the best to the worst: a rule takes the worst of
+# the pools it touches.
+CLASS_ORDER = ("covered", "verified_zero", "structural_gap", "unknown")
+
+
+def _effects(rule: dict[str, Any]) -> list[str]:
+    """The pools a schedule.json rule declares that it produces or consumes (`produces`, `consumes`: lists of entries
+    with a `pool_id`), each once, in order. What is not of that shape is the validator's to refuse."""
+    found: dict[str, None] = {}
+    for member in ("produces", "consumes"):
+        entries = rule.get(member)
+        for entry in entries if isinstance(entries, list) else ():
+            if isinstance(entry, dict) and isinstance(entry.get("pool_id"), str):
+                found[entry["pool_id"]] = None
+    return list(found)
+
+
+def _coverage(run: Run, repo: Path, targets: dict[str, Target]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """The coverage `export prices` delivered (`out/prices.json`, #424 ACM-PRICE PRICE-4a; addendum 2.1 §3.1), as the
+    repository's schedule.json meets it: each of its pools (a pool the model lacks, or a slot, is unknown) and each of
+    its rules that declares effects (the worst class of the pools it touches), with the counts by class. None when no
+    prices were exported. A prices.json of other versions of the model is shown with `current` false and the warning
+    `prices_stale`."""
+    path = run.folder / PRICES
+    if not path.exists():
+        return None, []
+    doc = read_prices(path)
+    if doc["model_id"] != run.head["model_id"]:
+        raise Failure(refusal(
+            "value_invalid", path, PRICES_FORMAT.name, "/model_id", expected=[run.head["model_id"]], literal=doc["model_id"]
+        ))
+    model = versions(run.checker, run.folder)
+    stale = [member for member in ("rules", "data", "tool") if doc["versions"][member] != model[member]]
+    warnings = [error(PRICES_STALE, {"path": str(path), "members": stale}, "/versions")] if stale else []
+    by_pool = {entry["pool"]: entry for entry in doc["prices"]}
+    slots = set(doc["slots"])
+    schedule = targets.get(SCHEDULE_FILE)
+    if schedule is None and (repo / SCHEDULE_FILE).exists():
+        schedule = read_target(repo, SCHEDULE_FILE)
+
+    def classed(pool: str) -> dict[str, Any]:
+        entry = by_pool.get(pool)
+        if entry is None:  # the model lacks it (or it is a slot, which is no pool): unknown, never 0
+            reason = "slot" if pool in slots else "not_in_model"
+            return {"class": "unknown", "status": "provisional", "reasons": [reason], "price": "pending",
+                    "pending": ["unknown"]}
+        return {key: entry[key] for key in ("class", "status", "reasons", "price", "pending")}
+
+    pools: dict[str, Any] = {}
+    rules: dict[str, Any] = {}
+    if schedule is not None:
+        for pool in schedule.pools:
+            pools[pool] = classed(pool)
+        for rule_id, index in schedule.rules.items():
+            touched = _effects(schedule.doc["rules"][index])
+            if not touched:
+                continue
+            found = [classed(pool) for pool in touched]
+            rules[rule_id] = {
+                "class": max((entry["class"] for entry in found), key=CLASS_ORDER.index),
+                "status": "provisional" if any(entry["status"] != "confirmed" for entry in found) else "confirmed",
+                "pools": touched,
+                "pending": [pool for pool, entry in zip(touched, found) if entry["price"] == "pending"],
+            }
+    counts = {
+        "pools": {kind: sum(1 for entry in pools.values() if entry["class"] == kind) for kind in CLASS_ORDER},
+        "rules": {kind: sum(1 for entry in rules.values() if entry["class"] == kind) for kind in CLASS_ORDER},
+        "model": doc["counts"],
+    }
+    return {"file": str(path), "current": not stale, "pools": pools, "rules": rules, "counts": counts}, warnings
+
+
 def check_bindings(
     path: Path | str,
     state_path: Path | str,
@@ -247,10 +329,11 @@ def check_bindings(
     max_bits: int,
     strict: bool,
     unknowns: Unknowns = Unknowns(),
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """`acmodel bindings check [--strict]`: every bound literal equals its exported threshold; with `strict`,
     no literal of a `fact` or `resource_projection` predicate of a schedule.json rule, and no quantity of one of
-    its pools, is left unbound."""
+    its pools, is left unbound. `data.coverage` is what `export prices` delivered, as schedule.json meets it
+    (`_coverage`); the warnings are its `prices_stale`."""
     run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
     repo, targets = _targets(run, bindings, strict)
@@ -277,7 +360,8 @@ def check_bindings(
         data["literals"], unbound = _unbound(targets[SCHEDULE_FILE], bindings)
         errors.extend(unbound)
     _raise(errors)
-    return data
+    data["coverage"], warnings = _coverage(run, repo, targets)
+    return data, warnings
 
 
 def _splice(target: Target, edits: list[tuple[str, int]]) -> bytes:

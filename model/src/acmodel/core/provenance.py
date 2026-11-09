@@ -194,13 +194,24 @@ def output_result(run: Run, output: str) -> dict[str, Any]:
     return {key: value for key, value in rule.items() if key != "general_logic"}
 
 
-def acceptances(run: Run) -> dict[str, int]:
-    """Each output that `acceptances` of exports.json accepts while provisional, and the index of its entry.
+def price_outputs(run: Run) -> set[str]:
+    """`price:<pool>` of each pool of the model (#424 ACM-PRICE PRICE-4a): each resource that is not a slot, whose price
+    is a diagnosis only (formats.md, "Slots")."""
+    checker, slot_ids = run.checker, flow.slots(run.checker, run.graph.typed)
+    return {
+        flow.PRICE + entity.id for entity in checker.entities
+        if checker.entries.get(entity.id) is entity and entity.kind == "resource" and entity.id not in slot_ids
+    }
 
-    An entry that names no output of the model is `rule_reference_missing` (`expected` `output`), and a second
-    entry of one output `model_id_duplicate` (`namespace` `acceptance`); both refuse whatever reads them.
+
+def acceptances(run: Run) -> dict[str, int]:
+    """Each output that `acceptances` of exports.json accepts while provisional, and the index of its entry; an
+    acceptance of a pool's price (`price:<pool>`, PRICE-4a) too, which only `export prices` applies.
+
+    An entry that names no output of the model (nor a pool's price) is `rule_reference_missing` (`expected` `output`),
+    and a second entry of one output `model_id_duplicate` (`namespace` `acceptance`); both refuse whatever reads them.
     """
-    path, known = run.exports.path, outputs(run)
+    path, known = run.exports.path, {**outputs(run), **dict.fromkeys(price_outputs(run))}
     found: dict[str, int] = {}
     errors = []
     for index, entry in enumerate(run.exports.doc.get("acceptances", [])):
@@ -232,8 +243,10 @@ def acceptance(run: Run, output: str) -> dict[str, Any] | None:
     }
 
 
-def _document(run: Run, output: str, root: tuple[str, ...], result: dict[str, Any]) -> dict[str, Any]:
-    """The provenance document of `output`, rooted at the graph node `root`, with its `result`."""
+def _tree(run: Run, root: tuple[str, ...], known: dict[str, dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
+    """The nodes of the tree rooted at the graph node `root`, by id; the nodes of `known` (a tree described before) are
+    taken as they are, with what they read."""
+    known = known or {}
     nodes: dict[str, dict[str, Any]] = {}
     todo = [root]
     while todo:
@@ -241,15 +254,27 @@ def _document(run: Run, output: str, root: tuple[str, ...], result: dict[str, An
         name = node_id(item)
         if name in nodes:
             continue
+        if name in known:
+            nodes.update(known)  # a whole tree: everything it reads is in it
+            continue
         found = _reads(run, item)
         nodes[name] = {**_describe(run, item), "reads": [node_id(read) for read in found]}
         todo.extend(found)
+    return nodes
+
+
+def _document(
+    run: Run, output: str, root: tuple[str, ...], result: dict[str, Any], known: dict[str, dict[str, Any]] | None = None,
+    model_versions: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """The provenance document of `output`, rooted at the graph node `root`, with its `result`."""
+    nodes = _tree(run, root, known)
     return {
         "schema_version": SCHEMA_VERSION,
         "model_id": run.head["model_id"],
         "output": output,
         "result": result,
-        "versions": versions(run.checker, run.folder),
+        "versions": model_versions or versions(run.checker, run.folder),
         "nodes": dict(sorted(nodes.items())),
     }
 
@@ -270,8 +295,9 @@ def assemble_economy(run: Run, output: str) -> dict[str, Any]:
     - An id whose kind is not one of these, or that names no resource (no activity) of the model, or none of the
       steady state, is `usage_invalid` (`output_unknown`).
     - A blocked steady state has no tree: the errors that block it are raised, each needed by `output`.
-    - exports.json's acceptances are checked as for every output (`acceptances`); none accepts an economy output in
-      this version."""
+    - exports.json's acceptances are checked as for every output (`acceptances`). An acceptance of a price is applied
+      by `export prices` alone, which reads the impact assessment for it (PRICE-4a): the document here never holds
+      one."""
     kind, _, target = output.partition(":")
     entry = run.checker.entries.get(target)
     unknown = Failure(error(USAGE_INVALID, {"reason": "output_unknown", "argument": output}))
@@ -291,6 +317,20 @@ def assemble_economy(run: Run, output: str) -> dict[str, Any]:
         raise unknown
     acceptances(run)
     return _document(run, output, (kind, target), result)
+
+
+def economy_documents(run: Run, names: list[str]) -> dict[str, dict[str, Any]]:
+    """The provenance document of each economy output in `names` (`price:<resource>`, `activity_value:<activity>`) of
+    a steady state the run's graph computed and that is not blocked, as `assemble_economy` gives it; the steady state's
+    tree, which each of them reads whole, is described once (`export prices`, PRICE-4a)."""
+    key = flow.NODES[flow.STEADY]
+    steady = run.graph.results[key]
+    shared, model_versions = _tree(run, key), versions(run.checker, run.folder)
+    found = {}
+    for name in names:
+        kind, target = name.split(":", 1)
+        found[name] = _document(run, name, (kind, target), flow.output(steady, name), shared, model_versions)
+    return found
 
 
 def explain(

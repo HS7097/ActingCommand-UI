@@ -232,7 +232,8 @@ absent for now: the static check warns of a source without it (see "Provenance c
 | `thresholds` | a list of `{id, from, form}` [`round`, `note`]: `id` is an id, unique among the thresholds; `from` is the id of a `derive` rule; `form` is `constant` (the rule's value) or `fact_offset` (the offset of the rule's `live`); `round` is `floor`, `ceil` or `half_even` (absent means exact) |
 | `tables` | a list of tables, each `{table_id, game, row_key, columns, rows}` [`note`] (below) |
 | `scoring` | a list of `{id, template}` [`note`]: `id` is an id; `template` a file relative to the model folder, `/`-separated segments `[a-z0-9][a-z0-9_.-]*` ending in `.json` |
-| [`acceptances`] | a list of `{output, accept_provisional: {ref, until}}` [`note`]: `output` is an output id (`rule:<id>`, `general_logic:<id>`, `threshold:<id>`); `ref` names the ruling or board comment, `until` the pending check. Absent means none. |
+| [`acceptances`] | a list of `{output, accept_provisional: {ref, until}}` [`note`]: `output` is an output id (`rule:<id>`, `general_logic:<id>`, `threshold:<id>`); `ref` names the ruling or board comment, `until` the pending check. Absent means none. An acceptance of a pool's price (`price:<pool>`, PRICE-4a) holds instead exactly one of `accept_provisional: {ref, until, binds, scope, flips}` and `accept_zero: {ref, scope, until}` (see "`acmodel export prices`"); `binds`, `scope` and `flips` on any other output, and `accept_zero` on one, are `member_unknown`, and their absence on a price's `accept_provisional` `member_missing`. |
+| [`prices`] | `{unit_milli}` [`note`] (#424 ACM-PRICE 4.2, PRICE-4a): the game's price unit κ, an integer ≥ 1: one value unit is `unit_milli` thousandths of a priority. One per game; two games' prices are never compared (137 K2). Absent, `export prices` refuses (`member_missing`); nothing else reads it. |
 | [`note`] | |
 
 **A table** becomes the Runtime's shared table `tables/<table_id>.json` (`actingcommand.table.v1`) of the
@@ -1198,7 +1199,8 @@ one dual optimal point, never a pick per pool: with V = min(A, B, C), each pool'
   resource's and each activity's entry of `joint`, a price with its own `status` and `reasons` (its entry of
   `price_status`: its static component's, see "Coverage" below), an activity's value with the steady state's
   `status`, and `per_account` false. `explain` prints their provenance; nothing binds or exports an activity's value.
-  They are blocked exactly when the steady state is. `out/prices.json` and the acceptances of `price:` are PRICE-4's.
+  They are blocked exactly when the steady state is. `export prices` writes the prices, with their acceptances, into
+  `out/prices.json` (PRICE-4a, see "`acmodel export prices`").
 
 ### Coverage (`coverage`; #424 ACM-PRICE addendum 2.1 §3.1–§3.3 and §3.7, the design's §4.6; PRICE-2b-2)
 
@@ -1264,9 +1266,10 @@ confirmed while the other is provisional.
   point value and its `estimate` as written (null when it has none), so that the research channel can verify the
   estimates of its step 3.
 
-What it leaves to PRICE-4: a covered pool whose price is 0 names the constraint that makes it 0 (an LP fact); a verified
-zero is exported only with its acceptance and `scope`; a pool of `schedule.json` that the model lacks is unknown; and a
-provisional derive under `estimates` without an `estimate` is `estimate_missing` there.
+What PRICE-4a builds on it (see "`acmodel export prices`" and "`acmodel bindings check`"): a verified zero is exported only
+with its acceptance and `scope`; a pool of `schedule.json` that the model lacks is unknown; and a provisional derive
+under `estimates` without an `estimate` is `estimate_missing`. Left for later: a covered pool whose price is 0 naming the
+constraint that makes it 0 (an LP fact).
 
 ### The plan (`plan`)
 
@@ -1504,7 +1507,7 @@ What a delivered file takes from an output (#424 design 6.6; `src/acmodel/export
 - **Booleans** must be one value in every scenario; an undecided one is `not_single` (`false..true`).
 - **Provenance files.** Each output a file delivers has its provenance document, as `explain` prints it, in
   `out/provenance/<kind>/<id>.json` of the model folder: `rules/` for `rule:<id>`, `general_logic/` and
-  `thresholds/`.
+  `thresholds/`; `export prices` writes each price's in `prices/` (PRICE-4a).
 
 A refusal is `export_refused` at the threshold, cell or placeholder, with the errors that block a blocked
 output; the export then writes nothing.
@@ -1561,6 +1564,109 @@ It fills the scoring templates of exports.json (#424 design 6.2; `src/acmodel/ex
 - **Writing.** Where `scoring.json` lives and which validator family reads it are not decided yet (367-D1). Until
   they are, a template that fills is refused as `export_refused` (`validator_path_unknown`, `output`
   `scoring:<id>`), and nothing is written (exit 5).
+
+### `acmodel export prices <model> --state <file>`
+
+The prices of the economy's steady state, with their coverage, the impact of their estimates and their acceptances (#424
+ACM-PRICE PRICE-4a; addendum 2.1 §3.1–§3.4 and §3.7; the design's §4.1, §4.2 and §4.6; `src/acmodel/export/prices.py`,
+`src/acmodel/core/impact.py`). It runs the model as `run` does, without the cache, computes the steady state with the keys
+under `lp` and `economy`, assesses the impact of its estimates (below), then writes into the model folder:
+1. `out/provenance/prices/<pool>.json`: the provenance document of each pool's price, as `explain price:<pool>` prints it
+   (the whole steady state's tree, "Provenance"), and, for a price delivered under an acceptance, that acceptance
+   (`acceptance`: `file`, `ref`, `sha256` of the entry and its `accept_provisional` or `accept_zero`);
+2. `out/prices.json` (`acmodel.prices.v1`), last.
+
+It needs exports.json's `prices` (the game's κ): without it, `model_file_invalid` (`member_missing` at `/prices`), and
+nothing is computed or written. The pools are the coverage section's: each resource that is not a slot.
+
+**What is exported** (§3.1), by the pool's class in the coverage section:
+
+| Class | Its price |
+|---|---|
+| `covered`, confirmed | the joint vector's coordinate |
+| `covered`, provisional (with estimates, or another provisional input) | the coordinate, under a current `accept_provisional` (below); otherwise `pending` |
+| `verified_zero` | 0, under an `accept_zero`; a conditional zero (its declaration names `facts`) only when its `scope` is `game` |
+| `structural_gap`, `unknown` | `pending` |
+
+and `pending` whatever the acceptances when the coordinate is withheld (`withheld`, "The joint price vector") or the pool's
+static component read a provisional derive that has no estimate (`estimate_missing`, below; a verified zero excepted).
+
+**An acceptance of a price** (exports.json `acceptances`, `output` `price:<pool>`):
+- `accept_provisional: {ref, until, binds, scope, flips}` (§3.4). `binds` is the sha256 of the canonical JSON (JCS,
+  `export/jcs.py`) of the price's provenance document as `explain` prints it (without the acceptance the export records
+  in it): `out/prices.json` shows it for each pool (`binds`). The model, a rule (an estimate too), a data row or the tool
+  changing changes it, and the acceptance no longer holds: `acceptance_stale` (a warning, at its `binds`). `flips` lists
+  the activities whose class flips in the impact assessment; it must hold every one that takes or brings in the pool,
+  otherwise `acceptance_incomplete` (a warning, at its `flips`, `missing` those it lacks). `scope` is `"game"`, or a list
+  of the aliases of the instances it was verified on: the same `schedule.json` pool is every instance's, and the Runtime
+  has no value per instance, so only `game` delivers (`scope_partial` otherwise).
+- `accept_zero: {ref, scope, until}` (§3.2), for a verified zero, with `scope` as above.
+
+An acceptance names a pool of the model (`rule_reference_missing`, `expected` `output`, otherwise; a slot is none), once
+(`model_id_duplicate`, `acceptance`). Only `export prices` applies it: `explain` and the other exports never do. One of a
+confirmed price, or of the wrong kind for its class, changes nothing (the latter leaves it `not_accepted`).
+
+**`estimate_missing`** (§3.4, §3.7). Each provisional derive the steady state read, through any node (the pending flows it
+left out aside), belongs to the static components of the items that read it (a flow amount's activity, a regen's, cap's or
+limit's subject, an objective's sink). One without an `estimate` cannot be assessed, so no acceptance can bind it: the
+warning `estimate_missing` (at its `logic`, with the `pools` of its components), and each of those prices `pending`.
+
+**The impact assessment** (§3.4, §3.7; `core/impact.py`). The Runtime's zero band holds rounding only (127 ii), so the
+uncertainty of the estimates is assessed here.
+- **Which estimates.** Each provisional derive with an `estimate` that the steady state read, in a component that is not a
+  structural gap and holds no derive without an estimate. The others are listed as skipped (`structural_gap`,
+  `estimate_missing`): every price of their components is pending whatever they are (the first version exports no part of
+  a gap, §3.3).
+- **Groups.** The estimates written with `of` that read a common unknown are one group and move together, by what their
+  `of` reads in the reference state: the discrete unknowns it chooses, and the continuous ones (a random rule read as its
+  enclosure among them) it computes with. Its passes: each point of its discrete unknowns, with each end (`low`, `high`)
+  of each continuous one, every combination; in each, each estimate is its `of` there. An estimate written with `low` and
+  `high` is a group of its own, with two passes: its lowest `low` and its highest `high`. A moved value is rounded as the
+  derive rounds its value.
+- **A pass** moves the group's derives, in every environment, to those values; every rule that reads one moves with it, and
+  every other rule keeps its point value. Its joint price vector is computed again, as the steady state computes it, from
+  the three solves to the selection, skipping what the vector does not read (the prices of the rules, the least losses,
+  HiGHS's marginals, the forcing costs, and the range of an activity some optimum runs, which is never in K). A pass whose
+  values are all the point values is the steady state's own vector.
+- **What it finds:** each pool's price range over the steady state and every pass (`impact`); and the activities whose
+  class flips: the sign of their value at the vector (positive, zero, negative) is not the same in the steady state and in
+  every pass. The Runtime's zero band, which needs the pools' scales and the rules' effects, is PRICE-4b's; an activity that
+  moves out of or into a store has no value, and no class.
+- **Refusals:** an estimate whose `of`, `low` or `high` is blocked, or a pass whose vector is blocked, is `export_refused`
+  (`impact_blocked`, `output` the derive's `rule:<id>`, `value` the pass, at its estimate) with the errors that block it,
+  each needed by it; one that needs the account state is the same, `per_account`. Nothing is written.
+
+**`out/prices.json`** (`acmodel.prices.v1`):
+
+| Member | Value |
+|---|---|
+| `schema_version` | `acmodel.prices.v1` |
+| `model_id`, `versions` | as in a provenance document |
+| `unit_milli` | κ, from exports.json |
+| `prices` | one entry per pool, by id (below) |
+| `slots` | the slot resources, by id: no pools, so not priced here |
+| `estimates` | each provisional derive the steady state read, by id: `rule`, `value` (its point value), `estimate` (as written, or null), `components`, `assessed`, and `skipped` (null, `structural_gap` or `estimate_missing`) |
+| `impact` | the assessment's groups, each `{rules, unknowns, passes, prices, flips}`: its derives; the unknowns they move by; each pass's `at` (each unknown's point or end, or the derive's `low` or `high`) and `values` (each derive's moved value); the pools whose price moves in it, with `low` and `high`; and the activities whose class flips in it |
+| `counts` | the pools of each class, and how many are `exported` and `pending` |
+
+A pool's entry: `pool`; `class`, `status`, `reasons` and `component`, from the coverage section; `price`, the exported price
+as an exact rational, or `pending`; `milli`, the price times κ (thousandths of a priority per unit), or null; `pending`,
+each reason that holds, in this order: `structural_gap`, `unknown`, `withheld`, `estimate_missing`, `not_accepted`,
+`acceptance_stale`, `acceptance_incomplete`, `scope_partial` (empty when exported); `joint`, its entry of the joint vector
+(`value`, `interval`, `by`, `withheld`), shown for analysis whatever is exported; `degenerate`, whether its interval on D* has
+two ends; `varies_by_step`, whether its price differs between the steps of the cycle; `estimates`, the provisional derives
+its component read; `impact`, its price range over the assessment (`low`, `high`), or null when no estimate of its
+component was assessed; `flips`, the activities that take or bring it in and whose class flips; `binds`; `acceptance`, its
+entry of exports.json (with `entry`, its pointer), or null; and `provenance`, its provenance file.
+
+**Refusals and writing.** A blocked steady state is `export_refused` (`blocked`, `output` `economy:steady`, at `/prices`)
+with the errors that block it; so are the assessment's (above). Then nothing is written. The warnings `estimate_missing`,
+`acceptance_stale` and `acceptance_incomplete` never change the exit status. The files have sorted keys, a two-space indent,
+UTF-8 and LF line ends; a write that fails is `export_write_failed`; nothing is deleted. `data` holds `path`, `model_id`,
+`state`, `unit_milli`, `counts` and `written`.
+
+**What it costs.** One steady state, then one vector per pass that moves something. Each pass solves as much of the
+steady state as its vector needs, so a model whose open components read many estimates pays roughly that many times.
 
 ## Bindings: `bindings.json`, `bindings check` and `bindings apply`
 
@@ -1655,7 +1761,18 @@ says `greater_than_or_equal`).
     `pool_id`], `path` and `literal`;
   - `fixed`: each with `entry`, `file`, [`rule_id` or `pool_id`], `path`, `literal`, `reason` and `ref`;
   - with `--strict`, `literals`: how many literals it scanned, those of the rules' predicates and the pools'
-    quantities.
+    quantities;
+  - `coverage` (#424 ACM-PRICE PRICE-4a; addendum 2.1 §3.1): the four classes as `export prices` delivered them, read back
+    from `out/prices.json` (its reader checks it, `model_file_invalid`, `format` `acmodel.prices.v1`; a file of another
+    model is `value_invalid` at `/model_id`), as the repository's `schedule.json` meets them; null when no prices were
+    exported. It holds `file`; `current`, false when the file was written for other versions of the model (its `versions`
+    differ: the warning `prices_stale`, with the `members` that differ, which never changes the exit status); `pools`, each
+    pool of `schedule.json` with its `class`, `status`, `reasons`, `price` and `pending` (a pool the model lacks, or a slot,
+    is `unknown`, `not_in_model` or `slot`, and `pending`); `rules`, each rule of `schedule.json` that declares `produces`
+    or `consumes`, with the pools they name (`pools`), the worst class among them (covered, then verified zero, then
+    structural gap, then unknown) and their worst status, and the pools whose price is pending (`pending`); and `counts`:
+    the pools and the rules of each class, and the model's own counts (`model`). It computes no steady state: that is the
+    export's.
 - **The provenance classes** of `acmodel check` (warnings, or errors under `check --strict-provenance`) are not
   read here: `--strict` concerns the literals of the schedule only.
 
