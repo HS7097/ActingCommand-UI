@@ -29,7 +29,8 @@ py -3.13 -I -B model\acmodel.py setup
 `setup` creates a virtual environment from that Python 3.13 and installs only the hash-pinned wheels of
 `requirements.txt` (numpy, scipy), with no source builds and no dependency resolution.
 - **Default venv location:** `%LOCALAPPDATA%\ActingCommand\acmodel\venv` (about 150 MB). It can be
-  changed with `paths.venv` (see Configuration).
+  changed with `paths.venv` (see Configuration), but never into a Runtime install root: there `setup` is refused and
+  makes nothing (`config_invalid`, `runtime_install_root`).
 - **Running it again** reuses a 3.13 venv and runs the install again.
 - **It never deletes anything.** It refuses a venv of another Python minor version, and a path that is
   not a venv. To start over, remove the venv folder yourself and run `setup` again.
@@ -209,9 +210,10 @@ default:
 - **State root.** The default for `paths.state_root` is `%LOCALAPPDATA%\ActingCommand\acmodel\state`. It
   holds the cache (`cache/`), the runs' outputs (`runs/`) and the steady-state trees the price provenance files share
   (`provenance/`, PRICE-4a2), never inside a repository.
-- **Never in a Runtime install root.** A state root that is a Runtime install root or lies inside one (the folder or
-  one above it holds `actingd.config.json`, `runtime/BUILD-MANIFEST.json` or `install/active.json`) is refused when
-  the configuration is read (`config_invalid`, `runtime_install_root`); so is a model folder, or the `--repo` of
+- **Never in a Runtime install root.** A state root or a venv that is a Runtime install root or lies inside one (the
+  folder or one above it holds `actingd.config.json`, `runtime/BUILD-MANIFEST.json` or `install/active.json`) is
+  refused when the configuration is read (`config_invalid`, `runtime_install_root`), so no command runs and `setup`
+  makes no venv; so is a model folder, or the `--repo` of
   `export tables`, that a command would write into (`location_refused`). See `contracts/cli.md`, "Never in a Runtime
   install root".
 - **Cache size.** `cache.max_bytes` (default 2 GiB) caps the cache; the least recently used entries are

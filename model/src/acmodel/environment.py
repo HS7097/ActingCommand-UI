@@ -1,6 +1,8 @@
 """The venv: its layout, whether this process runs in it, re-dispatch into it, and `setup`.
 
-Nothing here ever deletes a venv or any file in one; the person removes it.
+Nothing here ever deletes a venv or any file in one; the person removes it. A venv that is a Runtime install root or
+lies inside one never gets here: `config.load` refuses it (`config_invalid`, `runtime_install_root`, ref `/paths/venv`),
+so `setup` makes nothing there and no command is re-dispatched into it (#424, 2026-11-09).
 """
 
 from __future__ import annotations

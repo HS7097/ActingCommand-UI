@@ -25,7 +25,7 @@ python3 -I -B <model>/acmodel.py <command>    (elsewhere)
 
 | Command | Does | `data` |
 |---|---|---|
-| `setup` | Creates the venv at `paths.venv` from the running Python 3.13 (`python -I -B -m venv <path>`) if the path is absent. Then it installs `requirements.txt` with `python -I -B -m pip install --require-hashes --only-binary=:all: --no-deps -r requirements.txt` using the venv's Python. It reuses a 3.13 venv, refuses a venv of another minor version (`deps_invalid`, `python_version`) and a path that holds no venv (`venv_failed`, `stage: inspect`), and never deletes anything. The children's output goes to stderr. | `venv`, `created`, `requirements` |
+| `setup` | Creates the venv at `paths.venv` from the running Python 3.13 (`python -I -B -m venv <path>`) if the path is absent. Then it installs `requirements.txt` with `python -I -B -m pip install --require-hashes --only-binary=:all: --no-deps -r requirements.txt` using the venv's Python. It reuses a 3.13 venv, refuses a venv of another minor version (`deps_invalid`, `python_version`) and a path that holds no venv (`venv_failed`, `stage: inspect`), and never deletes anything. A `paths.venv` that is a Runtime install root or lies inside one is refused when the configuration is read (`config_invalid`, `runtime_install_root`), before anything is made (see "Never in a Runtime install root"). The children's output goes to stderr. | `venv`, `created`, `requirements` |
 | `version` | Runs the dependency check and reports the versions. | `tool`, `tool_version`, `python`, `packages` (name to version) |
 | `check <model> [--strict-provenance] [--report-supplements]` | Runs the dependency check, then the static check of the model: `<model>` is the model folder or its `model.json` (`formats.md`, "The static check"). It reads and computes, never writes. Every problem is one error; with any, the exit status is 1. The provenance classes (`rule_provenance_unsourced`, `formats.md`, "Provenance classes") are warnings, which never change the exit status, and errors (exit 1) with `--strict-provenance`. With `--report-supplements`, `data.supplements` lists every supplemented value. When it finds nothing else, it also checks the declared zeros (`no_use_contradicted`, `no_use_condition_incomplete`) and the estimates of provisional derives (`estimate_basis_invalid`, `estimate_scope_exceeded`; `formats.md`, "Declared zeros and estimates"). | `path`, `model_id`, `entities`, `rules`, `superseded`, `unknowns`, `tables`, and `supplements` with `--report-supplements` |
 | `run <model> --state <file>` | Runs the dependency check, the static check, the run's model checks and the derivation graph for the account state `<file>` (`formats.md`, "The run"), incrementally through the cache (see Cache). It writes only under `paths.state_root`: the cache and the run's outputs. A model or input that does not check is refused whole (exit 1, `data` `{}`). Otherwise every output is computed or blocked: a blocked output's error lists the outputs it blocks in `needed_by`, the other outputs are still in `data`, and the exit status is 1. Provisional outputs alone exit 0. A corrupt cache entry is a warning (`cache_entry_corrupt`) and the node is computed again. | `path`, `model_id`, `state`, `run_id`, `rules`, `thresholds`, `notes`, `work` |
@@ -52,20 +52,28 @@ argument and option a command names is required, and an option takes one value. 
 commands as `exists: false`; they create nothing.
 
 **Never in a Runtime install root** (#424, 2026-11-09; `src/acmodel/location.py`). The tool never writes into a
-Runtime install root. `paths.state_root`, and every folder a command writes into, must be neither one nor inside one:
+Runtime install root. `paths.state_root`, `paths.venv`, and every folder a command writes into, must be neither one nor
+inside one:
 - **What marks one.** The folder itself, or any folder above it up to its drive, share or `/`, holds one of the
   marks the Runtime's install layout puts at an install root: `actingd.config.json` (the root's one configuration
   file, in either layout), `runtime/BUILD-MANIFEST.json` (a single-location root) or `install/active.json` (an A/B
   root's install selection). Only whether something is at a mark's name is looked at, never what it holds.
 - **The state root** is checked when the configuration is read, as configured or by default: one in an install root
   is `config_invalid` (`runtime_install_root`, ref `/paths/state_root`), before anything else, so no command runs.
+- **The venv** (`paths.venv`, as configured or by default) is checked with it: `setup` makes the venv there and
+  installs into it, and every other command runs its Python. One in an install root is `config_invalid`
+  (`runtime_install_root`, ref `/paths/venv`), so no command runs: `setup` makes no venv and starts no child, and no
+  command is re-dispatched into it. With both in an install root, each is one error, the state root first.
 - **The folders written into** are checked before anything is computed: the model folder of `export thresholds`,
   `export prices`, `export tables`, `export scoring` and `bindings apply` (which writes into the repository two
   folders above it, on the model folder's way up), and the `--repo` of `export tables`. Each one in an install root
   is one `location_refused` error (exit 5; `argument` `model` or `--repo`), and nothing is written.
 - **Not checked:** the model folder of the commands that only read it (`check`, `run`, `economy`, `explain`,
   `verify prices`, `bindings check`, `watch`). Reading changes nothing there, and whatever they write is under the
-  state root, which is checked.
+  state root, which is checked. Nor the configured paths that are only read: `paths.datasets` (`check` hashes the
+  copies), `paths.actinglab` (run as the validator of `export tables`), `host.pause_file` (only whether it exists) and
+  `engines.roots` (the engines' code and data; the worker's guards refuse an engine's write outside its scratch folder,
+  which lies under the state root).
 - **How a folder is walked.** It is made absolute (`os.path.abspath`, which folds `.` and `..` by their text) and
   walked up; then its resolved form (`pathlib`'s `resolve()`, which follows symbolic links and junctions) is walked
   too, so a link into an install root is refused. A level that does not exist holds no mark. The file system compares
@@ -136,7 +144,7 @@ The exit status is that of the first error's code (`codes.json`), or 0.
 | Key | Default | Meaning |
 |---|---|---|
 | `schema_version` | (required in a file) | `acmodel.config.v1` |
-| `paths.venv` | `%LOCALAPPDATA%\ActingCommand\acmodel\venv` | the venv; an absolute path |
+| `paths.venv` | `%LOCALAPPDATA%\ActingCommand\acmodel\venv` | the venv; an absolute path, never a Runtime install root nor inside one (`config_invalid`, `runtime_install_root`; see "Never in a Runtime install root") |
 | `paths.state_root` | `%LOCALAPPDATA%\ActingCommand\acmodel\state` | the state root: the cache, the runs' outputs and the trees the price provenance files share (see Cache); an absolute path, never inside a repository, and never a Runtime install root nor inside one (`config_invalid`, `runtime_install_root`; see "Never in a Runtime install root") |
 | `paths.datasets` | `%LOCALAPPDATA%\ActingCommand\acmodel\datasets` | the local copies of external datasets, each the file named by its sha256 (`check` verifies them); an absolute path |
 | `paths.actinglab` | (none) | the Runtime's validator that `export tables` runs on every table it writes: an `actinglab` from a Runtime build or release, never compiled here; an absolute path. Without it, `export tables` is `export_validator_missing` |

@@ -57,7 +57,7 @@ FLAG_NEEDS = {"--quick": "--steady-only"}
 # model.json given), each checked before anything is computed or written: none may be a Runtime install root or lie
 # inside one (`location`; #424, 2026-11-09). `bindings apply` writes into the repository two folders above the model
 # folder, which the model folder's walk passes. The other commands write nothing there; whatever they write is under
-# `paths.state_root`, which `config.load` checks.
+# `paths.state_root`, and `setup` writes into `paths.venv`: `config.load` checks both.
 WRITES = {
     "export thresholds": ("model",),
     "export prices": ("model",),

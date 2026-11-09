@@ -1,11 +1,11 @@
 """Where the tool never writes: a Runtime install root (#424, 2026-11-09; contracts/cli.md, "Never in a Runtime install
 root").
 
-`paths.state_root` (checked when the configuration is read, `config.load`) and every folder a command writes into (the
-model folder of the exports and of `bindings apply`, the repository of `export tables`; `cli.WRITES`) must be neither a
-Runtime install root nor inside one. A folder is inside one when the folder itself, or any folder above it up to its
-anchor, holds one of the marks the Runtime's install layout puts at an install root (the Runtime repository,
-contracts/install-cli.md, "Layout" and "The A/B layout"; contracts/runtime-watchdog.md, "Layout"):
+`paths.state_root` and `paths.venv` (checked when the configuration is read, `config.load`) and every folder a command
+writes into (the model folder of the exports and of `bindings apply`, the repository of `export tables`; `cli.WRITES`)
+must be neither a Runtime install root nor inside one. A folder is inside one when the folder itself, or any folder
+above it up to its anchor, holds one of the marks the Runtime's install layout puts at an install root (the Runtime
+repository, contracts/install-cli.md, "Layout" and "The A/B layout"; contracts/runtime-watchdog.md, "Layout"):
 
 - `actingd.config.json`: the root's one configuration file, in either layout;
 - `runtime/BUILD-MANIFEST.json`: the mark of a single-location root;
