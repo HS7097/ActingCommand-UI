@@ -161,8 +161,9 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
 - **`bindings check`** compares each literal that `ours/model/bindings.json` ties to a threshold, in a rule
   or a pool of the repository's `schedule.json` or in a pack file, with the value `export thresholds` would
   write. With `--strict` it also refuses every number of a `fact` or `resource_projection` predicate of
-  `schedule.json`, and every quantity of its pools (capacity, regeneration amount and period), that is neither
-  bound nor listed as fixed with a reason, so no number without provenance reaches the schedule. It also reports
+  `schedule.json`, and every quantity of its pools (capacity, regeneration amount and period, stop line and hard
+  line), that is neither bound nor listed as fixed with a reason, so no number without provenance reaches the
+  schedule. It also reports
   the coverage of the prices `export prices` delivered, as `schedule.json` meets it (`data.coverage`; `prices_stale`
   when `out/prices.json` is of another version of the model), without computing a steady state. It writes nothing.
 - **`bindings apply`** writes the bound literals that differ, and changes only their bytes: line ends

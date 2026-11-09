@@ -201,7 +201,7 @@ class _Literal:
         """The problems of a bound literal other than its value, and the value it must hold (None when the
         form is wrong). A `fact_offset` literal is the offset of a fact reference in a `fact` predicate whose
         two fact keys are the threshold's; a constant is any integer literal but such an offset (the offset of
-        a fact reference elsewhere, in a `resource_projection` predicate or a pool's capacity, is one)."""
+        a fact reference elsewhere, in a `resource_projection` predicate or a pool's capacity or line, is one)."""
         doc, ref = self.target.doc, self.ref
         at_offset = (
             tokens(ref)[-2:] == ["value", "offset"] and fact_reference(resolve(doc, parent(ref)))
@@ -230,7 +230,7 @@ class _Literal:
 def _unbound(schedule: Target, bindings: File) -> tuple[int, list[dict[str, Any]]]:
     """How many literals `--strict` scans in schedule.json, and an error for each that is neither bound nor fixed:
     those the `fact` and `resource_projection` predicates of its rules compare with, then the quantities of its
-    pools (#424 ACM-POOL: capacity, regeneration amount and period)."""
+    pools (#424 ACM-POOL: capacity, regeneration amount and period; RL-M1: the stop line and the hard line)."""
     named = {
         ("rules" if "rule_id" in entry else "pools", entry.get("rule_id", entry.get("pool_id")), entry["path"])
         for _, entry in _entries(bindings) if entry["file"] == SCHEDULE_FILE
