@@ -11,6 +11,9 @@ what the value rests on. `assemble_economy(run, output)` gives it for an output 
   ids of what it read, sorted; a leaf reads nothing. A node read twice is listed once.
 - Every path in it is relative to the model folder, with `/`, so that the document can be delivered.
 - `explain` prints the document, and `export thresholds` writes it for each threshold.
+- `export prices` keeps the steady state's tree once (`steady_tree`, `acmodel.provenance.tree.v1`): each price's
+  document holds its own nodes and names that tree in `shared` by the digest of its document (`economy_documents`,
+  PRICE-4a2). `explain` still prints the whole document, the tree's nodes in `nodes`.
 
 Node ids:
 - a graph node: its key joined with `:`. These are `rule:<id>`, `general_logic:<id>`, `offset:<id>`,
@@ -45,6 +48,8 @@ from acmodel.core.versions import sha256, versions
 from acmodel.envelope import Failure, error
 
 SCHEMA_VERSION = "acmodel.provenance.v1"
+# A tree that several provenance documents read whole, kept once (PRICE-4a2: the steady state's, for the prices).
+TREE_SCHEMA_VERSION = "acmodel.provenance.tree.v1"
 GRAPH_NODES = (
     "rule", "general_logic", "offset", "flow", "member", "point", "threshold", "general", "reference", "regen",
     "objective",
@@ -243,19 +248,16 @@ def acceptance(run: Run, output: str) -> dict[str, Any] | None:
     }
 
 
-def _tree(run: Run, root: tuple[str, ...], known: dict[str, dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
-    """The nodes of the tree rooted at the graph node `root`, by id; the nodes of `known` (a tree described before) are
-    taken as they are, with what they read."""
-    known = known or {}
+def _tree(run: Run, root: tuple[str, ...], stop: frozenset[str] = frozenset()) -> dict[str, dict[str, Any]]:
+    """The nodes of the tree rooted at the graph node `root`, by id. A node whose id is in `stop` (the root of a shared
+    tree, which the document names in `shared` instead) is not described, nor is anything below it; the nodes that read
+    it still list it in `reads`."""
     nodes: dict[str, dict[str, Any]] = {}
     todo = [root]
     while todo:
         item = todo.pop()
         name = node_id(item)
-        if name in nodes:
-            continue
-        if name in known:
-            nodes.update(known)  # a whole tree: everything it reads is in it
+        if name in nodes or name in stop:
             continue
         found = _reads(run, item)
         nodes[name] = {**_describe(run, item), "reads": [node_id(read) for read in found]}
@@ -264,11 +266,12 @@ def _tree(run: Run, root: tuple[str, ...], known: dict[str, dict[str, Any]] | No
 
 
 def _document(
-    run: Run, output: str, root: tuple[str, ...], result: dict[str, Any], known: dict[str, dict[str, Any]] | None = None,
-    model_versions: dict[str, str] | None = None,
+    run: Run, output: str, root: tuple[str, ...], result: dict[str, Any], model_versions: dict[str, str] | None = None,
+    stop: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """The provenance document of `output`, rooted at the graph node `root`, with its `result`."""
-    nodes = _tree(run, root, known)
+    """The provenance document of `output`, rooted at the graph node `root`, with its `result`; without the trees rooted
+    at the ids of `stop`."""
+    nodes = _tree(run, root, stop)
     return {
         "schema_version": SCHEMA_VERSION,
         "model_id": run.head["model_id"],
@@ -319,17 +322,35 @@ def assemble_economy(run: Run, output: str) -> dict[str, Any]:
     return _document(run, output, (kind, target), result)
 
 
-def economy_documents(run: Run, names: list[str]) -> dict[str, dict[str, Any]]:
+def steady_tree(run: Run) -> dict[str, Any]:
+    """The steady state's tree as one document (`acmodel.provenance.tree.v1`, PRICE-4a2): `root` (`economy:steady`) and
+    every node below it, which is everything the steady state read, with the model's `versions`. Each price's
+    provenance document reads it whole, so `export prices` keeps it once and the documents name it by its digest
+    (`economy_documents`). The steady state must have been computed on the run's graph and not be blocked."""
+    key = flow.NODES[flow.STEADY]
+    return {
+        "schema_version": TREE_SCHEMA_VERSION,
+        "model_id": run.head["model_id"],
+        "root": node_id(key),
+        "versions": versions(run.checker, run.folder),
+        "nodes": dict(sorted(_tree(run, key).items())),
+    }
+
+
+def economy_documents(run: Run, names: list[str], shared: dict[str, str]) -> dict[str, dict[str, Any]]:
     """The provenance document of each economy output in `names` (`price:<resource>`, `activity_value:<activity>`) of
-    a steady state the run's graph computed and that is not blocked, as `assemble_economy` gives it; the steady state's
-    tree, which each of them reads whole, is described once (`export prices`, PRICE-4a)."""
+    a steady state the run's graph computed and that is not blocked, as delivered (`export prices`, PRICE-4a2): its own
+    nodes, and in `shared` the trees it reads but does not hold, each root's id to the digest of its tree document
+    (`steady_tree`). With each shared tree's nodes put back into `nodes`, and `shared` left out, it is the document
+    `assemble_economy` gives (`explain`)."""
     key = flow.NODES[flow.STEADY]
     steady = run.graph.results[key]
-    shared, model_versions = _tree(run, key), versions(run.checker, run.folder)
+    model_versions, stop = versions(run.checker, run.folder), frozenset(shared)
     found = {}
     for name in names:
         kind, target = name.split(":", 1)
-        found[name] = _document(run, name, (kind, target), flow.output(steady, name), shared, model_versions)
+        document = _document(run, name, (kind, target), flow.output(steady, name), model_versions, stop)
+        found[name] = {**document, "shared": dict(sorted(shared.items()))}
     return found
 
 

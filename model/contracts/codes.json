@@ -33,7 +33,7 @@
         "binds": {"type": "token", "required": true},
         "expected": {"type": "token", "required": true}
       },
-      "description": "acmodel export prices (a warning; #424 ACM-PRICE addendum 2.1 section 3.4, PRICE-4a): the acceptance of a provisional price (output, price:<pool>) binds a provenance document that is no longer the price's: its binds is not the sha256 of the canonical JSON (JCS) of the price's provenance document as explain prints it (expected). The model, a rule (an estimate too), a data row or the tool changed since it was written, so the price is written pending (acceptance_stale) until it is accepted again. path is exports.json and the error's ref the acceptance's binds."
+      "description": "acmodel export prices (a warning; #424 ACM-PRICE addendum 2.1 section 3.4, PRICE-4a): the acceptance of a provisional price (output, price:<pool>) binds a provenance document that is no longer the price's: its binds is not the sha256 of the canonical JSON (JCS) of the price's provenance file (expected), which names the steady state's shared tree by its digest (PRICE-4a2). The model, a rule (an estimate too), a data row or the tool changed since it was written (any node of the shared tree too), so the price is written pending (acceptance_stale) until it is accepted again. path is exports.json and the error's ref the acceptance's binds."
     },
     "binding_mismatch": {
       "category": "error",
@@ -993,6 +993,32 @@
         "phase": {"type": "vocab", "required": false, "members": ["evaluate", "assign"]}
       },
       "description": "The generic search (core/search.py; contracts/formats.md, The search) has no result. no_legal_assignment: a team has no legal row (team), or the disjoint teams have no assignment that fills them all (no team). op_missing: the engine (engine_id) lacks evaluate (op), or lacks predict (op) while all teams have more legal rows (space) than search.exact_max (exact_max), so there is nothing to screen with. space_too_large: the product of a team's slot combinations has more rows (rows) than search.screen_max_rows (screen_max_rows); nothing is enumerated. screen_overflow: a team's predict terms, rounded at search.screen_scale, could sum beyond the 64-bit integers of the screen (team). budget_exhausted: search.node_limit (node_limit) was reached (phase) before any assignment of all the teams was evaluated."
+    },
+    "shared_tree_mismatch": {
+      "category": "error",
+      "exit": 6,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "root": {"type": "token", "required": true},
+        "reason": {"type": "vocab", "required": true, "members": ["recomputed", "referenced"]},
+        "expected": {"type": "token", "required": true},
+        "found": {"type": "token", "required": true}
+      },
+      "description": "acmodel verify prices (#424 ACM-PRICE PRICE-4a2): a tree that the price provenance documents share (root, its root's id: economy:steady) is not the one out/prices.json records by its digest (expected, the sha256 of its tree document's canonical JSON, or none). recomputed: the tree computed again from the model, whose versions are the recorded ones, has another digest (found; none when the model has no such tree), so the tool, the account state or the keys under lp and economy describe it otherwise than when it was exported; path is prices.json and the error's ref the recorded digest (/shared/<root>/sha256), or /shared for a tree it does not record. referenced: a price's provenance file (path) names another tree there (found; none when it names none); the error's ref is its /shared/<root>. export prices writes them again. Every mismatch is reported at once, and the state root's copy of the tree is not written."
+    },
+    "shared_tree_stale": {
+      "category": "error",
+      "exit": 6,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "root": {"type": "token", "required": true},
+        "members": {"type": "list:token", "required": true}
+      },
+      "description": "acmodel verify prices (#424 ACM-PRICE PRICE-4a2): out/prices.json (path) records a shared tree (root, its root's id: economy:steady) computed from other versions of the model: the versions it records with the tree differ from the model's in members (rules, data, tool). The tree cannot be computed again from them, so nothing is computed; export prices brings the prices and the tree up to date. The error's ref is /shared/<root>/versions."
     },
     "state_entity_missing": {
       "category": "error",

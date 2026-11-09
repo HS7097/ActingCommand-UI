@@ -2,12 +2,18 @@
 contracts/formats.md, "`acmodel export prices`").
 
 It computes the economy's steady state for the state, without the cache, assesses the impact of its estimates
-(`core.impact`), and writes into the model folder:
-- `out/provenance/prices/<pool>.json`: the provenance document of each pool's price, as `explain price:<pool>` prints it,
-  and the acceptance it is delivered under, if any;
+(`core.impact`), keeps the steady state's tree once under the state root (PRICE-4a2: `provenance/<model_id>/<sha256>.json`,
+never in the repository: it is the bulk of every price's provenance, about a megabyte for the smallest model), and
+writes into the model folder:
+- `out/provenance/prices/<pool>.json`: the provenance document of each pool's price: its own nodes, and in `shared` the
+  steady state's tree named by its digest (with that tree's nodes, the document `explain price:<pool>` prints), and the
+  acceptance it is delivered under, if any;
 - `out/prices.json` (`acmodel.prices.v1`), last: each pool's price or `pending` with why, its class, the joint vector's
-  entry, its impact range and flips, and the digest an acceptance binds; the estimates the steady state read and the
-  assessment's groups.
+  entry, its impact range and flips, and the digest an acceptance binds; the shared tree's digest with the versions that
+  compute it again (`shared`); the estimates the steady state read and the assessment's groups.
+
+`acmodel verify prices` (`verify_prices`) computes the steady state's tree again from the versions prices.json records
+and checks it against the recorded digest (`shared_tree_stale`, `shared_tree_mismatch`).
 
 **What is exported** (§3.1): a covered pool whose price is confirmed, as it is; a covered pool with estimates under a
 current acceptance (`accept_provisional`: its `binds` is the digest of the price's provenance document as `explain`
@@ -36,13 +42,21 @@ from typing import Any
 from acmodel.cache.keys import digest
 from acmodel.check.coverage import judge
 from acmodel.check.walk import at
-from acmodel.codes import ACCEPTANCE_INCOMPLETE, ACCEPTANCE_STALE, ESTIMATE_MISSING, EXPORT_REFUSED
+from acmodel.codes import (
+    ACCEPTANCE_INCOMPLETE,
+    ACCEPTANCE_STALE,
+    ESTIMATE_MISSING,
+    EXPORT_REFUSED,
+    SHARED_TREE_MISMATCH,
+    SHARED_TREE_STALE,
+)
 from acmodel.config import EconomySettings, Unknowns
 from acmodel.core import flow, impact
 from acmodel.core.common import CONFIRMED, solve
 from acmodel.core.coverage import CLASSES, COVERED, STRUCTURAL_GAP, UNKNOWN, VERIFIED_ZERO
 from acmodel.core.graph import GENERAL, REFERENCE
-from acmodel.core.provenance import acceptances, economy_documents, relative
+from acmodel.core.provenance import SCHEMA_VERSION as PROVENANCE_FORMAT
+from acmodel.core.provenance import acceptances, economy_documents, relative, steady_tree
 from acmodel.core.run import Run, evaluate_model
 from acmodel.core.versions import sha256, versions
 from acmodel.envelope import Failure, error
@@ -50,12 +64,15 @@ from acmodel.export import jcs
 from acmodel.export.policy import delivered
 from acmodel.export.thresholds import write_file
 from acmodel.expr import Duration
-from acmodel.model.jsonfile import refusal
+from acmodel.model import read_prices
+from acmodel.model.jsonfile import load, refusal
 from acmodel.model.readers import EXPORTS
+from acmodel.model.readers import PRICES as PRICES_FORMAT
 
 SCHEMA_VERSION = "acmodel.prices.v1"
 PRICES = "out/prices.json"
 PROVENANCE = "out/provenance/prices"
+TREES = "provenance"  # under the state root: the shared trees, by model and digest (PRICE-4a2)
 PENDING = "pending"
 GAME = "game"
 # Why a price is pending, in the order they are listed (`acmodel.model.readers.PENDING_REASONS`).
@@ -66,8 +83,40 @@ WITHHELD, NOT_ACCEPTED, STALE, INCOMPLETE, SCOPE_PARTIAL = (
 
 def binds(doc: dict[str, Any]) -> str:
     """What an acceptance of a price binds (addendum 2.1 §3.4): the sha256 of the canonical JSON (JCS, `export.jcs`) of
-    its provenance document as `explain` prints it, without the acceptance it is delivered under."""
+    its provenance document as delivered, without the acceptance it is delivered under. The document names the steady
+    state's tree by its digest (`shared`, PRICE-4a2), so a change of that tree changes what every price binds."""
     return digest(jcs.dumps({key: value for key, value in doc.items() if key != "acceptance"}))
+
+
+def tree_digest(tree: dict[str, Any]) -> str:
+    """The digest a provenance document names a shared tree by (PRICE-4a2): the sha256 of the canonical JSON (JCS) of
+    its tree document (`core.provenance.steady_tree`)."""
+    return digest(jcs.dumps(tree))
+
+
+def tree_file(state_root: Path, model_id: str, sha: str) -> Path:
+    """Where the state root keeps a shared tree (PRICE-4a2): `provenance/<model_id>/<sha256>.json`, by its digest, so
+    that the trees of several versions stand side by side and none is overwritten by another."""
+    return state_root / TREES / model_id / f"{sha}.json"
+
+
+def _intact(target: Path, sha: str) -> bool:
+    """Whether `target` holds a tree document whose digest is `sha`."""
+    try:
+        doc = json.loads(target.read_bytes().decode("utf-8"))
+        return tree_digest(doc) == sha
+    except (OSError, ValueError, jcs.NotCanonical):  # absent, unreadable, not JSON, or no tree document
+        return False
+
+
+def keep_tree(state_root: Path, model_id: str, tree: dict[str, Any], sha: str) -> tuple[Path, bool]:
+    """The shared tree kept under the state root: its file, and whether it was written now (it is not when an intact
+    copy is there already). A write that fails is `export_write_failed`."""
+    target = tree_file(state_root, model_id, sha)
+    if _intact(target, sha):
+        return target, False
+    write_file(target, delivered(tree))
+    return target, True
 
 
 def _point(run: Run, derive: str) -> str | None:
@@ -94,9 +143,11 @@ def _steady(run: Run) -> flow.Economy:
     return steady
 
 
-def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, Any]]]:
+def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     """The files of the export, by their path relative to the model folder and in the order they are written
-    (`prices.json` last), what the envelope's `data` adds, and the warnings. A refusal raises `Failure`."""
+    (`prices.json` last), what the envelope's `data` adds, the warnings, and the steady state's tree document, which the
+    price documents name by its digest and which is kept under the state root only (PRICE-4a2). A refusal raises
+    `Failure`."""
     exports, checker = run.exports, run.checker
     if "prices" not in exports.doc:  # the game's price unit is needed, and has no default
         raise Failure(refusal("member_missing", exports.path, EXPORTS.name, "/prices", key="prices"))
@@ -112,7 +163,9 @@ def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, An
     missing = set().union(*(reach[derive] for derive in lacking)) if lacking else set()
     assessment = impact.assess(run.graph, steady, reach, gaps, missing)
     pools = sorted(coverage["pools"])
-    documents = economy_documents(run, [flow.PRICE + pool for pool in pools])
+    tree = steady_tree(run)
+    shared = {tree["root"]: tree_digest(tree)}
+    documents = economy_documents(run, [flow.PRICE + pool for pool in pools], shared)
     touching: dict[str, set[str]] = {}
     for activity in set(static.takes) | set(static.brings):
         for entity in static.takes.get(activity, set()) | static.brings.get(activity, set()):
@@ -206,6 +259,9 @@ def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, An
         "schema_version": SCHEMA_VERSION,
         "model_id": run.head["model_id"],
         "versions": versions(checker, run.folder),
+        "shared": {
+            root: {"sha256": sha, "versions": tree["versions"], "nodes": len(tree["nodes"])} for root, sha in shared.items()
+        },
         "unit_milli": unit,
         "prices": entries,
         "slots": sorted(resource for resource in data["joint"]["prices"] if resource not in coverage["pools"]),
@@ -213,25 +269,118 @@ def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, An
         "impact": assessment.groups,
         "counts": counts,
     }
-    return {name: delivered(doc) for name, doc in files.items()}, {"unit_milli": unit, "counts": counts}, warnings
+    shown = {"unit_milli": unit, "counts": counts}
+    return {name: delivered(doc) for name, doc in files.items()}, shown, warnings, tree
 
 
 def export_prices(
     path: Path | str,
     state_path: Path | str,
     *,
+    state_root: Path,
     datasets: Path | str,
     max_bits: int,
     unknowns: Unknowns = Unknowns(),
     economy: EconomySettings = EconomySettings(),
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Evaluate the model for the state and its steady state, then write the price provenance files and
-    `out/prices.json`, or refuse. Returns the envelope's `data` and the warnings."""
+    """Evaluate the model for the state and its steady state, then keep the steady state's tree under the state root
+    (PRICE-4a2) and write the price provenance files and `out/prices.json`, or refuse. Returns the envelope's `data`
+    and the warnings."""
     run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns, economy=economy)
-    files, data, warnings = build(run)
-    written = []
+    files, data, warnings, tree = build(run)
+    sha = tree_digest(tree)
+    kept, wrote = keep_tree(state_root, run.head["model_id"], tree, sha)  # first: a price document names it
+    written = [str(kept)] if wrote else []
     for name, payload in files.items():  # prices.json last
         target = run.folder / name
         write_file(target, payload)
         written.append(str(target))
-    return {**run.head, **data, "written": sorted(written)}, warnings
+    shared = {tree["root"]: {"sha256": sha, "file": str(kept)}}
+    return {**run.head, **data, "shared": shared, "written": sorted(written)}, warnings
+
+
+def _verified_steady(run: Run) -> flow.Economy:
+    """The steady state computed again for `verify prices`; a blocked one is reported with the errors that block it,
+    each needed by `economy:steady`."""
+    key, graph = flow.NODES[flow.STEADY], run.graph
+    solve([key], graph.compute, graph.results)
+    steady = graph.results[key]
+    if steady.blocked:
+        output = flow.OUTPUTS[flow.STEADY]
+        raise Failure(*({**graph.errors[index], "needed_by": [output]} for index in sorted(steady.blocked_by)))
+    return steady
+
+
+def verify_prices(
+    path: Path | str,
+    state_path: Path | str,
+    *,
+    state_root: Path,
+    datasets: Path | str,
+    max_bits: int,
+    unknowns: Unknowns = Unknowns(),
+    economy: EconomySettings = EconomySettings(),
+) -> dict[str, Any]:
+    """`acmodel verify prices` (PRICE-4a2): the shared trees that `out/prices.json` names, checked against the model.
+
+    1. prices.json is read (`model_file_invalid` when it is not there or not a prices file; a file of another model is
+       `value_invalid` at `/model_id`).
+    2. A tree whose recorded `versions` are not the model's cannot be computed again from this model:
+       `shared_tree_stale`, with the members that differ, and nothing is computed.
+    3. Otherwise the steady state is computed again (with the keys under `lp` and `economy`, as the export does), and
+       its tree's digest must be the recorded one (`shared_tree_mismatch`, `recomputed`); so must the digest each
+       price's provenance file names (`shared_tree_mismatch`, `referenced`, at that file's `shared`).
+    4. A tree that checks is kept under the state root when it is not there intact (`restored`).
+
+    Every problem is reported at once (exit 6); it writes nothing else."""
+    run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns, economy=economy)
+    file = run.folder / PRICES
+    doc = read_prices(file)
+    if doc["model_id"] != run.head["model_id"]:
+        raise Failure(refusal(
+            "value_invalid", file, PRICES_FORMAT.name, "/model_id", expected=[run.head["model_id"]],
+            literal=doc["model_id"],
+        ))
+    model = versions(run.checker, run.folder)
+    errors = []
+    for root, recorded in sorted(doc["shared"].items()):
+        differ = [member for member in ("rules", "data", "tool") if recorded["versions"][member] != model[member]]
+        if differ:
+            detail = {"path": str(file), "root": root, "members": differ}
+            errors.append(error(SHARED_TREE_STALE, detail, at("", "shared", root, "versions")))
+    if errors:
+        raise Failure(*errors)
+    _verified_steady(run)
+    tree = steady_tree(run)
+    found = {tree["root"]: tree_digest(tree)}
+    shown: dict[str, Any] = {}
+    for root in sorted(set(doc["shared"]) | set(found)):  # a tree recorded and not computed, or computed and not recorded
+        recorded, computed = doc["shared"].get(root), found.get(root)
+        expected = None if recorded is None else recorded["sha256"]
+        if computed != expected:
+            detail = {
+                "path": str(file), "root": root, "reason": "recomputed", "expected": expected or "none",
+                "found": computed or "none",
+            }
+            where = at("", "shared") if recorded is None else at("", "shared", root, "sha256")
+            errors.append(error(SHARED_TREE_MISMATCH, detail, where))
+        if recorded is not None:
+            shown[root] = {"sha256": expected, "recomputed": computed, "nodes": recorded["nodes"]}
+    for entry in doc["prices"]:
+        price_file = run.folder / entry["provenance"]
+        written = load(price_file, PROVENANCE_FORMAT)
+        named = written.get("shared") if isinstance(written, dict) else None
+        named = named if isinstance(named, dict) else {}
+        for root, recorded in sorted(doc["shared"].items()):
+            if named.get(root) != recorded["sha256"]:
+                detail = {
+                    "path": str(price_file), "root": root, "reason": "referenced", "expected": recorded["sha256"],
+                    "found": named.get(root) or "none",
+                }
+                errors.append(error(SHARED_TREE_MISMATCH, detail, at("", "shared", root)))
+    if errors:
+        raise Failure(*errors)
+    for root, entry in shown.items():
+        kept, restored = keep_tree(state_root, run.head["model_id"], tree, entry["sha256"])
+        entry.update(file=str(kept), restored=restored)
+    return {**run.head, "file": str(file), "shared": shown}

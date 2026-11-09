@@ -6,12 +6,14 @@
   scoring`), the scoring templates filled; and the export policy with its acceptances (`policy`).
 - PRICE-4a (#424 ACM-PRICE): `export_prices` (`acmodel export prices`), `out/prices.json` and one provenance file per
   pool, with the impact assessment of the estimates (`core.impact`) and the acceptances of the prices.
+- PRICE-4a2: the steady state's tree, which every price's provenance reads, kept once under the state root and named
+  by its digest; `verify_prices` (`acmodel verify prices`) computes it again and checks the digest.
 """
 
-from acmodel.export.prices import export_prices
+from acmodel.export.prices import export_prices, verify_prices
 from acmodel.export.scoring import export_scoring
 from acmodel.export.tables import export_tables
 from acmodel.export.thresholds import export_thresholds
 from acmodel.export.validator import Validator
 
-__all__ = ["Validator", "export_prices", "export_scoring", "export_tables", "export_thresholds"]
+__all__ = ["Validator", "export_prices", "export_scoring", "export_tables", "export_thresholds", "verify_prices"]

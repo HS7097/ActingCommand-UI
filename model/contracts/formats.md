@@ -1408,7 +1408,17 @@ of an `if`, the row a `lookup` found, every row of a set.
 | `result` | the output as `run` shows it (a rule without its `general_logic`, which is an output of its own) |
 | `versions` | `rules`: the sha256 over `model.json`, `sources.json` and the rule files; `data`: over the data files; `tool`: the tool version. Each file counts as `[path, document]`, sorted by path. A hash is over canonical JSON: sorted keys, no whitespace, UTF-8. |
 | `nodes` | node id to node; the tree is rooted at `output` |
+| [`shared`] | only in a price's provenance file that `export prices` writes (PRICE-4a2): the trees the document reads but does not hold, each root's id (`economy:steady`) to the sha256 of the canonical JSON (JCS, `export/jcs.py`) of its tree document (below); `nodes` then holds the document's own nodes only |
 | [`acceptance`] | only for a provisional output that `acceptances` of exports.json accepts: `file` (`exports.json`), `ref` (its entry, `/acceptances/<index>`), `sha256` of the entry and its `accept_provisional` |
+
+**A shared tree** (`acmodel.provenance.tree.v1`, PRICE-4a2). Every price reads the steady state whole, so its tree is
+the bulk of each price's provenance (about a megabyte for the smallest real model, the same in every price's document).
+`export prices` keeps it once, as a document of its own: `schema_version`, `model_id`, `root` (`economy:steady`),
+`versions` (as above) and `nodes` (every node of the tree rooted at `root`, as above). It is kept under the state root
+only (`paths.state_root`, `provenance/<model_id>/<sha256>.json`, by its digest), never in the model folder: a
+repository holds the digest, and the versions it is computed from (`out/prices.json`, `shared`), and `acmodel verify
+prices` computes it again. A price's document with each shared tree's nodes put into its `nodes`, and without `shared`,
+is the document `explain` prints.
 
 An acceptance that names no output of the model is `rule_reference_missing` (`expected` `output`), and a second
 one of the same output `model_id_duplicate` (`namespace` `acceptance`): `explain` and every export refuse them.
@@ -1425,7 +1435,8 @@ one of the same output `model_id_duplicate` (`namespace` `acceptance`): `explain
   member.
 - An economy output (`price:<resource>`, `activity_value:<activity>`) reads `economy:steady`, which reads what the
   steady state's program was built from: its reference-state nodes, its data rows and its gates (`entry:<id>`). In
-  this version an economy output's tree is the whole steady state's.
+  this version an economy output's tree is the whole steady state's; a price's provenance file names it in `shared`
+  (PRICE-4a2).
 
 | `node` | Ids | Members |
 |---|---|---|
@@ -1507,7 +1518,8 @@ What a delivered file takes from an output (#424 design 6.6; `src/acmodel/export
 - **Booleans** must be one value in every scenario; an undecided one is `not_single` (`false..true`).
 - **Provenance files.** Each output a file delivers has its provenance document, as `explain` prints it, in
   `out/provenance/<kind>/<id>.json` of the model folder: `rules/` for `rule:<id>`, `general_logic/` and
-  `thresholds/`; `export prices` writes each price's in `prices/` (PRICE-4a).
+  `thresholds/`; `export prices` writes each price's in `prices/` (PRICE-4a), naming the steady state's tree, which it
+  keeps under the state root, by its digest instead of holding it (PRICE-4a2; "A shared tree").
 
 A refusal is `export_refused` at the threshold, cell or placeholder, with the errors that block a blocked
 output; the export then writes nothing.
@@ -1570,11 +1582,16 @@ It fills the scoring templates of exports.json (#424 design 6.2; `src/acmodel/ex
 The prices of the economy's steady state, with their coverage, the impact of their estimates and their acceptances (#424
 ACM-PRICE PRICE-4a; addendum 2.1 §3.1–§3.4 and §3.7; the design's §4.1, §4.2 and §4.6; `src/acmodel/export/prices.py`,
 `src/acmodel/core/impact.py`). It runs the model as `run` does, without the cache, computes the steady state with the keys
-under `lp` and `economy`, assesses the impact of its estimates (below), then writes into the model folder:
-1. `out/provenance/prices/<pool>.json`: the provenance document of each pool's price, as `explain price:<pool>` prints it
-   (the whole steady state's tree, "Provenance"), and, for a price delivered under an acceptance, that acceptance
-   (`acceptance`: `file`, `ref`, `sha256` of the entry and its `accept_provisional` or `accept_zero`);
-2. `out/prices.json` (`acmodel.prices.v1`), last.
+under `lp` and `economy`, assesses the impact of its estimates (below), then:
+1. keeps the steady state's tree, which every price reads whole, once under the state root (PRICE-4a2; "Provenance", "A
+   shared tree": `<paths.state_root>/provenance/<model_id>/<sha256>.json`), unless an intact copy is there already. It
+   never goes into the model folder: it is about a megabyte for the smallest real model and several for the larger ones,
+   and a copy per pool would make a large model's price files hundreds of megabytes or more;
+2. writes into the model folder `out/provenance/prices/<pool>.json`: the provenance document of each pool's price, with
+   its own nodes (the price, which reads `economy:steady`) and, in `shared`, the steady state's tree named by its digest
+   (with that tree's nodes, the document `explain price:<pool>` prints), and, for a price delivered under an acceptance,
+   that acceptance (`acceptance`: `file`, `ref`, `sha256` of the entry and its `accept_provisional` or `accept_zero`);
+3. writes `out/prices.json` (`acmodel.prices.v1`), last.
 
 It needs exports.json's `prices` (the game's κ): without it, `model_file_invalid` (`member_missing` at `/prices`), and
 nothing is computed or written. The pools are the coverage section's: each resource that is not a slot.
@@ -1593,9 +1610,10 @@ static component read a provisional derive that has no estimate (`estimate_missi
 
 **An acceptance of a price** (exports.json `acceptances`, `output` `price:<pool>`):
 - `accept_provisional: {ref, until, binds, scope, flips}` (§3.4). `binds` is the sha256 of the canonical JSON (JCS,
-  `export/jcs.py`) of the price's provenance document as `explain` prints it (without the acceptance the export records
-  in it): `out/prices.json` shows it for each pool (`binds`). The model, a rule (an estimate too), a data row or the tool
-  changing changes it, and the acceptance no longer holds: `acceptance_stale` (a warning, at its `binds`). `flips` lists
+  `export/jcs.py`) of the price's provenance file (without the acceptance the export records in it): `out/prices.json`
+  shows it for each pool (`binds`). The file names the steady state's tree by its digest (`shared`, PRICE-4a2), so the
+  model, a rule (an estimate too), a data row or the tool changing any node of that tree changes what every price binds,
+  and the acceptance no longer holds: `acceptance_stale` (a warning, at its `binds`). `flips` lists
   the activities whose class flips in the impact assessment; it must hold every one that takes or brings in the pool,
   otherwise `acceptance_incomplete` (a warning, at its `flips`, `missing` those it lacks). `scope` is `"game"`, or a list
   of the aliases of the instances it was verified on: the same `schedule.json` pool is every instance's, and the Runtime
@@ -1642,6 +1660,7 @@ uncertainty of the estimates is assessed here.
 |---|---|
 | `schema_version` | `acmodel.prices.v1` |
 | `model_id`, `versions` | as in a provenance document |
+| `shared` | the tree the price documents share (PRICE-4a2), by its root's id (`economy:steady`): `sha256`, the digest each price's file names it by; `versions`, the model's versions it was computed from (what `verify prices` computes it again from); `nodes`, how many nodes it holds. The tree itself is under the state root only |
 | `unit_milli` | κ, from exports.json |
 | `prices` | one entry per pool, by id (below) |
 | `slots` | the slot resources, by id: no pools, so not priced here |
@@ -1662,11 +1681,35 @@ entry of exports.json (with `entry`, its pointer), or null; and `provenance`, it
 **Refusals and writing.** A blocked steady state is `export_refused` (`blocked`, `output` `economy:steady`, at `/prices`)
 with the errors that block it; so are the assessment's (above). Then nothing is written. The warnings `estimate_missing`,
 `acceptance_stale` and `acceptance_incomplete` never change the exit status. The files have sorted keys, a two-space indent,
-UTF-8 and LF line ends; a write that fails is `export_write_failed`; nothing is deleted. `data` holds `path`, `model_id`,
-`state`, `unit_milli`, `counts` and `written`.
+UTF-8 and LF line ends; a write that fails is `export_write_failed` (the shared tree is written first, so a failure there
+writes nothing into the model folder); nothing is deleted. `data` holds `path`, `model_id`, `state`, `unit_milli`,
+`counts`, `shared` (by root, `sha256` and the state root's `file`) and `written` (the shared tree's file only when it was
+written now).
 
 **What it costs.** One steady state, then one vector per pass that moves something. Each pass solves as much of the
 steady state as its vector needs, so a model whose open components read many estimates pays roughly that many times.
+
+### `acmodel verify prices <model> --state <file>`
+
+The shared tree is not in the repository (PRICE-4a2), so this command computes it again and checks it against what
+`out/prices.json` records (`src/acmodel/export/prices.py`, `verify_prices`). It runs the model as `run` does, without the
+cache, then:
+1. reads `out/prices.json` (its reader checks it: `model_file_invalid`, `format` `acmodel.prices.v1`, also when there is no
+   such file; a file of another model is `value_invalid` at `/model_id`);
+2. for each tree it records (`shared`), compares the recorded `versions` with the model's: a tree computed from other
+   versions cannot be computed again from this model, `shared_tree_stale` (at `/shared/<root>/versions`, with the
+   `members` that differ), and then nothing is computed;
+3. computes the steady state with the keys under `lp` and `economy`, as the export does (a blocked one reports the errors
+   that block it, each needed by `economy:steady`), and its tree; its digest must be the recorded one, else
+   `shared_tree_mismatch` (`recomputed`, `expected` the recorded digest, `found` the computed one): the tool, the account
+   state or those keys describe the tree otherwise than at the export;
+4. reads each price's provenance file that prices.json lists: each must name the recorded digest in `shared`, else
+   `shared_tree_mismatch` (`referenced`, at that file's `/shared/<root>`);
+5. when everything checks, keeps the tree under the state root unless an intact copy is there (`restored`).
+
+Every problem is reported at once (exit 6); nothing but the state root's copy is ever written. `data` holds `path`,
+`model_id`, `state`, `file` (prices.json) and `shared`, by root: `sha256`, `recomputed`, `nodes`, `file` (the state root's
+copy) and `restored`. It costs one steady state, without the impact assessment.
 
 ## Bindings: `bindings.json`, `bindings check` and `bindings apply`
 

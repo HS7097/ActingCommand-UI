@@ -706,6 +706,7 @@ PENDING_REASONS = (
     "acceptance_incomplete", "scope_partial",
 )
 NULLABLE_TEXT = Either(string=TEXT, null=ANY)
+MODEL_VERSIONS = Object({"rules": SHA256, "data": SHA256, "tool": VERSION})
 PRICES = Format(
     "acmodel.prices.v1",
     "acmodel.prices.v1",
@@ -713,7 +714,10 @@ PRICES = Format(
         {
             "schema_version": ANY,
             "model_id": ID,
-            "versions": Object({"rules": SHA256, "data": SHA256, "tool": VERSION}),
+            "versions": MODEL_VERSIONS,
+            # The trees the price documents share (PRICE-4a2): each root's id to the digest of its tree document, the
+            # versions it was computed from, and how many nodes it holds. The tree itself is kept under the state root.
+            "shared": MapOf(TEXT, Object({"sha256": SHA256, "versions": MODEL_VERSIONS, "nodes": Integer(1, MAX)})),
             "unit_milli": Integer(1, MAX),
             "prices": ListOf(
                 Object({
