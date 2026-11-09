@@ -9,6 +9,7 @@ Windows and on Ubuntu, so both legs must give the same exact values."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -17,6 +18,8 @@ from typing import Any, Callable
 import pytest
 
 from acmodel import cli
+from acmodel.core import provenance
+from acmodel.export import jcs
 from test_coverage import zero_fixture
 from test_economy import CODES, DAY, PROVENANCE, activity, flow, goal, limit, model, regen, resource, write
 from test_price_vector import ex1
@@ -85,6 +88,31 @@ def entries(folder: Path) -> dict[str, dict[str, Any]]:
 
 def picked(entry: dict[str, Any], *keys: str) -> dict[str, Any]:
     return {key: entry[key] for key in keys}
+
+
+def canonical_digest(doc: Any) -> str:
+    """The sha256 of a document's canonical JSON (JCS), as a provenance document names a shared tree by."""
+    return hashlib.sha256(jcs.dumps(doc)).hexdigest()
+
+
+def kept(app_dir: Path, sha: str) -> Path:
+    """Where the state root keeps the shared tree whose digest is `sha` (PRICE-4a2): the state root is the default one,
+    under the configuration folder, and the fixtures' model is `economy`."""
+    return app_dir / "state" / "provenance" / "economy" / f"{sha}.json"
+
+
+def kept_tree(app_dir: Path, doc: dict[str, Any]) -> dict[str, Any]:
+    """The steady state's tree that a price's provenance document names, as the state root keeps it."""
+    [(root, sha)] = doc["shared"].items()
+    assert root == "economy:steady"
+    return json.loads(kept(app_dir, sha).read_text(encoding="utf-8"))
+
+
+def resolved(doc: dict[str, Any], tree: dict[str, Any]) -> dict[str, Any]:
+    """A price's provenance document with the shared tree it names put back, and without the acceptance it is delivered
+    under: the document `explain` prints."""
+    whole = {key: value for key, value in doc.items() if key not in ("shared", "acceptance")}
+    return {**whole, "nodes": {**doc["nodes"], **tree["nodes"]}}
 
 
 def provisional(rule_id: str, subject: str, value: str, estimate: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -164,11 +192,12 @@ def test_a_provisional_derive_without_an_estimate_leaves_the_prices_it_touches_p
 # §2.5: the fixed small models; the price file and its provenance --------------------------------------------------
 
 
-def test_the_joint_vector_of_a_set_of_pools_is_exported_with_its_provenance(tmp_path, acmodel):
+def test_the_joint_vector_of_a_set_of_pools_is_exported_with_its_provenance(tmp_path, acmodel, app_dir):
     """§2.5 test 1 (EX1): a, b and c come at 1 a day each, and act.set turns one of each into 1 v. Their joint vector is
     (1/3, 1/3, 1/3) on intervals [0, 1] (test_price_vector.py works it out), all confirmed: each is exported, 1/3, or
-    1000/3 thousandths at κ = 1000, and marked degenerate (two ends on D*); v is exactly 1. Each pool's provenance file is
-    the document `explain price:<pool>` prints, and its `binds` the sha256 of that document's canonical JSON."""
+    1000/3 thousandths at κ = 1000, and marked degenerate (two ends on D*); v is exactly 1. Each pool's provenance file,
+    with the steady state's tree it names put back (PRICE-4a2: the tree is kept once, under the state root), is the
+    document `explain price:<pool>` prints, and its `binds` the sha256 of that file's canonical JSON."""
     folder = priced(ex1(tmp_path))
 
     status, doc = export(acmodel, folder)
@@ -195,7 +224,7 @@ def test_the_joint_vector_of_a_set_of_pools_is_exported_with_its_provenance(tmp_
 
     assert (status, shown["errors"]) == (0, [])
     written = json.loads((base(folder) / found["res.a"]["provenance"]).read_text(encoding="utf-8"))
-    assert written == shown["data"]["provenance"]
+    assert resolved(written, kept_tree(app_dir, written)) == shown["data"]["provenance"]
     assert HEX.fullmatch(found["res.a"]["binds"])
     assert found["res.a"]["binds"] != found["res.b"]["binds"]  # each document is rooted at its own price
 
@@ -565,4 +594,193 @@ def test_bindings_check_reports_the_delivered_coverage_as_the_schedule_meets_it(
     assert doc["warnings"] == [{
         "code": "prices_stale", "detail": {"path": str(base(folder) / "out" / "prices.json"), "members": ["rules"]},
         "ref": "/versions",
+    }]
+
+
+# PRICE-4a2: one steady state's tree, shared by every price's provenance ------------------------------------------------
+
+STEADY_ROOT = "economy:steady"
+
+
+def redescribed(patched: pytest.MonkeyPatch) -> None:
+    """The steady state's node described with one member more, as a tool that describes it otherwise would, while the
+    model and its versions stay as they are: only the shared tree changes."""
+    describe = provenance._describe
+
+    def described(run: Any, item: tuple[str, ...]) -> dict[str, Any]:
+        node = describe(run, item)
+        return {**node, "note": "described anew"} if item == ("economy", "steady") else node
+
+    patched.setattr(provenance, "_describe", described)
+
+
+def test_the_prices_name_one_shared_steady_state_tree_by_its_digest(tmp_path, acmodel, app_dir):
+    """PRICE-4a2's red test (before it, every price's provenance file held the whole steady state's tree, which every
+    price reads). EX1's four prices: the tree is kept once, under the state root by the sha256 of its canonical JSON
+    (`acmodel.provenance.tree.v1`, rooted at economy:steady, with the model's versions), never in the model folder. Each
+    price's file holds its own node only (the price, which reads economy:steady) and names the tree in `shared` by that
+    digest, the same for every pool; prices.json records the digest with the versions that compute it again and the
+    tree's node count, and each price's `binds` is still the digest of its own file. A second export finds the tree
+    intact and does not write it again."""
+    folder = priced(ex1(tmp_path))
+
+    status, doc = export(acmodel, folder)
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    prices = delivered(folder)
+    [(root, recorded)] = prices["shared"].items()
+    sha = recorded["sha256"]
+    assert root == STEADY_ROOT and HEX.fullmatch(sha)
+    assert recorded["versions"] == prices["versions"]
+    tree = json.loads(kept(app_dir, sha).read_text(encoding="utf-8"))
+    assert canonical_digest(tree) == sha
+    assert (tree["schema_version"], tree["model_id"], tree["root"], tree["versions"]) == (
+        "acmodel.provenance.tree.v1", "economy", STEADY_ROOT, prices["versions"],
+    )
+    assert tree["nodes"][STEADY_ROOT]["node"] == "economy" and recorded["nodes"] == len(tree["nodes"])
+    assert not any(name.startswith("price:") for name in tree["nodes"])
+    assert doc["data"]["shared"] == {STEADY_ROOT: {"sha256": sha, "file": str(kept(app_dir, sha))}}
+    assert str(kept(app_dir, sha)) in doc["data"]["written"]
+    found = entries(folder)
+    for pool in ("res.a", "res.b", "res.c", "res.v"):
+        written = json.loads((base(folder) / found[pool]["provenance"]).read_text(encoding="utf-8"))
+        assert written["shared"] == {STEADY_ROOT: sha}
+        assert written["nodes"] == {f"price:{pool}": {"node": "price", "resource": pool, "reads": [STEADY_ROOT]}}
+        assert found[pool]["binds"] == canonical_digest(written)
+    out = base(folder) / "out"
+    assert sorted(path.relative_to(out).as_posix() for path in out.rglob("*") if path.is_file()) == [
+        "prices.json", "provenance/prices/res.a.json", "provenance/prices/res.b.json", "provenance/prices/res.c.json",
+        "provenance/prices/res.v.json",
+    ]
+
+    status, doc = export(acmodel, folder)
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    assert delivered(folder)["shared"] == prices["shared"]
+    assert str(kept(app_dir, sha)) not in doc["data"]["written"]
+
+
+def test_a_change_of_the_shared_tree_alone_moves_what_every_price_binds(tmp_path, acmodel, monkeypatch):
+    """PRICE-4a2 (§3.4: `binds` is the digest of the price's provenance document). flips_fixture: s and v are one
+    component, which read pt.k, so both prices are provisional; accepted with the binds prices.json shows and every flip
+    (act.p, act.q; test_the_assessment_moves_... works them out), both are exported. Then the steady state's node is
+    described with one member more while the model stays as it is: the versions, each price's own nodes and its result
+    are unchanged, yet the shared tree's digest is another, so is what each price's file names, and so is each price's
+    `binds`. Both acceptances bind a document that is no longer the price's: both prices are pending again
+    (`acceptance_stale`, one warning each)."""
+    folder = flips_fixture(tmp_path)
+    export(acmodel, folder)
+    before = entries(folder)
+    flips = ["act.p", "act.q"]
+    accept(
+        folder,
+        {"output": "price:res.s", "accept_provisional": {
+            "ref": "R-5", "until": "item", "binds": before["res.s"]["binds"], "scope": "game", "flips": flips}},
+        {"output": "price:res.v", "accept_provisional": {
+            "ref": "R-6", "until": "item", "binds": before["res.v"]["binds"], "scope": "game", "flips": flips}},
+    )
+
+    status, doc = export(acmodel, folder)
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    found = entries(folder)
+    for pool in ("res.s", "res.v"):
+        assert picked(found[pool], "status", "price", "pending") == {"status": "provisional", "price": "1", "pending": []}
+    prices = delivered(folder)
+    files = {pool: json.loads((base(folder) / found[pool]["provenance"]).read_text(encoding="utf-8")) for pool in found}
+
+    with monkeypatch.context() as patched:
+        redescribed(patched)
+        status, doc = export(acmodel, folder)
+
+    assert (status, doc["errors"]) == (0, [])
+    after, moved = entries(folder), delivered(folder)
+    assert moved["versions"] == prices["versions"]
+    sha, moved_sha = prices["shared"][STEADY_ROOT]["sha256"], moved["shared"][STEADY_ROOT]["sha256"]
+    assert moved_sha != sha
+    for pool in ("res.s", "res.v"):
+        written = json.loads((base(folder) / after[pool]["provenance"]).read_text(encoding="utf-8"))
+        assert (written["nodes"], written["result"]) == (files[pool]["nodes"], files[pool]["result"])
+        assert (files[pool]["shared"], written["shared"]) == ({STEADY_ROOT: sha}, {STEADY_ROOT: moved_sha})
+        assert after[pool]["binds"] != before[pool]["binds"]
+        assert picked(after[pool], "price", "pending") == {"price": "pending", "pending": ["acceptance_stale"]}
+    assert doc["warnings"] == [
+        {
+            "code": "acceptance_stale",
+            "detail": {"path": exports_path(folder), "output": f"price:{pool}", "binds": before[pool]["binds"],
+                       "expected": after[pool]["binds"]},
+            "ref": f"/acceptances/{index}/accept_provisional/binds",
+        }
+        for index, pool in enumerate(("res.s", "res.v"))
+    ]
+
+
+def test_verify_prices_computes_the_shared_tree_again_and_names_what_does_not_match(tmp_path, acmodel, app_dir, monkeypatch):
+    """PRICE-4a2: the tree stays out of the repository, so `verify prices` computes it again from the model and checks it
+    against what prices.json records. Before any export there is nothing to verify (`model_file_invalid`). After EX1's
+    export it checks: the digest computed again is the recorded one, the state root's copy is intact (`restored`
+    false). A spoilt copy is written again (`restored` true). Then each mismatch has its name (exit 6):
+    - the tool describing the tree otherwise, the model unchanged: `shared_tree_mismatch`, `recomputed`, at the
+      recorded digest;
+    - a price's file naming another tree: `shared_tree_mismatch`, `referenced`, at that file's `shared`;
+    - the model changed since the export (a rule's note): its versions are no longer the recorded ones, the tree cannot
+      be computed again from them, `shared_tree_stale` with the members that differ, and nothing else is computed."""
+    folder = priced(ex1(tmp_path))
+    argv = ("verify", "prices", str(base(folder)), "--state", str(folder / "state.json"))
+    prices_file = str(base(folder) / "out" / "prices.json")
+
+    status, doc = acmodel(*argv)
+
+    assert status == 1
+    assert [(entry["code"], entry["detail"]["reason"]) for entry in doc["errors"]] == [("model_file_invalid", "unreadable")]
+
+    export(acmodel, folder)
+    recorded = delivered(folder)["shared"][STEADY_ROOT]
+    sha, tree_file = recorded["sha256"], kept(app_dir, recorded["sha256"])
+    status, doc = acmodel(*argv)
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    assert doc["data"]["file"] == prices_file
+    assert doc["data"]["shared"] == {STEADY_ROOT: {
+        "sha256": sha, "recomputed": sha, "nodes": recorded["nodes"], "file": str(tree_file), "restored": False,
+    }}
+
+    tree_file.write_text("{}", encoding="utf-8")
+    status, doc = acmodel(*argv)
+
+    assert (status, doc["errors"]) == (0, [])
+    assert doc["data"]["shared"][STEADY_ROOT]["restored"] is True
+    assert canonical_digest(json.loads(tree_file.read_text(encoding="utf-8"))) == sha
+
+    with monkeypatch.context() as patched:
+        redescribed(patched)
+        status, doc = acmodel(*argv)
+
+    assert status == 6
+    [refused] = doc["errors"]
+    assert (refused["code"], refused["ref"]) == ("shared_tree_mismatch", "/shared/economy:steady/sha256")
+    assert {key: refused["detail"][key] for key in ("path", "root", "reason", "expected")} == {
+        "path": prices_file, "root": STEADY_ROOT, "reason": "recomputed", "expected": sha,
+    }
+    assert HEX.fullmatch(refused["detail"]["found"]) and refused["detail"]["found"] != sha
+
+    price_file = base(folder) / "out" / "provenance" / "prices" / "res.b.json"
+    edit(price_file, lambda written: written.update(shared={STEADY_ROOT: "f" * 64}))
+    status, doc = acmodel(*argv)
+
+    assert status == 6
+    assert doc["errors"] == [{
+        "code": "shared_tree_mismatch",
+        "detail": {"path": str(price_file), "root": STEADY_ROOT, "reason": "referenced", "expected": sha, "found": "f" * 64},
+        "ref": "/shared/economy:steady",
+    }]
+
+    edit(base(folder) / "rules" / "economy.json", lambda rules: rules["rules"][0].update(note="edited"))
+    status, doc = acmodel(*argv)
+
+    assert status == 6
+    assert doc["errors"] == [{
+        "code": "shared_tree_stale",
+        "detail": {"path": prices_file, "root": STEADY_ROOT, "members": ["rules"]},
+        "ref": "/shared/economy:steady/versions",
     }]

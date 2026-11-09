@@ -8,7 +8,8 @@ This folder holds the launcher, `setup`, `version`, the output envelope, the dep
 readers of the model files, the expression language, the static check (`check`), the derivation graph
 (`run`) with its unknowns and their sensitivity and its random processes (exact pity chains, Wilson bounds of
 rates from samples), its cache with incremental recompute (`cache`), provenance
-(`explain`), the exports (`export thresholds`, `export prices`, `export tables`, `export scoring`) with their export policy, the
+(`explain`), the exports (`export thresholds`, `export prices`, `export tables`, `export scoring`) with their export policy and
+the check of the prices' shared provenance tree (`verify prices`), the
 bindings of thresholds to the schedule (`bindings check`, `bindings apply`), the economy's LP and MILP
 (`economy`), the engine host, which runs engines kept outside this repository in worker processes of its own,
 the generic search for teams over those engines (no command runs it yet) and the automatic refresh (`watch`).
@@ -44,6 +45,7 @@ model\acmodel.cmd economy <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd explain <resource repo>\ours\model threshold:<id> --state <state snapshot>
 model\acmodel.cmd export thresholds <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd export prices <resource repo>\ours\model --state <state snapshot>
+model\acmodel.cmd verify prices <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd export tables <resource repo>\ours\model --state <state snapshot> --repo <resource repo>
 model\acmodel.cmd export scoring <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd bindings check <resource repo>\ours\model --state <state snapshot> --strict
@@ -135,12 +137,18 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   digest of its provenance file (`acceptance_stale` when it changed) and lists every flip (`acceptance_incomplete`), and a
   verified zero under its `accept_zero`; a component that read a provisional derive without an estimate stays pending
   (`estimate_missing`). It computes the steady state once and a vector per moved pass, so it is a heavy computation on a
-  real model (`contracts/formats.md`, "`acmodel export prices`").
+  real model (`contracts/formats.md`, "`acmodel export prices`"). Every price reads the steady state whole, so its tree
+  (the bulk of each price's provenance, about a megabyte for the smallest real model) is kept once, under the state root
+  only, and each price's provenance file names it by its digest (PRICE-4a2): the repository holds the digest and the
+  versions it is computed from, never the tree.
+- **`verify prices`** computes that tree again from the model and checks it against the digest `out/prices.json`
+  records: recorded versions that are not the model's are `shared_tree_stale`, a tree or a price file that names another
+  digest `shared_tree_mismatch` (exit 6). A tree that checks is kept under the state root again if its copy is gone.
 - **The export policy** decides what a delivered file takes from an output: a confirmed value as it is; a
   provisional one only when `acceptances` of exports.json accept it (a table cell is `null` otherwise, the
   others are refused); a blocked or per-account one never. A number is scaled and rounded as declared
   (`floor`, `ceil`, `half_even`), and each output a file delivers gets its provenance file in the model folder,
-  equal to what `explain` prints.
+  equal to what `explain` prints (a price's, with the shared tree it names put back).
 - **`export tables`** writes the tables of exports.json into the repository's `tables/` as the Runtime's shared
   tables, in canonical JSON (keys in UTF-16 order, integers only), and runs the Runtime's own validator,
   `actinglab --json resource validate`, on each (`paths.actinglab`). Without a validator nothing is written; when
@@ -199,7 +207,8 @@ default:
 - **Strict reading.** Unknown members, duplicate keys and values of the wrong type are refused
   (`config_invalid`), never ignored.
 - **State root.** The default for `paths.state_root` is `%LOCALAPPDATA%\ActingCommand\acmodel\state`. It
-  holds the cache (`cache/`) and the runs' outputs (`runs/`), never inside a repository.
+  holds the cache (`cache/`), the runs' outputs (`runs/`) and the steady-state trees the price provenance files share
+  (`provenance/`, PRICE-4a2), never inside a repository.
 - **Cache size.** `cache.max_bytes` (default 2 GiB) caps the cache; the least recently used entries are
   evicted after a run.
 - **Cache lock.** Several commands may share a state root: a run writes the index only at its end. `cache.wait_ms`

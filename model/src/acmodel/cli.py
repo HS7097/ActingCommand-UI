@@ -15,7 +15,7 @@ from acmodel.codes import COMMAND_CRASHED, USAGE_INVALID
 from acmodel.core import run_economy, run_model
 from acmodel.core.provenance import explain
 from acmodel.envelope import Failure, build, error, write
-from acmodel.export import Validator, export_prices, export_scoring, export_tables, export_thresholds
+from acmodel.export import Validator, export_prices, export_scoring, export_tables, export_thresholds, verify_prices
 from acmodel.host import windows
 from acmodel.system import System
 from acmodel.watch.watcher import Watcher
@@ -33,6 +33,7 @@ COMMANDS = {
     "export prices": (("model",), ("--state",)),
     "export tables": (("model",), ("--state", "--repo")),
     "export scoring": (("model",), ("--state",)),
+    "verify prices": (("model",), ("--state",)),
     "bindings check": (("model",), ("--state",)),
     "bindings apply": (("model",), ("--state",)),
     "cache stats": ((), ()),
@@ -61,6 +62,7 @@ USAGE = (
     "          export prices <model folder or model.json> --state <state file>,\n"
     "          export tables <model folder or model.json> --state <state file> --repo <repository>,\n"
     "          export scoring <model folder or model.json> --state <state file>,\n"
+    "          verify prices <model folder or model.json> --state <state file>,\n"
     "          bindings check <model folder or model.json> --state <state file> [--strict],\n"
     "          bindings apply <model folder or model.json> --state <state file>,\n"
     "          cache stats, cache verify, cache gc [--apply],\n"
@@ -235,11 +237,22 @@ def _export_scoring(args: list[str], cfg: config.Config, system: System) -> dict
 
 def _export_prices(args: list[str], cfg: config.Config, system: System) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """The prices of the steady state, with the keys under `lp` and `economy`, and the impact assessment of its
-    estimates (#424 ACM-PRICE PRICE-4a); the warnings say why a price is pending."""
+    estimates (#424 ACM-PRICE PRICE-4a); the warnings say why a price is pending. The steady state's tree, which every
+    price's provenance reads, is kept once under `paths.state_root` (PRICE-4a2)."""
     _dependencies(system)
     return export_prices(
-        Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits, unknowns=cfg.unknowns,
-        economy=cfg.economy,
+        Path(args[0]), Path(args[1]), state_root=cfg.state_root, datasets=cfg.datasets, max_bits=cfg.expr_max_bits,
+        unknowns=cfg.unknowns, economy=cfg.economy,
+    )
+
+
+def _verify_prices(args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
+    """The shared trees out/prices.json names, computed again from the versions it records and checked against their
+    digests (PRICE-4a2); one that checks is kept under `paths.state_root`."""
+    _dependencies(system)
+    return verify_prices(
+        Path(args[0]), Path(args[1]), state_root=cfg.state_root, datasets=cfg.datasets, max_bits=cfg.expr_max_bits,
+        unknowns=cfg.unknowns, economy=cfg.economy,
     )
 
 
@@ -297,6 +310,8 @@ def main(argv: Sequence[str], system: System) -> int:
             data = _bindings(command, args, cfg, system)
         elif command == "export prices":
             data, warnings = _export_prices(args, cfg, system)
+        elif command == "verify prices":
+            data = _verify_prices(args, cfg, system)
         elif command == "export thresholds":
             data = _export_thresholds(args, cfg, system)
         elif command == "export tables":

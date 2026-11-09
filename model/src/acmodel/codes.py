@@ -70,6 +70,10 @@ ESTIMATE_MISSING = "estimate_missing"  # export prices: a provisional derive the
 ACCEPTANCE_STALE = "acceptance_stale"  # export prices: an acceptance binds another provenance document
 ACCEPTANCE_INCOMPLETE = "acceptance_incomplete"  # export prices: an acceptance leaves out a flip
 PRICES_STALE = "prices_stale"  # bindings check: out/prices.json is of other versions of the model
+# #424 ACM-PRICE PRICE-4a2: the steady state's tree that the price documents share, kept under the state root only and
+# named in out/prices.json by its digest and the versions that compute it again (`acmodel verify prices`).
+SHARED_TREE_STALE = "shared_tree_stale"  # verify prices: the recorded versions are not the model's
+SHARED_TREE_MISMATCH = "shared_tree_mismatch"  # verify prices: the tree computed again, or a price's, is another
 
 EXIT_OK = 0
 
@@ -140,4 +144,6 @@ EXIT_STATUS = {
     ACCEPTANCE_STALE: 0,
     ACCEPTANCE_INCOMPLETE: 0,
     PRICES_STALE: 0,
+    SHARED_TREE_STALE: 6,
+    SHARED_TREE_MISMATCH: 6,
 }
