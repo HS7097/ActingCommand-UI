@@ -1799,8 +1799,11 @@ says `greater_than_or_equal`).
     (`value/offset`); of a `resource_projection` predicate, its `value` or its fact reference's offset
     (`value/offset`, #386 CF-5).
   - The quantities of a pool (#424 ACM-POOL) are its `capacity`, or its fact reference's offset
-    (`capacity/offset`, #386 CF-5), and its projection's `projection/amount` and `projection/per_ms` (a
-    projection of kind `none` has neither). A binding or a fixed entry names them by `pool_id`.
+    (`capacity/offset`, #386 CF-5), its projection's `projection/amount` and `projection/per_ms` (a
+    projection of kind `none` has neither), and its two water lines (#424 RL-M1; see "Stop lines and hard
+    lines"): its `stop_line` and its `hard_line`, each a constant (`stop_line`, `hard_line`) or its fact
+    reference's offset (`stop_line/offset`, `hard_line/offset`). A binding or a fixed entry names them by
+    `pool_id`.
   - Other literals are not scanned: `max_age_ms`, counts and budgets, a pool's `value_source`, `group_delay` and
     `valuation`, and the pack files. They are bound when a threshold covers them.
   - The errors come in document order, the rules' before the pools'.
@@ -1837,6 +1840,24 @@ says `greater_than_or_equal`).
 - **`data`** holds `path`, `model_id`, `state`, `repo`, and:
   - `changed`: each with `entry`, `threshold`, `file`, [`rule_id` or `pool_id`], `path`, `from` and `to`;
   - `written`: the files whose bytes changed.
+
+### Stop lines and hard lines
+
+A pool of `schedule.json` may write two water lines (#424 RL-M1; the Runtime's SS-2h, its scheduling contract's
+"Pool lines"): `stop_line`, where spending at the cap stops, above `hard_line`, which the scheduler never spends
+below. Each is a fact reference to the pool's capacity fact with a negative offset (the read cap less a margin), or a
+constant, the line itself. The model writes them by this convention:
+- **Rules:** two `derive` rules of the resource, `stop_line.<x>` and `hard_line.<x>`, `<x>` the resource's short
+  name. The value of `stop_line.<x>` is the offset from the cap (minus the margin); that of `hard_line.<x>` is the
+  stop line's offset less one run of the costliest task that consumes the pool. A constant line is the line itself.
+- **Exports:** the `constant` thresholds `thr.stop_line.<x>` and `thr.hard_line.<x>` of `exports.json`. An offset
+  that reads no account state passes `per_account` (see "The values").
+- **Bindings:** by `pool_id`, at `/stop_line/offset` and `/hard_line/offset` (a fact reference), or at `/stop_line`
+  and `/hard_line` (a constant). Either takes a `constant` threshold (see "Where a literal may sit").
+
+It is a convention only: the tool checks no name, sign or order of the lines. That a pool writes both or neither, the
+stop line above the hard line, and neither above the cap are the Runtime's checks. `--strict` scans the lines as
+quantities of the pool, as it does the capacity.
 
 ## The search
 
