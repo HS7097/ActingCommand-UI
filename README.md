@@ -130,8 +130,9 @@ answers come from:
   whether every page read back at the current pin was whole; offline it is the opening's own observation.
 - At open, one `status()` and then one `runtime_fact_snapshot()` on the same connection give the pin
   (above) and the instance card its "runtime instances" lines. Status is read again only on a person's
-  jump to the latest; while following, every poll reads the task facts again, whether or not the pin
-  moved. The first two lines state the sequence each read was taken at; the fact snapshot may be past the
+  jump to the latest and, on a connection of its own and without moving the pin, after a resume a person
+  sent ("Conditional resume", below); while following, every poll reads the task facts again, whether or
+  not the pin moved. The first two lines state the sequence each read was taken at; the fact snapshot may be past the
   pin taken from the status, and while following the status stays where it was read as the pin moves on,
   so this is state as last read, not state at the pin. By contract the status read takes the Runtime's memory only and
   appends no ledger record (AO-4q); its position is the ledger's committed head when it was sampled. Then,
@@ -206,8 +207,11 @@ is asked for one.
 **A page the Runtime refuses** — its read budget ran out (`ledger_read_budget_exceeded`; right after it
 starts, while it still builds its Lab relations, many pages are refused so, most often on the Lab tab) or
 its writer did not answer in time (`writer_response_timeout`) — is stated with its code and why, and the
-window never sends it again by itself: a read that fails ends the fill there, stops following, and no
-span page is asked after it. The line says how a person reads again, which depends on where it failed:
+window never sends it again by itself. What else stops depends on the page: a timeline page that fails —
+a window the fill reads, or one following reads onto the top — ends the fill there, stops following, and
+no span page is asked after it; a span page or a frame's lookup that fails stops nothing else, and
+following, if on, goes on without asking that page again. The line says how a person reads again, which
+depends on where it failed:
 on the timeline or the span, Read Earlier, a tab or filter change, Jump to Latest, or closing and
 reopening the window; while following, ticking Follow Latest again, Jump to Latest, a tab or filter
 change, or closing and reopening; for a frame's lookup, Jump to Latest, a tab or filter change, or closing
