@@ -1709,7 +1709,7 @@ cache, then:
 1. reads `out/prices.json`, of `acmodel.prices.v2` or `acmodel.prices.v1` (its reader checks it by its own version:
    `model_file_invalid`, `format` that version, or `acmodel.prices.v2` before the version is known, also when there is no
    such file; any other version is `value_invalid` at `/schema_version`, `expected` both; a file of another model is
-   `value_invalid` at `/model_id`);
+   `value_invalid` at `/model_id`, `format` its own version);
 2. for each tree it records (`shared`), compares the recorded `versions` with the model's: a tree computed from other
    versions cannot be computed again from this model, `shared_tree_stale` (at `/shared/<root>/versions`, with the
    `members` that differ), and then nothing is computed;
@@ -1824,7 +1824,8 @@ says `greater_than_or_equal`).
     quantities;
   - `coverage` (#424 ACM-PRICE PRICE-4a; addendum 2.1 §3.1): the four classes as `export prices` delivered them, read back
     from `out/prices.json` (its reader checks it by its own version, `acmodel.prices.v2` or `acmodel.prices.v1`, as for
-    `verify prices`: `model_file_invalid`; a file of another model is `value_invalid` at `/model_id`), as the
+    `verify prices`: `model_file_invalid`; a file of another model is `value_invalid` at `/model_id`, `format` its own
+    version), as the
     repository's `schedule.json` meets them; null when no prices were
     exported. It holds `file`; `current`, false when the file was written for other versions of the model (its `versions`
     differ: the warning `prices_stale`, with the `members` that differ, which never changes the exit status); `pools`, each

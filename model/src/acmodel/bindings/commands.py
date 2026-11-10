@@ -65,7 +65,6 @@ from acmodel.envelope import Failure, error
 from acmodel.export.thresholds import threshold_entry
 from acmodel.model import read_bindings, read_prices
 from acmodel.model.jsonfile import refusal
-from acmodel.model.readers import PRICES as PRICES_FORMAT
 from acmodel.model.readers import SCHEDULE_FILE
 from acmodel.model.shape import json_type
 
@@ -278,7 +277,8 @@ def _coverage(run: Run, repo: Path, targets: dict[str, Target]) -> tuple[dict[st
     doc = read_prices(path)
     if doc["model_id"] != run.head["model_id"]:
         raise Failure(refusal(
-            "value_invalid", path, PRICES_FORMAT.name, "/model_id", expected=[run.head["model_id"]], literal=doc["model_id"]
+            "value_invalid", path, doc["schema_version"], "/model_id", expected=[run.head["model_id"]],
+            literal=doc["model_id"],
         ))
     model = versions(run.checker, run.folder)
     stale = [member for member in ("rules", "data", "tool") if doc["versions"][member] != model[member]]

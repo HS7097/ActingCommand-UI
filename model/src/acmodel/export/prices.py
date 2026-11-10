@@ -69,7 +69,6 @@ from acmodel.expr import Duration
 from acmodel.model import read_prices
 from acmodel.model.jsonfile import load, refusal
 from acmodel.model.readers import EXPORTS
-from acmodel.model.readers import PRICES as PRICES_FORMAT
 
 SCHEMA_VERSION = "acmodel.prices.v2"
 PRICES = "out/prices.json"
@@ -339,7 +338,7 @@ def verify_prices(
     doc = read_prices(file)
     if doc["model_id"] != run.head["model_id"]:
         raise Failure(refusal(
-            "value_invalid", file, PRICES_FORMAT.name, "/model_id", expected=[run.head["model_id"]],
+            "value_invalid", file, doc["schema_version"], "/model_id", expected=[run.head["model_id"]],
             literal=doc["model_id"],
         ))
     model = versions(run.checker, run.folder)
