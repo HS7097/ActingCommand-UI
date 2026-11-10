@@ -1597,7 +1597,7 @@ under `lp` and `economy`, assesses the impact of its estimates (below), then:
    its own nodes (the price, which reads `economy:steady`) and, in `shared`, the steady state's tree named by its digest
    (with that tree's nodes, the document `explain price:<pool>` prints), and, for a price delivered under an acceptance,
    that acceptance (`acceptance`: `file`, `ref`, `sha256` of the entry and its `accept_provisional` or `accept_zero`);
-3. writes `out/prices.json` (`acmodel.prices.v1`), last.
+3. writes `out/prices.json` (`acmodel.prices.v2`), last.
 
 It needs exports.json's `prices` (the game's κ): without it, `model_file_invalid` (`member_missing` at `/prices`), and
 nothing is computed or written. The pools are the coverage section's: each resource that is not a slot.
@@ -1660,11 +1660,11 @@ uncertainty of the estimates is assessed here.
   (`impact_blocked`, `output` the derive's `rule:<id>`, `value` the pass, at its estimate) with the errors that block it,
   each needed by it; one that needs the account state is the same, `per_account`. Nothing is written.
 
-**`out/prices.json`** (`acmodel.prices.v1`):
+**`out/prices.json`** (`acmodel.prices.v2`):
 
 | Member | Value |
 |---|---|
-| `schema_version` | `acmodel.prices.v1` |
+| `schema_version` | `acmodel.prices.v2` |
 | `model_id`, `versions` | as in a provenance document |
 | `shared` | the tree the price documents share (PRICE-4a2), by its root's id (`economy:steady`): `sha256`, the digest each price's file names it by; `versions`, the model's versions it was computed from (what `verify prices` computes it again from); `nodes`, how many nodes it holds. The tree itself is under the state root only |
 | `unit_milli` | κ, from exports.json |
@@ -1679,10 +1679,16 @@ as an exact rational, or `pending`; `milli`, the price times κ (thousandths of 
 each reason that holds, in this order: `structural_gap`, `unknown`, `withheld`, `estimate_missing`, `not_accepted`,
 `acceptance_stale`, `acceptance_incomplete`, `scope_partial` (empty when exported); `joint`, its entry of the joint vector
 (`value`, `interval`, `by`, `withheld`), shown for analysis whatever is exported; `degenerate`, whether its interval on D* has
-two ends; `varies_by_step`, whether its price differs between the steps of the cycle; `estimates`, the provisional derives
-its component read; `impact`, its price range over the assessment (`low`, `high`), or null when no estimate of its
-component was assessed; `flips`, the activities that take or bring it in and whose class flips; `binds`; `acceptance`, its
-entry of exports.json (with `entry`, its pointer), or null; and `provenance`, its provenance file.
+two ends; `varies_by_step`, whether its price differs between the steps of the cycle; `impact`, its price range over the
+assessment (`low`, `high`), or null when no estimate of its component was assessed; `flips`, the activities that take or
+bring it in and whose class flips; `binds`; `acceptance`, its entry of exports.json (with `entry`, its pointer), or null;
+and `provenance`, its provenance file. The provisional derives its component read are the top-level `estimates` whose
+`components` hold its `component`.
+
+`acmodel.prices.v1`, which `export prices` wrote before, is the same but for one member: each pool's entry also lists
+`estimates`, the provisional derives its component read (the same list for every pool of a component). A v1 file is still
+read, by that version's format, and verified: `verify prices` checks it as it checks a v2 file, and `bindings check` reads
+its coverage from either. `export prices` writes v2 only.
 
 **Refusals and writing.** A blocked steady state is `export_refused` (`blocked`, `output` `economy:steady`, at `/prices`)
 with the errors that block it; so are the assessment's (above). Then nothing is written. The warnings `estimate_missing`,
@@ -1700,8 +1706,10 @@ steady state as its vector needs, so a model whose open components read many est
 The shared tree is not in the repository (PRICE-4a2), so this command computes it again and checks it against what
 `out/prices.json` records (`src/acmodel/export/prices.py`, `verify_prices`). It runs the model as `run` does, without the
 cache, then:
-1. reads `out/prices.json` (its reader checks it: `model_file_invalid`, `format` `acmodel.prices.v1`, also when there is no
-   such file; a file of another model is `value_invalid` at `/model_id`);
+1. reads `out/prices.json`, of `acmodel.prices.v2` or `acmodel.prices.v1` (its reader checks it by its own version:
+   `model_file_invalid`, `format` that version, or `acmodel.prices.v2` before the version is known, also when there is no
+   such file; any other version is `value_invalid` at `/schema_version`, `expected` both; a file of another model is
+   `value_invalid` at `/model_id`, `format` its own version);
 2. for each tree it records (`shared`), compares the recorded `versions` with the model's: a tree computed from other
    versions cannot be computed again from this model, `shared_tree_stale` (at `/shared/<root>/versions`, with the
    `members` that differ), and then nothing is computed;
@@ -1815,12 +1823,13 @@ says `greater_than_or_equal`).
   - with `--strict`, `literals`: how many literals it scanned, those of the rules' predicates and the pools'
     quantities;
   - `coverage` (#424 ACM-PRICE PRICE-4a; addendum 2.1 §3.1): the four classes as `export prices` delivered them, read back
-    from `out/prices.json` (its reader checks it, `model_file_invalid`, `format` `acmodel.prices.v1`; a file of another
-    model is `value_invalid` at `/model_id`), as the repository's `schedule.json` meets them; null when no prices were
-    exported. It holds `file`; `current`, false when the file was written for other versions of the model (its `versions`
-    differ: the warning `prices_stale`, with the `members` that differ, which never changes the exit status); `pools`, each
-    pool of `schedule.json` with its `class`, `status`, `reasons`, `price` and `pending` (a pool the model lacks, or a slot,
-    is `unknown`, `not_in_model` or `slot`, and `pending`); `rules`, each rule of `schedule.json` that declares `produces`
+    from `out/prices.json` (its reader checks it by its own version, `acmodel.prices.v2` or `acmodel.prices.v1`, as for
+    `verify prices`: `model_file_invalid`; a file of another model is `value_invalid` at `/model_id`, `format` its own
+    version), as the repository's `schedule.json` meets them; null when no prices were exported. It holds `file`;
+    `current`, false when the file was written for other versions of the model (its `versions` differ: the warning
+    `prices_stale`, with the `members` that differ, which never changes the exit status); `pools`, each pool of
+    `schedule.json` with its `class`, `status`, `reasons`, `price` and `pending` (a pool the model lacks, or a slot, is
+    `unknown`, `not_in_model` or `slot`, and `pending`); `rules`, each rule of `schedule.json` that declares `produces`
     or `consumes`, with the pools they name (`pools`), the worst class among them (covered, then verified zero, then
     structural gap, then unknown) and their worst status, and the pools whose price is pending (`pending`); and `counts`:
     the pools and the rules of each class, and the model's own counts (`model`). It computes no steady state: that is the

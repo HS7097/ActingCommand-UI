@@ -169,14 +169,14 @@ def test_a_provisional_derive_without_an_estimate_leaves_the_prices_it_touches_p
         "ref": "/rules/2/logic",
     }]
     found = entries(folder)
-    assert picked(found["res.a"], "class", "status", "price", "milli", "pending", "joint", "estimates", "impact") == {
+    assert picked(found["res.a"], "class", "status", "price", "milli", "pending", "joint", "impact") == {
         "class": "covered", "status": "confirmed", "price": "1", "milli": "1000", "pending": [], "joint": EXACT_ONE,
-        "estimates": [], "impact": None,
-    }
-    assert picked(found["res.b"], "class", "status", "price", "milli", "pending", "estimates") == {
+        "impact": None,
+    } and "estimates" not in found["res.a"]
+    assert picked(found["res.b"], "class", "status", "price", "milli", "pending", "component") == {
         "class": "covered", "status": "provisional", "price": "pending", "milli": None, "pending": ["estimate_missing"],
-        "estimates": ["pt.b"],
-    }
+        "component": "act.b",
+    } and "estimates" not in found["res.b"]
     prices = delivered(folder)
     assert prices["estimates"] == [{
         "rule": "pt.b", "value": "3", "estimate": None, "components": ["act.b"], "assessed": False,
@@ -214,7 +214,7 @@ def test_the_joint_vector_of_a_set_of_pools_is_exported_with_its_provenance(tmp_
         }
     assert picked(found["res.v"], "price", "milli", "degenerate") == {"price": "1", "milli": "1000", "degenerate": False}
     prices = delivered(folder)
-    assert (prices["schema_version"], prices["unit_milli"], prices["slots"]) == ("acmodel.prices.v1", UNIT, [])
+    assert (prices["schema_version"], prices["unit_milli"], prices["slots"]) == ("acmodel.prices.v2", UNIT, [])
     assert prices["counts"]["exported"] == 4 and prices["estimates"] == [] and prices["impact"] == []
     assert sorted(path.name for path in (base(folder) / "out" / "provenance" / "prices").iterdir()) == [
         "res.a.json", "res.b.json", "res.c.json", "res.v.json",
@@ -284,10 +284,10 @@ def test_an_accepted_provisional_price_is_exported_until_what_it_binds_changes(t
 
     assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
     found = entries(folder)
-    assert picked(found["res.b"], "price", "pending", "impact", "flips", "estimates", "acceptance") == {
+    assert picked(found["res.b"], "price", "pending", "impact", "flips", "component", "acceptance") == {
         "price": "pending", "pending": ["not_accepted"], "impact": {"low": "1", "high": "1"}, "flips": [],
-        "estimates": ["pt.b"], "acceptance": None,
-    }
+        "component": "act.b", "acceptance": None,
+    } and "estimates" not in found["res.b"]
     assert found["res.a"]["impact"] is None  # its component read no estimate
     prices = delivered(folder)
     assert prices["estimates"] == [{
