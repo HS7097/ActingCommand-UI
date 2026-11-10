@@ -8,9 +8,11 @@ writes into the model folder:
 - `out/provenance/prices/<pool>.json`: the provenance document of each pool's price: its own nodes, and in `shared` the
   steady state's tree named by its digest (with that tree's nodes, the document `explain price:<pool>` prints), and the
   acceptance it is delivered under, if any;
-- `out/prices.json` (`acmodel.prices.v1`), last: each pool's price or `pending` with why, its class, the joint vector's
+- `out/prices.json` (`acmodel.prices.v2`), last: each pool's price or `pending` with why, its class, the joint vector's
   entry, its impact range and flips, and the digest an acceptance binds; the shared tree's digest with the versions that
-  compute it again (`shared`); the estimates the steady state read and the assessment's groups.
+  compute it again (`shared`); the estimates the steady state read, each with its components, and the assessment's
+  groups. A file of `acmodel.prices.v1`, written before, also listed in each pool's entry the estimates its component
+  read; it is still read and verified.
 
 `acmodel verify prices` (`verify_prices`) computes the steady state's tree again from the versions prices.json records
 and checks it against the recorded digest (`shared_tree_stale`, `shared_tree_mismatch`).
@@ -69,7 +71,7 @@ from acmodel.model.jsonfile import load, refusal
 from acmodel.model.readers import EXPORTS
 from acmodel.model.readers import PRICES as PRICES_FORMAT
 
-SCHEMA_VERSION = "acmodel.prices.v1"
+SCHEMA_VERSION = "acmodel.prices.v2"
 PRICES = "out/prices.json"
 PROVENANCE = "out/provenance/prices"
 TREES = "provenance"  # under the state root: the shared trees, by model and digest (PRICE-4a2)
@@ -237,7 +239,6 @@ def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, An
             "joint": joint,
             "degenerate": isinstance(joint["interval"], dict),
             "varies_by_step": len({json.dumps(step, sort_keys=True) for step in data["prices"][pool]}) > 1,
-            "estimates": sorted(derive for derive, components in reach.items() if component in components),
             "impact": None if impact_range is None else {"low": str(impact_range[0]), "high": str(impact_range[1])},
             "flips": flips,
             "binds": digest_of,
@@ -323,8 +324,8 @@ def verify_prices(
 ) -> dict[str, Any]:
     """`acmodel verify prices` (PRICE-4a2): the shared trees that `out/prices.json` names, checked against the model.
 
-    1. prices.json is read (`model_file_invalid` when it is not there or not a prices file; a file of another model is
-       `value_invalid` at `/model_id`).
+    1. prices.json is read, `acmodel.prices.v2` or `acmodel.prices.v1` (`model_file_invalid` when it is not there or not
+       a prices file; a file of another model is `value_invalid` at `/model_id`).
     2. A tree whose recorded `versions` are not the model's cannot be computed again from this model:
        `shared_tree_stale`, with the members that differ, and nothing is computed.
     3. Otherwise the steady state is computed again (with the keys under `lp` and `economy`, as the export does), and
