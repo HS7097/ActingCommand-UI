@@ -43,7 +43,8 @@ use frame::FrameSlot;
 use paint::port_options;
 use resume::Resume;
 use state::{
-    Effects, FrameEventsSlot, LedgerFailure, LedgerShared, LedgerState, Phase, PortMap, RequestTag,
+    Effects, FrameEventsSlot, LedgerFailure, LedgerShared, LedgerState, Phase, PortChoice, PortMap,
+    RequestTag,
 };
 use worker::{Command, Opening};
 
@@ -342,17 +343,21 @@ impl LedgerHandle {
         }
     }
 
-    /// Changes the live view model and takes a new generation under one lock,
-    /// so no read under the old view lands after the change. `None` when there
-    /// is no live view model.
-    fn supersede(&self, change: impl FnOnce(&mut ViewModel, &PortMap)) -> Option<RequestTag> {
+    /// Changes the live view model, and the port map with it when a pick in
+    /// the box says no more what a status read took away, and takes a new
+    /// generation under one lock, so no read under the old view lands after
+    /// the change. `None` when there is no live view model.
+    fn supersede(
+        &self,
+        change: impl FnOnce(&mut ViewModel, &mut PortMap),
+    ) -> Option<RequestTag> {
         let mut guard = self.lock();
         let state = &mut *guard;
         if !matches!(state.phase, Phase::Open(_)) {
             return None;
         }
         let model = state.model.as_mut()?;
-        change(model, &state.port_map);
+        change(model, &mut state.port_map);
         state.tag.generation += 1;
         Some(state.tag)
     }
@@ -360,7 +365,7 @@ impl LedgerHandle {
     /// Changes the live view model and starts the view over from the pin, or
     /// from where its time bound is estimated to fall. That applies the bound
     /// the time cursor holds now.
-    pub fn restart(&self, change: impl FnOnce(&mut ViewModel, &PortMap)) {
+    pub fn restart(&self, change: impl FnOnce(&mut ViewModel, &mut PortMap)) {
         let Some(tag) = self.supersede(change) else {
             return;
         };
@@ -700,23 +705,32 @@ pub fn install_callbacks(handle: &Rc<LedgerHandle>) {
             .and_then(|index| ledger.module_choices.borrow().get(index).copied());
         ledger.restart(|model, _| model.filters.origin_module = module)
     });
-    // A port is one instance: its whole set of ids goes into the query, or
-    // nothing does. The first item, and any name not on the list, clears both.
+    // Offline a port is one instance: its whole set of ids goes into the
+    // query, or nothing does. Online an instance the status read reports is
+    // picked by its one id. The first item, and any name not on the list,
+    // clears both. Any pick says no more what a status read took away.
     on!(on_port_changed, |ledger, ui, name| {
         let labels = ui.labels();
         ledger.restart(|model, port_map| {
             // The list the box shows: made in the language it was painted in,
             // which is the one shown now.
             let (options, choices) = port_options(labels, port_map);
-            let entry = options
+            let choice = options
                 .iter()
                 .position(|option| *option == name)
                 .and_then(|index| index.checked_sub(1))
-                .and_then(|index| choices.get(index))
-                .and_then(|port| port_map.entry(*port));
-            model.filters.port = entry.map(|entry| entry.port);
-            model.filters.instance_ids =
-                entry.map(|entry| entry.members.clone()).unwrap_or_default();
+                .and_then(|index| choices.get(index));
+            let (port, instance_ids) = match choice {
+                Some(PortChoice::Port(port)) => match port_map.entry(*port) {
+                    Some(entry) => (Some(entry.port), entry.members.clone()),
+                    None => (None, Vec::new()),
+                },
+                Some(PortChoice::Instance(id)) => (None, vec![*id]),
+                None => (None, Vec::new()),
+            };
+            model.filters.port = port;
+            model.filters.instance_ids = instance_ids;
+            port_map.forget_dropped();
         })
     });
     // Shown or hidden again from the pin: the performance monitor's routine

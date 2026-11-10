@@ -13,11 +13,11 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use acui_model::ViewModel;
-use acui_rows::{PortBindings, PortEntry, ProjectedEvent};
+use acui_model::{Filters, ViewModel};
+use acui_rows::{InstanceId, PortBindings, PortEntry, ProjectedEvent};
 use acui_source::{
     ClientFailure, InstanceFacts, LedgerOpenFailure, MaterialReader, OfflineFacts, OfflineReason,
-    ReadSource, RuntimeInstances,
+    ReadSource, RuntimeInstance, RuntimeInstances,
 };
 
 /// One ledger window's state and the two flags its reader and its timers
@@ -59,9 +59,10 @@ pub struct LedgerState {
     /// after it opened keeps it, so a reopen starts from the same tab and
     /// filters the boxes still show.
     pub model: Option<ViewModel>,
-    /// Instance identity by ADB port, read once at the pinned snapshot. The
-    /// port box's items come from it at every paint (`paint::port_options`),
-    /// in the language shown then.
+    /// What the port box picks from: offline, instance identity by ADB port,
+    /// read once at the pinned snapshot; online, the instances the last
+    /// status read reports. The box's items come from it at every paint
+    /// (`paint::port_options`), in the language shown then.
     pub port_map: PortMap,
     pub frame_events: FrameEventsSlot,
     /// What the reader is reading now, and since when; `None` while it waits
@@ -141,12 +142,19 @@ impl SourceFacts {
 }
 
 /// The port map this session filters by: the offline read face derives it
-/// once from the binding facts through the pinned snapshot.
+/// once from the binding facts through the pinned snapshot; online it is the
+/// instances the last status read reports, made again at every status read.
 pub enum PortMap {
     /// The read face is still opening.
     Opening,
-    /// Online: the Runtime does not derive bindings through its page.
-    Online,
+    /// Online: the Runtime derives no binding through its page, so the box
+    /// lists the instances the session's last status read reports — at open,
+    /// at a jump to the latest, after a person's resume — in its order (by
+    /// alias), or why that read failed; and the instance picked before it,
+    /// when that read took the pick away (`check_pick`). Only the ids the
+    /// status reports now: the ids a port was bound to before belong to the
+    /// offline face.
+    Online { instances: Result<Vec<OnlineInstance>, ClientFailure>, dropped: Option<DroppedPick> },
     /// The read face is unopened, offered and not opened, or failed: nothing
     /// was read.
     Unopened,
@@ -155,16 +163,124 @@ pub enum PortMap {
     Read(PortBindings),
 }
 
+/// One instance a status read reports, as the box lists it online: its id,
+/// its alias, and the ADB port the status states for it — none for a
+/// serial-configured instance or one without an ADB target, and the box shows
+/// no port the status did not state.
+#[derive(Debug, Clone)]
+pub struct OnlineInstance {
+    pub instance_id: InstanceId,
+    pub alias: String,
+    pub adb_port: Option<u16>,
+}
+
+/// An instance picked online that the status read after the pick did not
+/// report, or could not confirm since it failed: the pick went back to every
+/// instance, and the line under the boxes says which went — by its alias when
+/// the list it was picked from named it.
+#[derive(Debug, Clone)]
+pub struct DroppedPick {
+    pub instance_id: InstanceId,
+    pub alias: Option<String>,
+}
+
+/// What an item of the box after the first one picks: offline a port of the
+/// session's map, queried as its whole set of ids; online one instance the
+/// status read reports, by its id.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PortChoice {
+    Port(u16),
+    Instance(InstanceId),
+}
+
+/// What the view's filters picked in the box: a port, or, with no port and a
+/// single id, one instance; `None` while every instance is shown.
+pub fn box_pick(filters: &Filters) -> Option<PortChoice> {
+    match (filters.port, filters.instance_ids.as_slice()) {
+        (Some(port), _) => Some(PortChoice::Port(port)),
+        (None, [id]) => Some(PortChoice::Instance(*id)),
+        (None, _) => None,
+    }
+}
+
 impl PortMap {
+    /// The online map of the status read `instances` holds: the instances it
+    /// reports — a row the fact snapshot alone holds is not one — or its
+    /// failure; no pick dropped yet. Offline there is no status read, and no
+    /// instance it reports.
+    pub fn online(instances: &InstancesSnapshot) -> Self {
+        let instances = match instances {
+            InstancesSnapshot::Online(Ok(read)) => {
+                Ok(read.instances.iter().filter_map(OnlineInstance::reported).collect())
+            }
+            InstancesSnapshot::Online(Err(failure)) => Err(failure.clone()),
+            InstancesSnapshot::Offline(_) => Ok(Vec::new()),
+        };
+        Self::Online { instances, dropped: None }
+    }
+
+    /// Checks the view's instance pick (`filters`) against this map, the one
+    /// a status read just made: a pick it does not report — or cannot
+    /// confirm, since the read failed — goes, so the view reads every
+    /// instance again, and the map keeps which went, with its alias when
+    /// `before`, the map it was picked from, names it. Only the online map
+    /// holds a pick; offline no status read gives one, and a pick there goes
+    /// too. Whether a pick went.
+    pub fn check_pick(&mut self, filters: &mut Filters, before: &PortMap) -> bool {
+        let Some(PortChoice::Instance(id)) = box_pick(filters) else {
+            return false;
+        };
+        let Self::Online { instances, dropped } = self else {
+            filters.instance_ids.clear();
+            return true;
+        };
+        let reported = match instances {
+            Ok(list) => list.iter().any(|instance| instance.instance_id == id),
+            Err(_) => false,
+        };
+        if reported {
+            return false;
+        }
+        filters.instance_ids.clear();
+        *dropped = Some(DroppedPick { instance_id: id, alias: before.alias_of(&id) });
+        true
+    }
+
+    /// A person picked in the box: what a status read took away before is
+    /// said no more.
+    pub fn forget_dropped(&mut self) {
+        if let Self::Online { dropped, .. } = self {
+            *dropped = None;
+        }
+    }
+
+    /// The alias the online list gives `id`, when it lists it.
+    fn alias_of(&self, id: &InstanceId) -> Option<String> {
+        let Self::Online { instances: Ok(list), .. } = self else {
+            return None;
+        };
+        let instance = list.iter().find(|instance| instance.instance_id == *id)?;
+        Some(instance.alias.clone())
+    }
+
     pub fn bindings(&self) -> Option<&PortBindings> {
         match self {
             Self::Read(bindings) => Some(bindings),
-            Self::Opening | Self::Online | Self::Unopened | Self::Failed(_) => None,
+            Self::Opening | Self::Online { .. } | Self::Unopened | Self::Failed(_) => None,
         }
     }
 
     pub fn entry(&self, port: u16) -> Option<&PortEntry> {
         self.bindings()?.ports.iter().find(|entry| entry.port == port)
+    }
+}
+
+impl OnlineInstance {
+    /// An instance the status read registers; `None` for a row the fact
+    /// snapshot alone holds.
+    fn reported(instance: &RuntimeInstance) -> Option<Self> {
+        let live = instance.status.as_ref()?;
+        Some(Self { instance_id: live.id, alias: live.alias.clone(), adb_port: live.adb_port })
     }
 }
 

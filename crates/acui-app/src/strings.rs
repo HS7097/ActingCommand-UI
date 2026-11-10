@@ -106,11 +106,20 @@ pub struct Labels {
     pub severity_max: [&'static str; 4],
     pub all_modules: &'static str,
     /// The port box: its first item, one item per port (port, latest member
-    /// id), and the one item it shows when it is disabled and why.
+    /// id), and the one item it shows when it is disabled and why. Online,
+    /// one item per instance the status read reports (alias, the ADB port
+    /// the status states; the alias alone where it states none), and the one
+    /// item it shows when that read, or the fact snapshot read with it, failed.
     pub all_instances: &'static str,
     pub port_option: &'static str,
+    pub instance_option: &'static str,
     pub no_binding_records: &'static str,
-    pub port_online_unsupported: &'static str,
+    pub port_status_unread: &'static str,
+    /// Under the boxes, once a status read took the picked instance away
+    /// (alias and id, or the id alone): the read no longer reports it, or it
+    /// or the fact snapshot read with it failed, so it cannot confirm it.
+    pub instance_pick_gone: &'static str,
+    pub instance_pick_unconfirmed: &'static str,
     /// The port column of a row that links no instance.
     pub host: &'static str,
     pub id_placeholder: &'static str,
@@ -1232,8 +1241,11 @@ pub const ZH: Labels = Labels {
     all_modules: "全部模块",
     all_instances: "全部实例",
     port_option: "端口 {} ／ {}",
+    instance_option: "{} · 端口 {}",
     no_binding_records: "无绑定记录",
-    port_online_unsupported: "在线态不支持",
+    port_status_unread: "实例没读全（状态或事实快照），见实例卡",
+    instance_pick_gone: "最近一次读到的状态里已经没有所选的实例 {}，实例框已改回「全部实例」",
+    instance_pick_unconfirmed: "最近一次没读全实例（状态或事实快照读取失败），没法确认所选的实例 {} 还在，实例框已改回「全部实例」",
     host: "宿主",
     id_placeholder: "完整的 correlation_ / request_ / run_ / task_ / instance_ 编号",
     continue_reading: "读更早",
@@ -1415,7 +1427,7 @@ pub const ZH: Labels = Labels {
     frame_decode_failed: "PNG 解码失败：{}",
     frame_too_large: "素材 {} 字节超出监控台上限 {} 字节",
     filter_id_error: "编号需填完整的 correlation_ / request_ / run_ / task_ / instance_ 标识",
-    filter_instance_conflict: "端口与实例编号只能选一",
+    filter_instance_conflict: "实例框选了实例（离线是端口），编号框又填了 instance_ 编号：两者只能用一个",
     filter_rejected: "过滤条件无效：{}",
     read_failed: "读取失败：{}",
     page_budget_refused: "Runtime 拒答了这一页（{}）：它没能在时限内读完。Runtime 刚启动、还在后台整理 Lab 关系时，很多页（Lab 页签最常见）会这样被拒，过一会儿再读即可。",
@@ -2114,8 +2126,11 @@ pub const EN: Labels = Labels {
     all_modules: "All Modules",
     all_instances: "All Instances",
     port_option: "Port {} ／ {}",
+    instance_option: "{} · Port {}",
     no_binding_records: "No Binding Records",
-    port_online_unsupported: "Not in Online Mode",
+    port_status_unread: "Instances Not Fully Read (Status or Fact Snapshot); See the Card",
+    instance_pick_gone: "The last status read no longer reports the picked instance {}; the instance box is back on All Instances",
+    instance_pick_unconfirmed: "The last instance read failed (status or fact snapshot), so the picked instance {} cannot be confirmed; the instance box is back on All Instances",
     host: "Host",
     id_placeholder: "Whole correlation_ / request_ / run_ / task_ / instance_ id",
     continue_reading: "Read Earlier",
@@ -2297,7 +2312,7 @@ pub const EN: Labels = Labels {
     frame_decode_failed: "PNG decode failed: {}",
     frame_too_large: "Material of {} bytes is over the console's limit of {} bytes",
     filter_id_error: "The id must be a whole correlation_ / request_ / run_ / task_ / instance_ identifier",
-    filter_instance_conflict: "Pick a port or type an instance id, not both",
+    filter_instance_conflict: "An instance (offline, a port) is picked in the instance box and an instance_ id is typed in the id box: use one, not both",
     filter_rejected: "Filter rejected: {}",
     read_failed: "Read failed: {}",
     page_budget_refused: "The Runtime refused this page ({}): it could not read it within its time limit. While the Runtime has just started and is still sorting out its Lab relations in the background, many pages (most often on the Lab tab) are refused like this; read again a little later.",

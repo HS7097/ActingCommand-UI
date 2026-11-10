@@ -112,7 +112,9 @@ pub enum Command {
     RefreshReader,
     /// A person's resume came back (`resume`): status and facts are read again
     /// on a connection of their own. Not superseded by a new generation: the
-    /// status belongs to the session, not to the view.
+    /// status belongs to the session, not to the view. Only when the read took
+    /// the picked instance away is the view read again, for the request
+    /// current then.
     RereadInstances,
 }
 
@@ -305,7 +307,8 @@ impl Worker {
     }
 
     /// The read face, opened here; then, offline, its port map, read before
-    /// anything is left in the state. The committed span is read after the
+    /// anything is left in the state; online the box lists the instances the
+    /// status read at open reports. The committed span is read after the
     /// first fill (`span_after`), whose first window may already hold the event
     /// at the pin. `None` when it did not open: the state says why.
     fn open(&self, opening: &Opening) -> Result<Option<(ReadSource, RequestTag)>, Superseded> {
@@ -348,9 +351,12 @@ impl Worker {
         if !source.follows() {
             self.busy(Busy::new(BusyKind::Bindings, BINDINGS_SECONDS, false))?;
         }
-        let port_map = match source.instance_bindings() {
+        let facts = SourceFacts::of(&source);
+        let mut port_map = match source.instance_bindings() {
             Ok(Some(bindings)) => PortMap::Read(bindings),
-            Ok(None) => PortMap::Online,
+            // Online there is no binding read: the instances the status read
+            // at open reports (`OnlineSource::pin`).
+            Ok(None) => PortMap::online(&facts.instances),
             Err(error) => PortMap::Failed(error),
         };
         let mut model = ViewModel::new(
@@ -376,9 +382,11 @@ impl Worker {
                         }
                     }
                 }
+                // An instance picked online is one this session's status read
+                // reports, or it goes, and the line under the boxes says so.
+                port_map.check_pick(&mut model.filters, &PortMap::Opening);
             }
         }
-        let facts = SourceFacts::of(&source);
         let reader = source.material_reader();
         let tag = self.in_session(|state| {
             state.phase = Phase::Open(facts);
@@ -591,13 +599,14 @@ impl Worker {
     /// A person's jump to the latest: status and facts are read again and the
     /// pin moves to the head they state (`ReadSource::repin`) — neither read
     /// appends a ledger record, and no page is asked for it — and the view
-    /// starts over from the new pin, with no time bound. The instances are the
-    /// ones this read found, whatever became of the pin.
+    /// starts over from the new pin, with no time bound. The instances, and
+    /// the box's list, are the ones this read found, whatever became of the
+    /// pin (`status_read`).
     fn jump_latest(&self, source: &ReadSource, tag: RequestTag) -> Result<(), Superseded> {
         self.busy_for(tag, Busy::new(BusyKind::Repinning, INSTANCES_SECONDS, false))?;
-        if let Err(error) = source.repin() {
-            let facts = SourceFacts::of(source);
-            self.in_session(|state| state.phase = Phase::Open(facts))?;
+        let repinned = source.repin();
+        self.status_read(SourceFacts::of(source), None)?;
+        if let Err(error) = repinned {
             self.current(tag, |state| {
                 if let Some(model) = state.model.as_mut() {
                     model.query_error = Some(read_failed(&error));
@@ -646,6 +655,41 @@ impl Worker {
                 }
             }
             state.phase = Phase::Open(facts);
+        })
+    }
+
+    /// A status read just made — a jump to the latest's, or the one after a
+    /// person's resume, with what it found (`found`) — into the state for the
+    /// whole session, whatever request is current: the facts the card shows,
+    /// and online the box's list made again from what the read reports. An
+    /// instance picked that the read does not report, or cannot confirm since
+    /// it failed, goes (`PortMap::check_pick`), and with it the rows read
+    /// under it: the view starts over at the pin, empty until a fill reads it.
+    /// The request current when a pick went, for that fill.
+    fn status_read(
+        &self,
+        facts: SourceFacts,
+        found: Option<StatusReread>,
+    ) -> Result<Option<RequestTag>, Superseded> {
+        self.in_session(|state| {
+            let mut dropped = false;
+            if matches!(facts.instances, InstancesSnapshot::Online(_)) {
+                let mut port_map = PortMap::online(&facts.instances);
+                if let Some(model) = state.model.as_mut() {
+                    dropped = port_map.check_pick(&mut model.filters, &state.port_map);
+                    if dropped {
+                        let pin = model.snapshot_position();
+                        model.begin(pin);
+                        state.effects.forget_frame = true;
+                    }
+                }
+                state.port_map = port_map;
+            }
+            state.phase = Phase::Open(facts);
+            if found.is_some() {
+                state.effects.status_reread = found;
+            }
+            dropped.then_some(state.tag)
         })
     }
 
@@ -949,7 +993,10 @@ impl Worker {
     /// resume went out on — and left for the whole session, whatever request
     /// is current. Neither read appends a ledger record. Offline there is no
     /// status, and nothing is read. What the read found goes with it: one
-    /// that failed is never said as one that was made.
+    /// that failed is never said as one that was made. The box's list is
+    /// this read's (`status_read`); when it took the picked instance away,
+    /// the view is read again from the pin, of every instance, as a person's
+    /// pick of every instance reads it.
     fn reread_instances(&self, source: &ReadSource) -> Result<(), Superseded> {
         self.busy(Busy::new(BusyKind::Instances, INSTANCES_SECONDS, false))?;
         source.reread_instances();
@@ -959,12 +1006,13 @@ impl Worker {
             InstancesSnapshot::Online(Err(failure)) => StatusReread::Failed(failure.clone()),
             InstancesSnapshot::Offline(_) => StatusReread::Offline,
         };
-        self.in_session(|state| {
-            state.phase = Phase::Open(facts);
-            state.effects.status_reread = Some(found);
-        })?;
+        let dropped = self.status_read(facts, Some(found))?;
         self.repaint();
-        Ok(())
+        let Some(tag) = dropped else {
+            return Ok(());
+        };
+        let fill = self.reload(source, tag, false)?;
+        self.span_after(source, tag, fill)
     }
 }
 

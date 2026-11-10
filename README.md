@@ -300,14 +300,32 @@ version exists only in the tag.
   when there are binding facts but not one of them gives a port (serial-port configurations and the like),
   the box has only "all instances" and is disabled — in both cases the id box can still take an
   `instance_` id directly. When reading the bindings fails, the box holds only the read face's error code,
-  and the instance card states that code too; under the online read face the box is disabled and says
-  "not supported online". With a port selected, the instance card additionally states the instance alias,
+  and the instance card states that code too; under the online read face the same box picks an instance
+  instead (next item). With a port selected, the instance card additionally states the instance alias,
   the port, the source (`physical_device` / `fixture_simulation` verbatim on the lower layer), the number
   of bound ids and the sequence number of the most recent binding; the severity counts and the row count
   still come from the re-queried rows. Rows gain a "port" column: an event with no instance
   association says "host"; one with an association whose id's most recent binding gave HOST:PORT says the
   port number; one with an association but absent from the port table (fixtures, serial-port
   configurations, no binding seen) says the abbreviated instance id — no port is invented.
+- **Instance filtering online**: online there is no binding read, so the same box lists the instances
+  the Runtime's status read reports now: "all instances" first, the default, then one item per instance
+  in the status's order (by alias) — its alias, and " · port N" when the status states that instance's
+  ADB port; a serial-configured instance, or one without an ADB target, gets its alias alone, and no port
+  is invented. Only the ids that status reports are listed; the ids a port was bound to earlier belong to
+  the offline read face. Picking one queries the ledger again with that one id as
+  `EventQuery.instance_ids`, every page bounded as every online page is (`from_sequence` and
+  `to_sequence`, limit 256, at the pin), for the timeline, "read earlier" and following alike; "all
+  instances" clears it. The list is made again at every status read: at open, on a jump to the latest,
+  and after a resume a person sent; following reads no status and leaves it as it is. When that read no
+  longer reports the picked instance, or it or the fact snapshot read with it fails and so cannot confirm
+  it, the pick goes back to "all instances", the filter error line names the instance, and the rows read
+  under the pick go: the view is read again from the pin (after a jump to the latest that could not move
+  the pin it stays empty, beside the jump's error, until a person reads again). A pick carried into a
+  reopened window is checked the same way. A status read that reports no instance leaves the box saying
+  so; a failed status or fact snapshot read leaves it saying the instances were not fully read (status or
+  fact snapshot), see the instance card; either way the box is disabled, and the id box still takes an
+  `instance_` id. A picked instance and an `instance_` id are mutually exclusive, as offline.
 - **Reading from the latest end**: the ledger query has no descending order, so the timeline reads
   backward windows down from the pinned position, starting at 256 positions. A window that size holds no
   more events than one page's event limit, so one query reads it, every filter applied by the ledger. A

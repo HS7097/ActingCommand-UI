@@ -30,8 +30,8 @@ use slint::{
 use crate::ledger::frame::{FrameRequest, FrameSlot};
 use crate::ledger::resume;
 use crate::ledger::state::{
-    BusyKind, FrameLookupError, InstancesSnapshot, LedgerFailure, LedgerState, Phase, PortMap,
-    SourceFacts,
+    box_pick, BusyKind, DroppedPick, FrameLookupError, InstancesSnapshot, LedgerFailure,
+    LedgerState, OnlineInstance, Phase, PortChoice, PortMap, SourceFacts,
 };
 use crate::ledger::LedgerHandle;
 use crate::phrase::{phrase, Phrase};
@@ -42,15 +42,21 @@ use crate::{ArtifactItem, FieldLine, LedgerWindow, OverlayItem, RowItem, Strings
 /// How long a request runs before the busy line shows.
 const BUSY_QUIET: Duration = Duration::from_secs(1);
 
-/// The port box's items, and the port each item after the first one means: the
-/// first means every instance, then one per port, ascending, naming the port
-/// and the member its latest binding is for, with ` +n` for the further
-/// members of the same port. A map with nothing to pick — no binding facts,
-/// facts that name no port, online, a face still opening or unopened, or a
-/// refused read — gives one item that says which, and no choices, so the box
-/// is disabled. Made again at every paint and every pick, in the language
-/// shown then; the map itself is fixed for the session.
-pub fn port_options(labels: &Labels, port_map: &PortMap) -> (Vec<SharedString>, Vec<u16>) {
+/// The port box's items, and what each item after the first one picks: the
+/// first means every instance. Offline, one per port, ascending, naming the
+/// port and the member its latest binding is for, with ` +n` for the further
+/// members of the same port. Online, one per instance the last status read
+/// reports, in its order: its alias, with the ADB port the status states for
+/// it when it states one (`online_options`). A map with nothing to pick — no
+/// binding facts, facts that name no port, a status read that reports no
+/// instance or failed, a face still opening or unopened, or a refused read —
+/// gives one item that says which, and no choices, so the box is disabled.
+/// Made again at every paint and every pick, in the language shown then; the
+/// offline map is fixed for the session, the online one is each status read's.
+pub fn port_options(
+    labels: &Labels,
+    port_map: &PortMap,
+) -> (Vec<SharedString>, Vec<PortChoice>) {
     let bindings = match port_map {
         PortMap::Read(bindings) if !bindings.ports.is_empty() => bindings,
         PortMap::Read(bindings) if !bindings.unported.is_empty() => {
@@ -58,7 +64,12 @@ pub fn port_options(labels: &Labels, port_map: &PortMap) -> (Vec<SharedString>, 
         }
         PortMap::Read(_) => return (vec![labels.no_binding_records.into()], Vec::new()),
         PortMap::Opening => return (vec![labels.ledger_opening.into()], Vec::new()),
-        PortMap::Online => return (vec![labels.port_online_unsupported.into()], Vec::new()),
+        PortMap::Online { instances: Ok(instances), .. } => {
+            return online_options(labels, instances)
+        }
+        PortMap::Online { instances: Err(_), .. } => {
+            return (vec![labels.port_status_unread.into()], Vec::new())
+        }
         PortMap::Unopened => return (vec![labels.ledger_unopened.into()], Vec::new()),
         PortMap::Failed(error) => return (vec![error.to_string().into()], Vec::new()),
     };
@@ -73,7 +84,43 @@ pub fn port_options(labels: &Labels, port_map: &PortMap) -> (Vec<SharedString>, 
         }
         SharedString::from(text)
     }));
-    (options, bindings.ports.iter().map(|entry| entry.port).collect())
+    (options, bindings.ports.iter().map(|entry| PortChoice::Port(entry.port)).collect())
+}
+
+/// The online items: every instance, then each instance the status read
+/// reports, by its alias — unique in one status read — with the ADB port the
+/// status states for it, and no port where it states none. A read that
+/// reports no instance gives one item that says so, and no choices.
+fn online_options(
+    labels: &Labels,
+    instances: &[OnlineInstance],
+) -> (Vec<SharedString>, Vec<PortChoice>) {
+    if instances.is_empty() {
+        return (vec![labels.instances_none.into()], Vec::new());
+    }
+    let mut options = vec![SharedString::from(labels.all_instances)];
+    options.extend(instances.iter().map(|instance| {
+        SharedString::from(match instance.adb_port {
+            Some(port) => fill(labels.instance_option, &[&instance.alias, &port.to_string()]),
+            None => instance.alias.clone(),
+        })
+    }));
+    let choices = instances.iter().map(|instance| PortChoice::Instance(instance.instance_id));
+    (options, choices.collect())
+}
+
+/// What the line under the boxes says of a pick a status read took away: the
+/// instance, by its alias when the list it was picked from named it, and its
+/// id; and whether that read no longer reports it, or failed (`unread`).
+fn dropped_text(labels: &Labels, dropped: &DroppedPick, unread: bool) -> String {
+    let id = code(&dropped.instance_id);
+    let instance = match &dropped.alias {
+        Some(alias) => format!("{alias} · {id}"),
+        None => id,
+    };
+    let template =
+        if unread { labels.instance_pick_unconfirmed } else { labels.instance_pick_gone };
+    fill(template, &[&instance])
 }
 
 /// Paints the ledger window from `state` alone, in the language of `labels`:
@@ -269,10 +316,15 @@ pub fn refresh(
     window.set_active_tab(active as i32);
 
     sync_modules(window, ledger, labels, &model.filters.origin_module.clone(), card.modules);
-    sync_ports(window, state, labels, model.filters.port);
+    sync_ports(window, state, labels, box_pick(&model.filters));
 
     let display = model.display_rows();
     let mut errors = Vec::new();
+    // The instance the last status read took from the box: never a pick that
+    // goes without a word.
+    if let PortMap::Online { instances, dropped: Some(dropped) } = &state.port_map {
+        errors.push(dropped_text(labels, dropped, instances.is_err()));
+    }
     if let Some(error) = &model.query_error {
         errors.push(query_error_text(labels, Some(error), labels.page_read_again));
     }
@@ -717,13 +769,18 @@ fn sync_modules(
     window.set_module_index(index);
 }
 
-/// Puts the port box back on the port the console is filtering by, found in
-/// the list the session's fixed map gives in the language shown; the first
-/// item when there is none.
-fn sync_ports(window: &LedgerWindow, state: &LedgerState, labels: &Labels, picked: Option<u16>) {
+/// Puts the port box back on the port, or online the instance, the console is
+/// filtering by, found in the list the session's map gives in the language
+/// shown; the first item when there is none.
+fn sync_ports(
+    window: &LedgerWindow,
+    state: &LedgerState,
+    labels: &Labels,
+    picked: Option<PortChoice>,
+) {
     let (options, choices) = port_options(labels, &state.port_map);
     let index = picked
-        .and_then(|port| choices.iter().position(|choice| *choice == port))
+        .and_then(|picked| choices.iter().position(|choice| *choice == picked))
         .map(|index| index as i32 + 1)
         .unwrap_or(0);
     window.set_port_options(models(options));

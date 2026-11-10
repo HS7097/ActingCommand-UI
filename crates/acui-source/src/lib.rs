@@ -47,7 +47,7 @@ use acui_rows::{
 };
 use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
-    FactValue, InstancePauseStage, InstancePauseState, OwnerEpoch, RuntimeFactRecord,
+    FactValue, InstanceId, InstancePauseStage, InstancePauseState, OwnerEpoch, RuntimeFactRecord,
     RuntimeFactScope, RuntimeFactSnapshot, RuntimeResult, SchedulingPauseExpectation,
     SchedulingPauseScope, SchedulingPauseState,
 };
@@ -811,6 +811,10 @@ pub enum InstanceFacts<'a> {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeInstanceLive {
+    /// The id the status read states for the instance, typed: what a pick in
+    /// the ledger window's instance box queries by. `RuntimeInstance` carries
+    /// the same id as text.
+    pub id: InstanceId,
     pub alias: String,
     pub adb_port: Option<u16>,
     pub lease_active: bool,
@@ -1464,6 +1468,7 @@ fn read_instances(main: &Rebuilding, root: &Path) -> InstancesRead {
         .map(|instance| RuntimeInstance {
             instance_id: code(&instance.instance_id()),
             status: Some(RuntimeInstanceLive {
+                id: instance.instance_id(),
                 alias: instance.instance_alias().to_string(),
                 adb_port: instance.adb_port(),
                 lease_active: instance.lease_active(),
