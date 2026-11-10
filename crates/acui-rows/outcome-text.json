@@ -115,14 +115,38 @@
     },
     "console_time_span_page_limit": {
       "en": {
-        "sentence": "The time span could not be read: page after page came back without an event, so the console stopped asking. The event list is not affected.",
+        "sentence": "The time span could not be read: a bounded read came back without the event it must hold, so the console stopped asking. The event list is not affected.",
         "short": "Time span not read",
         "handling": "Jump to the latest, or reopen the window, to read it again."
       },
       "zh-Hans": {
-        "sentence": "时间跨度没能读出：一页接一页都没有返回事件，监控台已停止追读；事件列表不受影响。",
+        "sentence": "时间跨度没能读出：一次有界读取没有读回应有的事件，监控台已停止追读；事件列表不受影响。",
         "short": "时间跨度未读出",
         "handling": "可点「跳到最新」或重新打开窗口再读一次。"
+      }
+    },
+    "console_window_page_limit": {
+      "en": {
+        "sentence": "One window of the ledger took more pages than the console allows (64) and still went on, so the console stopped reading it. Rows already shown are not affected.",
+        "short": "Window read stopped",
+        "handling": "Read again, or narrow the view with a filter or an id."
+      },
+      "zh-Hans": {
+        "sentence": "账本的一个序号窗读了 64 页还没读完，监控台已停止读取这一窗；已显示的行不受影响。",
+        "short": "序号窗未读完",
+        "handling": "可再读一次，或用过滤条件、编号缩小范围。"
+      }
+    },
+    "console_online_page_unbounded": {
+      "en": {
+        "sentence": "The console refused to send an online ledger page that lacked its position bounds or carried a time condition, and read nothing in its place. This is a defect of the console.",
+        "short": "Unbounded page not sent",
+        "handling": "Report it with what the window showed, and reopen the window to read again."
+      },
+      "zh-Hans": {
+        "sentence": "监控台拒绝发出一页缺少序号上下界、或带时间条件的在线账本查询，也没有改读别的；这是监控台的缺陷。",
+        "short": "未发出无界的页",
+        "handling": "请连同窗口显示的内容一起反馈，并重新打开窗口再读。"
       }
     }
   }

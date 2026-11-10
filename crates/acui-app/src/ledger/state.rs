@@ -20,8 +20,6 @@ use acui_source::{
     ReadSource, RuntimeInstances,
 };
 
-use crate::strings::Labels;
-
 /// One ledger window's state and the two flags its reader and its timers
 /// share with the event loop.
 pub struct LedgerShared {
@@ -167,19 +165,33 @@ impl PortMap {
 /// The events read for the last frame the pane had to look up, by the frame's
 /// id as `code` writes it: asked once, and only when the loaded rows hold no
 /// capture of it. A failed read stays until another frame is looked up, or a
-/// reload clears it to ask again.
+/// reload clears it to ask again: it is never asked again by itself.
 pub enum FrameEventsSlot {
     Empty,
     /// Asked of the reader, not answered yet.
     Pending { frame: String },
-    Read { frame: String, events: Result<Vec<ProjectedEvent>, FrameLookupError> },
+    /// Answered: the positions the lookup read, `from` to `to`, and what it
+    /// found there.
+    Read {
+        frame: String,
+        searched: (u64, u64),
+        events: Result<Vec<ProjectedEvent>, FrameLookupError>,
+    },
 }
 
 impl FrameEventsSlot {
     /// The read this slot holds for `frame`, if it holds that frame's.
     pub fn of(&self, frame: &str) -> Option<&Result<Vec<ProjectedEvent>, FrameLookupError>> {
         match self {
-            Self::Read { frame: held, events } if held.as_str() == frame => Some(events),
+            Self::Read { frame: held, events, .. } if held.as_str() == frame => Some(events),
+            _ => None,
+        }
+    }
+
+    /// The positions the read this slot holds for `frame` looked in.
+    pub fn searched(&self, frame: &str) -> Option<(u64, u64)> {
+        match self {
+            Self::Read { frame: held, searched, .. } if held.as_str() == frame => Some(*searched),
             _ => None,
         }
     }
@@ -200,23 +212,17 @@ impl FrameEventsSlot {
     }
 }
 
-/// Why a frame's own events could not be read: put into words when painted.
+/// Why a frame's own events could not be read: put into words when painted
+/// (`paint`).
 #[derive(Clone)]
 pub enum FrameLookupError {
     /// A page of the read says its source is incomplete, so it cannot say the
     /// capture is absent.
     Incomplete,
-    /// The read face's own words.
-    Read(String),
-}
-
-impl FrameLookupError {
-    pub fn text(&self, labels: &Labels) -> String {
-        match self {
-            Self::Incomplete => labels.source_incomplete.to_owned(),
-            Self::Read(text) => text.clone(),
-        }
-    }
+    /// The read face's own words, and the outcome code beneath them when the
+    /// error carries one: the console's own (a window past its page limit), or
+    /// the Runtime's code of a page it did not answer.
+    Read { text: String, code: Option<&'static str> },
 }
 
 /// What the reader is reading, since when, and about how long a read of that
@@ -240,7 +246,7 @@ pub enum BusyKind {
     /// The offline port map, read once at the pin.
     Bindings,
     Span,
-    /// The probes that make a time bound's estimated start safe.
+    /// The probes that make a time bound's estimated start safe: offline only.
     Probing,
     /// One window of a fill, of at most `of`.
     Reading { read: usize, of: usize },

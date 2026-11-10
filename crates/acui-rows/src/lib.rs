@@ -54,7 +54,11 @@ pub struct OpenReport {
     pub backend: String,
     pub latest_sequence: u64,
     pub event_count: LedgerCount,
-    pub read_complete: bool,
+    /// Offline, the opening's own statement. Online, whether every page read at
+    /// the current pin read its source whole (`page_source_complete`); `None`
+    /// until a page at that pin came back, so nothing is called whole before it
+    /// was read.
+    pub read_complete: Option<bool>,
     pub corrupt_tail: Option<String>,
     /// The repair log's own count; it does not share the event snapshot's boundary.
     pub repair_count: LedgerCount,

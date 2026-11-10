@@ -60,7 +60,8 @@ pub enum QueryError {
     /// routine performance types do not parse.
     Rejected(String),
     /// The read face could not answer: its own words, verbatim, and the
-    /// console's own code when the error carries one. Nothing here is in a
+    /// outcome code the error carries, if any — the console's own, or the
+    /// Runtime's code of a page it did not answer. Nothing here is in a
     /// language: the console puts the code into words when it paints.
     ReadFailed { text: String, code: Option<&'static str> },
 }
@@ -86,6 +87,8 @@ pub struct Filters {
     pub instance_ids: Vec<InstanceId>,
     /// The port that set stands for; display only, the query carries the set.
     pub port: Option<u16>,
+    /// The time bounds, offline only: online the window sets none, and the
+    /// online face sends no page with a time condition (#429).
     pub from_timestamp_unix_ms: Option<u64>,
     pub to_timestamp_unix_ms: Option<u64>,
 }
@@ -198,10 +201,53 @@ pub enum DisplayRow<'a> {
 }
 
 /// The positions the loaded windows cover, lowest to highest, and whether
-/// every window's page said it read its range completely.
+/// every window's page said it read its range completely; and how they were
+/// read: the windows and their pages, the pages the Runtime's read budget cut
+/// short (`read_budget`: their cursor read the rest), and the pages stating a
+/// run whose recovery context the budget cut (`context_limit`). Counted, never
+/// dropped: a window the budget cut is read on through its cursor, and a run
+/// whose context was cut shows its gap.
 pub struct ReadScope {
     pub range: Option<(u64, u64)>,
     pub read_complete: bool,
+    pub windows: usize,
+    pub pages: usize,
+    pub budget_pages: usize,
+    pub context_pages: usize,
+}
+
+impl ReadScope {
+    fn empty() -> Self {
+        Self {
+            range: None,
+            read_complete: true,
+            windows: 0,
+            pages: 0,
+            budget_pages: 0,
+            context_pages: 0,
+        }
+    }
+
+    /// One window more, as `take_window` tallied it.
+    fn add(&mut self, range: (u64, u64), tally: &WindowTally) {
+        self.range = Some(range);
+        self.read_complete &= tally.complete;
+        self.windows += 1;
+        self.pages += tally.pages;
+        self.budget_pages += tally.budget_pages;
+        self.context_pages += tally.context_pages;
+    }
+}
+
+/// What one window's pages said: whether each read its range completely, how
+/// many events the ledger returned, and the pages, budget-cut pages and
+/// context-cut pages among them.
+struct WindowTally {
+    complete: bool,
+    read: u64,
+    pages: usize,
+    budget_pages: usize,
+    context_pages: usize,
 }
 
 /// The ledger facts about the open source, plus the counts of the loaded rows.
@@ -211,7 +257,9 @@ pub struct InstanceCard {
     pub backend: String,
     pub latest_sequence: u64,
     pub event_count: LedgerCount,
-    pub read_complete: bool,
+    /// As the read face last reported it: `None` online until a page at the
+    /// pin came back.
+    pub read_complete: Option<bool>,
     pub corrupt_tail: Option<String>,
     pub repair_count: LedgerCount,
     pub writer: WriterFacts,
@@ -292,7 +340,7 @@ impl ViewModel {
             lowest_read: None,
             width: WINDOW,
             hidden_performance: 0,
-            scope: ReadScope { range: None, read_complete: true },
+            scope: ReadScope::empty(),
             snapshot_position,
             open,
             state_root,
@@ -334,7 +382,7 @@ impl ViewModel {
         self.lowest_read = None;
         self.width = WINDOW;
         self.hidden_performance = 0;
-        self.scope = ReadScope { range: None, read_complete: true };
+        self.scope = ReadScope::empty();
     }
 
     /// The next window down, `(from, to)`, or `None` once position 1 is read.
@@ -382,7 +430,8 @@ impl ViewModel {
     /// events doubles the next one's span, up to `MAX_WIDTH`; one that brought
     /// half a page or more puts it back to `WINDOW`.
     pub fn apply_window(&mut self, (from, to): (u64, u64), pages: &[RuntimeEventQueryPage]) {
-        let (mut events, complete, read) = self.take_window(pages);
+        let (mut events, tally) = self.take_window(pages);
+        let read = tally.read;
         self.width = if read < WINDOW / 4 {
             (self.width * 2).min(MAX_WIDTH)
         } else if read >= WINDOW / 2 {
@@ -393,10 +442,8 @@ impl ViewModel {
         events.append(&mut self.rows);
         self.rows = events;
         self.lowest_read = Some(from);
-        self.scope = ReadScope {
-            range: Some((from, self.scope.range.map_or(to, |(_, high)| high))),
-            read_complete: self.scope.read_complete && complete,
-        };
+        let high = self.scope.range.map_or(to, |(_, high)| high);
+        self.scope.add((from, high), &tally);
     }
 
     /// The pin moved: what the source now states about itself. Rows already
@@ -404,6 +451,12 @@ impl ViewModel {
     pub fn set_pin(&mut self, open: OpenReport, snapshot_position: u64) {
         self.open = open;
         self.snapshot_position = snapshot_position;
+    }
+
+    /// What the source states about itself after it read pages at the same
+    /// pin: online, whether those pages read their source whole.
+    pub fn set_open(&mut self, open: OpenReport) {
+        self.open = open;
     }
 
     /// The committed span the time cursor runs over, read again.
@@ -425,26 +478,27 @@ impl ViewModel {
     /// view's lowest read position becomes this window's, so "read earlier"
     /// reads what lies below it, once.
     pub fn apply_newer_window(&mut self, (from, to): (u64, u64), pages: &[RuntimeEventQueryPage]) {
-        let (mut events, complete, _) = self.take_window(pages);
+        let (mut events, tally) = self.take_window(pages);
         self.rows.append(&mut events);
         self.upper = to;
         self.lowest_read.get_or_insert(from);
-        self.scope = ReadScope {
-            range: Some((self.scope.range.map_or(from, |(low, _)| low), to)),
-            read_complete: self.scope.read_complete && complete,
-        };
+        let low = self.scope.range.map_or(from, |(low, _)| low);
+        self.scope.add((low, to), &tally);
     }
 
     /// A window's events in ledger order, performance-monitor ones dropped and
-    /// counted when hidden, its recovery statements merged; whether every page
-    /// read its range completely; and how many events the ledger returned.
-    fn take_window(&mut self, pages: &[RuntimeEventQueryPage]) -> (Vec<ProjectedEvent>, bool, u64) {
+    /// counted when hidden, its recovery statements merged; and its tally:
+    /// whether every page read its range completely, how many events the
+    /// ledger returned, and how many pages the read budget or a run's context
+    /// limit cut.
+    fn take_window(&mut self, pages: &[RuntimeEventQueryPage]) -> (Vec<ProjectedEvent>, WindowTally) {
         let hide = self.hides_performance();
         let mut events = Vec::new();
-        let mut complete = true;
-        let mut read = 0;
+        let mut tally =
+            WindowTally { complete: true, read: 0, pages: 0, budget_pages: 0, context_pages: 0 };
         for page in pages {
-            read += page.events().len() as u64;
+            tally.pages += 1;
+            tally.read += page.events().len() as u64;
             for event in page.events() {
                 let routine = matches!(event.severity, EventSeverity::Debug | EventSeverity::Info);
                 if hide && routine && event.origin.module() == OriginModule::PerformanceMonitor {
@@ -453,12 +507,22 @@ impl ViewModel {
                     events.push(event.clone());
                 }
             }
-            complete &= page_source_complete(page);
+            tally.complete &= page_source_complete(page);
+            if page.read_budget_stopped() {
+                tally.budget_pages += 1;
+            }
+            if page
+                .run_recovery()
+                .iter()
+                .any(|group| group.gaps.contains(&LedgerRecoveryGap::ContextLimit))
+            {
+                tally.context_pages += 1;
+            }
             for group in page.run_recovery() {
                 self.absorb_recovery(group);
             }
         }
-        (events, complete, read)
+        (events, tally)
     }
 
     fn absorb_recovery(&mut self, group: &LedgerRunRecovery) {

@@ -19,7 +19,10 @@ use acui_rows::{
     seconds_since, short_id, ArtifactEvictionObservation, EventSeverity, LedgerCount,
     OriginModule, ProjectedEvent, Sensitivity, WriterFacts,
 };
-use acui_source::{MaterialOutcome, OfflineFacts, OfflineReason, RuntimeInstance, MAX_FRAME_BYTES};
+use acui_source::{
+    MaterialOutcome, OfflineFacts, OfflineReason, RuntimeInstance, MAX_FRAME_BYTES,
+    UNANSWERED_PAGE_CODES,
+};
 use slint::{
     ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
 };
@@ -115,6 +118,8 @@ pub fn refresh(
                 }
                 text
             }
+            // Pin 0: the ledger holds no record, and no page was asked.
+            None if model.snapshot_position() == 0 => labels.ledger_empty.to_string(),
             None => labels.read_up_to_unknown.to_string(),
         }
         .into(),
@@ -127,13 +132,17 @@ pub fn refresh(
     window.set_loaded_rows_text(loaded.into());
     window.set_show_performance(model.filters.show_performance);
     window.set_follow_available(facts.follows);
+    // Online the time cursor is off, and the note under the row says why: an
+    // online page carries no time condition (#429).
+    window.set_time_cursor_enabled(!facts.follows);
+    window.set_cursor_note(if facts.follows { labels.cursor_off_online_note } else { "" }.into());
     window.set_cursor_label(
-        model
-            .filters
-            .to_timestamp_unix_ms
-            .map(|bound| format!("≤ {}", format_full(bound)))
-            .unwrap_or_else(|| labels.all.to_string())
-            .into(),
+        match model.filters.to_timestamp_unix_ms {
+            _ if facts.follows => labels.cursor_off_online.to_string(),
+            Some(bound) => format!("≤ {}", format_full(bound)),
+            None => labels.all.to_string(),
+        }
+        .into(),
     );
 
     let mut lines = vec![
@@ -158,6 +167,23 @@ pub fn refresh(
             "",
         ),
         field(labels, "integrity", integrity_text(labels, &card), ""),
+        // How the loaded windows were read, counted, never dropped: the pages
+        // the read budget cut short (their cursor read the rest) and the pages
+        // stating a run whose recovery context it cut.
+        field(
+            labels,
+            "pages_read",
+            fill(
+                labels.pages_read,
+                &[
+                    &scope.windows.to_string(),
+                    &scope.pages.to_string(),
+                    &scope.budget_pages.to_string(),
+                    &scope.context_pages.to_string(),
+                ],
+            ),
+            "read_budget · context_limit",
+        ),
         field(labels, "repair_count", count_text(labels, card.repair_count), "repair_count"),
         field(labels, "writer", writer_text(labels, &card.writer), ""),
     ];
@@ -343,8 +369,14 @@ pub fn refresh(
             let none_note = match &frame {
                 Some(FrameView { pending: true, .. }) => labels.frame_events_reading.to_string(),
                 Some(FrameView { failure: Some(failure), .. }) => {
-                    fill(labels.frame_events_failed, &[&failure.text(labels)])
+                    fill(labels.frame_events_failed, &[&frame_failure_text(labels, failure)])
                 }
+                // The lookup read its window whole and found no capture: it
+                // says where it looked, not that the ledger holds none.
+                Some(FrameView { searched: Some((from, to)), .. }) => fill(
+                    labels.frame_capture_not_in_range,
+                    &[&from.to_string(), &to.to_string()],
+                ),
                 Some(_) => labels.frame_capture_missing.to_string(),
                 None if model.selected().is_some_and(is_input) => {
                     labels.frame_basis_missing.to_string()
@@ -476,6 +508,8 @@ fn paint_closed(
     window.set_read_up_to_text(top.into());
     window.set_loaded_rows_text(SharedString::new());
     window.set_follow_available(false);
+    window.set_time_cursor_enabled(false);
+    window.set_cursor_note(SharedString::new());
     window.set_cursor_label(labels.all.into());
     // The card's only line, and so the one that may wrap.
     window.set_card_lines(models(vec![FieldLine {
@@ -922,13 +956,21 @@ fn recovery_text(labels: &Labels, group: &RecoveryGroup) -> String {
     text
 }
 
+/// Whether the ledger read whole: offline, the opening's statement; online,
+/// what the pages read at the current pin said (`read_scope`), and "not read
+/// yet" before the first of them came back — never "whole" before a read.
 fn integrity_text(labels: &Labels, card: &InstanceCard) -> String {
     match (&card.corrupt_tail, card.read_complete) {
-        (None, true) if card.backend == "sqlite" => labels.integrity_ok_sqlite.to_string(),
-        (None, true) => labels.integrity_ok.to_string(),
+        (None, None) => labels.integrity_unread.to_string(),
+        (None, Some(true)) if card.backend == "sqlite" => labels.integrity_ok_sqlite.to_string(),
+        (None, Some(true)) if card.backend == "runtime" => labels.integrity_ok_pages.to_string(),
+        (None, Some(true)) => labels.integrity_ok.to_string(),
         (tail, complete) => fill(
             labels.integrity_bad,
-            &[&complete.to_string(), tail.as_deref().unwrap_or(labels.none)],
+            &[
+                &complete.map_or_else(|| labels.integrity_unread.to_string(), |c| c.to_string()),
+                tail.as_deref().unwrap_or(labels.none),
+            ],
         ),
     }
 }
@@ -1034,15 +1076,37 @@ fn query_error_text(labels: &Labels, error: Option<&QueryError>) -> String {
                 None => text,
             }
         }
-        // The read face's own words, and, when the error carries one of the
-        // console's own codes, that code's words after them.
+        // The read face's own words, and, when the error carries a code, that
+        // code's words after them.
         Some(QueryError::ReadFailed { text, code }) => {
-            let reason = match (*code).and_then(|code| outcome_sentence(labels, code)) {
-                Some(words) => format!("{text} · {words}"),
-                None => text.clone(),
-            };
-            fill(labels.read_failed, &[&reason])
+            fill(labels.read_failed, &[&reason_text(labels, text, *code)])
         }
+    }
+}
+
+/// A read's own words, then the words of the outcome code beneath them: for a
+/// page the Runtime did not answer (`UNANSWERED_PAGE_CODES`), why, and that
+/// the window does not ask it again by itself; for the console's own code, its
+/// sentence and handling.
+fn reason_text(labels: &Labels, text: &str, code: Option<&'static str>) -> String {
+    let words = match code {
+        Some(code) if UNANSWERED_PAGE_CODES.contains(&code) => {
+            Some(fill(labels.page_unanswered, &[code]))
+        }
+        Some(code) => outcome_sentence(labels, code),
+        None => None,
+    };
+    match words {
+        Some(words) => format!("{text} · {words}"),
+        None => text.to_owned(),
+    }
+}
+
+/// Why a frame's own events could not be read.
+fn frame_failure_text(labels: &Labels, failure: &FrameLookupError) -> String {
+    match failure {
+        FrameLookupError::Incomplete => labels.source_incomplete.to_owned(),
+        FrameLookupError::Read { text, code } => reason_text(labels, text, *code),
     }
 }
 
@@ -1146,33 +1210,35 @@ const fn recovery_index(state: acui_rows::LedgerRecoveryState) -> usize {
 
 /// The frame pane's view of the selected event's frame: what the ledger says
 /// about it, how it was found, whether the frame's own events are still being
-/// read, and why they could not be read.
+/// read, the positions their lookup read, and why they could not be read.
 struct FrameView {
     group: FrameGroup,
     via: BasisVia,
     basis_sequence: u64,
     pending: bool,
+    searched: Option<(u64, u64)>,
     failure: Option<FrameLookupError>,
 }
 
 /// The selected event's frame, found among the loaded rows and, when they hold
 /// no capture of it, among the frame's own events, which the window's reader
-/// reads — one query by frame id, kept while the pane stays on that frame — so
-/// an event still lands on its frame when the capture is filtered out or not
-/// loaded.
+/// reads — one query by frame id within a window of positions around the event
+/// that names it, kept while the pane stays on that frame — so an event still
+/// lands on its frame when the capture is filtered out or not loaded.
 fn frame_view(state: &LedgerState, model: &ViewModel) -> Option<FrameView> {
     let (basis, via) = model.selected_basis()?;
     let frame_id = *basis.links.frame_id()?;
     let frame = code(&frame_id);
     let basis_sequence = basis.sequence;
     let pending = state.frame_events.pending(&frame);
+    let searched = state.frame_events.searched(&frame);
     let (extra, failure) = match state.frame_events.of(&frame) {
         Some(Ok(events)) => (events.as_slice(), None),
         Some(Err(error)) => (&[][..], Some(error.clone())),
         None => (&[][..], None),
     };
     let group = model.frame_group(&frame, extra);
-    Some(FrameView { group, via, basis_sequence, pending, failure })
+    Some(FrameView { group, via, basis_sequence, pending, searched, failure })
 }
 
 fn is_input(event: &ProjectedEvent) -> bool {
