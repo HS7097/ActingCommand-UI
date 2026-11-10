@@ -567,15 +567,20 @@ impl LedgerHandle {
 
 /// When the selected event's frame has no capture among the loaded rows and
 /// the slot holds nothing for it: the slot is marked pending, and the frame's
-/// id, the query by it and the positions it reads go to the reader. The query
-/// is the frame id, the instance the event that names the frame links (when
-/// it links one), and the window of positions `FRAME_LOOKUP_REACH` either side
-/// of that event, within the pin (#429 Q7): a capture's diagnostic records are
-/// appended when its run ends, so they may lie well after it.
-fn wanted_frame_events(state: &mut LedgerState) -> Option<(String, EventQuery, (u64, u64))> {
-    if !matches!(state.phase, Phase::Open(_)) {
-        return None;
-    }
+/// id, the query by it and the positions it reads go to the reader. Online
+/// the query is the frame id, the instance the event that names the frame
+/// links (when it links one), and the window of positions `FRAME_LOOKUP_REACH`
+/// either side of that event, within the pin (#429 Q7): a capture's
+/// diagnostic records are appended when its run ends, so they may lie well
+/// after it. Offline it is the frame id alone, as before: slice 1 leaves the
+/// offline face's reads as they were.
+fn wanted_frame_events(
+    state: &mut LedgerState,
+) -> Option<(String, EventQuery, Option<(u64, u64)>)> {
+    let online = match &state.phase {
+        Phase::Open(facts) => facts.follows,
+        _ => return None,
+    };
     let model = state.model.as_ref()?;
     let (basis, _) = model.selected_basis()?;
     let frame_id = basis.links.frame_id().copied()?;
@@ -583,20 +588,24 @@ fn wanted_frame_events(state: &mut LedgerState) -> Option<(String, EventQuery, (
     if state.frame_events.holds(&frame) || model.frame_group(&frame, &[]).target.is_some() {
         return None;
     }
-    // A loaded row lies within the pin, which only ever moves up.
-    let at = basis.sequence;
-    let searched = (
-        at.saturating_sub(FRAME_LOOKUP_REACH).max(1),
-        at.saturating_add(FRAME_LOOKUP_REACH).min(model.snapshot_position()),
-    );
-    let query = EventQuery {
+    let mut query = EventQuery {
         view: Some(LedgerView::Events),
         frame_id: Some(frame_id),
-        instance_id: basis.links.instance_id().copied(),
-        from_sequence: Some(searched.0),
-        to_sequence: Some(searched.1),
         ..EventQuery::default()
     };
+    // A loaded row lies within the pin, which only ever moves up.
+    let at = basis.sequence;
+    let searched = online.then(|| {
+        (
+            at.saturating_sub(FRAME_LOOKUP_REACH).max(1),
+            at.saturating_add(FRAME_LOOKUP_REACH).min(model.snapshot_position()),
+        )
+    });
+    if let Some((from, to)) = searched {
+        query.instance_id = basis.links.instance_id().copied();
+        query.from_sequence = Some(from);
+        query.to_sequence = Some(to);
+    }
     state.frame_events = FrameEventsSlot::Pending { frame: frame.clone() };
     Some((frame, query, searched))
 }

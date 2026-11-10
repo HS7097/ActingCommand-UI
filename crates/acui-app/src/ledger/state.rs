@@ -170,11 +170,11 @@ pub enum FrameEventsSlot {
     Empty,
     /// Asked of the reader, not answered yet.
     Pending { frame: String },
-    /// Answered: the positions the lookup read, `from` to `to`, and what it
-    /// found there.
+    /// Answered: the positions the lookup read, `from` to `to` (online; offline
+    /// it reads by frame id alone, `None`), and what it found there.
     Read {
         frame: String,
-        searched: (u64, u64),
+        searched: Option<(u64, u64)>,
         events: Result<Vec<ProjectedEvent>, FrameLookupError>,
     },
 }
@@ -188,10 +188,11 @@ impl FrameEventsSlot {
         }
     }
 
-    /// The positions the read this slot holds for `frame` looked in.
+    /// The positions the read this slot holds for `frame` looked in, when it
+    /// looked in a window of them.
     pub fn searched(&self, frame: &str) -> Option<(u64, u64)> {
         match self {
-            Self::Read { frame: held, searched, .. } if held.as_str() == frame => Some(*searched),
+            Self::Read { frame: held, searched, .. } if held.as_str() == frame => *searched,
             _ => None,
         }
     }
@@ -275,8 +276,9 @@ pub struct Effects {
     /// The view started over: the frame pane's request is dropped, so the next
     /// paint of a frame asks again.
     pub forget_frame: bool,
-    /// A follow read failed: the ticks stop and the box is unticked, its
-    /// reason kept on screen.
+    /// A follow read failed, or a fill's read did (a page the Runtime refused
+    /// included): the ticks stop and the box is unticked, its reason kept on
+    /// screen, so no tick asks a page again by itself.
     pub follow_halted: bool,
     /// The status was read again after a person's resume (`resume`), and
     /// what that read found: the resume line says it, never a read that

@@ -145,8 +145,10 @@ pub const FRAME_LOOKUP_REACH: u64 = 65_536;
 /// `runtime_unavailable`, state `failed`, and latches nothing; the receipt's
 /// outcome names the ledger's code. Such a page is said with its code and
 /// never asked again here: a person reads again.
-pub const UNANSWERED_PAGE_CODES: [&str; 2] =
-    ["ledger_read_budget_exceeded", "writer_response_timeout"];
+pub const UNANSWERED_PAGE_CODES: [&str; 2] = [LEDGER_READ_BUDGET_EXCEEDED, WRITER_RESPONSE_TIMEOUT];
+/// The two codes of `UNANSWERED_PAGE_CODES`, each said in its own words.
+pub const LEDGER_READ_BUDGET_EXCEEDED: &str = "ledger_read_budget_exceeded";
+pub const WRITER_RESPONSE_TIMEOUT: &str = "writer_response_timeout";
 
 /// The spelling of a client error's `code()` or `operation()`, whichever type
 /// the pinned client returns them as: `&'static str`, or the contract's

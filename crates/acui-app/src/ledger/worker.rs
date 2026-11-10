@@ -101,11 +101,12 @@ pub enum Command {
     FollowOn { tag: RequestTag },
     /// One follow tick.
     FollowTick { tag: RequestTag },
-    /// The selected frame's own events, by frame id within the window of
-    /// positions `searched`: one query, read once while the slot is still
+    /// The selected frame's own events, by frame id — online within the window
+    /// of positions `searched`, offline by frame id alone, as before slice 1
+    /// (`searched` is `None`): one query, read once while the slot is still
     /// pending for `frame`. Not superseded by a new generation: the answer
     /// depends on the frame alone.
-    FrameEvents { frame: String, query: EventQuery, searched: (u64, u64) },
+    FrameEvents { frame: String, query: EventQuery, searched: Option<(u64, u64)> },
     /// A frame read found the material reader latched, or its rebuild failed:
     /// a new one is made and published.
     RefreshReader,
@@ -133,6 +134,18 @@ struct Superseded;
 /// the read's own result.
 type Read<T, E> = Result<Result<T, E>, Superseded>;
 
+/// How a fill ended, for the span read after it (`span_after`).
+#[derive(Default)]
+struct Fill {
+    /// The time of the event at the pin, when a window the fill read holds it.
+    pin_time: Option<u64>,
+    /// The fill stopped at a read that failed — a page the Runtime refused, a
+    /// window past its page limit, any read the face could not answer — whose
+    /// reason is on screen: no more page is asked for this request, and
+    /// following stops, until a person reads again.
+    stopped: bool,
+}
+
 /// Starts the reader of `session` of window `id` on `acui-ledger-<id>`, and
 /// gives back where its requests go. The thread opens the read face first.
 pub fn spawn(
@@ -142,8 +155,14 @@ pub fn spawn(
     opening: Opening,
 ) -> io::Result<Sender<Command>> {
     let (sender, commands) = mpsc::channel();
-    let worker =
-        Worker { id, session, shared, halted: Cell::new(None), first_time: Cell::new(None) };
+    let worker = Worker {
+        id,
+        session,
+        shared,
+        halted: Cell::new(None),
+        first_time: Cell::new(None),
+        span_pin: Cell::new(None),
+    };
     launcher::spawn_worker(&format!("acui-ledger-{id}"), move || worker.run(opening, commands))?;
     Ok(sender)
 }
@@ -158,6 +177,9 @@ struct Worker {
     /// The time of the ledger's first event, once read: the same at every pin,
     /// so read once per session.
     first_time: Cell<Option<u64>>,
+    /// The pin the committed span was last read at, once a read of it
+    /// succeeded: a fill at that pin asks no span read again.
+    span_pin: Cell<Option<u64>>,
 }
 
 impl Worker {
@@ -267,7 +289,7 @@ impl Worker {
             Ok(Some((source, tag))) => {
                 let first = self
                     .reload(&source, tag, false)
-                    .and_then(|pin_time| self.read_span(&source, tag, pin_time));
+                    .and_then(|fill| self.span_after(&source, tag, fill));
                 self.settle(first);
                 self.reported(&source);
                 Some(source)
@@ -281,7 +303,7 @@ impl Worker {
 
     /// The read face, opened here; then, offline, its port map, read before
     /// anything is left in the state. The committed span is read after the
-    /// first fill (`read_span`), whose first window may already hold the event
+    /// first fill (`span_after`), whose first window may already hold the event
     /// at the pin. `None` when it did not open: the state says why.
     fn open(&self, opening: &Opening) -> Result<Option<(ReadSource, RequestTag)>, Superseded> {
         let bound = match opening.mode {
@@ -359,7 +381,9 @@ impl Worker {
 
     fn execute(&self, source: &ReadSource, command: Command) {
         let finished = match command {
-            Command::Reload { tag, earlier } => self.reload(source, tag, earlier).map(|_| ()),
+            Command::Reload { tag, earlier } => self
+                .reload(source, tag, earlier)
+                .and_then(|fill| self.span_after(source, tag, fill)),
             Command::JumpLatest { tag } => self.jump_latest(source, tag),
             Command::FollowOn { tag } => self.follow_on(source, tag),
             Command::FollowTick { tag } => {
@@ -413,19 +437,20 @@ impl Worker {
     /// positions, of pages of `MAX_RUNTIME_EVENT_QUERY_EVENTS` rows at the pin,
     /// with run recovery. A window that failed — the Runtime refused a page, or
     /// the window passed its page limit — ends the fill with its code on screen,
-    /// and nothing asks it again until a person reads again. The time of the
-    /// event at the pin, when a window read holds it, so the span's end needs
-    /// no read of its own.
+    /// stops following, and nothing asks a page again until a person reads
+    /// again: neither this request's span read (`Fill::stopped`) nor the next
+    /// follow tick. The time of the event at the pin, when a window read holds
+    /// it, so the span's end needs no read of its own.
     fn reload(
         &self,
         source: &ReadSource,
         tag: RequestTag,
         earlier: bool,
-    ) -> Result<Option<u64>, Superseded> {
+    ) -> Result<Fill, Superseded> {
         let online = source.follows();
         let wanted = || self.page(tag);
         let pin = source.snapshot_position();
-        let mut pin_time = None;
+        let mut fill = Fill::default();
         if !earlier {
             // And it retries a frame read that failed.
             let plan = self.current(tag, |state| {
@@ -437,7 +462,7 @@ impl Worker {
                 })
             })?;
             let Some((bound, span, query)) = plan else {
-                return Ok(None);
+                return Ok(fill);
             };
             let snapshot = source.snapshot_position();
             let upper = match bound {
@@ -448,6 +473,7 @@ impl Worker {
                     checked_upper(source, query, estimate, snapshot, &wanted)?
                 }
             };
+            let stopped = matches!(&upper, Err(error) if read_stopped(error));
             let go_on = self.current(tag, |state| {
                 state.effects.forget_frame = true;
                 let Some(model) = state.model.as_mut() else {
@@ -461,13 +487,16 @@ impl Worker {
                     Err(error) => {
                         model.begin(0);
                         model.query_error = Some(error);
+                        state.effects.follow_halted |= stopped;
                         false
                     }
                 }
             })?;
             self.repaint();
             if !go_on {
-                return Ok(None);
+                self.halt(tag, stopped);
+                fill.stopped = stopped;
+                return Ok(fill);
             }
         }
         let started = Instant::now();
@@ -478,7 +507,7 @@ impl Worker {
             })
         })?;
         let Some(target) = target else {
-            return Ok(None);
+            return Ok(fill);
         };
         for read in 0..FILL_WINDOWS {
             let next = self.current(tag, |state| {
@@ -505,8 +534,9 @@ impl Worker {
                 Err(error) => Err(error),
             };
             if let Ok(pages) = &pages {
-                pin_time = pin_time.or_else(|| event_time_at(pages, pin));
+                fill.pin_time = fill.pin_time.or_else(|| event_time_at(pages, pin));
             }
+            let stopped = matches!(&pages, Err(error) if read_stopped(error));
             let applied = self.current(tag, |state| {
                 let Some(model) = state.model.as_mut() else {
                     return false;
@@ -518,16 +548,31 @@ impl Worker {
                     }
                     Err(error) => {
                         model.query_error = Some(error);
+                        // Following, if on, would ask this view's next window
+                        // by itself at its next tick: it stops, as a failed
+                        // follow read stops it.
+                        state.effects.follow_halted |= stopped;
                         false
                     }
                 }
             })?;
             self.repaint();
             if !applied {
+                self.halt(tag, stopped);
+                fill.stopped = stopped;
                 break;
             }
         }
-        Ok(pin_time)
+        Ok(fill)
+    }
+
+    /// After a read of `tag` that failed (`stopped`): a follow tick of that
+    /// request still queued behind is not run (`follow_tick`); the follow
+    /// timer itself stops on the event loop (`Effects::follow_halted`).
+    fn halt(&self, tag: RequestTag, stopped: bool) {
+        if stopped {
+            self.halted.set(Some(tag));
+        }
     }
 
     /// A person's jump to the latest: status and facts are read again and the
@@ -593,7 +638,7 @@ impl Worker {
 
     /// The view starts over from a pin just moved: no time bound, the time
     /// cursor back at the top, and after the fill the span's end at the new
-    /// pin (`read_span`).
+    /// pin (`span_after`).
     fn start_at_pin(&self, source: &ReadSource, tag: RequestTag) -> Result<(), Superseded> {
         let live = self.current(tag, |state| {
             state.effects.cursor_top = true;
@@ -602,15 +647,40 @@ impl Worker {
         if !live {
             return Ok(());
         }
-        let pin_time = self.reload(source, tag, false)?;
-        self.read_span(source, tag, pin_time)
+        let fill = self.reload(source, tag, false)?;
+        self.span_after(source, tag, fill)
+    }
+
+    /// After a fill a person asked for — the first one, any reload, "read
+    /// earlier", a jump to the latest, following turned on — the committed
+    /// span at the pin (`read_span`), unless it was read at this pin already
+    /// (`span_pin`). So a span the first fill could not read, because a newer
+    /// request took it over, is read by the next fill that runs to its end. A
+    /// fill that stopped at a read that failed asks no span page: its reason
+    /// is on screen, and no page is asked again until a person reads again;
+    /// only a span it can complete without a page moves on.
+    fn span_after(
+        &self,
+        source: &ReadSource,
+        tag: RequestTag,
+        fill: Fill,
+    ) -> Result<(), Superseded> {
+        if self.span_pin.get() == Some(source.snapshot_position()) {
+            return Ok(());
+        }
+        let needs_page = self.first_time.get().is_none() || fill.pin_time.is_none();
+        if fill.stopped && needs_page {
+            return Ok(());
+        }
+        self.read_span(source, tag, fill.pin_time)
     }
 
     /// The committed span at the pin into the view: the ledger's first event's
     /// time, read once per session (`first_time`), and the time of the event at
     /// the pin — `pin_time` when a window just read held it, one point read
     /// otherwise. An empty ledger (pin 0) has no span and asks no page. A read
-    /// that fails leaves the span as it was and says why (`set_span`).
+    /// that fails leaves the span as it was and says why (`set_span`); one
+    /// that succeeds is kept as read at this pin (`span_pin`).
     fn read_span(
         &self,
         source: &ReadSource,
@@ -640,11 +710,15 @@ impl Worker {
                 },
             }
         };
+        let read_whole = read.is_ok();
         self.current(tag, |state| {
             if let Some(model) = state.model.as_mut() {
                 set_span(model, read);
             }
         })?;
+        if read_whole {
+            self.span_pin.set(Some(pin));
+        }
         self.repaint();
         Ok(())
     }
@@ -803,18 +877,18 @@ impl Worker {
     }
 
     /// The selected event's frame, when the loaded rows hold no capture of it:
-    /// its own events, read once — one query by frame id, within the window of
-    /// positions `searched` around the event that names it, without run
-    /// recovery — so an event still lands on its frame when the capture is
+    /// its own events, read once — one query by frame id, online within the
+    /// window of positions `searched` around the event that names it, without
+    /// run recovery — so an event still lands on its frame when the capture is
     /// filtered out or not loaded. A read the page says is incomplete cannot
     /// say the capture is absent; one that is complete and holds none says in
-    /// which positions it looked.
+    /// which positions it looked, when it looked in a window of them.
     fn frame_events(
         &self,
         source: &ReadSource,
         frame: String,
         query: &EventQuery,
-        searched: (u64, u64),
+        searched: Option<(u64, u64)>,
     ) -> Result<(), Superseded> {
         // Superseded when another session took the window, or the pane moved
         // to another frame: either way not wanted any more.
@@ -895,6 +969,14 @@ const fn page_seconds(online: bool) -> u64 {
 /// page it did not answer; both are put into words when painted.
 fn read_failed(error: &anyhow::Error) -> QueryError {
     QueryError::ReadFailed { text: error.to_string(), code: console_code(error) }
+}
+
+/// Whether an error that ended a fill is a read that failed — the face could
+/// not answer, or the console stopped a window at its page limit — rather
+/// than filters that form no query: after one, no page is asked again until
+/// a person reads again.
+fn read_stopped(error: &QueryError) -> bool {
+    matches!(error, QueryError::ReadFailed { .. })
 }
 
 /// One window of positions read whole: its pages of

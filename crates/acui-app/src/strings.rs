@@ -219,9 +219,14 @@ pub struct Labels {
     pub filter_instance_conflict: &'static str,
     pub filter_rejected: &'static str,
     pub read_failed: &'static str,
-    /// Follows a page the Runtime did not answer, its code filled in: why,
-    /// and that the window does not ask it again by itself.
-    pub page_unanswered: &'static str,
+    /// Follows a page the Runtime did not answer, its code filled in: why, by
+    /// code — its read budget refused it (`ledger_read_budget_exceeded`), or
+    /// it did not answer in time (`writer_response_timeout`) — then how a
+    /// person reads it again, since the window does not ask it again by
+    /// itself; joined as `outcome_words` joins a sentence and its handling.
+    pub page_budget_refused: &'static str,
+    pub page_writer_timeout: &'static str,
+    pub page_read_again: &'static str,
     /// An outcome code's sentence, then its handling.
     pub outcome_words: &'static str,
     /// The outcome words could not be read: the table's problem.
@@ -1191,7 +1196,7 @@ pub const ZH: Labels = Labels {
     show_up_to: "只看到",
     all: "全部",
     cursor_off_online: "在线时不可用",
-    cursor_off_online_note: "「只看到」在线时不可用：Runtime 还没有限住带时间条件的账本页（带时间条件时查询可能走时间索引，序号窗就框不住扫描），所以在线读的每一页只按序号窗读，不带时间条件。要按时间看，请离线打开副本或测试根。",
+    cursor_off_online_note: "「只看到」在线时不可用：Runtime 还不能保证按时间查账本有界，在线只按序号读。要按时间看，请离线打开副本或测试根。",
     text_size: "字号",
     text_sizes: ["标准", "大", "特大"],
     language: "语言",
@@ -1389,7 +1394,9 @@ pub const ZH: Labels = Labels {
     filter_instance_conflict: "端口与实例编号只能选一",
     filter_rejected: "过滤条件无效：{}",
     read_failed: "读取失败：{}",
-    page_unanswered: "Runtime 没有答这一页（{}：读预算用完，或写者没有按时回应）。窗口不会自己马上重发；要再读，请按「读更早」、换页签或筛选、「跳到最新」或「重新打开」。Lab 页签在 Runtime 读者池的 Lab 关系建好之前，每页都要读全部历史的 Lab 锚点，常因此被拒，过一会儿再读即可",
+    page_budget_refused: "Runtime 拒答了这一页（{}）：它没能在时限内读完。Runtime 刚启动、还在后台整理 Lab 关系时，很多页（Lab 页签最常见）会这样被拒，过一会儿再读即可。",
+    page_writer_timeout: "Runtime 没有按时回应这一页（{}）。",
+    page_read_again: "窗口不会自己重发；要再读，请按「读更早」、换页签或筛选、按「跳到最新」，或关掉窗口再打开。",
     outcome_words: "{}{}",
     outcome_table_unusable: "结果码说明表不可用：{}",
     outcome_unknown: "这个码不在本界面的说明表里，可能来自更新版本的 Runtime；以上是原码，详情见排障窗口",
@@ -2063,7 +2070,7 @@ pub const EN: Labels = Labels {
     show_up_to: "Show Up To",
     all: "All",
     cursor_off_online: "Off while online",
-    cursor_off_online_note: "Show Up To is off while online: the Runtime does not yet bound ledger pages that carry a time condition (with one, a query may read through the time index, where its window of positions no longer bounds the scan), so every online page reads a window of positions only, with no time condition. To read by time, open a copy or a test root offline.",
+    cursor_off_online_note: "Show Up To is off while online: the Runtime cannot yet keep reads by time bounded, so online reads go by position only. To read by time, open a copy or a test root offline.",
     text_size: "Text Size",
     text_sizes: ["Standard", "Large", "Extra Large"],
     language: "Language",
@@ -2261,7 +2268,9 @@ pub const EN: Labels = Labels {
     filter_instance_conflict: "Pick a port or type an instance id, not both",
     filter_rejected: "Filter rejected: {}",
     read_failed: "Read failed: {}",
-    page_unanswered: "The Runtime did not answer this page ({}: its read budget ran out, or its writer did not answer in time). The window does not ask again by itself; to read again, press Read Earlier, change the tab or a filter, Jump to Latest, or Reopen. On the Lab tab, until the Runtime's reader pool has built its Lab relations, every page reads the whole history's Lab anchors and is often refused so; read again a little later",
+    page_budget_refused: "The Runtime refused this page ({}): it could not read it within its time limit. While the Runtime has just started and is still sorting out its Lab relations in the background, many pages (most often on the Lab tab) are refused like this; read again a little later.",
+    page_writer_timeout: "The Runtime did not answer this page in time ({}).",
+    page_read_again: "The window does not ask again by itself; to read again, press Read Earlier, change the tab or a filter, press Jump to Latest, or close the window and open it again.",
     outcome_words: "{} {}",
     outcome_table_unusable: "Outcome words unavailable: {}",
     outcome_unknown: "This code is not in this console's table; it may come from a newer Runtime. The code is shown as is; see the troubleshooting window for details",

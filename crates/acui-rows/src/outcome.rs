@@ -41,8 +41,9 @@ pub const CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN: &str =
 /// `runtime_owner_epoch_changed` means the same; the console detects it
 /// itself, so it states its own code.
 pub const CONSOLE_RUNTIME_OWNER_CHANGED: &str = "console_runtime_owner_changed";
-/// A read of the committed time span asked its one bounded page and it came
-/// back without the event it must hold, and the console stopped.
+/// A read of the committed time span asked its one bounded page — its page
+/// limit, once 64 pages of a cursor followed — and it came back without the
+/// event it must hold, and the console stopped.
 pub const CONSOLE_TIME_SPAN_PAGE_LIMIT: &str = "console_time_span_page_limit";
 /// The console followed the page cursor of one window of positions for its
 /// whole page limit and the window still went on, and stopped.

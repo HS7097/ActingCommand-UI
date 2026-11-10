@@ -21,7 +21,7 @@ use acui_rows::{
 };
 use acui_source::{
     MaterialOutcome, OfflineFacts, OfflineReason, RuntimeInstance, MAX_FRAME_BYTES,
-    UNANSWERED_PAGE_CODES,
+    UNANSWERED_PAGE_CODES, WRITER_RESPONSE_TIMEOUT,
 };
 use slint::{
     ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
@@ -1085,13 +1085,18 @@ fn query_error_text(labels: &Labels, error: Option<&QueryError>) -> String {
 }
 
 /// A read's own words, then the words of the outcome code beneath them: for a
-/// page the Runtime did not answer (`UNANSWERED_PAGE_CODES`), why, and that
-/// the window does not ask it again by itself; for the console's own code, its
-/// sentence and handling.
+/// page the Runtime did not answer (`UNANSWERED_PAGE_CODES`), why, by its
+/// code, then how a person reads it again, since the window does not ask it
+/// again by itself; for the console's own code, its sentence and handling.
 fn reason_text(labels: &Labels, text: &str, code: Option<&'static str>) -> String {
     let words = match code {
         Some(code) if UNANSWERED_PAGE_CODES.contains(&code) => {
-            Some(fill(labels.page_unanswered, &[code]))
+            let why = if code == WRITER_RESPONSE_TIMEOUT {
+                labels.page_writer_timeout
+            } else {
+                labels.page_budget_refused
+            };
+            Some(fill(labels.outcome_words, &[&fill(why, &[code]), labels.page_read_again]))
         }
         Some(code) => outcome_sentence(labels, code),
         None => None,
@@ -1222,9 +1227,10 @@ struct FrameView {
 
 /// The selected event's frame, found among the loaded rows and, when they hold
 /// no capture of it, among the frame's own events, which the window's reader
-/// reads — one query by frame id within a window of positions around the event
-/// that names it, kept while the pane stays on that frame — so an event still
-/// lands on its frame when the capture is filtered out or not loaded.
+/// reads — one query by frame id, online within a window of positions around
+/// the event that names it, kept while the pane stays on that frame — so an
+/// event still lands on its frame when the capture is filtered out or not
+/// loaded.
 fn frame_view(state: &LedgerState, model: &ViewModel) -> Option<FrameView> {
     let (basis, via) = model.selected_basis()?;
     let frame_id = *basis.links.frame_id()?;
