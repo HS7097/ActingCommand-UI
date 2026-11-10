@@ -1,7 +1,8 @@
 """PY-14: the exports (#424 design 6.1, 6.2, 6.4, 6.6; design-py 6.1, 6.2) on a neutral fixture (`fixtures/tables`):
 the JCS writer; `export tables` with a fake validator script (`fakes/validator.py`, never a real binary): its
 refusal with the previous bytes back, no validator at all, provisional cells, blocked cells and the rounding
-modes; the scoring template fill; and provenance files that equal `explain`."""
+modes; the scoring template fill; and provenance files that equal `explain`. The validator's reading of the CLI
+line of Runtime 0.12.50 on (#434 LAB-2b) is tested on `validate` itself, with answers given as bytes."""
 
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from acmodel.envelope import Failure
 from acmodel.export import jcs
 from acmodel.export.policy import Policy
 from acmodel.export.scoring import fill
+from acmodel.export.validator import Validator, validate
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "tables"
 FAKE_VALIDATOR = Path(__file__).resolve().parent / "fakes" / "validator.py"
@@ -32,6 +34,17 @@ STATE = "state/acct-1.json"
 REFUSAL = ["table_value_out_of_range", "/rows/1/2"]
 ACCEPTANCE = {"output": "rule:v.est", "accept_provisional": {"ref": "R-9", "until": "check list item 2"}}
 ROUNDED = [["half", 2, 3, 2, 2500], ["odd", 3, 4, 4, 3500], ["neg", -3, -2, -2, -2500], ["ratio", 0, 1, 1, 666]]
+# The CLI line `actinglab` prints from Runtime 0.12.50 (#434 LAB-2b, its contracts/lab-two-entries.md §9.3).
+LINE_TABLE = "tables/unit_values.json"
+LINE_ENTRY = {"path": LINE_TABLE, "status": "valid", "family": "standard_pack_tables"}
+LINE_PASSED = {
+    "schema_version": "actinglab.resource-declarations.v1", "status": "valid", "entries": [LINE_ENTRY],
+    "outcome": {"schema_version": "actingcommand.outcome.v1", "code": "lab_operation_completed",
+                "category": "success", "values": {}},
+}
+LINE_REFUSED_OUTCOME = {"schema_version": "actingcommand.outcome.v1", "code": "resource_declaration_invalid",
+                        "category": "error", "values": {}}
+LINE_MESSAGE = f"{LINE_TABLE}: standard_pack_problem=table_value_out_of_range json_pointer=/rows/1/2"
 
 
 @pytest.fixture
@@ -156,6 +169,58 @@ def test_without_a_validator_the_export_is_export_validator_missing_and_writes_n
     assert errors(doc) == [("export_validator_missing", None, {"key": "paths.actinglab", "reason": "not_configured"})]
     assert tree(folder) == before
     assert acmodel.calls() == []
+
+
+def validate_line(tmp_path: Path, exit_code: int, line: Any) -> list[dict[str, Any]]:
+    """The errors of `validate` for tables/unit_values.json when `actinglab` prints `line` and exits `exit_code`."""
+
+    def run(cmd: list[str], *, timeout_ms: int) -> tuple[int, bytes]:
+        assert cmd[1:] == ["--json", "resource", "validate", "--repo", str(tmp_path), "--changed-path", LINE_TABLE]
+        return exit_code, json.dumps(line).encode("utf-8")
+
+    validator = Validator(tmp_path / "actinglab", 120000, run)
+    return validate(validator, tmp_path, LINE_TABLE, tmp_path / LINE_TABLE, "unit_values")
+
+
+def test_the_cli_line_that_finds_the_table_valid_passes_it(tmp_path):
+    assert validate_line(tmp_path, 0, LINE_PASSED) == []
+
+
+@pytest.mark.parametrize("details, problem, pointer", [
+    ({"declaration_file": LINE_TABLE}, "table_value_out_of_range", "/rows/1/2"),
+    ({"declaration_file": LINE_TABLE, "standard_pack_problem": "table_row_invalid", "json_pointer": "/rows/0"},
+     "table_row_invalid", "/rows/0"),
+    (None, "table_value_out_of_range", "/rows/1/2"),
+])
+def test_a_cli_line_refusal_is_export_table_invalid_with_its_outcome_code_and_details(
+    tmp_path, details, problem, pointer
+):
+    # The problem and the pointer come from the details when they name them, else from the message; a line
+    # without details is a refusal too.
+    line = {"outcome": LINE_REFUSED_OUTCOME, "message": LINE_MESSAGE}
+    if details is not None:
+        line["details"] = details
+    assert validate_line(tmp_path, 1, line) == [{"code": "export_table_invalid", "ref": pointer, "detail": {
+        "path": str(tmp_path / LINE_TABLE), "table_id": "unit_values", "problem": problem,
+        "validator_code": "resource_declaration_invalid", "raw_text": LINE_MESSAGE,
+    }}]
+
+
+@pytest.mark.parametrize("exit_code, line", [
+    # Neither shape: no `outcome` and no `ok`, or an `outcome` that is no object.
+    (0, {"status": "valid", "entries": [LINE_ENTRY]}),
+    (0, {"outcome": "lab_operation_completed", "entries": [LINE_ENTRY]}),
+    # The line, but its exit does not agree with its outcome, or `{outcome}` alone: the installation's refusal,
+    # before the command runs, with no message.
+    (1, LINE_PASSED),
+    (0, {"outcome": LINE_REFUSED_OUTCOME, "message": LINE_MESSAGE}),
+    (1, {"outcome": {**LINE_REFUSED_OUTCOME, "code": "install_environment_incomplete"}}),
+])
+def test_an_answer_of_neither_shape_is_export_validator_missing_answer_invalid(tmp_path, exit_code, line):
+    assert validate_line(tmp_path, exit_code, line) == [{"code": "export_validator_missing", "detail": {
+        "key": "paths.actinglab", "reason": "answer_invalid", "path": str(tmp_path / "actinglab"),
+        "exit_code": exit_code, "raw_text": json.dumps(line),
+    }}]
 
 
 def test_a_provisional_value_is_null_unless_accepted(folder, acmodel):

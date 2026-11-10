@@ -5,9 +5,15 @@ each file an export wrote, it runs
 
     <paths.actinglab> --json resource validate --repo <repo> --changed-path <file relative to repo>
 
-and reads the one JSON envelope `actinglab` prints on stdout (its stderr passes through to ours):
-- **valid:** exit 0, `ok` true, and the answer's entry for the file has `status` `valid`;
-- **refused:** `ok` false with its `error`. The validator's problem and JSON pointer are its
+and reads the one JSON answer `actinglab` prints on stdout (its stderr passes through to ours), in either of its
+two shapes, so `paths.actinglab` may name an `actinglab` of either: an answer with a top-level `outcome` and no
+`ok` is the CLI line (Runtime 0.12.50 on, Workflow #434 LAB-2b, the Runtime's `contracts/lab-two-entries.md`
+§9.3), any other the envelope of earlier ones (`ok`, `data`, `error`). It never passes `--via`, which keeps the
+envelope.
+- **valid:** exit 0, `ok` true (the line: `outcome.category` `success`), and the answer's entry for the file (in
+  `data.entries`; the line's own `entries`) has `status` `valid`;
+- **refused:** a non-zero exit with `ok` false and its `error` (the line: `outcome.category` `error`, its
+  `outcome.code`, `message` and `details`, which may be absent). The validator's problem and JSON pointer are its
   `details.standard_pack_problem` and `details.json_pointer`, or, for a table, the `standard_pack_problem=…
   json_pointer=…` of its message; a refusal that names no problem gives its error code instead. An entry with
   another status (`excluded`) is a refusal too: the file was not validated.
@@ -58,6 +64,20 @@ def _text(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _read(answer: dict[str, Any]) -> tuple[bool, Any, bool, Any]:
+    """Whether `answer` accepts, the result that holds its `entries`, whether it refuses, and its error
+    (`code`, `message`, `details`): from the CLI line when it has a top-level `outcome` and no `ok`, else from the
+    envelope."""
+    if "outcome" in answer and "ok" not in answer:
+        outcome = answer["outcome"]
+        category = outcome.get("category") if isinstance(outcome, dict) else None
+        failure = {
+            "code": outcome.get("code"), "message": answer.get("message"), "details": answer.get("details"),
+        } if category == "error" else None
+        return category == "success", answer, category == "error", failure
+    return answer.get("ok") is True, answer.get("data"), answer.get("ok") is False, answer.get("error")
+
+
 def validate(validator: Validator, repo: Path, relative: str, target: Path, name: str) -> list[dict[str, Any]]:
     """The errors of validating the file `relative` (`target`, written for `name`, its table id) in `repo`;
     none when the validator accepts it."""
@@ -79,8 +99,8 @@ def validate(validator: Validator, repo: Path, relative: str, target: Path, name
     if not isinstance(answer, dict):
         return [invalid]
     table = {"path": str(target), "table_id": name}
-    if answer.get("ok") is True and exit_code == 0:
-        data = answer.get("data")
+    accepted, data, refused, failure = _read(answer)
+    if accepted and exit_code == 0:
         entries = data.get("entries") if isinstance(data, dict) else None
         entry = next(
             (item for item in entries if isinstance(item, dict) and item.get("path") == relative), None
@@ -93,8 +113,7 @@ def validate(validator: Validator, repo: Path, relative: str, target: Path, name
         detail = {**table, "problem": status}
         reason = _text(entry.get("reason"))
         return [error(EXPORT_TABLE_INVALID, detail if reason is None else {**detail, "raw_text": reason})]
-    failure = answer.get("error")
-    if answer.get("ok") is not False or exit_code == 0 or not isinstance(failure, dict):
+    if not refused or exit_code == 0 or not isinstance(failure, dict):
         return [invalid]
     code, message = _text(failure.get("code")), _text(failure.get("message"))
     if code is None or message is None:
