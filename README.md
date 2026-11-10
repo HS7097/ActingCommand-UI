@@ -183,8 +183,22 @@ filters the boxes show now, without a time bound. When a read reaches a Runtime 
 now. A time span read follows the cursor for at most 64 pages; with still no event it stops, as
 `console_time_span_page_limit`, rather than keep the window reading.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.43
-(#404 FS-3: ledger revision 7 adds the confirmations `tracked` and `track_lost` of a `task.selection_evaluated`
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.47
+(#407 GPU-1, v0.12.44: configuration revision 27 lets the `vision` section name DirectML
+(`vision.execution_provider` `directml`, `vision.directml_device`, `vision.gpu_fallback`); the section takes
+effect at the next Runtime start, is no key of the key table, and the console neither writes nor interprets it,
+so the settings page shows no new row and a file that names them is within the console's `actingd-config`
+[5, 27]; since v0.12.43 the contract crate otherwise only gained value keys, the runtime fact
+`config.catalog_warnings` (#428 CW-1) and the OCR node placement report v2, none of which the console reads, and
+in the outcome-code catalog it embeds the warning `vision_gpu_unavailable`, the scheduling codes `pool_line_held`,
+`pool_lines_invalid`, `pool_lines_unvalued` and `capped_spend` (SS-2h), the Lab codes `lab_operation_check_failed`
+and `lab_operation_completed`, the vocabularies `gpu_unavailable_reason`, `gpu_fallback` and `pool_line_hold` and
+the provider `directml`, with `watchdog_launcher_spawn_failed` and `resource_check_release_retired` retired;
+`runtime-client` reads official OCR evidence on DirectML and keeps the Runtime's answer to a Lab operation whose
+check failed, neither a request the console makes; policy gained the business tier's turn across instances
+(SS-2f) and pool lines with the capped spending order (SS-2h); ledger, ledger-forensics, runtime-config and the
+other Runtime crates the console links are unchanged;
+v0.12.43's #404 FS-3: ledger revision 7 adds the confirmations `tracked` and `track_lost` of a `task.selection_evaluated`
 record, which only a select step of a package declaring `confirm: "track"` writes and which a console built on
 revision 6 cannot read, so the ledger page that holds one fails whole; since v0.12.40 the contract crate
 otherwise only gained the performance status's optional members `memory` and `vision`, #407 PERF-READ,
@@ -204,7 +218,7 @@ with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 
 v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 5, ledger revision 7):
 
 ```
-rev = "a322caa40062969dc24a8fc148ddbb50ed53f617"
+rev = "d06910c64bb1cbfaa6c71df2d2db3798aacd7fa7"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -422,7 +436,7 @@ or on a handset scrcpy, for capture), with where the value comes from (the confi
 online, when and through which way) and the device's latest self-check. Apply switches that device at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.43, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.47, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
