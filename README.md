@@ -331,12 +331,13 @@ version exists only in the tag.
   `to_sequence`, limit 256, at the pin), for the timeline, "read earlier" and following alike; "all
   instances" clears it. The list is made again at every status read: at open, on a jump to the latest,
   and after a resume a person sent; following reads no status and leaves it as it is. When that read no
-  longer reports the picked instance, or fails and so cannot confirm it, the pick goes back to "all
-  instances", the filter error line names the instance, and the rows read under the pick go: the
-  view is read again from the pin (after a jump to the latest that could not move the pin it stays empty,
-  beside the jump's error, until a person reads again). A pick carried into a reopened window is checked
-  the same way. A status read that reports no instance leaves the box saying so, one that failed leaves it
-  saying the status was not read; either way the box is disabled, and the id box still takes an
+  longer reports the picked instance, or it or the fact snapshot read with it fails and so cannot confirm
+  it, the pick goes back to "all instances", the filter error line names the instance, and the rows read
+  under the pick go: the view is read again from the pin (after a jump to the latest that could not move
+  the pin it stays empty, beside the jump's error, until a person reads again). A pick carried into a
+  reopened window is checked the same way. A status read that reports no instance leaves the box saying
+  so; a failed status or fact snapshot read leaves it saying the instances were not fully read (status or
+  fact snapshot), see the instance card; either way the box is disabled, and the id box still takes an
   `instance_` id. A picked instance and an `instance_` id are mutually exclusive, as offline.
 - **Reading from the latest end**: the ledger query has no descending order, so the timeline reads
   backward windows down from the pinned position, starting at 256 positions. A window that size holds no

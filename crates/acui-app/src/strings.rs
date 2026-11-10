@@ -109,7 +109,7 @@ pub struct Labels {
     /// id), and the one item it shows when it is disabled and why. Online,
     /// one item per instance the status read reports (alias, the ADB port
     /// the status states; the alias alone where it states none), and the one
-    /// item it shows when that read failed.
+    /// item it shows when that read, or the fact snapshot read with it, failed.
     pub all_instances: &'static str,
     pub port_option: &'static str,
     pub instance_option: &'static str,
@@ -117,7 +117,7 @@ pub struct Labels {
     pub port_status_unread: &'static str,
     /// Under the boxes, once a status read took the picked instance away
     /// (alias and id, or the id alone): the read no longer reports it, or it
-    /// failed, so it cannot confirm it.
+    /// or the fact snapshot read with it failed, so it cannot confirm it.
     pub instance_pick_gone: &'static str,
     pub instance_pick_unconfirmed: &'static str,
     /// The port column of a row that links no instance.
@@ -1243,9 +1243,9 @@ pub const ZH: Labels = Labels {
     port_option: "端口 {} ／ {}",
     instance_option: "{} · 端口 {}",
     no_binding_records: "无绑定记录",
-    port_status_unread: "状态没读到，见实例卡",
+    port_status_unread: "实例没读全（状态或事实快照），见实例卡",
     instance_pick_gone: "最近一次读到的状态里已经没有所选的实例 {}，实例框已改回「全部实例」",
-    instance_pick_unconfirmed: "最近一次没读到状态，没法确认所选的实例 {} 还在，实例框已改回「全部实例」",
+    instance_pick_unconfirmed: "最近一次没读全实例（状态或事实快照读取失败），没法确认所选的实例 {} 还在，实例框已改回「全部实例」",
     host: "宿主",
     id_placeholder: "完整的 correlation_ / request_ / run_ / task_ / instance_ 编号",
     continue_reading: "读更早",
@@ -2128,9 +2128,9 @@ pub const EN: Labels = Labels {
     port_option: "Port {} ／ {}",
     instance_option: "{} · Port {}",
     no_binding_records: "No Binding Records",
-    port_status_unread: "Status Not Read; See the Card",
+    port_status_unread: "Instances Not Fully Read (Status or Fact Snapshot); See the Card",
     instance_pick_gone: "The last status read no longer reports the picked instance {}; the instance box is back on All Instances",
-    instance_pick_unconfirmed: "The last status read failed, so the picked instance {} cannot be confirmed; the instance box is back on All Instances",
+    instance_pick_unconfirmed: "The last instance read failed (status or fact snapshot), so the picked instance {} cannot be confirmed; the instance box is back on All Instances",
     host: "Host",
     id_placeholder: "Whole correlation_ / request_ / run_ / task_ / instance_ id",
     continue_reading: "Read Earlier",
