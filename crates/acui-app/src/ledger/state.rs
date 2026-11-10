@@ -84,6 +84,11 @@ pub enum Phase {
     /// The offline face the ledger refused to open, with its own error.
     /// Nothing was read: no page, no port map, no material.
     Unopened { root: PathBuf, reason: OfflineReason, failure: LedgerOpenFailure },
+    /// `auto` could not read online, for `reason`, and opened no face: the
+    /// window says why and offers the offline face, which only a person's
+    /// press opens (a session of `SourceMode::Offline`). Nothing was read: no
+    /// page, no port map, no material, no fact replay.
+    OfflineOffered { root: PathBuf, reason: OfflineReason },
     /// The read face could not be opened, or the reader stopped: nothing more
     /// is read in this session.
     Failed { root: PathBuf, failure: LedgerFailure },
@@ -142,7 +147,8 @@ pub enum PortMap {
     Opening,
     /// Online: the Runtime does not derive bindings through its page.
     Online,
-    /// The read face is unopened, or failed: nothing was read.
+    /// The read face is unopened, offered and not opened, or failed: nothing
+    /// was read.
     Unopened,
     /// The read face refused, with its typed code as the outermost context.
     Failed(anyhow::Error),
@@ -350,18 +356,19 @@ impl LedgerState {
     pub fn state_root(&self) -> &Path {
         match &self.phase {
             Phase::Open(facts) => &facts.state_root,
-            Phase::Opening { root } | Phase::Unopened { root, .. } | Phase::Failed { root, .. } => {
-                root
-            }
+            Phase::Opening { root }
+            | Phase::Unopened { root, .. }
+            | Phase::OfflineOffered { root, .. }
+            | Phase::Failed { root, .. } => root,
         }
     }
 
     /// Why the window reads offline, if it does: an unopened face is the
-    /// offline one.
+    /// offline one; or why it reads nothing, when `auto` could not read online.
     pub fn offline_reason(&self) -> Option<&OfflineReason> {
         match &self.phase {
             Phase::Open(facts) => facts.offline_reason.as_ref(),
-            Phase::Unopened { reason, .. } => Some(reason),
+            Phase::Unopened { reason, .. } | Phase::OfflineOffered { reason, .. } => Some(reason),
             Phase::Opening { .. } | Phase::Failed { .. } => None,
         }
     }

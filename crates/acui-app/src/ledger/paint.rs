@@ -20,7 +20,7 @@ use acui_rows::{
     OriginModule, ProjectedEvent, Sensitivity, WriterFacts,
 };
 use acui_source::{
-    MaterialOutcome, OfflineFacts, OfflineReason, RuntimeInstance, MAX_FRAME_BYTES,
+    MaterialOutcome, OfflineFacts, OfflineReason, RuntimeInstance, SourceMode, MAX_FRAME_BYTES,
     UNANSWERED_PAGE_CODES, WRITER_RESPONSE_TIMEOUT,
 };
 use slint::{
@@ -91,11 +91,15 @@ pub fn refresh(
     let source = match &state.phase {
         Phase::Open(facts) if facts.offline_reason.is_none() => labels.data_source_online,
         Phase::Open(_) | Phase::Unopened { .. } => labels.data_source,
-        Phase::Opening { .. } | Phase::Failed { .. } => labels.data_source_pending,
+        Phase::Opening { .. } | Phase::OfflineOffered { .. } | Phase::Failed { .. } => {
+            labels.data_source_pending
+        }
     };
+    let auto = ledger.mode() == SourceMode::Auto;
     window.global::<Strings>().set_data_source(source.into());
     window.set_busy_text(busy_text(labels, state).into());
-    paint_reopen(window, state, labels, runtime_ready);
+    paint_reopen(window, state, labels, runtime_ready, auto);
+    paint_offline_offer(window, state, labels);
     resume::paint(window, ledger, state, labels);
     let (Phase::Open(facts), Some(model)) = (&state.phase, &state.model) else {
         paint_closed(window, ledger, state, labels);
@@ -150,7 +154,7 @@ pub fn refresh(
         field(
             labels,
             "source",
-            source_text(labels, state),
+            source_text(labels, state, auto),
             if state.offline_reason().is_some() { "offline" } else { "online" },
         ),
         field(labels, "latest_sequence", card.latest_sequence.to_string(), "latest_sequence"),
@@ -487,26 +491,36 @@ fn clear_detail(window: &LedgerWindow, ledger: &LedgerHandle, labels: &Labels, n
     clear_frame(window, &ledger.frame, note);
 }
 
-/// The window over a read face that is not open — still opening, unopened, or
-/// failed: nothing is shown as read, so the card has the read-face line only,
-/// and the list, the boxes and the frame pane say why instead of standing
-/// empty, which would read as an empty ledger. The controls that would query
-/// it are off. Whatever an earlier session of the window painted goes.
+/// The window over a read face that is not open — still opening, unopened,
+/// offered and not opened, or failed: nothing is shown as read, so the card
+/// has the read-face line only, and the list, the boxes and the frame pane say
+/// why instead of standing empty, which would read as an empty ledger. The
+/// controls that would query it are off. Whatever an earlier session of the
+/// window painted goes.
 fn paint_closed(
     window: &LedgerWindow,
     ledger: &LedgerHandle,
     state: &LedgerState,
     labels: &Labels,
 ) {
+    let auto = ledger.mode() == SourceMode::Auto;
     let (top, note, failed) = match &state.phase {
         Phase::Opening { .. } | Phase::Open(_) => {
             (labels.ledger_opening, labels.list_opening.to_owned(), false)
         }
         Phase::Unopened { .. } => (labels.ledger_unopened, labels.list_unopened.to_owned(), true),
+        // Red when the state root names a Runtime the client could not
+        // connect to; grey when it names none.
+        Phase::OfflineOffered { reason, .. } => (
+            labels.ledger_unopened,
+            labels.list_offline_offered.to_owned(),
+            matches!(reason, OfflineReason::ConnectFailed { .. }),
+        ),
         Phase::Failed { failure, .. } => (labels.ledger_unopened, failure_text(labels, failure), true),
     };
     let (value, raw) = match &state.phase {
-        Phase::Unopened { .. } => (source_text(labels, state), "offline"),
+        Phase::Unopened { .. } => (source_text(labels, state, auto), "offline"),
+        Phase::OfflineOffered { .. } => (source_text(labels, state, auto), "auto"),
         Phase::Failed { failure, .. } => (failure_text(labels, failure), ""),
         Phase::Opening { .. } | Phase::Open(_) => (labels.ledger_opening.to_owned(), ""),
     };
@@ -559,15 +573,17 @@ fn failure_text(labels: &Labels, failure: &LedgerFailure) -> String {
 
 /// The reopen offer alone: painted with the rest of the window, and again with
 /// the launcher's lines (`LedgerHandle::paint_reopen`), since a Runtime the
-/// launcher finds up is worth a new session to a window that reads offline
-/// only for want of one.
+/// launcher finds up is worth a new session to a window of `auto` (`auto` is
+/// whether the window is one) that reads nothing for want of one, or reads
+/// offline.
 pub fn paint_reopen(
     window: &LedgerWindow,
     state: &LedgerState,
     labels: &Labels,
     runtime_ready: bool,
+    auto: bool,
 ) {
-    let (offered, note, failed) = reopen_offer(labels, state, runtime_ready);
+    let (offered, note, failed) = reopen_offer(labels, state, runtime_ready, auto);
     window.set_reopen_offered(offered);
     window.set_reopen_note(note.into());
     window.set_reopen_failed(failed);
@@ -576,30 +592,47 @@ pub fn paint_reopen(
 /// Whether the window offers a new session, why when the rest of the window
 /// does not already say it, and whether that why is a failure: a face that did
 /// not open, a reader that stopped, a read that reached a Runtime other than
-/// the session's, or a Runtime that is up now while the window reads offline
-/// because `auto` found none. A window `--source offline` asked for reads
+/// the session's, a window of `auto` that reads nothing because it could not
+/// read online, or a Runtime that is up now while such a window reads nothing,
+/// or reads offline because a person pressed for it — its reopen reads online
+/// (`LedgerHandle::reopen`). A window `--source offline` asked for reads
 /// offline as asked, Runtime or not.
 fn reopen_offer(
     labels: &Labels,
     state: &LedgerState,
     runtime_ready: bool,
+    auto: bool,
 ) -> (bool, String, bool) {
-    let online_now = runtime_ready
-        && matches!(
-            state.offline_reason(),
-            Some(OfflineReason::RuntimeInfoAbsent | OfflineReason::ConnectFailed { .. })
-        );
+    let online_now = runtime_ready && auto;
     let started = || (true, labels.ledger_runtime_started.to_owned(), false);
     match &state.phase {
         Phase::Opening { .. } => (false, String::new(), false),
-        Phase::Unopened { .. } if online_now => started(),
-        Phase::Unopened { .. } | Phase::Failed { .. } => (true, String::new(), false),
+        Phase::Unopened { .. } | Phase::OfflineOffered { .. } if online_now => started(),
+        Phase::Unopened { .. } | Phase::OfflineOffered { .. } | Phase::Failed { .. } => {
+            (true, String::new(), false)
+        }
         Phase::Open(facts) if owner_changed(state, facts) => {
             (true, labels.ledger_owner_changed.to_owned(), true)
         }
-        Phase::Open(_) if online_now => started(),
+        Phase::Open(facts) if online_now && facts.offline_reason.is_some() => started(),
         Phase::Open(_) => (false, String::new(), false),
     }
+}
+
+/// The offline face's offer, only while a window of `auto` reads nothing
+/// because it could not read online (`Phase::OfflineOffered`): the button says
+/// it opens the local ledger read-only, for a copy or a test root, and beside
+/// it is the state root whose ledger it would open. Nothing is read until it
+/// is pressed (`LedgerHandle::open_offline`).
+fn paint_offline_offer(window: &LedgerWindow, state: &LedgerState, labels: &Labels) {
+    let offered = matches!(state.phase, Phase::OfflineOffered { .. });
+    let note = if offered {
+        fill(labels.offline_open_path, &[&state.state_root().display().to_string()])
+    } else {
+        String::new()
+    };
+    window.set_offline_offered(offered);
+    window.set_offline_note(note.into());
 }
 
 /// Whether a read of this session, or its last status read, reached a Runtime
@@ -1010,9 +1043,14 @@ fn writer_text(labels: &Labels, writer: &WriterFacts) -> String {
     }
 }
 
-fn source_text(labels: &Labels, state: &LedgerState) -> String {
+/// The read-face line: online; offline, and who asked for it — `--source
+/// offline`, or, in a window of `auto` (`auto` is whether the window is one),
+/// a person's press, the only way such a window reads offline; or, for `auto`,
+/// why it reads nothing.
+fn source_text(labels: &Labels, state: &LedgerState, auto: bool) -> String {
     let mut text = match state.offline_reason() {
         None => labels.source_online.to_string(),
+        Some(OfflineReason::Requested) if auto => labels.source_offline_pressed.to_string(),
         Some(OfflineReason::Requested) => labels.source_offline_requested.to_string(),
         Some(OfflineReason::RuntimeInfoAbsent) => labels.source_offline_absent.to_string(),
         Some(OfflineReason::ConnectFailed { code, operation }) => {

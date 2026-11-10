@@ -345,6 +345,7 @@ export global Strings {
     in property <string> jump-latest;
     in property <string> follow-latest;
     in property <string> reopen-ledger;
+    in property <string> open-offline;
     in property <string> card-title;
     in property <string> card-note;
     in property <string> detail-title;
@@ -539,12 +540,20 @@ export component LedgerWindow inherits Window {
     // while it waits for a request.
     in property <string> busy-text;
     // A new session of the read face, offered when it did not open, when its
-    // reader stopped, when a read reached another Runtime, or when a Runtime
-    // is up while this window reads offline for want of one; and why, when the
-    // rest of the window does not already say it, red when that is a failure.
+    // reader stopped, when a read reached another Runtime, when a window of the
+    // default source reads nothing because it could not read online, or when a
+    // Runtime is up while such a window reads nothing or reads offline; and
+    // why, when the rest of the window does not already say it, red when that
+    // is a failure.
     in property <bool> reopen-offered;
     in property <string> reopen-note;
     in property <bool> reopen-failed;
+    // The offline face, offered only while a window of the default source
+    // (auto) reads nothing because it could not read online; beside the
+    // button, the state root whose ledger it would open, read-only. Nothing is
+    // read until it is pressed.
+    in property <bool> offline-offered;
+    in property <string> offline-note;
     in property <bool> has-more;
     // The performance monitor's routine events shown; hidden by default.
     in-out property <bool> show-performance;
@@ -617,6 +626,7 @@ export component LedgerWindow inherits Window {
     callback jump-latest();
     callback follow-changed(bool);
     callback reopen-ledger();
+    callback open-offline();
     callback text-size-changed(int);
     callback language-changed(int);
     callback theme-changed(int);
@@ -796,6 +806,21 @@ export component LedgerWindow inherits Window {
                         Notice {
                             text: root.reopen-note;
                             failed: root.reopen-failed;
+                            vertical-alignment: center;
+                            min-width: 40px * Scale.factor;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                    if root.offline-offered: HorizontalLayout {
+                        spacing: 14px;
+                        SkinButton {
+                            text: Strings.open-offline;
+                            clicked => {
+                                root.open-offline();
+                            }
+                        }
+                        Notice {
+                            text: root.offline-note;
                             vertical-alignment: center;
                             min-width: 40px * Scale.factor;
                             horizontal-stretch: 1;

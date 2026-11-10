@@ -75,6 +75,10 @@ pub struct LedgerHandle {
     /// go with the entry.
     pub window: LedgerWindow,
     open: OpenArgs,
+    /// The face the current session asks for: the window's own (`open.mode`),
+    /// or the offline face a person pressed for in a window of `auto`
+    /// (`open_offline`).
+    face: Cell<SourceMode>,
     pub shared: Arc<LedgerShared>,
     /// The reader of the current session; `None` when the system refused it.
     commands: RefCell<Option<Sender<Command>>>,
@@ -157,6 +161,7 @@ impl LedgerHandle {
         Rc::new(Self {
             id,
             window,
+            face: Cell::new(open.mode),
             open,
             shared: Arc::new(LedgerShared {
                 state: Mutex::new(state),
@@ -203,15 +208,16 @@ impl LedgerHandle {
         }
     }
 
-    /// Starts the reader of the session the state names now, with the view to
-    /// start from: a new thread, which opens the read face first. A thread the
-    /// system refuses fails the session, in the log and in the window, which is
-    /// painted again for it whoever called: at start nothing else would.
+    /// Starts the reader of the session the state names now, of the face it
+    /// asks for (`face`), with the view to start from: a new thread, which
+    /// opens the read face first. A thread the system refuses fails the
+    /// session, in the log and in the window, which is painted again for it
+    /// whoever called: at start nothing else would.
     pub fn start(&self, carry: Option<(LedgerView, Filters)>) {
         let session = self.lock().tag.session;
         let opening = Opening {
             state_root: self.open.state_root.clone(),
-            mode: self.open.mode,
+            mode: self.face.get(),
             tab: self.open.tab,
             carry,
         };
@@ -226,16 +232,42 @@ impl LedgerHandle {
         }
     }
 
-    /// A new session on the same state root and face: the reader of the old
+    /// "Reopen": a new session on the same state root and face — except that a
+    /// Runtime the launcher finds up takes a window of `auto` back to `auto`,
+    /// which reads it online, whatever face its session had (the offline one a
+    /// person pressed for included). See `reopen_as`.
+    pub fn reopen(&self, ui: &Ui) {
+        let runtime_ready = ui.launcher_view.borrow().runtime_ready();
+        let face = if self.open.mode == SourceMode::Auto && runtime_ready {
+            SourceMode::Auto
+        } else {
+            self.face.get()
+        };
+        self.reopen_as(ui, face);
+    }
+
+    /// A person's press of "open offline" in a window of `auto` that could not
+    /// read online (`Phase::OfflineOffered`): a new session of the offline
+    /// face. Only that phase offers it; a press that finds the window in any
+    /// other does nothing.
+    pub fn open_offline(&self, ui: &Ui) {
+        if !matches!(self.lock().phase, Phase::OfflineOffered { .. }) {
+            return;
+        }
+        self.reopen_as(ui, SourceMode::Offline);
+    }
+
+    /// A new session on the same state root, of `face`: the reader of the old
     /// one stops at its next page, and the new one opens the read face again,
     /// from the tab and filters the boxes show, without a time bound. The
     /// last resume's line goes with the old session (`Resume::reopened`). A
     /// closed window starts nothing: its entry can still be pressed through
     /// the fade, and no later close would let that session go.
-    pub fn reopen(&self, ui: &Ui) {
+    fn reopen_as(&self, ui: &Ui, face: SourceMode) {
         if self.closed.get() {
             return;
         }
+        self.face.set(face);
         self.follow.stop();
         self.cursor_rest.stop();
         self.window.set_following(false);
@@ -510,15 +542,16 @@ impl LedgerHandle {
     }
 
     /// Only the reopen offer, with the launcher's lines: a Runtime the
-    /// launcher finds up now is offered to a window that reads offline for
-    /// want of one.
+    /// launcher finds up now is offered to a window of `auto` that reads
+    /// nothing for want of one, or reads offline.
     pub fn paint_reopen(&self, ui: &Ui) {
         if self.closed.get() {
             return;
         }
         let runtime_ready = ui.launcher_view.borrow().runtime_ready();
         let state = self.lock();
-        paint::paint_reopen(&self.window, &state, ui.labels(), runtime_ready);
+        let auto = self.open.mode == SourceMode::Auto;
+        paint::paint_reopen(&self.window, &state, ui.labels(), runtime_ready, auto);
     }
 
     /// What the reader left for the event loop.
@@ -744,8 +777,9 @@ pub fn install_callbacks(handle: &Rc<LedgerHandle>) {
         });
     }
     // A new session of the window's read face: offered when it did not open,
-    // when its reader stopped, when a read reached another Runtime, or when a
-    // Runtime is up while the window reads offline for want of one.
+    // when its reader stopped, when a read reached another Runtime, when a
+    // window of `auto` reads nothing because it could not read online, or when
+    // a Runtime is up while such a window reads nothing or reads offline.
     {
         let weak = Rc::downgrade(handle);
         handle.window.on_reopen_ledger(move || {
@@ -753,6 +787,17 @@ pub fn install_callbacks(handle: &Rc<LedgerHandle>) {
                 return;
             };
             ledger.reopen(&ui);
+        });
+    }
+    // The offline face, offered only while a window of `auto` reads nothing
+    // because it could not read online: a new session that opens it.
+    {
+        let weak = Rc::downgrade(handle);
+        handle.window.on_open_offline(move || {
+            let (Some(ledger), Some(ui)) = (weak.upgrade(), ui::current()) else {
+                return;
+            };
+            ledger.open_offline(&ui);
         });
     }
     // A pause line's resume entry, by the line's place as painted: the first

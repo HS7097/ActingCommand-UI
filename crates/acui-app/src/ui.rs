@@ -850,6 +850,7 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_jump_latest(labels.jump_latest.into());
     global.set_follow_latest(labels.follow_latest.into());
     global.set_reopen_ledger(labels.reopen_ledger.into());
+    global.set_open_offline(labels.open_offline.into());
     global.set_card_title(labels.card_title.into());
     global.set_card_note(labels.card_note.into());
     global.set_detail_title(labels.detail_title.into());
