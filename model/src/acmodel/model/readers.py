@@ -698,8 +698,9 @@ BINDINGS = Format(
     ),
 )
 
-# `out/prices.json` (`acmodel.prices.v1`, #424 ACM-PRICE PRICE-4a), which `export prices` writes and `bindings check`
-# reads back for its coverage. The members it reads are checked; the analysis it only passes on is any JSON.
+# `out/prices.json` (#424 ACM-PRICE PRICE-4a), which `export prices` writes (`acmodel.prices.v2`) and `bindings check`
+# and `verify prices` read back. The members they read are checked; the analysis they only pass on is any JSON. A file
+# of `acmodel.prices.v1`, which `export prices` wrote before, is still read, by its own format.
 POOL_CLASSES = ("covered", "structural_gap", "verified_zero", "unknown")
 PENDING_REASONS = (
     "structural_gap", "unknown", "withheld", "estimate_missing", "not_accepted", "acceptance_stale",
@@ -707,46 +708,62 @@ PENDING_REASONS = (
 )
 NULLABLE_TEXT = Either(string=TEXT, null=ANY)
 MODEL_VERSIONS = Object({"rules": SHA256, "data": SHA256, "tool": VERSION})
-PRICES = Format(
-    "acmodel.prices.v1",
-    "acmodel.prices.v1",
-    Object(
-        {
-            "schema_version": ANY,
-            "model_id": ID,
-            "versions": MODEL_VERSIONS,
-            # The trees the price documents share (PRICE-4a2): each root's id to the digest of its tree document, the
-            # versions it was computed from, and how many nodes it holds. The tree itself is kept under the state root.
-            "shared": MapOf(TEXT, Object({"sha256": SHA256, "versions": MODEL_VERSIONS, "nodes": Integer(1, MAX)})),
-            "unit_milli": Integer(1, MAX),
-            "prices": ListOf(
-                Object({
-                    "pool": ID, "class": Choice(*POOL_CLASSES), "status": Choice("confirmed", "provisional"),
-                    "reasons": ListOf(TEXT), "component": ID, "price": TEXT, "milli": NULLABLE_TEXT,
-                    "pending": ListOf(Choice(*PENDING_REASONS)), "joint": ANY, "degenerate": BOOLEAN,
-                    "varies_by_step": BOOLEAN, "estimates": ListOf(ID), "impact": ANY, "flips": ListOf(ID),
-                    "binds": SHA256, "acceptance": ANY, "provenance": TEXT,
-                })
-            ),
-            "slots": ListOf(ID),
-            "estimates": ANY,
-            "impact": ANY,
-            "counts": ANY,
-        }
-    ),
-)
+# A pool's entry in v1. v2 has no `estimates`, the provisional derives its component read, which every pool of that
+# component repeated: the top-level `estimates` names each derive's `components`.
+PRICE_ENTRY = {
+    "pool": ID, "class": Choice(*POOL_CLASSES), "status": Choice("confirmed", "provisional"),
+    "reasons": ListOf(TEXT), "component": ID, "price": TEXT, "milli": NULLABLE_TEXT,
+    "pending": ListOf(Choice(*PENDING_REASONS)), "joint": ANY, "degenerate": BOOLEAN,
+    "varies_by_step": BOOLEAN, "estimates": ListOf(ID), "impact": ANY, "flips": ListOf(ID),
+    "binds": SHA256, "acceptance": ANY, "provenance": TEXT,
+}
 
 
-def _read(path: Path | str, fmt: Format) -> dict[str, Any]:
+def _prices(version: str, entry: dict[str, Spec]) -> Format:
+    """`out/prices.json` of one version, whose pool entries hold `entry`."""
+    return Format(
+        version,
+        version,
+        Object(
+            {
+                "schema_version": ANY,
+                "model_id": ID,
+                "versions": MODEL_VERSIONS,
+                # The trees the price documents share (PRICE-4a2): each root's id to the digest of its tree document,
+                # the versions it was computed from, and how many nodes it holds. The tree itself is kept under the
+                # state root.
+                "shared": MapOf(TEXT, Object({"sha256": SHA256, "versions": MODEL_VERSIONS, "nodes": Integer(1, MAX)})),
+                "unit_milli": Integer(1, MAX),
+                "prices": ListOf(Object(entry)),
+                "slots": ListOf(ID),
+                "estimates": ANY,
+                "impact": ANY,
+                "counts": ANY,
+            }
+        ),
+    )
+
+
+PRICES_V1 = _prices("acmodel.prices.v1", PRICE_ENTRY)
+PRICES = _prices("acmodel.prices.v2", {name: spec for name, spec in PRICE_ENTRY.items() if name != "estimates"})
+
+
+def _read(path: Path | str, fmt: Format, *older: Format) -> dict[str, Any]:
+    """The file's document, checked by the format of its own `schema_version`: `fmt`, or one of the `older` formats a
+    reader still reads. Any other version is refused with each of theirs expected; that refusal, and those before the
+    version is known, name `fmt`."""
     path = Path(path)
     doc = load(path, fmt.name)
     ctx = Context(path, fmt.name)
+    known = (fmt, *older)
     if not isinstance(doc, dict):
         ctx.refuse("type_invalid", "", expected=["object"])
     elif "schema_version" not in doc:
         ctx.refuse("member_missing", "/schema_version", key="schema_version")
-    elif Choice(fmt.version).check(doc["schema_version"], "/schema_version", ctx):
-        fmt.shape.check(doc, "", ctx)
+    elif Choice(*(each.version for each in known)).check(doc["schema_version"], "/schema_version", ctx):
+        own = next(each for each in known if each.version == doc["schema_version"])
+        ctx.fmt = own.name
+        own.shape.check(doc, "", ctx)
     if ctx.errors:
         raise Failure(*ctx.errors)
     return doc
@@ -789,8 +806,10 @@ def read_exports(path: Path | str) -> dict[str, Any]:
 
 
 def read_prices(path: Path | str) -> dict[str, Any]:
-    """`out/prices.json` (`acmodel.prices.v1`), as `export prices` wrote it: the members `bindings check` reads."""
-    return _read(path, PRICES)
+    """`out/prices.json`, as `export prices` wrote it: the members `bindings check` and `verify prices` read. Each file
+    is read by its own version: `acmodel.prices.v2`, which `export prices` writes, or `acmodel.prices.v1`, which it
+    wrote before (each pool's entry with its `estimates` too)."""
+    return _read(path, PRICES, PRICES_V1)
 
 
 def read_bindings(path: Path | str) -> dict[str, Any]:
