@@ -36,12 +36,12 @@ serde_json = "1"
 # The formal ledger read face (offline) and the typed IPC client (online),
 # pinned to one exact Runtime source. One rev for every Runtime crate the console reads
 # through; setup shares the bundle contract and offline package qualifications.
-actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "a322caa40062969dc24a8fc148ddbb50ed53f617" }
-actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "a322caa40062969dc24a8fc148ddbb50ed53f617" }
-actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "a322caa40062969dc24a8fc148ddbb50ed53f617" }
-actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "a322caa40062969dc24a8fc148ddbb50ed53f617" }
-actingcommand-runtime-config = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "a322caa40062969dc24a8fc148ddbb50ed53f617" }
-actingcommand-execution-kernel = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "a322caa40062969dc24a8fc148ddbb50ed53f617" }
+actingcommand-contract = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "d06910c64bb1cbfaa6c71df2d2db3798aacd7fa7" }
+actingcommand-ledger = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "d06910c64bb1cbfaa6c71df2d2db3798aacd7fa7" }
+actingcommand-ledger-forensics = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "d06910c64bb1cbfaa6c71df2d2db3798aacd7fa7" }
+actingcommand-runtime-client = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "d06910c64bb1cbfaa6c71df2d2db3798aacd7fa7" }
+actingcommand-runtime-config = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "d06910c64bb1cbfaa6c71df2d2db3798aacd7fa7" }
+actingcommand-execution-kernel = { git = "https://github.com/HS7097/ActingCommand-Runtime.git", rev = "d06910c64bb1cbfaa6c71df2d2db3798aacd7fa7" }
 # Only what the console needs: the trim drops the renderers and backends this
 # program never uses (software renderer, testing backend, Linux system tray).
 # It does not drop image decoding, and the console does decode: the capture

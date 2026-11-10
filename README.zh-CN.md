@@ -132,8 +132,18 @@ Runtime 在运行，就给出「重新打开」并写明可以改为在线读取
 `console_runtime_owner_changed`）时，顶栏同样提示按「重新打开」改读现在运行的 Runtime。时间跨度的
 读取跟着游标最多 64 页，仍没有读到事件就停下并报 `console_time_span_page_limit`，不让窗口一直读下去。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.43
-（#404 FS-3：账本修订 7 给 `task.selection_evaluated` 记录加了两种确认 `tracked`、`track_lost`，只有声明了
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.47
+（#407 GPU-1，v0.12.44 起：配置修订 27 让 `vision` 段可以写 DirectML（`vision.execution_provider` 取 `directml`、
+`vision.directml_device`、`vision.gpu_fallback`）；这一段在 Runtime 下次启动时生效，不是键表里的键，控制台不写也不解释它，
+所以设置页不多出行，写了它们的文件也在控制台声明的 `actingd-config` [5, 27] 之内。
+v0.12.43 以来 contract crate 别的只多了值键、程序事实 `config.catalog_warnings`（#428 CW-1）和 OCR 节点分布报告 v2，
+控制台都不读；嵌入的结果码目录多了警告 `vision_gpu_unavailable`，调度码 `pool_line_held`、`pool_lines_invalid`、
+`pool_lines_unvalued`、`capped_spend`（SS-2h），Lab 码 `lab_operation_check_failed`、`lab_operation_completed`，
+词表 `gpu_unavailable_reason`、`gpu_fallback`、`pool_line_hold` 和执行提供者 `directml`，`watchdog_launcher_spawn_failed`、
+`resource_check_release_retired` 退役；`runtime-client` 认 DirectML 上的官方 OCR 证据，Lab 操作核验失败时带上 Runtime 的答复，
+这两样控制台都不发；policy 多了业务档跨实例的轮换（SS-2f）和池的水位线、封顶次序（SS-2h）；ledger、ledger-forensics、
+runtime-config 和控制台链接的其他 Runtime crate 都没改。
+v0.12.43 起 #404 FS-3：账本修订 7 给 `task.selection_evaluated` 记录加了两种确认 `tracked`、`track_lost`，只有声明了
 `confirm: "track"` 的包的 select 步才写；建在修订 6 上的控制台读不了，含这种记录的账本页整页失败。
 v0.12.40 以来 contract crate 别的只多了性能状态的可选成员 `memory`、`vision`（#407 PERF-READ，`runtime-client`
 修订 6，控制台不发这个请求），嵌入的结果码目录多了警告 `perf_memory_unavailable`、值键 `confirm`、`shift_px` 和新词表 `selection_confirm`；
@@ -149,7 +159,7 @@ v0.12.38 起读帧的账本查找由读者池在写线程外回答，#422 RA-1�
 照旧），说 0.12 协议（`runtime-client` 修订 5、账本修订 7）：
 
 ```
-rev = "a322caa40062969dc24a8fc148ddbb50ed53f617"
+rev = "d06910c64bb1cbfaa6c71df2d2db3798aacd7fa7"
 ```
 
 六个 crate（contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
@@ -305,7 +315,7 @@ acui --help
 MuMu 原生（Nemu IPC）；截图：ADB 截图，模拟器还有 DroidCast 和 MuMu 原生，真机还有 scrcpy），旁边写值的来源（配置文件，
 或在线设置及其时间、入口）和这台最近一次自检的结果。按「应用」后，这台空闲时立刻切换（最多等 3 秒，即契约的
 `CONNECTION_PREPARATION_CLAIM_WAIT_MS`）：用新后端重连并自检，监控台等回执最长约 138 秒（契约的 `BACKEND_SWITCH_WAIT_MS`，
-v0.12.43 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
+v0.12.47 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
 先问触控一起改成哪个，再两项一起发。在线设置的值有「恢复为文件值」，这也是一次切换（单清一项可能拆散这一对时两项一起清）；
 文件值和在线值相同时设备不动，结果行只写已恢复为文件值。结果在顶栏下面单独一行，带账号；拒绝照原因写人话：这台正忙（忙什么）、
 你正在玩、被围栏、没开，或新后端没打开（以及为什么，比如 MuMu 原生触控时这台没装配置的游戏包；v0.12.40 起游戏没在跑不再是原因，只有回退到 v0.12.39 或更早的 Runtime 还这样说）、原来的已换回或也
