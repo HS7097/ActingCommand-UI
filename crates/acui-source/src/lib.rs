@@ -35,14 +35,15 @@ use std::time::{Duration, Instant};
 
 use acui_rows::outcome::{
     CONSOLE_CLIENT_ACTION_TERMINAL_MISSING, CONSOLE_INSTANCE_BINDING_MISSING,
-    CONSOLE_RUNTIME_OWNER_CHANGED, CONSOLE_STATUS_SOURCE_MISSING,
+    CONSOLE_ONLINE_PAGE_UNBOUNDED, CONSOLE_RUNTIME_OWNER_CHANGED, CONSOLE_STATUS_SOURCE_MISSING,
 };
 use acui_rows::{
     code, page_source_complete, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord,
-    EventActor, EventQuery, EventSource, LedgerCount, LedgerEventPosition, LedgerView, OpenReport,
+    EventActor, EventQuery, EventSource, LedgerCount, LedgerEventPosition, OpenReport,
     PortBindings, PortEntry, ProjectedArtifactReference, ProjectionProfile,
     RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
     RuntimeMaterialReadLimit, RuntimeMaterialReadState, WriterFacts,
+    MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
@@ -119,6 +120,35 @@ const LEDGER_PAGE_IO_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The wait before the one retry of a page exchange that timed out.
 const LEDGER_PAGE_RETRY_BACKOFF: Duration = Duration::from_secs(1);
+
+/// The widest window of positions an online page reads, `from_sequence` to
+/// `to_sequence` inclusive: 16 pages of `MAX_RUNTIME_EVENT_QUERY_EVENTS`, the
+/// ledger window's widest timeline window (acui-model's `MAX_WIDTH`). The
+/// Runtime does not bound the gap between the two; the console does, so a
+/// page's work stays a window's whatever the ledger's length (#429, B plan).
+pub const MAX_ONLINE_WINDOW: u64 = 16 * MAX_RUNTIME_EVENT_QUERY_EVENTS as u64;
+
+/// How far either side of the event that names it a frame's lookup reads, in
+/// positions: a capture's diagnostic records are appended when its run ends,
+/// so they may lie well after the event (#411 A24). A lookup is keyed by its
+/// frame id, a per-run link whose own index drives the Runtime's statement,
+/// so its cost follows that frame's rows, not this reach (#429 Q7).
+pub const FRAME_LOOKUP_REACH: u64 = 65_536;
+
+/// The Runtime's codes of a page it did not answer (#411 A51 R3, #422
+/// IDLE-OV): its read budget ran out where the page could not go on
+/// (`ledger_read_budget_exceeded`; a Lab view page, or a page reaching a row
+/// that names a request, a correlation or a run, before the reader pool has
+/// built its Lab relations reads the whole history's Lab anchors, and is
+/// refused so), or its writer did not answer in time
+/// (`writer_response_timeout`). QueryEvents relays either as
+/// `runtime_unavailable`, state `failed`, and latches nothing; the receipt's
+/// outcome names the ledger's code. Such a page is said with its code and
+/// never asked again here: a person reads again.
+pub const UNANSWERED_PAGE_CODES: [&str; 2] = [LEDGER_READ_BUDGET_EXCEEDED, WRITER_RESPONSE_TIMEOUT];
+/// The two codes of `UNANSWERED_PAGE_CODES`, each said in its own words.
+pub const LEDGER_READ_BUDGET_EXCEEDED: &str = "ledger_read_budget_exceeded";
+pub const WRITER_RESPONSE_TIMEOUT: &str = "writer_response_timeout";
 
 /// The spelling of a client error's `code()` or `operation()`, whichever type
 /// the pinned client returns them as: `&'static str`, or the contract's
@@ -208,17 +238,16 @@ impl EvidenceSource {
     }
 
     /// One formal page: events, their view membership, read scope, cursor,
-    /// run recovery groups and artifact eviction facts.
+    /// run recovery groups (unless `recovery` skips them) and artifact
+    /// eviction facts.
     pub fn query(
         &self,
         query: &EventQuery,
         limit: u16,
         cursor: Option<RuntimeEventQueryCursor>,
+        recovery: RunRecovery,
     ) -> Result<RuntimeEventQueryPage> {
-        let request = RuntimeEventQueryPageRequest::new(limit, cursor)
-            .map_err(|error| anyhow!("页请求无效：{}", error.code()))?
-            .at_snapshot(self.snapshot_position())
-            .map_err(|error| anyhow!("快照位置无效：{}", error.code()))?;
+        let request = page_request(limit, cursor, self.snapshot_position(), recovery)?;
         actingcommand_ledger_forensics::query_view_page(
             &self.snapshot_for_read(),
             query,
@@ -323,7 +352,7 @@ impl EvidenceSource {
             } else {
                 LedgerCount::VerifiedPrefix(event_count)
             },
-            read_complete: snapshot.read_complete(),
+            read_complete: Some(snapshot.read_complete()),
             corrupt_tail: snapshot.corrupt_tail().map(|tail| {
                 format!(
                     "{} 段{} 偏移{} 悬挂{}字节",
@@ -352,17 +381,18 @@ impl EvidenceSource {
     }
 }
 
-/// One session against the running Runtime, read at the one snapshot the
-/// Runtime stated on the session's first page — the same pinned-snapshot
-/// session the offline face gives, so both faces page and cursor alike.
+/// One session against the running Runtime, read at one pinned snapshot: the
+/// ledger head the Runtime stated in memory when the session opened (its
+/// status read, else its fact snapshot; see `read_instances`) — the same
+/// pinned-snapshot session the offline face gives, so both faces page and
+/// cursor alike. No page is ever asked without that pin.
 pub struct OnlineSource {
     root: PathBuf,
     /// The session's main connection, at the client's default io timeout:
-    /// follow polls, the instances' status and facts, and `open_report`.
-    /// Rebuilt after the client latched it (see `Rebuilding`).
+    /// the status and fact reads a pin is taken from, follow polls, and
+    /// `open_report`. Rebuilt after the client latched it (see `Rebuilding`).
     main: Rebuilding,
-    /// The connection every page, the first included, and every repin reads
-    /// through.
+    /// The connection every page reads through.
     pages: LedgerPages,
     /// The connection material reads go through, on the frame worker, at the
     /// client's default io timeout. Apart from the main one: the clones of a
@@ -372,9 +402,12 @@ pub struct OnlineSource {
     /// a read latched it (see `MaterialReader::Online`).
     material: Rebuilding,
     /// The pin every page reads at. `repin` moves it on a person's jump to the
-    /// latest or when following is turned on; `poll` moves it while following.
+    /// latest; `poll` moves it when following is turned on and while following.
     snapshot: Cell<u64>,
-    read_complete: Cell<bool>,
+    /// Whether every page read at the current pin read its source whole
+    /// (`page_source_complete`); `None` until a page at that pin came back.
+    /// Starts over whenever the pin moves.
+    read_complete: Cell<Option<bool>>,
     instances: RefCell<Result<RuntimeInstances, ClientFailure>>,
 }
 
@@ -451,9 +484,10 @@ impl RebuildFailed {
     }
 }
 
-/// One of the console's own outcome codes, beneath the text of a read's error:
-/// the text already ends with the code, and this lets the window find it and
-/// show its words without reading the text.
+/// One outcome code beneath the text of a read's error: one of the console's
+/// own, or the Runtime's code of a page it did not answer
+/// (`UNANSWERED_PAGE_CODES`). The text already holds the code, and this lets
+/// the window find it and show its words without reading the text.
 #[derive(Debug)]
 struct ConsoleCode(&'static str);
 
@@ -465,9 +499,11 @@ impl fmt::Display for ConsoleCode {
 
 impl std::error::Error for ConsoleCode {}
 
-/// The console's own outcome code a read's error carries, if any: so far only
+/// The outcome code a read's error carries, if any: the console's own
 /// `CONSOLE_RUNTIME_OWNER_CHANGED`, from a rebuild that reached a Runtime of
-/// another owner epoch.
+/// another owner epoch, or `CONSOLE_ONLINE_PAGE_UNBOUNDED`, from a page the
+/// online face refused to send; or the Runtime's code of a page it did not
+/// answer (`UNANSWERED_PAGE_CODES`).
 pub fn console_code(error: &anyhow::Error) -> Option<&'static str> {
     error.chain().find_map(|cause| cause.downcast_ref::<ConsoleCode>()).map(|code| code.0)
 }
@@ -560,9 +596,10 @@ impl LedgerPages {
     /// `LEDGER_PAGE_RETRY_BACKOFF`, on a rebuilt connection, and not at all
     /// when the rebuilt connection reaches a Runtime of another owner epoch:
     /// the pin was stated by the one that is gone. Any other failure, and the
-    /// retry's, comes back as it is. Every failure reads `Runtime 查询失败：`
-    /// and the client's error; a timeout whose rebuild failed carries the
-    /// rebuild's reason after it.
+    /// retry's, comes back as it is (`page_failed`): a page the Runtime did not
+    /// answer (`UNANSWERED_PAGE_CODES`) is not asked again. Every failure reads
+    /// `Runtime 查询失败：` and the client's error; a timeout whose rebuild
+    /// failed carries the rebuild's reason after it.
     fn exchange<T>(
         &self,
         root: &Path,
@@ -579,7 +616,7 @@ impl LedgerPages {
         drop(client);
         self.connection.note(&first);
         if !page_timed_out(&first) {
-            return Err(anyhow!("Runtime 查询失败：{first}"));
+            return Err(page_failed(&first));
         }
         std::thread::sleep(LEDGER_PAGE_RETRY_BACKOFF);
         if let Err(reason) = self.connection.reconnect(root) {
@@ -588,9 +625,60 @@ impl LedgerPages {
         let client = self.connection.current();
         call(&client).map_err(|error| {
             self.connection.note(&error);
-            anyhow!("Runtime 查询失败：{error}")
+            page_failed(&error)
         })
     }
+}
+
+/// A page exchange's failure as a read's error: `Runtime 查询失败：` and the
+/// client's error, which names the Runtime's code. A page the Runtime did not
+/// answer — its receipt's outcome is one of `UNANSWERED_PAGE_CODES` — also
+/// carries that code beneath the text, for `console_code`, so the window says
+/// it with its code and leaves the next read to a person.
+fn page_failed(error: &RuntimeClientError) -> anyhow::Error {
+    let text = format!("Runtime 查询失败：{error}");
+    let refused = error.receipt_outcome().map(|outcome| outcome.code().as_str());
+    let unanswered = refused
+        .and_then(|refused| UNANSWERED_PAGE_CODES.into_iter().find(|code| *code == refused));
+    match unanswered {
+        Some(code) => anyhow::Error::new(ConsoleCode(code)).context(text),
+        None => anyhow!(text),
+    }
+}
+
+/// Refuses, before it is sent, an online page the console's own bounds do not
+/// allow (#429): every online page reads one window of positions at the pin,
+/// `from_sequence` and `to_sequence` both stated, `1 <= from <= to <= pin`, at
+/// most `MAX_ONLINE_WINDOW` positions — a frame's lookup, keyed by its frame
+/// id, at most `FRAME_LOOKUP_REACH` either side of its event — and with no time
+/// condition: with one, the Runtime's planner may read through the time index,
+/// where the sequence bounds do not hold the scan, and a page's work grows with
+/// all the history before its window. No read of the window asks for such a
+/// page; one that did is a defect, said loudly with
+/// `CONSOLE_ONLINE_PAGE_UNBOUNDED`, and nothing is sent.
+fn check_online_page(query: &EventQuery, pin: u64) -> Result<()> {
+    let widest = if query.frame_id.is_some() {
+        2 * FRAME_LOOKUP_REACH + 1
+    } else {
+        MAX_ONLINE_WINDOW
+    };
+    let bounded = match (query.from_sequence, query.to_sequence) {
+        (Some(from), Some(to)) => 1 <= from && from <= to && to <= pin && to - from < widest,
+        _ => false,
+    };
+    let timed = query.from_timestamp_unix_ms.is_some() || query.to_timestamp_unix_ms.is_some();
+    if bounded && !timed {
+        return Ok(());
+    }
+    let text = format!(
+        "{CONSOLE_ONLINE_PAGE_UNBOUNDED}: from_sequence={:?} to_sequence={:?} pin={pin} \
+         widest={widest} from_timestamp_unix_ms={:?} to_timestamp_unix_ms={:?}",
+        query.from_sequence,
+        query.to_sequence,
+        query.from_timestamp_unix_ms,
+        query.to_timestamp_unix_ms,
+    );
+    Err(anyhow::Error::new(ConsoleCode(CONSOLE_ONLINE_PAGE_UNBOUNDED)).context(text))
 }
 
 /// Whether a page exchange timed out waiting for its receipt: the client's
@@ -608,10 +696,10 @@ fn page_timed_out(error: &RuntimeClientError) -> bool {
 /// The client's own spelling of its connect operation (`ClientLocation::ConnectRuntime`).
 const CONNECT_RUNTIME: &str = "connect_runtime";
 
-/// The running Runtime's instances: one status read and one fact snapshot,
-/// right after the session's page pin and again on a person's jump to the
-/// latest; while following, each poll's fact snapshot refreshes the task facts
-/// alone. Each read is at the ledger position the Runtime stated for it, which
+/// The running Runtime's instances: one status read and one fact snapshot, the
+/// two reads the session's pin is taken from, at open and again on a person's
+/// jump to the latest; while following, each poll's fact snapshot refreshes
+/// the task facts alone. Each read is at the ledger position the Runtime stated for it, which
 /// may be past the pin: state as last read, not state at the pinned snapshot,
 /// and the card says so. Neither read appends a ledger record (AO-4q).
 #[derive(Debug, Clone)]
@@ -770,25 +858,30 @@ impl OnlineSource {
         ))
     }
 
-    /// The first page, asked without a snapshot on the session's page
-    /// connection, is where the Runtime states the position this session then
-    /// reads at. The page and the material connection are made first, to the
-    /// Runtime the main connection reached.
+    /// The position this session reads at is the ledger head the Runtime
+    /// states in memory (`read_instances`): its status read's
+    /// `ledger_committed_head`, else its fact snapshot's `ledger_position`. No
+    /// page is asked for it. When neither read states a head the session does
+    /// not open, with both reads' errors; it never falls back to a page asked
+    /// without a snapshot. The page and the material connection are made
+    /// first, to the Runtime the main connection reached.
     fn pin(root: PathBuf, client: RuntimeClient) -> Result<Self> {
         let owner_epoch = client.runtime_info().owner_epoch();
         let main = Rebuilding::new(Self::connect, client, owner_epoch);
         let pages = LedgerPages::open(&root, owner_epoch)?;
         let material = Self::open_material(&root, owner_epoch)?;
-        let (snapshot, read_complete) = latest(&pages, &root)?;
-        let instances = read_instances(&main, &root);
+        let read = read_instances(&main, &root);
+        let snapshot = read.head.map_err(|unstated| {
+            unstated.into_error("在线读面不可用 / online source unavailable: ")
+        })?;
         Ok(Self {
             root,
             main,
             pages,
             material,
             snapshot: Cell::new(snapshot),
-            read_complete: Cell::new(read_complete),
-            instances: RefCell::new(instances),
+            read_complete: Cell::new(None),
+            instances: RefCell::new(read.instances),
         })
     }
 
@@ -808,14 +901,21 @@ impl OnlineSource {
         self.instances.borrow()
     }
 
-    /// Moves the pin to the Runtime's latest position, as a fresh first page
-    /// states it; `Ok(true)` when it moved. Pages read after this read at the
-    /// new pin. A page query writes nothing into the ledger.
+    /// A person's jump to the latest: status and facts read again, as at open
+    /// (`read_instances`), and the pin moved to the head they state; `Ok(true)`
+    /// when it moved. Pages read after this read at the new pin. The instances
+    /// are what this read found, whatever became of the pin; when neither read
+    /// stated a head the pin stays, and the error carries both reasons. Neither
+    /// read appends a ledger record, and no page is asked.
     pub fn repin(&self) -> Result<bool> {
-        let (snapshot, read_complete) = latest(&self.pages, &self.root)?;
+        let read = read_instances(&self.main, &self.root);
+        *self.instances.borrow_mut() = read.instances;
+        let snapshot = read.head.map_err(|unstated| unstated.into_error(""))?;
         let moved = snapshot != self.snapshot.get();
-        self.snapshot.set(snapshot);
-        self.read_complete.set(read_complete);
+        if moved {
+            self.snapshot.set(snapshot);
+            self.read_complete.set(None);
+        }
         Ok(moved)
     }
 
@@ -837,6 +937,7 @@ impl OnlineSource {
         let moved = snapshot.ledger_position > self.snapshot.get();
         if moved {
             self.snapshot.set(snapshot.ledger_position);
+            self.read_complete.set(None);
         }
         self.refold(&snapshot);
         Ok(moved)
@@ -871,12 +972,6 @@ impl OnlineSource {
         *self.instances.borrow_mut() = Ok(refolded);
     }
 
-    /// Re-reads status and facts, as at open: for a person's jump to the latest.
-    pub fn refresh_instances(&self) {
-        let refreshed = read_instances(&self.main, &self.root);
-        *self.instances.borrow_mut() = refreshed;
-    }
-
     /// Re-reads status and facts, as at open, on a connection made for this
     /// read alone, to the session's Runtime, and let go after it: after a
     /// person's resume (`resume_paused`), whatever became of it. A connect that
@@ -891,7 +986,7 @@ impl OnlineSource {
             Ok(Rebuilding::new(Self::connect, client, owner_epoch))
         });
         let reread = match fresh {
-            Ok(connection) => read_instances(&connection, &self.root),
+            Ok(connection) => read_instances(&connection, &self.root).instances,
             Err(reason) => Err(reason.into_failure()),
         };
         *self.instances.borrow_mut() = reread;
@@ -905,21 +1000,28 @@ impl OnlineSource {
         self.snapshot.get()
     }
 
-    /// The same page request as offline, answered by the Runtime on the page
-    /// connection.
+    /// The same page request as offline, at the pin, answered by the Runtime on
+    /// the page connection; only a page within the console's own bounds is
+    /// sent (`check_online_page`). Each page that comes back at the pin is
+    /// folded into whether the pages at that pin read their source whole.
     pub fn query(
         &self,
         query: &EventQuery,
         limit: u16,
         cursor: Option<RuntimeEventQueryCursor>,
+        recovery: RunRecovery,
     ) -> Result<RuntimeEventQueryPage> {
-        let request = RuntimeEventQueryPageRequest::new(limit, cursor)
-            .map_err(|error| anyhow!("页请求无效：{}", error.code()))?
-            .at_snapshot(self.snapshot.get())
-            .map_err(|error| anyhow!("快照位置无效：{}", error.code()))?;
-        self.pages.exchange(&self.root, |client| {
+        let pin = self.snapshot.get();
+        check_online_page(query, pin)?;
+        let request = page_request(limit, cursor, pin, recovery)?;
+        let page = self.pages.exchange(&self.root, |client| {
             client.query_event_page(query.clone(), ProjectionProfile::Ui, request.clone())
-        })
+        })?;
+        if page.snapshot_ledger_position() == pin {
+            let whole = self.read_complete.get().unwrap_or(true) && page_source_complete(&page);
+            self.read_complete.set(Some(whole));
+        }
+        Ok(page)
     }
 
     /// The medium, the corrupt tail, the writer record and the repair count are
@@ -928,7 +1030,9 @@ impl OnlineSource {
     /// the Runtime this session is connected to, as its own
     /// `runtime-info.json` describes it. The event count is the pinned position:
     /// the contract states sequences are gap-free from 1, so the count at a
-    /// position is that position (`runtime-state-observation.md`).
+    /// position is that position (`runtime-state-observation.md`). Whether the
+    /// ledger read whole is what the pages read at the pin said, `None` before
+    /// the first of them.
     pub fn open_report(&self) -> OpenReport {
         let client = self.main.current();
         let info = client.runtime_info();
@@ -960,19 +1064,34 @@ impl OnlineSource {
     }
 }
 
-/// The Runtime's latest position and whether its first page read completely:
-/// one first page, asked without a snapshot on the page connection.
-fn latest(pages: &LedgerPages, root: &Path) -> Result<(u64, bool)> {
-    let request = RuntimeEventQueryPageRequest::new(1, None)
-        .map_err(|error| anyhow!("页请求无效：{}", error.code()))?;
-    let page = pages.exchange(root, |client| {
-        client.query_event_page(
-            EventQuery { view: Some(LedgerView::Events), ..EventQuery::default() },
-            ProjectionProfile::Ui,
-            request.clone(),
-        )
-    })?;
-    Ok((page.snapshot_ledger_position(), page_source_complete(&page)))
+/// Whether a page derives its `run_recovery` groups (#422 QR-2). The
+/// timeline's windows do: the view folds a run's resolved failures under it,
+/// and a run whose context the read budget cut says so (`context_limit`). A
+/// span's point read, a frame's lookup and the offline face's time-bound
+/// probe show no group, and the Runtime reads no run's context for them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunRecovery {
+    Derived,
+    Skipped,
+}
+
+/// The request of every page a session asks, on either face: at most `limit`
+/// rows, from `cursor`, at the pinned `snapshot`, without run recovery when
+/// `recovery` skips it.
+fn page_request(
+    limit: u16,
+    cursor: Option<RuntimeEventQueryCursor>,
+    snapshot: u64,
+    recovery: RunRecovery,
+) -> Result<RuntimeEventQueryPageRequest> {
+    let request = RuntimeEventQueryPageRequest::new(limit, cursor)
+        .map_err(|error| anyhow!("页请求无效：{}", error.code()))?
+        .at_snapshot(snapshot)
+        .map_err(|error| anyhow!("快照位置无效：{}", error.code()))?;
+    Ok(match recovery {
+        RunRecovery::Derived => request,
+        RunRecovery::Skipped => request.without_run_recovery(),
+    })
 }
 
 /// Which read face `--source` asks for.
@@ -1030,8 +1149,8 @@ pub enum Session {
 impl Session {
     /// `Online` fails loud with the client's own error. `Auto` reads offline
     /// only when the client could not reach a Runtime, and keeps the reason;
-    /// a Runtime that was reached but could not answer the first page is an
-    /// error in every mode. An offline face the ledger refuses to open is not
+    /// a Runtime that was reached but stated no ledger head (`OnlineSource::pin`)
+    /// is an error in every mode. An offline face the ledger refuses to open is not
     /// an error of the session: it is `Unopened`, with the ledger's own error.
     pub fn open(state_root: impl Into<PathBuf>, mode: SourceMode) -> Result<Self> {
         let root = state_root.into();
@@ -1093,15 +1212,18 @@ impl ReadSource {
         }
     }
 
+    /// One page at the pin: at most `limit` rows, from `cursor`, with or
+    /// without run recovery.
     pub fn query(
         &self,
         query: &EventQuery,
         limit: u16,
         cursor: Option<RuntimeEventQueryCursor>,
+        recovery: RunRecovery,
     ) -> Result<RuntimeEventQueryPage> {
         match self {
-            Self::Offline { source, .. } => source.query(query, limit, cursor),
-            Self::Online(source) => source.query(query, limit, cursor),
+            Self::Offline { source, .. } => source.query(query, limit, cursor, recovery),
+            Self::Online(source) => source.query(query, limit, cursor, recovery),
         }
     }
 
@@ -1143,8 +1265,8 @@ impl ReadSource {
         matches!(self, Self::Online(_))
     }
 
-    /// Online, moves the pin to the Runtime's latest position; offline,
-    /// `Ok(false)`.
+    /// Online, status and facts read again and the pin moved to the head they
+    /// state (see `OnlineSource::repin`); offline, `Ok(false)`.
     pub fn repin(&self) -> Result<bool> {
         match self {
             Self::Offline { .. } => Ok(false),
@@ -1157,13 +1279,6 @@ impl ReadSource {
         match self {
             Self::Offline { .. } => Ok(false),
             Self::Online(source) => source.poll(),
-        }
-    }
-
-    /// Online, re-reads status and facts; offline, nothing.
-    pub fn refresh_instances(&self) {
-        if let Self::Online(source) = self {
-            source.refresh_instances();
         }
     }
 
@@ -1226,26 +1341,104 @@ pub fn probe_runtime(state_root: &Path) -> Result<RuntimeFacts, ClientFailure> {
     Ok(RuntimeFacts { pid: info.pid(), owner_epoch: code(&info.owner_epoch()) })
 }
 
+/// What one `read_instances` found: the instances as the card shows them, and
+/// the ledger head a session's pin is taken from.
+struct InstancesRead {
+    /// The status read's `ledger_committed_head`, else the fact snapshot's
+    /// `ledger_position`. Both are the head the Runtime's writer handed its
+    /// ledger reader pool, held in memory (runtime-state-observation.md W1-8),
+    /// so every page asked at it can be answered there.
+    head: Result<u64, HeadUnstated>,
+    instances: Result<RuntimeInstances, ClientFailure>,
+}
+
+/// Why no ledger head could be taken: neither the status read nor the fact
+/// snapshot stated one. Both reads' errors, as they read; with the console's
+/// own `CONSOLE_RUNTIME_OWNER_CHANGED` when either reached a Runtime of
+/// another owner epoch.
+struct HeadUnstated {
+    text: String,
+    code: Option<&'static str>,
+}
+
+impl HeadUnstated {
+    /// As a read's error shows it: `prefix`, then both reasons. The console's
+    /// own code goes beneath the text, for `console_code`.
+    fn into_error(self, prefix: &str) -> anyhow::Error {
+        let text = format!("{prefix}账本头读不出 / ledger head unstated: {}", self.text);
+        match self.code {
+            Some(code) => anyhow::Error::new(ConsoleCode(code)).context(text),
+            None => anyhow!(text),
+        }
+    }
+}
+
+/// A read on the main connection that failed: as the card shows it, and as the
+/// client's error, or the rebuild's, says it.
+type MainFailed = (ClientFailure, String);
+
 /// One status read, then one fact snapshot, on the session's main connection,
-/// rebuilt first when an earlier exchange latched it. Neither appends a ledger
-/// record (Runtime contracts/runtime-state-observation.md, AO-4q). Either
-/// failing fails the pair with its own error; a status without its source is
-/// the console's own `CONSOLE_STATUS_SOURCE_MISSING`, since the card would
-/// otherwise state a position the Runtime did not give. Only the three `task.`
-/// keys are taken.
-fn read_instances(main: &Rebuilding, root: &Path) -> Result<RuntimeInstances, ClientFailure> {
-    let client = main.client(root).map_err(RebuildFailed::into_failure)?;
-    let status = client.status().map_err(|error| main.failure(error))?;
-    let status_sequence = status
-        .source()
-        .ok_or(ClientFailure {
-            code: CONSOLE_STATUS_SOURCE_MISSING,
-            operation: "runtime_status",
-            runtime_code: None,
-            host: None,
-        })?
-        .ledger_committed_head;
-    let snapshot = client.runtime_fact_snapshot().map_err(|error| main.failure(error))?;
+/// rebuilt first when an earlier exchange latched it — before the fact snapshot
+/// too, when the status read latched it. Neither appends a ledger record
+/// (Runtime contracts/runtime-state-observation.md, AO-4q), and neither is a
+/// page. The fact snapshot is read whatever became of the status: it brings
+/// the task facts, and its position is the head when the status states none.
+/// Either failing fails the instances with its own error; a status without its
+/// source is the console's own `CONSOLE_STATUS_SOURCE_MISSING`, since the card
+/// would otherwise state a position the Runtime did not give. Only the three
+/// `task.` keys are taken.
+fn read_instances(main: &Rebuilding, root: &Path) -> InstancesRead {
+    let rebuild = |reason: RebuildFailed| -> MainFailed {
+        let text = reason.to_string();
+        (reason.into_failure(), text)
+    };
+    let failed = |error: RuntimeClientError| -> MainFailed {
+        let text = error.to_string();
+        (main.failure(error), text)
+    };
+    let status = main
+        .client(root)
+        .map_err(rebuild)
+        .and_then(|client| client.status().map_err(failed))
+        .and_then(|status| {
+            let head = status.source().map(|source| source.ledger_committed_head);
+            match head {
+                Some(head) => Ok((status, head)),
+                None => Err((
+                    ClientFailure {
+                        code: CONSOLE_STATUS_SOURCE_MISSING,
+                        operation: "runtime_status",
+                        runtime_code: None,
+                        host: None,
+                    },
+                    CONSOLE_STATUS_SOURCE_MISSING.to_owned(),
+                )),
+            }
+        });
+    let snapshot = main
+        .client(root)
+        .map_err(rebuild)
+        .and_then(|client| client.runtime_fact_snapshot().map_err(failed));
+    let owner_changed = |failure: &ClientFailure| failure.code == CONSOLE_RUNTIME_OWNER_CHANGED;
+    let head = match (&status, &snapshot) {
+        (Ok((_, head)), _) => Ok(*head),
+        (Err(_), Ok(snapshot)) => Ok(snapshot.ledger_position),
+        (Err((status_failure, status_text)), Err((facts_failure, facts_text))) => {
+            Err(HeadUnstated {
+                text: format!(
+                    "状态读取 / status: {status_text}；事实快照 / fact snapshot: {facts_text}"
+                ),
+                code: (owner_changed(status_failure) || owner_changed(facts_failure))
+                    .then_some(CONSOLE_RUNTIME_OWNER_CHANGED),
+            })
+        }
+    };
+    let (status, status_sequence, snapshot) = match (status, snapshot) {
+        (Ok((status, status_sequence)), Ok(snapshot)) => (status, status_sequence, snapshot),
+        (Err((failure, _)), _) | (Ok(_), Err((failure, _))) => {
+            return InstancesRead { head, instances: Err(failure) }
+        }
+    };
     // Every pause names the owner epoch of this one status read, with its own
     // scope's revision, so a resume of it lifts only what this read saw.
     let owner_epoch = status.owner_epoch();
@@ -1271,12 +1464,15 @@ fn read_instances(main: &Rebuilding, root: &Path) -> Result<RuntimeInstances, Cl
         })
         .collect();
     fold_task_facts(&snapshot.records, &mut instances);
-    Ok(RuntimeInstances {
-        status_sequence,
-        facts_position: snapshot.ledger_position,
-        global_pause,
-        instances,
-    })
+    InstancesRead {
+        head,
+        instances: Ok(RuntimeInstances {
+            status_sequence,
+            facts_position: snapshot.ledger_position,
+            global_pause,
+            instances,
+        }),
+    }
 }
 
 /// The global pause one status read reported, naming that read's owner epoch.

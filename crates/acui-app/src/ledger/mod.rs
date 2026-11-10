@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use acui_model::{DisplayRow, Filters, ViewModel, ALL_TABS};
 use acui_rows::{code, EventQuery, EventSeverity, LedgerView, OriginModule};
-use acui_source::{PauseTarget, SourceMode};
+use acui_source::{PauseTarget, SourceMode, FRAME_LOOKUP_REACH};
 use slint::{SharedString, Timer, TimerMode};
 
 use crate::settings::{TextSize, Theme};
@@ -356,13 +356,18 @@ impl LedgerHandle {
     /// The bound and its label follow the handle at once; the reload waits
     /// until the handle rests, so a drag is one reload, not one per step. A
     /// time bound reads down from the past: following stops at once. A closed
-    /// window's timers stay stopped.
+    /// window's timers stay stopped. Online the cursor is off and takes no
+    /// bound: an online page carries no time condition (#429; the paint says
+    /// why beside it).
     pub fn cursor_moved(&self, ui: &Ui, value: f32) {
         if self.closed.get() {
             return;
         }
         let bound = {
             let mut state = self.lock();
+            if matches!(&state.phase, Phase::Open(facts) if facts.follows) {
+                return;
+            }
             let Some(model) = state.live_mut() else {
                 return;
             };
@@ -499,8 +504,8 @@ impl LedgerHandle {
         // of every window says where it is.
         ui.paint_log_notes();
         self.tick_busy(busy);
-        if let Some((frame, query)) = lookup {
-            self.send(Command::FrameEvents { frame, query });
+        if let Some((frame, query, searched)) = lookup {
+            self.send(Command::FrameEvents { frame, query, searched });
         }
     }
 
@@ -562,11 +567,20 @@ impl LedgerHandle {
 
 /// When the selected event's frame has no capture among the loaded rows and
 /// the slot holds nothing for it: the slot is marked pending, and the frame's
-/// id and the query by it go to the reader.
-fn wanted_frame_events(state: &mut LedgerState) -> Option<(String, EventQuery)> {
-    if !matches!(state.phase, Phase::Open(_)) {
-        return None;
-    }
+/// id, the query by it and the positions it reads go to the reader. Online
+/// the query is the frame id, the instance the event that names the frame
+/// links (when it links one), and the window of positions `FRAME_LOOKUP_REACH`
+/// either side of that event, within the pin (#429 Q7): a capture's
+/// diagnostic records are appended when its run ends, so they may lie well
+/// after it. Offline it is the frame id alone, as before: slice 1 leaves the
+/// offline face's reads as they were.
+fn wanted_frame_events(
+    state: &mut LedgerState,
+) -> Option<(String, EventQuery, Option<(u64, u64)>)> {
+    let online = match &state.phase {
+        Phase::Open(facts) => facts.follows,
+        _ => return None,
+    };
     let model = state.model.as_ref()?;
     let (basis, _) = model.selected_basis()?;
     let frame_id = basis.links.frame_id().copied()?;
@@ -574,13 +588,26 @@ fn wanted_frame_events(state: &mut LedgerState) -> Option<(String, EventQuery)> 
     if state.frame_events.holds(&frame) || model.frame_group(&frame, &[]).target.is_some() {
         return None;
     }
-    let query = EventQuery {
+    let mut query = EventQuery {
         view: Some(LedgerView::Events),
         frame_id: Some(frame_id),
         ..EventQuery::default()
     };
+    // A loaded row lies within the pin, which only ever moves up.
+    let at = basis.sequence;
+    let searched = online.then(|| {
+        (
+            at.saturating_sub(FRAME_LOOKUP_REACH).max(1),
+            at.saturating_add(FRAME_LOOKUP_REACH).min(model.snapshot_position()),
+        )
+    });
+    if let Some((from, to)) = searched {
+        query.instance_id = basis.links.instance_id().copied();
+        query.from_sequence = Some(from);
+        query.to_sequence = Some(to);
+    }
     state.frame_events = FrameEventsSlot::Pending { frame: frame.clone() };
-    Some((frame, query))
+    Some((frame, query, searched))
 }
 
 /// The ledger window's controls. Each only changes the window's state and

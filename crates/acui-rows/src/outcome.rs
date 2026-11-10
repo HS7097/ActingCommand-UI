@@ -41,18 +41,28 @@ pub const CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN: &str =
 /// `runtime_owner_epoch_changed` means the same; the console detects it
 /// itself, so it states its own code.
 pub const CONSOLE_RUNTIME_OWNER_CHANGED: &str = "console_runtime_owner_changed";
-/// The console followed the page cursor of a time span read for its whole page
-/// limit without finding an event, and stopped.
+/// A read of the committed time span asked its one bounded page — its page
+/// limit, once 64 pages of a cursor followed — and it came back without the
+/// event it must hold, and the console stopped.
 pub const CONSOLE_TIME_SPAN_PAGE_LIMIT: &str = "console_time_span_page_limit";
+/// The console followed the page cursor of one window of positions for its
+/// whole page limit and the window still went on, and stopped.
+pub const CONSOLE_WINDOW_PAGE_LIMIT: &str = "console_window_page_limit";
+/// The online read face refused to send a page outside the console's own
+/// bounds: without both sequence bounds, wider than its window, or with a
+/// time condition.
+pub const CONSOLE_ONLINE_PAGE_UNBOUNDED: &str = "console_online_page_unbounded";
 
 /// Every code constant above: the code table must hold each of them.
-const UI_CODES: [&str; 6] = [
+const UI_CODES: [&str; 8] = [
     CONSOLE_INSTANCE_BINDING_MISSING,
     CONSOLE_STATUS_SOURCE_MISSING,
     CONSOLE_CLIENT_ACTION_TERMINAL_MISSING,
     CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN,
     CONSOLE_RUNTIME_OWNER_CHANGED,
     CONSOLE_TIME_SPAN_PAGE_LIMIT,
+    CONSOLE_WINDOW_PAGE_LIMIT,
+    CONSOLE_ONLINE_PAGE_UNBOUNDED,
 ];
 
 const CODES_FILE: &str = "outcome-codes.json";

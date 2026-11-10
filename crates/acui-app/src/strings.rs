@@ -78,10 +78,22 @@ pub struct Labels {
     pub follow_latest: &'static str,
     pub source_incomplete: &'static str,
     pub read_up_to_unknown: &'static str,
+    /// The pin is 0: the ledger holds no record, and no page is read.
+    pub ledger_empty: &'static str,
+    /// The card's line of how the loaded windows were read: windows, pages.
+    pub pages_read: &'static str,
+    /// The card's line under it: pages the Runtime's read budget cut short
+    /// (`read_budget`), and pages stating a run whose recovery context the
+    /// budget cut (`context_limit`).
+    pub pages_cut: &'static str,
     pub loaded_rows_top: &'static str,
     pub loaded_badge: &'static str,
     pub show_up_to: &'static str,
     pub all: &'static str,
+    /// Online the time cursor is off: its label, and the note under the row
+    /// that says why.
+    pub cursor_off_online: &'static str,
+    pub cursor_off_online_note: &'static str,
     pub text_size: &'static str,
     pub text_sizes: [&'static str; 3],
     pub language: &'static str,
@@ -122,7 +134,7 @@ pub struct Labels {
     /// `EventSource`, in the contract's declaration order.
     pub sources: [(&'static str, &'static str); 8],
     /// Field key to label, for the instance card and the detail pane.
-    pub fields: [(&'static str, &'static str); 50],
+    pub fields: [(&'static str, &'static str); 52],
     /// `ExecutionBackendProvenance`, by wire value.
     pub provenances: [(&'static str, &'static str); 2],
     pub artifact_kinds: [(&'static str, &'static str); 6],
@@ -149,6 +161,10 @@ pub struct Labels {
     /// authenticated as they are read, so "intact" would overstate it.
     pub integrity_ok_sqlite: &'static str,
     pub integrity_bad: &'static str,
+    /// Online: no page at the current pin has come back yet, so nothing is
+    /// called whole; and every page that came back read its source whole.
+    pub integrity_unread: &'static str,
+    pub integrity_ok_pages: &'static str,
     pub writer_absent: &'static str,
     pub writer_locked: &'static str,
     pub writer_running: &'static str,
@@ -192,6 +208,8 @@ pub struct Labels {
     pub frame_via_input: &'static str,
     pub frame_basis_missing: &'static str,
     pub frame_capture_missing: &'static str,
+    /// A frame's lookup read its window and found no capture there: from, to.
+    pub frame_capture_not_in_range: &'static str,
     pub frame_events_failed: &'static str,
     /// Input kinds as the ledger writes them, by prefix, and their names.
     pub action_kinds: &'static [(&'static str, &'static str)],
@@ -203,6 +221,20 @@ pub struct Labels {
     pub filter_instance_conflict: &'static str,
     pub filter_rejected: &'static str,
     pub read_failed: &'static str,
+    /// Follows a page the Runtime did not answer, its code filled in: why, by
+    /// code — its read budget refused it (`ledger_read_budget_exceeded`), or
+    /// it did not answer in time (`writer_response_timeout`) — then how a
+    /// person reads it again, since the window does not ask it again by
+    /// itself; joined as `outcome_words` joins a sentence and its handling.
+    /// How depends on where the page failed: a timeline or span page
+    /// (`page_read_again`), a window following read onto the top, which
+    /// "read earlier" never reads again (`follow_read_again`), or a frame's
+    /// lookup, read again only for a row selected anew (`frame_read_again`).
+    pub page_budget_refused: &'static str,
+    pub page_writer_timeout: &'static str,
+    pub page_read_again: &'static str,
+    pub follow_read_again: &'static str,
+    pub frame_read_again: &'static str,
     /// An outcome code's sentence, then its handling.
     pub outcome_words: &'static str,
     /// The outcome words could not be read: the table's problem.
@@ -1165,10 +1197,15 @@ pub const ZH: Labels = Labels {
     follow_latest: "跟随最新",
     source_incomplete: "源不完整",
     read_up_to_unknown: "读取范围未给",
+    ledger_empty: "账本为空：没有可读的记录",
+    pages_read: "{} 窗 {} 页",
+    pages_cut: "读预算 {} 页 · 上下文 {} 页",
     loaded_rows_top: "已载入 {} 条",
     loaded_badge: "已载入 {}",
     show_up_to: "只看到",
     all: "全部",
+    cursor_off_online: "在线时不可用",
+    cursor_off_online_note: "「只看到」在线时不可用：Runtime 还不能保证按时间查账本有界，在线只按序号读。要按时间看，请离线打开副本或测试根。",
     text_size: "字号",
     text_sizes: ["标准", "大", "特大"],
     language: "语言",
@@ -1227,6 +1264,8 @@ pub const ZH: Labels = Labels {
         ("latest_event", "最新一条时间"),
         ("age", "距今"),
         ("integrity", "账本是否完整"),
+        ("pages_read", "已读页"),
+        ("pages_cut", "截断页"),
         ("repair_count", "修复记录数"),
         ("writer", "写入进程：编号／PID／是否仍在运行"),
         ("modules", "出现过的模块"),
@@ -1309,6 +1348,8 @@ pub const ZH: Labels = Labels {
     integrity_ok: "完整",
     integrity_ok_sqlite: "打开时的检查通过（较早的记录读到时再校验）",
     integrity_bad: "不完整：读全={} · 损坏尾部={}",
+    integrity_unread: "未读（当前钉点下还没有读回任何一页）",
+    integrity_ok_pages: "当前钉点下读回的页都完整",
     writer_absent: "无写入进程记录",
     writer_locked: "记录被占用（{} 字节）",
     writer_running: "{} · PID {} · 仍在运行 · 起 {}",
@@ -1344,6 +1385,7 @@ pub const ZH: Labels = Labels {
     frame_via_input: "帧取自同一运行中前一条操作意图 #{}",
     frame_basis_missing: "已载入的行里找不到它所基于的帧",
     frame_capture_missing: "账本里没有这一帧的截图产物",
+    frame_capture_not_in_range: "在序号 {}–{} 内没找到这一帧的截图产物",
     frame_events_failed: "读取这一帧的事件失败：{}",
     action_kinds: &[
         ("tap", "点击"),
@@ -1362,6 +1404,11 @@ pub const ZH: Labels = Labels {
     filter_instance_conflict: "端口与实例编号只能选一",
     filter_rejected: "过滤条件无效：{}",
     read_failed: "读取失败：{}",
+    page_budget_refused: "Runtime 拒答了这一页（{}）：它没能在时限内读完。Runtime 刚启动、还在后台整理 Lab 关系时，很多页（Lab 页签最常见）会这样被拒，过一会儿再读即可。",
+    page_writer_timeout: "Runtime 没有按时回应这一页（{}）。",
+    page_read_again: "窗口不会自己重发；要再读，请按「读更早」、换页签或筛选、按「跳到最新」，或关掉窗口再打开。",
+    follow_read_again: "窗口不会自己重发，跟随已停下；要再读，请再勾上「跟随最新」、按「跳到最新」、换页签或筛选，或关掉窗口再打开。",
+    frame_read_again: "窗口不会自己重发；要再读，请按「跳到最新」、换页签或筛选，或关掉窗口再打开，然后再选上这一行。",
     outcome_words: "{}{}",
     outcome_table_unusable: "结果码说明表不可用：{}",
     outcome_unknown: "这个码不在本界面的说明表里，可能来自更新版本的 Runtime；以上是原码，详情见排障窗口",
@@ -2028,10 +2075,15 @@ pub const EN: Labels = Labels {
     follow_latest: "Follow Latest",
     source_incomplete: "Source Incomplete",
     read_up_to_unknown: "Read Range Not Given",
+    ledger_empty: "The Ledger Is Empty: No Record to Read",
+    pages_read: "{} windows, {} pages",
+    pages_cut: "budget {} · run context {}",
     loaded_rows_top: "Loaded Rows: {}",
     loaded_badge: "Loaded {}",
     show_up_to: "Show Up To",
     all: "All",
+    cursor_off_online: "Off while online",
+    cursor_off_online_note: "Show Up To is off while online: the Runtime cannot yet keep reads by time bounded, so online reads go by position only. To read by time, open a copy or a test root offline.",
     text_size: "Text Size",
     text_sizes: ["Standard", "Large", "Extra Large"],
     language: "Language",
@@ -2090,6 +2142,8 @@ pub const EN: Labels = Labels {
         ("latest_event", "Latest Event"),
         ("age", "Age"),
         ("integrity", "Ledger Integrity"),
+        ("pages_read", "Pages Read"),
+        ("pages_cut", "Pages Cut"),
         ("repair_count", "Repair Records"),
         ("writer", "Writer: ID／PID／Running"),
         ("modules", "Modules Seen"),
@@ -2172,6 +2226,8 @@ pub const EN: Labels = Labels {
     integrity_ok: "Intact",
     integrity_ok_sqlite: "Passed the opening check (earlier records are verified as they are read)",
     integrity_bad: "Not intact: read_complete={} · corrupt tail={}",
+    integrity_unread: "Not read yet (no page at the current pin has come back)",
+    integrity_ok_pages: "Every page read at the current pin was whole",
     writer_absent: "No writer recorded",
     writer_locked: "Record held open ({} bytes)",
     writer_running: "{} · PID {} · still running · since {}",
@@ -2207,6 +2263,7 @@ pub const EN: Labels = Labels {
     frame_via_input: "frame taken from the run's previous effect intent #{}",
     frame_basis_missing: "The frame it acted on is not found among the loaded rows",
     frame_capture_missing: "The ledger holds no capture of this frame",
+    frame_capture_not_in_range: "No capture of this frame between positions {} and {}",
     frame_events_failed: "Reading this frame's events failed: {}",
     action_kinds: &[
         ("tap", "tap"),
@@ -2225,6 +2282,11 @@ pub const EN: Labels = Labels {
     filter_instance_conflict: "Pick a port or type an instance id, not both",
     filter_rejected: "Filter rejected: {}",
     read_failed: "Read failed: {}",
+    page_budget_refused: "The Runtime refused this page ({}): it could not read it within its time limit. While the Runtime has just started and is still sorting out its Lab relations in the background, many pages (most often on the Lab tab) are refused like this; read again a little later.",
+    page_writer_timeout: "The Runtime did not answer this page in time ({}).",
+    page_read_again: "The window does not ask again by itself; to read again, press Read Earlier, change the tab or a filter, press Jump to Latest, or close the window and open it again.",
+    follow_read_again: "The window does not ask again by itself, and following has stopped; to read again, tick Follow Latest again, press Jump to Latest, change the tab or a filter, or close the window and open it again.",
+    frame_read_again: "The window does not ask again by itself; to read again, press Jump to Latest, change the tab or a filter, or close the window and open it again, then select this row again.",
     outcome_words: "{} {}",
     outcome_table_unusable: "Outcome words unavailable: {}",
     outcome_unknown: "This code is not in this console's table; it may come from a newer Runtime. The code is shown as is; see the troubleshooting window for details",
