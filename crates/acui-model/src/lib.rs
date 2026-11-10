@@ -52,8 +52,9 @@ use serde_json::Value;
 pub enum QueryError {
     /// The id box holds something that is not a whole canonical id.
     IdNotCanonical,
-    /// A port is picked and an `instance_` id is typed: the ledger takes one
-    /// instance filter, and the console gives neither precedence.
+    /// A port (offline) or an instance (online) is picked and an `instance_`
+    /// id is typed: the ledger takes one instance filter, and the console
+    /// gives neither precedence.
     InstanceFilterConflict,
     /// The ledger refused the assembled query; carries the ledger's own code,
     /// or the console's own `CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN` when its
@@ -82,10 +83,12 @@ pub struct Filters {
     /// One canonical `correlation_` / `request_` / `run_` / `task_` /
     /// `instance_` id.
     pub id_text: String,
-    /// Every instance id ever bound to the picked port: one instance, queried
-    /// as the whole set or not at all.
+    /// Offline, every instance id ever bound to the picked port: one
+    /// instance, queried as the whole set or not at all. Online, the one id
+    /// of the instance picked among those the status read reports.
     pub instance_ids: Vec<InstanceId>,
-    /// The port that set stands for; display only, the query carries the set.
+    /// The port that set stands for, offline only; display only, the query
+    /// carries the set.
     pub port: Option<u16>,
     /// The time bounds, offline only: online the window sets none, and the
     /// online face sends no page with a time condition (#429).
