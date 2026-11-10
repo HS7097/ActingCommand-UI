@@ -267,13 +267,17 @@ pub fn refresh(
     let display = model.display_rows();
     let mut errors = Vec::new();
     if let Some(error) = &model.query_error {
-        errors.push(query_error_text(labels, Some(error)));
+        errors.push(query_error_text(labels, Some(error), labels.page_read_again));
     }
+    // A page following failed at lies above what is loaded, where "read
+    // earlier" never reads: its own way to read again.
     if let Some(error) = &model.follow_error {
-        errors.push(fill(labels.follow_failed, &[&query_error_text(labels, Some(error))]));
+        let text = query_error_text(labels, Some(error), labels.follow_read_again);
+        errors.push(fill(labels.follow_failed, &[&text]));
     }
     if let Some(error) = &model.span_error {
-        errors.push(fill(labels.span_failed, &[&query_error_text(labels, Some(error))]));
+        let text = query_error_text(labels, Some(error), labels.page_read_again);
+        errors.push(fill(labels.span_failed, &[&text]));
     }
     window.set_filter_error(errors.join(" · ").into());
     window.set_has_more(model.has_earlier());
@@ -1063,8 +1067,9 @@ fn frame_size_text(labels: &Labels, frame_size: Option<(f32, f32)>) -> String {
 }
 
 /// A refused query names its code, the contract's or the console's own; the
-/// code's words follow it.
-fn query_error_text(labels: &Labels, error: Option<&QueryError>) -> String {
+/// code's words follow it. `again` says how a person reads a page the Runtime
+/// did not answer again, from where it failed (`reason_text`).
+fn query_error_text(labels: &Labels, error: Option<&QueryError>, again: &str) -> String {
     match error {
         None => String::new(),
         Some(QueryError::IdNotCanonical) => labels.filter_id_error.to_string(),
@@ -1079,16 +1084,17 @@ fn query_error_text(labels: &Labels, error: Option<&QueryError>) -> String {
         // The read face's own words, and, when the error carries a code, that
         // code's words after them.
         Some(QueryError::ReadFailed { text, code }) => {
-            fill(labels.read_failed, &[&reason_text(labels, text, *code)])
+            fill(labels.read_failed, &[&reason_text(labels, text, *code, again)])
         }
     }
 }
 
 /// A read's own words, then the words of the outcome code beneath them: for a
 /// page the Runtime did not answer (`UNANSWERED_PAGE_CODES`), why, by its
-/// code, then how a person reads it again, since the window does not ask it
-/// again by itself; for the console's own code, its sentence and handling.
-fn reason_text(labels: &Labels, text: &str, code: Option<&'static str>) -> String {
+/// code, then how a person reads it again (`again`, which depends on where
+/// the page failed), since the window does not ask it again by itself; for
+/// the console's own code, its sentence and handling.
+fn reason_text(labels: &Labels, text: &str, code: Option<&'static str>, again: &str) -> String {
     let words = match code {
         Some(code) if UNANSWERED_PAGE_CODES.contains(&code) => {
             let why = if code == WRITER_RESPONSE_TIMEOUT {
@@ -1096,7 +1102,7 @@ fn reason_text(labels: &Labels, text: &str, code: Option<&'static str>) -> Strin
             } else {
                 labels.page_budget_refused
             };
-            Some(fill(labels.outcome_words, &[&fill(why, &[code]), labels.page_read_again]))
+            Some(fill(labels.outcome_words, &[&fill(why, &[code]), again]))
         }
         Some(code) => outcome_sentence(labels, code),
         None => None,
@@ -1107,11 +1113,15 @@ fn reason_text(labels: &Labels, text: &str, code: Option<&'static str>) -> Strin
     }
 }
 
-/// Why a frame's own events could not be read.
+/// Why a frame's own events could not be read. A lookup that failed is not
+/// asked again for the row still selected, "read earlier" included: it is
+/// read again for a row selected anew after the view starts over.
 fn frame_failure_text(labels: &Labels, failure: &FrameLookupError) -> String {
     match failure {
         FrameLookupError::Incomplete => labels.source_incomplete.to_owned(),
-        FrameLookupError::Read { text, code } => reason_text(labels, text, *code),
+        FrameLookupError::Read { text, code } => {
+            reason_text(labels, text, *code, labels.frame_read_again)
+        }
     }
 }
 
