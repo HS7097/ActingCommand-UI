@@ -151,8 +151,8 @@ answers come from:
 
 `--source <auto|offline|online>`, default `auto`: if the client can connect to the Runtime the state root
 points at, online; otherwise **no ledger is opened**: `auto` never opens the offline face by itself, which
-would read the whole local ledger (on a production machine, the big one under the state root) without
-anyone asking. The window then reads nothing of the ledger — no page, no material, no port map, no fact
+would open the local ledger (on a production machine, the big one under the state root) without anyone
+asking. The window then reads nothing of the ledger — no page, no material, no port map, no fact
 replay. The instance card's first line, "read face", says why (`runtime-info.json` absent, or the client
 error code and operation of the failed connection); the list says no events were read, in red when the
 connection failed, and the controls that would query the ledger are off, as for an unopened face (below);
@@ -167,8 +167,8 @@ status read nor its fact snapshot — is an error in any mode, with both reads' 
 instance card state in red why the read face did not open, and "Reopen" is offered.
 
 When the offline read face cannot be opened — with `offline`, or after the press of "Open Offline" — the
-console does not exit: the ledger window opens **unopened**, which is what a fresh install looks like, since the
-Runtime creates the ledger on its first start. The instance card then has only its first line, "read
+console does not exit: the window shows the face **unopened**, which is what a fresh state root looks like
+to the offline face, since the Runtime creates the ledger on its first start. The instance card then has only its first line, "read
 face", which says the ledger could not be opened and states the read face's own `code`, `operation` and
 `detail` verbatim, and for an io error its io kind (`LedgerIoKind`: `not_found`, `permission_denied`,
 …). The kind, never the localized `detail`, tells "no ledger yet" from "a ledger that cannot be read":

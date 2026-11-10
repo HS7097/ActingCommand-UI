@@ -191,7 +191,8 @@ pub struct Labels {
     pub ledger_unopened: &'static str,
     pub list_unopened: &'static str,
     /// `auto` could not read online and opened nothing: the list and the frame
-    /// pane, pointing at the instance card and at "open offline".
+    /// pane, pointing at the instance card and at "reopen" once the Runtime
+    /// runs; "open offline" is only for a copy or a test root.
     pub list_offline_offered: &'static str,
     pub age_days: &'static str,
     pub age_hours: &'static str,
@@ -1377,7 +1378,7 @@ pub const ZH: Labels = Labels {
     io_kind_text: " · IO 类别 {}",
     ledger_unopened: "账本未打开",
     list_unopened: "账本未打开：没有读取任何事件，原因见实例卡",
-    list_offline_offered: "没有读取任何事件：读不了在线账本，原因见实例卡。要读本机账本，请按上方「离线打开」",
+    list_offline_offered: "没有读取任何事件：读不了在线账本，原因见实例卡。Runtime 运行后按「重新打开」在线读取；「离线打开」只给副本、测试根用",
     age_days: "{} 天前",
     age_hours: "{} 小时前",
     age_minutes: "{} 分钟前",
@@ -2259,7 +2260,7 @@ pub const EN: Labels = Labels {
     io_kind_text: " · io kind {}",
     ledger_unopened: "Ledger Not Opened",
     list_unopened: "Ledger not opened: no events were read; the instance card says why",
-    list_offline_offered: "No events were read: the ledger cannot be read online, and the instance card says why. To read the local ledger, press Open Offline above",
+    list_offline_offered: "No events were read: the ledger cannot be read online, and the instance card says why. Once the Runtime runs, press Reopen to read it online; Open Offline is only for a copy or a test root",
     age_days: "{} days ago",
     age_hours: "{} hours ago",
     age_minutes: "{} minutes ago",
