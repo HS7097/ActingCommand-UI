@@ -70,7 +70,7 @@ const FIRST_POSITION: u64 = 1;
 const ONLINE_PAGE_SECONDS: u64 = 161;
 const OFFLINE_PAGE_SECONDS: u64 = 30;
 /// Opening offline: the ledger's own 60 s opening, then the 30 s fact replay.
-/// Opening online (and `auto`, which tries online first): the three
+/// Opening online (and `auto`, which opens no other face): the three
 /// connections, each its connect, `Health` and `BindChannel` (5 s, 20 s and
 /// 5 s each: 90 s), then the status read and the fact read the pin is taken
 /// from (5 s each, the fact read after the main connection's rebuild when the
@@ -116,9 +116,11 @@ pub enum Command {
     RereadInstances,
 }
 
-/// What a session opens: the state root and the face `--source` asks for, and
-/// the view to start with — the window's first one (`tab`), or the one the
-/// last session left (`carry`), its time bound dropped.
+/// What a session opens: the state root and the face it asks for — the one
+/// `--source` asked for, or the offline face a person pressed for in a window
+/// of `auto` (`LedgerHandle::open_offline`) — and the view to start with — the
+/// window's first one (`tab`), or the one the last session left (`carry`), its
+/// time bound dropped.
 pub struct Opening {
     pub state_root: PathBuf,
     pub mode: SourceMode,
@@ -186,8 +188,9 @@ impl Worker {
     fn run(self, opening: Opening, commands: Receiver<Command>) {
         let source = match catch_unwind(AssertUnwindSafe(|| self.start(&opening))) {
             Ok(Some(source)) => source,
-            // Unopened, failed, or another session took the window: there is
-            // nothing to read through, and no request is sent to it.
+            // Unopened, offered and not opened, failed, or another session
+            // took the window: there is nothing to read through, and no
+            // request is sent to it.
             Ok(None) => return,
             Err(panic) => return self.panicked(panic),
         };
@@ -326,6 +329,16 @@ impl Worker {
             Session::Unopened { root, reason, failure } => {
                 self.in_session(|state| {
                     state.phase = Phase::Unopened { root, reason, failure };
+                    state.port_map = PortMap::Unopened;
+                })?;
+                self.repaint();
+                return Ok(None);
+            }
+            // `auto` could not read online: no face is opened, and nothing of
+            // the ledger is read; the window offers the offline face.
+            Session::OfflineOffered { root, reason } => {
+                self.in_session(|state| {
+                    state.phase = Phase::OfflineOffered { root, reason };
                     state.port_map = PortMap::Unopened;
                 })?;
                 self.repaint();

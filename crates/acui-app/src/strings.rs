@@ -170,9 +170,13 @@ pub struct Labels {
     pub writer_running: &'static str,
     pub writer_stopped: &'static str,
     pub writer_runtime: &'static str,
-    /// The instance card's read-face line: online, or offline and why.
+    /// The instance card's read-face line: online; offline, by `--source
+    /// offline` or, in a window of `auto`, by a person's press of "open
+    /// offline"; or, for `auto` that could not read online, nothing read, and
+    /// why (`runtime-info.json` absent, or the client's code and operation).
     pub source_online: &'static str,
     pub source_offline_requested: &'static str,
+    pub source_offline_pressed: &'static str,
     pub source_offline_absent: &'static str,
     pub source_offline_failed: &'static str,
     /// The offline face the ledger refused to open: ledger code, operation,
@@ -186,6 +190,9 @@ pub struct Labels {
     /// Unopened: the top bar and the two boxes, then the list and the frame pane.
     pub ledger_unopened: &'static str,
     pub list_unopened: &'static str,
+    /// `auto` could not read online and opened nothing: the list and the frame
+    /// pane, pointing at the instance card and at "open offline".
+    pub list_offline_offered: &'static str,
     pub age_days: &'static str,
     pub age_hours: &'static str,
     pub age_minutes: &'static str,
@@ -258,11 +265,15 @@ pub struct Labels {
     pub ledger_worker_gone: &'static str,
     /// A read reached a Runtime other than the session's; beside "reopen".
     pub ledger_owner_changed: &'static str,
-    /// A Runtime is up while an `auto` window reads offline for want of one;
-    /// beside "reopen".
+    /// A Runtime is up while an `auto` window reads nothing for want of one,
+    /// or reads offline; beside "reopen", which then reads online.
     pub ledger_runtime_started: &'static str,
     /// The button that opens a new session of the read face.
     pub reopen_ledger: &'static str,
+    /// The button that opens the offline face in an `auto` window that could
+    /// not read online, and beside it the state root whose ledger it opens.
+    pub open_offline: &'static str,
+    pub offline_open_path: &'static str,
     /// The busy line: what the reader reads, the seconds it has waited, and
     /// about how long a read of that kind may take at most; per page for a
     /// read that follows a cursor.
@@ -1357,14 +1368,16 @@ pub const ZH: Labels = Labels {
     writer_runtime: "运行中的 Runtime · PID {} · {} · 起 {}",
     source_online: "在线 · 经 runtime-client 直连运行中的 Runtime",
     source_offline_requested: "离线 · 按 --source offline",
-    source_offline_absent: "离线 · 自动：状态根里没有 runtime-info.json",
-    source_offline_failed: "离线 · 自动：连接 Runtime 失败 {}（{}）",
+    source_offline_pressed: "离线 · 按了「离线打开」（只读，给副本、测试根用）",
+    source_offline_absent: "未打开 · 自动：状态根里没有 runtime-info.json，读不了在线账本；离线账本不会自动打开",
+    source_offline_failed: "未打开 · 自动：连接 Runtime 失败 {}（{}），读不了在线账本；离线账本不会自动打开",
     source_unopened: "账本未能打开：{}（{}）· {}",
     source_unopened_hint: "状态根里还没有账本，多半是 Runtime 从未在这里启动过；可用启动器的「启动」",
     source_unopened_budget_hint: "离线打开没能在 60 秒内完成（详情里的 phase 指出停在哪一步）：可按「重新打开」再试，或在 Runtime 运行时在线读",
     io_kind_text: " · IO 类别 {}",
     ledger_unopened: "账本未打开",
     list_unopened: "账本未打开：没有读取任何事件，原因见实例卡",
+    list_offline_offered: "没有读取任何事件：读不了在线账本，原因见实例卡。要读本机账本，请按上方「离线打开」",
     age_days: "{} 天前",
     age_hours: "{} 小时前",
     age_minutes: "{} 分钟前",
@@ -1421,8 +1434,10 @@ pub const ZH: Labels = Labels {
     ledger_worker_panicked: "读取线程意外终止：{}",
     ledger_worker_gone: "读取线程已经退出",
     ledger_owner_changed: "Runtime 已换成另一个进程：这个窗口读的是已经退出的那一个；按「重新打开」改读现在运行的 Runtime",
-    ledger_runtime_started: "Runtime 已经在运行：这个窗口读的是离线账本；按「重新打开」改为在线读取",
+    ledger_runtime_started: "Runtime 已经在运行：按「重新打开」改为在线读取",
     reopen_ledger: "重新打开",
+    open_offline: "离线打开（只读，给副本、测试根用）",
+    offline_open_path: "将只读打开这个状态根里的账本：{}",
     busy_waited: "{} 已等待 {} 秒（这类读取最长约 {} 秒）",
     busy_waited_page: "{} 已等待 {} 秒（每页最长约 {} 秒）",
     busy_bindings: "正在读取端口映射…",
@@ -2235,14 +2250,16 @@ pub const EN: Labels = Labels {
     writer_runtime: "Running Runtime · PID {} · {} · since {}",
     source_online: "Online · runtime-client to the running Runtime",
     source_offline_requested: "Offline · by --source offline",
-    source_offline_absent: "Offline · auto: no runtime-info.json in the state root",
-    source_offline_failed: "Offline · auto: connecting to the Runtime failed with {} ({})",
+    source_offline_pressed: "Offline · by Open Offline (read-only, for a copy or a test root)",
+    source_offline_absent: "Not opened · auto: no runtime-info.json in the state root, so the ledger cannot be read online; the offline ledger is not opened by itself",
+    source_offline_failed: "Not opened · auto: connecting to the Runtime failed with {} ({}), so the ledger cannot be read online; the offline ledger is not opened by itself",
     source_unopened: "ledger could not be opened: {} ({}) · {}",
     source_unopened_hint: "the state root has no ledger yet, most likely because the Runtime has never been started here; use Start in the launcher",
     source_unopened_budget_hint: "the offline opening did not finish within 60 s (the detail's phase says where it stopped): press Reopen to try again, or read online while the Runtime runs",
     io_kind_text: " · io kind {}",
     ledger_unopened: "Ledger Not Opened",
     list_unopened: "Ledger not opened: no events were read; the instance card says why",
+    list_offline_offered: "No events were read: the ledger cannot be read online, and the instance card says why. To read the local ledger, press Open Offline above",
     age_days: "{} days ago",
     age_hours: "{} hours ago",
     age_minutes: "{} minutes ago",
@@ -2299,8 +2316,10 @@ pub const EN: Labels = Labels {
     ledger_worker_panicked: "The reader thread stopped unexpectedly: {}",
     ledger_worker_gone: "The reader thread has exited",
     ledger_owner_changed: "The Runtime is another process now: this window reads the one that exited; press Reopen to read the Runtime that runs now",
-    ledger_runtime_started: "The Runtime is running now: this window reads the ledger offline; press Reopen to read it online",
+    ledger_runtime_started: "The Runtime is running now: press Reopen to read the ledger online",
     reopen_ledger: "Reopen",
+    open_offline: "Open Offline (Read-Only, for a Copy or a Test Root)",
+    offline_open_path: "Opens the ledger in this state root, read-only: {}",
     busy_waited: "{} Waiting {} s (a read of this kind takes at most about {} s)",
     busy_waited_page: "{} Waiting {} s (at most about {} s per page)",
     busy_bindings: "Reading the Port Map…",

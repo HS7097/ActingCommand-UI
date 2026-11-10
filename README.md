@@ -150,14 +150,23 @@ answers come from:
   session opens (after the window shows, on the window's reader thread), bounded by a 30-second deadline.
 
 `--source <auto|offline|online>`, default `auto`: if the client can connect to the Runtime the state root
-points at, online; otherwise offline. The instance card's first line, "read face", states which one was
-chosen and why (`runtime-info.json` absent, or the client error code of the failed connection). With
+points at, online; otherwise **no ledger is opened**: `auto` never opens the offline face by itself, which
+would read the whole local ledger (on a production machine, the big one under the state root) without
+anyone asking. The window then reads nothing of the ledger — no page, no material, no port map, no fact
+replay. The instance card's first line, "read face", says why (`runtime-info.json` absent, or the client
+error code and operation of the failed connection); the list says no events were read, in red when the
+connection failed, and the controls that would query the ledger are off, as for an unopened face (below);
+the top bar offers "Reopen", which tries online again, and a button, "Open Offline (Read-Only, for a Copy
+or a Test Root)", with the state root whose ledger it would open written beside it. Only that press opens
+the offline face, in the same window, as a new session of `offline`; the card's "read face" line then says
+it was opened by that press. `--source offline` stays the explicit choice and opens the offline face
+directly. With
 `online`, a failed connection **is an error carrying the client's error code**; it does not quietly
 switch to offline. Across both read faces, a Runtime that connects but states no ledger head — neither its
 status read nor its fact snapshot — is an error in any mode, with both reads' reasons and no fallback. Neither error ends the console: the window stays, the list and the
 instance card state in red why the read face did not open, and "Reopen" is offered.
 
-When the offline read face cannot be opened — with `offline`, or with `auto` falling back to it — the
+When the offline read face cannot be opened — with `offline`, or after the press of "Open Offline" — the
 console does not exit: the ledger window opens **unopened**, which is what a fresh install looks like, since the
 Runtime creates the ledger on its first start. The instance card then has only its first line, "read
 face", which says the ledger could not be opened and states the read face's own `code`, `operation` and
@@ -169,10 +178,12 @@ fact is shown, not even a zero: the list says the ledger is not opened instead o
 tabs, the filter boxes, the id box and the time slider are off; the module and port boxes and the frame
 pane say "ledger not opened". Nothing is asked of the ledger and no material is read. The launcher works
 as usual; once the Runtime has started and made the ledger, "Reopen" opens the read face again. A window
-of the default source (`auto`) that reads offline, or whose offline face is unopened, because no Runtime
-was there offers "Reopen" as soon as the launcher's probe finds one running, with a line saying it can
-read online now; a window `--source offline` asked for keeps reading offline. Neither switches read face
-mid-session on its own.
+of the default source (`auto`) that reads nothing because no Runtime was there, or that reads offline (or
+whose offline face is unopened) after the press of "Open Offline", offers "Reopen" as soon as the
+launcher's probe finds one running, with a line saying it can read online now, and that reopen reads
+online; while no Runtime is found, "Reopen" opens the same face again (after the press, the offline one).
+A window `--source offline` asked for keeps reading offline. Neither switches read face mid-session on its
+own.
 
 **The reader thread**: the window comes up first, and the read face is opened afterwards on the window's
 own reader thread (`acui-ledger-<window id>`). Opening, page reads, reading earlier, following, the jump
@@ -692,8 +703,9 @@ finished only says so. Of probes in flight, only the newest one's answer is show
   outcome line — or that the log could not be read, with the error, or holds no such line — and the log
   path; if it has not exited it
   does one more `connect`, and a connection means ready, stating the PID and owner epoch, and then the
-  press is recorded (see below). A ledger window of the default source that reads offline, or whose
-  offline face is unopened, then offers "Reopen", saying it can read online now — it **never quietly
+  press is recorded (see below). A ledger window of the default source that reads nothing for want of a
+  Runtime, or reads offline after the press of "Open Offline" (its offline face unopened included), then
+  offers "Reopen", saying it can read online now — it **never quietly
   switches read face mid-session**. If all 60 attempts fail to connect, it says "still not ready" and the last
   client error code. Readiness is **never read from the daemon's output**: the log is read back only
   after an early exit, for that one outcome, and nothing in it is interpreted but whether its code is
@@ -1265,7 +1277,8 @@ one frame-grouping function the live picture shares with the ledger window:
   `EvidenceSource::open` / `query` / `open_report` / `read_material`;
   `Session::open(root, mode)` picks one of it and the online `OnlineSource` according to `--source`, or
   gives back `Session::Unopened` with the ledger's own error (`LedgerOpenFailure`: code, operation,
-  detail, io kind) when the ledger refuses the offline face, and `material_reader()` hands material
+  detail, io kind) when the ledger refuses the offline face, or, for `auto` that cannot connect,
+  `Session::OfflineOffered` with why, opening no face at all; `material_reader()` hands material
   reading to the background thread. It also reads the instances' task facts once per session
   (`instance_facts()`): offline replayed at the pinned position, online with their status, the two
   reads the pin is taken from; for the fact snapshot's scope and value types it names the contract crate directly.

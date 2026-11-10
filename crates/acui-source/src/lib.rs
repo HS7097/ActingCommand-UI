@@ -1097,8 +1097,9 @@ fn page_request(
 /// Which read face `--source` asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SourceMode {
-    /// Online when the client can reach a Runtime through the state root,
-    /// offline otherwise; the instance card says which and why.
+    /// Online when the client can reach a Runtime through the state root;
+    /// otherwise no face at all, with why (`Session::OfflineOffered`): the
+    /// offline face opens only when a person asks for it (`Offline`).
     #[default]
     Auto,
     Offline,
@@ -1116,11 +1117,13 @@ impl SourceMode {
     }
 }
 
-/// Why a session reads offline. Stated on the instance card, so an `auto`
-/// pick is never silent.
+/// Why a session reads offline, or, for `auto`, why it reads nothing: `auto`
+/// never opens the offline face by itself (`Session::OfflineOffered`). Stated
+/// on the instance card, so neither is ever silent.
 #[derive(Debug, Clone)]
 pub enum OfflineReason {
-    /// `--source offline`.
+    /// `SourceMode::Offline`: `--source offline`, or a person's press in a
+    /// window of `auto` that could not read online.
     Requested,
     /// `auto`: the client found no `runtime-info.json` in the state root.
     RuntimeInfoAbsent,
@@ -1137,40 +1140,52 @@ pub enum ReadSource {
     Online(OnlineSource),
 }
 
-/// What this session reads through: an open read face, or the offline face
-/// the ledger refused to open. Unopened, nothing is read — no page, no port
-/// map, no material — and the launcher still works: the Runtime it starts is
-/// what creates the ledger.
+/// What this session reads through: an open read face; the offline face the
+/// ledger refused to open; or, for `auto` that could not read online, no face
+/// at all. Unopened or offered, nothing is read — no page, no port map, no
+/// material, no fact replay — and the launcher still works: the Runtime it
+/// starts is what creates the ledger.
 pub enum Session {
     Open(ReadSource),
     Unopened { root: PathBuf, reason: OfflineReason, failure: LedgerOpenFailure },
+    /// `auto` could not read online, for `reason` (`RuntimeInfoAbsent` or
+    /// `ConnectFailed`): the offline face could be opened, and is not. The
+    /// ledger is not opened; only a person's press opens it, as a session of
+    /// `SourceMode::Offline`.
+    OfflineOffered { root: PathBuf, reason: OfflineReason },
 }
 
 impl Session {
-    /// `Online` fails loud with the client's own error. `Auto` reads offline
-    /// only when the client could not reach a Runtime, and keeps the reason;
-    /// a Runtime that was reached but stated no ledger head (`OnlineSource::pin`)
-    /// is an error in every mode. An offline face the ledger refuses to open is not
-    /// an error of the session: it is `Unopened`, with the ledger's own error.
+    /// `Online` fails loud with the client's own error. `Auto` never opens the
+    /// offline face: when the client could not reach a Runtime, it is
+    /// `OfflineOffered`, with the reason, and the ledger is not touched. A
+    /// Runtime that was reached but stated no ledger head (`OnlineSource::pin`)
+    /// is an error in every mode. `Offline` opens the offline face; one the
+    /// ledger refuses to open is not an error of the session: it is
+    /// `Unopened`, with the ledger's own error.
     pub fn open(state_root: impl Into<PathBuf>, mode: SourceMode) -> Result<Self> {
         let root = state_root.into();
-        let reason = match mode {
-            SourceMode::Offline => OfflineReason::Requested,
+        match mode {
+            SourceMode::Offline => {}
             SourceMode::Auto | SourceMode::Online => match OnlineSource::connect(&root) {
                 Ok(client) => {
                     return OnlineSource::pin(root, client)
                         .map(|source| Self::Open(ReadSource::Online(source)))
                 }
-                Err(error) if mode == SourceMode::Auto => match error.code().spelling() {
-                    "runtime_info_unavailable" => OfflineReason::RuntimeInfoAbsent,
-                    code => OfflineReason::ConnectFailed {
-                        code,
-                        operation: error.operation().spelling(),
-                    },
-                },
+                Err(error) if mode == SourceMode::Auto => {
+                    let reason = match error.code().spelling() {
+                        "runtime_info_unavailable" => OfflineReason::RuntimeInfoAbsent,
+                        code => OfflineReason::ConnectFailed {
+                            code,
+                            operation: error.operation().spelling(),
+                        },
+                    };
+                    return Ok(Self::OfflineOffered { root, reason });
+                }
                 Err(error) => bail!("在线读面不可用 / online source unavailable: {error}"),
             },
-        };
+        }
+        let reason = OfflineReason::Requested;
         Ok(match EvidenceSource::open(&root) {
             Ok(source) => {
                 let facts = source.instance_facts();
@@ -1183,14 +1198,14 @@ impl Session {
     pub fn state_root(&self) -> &Path {
         match self {
             Self::Open(source) => source.state_root(),
-            Self::Unopened { root, .. } => root,
+            Self::Unopened { root, .. } | Self::OfflineOffered { root, .. } => root,
         }
     }
 
     pub fn offline_reason(&self) -> Option<&OfflineReason> {
         match self {
             Self::Open(source) => source.offline_reason(),
-            Self::Unopened { reason, .. } => Some(reason),
+            Self::Unopened { reason, .. } | Self::OfflineOffered { reason, .. } => Some(reason),
         }
     }
 }

@@ -38,8 +38,8 @@
 //! The Runtime's status comes from the workbench's `Status` reads (`workbench`),
 //! which land in the view as `LauncherView::live`, whatever the launcher itself
 //! is doing; a press's own probe counts only until the next of them. A status
-//! that finds a Runtime up is also what offers a ledger window that reads offline
-//! for want of one to read it online.
+//! that finds a Runtime up is also what offers a ledger window of `auto` that
+//! reads nothing for want of one, or reads offline, to read it online.
 
 use std::fs::File;
 use std::io::{self, Read};
