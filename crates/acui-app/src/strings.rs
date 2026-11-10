@@ -80,10 +80,12 @@ pub struct Labels {
     pub read_up_to_unknown: &'static str,
     /// The pin is 0: the ledger holds no record, and no page is read.
     pub ledger_empty: &'static str,
-    /// The card's line of how the loaded windows were read: windows, pages,
-    /// pages the Runtime's read budget cut short (`read_budget`), and pages
-    /// stating a run whose recovery context the budget cut (`context_limit`).
+    /// The card's line of how the loaded windows were read: windows, pages.
     pub pages_read: &'static str,
+    /// The card's line under it: pages the Runtime's read budget cut short
+    /// (`read_budget`), and pages stating a run whose recovery context the
+    /// budget cut (`context_limit`).
+    pub pages_cut: &'static str,
     pub loaded_rows_top: &'static str,
     pub loaded_badge: &'static str,
     pub show_up_to: &'static str,
@@ -132,7 +134,7 @@ pub struct Labels {
     /// `EventSource`, in the contract's declaration order.
     pub sources: [(&'static str, &'static str); 8],
     /// Field key to label, for the instance card and the detail pane.
-    pub fields: [(&'static str, &'static str); 51],
+    pub fields: [(&'static str, &'static str); 52],
     /// `ExecutionBackendProvenance`, by wire value.
     pub provenances: [(&'static str, &'static str); 2],
     pub artifact_kinds: [(&'static str, &'static str); 6],
@@ -1196,7 +1198,8 @@ pub const ZH: Labels = Labels {
     source_incomplete: "源不完整",
     read_up_to_unknown: "读取范围未给",
     ledger_empty: "账本为空：没有可读的记录",
-    pages_read: "{} 窗 {} 页 · 读预算截断 {} 页 · 运行上下文截断 {} 页",
+    pages_read: "{} 窗 {} 页",
+    pages_cut: "读预算 {} 页 · 上下文 {} 页",
     loaded_rows_top: "已载入 {} 条",
     loaded_badge: "已载入 {}",
     show_up_to: "只看到",
@@ -1262,6 +1265,7 @@ pub const ZH: Labels = Labels {
         ("age", "距今"),
         ("integrity", "账本是否完整"),
         ("pages_read", "已读页"),
+        ("pages_cut", "截断页"),
         ("repair_count", "修复记录数"),
         ("writer", "写入进程：编号／PID／是否仍在运行"),
         ("modules", "出现过的模块"),
@@ -2072,7 +2076,8 @@ pub const EN: Labels = Labels {
     source_incomplete: "Source Incomplete",
     read_up_to_unknown: "Read Range Not Given",
     ledger_empty: "The Ledger Is Empty: No Record to Read",
-    pages_read: "{} windows, {} pages · {} cut by the read budget · {} with a run's context cut",
+    pages_read: "{} windows, {} pages",
+    pages_cut: "budget {} · run context {}",
     loaded_rows_top: "Loaded Rows: {}",
     loaded_badge: "Loaded {}",
     show_up_to: "Show Up To",
@@ -2138,6 +2143,7 @@ pub const EN: Labels = Labels {
         ("age", "Age"),
         ("integrity", "Ledger Integrity"),
         ("pages_read", "Pages Read"),
+        ("pages_cut", "Pages Cut"),
         ("repair_count", "Repair Records"),
         ("writer", "Writer: ID／PID／Running"),
         ("modules", "Modules Seen"),

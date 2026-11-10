@@ -170,17 +170,20 @@ pub fn refresh(
         // How the loaded windows were read, counted, never dropped: the pages
         // the read budget cut short (their cursor read the rest) and the pages
         // stating a run whose recovery context it cut.
+        // Two short lines, since a card line other than the last never wraps
+        // and one long line was cut short before its second count.
         field(
             labels,
             "pages_read",
+            fill(labels.pages_read, &[&scope.windows.to_string(), &scope.pages.to_string()]),
+            "",
+        ),
+        field(
+            labels,
+            "pages_cut",
             fill(
-                labels.pages_read,
-                &[
-                    &scope.windows.to_string(),
-                    &scope.pages.to_string(),
-                    &scope.budget_pages.to_string(),
-                    &scope.context_pages.to_string(),
-                ],
+                labels.pages_cut,
+                &[&scope.budget_pages.to_string(), &scope.context_pages.to_string()],
             ),
             "read_budget · context_limit",
         ),

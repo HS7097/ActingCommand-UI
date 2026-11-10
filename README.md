@@ -327,10 +327,10 @@ version exists only in the tag.
   states the positions the loaded windows cover ("read positions A–B"), with "source incomplete" appended
   when a window's page said its read was incomplete — except a page that only the Runtime's read budget
   stopped (#411 A51): its cursor goes on, and the window follows it. At a pin of 0 the ledger holds no
-  record: no page is asked, and the top bar says the ledger is empty. The instance card's "Pages Read"
-  line counts, over the loaded windows, the windows and pages read, the pages the read budget cut short
-  (`read_budget`; their cursor read the rest) and the pages stating a run whose recovery context the
-  budget cut (`context_limit`): counted, never dropped.
+  record: no page is asked, and the top bar says the ledger is empty. Two lines of the instance card count,
+  over the loaded windows: "Pages Read", the windows and pages read; "Pages Cut", the pages the read budget
+  cut short (`read_budget`; their cursor read the rest) and the pages stating a run whose recovery context
+  the budget cut (`context_limit`): counted, never dropped.
 - **Jump to latest, follow latest (online only)**: "jump to latest" reads status and facts again —
   neither read appends a ledger record, and no page is asked — moves the pin to the head they state
   (above), drops any time bound and starts the view over from the new pin; when neither states a head,
