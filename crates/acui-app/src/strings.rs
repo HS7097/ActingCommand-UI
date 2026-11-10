@@ -80,15 +80,14 @@ pub struct Labels {
     pub read_up_to_unknown: &'static str,
     /// The pin is 0: the ledger holds no record, and no page is read.
     pub ledger_empty: &'static str,
-    /// The card's line of how the loaded windows were read: windows, pages.
+    /// The card's line of how the loaded windows were read: windows, pages,
+    /// and the point reads that located the time cursor ("show up to") the
+    /// view starts from.
     pub pages_read: &'static str,
     /// The card's line under it: pages the Runtime's read budget cut short
     /// (`read_budget`), and pages stating a run whose recovery context the
     /// budget cut (`context_limit`).
     pub pages_cut: &'static str,
-    /// The card's line of the point reads that located the time cursor the
-    /// view starts from.
-    pub point_reads: &'static str,
     pub loaded_rows_top: &'static str,
     pub loaded_badge: &'static str,
     pub show_up_to: &'static str,
@@ -146,7 +145,7 @@ pub struct Labels {
     /// `EventSource`, in the contract's declaration order.
     pub sources: [(&'static str, &'static str); 8],
     /// Field key to label, for the instance card and the detail pane.
-    pub fields: [(&'static str, &'static str); 53],
+    pub fields: [(&'static str, &'static str); 52],
     /// `ExecutionBackendProvenance`, by wire value.
     pub provenances: [(&'static str, &'static str); 2],
     pub artifact_kinds: [(&'static str, &'static str); 6],
@@ -249,12 +248,15 @@ pub struct Labels {
     /// How depends on where the page failed: a timeline or span page
     /// (`page_read_again`), a window following read onto the top, which
     /// "read earlier" never reads again (`follow_read_again`), or a frame's
-    /// lookup, read again only for a row selected anew (`frame_read_again`).
+    /// lookup, read again only for a row selected anew (`frame_read_again`),
+    /// or a point read of the time cursor's locate, after which no window is
+    /// read, so "read earlier" is not offered (`locate_read_again`).
     pub page_budget_refused: &'static str,
     pub page_writer_timeout: &'static str,
     pub page_read_again: &'static str,
     pub follow_read_again: &'static str,
     pub frame_read_again: &'static str,
+    pub locate_read_again: &'static str,
     /// An outcome code's sentence, then its handling.
     pub outcome_words: &'static str,
     /// The outcome words could not be read: the table's problem.
@@ -294,7 +296,7 @@ pub struct Labels {
     pub busy_waited_page: &'static str,
     pub busy_bindings: &'static str,
     pub busy_span: &'static str,
-    /// point read, point reads at most.
+    /// page, pages at most: the time cursor's locate, one point read a page.
     pub busy_locating: &'static str,
     /// window, windows.
     pub busy_reading: &'static str,
@@ -1223,9 +1225,8 @@ pub const ZH: Labels = Labels {
     source_incomplete: "源不完整",
     read_up_to_unknown: "读取范围未给",
     ledger_empty: "账本为空：没有可读的记录",
-    pages_read: "{} 窗 {} 页",
+    pages_read: "{} 窗 {} 页 · 定位 {} 页",
     pages_cut: "读预算 {} 页 · 上下文 {} 页",
-    point_reads: "{} 次",
     loaded_rows_top: "已载入 {} 条",
     loaded_badge: "已载入 {}",
     show_up_to: "只看到",
@@ -1295,7 +1296,6 @@ pub const ZH: Labels = Labels {
         ("integrity", "账本是否完整"),
         ("pages_read", "已读页"),
         ("pages_cut", "截断页"),
-        ("point_reads", "定位点读"),
         ("repair_count", "修复记录数"),
         ("writer", "写入进程：编号／PID／是否仍在运行"),
         ("modules", "出现过的模块"),
@@ -1441,6 +1441,7 @@ pub const ZH: Labels = Labels {
     page_read_again: "窗口不会自己重发；要再读，请按「读更早」、换页签或筛选、按「跳到最新」，或关掉窗口再打开。",
     follow_read_again: "窗口不会自己重发，跟随已停下；要再读，请再勾上「跟随最新」、按「跳到最新」、换页签或筛选，或关掉窗口再打开。",
     frame_read_again: "窗口不会自己重发；要再读，请按「跳到最新」、换页签或筛选，或关掉窗口再打开，然后再选上这一行。",
+    locate_read_again: "窗口不会自己重发；要再读，请再拖一次「只看到」，或换页签、筛选，会重新定位；也可以把「只看到」拉回最右端（全部）、在线时按「跳到最新」，或关掉窗口再打开，这样就不用「只看到」了。",
     outcome_words: "{}{}",
     outcome_table_unusable: "结果码说明表不可用：{}",
     outcome_unknown: "这个码不在本界面的说明表里，可能来自更新版本的 Runtime；以上是原码，详情见排障窗口",
@@ -1461,7 +1462,7 @@ pub const ZH: Labels = Labels {
     busy_waited_page: "{} 已等待 {} 秒（每页最长约 {} 秒）",
     busy_bindings: "正在读取端口映射…",
     busy_span: "正在读取时间跨度…",
-    busy_locating: "正在定位时间游标：第 {}/{} 次点读…",
+    busy_locating: "正在定位「只看到」：第 {}/{} 页…",
     busy_reading: "正在读取第 {}/{} 窗…",
     busy_repinning: "正在移到账本最新位置…",
     busy_polling: "正在询问账本最新位置…",
@@ -2110,9 +2111,8 @@ pub const EN: Labels = Labels {
     source_incomplete: "Source Incomplete",
     read_up_to_unknown: "Read Range Not Given",
     ledger_empty: "The Ledger Is Empty: No Record to Read",
-    pages_read: "{} windows, {} pages",
+    pages_read: "{} windows, {} pages · locate {}",
     pages_cut: "budget {} · run context {}",
-    point_reads: "{}",
     loaded_rows_top: "Loaded Rows: {}",
     loaded_badge: "Loaded {}",
     show_up_to: "Show Up To",
@@ -2182,7 +2182,6 @@ pub const EN: Labels = Labels {
         ("integrity", "Ledger Integrity"),
         ("pages_read", "Pages Read"),
         ("pages_cut", "Pages Cut"),
-        ("point_reads", "Cursor Point Reads"),
         ("repair_count", "Repair Records"),
         ("writer", "Writer: ID／PID／Running"),
         ("modules", "Modules Seen"),
@@ -2328,6 +2327,7 @@ pub const EN: Labels = Labels {
     page_read_again: "The window does not ask again by itself; to read again, press Read Earlier, change the tab or a filter, press Jump to Latest, or close the window and open it again.",
     follow_read_again: "The window does not ask again by itself, and following has stopped; to read again, tick Follow Latest again, press Jump to Latest, change the tab or a filter, or close the window and open it again.",
     frame_read_again: "The window does not ask again by itself; to read again, press Jump to Latest, change the tab or a filter, or close the window and open it again, then select this row again.",
+    locate_read_again: "The window does not ask again by itself; to read again, move Show Up To again, or change the tab or a filter, which locates it again; or drag Show Up To back to the far right (All), press Jump to Latest (online), or close the window and open it again, which reads without it.",
     outcome_words: "{} {}",
     outcome_table_unusable: "Outcome words unavailable: {}",
     outcome_unknown: "This code is not in this console's table; it may come from a newer Runtime. The code is shown as is; see the troubleshooting window for details",
@@ -2348,7 +2348,7 @@ pub const EN: Labels = Labels {
     busy_waited_page: "{} Waiting {} s (at most about {} s per page)",
     busy_bindings: "Reading the Port Map…",
     busy_span: "Reading the Time Span…",
-    busy_locating: "Locating the Time Cursor: Point Read {} of {}…",
+    busy_locating: "Locating Show Up To: Page {} of {}…",
     busy_reading: "Reading Window {} of {}…",
     busy_repinning: "Moving to the Ledger's Latest Position…",
     busy_polling: "Asking for the Ledger's Latest Position…",

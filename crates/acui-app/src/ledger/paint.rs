@@ -208,14 +208,23 @@ pub fn refresh(
         ),
         field(labels, "integrity", integrity_text(labels, &card), ""),
         // How the loaded windows were read, counted, never dropped: the pages
-        // the read budget cut short (their cursor read the rest) and the pages
-        // stating a run whose recovery context it cut.
+        // read, with the point reads that located the time cursor this view
+        // starts from (#429 T3), then the pages the read budget cut short
+        // (their cursor read the rest) and the pages stating a run whose
+        // recovery context it cut.
         // Two short lines, since a card line other than the last never wraps
         // and one long line was cut short before its second count.
         field(
             labels,
             "pages_read",
-            fill(labels.pages_read, &[&scope.windows.to_string(), &scope.pages.to_string()]),
+            fill(
+                labels.pages_read,
+                &[
+                    &scope.windows.to_string(),
+                    &scope.pages.to_string(),
+                    &scope.point_reads.to_string(),
+                ],
+            ),
             "",
         ),
         field(
@@ -226,14 +235,6 @@ pub fn refresh(
                 &[&scope.budget_pages.to_string(), &scope.context_pages.to_string()],
             ),
             "read_budget · context_limit",
-        ),
-        // The point reads that located the time cursor this view starts from:
-        // a line of its own, as the two above are already full.
-        field(
-            labels,
-            "point_reads",
-            fill(labels.point_reads, &[&scope.point_reads.to_string()]),
-            "",
         ),
         field(labels, "repair_count", count_text(labels, card.repair_count), "repair_count"),
         field(labels, "writer", writer_text(labels, &card.writer), ""),
@@ -323,7 +324,18 @@ pub fn refresh(
         errors.push(dropped_text(labels, dropped, instances.is_err()));
     }
     if let Some(error) = &model.query_error {
-        errors.push(query_error_text(labels, Some(error), labels.page_read_again));
+        // A locate that failed leaves the time cursor unlocated at this pin
+        // and the view with no window to read: "read earlier" is not shown,
+        // and it would not locate again, so the line says what does.
+        let unlocated = model
+            .cursor()
+            .is_some_and(|cursor| cursor.at(model.snapshot_position()).is_none());
+        let again = if unlocated && !model.has_earlier() {
+            labels.locate_read_again
+        } else {
+            labels.page_read_again
+        };
+        errors.push(query_error_text(labels, Some(error), again));
     }
     // A page following failed at lies above what is loaded, where "read
     // earlier" never reads: its own way to read again.

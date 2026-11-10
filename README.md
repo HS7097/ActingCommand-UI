@@ -209,13 +209,17 @@ starts, while it still builds its Lab relations, many pages are refused so, most
 its writer did not answer in time (`writer_response_timeout`) — is stated with its code and why, and the
 window never sends it again by itself. What else stops depends on the page: a timeline page that fails —
 a window the fill reads, or one following reads onto the top — ends the fill there, stops following, and
-no span page is asked after it; a span page or a frame's lookup that fails stops nothing else, and
+no span page is asked after it; a point read locating the time cursor ends it the same way, before any
+window is read; a span page or a frame's lookup that fails stops nothing else, and
 following, if on, goes on without asking that page again. The line says how a person reads again, which
 depends on where it failed:
 on the timeline or the span, Read Earlier, a tab or filter change, Jump to Latest, or closing and
 reopening the window; while following, ticking Follow Latest again, Jump to Latest, a tab or filter
 change, or closing and reopening; for a frame's lookup, Jump to Latest, a tab or filter change, or closing
-and reopening, then selecting the row again.
+and reopening, then selecting the row again; for a point read locating the time cursor, where no window
+was read and Read Earlier is not offered, moving "Show up to" again or a tab or filter change, which
+locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
+reopening, which read without it.
 
 Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.47
 (#407 GPU-1, v0.12.44: configuration revision 27 lets the `vision` section name DirectML
@@ -348,11 +352,12 @@ version exists only in the tag.
   when a window's page said its read was incomplete — except a page that only the Runtime's read budget
   stopped (#411 A51): its cursor goes on, and the window follows it. At a pin of 0 the ledger holds no
   record: no page is asked, and the top bar says the ledger is empty. Two lines of the instance card count,
-  over the loaded windows: "Pages Read", the windows and pages read; "Pages Cut", the pages the read budget
+  over the loaded windows: "Pages Read", the windows and pages read, then ("locate N") the point reads,
+  one page each, that located the time cursor this view starts from (0 to 8; 0 when it was located before
+  at this pin, or no cursor is set); "Pages Cut", the pages the read budget
   cut short (`read_budget`; their cursor read the rest) and the pages stating a run whose recovery context
-  the budget cut (`context_limit`): counted, never dropped. One more line, "Cursor Point Reads", counts the
-  point reads that located the time cursor this view starts from (0 to 8; 0 when it was located before at
-  this pin, or no cursor is set). The span's own point reads are not counted on the card.
+  the budget cut (`context_limit`): counted, never dropped. The span's own point reads are not counted on
+  the card.
 - **Jump to latest, follow latest (online only)**: "jump to latest" reads status and facts again —
   neither read appends a ledger record, and no page is asked — moves the pin to the head they state
   (above), clears the time cursor and starts the view over from the new pin; when neither states a head,
@@ -400,8 +405,10 @@ version exists only in the tag.
   order; the position whose event's time is nearest the time picked wins, and an exact match ends the
   reads early. The view then reads down from that position in the usual windows, and the label shows
   that event's own time, "≤ time". The same time at the same pin is not located again: a tab or filter
-  change reads from the same position with no point read. While locating, the busy line says which point
-  read of 8 it is, and the card's "Cursor Point Reads" counts them. **The position is approximate**: a
+  change reads from the same position with no point read. While locating, the busy line says which page
+  of 8 it is ("Locating Show Up To: Page n of 8"), and the card's "Pages Read" line counts them
+  ("locate N"); the busy line and the error name the control by its caption, "Show Up To".
+  **The position is approximate**: a
   record's time does not always follow its position (#411 A24 — a run's diagnostic artifact records are
   appended when the run ends but carry its start time), so a point read can land on such a record and
   pull the search aside; the label's time is what was actually read there. Offline this differs from the
@@ -409,7 +416,10 @@ version exists only in the tag.
   the one picked are no longer hidden. A point read that comes back without the event its position must
   hold — cut short by the Runtime's read budget, or with none there — stops the locate, loudly, as
   `console_time_locate_failed`: the view reads no window from a guessed position and stays empty with
-  that code until a person reads again. The handle back at the far right, a jump to the latest, following
+  that code until a person reads again; a point read the Runtime refuses (above) stops it the same way.
+  Read Earlier is not offered then, as no window was read: the line says to move the handle again or
+  change the tab or a filter, which locates it again, or to drag it back to the far right, Jump to Latest
+  (online) or reopen, which read without it. The handle back at the far right, a jump to the latest, following
   turned on and a reopen all clear the cursor.
 - **Row types are no longer mirrored**: `acui-rows` re-exports the contract types directly, and only adds
   display functions such as local time, id abbreviation, wire codes and the display-name dictionary.

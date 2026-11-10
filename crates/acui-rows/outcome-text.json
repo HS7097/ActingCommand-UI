@@ -151,14 +151,14 @@
     },
     "console_time_locate_failed": {
       "en": {
-        "sentence": "The time cursor could not be placed: a point read came back without the event its position must hold, so the console stopped and read nothing from a guessed position.",
-        "short": "Time cursor not placed",
-        "handling": "Move the time cursor again, or change the tab or a filter, to place it again; Jump to Latest reads from the latest position without it."
+        "sentence": "Show Up To could not be placed: a page read to locate it came back without the event its position must hold, so the console stopped and read nothing from a guessed position.",
+        "short": "Show Up To not placed",
+        "handling": "Move Show Up To again, or change the tab or a filter, to place it again; or drag it back to the far right (All), press Jump to Latest (online), or reopen the window, to read without it."
       },
       "zh-Hans": {
-        "sentence": "时间游标没能定位：一次点读没有读回这个位置上应有的事件，监控台已停下，没有从猜的位置往下读。",
-        "short": "时间游标未定位",
-        "handling": "再拖一次时间游标，或换页签、筛选，会重新定位；按「跳到最新」则不用游标，从最新位置读。"
+        "sentence": "「只看到」没能定位：为它定位读的一页没有读回这个位置上应有的事件，监控台已停下，没有从猜的位置往下读。",
+        "short": "「只看到」未定位",
+        "handling": "再拖一次「只看到」，或换页签、筛选，会重新定位；也可以把它拉回最右端（全部）、在线时按「跳到最新」，或重新打开窗口，这样就不用「只看到」了。"
       }
     }
   }
