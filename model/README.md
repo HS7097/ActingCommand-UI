@@ -152,9 +152,10 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   equal to what `explain` prints (a price's, with the shared tree it names put back).
 - **`export tables`** writes the tables of exports.json into the repository's `tables/` as the Runtime's shared
   tables, in canonical JSON (keys in UTF-16 order, integers only), and runs the Runtime's own validator,
-  `actinglab --json resource validate`, on each (`paths.actinglab`). Without a validator nothing is written; when
-  it refuses a table, every file gets its previous bytes back (`export_table_invalid`, exit 5, with the
-  validator's problem and JSON pointer). It never commits.
+  `actinglab --json resource validate`, on each (`paths.actinglab`), reading either answer it prints: the
+  envelope (`ok`, `data`, `error`) or, from Runtime 0.12.50, the CLI line (a top-level `outcome`). Without a
+  validator nothing is written; when it refuses a table, every file gets its previous bytes back
+  (`export_table_invalid`, exit 5, with the validator's problem and JSON pointer). It never commits.
 - **`export scoring`** fills each scoring template with the model's numbers; one placeholder it cannot fill
   refuses the whole document. Until the place of `scoring.json` and its validator are decided, it writes nothing
   (`export_refused`, `validator_path_unknown`).
@@ -269,7 +270,8 @@ default:
   warm start screens again only what a change touches, and every result reports the loss of the team the additive
   terms alone would pick (`contracts/formats.md`, "The search").
 - **Exports.** `paths.actinglab` (no default) is the Runtime's validator that `export tables` runs, an
-  `actinglab` from a Runtime build or release; `export.validator_timeout_ms` (120000) bounds each run of it.
+  `actinglab` from a Runtime build or release, of 0.12.49 or earlier or of 0.12.50 on (both answers are read);
+  `export.validator_timeout_ms` (120000) bounds each run of it.
 - **Automatic refresh.** `watch.poll_interval_ms` (5000) is how often `watch` scans, `watch.debounce_ms` (5000)
   the window a change opens, and `watch.keep_workers_warm` (true) keeps the engine workers started between
   refreshes.

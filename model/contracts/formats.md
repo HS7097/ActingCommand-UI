@@ -1558,6 +1558,16 @@ Runtime's own validator checks each of them (#424 design 6.1, design-py 6.1; `sr
    A validator that cannot be started, runs past `export.validator_timeout_ms` or answers otherwise is
    `export_validator_missing` (`start_failed`, `timeout`, `answer_invalid`).
 
+   Both shapes `actinglab` prints are read, so `paths.actinglab` may name a Runtime's `actinglab` of 0.12.49 or
+   earlier, or of 0.12.50 on (`src/acmodel/export/validator.py`). An answer with a top-level `outcome` and no `ok`
+   is the CLI line (Workflow #434 LAB-2b, the Runtime's `contracts/lab-two-entries.md` §9.3): it passes with
+   `outcome.category` `success` and the file's entry in its top-level `entries`, and refuses with a non-zero
+   exit, `outcome.category` `error`, its `outcome.code` (`validator_code`), `message` and `details` (which may
+   be absent; the problem and pointer are read from them as from the envelope's). Any other answer is the
+   envelope: it passes with `ok` true and the entry in `data.entries`, and refuses with a non-zero exit, `ok`
+   false and its `error` (`code`, `message`, `details`). The tool never passes `--via`, whose lines keep the
+   envelope.
+
 **One change.** When a write fails (`export_write_failed`) or a table is not accepted, every file the export
 wrote gets its previous bytes back: a file that was not there is removed again, and so is a folder the export
 created. The export never commits, and deletes nothing else, not even a table that exports.json no longer lists.
