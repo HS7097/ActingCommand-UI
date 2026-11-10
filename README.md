@@ -101,13 +101,19 @@ answers come from:
   `owner.lock`, and writes nothing into the state root; launching and requesting shutdown belong to the
   workbench's launcher (see the "Launcher" section), and shutdown too goes only through this same typed
   client.
-- The first page at startup asks without a snapshot position; the `snapshot_ledger_position` the Runtime
-  states on that page is the position this session reads at — the pin. A person's jump to the latest,
-  and turning following on, move it by the same kind of fresh first page; while following, each poll
-  moves it to the position the Runtime's fact snapshot states (below). Offline it never moves. Every page
-  after that is
+- The position this session reads at — the pin — is the ledger head the Runtime states in memory: the
+  `ledger_committed_head` of its status read, or, when that read fails or states no source, the
+  `ledger_position` of its fact snapshot (both read at open, below). No page is asked to learn it, and
+  neither read appends a ledger record. A person's jump to the latest moves it by reading both again the
+  same way; turning following on, and each poll while following, move it to the position the Runtime's
+  fact snapshot states (below). Offline it never moves. Every page is
   `RuntimeClient::query_event_page(query, ProjectionProfile::Ui, page.at_snapshot(pos))`,
-  the same `EventQuery` bounded to one window, the same page limit, the same `next_cursor`.
+  the same `EventQuery` bounded to one window, the same page limit, the same `next_cursor`. Online the
+  console sends no page that does not carry both `from_sequence` and `to_sequence` within 1 to the pin,
+  that spans more than 4096 positions (a frame's lookup: 65,536 either side of its event), or that
+  carries a time condition — with one, the Runtime may read through its time index, where the position
+  bounds do not hold the scan. A read asking for such a page would be a defect of the console: it fails as
+  `console_online_page_unbounded`, and nothing is sent.
 - Material goes through `RuntimeClient::read_material_complete` on a connection of its own, made at
   the pin with the page connection, to the same owner epoch, and rebuilt after a read latched it; so a
   material read (up to 30 s) never holds a follow poll or a status read behind it. The client
@@ -119,19 +125,23 @@ answers come from:
   "storage format" says "determined by the Runtime", the repair count says the Runtime does not state it,
   the event count is the pinned position (the contract states sequences are gap-free from 1, so the count
   at a position is that position), and "writer process" states the connected Runtime itself
-  (PID, owner epoch, start time, all out of its own `runtime-info.json`).
-- Right after the pin, one `status()` and one `runtime_fact_snapshot()` on the same connection give the
-  instance card its "runtime instances" lines. Status is read again only on a person's jump to the
-  latest; while following, every poll reads the task facts again, whether or not the pin moved. The first two
-  lines state the sequence each read was taken at; both may be past the pinned snapshot, so this is state
-  as last read, not state at the pin. By contract the status read takes the Runtime's memory only and
+  (PID, owner epoch, start time, all out of its own `runtime-info.json`). "Ledger integrity" says "not
+  read yet" until a page at the current pin has come back — again each time the pin moves — and then
+  whether every page read back at the current pin was whole; offline it is the opening's own observation.
+- At open, one `status()` and then one `runtime_fact_snapshot()` on the same connection give the pin
+  (above) and the instance card its "runtime instances" lines. Status is read again only on a person's
+  jump to the latest; while following, every poll reads the task facts again, whether or not the pin
+  moved. The first two lines state the sequence each read was taken at; the fact snapshot may be past the
+  pin taken from the status, and while following the status stays where it was read as the pin moves on,
+  so this is state as last read, not state at the pin. By contract the status read takes the Runtime's memory only and
   appends no ledger record (AO-4q); its position is the ledger's committed head when it was sampled. Then,
   per instance the status registers: its alias (the instance id in grey), port, lease (leased / takeover
   cooldown / idle, plus the queued request count when there is one), and the instance facts
   `task.game`, `task.server` and `task.page` (the page label the last recognition matched) verbatim, or
   "not recorded". A fact whose id the status does not register gets a row that says so. If either read
   fails, the lines state the Runtime's refusal, the client error and any host failure, one per line;
-  the session still opens. Offline, the read face's `runtime_facts_at` replays the fact store at the
+  the session still opens as long as the other read states a head, and does not open when neither does
+  (below). Offline, the read face's `runtime_facts_at` replays the fact store at the
   pinned position itself, the same position every page reads at: the lines state that position, that
   there is no lease offline, and each instance's id (short; the full id in grey) with its three facts. A
   ledger with no event yet says so; a replay the read face declines states its reason, and a failed one
@@ -142,8 +152,8 @@ answers come from:
 points at, online; otherwise offline. The instance card's first line, "read face", states which one was
 chosen and why (`runtime-info.json` absent, or the client error code of the failed connection). With
 `online`, a failed connection **is an error carrying the client's error code**; it does not quietly
-switch to offline. Across both read faces, a Runtime that connects but cannot answer the first page is an
-error in any mode, with no fallback. Neither error ends the console: the window stays, the list and the
+switch to offline. Across both read faces, a Runtime that connects but states no ledger head — neither its
+status read nor its fact snapshot — is an error in any mode, with both reads' reasons and no fallback. Neither error ends the console: the window stays, the list and the
 instance card state in red why the read face did not open, and "Reopen" is offered.
 
 When the offline read face cannot be opened — with `offline`, or with `auto` falling back to it — the
@@ -165,7 +175,7 @@ mid-session on its own.
 
 **The reader thread**: the window comes up first, and the read face is opened afterwards on the window's
 own reader thread (`acui-ledger-<window id>`). Opening, page reads, reading earlier, following, the jump
-to the latest, the time bound's probes and the frame's own events are all read there, one request after
+to the latest, the time bound's probes (offline) and the frame's own events are all read there, one request after
 another; the window's event loop never waits on a read, and the read face never leaves that thread. While
 it opens, the list says the ledger is being opened and the controls are off. While a read is in flight,
 the top bar has one more line, "… waiting N s (a read of this kind takes at most about M s)", or "at most
@@ -180,8 +190,28 @@ the window and in the technical log, and "Reopen" is offered too. "Reopen" start
 reader stops after the page in hand, and the new session opens the read face again with the tab and the
 filters the boxes show now, without a time bound. When a read reaches a Runtime that is another process now
 (`console_runtime_owner_changed`), the top bar says so beside "Reopen", which reads the Runtime that runs
-now. A time span read follows the cursor for at most 64 pages; with still no event it stops, as
-`console_time_span_page_limit`, rather than keep the window reading.
+now.
+
+The committed time span — the time of the ledger's first event and of the event at the pin, which the
+time slider runs over — is read after the first fill, not before it, and once per pin. The first event's
+time is one point read of position 1, kept for the session; the pin's is taken from a window just read
+when it holds the event at the pin, otherwise from one point read of the pin. Each is a page of limit 1
+bounded to that one position, without run recovery. Only when position 1 holds no event is one more page
+asked, of positions 1 to 4096 (or to the pin, if lower), still of limit 1. A span read follows no cursor
+and reads no wider: a page that comes back without the event it must hold — cut short by the Runtime's
+read budget, or with none in its range — stops it, as `console_time_span_page_limit`; the span stays as
+it was, and following does not ask it again by itself. A ledger whose pin is 0 has no span, and no page
+is asked for one.
+
+**A page the Runtime refuses** — its read budget ran out (`ledger_read_budget_exceeded`; right after it
+starts, while it still builds its Lab relations, many pages are refused so, most often on the Lab tab) or
+its writer did not answer in time (`writer_response_timeout`) — is stated with its code and why, and the
+window never sends it again by itself: a read that fails ends the fill there, stops following, and no
+span page is asked after it. The line says how a person reads again, which depends on where it failed:
+on the timeline or the span, Read Earlier, a tab or filter change, Jump to Latest, or closing and
+reopening the window; while following, ticking Follow Latest again, Jump to Latest, a tab or filter
+change, or closing and reopening; for a frame's lookup, Jump to Latest, a tab or filter change, or closing
+and reopening, then selecting the row again.
 
 Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.47
 (#407 GPU-1, v0.12.44: configuration revision 27 lets the `vision` section name DirectML
@@ -248,7 +278,7 @@ version exists only in the tag.
   **appears only on the current tab** and is that view's **number of loaded rows**; the read face does not
   give a total per view, so no numbers are placed on the other views' tabs.
 - **Filtering is a ledger query**: view, severity lower and upper bounds, source module,
-  `correlation_`/`request_`/`run_`/`task_`/`instance_` id and time upper bound are assembled into one
+  `correlation_`/`request_`/`run_`/`task_`/`instance_` id and time upper bound (offline only, below) are assembled into one
   `EventQuery`, and the ledger is queried again at the **same snapshot position**; it does not filter the
   rows already held locally and then call itself a ledger query (the one stated exception is the
   performance monitor, below). An id must be a complete canonical id,
@@ -280,9 +310,11 @@ version exists only in the tag.
   backward windows down from the pinned position, starting at 256 positions. A window that size holds no
   more events than one page's event limit, so one query reads it, every filter applied by the ledger. A
   window that comes back with fewer than 64 events doubles the next one's span, up to 4096 positions; one
-  with 128 or more puts it back to 256. A wider window, and any the reply's byte limit splits, is read by
-  following the cursor, whole — so one fill can add more rows than it aims for. Online, every page query
-  is answered by the Runtime's ledger reader pool, off its writer (#422 QR-1; a frame's artifact lookups
+  with 128 or more puts it back to 256. A wider window, and any the reply's byte limit or the Runtime's
+  read budget cuts short, is read by following the cursor, whole — so one fill can add more rows than it
+  aims for — in at most 64 pages; a window still going on past that stops, as `console_window_page_limit`,
+  and is not shown as read. Online, every page query — the window's `from_sequence` and `to_sequence`,
+  a limit of 256, at the pin — is answered by the Runtime's ledger reader pool, off its writer (#422 QR-1; a frame's artifact lookups
   too since v0.12.38, RA-1), and still costs the Runtime a read and a verification per page, so one fill
   reads at least one window
   and starts no further window once it has 256 more rows, has read position 1, has read 16 windows or has
@@ -290,20 +322,25 @@ version exists only in the tag.
   **newest first**; "read earlier" at the bottom continues below what is loaded. The top bar permanently
   states the positions the loaded windows cover ("read positions A–B"), with "source incomplete" appended
   when a window's page said its read was incomplete — except a page that only the Runtime's read budget
-  stopped (#411 A51): its cursor goes on, and the window follows it.
-- **Jump to latest, follow latest (online only)**: "jump to latest" moves the pin to the Runtime's latest
-  position (one fresh first page), reads status and facts again (the status read appends no ledger
-  record), drops any time bound and starts the view over from the new pin. "Follow latest"
-  first catches up the same way without the status read, then every 5 seconds reads the Runtime's fact
+  stopped (#411 A51): its cursor goes on, and the window follows it. At a pin of 0 the ledger holds no
+  record: no page is asked, and the top bar says the ledger is empty. The instance card's "Pages Read"
+  line counts, over the loaded windows, the windows and pages read, the pages the read budget cut short
+  (`read_budget`; their cursor read the rest) and the pages stating a run whose recovery context the
+  budget cut (`context_limit`): counted, never dropped.
+- **Jump to latest, follow latest (online only)**: "jump to latest" reads status and facts again —
+  neither read appends a ledger record, and no page is asked — moves the pin to the head they state
+  (above), drops any time bound and starts the view over from the new pin; when neither states a head,
+  the pin stays and the view's error says both reasons. "Follow latest"
+  first catches up with one fact-snapshot poll, without the status read, then every 5 seconds reads the Runtime's fact
   snapshot — its in-memory fact store, stated at the ledger's latest position, which costs no ledger read
   and writes nothing. Only when that position has moved does the pin move to it and are the windows
   between the old and new pin read onto the top of the view, with page queries; the loaded rows, the
-  selection and a frame being read stay, and the task facts come from that same snapshot. Setting a time
-  bound while following stops it. The span's end follows the pin: taken from the newer windows when they
-  hold the event at the pin, otherwise one more one-event read. A failed tick shows as "following latest:
-  …" beside the view's own error; a failed poll stays until a later tick gets past it, and a failed page
-  read also stops the following — a Runtime refusing the query is not asked again every five seconds —
-  until it is turned on again.
+  selection and a frame being read stay, and the task facts come from that same snapshot. The span's end
+  follows the pin: taken from the newer windows when they hold the event at the pin, otherwise one more
+  point read of the pin; a span read that failed is not asked again by a tick. A failed tick shows as
+  "following latest: …" beside the view's own error; a failed poll stays until a later tick gets past it,
+  and a failed page read also stops the following — a Runtime refusing the query is not asked again every
+  five seconds — until it is turned on again; so does a page that failed a fill.
   Offline there is no running Runtime writing newer events, and both controls are off.
 - **The performance monitor's routine events are hidden by default**: they would bury everything else.
   Unless "show performance monitor" is ticked, the performance monitor is picked as the module, or the
@@ -324,7 +361,7 @@ version exists only in the tag.
   failure events. Across pages it **merges by run id**: a later page only adds evidence into it, positions
   given by earlier pages are all kept, and "recovered" rows already collapsed are not re-expanded by a
   later page.
-- **Time upper bound**: the slider's starting position is the state it represents — the far right is
+- **Time upper bound (offline only)**: the slider's starting position is the state it represents — the far right is
   "all", and the first drag narrows. The bound and its label follow the handle at once; the view reloads
   once the handle has rested for 0.4 s (a tab switch or "read earlier" meanwhile applies the new bound
   first). Reading only goes down, so with a bound set it must start above every matching event: the
@@ -333,7 +370,10 @@ version exists only in the tag.
   reading starts there — unless the Runtime's read budget stopped that page before it decided a row
   (#411 A51), which decides nothing, so the pin. One found: the start moves above it, the step doubling each time, for at most
   three probes within the one-second budget, and otherwise falls back to the pin. The query's own time bound still decides what
-  shows; the top bar states the positions actually read.
+  shows; the top bar states the positions actually read. Online the slider is off and its label says
+  "Off while online"; a note under the row says why — the Runtime cannot yet keep reads by time bounded,
+  so online reads go by position only — and that reading by time means opening a copy or a test root
+  offline. No online page carries a time condition.
 - **Row types are no longer mirrored**: `acui-rows` re-exports the contract types directly, and only adds
   display functions such as local time, id abbreviation, wire codes and the display-name dictionary.
 
@@ -385,8 +425,13 @@ projected away — so its frame is the one of the last effect intent of its run 
 under the frame says which event the frame was taken from. The frame is found among the loaded rows
 first; only when they hold no capture of it are the frame's own events read, by the reader thread, with
 one query by frame id (the note under the frame says so while it runs), kept while the pane stays on that
-frame. A failed or incomplete read is stated in the frame note under the frame, and the next reload tries
-again. The material reader is the one the reader thread hands the frame pane; when a frame read latches
+frame. Online that query also carries the instance the event naming the frame links, when it links one,
+and reads only the positions within 65,536 either side of that event, within the pin — a capture's
+diagnostic records are appended when its run ends, so they may lie well after it; when that window holds
+no capture, the note says in which positions it looked ("no capture of this frame between positions A
+and B"), not that the ledger holds none. Offline it is the frame id alone, as before. A failed or
+incomplete read is stated in the frame note under the frame and is never asked again by itself: the next
+reload (not "read earlier") clears it, and selecting the row again reads it again. The material reader is the one the reader thread hands the frame pane; when a frame read latches
 the material connection, the reader thread makes a new one at once, and the next frame read uses it.
 
 On the frame, beside the event's own geometry:
@@ -1218,8 +1263,8 @@ one frame-grouping function the live picture shares with the ledger window:
   gives back `Session::Unopened` with the ledger's own error (`LedgerOpenFailure`: code, operation,
   detail, io kind) when the ledger refuses the offline face, and `material_reader()` hands material
   reading to the background thread. It also reads the instances' task facts once per session
-  (`instance_facts()`): offline replayed at the pinned position, online with their status right after
-  the pin; for the fact snapshot's scope and value types it names the contract crate directly.
+  (`instance_facts()`): offline replayed at the pinned position, online with their status, the two
+  reads the pin is taken from; for the fact snapshot's scope and value types it names the contract crate directly.
 - `acui-model`: a pure Rust view model (tabs, filtering, paging, recovery collapsing, selection), with no
   dependency on slint and **no plain language either** — it gives structured facts only, and all wording
   is chosen by `acui-app` from the language tables.
@@ -1303,7 +1348,7 @@ to the Runtime source at the pinned rev.
   every range (a 3.6 MB frame is 19 ranges of 192 KiB).
 - **Instance facts: resolved on both faces, at different positions**. Online, the fact store is read
   through `RuntimeClient::runtime_fact_snapshot()` (`crates/runtime-client/src/client.rs`), which
-  answers at the Runtime's latest position, past the pin. Offline, `runtime_facts_at`
+  answers at the Runtime's latest position, at the pin or past it. Offline, `runtime_facts_at`
   (`crates/ledger-forensics/src/runtime_facts.rs`) replays the store at the pinned position itself,
   under the Runtime's own replay rules; the console never folds `runtime.fact_*` events itself. Lease
   state comes only from the online status read, so offline has none.
