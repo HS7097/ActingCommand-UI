@@ -174,7 +174,7 @@ own.
 
 **The reader thread**: the window comes up first, and the read face is opened afterwards on the window's
 own reader thread (`acui-ledger-<window id>`). Opening, page reads, reading earlier, following, the jump
-to the latest, the time bound's probes (offline) and the frame's own events are all read there, one request after
+to the latest, the time cursor's point reads and the frame's own events are all read there, one request after
 another; the window's event loop never waits on a read, and the read face never leaves that thread. While
 it opens, the list says the ledger is being opened and the controls are off. While a read is in flight,
 the top bar has one more line, "… waiting N s (a read of this kind takes at most about M s)", or "at most
@@ -187,7 +187,7 @@ finished. The window's state is locked only for the few milliseconds it takes to
 paint, never while reading. A reader thread that panics, or that the system refuses, is stated in red in
 the window and in the technical log, and "Reopen" is offered too. "Reopen" starts a new session: the old
 reader stops after the page in hand, and the new session opens the read face again with the tab and the
-filters the boxes show now, without a time bound. When a read reaches a Runtime that is another process now
+filters the boxes show now, without the time cursor. When a read reaches a Runtime that is another process now
 (`console_runtime_owner_changed`), the top bar says so beside "Reopen", which reads the Runtime that runs
 now.
 
@@ -200,20 +200,26 @@ asked, of positions 1 to 4096 (or to the pin, if lower), still of limit 1. A spa
 and reads no wider: a page that comes back without the event it must hold — cut short by the Runtime's
 read budget, or with none in its range — stops it, as `console_time_span_page_limit`; the span stays as
 it was, and following does not ask it again by itself. A ledger whose pin is 0 has no span, and no page
-is asked for one.
+is asked for one. The span's two ends are also where locating the time cursor starts: position 1 with
+the first event's time, and the position the span was last read at with its event's time (see "Time
+cursor" below); while no span has been read, the slider stays at "all".
 
 **A page the Runtime refuses** — its read budget ran out (`ledger_read_budget_exceeded`; right after it
 starts, while it still builds its Lab relations, many pages are refused so, most often on the Lab tab) or
 its writer did not answer in time (`writer_response_timeout`) — is stated with its code and why, and the
 window never sends it again by itself. What else stops depends on the page: a timeline page that fails —
 a window the fill reads, or one following reads onto the top — ends the fill there, stops following, and
-no span page is asked after it; a span page or a frame's lookup that fails stops nothing else, and
+no span page is asked after it; a point read locating the time cursor ends it the same way, before any
+window is read; a span page or a frame's lookup that fails stops nothing else, and
 following, if on, goes on without asking that page again. The line says how a person reads again, which
 depends on where it failed:
 on the timeline or the span, Read Earlier, a tab or filter change, Jump to Latest, or closing and
 reopening the window; while following, ticking Follow Latest again, Jump to Latest, a tab or filter
 change, or closing and reopening; for a frame's lookup, Jump to Latest, a tab or filter change, or closing
-and reopening, then selecting the row again.
+and reopening, then selecting the row again; for a point read locating the time cursor, where no window
+was read and Read Earlier is not offered, moving "Show up to" again or a tab or filter change, which
+locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
+reopening, which read without it.
 
 Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.47
 (#407 GPU-1, v0.12.44: configuration revision 27 lets the `vision` section name DirectML
@@ -280,8 +286,10 @@ version exists only in the tag.
   **appears only on the current tab** and is that view's **number of loaded rows**; the read face does not
   give a total per view, so no numbers are placed on the other views' tabs.
 - **Filtering is a ledger query**: view, severity lower and upper bounds, source module,
-  `correlation_`/`request_`/`run_`/`task_`/`instance_` id and time upper bound (offline only, below) are assembled into one
-  `EventQuery`, and the ledger is queried again at the **same snapshot position**; it does not filter the
+  `correlation_`/`request_`/`run_`/`task_`/`instance_` id are assembled into one
+  `EventQuery` — never a time condition, on either read face: the time cursor is where reading starts,
+  not a filter (below) —
+  and the ledger is queried again at the **same snapshot position**; it does not filter the
   rows already held locally and then call itself a ledger query (the one stated exception is the
   performance monitor, below). An id must be a complete canonical id,
   otherwise it states that a complete identifier is required. The "source module" options are **rebuilt
@@ -344,12 +352,15 @@ version exists only in the tag.
   when a window's page said its read was incomplete — except a page that only the Runtime's read budget
   stopped (#411 A51): its cursor goes on, and the window follows it. At a pin of 0 the ledger holds no
   record: no page is asked, and the top bar says the ledger is empty. Two lines of the instance card count,
-  over the loaded windows: "Pages Read", the windows and pages read; "Pages Cut", the pages the read budget
+  over the loaded windows: "Pages Read", the windows and pages read, then ("locate N") the point reads,
+  one page each, that located the time cursor this view starts from (0 to 8; 0 when it was located before
+  at this pin, or no cursor is set); "Pages Cut", the pages the read budget
   cut short (`read_budget`; their cursor read the rest) and the pages stating a run whose recovery context
-  the budget cut (`context_limit`): counted, never dropped.
+  the budget cut (`context_limit`): counted, never dropped. The span's own point reads are not counted on
+  the card.
 - **Jump to latest, follow latest (online only)**: "jump to latest" reads status and facts again —
   neither read appends a ledger record, and no page is asked — moves the pin to the head they state
-  (above), drops any time bound and starts the view over from the new pin; when neither states a head,
+  (above), clears the time cursor and starts the view over from the new pin; when neither states a head,
   the pin stays and the view's error says both reasons. "Follow latest"
   first catches up with one fact-snapshot poll, without the status read, then every 5 seconds reads the Runtime's fact
   snapshot — its in-memory fact store, stated at the ledger's latest position, which costs no ledger read
@@ -381,19 +392,35 @@ version exists only in the tag.
   failure events. Across pages it **merges by run id**: a later page only adds evidence into it, positions
   given by earlier pages are all kept, and "recovered" rows already collapsed are not re-expanded by a
   later page.
-- **Time upper bound (offline only)**: the slider's starting position is the state it represents — the far right is
-  "all", and the first drag narrows. The bound and its label follow the handle at once; the view reloads
-  once the handle has rested for 0.4 s (a tab switch or "read earlier" meanwhile applies the new bound
-  first). Reading only goes down, so with a bound set it must start above every matching event: the
-  start is estimated from the committed time span, as if events were even in time, plus two windows of
-  slack, and one probe with the view's own query asks for the first matching event above it. None:
-  reading starts there — unless the Runtime's read budget stopped that page before it decided a row
-  (#411 A51), which decides nothing, so the pin. One found: the start moves above it, the step doubling each time, for at most
-  three probes within the one-second budget, and otherwise falls back to the pin. The query's own time bound still decides what
-  shows; the top bar states the positions actually read. Online the slider is off and its label says
-  "Off while online"; a note under the row says why — the Runtime cannot yet keep reads by time bounded,
-  so online reads go by position only — and that reading by time means opening a copy or a test root
-  offline. No online page carries a time condition.
+- **Time cursor (both read faces)**: "Show up to" picks a ledger **position** to read down from, never a
+  time condition; no page of the window, online or offline, carries one. The slider's starting position
+  is the state it represents — the far right is "all", the view reads down from the pin — and the first
+  drag narrows. The handle picks a time between the committed span's two ends (above); the label follows
+  it at once as "≈ that time", and following stops. Once the handle has rested for 0.4 s (a tab switch or
+  "read earlier" meanwhile goes first), the view locates that time as a position: at most 8 point reads,
+  each one page of limit 1 bounded to one position (`from_sequence` = `to_sequence`) between position 1
+  and the position the span was last read at, at the pin, without run recovery, every one within the
+  online bounds above. Each read goes where the time would fall if the events between the two nearest
+  times known on either side were even in time, or halfway when those two times are equal or out of
+  order; the position whose event's time is nearest the time picked wins, and an exact match ends the
+  reads early. The view then reads down from that position in the usual windows, and the label shows
+  that event's own time, "≤ time". The same time at the same pin is not located again: a tab or filter
+  change reads from the same position with no point read. While locating, the busy line says which page
+  of 8 it is ("Locating Show Up To: Page n of 8"), and the card's "Pages Read" line counts them
+  ("locate N"); the busy line and the error name the control by its caption, "Show Up To".
+  **The position is approximate**: a
+  record's time does not always follow its position (#411 A24 — a run's diagnostic artifact records are
+  appended when the run ends but carry its start time), so a point read can land on such a record and
+  pull the search aside; the label's time is what was actually read there. Offline this differs from the
+  earlier time upper bound, a time condition on each query: events below the position with a time after
+  the one picked are no longer hidden. A point read that comes back without the event its position must
+  hold — cut short by the Runtime's read budget, or with none there — stops the locate, loudly, as
+  `console_time_locate_failed`: the view reads no window from a guessed position and stays empty with
+  that code until a person reads again; a point read the Runtime refuses (above) stops it the same way.
+  Read Earlier is not offered then, as no window was read: the line says to move the handle again or
+  change the tab or a filter, which locates it again, or to drag it back to the far right, Jump to Latest
+  (online) or reopen, which read without it. The handle back at the far right, a jump to the latest, following
+  turned on and a reopen all clear the cursor.
 - **Row types are no longer mirrored**: `acui-rows` re-exports the contract types directly, and only adds
   display functions such as local time, id abbreviation, wire codes and the display-name dictionary.
 

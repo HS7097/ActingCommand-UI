@@ -90,21 +90,18 @@ pub struct Filters {
     /// The port that set stands for, offline only; display only, the query
     /// carries the set.
     pub port: Option<u16>,
-    /// The time bounds, offline only: online the window sets none, and the
-    /// online face sends no page with a time condition (#429).
-    pub from_timestamp_unix_ms: Option<u64>,
-    pub to_timestamp_unix_ms: Option<u64>,
 }
 
 impl Filters {
+    /// The query these filters form. It never carries a time condition, on
+    /// either face: the time cursor is a position the view reads down from
+    /// (`ViewModel::cursor`), not a filter (#429 T3).
     pub fn query(&self, view: LedgerView) -> Result<EventQuery, QueryError> {
         let mut query = EventQuery {
             view: Some(view),
             minimum_severity: self.minimum_severity,
             maximum_severity: self.maximum_severity,
             origin_module: self.origin_module,
-            from_timestamp_unix_ms: self.from_timestamp_unix_ms,
-            to_timestamp_unix_ms: self.to_timestamp_unix_ms,
             ..EventQuery::default()
         };
         let text = self.id_text.trim();
@@ -206,10 +203,11 @@ pub enum DisplayRow<'a> {
 /// The positions the loaded windows cover, lowest to highest, and whether
 /// every window's page said it read its range completely; and how they were
 /// read: the windows and their pages, the pages the Runtime's read budget cut
-/// short (`read_budget`: their cursor read the rest), and the pages stating a
-/// run whose recovery context the budget cut (`context_limit`). Counted, never
-/// dropped: a window the budget cut is read on through its cursor, and a run
-/// whose context was cut shows its gap.
+/// short (`read_budget`: their cursor read the rest), the pages stating a run
+/// whose recovery context the budget cut (`context_limit`), and the point
+/// reads that located the time cursor before this view started. Counted,
+/// never dropped: a window the budget cut is read on through its cursor, and
+/// a run whose context was cut shows its gap.
 pub struct ReadScope {
     pub range: Option<(u64, u64)>,
     pub read_complete: bool,
@@ -217,6 +215,7 @@ pub struct ReadScope {
     pub pages: usize,
     pub budget_pages: usize,
     pub context_pages: usize,
+    pub point_reads: usize,
 }
 
 impl ReadScope {
@@ -228,6 +227,7 @@ impl ReadScope {
             pages: 0,
             budget_pages: 0,
             context_pages: 0,
+            point_reads: 0,
         }
     }
 
@@ -288,6 +288,35 @@ pub struct DetailView<'a> {
     pub frame_size: Option<(f32, f32)>,
 }
 
+/// The time cursor (#429 T3): a position the view reads down from, never a
+/// time condition. `time` is the time a person picked on the slider,
+/// interpolated over the committed span; `located`, once the reader located
+/// it, is where.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeCursor {
+    pub time: u64,
+    pub located: Option<Located>,
+}
+
+/// Where the reader located a time cursor: at the pin `pin`, the position
+/// whose event's time was nearest the cursor's among those it read, and that
+/// event's own time. Approximate: a record's time does not always follow its
+/// position (#411 A24).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Located {
+    pub pin: u64,
+    pub position: u64,
+    pub time: u64,
+}
+
+impl TimeCursor {
+    /// Where it was located at `pin`; `None` when it was not located yet, or
+    /// at another pin.
+    pub fn at(&self, pin: u64) -> Option<Located> {
+        self.located.filter(|located| located.pin == pin)
+    }
+}
+
 /// What the frame pane should read, and what the ledger already says about it.
 pub struct FrameTarget {
     pub event: LedgerEventPosition,
@@ -310,6 +339,9 @@ pub struct ViewModel {
     /// Loaded rows in ledger order, oldest first; shown newest first.
     rows: Vec<ProjectedEvent>,
     recovery: Vec<RecoveryGroup>,
+    /// The time cursor, while one is set: the view's upper bound is then the
+    /// position it was located at, not the pin.
+    cursor: Option<TimeCursor>,
     /// The position this view reads down from, and the lowest one read so far.
     upper: u64,
     lowest_read: Option<u64>,
@@ -339,6 +371,7 @@ impl ViewModel {
             span_error: None,
             rows: Vec::new(),
             recovery: Vec::new(),
+            cursor: None,
             upper: snapshot_position,
             lowest_read: None,
             width: WINDOW,
@@ -354,6 +387,34 @@ impl ViewModel {
     /// The whole committed time span, for the time-range cursor.
     pub fn span(&self) -> Option<(u64, u64)> {
         self.span
+    }
+
+    /// The time cursor, while one is set.
+    pub fn cursor(&self) -> Option<TimeCursor> {
+        self.cursor
+    }
+
+    /// A person put the time cursor at `time`. The same time keeps where it
+    /// was located; another must be located again.
+    pub fn set_cursor(&mut self, time: u64) {
+        if self.cursor.is_some_and(|cursor| cursor.time == time) {
+            return;
+        }
+        self.cursor = Some(TimeCursor { time, located: None });
+    }
+
+    /// The time cursor is back at the top: the view reads down from the pin.
+    pub fn clear_cursor(&mut self) {
+        self.cursor = None;
+    }
+
+    /// Where the reader located the cursor of `time`: kept only while the
+    /// cursor still holds that time, so a locate that a newer drag overtook
+    /// leaves nothing.
+    pub fn locate_cursor(&mut self, time: u64, located: Located) {
+        if let Some(cursor) = self.cursor.as_mut().filter(|cursor| cursor.time == time) {
+            cursor.located = Some(located);
+        }
     }
 
     /// The filters' query, the routine performance types left out by the
@@ -376,7 +437,8 @@ impl ViewModel {
     }
 
     /// Starts the view over, reading down from `upper`: the pinned position,
-    /// or the last one a time bound allows.
+    /// or the one the time cursor was located at. The point reads that
+    /// located it are counted after (`add_point_reads`).
     pub fn begin(&mut self, upper: u64) {
         self.rows.clear();
         self.recovery.clear();
@@ -386,6 +448,12 @@ impl ViewModel {
         self.width = WINDOW;
         self.hidden_performance = 0;
         self.scope = ReadScope::empty();
+    }
+
+    /// The point reads that located the time cursor this view starts from,
+    /// into its read scope: none when it was located before, at this pin.
+    pub fn add_point_reads(&mut self, reads: usize) {
+        self.scope.point_reads += reads;
     }
 
     /// The next window down, `(from, to)`, or `None` once position 1 is read.
@@ -468,11 +536,11 @@ impl ViewModel {
     }
 
     /// The next window above what is loaded, up to the pin; `None` once the
-    /// view reaches the pin, and always under a time bound, where the view does
-    /// not read down from the pin.
+    /// view reaches the pin, and always while the time cursor is set, where the
+    /// view reads down from the position it was located at, not from the pin.
     pub fn next_newer_window(&self) -> Option<(u64, u64)> {
         let from = self.upper + 1;
-        (self.filters.to_timestamp_unix_ms.is_none() && from <= self.snapshot_position)
+        (self.cursor.is_none() && from <= self.snapshot_position)
             .then(|| (from, (from + WINDOW - 1).min(self.snapshot_position)))
     }
 

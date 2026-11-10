@@ -1071,8 +1071,8 @@ impl OnlineSource {
 /// Whether a page derives its `run_recovery` groups (#422 QR-2). The
 /// timeline's windows do: the view folds a run's resolved failures under it,
 /// and a run whose context the read budget cut says so (`context_limit`). A
-/// span's point read, a frame's lookup and the offline face's time-bound
-/// probe show no group, and the Runtime reads no run's context for them.
+/// span's point read, a time cursor's point read and a frame's lookup show no
+/// group, and the Runtime reads no run's context for them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunRecovery {
     Derived,
