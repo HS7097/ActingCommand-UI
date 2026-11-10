@@ -20,35 +20,22 @@ and guesses nothing.
 
 ## Current release
 
-- **UI v0.11.4**, a pre-release like every release so far: `acui-windows-<sha>.zip` with `SHA256SUMS`
-  on this repository's [Releases](https://github.com/HS7097/ActingCommand-UI/releases). The zip holds
-  `acui.exe` (the console), `acsetup.exe` (the setup wizard), `acforward.exe` (the fixed entry),
-  `LICENSE`, `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. It is built
-  against the Runtime crates of a Runtime commit after v0.11.6 that still speaks the 0.11 protocols
-  (the pinned rev under "Data source").
-- **New in v0.11.4**: the Runtime crates are pinned to that commit, and this README was updated. The
-  interfaces it declares are those of v0.11.3.
-- **From v0.11.3**: whether components fit together is judged from the interfaces each one declares,
-  not from version numbers (exit code 6 when they do not fit; see "Component interfaces"); Tools layout 3,
-  with the watchdog launcher `actingwatch.exe`, is recognized; once the ledger is at revision 2, a
-  rollback to a Runtime v0.11.2 slot is refused (exit code 1, nothing changed); resource-only update
-  `acsetup --resources <zip>`, also a tick on step 0; actingd is started through WMI with a hidden
-  window, and a start that exits at once is reported with the log's `FATAL` line; an upgrade refreshes
-  the fixed entries whose bytes changed.
-- **Works with the 0.11 Runtime**: by the interfaces it declares (`actingd-config` [1, 2], `ledger`
-  [1, 2], `runtime-client` [1, 1], `package` [1, 2]) it fits Runtime v0.11.3 to v0.11.6; acsetup v0.11.3
-  has upgraded an A/B installation to Runtime v0.11.6.
-- **Does not work with Runtime 0.12**: the Runtime's 0.12 series (newest v0.12.10) declares
-  `actingd-config` [5, 9], `ledger` [3, 4], `runtime-client` [2, 2] and `package` [3, 5]. acsetup refuses
-  such a Runtime with exit code 6 before it changes anything, and the console can neither connect to it
-  (a 0.12 Runtime refuses requests v1 to v3) nor read its ledger. There is no UI release for the 0.12
-  series.
-- **Where to get it**: the umbrella repository's
-  [Releases](https://github.com/HS7097/ActingCommand/releases) carry the two installers, the online
-  `acsetup.exe` and the offline `acsetup-full-<tag>.exe`, each with its `.sha256`. The newest umbrella
-  release, v0.11.4, carries Runtime v0.11.4, UI v0.11.3 and the available standard packs. UI v0.11.4 and
-  the Runtime releases after v0.11.4 are not in an umbrella release, so the online wizard installs
-  Runtime v0.11.4 and UI v0.11.3 today.
+- **The 0.12 series (UI v0.12.0 and later)**, pre-releases like every release so far:
+  `acui-windows-<sha>.zip` with `SHA256SUMS` on this repository's
+  [Releases](https://github.com/HS7097/ActingCommand-UI/releases). Every release is a pre-release, so
+  GitHub marks none as "Latest": take the newest tag. The zip holds `acui.exe` (the console),
+  `acforward.exe` (the fixed entry), `LICENSE`, `README.md` and the `BUILD-MANIFEST.json` that binds them
+  to their commit; `acsetup.exe` is not in it for now (see the note above). It is built against
+  the crates of Runtime v0.12.47 (the pinned rev under "Data source").
+- **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 27], `ledger` [3, 7],
+  `runtime-client` [3, 5] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47, which it is pinned
+  to, and v0.12.48, which declares the same interfaces; whether another Runtime fits is judged from the
+  interfaces each side declares, not from version numbers (see "Component interfaces").
+- **The 0.11 series**: UI v0.11.4 and earlier speak the 0.11 protocols only and cannot connect to a
+  0.12 Runtime. The 0.11 series is not maintained.
+- **What changed**: each release's notes on its Releases page say what changed in it.
+- **Umbrella repository**: its newest release, v0.11.4, still carries the 0.11 series (Runtime v0.11.4,
+  UI v0.11.3) and its installers; no umbrella release carries the 0.12 series yet.
 
 ## Development status
 
@@ -57,8 +44,8 @@ and guesses nothing.
 - **Every release is a pre-release**: interfaces, configuration and file formats still change. **Only the
   newest version is supported**; older series get no fixes (the 0.11 series is not maintained).
 - **Runtime 0.12**: the Runtime's 0.12 series brought a new ledger (a 0.11 state root is not carried
-  over), new command-line output and exit codes and a new pack format. This UI does not work with it (see
-  "Current release").
+  over), new command-line output and exit codes and a new pack format. The console follows it from UI
+  v0.12.0 on (see "Current release").
 - **On real devices**: since early October, routine batches run every day on real MuMu instances,
   scheduled by catalog with the available standard packs. The standard packs' coverage is still
   incomplete, and multi-day unattended runs are still being validated.
@@ -777,12 +764,13 @@ finished only says so. Of probes in flight, only the newest one's answer is show
   `kill`, no blocking `wait`, no job object attached; the handle is dropped once the readiness decision
   ends, and the daemon outlives the console.
 
-The console has no pause control: pause scheduling with
-`actingctl pause --state-root <state root>` (add `--instance <alias>` for one instance) and lift it with
+The workbench's top bar has **Pause All** and **Put All on Duty**. Pause All asks the Runtime for a
+global pause of scheduling: no new task is scheduled, and a task already running finishes on its own.
+Put All on Duty lifts that global pause; a global pause another tool set is lifted only after the person
+confirms it, and a pause Alice decides to lift cannot be lifted there. No button pauses a single
+instance: pause one with `actingctl pause --state-root <state root> --instance <alias>` and lift it with
 `actingctl resume` and the same flags, or use the MCP tools `ac_pause` / `ac_resume` (see "MCP for
-agents"; in Runtime v0.11.6 these two fail with `client_action_invalid` for an alias
-containing upper-case letters, a known issue, so use `actingctl pause` / `resume` there). The ledger window
-can only resume, conditionally, a pause another tool set (below). Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
+agents"). The ledger window can resume, conditionally, a pause another tool set (below). Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
 
 - **Conditional resume (ledger window)**: below the technical lines the window lists the global pause and
   each instance's pause of its last status read (reason, revision, since), each by its own scope. One

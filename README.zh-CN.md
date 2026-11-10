@@ -17,32 +17,26 @@
 
 ## 当前发布
 
-- **UI v0.11.4**，与此前每一版一样是预发布：本仓 [Releases](https://github.com/HS7097/ActingCommand-UI/releases)
-  上的 `acui-windows-<sha>.zip` 与 `SHA256SUMS`。zip 里有 `acui.exe`（监控台）、`acsetup.exe`（安装向导）、
-  `acforward.exe`（固定入口）、`LICENSE`、`README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。它基于
-  Runtime v0.11.6 之后、仍说 0.11 协议的一个 Runtime 提交的 crate 构建（钉点见「数据来源」一节）。
-- **v0.11.4 新增**：Runtime crate 改钉到上述提交，本 README 也随之更新。声明的接口与 v0.11.3 相同。
-- **v0.11.3 起**：能否搭配按各组件声明的接口判断，不再看版本号（不相容时退出码 6，见「组件接口」）；认得 Tools
-  布局第 3 版（带看门狗启动器 `actingwatch.exe`）；账本升到修订 2 之后，拒绝回退到 Runtime v0.11.2 的槽（退出码 1、
-  不做改动）；只更新资源 `acsetup --resources <zip>`，第 0 步也可勾选；actingd 经 WMI 以隐藏窗口拉起，启动即退出时
-  报错带上日志里的 `FATAL` 行；升级时刷新字节有变化的固定入口。
-- **可与 0.11 的 Runtime 搭配**：按它声明的接口（`actingd-config` [1, 2]、`ledger` [1, 2]、`runtime-client`
-  [1, 1]、`package` [1, 2]），它与 Runtime v0.11.3 到 v0.11.6 相容；acsetup v0.11.3 已把一份 A/B 安装升级到
-  Runtime v0.11.6。
-- **不能用于 Runtime 0.12**：Runtime 的 0.12 系列（最新 v0.12.10）声明的是 `actingd-config` [5, 9]、`ledger`
-  [3, 4]、`runtime-client` [2, 2] 与 `package` [3, 5]。acsetup 会在改动任何东西之前以退出码 6 拒绝这样的
-  Runtime；监控台既连不上它（0.12 的 Runtime 拒绝 v1 到 v3 的请求），也读不了它的账本。0.12 系列没有对应的 UI 版本。
-- **从哪里取**：伞仓 [Releases](https://github.com/HS7097/ActingCommand/releases) 上有两个安装器，在线版
-  `acsetup.exe` 与离线版 `acsetup-full-<tag>.exe`，各带 `.sha256`。伞仓最新发布 v0.11.4 带 Runtime v0.11.4、
-  UI v0.11.3 与可用的标准包。UI v0.11.4 以及 v0.11.4 之后的 Runtime 发布都没有进伞仓发布，所以目前在线向导装上的
-  是 Runtime v0.11.4 与 UI v0.11.3。
+- **0.12 系列（UI v0.12.0 起）**，与此前每一版一样是预发布：本仓
+  [Releases](https://github.com/HS7097/ActingCommand-UI/releases) 上的 `acui-windows-<sha>.zip` 与
+  `SHA256SUMS`。每一版都是预发布，所以 GitHub 上没有标「Latest」的版本，取标签最新的那个。zip 里有
+  `acui.exe`（监控台）、`acforward.exe`（固定入口）、`LICENSE`、`README.md`，以及把它们绑到所在提交的
+  `BUILD-MANIFEST.json`；`acsetup.exe` 暂时不在里面（见上方说明）。这一版基于 Runtime v0.12.47 的 crate
+  构建（钉点见「数据来源」一节）。
+- **可与 0.12 的 Runtime 搭配**：它声明 `actingd-config` [5, 27]、`ledger` [3, 7]、`runtime-client`
+  [3, 5] 与 `runtime-outcomes` [1, 1]。它与所钉的 Runtime v0.12.47 相容，也与声明相同接口的 v0.12.48
+  相容；别的 Runtime 能否搭配，按双方声明的接口判断，不看版本号（见"组件接口"）。
+- **0.11 系列**：UI v0.11.4 及更早的版本只说 0.11 协议，连不上 0.12 的 Runtime。0.11 系列不再维护。
+- **变了什么**：每一版 Releases 页上的说明写着这一版改了什么。
+- **伞仓**：伞仓最新发布 v0.11.4 仍是 0.11 系列（Runtime v0.11.4、UI v0.11.3）及其安装器；还没有伞仓发布
+  带 0.12 系列。
 
 ## 开发状态
 
 - **调试阶段**：主循环是「发现问题 → 修复 → 对照预期检查 → 再改」；部署与可用性是次要的。
 - **全部是预发布**：接口、配置与文件格式还会变。**只支持最新版**，旧系列不出修复（不维护 0.11 系列）。
 - **Runtime 0.12**：Runtime 的 0.12 系列换了新账本（0.11 的状态根不带过去）、新的命令行输出与退出码和新的包格式。
-  本 UI 不能用于它（见「当前发布」）。
+  监控台从 UI v0.12.0 起跟上它（见「当前发布」）。
 - **实机现状**：自 10 月上旬起，在真实 MuMu 实例上按目录、用可用的标准包每天跑例行批次。标准包的内容覆盖还不
   完整，多日无人值守长跑仍在验证。
 - **版本号规则**：X 重大或不兼容、Y 新特性或新覆盖面、Z 修复（含为修复服务的特性）。Runtime、UI 与各标准包
@@ -552,10 +546,11 @@ PID 与 owner epoch（或客户端错误码），下面是上一次请求的技�
 - **永不杀**：`Child` 句柄只用来 `try_wait()` 看有没有早退，不 `kill`、不阻塞 `wait`、不挂
   job object；就绪判定结束就丢掉句柄，守护进程活得比监控台久。
 
-监控台没有暂停的控件：用 `actingctl pause --state-root <状态根>` 暂停调度（只停一个实例时加
-`--instance <别名>`），用带同样参数的 `actingctl resume` 恢复，或用 MCP 工具 `ac_pause` / `ac_resume`（见「智能体用的 MCP」
-一节；Runtime v0.11.6 里别名含大写字母时这两个工具会以 `client_action_invalid` 失败，是已知问题，
-这时改用 `actingctl pause` / `resume`）。账本窗口只能有条件地恢复别的工具加的暂停（见下）。开机自启是安装向导的一个选项，见「安装向导 acsetup」一节。
+工作台顶栏有「全部暂停」和「全部开始执勤」。「全部暂停」请 Runtime 全局暂停调度：不再安排新任务，正在进行的
+任务自己收尾。「全部开始执勤」解除这份全局暂停；别的工具加的全局暂停要人确认后才解除，由 Alice 决定恢复的暂停
+在这里解除不了。没有只暂停一个实例的按钮：只停一个实例，用 `actingctl pause --state-root <状态根> --instance
+<别名>`，用带同样参数的 `actingctl resume` 恢复，或用 MCP 工具 `ac_pause` / `ac_resume`（见「智能体用的 MCP」
+一节）。账本窗口可以有条件地恢复别的工具加的暂停（见下）。开机自启是安装向导的一个选项，见「安装向导 acsetup」一节。
 
 - **有条件恢复（账本窗口）**：技术行下面按最近一次状态读取列出全局暂停和各实例的暂停（理由、修订、
   起始时间），全局与实例各按各的范围。别的工具加的暂停（全局的，或设备已交还的实例暂停）带
