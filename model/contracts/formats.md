@@ -1825,12 +1825,11 @@ says `greater_than_or_equal`).
   - `coverage` (#424 ACM-PRICE PRICE-4a; addendum 2.1 §3.1): the four classes as `export prices` delivered them, read back
     from `out/prices.json` (its reader checks it by its own version, `acmodel.prices.v2` or `acmodel.prices.v1`, as for
     `verify prices`: `model_file_invalid`; a file of another model is `value_invalid` at `/model_id`, `format` its own
-    version), as the
-    repository's `schedule.json` meets them; null when no prices were
-    exported. It holds `file`; `current`, false when the file was written for other versions of the model (its `versions`
-    differ: the warning `prices_stale`, with the `members` that differ, which never changes the exit status); `pools`, each
-    pool of `schedule.json` with its `class`, `status`, `reasons`, `price` and `pending` (a pool the model lacks, or a slot,
-    is `unknown`, `not_in_model` or `slot`, and `pending`); `rules`, each rule of `schedule.json` that declares `produces`
+    version), as the repository's `schedule.json` meets them; null when no prices were exported. It holds `file`;
+    `current`, false when the file was written for other versions of the model (its `versions` differ: the warning
+    `prices_stale`, with the `members` that differ, which never changes the exit status); `pools`, each pool of
+    `schedule.json` with its `class`, `status`, `reasons`, `price` and `pending` (a pool the model lacks, or a slot, is
+    `unknown`, `not_in_model` or `slot`, and `pending`); `rules`, each rule of `schedule.json` that declares `produces`
     or `consumes`, with the pools they name (`pools`), the worst class among them (covered, then verified zero, then
     structural gap, then unknown) and their worst status, and the pools whose price is pending (`pending`); and `counts`:
     the pools and the rules of each class, and the model's own counts (`model`). It computes no steady state: that is the
