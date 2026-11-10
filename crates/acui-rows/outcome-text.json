@@ -148,6 +148,18 @@
         "short": "未发出无界的页",
         "handling": "请连同窗口显示的内容一起反馈，并重新打开窗口再读。"
       }
+    },
+    "console_time_locate_failed": {
+      "en": {
+        "sentence": "The time cursor could not be placed: a point read came back without the event its position must hold, so the console stopped and read nothing from a guessed position.",
+        "short": "Time cursor not placed",
+        "handling": "Move the time cursor again, or change the tab or a filter, to place it again; Jump to Latest reads from the latest position without it."
+      },
+      "zh-Hans": {
+        "sentence": "时间游标没能定位：一次点读没有读回这个位置上应有的事件，监控台已停下，没有从猜的位置往下读。",
+        "short": "时间游标未定位",
+        "handling": "再拖一次时间游标，或换页签、筛选，会重新定位；按「跳到最新」则不用游标，从最新位置读。"
+      }
     }
   }
 }

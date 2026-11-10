@@ -260,7 +260,7 @@ impl LedgerHandle {
 
     /// A new session on the same state root, of `face`: the reader of the old
     /// one stops at its next page, and the new one opens the read face again,
-    /// from the tab and filters the boxes show, without a time bound. The
+    /// from the tab and filters the boxes show, without the time cursor. The
     /// last resume's line goes with the old session (`Resume::reopened`). A
     /// closed window starts nothing: its entry can still be pressed through
     /// the fade, and no later close would let that session go.
@@ -363,8 +363,8 @@ impl LedgerHandle {
     }
 
     /// Changes the live view model and starts the view over from the pin, or
-    /// from where its time bound is estimated to fall. That applies the bound
-    /// the time cursor holds now.
+    /// from the position the time cursor is located at: the time it holds now,
+    /// located first when it was not at this pin.
     pub fn restart(&self, change: impl FnOnce(&mut ViewModel, &mut PortMap)) {
         let Some(tag) = self.supersede(change) else {
             return;
@@ -373,8 +373,9 @@ impl LedgerHandle {
         self.send(Command::Reload { tag, earlier: false });
     }
 
-    /// "Read earlier". A bound the time cursor set but has not applied yet goes
-    /// first: no window of it is appended below rows read under the old one.
+    /// "Read earlier". A time the cursor holds but the view has not started
+    /// from yet goes first: no window below its position is appended under
+    /// rows read from another.
     pub fn load_more(&self) {
         if self.cursor_rest.running() {
             self.restart(|_, _| {});
@@ -390,32 +391,35 @@ impl LedgerHandle {
         self.send(Command::Reload { tag, earlier: true });
     }
 
-    /// The bound and its label follow the handle at once; the reload waits
-    /// until the handle rests, so a drag is one reload, not one per step. A
-    /// time bound reads down from the past: following stops at once. A closed
-    /// window's timers stay stopped. Online the cursor is off and takes no
-    /// bound: an online page carries no time condition (#429; the paint says
-    /// why beside it).
+    /// The cursor's time and its label follow the handle at once: the time
+    /// picked, interpolated over the committed span, and no filter. The reload
+    /// waits until the handle rests, so a drag is one reload, not one per
+    /// step; it locates the time as a position and reads down from there, on
+    /// either face, with no time condition (#429 T3). A cursor reads down from
+    /// the past: following stops at once. A closed window's timers stay
+    /// stopped.
     pub fn cursor_moved(&self, ui: &Ui, value: f32) {
         if self.closed.get() {
             return;
         }
-        let bound = {
+        let set = {
             let mut state = self.lock();
-            if matches!(&state.phase, Phase::Open(facts) if facts.follows) {
-                return;
-            }
             let Some(model) = state.live_mut() else {
                 return;
             };
-            let bound = model.span().and_then(|(from, to)| {
+            // In floating point: the span's two times need not be in order
+            // (#411 A24).
+            let time = model.span().and_then(|(from, to)| {
                 let ratio = (value as f64 / 1000.0).clamp(0.0, 1.0);
-                (ratio < 1.0).then(|| from + ((to - from) as f64 * ratio) as u64)
+                (ratio < 1.0).then(|| (from as f64 + (to as f64 - from as f64) * ratio) as u64)
             });
-            model.filters.to_timestamp_unix_ms = bound;
-            bound
+            match time {
+                Some(time) => model.set_cursor(time),
+                None => model.clear_cursor(),
+            }
+            time.is_some()
         };
-        if bound.is_some() {
+        if set {
             self.stop_following();
         }
         let id = self.id;
@@ -491,7 +495,7 @@ impl LedgerHandle {
         }
     }
 
-    /// One tick of the follow timer: a time bound set meanwhile stops the
+    /// One tick of the follow timer: a time cursor set meanwhile stops the
     /// following; otherwise one follow tick is handed to the reader, unless
     /// the last one has not finished.
     fn follow_tick(&self) {
@@ -501,7 +505,7 @@ impl LedgerHandle {
         let tag = {
             let state = self.lock();
             let bounded = match state.live() {
-                Some(model) => model.filters.to_timestamp_unix_ms.is_some(),
+                Some(model) => model.cursor().is_some(),
                 None => return,
             };
             let tag = state.tag;

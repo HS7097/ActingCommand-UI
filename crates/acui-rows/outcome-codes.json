@@ -124,7 +124,21 @@
       "since": "1.0.0",
       "description": "The online read face refused to send a ledger page outside the console's own bounds, and sent nothing. Every online page reads one window of positions at the session's pin: from_sequence and to_sequence both given, 1 <= from <= to <= pin, at most 4096 positions (a frame's lookup, keyed by its frame id, at most 65536 positions either side of its event), and no time condition (from_timestamp_unix_ms, to_timestamp_unix_ms): with one, the Runtime's query planner may read through its time index, where the sequence bounds do not hold the scan, and the page's work grows with all the history before its window. The Runtime does not check the width of a window, so the console does. The read that asked fails and says so with this code; nothing is read in its place.",
       "common_causes": "A defect of the console: one of its reads assembled a page without these bounds.",
-      "handling": "Report it with what the window showed; reopen the window to read again. Reading by time is offline only for now."
+      "handling": "Report it with what the window showed; reopen the window to read again."
+    },
+    "console_time_locate_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "ui",
+      "layer": "ui",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "1.0.0",
+      "description": "Locating the ledger window's time cursor (#429 slice 2, on either read face): the cursor is a position the timeline reads down from, never a time condition. From the time a person picked, the console asked at most 8 point reads, each a page of limit 1 bounded to one position (from_sequence = to_sequence) between position 1 and the position the committed time span was read at, at the pinned snapshot, without run recovery and without any time condition, interpolating toward the position whose event's time is nearest the time picked. One came back without the event its position must hold: with a cursor, because the Runtime's read budget stopped it before the position, or with no event at it. The console follows no cursor of a point read and reads nothing in its place, so it stopped: the timeline is not read from a guessed position, it shows no rows and states this code, and nothing is asked again until a person reads again. The same code says when the window had no committed time span to locate from, which it rules out, as it sets no cursor without one.",
+      "common_causes": "A very busy host whose read budget stops even a one-position read; a ledger that does not hold every position from 1 to its head, which the Runtime's contract rules out (records 1..=head are contiguous; eviction removes a capture's material file, never a record).",
+      "handling": "Move the time cursor again, or change the tab or a filter, to locate it again; Jump to Latest reads from the latest position without it. If it recurs, read with a less busy host."
     }
   },
   "locations": {}

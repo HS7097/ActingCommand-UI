@@ -86,14 +86,17 @@ pub struct Labels {
     /// (`read_budget`), and pages stating a run whose recovery context the
     /// budget cut (`context_limit`).
     pub pages_cut: &'static str,
+    /// The card's line of the point reads that located the time cursor the
+    /// view starts from.
+    pub point_reads: &'static str,
     pub loaded_rows_top: &'static str,
     pub loaded_badge: &'static str,
     pub show_up_to: &'static str,
     pub all: &'static str,
-    /// Online the time cursor is off: its label, and the note under the row
-    /// that says why.
-    pub cursor_off_online: &'static str,
-    pub cursor_off_online_note: &'static str,
+    /// The time cursor's label: the time a person picked, until it is
+    /// located; then the time of the event at the position it was located at.
+    pub cursor_estimated: &'static str,
+    pub cursor_located: &'static str,
     pub text_size: &'static str,
     pub text_sizes: [&'static str; 3],
     pub language: &'static str,
@@ -143,7 +146,7 @@ pub struct Labels {
     /// `EventSource`, in the contract's declaration order.
     pub sources: [(&'static str, &'static str); 8],
     /// Field key to label, for the instance card and the detail pane.
-    pub fields: [(&'static str, &'static str); 52],
+    pub fields: [(&'static str, &'static str); 53],
     /// `ExecutionBackendProvenance`, by wire value.
     pub provenances: [(&'static str, &'static str); 2],
     pub artifact_kinds: [(&'static str, &'static str); 6],
@@ -291,7 +294,8 @@ pub struct Labels {
     pub busy_waited_page: &'static str,
     pub busy_bindings: &'static str,
     pub busy_span: &'static str,
-    pub busy_probing: &'static str,
+    /// point read, point reads at most.
+    pub busy_locating: &'static str,
     /// window, windows.
     pub busy_reading: &'static str,
     pub busy_repinning: &'static str,
@@ -1221,12 +1225,13 @@ pub const ZH: Labels = Labels {
     ledger_empty: "账本为空：没有可读的记录",
     pages_read: "{} 窗 {} 页",
     pages_cut: "读预算 {} 页 · 上下文 {} 页",
+    point_reads: "{} 次",
     loaded_rows_top: "已载入 {} 条",
     loaded_badge: "已载入 {}",
     show_up_to: "只看到",
     all: "全部",
-    cursor_off_online: "在线时不可用",
-    cursor_off_online_note: "「只看到」在线时不可用：Runtime 还不能保证按时间查账本有界，在线只按序号读。要按时间看，请离线打开副本或测试根。",
+    cursor_estimated: "约 {}",
+    cursor_located: "≤ {}",
     text_size: "字号",
     text_sizes: ["标准", "大", "特大"],
     language: "语言",
@@ -1290,6 +1295,7 @@ pub const ZH: Labels = Labels {
         ("integrity", "账本是否完整"),
         ("pages_read", "已读页"),
         ("pages_cut", "截断页"),
+        ("point_reads", "定位点读"),
         ("repair_count", "修复记录数"),
         ("writer", "写入进程：编号／PID／是否仍在运行"),
         ("modules", "出现过的模块"),
@@ -1455,7 +1461,7 @@ pub const ZH: Labels = Labels {
     busy_waited_page: "{} 已等待 {} 秒（每页最长约 {} 秒）",
     busy_bindings: "正在读取端口映射…",
     busy_span: "正在读取时间跨度…",
-    busy_probing: "正在估算时间上界的位置…",
+    busy_locating: "正在定位时间游标：第 {}/{} 次点读…",
     busy_reading: "正在读取第 {}/{} 窗…",
     busy_repinning: "正在移到账本最新位置…",
     busy_polling: "正在询问账本最新位置…",
@@ -2106,12 +2112,13 @@ pub const EN: Labels = Labels {
     ledger_empty: "The Ledger Is Empty: No Record to Read",
     pages_read: "{} windows, {} pages",
     pages_cut: "budget {} · run context {}",
+    point_reads: "{}",
     loaded_rows_top: "Loaded Rows: {}",
     loaded_badge: "Loaded {}",
     show_up_to: "Show Up To",
     all: "All",
-    cursor_off_online: "Off while online",
-    cursor_off_online_note: "Show Up To is off while online: the Runtime cannot yet keep reads by time bounded, so online reads go by position only. To read by time, open a copy or a test root offline.",
+    cursor_estimated: "≈ {}",
+    cursor_located: "≤ {}",
     text_size: "Text Size",
     text_sizes: ["Standard", "Large", "Extra Large"],
     language: "Language",
@@ -2175,6 +2182,7 @@ pub const EN: Labels = Labels {
         ("integrity", "Ledger Integrity"),
         ("pages_read", "Pages Read"),
         ("pages_cut", "Pages Cut"),
+        ("point_reads", "Cursor Point Reads"),
         ("repair_count", "Repair Records"),
         ("writer", "Writer: ID／PID／Running"),
         ("modules", "Modules Seen"),
@@ -2340,7 +2348,7 @@ pub const EN: Labels = Labels {
     busy_waited_page: "{} Waiting {} s (at most about {} s per page)",
     busy_bindings: "Reading the Port Map…",
     busy_span: "Reading the Time Span…",
-    busy_probing: "Estimating Where the Time Bound Falls…",
+    busy_locating: "Locating the Time Cursor: Point Read {} of {}…",
     busy_reading: "Reading Window {} of {}…",
     busy_repinning: "Moving to the Ledger's Latest Position…",
     busy_polling: "Asking for the Ledger's Latest Position…",

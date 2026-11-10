@@ -369,8 +369,8 @@ pub enum BusyKind {
     /// The offline port map, read once at the pin.
     Bindings,
     Span,
-    /// The probes that make a time bound's estimated start safe: offline only.
-    Probing,
+    /// One point read of the time cursor's locate, of at most `of`.
+    Locating { read: usize, of: usize },
     /// One window of a fill, of at most `of`.
     Reading { read: usize, of: usize },
     Repinning,

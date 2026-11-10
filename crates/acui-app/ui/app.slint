@@ -512,11 +512,8 @@ export component LedgerWindow inherits Window {
     in property <string> loaded-rows-text;
     in property <string> cursor-label;
     // The time cursor's handle; put back at the top when the view jumps to the latest.
+    // It works on either read face: a position located from the time, never a time condition.
     in-out property <float> cursor-value: 1000;
-    // Offline only: online the time cursor is off, and the note under the row
-    // says why.
-    in property <bool> time-cursor-enabled: true;
-    in property <string> cursor-note;
     // Online only: the pin can move to the Runtime's latest position.
     in property <bool> follow-available;
     in-out property <bool> following;
@@ -768,7 +765,7 @@ export component LedgerWindow inherits Window {
                         Caption { text: Strings.show-up-to; }
                         Slider {
                             width: 150px * Scale.factor;
-                            enabled: root.ledger-live && root.time-cursor-enabled;
+                            enabled: root.ledger-live;
                             minimum: 0;
                             maximum: 1000;
                             // The handle starts where the state starts: at the top of
@@ -786,10 +783,6 @@ export component LedgerWindow inherits Window {
                             overflow: elide;
                             color: Look.text-secondary;
                         }
-                    }
-                    if root.cursor-note != "": Notice {
-                        text: root.cursor-note;
-                        font-size: Scale.grey-font;
                     }
                     if root.busy-text != "": Notice {
                         text: root.busy-text;

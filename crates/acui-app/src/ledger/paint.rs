@@ -183,18 +183,7 @@ pub fn refresh(
     window.set_loaded_rows_text(loaded.into());
     window.set_show_performance(model.filters.show_performance);
     window.set_follow_available(facts.follows);
-    // Online the time cursor is off, and the note under the row says why: an
-    // online page carries no time condition (#429).
-    window.set_time_cursor_enabled(!facts.follows);
-    window.set_cursor_note(if facts.follows { labels.cursor_off_online_note } else { "" }.into());
-    window.set_cursor_label(
-        match model.filters.to_timestamp_unix_ms {
-            _ if facts.follows => labels.cursor_off_online.to_string(),
-            Some(bound) => format!("≤ {}", format_full(bound)),
-            None => labels.all.to_string(),
-        }
-        .into(),
-    );
+    window.set_cursor_label(cursor_text(labels, model).into());
 
     let mut lines = vec![
         // Which face answered, and for an `auto` pick, why: never a silent choice.
@@ -237,6 +226,14 @@ pub fn refresh(
                 &[&scope.budget_pages.to_string(), &scope.context_pages.to_string()],
             ),
             "read_budget · context_limit",
+        ),
+        // The point reads that located the time cursor this view starts from:
+        // a line of its own, as the two above are already full.
+        field(
+            labels,
+            "point_reads",
+            fill(labels.point_reads, &[&scope.point_reads.to_string()]),
+            "",
         ),
         field(labels, "repair_count", count_text(labels, card.repair_count), "repair_count"),
         field(labels, "writer", writer_text(labels, &card.writer), ""),
@@ -581,8 +578,6 @@ fn paint_closed(
     window.set_read_up_to_text(top.into());
     window.set_loaded_rows_text(SharedString::new());
     window.set_follow_available(false);
-    window.set_time_cursor_enabled(false);
-    window.set_cursor_note(SharedString::new());
     window.set_cursor_label(labels.all.into());
     // The card's only line, and so the one that may wrap.
     window.set_card_lines(models(vec![FieldLine {
@@ -708,6 +703,20 @@ fn owner_changed(state: &LedgerState, facts: &SourceFacts) -> bool {
     read || status
 }
 
+/// The time cursor's label: every event while it is at the top; the time a
+/// person picked, marked as about, until the reader has located it at this
+/// pin; then the time of the event at the position it found, which the view
+/// reads down from (#429 T3).
+fn cursor_text(labels: &Labels, model: &ViewModel) -> String {
+    let Some(cursor) = model.cursor() else {
+        return labels.all.to_string();
+    };
+    match cursor.at(model.snapshot_position()) {
+        Some(located) => fill(labels.cursor_located, &[&format_full(located.time)]),
+        None => fill(labels.cursor_estimated, &[&format_full(cursor.time)]),
+    }
+}
+
 /// The busy line: what the window's reader is reading, how long it has
 /// waited, and about how long a read of that kind may take; empty while it
 /// waits for a request, and for a request's first `BUSY_QUIET`, so a quick one
@@ -721,7 +730,9 @@ pub fn busy_text(labels: &Labels, state: &LedgerState) -> String {
         BusyKind::Opening => labels.ledger_opening.to_owned(),
         BusyKind::Bindings => labels.busy_bindings.to_owned(),
         BusyKind::Span => labels.busy_span.to_owned(),
-        BusyKind::Probing => labels.busy_probing.to_owned(),
+        BusyKind::Locating { read, of } => {
+            fill(labels.busy_locating, &[&read.to_string(), &of.to_string()])
+        }
         BusyKind::Reading { read, of } => {
             fill(labels.busy_reading, &[&read.to_string(), &of.to_string()])
         }

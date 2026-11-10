@@ -52,9 +52,12 @@ pub const CONSOLE_WINDOW_PAGE_LIMIT: &str = "console_window_page_limit";
 /// bounds: without both sequence bounds, wider than its window, or with a
 /// time condition.
 pub const CONSOLE_ONLINE_PAGE_UNBOUNDED: &str = "console_online_page_unbounded";
+/// Locating the time cursor, a point read came back without the event its
+/// position must hold, and the console stopped.
+pub const CONSOLE_TIME_LOCATE_FAILED: &str = "console_time_locate_failed";
 
 /// Every code constant above: the code table must hold each of them.
-const UI_CODES: [&str; 8] = [
+const UI_CODES: [&str; 9] = [
     CONSOLE_INSTANCE_BINDING_MISSING,
     CONSOLE_STATUS_SOURCE_MISSING,
     CONSOLE_CLIENT_ACTION_TERMINAL_MISSING,
@@ -63,6 +66,7 @@ const UI_CODES: [&str; 8] = [
     CONSOLE_TIME_SPAN_PAGE_LIMIT,
     CONSOLE_WINDOW_PAGE_LIMIT,
     CONSOLE_ONLINE_PAGE_UNBOUNDED,
+    CONSOLE_TIME_LOCATE_FAILED,
 ];
 
 const CODES_FILE: &str = "outcome-codes.json";

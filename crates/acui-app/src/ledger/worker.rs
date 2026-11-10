@@ -24,8 +24,10 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use acui_model::{Filters, QueryError, ViewModel, FILL_ROWS, FILL_WINDOWS, MAX_WIDTH, WINDOW};
-use acui_rows::outcome::{CONSOLE_TIME_SPAN_PAGE_LIMIT, CONSOLE_WINDOW_PAGE_LIMIT};
+use acui_model::{Filters, Located, QueryError, ViewModel, FILL_ROWS, FILL_WINDOWS, MAX_WIDTH};
+use acui_rows::outcome::{
+    CONSOLE_TIME_LOCATE_FAILED, CONSOLE_TIME_SPAN_PAGE_LIMIT, CONSOLE_WINDOW_PAGE_LIMIT,
+};
 use acui_rows::{
     page_source_complete, EventQuery, LedgerView, ProjectedEvent, RuntimeEventQueryPage,
     MAX_RUNTIME_EVENT_QUERY_EVENTS,
@@ -40,10 +42,10 @@ use crate::{launcher, report};
 
 /// How long one fill may keep reading windows after the first.
 const FILL_BUDGET: Duration = Duration::from_secs(1);
-/// Windows of slack above a time bound's estimated position, and the most
-/// probes that check it. Offline only: online the view takes no time bound.
-const TIME_SLACK_WINDOWS: u64 = 2;
-const TIME_PROBES: usize = 3;
+/// The most point reads one locate of the time cursor asks (#429 T3): each
+/// one page of limit 1, `from_sequence` = `to_sequence`, at the pin, without
+/// run recovery and without any time condition.
+const LOCATE_READS: usize = 8;
 /// The most pages one window of positions is read in, following its cursor: a
 /// window of the timeline (at most `MAX_WIDTH` positions, 16 full pages) or
 /// of a frame's lookup. The rest of the limit is for pages the reply's byte
@@ -91,8 +93,8 @@ const REBUILD_SECONDS: u64 = 15;
 
 /// What a window asks of its reader.
 pub enum Command {
-    /// The view starts over from the pin, or from where a time bound is
-    /// estimated to fall; with `earlier`, it reads on below what is loaded.
+    /// The view starts over from the pin, or from the position the time
+    /// cursor is located at; with `earlier`, it reads on below what is loaded.
     Reload { tag: RequestTag, earlier: bool },
     /// A person's jump to the latest: repin, status and facts read again, and
     /// the view starts over from the new pin.
@@ -121,8 +123,9 @@ pub enum Command {
 /// What a session opens: the state root and the face it asks for — the one
 /// `--source` asked for, or the offline face a person pressed for in a window
 /// of `auto` (`LedgerHandle::open_offline`) — and the view to start with — the
-/// window's first one (`tab`), or the one the last session left (`carry`), its
-/// time bound dropped.
+/// window's first one (`tab`), or the one the last session left (`carry`),
+/// without its time cursor: the filters hold none, and the new view starts
+/// with none.
 pub struct Opening {
     pub state_root: PathBuf,
     pub mode: SourceMode,
@@ -370,7 +373,6 @@ impl Worker {
             Some((tab, filters)) => {
                 model.tab = *tab;
                 model.filters = filters.clone();
-                model.filters.to_timestamp_unix_ms = None;
                 // A port is one instance by the map this session read: its
                 // whole set again, or no port when the map has none.
                 if let Some(port) = model.filters.port {
@@ -452,16 +454,20 @@ impl Worker {
     /// at least one window each time. Every page query costs the Runtime a
     /// read and a verification (online, on its ledger reader pool), so what the
     /// budget leaves is for "read earlier"; the top bar states what was read. `earlier` continues below
-    /// what is loaded; otherwise the view starts over from the pin, or, offline,
-    /// from where a time bound is estimated to fall. Each window read is
+    /// what is loaded; otherwise the view starts over from the pin, or, with the
+    /// time cursor set, from the position it is located at (`locate`: at most
+    /// `LOCATE_READS` point reads, none when it was located before at this pin
+    /// for the same time), on either face. No page of it carries a time
+    /// condition. Each window read is
     /// painted; each is `from_sequence` to `to_sequence`, at most `MAX_WIDTH`
     /// positions, of pages of `MAX_RUNTIME_EVENT_QUERY_EVENTS` rows at the pin,
     /// with run recovery. A window that failed — the Runtime refused a page, or
     /// the window passed its page limit — ends the fill with its code on screen,
     /// stops following, and nothing asks a page again until a person reads
     /// again: neither this request's span read (`Fill::stopped`) nor the next
-    /// follow tick. The time of the event at the pin, when a window read holds
-    /// it, so the span's end needs no read of its own.
+    /// follow tick; a locate that failed does the same, and no window is read.
+    /// The time of the event at the pin, when a window read holds it, so the
+    /// span's end needs no read of its own.
     fn reload(
         &self,
         source: &ReadSource,
@@ -478,31 +484,41 @@ impl Worker {
                 if state.frame_events.failed() {
                     state.frame_events = FrameEventsSlot::Empty;
                 }
-                state.model.as_ref().map(|model| {
-                    (model.filters.to_timestamp_unix_ms, model.span(), model.query())
-                })
+                state
+                    .model
+                    .as_ref()
+                    .map(|model| (model.cursor(), model.span(), model.query().is_ok()))
             })?;
-            let Some((bound, span, query)) = plan else {
+            let Some((cursor, span, forms)) = plan else {
                 return Ok(fill);
             };
-            let snapshot = source.snapshot_position();
-            let upper = match bound {
-                None => Ok(snapshot),
-                Some(bound) => {
-                    self.busy_for(tag, Busy::new(BusyKind::Probing, page_seconds(online), true))?;
-                    let estimate = upper_for_time(span, snapshot, bound);
-                    checked_upper(source, query, estimate, snapshot, &wanted)?
-                }
+            // Where the view reads down from: the pin, or the time cursor's
+            // position, located once per pin and time.
+            let (located, reads) = match cursor {
+                None => (Ok(None), 0),
+                Some(cursor) => match cursor.at(pin) {
+                    Some(located) => (Ok(Some(located)), 0),
+                    // Filters that form no query read no window, so no point
+                    // read is asked either: the fill's first window says why.
+                    None if !forms => (Ok(None), 0),
+                    None => {
+                        let (found, reads) = self.locate(source, tag, cursor.time, span)?;
+                        (found.map(Some), reads)
+                    }
+                },
             };
-            let stopped = matches!(&upper, Err(error) if read_stopped(error));
+            let stopped = matches!(&located, Err(error) if read_stopped(error));
             let go_on = self.current(tag, |state| {
                 state.effects.forget_frame = true;
                 let Some(model) = state.model.as_mut() else {
                     return false;
                 };
-                match upper {
-                    Ok(upper) => {
-                        model.begin(upper);
+                let go_on = match located {
+                    Ok(located) => {
+                        model.begin(located.map_or(pin, |at| at.position));
+                        if let (Some(cursor), Some(at)) = (cursor, located) {
+                            model.locate_cursor(cursor.time, at);
+                        }
                         true
                     }
                     Err(error) => {
@@ -511,7 +527,9 @@ impl Worker {
                         state.effects.follow_halted |= stopped;
                         false
                     }
-                }
+                };
+                model.add_point_reads(reads);
+                go_on
             })?;
             self.repaint();
             if !go_on {
@@ -599,7 +617,7 @@ impl Worker {
     /// A person's jump to the latest: status and facts are read again and the
     /// pin moves to the head they state (`ReadSource::repin`) — neither read
     /// appends a ledger record, and no page is asked for it — and the view
-    /// starts over from the new pin, with no time bound. The instances, and
+    /// starts over from the new pin, the time cursor cleared. The instances, and
     /// the box's list, are the ones this read found, whatever became of the
     /// pin (`status_read`).
     fn jump_latest(&self, source: &ReadSource, tag: RequestTag) -> Result<(), Superseded> {
@@ -621,7 +639,7 @@ impl Worker {
 
     /// Turning following on catches up like a jump to the latest, without the
     /// status read: one follow poll (`ReadSource::poll`), whose fact snapshot
-    /// moves the pin to the head it states, any time bound is dropped and the
+    /// moves the pin to the head it states, the time cursor is cleared and the
     /// view starts over from the pin, however far the ledger has moved since.
     /// A poll that fails stops the following.
     fn follow_on(&self, source: &ReadSource, tag: RequestTag) -> Result<(), Superseded> {
@@ -693,13 +711,13 @@ impl Worker {
         })
     }
 
-    /// The view starts over from a pin just moved: no time bound, the time
-    /// cursor back at the top, and after the fill the span's end at the new
-    /// pin (`span_after`).
+    /// The view starts over from a pin just moved: the time cursor cleared and
+    /// its handle back at the top, and after the fill the span's end at the
+    /// new pin (`span_after`).
     fn start_at_pin(&self, source: &ReadSource, tag: RequestTag) -> Result<(), Superseded> {
         let live = self.current(tag, |state| {
             state.effects.cursor_top = true;
-            state.model.as_mut().map(|model| model.filters.to_timestamp_unix_ms = None).is_some()
+            state.model.as_mut().map(ViewModel::clear_cursor).is_some()
         })?;
         if !live {
             return Ok(());
@@ -759,7 +777,7 @@ impl Worker {
                     Some(last) => Ok(Some((first, last))),
                     // The pin's own event: the ledger holds every position up
                     // to its head, so a point read that finds none fails.
-                    None => match event_time(source, (pin, pin), &wanted)? {
+                    None => match event_time(source, (pin, pin), &wanted, span_failed)? {
                         Ok(Some(last)) => Ok(Some((first, last))),
                         Ok(None) => Err(span_failed((pin, pin), false)),
                         Err(error) => Err(error),
@@ -789,7 +807,8 @@ impl Worker {
         if let Some(first) = self.first_time.get() {
             return Ok(Ok(first));
         }
-        let found = match event_time(source, (FIRST_POSITION, FIRST_POSITION), wanted)? {
+        let point = (FIRST_POSITION, FIRST_POSITION);
+        let found = match event_time(source, point, wanted, span_failed)? {
             Ok(Some(first)) => Ok(first),
             Ok(None) => {
                 let last = (FIRST_POSITION + MAX_WIDTH - 1).min(source.snapshot_position());
@@ -797,7 +816,7 @@ impl Worker {
                 if last <= FIRST_POSITION {
                     Err(span_failed(window, false))
                 } else {
-                    match event_time(source, window, wanted)? {
+                    match event_time(source, window, wanted, span_failed)? {
                         Ok(Some(first)) => Ok(first),
                         Ok(None) => Err(span_failed(window, false)),
                         Err(error) => Err(error),
@@ -810,6 +829,60 @@ impl Worker {
             self.first_time.set(Some(first));
         }
         Ok(found)
+    }
+
+    /// Locates the time cursor of `time` at the pin (#429 T3): the position
+    /// whose event's time is nearest `time`, between `FIRST_POSITION` and the
+    /// position the committed span was last read at (`span_pin`), whose two
+    /// times `span` holds. At most `LOCATE_READS` point reads (`event_time`
+    /// of one position, at the pin, without run recovery), each strictly
+    /// between the two positions read so far whose times lie either side of
+    /// `time` (`guess`); the nearest of every time known wins, and an exact
+    /// one ends the reads. Approximate: a record's time does not always follow
+    /// its position (#411 A24), so the label then says the time of the event
+    /// found. A point read that finds no event at its position, or that the
+    /// Runtime's read budget cut, fails the locate loudly (`locate_failed`);
+    /// so does a span that was not read, which the window rules out, as it
+    /// sets no cursor without one. The point reads asked are counted, the
+    /// failed one too.
+    fn locate(
+        &self,
+        source: &ReadSource,
+        tag: RequestTag,
+        time: u64,
+        span: Option<(u64, u64)>,
+    ) -> Result<(Result<Located, QueryError>, usize), Superseded> {
+        let pin = source.snapshot_position();
+        let read_at = self.span_pin.get().filter(|at| *at >= FIRST_POSITION);
+        let (Some((first, last)), Some(read_at)) = (span, read_at) else {
+            let error = QueryError::ReadFailed {
+                text: format!("{CONSOLE_TIME_LOCATE_FAILED}: no span at {pin}"),
+                code: Some(CONSOLE_TIME_LOCATE_FAILED),
+            };
+            return Ok((Err(error), 0));
+        };
+        let wanted = || self.page(tag);
+        let (mut low, mut high) = ((FIRST_POSITION, first), (read_at, last));
+        let mut best = nearest(time, low, high);
+        let mut reads = 0;
+        while reads < LOCATE_READS && high.0 - low.0 > 1 && best.1 != time {
+            let position = guess(time, low, high);
+            reads += 1;
+            let kind = BusyKind::Locating { read: reads, of: LOCATE_READS };
+            self.busy_for(tag, Busy::new(kind, page_seconds(source.follows()), true))?;
+            let found = match event_time(source, (position, position), &wanted, locate_failed)? {
+                Ok(Some(found)) => (position, found),
+                Ok(None) => return Ok((Err(locate_failed((position, position), false)), reads)),
+                Err(error) => return Ok((Err(error), reads)),
+            };
+            best = nearest(time, best, found);
+            if found.1 < time {
+                low = found;
+            } else {
+                high = found;
+            }
+        }
+        Ok((Ok(Located { pin, position: best.0, time: best.1 }), reads))
     }
 
     /// One follow tick. One fact snapshot says where the ledger is and brings
@@ -1082,11 +1155,14 @@ fn read_window(
 /// when `from == to`. `None` when the page read the whole range and found no
 /// event. A page that holds no event and still goes on — the Runtime's read
 /// budget stopped it before the range's end — decides nothing, and the read
-/// fails (`span_failed`). `wanted` is asked before the page.
+/// fails, as `failed` says it: the span's (`span_failed`) or the time cursor's
+/// locate's (`locate_failed`). No time condition: the range alone bounds it.
+/// `wanted` is asked before the page.
 fn event_time(
     source: &ReadSource,
     (from, to): (u64, u64),
     wanted: &dyn Fn() -> bool,
+    failed: fn((u64, u64), bool) -> QueryError,
 ) -> Read<Option<u64>, QueryError> {
     if !wanted() {
         return Err(Superseded);
@@ -1105,7 +1181,7 @@ fn event_time(
         return Ok(Ok(Some(event.timestamp_unix_ms)));
     }
     if page.next_cursor().is_some() {
-        return Ok(Err(span_failed((from, to), true)));
+        return Ok(Err(failed((from, to), true)));
     }
     Ok(Ok(None))
 }
@@ -1140,67 +1216,41 @@ fn set_span(model: &mut ViewModel, read: Result<Option<(u64, u64)>, QueryError>)
     }
 }
 
-/// Where a time bound is estimated to fall, from the committed span without any
-/// read: the position it would take if events were even in time, plus
-/// `TIME_SLACK_WINDOWS` windows, capped at the pin; 0 for a bound before the
-/// first event. `checked_upper` makes the estimate safe.
-fn upper_for_time(span: Option<(u64, u64)>, snapshot: u64, bound: u64) -> u64 {
-    let Some((first, last)) = span else {
-        return snapshot;
-    };
-    if bound >= last {
-        return snapshot;
+/// A point read of the time cursor's locate that came back without the event
+/// its position must hold, at `from` (= `to`): cut by the Runtime's read
+/// budget, or with none there (`CONSOLE_TIME_LOCATE_FAILED`).
+fn locate_failed((from, to): (u64, u64), budget_cut: bool) -> QueryError {
+    let cut = if budget_cut { " read_budget" } else { "" };
+    QueryError::ReadFailed {
+        text: format!("{CONSOLE_TIME_LOCATE_FAILED}: {from}–{to}{cut}"),
+        code: Some(CONSOLE_TIME_LOCATE_FAILED),
     }
-    if bound < first {
-        return 0;
-    }
-    let ratio = (bound - first) as f64 / (last - first) as f64;
-    let estimate = (ratio * snapshot as f64) as u64;
-    (estimate + TIME_SLACK_WINDOWS * WINDOW).min(snapshot)
 }
 
-/// Makes an estimated start safe, since reading only goes down from it: one
-/// probe with the view's own query — its time bound included — asks for the
-/// first matching event above the start. None: nothing above could show, and
-/// reading starts there. One found: the start moves above it by a step that
-/// doubles each time, for at most `TIME_PROBES` probes and within the fill
-/// budget; past either, the pin, which is always safe. A page the read budget
-/// stopped may hold no row and still go on (#411 A51): it decides nothing
-/// above the start, so that is the pin too. `wanted` is asked before each probe.
-/// Offline only: online the view takes no time bound, and the online face
-/// sends no page with a time condition (#429).
-fn checked_upper(
-    source: &ReadSource,
-    query: Result<EventQuery, QueryError>,
-    estimate: u64,
-    snapshot: u64,
-    wanted: &dyn Fn() -> bool,
-) -> Read<u64, QueryError> {
-    let (mut upper, mut step, started) = (estimate, TIME_SLACK_WINDOWS * WINDOW, Instant::now());
-    for probe in 0..TIME_PROBES {
-        if upper >= snapshot || (probe > 0 && started.elapsed() >= FILL_BUDGET) {
-            return Ok(Ok(snapshot));
-        }
-        let mut probed = match &query {
-            Ok(query) => query.clone(),
-            Err(error) => return Ok(Err(error.clone())),
-        };
-        probed.from_sequence = Some(upper + 1);
-        if let Err(error) = probed.validate() {
-            return Ok(Err(QueryError::Rejected(error.code().to_string())));
-        }
-        if !wanted() {
-            return Err(Superseded);
-        }
-        let page = match source.query(&probed, 1, None, RunRecovery::Skipped) {
-            Ok(page) => page,
-            Err(error) => return Ok(Err(read_failed(&error))),
-        };
-        let Some(found) = page.events().first() else {
-            return Ok(Ok(if page.next_cursor().is_some() { snapshot } else { upper }));
-        };
-        upper = found.sequence + step;
-        step *= 2;
+/// Where the locate's next point read goes, strictly between `low` and `high`
+/// (each a position and its event's time; at least two apart): where `time`
+/// would fall if the events between them were even in time, while their two
+/// times are in order with `time` between them; halfway otherwise — equal
+/// times, or times out of order, since a record's time does not always follow
+/// its position (#411 A24) — so nothing divides by a span that is zero or
+/// reversed.
+fn guess(time: u64, (low, low_time): (u64, u64), (high, high_time): (u64, u64)) -> u64 {
+    let even = low_time < high_time && low_time <= time && time <= high_time;
+    let position = if even {
+        let ratio = (time - low_time) as f64 / (high_time - low_time) as f64;
+        low + ((high - low) as f64 * ratio) as u64
+    } else {
+        low + (high - low) / 2
+    };
+    position.clamp(low + 1, high - 1)
+}
+
+/// Of `held` and `found` (each a position and its event's time), the one whose
+/// time is nearer `time`; `held` on a tie.
+fn nearest(time: u64, held: (u64, u64), found: (u64, u64)) -> (u64, u64) {
+    if found.1.abs_diff(time) < held.1.abs_diff(time) {
+        found
+    } else {
+        held
     }
-    Ok(Ok(snapshot))
 }
