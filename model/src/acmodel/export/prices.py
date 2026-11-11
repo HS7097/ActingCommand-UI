@@ -43,7 +43,11 @@ evaluator digest and, once the steady state is computed, its shared tree's diges
 `reuse_refused`, one error per member that differs, and nothing is written. Each pool's `flips` and `impact`, each
 estimate's `assessed` and `skipped`, and the groups (`impact`) come from it; everything else is computed as without the
 option, and prices.json records where they came from (`reused_assessment`). Without that member it is the full export's
-file byte for byte.
+file byte for byte, but for each pass's `timing_ms` (PASS-TIMING, `core.impact`): taken over with its group, it is the
+earlier run's.
+
+**Timing** (PASS-TIMING). Each pass of the groups records how long it took (`timing_ms`, `core.impact`); nothing else
+the export writes holds it: not the price provenance files (so no `binds`), the shared tree, `estimates` nor `counts`.
 """
 
 from __future__ import annotations

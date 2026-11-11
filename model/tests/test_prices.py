@@ -90,6 +90,23 @@ def picked(entry: dict[str, Any], *keys: str) -> dict[str, Any]:
     return {key: entry[key] for key in keys}
 
 
+TIMING = "timing_ms"
+
+
+def untimed(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The assessment's groups without each pass's `timing_ms` (PASS-TIMING), which records how long that run took and so
+    differs from run to run: each pass's `at` and `values`, as before."""
+    return [
+        {**group, "passes": [{key: value for key, value in each.items() if key != TIMING} for each in group["passes"]]}
+        for group in groups
+    ]
+
+
+def untimed_doc(doc: dict[str, Any]) -> dict[str, Any]:
+    """prices.json without its passes' `timing_ms` (`untimed`)."""
+    return {**doc, "impact": untimed(doc["impact"])}
+
+
 def canonical_digest(doc: Any) -> str:
     """The sha256 of a document's canonical JSON (JCS), as a provenance document names a shared tree by."""
     return hashlib.sha256(jcs.dumps(doc)).hexdigest()
@@ -293,7 +310,7 @@ def test_an_accepted_provisional_price_is_exported_until_what_it_binds_changes(t
     assert prices["estimates"] == [{
         "rule": "pt.b", "value": "3", "estimate": ESTIMATE_B, "components": ["act.b"], "assessed": True, "skipped": None,
     }]
-    assert prices["impact"] == [{
+    assert untimed(prices["impact"]) == [{
         "rules": ["pt.b"], "unknowns": [],
         "passes": [{"at": {"pt.b": "low"}, "values": {"pt.b": "2"}}, {"at": {"pt.b": "high"}, "values": {"pt.b": "4"}}],
         "prices": {}, "flips": [],
@@ -367,7 +384,7 @@ def test_the_assessment_moves_an_estimate_to_its_ends_and_an_acceptance_must_lis
         "impact": {"low": "1", "high": "2"}, "flips": ["act.p", "act.q"],
     }
     assert picked(found["res.v"], "impact", "flips") == {"impact": {"low": "1", "high": "1"}, "flips": ["act.p", "act.q"]}
-    assert delivered(folder)["impact"] == [{
+    assert untimed(delivered(folder)["impact"]) == [{
         "rules": ["pt.k"], "unknowns": [],
         "passes": [{"at": {"pt.k": "low"}, "values": {"pt.k": "1/2"}}, {"at": {"pt.k": "high"}, "values": {"pt.k": "2"}}],
         "prices": {"res.s": {"low": "1", "high": "2"}}, "flips": ["act.p", "act.q"],
@@ -439,7 +456,7 @@ def test_an_estimate_of_variants_is_moved_to_each_variant(tmp_path, acmodel):
         "joint": {"value": "1/20", "interval": "1/20", "by": "exact", "withheld": None},
         "impact": {"low": "1/30", "high": "1/10"}, "flips": [],
     }
-    assert delivered(folder)["impact"] == [{
+    assert untimed(delivered(folder)["impact"]) == [{
         "rules": ["pt.price"], "unknowns": ["unk.offer"],
         "passes": [
             {"at": {"unk.offer": "cheap"}, "values": {"pt.price": "10"}},

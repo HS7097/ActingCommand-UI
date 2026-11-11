@@ -109,6 +109,10 @@ class Evaluator:
 # (`core.coverage`), so the coverage section, `price_status` and the steady state's status change where one was, and
 # version 10's entries are not reused. The tool's version (`acmodel.__version__`) stays: it is `versions.tool`, in
 # every price's provenance document, so a bump would move every price's `binds` (contracts/formats.md, "Coverage").
+# PASS-TIMING: `economy` stays 11. The vector runs no tie probe and times its stages, but what its node keeps (`flow.encode`:
+# its data, status, warnings, blocks and reads) is what it was: the probes only gave warnings, which the vector never
+# kept, and the stages' times (`flow.Economy.timing`) are never encoded. The steady state, the plan and the quick look
+# compute what they did.
 EVALUATORS: dict[str, Evaluator] = {
     "economy": Evaluator(11, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),

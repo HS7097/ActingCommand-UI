@@ -21,7 +21,14 @@ price moves and which activities change sign. `export prices` reads it for the a
   the lowest `low` and the highest `high`. Each moved value is rounded as the derive rounds its value.
 - **A pass** is the vector of the steady state (`flow.VECTOR`) with the group's derives at those values and every other
   rule at its point value; a rule that reads a moved one moves with it (`graph.Moved`). A pass whose values are all the
-  point values is the steady state's own vector and is not solved again.
+  point values is the steady state's own vector and is not solved again. The vector runs no tie probe (PASS-TIMING): it
+  reads no tie, so its coordinates are those it had with them (`flow._Solver.vector`).
+- **Timing** (PASS-TIMING). Each pass records how long it took (`timing_ms`): `source`, how its vector was found
+  (`solved`, in the pass's own graph; `steady_state`, the steady state's own, not solved again; `cache`, a vector node's
+  value that came from the cache, which keeps no timing); `stages`, each stage's whole milliseconds by `flow.STAGES`
+  (`Economy.timing`; null unless solved); and `total`, the whole pass's (`_Assessor.vector`); both on `flow.CLOCK`.
+  It is shown in that one place: the vector node's value, the provenance documents, the shared tree, `estimates`,
+  `counts` and every other member hold none of it, so no `binds` moves with it.
 - **What it finds**: each pool's price range over the steady state and every pass, and the activities whose class flips:
   the sign of their value at the vector (positive, zero, negative) is not the same in the steady state and in every pass.
   The Runtime's zero band, which needs the pools' scales and the rules' effects, is PRICE-4b's; an activity that moves out
@@ -57,6 +64,9 @@ if TYPE_CHECKING:
 # Why an estimate the steady state read is not assessed: every price of its components is pending whatever it is.
 GAP, MISSING = "structural_gap", "estimate_missing"
 LOW, HIGH = "low", "high"
+# PASS-TIMING: how a pass's vector was found (`timing_ms.source`, module docstring): solved in the pass's own graph, every
+# stage timed; the steady state's own, not solved again; or a vector node's value from the cache, with no stage times.
+TIMING, SOLVED, STEADY_STATE, CACHE = "timing_ms", "solved", "steady_state", "cache"
 
 
 def _derive(checker: Checker, key: tuple[str, ...]) -> str | None:
@@ -234,10 +244,14 @@ class _Assessor:
                 found.append((where, values))
         return found
 
-    def vector(self, group: list[_Estimate], label: str, values: dict[str, Any], base: dict) -> tuple[dict, dict]:
-        """The vector of one pass: each pool's coordinate and each activity's value."""
+    def vector(
+        self, group: list[_Estimate], label: str, values: dict[str, Any], base: dict
+    ) -> tuple[dict, dict, dict[str, Any]]:
+        """The vector of one pass: each pool's coordinate and each activity's value; and its `timing_ms` (module
+        docstring), which nothing here reads."""
+        started = flow.CLOCK()
         if all(item.point is not None and values[item.entry.id] == item.point for item in group):
-            return self.prices, self.values  # the steady state's own vector
+            return self.prices, self.values, _timing(STEADY_STATE, None, started)  # the steady state's own vector
         graph = Moved(self.graph, base, values)
         solve([flow.VECTOR_NODE], graph.compute, graph.results)
         result = graph.results[flow.VECTOR_NODE]
@@ -247,7 +261,15 @@ class _Assessor:
         values_at = {
             activity: None if value is None else Fraction(value) for activity, value in result.data["activities"].items()
         }
-        return prices, values_at
+        stages = result.timing
+        return prices, values_at, _timing(SOLVED if stages is not None else CACHE, stages, started)
+
+
+def _timing(source: str, stages: dict[str, int] | None, started: int) -> dict[str, Any]:
+    """A pass's `timing_ms` (module docstring): how its vector was found, its stages' times (None unless solved) and the
+    whole pass's, from `started` on `flow.CLOCK`, in whole milliseconds rounded down."""
+    total = (flow.CLOCK() - started) // flow.NANOSECONDS_PER_MS
+    return {"source": source, "stages": None if stages is None else dict(stages), "total": total}
 
 
 def assess(
@@ -284,14 +306,17 @@ def assess(
         passes = []
         for where, values in assessor.passes(group):
             label = ",".join(f"{name}={point}" for name, point in sorted(where.items()))
-            prices, at_values = assessor.vector(group, label, values, base)
+            prices, at_values, timing = assessor.vector(group, label, values, base)
             for pool, price in prices.items():
                 low, high = group_ranges[pool]
                 group_ranges[pool] = (min(low, price), max(high, price))
             for activity, value in at_values.items():
                 if value is not None and activity in group_signs:
                     group_signs[activity].add(_sign(value))
-            passes.append({"at": dict(sorted(where.items())), "values": {d: _text(v) for d, v in sorted(values.items())}})
+            passes.append({
+                "at": dict(sorted(where.items())), "values": {d: _text(v) for d, v in sorted(values.items())},
+                TIMING: timing,
+            })
         moved = {pool: pair for pool, pair in group_ranges.items() if pair[0] != pair[1]}
         flipped = sorted(activity for activity, found in group_signs.items() if len(found) > 1)
         for pool, (low, high) in group_ranges.items():
