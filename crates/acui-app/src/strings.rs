@@ -966,11 +966,13 @@ pub struct Labels {
     /// instead of its rows: no Runtime answers (the lamp's words); it is being read; it cannot be
     /// read now; too many tasks for one read; the Runtime has no such account; nothing evaluated
     /// yet; this account not in the round's evaluation. Above its rows, in grey: that none starts
-    /// while paused, under the account's pause in its card's words; that tasks are not switched
-    /// singly yet; which round they are of (time); in amber that the names cannot be read; that
-    /// not every task is listed. The account's own line of tasks without a package, and why, in
-    /// grey; the Runtime's own reading task. A group of no `ui.json` group; a package with no
-    /// summary; its two badges. What a row says: running, not for the scheduler; scheduled, and
+    /// meanwhile, under the account's pause or fence in its card's words but for three pauses:
+    /// this console's own of the account, which is lifted on its card, not below the list, and
+    /// another tool's of the account or of all, without the reason it wrote; that tasks are not
+    /// switched singly yet; which round they are of (time); in amber that the names cannot be
+    /// read; that not every task is listed. The account's own line of tasks without a package, and
+    /// why, in grey; the Runtime's own reading task. A group of no `ui.json` group; a package with
+    /// no summary; its two badges. What a row says: running, not for the scheduler; scheduled, and
     /// while paused; done, or not started, this round; a paused reason; the other reasons of its
     /// tasks (their sentences), how they are joined, and that there are more.
     pub tasks_tab: &'static str,
@@ -982,6 +984,9 @@ pub struct Labels {
     pub tasks_not_evaluated: &'static str,
     pub tasks_not_in_table: &'static str,
     pub tasks_held_note: &'static str,
+    pub tasks_paused_account: &'static str,
+    pub tasks_paused_other: &'static str,
+    pub tasks_paused_other_all: &'static str,
     pub tasks_switches: &'static str,
     pub tasks_evaluated: &'static str,
     pub tasks_names_unreadable: &'static str,
@@ -2044,14 +2049,17 @@ pub const ZH: Labels = Labels {
     card_why_reason_missing: "原因没写明（程序的问题，已记入日志）",
     card_why_unlisted: "现在不安排",
     tasks_tab: "日常任务",
-    tasks_down: "{}，读不到任务清单",
+    tasks_down: "{} · 读不到任务清单",
     tasks_reading: "正在读这个号的任务…",
     tasks_unreadable: "任务清单暂时读不到，稍后会自动再读",
     tasks_too_large: "这个号的任务太多，一次读不完",
     tasks_instance_unknown: "Runtime 里没有这个号",
     tasks_not_evaluated: "还没有评估结果",
     tasks_not_in_table: "这一轮的评估里没有这个号",
-    tasks_held_note: "暂停期间下面的任务都不会开始",
+    tasks_held_note: "这期间下面的任务都不会开始",
+    tasks_paused_account: "已用「暂停这个号」暂停，可用这个号卡片上的「恢复这个号」恢复",
+    tasks_paused_other: "已被其他工具暂停，可在「排障与账本」里恢复",
+    tasks_paused_other_all: "已被其他工具暂停，可用「全部开始执勤」恢复",
     tasks_switches: "现在每个任务都按标准包的规则安排，单独开关任务还没开放。",
     tasks_evaluated: "按 {} 那一轮评估",
     tasks_names_unreadable: "任务名称读不到，下面按编号显示",
@@ -3013,14 +3021,17 @@ pub const EN: Labels = Labels {
     card_why_reason_missing: "No reason was given (a program problem; written to the log)",
     card_why_unlisted: "Not scheduled right now",
     tasks_tab: "Daily Tasks",
-    tasks_down: "{}; the task list cannot be read",
+    tasks_down: "{} · the task list cannot be read",
     tasks_reading: "Reading this account's tasks…",
     tasks_unreadable: "The task list cannot be read right now; it is read again by itself shortly",
     tasks_too_large: "This account has too many tasks to read at once",
     tasks_instance_unknown: "The Runtime has no such account",
     tasks_not_evaluated: "No evaluation yet",
     tasks_not_in_table: "This round's evaluation does not include this account",
-    tasks_held_note: "While paused, none of the tasks below start",
+    tasks_held_note: "Meanwhile, none of the tasks below start",
+    tasks_paused_account: "Paused with Pause This Account; Resume This Account on its card resumes it",
+    tasks_paused_other: "Paused by another tool; it can be resumed in Troubleshooting and Ledger",
+    tasks_paused_other_all: "Paused by another tool; Put All on Duty resumes it",
     tasks_switches: "Every task is scheduled by its standard pack's rules for now; switching single tasks on or off is not offered yet.",
     tasks_evaluated: "As evaluated in the round of {}",
     tasks_names_unreadable: "Task names cannot be read; the tasks below show their IDs",
@@ -3040,7 +3051,7 @@ pub const EN: Labels = Labels {
     tasks_rejected: "Could not start this round",
     tasks_paused: "Paused; no new tasks start",
     tasks_also: "Also: {}",
-    tasks_also_join: "; ",
+    tasks_also_join: " · ",
     tasks_also_more: ", and others",
     picture_title: "Live View",
     picture_looking: "Looking for this account's latest picture…",

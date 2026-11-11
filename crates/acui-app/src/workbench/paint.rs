@@ -27,8 +27,8 @@ use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietRead, QuietShown};
 use acui_source::workbench::{
     PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
-    SettingValue, ValueProblem, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, MODE_FULL, MODE_OBSERVE,
-    MODE_PACE,
+    SettingValue, TasksRead, ValueProblem, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, MODE_FULL,
+    MODE_OBSERVE, MODE_PACE,
 };
 use slint::{Image, Model as _, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
@@ -38,7 +38,7 @@ use super::actions::{
     RowEdit, RuleItem, RulesHold, RulesView, Said, StartRule, StepperView, Write,
     PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
 };
-use super::card::{Band, CardView, Down, Line, ReasonClass};
+use super::card::{reason_logged, Band, CardView, Down, Line, ReasonClass};
 use super::model::{Fault, Page, RightTab};
 use super::picture::{
     DimWhy, Doing, EmptyWhy, Offline, Origin, OverlayView, PictureView, RefreshHold, RefreshWhyNot,
@@ -2511,7 +2511,7 @@ fn task_list(
     labels: &Labels,
     list: &TaskList,
 ) -> (TaskListData, Vec<TaskRowData>, Vec<TaskRowData>) {
-    let held = list.held.as_ref().map_or_else(String::new, |line| line_text(ui, labels, line));
+    let held = list.held.as_ref().map_or_else(String::new, |line| held_text(ui, labels, line));
     let data = TaskListData {
         instead: SharedString::new(),
         instead_failed: false,
@@ -2523,6 +2523,8 @@ fn task_list(
         cut_short: list.cut_short,
         fold_shown: !list.unmatched.is_empty(),
         fold_open: list.fold_open,
+        // The Runtime's own reading task is no package's on any configuration.
+        fold_note: list.unmatched.iter().any(|line| matches!(line.task, TaskName::Id(_))),
     };
     let mut rows = Vec::new();
     for group in &list.groups {
@@ -2546,6 +2548,27 @@ fn task_list(
         Vec::new()
     };
     (data, rows, fold)
+}
+
+/// The account's pause or fence above the list's rows, in its card's words but for three pauses
+/// whose words would be wrong there: this console's own pause of the account is lifted on its
+/// card, not below the list; and another tool's, of the account or of all, goes without the reason
+/// it wrote, which may name a person.
+fn held_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
+    let Line::Paused { everyone, by: Lifter::Window, reason } = line else {
+        return line_text(ui, labels, line);
+    };
+    let said = match (*everyone, reason.as_str()) {
+        (true, CONSOLE_PAUSE_ALL) => return line_text(ui, labels, line),
+        (true, _) => labels.tasks_paused_other_all,
+        (false, CONSOLE_PAUSE_ACCOUNT) => labels.tasks_paused_account,
+        (false, _) => labels.tasks_paused_other,
+    };
+    if *everyone {
+        fill(labels.card_all_accounts, &[said])
+    } else {
+        said.to_owned()
+    }
 }
 
 /// One package: its name, its badges, why it runs or not now, the other reasons of its tasks,
@@ -2886,14 +2909,34 @@ fn reason_words(ui: &Ui, labels: &Labels, class: ReasonClass, why: &str) -> Stri
             labels.card_why_reason_missing
         }
         ReasonClass::Unlisted => {
-            let line = format!("no sentence for not-running reason {why}");
-            if ui.model.borrow_mut().first_told(&line) {
-                report::log_quiet("acui-cards", &line);
-            }
+            unlisted_told(ui, why);
             labels.card_why_unlisted
         }
     };
     words.to_owned()
+}
+
+/// Every reason of a task list's answer with no sentence of its own goes to the log once, whether
+/// a row says it or not: one another's sentence stands for, one past the most a row says, one of
+/// a package that runs or is scheduled, one under the account's own line while that is closed.
+pub fn tasks_unlisted(ui: &Ui, read: &TasksRead) {
+    let Some(entry) = &read.entry else {
+        return;
+    };
+    for row in &entry.rows {
+        let (gap, hold) = (row.gap.as_deref(), row.hold.as_deref());
+        if ReasonClass::of(&row.why, gap, hold) == ReasonClass::Unlisted {
+            unlisted_told(ui, &reason_logged(&row.why, gap, hold));
+        }
+    }
+}
+
+/// A reason code with no sentence, as `reason_logged` gives it, to the log the first time only.
+fn unlisted_told(ui: &Ui, why: &str) {
+    let line = format!("no sentence for not-running reason {why}");
+    if ui.model.borrow_mut().first_told(&line) {
+        report::log_quiet("acui-cards", &line);
+    }
 }
 
 /// A fence's cause in plain words. The card never shows the code: one the tables do

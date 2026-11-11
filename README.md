@@ -578,8 +578,9 @@ With a `ui.json` the rows go by its groups and its order, the rest under "Other"
 Which package a task runs comes from the `task_ids` of the same `actingctl packs` run the names come from:
 a task no row of it lists, and every task when that run failed or had warnings, is listed by its task id
 under "This account: some plans do not match a task pack", which opens. Above the rows: the account's
-pause or fence in its card's words, which round of the evaluation the rows are of ("As evaluated in the
-round of hh:mm"), and whether the names cannot be read or not every task is listed. The list reads one
+pause or fence in its card's words (another tool's pause without the reason it wrote), which round of the
+evaluation the rows are of ("As evaluated in the round of hh:mm"), and whether the names cannot be read or
+not every task is listed. The list reads one
 `ScheduleExplanation` of that one account with its candidate rows, answered from memory without the
 ledger, only while its tab shows on the main page of a window that is not minimized and the Runtime is
 online: every 15 seconds, 30 after a failure, and at once when the tab, the account or the owner epoch

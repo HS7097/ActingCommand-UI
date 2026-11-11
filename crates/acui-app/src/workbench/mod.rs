@@ -305,6 +305,14 @@ pub fn tasks_fold_toggled(ui: &Ui) {
 /// account, starts afresh and is read at once. Each time this may change: a `Status` read, a page
 /// or a tab gone to, the window minimized or back, a card picked, a reading thread gone.
 fn tasks_sync(ui: &Ui) {
+    if tasks_follow(ui) {
+        ask(ui, Read::Tasks.lane(), Poke::Only(Read::Tasks));
+    }
+}
+
+/// `tasks_sync` but for its poke: whether the list is to be read at once. A caller that pokes the
+/// slow thread for all its reads right after asks for it there, so that it is read once.
+fn tasks_follow(ui: &Ui) -> bool {
     let (wanted, changed) = {
         let mut model = ui.model.borrow_mut();
         let wanted = model.tasks_wanted();
@@ -317,9 +325,7 @@ fn tasks_sync(ui: &Ui) {
             *slot = wanted.clone();
         }
     }
-    if changed && wanted.is_some() {
-        ask(ui, Read::Tasks.lane(), Poke::Only(Read::Tasks));
-    }
+    changed && wanted.is_some()
 }
 
 /// A `Status` read now: a request of the launcher's is over.
@@ -435,9 +441,10 @@ fn check_shown() {
     };
     let shown = !window.window().is_minimized();
     let changed = ui.model.borrow_mut().set_shown(shown);
+    let mut list_fresh = false;
     if changed {
         preview::sync(&ui);
-        tasks_sync(&ui);
+        list_fresh = tasks_follow(&ui);
         paint::picture(&ui);
         paint::tasks(&ui);
     } else if shown {
@@ -448,7 +455,11 @@ fn check_shown() {
         .borrow()
         .as_ref()
         .is_some_and(|reading| !reading.shown.swap(shown, Ordering::SeqCst) && shown);
+    if !came_back && list_fresh {
+        ask(&ui, Read::Tasks.lane(), Poke::Only(Read::Tasks));
+    }
     if came_back {
+        // Every read of the slow thread, the task list's among them while it shows.
         poke(&ui, Lane::Live);
         poke(&ui, Lane::Slow);
         let owed = ui.reading.borrow().as_ref().is_some_and(|reading| reading.names_owed);
@@ -519,7 +530,7 @@ fn live_landed(ui: &Ui, read: LiveRead) {
         ui.paint_names_note();
     }
     // Before the slow thread is poked: online or not, the account gone or listed.
-    tasks_sync(ui);
+    let list_fresh = tasks_follow(ui);
     // What was asked for on the command line and cannot be had is said, not passed over.
     if let Some(alias) = &landed.unknown_account {
         report::log(
@@ -527,10 +538,13 @@ fn live_landed(ui: &Ui, read: LiveRead) {
             &format!("--account {alias}: no account has that alias; the first one's picture shows"),
         );
     }
-    // Before the cards: the explanation's clock starts here, and they go by it.
+    // Before the cards: the explanation's clock starts here, and they go by it. Every read of the
+    // slow thread, the task list's among them while it shows; and so does a write's (`wrote`).
     if landed.connected || landed.epoch_changed {
         poke(ui, Lane::Slow);
         ask_start(ui);
+    } else if list_fresh && !landed.switch_over {
+        ask(ui, Read::Tasks.lane(), Poke::Only(Read::Tasks));
     }
     // No refresh of the picture out holds across a restart, nor any operation of a device.
     if landed.epoch_changed {
@@ -624,8 +638,12 @@ fn explain_landed(ui: &Ui, read: Result<ExplainRead, ClientFailure>) {
 }
 
 /// The task list's read of `alias`, as the cards' explanation is taken: a failure and its end
-/// each one line of the log, not every failed read.
+/// each one line of the log, not every failed read; and each reason code it has no words for,
+/// once, whether a row says it or not (`paint::tasks_unlisted`).
 fn tasks_landed(ui: &Ui, alias: &str, read: Result<TasksRead, ClientFailure>) {
+    if let Ok(read) = &read {
+        paint::tasks_unlisted(ui, read);
+    }
     let landed = ui.model.borrow_mut().apply_tasks(alias, read, Instant::now());
     let thread = Lane::Slow.name();
     match &landed.news {

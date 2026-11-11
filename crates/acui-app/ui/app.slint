@@ -160,8 +160,9 @@ export struct TaskRowData {
 // Above the list's rows, in words: what it says instead of them, red or amber when that says a
 // failure; the account's pause or fence, which holds them all; whether the note on switches shows;
 // which round of the evaluation they are of; whether the names cannot be read, and whether not
-// every task is listed; whether the account's own line of tasks without a package shows, and
-// whether it is open.
+// every task is listed; whether the account's own line of tasks without a package shows, whether
+// it is open, and whether its note on why goes with it: not when it holds only the Runtime's own
+// reading task, which is no package's on any configuration.
 export struct TaskListData {
     instead: string,
     instead-failed: bool,
@@ -173,6 +174,7 @@ export struct TaskListData {
     cut-short: bool,
     fold-shown: bool,
     fold-open: bool,
+    fold-note: bool,
 }
 
 // One of the Runtime's settings on the settings page, in words: its name, with the
@@ -2124,9 +2126,9 @@ component TaskLineView {
 // column: only words, no switch. What it says instead of its rows; else above them the account's
 // pause or fence, and in grey that none of its tasks starts meanwhile; the note on switches; which
 // round they are of; that the names cannot be read, and that not every task is listed. Then the
-// account's own line of tasks without a package, marked while open, and while open why, in grey,
-// and those tasks; then the groups' titles and their packages. All of it wraps but a name and a
-// summary; the whole card scrolls when it is too short for it.
+// account's own line of tasks without a package, marked while open, and while open why, in grey
+// (`fold-note`), and those tasks; then the groups' titles and their packages. All of it wraps but
+// a name and a summary; the whole card scrolls when it is too short for it.
 component TaskList {
     in property <TaskListData> data;
     in property <[TaskRowData]> rows;
@@ -2190,7 +2192,7 @@ component TaskList {
                 }
             }
         }
-        if root.data.fold-shown && root.data.fold-open: Text {
+        if root.data.fold-shown && root.data.fold-open && root.data.fold-note: Text {
             text: Strings.tasks-fold-note;
             font-size: Scale.grey-font;
             color: Look.text-caption;
