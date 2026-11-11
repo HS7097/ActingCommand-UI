@@ -541,7 +541,12 @@ impl Model {
                         };
                         let selected = picked == Some(instance.alias.as_str());
                         let elsewhere = &self.resume_elsewhere;
-                        let account = actions::account_view(instance, &self.actions, elsewhere);
+                        let account = actions::account_view(
+                            instance,
+                            &self.actions,
+                            elsewhere,
+                            global.is_some(),
+                        );
                         card::card_view(
                             instance, server, last_seen, global, schedule, selected, elsewhere,
                             account,
@@ -567,7 +572,8 @@ impl Model {
             return None;
         }
         let instance = self.instances.iter().find(|instance| instance.alias == alias)?;
-        Some(actions::account_view(instance, &self.actions, &self.resume_elsewhere).entry)
+        let global = self.global_pause.is_some();
+        Some(actions::account_view(instance, &self.actions, &self.resume_elsewhere, global).entry)
     }
 
     /// The account whose picture the right column shows, of the cards `cards` lists:

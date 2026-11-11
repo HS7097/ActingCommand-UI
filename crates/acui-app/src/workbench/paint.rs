@@ -2463,7 +2463,7 @@ fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
         AccountEntry::Resume { offered, .. } => (false, true, *offered),
     };
     let (said, said_failed) = match &view.account.said {
-        Some(said) => account_said_text(labels, said),
+        Some(said) => account_said_text(labels, said, view.account.global_holds),
         None => (String::new(), false),
     };
     AccountCard {
@@ -2488,8 +2488,10 @@ fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
 
 /// What the last press of an account card's own button came to in words, and whether that is
 /// a failure. A refusal says its code as the Runtime gave it, then the code's short words, and
-/// so does a lift whose reconnect of the device failed.
-fn account_said_text(labels: &Labels, said: &AccountSaid) -> (String, bool) {
+/// so does a lift whose reconnect of the device failed. A lift while a global pause holds
+/// (`global_holds`) says that the account is still not scheduled, as the top bar's says the
+/// pauses that still hold.
+fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) -> (String, bool) {
     let coded = |template: &str, code: &str| {
         let words = outcome_short(labels, code)
             .unwrap_or_else(|| labels.outcome_unknown_short.to_owned());
@@ -2504,11 +2506,15 @@ fn account_said_text(labels: &Labels, said: &AccountSaid) -> (String, bool) {
         }
         AccountSaid::Paused => (labels.account_paused.to_owned(), false),
         AccountSaid::AlreadyPaused => (labels.account_pause_already.to_owned(), false),
-        AccountSaid::Resumed { device_failure: None } => {
-            (labels.account_resumed.to_owned(), false)
-        }
-        AccountSaid::Resumed { device_failure: Some(code) } => {
-            (coded(labels.account_resumed_device_failed, code.as_str()), true)
+        AccountSaid::Resumed { device_failure } => {
+            let mut text = match device_failure {
+                None => labels.account_resumed.to_owned(),
+                Some(code) => coded(labels.account_resumed_device_failed, code.as_str()),
+            };
+            if global_holds {
+                text.push_str(labels.account_resumed_global_holds);
+            }
+            (text, device_failure.is_some())
         }
         AccountSaid::PauseMoved => (labels.resume_all_moved.to_owned(), false),
         AccountSaid::Refused { write: AccountWrite::Pause, code } => {

@@ -1326,7 +1326,8 @@ export component LedgerWindow inherits Window {
 // Space does once Tab has reached it, the way a page tab is picked; a click does not
 // take the focus. The card picked is edged in the accent, heavier, and its picture is
 // the one the right column shows. Its own button is pressed, not the card: a click on
-// it picks nothing.
+// it picks nothing while it can be pressed. While it cannot (a press of it is out), the
+// button takes no click, and one on it picks the card as a click elsewhere on it does.
 component AccountCardView {
     in property <AccountCard> account;
     callback picked();
@@ -1341,7 +1342,8 @@ component AccountCardView {
         root.picked();
     }
     // Under the card, so that its own button takes its own clicks; the rest of the card
-    // takes none, and passes them down to this.
+    // takes none, nor does the button while it cannot be pressed, and passes them down to
+    // this.
     TouchArea {
         clicked => {
             root.picked();

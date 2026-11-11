@@ -857,8 +857,9 @@ epoch and the revision of the status read the card was painted from, so the Runt
 nothing once that pause has changed. It goes at one press, without the confirmation Put All on Duty asks
 of another tool's pause, since the console set this pause itself. The resume connects the device again;
 a reconnect that fails is said in red with its code, and the resume stands. What a press came to is said
-on the card: done; a pause that already holds, which keeps its reason; a refusal, in red, its code
-verbatim and the code's words (a fixture instance, for one, is refused with
+on the card: done (a resume done while a global pause holds adds that no task is scheduled for the
+account until that one is lifted too); a pause that already holds, which keeps its reason; a refusal,
+in red, its code verbatim and the code's words (a fixture instance, for one, is refused with
 `fixture_execution_scope_forbidden`); or not confirmed, which is not sent again. While
 `resume_elsewhere_reasons` cannot be used the card still lifts this pause, as the top bar still lifts its
 own Pause All; a settings file that lists `console_pause_account` leaves it to "whoever set it", like
@@ -870,10 +871,11 @@ as before, and the ledger window resumes those it may (below). From the command 
 
 - **Conditional resume (ledger window)**: below the technical lines the window lists the global pause and
   each instance's pause of its last status read (reason, revision, since), each by its own scope. One
-  another tool set — the global one, or an instance's whose device is handed back — carries "Resume
-  Scheduling…": the first press only shows the statement "resume this one pause" and "Confirm and
-  Resume"; the confirm sends one conditional `ResumeScheduling` on a worker thread, over a fresh person's
-  connection (actor `user`), its condition the owner epoch of that status read and the scope's revision,
+  another tool or the console itself set (the console's own line says "Paused by This Console", not
+  "Paused by Another Tool") — the global one, or an instance's whose device is handed back — carries
+  "Resume Scheduling…": the first press only shows the statement "resume this one pause" and "Confirm
+  and Resume"; the confirm sends one conditional `ResumeScheduling` on a worker thread, over a fresh
+  person's connection (actor `user`), its condition the owner epoch of that status read and the scope's revision,
   so the Runtime refuses it and lifts nothing once that pause has changed or another Runtime runs; only the
   pause of that line is resumed. Lifted, refused (shown by its code, "code not in this console's table" for
   one the table lacks) or not confirmed (a receipt timeout, a dropped connection,
@@ -893,12 +895,14 @@ as before, and the ledger window resumes those it may (below). From the command 
   top bar and the account cards too. While
   that settings line cannot be used, every pause but a deployment's, a Lab rescue's and the console's
   own two (Pause All, the global pause with reason `console_pause_all`, and Pause This Account, an
-  instance's with reason `console_pause_account`) is of the first kind. The pauses the Runtime itself
-  sets for a person to lift after looking are of none of these kinds, so they carry "Resume
-  Scheduling…" like another tool's pause unless `resume_elsewhere_reasons` lists their reason:
-  `instance.added`, the pause of an account just added (Runtime INST-5), and
-  `policy_settlement_facts_skipped`, the hold of an instance whose settlement facts the Runtime's start
-  could not record (Runtime ISO-START-1). An instance
+  instance's with reason `console_pause_account`) is of the first kind. Two pauses set for a person to
+  lift after looking are of none of these kinds, so they carry "Resume Scheduling…" like another tool's
+  pause unless `resume_elsewhere_reasons` lists their reason: `instance.added`, which the Lab's rescue
+  module's `instance add` (Runtime INST-5) sets on the account it has just added and which, unlike that
+  module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
+  Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
+  No Runtime release up to 0.12.51, the pinned 0.12.47 included, sets either; both come with a later
+  one. An instance
   pause still draining or handing its device back gets none either: the Runtime refuses its resume
   then. Each line shows its pause's reason verbatim, whatever the operator wrote.
 

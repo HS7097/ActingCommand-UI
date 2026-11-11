@@ -1141,6 +1141,10 @@ pub enum AccountEntry {
 pub struct AccountView {
     pub entry: AccountEntry,
     pub said: Option<AccountSaid>,
+    /// The newest `Status` shows a global pause, which a lift of the account's own leaves: a
+    /// resume said done then says that the account is still not scheduled, as the top bar's
+    /// says the pauses that still hold (`resume_all_still_paused`).
+    pub global_holds: bool,
 }
 
 /// The card's own button of `instance`, an account of the newest `Status` while it answers:
@@ -1148,10 +1152,12 @@ pub struct AccountView {
 /// one only whoever set it lifts by the settings file is not this console's to lift), handed
 /// back, "resume this account"; under any other, none. Either can be pressed while no press of
 /// that account is out. A fixture is offered the pause too: the Runtime's refusal says why not.
+/// `global_holds`: that `Status` shows a global pause.
 pub fn account_view(
     instance: &InstanceLive,
     actions: &Actions,
     elsewhere: &ResumeElsewhere,
+    global_holds: bool,
 ) -> AccountView {
     let offered = !actions.account_out(&instance.alias);
     let entry = match &instance.pause {
@@ -1165,12 +1171,17 @@ pub fn account_view(
         }
         Some(_) => AccountEntry::Off,
     };
-    AccountView { entry, said: actions.account_said(&instance.alias).cloned() }
+    AccountView { entry, said: actions.account_said(&instance.alias).cloned(), global_holds }
 }
 
-/// An account no `Status` answers about now: no button, and what its last press came to.
+/// An account no `Status` answers about now: no button, and what its last press came to; no
+/// global pause known.
 pub fn account_down_view(alias: &str, actions: &Actions) -> AccountView {
-    AccountView { entry: AccountEntry::Off, said: actions.account_said(alias).cloned() }
+    AccountView {
+        entry: AccountEntry::Off,
+        said: actions.account_said(alias).cloned(),
+        global_holds: false,
+    }
 }
 
 /// The top bar's performance preset now.

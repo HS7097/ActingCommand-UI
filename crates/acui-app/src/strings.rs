@@ -407,13 +407,15 @@ pub struct Labels {
     pub unlock_spawn_failed: &'static str,
     /// A scheduling pause's line in the ledger window. Its scope: global, or
     /// an instance's (alias). Then scope, reason, revision, since: a pause
-    /// another tool set, with the stage of an instance's that cannot be resumed
+    /// another tool set, or this console (its Pause All or Pause This Account),
+    /// with the stage of an instance's that cannot be resumed
     /// yet; one only whoever set it lifts, by the settings file; a deployment's,
     /// which the installer lifts; a Lab rescue operation's, which it lifts as it
     /// finishes, but for a stop's (`lab-down-`), which is lifted from the Lab.
     pub pause_global: &'static str,
     pub pause_instance: &'static str,
     pub pause_other_tool: &'static str,
+    pub pause_console: &'static str,
     pub pause_draining: &'static str,
     pub pause_releasing: &'static str,
     pub pause_setter: &'static str,
@@ -565,7 +567,8 @@ pub struct Labels {
     /// An account card's own button: with no pause of its own, and under the one this console
     /// set there. Then, on the card, what its press came to: in flight each way, which may take
     /// a while; done; a pause that already holds; a refusal, which takes the code as the Runtime
-    /// gave it and its short words, and a lift whose reconnect of the device failed the same.
+    /// gave it and its short words, and a lift whose reconnect of the device failed the same;
+    /// after a lift, that a global pause still holds over the account.
     /// The rest are the top bar's (`write_*`, `resume_all_moved`, `resume_all_unsupported`).
     pub pause_account: &'static str,
     pub resume_account: &'static str,
@@ -576,6 +579,7 @@ pub struct Labels {
     pub account_resume_sending: &'static str,
     pub account_resumed: &'static str,
     pub account_resumed_device_failed: &'static str,
+    pub account_resumed_global_holds: &'static str,
     pub account_resume_refused: &'static str,
     /// The top bar's performance preset: the row's caption, each known preset's name
     /// and what it means, what is in effect when no preset is, and that it cannot be
@@ -1555,6 +1559,7 @@ pub const ZH: Labels = Labels {
     pause_global: "全局调度",
     pause_instance: "实例 {} 的调度",
     pause_other_tool: "{}：被其他工具暂停（理由 {}，修订 {}，自 {}）",
+    pause_console: "{}：被这个监控台暂停（理由 {}，修订 {}，自 {}）",
     pause_draining: " · 正在等进行中的任务收尾，收尾后才能恢复",
     pause_releasing: " · 正在交还设备，交还后才能恢复",
     pause_setter: "{}：已暂停（理由 {}，修订 {}，自 {}）· 此暂停要由设下它的一方解除",
@@ -1660,6 +1665,7 @@ pub const ZH: Labels = Labels {
     account_resume_sending: "正在恢复这个号…要重新连一次设备，最多要半分钟左右",
     account_resumed: "这个号已恢复",
     account_resumed_device_failed: "这个号已恢复，但重新连接设备没有成功：{} · {}",
+    account_resumed_global_holds: " · 全局暂停还在，这个号仍不会被安排任务",
     account_resume_refused: "恢复这个号没有成功：{} · {}",
     performance_preset: "性能档位",
     preset_standard: "标准",
@@ -2456,6 +2462,7 @@ pub const EN: Labels = Labels {
     pause_global: "Global Scheduling",
     pause_instance: "Scheduling of Instance {}",
     pause_other_tool: "{}: Paused by Another Tool (Reason {}, Revision {}, Since {})",
+    pause_console: "{}: Paused by This Console (Reason {}, Revision {}, Since {})",
     pause_draining: " · Waiting for the Running Tasks to Finish; It Can Be Resumed After That",
     pause_releasing: " · Handing the Device Back; It Can Be Resumed After That",
     pause_setter: "{}: Paused (Reason {}, Revision {}, Since {}) · This Pause Is to Be Lifted by Whoever Set It",
@@ -2561,6 +2568,7 @@ pub const EN: Labels = Labels {
     account_resume_sending: "Resuming this account… its device is connected again; this can take about half a minute",
     account_resumed: "This account is resumed",
     account_resumed_device_failed: "This account is resumed, but connecting its device again did not succeed: {} · {}",
+    account_resumed_global_holds: " · The global pause still holds, so no task is scheduled for this account yet",
     account_resume_refused: "Resume This Account did not succeed: {} · {}",
     performance_preset: "Performance",
     preset_standard: "Standard",

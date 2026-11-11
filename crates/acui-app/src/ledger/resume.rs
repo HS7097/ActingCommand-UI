@@ -27,12 +27,17 @@
 //! one, and "pause this account", an instance's, is of the first kind
 //! (`ResumeElsewhere`).
 //!
-//! Of the pauses the Runtime itself sets for a person to lift, the pause of an
-//! account just added (`instance.added`, Runtime INST-5) and the hold of an
-//! instance whose settlement facts the start could not record
+//! Of the pauses set for a person to lift after looking, the one the Lab's
+//! rescue module's `instance add` sets on the account it has just added
+//! (`instance.added`, Runtime INST-5), which no operation of that module lifts
+//! as it does its `lab-<word>-<ms>` ones, and the hold the Runtime's start sets
+//! on an instance whose settlement facts it could not record
 //! (`policy_settlement_facts_skipped`, Runtime ISO-START-1) are of no kind above:
 //! this window offers their resume (`Lifter::Window`), unless the settings file
-//! lists their reason.
+//! lists their reason. No Runtime release up to 0.12.51 sets either.
+//!
+//! This console's own two are said as its own, not another tool's, and are
+//! resumed here as those are.
 
 use acui_rows::format_full;
 use acui_source::workbench::{CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL};
@@ -288,7 +293,7 @@ fn unread(labels: &Labels, failure: &ClientFailure) -> (String, &'static str) {
 }
 
 /// A pause's line, and whether a person may resume it here: one another tool
-/// set, global, or an instance's whose device is handed back — the Runtime
+/// or this console set, global, or an instance's whose device is handed back — the Runtime
 /// refuses the resume of one still draining or handing it back.
 fn pause_text(labels: &Labels, fact: &PauseFact, elsewhere: &ResumeElsewhere) -> (String, bool) {
     let scope = scope_text(labels, &fact.target);
@@ -299,7 +304,10 @@ fn pause_text(labels: &Labels, fact: &PauseFact, elsewhere: &ResumeElsewhere) ->
         Lifter::Installer => (fill(labels.pause_deploy, &values), false),
         Lifter::LabRescue => (fill(labels.pause_lab_rescue, &values), false),
         Lifter::Window => {
-            let mut text = fill(labels.pause_other_tool, &values);
+            // This console's own, by reason and scope (`console_set`), is not another tool's.
+            let set_by =
+                if console_set(fact) { labels.pause_console } else { labels.pause_other_tool };
+            let mut text = fill(set_by, &values);
             let resumable = match fact.stage {
                 None | Some(PauseStage::Released) => true,
                 Some(PauseStage::Draining) => {
