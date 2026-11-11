@@ -64,7 +64,8 @@ another acquisition is a conversion, compared inside V. Three solves:
 All of them compare exact fractions; a row A ≥ A* or V ≥ V* is checked exactly like every other row. An activity
 whose dual slack at the exact optimal point of S3's dual is above 0 runs in no optimum (complementary slackness,
 `_never`; PRICE-2c), so it needs no tie probe and no probe of `most`; a probe that cannot be verified exactly is
-`lp_probe_unverified` (a warning, its activity a structural gap) and never blocks the steady state.
+`lp_probe_unverified` (a warning, its activity a structural gap but for a forcing cost alone at the pivot cap, which no
+price reads: PROBE-GAP, `core.coverage`) and never blocks the steady state.
 
 **The joint price vector** (#424 ACM-PRICE addendum 2.1 §2.2, ruling 127 iii; PRICE-2b-1). The exported prices are
 one point of D*, never a pick per pool. Steps:
@@ -214,9 +215,11 @@ NO_STEADY_SUPPLY, NO_ROOM = "no_steady_supply", "no_room"
 # `grain`, of two exact fractions, and every exactness check stay exact.
 MARGINAL_TOLERANCE = Fraction(1, 10**7)
 # A per-activity probe that cannot be verified exactly (PRICE-2c): `lp_probe_unverified`, a warning, and its activity a
-# structural gap of its static component (`core.coverage`). The probes, by the judgement they answer: a tie
-# (`objective_tier_tie`), the most an optimum runs it, its value's range on D*, its forcing cost. Why: HiGHS left no
-# valid basis (`no_basis`), its basis gave no certified vertex (an `exact` reason), or the probe's LP failed.
+# structural gap of its static component (`core.coverage`), but for a forcing cost that the pivot cap left unverified and
+# that is its activity's only unverified probe, which no price reads (PROBE-GAP). The probes, by the judgement they
+# answer: a tie (`objective_tier_tie`), the most an optimum runs it, its value's range on D*, its forcing cost. Why:
+# HiGHS left no valid basis (`no_basis`), its basis gave no certified vertex (an `exact` reason), or the probe's LP
+# failed.
 TIE, MOST, RANGE, FORCING = "tie", "most", "range", "forcing_cost"
 NO_BASIS, SOLVE_FAILED = "no_basis", "solve_failed"
 # HiGHS's simplex strategies (`SimplexStrategy`): the dual simplex, which `linprog` sets for every solve, and the primal
@@ -2865,8 +2868,10 @@ class _Solver:
         - **Unverified probes** (PRICE-2c): a probe of `most`, `range` or `forcing_cost` whose LP gives no certified
           optimum is `lp_probe_unverified` (returned with the section), its members null and its name listed in the
           activity's `unverified`; an activity whose `most` or `range` is unverified is left out of K (whether it is
-          an optimum's is not known), and its component is a structural gap (`core.coverage`). `forcing_cost` reads
-          `most`, so it is unverified with it.
+          an optimum's is not known), and an unverified probe makes its component a structural gap (`core.coverage`),
+          but for a forcing cost that the pivot cap left unverified and that is its activity's only one: it is solved
+          below, after the vector, and nothing above reads it (PROBE-GAP). `forcing_cost` reads `most`, so it is
+          unverified with it.
         - **`lean`** (the vector, PRICE-4a): only what the vector reads. The range of an activity is probed only when no
           optimum runs it (`most` 0: only such an activity is in K), and no forcing cost is computed; the activities'
           other judgements are then null. The vector is the same: every step of the selection is an LP's optimal
