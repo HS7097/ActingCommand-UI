@@ -578,10 +578,15 @@ Runtime's settings, then "Runtime" (Request Shutdown, "Start the Runtime again a
 "Appearance" (the text size, the language and the theme). The Runtime's settings come from the running Runtime (read again on going to the page), in two
 groups, "Everyday" and "Advanced": which keys show and in which group is the Runtime's own tiering, and the
 four settings of the performance preset are only on the top bar. Each says its value, where it comes
-from, how it is changed (shown only for now, changed in the configuration file with a Runtime restart,
-or set by the installer) and when a change takes effect; one the file does not name and that has no
-default says "not set" rather than being left out. Of the rows, only "Days to keep unconfirmed
-evidence frames" is changed here: type a whole number and press Save, or empty the field and save to go
+from, how it is changed (shown only for now, changed under that account's Auto Rules on the main page,
+changed in the configuration file with a Runtime restart, or set by the installer) and when a change
+takes effect; one the file does not name and that has no default says "not set" rather than being left
+out. Everyday starts with the quiet times of all accounts (`scheduling.blackout.host`): one line per
+time, each with Delete, then Add a Time…, Delete All (asked once) and Back to File Setting, the same
+form as an account's own under its Auto Rules on the main page; each change sends the whole list online
+once; a start equal to its end is not sent, and Whole Day makes 0:00 to 0:00 the next day. Of the other
+rows, only "Days to keep unconfirmed evidence frames" is changed here: type a whole number and press
+Save, or empty the field and save to go
 back to the configuration file's value (or the default). Only the Runtime judges the range, and a refusal
 says what it said; the result has a line of its own under the top bar, naming the setting. A save is
 sent once: when its result is unknown, what holds is read again before anything is said, and nothing is
@@ -1608,3 +1613,7 @@ header of every `.rs` / `.slint` file agree with it. The interface is rendered b
 [Slint](https://slint.dev), used under its GPLv3 licensing option. The Runtime crates depended on
 (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) are `AGPL-3.0-only`, and the
 two combine under GPLv3 section 13.
+
+No source code of another automation project is in this repository. The upstream license matrix of the
+whole family is in the umbrella repository's
+[LICENSE_POLICY.md](https://github.com/HS7097/ActingCommand/blob/main/LICENSE_POLICY.md).

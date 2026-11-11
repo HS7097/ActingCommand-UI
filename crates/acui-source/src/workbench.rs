@@ -1258,8 +1258,10 @@ impl SettingsRead {
             });
             return;
         };
-        // UI-3e1-b: a blackout list's entries are read as well, by the Runtime's own parser, for
-        // an account's rules; the page shows the list only as set or not.
+        // UI-3e1-b/-c: a blackout list's entries are read as well, by the Runtime's own parser: an
+        // instance's own for its account's rules, its row showing only as set or not, and the
+        // host's for the editor of every account's quiet times, which the settings page shows in
+        // its row's place.
         if let Some(entries) = rules::list_read(row.name, instance, &parameter.value) {
             self.quiet.insert(parameter.key.clone(), entries);
         }

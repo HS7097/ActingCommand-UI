@@ -4,8 +4,9 @@
 //! rows come and go only when the accounts do, so a read every few seconds costs
 //! nothing and moves nothing. And the top bar's writes, its performance preset and the
 //! stepper under it, from their views; which page shows; the settings page's rows of
-//! the Runtime's settings, the same way as the cards, with the field of the evidence days
-//! among them and each device's group of its backends after them; what the start report says
+//! the Runtime's settings, the same way as the cards, the editor of every account's quiet times
+//! heading the everyday ones (UI-3e1-c), with the field of the evidence days among them and each
+//! device's group of its backends after them; what the start report says
 //! of the settings; and whether the Runtime is started again when it is gone. And the right
 //! column's live view, from its view, the frame's pixels once when it lands; and under it the
 //! picture's refresh, painted with it. And over the picture the account's rescue bar, and while
@@ -24,7 +25,7 @@ use acui_source::workbench::backends::{
 };
 use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
 use acui_source::workbench::preview::Overlay;
-use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietRead, QuietShown};
+use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietOf, QuietRead, QuietShown};
 use acui_source::workbench::stop::{Origin as RunOrigin, Refusal, Reset};
 use acui_source::workbench::{
     PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
@@ -35,9 +36,9 @@ use slint::{Image, Model as _, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedStr
 
 use super::actions::{
     AccountEntry, AccountRules, AccountSaid, AccountWrite, ActionsView, Choice, EvidenceView,
-    Field, FormProblem, GroupState, PresetState, PresetView, QuietFormView, Reread, ResumeEntry,
-    RowEdit, RuleItem, RulesHold, RulesView, Said, StartRule, StepperView, Write,
-    PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
+    Field, FormProblem, GroupState, HostQuiet, PresetState, PresetView, QuietFormView, QuietRule,
+    QuietTarget, Reread, ResumeEntry, RowEdit, RuleItem, RulesHold, RulesView, Said, StartRule,
+    StepperView, Write, PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
 };
 use super::card::{reason_logged, Band, CardView, Down, Line, ReasonClass};
 use super::model::{Fault, Page, RightTab};
@@ -61,9 +62,9 @@ use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
 use crate::{
-    AccountCard, BackendGroupItem, IdlePick, OverlayItem, PresetChoice, QuietLine, RescueBar,
-    RescueOp, RulesData, SettingItem, StatusTone, TargetItem, TaskListData, TaskRowData, TaskTone,
-    WorkbenchPage, WorkbenchTab, WorkbenchWindow,
+    AccountCard, BackendGroupItem, IdlePick, OverlayItem, PresetChoice, QuietData, QuietEditor,
+    QuietLine, RescueBar, RescueOp, RulesData, SettingItem, StatusTone, TargetItem, TaskListData,
+    TaskRowData, TaskTone, WorkbenchPage, WorkbenchTab, WorkbenchWindow,
 };
 
 /// What the technical log's lines about the settings page are under.
@@ -145,6 +146,15 @@ pub fn idle_picked(pick: IdlePick) -> IdleChoice {
     match pick {
         IdlePick::DoNothing => IdleChoice::Nothing,
         IdlePick::CloseGame => IdleChoice::CloseGame,
+    }
+}
+
+/// The editor of quiet times a press names (UI-3e1-c): an account's own on its rules panel, or
+/// every account's on the settings page.
+pub fn quiet_editor(editor: QuietEditor) -> QuietTarget {
+    match editor {
+        QuietEditor::Account => QuietTarget::Account,
+        QuietEditor::Host => QuietTarget::Host,
     }
 }
 
@@ -1118,7 +1128,7 @@ fn rules_panel(
         None => (RulesData::default(), Vec::new(), None),
     };
     sync(window.get_quiet_lines(), lines, |rows| window.set_quiet_lines(rows));
-    quiet_form_fields(window, form.as_ref());
+    quiet_form_fields(window, QuietTarget::Account, form.as_ref());
     if window.get_rules() != data {
         window.set_rules(data);
     }
@@ -1152,8 +1162,10 @@ fn rules_data(
 /// all: a change of its own out says so on its own line, as one saved does until the newest
 /// settings show it. Each rule: where its value comes from and when a change takes effect; why it
 /// cannot be changed when it cannot, whatever holds the others; what the last change of it came
-/// to. A list or an idle action that does not read, or the host's list, goes to the log once,
-/// why with it.
+/// to. Its own quiet times are the editor every account's are as well (`quiet_data`), under which
+/// it says whether every account's add to them, pointing at the settings page that changes them.
+/// A list or an idle action that does not read, or the host's list, goes to the log once, why
+/// with it.
 fn rules_read(
     ui: &Ui,
     labels: &Labels,
@@ -1163,6 +1175,7 @@ fn rules_read(
 ) -> (RulesData, Vec<QuietLine>, Option<QuietFormView>) {
     let view = ui.model.borrow().actions_view();
     let id = rules.instance_id.as_str();
+    let whose = format!("instance {id}");
     let quiet = &rules.quiet;
     let idle = &rules.idle;
     let start = rules.start.as_ref();
@@ -1171,51 +1184,22 @@ fn rules_read(
         .into_iter()
         .flatten()
         .any(|said| matches!(said, Said::ConfigApplied | Said::BackToFile));
-    let hold = match &rules.hold {
-        None | Some(RulesHold::OwnWrite) => String::new(),
-        Some(RulesHold::Switching { account }) => {
-            fill(labels.rules_switching, &[account.as_deref().unwrap_or(labels.start_account_gone)])
-        }
-        Some(RulesHold::OtherWrite) => labels.rules_other_write.to_owned(),
-        Some(RulesHold::RowsBehind) if saved => String::new(),
-        Some(RulesHold::RowsBehind) => labels.rules_rows_behind.to_owned(),
-    };
+    let hold = rules_hold_text(labels, rules.hold.as_ref(), saved);
 
-    let (lines, quiet_source, quiet_empty, quiet_why) = match &quiet.read {
-        QuietRead::Read { list, source, settable } => {
-            let local = local_utc_offset_minutes();
-            let lines: Vec<QuietLine> =
-                list.entries().map(|entry| quiet_entry(labels, entry, local)).collect();
-            let empty = if list.is_empty() { labels.rules_quiet_none } else { "" };
-            let why = if *settable { "" } else { labels.rules_file_restart };
-            (lines, source_effect(labels, *source, labels.setting_effect_round), empty, why)
-        }
+    let of = QuietOf::Instance(id.to_owned());
+    let ask = fill(labels.rules_clear_ask, &[alias]);
+    let (quiet_words, lines, form) = quiet_data(ui, labels, &view, &of, ask, quiet);
+    let host = match &rules.host_quiet {
+        QuietRead::Read { list, .. } if list.is_empty() => labels.rules_host_none,
+        QuietRead::Read { .. } => labels.rules_host_some,
         QuietRead::Unread(why) => {
             if let Some(why) = why {
-                let line = format!("instance {id}: its quiet times are shown, not changed: {why}");
-                tell_once(ui, &line, true);
+                tell_once(ui, &quiet_unread_line(&QuietOf::Host, why), true);
             }
-            (Vec::new(), String::new(), "", labels.rules_quiet_unread)
-        }
-    };
-    let form = quiet.form.clone();
-    let problem = form
-        .as_ref()
-        .and_then(|form| form.problem)
-        .map_or("", |problem| form_problem_text(labels, problem));
-    let confirm =
-        if quiet.confirming { fill(labels.rules_clear_ask, &[alias]) } else { String::new() };
-    let host = match &rules.host_quiet {
-        Some(Ok(0)) => labels.rules_host_none,
-        Some(Ok(_)) => labels.rules_host_some,
-        Some(Err(why)) => {
-            tell_once(ui, &format!("the quiet times of every instance do not read: {why}"), true);
             labels.rules_host_unread
         }
-        None => "",
     };
-    let (quiet_line, quiet_failed) =
-        rule_said_text(ui, labels, &view, id, RuleItem::Quiet, quiet.said.as_ref());
+    let quiet_words = QuietData { other: host.into(), ..quiet_words };
 
     let (idle_nothing, idle_close, idle_source, idle_now, idle_why) = match &idle.now {
         Some(now) => {
@@ -1252,7 +1236,7 @@ fn rules_read(
         idle_note = fill(labels.rescue_then, &[&idle_note, labels.rules_idle_no_device]);
     }
     let (idle_line, idle_failed) =
-        rule_said_text(ui, labels, &view, id, RuleItem::Idle, idle.said.as_ref());
+        rule_said_text(ui, labels, &view, &whose, RuleItem::Idle, idle.said.as_ref());
 
     let (start_on, start_off, start_source, start_why) = match start {
         None => (false, false, String::new(), ""),
@@ -1272,7 +1256,9 @@ fn rules_read(
         }
     };
     let (start_line, start_failed) = match start {
-        Some(start) => rule_said_text(ui, labels, &view, id, RuleItem::Start, start.said.as_ref()),
+        Some(start) => {
+            rule_said_text(ui, labels, &view, &whose, RuleItem::Start, start.said.as_ref())
+        }
         None => (String::new(), false),
     };
     let start_can_write = start.is_some_and(|start| start.can_write);
@@ -1284,18 +1270,7 @@ fn rules_read(
         hold: hold.into(),
         hold_failed: false,
         shown: true,
-        quiet_source: quiet_source.into(),
-        quiet_empty: quiet_empty.into(),
-        quiet_why: quiet_why.into(),
-        quiet_can_write: quiet.can_write,
-        quiet_form_open: form.is_some(),
-        quiet_problem: problem.into(),
-        quiet_can_clear: quiet.can_clear,
-        quiet_confirm: confirm.into(),
-        quiet_back: quiet.back_to_file,
-        quiet_host: host.into(),
-        quiet_line: quiet_line.into(),
-        quiet_failed,
+        quiet: quiet_words,
         idle_nothing,
         idle_close,
         idle_can_write: idle.can_write,
@@ -1321,9 +1296,127 @@ fn rules_read(
     (data, lines, form)
 }
 
+/// Why no rule of an account, or none of every account's quiet times, can be changed now: nothing
+/// while its own change is out, which its line says, nor once one was saved (`saved`) while the
+/// newest settings are read, which its line says too.
+fn rules_hold_text(labels: &Labels, hold: Option<&RulesHold>, saved: bool) -> String {
+    match hold {
+        None | Some(RulesHold::OwnWrite) => String::new(),
+        Some(RulesHold::Switching { account }) => {
+            fill(labels.rules_switching, &[account.as_deref().unwrap_or(labels.start_account_gone)])
+        }
+        Some(RulesHold::OtherWrite) => labels.rules_other_write.to_owned(),
+        Some(RulesHold::RowsBehind) if saved => String::new(),
+        Some(RulesHold::RowsBehind) => labels.rules_rows_behind.to_owned(),
+    }
+}
+
+/// What the log hears, once, of the quiet times of `of` that do not read: they are shown so, and
+/// not changed.
+fn quiet_unread_line(of: &QuietOf, why: &str) -> String {
+    format!("{of}: its quiet times are shown, not changed: {why}")
+}
+
+/// One editor of quiet times in words (UI-3e1-c), the window's `QuietTimes` of either list: an
+/// account's own on its rules panel (`of` an instance), or every account's on the settings page.
+/// Its title and what the times do, which tell the two apart; where the list comes from and when a
+/// change takes effect; its times' lines, or that it has none; why it cannot be changed when the
+/// Runtime does not take a change while it runs, or that it does not read (to the log once, why
+/// with it); the form while open, and why its last "add" sent nothing; whether "delete all" can be
+/// pressed, and the question `ask` its first press asks while it does; "back to the file's
+/// setting"; what the last change of it came to, red when it failed. What holds it, and what the
+/// other list adds, are its caller's to fill.
+fn quiet_data(
+    ui: &Ui,
+    labels: &Labels,
+    view: &ActionsView,
+    of: &QuietOf,
+    ask: String,
+    quiet: &QuietRule,
+) -> (QuietData, Vec<QuietLine>, Option<QuietFormView>) {
+    let (title, note, none, unread) = match of {
+        QuietOf::Instance(_) => (
+            labels.setting_quiet,
+            labels.rules_quiet_note,
+            labels.rules_quiet_none,
+            labels.rules_quiet_unread,
+        ),
+        QuietOf::Host => (
+            labels.setting_quiet_host,
+            labels.rules_host_note,
+            labels.rules_host_empty,
+            labels.rules_host_unread,
+        ),
+    };
+    let (lines, source, empty, why) = match &quiet.read {
+        QuietRead::Read { list, source, settable } => {
+            let local = local_utc_offset_minutes();
+            let lines: Vec<QuietLine> =
+                list.entries().map(|entry| quiet_entry(labels, entry, local)).collect();
+            let empty = if list.is_empty() { none } else { "" };
+            let why = if *settable { "" } else { labels.rules_file_restart };
+            (lines, source_effect(labels, *source, labels.setting_effect_round), empty, why)
+        }
+        QuietRead::Unread(why) => {
+            if let Some(why) = why {
+                tell_once(ui, &quiet_unread_line(of, why), true);
+            }
+            (Vec::new(), String::new(), "", unread)
+        }
+    };
+    let form = quiet.form.clone();
+    let problem = form
+        .as_ref()
+        .and_then(|form| form.problem)
+        .map_or("", |problem| form_problem_text(labels, problem));
+    let confirm = if quiet.confirming { ask } else { String::new() };
+    let (line, failed) =
+        rule_said_text(ui, labels, view, &of.to_string(), RuleItem::Quiet, quiet.said.as_ref());
+    let data = QuietData {
+        shown: true,
+        title: title.into(),
+        source: source.into(),
+        note: note.into(),
+        hold: SharedString::new(),
+        empty: empty.into(),
+        why: why.into(),
+        can_write: quiet.can_write,
+        form_open: form.is_some(),
+        problem: problem.into(),
+        can_clear: quiet.can_clear,
+        confirm: confirm.into(),
+        back: quiet.back_to_file,
+        other: SharedString::new(),
+        line: line.into(),
+        failed,
+    };
+    (data, lines, form)
+}
+
+/// The settings page's editor of every account's quiet times (UI-3e1-c), as `quiet_data` has it:
+/// above it why it cannot be changed now, as an account's rules panel says it of its rules; under
+/// it that each account may have quiet times of its own as well, changed on the main page.
+fn host_quiet_data(
+    ui: &Ui,
+    labels: &Labels,
+    host: &HostQuiet,
+) -> (QuietData, Vec<QuietLine>, Option<QuietFormView>) {
+    let view = ui.model.borrow().actions_view();
+    let quiet = &host.quiet;
+    let saved = quiet.said.as_ref().is_some_and(|said| {
+        matches!(said, Said::ConfigApplied | Said::BackToFile)
+    });
+    let hold = rules_hold_text(labels, host.hold.as_ref(), saved);
+    let ask = labels.rules_host_clear_ask.to_owned();
+    let (data, lines, form) = quiet_data(ui, labels, &view, &QuietOf::Host, ask, quiet);
+    let data = QuietData { hold: hold.into(), other: labels.rules_host_also.into(), ..data };
+    (data, lines, form)
+}
+
 /// One quiet time in words. A weekly one by its days, Monday first, and its start and end of its
-/// own clock, an end the next day or a whole day said so, and that clock beside it when it is not
-/// this computer's (`local`); one once by when it starts and ends, of this computer's clock.
+/// own clock, an end the next day or a whole day said so, the whole of each day when it starts at
+/// 0:00 (UI-3e1-c), and that clock beside it when it is not this computer's (`local`); one once by
+/// when it starts and ends, of this computer's clock.
 fn quiet_entry(labels: &Labels, entry: QuietShown, local: i16) -> QuietLine {
     match entry {
         QuietShown::Weekly { days, start_minute, end_minute, utc_offset_minutes } => {
@@ -1335,7 +1428,9 @@ fn quiet_entry(labels: &Labels, entry: QuietShown, local: i16) -> QuietLine {
                 .collect();
             let days = names.join(labels.name_list);
             let start = clock_words(start_minute);
-            let text = if end_minute == start_minute {
+            let text = if end_minute == start_minute && start_minute == 0 {
+                fill(labels.rules_quiet_weekly_day, &[&days])
+            } else if end_minute == start_minute {
                 fill(labels.rules_quiet_weekly_whole, &[&days, &start])
             } else {
                 let end = clock_words(end_minute);
@@ -1390,23 +1485,25 @@ fn form_problem_text(labels: &Labels, problem: FormProblem) -> &'static str {
     match problem {
         FormProblem::NoDay => labels.rules_form_no_day,
         FormProblem::NotTime => labels.rules_form_not_time,
+        FormProblem::SameTimes => labels.rules_form_same_time,
         FormProblem::TooBig => labels.rules_form_too_big,
         FormProblem::NotTaken => labels.rules_form_not_taken,
     }
 }
 
-/// What the last change of the rule `item` of `instance` came to, on its own line, and whether
-/// that is a failure; nothing before one. Saved, that the newest settings are being read, until
-/// they show it (D-28). The refusals only these rules meet in their own words: an emulator's
-/// start on for an instance not bound by discovery; the check that holds the emulator's start on
-/// while the idle action stops the emulator, from either side; and the whole section's check of
-/// quiet times, which the console's own check of them passed, so the log hears of it as the
-/// problem it is. Anything else as any change of settings is said.
+/// What the last change of the rule `item` came to, on its own line, and whether that is a
+/// failure; nothing before one. `whose` names its list or its account for the log: an
+/// instance's, or the host's for every account's quiet times (UI-3e1-c). Saved, that the newest
+/// settings are being read, until they show it (D-28). The refusals only these rules meet in their
+/// own words: an emulator's start on for an instance not bound by discovery; the check that holds
+/// the emulator's start on while the idle action stops the emulator, from either side; and the
+/// whole section's check of quiet times, which the console's own check of them passed, so the log
+/// hears of it as the problem it is. Anything else as any change of settings is said.
 fn rule_said_text(
     ui: &Ui,
     labels: &Labels,
     view: &ActionsView,
-    instance: &str,
+    whose: &str,
     item: RuleItem,
     said: Option<&Said>,
 ) -> (String, bool) {
@@ -1430,8 +1527,8 @@ fn rule_said_text(
         (RuleItem::Idle, Some(ValueProblem::SectionCheck)) => Some(labels.rules_idle_section),
         (RuleItem::Quiet, Some(ValueProblem::SectionCheck)) => {
             let line = format!(
-                "instance {instance}: the Runtime refused its quiet times by a check of the whole \
-                 section, which the same parser passed here: the Runtime is not the pinned one, or \
+                "{whose}: the Runtime refused its quiet times by a check of the whole section, \
+                 which the same parser passed here: the Runtime is not the pinned one, or \
                  another check of the section refused them"
             );
             tell_once(ui, &line, true);
@@ -1445,40 +1542,61 @@ fn rule_said_text(
     }
 }
 
-/// The form's seven boxes and two fields as `form` holds them, or empty while it is not open:
-/// each set only when it says otherwise, as the box flips itself and the field holds what is
-/// typed before Rust hears of it.
-fn quiet_form_fields(window: &WorkbenchWindow, form: Option<&QuietFormView>) {
-    let (days, start, end) = match form {
-        Some(form) => (form.days, form.start.as_str(), form.end.as_str()),
-        None => ([false; 7], "", ""),
+/// The form's seven boxes, two fields and "whole day" as `form` holds them, or empty while it is
+/// not open: each set only when it says otherwise, as the box flips itself and the field holds
+/// what is typed before Rust hears of it. Each editor has a set of its own in the window
+/// (`target`): the rules panel's paint sets its own back from its form, which would otherwise
+/// take from the settings page what is being typed there.
+fn quiet_form_fields(window: &WorkbenchWindow, target: QuietTarget, form: Option<&QuietFormView>) {
+    let (days, start, end, whole_day) = match form {
+        Some(form) => (form.days, form.start.as_str(), form.end.as_str(), form.whole_day),
+        None => ([false; 7], "", "", false),
     };
-    if window.get_quiet_day_0() != days[0] {
-        window.set_quiet_day_0(days[0]);
+    match target {
+        QuietTarget::Account => {
+            put_flag(window.get_quiet_day_0(), days[0], |on| window.set_quiet_day_0(on));
+            put_flag(window.get_quiet_day_1(), days[1], |on| window.set_quiet_day_1(on));
+            put_flag(window.get_quiet_day_2(), days[2], |on| window.set_quiet_day_2(on));
+            put_flag(window.get_quiet_day_3(), days[3], |on| window.set_quiet_day_3(on));
+            put_flag(window.get_quiet_day_4(), days[4], |on| window.set_quiet_day_4(on));
+            put_flag(window.get_quiet_day_5(), days[5], |on| window.set_quiet_day_5(on));
+            put_flag(window.get_quiet_day_6(), days[6], |on| window.set_quiet_day_6(on));
+            put_text(window.get_quiet_start(), start, |text| window.set_quiet_start(text));
+            put_text(window.get_quiet_end(), end, |text| window.set_quiet_end(text));
+            put_flag(window.get_quiet_whole_day(), whole_day, |on| {
+                window.set_quiet_whole_day(on);
+            });
+        }
+        QuietTarget::Host => {
+            put_flag(window.get_host_quiet_day_0(), days[0], |on| window.set_host_quiet_day_0(on));
+            put_flag(window.get_host_quiet_day_1(), days[1], |on| window.set_host_quiet_day_1(on));
+            put_flag(window.get_host_quiet_day_2(), days[2], |on| window.set_host_quiet_day_2(on));
+            put_flag(window.get_host_quiet_day_3(), days[3], |on| window.set_host_quiet_day_3(on));
+            put_flag(window.get_host_quiet_day_4(), days[4], |on| window.set_host_quiet_day_4(on));
+            put_flag(window.get_host_quiet_day_5(), days[5], |on| window.set_host_quiet_day_5(on));
+            put_flag(window.get_host_quiet_day_6(), days[6], |on| window.set_host_quiet_day_6(on));
+            put_text(window.get_host_quiet_start(), start, |text| {
+                window.set_host_quiet_start(text);
+            });
+            put_text(window.get_host_quiet_end(), end, |text| window.set_host_quiet_end(text));
+            put_flag(window.get_host_quiet_whole_day(), whole_day, |on| {
+                window.set_host_quiet_whole_day(on);
+            });
+        }
     }
-    if window.get_quiet_day_1() != days[1] {
-        window.set_quiet_day_1(days[1]);
+}
+
+/// A box of the window set to `on`, through `set`, only when it shows otherwise (`now`).
+fn put_flag(now: bool, on: bool, set: impl FnOnce(bool)) {
+    if now != on {
+        set(on);
     }
-    if window.get_quiet_day_2() != days[2] {
-        window.set_quiet_day_2(days[2]);
-    }
-    if window.get_quiet_day_3() != days[3] {
-        window.set_quiet_day_3(days[3]);
-    }
-    if window.get_quiet_day_4() != days[4] {
-        window.set_quiet_day_4(days[4]);
-    }
-    if window.get_quiet_day_5() != days[5] {
-        window.set_quiet_day_5(days[5]);
-    }
-    if window.get_quiet_day_6() != days[6] {
-        window.set_quiet_day_6(days[6]);
-    }
-    if window.get_quiet_start() != start {
-        window.set_quiet_start(start.into());
-    }
-    if window.get_quiet_end() != end {
-        window.set_quiet_end(end.into());
+}
+
+/// A field of the window set to `text`, through `set`, only when it holds otherwise (`now`).
+fn put_text(now: SharedString, text: &str, set: impl FnOnce(SharedString)) {
+    if now != text {
+        set(text.into());
     }
 }
 
@@ -1645,11 +1763,13 @@ fn value_text(labels: &Labels, value: &SettingValue) -> String {
     }
 }
 
-/// The settings page's rows of the Runtime's settings, in their two groups, with the field of
+/// The settings page's rows of the Runtime's settings, in their two groups, the editor of every
+/// account's quiet times heading the everyday one (`host_quiet_data`, UI-3e1-c), with the field of
 /// the evidence days in its place among the advanced ones (`evidence_field`), and what is said
-/// instead of them, or besides. A setting without a name here and a snapshot that reports no
-/// configuration each go to the log once; rows that do not read, each by its key and why,
-/// once for each owner epoch.
+/// instead of them, or besides: while the reads fail and a change of every account's quiet times
+/// awaits a snapshot, that what came of it is not known either. A setting without a name here and
+/// a snapshot that reports no configuration each go to the log once; rows that do not read, each
+/// by its key and why, once for each owner epoch.
 pub fn settings(ui: &Ui) {
     let Some(window) = ui.workbench() else {
         return;
@@ -1665,7 +1785,16 @@ pub fn settings(ui: &Ui) {
         SettingsView::Unreachable => (labels.settings_table_unreachable.to_owned(), false),
         SettingsView::Reading => (labels.settings_table_reading.to_owned(), false),
         // The read's failure is in the log already, with the snapshot's (`config_landed`).
-        SettingsView::Failed => (labels.settings_table_unreadable.to_owned(), true),
+        SettingsView::Failed => {
+            let rereading =
+                ui.model.borrow().actions_view().reread_failed == Some(Field::HostQuiet);
+            let note = if rereading {
+                labels.rules_reread_failed
+            } else {
+                labels.settings_table_unreadable
+            };
+            (note.to_owned(), true)
+        }
         SettingsView::Unreported => {
             tell_once(ui, "the fact snapshot has no config.parameters record", true);
             (labels.settings_table_unreadable.to_owned(), true)
@@ -1719,8 +1848,24 @@ pub fn settings(ui: &Ui) {
         | SettingsView::Failed
         | SettingsView::Unreported => &[],
     };
+    let (host, host_lines, host_form) = match &view {
+        SettingsView::Read { host_quiet, .. } => host_quiet_data(ui, labels, host_quiet),
+        SettingsView::NotRunning
+        | SettingsView::Unreachable
+        | SettingsView::Reading
+        | SettingsView::Failed
+        | SettingsView::Unreported => (QuietData::default(), Vec::new(), None),
+    };
     window.set_runtime_settings_note(note.into());
     window.set_runtime_settings_failed(failed);
+    // Its lines and its form's boxes and fields set only when they say otherwise, as the rules
+    // panel's are: a paint every few seconds neither moves a row nor takes a field from the
+    // person typing in it.
+    sync(window.get_host_quiet_lines(), host_lines, |rows| window.set_host_quiet_lines(rows));
+    quiet_form_fields(&window, QuietTarget::Host, host_form.as_ref());
+    if window.get_host_quiet() != host {
+        window.set_host_quiet(host);
+    }
     sync(window.get_daily_settings(), daily, |rows| window.set_daily_settings(rows));
     sync(window.get_advanced_settings(), advanced, |rows| window.set_advanced_settings(rows));
     evidence_field(&window, labels, evidence);
@@ -2283,8 +2428,9 @@ fn settings_text(labels: &Labels, view: &ActionsView, field: Field) -> (String, 
         Field::TopBar => &view.settings_said,
         Field::EvidenceDays => &view.evidence_said,
         Field::Backends => &view.backends_said,
-        // A rule's line is its panel's, never one of these.
-        Field::Rules(_) => return (String::new(), false),
+        // A rule's line is its panel's, never one of these, and that of every account's quiet
+        // times is their editor's.
+        Field::Rules(_) | Field::HostQuiet => return (String::new(), false),
     };
     let (text, failed) = if view.reread_failed == Some(field) {
         (labels.config_reread_failed.to_owned(), true)
@@ -2309,7 +2455,7 @@ fn settings_text(labels: &Labels, view: &ActionsView, field: Field) -> (String, 
             let account = view.backends_account.as_deref().unwrap_or(labels.start_account_gone);
             (fill(labels.backend_said, &[account, &text]), failed)
         }
-        Field::Rules(_) => (String::new(), false),
+        Field::Rules(_) | Field::HostQuiet => (String::new(), false),
     }
 }
 

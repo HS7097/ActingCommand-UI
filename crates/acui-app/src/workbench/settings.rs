@@ -12,13 +12,17 @@
 //! Only an answer of the Runtime online counts: while none comes, none of its settings
 //! shows, since an older read would pose as the present.
 //!
-//! One row's setting is changed here: how many days an evidence frame nobody confirmed reading
-//! is kept, the one the Runtime tiers advanced and takes while it runs. Its row is a field and
-//! "save" (`actions::evidence_view`), in its place among the others. Every other row says how
-//! its value is changed: in the configuration file with a restart, by the installer, on the
-//! main page's rules panel of its account (UI-3e1-b: an account's own quiet times and idle
-//! action, and whether the Runtime starts and watches the emulator of one bound by discovery),
-//! or not on this page for now. Each device's backends are changed in its group, below the rows.
+//! Two settings are changed here. The quiet times of every account (UI-3e1-c), the one the
+//! Runtime tiers everyday first, are no row but an editor heading that group, the same one as an
+//! account's own quiet times have on its rules panel (`actions::host_quiet_view`): each time with
+//! "delete", the form of one to add, "delete all" and "back to the file's setting". And how many
+//! days an evidence frame nobody confirmed reading is kept, the one the Runtime tiers advanced and
+//! takes while it runs: its row is a field and "save" (`actions::evidence_view`), in its place
+//! among the others. Every other row says how its value is changed: in the configuration file
+//! with a restart, by the installer, on the main page's rules panel of its account (UI-3e1-b: an
+//! account's own quiet times and idle action, and whether the Runtime starts and watches the
+//! emulator of one bound by discovery), or not on this page for now. Each device's backends are
+//! changed in its group, below the rows.
 //!
 //! And what the start report of this owner epoch says of the settings changed while a Runtime
 //! ran: which this start did not restore, and which it kept over a default that changed.
@@ -46,7 +50,7 @@ use acui_source::workbench::{
     IDLE_STOP_EMULATOR, PRIORITY_LOW, PRIORITY_NORMAL,
 };
 
-use super::actions::{self, Actions, BackendEdit, EvidenceView};
+use super::actions::{self, Actions, BackendEdit, EvidenceView, HostQuiet};
 use super::model::{DeviceBusy, Link};
 use super::tools::{TaskState, WatchdogRead};
 use crate::install::ToolIssue;
@@ -67,6 +71,8 @@ pub enum SettingsView {
     /// The snapshot that came reports no configuration at all.
     Unreported,
     Read {
+        /// The quiet times of every account, heading the everyday group (UI-3e1-c).
+        host_quiet: HostQuiet,
         daily: Vec<SettingLine>,
         /// The advanced rows before the field of the evidence days, when it shows, and
         /// those after it; all of them otherwise.
@@ -156,7 +162,8 @@ pub enum Change {
 }
 
 /// `read` of the Runtime `link` names, unless the reads since failed (`failed`); its
-/// instances' own settings by the accounts `instances` lists, in that order. The evidence
+/// instances' own settings by the accounts `instances` lists, in that order. The quiet times of
+/// every account are their editor, with what `actions` left of it, and not a row. The evidence
 /// days are a field while the Runtime takes a change of them and tiers them advanced, with
 /// what `actions` left of it; otherwise a row as any other. Each device's group goes by what
 /// else of that device is out from here, by its account (`busy`, `Model::device_busy`).
@@ -186,9 +193,14 @@ pub fn view(
         return SettingsView::Unreported;
     };
     let ids: Vec<&str> = instances.iter().map(|instance| instance.instance_id.as_str()).collect();
+    let host_quiet = actions::host_quiet_view(settings, instances, actions);
     let (mut daily, mut advanced, mut advanced_after) = (Vec::new(), Vec::new(), Vec::new());
     let mut evidence = None;
     for row in settings.rows(&ids) {
+        // Its editor heads the everyday group in its place, so it is no row as well.
+        if row.name == SettingName::QuietTimesHost {
+            continue;
+        }
         let days = match row.value {
             ShownValue::Number(days) => Some(Some(days)),
             ShownValue::Unset => Some(None),
@@ -242,7 +254,16 @@ pub fn view(
         .collect();
     let unlisted = read.backends.keys().filter(|id| !ids.contains(&id.as_str())).cloned().collect();
     let unread = settings.unread().to_vec();
-    SettingsView::Read { daily, advanced, evidence, advanced_after, backends, unlisted, unread }
+    SettingsView::Read {
+        host_quiet,
+        daily,
+        advanced,
+        evidence,
+        advanced_after,
+        backends,
+        unlisted,
+        unread,
+    }
 }
 
 /// The account of an instance's own setting: its alias, or its instance id when the newest

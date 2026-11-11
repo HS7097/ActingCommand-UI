@@ -392,11 +392,13 @@ impl Model {
     }
 
     /// A confirmation asked on the page left goes with it (`rescue`), and so do the rules panel's
-    /// form and confirmation (`Actions::rules_reset`).
+    /// form and confirmation (`Actions::rules_reset`), and the panel itself closes: back on the
+    /// main page it is shut, so "auto rules" opens it at the first press, not the second.
     pub fn set_page(&mut self, page: Page) {
         if self.page != page {
             self.rescue.unconfirm();
             self.actions.rules_reset();
+            self.rules_open = false;
         }
         self.page = page;
     }
@@ -1130,7 +1132,8 @@ impl Model {
         }
     }
 
-    /// Whether the rules panel is open, which it shows only while the rescue bar does.
+    /// Whether the rules panel is open, which it shows only while the rescue bar does. Another
+    /// page closes it (`set_page`).
     pub fn rules_open(&self) -> bool {
         self.rules_open
     }
@@ -1167,13 +1170,23 @@ impl Model {
     /// The rules panel's form and confirmation are of the account whose picture shows, which a
     /// `Status` may have changed: those of another go. The confirmation goes for good, too, once
     /// "delete all" cannot be pressed, as a read leaves it: one that came back later would ask
-    /// about what may no longer hold.
+    /// about what may no longer hold. So does that of every account's quiet times on the settings
+    /// page (UI-3e1-c), once its own "delete all" cannot be pressed.
     fn rules_reviewed(&mut self) {
         let shown = self
             .picture_account()
             .and_then(|alias| self.instances.iter().find(|instance| instance.alias == alias))
             .map(|instance| (instance.alias.clone(), instance.instance_id.clone()));
         self.actions.rules_follow(shown.as_ref().map(|(_, id)| id.as_str()));
+        if self.actions.host_confirm() {
+            let offered = matches!(
+                self.settings_view(),
+                SettingsView::Read { host_quiet, .. } if host_quiet.quiet.confirming
+            );
+            if !offered {
+                self.actions.host_unconfirm();
+            }
+        }
         if self.actions.rules_confirm().is_none() {
             return;
         }
