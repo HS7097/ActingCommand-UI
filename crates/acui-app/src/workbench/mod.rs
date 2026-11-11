@@ -23,7 +23,9 @@
 //!    since it changes what the reads show of the account, its activity, its emulator's
 //!    reading and its fence. Rule 5 stands: a refresh is still none. Neither goes out while
 //!    the other, or a switch of that device's backends, is out for the same account
-//!    (`Model::device_busy`, the one place that says so).
+//!    (`Model::device_busy`, the one place that says so). A person's stop of an account's run
+//!    (`stop`, UI-3e2) is a write too, its answer counting one, but no work of the device's: it
+//!    is not in `device_busy`, and neither holds back the other.
 //!
 //! Another thread runs the Runtime's `actingctl` (`tools`), only when asked: `packs` for the
 //! task names and the picture proportions each game's standard pack declares, and `watchdog
@@ -75,6 +77,7 @@ pub mod read;
 pub mod refresh;
 pub mod rescue;
 pub mod settings;
+pub mod stop;
 pub mod tasks;
 pub mod tools;
 
@@ -412,6 +415,8 @@ fn lane_failed(ui: &Ui, lane: Lane, error: String) {
     report::log(lane.name(), &format!("no reading thread: {error}"));
     ui.model.borrow_mut().lane_lost(lane, error.clone());
     if lane == Lane::Live {
+        // No read will say what came of a stop that waits for one.
+        stop::lane_lost(ui);
         ui.launcher_view.borrow_mut().reading_failed(error);
         // No `Status` says what is online any more: the picture stops, and the task list.
         preview::sync(ui);
@@ -551,6 +556,9 @@ fn live_landed(ui: &Ui, read: LiveRead) {
         refresh::restarted(ui);
         rescue::restarted(ui);
     }
+    // A stop of a run is judged by a read online only, of its own epoch or another: its follow-up,
+    // or a restart's letting it go (`stop`).
+    stop::status_read(ui);
     // An unconfirmed switch shown over: only a snapshot begun after this says what came of it.
     if landed.switch_over {
         wrote(ui);

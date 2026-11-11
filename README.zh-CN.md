@@ -164,7 +164,8 @@
 （#429 R-6，v0.12.53 起：contract crate 给请求 `StopInstanceRun` 定了成功码 `request_stop_instance_run_completed`，建在它上面的
 控制台核得了 v0.12.53 的 Runtime 停完一次运行的回执；建在 v0.12.47 上的控制台那里这个种类没有成功码，会核错。停调度器或 Runtime
 自己发起的运行被拒成 `scheduled_contained_task_not_client_cancellable`，用键 `run_origin`（词表 `run_origin`：`policy`、`host`）
-写明是谁发起的；控制台还不发停止，「关闭这个任务」照旧灰着。v0.12.47 以来控制台对上的接口都没动（`actingd-config` [5, 27]、
+写明是谁发起的；控制台从这一版起能在救援条上用「停下这次运行」停别的工具直接发起的运行（见「暂停这个号」那段之后）。
+v0.12.47 以来控制台对上的接口都没动（`actingd-config` [5, 27]、
 `ledger` [3, 7]、`runtime-client` [3, 6]，`StopInstanceRun` 是修订 3 的种类；v0.12.50 起的 `package` [3, 8] 只归 acsetup）；
 contract crate 别的只多了程序事实 `config.catalog_provenance`（#428 SCHED-C1b）、`inventory.list.` 下的列表读数（#428 S168-4）、
 `schedule.json` 规则的固定值（#428 SCHED-C1a）和原地替换在 `tables/` 里留下的名字（#428 TB-R1），控制台都不读；嵌入的结果码目录
@@ -646,6 +647,19 @@ Runtime 才回话，所以按下去可能要半分钟左右，这期间卡片上
 由谁解除，能恢复的到账本窗口里恢复（见下）。命令行上照旧可以用 `actingctl pause --state-root <状态根>
 --instance <别名>` 暂停一个实例、用带同样参数的 `actingctl resume` 恢复，或用 MCP 工具 `ac_pause` /
 `ac_resume`（见「智能体用的 MCP」一节）。
+
+实时画面上方的救援条在这个号有活动时多一行「停下这次运行」（#429 UI-3e2，R-6 第一片，Runtime v0.12.53 起）。
+只有别的工具直接发起的运行能按：最近一次状态读取里这个号的活动是 `direct_run`，并带着它的 `request_id`（比如
+Lab 的 `run start`、`actingctl task-run`、MCP 的 `ac_run_pack` 起的运行）。调度器派的运行和 Runtime 自己发起
+的步骤不发请求，按钮灰着并写明原因（调度器派的那种用卡片上的「暂停这个号」停）。按一下就发，不问第二遍：在后台
+线程用一条新的「人」连接发一次 `StopInstanceRun`，`wait_ms` 5 秒；Runtime 让这次运行停在下一个检查点，再用这次
+运行自己的租约复位设备，然后回答。结果写在这一行下面，带时刻；屏上不出码、不出请求号，被停运行的请求号只写进技术
+日志。回答说还没停下（`settled: false`）或者结果未确认时，等同一个 owner epoch 里、这次回答之后的一次状态读取
+显示这次运行已经不在了，再补发一次，读复位的结果；最多补发这一次，没有定时重发，被拒或没发出去也不重发。Runtime
+重启了、这个号不在列表里了、读取线程没了，就写结果不明，不补发；运行一直不结束就一直等，不另设上限。v0.12.53
+之前的 Runtime 答 `not_implemented`（不入账），之后这一轮 Runtime 里按钮灰着。别的控制台或工具已经请停时，这里
+看不出来；再按只多三条账本记录（`ui.action`、`command.received`，再加 `command.validated` 或
+`command.rejected`），结果照样能读到。
 
 - **有条件恢复（账本窗口）**：技术行下面按最近一次状态读取列出全局暂停和各实例的暂停（理由、修订、
   起始时间），全局与实例各按各的范围。别的工具或监控台自己加的暂停（全局的，或设备已交还的实例暂停；

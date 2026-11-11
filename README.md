@@ -228,9 +228,10 @@ Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.1
 `request_stop_instance_run_completed`, so a console built on it checks the receipt of a stop a v0.12.53 Runtime
 completes, which one built on v0.12.47, where the kind had no success code, would mis-check; a stop refused for a
 run the scheduler or the Runtime itself started, `scheduled_contained_task_not_client_cancellable`, names who
-started it with the key `run_origin` (vocabulary `run_origin`: `policy`, `host`); the console sends no stop yet,
-so "Close This Task" stays off; since v0.12.47 the interfaces the console meets have not moved (`actingd-config`
-[5, 27], `ledger` [3, 7], `runtime-client` [3, 6], `StopInstanceRun` being a revision-3 kind; `package` [3, 8],
+started it with the key `run_origin` (vocabulary `run_origin`: `policy`, `host`); from this version the
+console's Stop This Run on the rescue bar stops a run another tool started (see after Pause This
+Account); since v0.12.47 the interfaces the console meets have not moved (`actingd-config` [5, 27],
+`ledger` [3, 7], `runtime-client` [3, 6], `StopInstanceRun` being a revision-3 kind; `package` [3, 8],
 since v0.12.50, is acsetup's), the contract crate otherwise only gained the runtime fact
 `config.catalog_provenance` (#428 SCHED-C1b), the list readings under `inventory.list.` (#428 S168-4), a
 `schedule.json` rule's fixed value (#428 SCHED-C1a) and the names a replacement in place leaves in `tables/`
@@ -922,6 +923,26 @@ account, another tool's or one set with `actingctl pause --instance`, is said on
 as before, and the ledger window resumes those it may (below). From the command line, `actingctl pause
 --state-root <state root> --instance <alias>` and `actingctl resume` with the same flags, or the MCP tools
 `ac_pause` / `ac_resume` (see "MCP for agents"), still pause and resume one instance.
+
+Over the live view, the rescue bar has one more row while the account does something: **Stop This Run**
+(#429 UI-3e2, R-6's first slice, Runtime v0.12.53 or later). It can be pressed only for a run another tool
+started: the account's activity in the last status read is `direct_run`, naming its `request_id` (a run
+of the Lab's `run start`, `actingctl task-run` or the MCP tool `ac_run_pack`, say). A run the scheduler
+dispatched and a step the Runtime started itself send nothing: the button stays off and says why (a
+scheduled one is stopped with Pause This Account on its card). One press sends it, with no second
+question: one `StopInstanceRun` on a worker thread over a fresh person's connection, `wait_ms` 5 s; the
+Runtime stops the run at its next checkpoint, resets the device itself with the run's own lease, and
+answers. What it came to is said under the row, with when; never a code or a request id on screen, and
+the stopped run's request id only in the technical log. After an answer that the run still stops
+(`settled: false`), or one not confirmed, it is sent once more, and only once, when a status read of the
+same owner epoch, begun after that answer, shows the run gone, to read the reset's result; nothing sends
+it on a timer, and a refusal or one not sent is not sent again. A Runtime that restarted, an account no
+longer listed or a reading thread gone leaves the result unknown, and nothing more is sent; a run that
+does not end is waited for as long as it runs, with no limit of the console's own. A Runtime before
+v0.12.53 answers `not_implemented` (which records nothing), and the button then stays off for that
+Runtime's owner epoch. Whether another console or tool already asked the run to stop is not seen here:
+another press costs only three more ledger records (`ui.action`, `command.received`, then
+`command.validated` or `command.rejected`), and still reads the result.
 
 - **Conditional resume (ledger window)**: below the technical lines the window lists the global pause and
   each instance's pause of its last status read (reason, revision, since), each by its own scope. One

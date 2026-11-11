@@ -28,7 +28,9 @@
 //! log.
 //!
 //! Left out on purpose: `player_hold` and `control` (the hold's read face is
-//! UI-3d's); `request_id` (nothing here stops a run); a fence's recheck counts.
+//! UI-3d's); a fence's recheck counts. An activity's `request_id` is kept, as the run's
+//! identity that a stop of it names and nothing outside this crate reads
+//! ([`ActivityFact::run`], [`stop::stop_run`], UI-3e2).
 //! `emulator_state` is a condition of the picture's refresh and of the device's buttons, whose
 //! reason says when it was seen, and never shown as what holds now
 //! ([`InstanceLive::emulator_off`], [`InstanceLive::emulator_on`]; UI-3c-2, UI-3e1-a). The
@@ -44,9 +46,13 @@
 //! of settings ([`configure`]), in the picture's file a person's refresh of the picture
 //! ([`preview::observe_frame`]), and in the device's a person's operation of a device: its
 //! reconnect and self-check, its emulator's control, its game's launch and restart
-//! ([`device::operate`], UI-3e1-a). Like the conditional resume beside them (`resume_paused`)
+//! ([`device::operate`], UI-3e1-a), and in the stop's a person's stop of one run of an account
+//! ([`stop::stop_run`], UI-3e2). Like the conditional resume beside them (`resume_paused`)
 //! each goes out once on a fresh person's connection, and never again by itself, whatever
-//! comes back.
+//! comes back, with one exception: a stop that answered that the run still stops, or whose
+//! answer is not known, is asked once more, on another fresh connection, once a `Status` shows
+//! the run gone, so that its reset's result is read (the console's `stop`, not this crate,
+//! decides when).
 //!
 //! An instance's touch and capture backends (HS-U, Runtime 0.12.39's #402 HS-2) are settings
 //! too, but not rows of the page's tiers: [`backends`] reads them as each device instance's
@@ -70,7 +76,7 @@ use actingcommand_contract::{
     config_parameters_fact_key, is_instance_backend_key, ConfigParameter, ConfigParameterSource,
     ConfigSettingChange, EmulatorCapability, EmulatorRunningState, ExecutionBackendProvenance,
     FactScalar, FactValue, InstanceActivity, InstanceActivityKind, InstanceId, OwnerEpoch,
-    RuntimeControlPlaneStatus,
+    RequestId, RuntimeControlPlaneStatus,
     RuntimeErrorCode, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
     RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation, RuntimeStartReport,
     ScheduleCandidateEligibility, ScheduleDispatchState,
@@ -100,6 +106,7 @@ pub mod backends;
 pub mod device;
 pub mod preview;
 pub mod rules;
+pub mod stop;
 
 /// The reason this console's "pause all" gives, a free name of the pause, no outcome
 /// code. A pause of this reason is one a person pressed here, so lifting it asks for
@@ -831,11 +838,26 @@ pub struct FenceFact {
     pub awaiting_person: bool,
 }
 
-/// What an instance does now. `policy_run` and `direct_run` always name a package.
+/// What an instance does now. `policy_run` and `direct_run` always name a package. `run`: the
+/// request of what it does (`request_id`), the run's identity a stop of it names (UI-3e2), which
+/// a `direct_run` always states; never shown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivityFact {
     pub kind: ActivityKind,
     pub package_id: Option<String>,
+    pub run: Option<RunKey>,
+}
+
+/// A run's identity as the wire types it, its request's id, opaque outside this crate as
+/// [`InstanceKey`] is: what a stop of the run names ([`stop::stop_run`]), compared and copied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunKey(RequestId);
+
+impl RunKey {
+    /// The request's id as the wire spells it: for the technical log only, never shown.
+    pub fn line(&self) -> String {
+        code(&self.0)
+    }
 }
 
 /// `InstanceActivityKind`, a closed vocabulary.
@@ -1699,6 +1721,7 @@ fn activity_fact(activity: &InstanceActivity) -> ActivityFact {
             InstanceActivityKind::Ladder => ActivityKind::Ladder,
         },
         package_id: activity.package_id.clone(),
+        run: activity.request_id.map(RunKey),
     }
 }
 

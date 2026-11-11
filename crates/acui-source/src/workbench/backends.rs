@@ -1059,8 +1059,12 @@ pub(super) fn holder(word: &str) -> Holder {
     }
 }
 
-/// The outcomes `outcome` links by `relation`, in order.
-fn links<'a>(outcome: &'a Outcome, relation: &'static str) -> impl Iterator<Item = &'a Outcome> {
+/// The outcomes `outcome` links by `relation`, in order. A stop's failed reset is read so too
+/// (`stop`).
+pub(super) fn links<'a>(
+    outcome: &'a Outcome,
+    relation: &'static str,
+) -> impl Iterator<Item = &'a Outcome> {
     outcome
         .causes()
         .iter()
