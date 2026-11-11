@@ -94,8 +94,10 @@
 //! derived from the rows and so held while they are behind, and while it is out every account's
 //! panel holds as for any other change. The one form is of one list at a time; going to another
 //! page lets go of it, and a `Status` read lets go only of an account's. Deleting all of them asks
-//! first as well, and that question goes with any press, any change of settings sent, another page
-//! or owner epoch, or no `Status`.
+//! first as well, and that question goes with any other press of its editor, any change of
+//! settings sent, another page or owner epoch, or no `Status`; and for good, as an account's does,
+//! once a read leaves its "delete all" not pressable: one that came back later would ask about
+//! what may no longer hold.
 //!
 //! `view`, `preset_view`, `evidence_view`, `backend_edit`, `rules_view` and `host_quiet_view` are
 //! pure functions of what the reads and the presses left, without words; `paint` makes the words.
@@ -540,7 +542,8 @@ pub struct Actions {
     /// The instance id of the account whose first press of "delete all" its quiet times asked.
     rules_confirm: Option<String>,
     /// The first press of "delete all" of every account's quiet times asked (UI-3e1-c), on the
-    /// same terms as `rules_confirm`; it counts only while "delete all" can be pressed.
+    /// same terms as `rules_confirm`: it counts only while "delete all" can be pressed, and goes
+    /// for good once a read leaves it not pressable (`Model::rules_reviewed`).
     host_confirm: bool,
     /// A change of settings was taken, from wherever, and no snapshot read after it has come:
     /// the rows shown are of before it, whatever version its answer named, and nothing derived
@@ -804,6 +807,17 @@ impl Actions {
     /// The confirmation "delete all" asked goes: it can no longer be pressed.
     pub fn rules_unconfirm(&mut self) {
         self.rules_confirm = None;
+    }
+
+    /// Whether "delete all" of every account's quiet times asked to confirm (UI-3e1-c).
+    pub fn host_confirm(&self) -> bool {
+        self.host_confirm
+    }
+
+    /// The confirmation "delete all" of every account's quiet times asked goes: it can no longer
+    /// be pressed.
+    pub fn host_unconfirm(&mut self) {
+        self.host_confirm = false;
     }
 
     /// Whether a change of settings was taken and the rows shown are of before it

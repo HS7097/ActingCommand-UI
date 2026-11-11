@@ -4,8 +4,9 @@
 //! rows come and go only when the accounts do, so a read every few seconds costs
 //! nothing and moves nothing. And the top bar's writes, its performance preset and the
 //! stepper under it, from their views; which page shows; the settings page's rows of
-//! the Runtime's settings, the same way as the cards, with the field of the evidence days
-//! among them and each device's group of its backends after them; what the start report says
+//! the Runtime's settings, the same way as the cards, the editor of every account's quiet times
+//! heading the everyday ones (UI-3e1-c), with the field of the evidence days among them and each
+//! device's group of its backends after them; what the start report says
 //! of the settings; and whether the Runtime is started again when it is gone. And the right
 //! column's live view, from its view, the frame's pixels once when it lands; and under it the
 //! picture's refresh, painted with it. And over the picture the account's rescue bar, and while

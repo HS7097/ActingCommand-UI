@@ -187,7 +187,7 @@ impl QuietList {
         &self.of
     }
 
-    /// Its entries as the panel shows them, in its order.
+    /// Its entries as an editor shows them, in its order.
     pub fn entries(&self) -> impl Iterator<Item = QuietShown> + '_ {
         self.entries.iter().map(shown)
     }
