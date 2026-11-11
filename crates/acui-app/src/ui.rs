@@ -557,6 +557,16 @@ fn install_workbench(window: &WorkbenchWindow) {
             workbench::account_picked(&ui, &alias);
         }
     });
+    window.on_account_pause(|alias| {
+        if let Some(ui) = current() {
+            workbench::actions::account_pause_pressed(&ui, &alias);
+        }
+    });
+    window.on_account_resume(|alias| {
+        if let Some(ui) = current() {
+            workbench::actions::account_resume_pressed(&ui, &alias);
+        }
+    });
     window.on_picture_overlays_toggled(|on| {
         if let Some(ui) = current() {
             workbench::preview::overlays_toggled(&ui, on);
@@ -884,6 +894,8 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_start(labels.start.into());
     global.set_pause_all(labels.pause_all.into());
     global.set_resume_all(labels.resume_all.into());
+    global.set_pause_account(labels.pause_account.into());
+    global.set_resume_account(labels.resume_account.into());
     global.set_performance_preset(labels.performance_preset.into());
     global.set_back_to_file(labels.back_to_file.into());
     global.set_preset_confirm(labels.preset_confirm.into());

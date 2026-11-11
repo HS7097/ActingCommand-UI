@@ -11,7 +11,8 @@
 //! UI-3d's. So a card is green, amber or grey.
 //!
 //! Whether a card is the one picked, whose picture the right column shows, is no read's:
-//! the caller says (`picture`).
+//! the caller says (`picture`); nor is the card's own button, of its account's pause, which the
+//! presses leave as well (`actions::account_view`).
 
 use std::collections::BTreeMap;
 
@@ -20,6 +21,7 @@ use acui_source::workbench::{
 };
 use acui_source::{PauseFact, PauseStage};
 
+use super::actions::AccountView;
 use super::model::Link;
 use crate::ledger::resume::{lifter, Lifter, ResumeElsewhere};
 
@@ -40,6 +42,8 @@ pub struct CardView {
     pub notes: Vec<Line>,
     /// Its picture is the one the right column shows.
     pub selected: bool,
+    /// Its own button, and what its last press came to.
+    pub account: AccountView,
 }
 
 /// The colour of a card's band.
@@ -205,8 +209,8 @@ pub enum Line {
 }
 
 /// An account no Runtime answers about now: grey, with nothing an earlier answer
-/// said.
-pub fn down_view(alias: &str, down: Down, selected: bool) -> CardView {
+/// said, but what its own button's last press came to (`account`).
+pub fn down_view(alias: &str, down: Down, selected: bool, account: AccountView) -> CardView {
     CardView {
         alias: alias.to_owned(),
         game: None,
@@ -216,12 +220,15 @@ pub fn down_view(alias: &str, down: Down, selected: bool) -> CardView {
         main: Line::Down(down),
         notes: Vec::new(),
         selected,
+        account,
     }
 }
 
 /// An account of the newest `Status`, its server in the newest fact snapshot or, when that
 /// names none, the one last seen this owner epoch (`server_last_seen`), that read's global
-/// pause, and what the schedule explanation reads leave; who lifts a pause by `elsewhere`.
+/// pause, and what the schedule explanation reads leave; who lifts a pause by `elsewhere`; its
+/// own button as the reads and the presses leave it (`account`).
+#[allow(clippy::too_many_arguments)]
 pub fn card_view(
     instance: &InstanceLive,
     server: Option<&str>,
@@ -230,6 +237,7 @@ pub fn card_view(
     schedule: Schedule<'_>,
     selected: bool,
     elsewhere: &ResumeElsewhere,
+    account: AccountView,
 ) -> CardView {
     let (band, main, notes) = said(instance, global, schedule, elsewhere);
     CardView {
@@ -241,6 +249,7 @@ pub fn card_view(
         main,
         notes,
         selected,
+        account,
     }
 }
 

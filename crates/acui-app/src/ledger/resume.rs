@@ -23,11 +23,19 @@
 //! (`down`), which stays until it is lifted from the Lab. The
 //! contract keeps no actor with a pause and no prefix of its reason, so all are
 //! known by the reason alone. While that line cannot be taken, every pause but
-//! a deployment's, a Lab rescue's and this console's own "pause all", a global
-//! one, is of the first kind (`ResumeElsewhere`).
+//! a deployment's, a Lab rescue's and this console's own two, "pause all", a global
+//! one, and "pause this account", an instance's, is of the first kind
+//! (`ResumeElsewhere`).
+//!
+//! Of the pauses the Runtime itself sets for a person to lift, the pause of an
+//! account just added (`instance.added`, Runtime INST-5) and the hold of an
+//! instance whose settlement facts the start could not record
+//! (`policy_settlement_facts_skipped`, Runtime ISO-START-1) are of no kind above:
+//! this window offers their resume (`Lifter::Window`), unless the settings file
+//! lists their reason.
 
 use acui_rows::format_full;
-use acui_source::workbench::CONSOLE_PAUSE_ALL;
+use acui_source::workbench::{CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL};
 use acui_source::{
     resume_paused, ClientFailure, PauseFact, PauseStage, PauseTarget, ResumeOutcome,
 };
@@ -68,8 +76,8 @@ pub enum ResumeElsewhere {
     /// The reasons the line lists, each one the Runtime takes; none without it.
     Listed(Vec<String>),
     /// The line, or the file, could not be read, so which reasons it lists is
-    /// not known: until it is fixed, every pause but this console's own
-    /// "pause all", which is global only (`pause_global`), is one.
+    /// not known: until it is fixed, every pause but this console's own is one
+    /// (`console_set`).
     Unusable,
 }
 
@@ -83,10 +91,18 @@ impl ResumeElsewhere {
     fn names(&self, pause: &PauseFact) -> bool {
         match self {
             Self::Listed(reasons) => reasons.iter().any(|listed| *listed == pause.reason),
-            Self::Unusable => {
-                pause.reason != CONSOLE_PAUSE_ALL || pause.target.instance_alias().is_some()
-            }
+            Self::Unusable => !console_set(pause),
         }
+    }
+}
+
+/// Whether this console set `pause` itself, by its reason and its scope together: its
+/// "pause all" is global only (`pause_global`), its "pause this account" an instance's only
+/// (`pause_account`). Either reason on the other scope is another tool's.
+fn console_set(pause: &PauseFact) -> bool {
+    match pause.target.instance_alias() {
+        None => pause.reason == CONSOLE_PAUSE_ALL,
+        Some(_) => pause.reason == CONSOLE_PAUSE_ACCOUNT,
     }
 }
 

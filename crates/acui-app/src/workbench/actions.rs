@@ -19,6 +19,14 @@
 //! (`lifter`): the rest stay off and say who lifts them. A pause another tool set
 //! takes two presses, and the first only asks; one pressed here takes one.
 //!
+//! Each account's card has a button of its own (`account_view`), on the same terms as the top
+//! bar's pause and resume but under a ticket of that account's, one out per account: with no
+//! pause of its own, "pause this account" sends that instance's pause with this console's own
+//! reason (`pause_account`); under the one this console set there, handed back, "resume this
+//! account" lifts exactly the pause the newest `Status` showed, by its owner epoch and revision
+//! (`resume_paused`), at one press. A pause of the account another tool set gets no button on
+//! the card, which says who lifts it; the ledger window resumes those it may.
+//!
 //! Picking a preset, or going back to the file's setting, is one change of settings
 //! (`ConfigFlow`). It names the version of the newest snapshot, and only a snapshot or an
 //! answer that it took moves that version. An answer that says nothing, or that another
@@ -93,11 +101,13 @@ use acui_source::workbench::rules::{
     IdleChoice, IdleNow, NewWeekly, QuietNotSent, QuietRead, RuleSetting,
 };
 use acui_source::workbench::{
-    configure, pause_global, ActivityKind, ConfigEdit, ConfigOutcome, ConfigRead, ConfigRefusal,
-    InstanceLive, PauseOutcome, PresetMember, PresetSetting, RefusalWhy, SettingSource,
-    SettingValue, CONSOLE_PAUSE_ALL,
+    configure, pause_account, pause_global, ActivityKind, ConfigEdit, ConfigOutcome, ConfigRead,
+    ConfigRefusal, InstanceLive, PauseOutcome, PresetMember, PresetSetting, RefusalWhy,
+    SettingSource, SettingValue, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL,
 };
-use acui_source::{resume_paused, ClientFailure, PauseFact, PauseTarget, ResumeOutcome};
+use acui_source::{
+    resume_paused, ClientFailure, PauseFact, PauseStage, PauseTarget, ResumeOutcome,
+};
 
 use super::model::{DeviceBusy, Link};
 use super::read::panic_message;
@@ -219,6 +229,58 @@ impl Write {
     fn switches_backends(self) -> bool {
         matches!(self, Self::Configure { field: Field::Backends, .. })
     }
+}
+
+/// Which of an account card's own buttons was pressed (`account_view`). The account is not
+/// part of it: each account's presses are kept by its alias (`Actions::accounts`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountWrite {
+    /// "Pause this account".
+    Pause,
+    /// "Resume this account".
+    Resume,
+}
+
+impl AccountWrite {
+    /// Its thread's name, also what its lines in the technical log are under.
+    fn thread(self) -> &'static str {
+        match self {
+            Self::Pause => "acui-act-pause-account",
+            Self::Resume => "acui-act-resume-account",
+        }
+    }
+}
+
+/// What the last press of an account card's own button came to, before its words: the top
+/// bar's pause and resume come to the same (`Said`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountSaid {
+    Sending(AccountWrite),
+    Paused,
+    /// A pause of the account already holds: it keeps its reason, and this press set nothing.
+    AlreadyPaused,
+    /// The pause is lifted; `device_failure` is the device code of the reconnect that followed
+    /// it and failed (`selfcheck.failure_code`), which never rolls the resume back.
+    Resumed { device_failure: Option<String> },
+    /// The pause was changed or lifted elsewhere: nothing was lifted here.
+    PauseMoved,
+    /// `code` is the Runtime's own, shown as it gave it, with its words.
+    Refused { write: AccountWrite, code: String },
+    /// A Runtime that cannot lift a pause on condition.
+    Unsupported,
+    Unconfirmed,
+    NotSent,
+    /// The system refused the thread: nothing was sent. The error is the system's.
+    NoThread { error: String },
+    /// A press was out across a restart.
+    Restarted,
+}
+
+/// One account's: the press of its card's own button out, if any, and what the last came to.
+#[derive(Debug, Clone, Default)]
+struct AccountSlot {
+    out: Option<(Ticket, AccountWrite)>,
+    said: Option<AccountSaid>,
 }
 
 const CONFIG_THREAD: &str = "acui-act-config";
@@ -453,6 +515,9 @@ pub struct Actions {
     /// from them goes out meanwhile. Only the rules' changes are derived from them: the others
     /// name their keys outright.
     rows_behind: bool,
+    /// Each account card's own button, by alias: one press out per account, its tickets of the
+    /// same count as the top bar's.
+    accounts: BTreeMap<String, AccountSlot>,
 }
 
 impl Actions {
@@ -512,6 +577,44 @@ impl Actions {
         }
         self.said.insert(write.said_at(), said);
         true
+    }
+
+    /// `write` of the card of the account `alias` pressed: a new ticket, unless one of that
+    /// account's is out. What it came to is, for now, that it is being sent.
+    fn account_begin(&mut self, alias: &str, write: AccountWrite) -> Option<Ticket> {
+        let slot = self.accounts.entry(alias.to_owned()).or_default();
+        if slot.out.is_some() {
+            return None;
+        }
+        self.issued += 1;
+        let ticket = Ticket(self.issued);
+        slot.out = Some((ticket, write));
+        slot.said = Some(AccountSaid::Sending(write));
+        Some(ticket)
+    }
+
+    /// An answer of the account `alias`'s press: whether `ticket` was the one out for it,
+    /// which is all that makes it count.
+    fn account_settle(&mut self, alias: &str, ticket: Ticket, said: AccountSaid) -> bool {
+        let Some(slot) = self.accounts.get_mut(alias) else {
+            return false;
+        };
+        if slot.out.map(|(out, _)| out) != Some(ticket) {
+            return false;
+        }
+        *slot = AccountSlot { out: None, said: Some(said) };
+        true
+    }
+
+    /// Whether a press of the card of the account `alias` is out.
+    fn account_out(&self, alias: &str) -> bool {
+        self.accounts.get(alias).is_some_and(|slot| slot.out.is_some())
+    }
+
+    /// What the last press of the card of the account `alias` came to, if one was pressed this
+    /// epoch.
+    pub fn account_said(&self, alias: &str) -> Option<&AccountSaid> {
+        self.accounts.get(alias)?.said.as_ref()
     }
 
     /// A change of the quiet times answered: a time added that was taken leaves the form, closed,
@@ -605,6 +708,11 @@ impl Actions {
         self.rules_confirm = None;
         // The snapshots of this epoch are all to come.
         self.rows_behind = false;
+        // An account's card says only that its press was out; whatever else it said goes.
+        self.accounts.retain(|_, slot| slot.out.is_some());
+        for slot in self.accounts.values_mut() {
+            *slot = AccountSlot { out: None, said: Some(AccountSaid::Restarted) };
+        }
     }
 
     /// Another account's picture shown, another page gone to, or the rules panel closed: its form
@@ -814,6 +922,20 @@ impl Actions {
         if overtaken {
             self.said.remove(&SaidAt::Scheduling);
         }
+        // So does an account card's, by the account's own pause.
+        for (alias, slot) in &mut self.accounts {
+            let paused = instances
+                .iter()
+                .any(|instance| instance.alias == *alias && instance.pause.is_some());
+            let overtaken = match slot.said {
+                Some(AccountSaid::Paused) => !paused,
+                Some(AccountSaid::Resumed { .. }) => paused,
+                _ => false,
+            };
+            if overtaken {
+                slot.said = None;
+            }
+        }
         self.switch_seen(instances, now)
     }
 
@@ -998,6 +1120,57 @@ pub fn view(
             _ => None,
         },
     }
+}
+
+/// An account card's own button now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountEntry {
+    /// None: no Runtime answers; the account's own pause is another's, which the card says who
+    /// lifts; or it is this console's and still drains or hands the device back, which the
+    /// Runtime refuses to lift.
+    Off,
+    /// "Pause this account", and whether it can be pressed now.
+    Pause { offered: bool },
+    /// "Resume this account": of the pause this console set there, as the newest `Status`
+    /// showed it, and whether it can be pressed now.
+    Resume { target: PauseTarget, offered: bool },
+}
+
+/// An account card's own button, and what its last press came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountView {
+    pub entry: AccountEntry,
+    pub said: Option<AccountSaid>,
+}
+
+/// The card's own button of `instance`, an account of the newest `Status` while it answers:
+/// with no pause of its own, "pause this account"; under this console's own (its reason, and
+/// one only whoever set it lifts by the settings file is not this console's to lift), handed
+/// back, "resume this account"; under any other, none. Either can be pressed while no press of
+/// that account is out. A fixture is offered the pause too: the Runtime's refusal says why not.
+pub fn account_view(
+    instance: &InstanceLive,
+    actions: &Actions,
+    elsewhere: &ResumeElsewhere,
+) -> AccountView {
+    let offered = !actions.account_out(&instance.alias);
+    let entry = match &instance.pause {
+        None => AccountEntry::Pause { offered },
+        Some(pause)
+            if pause.reason == CONSOLE_PAUSE_ACCOUNT
+                && lifter(pause, elsewhere) == Lifter::Window
+                && pause.stage == Some(PauseStage::Released) =>
+        {
+            AccountEntry::Resume { target: pause.target.clone(), offered }
+        }
+        Some(_) => AccountEntry::Off,
+    };
+    AccountView { entry, said: actions.account_said(&instance.alias).cloned() }
+}
+
+/// An account no `Status` answers about now: no button, and what its last press came to.
+pub fn account_down_view(alias: &str, actions: &Actions) -> AccountView {
+    AccountView { entry: AccountEntry::Off, said: actions.account_said(alias).cloned() }
 }
 
 /// The top bar's performance preset now.
@@ -1959,6 +2132,194 @@ pub fn resume_confirmed(ui: &Ui) {
 
 fn send_resume(ui: &Ui, target: PauseTarget) {
     send(ui, Write::ResumeAll, move |root| Written::Resume(resume_paused(root, &target)));
+}
+
+/// A card's "pause this account": the pause of that account alone, as "pause all" is the
+/// global one. The press may land after the read that turned it off.
+pub fn account_pause_pressed(ui: &Ui, alias: &str) {
+    let entry = ui.model.borrow().account_entry(alias);
+    if matches!(entry, Some(AccountEntry::Pause { offered: true })) {
+        let instance_alias = alias.to_owned();
+        send_account(ui, alias, AccountWrite::Pause, move |root| {
+            AccountWritten::Pause(pause_account(root, &instance_alias))
+        });
+    }
+}
+
+/// A card's "resume this account": the conditional lift of exactly the pause the newest
+/// `Status` showed there, as "put all on duty" lifts the global one. At one press, with no
+/// confirmation: this console set that pause itself (`account_view`), so there is no other
+/// tool's pause to ask about, and the condition keeps it from lifting any other.
+pub fn account_resume_pressed(ui: &Ui, alias: &str) {
+    let entry = ui.model.borrow().account_entry(alias);
+    if let Some(AccountEntry::Resume { target, offered: true }) = entry {
+        send_account(ui, alias, AccountWrite::Resume, move |root| {
+            AccountWritten::Resume(resume_paused(root, &target))
+        });
+    }
+}
+
+/// What the thread of an account card's press hands back.
+enum AccountWritten {
+    Pause(PauseOutcome),
+    Resume(ResumeOutcome),
+    /// The write panicked: whether it got out is not known.
+    Panicked(String),
+    NoThread(String),
+}
+
+impl AccountWritten {
+    /// As `Written::said` has it of the top bar's pause and resume.
+    fn said(self, write: AccountWrite) -> AccountSaid {
+        match self {
+            Self::Pause(PauseOutcome::Applied { .. }) => AccountSaid::Paused,
+            Self::Pause(PauseOutcome::Refused(failure)) => {
+                let code = refusal(&failure);
+                if code == ALREADY_PAUSED {
+                    AccountSaid::AlreadyPaused
+                } else {
+                    AccountSaid::Refused { write, code: code.to_owned() }
+                }
+            }
+            Self::Resume(ResumeOutcome::Resumed { device_failure, .. }) => {
+                AccountSaid::Resumed { device_failure }
+            }
+            Self::Resume(ResumeOutcome::Refused(failure)) => {
+                let code = refusal(&failure);
+                if failure.code == RUNTIME_OPERATION_UNSUPPORTED {
+                    AccountSaid::Unsupported
+                } else if PAUSE_MOVED.contains(&code) {
+                    AccountSaid::PauseMoved
+                } else {
+                    AccountSaid::Refused { write, code: code.to_owned() }
+                }
+            }
+            Self::Pause(PauseOutcome::NotSent(_)) | Self::Resume(ResumeOutcome::NotSent(_)) => {
+                AccountSaid::NotSent
+            }
+            Self::Pause(PauseOutcome::Unconfirmed(_))
+            | Self::Resume(ResumeOutcome::Unconfirmed(_))
+            | Self::Panicked(_) => AccountSaid::Unconfirmed,
+            Self::NoThread(error) => AccountSaid::NoThread { error },
+        }
+    }
+
+    /// Into the technical log, naming the account, as `Written::log` does the top bar's: what
+    /// went as it should and the refusals that only say the state moved on quietly, the rest,
+    /// a reconnect that failed after a lift included, as the problems they are.
+    fn log(&self, alias: &str, write: AccountWrite, ticket: Ticket) {
+        let thread = write.thread();
+        let prefix = format!("ticket {} of {alias}", ticket.0);
+        match self {
+            Self::Pause(PauseOutcome::Applied { revision }) => {
+                report::log_quiet(thread, &format!("{prefix}: paused at revision {revision}"));
+            }
+            Self::Resume(ResumeOutcome::Resumed { revision, device_failure: None }) => {
+                report::log_quiet(thread, &format!("{prefix}: resumed at revision {revision}"));
+            }
+            Self::Resume(ResumeOutcome::Resumed { revision, device_failure: Some(code) }) => {
+                report::log(
+                    thread,
+                    &format!(
+                        "{prefix}: resumed at revision {revision}; the device's reconnect \
+                         failed: {code}"
+                    ),
+                );
+            }
+            Self::Pause(PauseOutcome::Refused(failure))
+            | Self::Resume(ResumeOutcome::Refused(failure)) => {
+                let code = refusal(failure);
+                let line = format!("{prefix}: refused: {}", failure_line(failure));
+                if code == ALREADY_PAUSED || PAUSE_MOVED.contains(&code) {
+                    report::log_quiet(thread, &line);
+                } else {
+                    report::log(thread, &line);
+                }
+            }
+            Self::Pause(PauseOutcome::NotSent(failure))
+            | Self::Resume(ResumeOutcome::NotSent(failure)) => {
+                report::log(thread, &format!("{prefix}: not sent: {}", failure_line(failure)));
+            }
+            Self::Pause(PauseOutcome::Unconfirmed(failure))
+            | Self::Resume(ResumeOutcome::Unconfirmed(failure)) => report::log(
+                thread,
+                &format!("{prefix}: unconfirmed, not sent again: {}", failure_line(failure)),
+            ),
+            Self::Panicked(message) => report::log(
+                thread,
+                &format!("{prefix}: panicked, unconfirmed, not sent again: {message}"),
+            ),
+            Self::NoThread(error) => {
+                report::log(thread, &format!("{prefix}: no thread, not sent: {error}"));
+            }
+        }
+    }
+}
+
+/// One press of an account card's own button, once, on a thread of its own, under a ticket of
+/// that account's, as `send` sends the top bar's: a thread the system refuses is the press's
+/// answer at once, in red, and a panic in the write is an answer as well.
+fn send_account(
+    ui: &Ui,
+    alias: &str,
+    write: AccountWrite,
+    work: impl FnOnce(&Path) -> AccountWritten + Send + 'static,
+) {
+    let Ok(launcher) = &ui.launcher else {
+        return;
+    };
+    let Some(ticket) = ui.model.borrow_mut().actions_mut().account_begin(alias, write) else {
+        return;
+    };
+    let root = launcher.state_root.clone();
+    let worker_alias = alias.to_owned();
+    let spawned = spawn_worker(write.thread(), move || {
+        let alias = worker_alias;
+        let written = match catch_unwind(AssertUnwindSafe(|| work(&root))) {
+            Ok(written) => written,
+            Err(panic) => AccountWritten::Panicked(panic_message(&*panic)),
+        };
+        written.log(&alias, write, ticket);
+        report::post(write.thread(), move || {
+            if let Some(ui) = ui::current() {
+                account_landed(&ui, &alias, write, ticket, written);
+            }
+        });
+    });
+    match spawned {
+        Ok(()) => paint::cards(ui),
+        Err(error) => {
+            let written = AccountWritten::NoThread(error.to_string());
+            written.log(alias, write, ticket);
+            account_landed(ui, alias, write, ticket, written);
+        }
+    }
+}
+
+/// An account's answer, on the event loop, as `landed` takes the top bar's: one whose ticket a
+/// restart let go changes nothing shown, and only the log had it.
+fn account_landed(
+    ui: &Ui,
+    alias: &str,
+    write: AccountWrite,
+    ticket: Ticket,
+    written: AccountWritten,
+) {
+    let said = written.said(write);
+    let counted = ui.model.borrow_mut().actions_mut().account_settle(alias, ticket, said);
+    if counted {
+        super::wrote(ui);
+        paint::cards(ui);
+    } else {
+        report::log_quiet(
+            write.thread(),
+            &format!(
+                "ticket {} of {alias}: its answer came after a restart, and counts for nothing",
+                ticket.0
+            ),
+        );
+    }
+    ui.paint_log_notes();
 }
 
 /// A preset's segment: at once, or, leaving the learning mode the file holds, the first
