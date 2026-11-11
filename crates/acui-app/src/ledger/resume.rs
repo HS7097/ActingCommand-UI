@@ -32,9 +32,11 @@
 //! (`instance.added`, Runtime INST-5), which no operation of that module lifts
 //! as it does its `lab-<word>-<ms>` ones, and the hold the Runtime's start sets
 //! on an instance whose settlement facts it could not record
-//! (`policy_settlement_facts_skipped`, Runtime ISO-START-1) are of no kind above:
-//! this window offers their resume (`Lifter::Window`), unless the settings file
-//! lists their reason. No Runtime release up to 0.12.51 sets either.
+//! (`policy_settlement_facts_skipped`, Runtime ISO-START-1) are neither a
+//! deployment's nor a Lab rescue's: this window offers their resume
+//! (`Lifter::Window`), unless the settings file lists their reason or that line
+//! cannot be taken, when they are of the first kind (`Lifter::Setter`). No
+//! Runtime release up to 0.12.51 sets either.
 //!
 //! This console's own two are said as its own, not another tool's, and are
 //! resumed here as those are.

@@ -896,8 +896,9 @@ as before, and the ledger window resumes those it may (below). From the command 
   that settings line cannot be used, every pause but a deployment's, a Lab rescue's and the console's
   own two (Pause All, the global pause with reason `console_pause_all`, and Pause This Account, an
   instance's with reason `console_pause_account`) is of the first kind. Two pauses set for a person to
-  lift after looking are of none of these kinds, so they carry "Resume Scheduling…" like another tool's
-  pause unless `resume_elsewhere_reasons` lists their reason: `instance.added`, which the Lab's rescue
+  lift after looking are neither a deployment's nor a Lab rescue's, so they carry "Resume Scheduling…"
+  like another tool's pause unless `resume_elsewhere_reasons` lists their reason or, as just said, cannot
+  be used, when they are of the first kind: `instance.added`, which the Lab's rescue
   module's `instance add` (Runtime INST-5) sets on the account it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).

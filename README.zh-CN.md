@@ -633,8 +633,8 @@ Runtime 才回话，所以按下去可能要半分钟左右，这期间卡片上
   （理由以 lab-down- 开头）挂的不会自己解除，它和操作已经停掉还留下的一样，请从 Lab 解除」），顶栏和
   账号卡片也一样。这一行设置用不了的时候，除了部署暂停、Lab 救急暂停和监控台自己加的两种（「全部暂停」的
   全局暂停 `console_pause_all`、「暂停这个号」的实例暂停 `console_pause_account`），所有暂停都按第一类处理。
-  有两种等人看过再解除的暂停不属于上面哪一类，所以和别的工具加的暂停一样带「恢复自动调度…」，
-  除非 `resume_elsewhere_reasons` 列了它们的理由：一是 `instance.added`，Lab 救急模块添加账号
+  有两种等人看过再解除的暂停既不是部署暂停，也不是 Lab 救急暂停，所以和别的工具加的暂停一样带「恢复自动调度…」，
+  除非 `resume_elsewhere_reasons` 列了它们的理由，或者像上面说的这一行用不了，那时它们按第一类处理：一是 `instance.added`，Lab 救急模块添加账号
   （`instance add`，Runtime INST-5）后给刚加进来的账号挂的暂停，它和这个模块那些 `lab-…` 暂停不一样，
   没有哪次操作会自己解除它；二是 `policy_settlement_facts_skipped`，Runtime 启动时给记不下结算事实的实例
   挂的暂停（Runtime ISO-START-1）。到 0.12.51 为止的 Runtime 发行版（包括钉住的 0.12.47）都不会加这两种
