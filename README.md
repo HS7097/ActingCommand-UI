@@ -25,12 +25,14 @@ and guesses nothing.
   [Releases](https://github.com/HS7097/ActingCommand-UI/releases). Every release is a pre-release, so
   GitHub marks none as "Latest": take the newest tag. The zip holds `acui.exe` (the console),
   `acforward.exe` (the fixed entry), `LICENSE`, `README.md` and the `BUILD-MANIFEST.json` that binds them
-  to their commit; `acsetup.exe` is not in it for now (see the note above). It is built against
-  the crates of Runtime v0.12.47 (the pinned rev under "Data source").
+  to their commit; `acsetup.exe` is not in it for now (see the note above). Each release is built
+  against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
+  of Runtime v0.12.47; the pin is now v0.12.53.
 - **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 27], `ledger` [3, 7],
-  `runtime-client` [3, 5] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47, which it is pinned
-  to, and v0.12.48, which declares the same interfaces; whether another Runtime fits is judged from the
-  interfaces each side declares, not from version numbers (see "Component interfaces").
+  `runtime-client` [3, 5] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.53, which
+  declare the same interfaces but acsetup's `package` ([3, 8] from v0.12.50); whether another Runtime
+  fits is judged from the interfaces each side declares, not from version numbers (see "Component
+  interfaces").
 - **The 0.11 series**: UI v0.11.4 and earlier speak the 0.11 protocols only and cannot connect to a
   0.12 Runtime. The 0.11 series is not maintained.
 - **What changed**: each release's notes on its Releases page say what changed in it.
@@ -221,8 +223,32 @@ was read and Read Earlier is not offered, moving "Show up to" again or a tab or 
 locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
 reopening, which read without it.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.47
-(#407 GPU-1, v0.12.44: configuration revision 27 lets the `vision` section name DirectML
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.53
+(#429 R-6, v0.12.53: the contract crate gives the request `StopInstanceRun` its success code
+`request_stop_instance_run_completed`, so a console built on it checks the receipt of a stop a v0.12.53 Runtime
+completes, which one built on v0.12.47, where the kind had no success code, would mis-check; a stop refused for a
+run the scheduler or the Runtime itself started, `scheduled_contained_task_not_client_cancellable`, names who
+started it with the key `run_origin` (vocabulary `run_origin`: `policy`, `host`); the console sends no stop yet,
+so "Close This Task" stays off; since v0.12.47 the interfaces the console meets have not moved (`actingd-config`
+[5, 27], `ledger` [3, 7], `runtime-client` [3, 6], `StopInstanceRun` being a revision-3 kind; `package` [3, 8],
+since v0.12.50, is acsetup's), the contract crate otherwise only gained the runtime fact
+`config.catalog_provenance` (#428 SCHED-C1b), the list readings under `inventory.list.` (#428 S168-4), a
+`schedule.json` rule's fixed value (#428 SCHED-C1a) and the names a replacement in place leaves in `tables/`
+(#428 TB-R1), none of which the console reads, and in the outcome-code catalog it embeds ten codes (among them
+`request_stop_instance_run_completed` and ISO-START-1's `policy_settlement_facts_skipped`), seven keys, nine
+locations, the vocabulary `run_origin` and new tokens of `install_caveat`, `install_operation_kind`,
+`install_refusal`, `install_step_kind` and `reading_problem`, with no code retired or removed and no `console_` or
+`setup_` name; the ledger crate no longer lets a time bound drive a page's statement (#422 QP-1: the same rows in
+the same order), settles a run without a terminal whose one release is its own as interrupted also when it wrote
+effect or input records (#428 UNSET-2), and adds `host.capped_episodes` to the default
+`ledger_observer.tag.workbench_patterns` (#428 SCHED-C1d), at ledger revision 7 still; runtime-config's source
+changed only in a test and the defaults file it embeds only by that same pattern, so the key table's keys and
+`ui_tier` are v0.12.47's and the settings page shows no new row; policy and
+selection-policy, which runtime-client links, gained the capped spending order's trigger line and its episodes
+kept across a start (SCHED-C1c, SCHED-C1d), fixed values (SCHED-C1a) and a table maximum over a list
+(#428 S168-5a); runtime-client, artifact-store and runtime-database have the same source, and so has
+ledger-forensics, whose embedded defaults file differs only by that same pattern, which it does not read;
+v0.12.44's #407 GPU-1: configuration revision 27 lets the `vision` section name DirectML
 (`vision.execution_provider` `directml`, `vision.directml_device`, `vision.gpu_fallback`); the section takes
 effect at the next Runtime start, is no key of the key table, and the console neither writes nor interprets it,
 so the settings page shows no new row and a file that names them is within the console's `actingd-config`
@@ -256,7 +282,7 @@ with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 
 v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 5, ledger revision 7):
 
 ```
-rev = "d06910c64bb1cbfaa6c71df2d2db3798aacd7fa7"
+rev = "59fa27f0f71904b651c67f50108387fa53f541ff"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -528,7 +554,7 @@ or on a handset scrcpy, for capture), with where the value comes from (the confi
 online, when and through which way) and the device's latest self-check. Apply switches that device at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.47, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.53, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -931,8 +957,8 @@ as before, and the ledger window resumes those it may (below). From the command 
   module's `instance add` (Runtime INST-5) sets on the account it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
-  No Runtime release up to 0.12.51, the pinned 0.12.47 included, sets either; both come with a later
-  one. An instance
+  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.53 has
+  both. An instance
   pause still draining or handing its device back gets none either: the Runtime refuses its resume
   then. Each line shows its pause's reason verbatim, whatever the operator wrote.
 
