@@ -98,12 +98,15 @@ impl<'a> Schedule<'a> {
     }
 }
 
-/// Which sentence a not-running row's reason code gets. Several codes share one;
-/// the code itself is never shown.
+/// Which sentence a not-running row's reason code gets, the card's and the daily task list's
+/// alike (UI-3f1): one class, one sentence. Several codes share one; the code itself is never
+/// shown. Two values of a reason choose too: a `benefit_unknown`'s `benefit_gap`, and a
+/// `pool_line_held`'s `pool_line_hold`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReasonClass {
     /// A pause or a fence. `Status` says those: a card that gets as far as this
-    /// row has neither, so the explanation is older than the `Status` read.
+    /// row has neither, so the explanation is older than the `Status` read. The task
+    /// list says the pause above its rows.
     ControlGate,
     Held,
     Unavailable,
@@ -115,19 +118,70 @@ pub enum ReasonClass {
     Closed,
     Paced,
     Queue,
+    /// Another task of the account is selected this round.
+    OtherFirst,
+    /// The step before it in its chain is still out.
+    ChainWait,
     RemedyWait,
     NeedsChoice,
     Suspended,
+    /// Its benefit is unknown, and the reason names no gap this console has words for.
     BenefitUnknown,
+    /// The pack declares no effect of the task; one of its entries is pending; a pool it
+    /// touches has no value; how much of a pool there is now is not known, or of a capped
+    /// pool, its capacity or a line.
+    NoEffects,
+    EntryPending,
+    Unvalued,
+    ReadingUnknown,
     BenefitNonpositive,
     NoProgress,
     NoTask,
-    /// No sentence of its own: the code's category speaks, and the log hears of it.
+    NotMet,
+    NotTime,
+    Cooling,
+    RetryLater,
+    Missed,
+    /// The time a fact holds was served already.
+    Served,
+    /// Its feedback stop holds.
+    Enough,
+    FactsMissing,
+    Refreshing,
+    RefreshUnclear,
+    RefreshStuck,
+    /// A fact is missing, and no task reads it.
+    RefreshUnbound,
+    Locked,
+    OutOfHours,
+    NotCapable,
+    TurnedOff,
+    NoProfile,
+    HostShort,
+    NextRound,
+    GateUnmet,
+    Reserve,
+    /// The pools' lines: a run would cross a hard line; at a pool's cap, a better candidate
+    /// goes first; the lines are wrong, or so high that nothing spends the pool.
+    HardLine,
+    BetterFirst,
+    LinesInvalid,
+    LinesUnspendable,
+    DependencyWait,
+    WithinTolerance,
+    Budget,
+    /// The Runtime gave a decision no reason: its fault, which the log hears of.
+    ReasonMissing,
+    /// No sentence of its own: a general one says it is not scheduled now, and the log
+    /// hears of the code once. So do `timeline_active`, `benefit_fixed_value` and a
+    /// `pool_line_held` of a hold this console has no words for.
     Unlisted,
 }
 
 impl ReasonClass {
-    fn of(why: &str) -> Self {
+    /// The class of the reason code `why`, its `benefit_gap` `gap` and its `pool_line_hold`
+    /// `hold`.
+    pub(super) fn of(why: &str, gap: Option<&str>, hold: Option<&str>) -> Self {
         match why {
             "dispatch_paused_instance" | "dispatch_paused_global" | "dispatch_resource_fenced" => {
                 Self::ControlGate
@@ -145,30 +199,98 @@ impl ReasonClass {
             | "dispatch_random_delay_waiting" => Self::Paced,
             "policy_concurrent_runs_deferred"
             | "heavy_scene_budget_deferred"
-            | "heavy_scene_budget_exhausted"
-            | "instance_already_selected"
-            | "policy_chain_handover_waiting" => Self::Queue,
+            | "heavy_scene_budget_exhausted" => Self::Queue,
+            "instance_already_selected" => Self::OtherFirst,
+            "policy_chain_handover_waiting" => Self::ChainWait,
             "policy_remedy_waiting" => Self::RemedyWait,
             "policy_remedy_unchosen" | "policy_remedy_unavailable" | "policy_remedy_exhausted" => {
                 Self::NeedsChoice
             }
-            "pack_admission_suspended" => Self::Suspended,
-            "benefit_unknown" => Self::BenefitUnknown,
+            "pack_admission_suspended" | "policy_task_paused" => Self::Suspended,
+            "benefit_unknown" => match gap {
+                Some("no_effects") => Self::NoEffects,
+                Some("entry_pending") => Self::EntryPending,
+                Some("valuation_pending" | "valuation_missing") => Self::Unvalued,
+                Some("reading_unknown") => Self::ReadingUnknown,
+                Some(_) | None => Self::BenefitUnknown,
+            },
             "policy_benefit_nonpositive" => Self::BenefitNonpositive,
             "policy_no_progress" => Self::NoProgress,
             "due_task_missing" => Self::NoTask,
+            "trigger_false" => Self::NotMet,
+            "fact_time_pending" => Self::NotTime,
+            "task_cooldown_active" => Self::Cooling,
+            "policy_retry_backoff_active" => Self::RetryLater,
+            "clock_occurrence_expired" => Self::Missed,
+            "fact_time_served" => Self::Served,
+            "feedback_stop_true" => Self::Enough,
+            "trigger_unknown"
+            | "feedback_stop_unknown"
+            | "selection_input_unknown"
+            | "fact_time_unavailable"
+            | "fact_reference_unavailable"
+            | "policy_instance_fact_missing" => Self::FactsMissing,
+            "fact_refresh_requested" | "fact_refresh_pending" => Self::Refreshing,
+            "fact_refresh_unresolved" => Self::RefreshUnclear,
+            "fact_refresh_exhausted" => Self::RefreshStuck,
+            "fact_refresh_unbound" => Self::RefreshUnbound,
+            "feature_locked" => Self::Locked,
+            // `timeline_active` is a window that is open: no reason not to run.
+            "timeline_unavailable" | "policy_activity_window_closed" => Self::OutOfHours,
+            "capability_missing" => Self::NotCapable,
+            "instance_override_disabled" => Self::TurnedOff,
+            "activity_profile_missing" => Self::NoProfile,
+            "host_capacity_insufficient" => Self::HostShort,
+            "score_deferred" => Self::NextRound,
+            "score_unknown" | "gate_rejected" => Self::GateUnmet,
+            "resource_reserve_insufficient" => Self::Reserve,
+            "pool_line_held" => match hold {
+                Some("would_cross_hard_line" | "capped_would_cross_hard_line") => Self::HardLine,
+                Some("capped_cap_unknown") => Self::ReadingUnknown,
+                Some("capped_not_head" | "capped_not_dispatchable" | "capped_limited_spent") => {
+                    Self::BetterFirst
+                }
+                Some("lines_invalid") => Self::LinesInvalid,
+                Some(_) | None => Self::Unlisted,
+            },
+            // Runtime 0.12.53 on; a string on the wire, so the pinned client reads it all the same.
+            "pool_lines_unspendable" => Self::LinesUnspendable,
+            "dependency_already_served" => Self::DependencyWait,
+            "benefit_within_tolerance" => Self::WithinTolerance,
+            "policy_budget_exhausted" => Self::Budget,
+            "decision_reason_missing" => Self::ReasonMissing,
             other if other.starts_with("perf_") => Self::Paced,
             _ => Self::Unlisted,
         }
     }
 
-    /// A person is the one to act, or is the reason.
-    fn band(self) -> Band {
+    /// A person is the one to act, or is the reason: amber, on a card and on the task list.
+    pub(super) fn band(self) -> Band {
         match self {
-            Self::Held | Self::NeedsChoice | Self::Suspended => Band::Attention,
+            Self::Held
+            | Self::NeedsChoice
+            | Self::Suspended
+            | Self::RefreshUnbound
+            | Self::LinesInvalid
+            | Self::LinesUnspendable
+            | Self::ReasonMissing => Band::Attention,
             _ => Band::Ok,
         }
     }
+}
+
+/// A reason code as the log hears of it: with the value that chose its words, when one did.
+pub(super) fn reason_logged(why: &str, gap: Option<&str>, hold: Option<&str>) -> String {
+    match (why, gap, hold) {
+        ("benefit_unknown", Some(gap), _) => format!("{why} (benefit_gap {gap})"),
+        ("pool_line_held", _, Some(hold)) => format!("{why} (pool_line_hold {hold})"),
+        _ => why.to_owned(),
+    }
+}
+
+/// The class of an account's not-running row.
+fn row_class(row: &InstanceExplain) -> ReasonClass {
+    ReasonClass::of(&row.why, row.gap.as_deref(), row.hold.as_deref())
 }
 
 /// One line of a card, before its words. `package` is an activity's package id; a
@@ -200,8 +322,8 @@ pub enum Line {
     ScheduleUnreadable,
     /// A task is selected and its dispatch has not ended.
     Preparing,
-    /// A not-running row: `why` is its code, for the log of an `Unlisted` one, and
-    /// `wake` that row's own time.
+    /// A not-running row: `why` is its code, with the value that chose its words
+    /// (`reason_logged`), for the log of an `Unlisted` one, and `wake` that row's own time.
     Reason { class: ReasonClass, why: String, wake: Option<u64> },
     NotEvaluated,
     /// The latest evaluation decided nothing for this account.
@@ -253,8 +375,9 @@ pub fn card_view(
     }
 }
 
-/// The band, the main line and the small print: the first case that applies.
-fn said(
+/// The band, the main line and the small print: the first case that applies. The daily task
+/// list says the account's pause or fence above its rows as this says it (`tasks::held`).
+pub(super) fn said(
     instance: &InstanceLive,
     global: Option<&PauseFact>,
     schedule: Schedule<'_>,
@@ -306,7 +429,7 @@ fn said(
     }
     // With no pause a fence always shows, whatever the explanation says or fails to.
     if let Some(fence) = fence {
-        let why = row.filter(|row| ReasonClass::of(&row.why) != ReasonClass::ControlGate);
+        let why = row.filter(|row| row_class(row) != ReasonClass::ControlGate);
         return (Band::Attention, fence, why.map(reason_line).into_iter().collect());
     }
     if instance.ladder_busy {
@@ -317,7 +440,7 @@ fn said(
         Schedule::NotEvaluated => (Band::Ok, Line::NotEvaluated),
         Schedule::Evaluated(_) => match row {
             Some(row) if row.preparing => (Band::Ok, Line::Preparing),
-            Some(row) => (ReasonClass::of(&row.why).band(), reason_line(row)),
+            Some(row) => (row_class(row).band(), reason_line(row)),
             None => (Band::Ok, Line::NotPlanned),
         },
     };
@@ -327,9 +450,10 @@ fn said(
 /// A row's reason. A control gate this far down is an old row (`ControlGate`), and
 /// its wake with it.
 fn reason_line(row: &InstanceExplain) -> Line {
-    let class = ReasonClass::of(&row.why);
+    let class = row_class(row);
     let wake = if class == ReasonClass::ControlGate { None } else { row.next_wake };
-    Line::Reason { class, why: row.why.clone(), wake }
+    let why = reason_logged(&row.why, row.gap.as_deref(), row.hold.as_deref());
+    Line::Reason { class, why, wake }
 }
 
 fn fence_line(fence: &FenceFact) -> Line {

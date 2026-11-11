@@ -9,7 +9,8 @@
 //! 3. `acui-app` uses no Runtime crate: wire types end in `acui-source`.
 //! 4. Nothing here calls `Session::open`, `OnlineSource::pin`, `source.query` or
 //!    `monitor_status`. The two reading threads read `Status`, `ScheduleExplanation`
-//!    without candidates and `RuntimeFactSnapshot`, none of which walks the ledger or takes
+//!    without candidates and, while an account's daily task list shows, of that one account
+//!    with them (UI-3f1), and `RuntimeFactSnapshot`, none of which walks the ledger or takes
 //!    a ledger record. The picture's thread is the one exception: it reads ledger pages,
 //!    which take no record either, and frames' material, whose read takes none when it
 //!    succeeds or finds the file gone and one for any other failure; so a frame it failed
@@ -54,6 +55,12 @@
 //! account's rescue bar (`rescue`), painted with the picture's refresh whenever that is, and once
 //! more as a fact snapshot lands, which its question before an emulator's stop reads.
 //!
+//! The right column has two tabs (UI-3f1), the `Model`'s too (`tab_picked`): the live view and
+//! that same account's daily task list (`tasks`), only words. The picture reads only under its
+//! own tab, and the list only under its: which account's list the slow thread reads, if any, is
+//! told it in one place (`tasks_sync`), each time that may change, as for the picture. A list
+//! shown anew, or of another account, lets go of what was read and is read at once.
+//!
 //! A read that fails is no event to log each time: the log gets a change, as it
 //! happens, so a failure that repeats every few seconds is one line, and its end
 //! another.
@@ -68,20 +75,21 @@ pub mod read;
 pub mod refresh;
 pub mod rescue;
 pub mod settings;
+pub mod tasks;
 pub mod tools;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, StartRead};
+use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, StartRead, TasksRead};
 use acui_source::{ClientFailure, RuntimeFacts};
 use slint::{ComponentHandle, Timer, TimerMode};
 
-use self::model::{Link, News, Page};
+use self::model::{Link, News, Page, RightTab};
 use self::preview::{Order, PreviewTally};
-use self::read::{Lane, Landing, Poke, Read, Tally, START_RETRY, START_TRIES};
+use self::read::{Lane, Landing, Poke, Read, Tally, TasksFor, START_RETRY, START_TRIES};
 use self::tools::{Job, NamesRead, ToolFailure, WatchdogRead};
 use crate::launcher;
 use crate::report;
@@ -105,6 +113,8 @@ pub struct Reading {
     autostart_owed: bool,
     /// Whether the workbench is not minimized; `SHOWN_CHECK` keeps it.
     shown: Arc<AtomicBool>,
+    /// The account whose daily task list the slow thread reads, while it shows (`tasks_sync`).
+    tasks_for: TasksFor,
     tally: Arc<Tally>,
     /// How many writes have landed. A read states what it was when it began.
     write_gen: Arc<AtomicU64>,
@@ -169,13 +179,18 @@ pub fn start(ui: &Ui, frame_gap: Duration) {
         return;
     };
     let shown = Arc::new(AtomicBool::new(true));
+    let tasks_for: TasksFor = Arc::new(Mutex::new(None));
     let tally = Arc::new(Tally::default());
     let write_gen = Arc::new(AtomicU64::new(0));
     let spawned = |lane: Lane| {
         let root = launcher.state_root.clone();
-        let (shown, tally, write_gen) =
-            (Arc::clone(&shown), Arc::clone(&tally), Arc::clone(&write_gen));
-        match read::spawn(lane, root, shown, tally, write_gen) {
+        let (shown, tasks_for, tally, write_gen) = (
+            Arc::clone(&shown),
+            Arc::clone(&tasks_for),
+            Arc::clone(&tally),
+            Arc::clone(&write_gen),
+        );
+        match read::spawn(lane, root, shown, tasks_for, tally, write_gen) {
             Ok(sender) => Some(sender),
             Err(error) => {
                 lane_failed(ui, lane, error.to_string());
@@ -204,6 +219,7 @@ pub fn start(ui: &Ui, frame_gap: Duration) {
         names_owed: false,
         autostart_owed: false,
         shown,
+        tasks_for,
         tally,
         write_gen,
         _shown_check: shown_check,
@@ -239,7 +255,9 @@ pub fn show_page(ui: &Ui, page: Page) {
     ui.model.borrow_mut().set_page(page);
     paint::page(ui);
     preview::sync(ui);
+    tasks_sync(ui);
     paint::picture(ui);
+    paint::tasks(ui);
     if page == Page::Settings {
         // A device's operation or refresh just pressed on the main page holds its group's switch
         // now, not only from the next `Status`'s paint on.
@@ -250,14 +268,64 @@ pub fn show_page(ui: &Ui, page: Page) {
 }
 
 /// A card picked, by a click or from the keyboard: its picture is the one the right column
-/// shows from now on, and the one the picture thread follows.
+/// shows from now on, and the one the picture thread follows; so is its daily task list, under
+/// that tab, whichever tab shows.
 pub fn account_picked(ui: &Ui, alias: &str) {
     let changed = ui.model.borrow_mut().pick_account(alias);
     if changed {
         preview::sync(ui);
+        tasks_sync(ui);
         paint::cards(ui);
         paint::picture(ui);
+        paint::tasks(ui);
     }
+}
+
+/// A tab of the right column picked (UI-3f1), by a click or from the keyboard: the live view,
+/// or the account's daily task list. Only the one shown reads.
+pub fn tab_picked(ui: &Ui, tab: RightTab) {
+    let changed = ui.model.borrow_mut().pick_tab(tab);
+    if changed {
+        preview::sync(ui);
+        tasks_sync(ui);
+        paint::picture(ui);
+        paint::tasks(ui);
+    }
+}
+
+/// The daily task list's line of the account's own tasks, those no package was found for,
+/// opened or closed.
+pub fn tasks_fold_toggled(ui: &Ui) {
+    ui.model.borrow_mut().tasks_fold_toggled();
+    paint::tasks(ui);
+}
+
+/// Which account's daily task list the slow thread is to read now, if any (`Model::tasks_wanted`),
+/// into its slot (`TasksFor`), the one place that says so: a list shown anew, or of another
+/// account, starts afresh and is read at once. Each time this may change: a `Status` read, a page
+/// or a tab gone to, the window minimized or back, a card picked, a reading thread gone.
+fn tasks_sync(ui: &Ui) {
+    if tasks_follow(ui) {
+        ask(ui, Read::Tasks.lane(), Poke::Only(Read::Tasks));
+    }
+}
+
+/// `tasks_sync` but for its poke: whether the list is to be read at once. A caller that pokes the
+/// slow thread for all its reads right after asks for it there, so that it is read once.
+fn tasks_follow(ui: &Ui) -> bool {
+    let (wanted, changed) = {
+        let mut model = ui.model.borrow_mut();
+        let wanted = model.tasks_wanted();
+        let changed = model.tasks_follow(wanted.as_deref());
+        (wanted, changed)
+    };
+    if let Some(reading) = ui.reading.borrow().as_ref() {
+        let mut slot = reading.tasks_for.lock().unwrap_or_else(|held| held.into_inner());
+        if *slot != wanted {
+            *slot = wanted.clone();
+        }
+    }
+    changed && wanted.is_some()
 }
 
 /// A `Status` read now: a request of the launcher's is over.
@@ -289,6 +357,9 @@ fn poke(ui: &Ui, lane: Lane) {
 fn ask(ui: &Ui, lane: Lane, poke: Poke) {
     if lane == Read::Explain.lane() && poke.asks(Read::Explain) {
         ui.model.borrow_mut().explain_asked(Instant::now());
+    }
+    if lane == Read::Tasks.lane() && poke.asks(Read::Tasks) {
+        ui.model.borrow_mut().tasks_asked(Instant::now());
     }
     let gone = ui.reading.borrow_mut().as_mut().is_some_and(|reading| reading.poke(lane, poke));
     if gone {
@@ -342,13 +413,15 @@ fn lane_failed(ui: &Ui, lane: Lane, error: String) {
     ui.model.borrow_mut().lane_lost(lane, error.clone());
     if lane == Lane::Live {
         ui.launcher_view.borrow_mut().reading_failed(error);
-        // No `Status` says what is online any more: the picture stops.
+        // No `Status` says what is online any more: the picture stops, and the task list.
         preview::sync(ui);
+        tasks_sync(ui);
     }
     ui.paint_notices();
     ui.paint_accounts_note();
     paint::cards(ui);
     paint::picture(ui);
+    paint::tasks(ui);
     paint::actions(ui);
     paint::preset(ui);
     paint::settings(ui);
@@ -356,8 +429,9 @@ fn lane_failed(ui: &Ui, lane: Lane, error: String) {
     launcher::paint(ui);
 }
 
-/// A minimized workbench reads less (`read`), and the picture nothing; one that comes back
-/// reads at once. Each second the picture shows, its corner says how old the frame is.
+/// A minimized workbench reads less (`read`), and the picture and the task list nothing; one
+/// that comes back reads at once. Each second the picture shows, its corner says how old the
+/// frame is.
 fn check_shown() {
     let Some(ui) = crate::ui::current() else {
         return;
@@ -367,9 +441,12 @@ fn check_shown() {
     };
     let shown = !window.window().is_minimized();
     let changed = ui.model.borrow_mut().set_shown(shown);
+    let mut list_fresh = false;
     if changed {
         preview::sync(&ui);
+        list_fresh = tasks_follow(&ui);
         paint::picture(&ui);
+        paint::tasks(&ui);
     } else if shown {
         paint::picture_age(&ui);
     }
@@ -378,7 +455,11 @@ fn check_shown() {
         .borrow()
         .as_ref()
         .is_some_and(|reading| !reading.shown.swap(shown, Ordering::SeqCst) && shown);
+    if !came_back && list_fresh {
+        ask(&ui, Read::Tasks.lane(), Poke::Only(Read::Tasks));
+    }
     if came_back {
+        // Every read of the slow thread, the task list's among them while it shows.
         poke(&ui, Lane::Live);
         poke(&ui, Lane::Slow);
         let owed = ui.reading.borrow().as_ref().is_some_and(|reading| reading.names_owed);
@@ -412,6 +493,7 @@ fn landed(landing: Landing, generation: u64) {
     match landing {
         Landing::Live(read) => live_landed(&ui, read),
         Landing::Explain(read) => explain_landed(&ui, read),
+        Landing::Tasks { alias, read } => tasks_landed(&ui, &alias, read),
         Landing::Config(read) => config_landed(&ui, read),
         Landing::Start(read) => {
             start_landed(&ui, read.map_err(|failure| failure_line(&failure)));
@@ -447,6 +529,8 @@ fn live_landed(ui: &Ui, read: LiveRead) {
         ask_names(ui);
         ui.paint_names_note();
     }
+    // Before the slow thread is poked: online or not, the account gone or listed.
+    let list_fresh = tasks_follow(ui);
     // What was asked for on the command line and cannot be had is said, not passed over.
     if let Some(alias) = &landed.unknown_account {
         report::log(
@@ -454,10 +538,13 @@ fn live_landed(ui: &Ui, read: LiveRead) {
             &format!("--account {alias}: no account has that alias; the first one's picture shows"),
         );
     }
-    // Before the cards: the explanation's clock starts here, and they go by it.
+    // Before the cards: the explanation's clock starts here, and they go by it. Every read of the
+    // slow thread, the task list's among them while it shows; and so does a write's (`wrote`).
     if landed.connected || landed.epoch_changed {
         poke(ui, Lane::Slow);
         ask_start(ui);
+    } else if list_fresh && !landed.switch_over {
+        ask(ui, Read::Tasks.lane(), Poke::Only(Read::Tasks));
     }
     // No refresh of the picture out holds across a restart, nor any operation of a device.
     if landed.epoch_changed {
@@ -472,6 +559,7 @@ fn live_landed(ui: &Ui, read: LiveRead) {
     preview::sync(ui);
     paint::cards(ui);
     paint::picture(ui);
+    paint::tasks(ui);
     paint::actions(ui);
     paint::preset(ui);
     paint::settings(ui);
@@ -545,6 +633,31 @@ fn explain_landed(ui: &Ui, read: Result<ExplainRead, ClientFailure>) {
         ui.paint_notices();
     }
     paint::cards(ui);
+    // The task list says the account's state above its rows as its card does.
+    paint::tasks(ui);
+}
+
+/// The task list's read of `alias`, as the cards' explanation is taken: a failure and its end
+/// each one line of the log, not every failed read; and each reason code it has no words for,
+/// once, whether a row says it or not (`paint::tasks_unlisted`).
+fn tasks_landed(ui: &Ui, alias: &str, read: Result<TasksRead, ClientFailure>) {
+    if let Ok(read) = &read {
+        paint::tasks_unlisted(ui, read);
+    }
+    let landed = ui.model.borrow_mut().apply_tasks(alias, read, Instant::now());
+    let thread = Lane::Slow.name();
+    match &landed.news {
+        News::Nothing => {}
+        News::Failed(failure) => {
+            let line = format!("task list of {alias} failed: {}", failure_line(failure));
+            report::log(thread, &line);
+        }
+        News::Recovered => report::log(thread, &format!("task list of {alias} read again")),
+    }
+    if landed.fault_cleared {
+        ui.paint_notices();
+    }
+    paint::tasks(ui);
 }
 
 /// The servers are on the cards, the version says whether the finishing count holds,
@@ -584,6 +697,7 @@ fn panicked(ui: &Ui, read: Read, message: String) {
         report::log(read.lane().name(), &line);
         ui.paint_notices();
         paint::cards(ui);
+        paint::tasks(ui);
         paint::actions(ui);
         paint::preset(ui);
         paint::settings(ui);
@@ -605,6 +719,7 @@ fn names_landed(ui: &Ui, read: NamesRead, took: Duration) {
     ui.paint_names_note();
     paint::cards(ui);
     paint::picture(ui);
+    paint::tasks(ui);
     ui.paint_log_notes();
 }
 
