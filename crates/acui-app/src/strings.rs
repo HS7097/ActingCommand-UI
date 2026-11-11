@@ -409,7 +409,8 @@ pub struct Labels {
     /// an instance's (alias). Then scope, reason, revision, since: a pause
     /// another tool set, with the stage of an instance's that cannot be resumed
     /// yet; one only whoever set it lifts, by the settings file; a deployment's,
-    /// which the installer lifts.
+    /// which the installer lifts; a Lab rescue operation's, which it lifts as it
+    /// finishes.
     pub pause_global: &'static str,
     pub pause_instance: &'static str,
     pub pause_other_tool: &'static str,
@@ -417,6 +418,7 @@ pub struct Labels {
     pub pause_releasing: &'static str,
     pub pause_setter: &'static str,
     pub pause_deploy: &'static str,
+    pub pause_lab_rescue: &'static str,
     /// In place of the pause lines when the status read failed: code (with
     /// its short words), client operation.
     pub pauses_unread: &'static str,
@@ -541,6 +543,7 @@ pub struct Labels {
     pub pause_note_no_update: &'static str,
     pub resume_barred_setter: &'static str,
     pub resume_barred_installer: &'static str,
+    pub resume_barred_lab_rescue: &'static str,
     /// The first press on a pause another tool set: its reason as written.
     pub resume_all_statement: &'static str,
     pub pause_all_sending: &'static str,
@@ -834,16 +837,18 @@ pub struct Labels {
     pub autostart_not_installed: &'static str,
     /// What an account's card says it does or waits for. Draining: the task, or
     /// `card_draining_any` when none is named. Paused: by whom it is lifted — only
-    /// whoever set it, by the settings file, or the installer — or the other tool's
-    /// own reason as it wrote it and where it is resumed: an instance's in the ledger
-    /// window, the global one by the top bar, which is also where one pressed here is
-    /// lifted; and `card_all_accounts` round the sentence for the global pause. A task
-    /// with no name at all; a fence's cause the tables have no words for.
+    /// whoever set it, by the settings file, the installer, or a Lab rescue operation as
+    /// it finishes — or the other tool's own reason as it wrote it and where it is
+    /// resumed: an instance's in the ledger window, the global one by the top bar, which
+    /// is also where one pressed here is lifted; and `card_all_accounts` round the
+    /// sentence for the global pause. A task with no name at all; a fence's cause the
+    /// tables have no words for.
     pub card_draining: &'static str,
     pub card_draining_any: &'static str,
     pub card_handing_back: &'static str,
     pub card_paused_setter: &'static str,
     pub card_paused_installer: &'static str,
+    pub card_paused_lab_rescue: &'static str,
     pub card_paused_other: &'static str,
     pub card_paused_other_all: &'static str,
     pub card_paused_console: &'static str,
@@ -1536,6 +1541,7 @@ pub const ZH: Labels = Labels {
     pause_releasing: " · 正在交还设备，交还后才能恢复",
     pause_setter: "{}：已暂停（理由 {}，修订 {}，自 {}）· 此暂停要由设下它的一方解除",
     pause_deploy: "{}：部署暂停（理由 {}，修订 {}，自 {}）· 这是安装器加的部署暂停，请用安装器恢复",
+    pause_lab_rescue: "{}：已暂停（理由 {}，修订 {}，自 {}）· 此暂停是 Lab 救急操作挂的，操作结束会自己解除；如果操作已经停掉还留着它，请从 Lab 解除",
     pauses_unread: "状态没读到，暂停情况未知：{}（{}）",
     resume_scheduling: "恢复自动调度…",
     resume_statement: "确认：只恢复这一份暂停；它已有变动时 Runtime 会拒绝",
@@ -1610,6 +1616,7 @@ pub const ZH: Labels = Labels {
     pause_note_no_update: "全局暂停期间不能更新软件，要先解除",
     resume_barred_setter: "「全部开始执勤」不可用：此暂停要由设下它的一方解除",
     resume_barred_installer: "「全部开始执勤」不可用：此暂停由安装程序恢复",
+    resume_barred_lab_rescue: "「全部开始执勤」不可用：此暂停是 Lab 救急操作挂的，操作结束会自己解除；如果操作已经停掉还留着它，请从 Lab 解除",
     resume_all_statement: "确认：这份全局暂停是其他工具加的（理由：{}）。只恢复这一份；它已有变动时 Runtime 会拒绝",
     pause_all_sending: "正在请求全部暂停…",
     pause_all_applied: "全部暂停已生效",
@@ -1836,6 +1843,7 @@ pub const ZH: Labels = Labels {
     card_handing_back: "交还设备中",
     card_paused_setter: "已暂停，此暂停要由设下它的一方解除",
     card_paused_installer: "正在更新，由安装程序恢复",
+    card_paused_lab_rescue: "已暂停，此暂停是 Lab 救急操作挂的，操作结束会自己解除；如果操作已经停掉还留着它，请从 Lab 解除",
     card_paused_other: "已被其他工具暂停（理由：{}），可在「排障与账本」里恢复",
     card_paused_other_all: "已被其他工具暂停（理由：{}），可用「全部开始执勤」恢复",
     card_paused_console: "已暂停，可用「全部开始执勤」恢复",
@@ -2423,6 +2431,7 @@ pub const EN: Labels = Labels {
     pause_releasing: " · Handing the Device Back; It Can Be Resumed After That",
     pause_setter: "{}: Paused (Reason {}, Revision {}, Since {}) · This Pause Is to Be Lifted by Whoever Set It",
     pause_deploy: "{}: Deployment Pause (Reason {}, Revision {}, Since {}) · The Installer Set It; Lift It with the Installer",
+    pause_lab_rescue: "{}: Paused (Reason {}, Revision {}, Since {}) · A Lab Rescue Operation Set This Pause, and the Operation Lifts It When It Finishes; If the Operation Has Stopped and Left It Behind, Lift It from the Lab",
     pauses_unread: "The Status Was Not Read; Whether Scheduling Is Paused Is Unknown: {} ({})",
     resume_scheduling: "Resume Scheduling…",
     resume_statement: "Confirm: Resume This One Pause; the Runtime Refuses If It Has Changed",
@@ -2497,6 +2506,7 @@ pub const EN: Labels = Labels {
     pause_note_no_update: "The software cannot be updated during a global pause: lift it first",
     resume_barred_setter: "Put All on Duty is unavailable: this pause is to be lifted by whoever set it",
     resume_barred_installer: "Put All on Duty is unavailable: the installer lifts this pause",
+    resume_barred_lab_rescue: "Put All on Duty is unavailable: a Lab rescue operation set this pause, and the operation lifts it when it finishes; if the operation has stopped and left it behind, lift it from the Lab",
     resume_all_statement: "Confirm: another tool set this global pause (reason: {}). Only this pause is lifted; the Runtime refuses if it has changed",
     pause_all_sending: "Asking to pause all…",
     pause_all_applied: "Pause All is in effect",
@@ -2723,6 +2733,7 @@ pub const EN: Labels = Labels {
     card_handing_back: "Handing the device back",
     card_paused_setter: "Paused; this pause is to be lifted by whoever set it",
     card_paused_installer: "Updating; the installer lifts this pause",
+    card_paused_lab_rescue: "Paused; a Lab rescue operation set this pause, and the operation lifts it when it finishes; if the operation has stopped and left it behind, lift it from the Lab",
     card_paused_other: "Paused by another tool (reason: {}); it can be resumed in Troubleshooting and Ledger",
     card_paused_other_all: "Paused by another tool (reason: {}); Put All on Duty resumes it",
     card_paused_console: "Paused; Put All on Duty resumes it",
