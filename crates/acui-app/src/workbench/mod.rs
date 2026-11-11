@@ -29,8 +29,9 @@
 //! status` as the settings page is gone to, for whether the Runtime is started again when it
 //! is gone. Neither is a read of the running Runtime's state.
 //!
-//! What a person writes from the top bar is in `actions`: each write on a thread and
-//! a connection of its own, sent once. Once one lands, a read begun before that no
+//! What a person writes from the top bar is in `actions`, and so is the pause of one account
+//! and its lift from that account's card: each write on a thread and a connection of its own,
+//! sent once. Once one lands, a read begun before that no
 //! longer counts: it is let go, and read again. So it is once a `Status` shows over a
 //! switch of a device's backends whose answer was lost, which only a snapshot read after
 //! that may judge. A person's refresh of the picture is sent

@@ -25,14 +25,16 @@ use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietRead, QuietShown};
 use acui_source::workbench::{
     PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
-    SettingValue, ValueProblem, CONSOLE_PAUSE_ALL, MODE_FULL, MODE_OBSERVE, MODE_PACE,
+    SettingValue, ValueProblem, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, MODE_FULL, MODE_OBSERVE,
+    MODE_PACE,
 };
 use slint::{Image, Model as _, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
 use super::actions::{
-    AccountRules, ActionsView, Choice, EvidenceView, Field, FormProblem, GroupState, PresetState,
-    PresetView, QuietFormView, Reread, ResumeEntry, RowEdit, RuleItem, RulesHold, RulesView,
-    Said, StartRule, StepperView, Write, PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
+    AccountEntry, AccountRules, AccountSaid, AccountWrite, ActionsView, Choice, EvidenceView,
+    Field, FormProblem, GroupState, PresetState, PresetView, QuietFormView, Reread, ResumeEntry,
+    RowEdit, RuleItem, RulesHold, RulesView, Said, StartRule, StepperView, Write,
+    PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
 };
 use super::card::{Band, CardView, Down, Line, ReasonClass};
 use super::model::{Fault, Page};
@@ -2455,6 +2457,15 @@ fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
     });
     let game_line: Vec<&str> =
         [view.game.as_deref(), server.as_deref()].into_iter().flatten().collect();
+    let (pause_shown, resume_shown, entry_offered) = match &view.account.entry {
+        AccountEntry::Off => (false, false, false),
+        AccountEntry::Pause { offered } => (true, false, *offered),
+        AccountEntry::Resume { offered, .. } => (false, true, *offered),
+    };
+    let (said, said_failed) = match &view.account.said {
+        Some(said) => account_said_text(labels, said, view.account.global_holds),
+        None => (String::new(), false),
+    };
     AccountCard {
         alias: view.alias.as_str().into(),
         game_line: game_line.join(" · ").into(),
@@ -2467,6 +2478,59 @@ fn account_card(ui: &Ui, labels: &Labels, view: &CardView) -> AccountCard {
         main_failed: matches!(view.main, Line::ScheduleUnreadable),
         note: notes.join(" · ").into(),
         selected: view.selected,
+        pause_shown,
+        resume_shown,
+        entry_offered,
+        said: said.into(),
+        said_failed,
+    }
+}
+
+/// What the last press of an account card's own button came to in words, and whether that is
+/// a failure. A refusal says its code as the Runtime gave it, then the code's short words, and
+/// so does a lift whose reconnect of the device failed. A lift while a global pause holds
+/// (`global_holds`) says that the account is still not scheduled, as the top bar's says the
+/// pauses that still hold.
+fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) -> (String, bool) {
+    let coded = |template: &str, code: &str| {
+        let words = outcome_short(labels, code)
+            .unwrap_or_else(|| labels.outcome_unknown_short.to_owned());
+        fill(template, &[code, words.as_str()])
+    };
+    match said {
+        AccountSaid::Sending(AccountWrite::Pause) => {
+            (labels.account_pause_sending.to_owned(), false)
+        }
+        AccountSaid::Sending(AccountWrite::Resume) => {
+            (labels.account_resume_sending.to_owned(), false)
+        }
+        AccountSaid::Paused => (labels.account_paused.to_owned(), false),
+        AccountSaid::AlreadyPaused => (labels.account_pause_already.to_owned(), false),
+        AccountSaid::Resumed { device_failure } => {
+            let mut text = match device_failure {
+                None => labels.account_resumed.to_owned(),
+                Some(code) => coded(labels.account_resumed_device_failed, code.as_str()),
+            };
+            if global_holds {
+                text.push_str(labels.account_resumed_global_holds);
+            }
+            (text, device_failure.is_some())
+        }
+        AccountSaid::PauseMoved => (labels.resume_all_moved.to_owned(), false),
+        AccountSaid::Refused { write: AccountWrite::Pause, code } => {
+            (coded(labels.account_pause_refused, code.as_str()), true)
+        }
+        AccountSaid::Refused { write: AccountWrite::Resume, code } => {
+            (coded(labels.account_resume_refused, code.as_str()), true)
+        }
+        AccountSaid::Unsupported => (labels.resume_all_unsupported.to_owned(), true),
+        AccountSaid::Unconfirmed => (labels.write_unconfirmed.to_owned(), true),
+        AccountSaid::NotSent => (labels.write_not_sent.to_owned(), true),
+        AccountSaid::NoThread { error } => {
+            let why = fill(labels.thread_failed, &[error.as_str()]);
+            (fill(labels.write_no_thread, &[why.as_str()]), true)
+        }
+        AccountSaid::Restarted => (labels.write_restarted.to_owned(), false),
     }
 }
 
@@ -2491,6 +2555,10 @@ fn line_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
                 }
                 Lifter::Window if *everyone => {
                     fill(labels.card_paused_other_all, &[reason.as_str()])
+                }
+                // This console's own pause of the account, which its card lifts.
+                Lifter::Window if reason.as_str() == CONSOLE_PAUSE_ACCOUNT => {
+                    labels.card_paused_account.to_owned()
                 }
                 Lifter::Window => fill(labels.card_paused_other, &[reason.as_str()]),
             };

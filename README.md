@@ -703,9 +703,9 @@ backslashes.
 
 `resume_elsewhere_reasons` names the pauses the console leaves to whoever set them. The Runtime keeps
 no actor with a pause, only its reason, so the pauses that must not be lifted from here are named by
-their reasons: a pause with one of them gets neither Put All on Duty nor "Resume Scheduling…", only the
-words "this pause is to be lifted by whoever set it", on the top bar, on the account cards and in the
-ledger window. No box writes the key, and a save of another key keeps its line byte for byte, like any
+their reasons: a pause with one of them gets neither Put All on Duty, Resume This Account nor "Resume
+Scheduling…", only the words "this pause is to be lifted by whoever set it", on the top bar, on the
+account cards and in the ledger window. No box writes the key, and a save of another key keeps its line byte for byte, like any
 line; but the setup wizard's fresh install and first migration write the file anew with only `lang`,
 `text_size` and the three paths (see "Setup wizard acsetup"), so after either one the line is gone, with
 nothing said, and has to be written again. It is one line, its key bare or in quotes, a TOML array of
@@ -716,8 +716,9 @@ escape. A line of this key the console cannot use — not such an array (an arra
 an item not quoted or not such a reason, a comment after the value, a line of the key without `=`, the
 key in quotes that do not pair — is said in red at the top of every window, with the file and the
 line, and **fails closed**: until it is fixed, whatever another line of the key says, no pause except
-the console's own Pause All, the global pause with reason `console_pause_all`, offers a resume anywhere
-in the console; an instance pause with that reason gets none either. A settings file that is there but
+the console's own two offers a resume anywhere in the console: Pause All, the global pause with reason
+`console_pause_all`, and Pause This Account, an instance's pause with reason `console_pause_account`
+(see "Launcher"); either reason on the other scope gets none. A settings file that is there but
 cannot be read, or no configuration directory, fails closed the same way. A deployment's pause stays
 the installer's in any case, and a pause the Lab's rescue module set stays its operation's (see
 "Conditional resume" under "Launcher"). The reasons are the operator's own data: the console never
@@ -839,17 +840,42 @@ The workbench's top bar has **Pause All** and **Put All on Duty**. Pause All ask
 global pause of scheduling: no new task is scheduled, and a task already running finishes on its own.
 Put All on Duty lifts that global pause; a global pause another tool set is lifted only after the person
 confirms it, and a pause whose reason the settings file lists in `resume_elsewhere_reasons` (see
-"Settings file") is to be lifted by whoever set it, so it cannot be lifted there. No button pauses a single
-instance: pause one with `actingctl pause --state-root <state root> --instance <alias>` and lift it with
-`actingctl resume` and the same flags, or use the MCP tools `ac_pause` / `ac_resume` (see "MCP for
-agents"). The ledger window can resume, conditionally, a pause another tool set (below). Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
+"Settings file") is to be lifted by whoever set it, so it cannot be lifted there. The ledger window can
+resume, conditionally, a pause another tool set (below). Start at boot is an option of the setup wizard;
+see "Setup wizard acsetup".
+
+Each account's card has a button of its own. While the account has no pause of its own it is **Pause
+This Account**: one `PauseScheduling` of that instance alone, with the console's own reason
+`console_pause_account` and the same drain timeout as Pause All (the lowest the Runtime takes, 1 s), sent
+once on a worker thread over a fresh person's connection (actor `user`) and never again by itself. No new
+task of that account is scheduled. Unlike the global pause an instance pause drains: a task still running
+on the account once that second has passed is asked to stop at its next checkpoint, and the Runtime
+answers once the device is handed back, so a press can take about half a minute, which the card says
+while it is out. Under the pause the console set there, once its device is handed back, the button is
+**Resume This Account**: one conditional `ResumeScheduling` of that instance, its condition the owner
+epoch and the revision of the status read the card was painted from, so the Runtime refuses it and lifts
+nothing once that pause has changed. It goes at one press, without the confirmation Put All on Duty asks
+of another tool's pause, since the console set this pause itself. The resume connects the device again;
+a reconnect that fails is said in red with its code, and the resume stands. What a press came to is said
+on the card: done (a resume done while a global pause holds adds that no task is scheduled for the
+account until that one is lifted too); a pause that already holds, which keeps its reason; a refusal,
+in red, its code verbatim and the code's words (a fixture instance, for one, is refused with
+`fixture_execution_scope_forbidden`); or not confirmed, which is not sent again. While
+`resume_elsewhere_reasons` cannot be used the card still lifts this pause, as the top bar still lifts its
+own Pause All; a settings file that lists `console_pause_account` leaves it to "whoever set it", like
+any reason listed. The card resumes only the console's own account pause: any other pause of the
+account, another tool's or one set with `actingctl pause --instance`, is said on the card by who lifts it
+as before, and the ledger window resumes those it may (below). From the command line, `actingctl pause
+--state-root <state root> --instance <alias>` and `actingctl resume` with the same flags, or the MCP tools
+`ac_pause` / `ac_resume` (see "MCP for agents"), still pause and resume one instance.
 
 - **Conditional resume (ledger window)**: below the technical lines the window lists the global pause and
   each instance's pause of its last status read (reason, revision, since), each by its own scope. One
-  another tool set — the global one, or an instance's whose device is handed back — carries "Resume
-  Scheduling…": the first press only shows the statement "resume this one pause" and "Confirm and
-  Resume"; the confirm sends one conditional `ResumeScheduling` on a worker thread, over a fresh person's
-  connection (actor `user`), its condition the owner epoch of that status read and the scope's revision,
+  another tool or the console itself set (the console's own line says "Paused by This Console", not
+  "Paused by Another Tool") — the global one, or an instance's whose device is handed back — carries
+  "Resume Scheduling…": the first press only shows the statement "resume this one pause" and "Confirm
+  and Resume"; the confirm sends one conditional `ResumeScheduling` on a worker thread, over a fresh
+  person's connection (actor `user`), its condition the owner epoch of that status read and the scope's revision,
   so the Runtime refuses it and lifts nothing once that pause has changed or another Runtime runs; only the
   pause of that line is resumed. Lifted, refused (shown by its code, "code not in this console's table" for
   one the table lacks) or not confirmed (a receipt timeout, a dropped connection,
@@ -862,13 +888,23 @@ agents"). The ledger window can resume, conditionally, a pause another tool set 
   deployment's — `acsetup_update`, `install_restart` and any reason starting with `deploy-` — which the
   installer lifts (the console does not run `release-hold`); and one the Lab's rescue module set (Runtime
   0.12.48 on), its reason exactly `lab-<operation>-<unix ms>` with the operation one of `config`,
-  `deploy`, `down`, `place`, `restore` and `rollback`, which that operation lifts as it finishes, except
+  `deploy`, `down`, `instance` (the instance add, 0.12.52 on), `place`, `restore` and `rollback`, which
+  that operation lifts as it finishes, except
   `down`, the stop, whose pause stays until it is lifted from the Lab ("a Lab rescue operation set this
   pause, and the operation lifts it when it finishes; one a stop set (reason starting lab-down-) is not
   lifted by itself: like one an operation that has stopped left behind, lift it from the Lab"), on the
   top bar and the account cards too. While
   that settings line cannot be used, every pause but a deployment's, a Lab rescue's and the console's
-  own Pause All (the global pause with reason `console_pause_all`) is of the first kind. An instance
+  own two (Pause All, the global pause with reason `console_pause_all`, and Pause This Account, an
+  instance's with reason `console_pause_account`) is of the first kind. Two pauses set for a person to
+  lift after looking are neither a deployment's nor a Lab rescue's, so they carry "Resume Scheduling…"
+  like another tool's pause unless `resume_elsewhere_reasons` lists their reason or, as just said, cannot
+  be used, when they are of the first kind: `instance.added`, which the Lab's rescue
+  module's `instance add` (Runtime INST-5) sets on the account it has just added and which, unlike that
+  module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
+  Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
+  No Runtime release up to 0.12.51, the pinned 0.12.47 included, sets either; both come with a later
+  one. An instance
   pause still draining or handing its device back gets none either: the Runtime refuses its resume
   then. Each line shows its pause's reason verbatim, whatever the operator wrote.
 

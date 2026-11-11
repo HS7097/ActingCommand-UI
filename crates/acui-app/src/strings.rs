@@ -407,13 +407,15 @@ pub struct Labels {
     pub unlock_spawn_failed: &'static str,
     /// A scheduling pause's line in the ledger window. Its scope: global, or
     /// an instance's (alias). Then scope, reason, revision, since: a pause
-    /// another tool set, with the stage of an instance's that cannot be resumed
+    /// another tool set, or this console (its Pause All or Pause This Account),
+    /// with the stage of an instance's that cannot be resumed
     /// yet; one only whoever set it lifts, by the settings file; a deployment's,
     /// which the installer lifts; a Lab rescue operation's, which it lifts as it
     /// finishes, but for a stop's (`lab-down-`), which is lifted from the Lab.
     pub pause_global: &'static str,
     pub pause_instance: &'static str,
     pub pause_other_tool: &'static str,
+    pub pause_console: &'static str,
     pub pause_draining: &'static str,
     pub pause_releasing: &'static str,
     pub pause_setter: &'static str,
@@ -562,6 +564,23 @@ pub struct Labels {
     /// Why no thread: `thread_failed` filled in.
     pub write_no_thread: &'static str,
     pub write_restarted: &'static str,
+    /// An account card's own button: with no pause of its own, and under the one this console
+    /// set there. Then, on the card, what its press came to: in flight each way, which may take
+    /// a while; done; a pause that already holds; a refusal, which takes the code as the Runtime
+    /// gave it and its short words, and a lift whose reconnect of the device failed the same;
+    /// after a lift, that a global pause still holds over the account.
+    /// The rest are the top bar's (`write_*`, `resume_all_moved`, `resume_all_unsupported`).
+    pub pause_account: &'static str,
+    pub resume_account: &'static str,
+    pub account_pause_sending: &'static str,
+    pub account_paused: &'static str,
+    pub account_pause_already: &'static str,
+    pub account_pause_refused: &'static str,
+    pub account_resume_sending: &'static str,
+    pub account_resumed: &'static str,
+    pub account_resumed_device_failed: &'static str,
+    pub account_resumed_global_holds: &'static str,
+    pub account_resume_refused: &'static str,
     /// The top bar's performance preset: the row's caption, each known preset's name
     /// and what it means, what is in effect when no preset is, and that it cannot be
     /// read. One setting of a preset takes its name, value and source; `preset_custom`
@@ -841,7 +860,8 @@ pub struct Labels {
     /// it finishes (a stop's from the Lab) — or the other tool's own reason as it
     /// wrote it and where it is resumed: an instance's in the ledger window, the
     /// global one by the top bar, which
-    /// is also where one pressed here is lifted; and `card_all_accounts` round the
+    /// is also where one pressed here is lifted; one pressed on the account's card is
+    /// lifted there (`card_paused_account`); and `card_all_accounts` round the
     /// sentence for the global pause. A task with no name at all; a fence's cause the
     /// tables have no words for.
     pub card_draining: &'static str,
@@ -853,6 +873,7 @@ pub struct Labels {
     pub card_paused_other: &'static str,
     pub card_paused_other_all: &'static str,
     pub card_paused_console: &'static str,
+    pub card_paused_account: &'static str,
     pub card_all_accounts: &'static str,
     pub card_running: &'static str,
     pub card_finishing: &'static str,
@@ -1538,6 +1559,7 @@ pub const ZH: Labels = Labels {
     pause_global: "全局调度",
     pause_instance: "实例 {} 的调度",
     pause_other_tool: "{}：被其他工具暂停（理由 {}，修订 {}，自 {}）",
+    pause_console: "{}：被这个监控台暂停（理由 {}，修订 {}，自 {}）",
     pause_draining: " · 正在等进行中的任务收尾，收尾后才能恢复",
     pause_releasing: " · 正在交还设备，交还后才能恢复",
     pause_setter: "{}：已暂停（理由 {}，修订 {}，自 {}）· 此暂停要由设下它的一方解除",
@@ -1634,6 +1656,17 @@ pub const ZH: Labels = Labels {
     write_not_sent: "没有发出去：连不上 Runtime",
     write_no_thread: "没有发出去：{}",
     write_restarted: "Runtime 已重启，请看现状",
+    pause_account: "暂停这个号",
+    resume_account: "恢复这个号",
+    account_pause_sending: "正在暂停这个号…它要是有任务在跑，会停在下一个检查点，最多要半分钟左右",
+    account_paused: "这个号已暂停，不再给它安排新任务",
+    account_pause_already: "这个号已经有一份暂停在生效，原来的理由不变；已刷新",
+    account_pause_refused: "暂停这个号没有成功：{} · {}",
+    account_resume_sending: "正在恢复这个号…要重新连一次设备，最多要半分钟左右",
+    account_resumed: "这个号已恢复",
+    account_resumed_device_failed: "这个号已恢复，但重新连接设备没有成功：{} · {}",
+    account_resumed_global_holds: " · 全局暂停还在，这个号仍不会被安排任务",
+    account_resume_refused: "恢复这个号没有成功：{} · {}",
     performance_preset: "性能档位",
     preset_standard: "标准",
     preset_standard_note: "不额外放慢",
@@ -1848,6 +1881,7 @@ pub const ZH: Labels = Labels {
     card_paused_other: "已被其他工具暂停（理由：{}），可在「排障与账本」里恢复",
     card_paused_other_all: "已被其他工具暂停（理由：{}），可用「全部开始执勤」恢复",
     card_paused_console: "已暂停，可用「全部开始执勤」恢复",
+    card_paused_account: "已用「暂停这个号」暂停，可用下面的「恢复这个号」恢复",
     card_all_accounts: "全部账号{}",
     card_running: "正在运行：{}",
     card_finishing: "正在收尾：{}",
@@ -2091,11 +2125,11 @@ pub const ZH: Labels = Labels {
     chrome_failed: "Aero 外框没有生效，这个窗口改用系统标题栏。详情见技术日志。",
     glass_failed: "Aero 玻璃没有生效，这个窗口改用实心外观。详情见技术日志。",
     close_failed: "这个窗口没能关闭。详情见技术日志。",
-    settings_no_dir: "找不到存放设置文件的目录（{} 未设置）：本次按默认设置运行，但除了监控台自己「全部暂停」加的暂停，这里不给任何暂停恢复；改了的设置也存不下来",
-    settings_unreadable: "设置文件 {} 读不出：{}。本次按默认设置运行，但除了监控台自己「全部暂停」加的暂停，这里不给任何暂停恢复；为免覆盖原文件，本次不保存设置",
+    settings_no_dir: "找不到存放设置文件的目录（{} 未设置）：本次按默认设置运行，但除了监控台自己用「全部暂停」和「暂停这个号」加的暂停，这里不给任何暂停恢复；改了的设置也存不下来",
+    settings_unreadable: "设置文件 {} 读不出：{}。本次按默认设置运行，但除了监控台自己用「全部暂停」和「暂停这个号」加的暂停，这里不给任何暂停恢复；为免覆盖原文件，本次不保存设置",
     settings_unknown_value: "设置文件 {} 第 {} 行的取值认不出（{} = {}），本次按默认处理；这一行原样保留",
     settings_malformed: "设置文件 {} 第 {} 行不是「键 = 值」的写法，已跳过；这一行原样保留",
-    settings_reasons_unusable: "设置文件 {} 第 {} 行的 resume_elsewhere_reasons 用不了（{}）：要写成一行字符串数组，每一项都得是 Runtime 认的暂停理由（1–64 个字符，只能有 a-z、0-9、_、.、-）。改好之前，除了监控台自己「全部暂停」加的暂停，这里不给任何暂停恢复；这一行原样保留",
+    settings_reasons_unusable: "设置文件 {} 第 {} 行的 resume_elsewhere_reasons 用不了（{}）：要写成一行字符串数组，每一项都得是 Runtime 认的暂停理由（1–64 个字符，只能有 a-z、0-9、_、.、-）。改好之前，除了监控台自己用「全部暂停」和「暂停这个号」加的暂停，这里不给任何暂停恢复；这一行原样保留",
     settings_save_blocked: "设置没有保存：设置文件 {} 开台时读不出，为免覆盖原文件，本次不写",
     settings_save_failed: "设置没能保存进 {}：{}",
     log_written: "技术日志：{}",
@@ -2428,6 +2462,7 @@ pub const EN: Labels = Labels {
     pause_global: "Global Scheduling",
     pause_instance: "Scheduling of Instance {}",
     pause_other_tool: "{}: Paused by Another Tool (Reason {}, Revision {}, Since {})",
+    pause_console: "{}: Paused by This Console (Reason {}, Revision {}, Since {})",
     pause_draining: " · Waiting for the Running Tasks to Finish; It Can Be Resumed After That",
     pause_releasing: " · Handing the Device Back; It Can Be Resumed After That",
     pause_setter: "{}: Paused (Reason {}, Revision {}, Since {}) · This Pause Is to Be Lifted by Whoever Set It",
@@ -2524,6 +2559,17 @@ pub const EN: Labels = Labels {
     write_not_sent: "Not sent: the Runtime cannot be reached",
     write_no_thread: "Not sent: {}",
     write_restarted: "The Runtime restarted: see what is shown now",
+    pause_account: "Pause This Account",
+    resume_account: "Resume This Account",
+    account_pause_sending: "Pausing this account… a task running on it stops at its next checkpoint, which can take about half a minute",
+    account_paused: "This account is paused: no new task is scheduled for it",
+    account_pause_already: "A pause of this account already holds and keeps its reason; refreshed",
+    account_pause_refused: "Pause This Account did not succeed: {} · {}",
+    account_resume_sending: "Resuming this account… its device is connected again; this can take about half a minute",
+    account_resumed: "This account is resumed",
+    account_resumed_device_failed: "This account is resumed, but connecting its device again did not succeed: {} · {}",
+    account_resumed_global_holds: " · The global pause still holds, so no task is scheduled for this account yet",
+    account_resume_refused: "Resume This Account did not succeed: {} · {}",
     performance_preset: "Performance",
     preset_standard: "Standard",
     preset_standard_note: "No extra slowing down",
@@ -2738,6 +2784,7 @@ pub const EN: Labels = Labels {
     card_paused_other: "Paused by another tool (reason: {}); it can be resumed in Troubleshooting and Ledger",
     card_paused_other_all: "Paused by another tool (reason: {}); Put All on Duty resumes it",
     card_paused_console: "Paused; Put All on Duty resumes it",
+    card_paused_account: "Paused with Pause This Account; Resume This Account below resumes it",
     card_all_accounts: "All accounts: {}",
     card_running: "Running: {}",
     card_finishing: "Finishing up: {}",
@@ -2981,11 +3028,11 @@ pub const EN: Labels = Labels {
     chrome_failed: "The Aero frame did not take effect: this window uses the system title bar instead. The technical log has the details.",
     glass_failed: "The Aero glass did not take effect: this window uses a solid look instead. The technical log has the details.",
     close_failed: "This window could not be closed. The technical log has the details.",
-    settings_no_dir: "No directory for the settings file ({} not set): this run uses the default settings, but offers no resume for any pause except this console's own Pause All, and a changed setting cannot be saved",
-    settings_unreadable: "The settings file {} could not be read: {}. This run uses the default settings, but offers no resume for any pause except this console's own Pause All, and saves none, so the file is never written over",
+    settings_no_dir: "No directory for the settings file ({} not set): this run uses the default settings, but offers no resume for any pause except those this console set itself with Pause All and Pause This Account, and a changed setting cannot be saved",
+    settings_unreadable: "The settings file {} could not be read: {}. This run uses the default settings, but offers no resume for any pause except those this console set itself with Pause All and Pause This Account, and saves none, so the file is never written over",
     settings_unknown_value: "The settings file {}, line {}: the value is not recognized ({} = {}); the default is used, and the line is kept as it is",
     settings_malformed: "The settings file {}, line {}: not of the form key = value; skipped, and the line is kept as it is",
-    settings_reasons_unusable: "The settings file {}, line {}: resume_elsewhere_reasons cannot be used ({}): it must be a one-line array of strings, each a pause reason the Runtime takes (1–64 characters of a-z, 0-9, _, . and -). Until it is fixed, this console offers no resume for any pause except its own Pause All; the line is kept as it is",
+    settings_reasons_unusable: "The settings file {}, line {}: resume_elsewhere_reasons cannot be used ({}): it must be a one-line array of strings, each a pause reason the Runtime takes (1–64 characters of a-z, 0-9, _, . and -). Until it is fixed, this console offers no resume for any pause except those it set itself with Pause All and Pause This Account; the line is kept as it is",
     settings_save_blocked: "Settings not saved: the settings file {} could not be read at the start, so this run does not write it",
     settings_save_failed: "Saving the settings to {} failed: {}",
     log_written: "Technical log: {}",

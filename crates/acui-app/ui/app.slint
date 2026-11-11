@@ -104,7 +104,10 @@ component DashedBox inherits Rectangle {
 
 // One account on the workbench: its alias and game, the colour of its band, what
 // it does or waits for now, red when that says a failure, and the small print. And
-// whether its picture is the one the right column shows.
+// whether its picture is the one the right column shows. And its own button, when it
+// has one: "pause this account" while it has no pause of its own, "resume this account"
+// under the one this console set there; whether that can be pressed now; and what its
+// last press came to, red when that says a failure.
 export struct AccountCard {
     alias: string,
     game-line: string,
@@ -113,6 +116,11 @@ export struct AccountCard {
     main-failed: bool,
     note: string,
     selected: bool,
+    pause-shown: bool,
+    resume-shown: bool,
+    entry-offered: bool,
+    said: string,
+    said-failed: bool,
 }
 
 // One performance preset on the top bar: what a press names it by, its name in words, and
@@ -369,6 +377,9 @@ export global Strings {
     in property <string> start;
     in property <string> pause-all;
     in property <string> resume-all;
+    // An account card's own button, of that account's pause.
+    in property <string> pause-account;
+    in property <string> resume-account;
     in property <string> performance-preset;
     in property <string> back-to-file;
     in property <string> preset-confirm;
@@ -1314,10 +1325,14 @@ export component LedgerWindow inherits Window {
 // One account's card in the workbench's left column. A click picks it, as Return or
 // Space does once Tab has reached it, the way a page tab is picked; a click does not
 // take the focus. The card picked is edged in the accent, heavier, and its picture is
-// the one the right column shows.
+// the one the right column shows. Its own button is pressed, not the card: a click on
+// it picks nothing while it can be pressed. While it cannot (a press of it is out), the
+// button takes no click, and one on it picks the card as a click elsewhere on it does.
 component AccountCardView {
     in property <AccountCard> account;
     callback picked();
+    callback pause-pressed();
+    callback resume-pressed();
     vertical-stretch: 0;
     accessible-role: list-item;
     accessible-label: root.account.alias;
@@ -1325,6 +1340,14 @@ component AccountCardView {
     accessible-item-selected: root.account.selected;
     accessible-action-default => {
         root.picked();
+    }
+    // Under the card, so that its own button takes its own clicks; the rest of the card
+    // takes none, nor does the button while it cannot be pressed, and passes them down to
+    // this.
+    TouchArea {
+        clicked => {
+            root.picked();
+        }
     }
     Card {
         strip: root.account.tone;
@@ -1366,11 +1389,24 @@ component AccountCardView {
             if root.account.note != "": Notice {
                 text: root.account.note;
             }
-        }
-    }
-    TouchArea {
-        clicked => {
-            root.picked();
+            if root.account.said != "": Notice {
+                text: root.account.said;
+                failed: root.account.said-failed;
+            }
+            if root.account.pause-shown || root.account.resume-shown: HorizontalLayout {
+                alignment: start;
+                SkinButton {
+                    text: root.account.pause-shown ? Strings.pause-account : Strings.resume-account;
+                    enabled: root.account.entry-offered;
+                    clicked => {
+                        if (root.account.pause-shown) {
+                            root.pause-pressed();
+                        } else {
+                            root.resume-pressed();
+                        }
+                    }
+                }
+            }
         }
     }
     focus-scope := FocusScope {
@@ -2236,8 +2272,11 @@ export component WorkbenchWindow inherits Window {
     in-out property <int> theme-index <=> theme-box.current-index;
 
     callback page-picked(WorkbenchPage);
-    // By the card's alias.
+    // By the card's alias: the card picked, and its own "pause this account" and "resume this
+    // account".
     callback account-picked(string);
+    callback account-pause(string);
+    callback account-resume(string);
     // The box beside the picture's title, as it is now.
     callback picture-overlays-toggled(bool);
     // The button under the picture that refreshes it.
@@ -2586,6 +2625,12 @@ export component WorkbenchWindow inherits Window {
                                     account: item;
                                     picked => {
                                         root.account-picked(item.alias);
+                                    }
+                                    pause-pressed => {
+                                        root.account-pause(item.alias);
+                                    }
+                                    resume-pressed => {
+                                        root.account-resume(item.alias);
                                     }
                                 }
                                 Card {

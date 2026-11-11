@@ -13,7 +13,7 @@
 //! pause reasons no window here offers a resume for, since only whoever set such a
 //! pause lifts it (`ResumeElsewhere`); none by default. A line of it that cannot be
 //! taken, or a file that cannot be read, is an error, and until it is fixed no pause
-//! but this console's own "pause all" offers a resume.
+//! but this console's own, its "pause all" and its "pause this account", offers a resume.
 //!
 //! The file is kept line by line: a save reads it again, changes the last line
 //! of its one key (or appends one), keeps every other line byte for byte —
@@ -180,7 +180,8 @@ pub enum SettingsIssue {
     /// A line of `resume_elsewhere_reasons` that is not a one-line array of reasons the
     /// Runtime takes, with its value as written (the whole line when it has no `=` or
     /// its key's quotes do not pair); counted from 1. Until it is fixed no pause but this
-    /// console's own "pause all" offers a resume (`ResumeElsewhere::Unusable`).
+    /// console's own, its "pause all" and its "pause this account", offers a resume
+    /// (`ResumeElsewhere::Unusable`).
     UnusableReasons { path: PathBuf, line: usize, value: String },
     /// A save refused because the file could not be read at the start.
     SaveBlocked { path: PathBuf },

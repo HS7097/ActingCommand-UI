@@ -38,7 +38,8 @@
 //! its own, and which of its emulator's controls its capability profile has available
 //! ([`InstanceLive::physical`], [`InstanceLive::emulator_controls`]).
 //!
-//! The writes here are a person's global pause ([`pause_global`]) and a person's change
+//! The writes here are a person's global pause ([`pause_global`]), a person's pause of one
+//! account ([`pause_account`]) and a person's change
 //! of settings ([`configure`]), in the picture's file a person's refresh of the picture
 //! ([`preview::observe_frame`]), and in the device's a person's operation of a device: its
 //! reconnect and self-check, its emulator's control, its game's launch and restart
@@ -103,6 +104,11 @@ pub mod rules;
 /// code. A pause of this reason is one a person pressed here, so lifting it asks for
 /// no second press.
 pub const CONSOLE_PAUSE_ALL: &str = "console_pause_all";
+
+/// The reason this console's "pause this account" gives, a pause of one instance's scope
+/// ([`pause_account`]), likewise a free name and no outcome code, and likewise lifted on the
+/// account's card with one press. As a name the Runtime takes it is 21 bytes of `[a-z_]`.
+pub const CONSOLE_PAUSE_ACCOUNT: &str = "console_pause_account";
 
 /// Whether `reason` is a name the Runtime takes as a pause's reason, by the contract's own
 /// check (`SchedulingPauseReason::new`: 1 to 64 bytes of `[a-z0-9_.-]`). The console's
@@ -361,10 +367,11 @@ fn connection_ended(error: &RuntimeClientError) -> bool {
     })
 }
 
-/// What became of one person's global pause ([`pause_global`]).
+/// What became of one person's global pause ([`pause_global`]), or of one person's pause of
+/// one account ([`pause_account`]).
 #[derive(Debug, Clone)]
 pub enum PauseOutcome {
-    /// The pause holds, at this revision of the global scope.
+    /// The pause holds, at this revision of its scope.
     Applied { revision: u64 },
     /// The Runtime answered and set nothing. Its code is the host's, in `host`:
     /// `runtime_code` is only the receipt's class. One pause already holding is
@@ -386,7 +393,26 @@ pub enum PauseOutcome {
 /// Every failure after the connection that is no refusal counts as unconfirmed, not
 /// only those the client calls uncertain: a failed write may have got the frame out.
 pub fn pause_global(root: &Path) -> PauseOutcome {
-    let reason = match SchedulingPauseReason::new(CONSOLE_PAUSE_ALL) {
+    pause(root, SchedulingPauseScope::Global, CONSOLE_PAUSE_ALL)
+}
+
+/// One person's pause of the one account `instance_alias`: as [`pause_global`], a fresh
+/// person's connection, one `PauseScheduling` of that instance's scope with this console's
+/// own reason ([`CONSOLE_PAUSE_ACCOUNT`]) and the same drain timeout, and the connection let
+/// go; sent once, whatever comes back. An instance pause does use that timeout: a run of the
+/// account still in flight once it has passed is asked to stop at its next checkpoint, and the
+/// Runtime answers once the device is handed back, so the receipt may take that timeout, the
+/// checkpoint grace and the io timeout. A stage that fails lifts the pause again, and is a
+/// refusal; so is a fixture instance's (`fixture_execution_scope_forbidden`), and an alias
+/// the Runtime does not know.
+pub fn pause_account(root: &Path, instance_alias: &str) -> PauseOutcome {
+    let scope = SchedulingPauseScope::Instance { instance_alias: instance_alias.to_owned() };
+    pause(root, scope, CONSOLE_PAUSE_ACCOUNT)
+}
+
+/// One `PauseScheduling` of `scope` with `reason`, for both of the above.
+fn pause(root: &Path, scope: SchedulingPauseScope, reason: &str) -> PauseOutcome {
+    let reason = match SchedulingPauseReason::new(reason) {
         Ok(reason) => reason,
         Err(error) => {
             return PauseOutcome::NotSent(ClientFailure {
@@ -401,11 +427,7 @@ pub fn pause_global(root: &Path) -> PauseOutcome {
         Ok(client) => client,
         Err(error) => return PauseOutcome::NotSent(ClientFailure::from(error)),
     };
-    let answer = client.pause_scheduling(
-        SchedulingPauseScope::Global,
-        reason,
-        MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
-    );
+    let answer = client.pause_scheduling(scope, reason, MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS);
     match answer {
         Ok(RuntimeResult::SchedulingPaused { revision, .. }) => PauseOutcome::Applied { revision },
         // The client checks the result itself and gives back no other.

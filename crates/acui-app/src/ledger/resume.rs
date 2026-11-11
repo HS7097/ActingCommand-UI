@@ -23,11 +23,26 @@
 //! (`down`), which stays until it is lifted from the Lab. The
 //! contract keeps no actor with a pause and no prefix of its reason, so all are
 //! known by the reason alone. While that line cannot be taken, every pause but
-//! a deployment's, a Lab rescue's and this console's own "pause all", a global
-//! one, is of the first kind (`ResumeElsewhere`).
+//! a deployment's, a Lab rescue's and this console's own two, "pause all", a global
+//! one, and "pause this account", an instance's, is of the first kind
+//! (`ResumeElsewhere`).
+//!
+//! Of the pauses set for a person to lift after looking, the one the Lab's
+//! rescue module's `instance add` sets on the account it has just added
+//! (`instance.added`, Runtime INST-5), which no operation of that module lifts
+//! as it does its `lab-<word>-<ms>` ones, and the hold the Runtime's start sets
+//! on an instance whose settlement facts it could not record
+//! (`policy_settlement_facts_skipped`, Runtime ISO-START-1) are neither a
+//! deployment's nor a Lab rescue's: this window offers their resume
+//! (`Lifter::Window`), unless the settings file lists their reason or that line
+//! cannot be taken, when they are of the first kind (`Lifter::Setter`). No
+//! Runtime release up to 0.12.51 sets either.
+//!
+//! This console's own two are said as its own, not another tool's, and are
+//! resumed here as those are.
 
 use acui_rows::format_full;
-use acui_source::workbench::CONSOLE_PAUSE_ALL;
+use acui_source::workbench::{CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL};
 use acui_source::{
     resume_paused, ClientFailure, PauseFact, PauseStage, PauseTarget, ResumeOutcome,
 };
@@ -48,10 +63,14 @@ const DEPLOY_PREFIX: &str = "deploy-";
 /// The words of the Lab rescue module's own pause reasons, `lab-<word>-<unix ms>`,
 /// one per operation that pauses (since 0.12.48): Runtime
 /// `crates/lab-rescue/src/rescue.rs`, `hold_reason` and its only callers, `down`,
-/// `deploy` and `rollback`, `config replace` and `config restore`, and `place`;
-/// it hands back only its own (`contracts/install-cli.md`, "The Lab's rescue
-/// module").
-const LAB_RESCUE_WORDS: [&str; 6] = ["config", "deploy", "down", "place", "restore", "rollback"];
+/// `deploy` and `rollback`, `config replace` and `config restore`, `place`, and
+/// (0.12.52 on, INST-5) `instance add`, whose word is `instance`
+/// (`contracts/install-cli.md`, "Instances, the first slice"); it hands back only
+/// its own (`contracts/install-cli.md`, "The Lab's rescue module"). The instance
+/// a person adds is then paused with `instance.added`, which is not of this shape
+/// and keeps its resume.
+const LAB_RESCUE_WORDS: [&str; 7] =
+    ["config", "deploy", "down", "instance", "place", "restore", "rollback"];
 
 /// Whether `reason` is exactly of that shape: `lab-`, one of those words, `-`, digits.
 fn lab_rescue(reason: &str) -> bool {
@@ -68,8 +87,8 @@ pub enum ResumeElsewhere {
     /// The reasons the line lists, each one the Runtime takes; none without it.
     Listed(Vec<String>),
     /// The line, or the file, could not be read, so which reasons it lists is
-    /// not known: until it is fixed, every pause but this console's own
-    /// "pause all", which is global only (`pause_global`), is one.
+    /// not known: until it is fixed, every pause but this console's own is one
+    /// (`console_set`).
     Unusable,
 }
 
@@ -83,10 +102,18 @@ impl ResumeElsewhere {
     fn names(&self, pause: &PauseFact) -> bool {
         match self {
             Self::Listed(reasons) => reasons.iter().any(|listed| *listed == pause.reason),
-            Self::Unusable => {
-                pause.reason != CONSOLE_PAUSE_ALL || pause.target.instance_alias().is_some()
-            }
+            Self::Unusable => !console_set(pause),
         }
+    }
+}
+
+/// Whether this console set `pause` itself, by its reason and its scope together: its
+/// "pause all" is global only (`pause_global`), its "pause this account" an instance's only
+/// (`pause_account`). Either reason on the other scope is another tool's.
+fn console_set(pause: &PauseFact) -> bool {
+    match pause.target.instance_alias() {
+        None => pause.reason == CONSOLE_PAUSE_ALL,
+        Some(_) => pause.reason == CONSOLE_PAUSE_ACCOUNT,
     }
 }
 
@@ -272,7 +299,7 @@ fn unread(labels: &Labels, failure: &ClientFailure) -> (String, &'static str) {
 }
 
 /// A pause's line, and whether a person may resume it here: one another tool
-/// set, global, or an instance's whose device is handed back — the Runtime
+/// or this console set, global, or an instance's whose device is handed back — the Runtime
 /// refuses the resume of one still draining or handing it back.
 fn pause_text(labels: &Labels, fact: &PauseFact, elsewhere: &ResumeElsewhere) -> (String, bool) {
     let scope = scope_text(labels, &fact.target);
@@ -283,7 +310,10 @@ fn pause_text(labels: &Labels, fact: &PauseFact, elsewhere: &ResumeElsewhere) ->
         Lifter::Installer => (fill(labels.pause_deploy, &values), false),
         Lifter::LabRescue => (fill(labels.pause_lab_rescue, &values), false),
         Lifter::Window => {
-            let mut text = fill(labels.pause_other_tool, &values);
+            // This console's own, by reason and scope (`console_set`), is not another tool's.
+            let set_by =
+                if console_set(fact) { labels.pause_console } else { labels.pause_other_tool };
+            let mut text = fill(set_by, &values);
             let resumable = match fact.stage {
                 None | Some(PauseStage::Released) => true,
                 Some(PauseStage::Draining) => {

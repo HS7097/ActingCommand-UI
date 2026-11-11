@@ -18,7 +18,7 @@ use acui_source::workbench::{
 };
 use acui_source::{ClientFailure, PauseFact};
 
-use super::actions::{self, Actions, ActionsView, PresetView, RulesView};
+use super::actions::{self, AccountEntry, Actions, ActionsView, PresetView, RulesView};
 use super::card::{self, CardView, Down, Schedule};
 use super::picture::{
     Doing, LinkNow, Offline, PictureView, Pictures, PreviewGate, RefreshHold, RefreshView,
@@ -541,8 +541,15 @@ impl Model {
                         };
                         let selected = picked == Some(instance.alias.as_str());
                         let elsewhere = &self.resume_elsewhere;
+                        let account = actions::account_view(
+                            instance,
+                            &self.actions,
+                            elsewhere,
+                            global.is_some(),
+                        );
                         card::card_view(
                             instance, server, last_seen, global, schedule, selected, elsewhere,
+                            account,
                         )
                     })
                     .collect()
@@ -550,9 +557,23 @@ impl Model {
             Some(down) => self
                 .seen_aliases
                 .iter()
-                .map(|alias| card::down_view(alias, down, picked == Some(alias.as_str())))
+                .map(|alias| {
+                    let account = actions::account_down_view(alias, &self.actions);
+                    card::down_view(alias, down, picked == Some(alias.as_str()), account)
+                })
                 .collect(),
         }
+    }
+
+    /// The own button of the card of `alias` now: none while no `Status` answers, or while the
+    /// newest does not list it.
+    pub fn account_entry(&self, alias: &str) -> Option<AccountEntry> {
+        if !matches!(self.link, Link::Online { .. }) {
+            return None;
+        }
+        let instance = self.instances.iter().find(|instance| instance.alias == alias)?;
+        let global = self.global_pause.is_some();
+        Some(actions::account_view(instance, &self.actions, &self.resume_elsewhere, global).entry)
     }
 
     /// The account whose picture the right column shows, of the cards `cards` lists:
