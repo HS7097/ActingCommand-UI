@@ -713,12 +713,13 @@ strings in double or single quotes, a trailing comma allowed; `[]`, or no line a
 none. Each item must be a reason the Runtime itself takes for a pause (checked by the Runtime's own
 `SchedulingPauseReason`: 1–64 characters of `a-z`, `0-9`, `_`, `.` and `-`), so there is nothing to
 escape. A line of this key the console cannot use — not such an array (an array in quotes is a string),
-an item not quoted or not such a reason, a comment after the value, a line of the key without `=` — is
-said in red at the top of every window, with the file and the line, and **fails closed**: until it is
-fixed, whatever another line of the key says, no pause except the console's own Pause All, the global
-pause with reason `console_pause_all`, offers a resume anywhere in the console; an instance pause with
-that reason gets none either. A settings file that is there but cannot be read, or no configuration
-directory, fails closed the same way. A deployment's pause stays the installer's in any case. The
+an item not quoted or not such a reason, a comment after the value, a line of the key without `=`, the
+key in quotes that do not pair — is said in red at the top of every window, with the file and the
+line, and **fails closed**: until it is fixed, whatever another line of the key says, no pause except
+the console's own Pause All, the global pause with reason `console_pause_all`, offers a resume anywhere
+in the console; an instance pause with that reason gets none either. A settings file that is there but
+cannot be read, or no configuration directory, fails closed the same way. A deployment's pause stays
+the installer's in any case. The
 reasons are the operator's own data: the console never rewrites one, and the ledger window still shows
 each pause's reason verbatim on its line under the technical lines.
 

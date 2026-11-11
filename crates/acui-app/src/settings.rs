@@ -178,9 +178,9 @@ pub enum SettingsIssue {
     /// A line that is not blank, not a comment and has no `=`; counted from 1.
     Malformed { path: PathBuf, line: usize },
     /// A line of `resume_elsewhere_reasons` that is not a one-line array of reasons the
-    /// Runtime takes, with its value as written (the whole line when it has no `=`);
-    /// counted from 1. Until it is fixed no pause but this console's own "pause all"
-    /// offers a resume (`ResumeElsewhere::Unusable`).
+    /// Runtime takes, with its value as written (the whole line when it has no `=` or
+    /// its key's quotes do not pair); counted from 1. Until it is fixed no pause but this
+    /// console's own "pause all" offers a resume (`ResumeElsewhere::Unusable`).
     UnusableReasons { path: PathBuf, line: usize, value: String },
     /// A save refused because the file could not be read at the start.
     SaveBlocked { path: PathBuf },
@@ -356,6 +356,16 @@ pub fn load() -> Loaded {
                         });
                     }
                 }
+            }
+            // The key in quotes that do not pair is not TOML, and names this key all the same:
+            // its line, unusable, shown whole, since the key is what is wrong.
+            _ if key.trim_matches(|c| c == '"' || c == '\'') == RESUME_ELSEWHERE => {
+                settings.resume_elsewhere = ResumeElsewhere::Unusable;
+                issues.push(SettingsIssue::UnusableReasons {
+                    path: path.clone(),
+                    line: number,
+                    value: bare(line).to_owned(),
+                });
             }
             _ => {}
         }
