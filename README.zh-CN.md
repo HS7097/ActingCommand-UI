@@ -21,11 +21,11 @@
   [Releases](https://github.com/HS7097/ActingCommand-UI/releases) 上的 `acui-windows-<sha>.zip` 与
   `SHA256SUMS`。每一版都是预发布，所以 GitHub 上没有标「Latest」的版本，取标签最新的那个。zip 里有
   `acui.exe`（监控台）、`acforward.exe`（固定入口）、`LICENSE`、`README.md`，以及把它们绑到所在提交的
-  `BUILD-MANIFEST.json`；`acsetup.exe` 暂时不在里面（见上方说明）。这一版基于 Runtime v0.12.47 的 crate
-  构建（钉点见「数据来源」一节）。
+  `BUILD-MANIFEST.json`；`acsetup.exe` 暂时不在里面（见上方说明）。每一版都基于它所在提交钉的 Runtime
+  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 v0.12.53。
 - **可与 0.12 的 Runtime 搭配**：它声明 `actingd-config` [5, 27]、`ledger` [3, 7]、`runtime-client`
-  [3, 5] 与 `runtime-outcomes` [1, 1]。它与所钉的 Runtime v0.12.47 相容，也与声明相同接口的 v0.12.48
-  相容；别的 Runtime 能否搭配，按双方声明的接口判断，不看版本号（见"组件接口"）。
+  [3, 5] 与 `runtime-outcomes` [1, 1]。它与 Runtime v0.12.47 到 v0.12.53 都相容，这几版声明的接口除了
+  acsetup 的 `package`（v0.12.50 起是 [3, 8]）都一样；别的 Runtime 能否搭配，按双方声明的接口判断，不看版本号（见"组件接口"）。
 - **0.11 系列**：UI v0.11.4 及更早的版本只说 0.11 协议，连不上 0.12 的 Runtime。0.11 系列不再维护。
 - **变了什么**：每一版 Releases 页上的说明写着这一版改了什么。
 - **伞仓**：伞仓最新发布 v0.11.4 仍是 0.11 系列（Runtime v0.11.4、UI v0.11.3）及其安装器；还没有伞仓发布
@@ -165,14 +165,14 @@
 控制台核得了 v0.12.53 的 Runtime 停完一次运行的回执；建在 v0.12.47 上的控制台那里这个种类没有成功码，会核错。停调度器或 Runtime
 自己发起的运行被拒成 `scheduled_contained_task_not_client_cancellable`，用键 `run_origin`（词表 `run_origin`：`policy`、`host`）
 写明是谁发起的；控制台还不发停止，「关闭这个任务」照旧灰着。v0.12.47 以来控制台对上的接口都没动（`actingd-config` [5, 27]、
-`ledger` [3, 7]、`runtime-client` [3, 6]，`StopInstanceRun` 是修订 3 的种类；v0.12.52 起的 `package` [3, 8] 只归 acsetup）；
+`ledger` [3, 7]、`runtime-client` [3, 6]，`StopInstanceRun` 是修订 3 的种类；v0.12.50 起的 `package` [3, 8] 只归 acsetup）；
 contract crate 别的只多了程序事实 `config.catalog_provenance`（#428 SCHED-C1b）、`inventory.list.` 下的列表读数（#428 S168-4）、
 `schedule.json` 规则的固定值（#428 SCHED-C1a）和原地替换在 `tables/` 里留下的名字（#428 TB-R1），控制台都不读；嵌入的结果码目录
 多了 10 个码（其中有 `request_stop_instance_run_completed` 和 ISO-START-1 的 `policy_settlement_facts_skipped`）、7 个键、9 个位置、
 词表 `run_origin`，以及 `install_caveat`、`install_operation_kind`、`install_refusal`、`install_step_kind`、`reading_problem` 的新词，
 没有退役或删掉的码，也没有 `console_`、`setup_` 名字；ledger crate 不再让时间界驱动一页的语句（#422 QP-1，行和次序不变），
 没有终局、唯一一次放租是自己放的运行，写过效果或输入记录也结成中断（#428 UNSET-2），默认的 `ledger_observer.tag.workbench_patterns`
-多了 `host.capped_episodes`（#428 SCHED-C1d），账本仍是修订 7；runtime-config 只改了测试，键表的键和 `ui_tier` 都是 v0.12.47 的，
+多了 `host.capped_episodes`（#428 SCHED-C1d），账本仍是修订 7；runtime-config 的源码只改了测试，它编进去的默认值文件也只多了这同一个模式，键表的键和 `ui_tier` 都是 v0.12.47 的，
 设置页不多出行；runtime-client 链接的 policy、selection-policy 多了封顶消耗顺序的触发线和活过重启的回合（SCHED-C1c、SCHED-C1d）、
 固定值（SCHED-C1a）和列表上的表最大值（#428 S168-5a）；runtime-client、ledger-forensics、artifact-store、runtime-database 的源码没改。
 v0.12.44 起 #407 GPU-1：配置修订 27 让 `vision` 段可以写 DirectML（`vision.execution_provider` 取 `directml`、

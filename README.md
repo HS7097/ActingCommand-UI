@@ -25,12 +25,14 @@ and guesses nothing.
   [Releases](https://github.com/HS7097/ActingCommand-UI/releases). Every release is a pre-release, so
   GitHub marks none as "Latest": take the newest tag. The zip holds `acui.exe` (the console),
   `acforward.exe` (the fixed entry), `LICENSE`, `README.md` and the `BUILD-MANIFEST.json` that binds them
-  to their commit; `acsetup.exe` is not in it for now (see the note above). It is built against
-  the crates of Runtime v0.12.47 (the pinned rev under "Data source").
+  to their commit; `acsetup.exe` is not in it for now (see the note above). Each release is built
+  against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
+  of Runtime v0.12.47; the pin is now v0.12.53.
 - **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 27], `ledger` [3, 7],
-  `runtime-client` [3, 5] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47, which it is pinned
-  to, and v0.12.48, which declares the same interfaces; whether another Runtime fits is judged from the
-  interfaces each side declares, not from version numbers (see "Component interfaces").
+  `runtime-client` [3, 5] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.53, which
+  declare the same interfaces but acsetup's `package` ([3, 8] from v0.12.50); whether another Runtime
+  fits is judged from the interfaces each side declares, not from version numbers (see "Component
+  interfaces").
 - **The 0.11 series**: UI v0.11.4 and earlier speak the 0.11 protocols only and cannot connect to a
   0.12 Runtime. The 0.11 series is not maintained.
 - **What changed**: each release's notes on its Releases page say what changed in it.
@@ -229,7 +231,7 @@ run the scheduler or the Runtime itself started, `scheduled_contained_task_not_c
 started it with the key `run_origin` (vocabulary `run_origin`: `policy`, `host`); the console sends no stop yet,
 so "Close This Task" stays off; since v0.12.47 the interfaces the console meets have not moved (`actingd-config`
 [5, 27], `ledger` [3, 7], `runtime-client` [3, 6], `StopInstanceRun` being a revision-3 kind; `package` [3, 8],
-since v0.12.52, is acsetup's), the contract crate otherwise only gained the runtime fact
+since v0.12.50, is acsetup's), the contract crate otherwise only gained the runtime fact
 `config.catalog_provenance` (#428 SCHED-C1b), the list readings under `inventory.list.` (#428 S168-4), a
 `schedule.json` rule's fixed value (#428 SCHED-C1a) and the names a replacement in place leaves in `tables/`
 (#428 TB-R1), none of which the console reads, and in the outcome-code catalog it embeds ten codes (among them
@@ -239,8 +241,9 @@ locations, the vocabulary `run_origin` and new tokens of `install_caveat`, `inst
 `setup_` name; the ledger crate no longer lets a time bound drive a page's statement (#422 QP-1: the same rows in
 the same order), settles a run without a terminal whose one release is its own as interrupted also when it wrote
 effect or input records (#428 UNSET-2), and adds `host.capped_episodes` to the default
-`ledger_observer.tag.workbench_patterns` (#428 SCHED-C1d), at ledger revision 7 still; runtime-config changed only
-in a test, so the key table's keys and `ui_tier` are v0.12.47's and the settings page shows no new row; policy and
+`ledger_observer.tag.workbench_patterns` (#428 SCHED-C1d), at ledger revision 7 still; runtime-config's source
+changed only in a test and the defaults file it embeds only by that same pattern, so the key table's keys and
+`ui_tier` are v0.12.47's and the settings page shows no new row; policy and
 selection-policy, which runtime-client links, gained the capped spending order's trigger line and its episodes
 kept across a start (SCHED-C1c, SCHED-C1d), fixed values (SCHED-C1a) and a table maximum over a list
 (#428 S168-5a); runtime-client, ledger-forensics, artifact-store and runtime-database have the same source;
