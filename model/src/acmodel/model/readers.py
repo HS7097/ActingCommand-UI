@@ -746,10 +746,13 @@ def _prices(version: str, entry: dict[str, Spec], optional: dict[str, Spec] | No
 
 
 # #424 PRICE-REUSE: what computed the steady state and its assessment besides the model's inputs (`core.evaluator`):
-# the digest of the tool's source, the libraries the steady state's node declares and the configuration keys of its
-# spec, and the digest of those three. Every v2 file `export prices` writes from PRICE-REUSE on holds it.
+# the digest of the tool's source, the libraries the steady state's node declares and the configuration (every key but
+# those that never change a result and the plan's, by its dotted name: an integer, its decimal text when it is beyond
+# the safe range, a string or a boolean), and the digest of those three. Every v2 file `export prices` writes from
+# PRICE-REUSE on holds it.
 EVALUATOR = Object({
-    "sha256": SHA256, "source": SHA256, "libraries": MapOf(TEXT, TEXT), "config": MapOf(TEXT, Integer(0, MAX)),
+    "sha256": SHA256, "source": SHA256, "libraries": MapOf(TEXT, TEXT),
+    "config": MapOf(TEXT, Either(integer=Integer(0, MAX), string=TEXT, boolean=BOOLEAN)),
 })
 # A v2 file whose assessment was taken over from an earlier one (`--reuse-assessment`): the sha256 of that file's bytes,
 # its versions, the digests of its shared trees and of its evaluator, and the members taken over.

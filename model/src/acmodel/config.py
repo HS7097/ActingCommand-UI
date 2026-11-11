@@ -10,6 +10,10 @@ host's keys (`compute.workers.*`, `engine.*`, `engines.*`) by `acmodel.engine.se
 generic search's (the other keys under `search`) are `SearchSettings`, and the validator of the exports is
 `paths.actinglab` (no default: an export that needs it refuses without it) and `export.validator_timeout_ms`.
 
+`keys()` names every key by its dotted name, from `_MEMBERS`, the table every member read is checked against (and the
+objects of keys among its members, `NESTED`); `FIELDS` says where `Config` holds each, `value()` reads it. The evaluator
+digest of `export prices` takes its configuration from them (`acmodel.core.evaluator`, #424 PRICE-REUSE).
+
 `paths.state_root` and `paths.venv`, as configured or by default, are checked last (`OUTSIDE_RUNTIME`): each that is a
 Runtime install root or lies inside one (`acmodel.location`) is one `config_invalid` (`runtime_install_root`, or
 `runtime_install_unchecked` when a level cannot be looked at) at `/paths/<key>`, the state root first, so no command
@@ -63,6 +67,9 @@ _MEMBERS = {
     "export": {"validator_timeout_ms"},
     "watch": watch_settings.MEMBERS,
 }
+# The members of `_MEMBERS` that are objects of keys themselves, each read by its own module: (section, member) to
+# their keys.
+NESTED = {**host_caps.NESTED, ("compute", "workers"): engine_settings.WORKERS_MEMBERS}
 # The configured folders that may be neither a Runtime install root nor inside one (`acmodel.location`), in the order
 # they are checked: the state root, under which the commands write, and the venv, which `setup` makes and installs into
 # and whose Python every other command runs. The other paths are only read: `paths.datasets` (`check` hashes the
@@ -221,6 +228,60 @@ class Config:
     actinglab: Path | None  # `paths.actinglab`: the Runtime's validator of the exports; None when not configured
     validator_timeout_ms: int  # `export.validator_timeout_ms`
     watch: watch_settings.WatchSettings  # the keys under `watch` (acmodel.watch.settings)
+
+
+# Where `Config` holds each configuration key (`keys`), by its dotted name: the attributes from `Config` down. It names
+# every key and nothing else (a test holds it to `keys`).
+FIELDS: dict[str, tuple[str, ...]] = {
+    "paths.venv": ("venv",),
+    "paths.state_root": ("state_root",),
+    "paths.datasets": ("datasets",),
+    "paths.actinglab": ("actinglab",),
+    "compute.blas_threads": ("blas_threads",),
+    "compute.priority": ("host", "priority"),
+    "compute.job.cpu_rate_milli": ("host", "cpu_rate_milli"),
+    "compute.job.worker_memory_mib": ("host", "worker_memory_mib"),
+    "compute.workers.max": ("engine", "workers_max"),
+    "expr.max_bits": ("expr_max_bits",),
+    "cache.max_bytes": ("cache_max_bytes",),
+    "cache.wait_ms": ("cache_wait_ms",),
+    "host.memory.start_min_mib": ("host", "start_min_mib"),
+    "host.memory.pause_below_mib": ("host", "pause_below_mib"),
+    "host.memory.report_plan_above_mib": ("host", "report_plan_above_mib"),
+    "host.cpu.pause_load_milli": ("host", "pause_load_milli"),
+    "host.cpu.window_ms": ("host", "cpu_window_ms"),
+    "host.quiet_windows": ("host", "quiet_windows"),
+    "host.pause_file": ("host", "pause_file"),
+    "host.pause_poll_ms": ("host", "pause_poll_ms"),
+    **{f"engine.{key}": ("engine", key) for key in sorted(engine_settings.ENGINE_MEMBERS)},
+    "engines.roots": ("engine", "roots"),
+    **{f"{section}.{key}": ("unknowns", key) for section, key in sorted(UNKNOWNS_RANGES)},
+    "unknowns.drop_z": ("unknowns", "drop_z"),
+    **{f"{section}.{key}": ("economy", field) for (section, key), (field, _, _) in sorted(ECONOMY_RANGES.items())},
+    **{f"search.{key}": ("search", key) for key in sorted(SEARCH_RANGES)},
+    "export.validator_timeout_ms": ("validator_timeout_ms",),
+    **{f"watch.{key}": ("watch", key) for key in sorted(watch_settings.MEMBERS)},
+}
+
+
+def keys() -> list[str]:
+    """Every configuration key by its dotted name (contracts/cli.md, "Configuration"), sorted: each member of a section
+    of `_MEMBERS`, the table every member read is checked against, and, for a member that is an object of keys
+    (`NESTED`), each of its keys instead; `schema_version` is none."""
+    found = []
+    for section, members in _MEMBERS.items():
+        for member in sorted(members or ()):
+            nested = NESTED.get((section, member))
+            found += [f"{section}.{member}"] if nested is None else [f"{section}.{member}.{key}" for key in nested]
+    return sorted(found)
+
+
+def value(cfg: Config, key: str) -> Any:
+    """The value of the configuration key `key` in `cfg`, as read or by default (`FIELDS`)."""
+    found: Any = cfg
+    for name in FIELDS[key]:
+        found = getattr(found, name)
+    return found
 
 
 class _DuplicateKey(ValueError):

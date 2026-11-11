@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from acmodel import cache
+from acmodel import cache, config
 from acmodel.cache.keys import EVALUATORS, evaluator_tokens
 from acmodel.config import EconomySettings
 from acmodel.core import evaluator, flow, impact
@@ -38,8 +38,32 @@ from test_prices import (  # noqa: F401  (acmodel is a fixture)
 
 PINNED = {"numpy": "2.5.4", "scipy": "1.18.1"}  # the pins the fake system reports (conftest.py)
 LIBS = {"numpy": "2.5.4", "python": "3.13", "scipy": "1.18.1"}
-DEFAULT_CONFIG = {"max_bits": 127, "max_denominator": 1_000_000, "grain": 1, "max_cycle_steps": 28, "max_pivots": 20}
+# The digest's configuration by default: every key but those that never change a result and the plan's.
+DEFAULT_CONFIG = {
+    "compute.blas_threads": 1, "compute.workers.max": 2, "economy.max_cycle_steps": 28, "engine.hash_seed": 0,
+    "engine.reset_each_batch": True, "engine.worker_max_requests": 0, "engine.worker_soft_memory_mib": 896,
+    "expr.max_bits": 127, "lp.grain": 1, "lp.max_denominator": 1_000_000, "lp.max_pivots": 20,
+    "random.enclosure_digits": 12, "random.max_transitions": 1_000_000, "search.exact_max": 5000,
+    "search.node_limit": 100_000, "search.screen_max_rows": 2**23, "search.screen_scale": 1_000_000, "search.top_k": 32,
+    "sensitivity.top_n": 5, "unknowns.drop_z": "1.959964", "unknowns.resolution": 1_000_000, "unknowns.samples": 0,
+    "unknowns.scale": 1000, "unknowns.seed": 0, "unknowns.wilson_digits": 6, "watch.keep_workers_warm": True,
+}
 TAKEN = ["estimates.assessed", "estimates.skipped", "impact", "prices.flips", "prices.impact"]
+
+
+def defaults(tmp_path: Path) -> config.Config:
+    """The configuration without a file: every key by default."""
+    return config.load({"LOCALAPPDATA": str(tmp_path / "localappdata")})
+
+
+def changed(settings: config.Config, key: str, value: Any) -> config.Config:
+    """`settings` with the configuration key `key` (`config.FIELDS`) at `value`."""
+
+    def put(holder: Any, names: tuple[str, ...]) -> Any:
+        inner = value if len(names) == 1 else put(getattr(holder, names[0]), names[1:])
+        return replace(holder, **{names[0]: inner})
+
+    return put(settings, config.FIELDS[key])
 
 
 def reuse(acmodel, folder: Path, earlier: Path) -> tuple[int, dict[str, Any]]:
@@ -88,9 +112,10 @@ def test_the_evaluator_digest_is_the_same_twice_and_moves_with_each_of_its_input
     version is not one); each configuration key of the steady state's spec changes `config` (expr.max_bits too); the
     plan's keys are not the steady state's and change nothing. Each change moves `sha256`."""
     root = package(tmp_path)
-    first = evaluator.record(LIBS, 127, EconomySettings(), root)
+    settings = defaults(tmp_path)
+    first = evaluator.record(LIBS, settings, root)
 
-    assert evaluator.record(LIBS, 127, EconomySettings(), root) == first
+    assert evaluator.record(LIBS, settings, root) == first
     assert set(first) == {"sha256", "source", "libraries", "config"}
     assert HEX.fullmatch(first["sha256"]) and HEX.fullmatch(first["source"])
     assert (first["libraries"], first["config"]) == (LIBS, DEFAULT_CONFIG)
@@ -103,30 +128,29 @@ def test_the_evaluator_digest_is_the_same_twice_and_moves_with_each_of_its_input
     (root / "c.pyc").write_bytes(b"\x00compiled")
     (root / "notes.txt").write_text("not code", encoding="utf-8")
     assert evaluator.source_files(root) == ["__init__.py", "sub/b.py"]
-    assert evaluator.record(LIBS, 127, EconomySettings(), root) == first
+    assert evaluator.record(LIBS, settings, root) == first
 
     (root / "sub" / "b.py").write_bytes(b"VALUE = 2\n")
-    moved = evaluator.record(LIBS, 127, EconomySettings(), root)
+    moved = evaluator.record(LIBS, settings, root)
     assert moved["source"] != first["source"] and moved["sha256"] != first["sha256"]
     assert (moved["libraries"], moved["config"]) == (LIBS, DEFAULT_CONFIG)
     (root / "sub" / "b.py").write_bytes(b"VALUE = 1\n")
-    assert evaluator.record(LIBS, 127, EconomySettings(), root) == first
+    assert evaluator.record(LIBS, settings, root) == first
 
     for name in LIBS:
-        moved = evaluator.record({**LIBS, name: "0.0.1"}, 127, EconomySettings(), root)
+        moved = evaluator.record({**LIBS, name: "0.0.1"}, settings, root)
         assert moved["libraries"] == {**LIBS, name: "0.0.1"} and moved["sha256"] != first["sha256"]
         assert (moved["source"], moved["config"]) == (first["source"], DEFAULT_CONFIG)
     patch_15, patch_16 = cache.libraries((3, 13, 15), PINNED), cache.libraries((3, 13, 16), PINNED)
-    assert evaluator.record(patch_16, 127, EconomySettings(), root) == evaluator.record(patch_15, 127, EconomySettings(), root)
+    assert evaluator.record(patch_16, settings, root) == evaluator.record(patch_15, settings, root)
 
-    defaults = EconomySettings()
-    for key in ("max_denominator", "grain", "max_cycle_steps", "max_pivots"):
-        moved = evaluator.record(LIBS, 127, replace(defaults, **{key: getattr(defaults, key) + 1}), root)
+    for key in ("lp.max_denominator", "lp.grain", "economy.max_cycle_steps", "lp.max_pivots"):
+        moved = evaluator.record(LIBS, changed(settings, key, DEFAULT_CONFIG[key] + 1), root)
         assert moved["config"] == {**DEFAULT_CONFIG, key: DEFAULT_CONFIG[key] + 1} and moved["sha256"] != first["sha256"]
-    moved = evaluator.record(LIBS, 128, defaults, root)
-    assert moved["config"] == {**DEFAULT_CONFIG, "max_bits": 128} and moved["sha256"] != first["sha256"]
-    for key in ("node_limit", "plan_horizon"):
-        assert evaluator.record(LIBS, 127, replace(defaults, **{key: getattr(defaults, key) + 1}), root) == first
+    moved = evaluator.record(LIBS, changed(settings, "expr.max_bits", 128), root)
+    assert moved["config"] == {**DEFAULT_CONFIG, "expr.max_bits": 128} and moved["sha256"] != first["sha256"]
+    for key in ("search.milp_node_limit", "economy.plan_horizon"):
+        assert evaluator.record(LIBS, changed(settings, key, config.value(settings, key) + 1), root) == first
 
 
 def test_the_tools_own_source_is_every_py_file_of_its_package():
@@ -154,12 +178,12 @@ class _Recorder:
         raise _Asked
 
 
-def test_the_evaluator_digest_holds_what_the_steady_states_cache_key_holds():
-    """The digest follows the cache key of the steady state's node (cli.md, "Cache", "Keys"): every member of the spec
-    `Graph.cached` builds for it but the node and its value's format is configuration, and each is in the digest's
-    `config` with its value (a member added to that spec fails here until the digest holds it too); the libraries in the
-    digest are those of the node's token (`EVALUATORS`, `evaluator_tokens`). The settings differ from the defaults, so
-    each value is the one given."""
+def test_the_evaluator_digest_holds_what_the_steady_states_cache_key_holds(tmp_path):
+    """The digest holds what the cache key of the steady state's node holds (cli.md, "Cache", "Keys"): every member of the
+    spec `Graph.cached` builds for it but the node and its value's format is configuration, and each is in the digest's
+    `config` with its value, by its configuration key (a member added to that spec fails here until the digest holds it
+    too); the libraries in the digest are those of the node's token (`EVALUATORS`, `evaluator_tokens`). The settings
+    differ from the defaults, so each value is the one given; the plan's two are not in it."""
     settings = EconomySettings(
         max_denominator=999, grain=3, node_limit=7, plan_horizon=5, max_cycle_steps=14, max_pivots=9,
     )
@@ -173,12 +197,84 @@ def test_the_evaluator_digest_holds_what_the_steady_states_cache_key_holds():
     [(kind, spec)] = recorder.specs
     assert (kind, spec["node"]) == (evaluator.KIND, [evaluator.KIND, evaluator.SOLVE])
     assert set(spec) == {"node", "format", "max_bits", "economy"}, "a new member of the steady state's spec"
-    assert evaluator.config(61, settings) == {"max_bits": spec["max_bits"], **spec["economy"]}
+    configured = replace(defaults(tmp_path), expr_max_bits=61, economy=settings)
+    named = {field: key for key, field in config.FIELDS.items()}
+    held = {named[("expr_max_bits",)]: spec["max_bits"]}
+    held.update({named[("economy", field)]: value for field, value in spec["economy"].items()})
+    assert held.items() <= evaluator.config(configured).items()
     libraries = cache.libraries((3, 13, 15), PINNED)
     assert evaluator.libraries(libraries) == evaluator_tokens(EVALUATORS, libraries)[kind]["libraries"]
-    assert evaluator.record(libraries, 61, settings)["config"] == {
-        "max_bits": 61, "max_denominator": 999, "grain": 3, "max_cycle_steps": 14, "max_pivots": 9,
+    assert evaluator.record(libraries, configured)["config"] == {
+        **DEFAULT_CONFIG, "expr.max_bits": 61, "lp.max_denominator": 999, "lp.grain": 3, "economy.max_cycle_steps": 14,
+        "lp.max_pivots": 9,
     }
+
+
+def test_every_configuration_key_is_in_the_digest_or_listed_as_left_out_with_why(tmp_path, monkeypatch):
+    """Every configuration key (`config.keys`, from the reader's table) is in exactly one of three: the digest's
+    configuration, the keys that never change a result (`NEUTRAL`) and the plan's (`PLAN_ONLY`), each listed with why;
+    `config.FIELDS` reads every key and nothing else; the digest lists its keys sorted. A key added to the reader's table
+    fails the digest (and so every export) until `FIELDS` reads it, and is then in the digest unless a list names it; a
+    list that names a key that is not one, or two lists naming one key, fail it too."""
+    every = config.keys()
+    taken, neutral, plan = set(evaluator.keys()), set(evaluator.NEUTRAL), set(evaluator.PLAN_ONLY)
+    root, settings = package(tmp_path), defaults(tmp_path)
+
+    assert len(every) == len(set(every)) and set(every) == taken | neutral | plan
+    assert not taken & neutral and not taken & plan and not neutral & plan
+    assert set(config.FIELDS) == set(every)
+    assert all(evaluator.NEUTRAL.values()) and all(evaluator.PLAN_ONLY.values())
+    assert list(evaluator.config(settings)) == evaluator.keys() == sorted(taken) == sorted(DEFAULT_CONFIG)
+    assert plan == {"economy.plan_horizon", "search.milp_node_limit"}
+
+    monkeypatch.setitem(config._MEMBERS, "lp", {*config._MEMBERS["lp"], "added"})
+    assert "lp.added" in config.keys()
+    with pytest.raises(ValueError, match="lp.added"):
+        evaluator.keys()
+    with pytest.raises(ValueError, match="lp.added"):
+        evaluator.record(LIBS, settings, root)
+    monkeypatch.setitem(config.FIELDS, "lp.added", ("economy", "grain"))
+    assert evaluator.keys() == sorted(taken | {"lp.added"})
+    monkeypatch.setitem(evaluator.NEUTRAL, "lp.added", "a key this test adds")
+    assert evaluator.keys() == sorted(taken)
+    monkeypatch.setitem(evaluator.PLAN_ONLY, "lp.added", "a key this test adds")
+    with pytest.raises(ValueError, match="lp.added"):
+        evaluator.keys()
+    monkeypatch.delitem(evaluator.PLAN_ONLY, "lp.added")
+    monkeypatch.setitem(evaluator.NEUTRAL, "lp.gone", "a key the configuration does not have")
+    with pytest.raises(ValueError, match="lp.gone"):
+        evaluator.keys()
+
+
+def test_each_key_of_the_digest_moves_it_and_a_key_left_out_does_not(tmp_path):
+    """Each key of the digest's configuration, changed, changes that key alone in `config` and moves `sha256`: among them
+    one under `unknowns` (also `drop_z`, a decimal string, and a seed beyond the safe range, which is recorded as its
+    decimal text), `sensitivity.top_n` and the keys under `random`. A change of a key that never changes a result (the
+    cache, a timeout, a chunk size) or of the plan's leaves the digest as it is."""
+    root, settings = package(tmp_path), defaults(tmp_path)
+    first = evaluator.record(LIBS, settings, root)
+
+    for key in evaluator.keys():
+        found = config.value(settings, key)
+        other = (not found) if type(found) is bool else found + 1 if type(found) is int else found + "1"
+        moved = evaluator.record(LIBS, changed(settings, key, other), root)
+        assert moved["config"] == {**DEFAULT_CONFIG, key: other} and moved["sha256"] != first["sha256"], key
+    for key, value, recorded in (
+        ("unknowns.wilson_digits", 7, 7),
+        ("unknowns.drop_z", "2.5", "2.5"),
+        ("unknowns.seed", 2**64 - 1, "18446744073709551615"),
+        ("sensitivity.top_n", 6, 6),
+        ("random.max_transitions", 99, 99),
+        ("random.enclosure_digits", 13, 13),
+    ):
+        moved = evaluator.record(LIBS, changed(settings, key, value), root)
+        assert moved["config"] == {**DEFAULT_CONFIG, key: recorded} and moved["sha256"] != first["sha256"], key
+    for key, value in (
+        ("cache.max_bytes", 1), ("cache.wait_ms", 1), ("export.validator_timeout_ms", 1),
+        ("engine.request_timeout_ms", 1), ("unknowns.chunk_size", 7), ("search.screen_chunk_rows", 7),
+        ("search.milp_node_limit", 7), ("economy.plan_horizon", 3),
+    ):
+        assert evaluator.record(LIBS, changed(settings, key, value), root) == first, key
 
 
 # The export records it ---------------------------------------------------------------------------------------------------
@@ -186,9 +282,9 @@ def test_the_evaluator_digest_holds_what_the_steady_states_cache_key_holds():
 
 def test_prices_json_records_the_evaluator_digest_and_nothing_else_moves(tmp_path, acmodel, app_dir):
     """Without the option, prices.json gains one member, `evaluator`: the tool's source, the libraries it runs with
-    (Python 3.13, the pinned numpy and scipy) and the default configuration of the steady state's spec. The versions keep
-    their three members, and no price's provenance file holds it, so no `binds` moves with it; `verify prices` reads the
-    file."""
+    (Python 3.13, the pinned numpy and scipy) and the default configuration (every key but those that never change a
+    result and the plan's). The versions keep their three members, and no price's provenance file holds it, so no
+    `binds` moves with it; `verify prices` reads the file."""
     folder = flips_fixture(tmp_path)
 
     status, doc = export(acmodel, folder)
@@ -305,7 +401,7 @@ def _drop_evaluator(doc: dict[str, Any]) -> None:
 
 
 def _grain_two(doc: dict[str, Any]) -> None:
-    doc["evaluator"]["config"]["grain"] = 2
+    doc["evaluator"]["config"]["lp.grain"] = 2
 
 
 def _numpy_older(doc: dict[str, Any]) -> None:
@@ -320,7 +416,7 @@ def _other_source(doc: dict[str, Any]) -> None:
     ("change", "member", "reason", "ref", "expected", "found"),
     [
         pytest.param(_drop_evaluator, "evaluator", "not_recorded", "/evaluator", "none", "sha256", id="no_evaluator"),
-        pytest.param(_grain_two, "evaluator.config.grain", "differs", "/evaluator/config/grain", "2", "1",
+        pytest.param(_grain_two, "evaluator.config.lp.grain", "differs", "/evaluator/config/lp.grain", "2", "1",
                      id="evaluator_config"),
         pytest.param(_numpy_older, "evaluator.libraries.numpy", "differs", "/evaluator/libraries/numpy", "2.5.3",
                      "2.5.4", id="evaluator_library"),
@@ -358,7 +454,7 @@ def test_an_earlier_evaluator_digest_that_is_not_this_ones_is_refused(
 def test_a_change_of_the_model_or_of_the_configuration_is_refused(tmp_path, acmodel, assessed, write_config):
     """A rule's note changes the rules version: `versions.rules`, with both digests; the model's own out folder named as
     the earlier export, whose prices.json is then of other versions. A configuration key of the steady state's spec
-    changed since the export (lp.grain 2): `evaluator.config.grain`, 1 then 2. Neither runs the assessment or writes."""
+    changed since the export (lp.grain 2): `evaluator.config.lp.grain`, 1 then 2. Neither runs the assessment or writes."""
     folder = flips_fixture(tmp_path)
     out = base(folder) / "out"
     export(acmodel, folder)
@@ -389,12 +485,68 @@ def test_a_change_of_the_model_or_of_the_configuration_is_refused(tmp_path, acmo
     assert status == 5
     assert doc["errors"] == [{
         "code": "reuse_refused",
-        "detail": {"path": str(out / "prices.json"), "member": "evaluator.config.grain", "reason": "differs",
+        "detail": {"path": str(out / "prices.json"), "member": "evaluator.config.lp.grain", "reason": "differs",
                    "expected": "1", "found": "2"},
-        "ref": "/evaluator/config/grain",
+        "ref": "/evaluator/config/lp.grain",
     }]
     assert len(assessed) == 1
     assert (snapshot(out), snapshot(tmp_path / "localappdata")) == before
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value", "expected"),
+    [
+        pytest.param("unknowns", "wilson_digits", 7, "6", id="unknowns"),
+        pytest.param("sensitivity", "top_n", 6, "5", id="sensitivity"),
+        pytest.param("random", "enclosure_digits", 13, "12", id="random"),
+    ],
+)
+def test_a_change_of_a_key_under_unknowns_sensitivity_or_random_is_refused(
+    tmp_path, acmodel, assessed, write_config, section, key, value, expected
+):
+    """The keys under `unknowns` (but `chunk_size`), `sensitivity` and `random` are not in the steady state's spec, but
+    what the steady state or the assessment reads may depend on them (a Wilson bound, a pity chain, an enclosure's
+    digits) while the shared tree stays the same: they are in the digest. One changed since the export is
+    `evaluator.config.<key>`, the earlier value then this one; nothing is assessed or written."""
+    folder = flips_fixture(tmp_path)
+    out = base(folder) / "out"
+    export(acmodel, folder)
+    write_config({"schema_version": "acmodel.config.v1", section: {key: value}})
+    before = snapshot(out), snapshot(tmp_path / "localappdata")
+
+    status, doc = reuse(acmodel, folder, out)
+
+    assert status == 5
+    assert doc["errors"] == [{
+        "code": "reuse_refused",
+        "detail": {"path": str(out / "prices.json"), "member": f"evaluator.config.{section}.{key}", "reason": "differs",
+                   "expected": expected, "found": str(value)},
+        "ref": f"/evaluator/config/{section}.{key}",
+    }]
+    assert len(assessed) == 1
+    assert (snapshot(out), snapshot(tmp_path / "localappdata")) == before
+
+
+def test_a_change_of_keys_that_never_change_a_result_takes_the_assessment_over(
+    tmp_path, acmodel, assessed, write_config
+):
+    """`cache.wait_ms`, `export.validator_timeout_ms` and `unknowns.chunk_size` are listed as never changing a result:
+    changed since the export, the digest is the same, and the assessment is taken over."""
+    folder = flips_fixture(tmp_path)
+    out = base(folder) / "out"
+    export(acmodel, folder)
+    earlier = json.loads((out / "prices.json").read_text(encoding="utf-8"))["evaluator"]
+    write_config({
+        "schema_version": "acmodel.config.v1", "cache": {"wait_ms": 1234}, "export": {"validator_timeout_ms": 999},
+        "unknowns": {"chunk_size": 7},
+    })
+
+    status, doc = reuse(acmodel, folder, out)
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
+    assert len(assessed) == 1
+    prices = json.loads((out / "prices.json").read_text(encoding="utf-8"))
+    assert prices["evaluator"] == earlier and prices["reused_assessment"]["evaluator"] == earlier["sha256"]
 
 
 def test_a_shared_tree_that_is_not_this_steady_states_is_refused(tmp_path, acmodel, assessed, monkeypatch):

@@ -287,22 +287,82 @@ code is named by its bytes:
   but a `.py` one (a `.pyc` neither). The launcher, the contracts and the tests are not the package and are not read;
 - `libraries`: the versions of the libraries the steady state's node kind declares (`EVALUATORS["economy"]` in
   `cache/keys.py`: `numpy`, `python`, the minor version, and `scipy`), as the node's token takes them;
-- `config`: the configuration keys of the steady state's spec (above, "Economy nodes" and the spec hash): `expr.max_bits`,
-  which every node's spec holds, as `max_bits`, and the keys `core.flow.spec_keys` gives the steady state, by their names
-  there: `lp.max_denominator` (`max_denominator`), `lp.grain` (`grain`), `economy.max_cycle_steps` (`max_cycle_steps`) and
-  `lp.max_pivots` (`max_pivots`);
+- `config`: **every configuration key** (the table of "Configuration"; in the code `config.keys()`, from the table the
+  reading checks every member against) **but the two lists below**, each by its dotted name (`lp.grain`) with its value
+  as read or by default, sorted by name: an integer, as its decimal text when it lies beyond ±(2<sup>53</sup> − 1), which
+  canonical JSON does not hold; a string (`unknowns.drop_z`); or a boolean;
 - `sha256`: the sha256 of the canonical JSON of `{source, libraries, config}`.
 
-The libraries and the keys are read from where the cache key is made (`EVALUATORS`, `flow.spec_keys`), never listed
-again: a library or a key the steady state's node comes to declare enters the digest with it, and a test holds the
-digest's configuration to the spec the graph builds for the steady state's node. Neither the versions nor a price's
-provenance file holds the digest, so no `binds` moves with it. Its limits:
+A key is in the digest unless a list below names it, so a key the configuration comes to have is in it from the start.
+The code holds the same two lists with the same reasons (`NEUTRAL` and `PLAN_ONLY` in `core/evaluator.py`); a list that
+names what is no key, a key both name, and a key of the digest the code cannot read are refused, so every export fails
+until the key is placed, and a test holds every key to exactly one of the three. When it is unclear whether a key can
+change a result, it is in. The libraries are read from where the cache key is made (`EVALUATORS`), never listed again,
+and a test holds the digest's configuration to hold every key of the spec the graph builds for the steady state's node
+(above, "Economy nodes" and the spec hash). Neither the versions nor a price's provenance file holds the digest, so no
+`binds` moves with it.
+
+*Left out: the keys that never change a result*, that is, what a computation that finishes computes: where files are, the
+cache, the host caps and the gate (whether, when and how fast the work runs), the time and the memory a process may take
+and the restarts a pool may make (past them a computation fails, it never computes otherwise), the verify sample, and two
+chunk sizes. A limit that a computation meets the same way each time (`expr.max_bits`, `random.max_transitions`,
+`search.screen_max_rows`) is never left out: past it the computation is refused, and a reuse must be refused where the
+assessment would be.
+
+| Key | Why it never changes a result |
+|---|---|
+| `paths.venv` | where the venv is: the libraries it holds are `libraries`, and the code the tool runs is `source`; a local path |
+| `paths.state_root` | where the cache, the runs' outputs and the shared trees are kept: `export prices` computes without the cache, and a shared tree is compared by its digest; a local path |
+| `paths.datasets` | where the copies of the external datasets are: each is the file named by the sha256 its data file declares (in the data version), and only that hash is checked; a local path |
+| `paths.actinglab` | the validator of `export tables`: it accepts or refuses a table and never changes one, and `export prices` does not run it; a local path |
+| `export.validator_timeout_ms` | how long that validator may take: past it that export fails |
+| `compute.priority` | the priority class: how soon the work is scheduled, never what it computes |
+| `compute.job.cpu_rate_milli` | the CPU cap of the Job: how fast the work runs, never what it computes |
+| `compute.job.worker_memory_mib` | the memory limit of each process in the Job: past it the process is stopped, a failure |
+| `cache.max_bytes` | the size cap of the cache: an evicted value is computed again, the same; `export prices` computes without the cache |
+| `cache.wait_ms` | how long a connection waits for the cache's lock: past it the command is `cache_unavailable` |
+| `host.memory.start_min_mib` | the gate: the available memory a batch starts at |
+| `host.memory.pause_below_mib` | the gate: the available memory a batch pauses below |
+| `host.memory.report_plan_above_mib` | the gate: which runs are reported before they start |
+| `host.cpu.pause_load_milli` | the gate: the CPU load that holds it |
+| `host.cpu.window_ms` | the gate: the span the CPU load is averaged over |
+| `host.quiet_windows` | the gate: the hours without compute |
+| `host.pause_file` | the gate: the file whose presence holds it; a local path |
+| `host.pause_poll_ms` | the gate: how often a waiting gate checks again |
+| `engine.verify_hash_seed` | the hash seed of the verify worker: the verify sample runs calls again only to refuse an engine whose outcome is not a function of its request (`engine_nondeterministic`), and never changes a result kept |
+| `engine.verify_sample_milli` | the share of a call's requests the verify sample runs again: it refuses a nondeterministic engine, and never changes a result kept |
+| `engine.request_timeout_ms` | how long a request may take: past it the batch fails (`engine_failed`, `timeout`) |
+| `engine.start_timeout_ms` | how long a worker may take to start or to stop: past it the call fails or the worker is killed |
+| `engine.restart_budget` | how many workers that ended abnormally a pool replaces: past it the call fails (`restart_budget_exhausted`) |
+| `engines.roots` | where each engine's home is on this host: what an engine computes is named by its fingerprint, which every engine call's cache key holds, not by where it is; a local path |
+| `unknowns.chunk_size` | the samples drawn per Philox call: sample s is the block at counter s however the draws are chunked |
+| `search.screen_chunk_rows` | the rows of a slot product the search's screen takes per chunk: it never changes a result |
+| `watch.poll_interval_ms` | how often `watch` scans its files: when a refresh runs, never what it computes |
+| `watch.debounce_ms` | how long `watch` gathers changes into one refresh: when a refresh runs, never what it computes |
+
+*Left out: the keys only the plan reads*; neither the steady state, nor its vector, nor the impact assessment reads them.
+
+| Key | Where only the plan reads it |
+|---|---|
+| `economy.plan_horizon` | the steps of an account's plan (`core.flow`, `_Reader.model`; the steady state's steps are its cycle), and the plan's spec (`spec_keys`) |
+| `search.milp_node_limit` | the node budget of the plan's MILP (`core.flow`, `_Solver.milp`, which only the plan's solves call; the steady state and its vector solve LPs), and the plan's spec (`spec_keys`) |
+
+*In the digest*, so: `compute.blas_threads`, `compute.workers.max`, `economy.max_cycle_steps`, `engine.hash_seed`,
+`engine.reset_each_batch`, `engine.worker_max_requests`, `engine.worker_soft_memory_mib`, `expr.max_bits`, `lp.grain`,
+`lp.max_denominator`, `lp.max_pivots`, `random.enclosure_digits`, `random.max_transitions`, `search.exact_max`,
+`search.node_limit`, `search.screen_max_rows`, `search.screen_scale`, `search.top_k`, `sensitivity.top_n`, the keys under
+`unknowns` but `chunk_size`, and `watch.keep_workers_warm`. Those under `unknowns`, `sensitivity` and `random` are not in
+the steady state's spec, but what the steady state or the assessment reads may depend on them (a Wilson bound, a pity
+chain, an enclosure's digits) while the shared tree, which names what was read and not its values, stays the same.
+Nothing `export prices` runs calls an engine or the search yet; the keys that shape what one computes (an engine
+worker's hash seed, `reset()` after each batch, the recycling of a worker, how many workers share the requests and
+whether `watch` keeps them warm; the search's budgets and scales) are in all the same, as are the BLAS threads, whose
+number may change a float's last digits.
+
+Its limits:
 - it names the bytes, so a checkout whose line ends differ (Git's `core.autocrlf`), or any edit of a source file, even of
-  a comment, is another digest, and a reuse across them is refused;
-- the keys under `unknowns`, `sensitivity` and `random` are not in it: the steady state's spec does not hold them (the run
-  id and the random processes' own nodes do). A value the steady state or the assessment reads can depend on them (a
-  Wilson bound, a pity chain, an enclosure's digits) while the shared tree, which names what was read and not its
-  values, stays the same: keep them as they were between an export and one that reuses its assessment;
+  a comment, is another digest, and a reuse across them is refused: a refusal, never a wrong result. Run the full export
+  of a batch and the exports that reuse its assessment in the same checkout;
 - the account state is not in it: neither the steady state nor the assessment reads it (both read the reference state
   only, and the assessment refuses an estimate that needs the account state, `per_account`).
 

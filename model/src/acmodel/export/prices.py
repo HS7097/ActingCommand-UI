@@ -34,10 +34,11 @@ priority too (`milli`); prices of two games are never compared (137 K2).
 `export_write_failed`. Nothing is deleted.
 
 **The evaluator digest and the reused assessment** (#424 PRICE-REUSE). prices.json records the evaluator digest
-(`evaluator`, `core.evaluator`): the tool's source, the libraries and the configuration keys of the steady state's cache
-key; neither the versions nor the price provenance files hold it, so no `binds` moves with it. With `reuse` (the out
-folder of an earlier export, `--reuse-assessment`), the impact assessment, which reads neither exports.json nor the
-account state, is taken over from that folder's prices.json instead of computed again, but only when its versions, its
+(`evaluator`, `core.evaluator`): the tool's source, the libraries of the steady state's cache key, and every configuration
+key but those listed as never changing a result and those only the plan reads; neither the versions nor the price
+provenance files hold it, so no `binds` moves with it. With `reuse` (the out folder of an earlier export,
+`--reuse-assessment`), the impact assessment, which reads neither exports.json nor the account state, is taken over
+from that folder's prices.json instead of computed again, but only when its versions, its
 evaluator digest and, once the steady state is computed, its shared tree's digest are this export's; otherwise
 `reuse_refused`, one error per member that differs, and nothing is written. Each pool's `flips` and `impact`, each
 estimate's `assessed` and `skipped`, and the groups (`impact`) come from it; everything else is computed as without the
@@ -65,7 +66,7 @@ from acmodel.codes import (
     SHARED_TREE_MISMATCH,
     SHARED_TREE_STALE,
 )
-from acmodel.config import EconomySettings, Unknowns
+from acmodel.config import Config, EconomySettings, Unknowns
 from acmodel.core import evaluator, flow, impact
 from acmodel.core.common import CONFIRMED, solve
 from acmodel.core.coverage import CLASSES, COVERED, STRUCTURAL_GAP, UNKNOWN, VERIFIED_ZERO
@@ -224,8 +225,13 @@ def _assessed(
 
 
 def _token(value: Any) -> str:
-    """A value of `reuse_refused` (`expected`, `found`): `none` for an absent one."""
-    return NONE if value is None else str(value)
+    """A value of `reuse_refused` (`expected`, `found`): `none` for an absent one, `true` or `false` for a boolean (a
+    configuration key of the evaluator digest)."""
+    if value is None:
+        return NONE
+    if type(value) is bool:
+        return "true" if value else "false"
+    return str(value)
 
 
 def _refused(earlier: Earlier, member: str, ref: str, expected: Any, found: Any, reason: str = DIFFERS) -> dict[str, Any]:
@@ -438,18 +444,23 @@ def export_prices(
     datasets: Path | str,
     max_bits: int,
     libraries: Mapping[str, str],
+    settings: Config,
     unknowns: Unknowns = Unknowns(),
     economy: EconomySettings = EconomySettings(),
     reuse: Path | str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Evaluate the model for the state and its steady state, then keep the steady state's tree under the state root
     (PRICE-4a2) and write the price provenance files and `out/prices.json`, or refuse. Returns the envelope's `data`
-    and the warnings. `libraries` holds the versions the tool runs with (`cache.keys.libraries`), for the evaluator
-    digest (PRICE-REUSE). With `reuse`, the out folder of an earlier export, its prices.json is read first, and its
-    impact assessment is taken over when its versions, evaluator digest and shared tree are this export's; otherwise
-    `reuse_refused`, and nothing is written."""
+    and the warnings. `libraries` holds the versions the tool runs with (`cache.keys.libraries`), and `settings` the
+    configuration that `max_bits`, `unknowns` and `economy` come from, for the evaluator digest (PRICE-REUSE). With
+    `reuse`, the out folder of an earlier export, its prices.json is read first, and its impact assessment is taken over
+    when its versions, evaluator digest and shared tree are this export's; otherwise `reuse_refused`, and nothing is
+    written."""
+    if (max_bits, unknowns, economy) != (settings.expr_max_bits, settings.unknowns, settings.economy):
+        raise ValueError("export_prices: max_bits, unknowns and economy differ from those of settings, which the "
+                         "evaluator digest records")
     earlier = None if reuse is None else read_earlier(Path(reuse))
-    recorded = evaluator.record(libraries, max_bits, economy)
+    recorded = evaluator.record(libraries, settings)
     run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns, economy=economy)
     if earlier is not None:
         refused = differences(earlier, versions(run.checker, run.folder), recorded)

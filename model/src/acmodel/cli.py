@@ -296,14 +296,14 @@ def _export_prices(args: list[str], cfg: config.Config, system: System) -> tuple
     """The prices of the steady state, with the keys under `lp` and `economy`, and the impact assessment of its
     estimates (#424 ACM-PRICE PRICE-4a); the warnings say why a price is pending. The steady state's tree, which every
     price's provenance reads, is kept once under `paths.state_root` (PRICE-4a2). prices.json records the evaluator
-    digest, from the libraries the tool runs with; with `--reuse-assessment`, the assessment of the earlier export in
-    that out folder is taken over when it may be (#424 PRICE-REUSE)."""
+    digest, from the libraries the tool runs with and the configuration; with `--reuse-assessment`, the assessment of
+    the earlier export in that out folder is taken over when it may be (#424 PRICE-REUSE)."""
     packages = _dependencies(system)
     reuse = _chosen("export prices", args, "--reuse-assessment")
     return export_prices(
         Path(args[0]), Path(args[1]), state_root=cfg.state_root, datasets=cfg.datasets, max_bits=cfg.expr_max_bits,
-        libraries=cache.libraries(system.python_version, packages), unknowns=cfg.unknowns, economy=cfg.economy,
-        reuse=None if reuse is None else Path(reuse),
+        libraries=cache.libraries(system.python_version, packages), settings=cfg, unknowns=cfg.unknowns,
+        economy=cfg.economy, reuse=None if reuse is None else Path(reuse),
     )
 
 

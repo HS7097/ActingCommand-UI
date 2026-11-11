@@ -1683,7 +1683,7 @@ uncertainty of the estimates is assessed here.
 | `estimates` | each provisional derive the steady state read, by id: `rule`, `value` (its point value), `estimate` (as written, or null), `components`, `assessed`, and `skipped` (null, `structural_gap` or `estimate_missing`) |
 | `impact` | the assessment's groups, each `{rules, unknowns, passes, prices, flips}`: its derives; the unknowns they move by; each pass's `at` (each unknown's point or end, or the derive's `low` or `high`) and `values` (each derive's moved value); the pools whose price moves in it, with `low` and `high`; and the activities whose class flips in it |
 | `counts` | the pools of each class, and how many are `exported` and `pending` |
-| `evaluator` | the evaluator digest (#424 PRICE-REUSE; `cli.md`, "Cache", "The evaluator digest"): `sha256`, over the other three; `source`, the digest of the tool's source files; `libraries`, the versions of the libraries the steady state's node declares (`numpy`, `python`, `scipy`); `config`, the configuration keys of its spec (`max_bits`, `max_denominator`, `grain`, `max_cycle_steps`, `max_pivots`). Every file written from PRICE-REUSE on has it; an earlier one may not. It is in neither `versions` nor a price's provenance file |
+| `evaluator` | the evaluator digest (#424 PRICE-REUSE; `cli.md`, "Cache", "The evaluator digest"): `sha256`, over the other three; `source`, the digest of the tool's source files; `libraries`, the versions of the libraries the steady state's node declares (`numpy`, `python`, `scipy`); `config`, every configuration key but those that never change a result and those only the plan reads (both listed, key by key, in `cli.md`), by its dotted name (`expr.max_bits`, `lp.grain`, `unknowns.seed`, …), sorted, with its value: an integer (its decimal text beyond ±(2<sup>53</sup> − 1)), a string or a boolean. Every file written from PRICE-REUSE on has it; an earlier one may not. It is in neither `versions` nor a price's provenance file |
 | `reused_assessment` | only in a file whose assessment was taken over (`--reuse-assessment`, below): `prices_sha256`, the sha256 of the earlier prices.json's bytes; its `versions`; `shared`, each of its shared trees' digest by root; `evaluator`, its evaluator digest's `sha256`; `members`, what was taken over (`estimates.assessed`, `estimates.skipped`, `impact`, `prices.flips`, `prices.impact`) |
 
 A pool's entry: `pool`; `class`, `status`, `reasons` and `component`, from the coverage section; `price`, the exported price
@@ -1721,7 +1721,7 @@ is read first (`model_file_invalid` when there is none, or it is no prices file)
    file the full export writes from the same inputs, and the provenance files are the full export's.
 
 Anything that differs is `reuse_refused` (exit 5; one error per member, `member` such as `versions.rules`,
-`evaluator.config.grain` or `shared.economy:steady`, `expected` the earlier value and `found` this export's, `none` for
+`evaluator.config.lp.grain` or `shared.economy:steady`, `expected` the earlier value and `found` this export's, `none` for
 a side without it, `ref` its pointer in the earlier file), and nothing is assessed or written: the export never falls
 back to the full one. The folder is only read; it may be the model's own `out`, which the export then writes over.
 
