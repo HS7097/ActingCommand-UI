@@ -706,9 +706,9 @@ no actor with a pause, only its reason, so the pauses that must not be lifted fr
 their reasons: a pause with one of them gets neither Put All on Duty nor "Resume Scheduling…", only the
 words "this pause is to be lifted by whoever set it", on the top bar, on the account cards and in the
 ledger window. No box writes the key, and a save of another key keeps its line byte for byte, like any
-line; the setup wizard's fresh install and first migration, which write the file anew, carry every line
-of the key over as written, one the console cannot use too (see "Setup wizard acsetup"). It is one
-line, its key bare or in quotes, a TOML array of
+line; but the setup wizard's fresh install and first migration write the file anew with only `lang`,
+`text_size` and the three paths (see "Setup wizard acsetup"), so after either one the line is gone, with
+nothing said, and has to be written again. It is one line, its key bare or in quotes, a TOML array of
 strings in double or single quotes, a trailing comma allowed; `[]`, or no line at all, is the default:
 none. Each item must be a reason the Runtime itself takes for a pause (checked by the Runtime's own
 `SchedulingPauseReason`: 1–64 characters of `a-z`, `0-9`, `_`, `.` and `-`), so there is nothing to
@@ -949,8 +949,7 @@ log" below):
    `bind_host` (127.0.0.1), `bind_port` (0), `secret_fingerprint_salt` and `instances` (empty) — the
    Runtime's parser is `deny_unknown_fields`, so not one extra field is written. The console settings
    `%APPDATA%\ActingCommand\acui.toml` get `state_root`, `actingd_config` and `actingd_exe` (the format
-   of the "Settings file" section, single-quoted literals; existing `lang` / `text_size` kept verbatim,
-   and every `resume_elsewhere_reasons` line as written).
+   of the "Settings file" section, single-quoted literals; existing `lang` / `text_size` kept verbatim).
    Configuration and Runtime settings name the fixed root argument alias and executable entry.
    The way it writes matches `crates/acui-app/src/settings.rs`, but `acui-setup` does not depend on
    `acui-app` and is a small duplicate writer. `instances` stays empty here; the instances step fills it.

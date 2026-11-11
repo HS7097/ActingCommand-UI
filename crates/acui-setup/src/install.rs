@@ -453,9 +453,9 @@ pub fn state_root_usable(state_root: &Path) -> Result<(), String> {
 
 /// The console's own file in the console's own format
 /// (`crates/acui-app/src/settings.rs`): `lang` and `text_size` as the file
-/// has them, every line of `resume_elsewhere_reasons` as written
-/// (`reasons_line`), then the three paths as TOML literal strings in single
-/// quotes. Nothing else the file may hold is carried over.
+/// has them, then the three paths as TOML literal strings in single quotes.
+/// Nothing else the file may hold is carried over, exactly as the console's
+/// own writer does.
 pub fn write_console_settings(
     path: &Path,
     state_root: &Path,
@@ -474,10 +474,7 @@ pub fn write_console_settings(
     };
     let mut body = String::from("# ActingCommand 监控台 / ActingCommand Console\n");
     for line in existing.lines() {
-        if reasons_line(line) {
-            body.push_str(line.trim_start_matches('\u{feff}').trim());
-            body.push('\n');
-        } else if let Some((key, value)) = line.split_once('=') {
+        if let Some((key, value)) = line.split_once('=') {
             let key = key.trim();
             if key == "lang" || key == "text_size" {
                 body.push_str(&format!("{key} = {}\n", value.trim()));
@@ -507,25 +504,6 @@ pub fn write_console_settings(
     }
     fs::write(path, body)
         .map_err(|error| format!("写入失败 / write failed: {}: {error}", path.display()))
-}
-
-/// Whether `line` is a line of the console's `resume_elsewhere_reasons` as the
-/// console reads it (`crates/acui-app/src/settings.rs`, `load`): the key before
-/// its `=`, bare or in quotes, paired or not, or a line without `=` that starts
-/// with it. Carried over as written, one the console cannot take too, so the
-/// console says of it what it said before; dropped, the pauses it lists would
-/// offer a resume with nothing said.
-fn reasons_line(line: &str) -> bool {
-    const KEY: &str = "resume_elsewhere_reasons";
-    let quote = |c: char| c == '"' || c == '\'';
-    let line = line.trim_start_matches('\u{feff}').trim();
-    if line.is_empty() || line.starts_with('#') {
-        return false;
-    }
-    match line.split_once('=') {
-        Some((key, _)) => key.trim().trim_matches(quote) == KEY,
-        None => line.trim_start_matches(quote).starts_with(KEY),
-    }
 }
 
 pub enum Autostart {
