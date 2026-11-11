@@ -392,11 +392,13 @@ impl Model {
     }
 
     /// A confirmation asked on the page left goes with it (`rescue`), and so do the rules panel's
-    /// form and confirmation (`Actions::rules_reset`).
+    /// form and confirmation (`Actions::rules_reset`), and the panel itself closes: back on the
+    /// main page it is shut, so "auto rules" opens it at the first press, not the second.
     pub fn set_page(&mut self, page: Page) {
         if self.page != page {
             self.rescue.unconfirm();
             self.actions.rules_reset();
+            self.rules_open = false;
         }
         self.page = page;
     }
@@ -1130,7 +1132,8 @@ impl Model {
         }
     }
 
-    /// Whether the rules panel is open, which it shows only while the rescue bar does.
+    /// Whether the rules panel is open, which it shows only while the rescue bar does. Another
+    /// page closes it (`set_page`).
     pub fn rules_open(&self) -> bool {
         self.rules_open
     }
