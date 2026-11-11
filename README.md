@@ -862,9 +862,11 @@ agents"). The ledger window can resume, conditionally, a pause another tool set 
   deployment's — `acsetup_update`, `install_restart` and any reason starting with `deploy-` — which the
   installer lifts (the console does not run `release-hold`); and one the Lab's rescue module set (Runtime
   0.12.48 on), its reason exactly `lab-<operation>-<unix ms>` with the operation one of `config`,
-  `deploy`, `down`, `place`, `restore` and `rollback`, which that operation lifts as it finishes ("a Lab
-  rescue operation set this pause, and the operation lifts it when it finishes; if the operation has
-  stopped and left it behind, lift it from the Lab"), on the top bar and the account cards too. While
+  `deploy`, `down`, `place`, `restore` and `rollback`, which that operation lifts as it finishes, except
+  `down`, the stop, whose pause stays until it is lifted from the Lab ("a Lab rescue operation set this
+  pause, and the operation lifts it when it finishes; one a stop set (reason starting lab-down-) is not
+  lifted by itself: like one an operation that has stopped left behind, lift it from the Lab"), on the
+  top bar and the account cards too. While
   that settings line cannot be used, every pause but a deployment's, a Lab rescue's and the console's
   own Pause All (the global pause with reason `console_pause_all`) is of the first kind. An instance
   pause still draining or handing its device back gets none either: the Runtime refuses its resume

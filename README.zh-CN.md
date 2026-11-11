@@ -610,8 +610,9 @@ PID 与 owner epoch（或客户端错误码），下面是上一次请求的技�
   只写说明：理由列在 `resume_elsewhere_reasons` 里的（「此暂停要由设下它的一方解除」）；部署暂停
   `acsetup_update`、`install_restart` 和以 `deploy-` 开头的，请用安装器恢复（监控台不接
   `release-hold`）；Lab 救急模块挂的暂停（Runtime 0.12.48 起），理由恰好是 `lab-<操作>-<毫秒时间戳>`，
-  操作是 `config`、`deploy`、`down`、`place`、`restore`、`rollback` 之一，由那次操作结束时自己解除
-  （「此暂停是 Lab 救急操作挂的，操作结束会自己解除；如果操作已经停掉还留着它，请从 Lab 解除」），顶栏和
+  操作是 `config`、`deploy`、`down`、`place`、`restore`、`rollback` 之一，由那次操作结束时自己解除；
+  只有停机 `down` 挂的会一直留着，要从 Lab 解除（「此暂停是 Lab 救急操作挂的，操作结束会自己解除；停机
+  （理由以 lab-down- 开头）挂的不会自己解除，它和操作已经停掉还留下的一样，请从 Lab 解除」），顶栏和
   账号卡片也一样。这一行设置用不了的时候，除了部署暂停、Lab 救急暂停和监控台自己「全部暂停」加的那份
   全局暂停（`console_pause_all`），所有暂停都按第一类处理。还在排空或交还设备的实例暂停也不给按钮，
   Runtime 这时会拒绝恢复。每一行都照原样显示暂停的理由，不管操作方写的是什么。

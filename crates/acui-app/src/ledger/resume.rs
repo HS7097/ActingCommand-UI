@@ -19,7 +19,8 @@
 //! Three kinds of pause offer no resume, only why: one whose reason the settings
 //! file lists (`resume_elsewhere_reasons`), which only whoever set it lifts; a
 //! deployment's, which the installer lifts; and one the Lab's rescue module set
-//! for an operation under way, which the operation lifts as it finishes. The
+//! for an operation, which the operation lifts as it finishes, but for a stop's
+//! (`down`), which stays until it is lifted from the Lab. The
 //! contract keeps no actor with a pause and no prefix of its reason, so all are
 //! known by the reason alone. While that line cannot be taken, every pause but
 //! a deployment's, a Lab rescue's and this console's own "pause all", a global
@@ -98,7 +99,8 @@ pub(crate) enum Lifter {
     Setter,
     Installer,
     /// The Lab's rescue module set it for an operation, which lifts it as it
-    /// finishes; one left behind is lifted from the Lab (`lab_rescue`).
+    /// finishes; a stop's (`down`, Runtime `rescue.rs`, which only holds) and
+    /// one left behind are lifted from the Lab (`lab_rescue`).
     LabRescue,
 }
 
