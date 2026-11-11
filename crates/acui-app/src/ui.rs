@@ -544,9 +544,9 @@ fn language_index(language: Language) -> i32 {
 /// stops its run (`workbench::stop`);
 /// Start and Request Shutdown are the launcher's;
 /// "troubleshooting and ledger" opens the window of the default source; the
-/// write buttons, the evidence days' field, each device's backends' boxes and buttons, and the
-/// rescue bar's "auto rules" with every control of the rules panel it opens, are
-/// `workbench::actions`'; "got it"
+/// write buttons, the evidence days' field, each device's backends' boxes and buttons, the
+/// rescue bar's "auto rules" with every control of the rules panel it opens, and the settings
+/// page's quiet times of every account, are `workbench::actions`'; "got it"
 /// on the start report's notice is `workbench`'s; the three boxes apply to every
 /// window. Closing it ends the program, after its fade if it has a frame of its
 /// own, unless an unlock runs: then it stays and says why, without fading.
@@ -616,54 +616,69 @@ fn install_workbench(window: &WorkbenchWindow) {
             workbench::actions::rules_toggled(&ui);
         }
     });
-    window.on_quiet_form_opened(|| {
+    // Each control of the quiet times names its editor (UI-3e1-c): an account's own on the rules
+    // panel, or every account's on the settings page.
+    window.on_quiet_form_opened(|editor| {
         if let Some(ui) = current() {
-            workbench::actions::quiet_form_opened(&ui);
+            workbench::actions::quiet_form_opened(&ui, workbench::paint::quiet_editor(editor));
         }
     });
-    window.on_quiet_day_toggled(|day, on| {
+    window.on_quiet_day_toggled(|editor, day, on| {
         if let Some(ui) = current() {
-            workbench::actions::quiet_day_toggled(&ui, day, on);
+            let target = workbench::paint::quiet_editor(editor);
+            workbench::actions::quiet_day_toggled(&ui, target, day, on);
         }
     });
-    window.on_quiet_start_edited(|text| {
+    window.on_quiet_start_edited(|editor, text| {
         if let Some(ui) = current() {
-            workbench::actions::quiet_start_edited(&ui, &text);
+            let target = workbench::paint::quiet_editor(editor);
+            workbench::actions::quiet_start_edited(&ui, target, &text);
         }
     });
-    window.on_quiet_end_edited(|text| {
+    window.on_quiet_end_edited(|editor, text| {
         if let Some(ui) = current() {
-            workbench::actions::quiet_end_edited(&ui, &text);
+            let target = workbench::paint::quiet_editor(editor);
+            workbench::actions::quiet_end_edited(&ui, target, &text);
         }
     });
-    window.on_quiet_add(|| {
+    window.on_quiet_whole_day_toggled(|editor, on| {
         if let Some(ui) = current() {
-            workbench::actions::quiet_add(&ui);
+            let target = workbench::paint::quiet_editor(editor);
+            workbench::actions::quiet_whole_day_toggled(&ui, target, on);
         }
     });
-    window.on_quiet_delete(|index| {
+    window.on_quiet_add(|editor| {
         if let Some(ui) = current() {
-            workbench::actions::quiet_delete(&ui, index);
+            workbench::actions::quiet_add(&ui, workbench::paint::quiet_editor(editor));
         }
     });
-    window.on_quiet_clear(|| {
+    window.on_quiet_delete(|editor, index| {
         if let Some(ui) = current() {
-            workbench::actions::quiet_clear(&ui);
+            let target = workbench::paint::quiet_editor(editor);
+            workbench::actions::quiet_delete(&ui, target, index);
         }
     });
-    window.on_quiet_clear_confirmed(|| {
+    window.on_quiet_clear(|editor| {
         if let Some(ui) = current() {
-            workbench::actions::quiet_clear_confirmed(&ui);
+            workbench::actions::quiet_clear(&ui, workbench::paint::quiet_editor(editor));
         }
     });
-    window.on_quiet_clear_cancelled(|| {
+    window.on_quiet_clear_confirmed(|editor| {
         if let Some(ui) = current() {
-            workbench::actions::quiet_clear_cancelled(&ui);
+            let target = workbench::paint::quiet_editor(editor);
+            workbench::actions::quiet_clear_confirmed(&ui, target);
         }
     });
-    window.on_quiet_back_to_file(|| {
+    window.on_quiet_clear_cancelled(|editor| {
         if let Some(ui) = current() {
-            workbench::actions::quiet_back_to_file(&ui);
+            let target = workbench::paint::quiet_editor(editor);
+            workbench::actions::quiet_clear_cancelled(&ui, target);
+        }
+    });
+    window.on_quiet_back_to_file(|editor| {
+        if let Some(ui) = current() {
+            let target = workbench::paint::quiet_editor(editor);
+            workbench::actions::quiet_back_to_file(&ui, target);
         }
     });
     window.on_idle_picked(|pick| {
@@ -956,8 +971,6 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_rescue_stop_run(labels.rescue_stop_run.into());
     global.set_rescue_rules(labels.rescue_rules.into());
     global.set_rules_close(labels.rules_close.into());
-    global.set_rules_quiet(labels.setting_quiet.into());
-    global.set_rules_quiet_note(labels.rules_quiet_note.into());
     global.set_rules_add_open(labels.rules_add_open.into());
     global.set_weekday_0(labels.rules_weekdays[0].into());
     global.set_weekday_1(labels.rules_weekdays[1].into());
@@ -970,6 +983,7 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_rules_to(labels.rules_to.into());
     global.set_rules_start_placeholder(labels.rules_start_placeholder.into());
     global.set_rules_end_placeholder(labels.rules_end_placeholder.into());
+    global.set_rules_whole_day(labels.rules_whole_day.into());
     global.set_rules_add(labels.rules_add.into());
     global.set_rules_form_note(labels.rules_form_note.into());
     global.set_rules_delete(labels.rules_delete.into());
