@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! An account's automatic rules (UI-3e1-b): what the main page's rules panel reads of one
 //! instance's quiet times, idle action and emulator start, and the changes of settings it sends of
-//! them. Nothing out of here names a key, a wire word or a wire type, but for the log.
+//! them; and the quiet times of every account (UI-3e1-c), which the settings page reads and
+//! changes on the same terms as an account's own ([`QuietOf`] says whose list it is). Nothing out
+//! of here names a key, a wire word or a wire type, but for the log.
 //!
 //! What it reads is all in the slow lane's one `RuntimeFactSnapshot`
 //! ([`super::ReadLane::read_config`]), the rows the settings page reads too
@@ -12,7 +14,8 @@
 //!   configuration check runs (BX-1, Runtime 0.12.39: `BlackoutEntry::parse_list`). That parser
 //!   takes a list whole or refuses it whole: a Runtime that runs holds no list it refuses itself,
 //!   so one that does not read here is of a newer Runtime, and is shown, never changed. With no
-//!   row (the file names none and no online value is set) the instance has none of its own;
+//!   row (the file names none and no online value is set) the list is empty, from its default:
+//!   the instance has none of its own, and the host's default is none at all;
 //! - its idle action (`instance.<instance id>.idle.action`), which every instance has a row of;
 //! - its emulator start (`instance.<instance id>.start_emulator`), reported only of an instance
 //!   that names it or that an online value sets: with no row it is off. Settable since 0.12.39
@@ -20,17 +23,20 @@
 //!   (`discovery_binding_required`); the daemon's start, the emulator watch and the idle wake read
 //!   it in effect at each of their decisions.
 //!
-//! What it sends is one key of one instance in one `ConfigureSettings`, based on the snapshot's
-//! version, as every change of settings here is ([`super::configure`]). A list goes whole: its
-//! entries as [`BlackoutEntry::list_json`] writes them, so an entry this console did not make
-//! goes back as the Runtime's parser read it, in the shape that parser reads (a `weekly` entry
-//! written without `kind` comes back with it, which reads as the same entry), and nothing of the
-//! entry's shape is spelled here. Before it goes, the list is read back by the same parser, and
-//! its size is held against the contract's bound on one value, which the client would otherwise
-//! refuse to send at all. The idle action is set only to nothing or to closing the game
-//! ([`IdleChoice`]): stopping the emulator cannot be spelled here (Alice's ruling 157), and an
-//! instance set to it in the file is shown so until a person picks one of the two. Each goes once,
-//! whatever comes back.
+//! What it sends is one key, of one instance or the host's list, in one `ConfigureSettings`,
+//! based on the snapshot's version, as every change of settings here is ([`super::configure`]).
+//! A list goes by the key of whose it is ([`ConfigEdit::quiet_times`]), and whole: its entries as
+//! [`BlackoutEntry::list_json`] writes them, so an entry this console did not make goes back as
+//! the Runtime's parser read it, in the shape that parser reads (a `weekly` entry written without
+//! `kind` comes back with it, which reads as the same entry), whole days of the file's own
+//! included, and nothing of the entry's shape is spelled here. Before it goes, the list is read
+//! back by the same parser, and its size is held against the contract's bound on one value, which
+//! the client would otherwise refuse to send at all. The idle action is set only to nothing or to
+//! closing the game ([`IdleChoice`]): stopping the emulator cannot be spelled here (Alice's ruling
+//! 157), and an instance set to it in the file is shown so until a person picks one of the two.
+//! Each goes once, whatever comes back.
+
+use std::fmt;
 
 use actingcommand_contract::{ConfigSettingChange, FactScalar, MAX_CONFIG_SETTING_VALUE_BYTES};
 use actingcommand_runtime_config::scheduling::{BLACKOUT_HOST, INSTANCE_BLACKOUT};
@@ -89,15 +95,53 @@ fn failure_line(failure: &ConfigFailure) -> String {
     line
 }
 
-/// An instance's own blackout list, its entries in the order read. The entries are the Runtime's
-/// own type, which goes no further than this crate.
+/// Whose blackout list it is: the host's, which counts for every instance, or an instance's own.
+/// It names the key a change of the list sets; nothing out of here holds that key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuietOf {
+    /// `scheduling.blackout.host`: the quiet times of every account.
+    Host,
+    /// `instance.<instance id>.scheduling.blackout` of the instance of this id.
+    Instance(String),
+}
+
+impl QuietOf {
+    /// The list as the Runtime's parser names it.
+    fn list_key(&self) -> BlackoutListKey<'_> {
+        match self {
+            Self::Host => BlackoutListKey::Host,
+            Self::Instance(instance_id) => BlackoutListKey::Instance(instance_id),
+        }
+    }
+
+    /// Its key's name in the key table, which says whether a list with no row is settable.
+    fn key_name(&self) -> KeyName {
+        match self {
+            Self::Host => KeyName::Exact(BLACKOUT_HOST),
+            Self::Instance(_) => KeyName::PerInstance(INSTANCE_BLACKOUT),
+        }
+    }
+}
+
+/// Whose list it is, for the log: `instance <id>`, or `the host`.
+impl fmt::Display for QuietOf {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Host => formatter.write_str("the host"),
+            Self::Instance(instance_id) => write!(formatter, "instance {instance_id}"),
+        }
+    }
+}
+
+/// A blackout list, the host's or an instance's own, its entries in the order read. The entries
+/// are the Runtime's own type, which goes no further than this crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuietList {
-    instance: String,
+    of: QuietOf,
     entries: Vec<BlackoutEntry>,
 }
 
-/// One quiet time, as the panel shows it.
+/// One quiet time, as an account's rules panel or the settings page shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuietShown {
     /// Every week, on the days it starts on (`days[0]` Monday, through `days[6]` Sunday), from
@@ -118,6 +162,15 @@ pub struct NewWeekly {
     pub end_minute: u16,
 }
 
+impl NewWeekly {
+    /// The whole of each of `days`, from 0:00 to 0:00 the next day: an end equal to its start
+    /// makes a whole day (the contract's weekly entry), so both are 0. Only here is that spelled:
+    /// a time a person types with its end equal to its start is the form's to stop.
+    pub fn whole_days(days: [bool; 7]) -> Self {
+        Self { days, start_minute: 0, end_minute: 0 }
+    }
+}
+
 /// Why a list was not sent: nothing went to the Runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuietNotSent {
@@ -129,9 +182,9 @@ pub enum QuietNotSent {
 }
 
 impl QuietList {
-    /// The instance whose list it is.
-    pub fn instance_id(&self) -> &str {
-        &self.instance
+    /// Whose list it is.
+    pub fn of(&self) -> &QuietOf {
+        &self.of
     }
 
     /// Its entries as the panel shows them, in its order.
@@ -153,14 +206,15 @@ impl QuietList {
         (index < self.entries.len()).then(|| {
             let mut entries = self.entries.clone();
             entries.remove(index);
-            Self { instance: self.instance.clone(), entries }
+            Self { of: self.of.clone(), entries }
         })
     }
 
     /// The list with `new` added at its end, of a clock `utc_offset_minutes` east of UTC, every
-    /// other entry as it is; `None` when `new` names no day. Its id is `ui-` and the time it is
-    /// made, `now_ms`, in base 36, with `-2`, `-3` and so on after it when the list has that id
-    /// already. Whether the Runtime takes the list is [`ConfigEdit::quiet_times`]'s to find out.
+    /// other entry as it is, a whole day included; `None` when `new` names no day. Its id is `ui-`
+    /// and the time it is made, `now_ms`, in base 36, with `-2`, `-3` and so on after it when the
+    /// list has that id already. Whether the Runtime takes the list is
+    /// [`ConfigEdit::quiet_times`]'s to find out.
     pub fn with_weekly(
         &self,
         new: &NewWeekly,
@@ -189,7 +243,7 @@ impl QuietList {
                 end_minute_of_day: new.end_minute,
             },
         });
-        Some(Self { instance: self.instance.clone(), entries })
+        Some(Self { of: self.of.clone(), entries })
     }
 }
 
@@ -285,7 +339,7 @@ pub struct RuleSetting<T> {
     pub settable: bool,
 }
 
-/// What a snapshot says of an instance's own quiet times.
+/// What a snapshot says of a blackout list, the host's or an instance's own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuietRead {
     /// Its list in effect: with no row an empty one, from its default, settable as the key
@@ -300,20 +354,32 @@ pub enum QuietRead {
 impl SettingsRead {
     /// The quiet times of the instance of `instance_id`, its own list.
     pub fn quiet(&self, instance_id: &str) -> QuietRead {
-        let key = BlackoutListKey::Instance(instance_id).config_key();
+        self.list_of(QuietOf::Instance(instance_id.to_owned()))
+    }
+
+    /// The quiet times of every instance, the host's list, read as an instance's own is: the
+    /// Runtime's default names it, so it has a row but where it does not read.
+    pub fn host_quiet(&self) -> QuietRead {
+        self.list_of(QuietOf::Host)
+    }
+
+    /// The list of `of` as the snapshot has it.
+    fn list_of(&self, of: QuietOf) -> QuietRead {
+        let key = of.list_key().config_key();
         if self.may_be_unread(&key) {
             return QuietRead::Unread(None);
         }
         let Some(shown) = self.parameters.get(&key) else {
+            let settable = self.unreported_settable(&key, of.key_name());
             return QuietRead::Read {
-                list: QuietList { instance: instance_id.to_owned(), entries: Vec::new() },
+                list: QuietList { of, entries: Vec::new() },
                 source: SettingSource::Default,
-                settable: self.unreported_settable(&key, KeyName::PerInstance(INSTANCE_BLACKOUT)),
+                settable,
             };
         };
         match self.quiet.get(&key) {
             Some(Ok(entries)) => QuietRead::Read {
-                list: QuietList { instance: instance_id.to_owned(), entries: entries.clone() },
+                list: QuietList { of, entries: entries.clone() },
                 source: shown.source,
                 settable: shown.settable,
             },
@@ -321,17 +387,6 @@ impl SettingsRead {
             // `take` reads a list's entries wherever it keeps its row.
             None => QuietRead::Unread(Some(format!("{key} has a row whose entries were not read"))),
         }
-    }
-
-    /// How many quiet times every instance has, the host's list: `Err` when the Runtime's parser
-    /// does not take its entries, why for the log; `None` when its row does not read, or a row or
-    /// a section naming no key may be it, or there is none.
-    pub fn host_quiet(&self) -> Option<Result<usize, String>> {
-        let key = BlackoutListKey::Host.config_key();
-        if self.may_be_unread(&key) || !self.parameters.contains_key(&key) {
-            return None;
-        }
-        self.quiet.get(&key).map(|read| read.as_ref().map(Vec::len).map_err(|line| line.clone()))
     }
 
     /// The idle action in effect of the instance of `instance_id`: every instance has a row of it.
@@ -379,11 +434,12 @@ impl SettingsRead {
 }
 
 impl ConfigEdit {
-    /// The instance's own blackout list as `list` has it, as an online value: its entries as the
-    /// Runtime's parser reads them, each written as that parser reads it back. Not when the parser
-    /// does not take it as made, or it is longer than one value may be: nothing is sent then.
+    /// The blackout list as `list` has it, as an online value of the key of whose it is, the
+    /// host's or an instance's own: its entries as the Runtime's parser reads them, each written as
+    /// that parser reads it back, a whole day as well as any other. Not when the parser does not
+    /// take it as made, or it is longer than one value may be: nothing is sent then.
     pub fn quiet_times(list: &QuietList) -> Result<Self, QuietNotSent> {
-        let key = BlackoutListKey::Instance(&list.instance);
+        let key = list.of.list_key();
         let value = BlackoutEntry::list_json(&list.entries);
         match BlackoutEntry::parse_list(key, &value) {
             Ok(read) if read == list.entries => {}
@@ -402,17 +458,18 @@ impl ConfigEdit {
         Ok(Self(vec![ConfigSettingChange { key: key.config_key(), value: Some(value) }]))
     }
 
-    /// The instance's own blackout list set online to none at all: an empty list, whatever the
-    /// file names.
-    pub fn quiet_times_none(instance_id: &str) -> Self {
-        let key = BlackoutListKey::Instance(instance_id).config_key();
+    /// The blackout list of `of` set online to none at all: an empty list, whatever the file
+    /// names.
+    pub fn quiet_times_none(of: &QuietOf) -> Self {
+        let key = of.list_key().config_key();
         Self(vec![ConfigSettingChange { key, value: Some(BlackoutEntry::list_json(&[])) }])
     }
 
-    /// The instance's own blackout list back to the configuration file's: the online one is
-    /// dropped, which leaves none of its own when the file names none.
-    pub fn quiet_times_back_to_file(instance_id: &str) -> Self {
-        let key = BlackoutListKey::Instance(instance_id).config_key();
+    /// The blackout list of `of` back to the configuration file's: the online one is dropped,
+    /// which leaves an instance none of its own when the file names none, and the host its
+    /// default, none at all.
+    pub fn quiet_times_back_to_file(of: &QuietOf) -> Self {
+        let key = of.list_key().config_key();
         Self(vec![ConfigSettingChange { key, value: None }])
     }
 
