@@ -92,7 +92,7 @@ use actingcommand_runtime_config::lab_module::{AUTHORING, DEBUGGING};
 use actingcommand_runtime_config::performance::presets::{self, CurrentMember, PresetTable};
 use actingcommand_runtime_config::performance::{self, pacing};
 use actingcommand_runtime_config::{
-    find_row, idle, instance_key, scalar_json, scheduling, ui_tier, ConfigCode,
+    find_row, idle, instance_key, scalar_json, scheduling, ui_tier, AutoGaps, ConfigCode,
     ConfigValueProblem, IdleAction, KeyName, ProcessPriorityLevel, UiTier, ValueType,
     CAPTURE_BACKEND, START_EMULATOR, TOUCH_BACKEND, UI_TIERS,
 };
@@ -142,6 +142,9 @@ const TASK_SERVER: &str = "task.server";
 pub const IDLE_NONE: &str = IdleAction::None.as_str();
 pub const IDLE_CLOSE_APP: &str = IdleAction::CloseApp.as_str();
 pub const IDLE_STOP_EMULATOR: &str = IdleAction::StopEmulator.as_str();
+/// IDLE-2's `auto`: only its word, which the thresholds it is built with here do not change.
+pub const IDLE_AUTO: &str =
+    IdleAction::Auto(AutoGaps { return_home_min_gap_ms: 0, stop_emulator_min_gap_ms: 0 }).as_str();
 
 /// The words of the Runtime process's two priorities (`host.*`), likewise.
 pub const PRIORITY_NORMAL: &str = ProcessPriorityLevel::Normal.token();

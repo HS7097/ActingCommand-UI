@@ -46,8 +46,8 @@ use acui_source::workbench::backends::{
 };
 use acui_source::workbench::{
     ConfigRead, InstanceLive, ReportedName, ReportedSetting, SettingName, SettingSource,
-    SettingTier, ShownValue, StartRead, UnreadRow, IDLE_CLOSE_APP, IDLE_NONE, IDLE_STOP_EMULATOR,
-    PRIORITY_LOW, PRIORITY_NORMAL,
+    SettingTier, ShownValue, StartRead, UnreadRow, IDLE_AUTO, IDLE_CLOSE_APP, IDLE_NONE,
+    IDLE_STOP_EMULATOR, PRIORITY_LOW, PRIORITY_NORMAL,
 };
 
 use super::actions::{self, Actions, BackendEdit, EvidenceView, HostQuiet};
@@ -482,6 +482,7 @@ pub fn value_words(labels: &Labels, name: &SettingName, value: &ShownValue) -> S
             (SettingName::IdleAction, IDLE_STOP_EMULATOR) => {
                 labels.setting_idle_stop_emulator.to_owned()
             }
+            (SettingName::IdleAction, IDLE_AUTO) => labels.setting_idle_auto.to_owned(),
             (SettingName::MemoryPriority | SettingName::IoPriority, PRIORITY_NORMAL) => {
                 labels.setting_priority_normal.to_owned()
             }

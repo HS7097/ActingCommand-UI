@@ -46,8 +46,8 @@ use actingcommand_runtime_config::{
 };
 
 use super::{
-    ConfigEdit, SettingSource, SettingsRead, ShownParameter, ShownValue, IDLE_CLOSE_APP,
-    IDLE_NONE, IDLE_STOP_EMULATOR,
+    ConfigEdit, SettingSource, SettingsRead, ShownParameter, ShownValue, IDLE_AUTO,
+    IDLE_CLOSE_APP, IDLE_NONE, IDLE_STOP_EMULATOR,
 };
 
 /// What [`SettingsRead`] keeps of a blackout list's row: its entries as the Runtime's parser reads
@@ -315,6 +315,8 @@ pub enum IdleNow {
     CloseGame,
     /// `stop_emulator`: only shown. Either [`IdleChoice`] replaces it.
     StopEmulator,
+    /// `auto` (IDLE-2: a tier by the idle time, up to stopping the emulator): only shown too.
+    Auto,
     /// A word of the key's range this file has no name for, as written.
     Other(String),
 }
@@ -325,6 +327,7 @@ impl IdleNow {
             IDLE_NONE => Self::Nothing,
             IDLE_CLOSE_APP => Self::CloseGame,
             IDLE_STOP_EMULATOR => Self::StopEmulator,
+            IDLE_AUTO => Self::Auto,
             other => Self::Other(other.to_owned()),
         }
     }

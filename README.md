@@ -27,12 +27,14 @@ and guesses nothing.
   `acforward.exe` (the fixed entry), `LICENSE`, `README.md` and the `BUILD-MANIFEST.json` that binds them
   to their commit; `acsetup.exe` is not in it for now (see the note above). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
-  of Runtime v0.12.47; the pin is now v0.12.53.
-- **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 27], `ledger` [3, 7],
-  `runtime-client` [3, 5] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.53, which
-  declare the same interfaces but acsetup's `package` ([3, 8] from v0.12.50); whether another Runtime
-  fits is judged from the interfaces each side declares, not from version numbers (see "Component
-  interfaces").
+  of Runtime v0.12.47; the pin is now v0.12.55.
+- **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 28], `ledger` [3, 8],
+  `runtime-client` [3, 7] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.55: each of
+  them declares a `ledger` maximum within [3, 8] and an `actingd-config` and a `runtime-client` range
+  that meet the console's. v0.12.55's ledger (revision 8) is one way: once a v0.12.55 Runtime has run on
+  a state root, no earlier Runtime opens it, and a console whose `ledger` range ends at 7 may fail to
+  read it, so switch the console first, then the Runtime. Whether another Runtime fits is judged from
+  the interfaces each side declares, not from version numbers (see "Component interfaces").
 - **The 0.11 series**: UI v0.11.4 and earlier speak the 0.11 protocols only and cannot connect to a
   0.12 Runtime. The 0.11 series is not maintained.
 - **What changed**: each release's notes on its Releases page say what changed in it.
@@ -223,8 +225,44 @@ was read and Read Earlier is not offered, moving "Show up to" again or a tab or 
 locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
 reopening, which read without it.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.53
-(#429 R-6, v0.12.53: the contract crate gives the request `StopInstanceRun` its success code
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.55
+(#428 S168-LB1a, v0.12.55: a `fact.published` record's `record_list` may hold up to 1024 rows
+(`MAX_FACT_RECORD_LIST_ROWS`, 256 before), which ledger revision 8 adds, one way (once a Runtime that
+declares it has run on a state root, no earlier Runtime opens it), and `runtime-client` revision 7 lets an
+`InstanceFactSnapshot` answer carry such a list, its request an optional `key_prefix` and its answer an
+optional `records_total`; the console sends no `InstanceFactSnapshot`, and an online ledger page's public
+projection of a `fact.published` carries no rows, so a long list never reaches it online, and offline the
+pinned crates read one; #429 R-6b (R-6b1, R-6b2) joins those two revisions, raising nothing:
+`policy.execution_recorded` gains a third result kind, `stopped` (`outcome`, `runtime_ms`), the
+settlement of a scheduled run a `StopInstanceRun` stopped, beside its `task.failed` terminal with
+`contained_task_cancelled`, which a console built on v0.12.53 cannot decode (offline the page that holds
+it fails whole, online `runtime_receipt_decode_failed`) and this one decodes; from v0.12.55 the Runtime
+stops a scheduled run too, asked by actinglab `task stop` or the Lab's tool, while MCP `ac_stop_run` and
+actinglab `run stop` still refuse every scheduled run, and this console's Stop This Run still stops only a
+direct run; v0.12.54's configuration revision 28 adds the value `auto` of `idle.action` and the keys
+`idle.return_home_min_gap_ms` and `idle.stop_emulator_min_gap_ms`, each also per instance (#386 IDLE-2),
+and `instance.<instance id>.scheduling.pool_lines` (#428 SCHED-C1e), every new key `hidden` in `ui_tier`,
+so the settings page shows no new row; the settings page shows `auto` as "choose by the idle time", and
+an account's rules panel says "It is now “choose by the idle time”, which is not offered here" and does
+not offer it; the requests `PackScheduleView` and `EditPackSchedule` gained the success codes
+`request_pack_schedule_view_completed` and `request_edit_pack_schedule_completed` (#429 R-8), neither a
+request the console makes; `contained_task_state_invalid` says what was invalid with the optional values
+`state_problem` (vocabulary `state_problem`: `held_state_unusable`, `no_move_from_page`,
+`runtime_invariant`, `transition_refused`), `phase_id`, `package_id`, `page_id` and `pack_operation_id`
+(#428 DIAG-SI), `runtime-outcomes` still 1; in the outcome-code catalog it embeds five codes (those two
+success codes, `consumption_fact_unusable`, `policy_fact_rows_exceeded` and
+`selection_decided_on_lower_bound`), nine keys, the vocabularies `consumption_source`, `lines_source`,
+`list_max_bound` and `state_problem` and the token `list_bytes_exceeded` of `reading_problem`, with no
+code retired, removed or re-categorised and no `console_` or `setup_` name; the ledger crate pairs a
+stopped run's record with its `task.failed` terminal and recovers such a run as `stopped` (R-6b); policy
+and selection-policy, which runtime-client links, gained the lines of a pool per instance (SCHED-C1e), a
+run's consumption read from a fact (#428 SCHED-C1f1), a no-progress guard held only for its own cause
+(#428 SS-4b) and the lower bound of a list maximum (#428 S168-LB1b); runtime-client gained the read by
+key prefix and reads a stopped run's summary;
+ledger-forensics, artifact-store and runtime-database have the same source, and the defaults file
+runtime-config and ledger-forensics embed only gained the two idle defaults (600000 and 7200000 ms),
+which ledger-forensics does not read; the Runtime's `Cargo.lock` is unchanged and no external crate moved;
+v0.12.53's #429 R-6: the contract crate gives the request `StopInstanceRun` its success code
 `request_stop_instance_run_completed`, so a console built on it checks the receipt of a stop a v0.12.53 Runtime
 completes, which one built on v0.12.47, where the kind had no success code, would mis-check; a stop refused for a
 run the scheduler or the Runtime itself started, `scheduled_contained_task_not_client_cancellable`, names who
@@ -280,10 +318,10 @@ device switches its two backends while the Runtime runs, #402 HS-1 to HS-4, and 
 long as the contract's `BACKEND_SWITCH_WAIT_MS` and the client's IO margin say;
 with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 AGT-1b's optional status member
 `agent_wake`, which the console reads and does not show, on top of #429 R-0b, R-4, R-11, R-7a and 114-A; it keeps
-v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 5, ledger revision 7):
+v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 7, ledger revision 8):
 
 ```
-rev = "59fa27f0f71904b651c67f50108387fa53f541ff"
+rev = "c0f75c7e833bd42773d1a55a22c920b3b6df1662"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -560,7 +598,7 @@ or on a handset scrcpy, for capture), with where the value comes from (the confi
 online, when and through which way) and the device's latest self-check. Apply switches that device at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.53, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.55, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -934,7 +972,8 @@ Over the live view, the rescue bar has one more row while the account does somet
 started: the account's activity in the last status read is `direct_run`, naming its `request_id` (a run
 of the Lab's `run start`, `actingctl task-run` or the MCP tool `ac_run_pack`, say). A run the scheduler
 dispatched and a step the Runtime started itself send nothing: the button stays off and says why (a
-scheduled one is stopped with Pause This Account on its card). One press sends it, with no second
+scheduled one is stopped with Pause This Account on its card); from v0.12.55 the Runtime can stop a
+scheduled run too, but this console does not send that yet (a later slice). One press sends it, with no second
 question: one `StopInstanceRun` on a worker thread over a fresh person's connection, `wait_ms` 5 s; the
 Runtime stops the run at its next checkpoint, resets the device itself with the run's own lease, and
 answers. What it came to is said under the row, with when; never a code or a request id on screen, and
@@ -983,7 +1022,7 @@ another press costs only three more ledger records (`ui.action`, `command.receiv
   module's `instance add` (Runtime INST-5) sets on the account it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
-  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.53 has
+  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.55 has
   both. An instance
   pause still draining or handing its device back gets none either: the Runtime refuses its resume
   then. Each line shows its pause's reason verbatim, whatever the operator wrote.
