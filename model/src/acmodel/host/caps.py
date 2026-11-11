@@ -30,7 +30,9 @@ DEFAULT_PAUSE_POLL_MS = 5000
 
 _TIME = re.compile(r"([01][0-9]|2[0-3]):([0-5][0-9])")
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-_NESTED = {
+# The members of `compute` and `host` that are objects of keys themselves, with their keys (config.py enumerates every
+# configuration key through it, `acmodel.config.keys`).
+NESTED = {
     ("compute", "job"): {"cpu_rate_milli", "worker_memory_mib"},
     ("host", "memory"): {"start_min_mib", "pause_below_mib", "report_plan_above_mib"},
     ("host", "cpu"): {"pause_load_milli", "window_ms"},
@@ -121,7 +123,7 @@ def _object(parent: dict[str, Any], parts: tuple[str, str], invalid: Invalid) ->
     if not isinstance(value, dict):
         raise invalid("value_invalid", parts)
     for key in sorted(value):
-        if key not in _NESTED[parts]:
+        if key not in NESTED[parts]:
             raise invalid("member_unknown", (*parts, key), key=key)
     return value
 

@@ -32,7 +32,7 @@ python3 -I -B <model>/acmodel.py <command>    (elsewhere)
 | `economy <model> --state <file> [--steady-only [--quick]]` | Runs as `run` does, then the economy's steady state and plan (`formats.md`, "The economy"): LP and MILP solved by scipy's HiGHS, every solution checked exactly; the steady state's dual too, from which come its prices, the joint price vector and the activity judgements (`joint`, PRICE-2b-1). It computes only the graph nodes they read, incrementally through the cache, and writes only under `paths.state_root`. A blocked output's errors list it in `needed_by` (`economy:steady`, `economy:plan`), and the exit status is 1; the warnings `lp_dual_disagrees` (a HiGHS marginal compared within a relative tolerance of 1e-7), `objective_tier_tie`, `lp_probe_unverified` (a per-activity probe, a tie or a judgement, that could not be verified exactly: reported unverified, its component a structural gap, PRICE-2c) and `search_budget_exhausted` never change it. With `--steady-only` it computes the steady state alone, as a rule regression needs it: the plan is not computed, so `data` has no `plan`, no error that only the plan has (such as `state_reading_missing` of a state sample without readings) is reported, and the exit status is 0 when the steady state is computed. Its run id is not that of `economy` without the flag. With `--quick` too, for iteration only, it stops after the three solves and the least losses and shows `data.quick` instead of `data.steady` (`formats.md`, "The quick look"): its own cache node and run id, which nothing else reads. Acceptance reads the full run, never this; `--quick` without `--steady-only` is `usage_invalid` (`argument_unexpected`). The steady state's `coverage` section classes each pool (covered, structural gap, verified zero, unknown) and lists the static components, with each price's status from its component, and the estimates it read (`formats.md`, "Coverage"). | `path`, `model_id`, `state`, `run_id`, `steady` (not with `--quick`), `plan` (not with `--steady-only`), `quick` (only with `--quick`), `work` |
 | `explain <model> <output> --state <file>` | Runs as `run` does, without the cache, and prints the provenance document of one output (`rule:<id>`, `general_logic:<id>` or `threshold:<id>`; or, computing the economy's steady state with the keys under `lp` and `economy`, `price:<resource>` or `activity_value:<activity>`, PRICE-2b-1, a price with the status of its static component; `formats.md`, "Outputs"). It writes nothing. An id that is not an output is `usage_invalid` (`output_unknown`); a blocked output reports the errors that block it (exit 1). | `path`, `model_id`, `state`, `output`, `provenance` |
 | `export thresholds <model> --state <file>` | Runs as `run` does, without the cache, then writes `out/thresholds.json` and one provenance file per threshold into the model folder (`formats.md`, "Outputs"). Only account-independent, confirmed, integer thresholds are exported: any other is `export_refused` (exit 5), and then nothing is written. A per-account value never enters these shared files. | `path`, `model_id`, `state`, `written` (the files written) |
-| `export prices <model> --state <file>` | Runs as `run` does, without the cache, then the economy's steady state with the keys under `lp` and `economy`, and the impact assessment of its estimates (each estimate moved to its ends or variants and the joint price vector computed again), then keeps the steady state's tree, which every price's provenance reads, once under `paths.state_root` (`provenance/<model_id>/<sha256>.json`, PRICE-4a2; never in the model folder), and writes `out/prices.json` and one provenance file per pool into the model folder, each naming that tree by its digest (#424 ACM-PRICE PRICE-4a; `formats.md`, "`acmodel export prices`"). A confirmed covered price is exported; a provisional one under a current acceptance of exports.json (`binds`, `scope`, `flips`), a verified zero under its `accept_zero`; every other is `pending`, with why. It needs exports.json's `prices.unit_milli` (κ; `model_file_invalid`, exit 1, without it). A blocked steady state, or an estimate or pass of the assessment that is blocked, is `export_refused` (exit 5), and then nothing is written. The warnings `estimate_missing`, `acceptance_stale` and `acceptance_incomplete` say why a price is pending and never change the exit status. | `path`, `model_id`, `state`, `unit_milli`, `counts` (the pools of each class, `exported`, `pending`), `shared` (the tree's digest and its file under the state root), `written` |
+| `export prices <model> --state <file> [--reuse-assessment <folder>]` | Runs as `run` does, without the cache, then the economy's steady state with the keys under `lp` and `economy`, and the impact assessment of its estimates (each estimate moved to its ends or variants and the joint price vector computed again), then keeps the steady state's tree, which every price's provenance reads, once under `paths.state_root` (`provenance/<model_id>/<sha256>.json`, PRICE-4a2; never in the model folder), and writes `out/prices.json` and one provenance file per pool into the model folder, each naming that tree by its digest (#424 ACM-PRICE PRICE-4a; `formats.md`, "`acmodel export prices`"). A confirmed covered price is exported; a provisional one under a current acceptance of exports.json (`binds`, `scope`, `flips`), a verified zero under its `accept_zero`; every other is `pending`, with why. It needs exports.json's `prices.unit_milli` (κ; `model_file_invalid`, exit 1, without it). A blocked steady state, or an estimate or pass of the assessment that is blocked, is `export_refused` (exit 5), and then nothing is written. The warnings `estimate_missing`, `acceptance_stale` and `acceptance_incomplete` say why a price is pending and never change the exit status. prices.json records the evaluator digest (`evaluator`; see Cache, "The evaluator digest"). With `--reuse-assessment <folder>`, the out folder of an earlier export, named explicitly (it is never looked for), the impact assessment is taken over from that folder's `prices.json` instead of computed again (#424 PRICE-REUSE; `formats.md`, "Taking an assessment over"): only when its `versions` (rules, data, tool), its evaluator digest and, once the steady state is computed, its shared tree's digest are this export's. Otherwise `reuse_refused` (exit 5), one error per member that differs with both values, and nothing is assessed or written; it never falls back to the full export. An earlier export that recorded no evaluator digest (written before PRICE-REUSE, or `acmodel.prices.v1`) is always refused (`not_recorded`); a folder without a readable prices.json is `model_file_invalid` (exit 1). The folder is only read, and may be the model's own `out`. | `path`, `model_id`, `state`, `unit_milli`, `counts` (the pools of each class, `exported`, `pending`), `shared` (the tree's digest and its file under the state root), `written`, and with `--reuse-assessment` `reused_assessment` (the earlier `file` and what prices.json records of it) |
 | `verify prices <model> --state <file>` | Runs as `run` does, without the cache, then checks the shared tree that `out/prices.json` names (PRICE-4a2; `formats.md`, "`acmodel verify prices`"): when the versions it records are the model's, it computes the steady state with the keys under `lp` and `economy` and its tree again, whose digest must be the recorded one, and each price's provenance file must name that digest. Recorded versions that are not the model's are `shared_tree_stale` (exit 6, nothing computed); a digest that differs is `shared_tree_mismatch` (exit 6, `recomputed` or `referenced`); no prices.json is `model_file_invalid` (exit 1). Every problem is reported at once. A tree that checks is kept under the state root when no intact copy is there; nothing else is written. | `path`, `model_id`, `state`, `file`, `shared` (by root: `sha256`, `recomputed`, `nodes`, `file`, `restored`) |
 | `export tables <model> --state <file> --repo <repository>` | Runs as `run` does, without the cache, then writes each table of exports.json into `<repository>/tables/<table_id>.json` as canonical JSON (`actingcommand.table.v1`), and the provenance file of each output it delivers into the model folder (`formats.md`, "`acmodel export tables`"). Each cell follows the export policy (`formats.md`, "The export policy"): a provisional output that is not accepted is `null`, a blocked or per-account one is `export_refused` (exit 5). Each table written is then checked by the validator `paths.actinglab` (`--json resource validate --repo <repository> --changed-path tables/<table_id>.json`), whose answer is read in either shape it prints: the envelope (`ok`, `data`, `error`) or, from Runtime 0.12.50, the CLI line (a top-level `outcome`; `formats.md`, "`acmodel export tables`"). Without it, nothing is written (`export_validator_missing`, exit 5); on a refusal (`export_table_invalid`, exit 5), a failed write or no usable answer, every file written gets its previous bytes back. It never commits. | `path`, `model_id`, `state`, `repo`, `tables`, `written` (the files written) |
 | `export scoring <model> --state <file>` | Runs as `run` does, without the cache, and fills each scoring template of exports.json with the model's numbers by the export policy (`formats.md`, "`acmodel export scoring`"). One refused placeholder refuses its whole document (`export_refused`, exit 5). Until the place of `scoring.json` and its validator are decided, a template that fills is refused too (`validator_path_unknown`, exit 5), and nothing is written. | `path`, `model_id`, `state`, `written` |
@@ -45,9 +45,10 @@ python3 -I -B <model>/acmodel.py <command>    (elsewhere)
 
 A command is one word, or a group and a word: `export`, `verify`, `bindings` and `cache` are groups
 (`export thresholds`, `export prices`, `verify prices`, `bindings check`, `cache stats`), and the envelope's `command` is both words. Every
-argument and option a command names is required, and an option takes one value. A missing one is
-`usage_invalid` (`argument_missing`, with the argument's or option's name), and an extra or repeated one is
-`usage_invalid` (`argument_unexpected`). A flag (`--strict-provenance` and `--report-supplements` of `check`,
+argument and option a command names is required, and an option takes one value, but for `--reuse-assessment` of
+`export prices`, which takes one value and is optional (#424 PRICE-REUSE). A missing one, or an optional option without
+its value, is `usage_invalid` (`argument_missing`, with the argument's or option's name), and an extra or repeated one
+is `usage_invalid` (`argument_unexpected`). A flag (`--strict-provenance` and `--report-supplements` of `check`,
 `--steady-only` and `--quick` of `economy`, `--quick` only with `--steady-only`, `--strict` of `bindings check`, `--apply` of `cache gc`) takes no value, is optional and may be given once. A state root without a cache is reported by the `cache`
 commands as `exists: false`; they create nothing.
 
@@ -274,6 +275,96 @@ what needed it.
   or of a drop from samples, `random.max_transitions` for a pity chain, and `random.enclosure_digits` for both
   random rules. They declare no library.
 - A **node key** is the sha256 of the spec hash and the sorted (input, value hash) pairs of its trace.
+
+**The evaluator digest** (#424 PRICE-REUSE; `src/acmodel/core/evaluator.py`). `export prices` records in prices.json
+(`evaluator`; `formats.md`, "`acmodel export prices`") what computed its steady state and its impact assessment besides
+the model's inputs, so that a later export takes that assessment over only when the same code, libraries and
+configuration would compute it again (`--reuse-assessment`). The tool's `__version__` is not bumped on a change, so the
+code is named by its bytes:
+- `source`: the sha256 of the canonical JSON of the list of [path, sha256 of the file's bytes] of every `.py` file of the
+  acmodel package (the folder of `acmodel/__init__.py`, `model/src/acmodel/` in the repository), each path relative to
+  that folder with `/`, the list sorted by path (by code point). Nothing under a `__pycache__` folder is read, and no file
+  but a `.py` one (a `.pyc` neither). The launcher, the contracts and the tests are not the package and are not read;
+- `libraries`: the versions of the libraries the steady state's node kind declares (`EVALUATORS["economy"]` in
+  `cache/keys.py`: `numpy`, `python`, the minor version, and `scipy`), as the node's token takes them;
+- `config`: **every configuration key** (the table of "Configuration"; in the code `config.keys()`, from the table the
+  reading checks every member against) **but the two lists below**, each by its dotted name (`lp.grain`) with its value
+  as read or by default, sorted by name: an integer, as its decimal text when it lies beyond ±(2<sup>53</sup> − 1), which
+  canonical JSON does not hold; a string (`unknowns.drop_z`); or a boolean;
+- `sha256`: the sha256 of the canonical JSON of `{source, libraries, config}`.
+
+A key is in the digest unless a list below names it, so a key the configuration comes to have is in it from the start.
+The code holds the same two lists with the same reasons (`NEUTRAL` and `PLAN_ONLY` in `core/evaluator.py`); a list that
+names what is no key, a key both name, and a key of the digest the code cannot read are refused, so every export fails
+until the key is placed, and a test holds every key to exactly one of the three. When it is unclear whether a key can
+change a result, it is in. The libraries are read from where the cache key is made (`EVALUATORS`), never listed again,
+and a test holds the digest's configuration to hold every key of the spec the graph builds for the steady state's node
+(above, "Economy nodes" and the spec hash). Neither the versions nor a price's provenance file holds the digest, so no
+`binds` moves with it.
+
+*Left out: the keys that never change a result*, that is, what a computation that finishes computes: where files are, the
+cache, the host caps and the gate (whether, when and how fast the work runs), the time and the memory a process may take
+and the restarts a pool may make (past them a computation fails, it never computes otherwise), the verify sample, and two
+chunk sizes. A limit that a computation meets the same way each time (`expr.max_bits`, `random.max_transitions`,
+`search.screen_max_rows`) is never left out: past it the computation is refused, and a reuse must be refused where the
+assessment would be.
+
+| Key | Why it never changes a result |
+|---|---|
+| `paths.venv` | where the venv is: the libraries it holds are `libraries`, and the code the tool runs is `source`; a local path |
+| `paths.state_root` | where the cache, the runs' outputs and the shared trees are kept: `export prices` computes without the cache, and a shared tree is compared by its digest; a local path |
+| `paths.datasets` | where the copies of the external datasets are: each is the file named by the sha256 its data file declares (in the data version), and only that hash is checked; a local path |
+| `paths.actinglab` | the validator of `export tables`: it accepts or refuses a table and never changes one, and `export prices` does not run it; a local path |
+| `export.validator_timeout_ms` | how long that validator may take: past it that export fails |
+| `compute.priority` | the priority class: how soon the work is scheduled, never what it computes |
+| `compute.job.cpu_rate_milli` | the CPU cap of the Job: how fast the work runs, never what it computes |
+| `compute.job.worker_memory_mib` | the memory limit of each process in the Job: past it the process is stopped, a failure |
+| `cache.max_bytes` | the size cap of the cache: an evicted value is computed again, the same; `export prices` computes without the cache |
+| `cache.wait_ms` | how long a connection waits for the cache's lock: past it the command is `cache_unavailable` |
+| `host.memory.start_min_mib` | the gate: the available memory a batch starts at |
+| `host.memory.pause_below_mib` | the gate: the available memory a batch pauses below |
+| `host.memory.report_plan_above_mib` | the gate: which runs are reported before they start |
+| `host.cpu.pause_load_milli` | the gate: the CPU load that holds it |
+| `host.cpu.window_ms` | the gate: the span the CPU load is averaged over |
+| `host.quiet_windows` | the gate: the hours without compute |
+| `host.pause_file` | the gate: the file whose presence holds it; a local path |
+| `host.pause_poll_ms` | the gate: how often a waiting gate checks again |
+| `engine.verify_hash_seed` | the hash seed of the verify worker: the verify sample runs calls again only to refuse an engine whose outcome is not a function of its request (`engine_nondeterministic`), and never changes a result kept |
+| `engine.verify_sample_milli` | the share of a call's requests the verify sample runs again: it refuses a nondeterministic engine, and never changes a result kept |
+| `engine.request_timeout_ms` | how long a request may take: past it the batch fails (`engine_failed`, `timeout`) |
+| `engine.start_timeout_ms` | how long a worker may take to start or to stop: past it the call fails or the worker is killed |
+| `engine.restart_budget` | how many workers that ended abnormally a pool replaces: past it the call fails (`restart_budget_exhausted`) |
+| `engines.roots` | where each engine's home is on this host: what an engine computes is named by its fingerprint, which every engine call's cache key holds, not by where it is; a local path |
+| `unknowns.chunk_size` | the samples drawn per Philox call: sample s is the block at counter s however the draws are chunked |
+| `search.screen_chunk_rows` | the rows of a slot product the search's screen takes per chunk: it never changes a result |
+| `watch.poll_interval_ms` | how often `watch` scans its files: when a refresh runs, never what it computes |
+| `watch.debounce_ms` | how long `watch` gathers changes into one refresh: when a refresh runs, never what it computes |
+
+*Left out: the keys only the plan reads*; neither the steady state, nor its vector, nor the impact assessment reads them.
+
+| Key | Where only the plan reads it |
+|---|---|
+| `economy.plan_horizon` | the steps of an account's plan (`core.flow`, `_Reader.model`; the steady state's steps are its cycle), and the plan's spec (`spec_keys`) |
+| `search.milp_node_limit` | the node budget of the plan's MILP (`core.flow`, `_Solver.milp`, which only the plan's solves call; the steady state and its vector solve LPs), and the plan's spec (`spec_keys`) |
+
+*In the digest*, so: `compute.blas_threads`, `compute.workers.max`, `economy.max_cycle_steps`, `engine.hash_seed`,
+`engine.reset_each_batch`, `engine.worker_max_requests`, `engine.worker_soft_memory_mib`, `expr.max_bits`, `lp.grain`,
+`lp.max_denominator`, `lp.max_pivots`, `random.enclosure_digits`, `random.max_transitions`, `search.exact_max`,
+`search.node_limit`, `search.screen_max_rows`, `search.screen_scale`, `search.top_k`, `sensitivity.top_n`, the keys under
+`unknowns` but `chunk_size`, and `watch.keep_workers_warm`. Those under `unknowns`, `sensitivity` and `random` are not in
+the steady state's spec, but what the steady state or the assessment reads may depend on them (a Wilson bound, a pity
+chain, an enclosure's digits) while the shared tree, which names what was read and not its values, stays the same.
+Nothing `export prices` runs calls an engine or the search yet; the keys that shape what one computes (an engine
+worker's hash seed, `reset()` after each batch, the recycling of a worker, how many workers share the requests and
+whether `watch` keeps them warm; the search's budgets and scales) are in all the same, as are the BLAS threads, whose
+number may change a float's last digits.
+
+Its limits:
+- it names the bytes, so a checkout whose line ends differ (Git's `core.autocrlf`), or any edit of a source file, even of
+  a comment, is another digest, and a reuse across them is refused: a refusal, never a wrong result. Run the full export
+  of a batch and the exports that reuse its assessment in the same checkout;
+- the account state is not in it: neither the steady state nor the assessment reads it (both read the reference state
+  only, and the assessment refuses an estimate that needs the account state, `per_account`).
 
 **Verifying traces.** A node is reused when one of its traces, the most recently used first, still holds:
 every input, in the order read, hashes as recorded. The check stops at the first input that differs, so an

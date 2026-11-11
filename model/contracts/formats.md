@@ -1683,6 +1683,8 @@ uncertainty of the estimates is assessed here.
 | `estimates` | each provisional derive the steady state read, by id: `rule`, `value` (its point value), `estimate` (as written, or null), `components`, `assessed`, and `skipped` (null, `structural_gap` or `estimate_missing`) |
 | `impact` | the assessment's groups, each `{rules, unknowns, passes, prices, flips}`: its derives; the unknowns they move by; each pass's `at` (each unknown's point or end, or the derive's `low` or `high`) and `values` (each derive's moved value); the pools whose price moves in it, with `low` and `high`; and the activities whose class flips in it |
 | `counts` | the pools of each class, and how many are `exported` and `pending` |
+| `evaluator` | the evaluator digest (#424 PRICE-REUSE; `cli.md`, "Cache", "The evaluator digest"): `sha256`, over the other three; `source`, the digest of the tool's source files; `libraries`, the versions of the libraries the steady state's node declares (`numpy`, `python`, `scipy`); `config`, every configuration key but those that never change a result and those only the plan reads (both listed, key by key, in `cli.md`), by its dotted name (`expr.max_bits`, `lp.grain`, `unknowns.seed`, …), sorted, with its value: an integer (its decimal text beyond ±(2<sup>53</sup> − 1)), a string or a boolean. Every file written from PRICE-REUSE on has it; an earlier one may not. It is in neither `versions` nor a price's provenance file |
+| `reused_assessment` | only in a file whose assessment was taken over (`--reuse-assessment`, below): `prices_sha256`, the sha256 of the earlier prices.json's bytes; its `versions`; `shared`, each of its shared trees' digest by root; `evaluator`, its evaluator digest's `sha256`; `members`, what was taken over (`estimates.assessed`, `estimates.skipped`, `impact`, `prices.flips`, `prices.impact`) |
 
 A pool's entry: `pool`; `class`, `status`, `reasons` and `component`, from the coverage section; `price`, the exported price
 as an exact rational, or `pending`; `milli`, the price times κ (thousandths of a priority per unit), or null; `pending`,
@@ -1696,9 +1698,32 @@ and `provenance`, its provenance file. The provisional derives its component rea
 `components` hold its `component`.
 
 `acmodel.prices.v1`, which `export prices` wrote before, is the same but for one member: each pool's entry also lists
-`estimates`, the provisional derives its component read (the same list for every pool of a component). A v1 file is still
-read, by that version's format, and verified: `verify prices` checks it as it checks a v2 file, and `bindings check` reads
-its coverage from either. `export prices` writes v2 only.
+`estimates`, the provisional derives its component read (the same list for every pool of a component), and it has
+neither `evaluator` nor `reused_assessment`. A v1 file is still read, by that version's format, and verified: `verify
+prices` checks it as it checks a v2 file, and `bindings check` reads its coverage from either. `export prices` writes v2
+only. The two members PRICE-REUSE added are optional members of v2, with no new `schema_version`: a v2 file written
+before them is still a v2 file, read as before.
+
+**Taking an assessment over** (`--reuse-assessment <folder>`, #424 PRICE-REUSE). The impact assessment is the bulk of an
+export's time, and it reads neither exports.json (the acceptances are applied after it) nor the account state; so an
+export whose model, tool and configuration are those of an earlier one may take its assessment over instead of computing
+it again, and pays one steady state. The earlier export is named by its out folder, never looked for; its `prices.json`
+is read first (`model_file_invalid` when there is none, or it is no prices file).
+1. Its `versions` (`rules`, `data`, `tool`) and its `evaluator` must be this export's, member by member, after the model
+   is run and before the steady state is computed. A file without `evaluator` (written before PRICE-REUSE, or a v1 file)
+   is never reused (`not_recorded`).
+2. The steady state is computed, and its tree; each shared tree's digest must be the recorded one.
+3. Then, without the assessment, each pool's `flips` and `impact`, each estimate's `assessed` and `skipped`, and the
+   groups (`impact`) are the earlier file's (checked as `export prices` writes them, `model_file_invalid` otherwise, and
+   for the same pools and estimates); everything else is computed as without the option: the coverage, the joint vector,
+   the provenance files and `binds`, the acceptances of exports.json with what they lack (`acceptance_incomplete` reads the
+   flips taken over), the counts. prices.json records `reused_assessment`; without that member it is, byte for byte, the
+   file the full export writes from the same inputs, and the provenance files are the full export's.
+
+Anything that differs is `reuse_refused` (exit 5; one error per member, `member` such as `versions.rules`,
+`evaluator.config.lp.grain` or `shared.economy:steady`, `expected` the earlier value and `found` this export's, `none` for
+a side without it, `ref` its pointer in the earlier file), and nothing is assessed or written: the export never falls
+back to the full one. The folder is only read; it may be the model's own `out`, which the export then writes over.
 
 **Refusals and writing.** A blocked steady state is `export_refused` (`blocked`, `output` `economy:steady`, at `/prices`)
 with the errors that block it; so are the assessment's (above). Then nothing is written. The warnings `estimate_missing`,
@@ -1706,10 +1731,12 @@ with the errors that block it; so are the assessment's (above). Then nothing is 
 UTF-8 and LF line ends; a write that fails is `export_write_failed` (the shared tree is written first, so a failure there
 writes nothing into the model folder); nothing is deleted. `data` holds `path`, `model_id`, `state`, `unit_milli`,
 `counts`, `shared` (by root, `sha256` and the state root's `file`) and `written` (the shared tree's file only when it was
-written now).
+written now), and with `--reuse-assessment` `reused_assessment`: the earlier prices.json's `file` and what this one
+records of it.
 
 **What it costs.** One steady state, then one vector per pass that moves something. Each pass solves as much of the
 steady state as its vector needs, so a model whose open components read many estimates pays roughly that many times.
+An export that takes its assessment over pays the steady state alone.
 
 ### `acmodel verify prices <model> --state <file>`
 

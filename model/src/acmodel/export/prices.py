@@ -32,14 +32,27 @@ priority too (`milli`); prices of two games are never compared (137 K2).
 `economy:steady`); and the assessment's own (`core.impact`). The warnings `estimate_missing`, `acceptance_stale` and
 `acceptance_incomplete` say why a price is pending; they never change the exit status. A write that fails is
 `export_write_failed`. Nothing is deleted.
+
+**The evaluator digest and the reused assessment** (#424 PRICE-REUSE). prices.json records the evaluator digest
+(`evaluator`, `core.evaluator`): the tool's source, the libraries of the steady state's cache key, and every configuration
+key but those listed as never changing a result and those only the plan reads; neither the versions nor the price
+provenance files hold it, so no `binds` moves with it. With `reuse` (the out folder of an earlier export,
+`--reuse-assessment`), the impact assessment, which reads neither exports.json nor the account state, is taken over
+from that folder's prices.json instead of computed again, but only when its versions, its
+evaluator digest and, once the steady state is computed, its shared tree's digest are this export's; otherwise
+`reuse_refused`, one error per member that differs, and nothing is written. Each pool's `flips` and `impact`, each
+estimate's `assessed` and `skipped`, and the groups (`impact`) come from it; everything else is computed as without the
+option, and prices.json records where they came from (`reused_assessment`). Without that member it is the full export's
+file byte for byte.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from acmodel.cache.keys import digest
 from acmodel.check.coverage import judge
@@ -49,11 +62,12 @@ from acmodel.codes import (
     ACCEPTANCE_STALE,
     ESTIMATE_MISSING,
     EXPORT_REFUSED,
+    REUSE_REFUSED,
     SHARED_TREE_MISMATCH,
     SHARED_TREE_STALE,
 )
-from acmodel.config import EconomySettings, Unknowns
-from acmodel.core import flow, impact
+from acmodel.config import Config, EconomySettings, Unknowns
+from acmodel.core import evaluator, flow, impact
 from acmodel.core.common import CONFIRMED, solve
 from acmodel.core.coverage import CLASSES, COVERED, STRUCTURAL_GAP, UNKNOWN, VERIFIED_ZERO
 from acmodel.core.graph import GENERAL, REFERENCE
@@ -66,8 +80,8 @@ from acmodel.export import jcs
 from acmodel.export.policy import delivered
 from acmodel.export.thresholds import write_file
 from acmodel.expr import Duration
-from acmodel.model import read_prices
-from acmodel.model.jsonfile import load, refusal
+from acmodel.model import read_prices, readers
+from acmodel.model.jsonfile import load, read, refusal
 from acmodel.model.readers import EXPORTS
 
 SCHEMA_VERSION = "acmodel.prices.v2"
@@ -80,6 +94,13 @@ GAME = "game"
 WITHHELD, NOT_ACCEPTED, STALE, INCOMPLETE, SCOPE_PARTIAL = (
     "withheld", "not_accepted", "acceptance_stale", "acceptance_incomplete", "scope_partial",
 )
+# PRICE-REUSE: prices.json's evaluator digest (`core.evaluator`), and the member an export that took its assessment over
+# from an earlier one records it in, with the members it took over.
+EVALUATOR, REUSED = "evaluator", "reused_assessment"
+TAKEN = ("estimates.assessed", "estimates.skipped", "impact", "prices.flips", "prices.impact")
+# Why `reuse_refused`: the earlier file records no evaluator digest, or a member differs; `none` stands for a side that
+# has no such member.
+NOT_RECORDED, DIFFERS, NONE = "not_recorded", "differs", "none"
 
 
 def binds(doc: dict[str, Any]) -> str:
@@ -144,11 +165,146 @@ def _steady(run: Run) -> flow.Economy:
     return steady
 
 
-def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+@dataclass(frozen=True)
+class Earlier:
+    """The prices.json of an earlier export whose impact assessment this one takes over (PRICE-REUSE): where it is, its
+    bytes and its document."""
+
+    path: Path
+    raw: bytes
+    doc: dict[str, Any]
+
+    def marker(self) -> dict[str, Any]:
+        """What prices.json records of it (`reused_assessment`): the sha256 of its bytes, its versions, the digests of
+        its shared trees and of its evaluator, and the members taken over."""
+        return {
+            "prices_sha256": digest(self.raw),
+            "versions": self.doc["versions"],
+            "shared": {root: entry["sha256"] for root, entry in sorted(self.doc["shared"].items())},
+            "evaluator": self.doc[EVALUATOR]["sha256"],
+            "members": list(TAKEN),
+        }
+
+
+def read_earlier(folder: Path) -> Earlier:
+    """`prices.json` in the out folder of an earlier export (`--reuse-assessment`), read as `verify prices` reads it
+    (`model_file_invalid` when it is not there or not a prices file)."""
+    file = folder / Path(PRICES).name
+    raw = read(file, readers.PRICES.name)
+    return Earlier(file, raw, read_prices(file, raw))
+
+
+@dataclass(frozen=True)
+class _Found:
+    """What the impact assessment gives the export, computed or taken over: each pool's `flips` and `impact`, each
+    estimate's `skipped` (None when it was assessed), and the groups."""
+
+    flips: dict[str, list[str]]
+    impact: dict[str, dict[str, str] | None]
+    skipped: dict[str, str | None]
+    groups: list[dict[str, Any]]
+
+
+def _assessed(
+    run: Run, steady: flow.Economy, reach: dict[str, set[str]], gaps: set[str], missing: set[str], lacking: list[str],
+    touching: dict[str, set[str]],
+) -> _Found:
+    """The impact assessment (`core.impact`) of the steady state, as the export shows it."""
+    assessment = impact.assess(run.graph, steady, reach, gaps, missing)
+    pools = steady.data["coverage"]["pools"]
+    shown: dict[str, dict[str, str] | None] = {}
+    for pool in pools:
+        found = assessment.ranges[pool] if pools[pool]["component"] in assessment.assessed else None
+        shown[pool] = None if found is None else {"low": str(found[0]), "high": str(found[1])}
+    return _Found(
+        flips={pool: sorted(touching.get(pool, set()) & assessment.flips) for pool in pools},
+        impact=shown,
+        skipped={derive: impact.MISSING if derive in lacking else assessment.skipped.get(derive) for derive in reach},
+        groups=assessment.groups,
+    )
+
+
+def _token(value: Any) -> str:
+    """A value of `reuse_refused` (`expected`, `found`): `none` for an absent one, `true` or `false` for a boolean (a
+    configuration key of the evaluator digest)."""
+    if value is None:
+        return NONE
+    if type(value) is bool:
+        return "true" if value else "false"
+    return str(value)
+
+
+def _refused(earlier: Earlier, member: str, ref: str, expected: Any, found: Any, reason: str = DIFFERS) -> dict[str, Any]:
+    detail = {"path": str(earlier.path), "member": member, "reason": reason, "expected": _token(expected),
+              "found": _token(found)}
+    return error(REUSE_REFUSED, detail, ref)
+
+
+def differences(earlier: Earlier, model: dict[str, str], recorded: dict[str, Any]) -> list[dict[str, Any]]:
+    """`reuse_refused` of each member of the earlier prices.json that is not this export's, before the steady state is
+    computed: each of the versions (`rules`, `data`, `tool`), then the evaluator digest. An earlier file without one
+    (written before PRICE-REUSE, or of v1) is `not_recorded`. A digest of the evaluator that differs is listed member by
+    member (`source`, each library, each configuration key), and as `sha256` only when none of them differs."""
+    doc, found = earlier.doc, []
+    for name in ("rules", "data", "tool"):
+        if doc["versions"][name] != model[name]:
+            where = at("", "versions", name)
+            found.append(_refused(earlier, f"versions.{name}", where, doc["versions"][name], model[name]))
+    before = doc.get(EVALUATOR)
+    if before is None:
+        found.append(_refused(earlier, EVALUATOR, at("", EVALUATOR), None, recorded["sha256"], NOT_RECORDED))
+        return found
+    body = []
+    if before["source"] != recorded["source"]:
+        where = at("", EVALUATOR, "source")
+        body.append(_refused(earlier, "evaluator.source", where, before["source"], recorded["source"]))
+    for group in ("libraries", "config"):
+        for key in sorted(set(before[group]) | set(recorded[group])):
+            if before[group].get(key) != recorded[group].get(key):
+                member, where = f"evaluator.{group}.{key}", at("", EVALUATOR, group, key)
+                body.append(_refused(earlier, member, where, before[group].get(key), recorded[group].get(key)))
+    if not body and before["sha256"] != recorded["sha256"]:
+        where = at("", EVALUATOR, "sha256")
+        body.append(_refused(earlier, "evaluator.sha256", where, before["sha256"], recorded["sha256"]))
+    return found + body
+
+
+def _taken(earlier: Earlier, shared: dict[str, str], pools: list[str], reach: dict[str, set[str]]) -> _Found:
+    """The earlier export's assessment, once its shared trees are this steady state's (`reuse_refused`, `shared.<root>`,
+    otherwise), the members taken over are as `export prices` writes them (`model_file_invalid` otherwise), and it lists
+    the same pools and estimates (`reuse_refused`, `prices` or `estimates`, otherwise: an earlier file edited by hand)."""
+    doc = earlier.doc
+    recorded = {root: entry["sha256"] for root, entry in doc["shared"].items()}
+    errors = [
+        _refused(earlier, f"shared.{root}", at("", "shared", root), recorded.get(root), shared.get(root))
+        for root in sorted(set(recorded) | set(shared)) if recorded.get(root) != shared.get(root)
+    ]
+    if errors:
+        raise Failure(*errors)
+    readers.check_assessment(doc, earlier.path)
+    entries = {entry["pool"]: entry for entry in doc["prices"]}
+    estimates = {entry["rule"]: entry for entry in doc["estimates"]}
+    for member, before, now in (("prices", set(entries), set(pools)), ("estimates", set(estimates), set(reach))):
+        errors += [_refused(earlier, member, at("", member), name, None) for name in sorted(before - now)]
+        errors += [_refused(earlier, member, at("", member), None, name) for name in sorted(now - before)]
+    if errors:
+        raise Failure(*errors)
+    return _Found(
+        flips={pool: entries[pool]["flips"] for pool in pools},
+        impact={pool: entries[pool]["impact"] for pool in pools},
+        skipped={derive: estimates[derive]["skipped"] for derive in reach},
+        groups=doc["impact"],
+    )
+
+
+def build(
+    run: Run, recorded: dict[str, Any], earlier: Earlier | None = None
+) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     """The files of the export, by their path relative to the model folder and in the order they are written
     (`prices.json` last), what the envelope's `data` adds, the warnings, and the steady state's tree document, which the
-    price documents name by its digest and which is kept under the state root only (PRICE-4a2). A refusal raises
-    `Failure`."""
+    price documents name by its digest and which is kept under the state root only (PRICE-4a2). `recorded` is the
+    evaluator digest prices.json records (PRICE-REUSE); with `earlier`, the impact assessment is taken over from it
+    (`_taken`) instead of computed. A refusal raises `Failure`."""
     exports, checker = run.exports, run.checker
     if "prices" not in exports.doc:  # the game's price unit is needed, and has no default
         raise Failure(refusal("member_missing", exports.path, EXPORTS.name, "/prices", key="prices"))
@@ -162,15 +318,18 @@ def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, An
     gaps = {name for name, component in coverage["components"].items() if component["gap"]}
     lacking = sorted(derive for derive in reach if "estimate" not in checker.entries[derive].doc["logic"])
     missing = set().union(*(reach[derive] for derive in lacking)) if lacking else set()
-    assessment = impact.assess(run.graph, steady, reach, gaps, missing)
-    pools = sorted(coverage["pools"])
-    tree = steady_tree(run)
-    shared = {tree["root"]: tree_digest(tree)}
-    documents = economy_documents(run, [flow.PRICE + pool for pool in pools], shared)
     touching: dict[str, set[str]] = {}
     for activity in set(static.takes) | set(static.brings):
         for entity in static.takes.get(activity, set()) | static.brings.get(activity, set()):
             touching.setdefault(entity, set()).add(activity)
+    if earlier is None:
+        assessment = _assessed(run, steady, reach, gaps, missing, lacking, touching)
+    pools = sorted(coverage["pools"])
+    tree = steady_tree(run)
+    shared = {tree["root"]: tree_digest(tree)}
+    if earlier is not None:  # compared before anything is taken over: the assessment is never run
+        assessment = _taken(earlier, shared, pools, reach)
+    documents = economy_documents(run, [flow.PRICE + pool for pool in pools], shared)
     warnings: list[dict[str, Any]] = []
     for derive in lacking:
         entry = checker.entries[derive]
@@ -183,7 +342,7 @@ def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, An
         shown, joint = coverage["pools"][pool], data["joint"]["prices"][pool]
         component, document = shown["component"], documents[flow.PRICE + pool]
         digest_of = binds(document)
-        flips = sorted(touching.get(pool, set()) & assessment.flips)
+        flips = assessment.flips[pool]
         index = accepted.get(flow.PRICE + pool)
         acceptance = None if index is None else exports.doc["acceptances"][index]
         pending: list[str] = []
@@ -225,7 +384,6 @@ def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, An
                 },
             }
         files[name] = document
-        impact_range = assessment.ranges[pool] if component in assessment.assessed else None
         entries.append({
             "pool": pool,
             "class": shown["class"],
@@ -238,7 +396,7 @@ def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, An
             "joint": joint,
             "degenerate": isinstance(joint["interval"], dict),
             "varies_by_step": len({json.dumps(step, sort_keys=True) for step in data["prices"][pool]}) > 1,
-            "impact": None if impact_range is None else {"low": str(impact_range[0]), "high": str(impact_range[1])},
+            "impact": assessment.impact[pool],
             "flips": flips,
             "binds": digest_of,
             "acceptance": None if acceptance is None else {"entry": at("", "acceptances", index), **acceptance},
@@ -247,7 +405,7 @@ def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, An
     estimates = []
     for derive in sorted(reach):
         logic = checker.entries[derive].doc["logic"]
-        skipped = impact.MISSING if derive in lacking else assessment.skipped.get(derive)
+        skipped = assessment.skipped[derive]
         estimates.append({
             "rule": derive, "value": _point(run, derive), "estimate": logic.get("estimate"),
             "components": sorted(reach[derive]), "assessed": skipped is None, "skipped": skipped,
@@ -268,8 +426,13 @@ def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, An
         "estimates": estimates,
         "impact": assessment.groups,
         "counts": counts,
+        EVALUATOR: recorded,
     }
-    shown = {"unit_milli": unit, "counts": counts}
+    shown: dict[str, Any] = {"unit_milli": unit, "counts": counts}
+    if earlier is not None:
+        marker = earlier.marker()
+        files[PRICES][REUSED] = marker
+        shown[REUSED] = {"file": str(earlier.path), **marker}
     return {name: delivered(doc) for name, doc in files.items()}, shown, warnings, tree
 
 
@@ -280,14 +443,30 @@ def export_prices(
     state_root: Path,
     datasets: Path | str,
     max_bits: int,
+    libraries: Mapping[str, str],
+    settings: Config,
     unknowns: Unknowns = Unknowns(),
     economy: EconomySettings = EconomySettings(),
+    reuse: Path | str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Evaluate the model for the state and its steady state, then keep the steady state's tree under the state root
     (PRICE-4a2) and write the price provenance files and `out/prices.json`, or refuse. Returns the envelope's `data`
-    and the warnings."""
+    and the warnings. `libraries` holds the versions the tool runs with (`cache.keys.libraries`), and `settings` the
+    configuration that `max_bits`, `unknowns` and `economy` come from, for the evaluator digest (PRICE-REUSE). With
+    `reuse`, the out folder of an earlier export, its prices.json is read first, and its impact assessment is taken over
+    when its versions, evaluator digest and shared tree are this export's; otherwise `reuse_refused`, and nothing is
+    written."""
+    if (max_bits, unknowns, economy) != (settings.expr_max_bits, settings.unknowns, settings.economy):
+        raise ValueError("export_prices: max_bits, unknowns and economy differ from those of settings, which the "
+                         "evaluator digest records")
+    earlier = None if reuse is None else read_earlier(Path(reuse))
+    recorded = evaluator.record(libraries, settings)
     run = evaluate_model(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns, economy=economy)
-    files, data, warnings, tree = build(run)
+    if earlier is not None:
+        refused = differences(earlier, versions(run.checker, run.folder), recorded)
+        if refused:
+            raise Failure(*refused)
+    files, data, warnings, tree = build(run, recorded, earlier)
     sha = tree_digest(tree)
     kept, wrote = keep_tree(state_root, run.head["model_id"], tree, sha)  # first: a price document names it
     written = [str(kept)] if wrote else []
