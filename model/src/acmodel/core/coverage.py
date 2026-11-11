@@ -15,7 +15,8 @@ a rule of the component, or a rule its expressions reach, names an unknown (`unk
 - `objective_tier_tie`, an activity of S3's optima and none of S2's;
 - `probe_unverified`, an activity a probe of which could not be verified exactly (`lp_probe_unverified`, PRICE-2c):
   whether it is a tie, the most an optimum runs it, its range or its forcing cost. Conservative: an unverified tie is
-  never read as no tie.
+  never read as no tie. A forcing cost that the pivot cap left unverified is no gap when it is its activity's only
+  unverified probe (#424 PROBE-GAP, `_no_gap`): nothing the steady state prices reads a forcing cost.
 
 The pending flows the steady state left out count as `excluded_pending` only: their own items and the unknowns they
 name are not `inputs`. A component that holds no gap keeps its own status, whatever another component holds.
@@ -40,6 +41,7 @@ from typing import TYPE_CHECKING, Any
 from acmodel.check.coverage import judge
 from acmodel.codes import LP_PROBE_UNVERIFIED, OBJECTIVE_TIER_TIE
 from acmodel.core.common import CONFIRMED, PROVISIONAL, worst
+from acmodel.core.exact import PIVOT_CAP
 from acmodel.expr import Duration
 
 if TYPE_CHECKING:
@@ -55,9 +57,13 @@ PROBE_UNVERIFIED = "probe_unverified"  # PRICE-2c
 GAPS = (EXCLUDED_PENDING, NO_STEADY_SUPPLY, TIER_TIE, PROBE_UNVERIFIED)
 INPUTS = "inputs"
 # The reasons `economy --steady-only --quick` cannot rule out (PRICE-2f, `coverage_unknown`): it runs the tie probes, so a
-# `probe_unverified` it shows holds, but not the judgements' (`most`, the range, the forcing cost), so one it does not
-# show may still hold. Every other gap and `inputs` come from what the program read and the three solves.
+# `probe_unverified` it shows holds, but not the judgements' (`most`, the range, a forcing cost unverified for another
+# reason than the pivot cap; PROBE-GAP: one alone at the pivot cap makes none), so one it does not show may still hold.
+# Every other gap and `inputs` come from what the program read and the three solves.
 NEEDS_LATER_STAGES = (PROBE_UNVERIFIED,)
+# PROBE-GAP (#424): the probe of an activity's forcing cost (`core.flow.FORCING`; `core.flow` imports this module, so it
+# is named here too), which the pivot cap (`core.exact.PIVOT_CAP`) may leave unverified without a gap (`_no_gap`).
+FORCING_COST = "forcing_cost"
 # The steady state reads its nodes in the reference state (`core.flow.PREFIX`).
 REFERENCE = "reference"
 
@@ -87,6 +93,18 @@ def _reached(checker: Checker, rule: Entry) -> list[Entry]:
                 found[entry.id] = entry
                 todo.append(target)
     return [found[name] for name in sorted(found)]
+
+
+def _no_gap(warning: dict[str, Any], probes: dict[str, int]) -> bool:
+    """Whether a warning `lp_probe_unverified` leaves its activity out of `probe_unverified` (#424 PROBE-GAP;
+    contracts/formats.md, "Coverage", "A forcing cost alone is no gap"): its probe is the forcing cost, the pivot cap
+    left it unverified, and it is its activity's only warning `lp_probe_unverified` (`probes`, by activity). Its `most`
+    is then certified (a forcing cost is probed only then) and its range and tie are verified or not probed. A forcing
+    cost is solved from its own LP after the joint price vector is fixed and checked (`core.flow._Solver.joint`), and
+    no price, interval or coordinate reads it, so the warning stands and the component keeps what its other items give
+    it. Any other reason, and a forcing cost beside another unverified probe, is a gap as before."""
+    detail = warning["detail"]
+    return detail["probe"] == FORCING_COST and detail["reason"] == PIVOT_CAP and probes[detail["activity"]] == 1
 
 
 def _text(value: Any) -> str:
@@ -132,11 +150,17 @@ def report(graph: Graph, reader: Any, model: Any, warnings: list[dict[str, Any]]
         gaps.setdefault(component[activity], {}).setdefault(EXCLUDED_PENDING, set()).add(activity)
     for pool in static.unsupplied:
         gaps.setdefault(component[pool], {}).setdefault(NO_STEADY_SUPPLY, set()).add(pool)
+    probes: dict[str, int] = {}  # activity -> its warnings `lp_probe_unverified` (PROBE-GAP)
+    for warning in warnings:
+        if warning["code"] == LP_PROBE_UNVERIFIED:
+            activity = warning["detail"]["activity"]
+            probes[activity] = probes.get(activity, 0) + 1
     for warning in warnings:
         gap = {OBJECTIVE_TIER_TIE: TIER_TIE, LP_PROBE_UNVERIFIED: PROBE_UNVERIFIED}.get(warning["code"])
-        if gap is not None:
-            activity = warning["detail"]["activity"]
-            gaps.setdefault(component[activity], {}).setdefault(gap, set()).add(activity)
+        if gap is None or (gap == PROBE_UNVERIFIED and _no_gap(warning, probes)):
+            continue
+        activity = warning["detail"]["activity"]
+        gaps.setdefault(component[activity], {}).setdefault(gap, set()).add(activity)
 
     def reasons(name: str) -> list[str]:
         return [gap for gap in GAPS if gap in gaps.get(name, {})] + ([INPUTS] if name in inputs else [])

@@ -105,8 +105,12 @@ class Evaluator:
 # and the plan compute what they did. Any change to what the quick look computes bumps this version too.
 # PRICE-REUSE: the libraries `economy` declares are also those of the evaluator digest `export prices` records
 # (`core.evaluator`), which reads them from here.
+# PROBE-GAP: `economy` 11: a forcing cost alone that the pivot cap left unverified is no structural gap
+# (`core.coverage`), so the coverage section, `price_status` and the steady state's status change where one was, and
+# version 10's entries are not reused. The tool's version (`acmodel.__version__`) stays: it is `versions.tool`, in
+# every price's provenance document, so a bump would move every price's `binds` (contracts/formats.md, "Coverage").
 EVALUATORS: dict[str, Evaluator] = {
-    "economy": Evaluator(10, ("numpy", "python", "scipy")),
+    "economy": Evaluator(11, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
     "flow": Evaluator(3),
     "general": Evaluator(3),

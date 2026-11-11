@@ -1049,7 +1049,8 @@ ruling 126 A, below):
     it. Every re-solve is of S3, V alone; a price is in value units, and the numeraire, which holds nothing, has none.
 - **The status of each price** (`price_status`): resource to `{status, reasons}`, the status and the reasons of its
   static component (see "Coverage" below): `excluded_pending`, `no_steady_supply`, `objective_tier_tie` and
-  `probe_unverified` (PRICE-2c), the structural gaps the component holds, and `inputs`, a rule, row or reading of the component is provisional, depends on
+  `probe_unverified` (PRICE-2c; never for a forcing cost alone at the pivot cap, see "Coverage"), the structural gaps
+  the component holds, and `inputs`, a rule, row or reading of the component is provisional, depends on
   an unknown it leaves unresolved, or names an unknown. A confirmed price has no reason. The graph output
   `price:<resource>` shows its entry (see "The joint price vector" below).
 - **Activity values** per step: what one execution produces less what it consumes, at that step's prices, in value
@@ -1193,8 +1194,10 @@ one dual optimal point, never a pick per pool: with V = min(A, B, C), each pool'
     `forcing_cost` reads `most`, so it is unverified with it. Each unverified probe is the warning
     `lp_probe_unverified` (`probe` `most`, `range` or `forcing_cost`; none of its own for a `forcing_cost` that only
     `most` leaves unverified). An activity whose `most` or `range` is unverified is left out of K (whether an optimum
-    runs it is not known); its component counts as a structural gap (`probe_unverified`, see "Coverage"). The joint
-    price vector itself is never relaxed: the dual, the projections and the selection still block when they fail.
+    runs it is not known). The component of an activity with an unverified probe counts as a structural gap
+    (`probe_unverified`, see "Coverage"), but not for a forcing cost alone that the pivot cap left unverified, which no
+    price reads (see "Coverage", "A forcing cost alone is no gap"). The joint price vector itself is never relaxed: the
+    dual, the projections and the selection still block when they fail.
 - **The graph outputs** `price:<resource>` and the diagnostic `activity_value:<activity>` (#424 ACM-PRICE 4.1): each
   resource's and each activity's entry of `joint`, a price with its own `status` and `reasons` (its entry of
   `price_status`: its static component's, see "Coverage" below), an activity's value with the steady state's
@@ -1233,11 +1236,36 @@ unless it is written as the number 0 (`"0"`); what any other expression comes to
 `excluded_pending` (an activity the steady state left out, see "Pending flows"), `no_steady_supply` (a pool without a
 steady supply), `objective_tier_tie` (an activity of the warning `objective_tier_tie`) and `probe_unverified` (an
 activity of the warning `lp_probe_unverified`: whether it is a tie, or a judgement of it, could not be verified exactly,
-PRICE-2c; conservative, never read as no tie). Its prices are computed and
-shown, provisional, and are not exportable (PRICE-4 writes `pending`). A component with no edge to a gap keeps its own
-class and status. Two gaps of §3.3 have no place here: an `objective_tier_conflict` blocks the whole steady state (and
-with it this section), and a pool brought only within an activity window cannot be written yet (no flow is tied to a
-window before ACM-PRICE-E), so it is not in the model.
+PRICE-2c; conservative, never read as no tie; never for a forcing cost alone at the pivot cap, below). Its prices are
+computed and shown, provisional, and are not exportable (PRICE-4 writes `pending`). A component with no edge to a gap
+keeps its own class and status. Two gaps of §3.3 have no place here: an `objective_tier_conflict` blocks the whole
+steady state (and with it this section), and a pool brought only within an activity window cannot be written yet (no
+flow is tied to a window before ACM-PRICE-E), so it is not in the model.
+
+**A forcing cost alone is no gap** (#424 PROBE-GAP). The warning `lp_probe_unverified` of probe `forcing_cost` with
+reason `pivot_cap` does not make its activity `probe_unverified` when the activity has no other `lp_probe_unverified`:
+its `most` is certified (a forcing cost is probed only then; an unverified `most` leaves the forcing cost unverified
+without a warning of its own, and is a gap itself), and its `range` and its tie were verified or not probed, so its
+entry of `joint.activities` lists `unverified` `["forcing_cost"]` and nothing else. Nothing the steady state prices
+reads a forcing cost: each is solved from its own LP after the joint price vector is fixed and checked, and is shown
+only in `joint.activities` (`forcing_cost`, `input_bound`) and the diagnostic `activity_value:<activity>`; the prices
+per step (`prices`), `grain`, `rule_prices`, `activity_values`, the projections, the selection and the vector come
+before it, and the vector of the impact assessment computes none ("The joint price vector";
+`src/acmodel/core/flow.py`, `_Solver.joint`). So such a probe leaves every price, interval and coordinate as a
+verified one would: it adds nothing to `gaps`, it is no reason of `price_status`, and the component keeps the class
+and the status its other items give it. It is still reported: the warning stands, and `forcing_cost` and
+`input_bound` stay null with `forcing_cost` listed in `unverified`, never guessed. Everything else is as before: a
+tie, a `most` or a `range` that is unverified, and a forcing cost unverified for another reason, make their activity
+`probe_unverified`; `objective_tier_tie`, `excluded_pending` and `no_steady_supply` are gaps; `lp_dual_disagrees`, a
+cross-check, is still none.
+
+The tool's version is not changed for this (`acmodel.__version__`, `versions.tool`): every price's provenance document
+holds it, so moving it would move the `binds` of every price of every game, and void every `accept_provisional`, where
+no price changed. The `economy` kind's evaluator version moves instead (11, `src/acmodel/cache/keys.py`;
+`contracts/cli.md`, "Cache"), which no document holds, so the cache solves each steady state again. Where a steady
+state held such a warning, only its `coverage` and `price_status` (and the status they give it) change, so only the
+provenance documents and the `binds` of the prices of those components change. The evaluator digest's `source` moves
+with the code, as for every change of it, so `--reuse-assessment` takes no earlier assessment over (PRICE-REUSE).
 
 **The status of a price** is that of its static component: the worst status of the items of the component the steady
 state read (amounts, regen members, caps and limits, objective members, demand and costs rows, gates), each with the
@@ -1333,8 +1361,10 @@ constraint that makes it 0 (an LP fact).
   - **Probes** (PRICE-2c): a per-activity probe (a tie, `most`, `range`, `forcing_cost`) whose answer needs an optimum
     reads it only from a certified one; an answer above 0 of a tie probe holds for any exactly feasible point. A probe
     that is not verified, or whose LP fails (`lp_numeric_check_failed`, `lp_solve_failed`), is `lp_probe_unverified`, a
-    warning, and never blocks the steady state. Every other solve (S3, S1, S2, the least losses, the price re-solves,
-    the dual and every step of the joint price vector) blocks as before when its check fails.
+    warning, and never blocks the steady state; its activity is a structural gap of its component (`probe_unverified`),
+    but for a `forcing_cost` probe at the pivot cap that is its activity's only unverified probe, which no price reads
+    (see "Coverage", PROBE-GAP). Every other solve (S3, S1, S2, the least losses, the price re-solves, the dual and every
+    step of the joint price vector) blocks as before when its check fails.
 - **Infeasible.** An infeasible program is `lp_infeasible`. It names a minimal set of conflicting groups: each regen,
   cap, limit and read cap is a group, and in a plan each opening stock. They are dropped in turn, in id order, and
   each stays dropped while the rest is still infeasible. A group whose check cannot be decided is kept and listed in
@@ -1382,8 +1412,9 @@ rules, the activities' values and the joint vector.
   where the interval is wide, which point it is depends on the solver's path, so a change in it alone says nothing;
 - `coverage`, as in `steady` (see "Coverage"), from what these solves know;
 - `coverage_unknown`, the reasons they cannot rule out: `["probe_unverified"]`. A `probe_unverified` in `coverage` holds
-  (from a tie probe); one that is absent may still come from the judgements' probes (`most`, the range, the forcing
-  cost) in the full run, and turn a component into a structural gap with its prices provisional.
+  (from a tie probe); one that is absent may still come from the judgements' probes (`most`, the range, a forcing cost
+  unverified for another reason than the pivot cap; a forcing cost alone at the pivot cap makes none, see "Coverage")
+  in the full run, and turn a component into a structural gap with its prices provisional.
 
 The warnings are `objective_tier_tie` and the tie probes' `lp_probe_unverified`; the later stages' are not run.
 
