@@ -246,7 +246,8 @@ changed only in a test and the defaults file it embeds only by that same pattern
 `ui_tier` are v0.12.47's and the settings page shows no new row; policy and
 selection-policy, which runtime-client links, gained the capped spending order's trigger line and its episodes
 kept across a start (SCHED-C1c, SCHED-C1d), fixed values (SCHED-C1a) and a table maximum over a list
-(#428 S168-5a); runtime-client, ledger-forensics, artifact-store and runtime-database have the same source;
+(#428 S168-5a); runtime-client, artifact-store and runtime-database have the same source, and so has
+ledger-forensics, whose embedded defaults file differs only by that same pattern, which it does not read;
 v0.12.44's #407 GPU-1: configuration revision 27 lets the `vision` section name DirectML
 (`vision.execution_provider` `directml`, `vision.directml_device`, `vision.gpu_fallback`); the section takes
 effect at the next Runtime start, is no key of the key table, and the console neither writes nor interprets it,

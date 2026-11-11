@@ -174,7 +174,8 @@ contract crate 别的只多了程序事实 `config.catalog_provenance`（#428 SC
 没有终局、唯一一次放租是自己放的运行，写过效果或输入记录也结成中断（#428 UNSET-2），默认的 `ledger_observer.tag.workbench_patterns`
 多了 `host.capped_episodes`（#428 SCHED-C1d），账本仍是修订 7；runtime-config 的源码只改了测试，它编进去的默认值文件也只多了这同一个模式，键表的键和 `ui_tier` 都是 v0.12.47 的，
 设置页不多出行；runtime-client 链接的 policy、selection-policy 多了封顶消耗顺序的触发线和活过重启的回合（SCHED-C1c、SCHED-C1d）、
-固定值（SCHED-C1a）和列表上的表最大值（#428 S168-5a）；runtime-client、ledger-forensics、artifact-store、runtime-database 的源码没改。
+固定值（SCHED-C1a）和列表上的表最大值（#428 S168-5a）；runtime-client、artifact-store、runtime-database 的源码没改，
+ledger-forensics 的源码也没改，它编进去的默认值文件只多了这同一个模式，而这一项它不读。
 v0.12.44 起 #407 GPU-1：配置修订 27 让 `vision` 段可以写 DirectML（`vision.execution_provider` 取 `directml`、
 `vision.directml_device`、`vision.gpu_fallback`）；这一段在 Runtime 下次启动时生效，不是键表里的键，控制台不写也不解释它，
 所以设置页不多出行，写了它们的文件也在控制台声明的 `actingd-config` [5, 27] 之内。
