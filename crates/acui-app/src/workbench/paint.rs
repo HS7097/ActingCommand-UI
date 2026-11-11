@@ -9,7 +9,9 @@
 //! of the settings; and whether the Runtime is started again when it is gone. And the right
 //! column's live view, from its view, the frame's pixels once when it lands; and under it the
 //! picture's refresh, painted with it. And over the picture the account's rescue bar, and while
-//! it says so the account's rules panel in the picture's place (UI-3e1-b).
+//! it says so the account's rules panel in the picture's place (UI-3e1-b). And which of the right
+//! column's two tabs shows, and under the second the account's daily task list (UI-3f1), its
+//! reasons in the cards' words.
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -25,8 +27,8 @@ use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietRead, QuietShown};
 use acui_source::workbench::{
     PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
-    SettingValue, ValueProblem, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, MODE_FULL, MODE_OBSERVE,
-    MODE_PACE,
+    SettingValue, TasksRead, ValueProblem, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, MODE_FULL,
+    MODE_OBSERVE, MODE_PACE,
 };
 use slint::{Image, Model as _, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
@@ -36,8 +38,8 @@ use super::actions::{
     RowEdit, RuleItem, RulesHold, RulesView, Said, StartRule, StepperView, Write,
     PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
 };
-use super::card::{Band, CardView, Down, Line, ReasonClass};
-use super::model::{Fault, Page};
+use super::card::{reason_logged, Band, CardView, Down, Line, ReasonClass};
+use super::model::{Fault, Page, RightTab};
 use super::picture::{
     DimWhy, Doing, EmptyWhy, Offline, Origin, OverlayView, PictureView, RefreshHold, RefreshWhyNot,
     Refreshed, Unread,
@@ -50,6 +52,9 @@ use super::settings::{
     self, AutostartView, BackendGroup, CheckEntry, ReportedAccount, ReportedLine, SelfCheckView,
     SettingLine, SettingsView, StartView,
 };
+use super::tasks::{
+    GroupTitle, PackRow, TaskLine, TaskList, TaskName, TaskSaid, TasksView, Unreadable,
+};
 use crate::ledger::paint::models;
 use crate::ledger::resume::Lifter;
 use crate::report;
@@ -57,7 +62,8 @@ use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
 use crate::{
     AccountCard, BackendGroupItem, IdlePick, OverlayItem, PresetChoice, QuietLine, RescueBar,
-    RescueOp, RulesData, SettingItem, StatusTone, TargetItem, WorkbenchPage, WorkbenchWindow,
+    RescueOp, RulesData, SettingItem, StatusTone, TargetItem, TaskListData, TaskRowData, TaskTone,
+    WorkbenchPage, WorkbenchTab, WorkbenchWindow,
 };
 
 /// What the technical log's lines about the settings page are under.
@@ -111,6 +117,14 @@ pub fn page_picked(page: WorkbenchPage) -> Page {
     match page {
         WorkbenchPage::Main => Page::Main,
         WorkbenchPage::Settings => Page::Settings,
+    }
+}
+
+/// The right column's tab a press asks for (UI-3f1).
+pub fn tab_picked(tab: WorkbenchTab) -> RightTab {
+    match tab {
+        WorkbenchTab::Picture => RightTab::Picture,
+        WorkbenchTab::Tasks => RightTab::Tasks,
     }
 }
 
@@ -2422,6 +2436,217 @@ fn refusal_text(labels: &Labels, why: &RefusalWhy) -> String {
     }
 }
 
+/// Which of the right column's two tabs shows, and under the second the account's daily task
+/// list (UI-3f1), from its view: why there are no rows, or above them the account's pause or
+/// fence in its card's words, that no task is switched on or off from here yet, which evaluation
+/// they are of, that the names cannot be read and that not every task is listed; the account's
+/// own line of tasks without a package, and its tasks while open; then each group's title and
+/// its packages, each with its name, badges, sentence, other sentences and summary. Under the
+/// live view the list holds nothing. Each list changes only where its rows do.
+pub fn tasks(ui: &Ui) {
+    let Some(window) = ui.workbench() else {
+        return;
+    };
+    let labels = ui.labels();
+    let tab = ui.model.borrow().right_tab();
+    let shown = match tab {
+        RightTab::Picture => WorkbenchTab::Picture,
+        RightTab::Tasks => WorkbenchTab::Tasks,
+    };
+    if window.get_right_tab() != shown {
+        window.set_right_tab(shown);
+    }
+    let view = match tab {
+        RightTab::Picture => None,
+        RightTab::Tasks => Some(ui.model.borrow().tasks_view(Instant::now(), labels.tongue)),
+    };
+    let (data, rows, fold) = match &view {
+        Some(view) => tasks_data(ui, labels, view),
+        None => (TaskListData::default(), Vec::new(), Vec::new()),
+    };
+    sync(window.get_task_rows(), rows, |rows| window.set_task_rows(rows));
+    sync(window.get_task_fold_lines(), fold, |rows| window.set_task_fold_lines(rows));
+    if window.get_tasks() != data {
+        window.set_tasks(data);
+    }
+}
+
+/// The list's words above its rows, its rows, and its account's own tasks while their line is
+/// open.
+fn tasks_data(
+    ui: &Ui,
+    labels: &Labels,
+    view: &TasksView,
+) -> (TaskListData, Vec<TaskRowData>, Vec<TaskRowData>) {
+    let instead = |text: String, failed: bool, warning: bool| TaskListData {
+        instead: text.into(),
+        instead_failed: failed,
+        instead_warning: warning,
+        ..TaskListData::default()
+    };
+    let data = match view {
+        TasksView::Down(down) => {
+            instead(fill(labels.tasks_down, &[down_text(labels, *down)]), false, false)
+        }
+        TasksView::NoAccount => instead(labels.picture_no_account.to_owned(), false, false),
+        TasksView::Reading => instead(labels.tasks_reading.to_owned(), false, false),
+        TasksView::Unreadable(Unreadable::Failed) => {
+            instead(labels.tasks_unreadable.to_owned(), false, true)
+        }
+        TasksView::Unreadable(Unreadable::TooLarge) => {
+            instead(labels.tasks_too_large.to_owned(), true, false)
+        }
+        TasksView::Unreadable(Unreadable::UnknownInstance) => {
+            instead(labels.tasks_instance_unknown.to_owned(), false, true)
+        }
+        TasksView::NotEvaluated => instead(labels.tasks_not_evaluated.to_owned(), false, false),
+        TasksView::NotInTable => instead(labels.tasks_not_in_table.to_owned(), false, false),
+        TasksView::Listed(list) => return task_list(ui, labels, list),
+    };
+    (data, Vec::new(), Vec::new())
+}
+
+fn task_list(
+    ui: &Ui,
+    labels: &Labels,
+    list: &TaskList,
+) -> (TaskListData, Vec<TaskRowData>, Vec<TaskRowData>) {
+    let held = list.held.as_ref().map_or_else(String::new, |line| held_text(ui, labels, line));
+    let data = TaskListData {
+        instead: SharedString::new(),
+        instead_failed: false,
+        instead_warning: false,
+        held: held.into(),
+        switches: list.switches_closed(),
+        evaluated: fill(labels.tasks_evaluated, &[&format_minute(list.evaluated_at)]).into(),
+        names_unreadable: list.names_unreadable,
+        cut_short: list.cut_short,
+        fold_shown: !list.unmatched.is_empty(),
+        fold_open: list.fold_open,
+        // The Runtime's own reading task is no package's on any configuration.
+        fold_note: list.unmatched.iter().any(|line| matches!(line.task, TaskName::Id(_))),
+    };
+    let mut rows = Vec::new();
+    for group in &list.groups {
+        let heading = match &group.title {
+            GroupTitle::None => None,
+            GroupTitle::Group { game, id } => {
+                let model = ui.model.borrow();
+                let title = model.group_title(game, id, labels.tongue).map(str::to_owned);
+                Some(title.unwrap_or_else(|| id.clone()))
+            }
+            GroupTitle::Other => Some(labels.tasks_other_group.to_owned()),
+        };
+        if let Some(heading) = heading {
+            rows.push(TaskRowData { heading: heading.into(), ..TaskRowData::default() });
+        }
+        rows.extend(group.rows.iter().map(|row| pack_row(ui, labels, row)));
+    }
+    let fold = if list.fold_open {
+        list.unmatched.iter().map(|line| fold_line(ui, labels, line)).collect()
+    } else {
+        Vec::new()
+    };
+    (data, rows, fold)
+}
+
+/// The account's pause or fence above the list's rows, in its card's words but for three pauses
+/// whose words would be wrong there: this console's own pause of the account is lifted on its
+/// card, not below the list; and another tool's, of the account or of all, goes without the reason
+/// it wrote, which may name a person.
+fn held_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
+    let Line::Paused { everyone, by: Lifter::Window, reason } = line else {
+        return line_text(ui, labels, line);
+    };
+    let said = match (*everyone, reason.as_str()) {
+        (true, CONSOLE_PAUSE_ALL) => return line_text(ui, labels, line),
+        (true, _) => labels.tasks_paused_other_all,
+        (false, CONSOLE_PAUSE_ACCOUNT) => labels.tasks_paused_account,
+        (false, _) => labels.tasks_paused_other,
+    };
+    if *everyone {
+        fill(labels.card_all_accounts, &[said])
+    } else {
+        said.to_owned()
+    }
+}
+
+/// One package: its name, its badges, why it runs or not now, the other reasons of its tasks,
+/// and its summary, or that it has none.
+fn pack_row(ui: &Ui, labels: &Labels, row: &PackRow) -> TaskRowData {
+    let (said, tone) = task_said_text(ui, labels, &row.said);
+    // Each other sentence without its wake, and more of them said to be more, never how many.
+    let also = if row.also.is_empty() {
+        String::new()
+    } else {
+        let mut others: Vec<String> =
+            row.also.iter().map(|other| task_said_text(ui, labels, other).0).collect();
+        if row.more {
+            if let Some(last) = others.last_mut() {
+                last.push_str(labels.tasks_also_more);
+            }
+        }
+        fill(labels.tasks_also, &[&others.join(labels.tasks_also_join)])
+    };
+    let summary = {
+        let model = ui.model.borrow();
+        model.pack_summary(&row.package_id, labels.tongue).map(str::to_owned)
+    };
+    TaskRowData {
+        heading: SharedString::new(),
+        name: package_name(ui, labels, &row.package_id).into(),
+        irreversible: row.irreversible,
+        risky: row.risky,
+        said: said.into(),
+        tone,
+        also: also.into(),
+        summary: summary.unwrap_or_else(|| labels.tasks_no_summary.to_owned()).into(),
+    }
+}
+
+/// One task under the account itself: by its id, the Runtime's reading task by words.
+fn fold_line(ui: &Ui, labels: &Labels, line: &TaskLine) -> TaskRowData {
+    let name = match &line.task {
+        TaskName::Id(task) => task.clone(),
+        TaskName::FactRefresh => labels.tasks_fact_refresh.to_owned(),
+    };
+    let (said, tone) = task_said_text(ui, labels, &line.said);
+    TaskRowData { name: name.into(), said: said.into(), tone, ..TaskRowData::default() }
+}
+
+/// A row's sentence and its colour: the accent while its package runs or is scheduled to, amber
+/// while a person is the one to act. A pause is said above the rows, so a reason of one only
+/// says that nothing starts.
+fn task_said_text(ui: &Ui, labels: &Labels, said: &TaskSaid) -> (String, TaskTone) {
+    match said {
+        TaskSaid::Running => (labels.tasks_running.to_owned(), TaskTone::Accent),
+        TaskSaid::RunningDirect => (labels.tasks_running_direct.to_owned(), TaskTone::Accent),
+        TaskSaid::Scheduled { paused: false } => {
+            (labels.tasks_scheduled.to_owned(), TaskTone::Accent)
+        }
+        TaskSaid::Scheduled { paused: true } => {
+            (labels.tasks_scheduled_paused.to_owned(), TaskTone::Plain)
+        }
+        TaskSaid::Completed => (labels.tasks_completed.to_owned(), TaskTone::Plain),
+        TaskSaid::Rejected => (labels.tasks_rejected.to_owned(), TaskTone::Plain),
+        TaskSaid::Reason { class, why, wake } => {
+            let words = match class {
+                ReasonClass::ControlGate => labels.tasks_paused.to_owned(),
+                _ => reason_words(ui, labels, *class, why),
+            };
+            let text = match wake {
+                Some(wake) => fill(labels.card_with_wake, &[&words, &format_minute(*wake)]),
+                None => words,
+            };
+            let tone = match class.band() {
+                Band::Attention => TaskTone::Warning,
+                Band::Ok | Band::Offline => TaskTone::Plain,
+            };
+            (text, tone)
+        }
+    }
+}
+
 /// Puts `items` into the list the window already shows, a row at a time; only the
 /// list it starts with is replaced.
 fn sync<T: Clone + PartialEq + 'static>(
@@ -2619,8 +2844,9 @@ fn package_name(ui: &Ui, labels: &Labels, package: &str) -> String {
     ui.model.borrow().task_title(package, labels.tongue).unwrap_or(package).to_owned()
 }
 
-/// A reason in plain words. One the card has no sentence for still says something:
-/// its category's words, or the unknown code's, and the code goes to the log once.
+/// A reason in plain words, a card's and the daily task list's alike. One with no sentence of
+/// its own still says something, that it is not scheduled now, and the code goes to the log
+/// once; so does one the Runtime gave no reason, which says so.
 fn reason_words(ui: &Ui, labels: &Labels, class: ReasonClass, why: &str) -> String {
     let words = match class {
         ReasonClass::ControlGate => labels.card_schedule_updating,
@@ -2634,23 +2860,83 @@ fn reason_words(ui: &Ui, labels: &Labels, class: ReasonClass, why: &str) -> Stri
         ReasonClass::Closed => labels.card_why_closed,
         ReasonClass::Paced => labels.card_why_paced,
         ReasonClass::Queue => labels.card_why_queue,
+        ReasonClass::OtherFirst => labels.card_why_other_first,
+        ReasonClass::ChainWait => labels.card_why_chain_wait,
         ReasonClass::RemedyWait => labels.card_why_remedy_wait,
         ReasonClass::NeedsChoice => labels.card_why_needs_choice,
         ReasonClass::Suspended => labels.card_why_suspended,
         ReasonClass::BenefitUnknown => labels.card_why_benefit_unknown,
+        ReasonClass::NoEffects => labels.card_why_no_effects,
+        ReasonClass::EntryPending => labels.card_why_entry_pending,
+        ReasonClass::Unvalued => labels.card_why_unvalued,
+        ReasonClass::ReadingUnknown => labels.card_why_reading_unknown,
         ReasonClass::BenefitNonpositive => labels.card_why_benefit_nonpositive,
         ReasonClass::NoProgress => labels.card_why_no_progress,
         ReasonClass::NoTask => labels.card_why_no_task,
-        ReasonClass::Unlisted => {
-            let line = format!("no sentence for not-running reason {why}");
+        ReasonClass::NotMet => labels.card_why_not_met,
+        ReasonClass::NotTime => labels.card_why_not_time,
+        ReasonClass::Cooling => labels.card_why_cooling,
+        ReasonClass::RetryLater => labels.card_why_retry_later,
+        ReasonClass::Missed => labels.card_why_missed,
+        ReasonClass::Served => labels.card_why_served,
+        ReasonClass::Enough => labels.card_why_enough,
+        ReasonClass::FactsMissing => labels.card_why_facts_missing,
+        ReasonClass::Refreshing => labels.card_why_refreshing,
+        ReasonClass::RefreshUnclear => labels.card_why_refresh_unclear,
+        ReasonClass::RefreshStuck => labels.card_why_refresh_stuck,
+        ReasonClass::RefreshUnbound => labels.card_why_refresh_unbound,
+        ReasonClass::Locked => labels.card_why_locked,
+        ReasonClass::OutOfHours => labels.card_why_out_of_hours,
+        ReasonClass::NotCapable => labels.card_why_not_capable,
+        ReasonClass::TurnedOff => labels.card_why_turned_off,
+        ReasonClass::NoProfile => labels.card_why_no_profile,
+        ReasonClass::HostShort => labels.card_why_host_short,
+        ReasonClass::NextRound => labels.card_why_next_round,
+        ReasonClass::GateUnmet => labels.card_why_gate_unmet,
+        ReasonClass::Reserve => labels.card_why_reserve,
+        ReasonClass::HardLine => labels.card_why_hard_line,
+        ReasonClass::BetterFirst => labels.card_why_better_first,
+        ReasonClass::LinesInvalid => labels.card_why_lines_invalid,
+        ReasonClass::LinesUnspendable => labels.card_why_lines_unspendable,
+        ReasonClass::DependencyWait => labels.card_why_dependency_wait,
+        ReasonClass::WithinTolerance => labels.card_why_within_tolerance,
+        ReasonClass::Budget => labels.card_why_budget,
+        ReasonClass::ReasonMissing => {
+            let line = format!("the Runtime gave a decision no reason: {why}");
             if ui.model.borrow_mut().first_told(&line) {
-                report::log_quiet("acui-cards", &line);
+                report::log("acui-cards", &line);
             }
-            return outcome_short(labels, why)
-                .unwrap_or_else(|| labels.outcome_unknown_short.to_owned());
+            labels.card_why_reason_missing
+        }
+        ReasonClass::Unlisted => {
+            unlisted_told(ui, why);
+            labels.card_why_unlisted
         }
     };
     words.to_owned()
+}
+
+/// Every reason of a task list's answer with no sentence of its own goes to the log once, whether
+/// a row says it or not: one another's sentence stands for, one past the most a row says, one of
+/// a package that runs or is scheduled, one under the account's own line while that is closed.
+pub fn tasks_unlisted(ui: &Ui, read: &TasksRead) {
+    let Some(entry) = &read.entry else {
+        return;
+    };
+    for row in &entry.rows {
+        let (gap, hold) = (row.gap.as_deref(), row.hold.as_deref());
+        if ReasonClass::of(&row.why, gap, hold) == ReasonClass::Unlisted {
+            unlisted_told(ui, &reason_logged(&row.why, gap, hold));
+        }
+    }
+}
+
+/// A reason code with no sentence, as `reason_logged` gives it, to the log the first time only.
+fn unlisted_told(ui: &Ui, why: &str) {
+    let line = format!("no sentence for not-running reason {why}");
+    if ui.model.borrow_mut().first_told(&line) {
+        report::log_quiet("acui-cards", &line);
+    }
 }
 
 /// A fence's cause in plain words. The card never shows the code: one the tables do

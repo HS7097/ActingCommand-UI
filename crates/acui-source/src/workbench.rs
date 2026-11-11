@@ -11,11 +11,12 @@
 //! epoch that is gone is the caller's.
 //!
 //! Lanes ask only what is answered from memory or takes no ledger record:
-//! `Status`, `ScheduleExplanation` without its candidate rows, `RuntimeFactSnapshot`
-//! and `StartReport`. The picture's lane ([`preview::PreviewLane`], UI-3c) is the one
-//! exception: it reads ledger pages, which take no record either but are read from the
-//! ledger, and frames' material, whose read takes no record when it succeeds or finds the
-//! file gone, and one for any other failure. How often is the caller's, too: a lane keeps
+//! `Status`, `ScheduleExplanation` of every instance without its candidate rows and, for an
+//! account's task list (UI-3f1), of that one instance with them ([`ReadLane::read_tasks`]),
+//! `RuntimeFactSnapshot` and `StartReport`. The picture's lane ([`preview::PreviewLane`],
+//! UI-3c) is the one exception: it reads ledger pages, which take no record either but are
+//! read from the ledger, and frames' material, whose read takes no record when it succeeds or
+//! finds the file gone, and one for any other failure. How often is the caller's, too: a lane keeps
 //! no clock, and asks again by itself in one case only, a read on a connection that turns
 //! out to have ended (`ReadLane::asked_once_more`; the picture lane's pages likewise).
 //!
@@ -72,7 +73,7 @@ use actingcommand_contract::{
     RuntimeControlPlaneStatus,
     RuntimeErrorCode, RuntimeFactRecord, RuntimeFactScope, RuntimeFactSnapshot,
     RuntimeInstanceStatus, RuntimeResult, RuntimeScheduleExplanation, RuntimeStartReport,
-    ScheduleDispatchState,
+    ScheduleCandidateEligibility, ScheduleDispatchState,
     ScheduleExplanationInstance, SchedulingPauseReason, SchedulingPauseScope,
     CONFIG_PARAMETERS_FACT_PREFIX, MIN_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
 };
@@ -146,6 +147,11 @@ const MUMU_ROOT: &str = "mumu_root";
 /// A row of `config.parameters` names its key here.
 const ROW_KEY: &str = "key";
 
+/// The two values of a schedule explanation's reason that choose its words too: why a
+/// `benefit_unknown` candidate's benefit is unknown, and why a `pool_line_held` one is held.
+const BENEFIT_GAP: &str = "benefit_gap";
+const POOL_LINE_HOLD: &str = "pool_line_hold";
+
 /// One reading thread's connection: actor `ui`, source `ui`, channel `ui`, at its
 /// own io timeout. The client holds its lock for a whole exchange and latches the
 /// connection on a timeout, so a read that must not wait for a slow one needs a
@@ -181,6 +187,14 @@ impl ReadLane {
         self.asked_once_more(Self::ask_explain)
     }
 
+    /// One `ScheduleExplanation` of the one instance `alias`, with its candidate rows: that
+    /// account's task list (UI-3f1). The cards' read stays the one above, of every instance
+    /// without them, so neither answer grows with the other, and one too large for a frame costs
+    /// only the list.
+    pub fn read_tasks(&mut self, alias: &str) -> Result<TasksRead, ClientFailure> {
+        self.asked_once_more(|lane| lane.ask_tasks(alias))
+    }
+
     /// One `RuntimeFactSnapshot`, and the settings' version read under the same gate,
     /// so what it says of the configuration is of that version.
     pub fn read_config(&mut self) -> Result<ConfigRead, ClientFailure> {
@@ -205,7 +219,7 @@ impl ReadLane {
     /// reads go through here.
     fn asked_once_more<T>(
         &mut self,
-        ask: fn(&mut Self) -> Result<T, RuntimeClientError>,
+        mut ask: impl FnMut(&mut Self) -> Result<T, RuntimeClientError>,
     ) -> Result<T, ClientFailure> {
         let kept = self.client.is_some();
         let asked = match ask(self) {
@@ -220,6 +234,15 @@ impl ReadLane {
         let epoch = code(&client.runtime_info().owner_epoch());
         match client.schedule_explanation(None, false) {
             Ok(explanation) => Ok(explain_read(epoch, &explanation)),
+            Err(error) => Err(self.settled(error)),
+        }
+    }
+
+    fn ask_tasks(&mut self, alias: &str) -> Result<TasksRead, RuntimeClientError> {
+        let client = self.connection()?;
+        let epoch = code(&client.runtime_info().owner_epoch());
+        match client.schedule_explanation(Some(alias), true) {
+            Ok(explanation) => Ok(tasks_read(epoch, alias, &explanation)),
             Err(error) => Err(self.settled(error)),
         }
     }
@@ -839,15 +862,75 @@ pub struct ExplainRead {
 }
 
 /// An instance's one not-running row. `why` is its reason code, which the words
-/// shown are chosen by, never shown itself.
+/// shown are chosen by, never shown itself; so are `gap` and `hold`, the reason's
+/// `benefit_gap` and `pool_line_hold` when it has them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceExplain {
     pub why: String,
+    pub gap: Option<String>,
+    pub hold: Option<String>,
     /// That row's own wake in unix ms; with no due row (`due_task_missing`) the
     /// instance's earliest wake, which is the only one there is then.
     pub next_wake: Option<u64>,
     /// A task is selected and its dispatch has not ended.
     pub preparing: bool,
+}
+
+/// One answered `ScheduleExplanation` of one instance, with its candidate rows (UI-3f1): that
+/// account's task list. `evaluated_at` is absent before the first evaluated cycle after a start;
+/// `entry` when the latest evaluation decided nothing for the instance. Its catalog hash stays
+/// here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TasksRead {
+    pub epoch: String,
+    /// The alias asked for: the client refuses an answer that names another.
+    pub alias: String,
+    pub evaluated_at: Option<u64>,
+    pub entry: Option<TasksEntry>,
+}
+
+/// The instance's entry: its earliest wake, the task selected for it, and its candidate rows in
+/// the Runtime's own order, due rows first. `cut_short`: it counted more rows than it answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TasksEntry {
+    pub next_wake: Option<u64>,
+    pub selected: Option<SelectedTask>,
+    pub rows: Vec<TaskRow>,
+    pub cut_short: bool,
+}
+
+/// The task selected for the instance, and where its dispatch stands. Its decision id stays
+/// here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedTask {
+    pub task_id: String,
+    pub stage: DispatchStage,
+}
+
+/// `ScheduleDispatchState`, a closed vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchStage {
+    Pending,
+    Intent,
+    Admitted,
+    Rejected,
+    Completed,
+}
+
+/// One candidate row, a decision that was not selected. `why` is the code of its last reason,
+/// which the words shown are chosen by, never shown itself; so are `gap` and `hold`, as of an
+/// instance's row ([`InstanceExplain`]). `wake` is the row's own. Its other reason codes, its
+/// since and its expected runtime stay here: the list shows no count and no number of the
+/// scheduler's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskRow {
+    pub task_id: String,
+    /// Its eligibility is true.
+    pub due: bool,
+    pub why: String,
+    pub gap: Option<String>,
+    pub hold: Option<String>,
+    pub wake: Option<u64>,
 }
 
 /// What one answered `StartReport` says of the settings changed while a Runtime ran, as far as
@@ -1632,8 +1715,11 @@ fn explain_read(epoch: String, explanation: &RuntimeScheduleExplanation) -> Expl
 }
 
 fn instance_explain(entry: &ScheduleExplanationInstance) -> InstanceExplain {
+    let why = &entry.not_running.why;
     InstanceExplain {
-        why: entry.not_running.why.code().as_str().to_owned(),
+        why: why.code().as_str().to_owned(),
+        gap: reason_value(why, BENEFIT_GAP),
+        hold: reason_value(why, POOL_LINE_HOLD),
         next_wake: entry.not_running.next_wake_unix_ms.or(entry.next_wake_unix_ms),
         preparing: entry.selected.as_ref().is_some_and(|selected| {
             match selected.dispatch_state {
@@ -1643,5 +1729,61 @@ fn instance_explain(entry: &ScheduleExplanationInstance) -> InstanceExplain {
                 ScheduleDispatchState::Rejected | ScheduleDispatchState::Completed => false,
             }
         }),
+    }
+}
+
+/// A reason's value `key` when it is text: only the two that choose words are read.
+fn reason_value(why: &Outcome, key: &str) -> Option<String> {
+    why.value(key).and_then(|value| value.as_str()).map(str::to_owned)
+}
+
+/// The entry of `alias` in an answer asked of that one instance: the client has refused one that
+/// names another, so the entry is there exactly when the evaluation decided for it.
+fn tasks_read(epoch: String, alias: &str, explanation: &RuntimeScheduleExplanation) -> TasksRead {
+    TasksRead {
+        epoch,
+        alias: alias.to_owned(),
+        evaluated_at: explanation.evaluated_at_unix_ms,
+        entry: explanation
+            .instances
+            .iter()
+            .find(|entry| entry.instance_alias == alias)
+            .map(tasks_entry),
+    }
+}
+
+fn tasks_entry(entry: &ScheduleExplanationInstance) -> TasksEntry {
+    let rows: Vec<TaskRow> = entry
+        .candidates
+        .iter()
+        .map(|row| TaskRow {
+            task_id: row.task_id.clone(),
+            due: row.eligibility == ScheduleCandidateEligibility::True,
+            why: row.why.code().as_str().to_owned(),
+            gap: reason_value(&row.why, BENEFIT_GAP),
+            hold: reason_value(&row.why, POOL_LINE_HOLD),
+            wake: row.next_wake_unix_ms,
+        })
+        .collect();
+    let cut_short =
+        u32::try_from(rows.len()).map_or(true, |answered| answered < entry.candidates_total);
+    TasksEntry {
+        next_wake: entry.next_wake_unix_ms,
+        selected: entry.selected.as_ref().map(|selected| SelectedTask {
+            task_id: selected.task_id.clone(),
+            stage: dispatch_stage(selected.dispatch_state),
+        }),
+        rows,
+        cut_short,
+    }
+}
+
+fn dispatch_stage(state: ScheduleDispatchState) -> DispatchStage {
+    match state {
+        ScheduleDispatchState::Pending => DispatchStage::Pending,
+        ScheduleDispatchState::Intent => DispatchStage::Intent,
+        ScheduleDispatchState::Admitted => DispatchStage::Admitted,
+        ScheduleDispatchState::Rejected => DispatchStage::Rejected,
+        ScheduleDispatchState::Completed => DispatchStage::Completed,
     }
 }

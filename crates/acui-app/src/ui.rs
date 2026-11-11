@@ -478,6 +478,7 @@ impl Ui {
         workbench::paint::page(self);
         workbench::paint::cards(self);
         workbench::paint::picture(self);
+        workbench::paint::tasks(self);
         workbench::paint::actions(self);
         workbench::paint::preset(self);
         workbench::paint::settings(self);
@@ -535,6 +536,8 @@ fn language_index(language: Language) -> i32 {
 
 /// The workbench's controls. The top bar's page button switches between the
 /// accounts and the settings; a card picked is the account whose picture shows (`workbench`),
+/// the right column's two tabs switch between its live view and its daily task list, whose
+/// line of tasks without a package opens and closes (`workbench`, UI-3f1),
 /// the box beside the picture's title draws on it or not (`workbench::preview`), the
 /// button under it refreshes it (`workbench::refresh`), and the rescue bar over it operates
 /// that account's device, its confirmation's two buttons included (`workbench::rescue`);
@@ -590,6 +593,16 @@ fn install_workbench(window: &WorkbenchWindow) {
     window.on_rescue_cancelled(|| {
         if let Some(ui) = current() {
             workbench::rescue::cancelled(&ui);
+        }
+    });
+    window.on_right_tab_picked(|tab| {
+        if let Some(ui) = current() {
+            workbench::tab_picked(&ui, workbench::paint::tab_picked(tab));
+        }
+    });
+    window.on_tasks_fold_toggled(|| {
+        if let Some(ui) = current() {
+            workbench::tasks_fold_toggled(&ui);
         }
     });
     window.on_rules_toggled(|| {
@@ -915,6 +928,15 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_settings_appearance(labels.settings_appearance.into());
     global.set_picture_title(labels.picture_title.into());
     global.set_picture_overlays(labels.picture_overlays.into());
+    global.set_tasks_tab(labels.tasks_tab.into());
+    global.set_tasks_held_note(labels.tasks_held_note.into());
+    global.set_tasks_switches(labels.tasks_switches.into());
+    global.set_tasks_names_unreadable(labels.tasks_names_unreadable.into());
+    global.set_tasks_cut_short(labels.tasks_cut_short.into());
+    global.set_tasks_fold(labels.tasks_fold.into());
+    global.set_tasks_fold_note(labels.tasks_fold_note.into());
+    global.set_tasks_irreversible(labels.tasks_irreversible.into());
+    global.set_tasks_risky(labels.tasks_risky.into());
     global.set_refresh_frame(labels.refresh_frame.into());
     global.set_refresh_cost(labels.refresh_cost.into());
     global.set_rescue_check(labels.rescue_check.into());

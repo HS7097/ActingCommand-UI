@@ -14,7 +14,7 @@ use std::time::Instant;
 use acui_source::workbench::device::DeviceOp;
 use acui_source::workbench::{
     ActivityKind, ConfigRead, ExplainRead, FenceFact, InstanceLive, LiveRead, LiveSnapshot,
-    PresetProblem, StartRead,
+    PresetProblem, StartRead, TasksRead,
 };
 use acui_source::{ClientFailure, PauseFact};
 
@@ -27,7 +27,8 @@ use super::preview::{Order, Target};
 use super::read::{Lane, Read, EXPLAIN_TOO_OLD, START_TRIES};
 use super::rescue::{Rescue, RescueHold, RescueView, Watch};
 use super::settings::{self, AutostartView, SettingsView, StartView};
-use super::tools::{Displays, NameTable, NamesRead, WatchdogRead};
+use super::tasks::{self, Listing, TasksNow, TasksView};
+use super::tools::{Displays, NameTable, NamesRead, PackTable, WatchdogRead};
 use crate::ledger::resume::ResumeElsewhere;
 use crate::strings::{fill, Labels, Language};
 
@@ -130,6 +131,27 @@ impl Page {
     }
 }
 
+/// Which of the main page's right column's two tabs shows (UI-3f1): the live view, or the
+/// account's daily task list. For this run only, the live view first; it stays across accounts
+/// and pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RightTab {
+    Picture,
+    Tasks,
+}
+
+/// The daily task list's read (UI-3f1), of the one account `of` names while its list shows:
+/// the last answer of this owner epoch, when it was, the failure of the reads since, and when
+/// the slow thread was last told to read it now. Another account, or none, starts it anew.
+#[derive(Default)]
+struct TasksSlice {
+    of: Option<String>,
+    value: Option<TasksRead>,
+    read_at: Option<Instant>,
+    error: Option<ClientFailure>,
+    asked_at: Option<Instant>,
+}
+
 /// Why the left column has no account to show, when no read has left one there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountsNote {
@@ -155,12 +177,12 @@ struct StartSlice {
     acknowledged: bool,
 }
 
-/// The task names, as the newest run of `actingctl packs` left them. Why one gave
-/// none is in the log.
+/// The task names, as the newest run of `actingctl packs` left them, and what the daily task
+/// list shows of the packages beside them. Why one gave none is in the log.
 enum Names {
     NotAsked,
     /// It answered, without warnings.
-    Ready(NameTable),
+    Ready { names: NameTable, packs: PackTable },
     /// It did not answer, it answered with warnings, or this run cannot tell how to
     /// run it. No task has a name, which is what the line on the workbench says.
     Unreadable,
@@ -214,6 +236,13 @@ pub struct Model {
     /// The fact snapshot read's. It shares a thread with the explanation and fails on
     /// its own: neither read's success says the other's panic is over.
     config_fault: Option<Fault>,
+    /// The daily task list's read's, likewise (UI-3f1).
+    tasks_fault: Option<Fault>,
+    /// The right column's tab, and its daily task list's read and whether its line of tasks
+    /// without a package is open (UI-3f1).
+    right_tab: RightTab,
+    tasks: TasksSlice,
+    tasks_fold_open: bool,
     /// The lines the log got about codes the cards have no words for: once each.
     told_codes: BTreeSet<String>,
     actions: Actions,
@@ -276,6 +305,13 @@ pub struct ExplainLanded {
     pub fault_cleared: bool,
 }
 
+/// What a task list's read changed, for what the event loop does next.
+pub struct TasksLanded {
+    pub news: News<ClientFailure>,
+    /// The read's fault is over.
+    pub fault_cleared: bool,
+}
+
 /// What a fact snapshot read changed, for what the event loop does next.
 pub struct ConfigLanded {
     pub news: News<ClientFailure>,
@@ -312,6 +348,10 @@ impl Model {
             live_fault: None,
             slow_fault: None,
             config_fault: None,
+            tasks_fault: None,
+            right_tab: RightTab::Picture,
+            tasks: TasksSlice::default(),
+            tasks_fold_open: false,
             told_codes: BTreeSet::new(),
             actions: Actions::default(),
             page: Page::Main,
@@ -496,7 +536,11 @@ impl Model {
     }
 
     pub fn faults(&self) -> impl Iterator<Item = &Fault> {
-        self.live_fault.iter().chain(self.slow_fault.iter()).chain(self.config_fault.iter())
+        self.live_fault
+            .iter()
+            .chain(self.slow_fault.iter())
+            .chain(self.config_fault.iter())
+            .chain(self.tasks_fault.iter())
     }
 
     pub fn accounts_note(&self) -> AccountsNote {
@@ -606,6 +650,154 @@ impl Model {
         changed
     }
 
+    /// The right column's tab (UI-3f1).
+    pub fn right_tab(&self) -> RightTab {
+        self.right_tab
+    }
+
+    /// A tab picked: whether that changed which shows. A confirmation asked under the live view
+    /// goes with it, as with the page (`set_page`), and so do the rules panel's form and
+    /// confirmation; the panel itself stays open or closed.
+    pub fn pick_tab(&mut self, tab: RightTab) -> bool {
+        if self.right_tab == tab {
+            return false;
+        }
+        self.right_tab = tab;
+        self.rescue.unconfirm();
+        self.actions.rules_reset();
+        true
+    }
+
+    /// The main page shows its live view, in a window not minimized.
+    fn picture_tab_shows(&self) -> bool {
+        self.page == Page::Main && self.shown && self.right_tab == RightTab::Picture
+    }
+
+    /// The account whose daily task list the slow thread is to read now (UI-3f1), if any: the one
+    /// whose picture the right column names, on the main page of a window not minimized under the
+    /// list's tab, while the Runtime answers and lists it.
+    pub fn tasks_wanted(&self) -> Option<String> {
+        if self.page != Page::Main || !self.shown || self.right_tab != RightTab::Tasks {
+            return None;
+        }
+        self.online_epoch()?;
+        let alias = self.picture_account()?;
+        self.instances.iter().any(|instance| instance.alias == alias).then(|| alias.to_owned())
+    }
+
+    /// The slow thread is told to read the list of `wanted` from now on, or none: whether that
+    /// changed. A change lets go of all that was read, so the list says it is reading until an
+    /// answer of that account comes, and closes its line of tasks without a package.
+    pub fn tasks_follow(&mut self, wanted: Option<&str>) -> bool {
+        if self.tasks.of.as_deref() == wanted {
+            return false;
+        }
+        self.tasks = TasksSlice { of: wanted.map(str::to_owned), ..TasksSlice::default() };
+        self.tasks_fold_open = false;
+        true
+    }
+
+    /// The slow thread was told to read the list now.
+    pub fn tasks_asked(&mut self, now: Instant) {
+        self.tasks.asked_at = Some(now);
+    }
+
+    /// The list's line of tasks without a package opened, or closed.
+    pub fn tasks_fold_toggled(&mut self) {
+        self.tasks_fold_open = !self.tasks_fold_open;
+    }
+
+    /// One read of the list of `alias`, held to the account it follows and the owner epoch
+    /// online, as `Slice::take` holds a read to the epoch: one of another account, or of none,
+    /// says nothing, and one of another epoch neither.
+    pub fn apply_tasks(
+        &mut self,
+        alias: &str,
+        read: Result<TasksRead, ClientFailure>,
+        now: Instant,
+    ) -> TasksLanded {
+        let fault_cleared = self.tasks_fault.take().is_some();
+        let Link::Online { epoch, .. } = &self.link else {
+            return TasksLanded { news: News::Nothing, fault_cleared };
+        };
+        let slice = &mut self.tasks;
+        if slice.of.as_deref() != Some(alias) {
+            return TasksLanded { news: News::Nothing, fault_cleared };
+        }
+        let news = match read {
+            Ok(read) if read.epoch != *epoch || read.alias != alias => News::Nothing,
+            Ok(read) => {
+                let recovered = slice.error.take().is_some();
+                slice.value = Some(read);
+                slice.read_at = Some(now);
+                if recovered {
+                    News::Recovered
+                } else {
+                    News::Nothing
+                }
+            }
+            Err(failure) if slice.error.as_ref() == Some(&failure) => News::Nothing,
+            Err(failure) => {
+                slice.error = Some(failure.clone());
+                News::Failed(failure)
+            }
+        };
+        TasksLanded { news, fault_cleared }
+    }
+
+    /// Nothing new of the list for too long, while the window shows: what was read is not what
+    /// the schedule says now.
+    fn tasks_late(&self, now: Instant) -> bool {
+        let since = self.tasks.read_at.max(self.tasks.asked_at);
+        self.shown
+            && since.is_some_and(|since| now.saturating_duration_since(since) > EXPLAIN_TOO_OLD)
+    }
+
+    /// The daily task list of the account whose picture the right column names (UI-3f1), as the
+    /// reads leave it at `now`: no row of an answer that is not of this account and epoch, or not
+    /// new, or after a failure. Above its rows the account's pause or fence as its card says it.
+    /// Rows no `ui.json` orders go by their names in `language`.
+    pub fn tasks_view(&self, now: Instant, language: Language) -> TasksView {
+        if let Some(down) = Down::of(&self.link) {
+            return TasksView::Down(down);
+        }
+        let Some(instance) = self
+            .picture_account()
+            .and_then(|alias| self.instances.iter().find(|instance| instance.alias == alias))
+        else {
+            return TasksView::NoAccount;
+        };
+        let ours = self.tasks.of.as_deref() == Some(instance.alias.as_str());
+        let thread_gone = matches!(self.slow_fault, Some(Fault::NoThread(_)));
+        let read = if self.tasks_fault.is_some() || thread_gone || self.tasks_late(now) {
+            TasksNow::Failed(None)
+        } else {
+            match (&self.tasks.error, &self.tasks.value) {
+                (Some(failure), _) if ours => TasksNow::Failed(Some(failure)),
+                (None, Some(read)) if ours => TasksNow::Read(read),
+                _ => TasksNow::Reading,
+            }
+        };
+        let global = self.global_pause.as_ref();
+        let schedule = self.schedule(now);
+        let (_, main, notes) = card::said(instance, global, schedule, &self.resume_elsewhere);
+        let (names, packs) = match &self.names {
+            Names::Ready { names, packs } => (Some(names), Some(packs)),
+            Names::NotAsked | Names::Unreadable => (None, None),
+        };
+        tasks::view(Listing {
+            instance,
+            paused: instance.pause.is_some() || global.is_some(),
+            held: tasks::held(main, notes),
+            read,
+            names,
+            packs,
+            names_unreadable: self.names_unreadable(),
+            fold_open: self.tasks_fold_open,
+            language,
+        })
+    }
+
     pub fn pictures(&self) -> &Pictures {
         &self.pictures
     }
@@ -653,10 +845,11 @@ impl Model {
     }
 
     /// The account the picture thread is to follow now, if any: the one whose picture shows,
-    /// on the main page of a window not minimized, while the Runtime answers and lists it, and
-    /// its gate is open. Fast while it runs a task or its recovery ladder climbs.
+    /// on the main page of a window not minimized under the live view's tab, while the Runtime
+    /// answers and lists it, and its gate is open. Fast while it runs a task or its recovery
+    /// ladder climbs.
     pub fn preview_target(&self) -> Option<Target> {
-        if self.page != Page::Main || !self.shown {
+        if !self.picture_tab_shows() {
             return None;
         }
         let Link::Online { epoch, .. } = &self.link else {
@@ -732,7 +925,7 @@ impl Model {
     /// back: a refresh under one takes the device a moment, which the cost under the button says.
     fn refresh_hold(&self, alias: &str) -> Option<RefreshHold> {
         if self.preview_target().is_none() {
-            let hold = if self.page != Page::Main || !self.shown {
+            let hold = if !self.picture_tab_shows() {
                 RefreshHold::Hidden
             } else if self.online_epoch().is_none() {
                 RefreshHold::NotOnline
@@ -773,11 +966,11 @@ impl Model {
     }
 
     /// What `alias`'s rescue bar offers now (UI-3e1-a), as the reads and the account's own
-    /// presses leave it: none while the main page does not show, the window is minimized, no
-    /// `Status` has answered yet, or the one online does not list the account; while no Runtime
-    /// answers, only that no device can be operated.
+    /// presses leave it: none while the main page does not show, or its live view's tab, the
+    /// window is minimized, no `Status` has answered yet, or the one online does not list the
+    /// account; while no Runtime answers, only that no device can be operated.
     pub fn rescue_view(&self, alias: &str) -> Option<RescueView> {
-        if self.page != Page::Main || !self.shown {
+        if !self.picture_tab_shows() {
             return None;
         }
         match &self.link {
@@ -909,7 +1102,7 @@ impl Model {
     /// Nothing of the account's device holds its rules back, nor its gate, its doing or a pause:
     /// only another change of settings, and rows behind one taken (`actions::rules_view`).
     pub fn rules_view(&self, alias: &str) -> Option<RulesView> {
-        if self.page != Page::Main || !self.shown || self.online_epoch().is_none() {
+        if !self.picture_tab_shows() || self.online_epoch().is_none() {
             return None;
         }
         let instance = self.instances.iter().find(|instance| instance.alias == alias)?;
@@ -984,9 +1177,25 @@ impl Model {
     /// `package`'s task name in `language`, when the names have one.
     pub fn task_title(&self, package: &str, language: Language) -> Option<&str> {
         match &self.names {
-            Names::Ready(table) => table.title(package, language),
+            Names::Ready { names, .. } => names.title(package, language),
             Names::NotAsked | Names::Unreadable => None,
         }
+    }
+
+    /// `package`'s summary in `language`, when its game's `ui.json` gives one (UI-3f1).
+    pub fn pack_summary(&self, package: &str, language: Language) -> Option<&str> {
+        let Names::Ready { packs, .. } = &self.names else {
+            return None;
+        };
+        packs.pack(package)?.ui.as_ref()?.summary(language)
+    }
+
+    /// The title in `language` of `game`'s group `group` of its `ui.json` (UI-3f1).
+    pub fn group_title(&self, game: &str, group: &str, language: Language) -> Option<&str> {
+        let Names::Ready { packs, .. } = &self.names else {
+            return None;
+        };
+        packs.group_title(game, group, language)
     }
 
     /// Whether names are missing for a reason other than the file not having them.
@@ -994,12 +1203,12 @@ impl Model {
         matches!(self.names, Names::Unreadable)
     }
 
-    /// One run of `actingctl packs`: the names, and the picture proportions, which its
-    /// warnings do not take away (`NamesRead::Table`).
+    /// One run of `actingctl packs`: the names, with the packages' table of the daily task list,
+    /// and the picture proportions, which its warnings do not take away (`NamesRead::Table`).
     pub fn apply_names(&mut self, read: NamesRead) {
         let (names, displays) = match read {
-            NamesRead::Table { table, displays, warnings } if warnings.is_empty() => {
-                (Names::Ready(table), Some(displays))
+            NamesRead::Table { table, packs, displays, warnings } if warnings.is_empty() => {
+                (Names::Ready { names: table, packs }, Some(displays))
             }
             NamesRead::Table { displays, .. } => (Names::Unreadable, Some(displays)),
             NamesRead::NoTool(_) | NamesRead::Failed(_) => (Names::Unreadable, None),
@@ -1044,6 +1253,8 @@ impl Model {
             }
             self.explain = Slice::empty();
             self.config = Slice::empty();
+            // Still of the same account: the poke this epoch's first read gives reads it anew.
+            self.tasks = TasksSlice { of: self.tasks.of.take(), ..TasksSlice::default() };
             self.servers_seen.clear();
             self.start = StartSlice::default();
             self.epoch = Some(epoch.clone());
@@ -1138,6 +1349,7 @@ impl Model {
             Read::Status => &mut self.live_fault,
             Read::Explain => &mut self.slow_fault,
             Read::Config => &mut self.config_fault,
+            Read::Tasks => &mut self.tasks_fault,
             // A start report's panic is one of its failures (`start_failed`), not a fault
             // of a read that a later one of its kind clears: there is no later one.
             Read::Start => return false,
