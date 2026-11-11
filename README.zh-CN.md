@@ -1075,3 +1075,6 @@ Runtime 的看门狗是一个计划任务，所以 acsetup 不替人设置。要
 `GPL-3.0-only`。仓库附 LICENSE 全文；工作区 `license` 字段与每个 `.rs` / `.slint` 文件的 SPDX 头与之一致。界面由
 [Slint](https://slint.dev) 渲染，按其 GPLv3 许可选项使用。依赖的 Runtime crate（contract / ledger /
 ledger-forensics / runtime-client / runtime-config / execution-kernel）为 `AGPL-3.0-only`，两者按 GPLv3 第 13 条合并。
+
+本仓没有其他自动化项目的源码。整个项目族的上游许可矩阵见伞仓的
+[LICENSE_POLICY.md](https://github.com/HS7097/ActingCommand/blob/main/LICENSE_POLICY.md)。

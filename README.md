@@ -1569,3 +1569,7 @@ header of every `.rs` / `.slint` file agree with it. The interface is rendered b
 [Slint](https://slint.dev), used under its GPLv3 licensing option. The Runtime crates depended on
 (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) are `AGPL-3.0-only`, and the
 two combine under GPLv3 section 13.
+
+No source code of another automation project is in this repository. The upstream license matrix of the
+whole family is in the umbrella repository's
+[LICENSE_POLICY.md](https://github.com/HS7097/ActingCommand/blob/main/LICENSE_POLICY.md).
