@@ -527,7 +527,8 @@ fn refusal_words(ui: &Ui, labels: &Labels, host: Option<&str>, class: Option<&st
 }
 
 /// Under the live view's title, while an account's picture shows on the main page: its rescue
-/// bar (UI-3e1-a), from its view. While no Runtime answers, only that no device can be operated.
+/// bar (UI-3e1-a), from its view. While no Runtime answers, only that no device can be operated,
+/// and over it, once no `Status` is read any more, that what came of a stop is not known.
 /// Else, of an account that drives a device of its own, its reconnect and check, its emulator's
 /// row while the Runtime offers its control, and its game's: each button pressed only when it may
 /// be, and at the row's end why one may not, or what the check does. While the account does
@@ -560,11 +561,19 @@ pub fn rescue(ui: &Ui) {
             rescue_told(ui, alias, &rows);
             rescue_bar(ui, labels, alias, &rows)
         }
-        (_, Some(RescueView::Offline)) => RescueBar {
-            shown: true,
-            reason: labels.rescue_offline.into(),
-            ..RescueBar::default()
-        },
+        (_, Some(RescueView::Offline { stop })) => {
+            let (close_line, close_failed) = match &stop {
+                Some(said) => stop_text(ui, labels, said),
+                None => (String::new(), false),
+            };
+            RescueBar {
+                shown: true,
+                reason: labels.rescue_offline.into(),
+                close_line: close_line.into(),
+                close_failed,
+                ..RescueBar::default()
+            }
+        }
         (_, None) | (None, Some(RescueView::Online(_))) => RescueBar::default(),
     };
     // The panel shows only under a bar with rows: none while no Runtime answers.

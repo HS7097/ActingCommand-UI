@@ -64,14 +64,20 @@ pub enum StopOutcome {
     /// The Runtime answered and stopped nothing: why, who started the run when the refusal names
     /// it, and whether it denied the request, which leaves everything as it was, or failed on the
     /// way, which leaves the device as the card says. The Runtime's code is in `runtime_code`, the
-    /// host's behind it in `host`.
-    Refused { failure: ClientFailure, why: Refusal, origin: Option<Origin>, denied: bool },
+    /// host's behind it in `host`; `chain`, as in each failure here, has every code of it.
+    Refused {
+        failure: ClientFailure,
+        chain: String,
+        why: Refusal,
+        origin: Option<Origin>,
+        denied: bool,
+    },
     /// No connection, so nothing was sent.
-    NotSent(ClientFailure),
+    NotSent { failure: ClientFailure, chain: String },
     /// Sent, or perhaps sent, and nothing says what became of it: a receipt that did not come in
     /// time, a failed write, a refusal that halted the host, an answer of another run or one whose
     /// `settled` and `reset` disagree (`runtime_result_unexpected`). Nothing here sends it again.
-    Unconfirmed(ClientFailure),
+    Unconfirmed { failure: ClientFailure, chain: String },
 }
 
 /// How the Runtime's own reset of the device after the stopped run went.
@@ -122,7 +128,10 @@ pub enum Origin {
 pub fn stop_run(root: &Path, alias: &str, run: RunKey) -> StopOutcome {
     let client = match RuntimeClient::connect(configure_config(root)) {
         Ok(client) => client,
-        Err(error) => return StopOutcome::NotSent(ClientFailure::from(error)),
+        Err(error) => {
+            let chain = chain(&error.outcome());
+            return StopOutcome::NotSent { failure: ClientFailure::from(error), chain };
+        }
     };
     match client.stop_instance_run(alias, run.0, STOP_WAIT) {
         Ok(answer) => stopped(answer),
@@ -150,10 +159,12 @@ fn stopped(answer: StoppedRun) -> StopOutcome {
 /// 2. anything else, a refusal that halted the host included, which carries a projection that is
 ///    fatal and no uncertainty: unconfirmed, since a failed write may have got the request out.
 fn failed(error: RuntimeClientError) -> StopOutcome {
+    // The failure as one outcome, the receipt's or else the client's own, with all it links.
+    let causes = chain(&error.outcome());
     let answered = error.projection().is_some_and(|refusal| !refusal.fatal)
         && !matches!(error.disposition(), RuntimeClientErrorClass::Uncertain);
     if !answered {
-        return StopOutcome::Unconfirmed(ClientFailure::from(error));
+        return StopOutcome::Unconfirmed { failure: ClientFailure::from(error), chain: causes };
     }
     let answer = error.receipt_outcome();
     // The receipt's own code, not the client's (`runtime_request_rejected`) nor its operation.
@@ -174,7 +185,7 @@ fn failed(error: RuntimeClientError) -> StopOutcome {
     let denied = error
         .received_receipt()
         .is_some_and(|receipt| matches!(receipt.state(), RuntimeReceiptState::Denied));
-    StopOutcome::Refused { failure: ClientFailure::from(error), why, origin, denied }
+    StopOutcome::Refused { failure: ClientFailure::from(error), chain: causes, why, origin, denied }
 }
 
 /// Why a reset failed: from the receipt's top outcome down the first `caused_by` of each, past

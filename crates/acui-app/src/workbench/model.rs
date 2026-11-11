@@ -1011,7 +1011,9 @@ impl Model {
     /// window is minimized, no `Status` has answered yet, or the one online does not list the
     /// account; while no Runtime answers, only that no device can be operated. Its "stop this
     /// run" and what the account's last stop came to are its stops' (`stop`), which a Runtime
-    /// that does not answer leaves as they were, to be judged and drawn once one does.
+    /// that does not answer leaves as they were, to be judged and drawn once one does; only a
+    /// stop that the reading thread's end left not known is drawn over that line, since then
+    /// no read online comes again (`Stops::unread`).
     pub fn rescue_view(&self, alias: &str) -> Option<RescueView> {
         if !self.picture_tab_shows() {
             return None;
@@ -1020,7 +1022,8 @@ impl Model {
             Link::Online { epoch, .. } => epoch.as_str(),
             Link::Unknown => return None,
             Link::Absent(_) | Link::NoAnswer(_) | Link::Trouble(_) | Link::ThreadFailed => {
-                return Some(RescueView::Offline)
+                let stop = self.stops.unread(alias).cloned();
+                return Some(RescueView::Offline { stop });
             }
         };
         let instance = self.instances.iter().find(|instance| instance.alias == alias)?;

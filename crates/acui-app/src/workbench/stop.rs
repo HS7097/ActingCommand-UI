@@ -33,7 +33,9 @@
 //! `Status` shows another run; the card and the picture say what holds now.
 //!
 //! Every answer goes in the log, from the thread, with the stopped run's request id, which the
-//! window never shows: quietly when the run stopped, or had ended, as the problem it is otherwise.
+//! window never shows, and of a failure its whole chain of causes: quietly when the run stopped,
+//! or had ended before the stop, or still stops after the first's wait; as the problem it is
+//! otherwise.
 //!
 //! `Stops` and the views it makes hold no words, as the `Model` they are part of; `paint` makes
 //! them.
@@ -232,6 +234,13 @@ impl Stops {
     /// What the last stop of `alias` came to, while it is said.
     pub fn said(&self, alias: &str) -> Option<&StopSaid> {
         self.slots.get(alias)?.said.as_ref()
+    }
+
+    /// What the last stop of `alias` came to, when that is that no `Status` is read any more
+    /// (`StopSaid::NoStatus`): the one line of it a bar with no rows draws, since no read online
+    /// ever comes again to draw it with them.
+    pub fn unread(&self, alias: &str) -> Option<&StopSaid> {
+        self.said(alias).filter(|said| matches!(said, StopSaid::NoStatus { .. }))
     }
 
     /// The first request of a stop of `alias` pressed: whether it goes, which it does not while one
@@ -439,7 +448,7 @@ impl Landing {
             Self::Answer(StopOutcome::Stopped { reset: None, .. }) => {
                 (StopSaid::Asked { at_ms }, Some(false))
             }
-            Self::Answer(StopOutcome::Refused { failure, why, origin, denied }) => {
+            Self::Answer(StopOutcome::Refused { failure, why, origin, denied, .. }) => {
                 let said = StopSaid::Refused {
                     at_ms,
                     why,
@@ -451,8 +460,8 @@ impl Landing {
                 };
                 (said, None)
             }
-            Self::Answer(StopOutcome::NotSent(_)) => (StopSaid::NotSent { at_ms }, None),
-            Self::Answer(StopOutcome::Unconfirmed(_)) | Self::Panicked(_) => {
+            Self::Answer(StopOutcome::NotSent { .. }) => (StopSaid::NotSent { at_ms }, None),
+            Self::Answer(StopOutcome::Unconfirmed { .. }) | Self::Panicked(_) => {
                 (StopSaid::Unconfirmed { at_ms }, (!follow_up).then_some(true))
             }
             Self::NoThread(error) => (StopSaid::NoThread { at_ms, error }, None),
@@ -460,8 +469,9 @@ impl Landing {
     }
 
     /// Into the technical log, with the stopped run's request id, its codes and, of a failed
-    /// reset, its whole chain of causes: quietly when the run stopped, ended before the stop, or
-    /// still stops after the first's wait; the rest as the problems they are.
+    /// reset or a request that failed, its whole chain of causes: quietly when the run stopped,
+    /// ended before the stop, or still stops after the first's wait; the rest as the problems
+    /// they are.
     fn log(&self, alias: &str, request: &Request) {
         let prefix = prefix(alias, request);
         let first = request.follows.is_none();
@@ -498,28 +508,33 @@ impl Landing {
                      again"
                 )
             }
-            Self::Answer(StopOutcome::Refused { failure, why: Refusal::RunUnknown, .. })
-                if first =>
-            {
+            Self::Answer(StopOutcome::Refused {
+                failure, chain, why: Refusal::RunUnknown, ..
+            }) if first => {
                 let line = format!(
-                    "{prefix}: the run had ended before the stop; nothing was done: {}",
+                    "{prefix}: the run had ended before the stop; nothing was done: {}; chain: \
+                     {chain}",
                     failure_line(failure)
                 );
                 report::log_quiet(THREAD, &line);
                 return;
             }
-            Self::Answer(StopOutcome::Refused { failure, why, origin, denied }) => {
+            Self::Answer(StopOutcome::Refused { failure, chain, why, origin, denied }) => {
                 let how = if *denied { "denied" } else { "failed" };
                 format!(
-                    "{prefix}: refused, {how}, {why:?}, run origin {origin:?}: {}",
+                    "{prefix}: refused, {how}, {why:?}, run origin {origin:?}: {}; chain: {chain}",
                     failure_line(failure)
                 )
             }
-            Self::Answer(StopOutcome::NotSent(failure)) => {
-                format!("{prefix}: not sent: {}", failure_line(failure))
+            Self::Answer(StopOutcome::NotSent { failure, chain }) => {
+                format!("{prefix}: not sent: {}; chain: {chain}", failure_line(failure))
             }
-            Self::Answer(StopOutcome::Unconfirmed(failure)) => {
-                format!("{prefix}: unconfirmed{}: {}", then(first), failure_line(failure))
+            Self::Answer(StopOutcome::Unconfirmed { failure, chain }) => {
+                format!(
+                    "{prefix}: unconfirmed{}: {}; chain: {chain}",
+                    then(first),
+                    failure_line(failure)
+                )
             }
             Self::Panicked(message) => {
                 format!("{prefix}: panicked, unconfirmed{}: {message}", then(first))

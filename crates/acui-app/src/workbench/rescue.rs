@@ -176,8 +176,10 @@ pub enum RescueHold {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RescueView {
     /// No Runtime answers: the bar is one line, that no device can be operated. Nothing an
-    /// earlier `Status` said decides which rows there would be.
-    Offline,
+    /// earlier `Status` said decides which rows there would be. Over it, once the thread that
+    /// reads `Status` is gone, a stop of the account's run that this left not known
+    /// (`Stops::unread`): no read online comes again to draw it.
+    Offline { stop: Option<StopSaid> },
     Online(RescueRows),
 }
 
@@ -185,7 +187,7 @@ impl RescueView {
     /// Whether `op`'s button is drawn and can be pressed now.
     pub fn offers(&self, op: DeviceOp) -> bool {
         match self {
-            Self::Offline => false,
+            Self::Offline { .. } => false,
             Self::Online(rows) => rows.offers(op),
         }
     }
