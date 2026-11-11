@@ -160,8 +160,22 @@
 「只看到」或换页签、筛选，会重新定位，或者把手柄拉回最右端（全部）、在线时按「跳到最新」、关掉窗口再打开，
 这样就不用游标往下读。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.47
-（#407 GPU-1，v0.12.44 起：配置修订 27 让 `vision` 段可以写 DirectML（`vision.execution_provider` 取 `directml`、
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.53
+（#429 R-6，v0.12.53 起：contract crate 给请求 `StopInstanceRun` 定了成功码 `request_stop_instance_run_completed`，建在它上面的
+控制台核得了 v0.12.53 的 Runtime 停完一次运行的回执；建在 v0.12.47 上的控制台那里这个种类没有成功码，会核错。停调度器或 Runtime
+自己发起的运行被拒成 `scheduled_contained_task_not_client_cancellable`，用键 `run_origin`（词表 `run_origin`：`policy`、`host`）
+写明是谁发起的；控制台还不发停止，「关闭这个任务」照旧灰着。v0.12.47 以来控制台对上的接口都没动（`actingd-config` [5, 27]、
+`ledger` [3, 7]、`runtime-client` [3, 6]，`StopInstanceRun` 是修订 3 的种类；v0.12.52 起的 `package` [3, 8] 只归 acsetup）；
+contract crate 别的只多了程序事实 `config.catalog_provenance`（#428 SCHED-C1b）、`inventory.list.` 下的列表读数（#428 S168-4）、
+`schedule.json` 规则的固定值（#428 SCHED-C1a）和原地替换在 `tables/` 里留下的名字（#428 TB-R1），控制台都不读；嵌入的结果码目录
+多了 10 个码（其中有 `request_stop_instance_run_completed` 和 ISO-START-1 的 `policy_settlement_facts_skipped`）、7 个键、9 个位置、
+词表 `run_origin`，以及 `install_caveat`、`install_operation_kind`、`install_refusal`、`install_step_kind`、`reading_problem` 的新词，
+没有退役或删掉的码，也没有 `console_`、`setup_` 名字；ledger crate 不再让时间界驱动一页的语句（#422 QP-1，行和次序不变），
+没有终局、唯一一次放租是自己放的运行，写过效果或输入记录也结成中断（#428 UNSET-2），默认的 `ledger_observer.tag.workbench_patterns`
+多了 `host.capped_episodes`（#428 SCHED-C1d），账本仍是修订 7；runtime-config 只改了测试，键表的键和 `ui_tier` 都是 v0.12.47 的，
+设置页不多出行；runtime-client 链接的 policy、selection-policy 多了封顶消耗顺序的触发线和活过重启的回合（SCHED-C1c、SCHED-C1d）、
+固定值（SCHED-C1a）和列表上的表最大值（#428 S168-5a）；runtime-client、ledger-forensics、artifact-store、runtime-database 的源码没改。
+v0.12.44 起 #407 GPU-1：配置修订 27 让 `vision` 段可以写 DirectML（`vision.execution_provider` 取 `directml`、
 `vision.directml_device`、`vision.gpu_fallback`）；这一段在 Runtime 下次启动时生效，不是键表里的键，控制台不写也不解释它，
 所以设置页不多出行，写了它们的文件也在控制台声明的 `actingd-config` [5, 27] 之内。
 v0.12.43 以来 contract crate 别的只多了值键、程序事实 `config.catalog_warnings`（#428 CW-1）和 OCR 节点分布报告 v2，
@@ -187,7 +201,7 @@ v0.12.38 起读帧的账本查找由读者池在写线程外回答，#422 RA-1�
 照旧），说 0.12 协议（`runtime-client` 修订 5、账本修订 7）：
 
 ```
-rev = "d06910c64bb1cbfaa6c71df2d2db3798aacd7fa7"
+rev = "59fa27f0f71904b651c67f50108387fa53f541ff"
 ```
 
 六个 crate（contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
@@ -376,7 +390,7 @@ acui --help
 MuMu 原生（Nemu IPC）；截图：ADB 截图，模拟器还有 DroidCast 和 MuMu 原生，真机还有 scrcpy），旁边写值的来源（配置文件，
 或在线设置及其时间、入口）和这台最近一次自检的结果。按「应用」后，这台空闲时立刻切换（最多等 3 秒，即契约的
 `CONNECTION_PREPARATION_CLAIM_WAIT_MS`）：用新后端重连并自检，监控台等回执最长约 138 秒（契约的 `BACKEND_SWITCH_WAIT_MS`，
-v0.12.47 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
+v0.12.53 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
 先问触控一起改成哪个，再两项一起发。在线设置的值有「恢复为文件值」，这也是一次切换（单清一项可能拆散这一对时两项一起清）；
 文件值和在线值相同时设备不动，结果行只写已恢复为文件值。结果在顶栏下面单独一行，带账号；拒绝照原因写人话：这台正忙（忙什么）、
 你正在玩、被围栏、没开，或新后端没打开（以及为什么，比如 MuMu 原生触控时这台没装配置的游戏包；v0.12.40 起游戏没在跑不再是原因，只有回退到 v0.12.39 或更早的 Runtime 还这样说）、原来的已换回或也
@@ -638,8 +652,8 @@ Runtime 才回话，所以按下去可能要半分钟左右，这期间卡片上
   除非 `resume_elsewhere_reasons` 列了它们的理由，或者像上面说的这一行用不了，那时它们按第一类处理：一是 `instance.added`，Lab 救急模块添加账号
   （`instance add`，Runtime INST-5）后给刚加进来的账号挂的暂停，它和这个模块那些 `lab-…` 暂停不一样，
   没有哪次操作会自己解除它；二是 `policy_settlement_facts_skipped`，Runtime 启动时给记不下结算事实的实例
-  挂的暂停（Runtime ISO-START-1）。到 0.12.51 为止的 Runtime 发行版（包括钉住的 0.12.47）都不会加这两种
-  暂停，要更新的 Runtime 才有。
+  挂的暂停（Runtime ISO-START-1）。到 0.12.51 为止的 Runtime 发行版都不会加这两种
+  暂停，0.12.52 起才有，钉住的 0.12.53 两种都有。
   还在排空或交还设备的实例暂停也不给按钮，
   Runtime 这时会拒绝恢复。每一行都照原样显示暂停的理由，不管操作方写的是什么。
 
