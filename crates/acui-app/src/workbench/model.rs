@@ -14,7 +14,7 @@ use std::time::Instant;
 use acui_source::workbench::device::DeviceOp;
 use acui_source::workbench::{
     ActivityKind, ConfigRead, ExplainRead, FenceFact, InstanceLive, LiveRead, LiveSnapshot,
-    PresetProblem, StartRead, TasksRead,
+    PresetProblem, RunKey, StartRead, TasksRead,
 };
 use acui_source::{ClientFailure, PauseFact};
 
@@ -27,6 +27,7 @@ use super::preview::{Order, Target};
 use super::read::{Lane, Read, EXPLAIN_TOO_OLD, START_TRIES};
 use super::rescue::{Rescue, RescueHold, RescueView, Watch};
 use super::settings::{self, AutostartView, SettingsView, StartView};
+use super::stop::{Review, StopTarget, Stops};
 use super::tasks::{self, Listing, TasksNow, TasksView};
 use super::tools::{Displays, NameTable, NamesRead, PackTable, WatchdogRead};
 use crate::ledger::resume::ResumeElsewhere;
@@ -255,6 +256,9 @@ pub struct Model {
     pictures: Pictures,
     /// Each account's operations of its device, and the confirmation asked (UI-3e1-a).
     rescue: Rescue,
+    /// Each account's stop of its run, beside them (UI-3e2): kept while no Runtime answers, and
+    /// judged again by the next `Status` read online (`stops_reviewed`).
+    stops: Stops,
     /// The ledger's committed head as the newest `Status` stated it, while online: where the
     /// picture's lookup starts down from.
     ledger_head: Option<u64>,
@@ -359,6 +363,7 @@ impl Model {
             autostart_asks: 0,
             pictures: Pictures::default(),
             rescue: Rescue::default(),
+            stops: Stops::default(),
             ledger_head: None,
             rules_open: false,
             resume_elsewhere,
@@ -810,6 +815,42 @@ impl Model {
         &mut self.rescue
     }
 
+    pub fn stops_mut(&mut self) -> &mut Stops {
+        &mut self.stops
+    }
+
+    /// What a press of "stop this run" on `alias`'s bar would stop now (UI-3e2): while its rescue
+    /// bar offers that button, the run the newest `Status` names for the account, its package,
+    /// and the owner epoch online; none while it cannot be pressed.
+    pub fn stop_target(&self, alias: &str) -> Option<StopTarget> {
+        let Some(RescueView::Online(rows)) = self.rescue_view(alias) else {
+            return None;
+        };
+        if !rows.close.is_some_and(|row| row.offered) {
+            return None;
+        }
+        let epoch = self.online_epoch()?.to_owned();
+        let instance = self.instances.iter().find(|instance| instance.alias == alias)?;
+        let activity = instance.activity.as_ref()?;
+        Some(StopTarget { run: activity.run?, package: activity.package_id.clone(), epoch })
+    }
+
+    /// The run the newest `Status` names for `alias`, if any; none while no Runtime answers.
+    pub fn account_run(&self, alias: &str) -> Option<RunKey> {
+        let instance = self.instances.iter().find(|instance| instance.alias == alias)?;
+        instance.activity.as_ref()?.run
+    }
+
+    /// What each account's stop waits for, judged by the newest `Status` when it is a read online
+    /// at `at_ms`, and only then: one that does not come online changes nothing (`stop`). A
+    /// follow-up's ticket is of the same count as the device's operations'.
+    pub fn stops_reviewed(&mut self, at_ms: u64) -> Review {
+        let Link::Online { epoch, .. } = &self.link else {
+            return Review::default();
+        };
+        self.stops.reviewed(epoch, &self.instances, &mut self.rescue, at_ms)
+    }
+
     /// Which of its device's works out from here holds `alias`'s device, if any: an operation of
     /// it, a switch of its backends, a refresh of its picture, said in that order. The one place
     /// where each of them keeps the others from going out for an account: the Runtime names none
@@ -968,25 +1009,28 @@ impl Model {
     /// What `alias`'s rescue bar offers now (UI-3e1-a), as the reads and the account's own
     /// presses leave it: none while the main page does not show, or its live view's tab, the
     /// window is minimized, no `Status` has answered yet, or the one online does not list the
-    /// account; while no Runtime answers, only that no device can be operated.
+    /// account; while no Runtime answers, only that no device can be operated. Its "stop this
+    /// run" and what the account's last stop came to are its stops' (`stop`), which a Runtime
+    /// that does not answer leaves as they were, to be judged and drawn once one does.
     pub fn rescue_view(&self, alias: &str) -> Option<RescueView> {
         if !self.picture_tab_shows() {
             return None;
         }
-        match &self.link {
-            Link::Online { .. } => {}
+        let epoch = match &self.link {
+            Link::Online { epoch, .. } => epoch.as_str(),
             Link::Unknown => return None,
             Link::Absent(_) | Link::NoAnswer(_) | Link::Trouble(_) | Link::ThreadFailed => {
                 return Some(RescueView::Offline)
             }
-        }
+        };
         let instance = self.instances.iter().find(|instance| instance.alias == alias)?;
         let gate = self.preview_gate(alias);
         let hold = self.rescue_hold(instance, gate);
         let watch = self.watch(instance);
         let file_value = self.file_value_lifts(instance);
         let withdrawn = gate == PreviewGate::Withdrawn;
-        let rows = self.rescue.view(instance, withdrawn, hold, watch, file_value);
+        let stops = &self.stops;
+        let rows = self.rescue.view(instance, withdrawn, hold, watch, file_value, stops, epoch);
         Some(RescueView::Online(rows))
     }
 
@@ -1377,7 +1421,8 @@ impl Model {
 
     /// What is shown of a Runtime that no longer answers. The last value read
     /// stays, for the same epoch coming back. No device can be operated then, so the
-    /// confirmation asked goes.
+    /// confirmation asked goes; each account's stop of its run stays, for the next read online
+    /// to judge (`stops_reviewed`).
     fn leave_online(&mut self) {
         self.instances.clear();
         self.global_pause = None;

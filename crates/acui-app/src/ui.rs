@@ -540,7 +540,8 @@ fn language_index(language: Language) -> i32 {
 /// line of tasks without a package opens and closes (`workbench`, UI-3f1),
 /// the box beside the picture's title draws on it or not (`workbench::preview`), the
 /// button under it refreshes it (`workbench::refresh`), and the rescue bar over it operates
-/// that account's device, its confirmation's two buttons included (`workbench::rescue`);
+/// that account's device, its confirmation's two buttons included (`workbench::rescue`), and
+/// stops its run (`workbench::stop`);
 /// Start and Request Shutdown are the launcher's;
 /// "troubleshooting and ledger" opens the window of the default source; the
 /// write buttons, the evidence days' field, each device's backends' boxes and buttons, and the
@@ -593,6 +594,11 @@ fn install_workbench(window: &WorkbenchWindow) {
     window.on_rescue_cancelled(|| {
         if let Some(ui) = current() {
             workbench::rescue::cancelled(&ui);
+        }
+    });
+    window.on_rescue_close_pressed(|| {
+        if let Some(ui) = current() {
+            workbench::stop::pressed(&ui);
         }
     });
     window.on_right_tab_picked(|tab| {
@@ -947,7 +953,7 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_rescue_game(labels.rescue_game.into());
     global.set_rescue_game_launch(labels.rescue_game_launch.into());
     global.set_rescue_game_restart(labels.rescue_game_restart.into());
-    global.set_rescue_close_task(labels.rescue_close_task.into());
+    global.set_rescue_stop_run(labels.rescue_stop_run.into());
     global.set_rescue_rules(labels.rescue_rules.into());
     global.set_rules_close(labels.rules_close.into());
     global.set_rules_quiet(labels.setting_quiet.into());

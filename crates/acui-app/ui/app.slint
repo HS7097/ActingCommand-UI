@@ -230,10 +230,11 @@ export struct BackendGroupItem {
 // under that row, when the device's backends group can lift its fence too (#402 HS-5c), so. The
 // emulator's row, each of its three buttons where its control is offered and whether it can
 // be pressed, and at the row's end why one cannot. The game's row, its two buttons, and why not.
-// "Close this task", always off, and why, while the account does something. The question a press
-// that closes the game asks, and its confirming button's words. What the last operation came to,
-// red when it failed. "Auto rules" at the first row's end (UI-3e1-b), and whether the account's
-// rules panel is open in the picture's place.
+// "Stop this run" (UI-3e2) while the account does something, whether it can be pressed, and what a
+// press does or why not; under it, and without it too, what the account's last stop came to, red
+// when it failed. The question a press that closes the game asks, and its confirming button's
+// words. What the last operation came to, red when it failed. "Auto rules" at the first row's end
+// (UI-3e1-b), and whether the account's rules panel is open in the picture's place.
 export struct RescueBar {
     shown: bool,
     reason: string,
@@ -255,7 +256,10 @@ export struct RescueBar {
     game-restart-offered: bool,
     game-note: string,
     close-shown: bool,
+    close-offered: bool,
     close-reason: string,
+    close-line: string,
+    close-failed: bool,
     confirm: string,
     confirm-label: string,
     line: string,
@@ -468,8 +472,8 @@ export global Strings {
     in property <string> refresh-frame;
     in property <string> refresh-cost;
     // The rescue bar under the live view's title: "reconnect and check"; the emulator's row, its
-    // caption and its three buttons; the game's row, its caption and its two buttons; "close
-    // this task".
+    // caption and its three buttons; the game's row, its caption and its two buttons; "stop this
+    // run".
     in property <string> rescue-check;
     in property <string> rescue-emulator;
     in property <string> rescue-emulator-start;
@@ -478,7 +482,7 @@ export global Strings {
     in property <string> rescue-game;
     in property <string> rescue-game-launch;
     in property <string> rescue-game-restart;
-    in property <string> rescue-close-task;
+    in property <string> rescue-stop-run;
     // "Auto rules" at the end of the rescue bar's first row, and on the rules panel that opens:
     // "close"; the quiet times' title and what they do; the button that opens the form of one to
     // add, its days' boxes Monday first, "from" and "to" its two fields and what they say empty,
@@ -2509,10 +2513,11 @@ export component WorkbenchWindow inherits Window {
     callback picture-overlays-toggled(bool);
     // The button under the picture that refreshes it.
     callback refresh-frame();
-    // A button of the rescue bar; its confirmation's button, and "cancel".
+    // A button of the rescue bar; its confirmation's button, and "cancel"; its "stop this run".
     callback rescue-pressed(RescueOp);
     callback rescue-confirmed();
     callback rescue-cancelled();
+    callback rescue-close-pressed();
     // The rescue bar's "auto rules", and the panel's "close". On the panel: the quiet times'
     // form opened, a day's box ticked or not (0 Monday through 6 Sunday), its two fields as
     // typed, "add"; a time's "delete" (its index); "delete all", its confirmation and "cancel";
@@ -3078,13 +3083,20 @@ export component WorkbenchWindow inherits Window {
                                             horizontal-stretch: 1;
                                         }
                                     }
-                                    // Never pressed in this version: shown so that why is said.
+                                    // "Stop this run" (UI-3e2), pressed only when it can be: one
+                                    // press sends it. Beside it what a press does, or why not; under
+                                    // it what the last stop came to, which stays once the row goes.
+                                    // Both before why the device's buttons are off: a run that holds
+                                    // them back may be the one this row stops.
                                     if root.picture-tab && root.rescue.shown && root.rescue.close-shown: HorizontalLayout {
                                         spacing: 14px;
                                         vertical-stretch: 0;
                                         SkinButton {
-                                            text: Strings.rescue-close-task;
-                                            enabled: false;
+                                            text: Strings.rescue-stop-run;
+                                            enabled: root.rescue.close-offered;
+                                            clicked => {
+                                                root.rescue-close-pressed();
+                                            }
                                         }
                                         Text {
                                             text: root.rescue.close-reason;
@@ -3095,6 +3107,10 @@ export component WorkbenchWindow inherits Window {
                                             min-width: 0px;
                                             horizontal-stretch: 1;
                                         }
+                                    }
+                                    if root.picture-tab && root.rescue.shown && root.rescue.close-line != "": Notice {
+                                        text: root.rescue.close-line;
+                                        failed: root.rescue.close-failed;
                                     }
                                     if root.picture-tab && root.rescue.shown && root.rescue.reason != "": Notice {
                                         text: root.rescue.reason;

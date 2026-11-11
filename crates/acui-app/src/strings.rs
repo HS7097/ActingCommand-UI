@@ -1097,7 +1097,7 @@ pub struct Labels {
     pub refresh_restarted: &'static str,
     /// Under the live view's title, the rescue bar (UI-3e1-a), whose buttons the window draws
     /// itself: reconnect and check; the emulator's row, its caption, start, stop and restart; the
-    /// game's row, its caption, launch and restart; "close this task", always off.
+    /// game's row, its caption, launch and restart; "stop this run" (UI-3e2).
     pub rescue_check: &'static str,
     pub rescue_emulator: &'static str,
     pub rescue_emulator_start: &'static str,
@@ -1106,7 +1106,7 @@ pub struct Labels {
     pub rescue_game: &'static str,
     pub rescue_game_launch: &'static str,
     pub rescue_game_restart: &'static str,
-    pub rescue_close_task: &'static str,
+    pub rescue_stop_run: &'static str,
     /// Why every device button is off: no Runtime answers; the device is being handed over; its
     /// picture is being refreshed; its backends are being switched, or may still be; one was
     /// just operated; it runs a task; it recovers by itself; it does something else (the card's
@@ -1134,11 +1134,40 @@ pub struct Labels {
     pub rescue_seen_off: &'static str,
     pub rescue_seen_off_start: &'static str,
     pub rescue_game_fault: &'static str,
-    /// Why "close this task" cannot be pressed: not from here with this Runtime; the system's
-    /// own startup or recovery; no task runs.
-    pub rescue_close_not_here: &'static str,
+    /// Beside "stop this run" (UI-3e2), what a press does or why it cannot be pressed, besides that
+    /// one was just pressed (`rescue_cooling`): a run another tool started, which a press asks the
+    /// Runtime to stop, the Runtime then resetting the device; this Runtime cannot stop a run from
+    /// here; a direct run whose identity was not read; a task the scheduler dispatched, which the
+    /// card's own pause of the account stops; a step the Runtime started itself; no task runs.
+    pub stop_note: &'static str,
+    pub stop_unsupported: &'static str,
+    pub stop_unidentified: &'static str,
+    pub stop_scheduled: &'static str,
     pub rescue_close_system: &'static str,
     pub rescue_close_no_task: &'static str,
+    /// What the last stop of a run came to, under its button, each that landed with when (time):
+    /// out; stopped and the device reset; ended for another reason before this stop, the Runtime
+    /// resetting nothing for it; stopped, and its reset failed (time, why); asked, and waited for
+    /// at the run's next checkpoint; its result read once the run is gone; asked, its result not
+    /// read; refused by a Runtime that cannot stop a run; the run ended before the stop; ended, its
+    /// reset's result not read; the stop as a refusal names it (`rescue_refused`); unconfirmed; the
+    /// account gone from the Runtime's list; the console reading no status. And a sentence with
+    /// the time it was said (the sentence, the time).
+    pub stop_sending: &'static str,
+    pub stop_done: &'static str,
+    pub stop_not_needed: &'static str,
+    pub stop_reset_failed: &'static str,
+    pub stop_asked: &'static str,
+    pub stop_reading: &'static str,
+    pub stop_unsettled: &'static str,
+    pub stop_refused_unsupported: &'static str,
+    pub stop_run_ended: &'static str,
+    pub stop_run_ended_unread: &'static str,
+    pub stop_op: &'static str,
+    pub stop_unconfirmed: &'static str,
+    pub stop_unlisted: &'static str,
+    pub stop_no_status: &'static str,
+    pub stop_at: &'static str,
     /// The question a press that closes the game asks (the account): a stop of the emulator; one
     /// whose watch starts it again, or may (the account, the setting's name); a restart of the
     /// emulator; a restart of the game. The confirming button's words: a stop's, a restart's.
@@ -2146,7 +2175,7 @@ pub const ZH: Labels = Labels {
     rescue_game: "游戏",
     rescue_game_launch: "启动",
     rescue_game_restart: "重启",
-    rescue_close_task: "关闭这个任务",
+    rescue_stop_run: "停下这次运行",
     rescue_offline: "Runtime 没有运行或连不上，不能操作设备",
     rescue_handing_over: "正在交接设备",
     rescue_refreshing: "正在刷新画面，稍等",
@@ -2163,9 +2192,27 @@ pub const ZH: Labels = Labels {
     rescue_seen_off: "已经关着（{} 看到的）",
     rescue_seen_off_start: "已经关着（{} 看到的），用「启动」",
     rescue_game_fault: "这台有待处理的故障，先重新连接并体检",
-    rescue_close_not_here: "这一版 Runtime 还不支持在这里关闭任务",
-    rescue_close_system: "这是系统自己的启动或恢复流程，不能关闭",
+    stop_note: "这次运行是别的工具发起的，按下就请 Runtime 停下它，之后由 Runtime 复位设备",
+    stop_unsupported: "这一版 Runtime 还不支持在这里停下运行",
+    stop_unidentified: "没读到这次运行的身份，这里停不了",
+    stop_scheduled: "这是自动调度的任务，用卡片上的「暂停这个号」可以停它",
+    rescue_close_system: "这是 Runtime 自己发起的步骤，不能在这里停",
     rescue_close_no_task: "现在没有在跑的任务",
+    stop_sending: "正在停下…（这次运行会停在下一个检查点，之后由 Runtime 复位设备）",
+    stop_done: "已停下（{}），Runtime 已复位设备",
+    stop_not_needed: "这次运行在这里停下之前已经因别的原因结束（{}），Runtime 这里没有复位设备；现在怎样以卡片为准",
+    stop_reset_failed: "已停下（{}），但设备复位没成功：{}。这台被隔离了，现在怎样以卡片为准",
+    stop_asked: "已经请它停下（{}），等它在下一个检查点停下…",
+    stop_reading: "正在读停止的结果…",
+    stop_unsettled: "已经请它停下，但这里没读到最后结果（{}）；现在怎样以卡片为准。不会再自动发。",
+    stop_refused_unsupported: "这一版 Runtime 还不支持在这里停下运行，什么都没做（{}）",
+    stop_run_ended: "这次运行在停下之前已经结束了，什么都没做（{}）",
+    stop_run_ended_unread: "这次运行已经结束，但复位的结果这里没读到（{}）；现在怎样以卡片为准",
+    stop_op: "停下这次运行",
+    stop_unconfirmed: "结果未确认：可能已经执行（{}）。卡片和画面是现在的情况；不会自己定时重发。",
+    stop_unlisted: "这个号不在 Runtime 的列表里了，这次停止的结果不明",
+    stop_no_status: "控制台读不到 Runtime 的状态了，这次停止的结果不明",
+    stop_at: "{}（{}）",
     rescue_confirm_stop: "关闭 {} 的模拟器？游戏会一起关掉。",
     rescue_confirm_stop_watched: "关闭 {} 的模拟器？游戏会一起关掉。这个号开了「{}」，Runtime 稍后会把它重新拉起；要它保持关着，先暂停这个号。",
     rescue_confirm_stop_maybe_watched: "关闭 {} 的模拟器？游戏会一起关掉。如果这个号开了「{}」，Runtime 稍后会把它重新拉起；要它保持关着，先暂停这个号。",
@@ -3118,7 +3165,7 @@ pub const EN: Labels = Labels {
     rescue_game: "Game",
     rescue_game_launch: "Launch",
     rescue_game_restart: "Restart",
-    rescue_close_task: "Close This Task",
+    rescue_stop_run: "Stop This Run",
     rescue_offline: "The Runtime is not running or cannot be reached: no device can be operated",
     rescue_handing_over: "The device is being handed over",
     rescue_refreshing: "Its picture is being refreshed: wait a moment",
@@ -3135,9 +3182,27 @@ pub const EN: Labels = Labels {
     rescue_seen_off: "Off when last seen ({})",
     rescue_seen_off_start: "Off when last seen ({}): use Start",
     rescue_game_fault: "This device has a fault to deal with: reconnect and check it first",
-    rescue_close_not_here: "This Runtime cannot close a task from here yet",
-    rescue_close_system: "This is the system's own startup or recovery: it cannot be closed",
+    stop_note: "Another tool started this run: a press asks the Runtime to stop it, and the Runtime then resets the device",
+    stop_unsupported: "This Runtime cannot stop a run from here yet",
+    stop_unidentified: "This run's identity was not read, so it cannot be stopped from here",
+    stop_scheduled: "This task was scheduled automatically: Pause This Account on its card stops it",
+    rescue_close_system: "This is a step the Runtime started itself: it cannot be stopped from here",
     rescue_close_no_task: "No task is running now",
+    stop_sending: "Stopping… (the run stops at its next checkpoint, and the Runtime then resets the device)",
+    stop_done: "Stopped ({}); the Runtime reset the device",
+    stop_not_needed: "The run had already ended for another reason before it was stopped here ({}); the Runtime did not reset the device for it; see the card for what holds now",
+    stop_reset_failed: "Stopped ({}), but the device's reset failed: {}. The device is fenced; see the card for what holds now",
+    stop_asked: "Asked to stop ({}); waiting for it to stop at its next checkpoint…",
+    stop_reading: "Reading what came of the stop…",
+    stop_unsettled: "Asked to stop, but its final result was not read here ({}); see the card for what holds now. Not sent again by itself.",
+    stop_refused_unsupported: "This Runtime cannot stop a run from here yet; nothing was done ({})",
+    stop_run_ended: "The run had already ended before it was stopped; nothing was done ({})",
+    stop_run_ended_unread: "The run has ended, but what came of its reset was not read here ({}); see the card for what holds now",
+    stop_op: "Stopping this run",
+    stop_unconfirmed: "Unconfirmed: it may have happened ({}). The card and picture show what holds now; it is not sent again on a timer.",
+    stop_unlisted: "This account is no longer in the Runtime's list: what came of this stop is not known",
+    stop_no_status: "The console can no longer read the Runtime's status: what came of this stop is not known",
+    stop_at: "{} ({})",
     rescue_confirm_stop: "Stop {}'s emulator? The game closes with it.",
     rescue_confirm_stop_watched: "Stop {}'s emulator? The game closes with it. “{}” is on for this account, so the Runtime will start it again shortly; pause this account to keep it off.",
     rescue_confirm_stop_maybe_watched: "Stop {}'s emulator? The game closes with it. If “{}” is on for this account, the Runtime will start it again shortly; pause this account to keep it off.",

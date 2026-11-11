@@ -25,6 +25,7 @@ use acui_source::workbench::backends::{
 use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
 use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietRead, QuietShown};
+use acui_source::workbench::stop::{Origin as RunOrigin, Refusal, Reset};
 use acui_source::workbench::{
     PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
     SettingValue, TasksRead, ValueProblem, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, MODE_FULL,
@@ -45,13 +46,12 @@ use super::picture::{
     Refreshed, Unread,
 };
 use super::preview;
-use super::rescue::{
-    Button, ButtonWhy, CloseWhy, RescueHold, RescueRows, RescueView, Rescued, Watch,
-};
+use super::rescue::{Button, ButtonWhy, RescueHold, RescueRows, RescueView, Rescued, Watch};
 use super::settings::{
     self, AutostartView, BackendGroup, CheckEntry, ReportedAccount, ReportedLine, SelfCheckView,
     SettingLine, SettingsView, StartView,
 };
+use super::stop::{CloseWhy, StopSaid};
 use super::tasks::{
     GroupTitle, PackRow, TaskLine, TaskList, TaskName, TaskSaid, TasksView, Unreadable,
 };
@@ -531,9 +531,11 @@ fn refusal_words(ui: &Ui, labels: &Labels, host: Option<&str>, class: Option<&st
 /// Else, of an account that drives a device of its own, its reconnect and check, its emulator's
 /// row while the Runtime offers its control, and its game's: each button pressed only when it may
 /// be, and at the row's end why one may not, or what the check does. While the account does
-/// something, "close this task", always off, and why. Then why every device button is off, or the
-/// question a press that closes the game asks; and what the account's last operation came to,
-/// red when it failed. Set only when anything in it changed.
+/// something, "stop this run" (UI-3e2), pressed only when it may be, and beside it what a press
+/// does or why it may not; under it, without it too, what the account's last stop came to, red
+/// when it failed. Then why every device button is off, or the question a press that closes the
+/// game asks; and what the account's last operation came to, red when it failed. Set only when
+/// anything in it changed.
 ///
 /// While the bar has rows, a fixture's account's as well, "auto rules" at the end of its first
 /// row; while that is open, the account's rules panel in the picture's place (`rules_panel`),
@@ -575,7 +577,8 @@ pub fn rescue(ui: &Ui) {
 }
 
 /// The bar's words for the rows of `alias`'s view. Why every device button is off stands only
-/// over device buttons: a fixture's account has none, only "close this task" with its own reason.
+/// over device buttons: a fixture's account has none, only "stop this run" with its own words,
+/// which that reason does not hold back.
 fn rescue_bar(ui: &Ui, labels: &Labels, alias: &str, rows: &RescueRows) -> RescueBar {
     let offered = |button: Option<Button>| button.is_some_and(|button| button.offered);
     let devices = rows.check.is_some() || rows.emulator.is_some() || rows.game.is_some();
@@ -591,6 +594,10 @@ fn rescue_bar(ui: &Ui, labels: &Labels, alias: &str, rows: &RescueRows) -> Rescu
     let (confirm, confirm_label) = confirm_text(labels, alias, rows);
     let (line, failed) = match &rows.said {
         Some(said) => rescued_text(ui, labels, rows, said),
+        None => (String::new(), false),
+    };
+    let (close_line, close_failed) = match &rows.stop {
+        Some(said) => stop_text(ui, labels, said),
         None => (String::new(), false),
     };
     RescueBar {
@@ -614,7 +621,10 @@ fn rescue_bar(ui: &Ui, labels: &Labels, alias: &str, rows: &RescueRows) -> Rescu
         game_restart_offered: offered(rows.game.map(|row| row.restart)),
         game_note: game_note(labels, rows).into(),
         close_shown: rows.close.is_some(),
-        close_reason: rows.close.map_or("", |why| close_text(labels, why)).into(),
+        close_offered: rows.close.is_some_and(|row| row.offered),
+        close_reason: rows.close.map_or("", |row| close_text(labels, row.why)).into(),
+        close_line: close_line.into(),
+        close_failed,
         confirm: confirm.into(),
         confirm_label: confirm_label.into(),
         line: line.into(),
@@ -695,12 +705,104 @@ fn game_note(labels: &Labels, rows: &RescueRows) -> String {
     }
 }
 
+/// Beside "stop this run": what a press does, or why it cannot be pressed; nothing while a stop is
+/// out or waits for the run, which the line under it says. Never the task's name, nor the run's.
 fn close_text(labels: &Labels, why: CloseWhy) -> &'static str {
     match why {
-        CloseWhy::NotHere => labels.rescue_close_not_here,
-        CloseWhy::SystemFlow => labels.rescue_close_system,
+        CloseWhy::Stopping => "",
+        CloseWhy::CoolingDown => labels.rescue_cooling,
+        CloseWhy::Unsupported => labels.stop_unsupported,
+        CloseWhy::DirectRun => labels.stop_note,
+        CloseWhy::Unidentified => labels.stop_unidentified,
+        CloseWhy::Scheduled => labels.stop_scheduled,
+        CloseWhy::RuntimeOwn => labels.rescue_close_system,
         CloseWhy::NoTask => labels.rescue_close_no_task,
     }
+}
+
+/// What the account's last stop of a run came to in words, each that landed with when, and
+/// whether that is a failure: never a code, a count or an id, which the log has. After a reset
+/// that failed, or a run that ended before the stop's reset, the card says what holds now.
+fn stop_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
+    let timed = |text: &str, at_ms: u64| fill(labels.stop_at, &[text, &format_second(at_ms)]);
+    match said {
+        StopSaid::Sending => (labels.stop_sending.to_owned(), false),
+        StopSaid::Stopped { at_ms, reset: Reset::Done } => {
+            (fill(labels.stop_done, &[&format_second(*at_ms)]), false)
+        }
+        StopSaid::Stopped { at_ms, reset: Reset::NotNeeded } => {
+            (fill(labels.stop_not_needed, &[&format_second(*at_ms)]), false)
+        }
+        StopSaid::Stopped { at_ms, reset: Reset::Failed { cause, .. } } => {
+            let codes: Vec<&str> = cause.as_deref().into_iter().collect();
+            let words = stop_words(ui, labels, &codes);
+            (fill(labels.stop_reset_failed, &[&format_second(*at_ms), &words]), true)
+        }
+        StopSaid::Asked { at_ms } => {
+            (fill(labels.stop_asked, &[&format_second(*at_ms)]), false)
+        }
+        StopSaid::Reading => (labels.stop_reading.to_owned(), false),
+        StopSaid::Unsettled { at_ms } => {
+            (fill(labels.stop_unsettled, &[&format_second(*at_ms)]), false)
+        }
+        StopSaid::Refused { at_ms, why, origin, host, class, denied, follow_up } => {
+            let at = format_second(*at_ms);
+            let nothing_done = fill(labels.stop_at, &[labels.rescue_nothing_done, &at]);
+            match (why, origin) {
+                (Refusal::NotStoppable, Some(RunOrigin::Policy)) => {
+                    (fill(labels.rescue_then, &[labels.stop_scheduled, &nothing_done]), true)
+                }
+                (Refusal::NotStoppable, Some(RunOrigin::Host)) => {
+                    (fill(labels.rescue_then, &[labels.rescue_close_system, &nothing_done]), true)
+                }
+                // The run ran out on its own between the `Status` and the press: no failure. Of
+                // the follow-up, the reset's result is not known.
+                (Refusal::RunUnknown, _) if !*follow_up => {
+                    (fill(labels.stop_run_ended, &[&at]), false)
+                }
+                (Refusal::RunUnknown, _) => (fill(labels.stop_run_ended_unread, &[&at]), true),
+                (Refusal::NotImplemented, _) => {
+                    (fill(labels.stop_refused_unsupported, &[&at]), true)
+                }
+                (Refusal::NotStoppable, None) | (Refusal::Other, _) => {
+                    let codes: Vec<&str> =
+                        [host.as_deref(), class.as_deref()].into_iter().flatten().collect();
+                    let words = stop_words(ui, labels, &codes);
+                    let sentence = refusal_sentence(labels, labels.stop_op, &words, *denied);
+                    (fill(labels.stop_at, &[&sentence, &at]), true)
+                }
+            }
+        }
+        StopSaid::Unconfirmed { at_ms } => {
+            (fill(labels.stop_unconfirmed, &[&format_second(*at_ms)]), true)
+        }
+        StopSaid::NotSent { at_ms } => (timed(labels.rescue_not_sent, *at_ms), true),
+        StopSaid::NoThread { at_ms, error } => {
+            let why = fill(labels.thread_failed, &[error.as_str()]);
+            let not_sent = fill(labels.rescue_no_thread, &[why.as_str()]);
+            (timed(not_sent.as_str(), *at_ms), true)
+        }
+        StopSaid::Restarted { at_ms } => (timed(labels.rescue_runtime_restarted, *at_ms), false),
+        StopSaid::Unlisted { at_ms } => (timed(labels.stop_unlisted, *at_ms), false),
+        StopSaid::NoStatus { at_ms } => (timed(labels.stop_no_status, *at_ms), true),
+    }
+}
+
+/// A stop's reason in plain words, never its code (`codes`, the host's before the Runtime's, or a
+/// failed reset's cause): as a device's operation's (`code_words`); else that it is not known
+/// here, which the log hears of once, as the problem it is (the stop's own line has its codes and
+/// its chain already).
+fn stop_words(ui: &Ui, labels: &Labels, codes: &[&str]) -> String {
+    if let Some(words) = code_words(labels, codes) {
+        return words;
+    }
+    let line = format!(
+        "no words for a stop of a run refused, or for its reset that failed, with codes {codes:?}"
+    );
+    if ui.model.borrow_mut().first_told(&line) {
+        report::log(RESCUE_LOG, &line);
+    }
+    labels.rescue_cause_unknown.to_owned()
 }
 
 /// The question a press that closes the game asks, naming the account, and its confirming
@@ -871,16 +973,22 @@ fn refused_text(
         return fill(labels.rescue_busy, &[holder]);
     }
     let words = rescue_code_words(ui, labels, op, codes);
-    let end = if denied { labels.rescue_nothing_done } else { labels.rescue_see_card };
-    fill(labels.rescue_refused, &[op_text(labels, op), &words, end])
+    refusal_sentence(labels, op_text(labels, op), &words, denied)
 }
 
-/// A refused or failed operation's reason in plain words, never its code: the bar's own words for
-/// a code it knows, by the host's code first and then the Runtime's (`codes`); else the code
-/// table's, whose category speaks for a code it gives no words of its own; else that it is not
-/// known here, which the log hears of once (the operation's own line has the codes already). A
-/// refusal of an emulator's control the capability profile offers is out of the ordinary, as the
-/// bar drew its button by that profile: the log hears of it once, as the problem it is.
+/// A refusal's sentence: what did not go through (`what`), why in plain words, and that nothing
+/// was done when the Runtime denied it, or that the card says how the device is when it failed on
+/// the way. A device's operation's (`refused_text`), and a stop's of a run (`stop_text`).
+fn refusal_sentence(labels: &Labels, what: &str, words: &str, denied: bool) -> String {
+    let end = if denied { labels.rescue_nothing_done } else { labels.rescue_see_card };
+    fill(labels.rescue_refused, &[what, words, end])
+}
+
+/// A refused or failed operation's reason in plain words, never its code, by the host's code first
+/// and then the Runtime's (`codes`, `code_words`); else that it is not known here, which the log
+/// hears of once (the operation's own line has the codes already). A refusal of an emulator's
+/// control the capability profile offers is out of the ordinary, as the bar drew its button by
+/// that profile: the log hears of it once, as the problem it is.
 fn rescue_code_words(
     ui: &Ui,
     labels: &Labels,
@@ -899,22 +1007,36 @@ fn rescue_code_words(
                 report::log(RESCUE_LOG, &line);
             }
         }
-        if let Some(words) = rescue_own_words(labels, code) {
-            return words.to_owned();
+        if rescue_own_words(labels, code).is_some() {
+            break;
         }
     }
-    for code in known.iter().copied() {
-        match explain(code, labels.tongue.outcome_tongue()) {
-            Ok(Some(words)) => return words.short.to_owned(),
-            Ok(None) => {}
-            Err(error) => return fill(labels.outcome_table_unusable, &[&error.to_string()]),
-        }
+    if let Some(words) = code_words(labels, &known) {
+        return words;
     }
     let line = format!("no words for {op:?} refused or failed with host code {host:?}, code {class:?}");
     if ui.model.borrow_mut().first_told(&line) {
         report::log_quiet(RESCUE_LOG, &line);
     }
     labels.rescue_cause_unknown.to_owned()
+}
+
+/// A reason in plain words, never its code, by `codes` in their order: the bar's own words for a
+/// code it knows; else the code table's, whose category speaks for a code it gives no words of its
+/// own; none when neither has any, which the caller says and logs. A device's operation's
+/// (`rescue_code_words`), and a stop's of a run (`stop_words`).
+fn code_words(labels: &Labels, codes: &[&str]) -> Option<String> {
+    if let Some(words) = codes.iter().copied().find_map(|code| rescue_own_words(labels, code)) {
+        return Some(words.to_owned());
+    }
+    for code in codes.iter().copied() {
+        match explain(code, labels.tongue.outcome_tongue()) {
+            Ok(Some(words)) => return Some(words.short.to_owned()),
+            Ok(None) => {}
+            Err(error) => return Some(fill(labels.outcome_table_unusable, &[&error.to_string()])),
+        }
+    }
+    None
 }
 
 /// The bar's own words for `code`, when it has any.
@@ -947,8 +1069,16 @@ fn rescue_own_words(labels: &Labels, code: &str) -> Option<&'static str> {
 /// What the status left out of an account's rows, into the log once for each account, each as
 /// the problem it is: no provenance, which a Runtime states of every instance, so no device
 /// button is drawn; no capability profile of an instance that drives a device of its own, which
-/// a Runtime states of every such instance (only a fixture has none), so no emulator's row.
+/// a Runtime states of every such instance (only a fixture has none), so no emulator's row; and a
+/// direct run whose status names no request, which the contract says it always does, so it cannot
+/// be stopped from here.
 fn rescue_told(ui: &Ui, alias: &str, rows: &RescueRows) {
+    if rows.close.is_some_and(|row| row.why == CloseWhy::Unidentified) {
+        let line = format!("{alias}: its status names a direct run without its request: no stop");
+        if ui.model.borrow_mut().first_told(&line) {
+            report::log(RESCUE_LOG, &line);
+        }
+    }
     if rows.unstated.provenance {
         let line = format!("{alias}: its status states no backend provenance: no device button");
         if ui.model.borrow_mut().first_told(&line) {

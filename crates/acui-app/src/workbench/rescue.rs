@@ -7,6 +7,13 @@
 //! Unlike a refresh's, an operation's answer counts a write for the reads (`super::wrote`): it
 //! changes what they show of the account, its activity, its emulator's reading and its fence.
 //!
+//! The bar's "stop this run" (UI-3e2) is the account's stop of its run, not an operation of its
+//! device: its slot is `stop`'s, beside these, its row drawn here by what `stop` says of it
+//! (`Stops::row`), and its tickets taken from the same count as these (`Rescue::ticket`). It is
+//! the one press whose request may go once more by itself, and only once: a stop that answered
+//! its run still stops, or whose answer is not known, is asked again once a `Status` shows the run
+//! gone, so that its reset's result is read (`stop`).
+//!
 //! A button can be pressed only while the reads and the account's own presses let it
 //! (`Model::rescue_view`): never while another work of the same device is out from here, an
 //! operation, a refresh of its picture or a switch of its backends (`Model::device_busy`), and
@@ -14,9 +21,9 @@
 //! let it go; the window never counts that down. So a press that lands after its button went
 //! off sends nothing. Stopping or restarting the emulator and restarting the game close the
 //! game, and take two presses: the first only asks, and the question goes once anything else of
-//! the device is pressed, it is cancelled, another account or page is picked, the Runtime starts
-//! again, or a `Status` read leaves the button off. A press of the same button again asks again:
-//! only the confirmation sends it.
+//! the device is pressed, "stop this run" too, it is cancelled, another account or page is
+//! picked, the Runtime starts again, or a `Status` read leaves the button off. A press of the same
+//! button again asks again: only the confirmation sends it.
 //!
 //! The only wait is the client's own for the receipt, on the operation's thread. A restart of
 //! the Runtime lets every ticket go: what was out may or may not have happened, and the next
@@ -32,13 +39,14 @@ use std::time::Duration;
 
 use acui_source::workbench::backends::Holder;
 use acui_source::workbench::device::{operate, DeviceDone, DeviceOp, DeviceOutcome};
-use acui_source::workbench::{ActivityKind, InstanceLive, Unstated};
+use acui_source::workbench::{InstanceLive, Unstated};
 use slint::Timer;
 
 use super::failure_line;
 use super::paint;
 use super::picture::Doing;
 use super::read::panic_message;
+use super::stop::{CloseRow, StopSaid, Stops};
 use crate::launcher::spawn_worker;
 use crate::report;
 use crate::ui::{self, Ui};
@@ -83,7 +91,8 @@ fn asks_first(op: DeviceOp) -> bool {
 /// loop only.
 #[derive(Default)]
 pub struct Rescue {
-    /// How many operations were pressed this run: the last one's ticket.
+    /// How many operations were pressed this run, and stops of a run sent (`ticket`): the last
+    /// one's ticket.
     issued: u64,
     /// By alias.
     slots: BTreeMap<String, RescueSlot>,
@@ -199,8 +208,12 @@ pub struct RescueRows {
     pub emulator: Option<EmulatorRow>,
     /// The game's: of an instance that drives a device of its own.
     pub game: Option<GameRow>,
-    /// "Close this task", always off, while the instance does something: why.
-    pub close: Option<CloseWhy>,
+    /// "Stop this run" (UI-3e2), while the instance does something and its picture is not
+    /// withdrawn: whether it can be pressed, and why not or what a press does (`Stops::row`).
+    pub close: Option<CloseRow>,
+    /// What the account's last stop of a run came to, while it is said: drawn under that row, and
+    /// without it too.
+    pub stop: Option<StopSaid>,
     /// Why every device button is off, if anything is.
     pub hold: Option<RescueHold>,
     /// The operation whose confirmation is asked, while its button can be pressed.
@@ -278,19 +291,14 @@ pub enum ButtonWhy {
     Fault,
 }
 
-/// Why "close this task" cannot be pressed: this Runtime stops no run from here
-/// (`StopInstanceRun` is not implemented), by what the instance does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CloseWhy {
-    /// A policy's task or a direct run's: not from here, with this Runtime.
-    NotHere,
-    /// The host's own startup run, or its recovery ladder: not to be closed.
-    SystemFlow,
-    /// A reconnect, a self-check, an emulator's control: no task runs.
-    NoTask,
-}
-
 impl Rescue {
+    /// A ticket of the one count every operation of a device and every stop of a run share
+    /// (`stop`), so that the log never has two of one number for an account.
+    pub fn ticket(&mut self) -> RescueTicket {
+        self.issued += 1;
+        RescueTicket(self.issued)
+    }
+
     /// The operation of `alias` out, if any.
     pub fn out(&self, alias: &str) -> Option<DeviceOp> {
         self.slots.get(alias)?.out.map(|(_, op)| op)
@@ -392,7 +400,10 @@ impl Rescue {
     /// does a quiet time: an operator's claim goes through a closed gate, and these buttons are a
     /// person's maintenance. A fence holds back only the game's: the check lifts it, and so does
     /// a start of the emulator that succeeds. `watch` is what a stop of its emulator would meet;
-    /// `file_value_lifts`, that a switch back to the file's backends lifts the fence too.
+    /// `file_value_lifts`, that a switch back to the file's backends lifts the fence too. "Stop
+    /// this run" and what the last stop came to are `stops`' to say, of the Runtime online at the
+    /// owner epoch `epoch`; `hold` holds that button back no more than a stop holds the others.
+    #[allow(clippy::too_many_arguments)]
     pub fn view(
         &self,
         instance: &InstanceLive,
@@ -400,6 +411,8 @@ impl Rescue {
         hold: Option<RescueHold>,
         watch: Watch,
         file_value_lifts: bool,
+        stops: &Stops,
+        epoch: &str,
     ) -> RescueRows {
         let alias = instance.alias.as_str();
         let drawn = instance.physical && !withdrawn;
@@ -415,15 +428,7 @@ impl Rescue {
         let on = instance.emulator_on.map(|at_ms| ButtonWhy::EmulatorOn { at_ms });
         let faulty = instance.fence.is_some() || instance.ladder_busy;
         let game_why = off(discovered).or_else(|| faulty.then_some(ButtonWhy::Fault));
-        let close = instance.activity.as_ref().filter(|_| !withdrawn).map(|activity| {
-            match activity.kind {
-                ActivityKind::PolicyRun | ActivityKind::DirectRun => CloseWhy::NotHere,
-                ActivityKind::HostRun | ActivityKind::Ladder => CloseWhy::SystemFlow,
-                ActivityKind::Reconnect
-                | ActivityKind::Selfcheck
-                | ActivityKind::EmulatorControl => CloseWhy::NoTask,
-            }
-        });
+        let close = stops.row(instance, epoch).filter(|_| !withdrawn);
         let rows = RescueRows {
             check: drawn.then(|| button(off(discovered))),
             check_urgent: instance.fence.is_some(),
@@ -435,6 +440,7 @@ impl Rescue {
             }),
             game: drawn.then(|| GameRow { launch: button(game_why), restart: button(game_why) }),
             close,
+            stop: stops.said(alias).cloned(),
             hold,
             confirming: None,
             said: self.said(alias).cloned(),
