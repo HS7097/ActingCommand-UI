@@ -888,7 +888,8 @@ as before, and the ledger window resumes those it may (below). From the command 
   deployment's — `acsetup_update`, `install_restart` and any reason starting with `deploy-` — which the
   installer lifts (the console does not run `release-hold`); and one the Lab's rescue module set (Runtime
   0.12.48 on), its reason exactly `lab-<operation>-<unix ms>` with the operation one of `config`,
-  `deploy`, `down`, `place`, `restore` and `rollback`, which that operation lifts as it finishes, except
+  `deploy`, `down`, `instance` (the instance add, 0.12.52 on), `place`, `restore` and `rollback`, which
+  that operation lifts as it finishes, except
   `down`, the stop, whose pause stays until it is lifted from the Lab ("a Lab rescue operation set this
   pause, and the operation lifts it when it finishes; one a stop set (reason starting lab-down-) is not
   lifted by itself: like one an operation that has stopped left behind, lift it from the Lab"), on the

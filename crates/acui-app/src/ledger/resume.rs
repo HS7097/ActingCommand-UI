@@ -63,10 +63,14 @@ const DEPLOY_PREFIX: &str = "deploy-";
 /// The words of the Lab rescue module's own pause reasons, `lab-<word>-<unix ms>`,
 /// one per operation that pauses (since 0.12.48): Runtime
 /// `crates/lab-rescue/src/rescue.rs`, `hold_reason` and its only callers, `down`,
-/// `deploy` and `rollback`, `config replace` and `config restore`, and `place`;
-/// it hands back only its own (`contracts/install-cli.md`, "The Lab's rescue
-/// module").
-const LAB_RESCUE_WORDS: [&str; 6] = ["config", "deploy", "down", "place", "restore", "rollback"];
+/// `deploy` and `rollback`, `config replace` and `config restore`, `place`, and
+/// (0.12.52 on, INST-5) `instance add`, whose word is `instance`
+/// (`contracts/install-cli.md`, "Instances, the first slice"); it hands back only
+/// its own (`contracts/install-cli.md`, "The Lab's rescue module"). The instance
+/// a person adds is then paused with `instance.added`, which is not of this shape
+/// and keeps its resume.
+const LAB_RESCUE_WORDS: [&str; 7] =
+    ["config", "deploy", "down", "instance", "place", "restore", "rollback"];
 
 /// Whether `reason` is exactly of that shape: `lab-`, one of those words, `-`, digits.
 fn lab_rescue(reason: &str) -> bool {
