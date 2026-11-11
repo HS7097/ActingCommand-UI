@@ -946,7 +946,7 @@ pub fn view(
     let online = matches!(link, Link::Online { .. });
     let open = online && !actions.out.contains_key(&GLOBAL_SCHEDULING);
     let resume = match global {
-        Some(pause) if open && lifter(&pause.reason, elsewhere) == Lifter::Window => {
+        Some(pause) if open && lifter(pause, elsewhere) == Lifter::Window => {
             if actions.confirming.as_ref() == Some(&pause.target) {
                 ResumeEntry::Confirming {
                     target: pause.target.clone(),
@@ -964,7 +964,7 @@ pub fn view(
     ActionsView {
         can_pause: open && global.is_none(),
         resume,
-        holding: global.map(|pause| lifter(&pause.reason, elsewhere)),
+        holding: global.map(|pause| lifter(pause, elsewhere)),
         scheduling_said: actions.said.get(&SaidAt::Scheduling).cloned(),
         settings_said: actions.said.get(&SaidAt::Settings(Field::TopBar)).cloned(),
         evidence_said: actions.said.get(&SaidAt::Settings(Field::EvidenceDays)).cloned(),
@@ -976,7 +976,7 @@ pub fn view(
                 .map(|instance| instance.alias.clone())
         }),
         still_paused: paused().count(),
-        setter_holds: paused().any(|pause| lifter(&pause.reason, elsewhere) == Lifter::Setter),
+        setter_holds: paused().any(|pause| lifter(pause, elsewhere) == Lifter::Setter),
         finishing: config.is_some_and(|read| read.version.is_some()).then(|| {
             instances
                 .iter()

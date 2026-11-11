@@ -1204,11 +1204,11 @@ one dual optimal point, never a pick per pool: with V = min(A, B, C), each pool'
 
 ### Coverage (`coverage`; #424 ACM-PRICE addendum 2.1 §3.1–§3.3 and §3.7, the design's §4.6; PRICE-2b-2)
 
-The coverage section of the steady state lets the research channel and Alice read whether a game's business coverage is
-complete (addendum 2.1 §3.6): no structural gap, every pool a business rule touches covered or verified zero, and every
-estimate accepted (that last part, and the report in `out/prices.json` and `bindings check`'s `data.coverage`, are
-PRICE-4's). The code is `src/acmodel/check/coverage.py` (the static judgement, which `acmodel check` reads too) and
-`src/acmodel/core/coverage.py` (the section).
+The coverage section of the steady state lets the research channel and the operator read whether a game's business
+coverage is complete (addendum 2.1 §3.6): no structural gap, every pool a business rule touches covered or verified
+zero, and every estimate accepted (that last part, and the report in `out/prices.json` and `bindings check`'s
+`data.coverage`, are PRICE-4's). The code is `src/acmodel/check/coverage.py` (the static judgement, which
+`acmodel check` reads too) and `src/acmodel/core/coverage.py` (the section).
 
 **The static judgement.** From the rules and the data only: no value is computed and nothing is solved. An amount counts
 unless it is written as the number 0 (`"0"`); what any other expression comes to only the run knows, so it counts.

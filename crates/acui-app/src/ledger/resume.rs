@@ -21,7 +21,8 @@
 //! and a deployment's, which the installer lifts. The contract keeps no actor
 //! with a pause and no prefix of its reason, so both are known by the reason
 //! alone. While that line cannot be taken, every pause but a deployment's and
-//! this console's own "pause all" is of the first kind (`ResumeElsewhere`).
+//! this console's own "pause all", a global one, is of the first kind
+//! (`ResumeElsewhere`).
 
 use acui_rows::format_full;
 use acui_source::workbench::CONSOLE_PAUSE_ALL;
@@ -50,7 +51,7 @@ pub enum ResumeElsewhere {
     Listed(Vec<String>),
     /// The line, or the file, could not be read, so which reasons it lists is
     /// not known: until it is fixed, every pause but this console's own
-    /// "pause all" is one.
+    /// "pause all", which is global only (`pause_global`), is one.
     Unusable,
 }
 
@@ -61,10 +62,12 @@ impl Default for ResumeElsewhere {
 }
 
 impl ResumeElsewhere {
-    fn names(&self, reason: &str) -> bool {
+    fn names(&self, pause: &PauseFact) -> bool {
         match self {
-            Self::Listed(reasons) => reasons.iter().any(|listed| listed == reason),
-            Self::Unusable => reason != CONSOLE_PAUSE_ALL,
+            Self::Listed(reasons) => reasons.iter().any(|listed| *listed == pause.reason),
+            Self::Unusable => {
+                pause.reason != CONSOLE_PAUSE_ALL || pause.target.instance_alias().is_some()
+            }
         }
     }
 }
@@ -79,10 +82,11 @@ pub(crate) enum Lifter {
     Installer,
 }
 
-pub(crate) fn lifter(reason: &str, elsewhere: &ResumeElsewhere) -> Lifter {
+pub(crate) fn lifter(pause: &PauseFact, elsewhere: &ResumeElsewhere) -> Lifter {
+    let reason = pause.reason.as_str();
     if DEPLOY_REASONS.contains(&reason) || reason.starts_with(DEPLOY_PREFIX) {
         Lifter::Installer
-    } else if elsewhere.names(reason) {
+    } else if elsewhere.names(pause) {
         Lifter::Setter
     } else {
         Lifter::Window
@@ -250,7 +254,7 @@ fn pause_text(labels: &Labels, fact: &PauseFact, elsewhere: &ResumeElsewhere) ->
     let scope = scope_text(labels, &fact.target);
     let (revision, since) = (fact.revision.to_string(), format_full(fact.since_unix_ms));
     let values: [&str; 4] = [&scope, &fact.reason, &revision, &since];
-    match lifter(&fact.reason, elsewhere) {
+    match lifter(fact, elsewhere) {
         Lifter::Setter => (fill(labels.pause_setter, &values), false),
         Lifter::Installer => (fill(labels.pause_deploy, &values), false),
         Lifter::Window => {

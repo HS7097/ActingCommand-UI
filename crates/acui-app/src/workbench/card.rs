@@ -332,7 +332,7 @@ fn fence_line(fence: &FenceFact) -> Line {
 }
 
 fn paused_line(pause: &PauseFact, everyone: bool, elsewhere: &ResumeElsewhere) -> Line {
-    Line::Paused { everyone, by: lifter(&pause.reason, elsewhere), reason: pause.reason.clone() }
+    Line::Paused { everyone, by: lifter(pause, elsewhere), reason: pause.reason.clone() }
 }
 
 /// The one activity the Runtime names; which of several an instance shows is the

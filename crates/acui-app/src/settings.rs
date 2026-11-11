@@ -288,8 +288,11 @@ pub fn load() -> Loaded {
         let number = index + 1;
         let (key, value) = match parse_line(line) {
             Line::Blank => continue,
-            // It names the reasons' key, which is all it says: their line, unusable.
-            Line::Malformed if bare(line).starts_with(RESUME_ELSEWHERE) => {
+            // It names the reasons' key, quoted or not, which is all it says: their line,
+            // unusable.
+            Line::Malformed
+                if bare(line).trim_start_matches(['"', '\'']).starts_with(RESUME_ELSEWHERE) =>
+            {
                 settings.resume_elsewhere = ResumeElsewhere::Unusable;
                 issues.push(SettingsIssue::UnusableReasons {
                     path: path.clone(),
@@ -336,19 +339,24 @@ pub fn load() -> Loaded {
                 }
             },
             // Reasons the Runtime takes, or none known and an issue, which no other line of
-            // the key undoes.
-            RESUME_ELSEWHERE => match reasons(value) {
-                Some(_) if settings.resume_elsewhere == ResumeElsewhere::Unusable => {}
-                Some(listed) => settings.resume_elsewhere = ResumeElsewhere::Listed(listed),
-                None => {
-                    settings.resume_elsewhere = ResumeElsewhere::Unusable;
-                    issues.push(SettingsIssue::UnusableReasons {
-                        path: path.clone(),
-                        line: number,
-                        value: value.to_owned(),
-                    });
+            // the key undoes. The key in quotes is the same key in TOML, so it is this one too;
+            // the value as written, before its quotes are stripped, since an array in quotes is
+            // a string, not an array.
+            _ if unquote(key) == RESUME_ELSEWHERE => {
+                let written = bare(line).split_once('=').map_or("", |(_, value)| value.trim());
+                match reasons(written) {
+                    Some(_) if settings.resume_elsewhere == ResumeElsewhere::Unusable => {}
+                    Some(listed) => settings.resume_elsewhere = ResumeElsewhere::Listed(listed),
+                    None => {
+                        settings.resume_elsewhere = ResumeElsewhere::Unusable;
+                        issues.push(SettingsIssue::UnusableReasons {
+                            path: path.clone(),
+                            line: number,
+                            value: written.to_owned(),
+                        });
+                    }
                 }
-            },
+            }
             _ => {}
         }
     }

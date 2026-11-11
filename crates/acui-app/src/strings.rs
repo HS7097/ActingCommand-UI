@@ -2505,7 +2505,7 @@ pub const EN: Labels = Labels {
     resume_all_sending: "Asking to put all on duty…",
     resume_all_done: "The global pause is lifted",
     resume_all_still_paused: "The global pause is lifted; {} still paused",
-    resume_all_setter_lifts: ", some of them to be lifted by whoever set them",
+    resume_all_setter_lifts: ", including a pause to be lifted by whoever set it",
     resume_all_moved: "The pause was changed elsewhere; refreshed",
     resume_all_refused: "Put All on Duty did not succeed: {}",
     resume_all_unsupported: "This version of the Runtime cannot lift a pause this way; nothing changed",

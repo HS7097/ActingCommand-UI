@@ -706,17 +706,21 @@ no actor with a pause, only its reason, so the pauses that must not be lifted fr
 their reasons: a pause with one of them gets neither Put All on Duty nor "Resume Scheduling…", only the
 words "this pause is to be lifted by whoever set it", on the top bar, on the account cards and in the
 ledger window. No box writes the key, and a save of another key keeps its line byte for byte, like any
-line. It is one line, a TOML array of strings in double or single quotes, a trailing comma allowed; `[]`,
-or no line at all, is the default: none. Each item must be a reason the Runtime itself takes for a
-pause (checked by the Runtime's own `SchedulingPauseReason`: 1–64 characters of `a-z`, `0-9`, `_`, `.`
-and `-`), so there is nothing to escape. A line of this key the console cannot use — not such an array,
+line; but the setup wizard's fresh install and first migration write the file anew with only `lang`,
+`text_size` and the three paths (see "Setup wizard acsetup"), so after either one the line is gone, with
+nothing said, and has to be written again. It is one line, its key bare or in quotes, a TOML array of
+strings in double or single quotes, a trailing comma allowed; `[]`, or no line at all, is the default:
+none. Each item must be a reason the Runtime itself takes for a pause (checked by the Runtime's own
+`SchedulingPauseReason`: 1–64 characters of `a-z`, `0-9`, `_`, `.` and `-`), so there is nothing to
+escape. A line of this key the console cannot use — not such an array (an array in quotes is a string),
 an item not quoted or not such a reason, a comment after the value, a line of the key without `=` — is
 said in red at the top of every window, with the file and the line, and **fails closed**: until it is
-fixed, whatever another line of the key says, no pause except the console's own Pause All
-(`console_pause_all`) offers a resume anywhere in the console. A settings file that is there but cannot
-be read, or no configuration directory, fails closed the same way. A deployment's pause stays the
-installer's in any case. The reasons are the operator's own data: the console never rewrites one, and
-the ledger window still shows each pause's reason verbatim on its line under the technical lines.
+fixed, whatever another line of the key says, no pause except the console's own Pause All, the global
+pause with reason `console_pause_all`, offers a resume anywhere in the console; an instance pause with
+that reason gets none either. A settings file that is there but cannot be read, or no configuration
+directory, fails closed the same way. A deployment's pause stays the installer's in any case. The
+reasons are the operator's own data: the console never rewrites one, and the ledger window still shows
+each pause's reason verbatim on its line under the technical lines.
 
 ## Launcher
 
@@ -855,9 +859,10 @@ agents"). The ledger window can resume, conditionally, a pause another tool set 
   reason `resume_elsewhere_reasons` lists ("this pause is to be lifted by whoever set it"), and a
   deployment's — `acsetup_update`, `install_restart` and any reason starting with `deploy-` — which the
   installer lifts (the console does not run `release-hold`). While that settings line cannot be used,
-  every pause but a deployment's and the console's own Pause All (`console_pause_all`) is of the first
-  kind. An instance pause still draining or handing its device back gets none either: the Runtime
-  refuses its resume then. Each line shows its pause's reason verbatim, whatever the operator wrote.
+  every pause but a deployment's and the console's own Pause All (the global pause with reason
+  `console_pause_all`) is of the first kind. An instance pause still draining or handing its device
+  back gets none either: the Runtime refuses its resume then. Each line shows its pause's reason
+  verbatim, whatever the operator wrote.
 
 ## Instance configuration
 
