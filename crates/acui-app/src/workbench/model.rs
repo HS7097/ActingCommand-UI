@@ -1012,8 +1012,8 @@ impl Model {
     /// account; while no Runtime answers, only that no device can be operated. Its "stop this
     /// run" and what the account's last stop came to are its stops' (`stop`), which a Runtime
     /// that does not answer leaves as they were, to be judged and drawn once one does; only a
-    /// stop that the reading thread's end left not known is drawn over that line, since then
-    /// no read online comes again (`Stops::unread`).
+    /// stop out or awaited as the reading thread ended is drawn over that line, how it goes and
+    /// what it came to, since then no read online comes again (`Stops::unread`).
     pub fn rescue_view(&self, alias: &str) -> Option<RescueView> {
         if !self.picture_tab_shows() {
             return None;

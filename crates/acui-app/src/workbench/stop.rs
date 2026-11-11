@@ -22,8 +22,10 @@
 //! not sent sent again. A `Status` of another owner epoch, or one that no longer lists the account,
 //! says what came of it is not known and sends nothing; a read that does not come online says
 //! nothing, and the stop waits on, for as long as the run goes on, which its deadline ends. The
-//! reading thread gone ends the wait, not known either. A restart lets go of a request out: its
-//! answer, when it lands, is the log's only.
+//! reading thread gone ends the wait, not known either; a request out then lands as it would, and
+//! what either comes to is drawn over the bar's one line that no Runtime answers, since no read
+//! online comes again. A restart lets go of a request out: its answer, when it lands, is the log's
+//! only.
 //!
 //! The button stays off while a stop of the account is out, or waits for a run that still stops,
 //! and for `RESCUE_COOLDOWN` after an answer lands or a restart let one go; after one not known,
@@ -71,8 +73,9 @@ pub struct Stops {
     unsupported: Option<String>,
 }
 
-/// One account's: what is out or awaited; what the last stop came to, and the runs that is of; and
-/// the ticket whose cooldown runs, which its timer ends (`Stops::cooled`).
+/// One account's: what is out or awaited; what the last stop came to, and the runs that is of; the
+/// ticket whose cooldown runs, which its timer ends (`Stops::cooled`); and whether the thread that
+/// reads `Status` went while it was out or awaited.
 #[derive(Default)]
 struct StopSlot {
     stage: Stage,
@@ -81,6 +84,10 @@ struct StopSlot {
     /// it names a run of neither, the line goes.
     runs: Vec<RunKey>,
     cooling: Option<RescueTicket>,
+    /// The thread that reads `Status` went while this stop was out or awaited (`reading_lost`):
+    /// what it says from then on is drawn over the line that no Runtime answers (`Stops::unread`),
+    /// since no read online ever comes again to draw it with the rows.
+    unread: bool,
 }
 
 #[derive(Default)]
@@ -236,11 +243,12 @@ impl Stops {
         self.slots.get(alias)?.said.as_ref()
     }
 
-    /// What the last stop of `alias` came to, when that is that no `Status` is read any more
-    /// (`StopSaid::NoStatus`): the one line of it a bar with no rows draws, since no read online
-    /// ever comes again to draw it with them.
+    /// What the last stop of `alias` came to, when the thread that reads `Status` went while it
+    /// was out or awaited: the one line of it a bar with no rows draws, since no read online ever
+    /// comes again to draw it with them. Of one awaited, that what came of it is not known
+    /// (`StopSaid::NoStatus`); of one out, how it goes, then its answer as it lands.
     pub fn unread(&self, alias: &str) -> Option<&StopSaid> {
-        self.said(alias).filter(|said| matches!(said, StopSaid::NoStatus { .. }))
+        self.slots.get(alias).filter(|slot| slot.unread)?.said.as_ref()
     }
 
     /// The first request of a stop of `alias` pressed: whether it goes, which it does not while one
@@ -257,6 +265,7 @@ impl Stops {
             said: Some(StopSaid::Sending),
             runs: vec![request.run],
             cooling: None,
+            unread: false,
         };
         true
     }
@@ -403,12 +412,18 @@ impl Stops {
     }
 
     /// The thread that reads `Status` is gone, at `at_ms`: no read will say what came of a stop
-    /// awaited, so each ends, not known. A request out lands as it would. The lines for the log.
+    /// awaited, so each ends, not known. A request out lands as it would. What either says from
+    /// now on is drawn without the rows (`unread`). The lines for the log.
     fn reading_lost(&mut self, at_ms: u64) -> Vec<String> {
         let mut lines = Vec::new();
         for (alias, slot) in &mut self.slots {
             slot.stage = match mem::take(&mut slot.stage) {
+                stage @ Stage::Out(_) => {
+                    slot.unread = true;
+                    stage
+                }
                 Stage::Waiting { request, .. } => {
+                    slot.unread = true;
                     slot.said = Some(StopSaid::NoStatus { at_ms });
                     lines.push(format!(
                         "{}: no Status is read any more; what came of it is not known, not sent \
@@ -417,7 +432,7 @@ impl Stops {
                     ));
                     Stage::Idle
                 }
-                stage => stage,
+                Stage::Idle => Stage::Idle,
             };
         }
         lines

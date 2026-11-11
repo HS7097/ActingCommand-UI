@@ -528,7 +528,7 @@ fn refusal_words(ui: &Ui, labels: &Labels, host: Option<&str>, class: Option<&st
 
 /// Under the live view's title, while an account's picture shows on the main page: its rescue
 /// bar (UI-3e1-a), from its view. While no Runtime answers, only that no device can be operated,
-/// and over it, once no `Status` is read any more, that what came of a stop is not known.
+/// and over it, once no `Status` is read any more, what a stop out or awaited then came to.
 /// Else, of an account that drives a device of its own, its reconnect and check, its emulator's
 /// row while the Runtime offers its control, and its game's: each button pressed only when it may
 /// be, and at the row's end why one may not, or what the check does. While the account does

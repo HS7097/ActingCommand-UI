@@ -177,7 +177,7 @@ pub enum RescueHold {
 pub enum RescueView {
     /// No Runtime answers: the bar is one line, that no device can be operated. Nothing an
     /// earlier `Status` said decides which rows there would be. Over it, once the thread that
-    /// reads `Status` is gone, a stop of the account's run that this left not known
+    /// reads `Status` is gone, what a stop of the account's run out or awaited then came to
     /// (`Stops::unread`): no read online comes again to draw it.
     Offline { stop: Option<StopSaid> },
     Online(RescueRows),
