@@ -19,6 +19,13 @@
 //! warnings, gives no names at all: every task shows its package id, one line on the
 //! workbench says so, and the details are in the log.
 //!
+//! The same answer gives an account's daily task list (UI-3f1) what it shows of each package
+//! beside its name (`PackTable`): which package each composed task runs (an installation row's
+//! `task_ids`, until SS-7 names a candidate's package itself), whether the Runtime derives the
+//! package irreversible, and its game's `ui.json` entry for it, its summary, its group and
+//! whether it names a risk word, with each game's groups. It stands and falls with the names:
+//! with warnings none of it is used either.
+//!
 //! `watchdog status`, for the settings page: whether the scheduled task is there that
 //! starts a Runtime gone without a formal close again. It only reads: it writes nothing,
 //! takes no lock but a moment's shared probe of the installer's writer lock, and asks a
@@ -91,17 +98,86 @@ impl NameTable {
 
     /// `package`'s title in `language`; `None` when the table has none for it.
     pub fn title(&self, package: &str, language: Language) -> Option<&str> {
-        let titles = self.0.get(package)?;
-        locales(language)
-            .iter()
-            .find_map(|locale| title_in(titles, locale))
-            .or_else(|| title_in(titles, "en"))
-            .or_else(|| titles.first().map(|(_, title)| title.as_str()))
+        in_language(self.0.get(package)?, language)
     }
+}
+
+/// The text of `texts`, each per locale in the order the file wrote them, in `language`: its
+/// locales in order, then `en`, then the first written.
+fn in_language(texts: &[(String, String)], language: Language) -> Option<&str> {
+    locales(language)
+        .iter()
+        .find_map(|locale| title_in(texts, locale))
+        .or_else(|| title_in(texts, "en"))
+        .or_else(|| texts.first().map(|(_, text)| text.as_str()))
 }
 
 fn title_in<'a>(titles: &'a [(String, String)], locale: &str) -> Option<&'a str> {
     titles.iter().find(|(name, _)| name == locale).map(|(_, title)| title.as_str())
+}
+
+/// What an account's daily task list shows of each package beside its name (UI-3f1), of one
+/// `packs` answer: the package each composed task runs, by task id, as the installation rows list
+/// their `task_ids` (a task of a shared rule by its composed id, as the scheduler has it); each
+/// package's facts; and each game's groups of its `ui.json`, per locale, in the file's order.
+#[derive(Default)]
+pub struct PackTable {
+    tasks: BTreeMap<String, String>,
+    packs: BTreeMap<String, PackFacts>,
+    groups: BTreeMap<String, Vec<(String, Vec<(String, String)>)>>,
+}
+
+impl PackTable {
+    fn len(&self) -> usize {
+        self.packs.len()
+    }
+
+    /// The package `task` runs, when an installation row lists the task.
+    pub fn package_of(&self, task: &str) -> Option<&str> {
+        self.tasks.get(task).map(String::as_str)
+    }
+
+    /// What the answer says of `package`, when it names it.
+    pub fn pack(&self, package: &str) -> Option<&PackFacts> {
+        self.packs.get(package)
+    }
+
+    /// Where `group` stands among `game`'s groups, when its `ui.json` has it.
+    pub fn group_rank(&self, game: &str, group: &str) -> Option<usize> {
+        self.groups.get(game)?.iter().position(|(id, _)| id == group)
+    }
+
+    /// The title in `language` of `game`'s group `group`.
+    pub fn group_title(&self, game: &str, group: &str, language: Language) -> Option<&str> {
+        let (_, titles) = self.groups.get(game)?.iter().find(|(id, _)| id == group)?;
+        in_language(titles, language)
+    }
+}
+
+/// One package as the answer has it: whether the Runtime derives it irreversible, as an
+/// installation row of it says, and its game's `ui.json` entry for it, when the file lists it.
+#[derive(Default)]
+pub struct PackFacts {
+    pub irreversible: bool,
+    pub ui: Option<PackUi>,
+}
+
+/// A package's entry of its game's `ui.json`: the game, its place among the file's packs, its
+/// summary per locale, its group's id, and whether it names any risk word. The words themselves
+/// are not kept: nothing has a name for them yet.
+pub struct PackUi {
+    pub game: String,
+    pub order: usize,
+    summary: Vec<(String, String)>,
+    pub group: Option<String>,
+    pub risky: bool,
+}
+
+impl PackUi {
+    /// Its summary in `language`.
+    pub fn summary(&self, language: Language) -> Option<&str> {
+        in_language(&self.summary, language)
+    }
 }
 
 /// The picture proportions of one `packs` answer: by game, each `<w>:<h>` its `ui.json`
@@ -123,9 +199,10 @@ impl Displays {
 /// What one run of `packs` came to.
 pub enum NamesRead {
     /// It answered. `warnings`: each as it wrote it, for the log; with any, the model
-    /// uses none of the table. The proportions are used all the same: one is there only
-    /// from a `ui.json` that keeps its rules, and a warning says nothing against it.
-    Table { table: NameTable, displays: Displays, warnings: Vec<String> },
+    /// uses none of the table, nor of the packages' (`packs`). The proportions are used all
+    /// the same: one is there only from a `ui.json` that keeps its rules, and a warning says
+    /// nothing against it.
+    Table { table: NameTable, packs: PackTable, displays: Displays, warnings: Vec<String> },
     /// This run cannot tell where `actingctl` is.
     NoTool(ToolIssue),
     Failed(ToolFailure),
@@ -135,12 +212,18 @@ impl NamesRead {
     /// The line the technical log gets about it.
     pub fn log_line(&self) -> String {
         match self {
-            Self::Table { table, displays, warnings } if warnings.is_empty() => {
-                format!("name table: {} entries; displays of {} games", table.len(), displays.len())
-            }
-            Self::Table { table, displays, warnings } => format!(
-                "name table: {} entries; displays of {} games; {} warnings: {}",
+            Self::Table { table, packs, displays, warnings } if warnings.is_empty() => format!(
+                "name table: {} entries; {} packages, {} tasks; displays of {} games",
                 table.len(),
+                packs.len(),
+                packs.tasks.len(),
+                displays.len(),
+            ),
+            Self::Table { table, packs, displays, warnings } => format!(
+                "name table: {} entries; {} packages, {} tasks; displays of {} games; {} warnings: {}",
+                table.len(),
+                packs.len(),
+                packs.tasks.len(),
                 displays.len(),
                 warnings.len(),
                 excerpt(warnings.join(" ").as_bytes()),
@@ -368,7 +451,9 @@ fn read_names(paths: &Result<ToolPaths, ToolIssue>) -> NamesRead {
     match packs_answer(paths).and_then(|stdout| {
         parse_packs(&stdout).map_err(ToolFailure::Malformed)
     }) {
-        Ok((table, displays, warnings)) => NamesRead::Table { table, displays, warnings },
+        Ok((table, packs, displays, warnings)) => {
+            NamesRead::Table { table, packs, displays, warnings }
+        }
         Err(failure) => NamesRead::Failed(failure),
     }
 }
@@ -547,13 +632,15 @@ fn excerpt(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).trim().chars().take(LOG_EXCERPT).collect()
 }
 
-/// `packs`' one line: `standard_packs.games[].ui.packs[]`, by `package_id`, and
-/// `standard_packs.games[].display.aspect_ratios`, by `game`, and its `warnings`. No
+/// `packs`' one line: `standard_packs.games[].ui.packs[]`, by `package_id`, with each game's
+/// `ui.groups[]`; `standard_packs.games[].display.aspect_ratios`, by `game`; each
+/// `installation[]` row's `package_id`, `task_ids` and `irreversible`; and its `warnings`. No
 /// `standard_packs` is a configuration without that root, and a game without `ui` or
 /// `display` one without the file, or whose file declares no proportions, as a `packs` from
-/// before they were listed answers: all ordinary. Anything else not of this shape is not
-/// an answer this build understands.
-fn parse_packs(stdout: &[u8]) -> Result<(NameTable, Displays, Vec<String>), String> {
+/// before they were listed answers; a row without `task_ids` is a configured binding (catalog
+/// mode), or of a `packs` from before them: all ordinary. Anything else not of this shape is
+/// not an answer this build understands.
+fn parse_packs(stdout: &[u8]) -> Result<(NameTable, PackTable, Displays, Vec<String>), String> {
     let document: Value =
         serde_json::from_slice(stdout).map_err(|error| format!("not JSON: {error}"))?;
     if !document.is_object() {
@@ -565,6 +652,7 @@ fn parse_packs(stdout: &[u8]) -> Result<(NameTable, Displays, Vec<String>), Stri
         Some(_) => return Err("`warnings` is not a list".to_owned()),
     };
     let mut names = BTreeMap::new();
+    let mut table = PackTable::default();
     let mut displays = BTreeMap::new();
     if let Some(section) = document.get("standard_packs") {
         let games = section
@@ -580,15 +668,91 @@ fn parse_packs(stdout: &[u8]) -> Result<(NameTable, Displays, Vec<String>), Stri
             let Some(ui) = game.get("ui") else {
                 continue;
             };
+            let name = game.get("game").and_then(Value::as_str).ok_or("a game has no `game`")?;
+            if let Some(groups) = ui.get("groups") {
+                let groups = groups.as_array().ok_or("a game's `ui.groups` is not a list")?;
+                let groups = groups.iter().map(group_titles).collect::<Result<Vec<_>, _>>()?;
+                table.groups.entry(name.to_owned()).or_insert(groups);
+            }
             let packs =
                 ui.get("packs").and_then(Value::as_array).ok_or("a game's `ui.packs` is not a list")?;
-            for pack in packs {
+            for (order, pack) in packs.iter().enumerate() {
                 let (package, titles) = pack_titles(pack)?;
                 names.entry(package.to_owned()).or_insert(titles);
+                let entry = pack_ui(pack, name, order)?;
+                let facts = table.packs.entry(package.to_owned()).or_default();
+                if facts.ui.is_none() {
+                    facts.ui = Some(entry);
+                }
             }
         }
     }
-    Ok((NameTable(names), Displays(displays), warnings))
+    if let Some(rows) = document.get("installation") {
+        let rows = rows.as_array().ok_or("`installation` is not a list")?;
+        for row in rows {
+            installation_row(row, &mut table)?;
+        }
+    }
+    Ok((NameTable(names), table, Displays(displays), warnings))
+}
+
+/// One installation row: a composed one names the tasks that run its package and whether the
+/// package is irreversible; a configured binding names neither, and a row without a package
+/// names nothing. A task two rows list keeps the first one's package.
+fn installation_row(row: &Value, table: &mut PackTable) -> Result<(), String> {
+    let Some(package) = row.get("package_id") else {
+        return Ok(());
+    };
+    let package = package.as_str().ok_or("an installation row's `package_id` is not text")?;
+    if let Some(tasks) = row.get("task_ids") {
+        let tasks = tasks.as_array().ok_or("an installation row's `task_ids` is not a list")?;
+        for task in tasks {
+            let task = task.as_str().ok_or("a task id is not text")?;
+            table.tasks.entry(task.to_owned()).or_insert_with(|| package.to_owned());
+        }
+    }
+    let irreversible = match row.get("irreversible") {
+        None => false,
+        Some(flag) => flag.as_bool().ok_or("an installation row's `irreversible` is not a flag")?,
+    };
+    table.packs.entry(package.to_owned()).or_default().irreversible |= irreversible;
+    Ok(())
+}
+
+/// A pack's entry of its game's `ui.json`, the `order`-th of the file's packs: its summary,
+/// its group and whether it names a risk word. The Runtime checked the file's shape; one
+/// member left out is taken as none.
+fn pack_ui(pack: &Value, game: &str, order: usize) -> Result<PackUi, String> {
+    let summary = match pack.get("summary") {
+        None => Vec::new(),
+        Some(summary) => locale_texts(summary).ok_or("a pack's `summary` is not text by locale")?,
+    };
+    let group = match pack.get("group") {
+        None => None,
+        Some(group) => Some(group.as_str().ok_or("a pack's `group` is not a word")?.to_owned()),
+    };
+    let risky = match pack.get("risk") {
+        None => false,
+        Some(risk) => !risk.as_array().ok_or("a pack's `risk` is not a list")?.is_empty(),
+    };
+    Ok(PackUi { game: game.to_owned(), order, summary, group, risky })
+}
+
+/// A group of a game's `ui.json`: its id and its title per locale.
+fn group_titles(group: &Value) -> Result<(String, Vec<(String, String)>), String> {
+    let id = group.get("id").and_then(Value::as_str).ok_or("a group has no `id`")?;
+    let title =
+        group.get("title").and_then(locale_texts).ok_or("a group's `title` is not text by locale")?;
+    Ok((id.to_owned(), title))
+}
+
+/// A text per locale, in the order the file wrote them; `None` when it is no such map.
+fn locale_texts(texts: &Value) -> Option<Vec<(String, String)>> {
+    texts
+        .as_object()?
+        .iter()
+        .map(|(locale, text)| Some((locale.clone(), text.as_str()?.to_owned())))
+        .collect()
 }
 
 /// A game's `display.aspect_ratios`, each `<w>:<h>` as two whole numbers above zero, which is

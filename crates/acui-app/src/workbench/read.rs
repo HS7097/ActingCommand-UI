@@ -14,6 +14,11 @@
 //! owner epoch, when the event loop names it, and never on a clock of its own. One that
 //! fails is named again `START_RETRY` later, `START_TRIES` times in all for the epoch.
 //!
+//! And while an account's daily task list shows (UI-3f1), the `ScheduleExplanation` of that
+//! one account with its candidate rows, on the explanation's clock: the event loop names the
+//! account in a slot of its own (`TasksFor`), which the thread reads when that read comes due,
+//! and with the slot empty it never comes due. It waits on the policy lock as the cards' does.
+//!
 //! A thread reads what is due, hands each result to the event loop, and sleeps
 //! until the next is due or it is poked. It ends once the event loop lets its
 //! sender go; nothing joins it, since it may be stuck in a read. A panic in a read
@@ -32,17 +37,17 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, ReadLane, StartRead};
+use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, ReadLane, StartRead, TasksRead};
 use acui_source::ClientFailure;
 
 use crate::launcher::spawn_worker;
 use crate::report;
 
 /// `READS` has one row for each `Read`, in its order: `Tally` counts by it.
-const READ_KINDS: usize = 4;
+const READ_KINDS: usize = 5;
 
 #[rustfmt::skip]
 static READS: [Cadence; READ_KINDS] = [
@@ -51,7 +56,13 @@ static READS: [Cadence; READ_KINDS] = [
     Cadence { read: Read::Config,  lane: Lane::Slow, every: Some(Every { shown: secs(30), minimized: None,           failed: secs(30) }) },
     // Once for each owner epoch, when the event loop names it.
     Cadence { read: Read::Start,   lane: Lane::Slow, every: None },
+    // Only while an account's task list shows: the slot names it (`TasksFor`).
+    Cadence { read: Read::Tasks,   lane: Lane::Slow, every: Some(Every { shown: secs(15), minimized: None,           failed: secs(30) }) },
 ];
+
+/// The account whose daily task list shows, while it does (UI-3f1): the event loop writes it,
+/// and the slow thread reads it as the list's read comes due. Empty, that read is never due.
+pub type TasksFor = Arc<Mutex<Option<String>>>;
 
 /// How many times in one owner epoch the start report is asked for, and how long after a
 /// failure it is asked again.
@@ -61,9 +72,9 @@ pub const START_RETRY: Duration = secs(30);
 /// A read longer than this leaves a line in the technical log.
 const LONG_READ: Duration = secs(2);
 
-/// A schedule explanation not read again for this long no longer counts as what
-/// the schedule says now. Far above the slow thread's own times, so a read that
-/// waits behind a slow one is not called unreadable.
+/// A schedule explanation not read again for this long, the cards' or an account's task
+/// list's, no longer counts as what the schedule says now. Far above the slow thread's own
+/// times, so a read that waits behind a slow one is not called unreadable.
 pub const EXPLAIN_TOO_OLD: Duration = secs(60);
 
 /// How long a thread with nothing due sleeps: a window coming back pokes it.
@@ -98,6 +109,8 @@ pub enum Read {
     Explain,
     Config,
     Start,
+    /// An account's daily task list (UI-3f1).
+    Tasks,
 }
 
 impl Read {
@@ -107,6 +120,7 @@ impl Read {
             Self::Explain => "schedule explanation",
             Self::Config => "fact snapshot",
             Self::Start => "start report",
+            Self::Tasks => "task list",
         }
     }
 
@@ -165,6 +179,8 @@ pub enum Landing {
     Explain(Result<ExplainRead, ClientFailure>),
     Config(Result<ConfigRead, ClientFailure>),
     Start(Result<StartRead, ClientFailure>),
+    /// Of the account the slot named: a failure says which, as an answer does.
+    Tasks { alias: String, read: Result<TasksRead, ClientFailure> },
     /// The read panicked: the panic's message, for the log.
     Panicked { read: Read, message: String },
 }
@@ -177,6 +193,7 @@ impl Landing {
                 | Self::Explain(Ok(_))
                 | Self::Config(Ok(_))
                 | Self::Start(Ok(_))
+                | Self::Tasks { read: Ok(_), .. }
         )
     }
 }
@@ -230,8 +247,12 @@ struct Due {
 impl Due {
     /// When this read is next due; `None` while the table stops it. A poke waits
     /// out a stop: the window coming back reads it anyway. One without a clock is due
-    /// only when poked, minimized or not.
-    fn at(&self, shown: bool, now: Instant) -> Option<Instant> {
+    /// only when poked, minimized or not. The task list's is never due while no account's
+    /// list shows (`listed`), poked or not: it waits for one.
+    fn at(&self, shown: bool, listed: bool, now: Instant) -> Option<Instant> {
+        if self.cadence.read == Read::Tasks && !listed {
+            return None;
+        }
         let Some(clock) = &self.cadence.every else {
             return self.poked.then_some(now);
         };
@@ -252,11 +273,14 @@ pub fn spawn(
     lane: Lane,
     root: PathBuf,
     shown: Arc<AtomicBool>,
+    tasks_for: TasksFor,
     tally: Arc<Tally>,
     write_gen: Arc<AtomicU64>,
 ) -> io::Result<Sender<Poke>> {
     let (sender, commands) = mpsc::channel();
-    spawn_worker(lane.name(), move || run(lane, root, &commands, &shown, &tally, &write_gen))?;
+    spawn_worker(lane.name(), move || {
+        run(lane, root, &commands, &shown, &tasks_for, &tally, &write_gen)
+    })?;
     Ok(sender)
 }
 
@@ -265,6 +289,7 @@ fn run(
     root: PathBuf,
     commands: &Receiver<Poke>,
     shown: &AtomicBool,
+    tasks_for: &TasksFor,
     tally: &Tally,
     write_gen: &AtomicU64,
 ) {
@@ -274,10 +299,13 @@ fn run(
         .filter(|cadence| cadence.lane == lane)
         .map(|cadence| Due { cadence, last: None, failed: false, poked: false })
         .collect();
+    // The account the task list's read is of as it comes due; none, it does not come due.
+    let listed = || tasks_for.lock().unwrap_or_else(|held| held.into_inner()).clone();
     loop {
         let now = Instant::now();
         let is_shown = shown.load(Ordering::SeqCst);
-        let next = plan.iter().filter_map(|due| due.at(is_shown, now)).min();
+        let is_listed = listed().is_some();
+        let next = plan.iter().filter_map(|due| due.at(is_shown, is_listed, now)).min();
         let wait = next.map_or(NOTHING_DUE, |at| at.saturating_duration_since(now));
         match commands.recv_timeout(wait) {
             Ok(poke) => mark(&mut plan, poke),
@@ -294,14 +322,20 @@ fn run(
         }
         for due in &mut plan {
             let now = Instant::now();
-            let is_due = due.at(shown.load(Ordering::SeqCst), now).is_some_and(|at| at <= now);
+            let alias = listed();
+            let is_due = due
+                .at(shown.load(Ordering::SeqCst), alias.is_some(), now)
+                .is_some_and(|at| at <= now);
             if !is_due {
                 continue;
             }
             let read = due.cadence.read;
             // Before the read: the event loop lets it go if a write lands meanwhile.
             let generation = write_gen.load(Ordering::SeqCst);
-            let landing = match catch_unwind(AssertUnwindSafe(|| read_on(read, &mut connection))) {
+            let asked = alias.as_deref();
+            let landing = match catch_unwind(AssertUnwindSafe(|| {
+                read_on(read, &mut connection, asked)
+            })) {
                 Ok(landing) => landing,
                 Err(panic) => {
                     connection = ReadLane::new(root.clone(), lane.io());
@@ -328,12 +362,18 @@ fn mark(plan: &mut [Due], poke: Poke) {
     }
 }
 
-fn read_on(read: Read, connection: &mut ReadLane) -> Landing {
+/// `read` on `connection`; the task list's of the account `listed` names, which it always does
+/// when that read is due (`Due::at`): an empty alias would be refused as no alias at all.
+fn read_on(read: Read, connection: &mut ReadLane, listed: Option<&str>) -> Landing {
     match read {
         Read::Status => Landing::Live(connection.read_live()),
         Read::Explain => Landing::Explain(connection.read_explain()),
         Read::Config => Landing::Config(connection.read_config()),
         Read::Start => Landing::Start(connection.read_start()),
+        Read::Tasks => {
+            let alias = listed.unwrap_or_default();
+            Landing::Tasks { alias: alias.to_owned(), read: connection.read_tasks(alias) }
+        }
     }
 }
 
