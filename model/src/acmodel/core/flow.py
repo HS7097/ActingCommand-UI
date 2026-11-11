@@ -246,7 +246,8 @@ class Economy:
 
 
 def spec_keys(settings: EconomySettings, solve: str) -> dict[str, int]:
-    """The configuration keys a node's value depends on, for its spec in the cache."""
+    """The configuration keys a node's value depends on, for its spec in the cache; the steady state's are also in the
+    evaluator digest `export prices` records (`core.evaluator`, #424 PRICE-REUSE)."""
     keys = {"max_denominator": settings.max_denominator, "grain": settings.grain}
     if solve in (STEADY, QUICK, VECTOR):
         keys["max_cycle_steps"] = settings.max_cycle_steps

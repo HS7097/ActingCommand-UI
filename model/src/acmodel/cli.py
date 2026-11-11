@@ -53,6 +53,9 @@ FLAGS = {
 }
 # A flag that is only valid together with another of its command's; without it, it is `argument_unexpected`.
 FLAG_NEEDS = {"--quick": "--steady-only"}
+# Optional options: each takes one value and may be given once (#424 PRICE-REUSE). They follow the flags in the
+# arguments a command gets, each as its name and its value.
+OPTIONAL = {"export prices": ("--reuse-assessment",)}
 # The folders each command writes into, by the argument that names them (`model`: the model folder, or the folder of the
 # model.json given), each checked before anything is computed or written: none may be a Runtime install root or lie
 # inside one (`location`; #424, 2026-11-09). `bindings apply` writes into the repository two folders above the model
@@ -73,7 +76,8 @@ USAGE = (
     "          economy <model folder or model.json> --state <state file> [--steady-only [--quick]],\n"
     "          explain <model folder or model.json> <output id> --state <state file>,\n"
     "          export thresholds <model folder or model.json> --state <state file>,\n"
-    "          export prices <model folder or model.json> --state <state file>,\n"
+    "          export prices <model folder or model.json> --state <state file>\n"
+    "                        [--reuse-assessment <out folder of an earlier export>],\n"
     "          export tables <model folder or model.json> --state <state file> --repo <repository>,\n"
     "          export scoring <model folder or model.json> --state <state file>,\n"
     "          verify prices <model folder or model.json> --state <state file>,\n"
@@ -90,7 +94,8 @@ def _usage(reason: str, argument: str | None = None) -> Failure:
 
 
 def parse(argv: Sequence[str]) -> tuple[str, list[str]]:
-    """The command and its arguments: the positional ones, then the option values, in declared order."""
+    """The command and its arguments: the positional ones, then the option values, in declared order, then the flags
+    given, then each optional option given, as its name and its value (`OPTIONAL`)."""
     if not argv:
         raise _usage("command_missing")
     command, *rest = argv
@@ -100,8 +105,10 @@ def parse(argv: Sequence[str]) -> tuple[str, list[str]]:
         raise _usage("command_unknown", command)
     names, options = COMMANDS[command]
     flags = FLAGS.get(command, ())
+    optional = OPTIONAL.get(command, ())
     positional: list[str] = []
     given: dict[str, str] = {}
+    chosen: dict[str, str] = {}
     set_flags: set[str] = set()
     items = iter(rest)
     for item in items:
@@ -110,6 +117,12 @@ def parse(argv: Sequence[str]) -> tuple[str, list[str]]:
             continue
         if item in flags and item not in set_flags:
             set_flags.add(item)
+            continue
+        if item in optional and item not in chosen:
+            value = next(items, None)
+            if value is None:
+                raise _usage("argument_missing", item)
+            chosen[item] = value
             continue
         if item not in options or item in given:
             raise _usage("argument_unexpected", item)
@@ -127,7 +140,20 @@ def parse(argv: Sequence[str]) -> tuple[str, list[str]]:
     for flag in flags:
         if flag in set_flags and FLAG_NEEDS.get(flag, flag) not in set_flags:
             raise _usage("argument_unexpected", flag)
-    return command, positional + [given[option] for option in options] + [flag for flag in flags if flag in set_flags]
+    chosen_pairs = [part for option in optional if option in chosen for part in (option, chosen[option])]
+    return command, (
+        positional + [given[option] for option in options] + [flag for flag in flags if flag in set_flags] + chosen_pairs
+    )
+
+
+def _chosen(command: str, args: list[str], option: str) -> str | None:
+    """The value of an optional option (`OPTIONAL`) as `parse` returns it, or None when it was not given."""
+    names, options = COMMANDS[command]
+    rest = args[len(names) + len(options):]
+    flags = FLAGS.get(command, ())
+    while rest and rest[0] in flags:  # the flags come first, then the optional options' pairs
+        rest = rest[1:]
+    return dict(zip(rest[::2], rest[1::2])).get(option)
 
 
 def _outside_runtime(command: str, args: list[str]) -> None:
@@ -269,11 +295,15 @@ def _export_scoring(args: list[str], cfg: config.Config, system: System) -> dict
 def _export_prices(args: list[str], cfg: config.Config, system: System) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """The prices of the steady state, with the keys under `lp` and `economy`, and the impact assessment of its
     estimates (#424 ACM-PRICE PRICE-4a); the warnings say why a price is pending. The steady state's tree, which every
-    price's provenance reads, is kept once under `paths.state_root` (PRICE-4a2)."""
-    _dependencies(system)
+    price's provenance reads, is kept once under `paths.state_root` (PRICE-4a2). prices.json records the evaluator
+    digest, from the libraries the tool runs with; with `--reuse-assessment`, the assessment of the earlier export in
+    that out folder is taken over when it may be (#424 PRICE-REUSE)."""
+    packages = _dependencies(system)
+    reuse = _chosen("export prices", args, "--reuse-assessment")
     return export_prices(
         Path(args[0]), Path(args[1]), state_root=cfg.state_root, datasets=cfg.datasets, max_bits=cfg.expr_max_bits,
-        unknowns=cfg.unknowns, economy=cfg.economy,
+        libraries=cache.libraries(system.python_version, packages), unknowns=cfg.unknowns, economy=cfg.economy,
+        reuse=None if reuse is None else Path(reuse),
     )
 
 

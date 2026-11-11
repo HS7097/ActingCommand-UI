@@ -837,6 +837,20 @@
       },
       "description": "acmodel bindings check (a warning; #424 ACM-PRICE PRICE-4a): out/prices.json (path), whose coverage the check reports, was written for other versions of the model: its versions differ from the model's in members (rules, data, tool). The coverage is still shown, with current false; export prices brings it up to date."
     },
+    "reuse_refused": {
+      "category": "error",
+      "exit": 5,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "member": {"type": "token", "required": true},
+        "reason": {"type": "vocab", "required": true, "members": ["not_recorded", "differs"]},
+        "expected": {"type": "token", "required": true},
+        "found": {"type": "token", "required": true}
+      },
+      "description": "acmodel export prices --reuse-assessment (#424 PRICE-REUSE): the earlier prices.json it names (path) cannot lend its impact assessment to this export, so nothing is taken over and nothing is written. One error per member that differs, expected the earlier file's value and found this export's (none where one side has no such member): versions.rules, versions.data or versions.tool (the model's versions); evaluator.source, evaluator.libraries.<name>, evaluator.config.<key> or evaluator.sha256 (the evaluator digest: the tool's source, a library the steady state's node declares, a configuration key of its spec); shared.<root> (the steady state's tree, compared once the versions and the evaluator agree, before the assessment would run); prices or estimates (a pool or an estimate, by id, that only one of the two holds: an earlier file edited by hand). reason not_recorded (member evaluator, expected none) is an earlier export that recorded no evaluator digest, a file written before PRICE-REUSE or of acmodel.prices.v1, which is never reused. The error's ref is the member's pointer in the earlier file. Run export prices without the option for a full export."
+    },
     "rule_conflict": {
       "category": "error",
       "exit": 1,

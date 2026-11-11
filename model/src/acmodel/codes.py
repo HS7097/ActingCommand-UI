@@ -77,6 +77,9 @@ SHARED_TREE_MISMATCH = "shared_tree_mismatch"  # verify prices: the tree compute
 # #424, 2026-11-09: a folder a command would write into is a Runtime install root or lies inside one (`location`); the
 # state root is `config_invalid` instead, when the configuration is read.
 LOCATION_REFUSED = "location_refused"
+# #424 PRICE-REUSE: `export prices --reuse-assessment` names an earlier prices.json whose versions, shared tree or evaluator
+# digest are not this export's (or that records no evaluator digest): nothing is taken over, computed further or written.
+REUSE_REFUSED = "reuse_refused"
 
 EXIT_OK = 0
 
@@ -150,4 +153,5 @@ EXIT_STATUS = {
     SHARED_TREE_STALE: 6,
     SHARED_TREE_MISMATCH: 6,
     LOCATION_REFUSED: 5,
+    REUSE_REFUSED: 5,
 }

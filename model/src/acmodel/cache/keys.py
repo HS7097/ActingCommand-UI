@@ -103,6 +103,8 @@ class Evaluator:
 # entries are not reused.
 # PRICE-2f: `economy` stays 10. ("economy", "quick") is a node of the same kind under its own spec, and the steady state
 # and the plan compute what they did. Any change to what the quick look computes bumps this version too.
+# PRICE-REUSE: the libraries `economy` declares are also those of the evaluator digest `export prices` records
+# (`core.evaluator`), which reads them from here.
 EVALUATORS: dict[str, Evaluator] = {
     "economy": Evaluator(10, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),

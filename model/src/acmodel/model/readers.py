@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 from acmodel import ids
 from acmodel.envelope import Failure
-from acmodel.model.jsonfile import MAX_SAFE_INTEGER, load, pointer
+from acmodel.model.jsonfile import MAX_SAFE_INTEGER, load, parse, pointer
 from acmodel.model.shape import (
     AnyValue,
     Boolean,
@@ -719,8 +719,8 @@ PRICE_ENTRY = {
 }
 
 
-def _prices(version: str, entry: dict[str, Spec]) -> Format:
-    """`out/prices.json` of one version, whose pool entries hold `entry`."""
+def _prices(version: str, entry: dict[str, Spec], optional: dict[str, Spec] | None = None) -> Format:
+    """`out/prices.json` of one version, whose pool entries hold `entry`, with the `optional` top-level members."""
     return Format(
         version,
         version,
@@ -739,21 +739,45 @@ def _prices(version: str, entry: dict[str, Spec]) -> Format:
                 "estimates": ANY,
                 "impact": ANY,
                 "counts": ANY,
-            }
+            },
+            optional,
         ),
     )
 
 
+# #424 PRICE-REUSE: what computed the steady state and its assessment besides the model's inputs (`core.evaluator`):
+# the digest of the tool's source, the libraries the steady state's node declares and the configuration keys of its
+# spec, and the digest of those three. Every v2 file `export prices` writes from PRICE-REUSE on holds it.
+EVALUATOR = Object({
+    "sha256": SHA256, "source": SHA256, "libraries": MapOf(TEXT, TEXT), "config": MapOf(TEXT, Integer(0, MAX)),
+})
+# A v2 file whose assessment was taken over from an earlier one (`--reuse-assessment`): the sha256 of that file's bytes,
+# its versions, the digests of its shared trees and of its evaluator, and the members taken over.
+REUSED_ASSESSMENT = Object({
+    "prices_sha256": SHA256, "versions": MODEL_VERSIONS, "shared": MapOf(TEXT, SHA256), "evaluator": SHA256,
+    "members": ListOf(TEXT),
+})
 PRICES_V1 = _prices("acmodel.prices.v1", PRICE_ENTRY)
-PRICES = _prices("acmodel.prices.v2", {name: spec for name, spec in PRICE_ENTRY.items() if name != "estimates"})
+PRICES = _prices(
+    "acmodel.prices.v2",
+    {name: spec for name, spec in PRICE_ENTRY.items() if name != "estimates"},
+    {"evaluator": EVALUATOR, "reused_assessment": REUSED_ASSESSMENT},
+)
+# What `export prices --reuse-assessment` takes over from an earlier v2 file (#424 PRICE-REUSE), which the format above
+# passes on as any JSON: each estimate's `assessed` and `skipped`, each pool's `impact` and the groups.
+_ESTIMATE = Object({
+    "rule": ID, "value": ANY, "estimate": ANY, "components": ListOf(ID), "assessed": BOOLEAN,
+    "skipped": Either(string=Choice("structural_gap", "estimate_missing"), null=ANY),
+})
+_IMPACT_RANGE = Either(object=Object({"low": TEXT, "high": TEXT}), null=ANY)
 
 
-def _read(path: Path | str, fmt: Format, *older: Format) -> dict[str, Any]:
+def _read(path: Path | str, fmt: Format, *older: Format, raw: bytes | None = None) -> dict[str, Any]:
     """The file's document, checked by the format of its own `schema_version`: `fmt`, or one of the `older` formats a
     reader still reads. Any other version is refused with each of theirs expected; that refusal, and those before the
-    version is known, name `fmt`."""
+    version is known, name `fmt`. With `raw`, the file's bytes already read, it is not read again."""
     path = Path(path)
-    doc = load(path, fmt.name)
+    doc = load(path, fmt.name) if raw is None else parse(raw, path, fmt.name)
     ctx = Context(path, fmt.name)
     known = (fmt, *older)
     if not isinstance(doc, dict):
@@ -805,11 +829,24 @@ def read_exports(path: Path | str) -> dict[str, Any]:
     return _read(path, EXPORTS)
 
 
-def read_prices(path: Path | str) -> dict[str, Any]:
+def read_prices(path: Path | str, raw: bytes | None = None) -> dict[str, Any]:
     """`out/prices.json`, as `export prices` wrote it: the members `bindings check` and `verify prices` read. Each file
     is read by its own version: `acmodel.prices.v2`, which `export prices` writes, or `acmodel.prices.v1`, which it
-    wrote before (each pool's entry with its `estimates` too)."""
-    return _read(path, PRICES, PRICES_V1)
+    wrote before (each pool's entry with its `estimates` too). With `raw`, the bytes of the file already read."""
+    return _read(path, PRICES, PRICES_V1, raw=raw)
+
+
+def check_assessment(doc: dict[str, Any], path: Path | str) -> None:
+    """The members of an earlier v2 prices.json (`doc`, read by `read_prices`) that `export prices --reuse-assessment`
+    takes over (#424 PRICE-REUSE): each estimate as `export prices` lists it, each pool's `impact` (null, or `low` and
+    `high`), and the groups (`impact`, a list). Each problem is `model_file_invalid` at its pointer."""
+    ctx = Context(path, doc["schema_version"])
+    ListOf(_ESTIMATE).check(doc["estimates"], "/estimates", ctx)
+    ListOf(ANY).check(doc["impact"], "/impact", ctx)
+    for index, entry in enumerate(doc["prices"]):
+        _IMPACT_RANGE.check(entry["impact"], pointer(pointer("/prices", index), "impact"), ctx)
+    if ctx.errors:
+        raise Failure(*ctx.errors)
 
 
 def read_bindings(path: Path | str) -> dict[str, Any]:
