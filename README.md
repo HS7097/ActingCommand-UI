@@ -560,6 +560,33 @@ front). `--state-root` alone opens none, since the fixed entry passes it on ever
 window's reader stops after the page in hand; opening it again is a new window and a new session. Closing
 the workbench ends the program, except while an unlock runs (see "Launcher").
 
+The main page's right column has two tabs, **Live View** and **Daily Tasks**, before the alias of the
+account picked on the left; the tab picked stays for the run, across accounts and pages, Live View being
+the first. Daily Tasks is that account's task packages, read only and with no switch (a note above the
+rows says single tasks cannot be switched on or off yet): one row per package, with its name (its
+package id when the game's `ui.json` gives none), "Irreversible" when the Runtime derives it so and
+"Risky" when its `ui.json` entry names a risk word (the word itself is not shown), why it runs or does
+not run now in a sentence, and its `ui.json` summary in grey ("No description given" without one). The
+sentence is "Running" (for a direct run, "not scheduled") while the status says the account runs that
+package; where the dispatch stands while the task selected for the account is one of the package's;
+else the words of the package's first candidate row in the Runtime's own order, chosen by its reason
+code (a `benefit_unknown` by its `benefit_gap`, a `pool_line_held` by its `pool_line_hold`), with
+"(earliest hh:mm)" when that row has a wake, and under it the other sentences of its tasks once each. The
+account cards say a reason in the same words. No reason code, count or scheduler number shows: a code
+the console has no words for says "Not scheduled right now", and the technical log hears of it once.
+With a `ui.json` the rows go by its groups and its order, the rest under "Other"; without one, by name.
+Which package a task runs comes from the `task_ids` of the same `actingctl packs` run the names come from:
+a task no row of it lists, and every task when that run failed or had warnings, is listed by its task id
+under "This account: some plans do not match a task pack", which opens. Above the rows: the account's
+pause or fence in its card's words, which round of the evaluation the rows are of ("As evaluated in the
+round of hh:mm"), and whether the names cannot be read or not every task is listed. The list reads one
+`ScheduleExplanation` of that one account with its candidate rows, answered from memory without the
+ledger, only while its tab shows on the main page of a window that is not minimized and the Runtime is
+online: every 15 seconds, 30 after a failure, and at once when the tab, the account or the owner epoch
+changes; the live view reads nothing meanwhile. While the Runtime does not answer, a read fails, nothing
+new came for 60 seconds, the account is not in the evaluation or none was made yet, no row shows, only
+why.
+
 `--state-root` applies to this run only and overrides `state_root` in the settings file; if neither is
 present the workbench still opens, with a red bar at its top that says in plain words that there is no
 state root to use and what to do (the usage and the key names go to the technical log only), and Start,

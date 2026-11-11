@@ -134,6 +134,47 @@ export struct PresetChoice {
 // Which of the workbench's two pages shows: the accounts, or the settings.
 export enum WorkbenchPage { main, settings }
 
+// Which of the main page's right column's two tabs shows (UI-3f1): the live view, or the account's
+// daily task list.
+export enum WorkbenchTab { picture, tasks }
+
+// The colour of a line's sentence on the daily task list: in the accent while its package runs or
+// is scheduled, amber while a person is the one to act, else as the grey lines are.
+export enum TaskTone { plain, accent, warning }
+
+// One line of the account's daily task list (UI-3f1), in words: a group's title alone; or a task
+// package's name, whether it is irreversible and whether it is risky, why it runs or not now in
+// its colour, the other reasons of its tasks, and its summary. Under the account's own line, a
+// task without a package: its id for a name, and why.
+export struct TaskRowData {
+    heading: string,
+    name: string,
+    irreversible: bool,
+    risky: bool,
+    said: string,
+    tone: TaskTone,
+    also: string,
+    summary: string,
+}
+
+// Above the list's rows, in words: what it says instead of them, red or amber when that says a
+// failure; the account's pause or fence, which holds them all; whether the note on switches shows;
+// which round of the evaluation they are of; whether the names cannot be read, and whether not
+// every task is listed; whether the account's own line of tasks without a package shows, and
+// whether it is open.
+export struct TaskListData {
+    instead: string,
+    instead-failed: bool,
+    instead-warning: bool,
+    held: string,
+    switches: bool,
+    evaluated: string,
+    names-unreadable: bool,
+    cut-short: bool,
+    fold-shown: bool,
+    fold-open: bool,
+}
+
 // One of the Runtime's settings on the settings page, in words: its name, with the
 // account of an instance's own; its value; and in grey where the value comes from, how
 // it is changed and when a change takes effect.
@@ -407,6 +448,19 @@ export global Strings {
     // draws the recognition's boxes and the inputs' points on a task's frame.
     in property <string> picture-title;
     in property <string> picture-overlays;
+    // The right column's second tab, the account's daily task list (UI-3f1); and on it, in grey,
+    // that none of its tasks starts while paused, that tasks are not switched singly yet, in amber
+    // that the names cannot be read, in grey that not every task is listed; the account's own line
+    // of tasks without a package and, in grey, why; the two badges of a package.
+    in property <string> tasks-tab;
+    in property <string> tasks-held-note;
+    in property <string> tasks-switches;
+    in property <string> tasks-names-unreadable;
+    in property <string> tasks-cut-short;
+    in property <string> tasks-fold;
+    in property <string> tasks-fold-note;
+    in property <string> tasks-irreversible;
+    in property <string> tasks-risky;
     // Under the live view: the button that refreshes the picture of the account picked, and in
     // grey what a refresh costs.
     in property <string> refresh-frame;
@@ -1993,6 +2047,166 @@ component RulesPanel {
     }
 }
 
+// One line of the daily task list (UI-3f1): a group's title; or a package's name, cut short
+// before its badges are, the badges after it in amber; under it why it runs or not now, which
+// wraps; the other reasons of its tasks in grey, which wrap; its summary in grey, cut short.
+component TaskLineView {
+    in property <TaskRowData> line;
+    vertical-stretch: 0;
+    VerticalLayout {
+        spacing: 2px;
+        if root.line.heading != "": Text {
+            text: root.line.heading;
+            font-size: Scale.body-font;
+            font-weight: 700;
+            color: Look.text;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.line.heading == "": HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.line.name;
+                font-size: Scale.body-font;
+                color: Look.text;
+                vertical-alignment: center;
+                overflow: elide;
+                min-width: 0px;
+                horizontal-stretch: 0;
+            }
+            if root.line.irreversible: Text {
+                text: Strings.tasks-irreversible;
+                font-size: Scale.grey-font;
+                color: Severity.warning;
+                vertical-alignment: center;
+                min-width: self.preferred-width;
+                horizontal-stretch: 0;
+            }
+            if root.line.risky: Text {
+                text: Strings.tasks-risky;
+                font-size: Scale.grey-font;
+                color: Severity.warning;
+                vertical-alignment: center;
+                min-width: self.preferred-width;
+                horizontal-stretch: 0;
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if root.line.heading == "": Text {
+            text: root.line.said;
+            font-size: Scale.body-font;
+            color: root.line.tone == TaskTone.accent ? Look.accent : root.line.tone == TaskTone.warning ? Severity.warning : Look.text-secondary;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.line.also != "": Text {
+            text: root.line.also;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.line.summary != "": Text {
+            text: root.line.summary;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            overflow: elide;
+            min-width: 0px;
+            vertical-stretch: 0;
+        }
+    }
+}
+
+// The account's daily task list on the workbench (UI-3f1), under its own tab in the right
+// column: only words, no switch. What it says instead of its rows; else above them the account's
+// pause or fence, and in grey that none of its tasks starts meanwhile; the note on switches; which
+// round they are of; that the names cannot be read, and that not every task is listed. Then the
+// account's own line of tasks without a package, marked while open, and while open why, in grey,
+// and those tasks; then the groups' titles and their packages. All of it wraps but a name and a
+// summary; the whole card scrolls when it is too short for it.
+component TaskList {
+    in property <TaskListData> data;
+    in property <[TaskRowData]> rows;
+    in property <[TaskRowData]> fold-lines;
+    callback fold-toggled();
+    vertical-stretch: 0;
+    VerticalLayout {
+        spacing: 6px;
+        if root.data.instead != "": Notice {
+            text: root.data.instead;
+            failed: root.data.instead-failed;
+            warning: root.data.instead-warning;
+        }
+        if root.data.held != "": Notice {
+            text: root.data.held;
+            warning: true;
+        }
+        if root.data.held != "": Text {
+            text: Strings.tasks-held-note;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.data.switches: Text {
+            text: Strings.tasks-switches;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.data.evaluated != "": Text {
+            text: root.data.evaluated;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.data.names-unreadable: Notice {
+            text: Strings.tasks-names-unreadable;
+            warning: true;
+        }
+        if root.data.cut-short: Text {
+            text: Strings.tasks-cut-short;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.data.fold-shown: HorizontalLayout {
+            alignment: start;
+            SkinSegment {
+                label: Strings.tasks-fold;
+                selected: root.data.fold-open;
+                clicked => {
+                    root.fold-toggled();
+                }
+            }
+        }
+        if root.data.fold-shown && root.data.fold-open: Text {
+            text: Strings.tasks-fold-note;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        for item in root.fold-lines: TaskLineView {
+            line: item;
+        }
+        for item in root.rows: TaskLineView {
+            line: item;
+        }
+    }
+}
+
 // What the settings file holds that the console could not take, or why a setting was
 // not saved, errors then warnings; why the window's look falls short of its theme, and
 // what it fell back to, the details being in the technical log; and where that log is,
@@ -2207,6 +2421,15 @@ export component WorkbenchWindow inherits Window {
     in property <string> refresh-reason;
     in property <string> refresh-line;
     in property <bool> refresh-failed;
+    // Which of the right column's two tabs shows (UI-3f1); a press asks for the other, and the
+    // console says which shows. Under the second, in the picture's place, the account's daily task
+    // list: above its rows, its rows, and while open its own tasks without a package. Nothing of
+    // the live view shows meanwhile.
+    in property <WorkbenchTab> right-tab;
+    property <bool> picture-tab: root.right-tab == WorkbenchTab.picture;
+    in property <TaskListData> tasks;
+    in property <[TaskRowData]> task-rows;
+    in property <[TaskRowData]> task-fold-lines;
     // Between the title and the frame, while the main page shows that account's picture: its
     // rescue bar, in words.
     in property <RescueBar> rescue;
@@ -2277,6 +2500,9 @@ export component WorkbenchWindow inherits Window {
     callback account-picked(string);
     callback account-pause(string);
     callback account-resume(string);
+    // A tab of the right column; the daily task list's line of tasks without a package.
+    callback right-tab-picked(WorkbenchTab);
+    callback tasks-fold-toggled();
     // The box beside the picture's title, as it is now.
     callback picture-overlays-toggled(bool);
     // The button under the picture that refreshes it.
@@ -2673,7 +2899,8 @@ export component WorkbenchWindow inherits Window {
                         }
 
                         // right: the window itself, then the live view of the account
-                        // picked on the left. The frame takes what the column can spare;
+                        // picked on the left, or under the second tab its daily task list
+                        // (UI-3f1). The frame takes what the column can spare;
                         // all of it scrolls only when the column is too short for it with
                         // the frame at its least, as in the smallest window at the largest
                         // text with lines above it, rather than its foot being cut off.
@@ -2694,15 +2921,27 @@ export component WorkbenchWindow inherits Window {
                                         log-note: root.log-note;
                                         log-failed: root.log-failed;
                                     }
-                                    // The title, and whose picture this is: what gives way. At the
-                                    // end, the box that draws on the frame.
+                                    // The two tabs (UI-3f1), and whose picture and tasks these are:
+                                    // what gives way. At the end, under the live view's tab, the box
+                                    // that draws on the frame.
                                     HorizontalLayout {
                                         spacing: 8px;
                                         vertical-stretch: 0;
-                                        CardTitle {
-                                            text: Strings.picture-title;
-                                            vertical-alignment: center;
+                                        SkinTab {
+                                            label: Strings.picture-title;
+                                            active: root.picture-tab;
                                             horizontal-stretch: 0;
+                                            clicked => {
+                                                root.right-tab-picked(WorkbenchTab.picture);
+                                            }
+                                        }
+                                        SkinTab {
+                                            label: Strings.tasks-tab;
+                                            active: !root.picture-tab;
+                                            horizontal-stretch: 0;
+                                            clicked => {
+                                                root.right-tab-picked(WorkbenchTab.tasks);
+                                            }
                                         }
                                         Caption {
                                             text: root.picture-account;
@@ -2710,7 +2949,7 @@ export component WorkbenchWindow inherits Window {
                                             min-width: 0px;
                                             horizontal-stretch: 1;
                                         }
-                                        SkinCheckBox {
+                                        if root.picture-tab: SkinCheckBox {
                                             text: Strings.picture-overlays;
                                             enabled: root.picture-overlays-offered;
                                             checked <=> root.picture-overlays-on;
@@ -2728,7 +2967,7 @@ export component WorkbenchWindow inherits Window {
                                     // to, which wrap. At the first row's end, a fixture's account's
                                     // as well, "auto rules" (UI-3e1-b), marked while its panel is
                                     // open; UI-3d's way to take over goes before it.
-                                    if root.rescue.shown && (root.rescue.check-shown || root.rescue.rules-shown): HorizontalLayout {
+                                    if root.picture-tab && root.rescue.shown && (root.rescue.check-shown || root.rescue.rules-shown): HorizontalLayout {
                                         spacing: 14px;
                                         vertical-stretch: 0;
                                         if root.rescue.check-shown: SkinButton {
@@ -2757,10 +2996,10 @@ export component WorkbenchWindow inherits Window {
                                     }
                                     // Under the check's row, which cuts its note short: the other
                                     // way to lift the fence (#402 HS-5c), which wraps.
-                                    if root.rescue.shown && root.rescue.check-hint != "": Notice {
+                                    if root.picture-tab && root.rescue.shown && root.rescue.check-hint != "": Notice {
                                         text: root.rescue.check-hint;
                                     }
-                                    if root.rescue.shown && root.rescue.emulator-shown: HorizontalLayout {
+                                    if root.picture-tab && root.rescue.shown && root.rescue.emulator-shown: HorizontalLayout {
                                         spacing: 8px;
                                         vertical-stretch: 0;
                                         Text {
@@ -2802,7 +3041,7 @@ export component WorkbenchWindow inherits Window {
                                             horizontal-stretch: 1;
                                         }
                                     }
-                                    if root.rescue.shown && root.rescue.game-shown: HorizontalLayout {
+                                    if root.picture-tab && root.rescue.shown && root.rescue.game-shown: HorizontalLayout {
                                         spacing: 8px;
                                         vertical-stretch: 0;
                                         Text {
@@ -2838,7 +3077,7 @@ export component WorkbenchWindow inherits Window {
                                         }
                                     }
                                     // Never pressed in this version: shown so that why is said.
-                                    if root.rescue.shown && root.rescue.close-shown: HorizontalLayout {
+                                    if root.picture-tab && root.rescue.shown && root.rescue.close-shown: HorizontalLayout {
                                         spacing: 14px;
                                         vertical-stretch: 0;
                                         SkinButton {
@@ -2855,11 +3094,11 @@ export component WorkbenchWindow inherits Window {
                                             horizontal-stretch: 1;
                                         }
                                     }
-                                    if root.rescue.shown && root.rescue.reason != "": Notice {
+                                    if root.picture-tab && root.rescue.shown && root.rescue.reason != "": Notice {
                                         text: root.rescue.reason;
                                     }
                                     // In two steps: only the confirmation sends it.
-                                    if root.rescue.shown && root.rescue.confirm != "": HorizontalLayout {
+                                    if root.picture-tab && root.rescue.shown && root.rescue.confirm != "": HorizontalLayout {
                                         spacing: 14px;
                                         vertical-stretch: 0;
                                         Notice {
@@ -2882,7 +3121,7 @@ export component WorkbenchWindow inherits Window {
                                             }
                                         }
                                     }
-                                    if root.rescue.shown && root.rescue.line != "": Notice {
+                                    if root.picture-tab && root.rescue.shown && root.rescue.line != "": Notice {
                                         text: root.rescue.line;
                                         failed: root.rescue.failed;
                                     }
@@ -2890,7 +3129,7 @@ export component WorkbenchWindow inherits Window {
                                     // picture and of its refresh (UI-3e1-b), its rows at the top and
                                     // what the column spares under them; the whole card scrolls
                                     // when it is too short for them.
-                                    if root.rescue.rules-open: RulesPanel {
+                                    if root.picture-tab && root.rescue.rules-open: RulesPanel {
                                         rules: root.rules;
                                         quiet-lines: root.quiet-lines;
                                         day-0 <=> root.quiet-day-0;
@@ -2948,12 +3187,12 @@ export component WorkbenchWindow inherits Window {
                                             root.start-back-to-file();
                                         }
                                     }
-                                    if root.rescue.rules-open: Rectangle {
+                                    if root.picture-tab && root.rescue.rules-open: Rectangle {
                                         vertical-stretch: 1;
                                     }
                                     // The frame takes every pixel the column can spare, and never
                                     // less than its least.
-                                    if !root.rescue.rules-open && !root.picture-withdrawn: FrameCanvas {
+                                    if root.picture-tab && !root.rescue.rules-open && !root.picture-withdrawn: FrameCanvas {
                                         min-height: 160px;
                                         vertical-stretch: 1;
                                         source: root.picture-image;
@@ -2971,12 +3210,12 @@ export component WorkbenchWindow inherits Window {
                                         empty-failed: root.picture-empty-failed;
                                     }
                                     // Taken down: UI-3d says why here, and offers to resume.
-                                    if !root.rescue.rules-open && root.picture-withdrawn: Rectangle {
+                                    if root.picture-tab && !root.rescue.rules-open && root.picture-withdrawn: Rectangle {
                                         min-height: 160px;
                                         vertical-stretch: 1;
                                     }
                                     // What took the frame shown, in grey.
-                                    if !root.rescue.rules-open && root.picture-origin != "": Text {
+                                    if root.picture-tab && !root.rescue.rules-open && root.picture-origin != "": Text {
                                         text: root.picture-origin;
                                         font-size: Scale.grey-font;
                                         color: Look.text-caption;
@@ -2985,7 +3224,7 @@ export component WorkbenchWindow inherits Window {
                                         vertical-stretch: 0;
                                     }
                                     // Why nothing is drawn on it, and its proportions, in amber.
-                                    if !root.rescue.rules-open && root.picture-hint != "": Notice {
+                                    if root.picture-tab && !root.rescue.rules-open && root.picture-hint != "": Notice {
                                         text: root.picture-hint;
                                         warning: true;
                                         font-size: Scale.grey-font;
@@ -2995,7 +3234,7 @@ export component WorkbenchWindow inherits Window {
                                     // largest text; beside it why it cannot be pressed now. Under
                                     // it what the last refresh came to, on a line of its own so
                                     // neither hides the other, and in grey what a refresh costs.
-                                    if !root.rescue.rules-open && root.refresh-shown: HorizontalLayout {
+                                    if root.picture-tab && !root.rescue.rules-open && root.refresh-shown: HorizontalLayout {
                                         spacing: 14px;
                                         vertical-stretch: 0;
                                         SkinButton {
@@ -3012,17 +3251,31 @@ export component WorkbenchWindow inherits Window {
                                             horizontal-stretch: 1;
                                         }
                                     }
-                                    if !root.rescue.rules-open && root.refresh-shown && root.refresh-line != "": Notice {
+                                    if root.picture-tab && !root.rescue.rules-open && root.refresh-shown && root.refresh-line != "": Notice {
                                         text: root.refresh-line;
                                         failed: root.refresh-failed;
                                     }
-                                    if !root.rescue.rules-open && root.refresh-shown: Text {
+                                    if root.picture-tab && !root.rescue.rules-open && root.refresh-shown: Text {
                                         text: Strings.refresh-cost;
                                         font-size: Scale.grey-font;
                                         color: Look.text-caption;
                                         wrap: word-wrap;
                                         min-height: self.preferred-height;
                                         vertical-stretch: 0;
+                                    }
+                                    // Under the second tab, in the place of all of the live view:
+                                    // the account's daily task list (UI-3f1), its rows at the top
+                                    // and what the column spares under them.
+                                    if !root.picture-tab: TaskList {
+                                        data: root.tasks;
+                                        rows: root.task-rows;
+                                        fold-lines: root.task-fold-lines;
+                                        fold-toggled => {
+                                            root.tasks-fold-toggled();
+                                        }
+                                    }
+                                    if !root.picture-tab: Rectangle {
+                                        vertical-stretch: 1;
                                     }
                                 }
                             }
