@@ -408,14 +408,14 @@ pub struct Labels {
     /// A scheduling pause's line in the ledger window. Its scope: global, or
     /// an instance's (alias). Then scope, reason, revision, since: a pause
     /// another tool set, with the stage of an instance's that cannot be resumed
-    /// yet; the one Alice lifts herself; a deployment's, which the installer
-    /// lifts.
+    /// yet; one only whoever set it lifts, by the settings file; a deployment's,
+    /// which the installer lifts.
     pub pause_global: &'static str,
     pub pause_instance: &'static str,
     pub pause_other_tool: &'static str,
     pub pause_draining: &'static str,
     pub pause_releasing: &'static str,
-    pub pause_alice: &'static str,
+    pub pause_setter: &'static str,
     pub pause_deploy: &'static str,
     /// In place of the pause lines when the status read failed: code (with
     /// its short words), client operation.
@@ -539,7 +539,7 @@ pub struct Labels {
     pub pause_note_finishing: &'static str,
     pub pause_note_all_finished: &'static str,
     pub pause_note_no_update: &'static str,
-    pub resume_barred_alice: &'static str,
+    pub resume_barred_setter: &'static str,
     pub resume_barred_installer: &'static str,
     /// The first press on a pause another tool set: its reason as written.
     pub resume_all_statement: &'static str,
@@ -550,7 +550,7 @@ pub struct Labels {
     pub resume_all_sending: &'static str,
     pub resume_all_done: &'static str,
     pub resume_all_still_paused: &'static str,
-    pub resume_all_alice_decides: &'static str,
+    pub resume_all_setter_lifts: &'static str,
     pub resume_all_moved: &'static str,
     pub resume_all_refused: &'static str,
     pub resume_all_unsupported: &'static str,
@@ -833,16 +833,16 @@ pub struct Labels {
     pub autostart_no_paths: &'static str,
     pub autostart_not_installed: &'static str,
     /// What an account's card says it does or waits for. Draining: the task, or
-    /// `card_draining_any` when none is named. Paused: by whom it is lifted, the
-    /// other tool's own reason as it wrote it and where it is resumed: an instance's
-    /// in the ledger window, the global one by the top bar, which is also where one
-    /// pressed here is lifted; and `card_all_accounts` round the sentence for the
-    /// global pause. A task with no name at all; a fence's cause the tables have no
-    /// words for.
+    /// `card_draining_any` when none is named. Paused: by whom it is lifted — only
+    /// whoever set it, by the settings file, or the installer — or the other tool's
+    /// own reason as it wrote it and where it is resumed: an instance's in the ledger
+    /// window, the global one by the top bar, which is also where one pressed here is
+    /// lifted; and `card_all_accounts` round the sentence for the global pause. A task
+    /// with no name at all; a fence's cause the tables have no words for.
     pub card_draining: &'static str,
     pub card_draining_any: &'static str,
     pub card_handing_back: &'static str,
-    pub card_paused_alice: &'static str,
+    pub card_paused_setter: &'static str,
     pub card_paused_installer: &'static str,
     pub card_paused_other: &'static str,
     pub card_paused_other_all: &'static str,
@@ -1191,11 +1191,13 @@ pub struct Labels {
     pub glass_failed: &'static str,
     pub close_failed: &'static str,
     /// The settings file: the variables its directory comes from; file, error;
-    /// file, line, key, value; file, line; file; file, error.
+    /// file, line, key, value; file, line; file, line, the line's value as written
+    /// (`resume_elsewhere_reasons`); file; file, error.
     pub settings_no_dir: &'static str,
     pub settings_unreadable: &'static str,
     pub settings_unknown_value: &'static str,
     pub settings_malformed: &'static str,
+    pub settings_reasons_unusable: &'static str,
     pub settings_save_blocked: &'static str,
     pub settings_save_failed: &'static str,
     /// The technical log: its path; the variables its directory comes from;
@@ -1532,7 +1534,7 @@ pub const ZH: Labels = Labels {
     pause_other_tool: "{}：被其他工具暂停（理由 {}，修订 {}，自 {}）",
     pause_draining: " · 正在等进行中的任务收尾，收尾后才能恢复",
     pause_releasing: " · 正在交还设备，交还后才能恢复",
-    pause_alice: "{}：已暂停（理由 {}，修订 {}，自 {}）· 此暂停由 Alice 决定恢复",
+    pause_setter: "{}：已暂停（理由 {}，修订 {}，自 {}）· 此暂停要由设下它的一方解除",
     pause_deploy: "{}：部署暂停（理由 {}，修订 {}，自 {}）· 这是安装器加的部署暂停，请用安装器恢复",
     pauses_unread: "状态没读到，暂停情况未知：{}（{}）",
     resume_scheduling: "恢复自动调度…",
@@ -1606,7 +1608,7 @@ pub const ZH: Labels = Labels {
     pause_note_finishing: "已停止安排新任务；正在进行的任务会自己收尾（收尾中 {} 个）",
     pause_note_all_finished: "已停止安排新任务；自动任务已全部收尾",
     pause_note_no_update: "全局暂停期间不能更新软件，要先解除",
-    resume_barred_alice: "「全部开始执勤」不可用：此暂停由 Alice 决定恢复",
+    resume_barred_setter: "「全部开始执勤」不可用：此暂停要由设下它的一方解除",
     resume_barred_installer: "「全部开始执勤」不可用：此暂停由安装程序恢复",
     resume_all_statement: "确认：这份全局暂停是其他工具加的（理由：{}）。只恢复这一份；它已有变动时 Runtime 会拒绝",
     pause_all_sending: "正在请求全部暂停…",
@@ -1616,7 +1618,7 @@ pub const ZH: Labels = Labels {
     resume_all_sending: "正在请求全部开始执勤…",
     resume_all_done: "全局暂停已解除",
     resume_all_still_paused: "全局暂停已解除，{} 台仍在暂停",
-    resume_all_alice_decides: "，由 Alice 决定恢复",
+    resume_all_setter_lifts: "，其中有的要由设下它的一方解除",
     resume_all_moved: "暂停已在别处变动，已刷新",
     resume_all_refused: "全部开始执勤没有成功：{}",
     resume_all_unsupported: "这个版本的 Runtime 不支持这样恢复，什么都没变",
@@ -1832,7 +1834,7 @@ pub const ZH: Labels = Labels {
     card_draining: "收尾中：{}",
     card_draining_any: "等当前任务结束",
     card_handing_back: "交还设备中",
-    card_paused_alice: "已暂停，此暂停由 Alice 决定恢复",
+    card_paused_setter: "已暂停，此暂停要由设下它的一方解除",
     card_paused_installer: "正在更新，由安装程序恢复",
     card_paused_other: "已被其他工具暂停（理由：{}），可在「排障与账本」里恢复",
     card_paused_other_all: "已被其他工具暂停（理由：{}），可用「全部开始执勤」恢复",
@@ -2080,10 +2082,11 @@ pub const ZH: Labels = Labels {
     chrome_failed: "Aero 外框没有生效，这个窗口改用系统标题栏。详情见技术日志。",
     glass_failed: "Aero 玻璃没有生效，这个窗口改用实心外观。详情见技术日志。",
     close_failed: "这个窗口没能关闭。详情见技术日志。",
-    settings_no_dir: "找不到存放设置文件的目录（{} 未设置）：本次按默认设置运行，改了的设置也存不下来",
-    settings_unreadable: "设置文件 {} 读不出：{}。本次按默认设置运行；为免覆盖原文件，本次不保存设置",
+    settings_no_dir: "找不到存放设置文件的目录（{} 未设置）：本次按默认设置运行，但除了监控台自己「全部暂停」加的暂停，这里不给任何暂停恢复；改了的设置也存不下来",
+    settings_unreadable: "设置文件 {} 读不出：{}。本次按默认设置运行，但除了监控台自己「全部暂停」加的暂停，这里不给任何暂停恢复；为免覆盖原文件，本次不保存设置",
     settings_unknown_value: "设置文件 {} 第 {} 行的取值认不出（{} = {}），本次按默认处理；这一行原样保留",
     settings_malformed: "设置文件 {} 第 {} 行不是「键 = 值」的写法，已跳过；这一行原样保留",
+    settings_reasons_unusable: "设置文件 {} 第 {} 行的 resume_elsewhere_reasons 用不了（{}）：要写成一行字符串数组，每一项都得是 Runtime 认的暂停理由（1–64 个字符，只能有 a-z、0-9、_、.、-）。改好之前，除了监控台自己「全部暂停」加的暂停，这里不给任何暂停恢复；这一行原样保留",
     settings_save_blocked: "设置没有保存：设置文件 {} 开台时读不出，为免覆盖原文件，本次不写",
     settings_save_failed: "设置没能保存进 {}：{}",
     log_written: "技术日志：{}",
@@ -2418,7 +2421,7 @@ pub const EN: Labels = Labels {
     pause_other_tool: "{}: Paused by Another Tool (Reason {}, Revision {}, Since {})",
     pause_draining: " · Waiting for the Running Tasks to Finish; It Can Be Resumed After That",
     pause_releasing: " · Handing the Device Back; It Can Be Resumed After That",
-    pause_alice: "{}: Paused (Reason {}, Revision {}, Since {}) · Alice Decides When This Pause Is Lifted",
+    pause_setter: "{}: Paused (Reason {}, Revision {}, Since {}) · This Pause Is to Be Lifted by Whoever Set It",
     pause_deploy: "{}: Deployment Pause (Reason {}, Revision {}, Since {}) · The Installer Set It; Lift It with the Installer",
     pauses_unread: "The Status Was Not Read; Whether Scheduling Is Paused Is Unknown: {} ({})",
     resume_scheduling: "Resume Scheduling…",
@@ -2492,7 +2495,7 @@ pub const EN: Labels = Labels {
     pause_note_finishing: "No new tasks are being scheduled; tasks under way finish on their own ({} finishing)",
     pause_note_all_finished: "No new tasks are being scheduled; all automatic tasks have finished",
     pause_note_no_update: "The software cannot be updated during a global pause: lift it first",
-    resume_barred_alice: "Put All on Duty is unavailable: Alice decides when this pause is lifted",
+    resume_barred_setter: "Put All on Duty is unavailable: this pause is to be lifted by whoever set it",
     resume_barred_installer: "Put All on Duty is unavailable: the installer lifts this pause",
     resume_all_statement: "Confirm: another tool set this global pause (reason: {}). Only this pause is lifted; the Runtime refuses if it has changed",
     pause_all_sending: "Asking to pause all…",
@@ -2502,7 +2505,7 @@ pub const EN: Labels = Labels {
     resume_all_sending: "Asking to put all on duty…",
     resume_all_done: "The global pause is lifted",
     resume_all_still_paused: "The global pause is lifted; {} still paused",
-    resume_all_alice_decides: ", Alice decides when",
+    resume_all_setter_lifts: ", some of them to be lifted by whoever set them",
     resume_all_moved: "The pause was changed elsewhere; refreshed",
     resume_all_refused: "Put All on Duty did not succeed: {}",
     resume_all_unsupported: "This version of the Runtime cannot lift a pause this way; nothing changed",
@@ -2718,7 +2721,7 @@ pub const EN: Labels = Labels {
     card_draining: "Finishing up: {}",
     card_draining_any: "waiting for the current task to end",
     card_handing_back: "Handing the device back",
-    card_paused_alice: "Paused; Alice decides when this pause is lifted",
+    card_paused_setter: "Paused; this pause is to be lifted by whoever set it",
     card_paused_installer: "Updating; the installer lifts this pause",
     card_paused_other: "Paused by another tool (reason: {}); it can be resumed in Troubleshooting and Ledger",
     card_paused_other_all: "Paused by another tool (reason: {}); Put All on Duty resumes it",
@@ -2966,10 +2969,11 @@ pub const EN: Labels = Labels {
     chrome_failed: "The Aero frame did not take effect: this window uses the system title bar instead. The technical log has the details.",
     glass_failed: "The Aero glass did not take effect: this window uses a solid look instead. The technical log has the details.",
     close_failed: "This window could not be closed. The technical log has the details.",
-    settings_no_dir: "No directory for the settings file ({} not set): this run uses the default settings, and a changed setting cannot be saved",
-    settings_unreadable: "The settings file {} could not be read: {}. This run uses the default settings and saves none, so the file is never written over",
+    settings_no_dir: "No directory for the settings file ({} not set): this run uses the default settings, but offers no resume for any pause except this console's own Pause All, and a changed setting cannot be saved",
+    settings_unreadable: "The settings file {} could not be read: {}. This run uses the default settings, but offers no resume for any pause except this console's own Pause All, and saves none, so the file is never written over",
     settings_unknown_value: "The settings file {}, line {}: the value is not recognized ({} = {}); the default is used, and the line is kept as it is",
     settings_malformed: "The settings file {}, line {}: not of the form key = value; skipped, and the line is kept as it is",
+    settings_reasons_unusable: "The settings file {}, line {}: resume_elsewhere_reasons cannot be used ({}): it must be a one-line array of strings, each a pause reason the Runtime takes (1–64 characters of a-z, 0-9, _, . and -). Until it is fixed, this console offers no resume for any pause except its own Pause All; the line is kept as it is",
     settings_save_blocked: "Settings not saved: the settings file {} could not be read at the start, so this run does not write it",
     settings_save_failed: "Saving the settings to {} failed: {}",
     log_written: "Technical log: {}",

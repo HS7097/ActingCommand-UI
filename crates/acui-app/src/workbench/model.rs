@@ -28,6 +28,7 @@ use super::read::{Lane, Read, EXPLAIN_TOO_OLD, START_TRIES};
 use super::rescue::{Rescue, RescueHold, RescueView, Watch};
 use super::settings::{self, AutostartView, SettingsView, StartView};
 use super::tools::{Displays, NameTable, NamesRead, WatchdogRead};
+use crate::ledger::resume::ResumeElsewhere;
 use crate::strings::{fill, Labels, Language};
 
 /// The Runtime as the newest `Status` read found it.
@@ -232,6 +233,9 @@ pub struct Model {
     /// picture shows: it stays so across accounts and pages, and shows only while that
     /// account's rescue bar does (`rules_view`).
     rules_open: bool,
+    /// The pauses the top bar and the cards offer no resume for, by the settings file: fixed
+    /// for the run.
+    resume_elsewhere: ResumeElsewhere,
 }
 
 /// What of an account's device is out from here (`Model::device_busy`).
@@ -290,7 +294,7 @@ pub enum News<F> {
 }
 
 impl Model {
-    pub fn new() -> Self {
+    pub fn new(resume_elsewhere: ResumeElsewhere) -> Self {
         Self {
             link: Link::Unknown,
             instances: Vec::new(),
@@ -317,6 +321,7 @@ impl Model {
             rescue: Rescue::default(),
             ledger_head: None,
             rules_open: false,
+            resume_elsewhere,
         }
     }
 
@@ -360,6 +365,7 @@ impl Model {
             &self.actions,
             self.config.value.as_ref(),
             self.config_failed(),
+            &self.resume_elsewhere,
         )
     }
 
@@ -534,7 +540,10 @@ impl Model {
                             },
                         };
                         let selected = picked == Some(instance.alias.as_str());
-                        card::card_view(instance, server, last_seen, global, schedule, selected)
+                        let elsewhere = &self.resume_elsewhere;
+                        card::card_view(
+                            instance, server, last_seen, global, schedule, selected, elsewhere,
+                        )
                     })
                     .collect()
             }

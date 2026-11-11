@@ -2187,7 +2187,7 @@ fn pause_note(labels: &Labels, view: &ActionsView) -> String {
     // waits for the pause to lift would be the wrong way round.
     let mut note = vec![meaning.as_str()];
     match by {
-        Lifter::Alice => note.extend([labels.pause_note_no_update, labels.resume_barred_alice]),
+        Lifter::Setter => note.extend([labels.pause_note_no_update, labels.resume_barred_setter]),
         Lifter::Installer => note.push(labels.resume_barred_installer),
         Lifter::Window => note.push(labels.pause_note_no_update),
     }
@@ -2206,8 +2206,8 @@ fn said_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, bool)
         Said::Resumed => {
             let mut text =
                 fill(labels.resume_all_still_paused, &[&view.still_paused.to_string()]);
-            if view.alice_holds {
-                text.push_str(labels.resume_all_alice_decides);
+            if view.setter_holds {
+                text.push_str(labels.resume_all_setter_lifts);
             }
             (text, false)
         }
@@ -2481,7 +2481,7 @@ fn line_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
         Line::HandingBack => labels.card_handing_back.to_owned(),
         Line::Paused { everyone, by, reason } => {
             let said = match by {
-                Lifter::Alice => labels.card_paused_alice.to_owned(),
+                Lifter::Setter => labels.card_paused_setter.to_owned(),
                 Lifter::Installer => labels.card_paused_installer.to_owned(),
                 Lifter::Window if *everyone && reason.as_str() == CONSOLE_PAUSE_ALL => {
                     labels.card_paused_console.to_owned()

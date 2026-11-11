@@ -8,7 +8,12 @@
 //! `theme`, and the optional `state_root`, `actingd_config` and `actingd_exe`
 //! (absolute paths, written as TOML literal strings in single quotes), and
 //! `preview_frame_gap_seconds`, the least time between two frames the workbench's
-//! picture reads (`workbench::preview::frame_gap`), which no box here writes.
+//! picture reads (`workbench::preview::frame_gap`), which no box here writes. And
+//! `resume_elsewhere_reasons`, which no box writes either: a one-line array of the
+//! pause reasons no window here offers a resume for, since only whoever set such a
+//! pause lifts it (`ResumeElsewhere`); none by default. A line of it that cannot be
+//! taken, or a file that cannot be read, is an error, and until it is fixed no pause
+//! but this console's own "pause all" offers a resume.
 //!
 //! The file is kept line by line: a save reads it again, changes the last line
 //! of its one key (or appends one), keeps every other line byte for byte —
@@ -21,6 +26,9 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use acui_source::workbench::pause_reason_valid;
+
+use crate::ledger::resume::ResumeElsewhere;
 use crate::strings::{fill, Labels, Language};
 use crate::workbench::preview::{self, MIN_FRAME_GAP};
 
@@ -130,6 +138,8 @@ pub struct Settings {
     pub actingd_exe: Option<PathBuf>,
     /// The least time between two frames the workbench's picture reads.
     pub preview_frame_gap: Duration,
+    /// The pauses no window here offers a resume for.
+    pub resume_elsewhere: ResumeElsewhere,
 }
 
 impl Default for Settings {
@@ -142,14 +152,19 @@ impl Default for Settings {
             actingd_config: None,
             actingd_exe: None,
             preview_frame_gap: MIN_FRAME_GAP,
+            resume_elsewhere: ResumeElsewhere::default(),
         }
     }
 }
 
+/// The key of the pause reasons no window here offers a resume for.
+const RESUME_ELSEWHERE: &str = "resume_elsewhere_reasons";
+
 /// What the file holds that this program could not take, or why a save did
-/// not happen. `is_error` sorts them: the file or its directory unusable and a
-/// save that failed are errors; a value or a line that does not parse is a
-/// warning, its default used and its line kept.
+/// not happen. `is_error` sorts them: the file or its directory unusable, a line
+/// of `resume_elsewhere_reasons` that cannot be taken and a save that failed are
+/// errors; any other value or line that does not parse is a warning, its default
+/// used and its line kept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsIssue {
     /// The platform states no config directory: nothing is read, and nothing
@@ -162,6 +177,11 @@ pub enum SettingsIssue {
     UnknownValue { path: PathBuf, line: usize, key: &'static str, value: String },
     /// A line that is not blank, not a comment and has no `=`; counted from 1.
     Malformed { path: PathBuf, line: usize },
+    /// A line of `resume_elsewhere_reasons` that is not a one-line array of reasons the
+    /// Runtime takes, with its value as written (the whole line when it has no `=`);
+    /// counted from 1. Until it is fixed no pause but this console's own "pause all"
+    /// offers a resume (`ResumeElsewhere::Unusable`).
+    UnusableReasons { path: PathBuf, line: usize, value: String },
     /// A save refused because the file could not be read at the start.
     SaveBlocked { path: PathBuf },
     /// A save that was tried and failed; the file is as it was.
@@ -193,6 +213,10 @@ impl SettingsIssue {
             Self::Malformed { path, line } => fill(
                 labels.settings_malformed,
                 &[&path.display().to_string(), &line.to_string()],
+            ),
+            Self::UnusableReasons { path, line, value } => fill(
+                labels.settings_reasons_unusable,
+                &[&path.display().to_string(), &line.to_string(), value],
             ),
             Self::SaveBlocked { path } => {
                 fill(labels.settings_save_blocked, &[&path.display().to_string()])
@@ -237,12 +261,16 @@ pub fn path() -> Option<PathBuf> {
 /// Anything else that keeps a key from being read is an issue, and the key
 /// keeps its default; a key given twice takes its last line. A path key is kept
 /// as written; whether it is absolute is checked where it is used, so the
-/// report names the key. Unknown keys are not read and not an issue.
+/// report names the key. Unknown keys are not read and not an issue. The pause
+/// reasons fail closed instead: a file there that cannot be read, no config
+/// directory to look in, or any line of their key that cannot be taken leaves
+/// them unknown (`ResumeElsewhere::Unusable`), whatever another line of it says.
 pub fn load() -> Loaded {
     let mut settings = Settings::default();
     let mut issues = Vec::new();
     let Some(path) = path() else {
         issues.push(SettingsIssue::NoConfigDir);
+        settings.resume_elsewhere = ResumeElsewhere::Unusable;
         let file = SettingsFile { path: None, save_blocked: false };
         return Loaded { settings, file, issues };
     };
@@ -251,6 +279,7 @@ pub fn load() -> Loaded {
         Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
         Err(error) => {
             issues.push(SettingsIssue::Unreadable { path: path.clone(), error: error.to_string() });
+            settings.resume_elsewhere = ResumeElsewhere::Unusable;
             let file = SettingsFile { path: Some(path), save_blocked: true };
             return Loaded { settings, file, issues };
         }
@@ -259,6 +288,16 @@ pub fn load() -> Loaded {
         let number = index + 1;
         let (key, value) = match parse_line(line) {
             Line::Blank => continue,
+            // It names the reasons' key, which is all it says: their line, unusable.
+            Line::Malformed if bare(line).starts_with(RESUME_ELSEWHERE) => {
+                settings.resume_elsewhere = ResumeElsewhere::Unusable;
+                issues.push(SettingsIssue::UnusableReasons {
+                    path: path.clone(),
+                    line: number,
+                    value: bare(line).to_owned(),
+                });
+                continue;
+            }
             Line::Malformed => {
                 issues.push(SettingsIssue::Malformed { path: path.clone(), line: number });
                 continue;
@@ -296,6 +335,20 @@ pub fn load() -> Loaded {
                     issues.push(unknown("preview_frame_gap_seconds"));
                 }
             },
+            // Reasons the Runtime takes, or none known and an issue, which no other line of
+            // the key undoes.
+            RESUME_ELSEWHERE => match reasons(value) {
+                Some(_) if settings.resume_elsewhere == ResumeElsewhere::Unusable => {}
+                Some(listed) => settings.resume_elsewhere = ResumeElsewhere::Listed(listed),
+                None => {
+                    settings.resume_elsewhere = ResumeElsewhere::Unusable;
+                    issues.push(SettingsIssue::UnusableReasons {
+                        path: path.clone(),
+                        line: number,
+                        value: value.to_owned(),
+                    });
+                }
+            },
             _ => {}
         }
     }
@@ -315,7 +368,7 @@ enum Line<'a> {
 
 /// A byte-order mark before the first line is not part of its key.
 fn parse_line(line: &str) -> Line<'_> {
-    let line = line.trim_start_matches('\u{feff}').trim();
+    let line = bare(line);
     if line.is_empty() || line.starts_with('#') {
         return Line::Blank;
     }
@@ -337,8 +390,34 @@ fn unquote(value: &str) -> &str {
     }
 }
 
+/// A line without the white space round it, or a byte-order mark before it.
+fn bare(line: &str) -> &str {
+    line.trim_start_matches('\u{feff}').trim()
+}
+
 fn path_value(value: &str) -> Option<PathBuf> {
     (!value.is_empty()).then(|| PathBuf::from(value))
+}
+
+/// A one-line TOML array of strings, `["a-reason", 'b.reason']`, a trailing comma
+/// allowed as in TOML, each item a name the Runtime takes as a pause's reason
+/// (`pause_reason_valid`); no escapes, as no such name needs one. `None` when the
+/// value is not one, or any item is not.
+fn reasons(value: &str) -> Option<Vec<String>> {
+    let items = value.strip_prefix('[')?.strip_suffix(']')?.trim();
+    if items.is_empty() {
+        return Some(Vec::new());
+    }
+    let items = items.strip_suffix(',').unwrap_or(items);
+    items
+        .split(',')
+        .map(|item| {
+            let item = item.trim();
+            let reason = unquote(item);
+            let quoted = reason.len() + 2 == item.len();
+            (quoted && pause_reason_valid(reason)).then(|| reason.to_owned())
+        })
+        .collect()
 }
 
 impl SettingsFile {

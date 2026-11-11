@@ -26,6 +26,7 @@ use slint::{CloseRequestResponse, ComponentHandle, PlatformError, Timer};
 use crate::install::InstallIssue;
 use crate::launcher::{self, Launcher, LauncherView};
 use crate::ledger::paint::shared;
+use crate::ledger::resume::ResumeElsewhere;
 use crate::ledger::{self, LedgerHandle, OpenArgs};
 use crate::report;
 use crate::settings::{Settings, SettingsFile, SettingsIssue, TextSize, Theme};
@@ -59,6 +60,9 @@ pub struct Ui {
     pub skins: Skins,
     /// The settings file the boxes save to.
     pub settings: SettingsFile,
+    /// The pauses no window here offers a resume for, by the settings file: each
+    /// ledger window takes them as it opens, and the workbench's model has its own.
+    resume_elsewhere: ResumeElsewhere,
     pub notices: RefCell<Notices>,
     /// The launcher of this run's state root, or why this run has none: then
     /// the workbench says so in red, and Start and the ledger window are off.
@@ -109,10 +113,11 @@ impl Ui {
             theme: Cell::new(stored.theme),
             skins: Skins::detect(),
             settings,
+            resume_elsewhere: stored.resume_elsewhere.clone(),
             notices: RefCell::new(Notices { settings: issues, save: None, window: None }),
             launcher,
             launcher_view: RefCell::new(launcher_view),
-            model: RefCell::new(Model::new()),
+            model: RefCell::new(Model::new(stored.resume_elsewhere.clone())),
             reading: RefCell::new(None),
             workbench: RefCell::new(None),
             ledgers: RefCell::new(BTreeMap::new()),
@@ -193,7 +198,12 @@ impl Ui {
         };
         let id = self.next_id.get();
         self.next_id.set(id + 1);
-        let open = OpenArgs { state_root: launcher.state_root.clone(), mode, tab };
+        let open = OpenArgs {
+            state_root: launcher.state_root.clone(),
+            mode,
+            tab,
+            resume_elsewhere: self.resume_elsewhere.clone(),
+        };
         let handle = LedgerHandle::new(id, window, open);
         apply_appearance!(&handle.window, self, WindowKey::Ledger(id));
         ledger::install_callbacks(&handle);

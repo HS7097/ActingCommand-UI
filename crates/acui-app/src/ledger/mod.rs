@@ -41,7 +41,7 @@ use crate::ui::{self, language_from_index, Ui};
 use crate::{launcher, report, LedgerWindow};
 use frame::FrameSlot;
 use paint::port_options;
-use resume::Resume;
+use resume::{Resume, ResumeElsewhere};
 use state::{
     Effects, FrameEventsSlot, LedgerFailure, LedgerShared, LedgerState, Phase, PortChoice, PortMap,
     RequestTag,
@@ -58,12 +58,14 @@ const CURSOR_REST: Duration = Duration::from_millis(400);
 const BUSY_TICK: Duration = Duration::from_secs(1);
 
 /// What a ledger window opens: the state root, the face it was opened for,
-/// and its first tab.
+/// and its first tab; and the pauses it offers no resume for, by the settings
+/// file (`resume::ResumeElsewhere`).
 #[derive(Clone)]
 pub struct OpenArgs {
     pub state_root: PathBuf,
     pub mode: SourceMode,
     pub tab: Option<LedgerView>,
+    pub resume_elsewhere: ResumeElsewhere,
 }
 
 /// One ledger window: the window itself; the state it is painted from, shared

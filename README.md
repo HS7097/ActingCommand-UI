@@ -679,6 +679,9 @@ actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'
 # reads a task frame at most this often. A frame read is answered by the Runtime's reader pool,
 # off the ledger writer (v0.12.38); default 5; do not set it faster before the C7 joint test.
 preview_frame_gap_seconds = 5
+# optional, one line, default none, e.g. ["a-reason", "b.reason"]: the pause reasons the console
+# offers no resume for, since only whoever set such a pause lifts it
+resume_elsewhere_reasons = []
 ```
 
 It is read once at startup, and a dropdown change writes its one key: the file is read again, the last
@@ -697,6 +700,23 @@ technical log. The parser is hand-written: one `key = value` per line, a line st
 comment, one matching pair of quotes is stripped, there is no escape handling and no comment after a
 value — write Windows paths in single quotes (TOML literal strings), not in double quotes with doubled
 backslashes.
+
+`resume_elsewhere_reasons` names the pauses the console leaves to whoever set them. The Runtime keeps
+no actor with a pause, only its reason, so the pauses that must not be lifted from here are named by
+their reasons: a pause with one of them gets neither Put All on Duty nor "Resume Scheduling…", only the
+words "this pause is to be lifted by whoever set it", on the top bar, on the account cards and in the
+ledger window. No box writes the key, and a save of another key keeps its line byte for byte, like any
+line. It is one line, a TOML array of strings in double or single quotes, a trailing comma allowed; `[]`,
+or no line at all, is the default: none. Each item must be a reason the Runtime itself takes for a
+pause (checked by the Runtime's own `SchedulingPauseReason`: 1–64 characters of `a-z`, `0-9`, `_`, `.`
+and `-`), so there is nothing to escape. A line of this key the console cannot use — not such an array,
+an item not quoted or not such a reason, a comment after the value, a line of the key without `=` — is
+said in red at the top of every window, with the file and the line, and **fails closed**: until it is
+fixed, whatever another line of the key says, no pause except the console's own Pause All
+(`console_pause_all`) offers a resume anywhere in the console. A settings file that is there but cannot
+be read, or no configuration directory, fails closed the same way. A deployment's pause stays the
+installer's in any case. The reasons are the operator's own data: the console never rewrites one, and
+the ledger window still shows each pause's reason verbatim on its line under the technical lines.
 
 ## Launcher
 
@@ -812,7 +832,8 @@ finished only says so. Of probes in flight, only the newest one's answer is show
 The workbench's top bar has **Pause All** and **Put All on Duty**. Pause All asks the Runtime for a
 global pause of scheduling: no new task is scheduled, and a task already running finishes on its own.
 Put All on Duty lifts that global pause; a global pause another tool set is lifted only after the person
-confirms it, and a pause Alice decides to lift cannot be lifted there. No button pauses a single
+confirms it, and a pause whose reason the settings file lists in `resume_elsewhere_reasons` (see
+"Settings file") is to be lifted by whoever set it, so it cannot be lifted there. No button pauses a single
 instance: pause one with `actingctl pause --state-root <state root> --instance <alias>` and lift it with
 `actingctl resume` and the same flags, or use the MCP tools `ac_pause` / `ac_resume` (see "MCP for
 agents"). The ledger window can resume, conditionally, a pause another tool set (below). Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
@@ -830,11 +851,13 @@ agents"). The ledger window can resume, conditionally, a pause another tool set 
   connection and painted. The line says what that read found: one that failed, or one the window could not
   make (it reads offline, or no longer reads), says in red, with its code, that whether scheduling is
   paused is unknown, and a failed status read shows one red line in place of the pause lines; only a read
-  that was made says the pause lines are current. Two kinds of pause get no button, only why: reason
-  `alice-116-scheduler-stop` ("Alice decides when this pause is lifted"), and a deployment's — `acsetup_update`, `install_restart`
-  and any reason starting with `deploy-` — which the installer lifts (the console does not run
-  `release-hold`). An instance pause still draining or handing its device back gets none either: the
-  Runtime refuses its resume then.
+  that was made says the pause lines are current. Two kinds of pause get no button, only why: one whose
+  reason `resume_elsewhere_reasons` lists ("this pause is to be lifted by whoever set it"), and a
+  deployment's — `acsetup_update`, `install_restart` and any reason starting with `deploy-` — which the
+  installer lifts (the console does not run `release-hold`). While that settings line cannot be used,
+  every pause but a deployment's and the console's own Pause All (`console_pause_all`) is of the first
+  kind. An instance pause still draining or handing its device back gets none either: the Runtime
+  refuses its resume then. Each line shows its pause's reason verbatim, whatever the operator wrote.
 
 ## Instance configuration
 
