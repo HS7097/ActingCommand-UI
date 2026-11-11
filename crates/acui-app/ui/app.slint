@@ -271,20 +271,47 @@ export struct RescueBar {
 // Which of the rescue bar's buttons was pressed.
 export enum RescueOp { check, emulator-start, emulator-stop, emulator-restart, game-launch, game-restart }
 
-// One of an account's own quiet times on its rules panel, in words: when it is, and in grey the
-// clock it is of when that is not this computer's.
+// One quiet time of a list on its editor, in words: when it is, and in grey the clock it is of
+// when that is not this computer's.
 export struct QuietLine {
     text: string,
     zone: string,
 }
 
+// One list of quiet times on its editor (UI-3e1-c), an account's own on its rules panel or every
+// account's on the settings page, in words: whether it shows; its title, and beside it where the
+// list comes from and when a change takes effect; what the times do; why it cannot be changed
+// now, while something else holds it; that it has none; why it cannot be changed at all; whether
+// it can be now; whether the form of a time to add is open, and why its last "add" sent nothing;
+// whether "delete all" can be pressed, and the question its first press asks; whether "back to
+// the file's setting" shows; what the other list adds to it; what the last change came to, red
+// when it failed.
+export struct QuietData {
+    shown: bool,
+    title: string,
+    source: string,
+    note: string,
+    hold: string,
+    empty: string,
+    why: string,
+    can-write: bool,
+    form-open: bool,
+    problem: string,
+    can-clear: bool,
+    confirm: string,
+    back: bool,
+    other: string,
+    line: string,
+    failed: bool,
+}
+
+// Which editor of quiet times a press is of: an account's own on its rules panel, or every
+// account's on the settings page.
+export enum QuietEditor { account, host }
+
 // An account's rules panel (UI-3e1-b), in words: its title; why nothing on it can be changed now,
 // red when that says a failure; whether its rules show.
-// Its own quiet times: where they come from and when a change takes effect; that it has none; why
-// they cannot be changed; whether they can be now; whether the form of a time to add is open, and
-// why its last "add" sent nothing; whether "delete all" can be pressed, and the question its first
-// press asks; whether "back to the file's setting" shows; what every account's own add to them;
-// what the last change came to, red when it failed.
+// Its own quiet times, as every account's are on the settings page (`QuietData`).
 // Its idle action: which of the two choices is in effect, whether they can be pressed, where it
 // comes from and when a change takes effect, what it is in effect when it is neither, why it
 // cannot be changed, what it does; "back to the file's setting"; what the last change came to.
@@ -297,18 +324,7 @@ export struct RulesData {
     hold: string,
     hold-failed: bool,
     shown: bool,
-    quiet-source: string,
-    quiet-empty: string,
-    quiet-why: string,
-    quiet-can-write: bool,
-    quiet-form-open: bool,
-    quiet-problem: string,
-    quiet-can-clear: bool,
-    quiet-confirm: string,
-    quiet-back: bool,
-    quiet-host: string,
-    quiet-line: string,
-    quiet-failed: bool,
+    quiet: QuietData,
     idle-nothing: bool,
     idle-close: bool,
     idle-can-write: bool,
@@ -484,15 +500,14 @@ export global Strings {
     in property <string> rescue-game-restart;
     in property <string> rescue-stop-run;
     // "Auto rules" at the end of the rescue bar's first row, and on the rules panel that opens:
-    // "close"; the quiet times' title and what they do; the button that opens the form of one to
-    // add, its days' boxes Monday first, "from" and "to" its two fields and what they say empty,
-    // "add" and how a time is read; "delete" and "delete all", and the confirming button of the
-    // latter. The idle action's title and two choices. The emulator's start's title, "on" and
-    // "off", and what it does.
+    // "close". Of either editor of quiet times, the account's on that panel and every account's on
+    // the settings page, whose titles and notes are their data's: the button that opens the form
+    // of one to add, its days' boxes Monday first, "from" and "to" its two fields and what they say
+    // empty, "whole day", "add" and how a time is read; "delete" and "delete all", and the
+    // confirming button of the latter. The idle action's title and two choices. The emulator's
+    // start's title, "on" and "off", and what it does.
     in property <string> rescue-rules;
     in property <string> rules-close;
-    in property <string> rules-quiet;
-    in property <string> rules-quiet-note;
     in property <string> rules-add-open;
     in property <string> weekday-0;
     in property <string> weekday-1;
@@ -505,6 +520,7 @@ export global Strings {
     in property <string> rules-to;
     in property <string> rules-start-placeholder;
     in property <string> rules-end-placeholder;
+    in property <string> rules-whole-day;
     in property <string> rules-add;
     in property <string> rules-form-note;
     in property <string> rules-delete;
@@ -1626,15 +1642,294 @@ component FrameCanvas inherits Rectangle {
     }
 }
 
+// One editor of a list of quiet times (UI-3e1-c), the same on an account's rules panel, of its own
+// list, and on the settings page, of every account's: its title, with where the list comes from
+// beside it; why it cannot be changed now; what the times do. Each time with "delete"; that there
+// is none; why it cannot be changed. The form of a time to add, its seven boxes, two fields and
+// "whole day" the window's own both ways, so that a paint puts back only what Rust holds: with
+// "whole day" ticked the two fields are greyed out, and not read. "Add a time…", "delete all",
+// which asks first, and "back to the file's setting"; what the other list adds; what the last
+// change came to, red when it failed. Every press is reported to its caller, which names the
+// editor to the window; nothing here changes a time by itself.
+component QuietTimes {
+    in property <QuietData> data;
+    in property <[QuietLine]> quiet-lines;
+    in-out property <bool> day-0;
+    in-out property <bool> day-1;
+    in-out property <bool> day-2;
+    in-out property <bool> day-3;
+    in-out property <bool> day-4;
+    in-out property <bool> day-5;
+    in-out property <bool> day-6;
+    in-out property <string> start-text;
+    in-out property <string> end-text;
+    in-out property <bool> whole-day;
+    callback quiet-form-opened();
+    callback quiet-day-toggled(int, bool);
+    callback quiet-start-edited(string);
+    callback quiet-end-edited(string);
+    callback quiet-whole-day-toggled(bool);
+    callback quiet-add();
+    callback quiet-delete(int);
+    callback quiet-clear();
+    callback quiet-clear-confirmed();
+    callback quiet-clear-cancelled();
+    callback quiet-back-to-file();
+    vertical-stretch: 0;
+    VerticalLayout {
+        spacing: 6px;
+        HorizontalLayout {
+            spacing: 8px;
+            vertical-stretch: 0;
+            Text {
+                text: root.data.title;
+                font-size: Scale.body-font;
+                font-weight: 700;
+                color: Look.text;
+                vertical-alignment: center;
+                min-width: self.preferred-width;
+                horizontal-stretch: 0;
+            }
+            Caption {
+                text: root.data.source;
+                overflow: elide;
+                min-width: 0px;
+                horizontal-stretch: 1;
+            }
+        }
+        if root.data.hold != "": Notice {
+            text: root.data.hold;
+        }
+        Notice {
+            text: root.data.note;
+            font-size: Scale.grey-font;
+        }
+        for line[index] in root.quiet-lines: HorizontalLayout {
+            spacing: 8px;
+            vertical-stretch: 0;
+            Text {
+                text: line.text;
+                font-size: Scale.body-font;
+                color: Look.text;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                min-width: 40px * Scale.factor;
+                min-height: self.preferred-height;
+                horizontal-stretch: 1;
+            }
+            if line.zone != "": Caption {
+                text: line.zone;
+                horizontal-stretch: 0;
+            }
+            SkinButton {
+                text: Strings.rules-delete;
+                enabled: root.data.can-write;
+                clicked => {
+                    root.quiet-delete(index);
+                }
+            }
+        }
+        if root.data.empty != "": Notice {
+            text: root.data.empty;
+        }
+        if root.data.why != "": Notice {
+            text: root.data.why;
+            warning: true;
+        }
+        // The days a time starts on, its start and end, "whole day" and "add"; then how a time is
+        // read, and why the last "add" sent nothing.
+        if root.data.form-open: VerticalLayout {
+            spacing: 4px;
+            vertical-stretch: 0;
+            HorizontalLayout {
+                spacing: 6px;
+                vertical-stretch: 0;
+                SkinCheckBox {
+                    text: Strings.weekday-0;
+                    enabled: root.data.can-write;
+                    checked <=> root.day-0;
+                    toggled => {
+                        root.quiet-day-toggled(0, self.checked);
+                    }
+                }
+                SkinCheckBox {
+                    text: Strings.weekday-1;
+                    enabled: root.data.can-write;
+                    checked <=> root.day-1;
+                    toggled => {
+                        root.quiet-day-toggled(1, self.checked);
+                    }
+                }
+                SkinCheckBox {
+                    text: Strings.weekday-2;
+                    enabled: root.data.can-write;
+                    checked <=> root.day-2;
+                    toggled => {
+                        root.quiet-day-toggled(2, self.checked);
+                    }
+                }
+                SkinCheckBox {
+                    text: Strings.weekday-3;
+                    enabled: root.data.can-write;
+                    checked <=> root.day-3;
+                    toggled => {
+                        root.quiet-day-toggled(3, self.checked);
+                    }
+                }
+                SkinCheckBox {
+                    text: Strings.weekday-4;
+                    enabled: root.data.can-write;
+                    checked <=> root.day-4;
+                    toggled => {
+                        root.quiet-day-toggled(4, self.checked);
+                    }
+                }
+                SkinCheckBox {
+                    text: Strings.weekday-5;
+                    enabled: root.data.can-write;
+                    checked <=> root.day-5;
+                    toggled => {
+                        root.quiet-day-toggled(5, self.checked);
+                    }
+                }
+                SkinCheckBox {
+                    text: Strings.weekday-6;
+                    enabled: root.data.can-write;
+                    checked <=> root.day-6;
+                    toggled => {
+                        root.quiet-day-toggled(6, self.checked);
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                vertical-stretch: 0;
+                Caption { text: Strings.rules-from; }
+                LineEdit {
+                    text <=> root.start-text;
+                    placeholder-text: Strings.rules-start-placeholder;
+                    // Greyed out under "whole day", whose time is 0:00 to 0:00.
+                    enabled: root.data.can-write && !root.whole-day;
+                    accessible-label: Strings.rules-from;
+                    font-size: Scale.body-font;
+                    // The std field asks for 160px; a time needs far less.
+                    min-width: 64px * Scale.factor;
+                    preferred-width: 80px * Scale.factor;
+                    horizontal-stretch: 0;
+                    edited(text) => {
+                        root.quiet-start-edited(text);
+                    }
+                }
+                Caption { text: Strings.rules-to; }
+                LineEdit {
+                    text <=> root.end-text;
+                    placeholder-text: Strings.rules-end-placeholder;
+                    enabled: root.data.can-write && !root.whole-day;
+                    accessible-label: Strings.rules-to;
+                    font-size: Scale.body-font;
+                    min-width: 64px * Scale.factor;
+                    preferred-width: 80px * Scale.factor;
+                    horizontal-stretch: 0;
+                    edited(text) => {
+                        root.quiet-end-edited(text);
+                    }
+                }
+                SkinCheckBox {
+                    text: Strings.rules-whole-day;
+                    enabled: root.data.can-write;
+                    checked <=> root.whole-day;
+                    toggled => {
+                        root.quiet-whole-day-toggled(self.checked);
+                    }
+                }
+                SkinButton {
+                    text: Strings.rules-add;
+                    enabled: root.data.can-write;
+                    clicked => {
+                        root.quiet-add();
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Notice {
+                text: Strings.rules-form-note;
+                font-size: Scale.grey-font;
+            }
+            if root.data.problem != "": Notice {
+                text: root.data.problem;
+                failed: true;
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            vertical-stretch: 0;
+            if !root.data.form-open: SkinButton {
+                text: Strings.rules-add-open;
+                enabled: root.data.can-write;
+                clicked => {
+                    root.quiet-form-opened();
+                }
+            }
+            if root.quiet-lines.length > 0: SkinButton {
+                text: Strings.rules-clear;
+                enabled: root.data.can-clear;
+                clicked => {
+                    root.quiet-clear();
+                }
+            }
+            if root.data.back: SkinButton {
+                text: Strings.back-to-file;
+                enabled: root.data.can-write;
+                clicked => {
+                    root.quiet-back-to-file();
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        // In two steps: only the confirmation sends it.
+        if root.data.confirm != "": HorizontalLayout {
+            spacing: 14px;
+            vertical-stretch: 0;
+            Notice {
+                text: root.data.confirm;
+                warning: true;
+                vertical-alignment: center;
+                min-width: 40px * Scale.factor;
+                horizontal-stretch: 1;
+            }
+            SkinButton {
+                text: Strings.rules-clear-confirm;
+                clicked => {
+                    root.quiet-clear-confirmed();
+                }
+            }
+            SkinButton {
+                text: Strings.cancel;
+                clicked => {
+                    root.quiet-clear-cancelled();
+                }
+            }
+        }
+        if root.data.other != "": Notice {
+            text: root.data.other;
+            font-size: Scale.grey-font;
+        }
+        if root.data.line != "": Notice {
+            text: root.data.line;
+            failed: root.data.failed;
+        }
+    }
+}
+
 // An account's rules panel (UI-3e1-b), in the picture's place while it is open: its title and the
 // button that closes it; why nothing on it can be changed now. Then, while its rules show, each
 // rule under its name, with where its value comes from beside it and what the last change of it
-// came to under it, red when it failed. Its own quiet times, each with "delete"; the form of a
-// time to add, its seven boxes and two fields the window's own both ways, so that a paint puts
-// back only what Rust holds; "delete all", which asks first, and "back to the file's setting";
-// what every account's own add. Its idle action's two choices, the one in effect marked. Whether
-// the Runtime starts and watches its emulator, of a discovery-bound MuMu instance only. Every
-// press is reported to the window; nothing here changes a rule by itself.
+// came to under it, red when it failed. Its own quiet times, in the editor every account's have
+// on the settings page too (`QuietTimes`), its form's boxes and fields the window's own both
+// ways; what every account's own add. Its idle action's two choices, the one in effect marked.
+// Whether the Runtime starts and watches its emulator, of a discovery-bound MuMu instance only.
+// Every press is reported to the window; nothing here changes a rule by itself.
 component RulesPanel {
     in property <RulesData> rules;
     in property <[QuietLine]> quiet-lines;
@@ -1647,11 +1942,13 @@ component RulesPanel {
     in-out property <bool> day-6;
     in-out property <string> start-text;
     in-out property <string> end-text;
+    in-out property <bool> whole-day;
     callback rules-toggled();
     callback quiet-form-opened();
     callback quiet-day-toggled(int, bool);
     callback quiet-start-edited(string);
     callback quiet-end-edited(string);
+    callback quiet-whole-day-toggled(bool);
     callback quiet-add();
     callback quiet-delete(int);
     callback quiet-clear();
@@ -1693,234 +1990,52 @@ component RulesPanel {
             spacing: 6px;
             vertical-stretch: 0;
             // The account's own quiet times.
-            HorizontalLayout {
-                spacing: 8px;
-                vertical-stretch: 0;
-                Text {
-                    text: Strings.rules-quiet;
-                    font-size: Scale.body-font;
-                    font-weight: 700;
-                    color: Look.text;
-                    vertical-alignment: center;
-                    min-width: self.preferred-width;
-                    horizontal-stretch: 0;
+            QuietTimes {
+                data: root.rules.quiet;
+                quiet-lines: root.quiet-lines;
+                day-0 <=> root.day-0;
+                day-1 <=> root.day-1;
+                day-2 <=> root.day-2;
+                day-3 <=> root.day-3;
+                day-4 <=> root.day-4;
+                day-5 <=> root.day-5;
+                day-6 <=> root.day-6;
+                start-text <=> root.start-text;
+                end-text <=> root.end-text;
+                whole-day <=> root.whole-day;
+                quiet-form-opened => {
+                    root.quiet-form-opened();
                 }
-                Caption {
-                    text: root.rules.quiet-source;
-                    overflow: elide;
-                    min-width: 0px;
-                    horizontal-stretch: 1;
+                quiet-day-toggled(day, on) => {
+                    root.quiet-day-toggled(day, on);
                 }
-            }
-            Notice {
-                text: Strings.rules-quiet-note;
-                font-size: Scale.grey-font;
-            }
-            for line[index] in root.quiet-lines: HorizontalLayout {
-                spacing: 8px;
-                vertical-stretch: 0;
-                Text {
-                    text: line.text;
-                    font-size: Scale.body-font;
-                    color: Look.text;
-                    vertical-alignment: center;
-                    wrap: word-wrap;
-                    min-width: 40px * Scale.factor;
-                    min-height: self.preferred-height;
-                    horizontal-stretch: 1;
+                quiet-start-edited(text) => {
+                    root.quiet-start-edited(text);
                 }
-                if line.zone != "": Caption {
-                    text: line.zone;
-                    horizontal-stretch: 0;
+                quiet-end-edited(text) => {
+                    root.quiet-end-edited(text);
                 }
-                SkinButton {
-                    text: Strings.rules-delete;
-                    enabled: root.rules.quiet-can-write;
-                    clicked => {
-                        root.quiet-delete(index);
-                    }
+                quiet-whole-day-toggled(on) => {
+                    root.quiet-whole-day-toggled(on);
                 }
-            }
-            if root.rules.quiet-empty != "": Notice {
-                text: root.rules.quiet-empty;
-            }
-            if root.rules.quiet-why != "": Notice {
-                text: root.rules.quiet-why;
-                warning: true;
-            }
-            // The days a time starts on, its start and end, and "add"; then how a time is read,
-            // and why the last "add" sent nothing.
-            if root.rules.quiet-form-open: VerticalLayout {
-                spacing: 4px;
-                vertical-stretch: 0;
-                HorizontalLayout {
-                    spacing: 6px;
-                    vertical-stretch: 0;
-                    SkinCheckBox {
-                        text: Strings.weekday-0;
-                        enabled: root.rules.quiet-can-write;
-                        checked <=> root.day-0;
-                        toggled => {
-                            root.quiet-day-toggled(0, self.checked);
-                        }
-                    }
-                    SkinCheckBox {
-                        text: Strings.weekday-1;
-                        enabled: root.rules.quiet-can-write;
-                        checked <=> root.day-1;
-                        toggled => {
-                            root.quiet-day-toggled(1, self.checked);
-                        }
-                    }
-                    SkinCheckBox {
-                        text: Strings.weekday-2;
-                        enabled: root.rules.quiet-can-write;
-                        checked <=> root.day-2;
-                        toggled => {
-                            root.quiet-day-toggled(2, self.checked);
-                        }
-                    }
-                    SkinCheckBox {
-                        text: Strings.weekday-3;
-                        enabled: root.rules.quiet-can-write;
-                        checked <=> root.day-3;
-                        toggled => {
-                            root.quiet-day-toggled(3, self.checked);
-                        }
-                    }
-                    SkinCheckBox {
-                        text: Strings.weekday-4;
-                        enabled: root.rules.quiet-can-write;
-                        checked <=> root.day-4;
-                        toggled => {
-                            root.quiet-day-toggled(4, self.checked);
-                        }
-                    }
-                    SkinCheckBox {
-                        text: Strings.weekday-5;
-                        enabled: root.rules.quiet-can-write;
-                        checked <=> root.day-5;
-                        toggled => {
-                            root.quiet-day-toggled(5, self.checked);
-                        }
-                    }
-                    SkinCheckBox {
-                        text: Strings.weekday-6;
-                        enabled: root.rules.quiet-can-write;
-                        checked <=> root.day-6;
-                        toggled => {
-                            root.quiet-day-toggled(6, self.checked);
-                        }
-                    }
-                    Rectangle { horizontal-stretch: 1; }
+                quiet-add => {
+                    root.quiet-add();
                 }
-                HorizontalLayout {
-                    spacing: 6px;
-                    vertical-stretch: 0;
-                    Caption { text: Strings.rules-from; }
-                    LineEdit {
-                        text <=> root.start-text;
-                        placeholder-text: Strings.rules-start-placeholder;
-                        enabled: root.rules.quiet-can-write;
-                        accessible-label: Strings.rules-from;
-                        font-size: Scale.body-font;
-                        // The std field asks for 160px; a time needs far less.
-                        min-width: 64px * Scale.factor;
-                        preferred-width: 80px * Scale.factor;
-                        horizontal-stretch: 0;
-                        edited(text) => {
-                            root.quiet-start-edited(text);
-                        }
-                    }
-                    Caption { text: Strings.rules-to; }
-                    LineEdit {
-                        text <=> root.end-text;
-                        placeholder-text: Strings.rules-end-placeholder;
-                        enabled: root.rules.quiet-can-write;
-                        accessible-label: Strings.rules-to;
-                        font-size: Scale.body-font;
-                        min-width: 64px * Scale.factor;
-                        preferred-width: 80px * Scale.factor;
-                        horizontal-stretch: 0;
-                        edited(text) => {
-                            root.quiet-end-edited(text);
-                        }
-                    }
-                    SkinButton {
-                        text: Strings.rules-add;
-                        enabled: root.rules.quiet-can-write;
-                        clicked => {
-                            root.quiet-add();
-                        }
-                    }
-                    Rectangle { horizontal-stretch: 1; }
+                quiet-delete(index) => {
+                    root.quiet-delete(index);
                 }
-                Notice {
-                    text: Strings.rules-form-note;
-                    font-size: Scale.grey-font;
+                quiet-clear => {
+                    root.quiet-clear();
                 }
-                if root.rules.quiet-problem != "": Notice {
-                    text: root.rules.quiet-problem;
-                    failed: true;
+                quiet-clear-confirmed => {
+                    root.quiet-clear-confirmed();
                 }
-            }
-            HorizontalLayout {
-                spacing: 8px;
-                vertical-stretch: 0;
-                if !root.rules.quiet-form-open: SkinButton {
-                    text: Strings.rules-add-open;
-                    enabled: root.rules.quiet-can-write;
-                    clicked => {
-                        root.quiet-form-opened();
-                    }
+                quiet-clear-cancelled => {
+                    root.quiet-clear-cancelled();
                 }
-                if root.quiet-lines.length > 0: SkinButton {
-                    text: Strings.rules-clear;
-                    enabled: root.rules.quiet-can-clear;
-                    clicked => {
-                        root.quiet-clear();
-                    }
+                quiet-back-to-file => {
+                    root.quiet-back-to-file();
                 }
-                if root.rules.quiet-back: SkinButton {
-                    text: Strings.back-to-file;
-                    enabled: root.rules.quiet-can-write;
-                    clicked => {
-                        root.quiet-back-to-file();
-                    }
-                }
-                Rectangle { horizontal-stretch: 1; }
-            }
-            // In two steps: only the confirmation sends it.
-            if root.rules.quiet-confirm != "": HorizontalLayout {
-                spacing: 14px;
-                vertical-stretch: 0;
-                Notice {
-                    text: root.rules.quiet-confirm;
-                    warning: true;
-                    vertical-alignment: center;
-                    min-width: 40px * Scale.factor;
-                    horizontal-stretch: 1;
-                }
-                SkinButton {
-                    text: Strings.rules-clear-confirm;
-                    clicked => {
-                        root.quiet-clear-confirmed();
-                    }
-                }
-                SkinButton {
-                    text: Strings.cancel;
-                    clicked => {
-                        root.quiet-clear-cancelled();
-                    }
-                }
-            }
-            if root.rules.quiet-host != "": Notice {
-                text: root.rules.quiet-host;
-                font-size: Scale.grey-font;
-            }
-            if root.rules.quiet-line != "": Notice {
-                text: root.rules.quiet-line;
-                failed: root.rules.quiet-failed;
             }
             // Its idle action.
             HorizontalLayout {
@@ -2293,8 +2408,9 @@ component SettingLine {
 // added for now; on the right the settings file's problems, what falls short of the theme
 // and where the technical log is, then the live view of the account picked, with its rescue bar,
 // and while that bar says so the account's rules panel in its picture's place. The settings page has those same lines, then the Runtime's
-// settings as it reads them, with what its start report says of them and a field for the
-// one it changes, and each device's backends in boxes, then Request Shutdown and whether a
+// settings as it reads them, with what its start report says of them, the editor of every
+// account's quiet times heading them and a field for the evidence days, and each device's
+// backends in boxes, then Request Shutdown and whether a
 // Runtime gone is started again, then the display settings. No code, pid or wire name shows here; those stay in the ledger
 // window's technical lines.
 // Closing it ends the program.
@@ -2441,7 +2557,8 @@ export component WorkbenchWindow inherits Window {
     in property <RescueBar> rescue;
     // While the rescue bar says it is open, in the picture's place: that account's rules panel
     // (UI-3e1-b), in words; its own quiet times; and its form of a time to add, the days' boxes
-    // Monday first and the two fields, both ways, set from Rust only when they say otherwise.
+    // Monday first, the two fields and "whole day", both ways, set from Rust only when they say
+    // otherwise.
     in property <RulesData> rules;
     in property <[QuietLine]> quiet-lines;
     in-out property <bool> quiet-day-0;
@@ -2453,6 +2570,7 @@ export component WorkbenchWindow inherits Window {
     in-out property <bool> quiet-day-6;
     in-out property <string> quiet-start;
     in-out property <string> quiet-end;
+    in-out property <bool> quiet-whole-day;
     // The Runtime's configuration file an instance is added to by hand,
     // selectable so it can be copied; or why there is none.
     in property <string> config-path;
@@ -2463,6 +2581,22 @@ export component WorkbenchWindow inherits Window {
     // The settings page's rows of the Runtime's settings, as the newest fact snapshot has
     // them, in its two tiers; and what is said instead of them, or besides, red when it
     // says a failure.
+    // Heading the everyday ones, while it shows: the quiet times of every account (UI-3e1-c),
+    // in words, in the editor an account's own have on its rules panel; its times; and its form
+    // of a time to add, a set of boxes and fields of its own, both ways, set from Rust only when
+    // they say otherwise: the rules panel's paint would take what is typed here.
+    in property <QuietData> host-quiet;
+    in property <[QuietLine]> host-quiet-lines;
+    in-out property <bool> host-quiet-day-0;
+    in-out property <bool> host-quiet-day-1;
+    in-out property <bool> host-quiet-day-2;
+    in-out property <bool> host-quiet-day-3;
+    in-out property <bool> host-quiet-day-4;
+    in-out property <bool> host-quiet-day-5;
+    in-out property <bool> host-quiet-day-6;
+    in-out property <string> host-quiet-start;
+    in-out property <string> host-quiet-end;
+    in-out property <bool> host-quiet-whole-day;
     in property <[SettingItem]> daily-settings;
     in property <[SettingItem]> advanced-settings;
     in property <string> runtime-settings-note;
@@ -2518,22 +2652,25 @@ export component WorkbenchWindow inherits Window {
     callback rescue-confirmed();
     callback rescue-cancelled();
     callback rescue-close-pressed();
-    // The rescue bar's "auto rules", and the panel's "close". On the panel: the quiet times'
-    // form opened, a day's box ticked or not (0 Monday through 6 Sunday), its two fields as
-    // typed, "add"; a time's "delete" (its index); "delete all", its confirmation and "cancel";
-    // "back to the file's setting". The idle action's choice, and its "back to the file's
-    // setting". The emulator's start on or off, and its "back to the file's setting".
+    // The rescue bar's "auto rules", and the panel's "close". Of either editor of quiet times,
+    // the panel's of its account or the settings page's of every account (UI-3e1-c), which each
+    // names first: the form opened, a day's box ticked or not (0 Monday through 6 Sunday), its two
+    // fields as typed, "whole day" ticked or not, "add"; a time's "delete" (its index); "delete
+    // all", its confirmation and "cancel"; "back to the file's setting". On the panel: the idle
+    // action's choice, and its "back to the file's setting". The emulator's start on or off, and
+    // its "back to the file's setting".
     callback rules-toggled();
-    callback quiet-form-opened();
-    callback quiet-day-toggled(int, bool);
-    callback quiet-start-edited(string);
-    callback quiet-end-edited(string);
-    callback quiet-add();
-    callback quiet-delete(int);
-    callback quiet-clear();
-    callback quiet-clear-confirmed();
-    callback quiet-clear-cancelled();
-    callback quiet-back-to-file();
+    callback quiet-form-opened(QuietEditor);
+    callback quiet-day-toggled(QuietEditor, int, bool);
+    callback quiet-start-edited(QuietEditor, string);
+    callback quiet-end-edited(QuietEditor, string);
+    callback quiet-whole-day-toggled(QuietEditor, bool);
+    callback quiet-add(QuietEditor);
+    callback quiet-delete(QuietEditor, int);
+    callback quiet-clear(QuietEditor);
+    callback quiet-clear-confirmed(QuietEditor);
+    callback quiet-clear-cancelled(QuietEditor);
+    callback quiet-back-to-file(QuietEditor);
     callback idle-picked(IdlePick);
     callback idle-back-to-file();
     callback start-picked(bool);
@@ -3159,38 +3296,42 @@ export component WorkbenchWindow inherits Window {
                                         day-6 <=> root.quiet-day-6;
                                         start-text <=> root.quiet-start;
                                         end-text <=> root.quiet-end;
+                                        whole-day <=> root.quiet-whole-day;
                                         rules-toggled => {
                                             root.rules-toggled();
                                         }
                                         quiet-form-opened => {
-                                            root.quiet-form-opened();
+                                            root.quiet-form-opened(QuietEditor.account);
                                         }
                                         quiet-day-toggled(day, on) => {
-                                            root.quiet-day-toggled(day, on);
+                                            root.quiet-day-toggled(QuietEditor.account, day, on);
                                         }
                                         quiet-start-edited(text) => {
-                                            root.quiet-start-edited(text);
+                                            root.quiet-start-edited(QuietEditor.account, text);
                                         }
                                         quiet-end-edited(text) => {
-                                            root.quiet-end-edited(text);
+                                            root.quiet-end-edited(QuietEditor.account, text);
+                                        }
+                                        quiet-whole-day-toggled(on) => {
+                                            root.quiet-whole-day-toggled(QuietEditor.account, on);
                                         }
                                         quiet-add => {
-                                            root.quiet-add();
+                                            root.quiet-add(QuietEditor.account);
                                         }
                                         quiet-delete(index) => {
-                                            root.quiet-delete(index);
+                                            root.quiet-delete(QuietEditor.account, index);
                                         }
                                         quiet-clear => {
-                                            root.quiet-clear();
+                                            root.quiet-clear(QuietEditor.account);
                                         }
                                         quiet-clear-confirmed => {
-                                            root.quiet-clear-confirmed();
+                                            root.quiet-clear-confirmed(QuietEditor.account);
                                         }
                                         quiet-clear-cancelled => {
-                                            root.quiet-clear-cancelled();
+                                            root.quiet-clear-cancelled(QuietEditor.account);
                                         }
                                         quiet-back-to-file => {
-                                            root.quiet-back-to-file();
+                                            root.quiet-back-to-file(QuietEditor.account);
                                         }
                                         idle-picked(pick) => {
                                             root.idle-picked(pick);
@@ -3337,8 +3478,58 @@ export component WorkbenchWindow inherits Window {
                                         text: root.start-base-note;
                                         font-size: Scale.grey-font;
                                     }
-                                    if root.daily-settings.length > 0: CardTitle {
+                                    if root.daily-settings.length > 0 || root.host-quiet.shown: CardTitle {
                                         text: Strings.settings-daily;
+                                    }
+                                    // First, the quiet times of every account (UI-3e1-c), in the
+                                    // editor an account's own have on its rules panel, its boxes
+                                    // and fields a set of the window's own.
+                                    if root.host-quiet.shown: QuietTimes {
+                                        data: root.host-quiet;
+                                        quiet-lines: root.host-quiet-lines;
+                                        day-0 <=> root.host-quiet-day-0;
+                                        day-1 <=> root.host-quiet-day-1;
+                                        day-2 <=> root.host-quiet-day-2;
+                                        day-3 <=> root.host-quiet-day-3;
+                                        day-4 <=> root.host-quiet-day-4;
+                                        day-5 <=> root.host-quiet-day-5;
+                                        day-6 <=> root.host-quiet-day-6;
+                                        start-text <=> root.host-quiet-start;
+                                        end-text <=> root.host-quiet-end;
+                                        whole-day <=> root.host-quiet-whole-day;
+                                        quiet-form-opened => {
+                                            root.quiet-form-opened(QuietEditor.host);
+                                        }
+                                        quiet-day-toggled(day, on) => {
+                                            root.quiet-day-toggled(QuietEditor.host, day, on);
+                                        }
+                                        quiet-start-edited(text) => {
+                                            root.quiet-start-edited(QuietEditor.host, text);
+                                        }
+                                        quiet-end-edited(text) => {
+                                            root.quiet-end-edited(QuietEditor.host, text);
+                                        }
+                                        quiet-whole-day-toggled(on) => {
+                                            root.quiet-whole-day-toggled(QuietEditor.host, on);
+                                        }
+                                        quiet-add => {
+                                            root.quiet-add(QuietEditor.host);
+                                        }
+                                        quiet-delete(index) => {
+                                            root.quiet-delete(QuietEditor.host, index);
+                                        }
+                                        quiet-clear => {
+                                            root.quiet-clear(QuietEditor.host);
+                                        }
+                                        quiet-clear-confirmed => {
+                                            root.quiet-clear-confirmed(QuietEditor.host);
+                                        }
+                                        quiet-clear-cancelled => {
+                                            root.quiet-clear-cancelled(QuietEditor.host);
+                                        }
+                                        quiet-back-to-file => {
+                                            root.quiet-back-to-file(QuietEditor.host);
+                                        }
                                     }
                                     for item in root.daily-settings: SettingLine {
                                         setting: item;

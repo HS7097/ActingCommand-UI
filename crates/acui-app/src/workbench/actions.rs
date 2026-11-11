@@ -76,15 +76,31 @@
 //! (`Actions::rows_behind`): the version its answer names stands in for the snapshot's meanwhile,
 //! and the rows are still of before it, so a list derived from them would undo that change and
 //! the Runtime would take it. Deleting every quiet time takes two presses. A time typed into the
-//! form to add that does not say a day and two times of day, or a list too long for one value or
-//! that the Runtime's parser does not take, is said there and not sent; a delete that leaves a
-//! list still too long for one value is said on the quiet times' line, and not sent. Stopping the
-//! emulator when idle cannot be picked here (Alice's ruling 157), and the emulator's start is not
-//! turned off, nor gone back to the file's value, while the idle action in effect stops the
-//! emulator, which the Runtime takes only with it on: the person changes the idle action first.
+//! form to add that does not say a day and two times of day, or whose end is its start, or a list
+//! too long for one value or that the Runtime's parser does not take, is said there and not sent;
+//! a whole day is only what the form's "whole day" box asks for, 0:00 to 0:00 the next day of each
+//! day ticked (UI-3e1-c), and its two times are not read then. That check is the form's alone: a
+//! whole day already in a list goes back as it is with every other change of it. A delete that
+//! leaves a list still too long for one value is said on the quiet times' line, and not sent.
+//! Stopping the emulator when idle cannot be picked here (Alice's ruling 157), and the emulator's
+//! start is not turned off, nor gone back to the file's value, while the idle action in effect
+//! stops the emulator, which the Runtime takes only with it on: the person changes the idle action
+//! first.
 //!
-//! `view`, `preset_view`, `evidence_view`, `backend_edit` and `rules_view` are pure functions of
-//! what the reads and the presses left, without words; `paint` makes the words.
+//! The quiet times of every account (UI-3e1-c), first in the settings page's everyday group, are
+//! changed as an account's own are, by the same form and the same presses (`QuietTarget` says
+//! which editor a press is of, `QuietOf` whose list it sends), as one more change of settings with
+//! a line of its own (`Field::HostQuiet`, `host_quiet_view`): one out at a time with every other,
+//! derived from the rows and so held while they are behind, and while it is out every account's
+//! panel holds as for any other change. The one form is of one list at a time; going to another
+//! page lets go of it, and a `Status` read lets go only of an account's. Deleting all of them asks
+//! first as well, and that question goes with any other press of its editor, any change of
+//! settings sent, another page or owner epoch, or no `Status`; and for good, as an account's does,
+//! once a read leaves its "delete all" not pressable: one that came back later would ask about
+//! what may no longer hold.
+//!
+//! `view`, `preset_view`, `evidence_view`, `backend_edit`, `rules_view` and `host_quiet_view` are
+//! pure functions of what the reads and the presses left, without words; `paint` makes the words.
 
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -98,18 +114,18 @@ use acui_source::workbench::backends::{
     UnconfirmedSwitch,
 };
 use acui_source::workbench::rules::{
-    IdleChoice, IdleNow, NewWeekly, QuietNotSent, QuietRead, RuleSetting,
+    IdleChoice, IdleNow, NewWeekly, QuietNotSent, QuietOf, QuietRead, RuleSetting,
 };
 use acui_source::workbench::{
     configure, pause_account, pause_global, ActivityKind, ConfigEdit, ConfigOutcome, ConfigRead,
     ConfigRefusal, InstanceLive, PauseOutcome, PresetMember, PresetSetting, RefusalWhy,
-    SettingSource, SettingValue, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL,
+    SettingSource, SettingValue, SettingsRead, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL,
 };
 use acui_source::{
     resume_paused, ClientFailure, PauseFact, PauseStage, PauseTarget, ResumeOutcome,
 };
 
-use super::model::{DeviceBusy, Link};
+use super::model::{DeviceBusy, Link, Page};
 use super::read::panic_message;
 use super::settings::{BackendGroup, SettingsView};
 use super::{failure_line, paint};
@@ -156,14 +172,16 @@ const GLOBAL_SETTINGS: (Scope, Kind) = (Scope::Global, Kind::Settings);
 
 /// Where a change of settings was asked for, which is where what it came to is said: the
 /// top bar's presets and stepper, the settings page's field of the evidence days, its
-/// group of one device's backends (`Actions::backend_said_of` names which), or one of an
-/// account's rules on the main page's rules panel (UI-3e1-b).
+/// group of one device's backends (`Actions::backend_said_of` names which), one of an
+/// account's rules on the main page's rules panel (UI-3e1-b), or the settings page's quiet
+/// times of every account (UI-3e1-c), which speak of no account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Field {
     TopBar,
     EvidenceDays,
     Backends,
     Rules(RuleItem),
+    HostQuiet,
 }
 
 /// Which of an account's rules a change from its rules panel is of. The account is not part
@@ -177,6 +195,15 @@ pub enum RuleItem {
     Idle,
     /// Whether the Runtime starts and watches its emulator.
     Start,
+}
+
+/// Which of the two editors of quiet times a press is of (UI-3e1-c): an account's own, on the
+/// rules panel of the account whose picture shows, or every account's, on the settings page.
+/// Both are the window's one component with one form; only whose list it is differs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuietTarget {
+    Account,
+    Host,
 }
 
 /// The line what a press came to is said on: one for pausing and resuming, and one for each
@@ -407,18 +434,22 @@ impl BackendDraft {
 const QUIET_FORM_START: &str = "23:00";
 const QUIET_FORM_END: &str = "07:00";
 
-/// The rules panel's form of a quiet time to add, of one account at a time: what its boxes and
-/// its two fields hold, which is not in effect. Closed while it has no owner.
+/// The form of a quiet time to add, of one list at a time, an account's own on its rules panel or
+/// every account's on the settings page: what its boxes and its two fields hold, which is not in
+/// effect. Closed while it has no owner.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct QuietForm {
-    /// The instance id of the account it is open for.
-    owner: Option<String>,
+    /// The list it is open for.
+    owner: Option<QuietOf>,
     /// The days the time starts on, `days[0]` Monday through `days[6]` Sunday.
     days: [bool; 7],
     /// Its start and end, hours and minutes: `QUIET_FORM_START` and `QUIET_FORM_END` as it
     /// opens, then as typed.
     start: String,
     end: String,
+    /// "Whole day": each day ticked from 0:00 to 0:00 the next day, the two times not read. Not
+    /// ticked as it opens.
+    whole_day: bool,
     /// What the last "add" found in it, which nothing was sent for; it goes once the form is
     /// changed.
     problem: Option<FormProblem>,
@@ -428,13 +459,13 @@ struct QuietForm {
 }
 
 impl QuietForm {
-    /// The form as the panel of the account `instance` shows it: none while it is not open for
-    /// that account.
-    fn view(&self, instance: &str) -> Option<QuietFormView> {
-        (self.owner.as_deref() == Some(instance)).then(|| QuietFormView {
+    /// The form as the editor of the list `of` shows it: none while it is not open for that list.
+    fn view(&self, of: &QuietOf) -> Option<QuietFormView> {
+        (self.owner.as_ref() == Some(of)).then(|| QuietFormView {
             days: self.days,
             start: self.start.clone(),
             end: self.end.clone(),
+            whole_day: self.whole_day,
             problem: self.problem,
         })
     }
@@ -506,14 +537,18 @@ pub struct Actions {
     /// written for from its panel, or whose "delete" was stopped here (`Said::QuietTooBig`).
     /// Another account's lets go of every line of the one before (`Actions::rules_speak_of`).
     rules_target: Option<String>,
-    /// The rules panel's form of a quiet time to add.
+    /// The form of a quiet time to add, of an account's own list or of every account's.
     quiet_form: QuietForm,
     /// The instance id of the account whose first press of "delete all" its quiet times asked.
     rules_confirm: Option<String>,
+    /// The first press of "delete all" of every account's quiet times asked (UI-3e1-c), on the
+    /// same terms as `rules_confirm`: it counts only while "delete all" can be pressed, and goes
+    /// for good once a read leaves it not pressable (`Model::rules_reviewed`).
+    host_confirm: bool,
     /// A change of settings was taken, from wherever, and no snapshot read after it has come:
     /// the rows shown are of before it, whatever version its answer named, and nothing derived
-    /// from them goes out meanwhile. Only the rules' changes are derived from them: the others
-    /// name their keys outright.
+    /// from them goes out meanwhile. Only the rules' changes, and those of every account's quiet
+    /// times, are derived from them: the others name their keys outright.
     rows_behind: bool,
     /// Each account card's own button, by alias: one press out per account, its tickets of the
     /// same count as the top bar's.
@@ -534,8 +569,10 @@ impl Actions {
             Write::PauseAll | Write::ResumeAll => self.confirming = None,
             Write::Configure { field, .. } => {
                 self.flow = ConfigFlow::InFlight(field);
-                // Whatever change goes out, "delete all" asked about quiet times as they were.
+                // Whatever change goes out, "delete all" asked about quiet times as they were,
+                // an account's own or every account's.
                 self.rules_confirm = None;
+                self.host_confirm = false;
             }
         }
         self.said.insert(write.said_at(), Said::Sending(write));
@@ -571,7 +608,7 @@ impl Actions {
             if matches!(said, Said::ConfigApplied | Said::BackToFile) {
                 self.rows_behind = true;
             }
-            if field == Field::Rules(RuleItem::Quiet) {
+            if matches!(field, Field::Rules(RuleItem::Quiet) | Field::HostQuiet) {
                 self.quiet_settled(&said);
             }
         }
@@ -671,8 +708,9 @@ impl Actions {
             Field::EvidenceDays => self.evidence_draft.as_mut(),
             // Each device's own, by its instance (`backends_settled`).
             Field::Backends => None,
-            // A rule's change is sent as it is pressed, from no draft.
-            Field::Rules(_) => None,
+            // A rule's change is sent as it is pressed, from no draft, and so is one of every
+            // account's quiet times.
+            Field::Rules(_) | Field::HostQuiet => None,
         }
     }
 
@@ -706,6 +744,7 @@ impl Actions {
         self.said = said;
         self.quiet_form = QuietForm::default();
         self.rules_confirm = None;
+        self.host_confirm = false;
         // The snapshots of this epoch are all to come.
         self.rows_behind = false;
         // An account's card says only that its press was out; whatever else it said goes.
@@ -715,18 +754,24 @@ impl Actions {
         }
     }
 
-    /// Another account's picture shown, another page gone to, or the rules panel closed: its form
-    /// of a quiet time to add goes, whatever it held, and so does the confirmation "delete all"
-    /// asked.
+    /// Another account's picture shown, another page gone to, or the rules panel closed: the form
+    /// of a quiet time to add goes, whatever it held and whichever list it was of, and so do the
+    /// confirmations "delete all" asked, an account's and every account's (UI-3e1-c).
     pub fn rules_reset(&mut self) {
         self.quiet_form = QuietForm::default();
         self.rules_confirm = None;
+        self.host_confirm = false;
     }
 
     /// The rules panel shows the account of `instance`, if any, as a `Status` read leaves it: a
-    /// form or a confirmation of another account goes, as when another is picked.
+    /// form or a confirmation of another account goes, as when another is picked. A form of
+    /// every account's quiet times, which is of no account, stays.
     pub fn rules_follow(&mut self, instance: Option<&str>) {
-        if self.quiet_form.owner.is_some() && self.quiet_form.owner.as_deref() != instance {
+        let other = matches!(
+            &self.quiet_form.owner,
+            Some(QuietOf::Instance(owner)) if Some(owner.as_str()) != instance
+        );
+        if other {
             self.quiet_form = QuietForm::default();
         }
         if self.rules_confirm.is_some() && self.rules_confirm.as_deref() != instance {
@@ -764,6 +809,17 @@ impl Actions {
         self.rules_confirm = None;
     }
 
+    /// Whether "delete all" of every account's quiet times asked to confirm (UI-3e1-c).
+    pub fn host_confirm(&self) -> bool {
+        self.host_confirm
+    }
+
+    /// The confirmation "delete all" of every account's quiet times asked goes: it can no longer
+    /// be pressed.
+    pub fn host_unconfirm(&mut self) {
+        self.host_confirm = false;
+    }
+
     /// Whether a change of settings was taken and the rows shown are of before it
     /// (`Actions::rows_behind`).
     pub fn rows_behind(&self) -> bool {
@@ -792,11 +848,12 @@ impl Actions {
     /// That is what a change of settings left waiting was waiting for, and what a draft
     /// that was applied waited for. A confirmation goes when what it asks about is no
     /// longer so. The rows are no longer behind, and a rule's line that its change was taken
-    /// goes: the panel shows what holds now.
+    /// goes, as does that of every account's quiet times: the panel and the page show what holds
+    /// now.
     pub fn snapshot_read(&mut self, read: &ConfigRead) {
         self.rows_behind = false;
         self.said.retain(|at, said| {
-            !(matches!(at, SaidAt::Settings(Field::Rules(_)))
+            !(matches!(at, SaidAt::Settings(Field::Rules(_) | Field::HostQuiet))
                 && matches!(said, Said::ConfigApplied | Said::BackToFile))
         });
         for draft in [&mut self.draft, &mut self.evidence_draft] {
@@ -833,20 +890,25 @@ impl Actions {
                                 self.backend_drafts.remove(instance);
                             }
                         }
-                        // A time added that may have been taken is not added twice.
-                        Field::Rules(RuleItem::Quiet) if self.quiet_form.adding => {
+                        // A time added that may have been taken is not added twice, to an
+                        // account's own list or to every account's.
+                        Field::Rules(RuleItem::Quiet) | Field::HostQuiet
+                            if self.quiet_form.adding =>
+                        {
                             self.quiet_form = QuietForm::default();
                         }
-                        Field::Rules(_) => {}
+                        Field::Rules(_) | Field::HostQuiet => {}
                     }
                 }
                 // Whatever came of it, no time added is out any more.
-                if field == Field::Rules(RuleItem::Quiet) {
+                if matches!(field, Field::Rules(RuleItem::Quiet) | Field::HostQuiet) {
                     self.quiet_form.adding = false;
                 }
                 let from = match field {
                     Field::Rules(_) => format!("{field:?} of instance {:?}", self.rules_target),
-                    Field::TopBar | Field::EvidenceDays | Field::Backends => format!("{field:?}"),
+                    Field::TopBar | Field::EvidenceDays | Field::Backends | Field::HostQuiet => {
+                        format!("{field:?}")
+                    }
                 };
                 log_verdict(reread, &from, read.version, &said);
                 self.said.insert(SaidAt::Settings(field), said);
@@ -976,10 +1038,12 @@ impl Actions {
         }
     }
 
-    /// No `Status` answers: nothing to confirm against, and no rules panel to press.
+    /// No `Status` answers: nothing to confirm against, and no rules panel to press; nor is
+    /// "delete all" of every account's quiet times confirmed against what holds now.
     pub fn status_lost(&mut self) {
         self.confirming = None;
         self.rules_confirm = None;
+        self.host_confirm = false;
         if matches!(self.flow, ConfigFlow::Confirming { .. }) {
             self.flow = ConfigFlow::Idle;
         }
@@ -1725,10 +1789,10 @@ pub struct AccountRules {
     /// Why none of them can be changed now, if anything holds them all.
     pub hold: Option<RulesHold>,
     pub quiet: QuietRule,
-    /// How many quiet times every account has, of the host's own list, which is only shown
-    /// here (Q12): `Err` when the Runtime's parser does not take its entries, why for the log;
-    /// `None` when its row does not read, or there is none.
-    pub host_quiet: Option<Result<usize, String>>,
+    /// The quiet times of every account, the host's own list, which the panel only says it has
+    /// or not, pointing at the settings page that changes them (UI-3e1-c); or that it does not
+    /// read (why, for the log once).
+    pub host_quiet: QuietRead,
     pub idle: IdleRule,
     /// Of an account whose emulator the Runtime starts, which only a discovery-bound MuMu
     /// instance's is (`InstanceLive::emulator_controls`): none of any other, which cannot have it
@@ -1748,19 +1812,21 @@ pub enum RulesHold {
     /// so.
     OwnWrite,
     /// Another change of settings is out or awaits its snapshot: another account's rule, the
-    /// top bar's, or the evidence days'.
+    /// top bar's, the evidence days', or one of every account's quiet times.
     OtherWrite,
     /// A change of settings was taken and no snapshot read after it has come (`rows_behind`).
     RowsBehind,
 }
 
-/// An account's own quiet times.
+/// A list of quiet times as its editor offers it: an account's own on its rules panel, or every
+/// account's on the settings page (`HostQuiet`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuietRule {
     /// Its list in effect, where it comes from and whether the Runtime takes a change of it; or
     /// that it does not read, which is shown so and never changed (why, for the log once).
     pub read: QuietRead,
-    /// A change can be sent now: nothing holds the rules, and the list reads and is settable.
+    /// A change can be sent now: nothing holds the rules (or every account's quiet times), and
+    /// the list reads and is settable.
     pub can_write: bool,
     /// "Back to the file's setting", while the list in effect is an online one.
     pub back_to_file: bool,
@@ -1768,20 +1834,49 @@ pub struct QuietRule {
     pub can_clear: bool,
     /// Its first press asked, and it can still be pressed.
     pub confirming: bool,
-    /// The form of a time to add, while it is open for this account.
+    /// The form of a time to add, while it is open for this list.
     pub form: Option<QuietFormView>,
-    /// What the last change of it from here came to, while this account was the last one
-    /// written; one taken only until a snapshot read after it shows the list.
+    /// What the last change of it from here came to: of an account's, while this account was the
+    /// last one written; one taken only until a snapshot read after it shows the list.
     pub said: Option<Said>,
 }
 
-/// The form of a quiet time to add, as the panel shows it.
+/// The list read, with whether a change can be sent now (`open`), whether its "delete all" asked
+/// (`asked`), its form while open for it and what its last change came to, as its editor offers it.
+fn quiet_rule(
+    read: QuietRead,
+    open: bool,
+    asked: bool,
+    form: Option<QuietFormView>,
+    said: Option<Said>,
+) -> QuietRule {
+    let (can_write, back_to_file, any) = match &read {
+        QuietRead::Read { list, source, settable } => {
+            (open && *settable, *source == SettingSource::Online, !list.is_empty())
+        }
+        QuietRead::Unread(_) => (false, false, false),
+    };
+    let can_clear = can_write && any;
+    QuietRule {
+        read,
+        can_write,
+        back_to_file,
+        can_clear,
+        confirming: can_clear && asked,
+        form,
+        said,
+    }
+}
+
+/// The form of a quiet time to add, as its editor shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuietFormView {
     /// The days it starts on, `days[0]` Monday through `days[6]` Sunday.
     pub days: [bool; 7],
     pub start: String,
     pub end: String,
+    /// "Whole day" is ticked: the two fields are greyed out and not read.
+    pub whole_day: bool,
     /// Why the last "add" sent nothing, until the form is changed.
     pub problem: Option<FormProblem>,
 }
@@ -1793,11 +1888,24 @@ pub enum FormProblem {
     NoDay,
     /// A time is not hours and minutes of a day.
     NotTime,
+    /// "Whole day" is not ticked, and the end is the start (UI-3e1-c): a whole day is only what
+    /// that box asks for.
+    SameTimes,
     /// The list with it is longer than one value of a setting may be.
     TooBig,
     /// The Runtime's own parser does not take the list with it: most likely more times than a
     /// list holds (the log says why).
     NotTaken,
+}
+
+/// The settings page's quiet times of every account (UI-3e1-c), first in its everyday group:
+/// why none can be changed now, if anything holds them (never `RulesHold::OwnWrite` but while a
+/// change of them is out or awaits its snapshot, which their line says), and the list as its
+/// editor offers it, on the same terms as an account's own on its rules panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostQuiet {
+    pub hold: Option<RulesHold>,
+    pub quiet: QuietRule,
 }
 
 /// An account's idle action.
@@ -1866,23 +1974,13 @@ pub fn rules_view(
     let hold = rules_hold(ours, instances, actions);
     let open = hold.is_none();
     let said = |item: RuleItem| actions.rules_said(id, item).cloned();
-    let quiet_read = settings.quiet(id);
-    let (can_write, back_to_file, any) = match &quiet_read {
-        QuietRead::Read { list, source, settable } => {
-            (open && *settable, *source == SettingSource::Online, !list.is_empty())
-        }
-        QuietRead::Unread(_) => (false, false, false),
-    };
-    let can_clear = can_write && any;
-    let quiet = QuietRule {
-        read: quiet_read,
-        can_write,
-        back_to_file,
-        can_clear,
-        confirming: can_clear && actions.rules_confirm.as_deref() == Some(id),
-        form: actions.quiet_form.view(id),
-        said: said(RuleItem::Quiet),
-    };
+    let quiet = quiet_rule(
+        settings.quiet(id),
+        open,
+        actions.rules_confirm.as_deref() == Some(id),
+        actions.quiet_form.view(&QuietOf::Instance(id.to_owned())),
+        said(RuleItem::Quiet),
+    );
     let idle_now = settings.idle(id);
     let stops_emulator =
         idle_now.as_ref().is_some_and(|now| now.value == IdleNow::StopEmulator);
@@ -1915,9 +2013,19 @@ pub fn rules_view(
 }
 
 /// Why no rule can be changed now (`RulesHold`), `ours` when the rules' lines speak of the
-/// account the panel shows. The global ticket of settings is out exactly while the flow is not
-/// open, and its field says whose it is.
+/// account the panel shows. A change of every account's quiet times is another's.
 fn rules_hold(ours: bool, instances: &[InstanceLive], actions: &Actions) -> Option<RulesHold> {
+    settings_hold(|field| ours && matches!(field, Field::Rules(_)), instances, actions)
+}
+
+/// Why a change of settings derived from the rows cannot go out now (`RulesHold`): `own` says
+/// which field's change out or awaited is the editor's own, which its line says. The global
+/// ticket of settings is out exactly while the flow is not open, and its field says whose it is.
+fn settings_hold(
+    own: impl Fn(Field) -> bool,
+    instances: &[InstanceLive],
+    actions: &Actions,
+) -> Option<RulesHold> {
     let hold = match actions.flow.field() {
         Some(Field::Backends) => {
             let account = actions.backend_said_of.as_ref().and_then(|of| {
@@ -1928,12 +2036,35 @@ fn rules_hold(ours: bool, instances: &[InstanceLive], actions: &Actions) -> Opti
             });
             RulesHold::Switching { account }
         }
-        Some(Field::Rules(_)) if ours => RulesHold::OwnWrite,
-        Some(Field::Rules(_) | Field::TopBar | Field::EvidenceDays) => RulesHold::OtherWrite,
+        Some(field) if own(field) => RulesHold::OwnWrite,
+        Some(Field::Rules(_) | Field::TopBar | Field::EvidenceDays | Field::HostQuiet) => {
+            RulesHold::OtherWrite
+        }
         None if actions.rows_behind => RulesHold::RowsBehind,
         None => return None,
     };
     Some(hold)
+}
+
+/// The settings page's quiet times of every account, as `settings`, the newest snapshot's unless
+/// the reads since failed, has them and the presses left them (UI-3e1-c): held as an account's
+/// rules are, by any other change of settings out or awaited and by rows behind one taken, a
+/// switch of backends naming its device's account of `instances`; its own change out or awaited
+/// says so on its own line (`Field::HostQuiet`), which no account's change touches.
+pub fn host_quiet_view(
+    settings: &SettingsRead,
+    instances: &[InstanceLive],
+    actions: &Actions,
+) -> HostQuiet {
+    let hold = settings_hold(|field| field == Field::HostQuiet, instances, actions);
+    let quiet = quiet_rule(
+        settings.host_quiet(),
+        hold.is_none(),
+        actions.host_confirm,
+        actions.quiet_form.view(&QuietOf::Host),
+        actions.said.get(&SaidAt::Settings(Field::HostQuiet)).cloned(),
+    );
+    HostQuiet { hold, quiet }
 }
 
 /// What a write's thread hands back.
@@ -2652,92 +2783,170 @@ fn rules_pressed(ui: &Ui) -> Option<AccountRules> {
     rules_shown(ui)
 }
 
-/// "Add a time…": the form of a quiet time to add opens for the account shown, while its list
-/// reads and the Runtime takes a change of it: no day ticked, and its fields holding
-/// `QUIET_FORM_START` and `QUIET_FORM_END`. One open for it already stays as it is; one closed by
-/// a time added opens so again.
-pub fn quiet_form_opened(ui: &Ui) {
-    let rules = rules_pressed(ui);
-    if let Some(rules) = rules.filter(|rules| {
-        matches!(rules.quiet.read, QuietRead::Read { settable: true, .. })
+/// One editor of quiet times as it offers them now: whose list, and what a press of it may do.
+struct QuietNow {
+    of: QuietOf,
+    quiet: QuietRule,
+}
+
+/// The editor `target` names as it offers its list now (UI-3e1-c): an account's own, of the rules
+/// panel as `rules_shown` has it; every account's, of the settings page while it shows and its
+/// settings read (`Model::settings_view`). Every press goes by this, recomputed, so one that lands
+/// after its button went off sends nothing.
+fn quiet_shown(ui: &Ui, target: QuietTarget) -> Option<QuietNow> {
+    match target {
+        QuietTarget::Account => rules_shown(ui).map(|rules| QuietNow {
+            of: QuietOf::Instance(rules.instance_id),
+            quiet: rules.quiet,
+        }),
+        QuietTarget::Host => {
+            let model = ui.model.borrow();
+            if model.page() != Page::Settings {
+                return None;
+            }
+            match model.settings_view() {
+                SettingsView::Read { host_quiet, .. } => {
+                    Some(QuietNow { of: QuietOf::Host, quiet: host_quiet.quiet })
+                }
+                SettingsView::NotRunning
+                | SettingsView::Unreachable
+                | SettingsView::Reading
+                | SettingsView::Failed
+                | SettingsView::Unreported => None,
+            }
+        }
+    }
+}
+
+/// A press on an editor of quiet times other than its confirmation's: that confirmation goes
+/// first, whatever this press comes to. Then the editor as `quiet_shown` has it.
+fn quiet_pressed(ui: &Ui, target: QuietTarget) -> Option<QuietNow> {
+    unconfirm_quiet(ui, target);
+    quiet_shown(ui, target)
+}
+
+/// The confirmation the editor `target`'s "delete all" asked goes: it can no longer be pressed.
+fn unconfirm_quiet(ui: &Ui, target: QuietTarget) {
+    let mut model = ui.model.borrow_mut();
+    let actions = model.actions_mut();
+    match target {
+        QuietTarget::Account => actions.rules_confirm = None,
+        QuietTarget::Host => actions.host_confirm = false,
+    }
+}
+
+/// The page of the editor `target`, painted again: the rescue bar with its rules panel, or the
+/// settings page.
+fn quiet_paint(ui: &Ui, target: QuietTarget) {
+    match target {
+        QuietTarget::Account => paint::rescue(ui),
+        QuietTarget::Host => paint::settings(ui),
+    }
+}
+
+/// "Add a time…": the form of a quiet time to add opens for the list the editor `target` shows,
+/// while it reads and the Runtime takes a change of it: no day ticked, "whole day" not ticked,
+/// and its fields holding `QUIET_FORM_START` and `QUIET_FORM_END`. One open for it already stays
+/// as it is; one closed by a time added opens so again.
+pub fn quiet_form_opened(ui: &Ui, target: QuietTarget) {
+    let shown = quiet_pressed(ui, target);
+    if let Some(shown) = shown.filter(|shown| {
+        matches!(shown.quiet.read, QuietRead::Read { settable: true, .. })
     }) {
         let mut model = ui.model.borrow_mut();
         let form = &mut model.actions_mut().quiet_form;
-        if form.owner.as_deref() != Some(rules.instance_id.as_str()) {
+        if form.owner.as_ref() != Some(&shown.of) {
             *form = QuietForm {
-                owner: Some(rules.instance_id),
+                owner: Some(shown.of),
                 start: QUIET_FORM_START.to_owned(),
                 end: QUIET_FORM_END.to_owned(),
                 ..QuietForm::default()
             };
         }
     }
-    paint::rescue(ui);
+    quiet_paint(ui, target);
 }
 
 /// The form's box of the day at `day`, `0` Monday through `6` Sunday, ticked or not. One of a day
 /// the form has not is this program's fault, in the log.
-pub fn quiet_day_toggled(ui: &Ui, day: i32, on: bool) {
+pub fn quiet_day_toggled(ui: &Ui, target: QuietTarget, day: i32, on: bool) {
     let Some(day) = usize::try_from(day).ok().filter(|day| *day < 7) else {
         let line = format!("the quiet time form's box of day {day} was ticked, which it has not");
         report::log(RULES_LOG, &line);
-        paint::rescue(ui);
+        quiet_paint(ui, target);
         ui.paint_log_notes();
         return;
     };
-    quiet_form_changed(ui, |form| form.days[day] = on);
+    quiet_form_changed(ui, target, |form| form.days[day] = on);
 }
 
 /// The form's start as the person typed it, whatever it says.
-pub fn quiet_start_edited(ui: &Ui, text: &str) {
-    quiet_form_changed(ui, |form| form.start = text.to_owned());
+pub fn quiet_start_edited(ui: &Ui, target: QuietTarget, text: &str) {
+    quiet_form_changed(ui, target, |form| form.start = text.to_owned());
 }
 
 /// And its end.
-pub fn quiet_end_edited(ui: &Ui, text: &str) {
-    quiet_form_changed(ui, |form| form.end = text.to_owned());
+pub fn quiet_end_edited(ui: &Ui, target: QuietTarget, text: &str) {
+    quiet_form_changed(ui, target, |form| form.end = text.to_owned());
 }
 
-/// The form open for the account shown, changed: what it says is not checked yet, so the problem
-/// the last "add" found goes. A change of a form not open for that account changes nothing, and
-/// the panel goes back to what it shows.
-fn quiet_form_changed(ui: &Ui, change: impl FnOnce(&mut QuietForm)) {
-    if let Some(rules) = rules_pressed(ui) {
+/// The form's "whole day" ticked or not (UI-3e1-c): ticked, its two fields are greyed out and
+/// not read, and "add" asks for each day ticked from 0:00 to 0:00 the next day.
+pub fn quiet_whole_day_toggled(ui: &Ui, target: QuietTarget, on: bool) {
+    quiet_form_changed(ui, target, |form| form.whole_day = on);
+}
+
+/// The form open for the list the editor `target` shows, changed: what it says is not checked
+/// yet, so the problem the last "add" found goes. A change of a form not open for that list
+/// changes nothing, and the editor goes back to what it shows.
+fn quiet_form_changed(ui: &Ui, target: QuietTarget, change: impl FnOnce(&mut QuietForm)) {
+    if let Some(shown) = quiet_pressed(ui, target) {
         let mut model = ui.model.borrow_mut();
         let form = &mut model.actions_mut().quiet_form;
-        if form.owner.as_deref() == Some(rules.instance_id.as_str()) {
+        if form.owner.as_ref() == Some(&shown.of) {
             change(&mut *form);
             form.problem = None;
         }
     }
-    paint::rescue(ui);
+    quiet_paint(ui, target);
 }
 
-/// The form's "add": the account's list with a weekly time of the days ticked, between the two
-/// times typed of this computer's clock, sent once, as a whole list (`ConfigEdit::quiet_times`).
-/// No day ticked, a time that is not hours and minutes, a list too long, or one the Runtime's
-/// parser does not take, sends nothing, and the form says why.
-pub fn quiet_add(ui: &Ui) {
-    let Some(rules) = rules_pressed(ui) else {
-        paint::rescue(ui);
+/// The form's "add": the list the editor `target` shows with a weekly time of the days ticked,
+/// sent once, as a whole list (`ConfigEdit::quiet_times`): with "whole day" ticked, each from 0:00
+/// to 0:00 the next day (`NewWeekly::whole_days`), the two fields not read; else between the two
+/// times typed, of this computer's clock. No day ticked, a time that is not hours and minutes, an
+/// end the same as the start without "whole day" (UI-3e1-c), a list too long, or one the
+/// Runtime's parser does not take, sends nothing, and the form says why. Only the time added is
+/// held to that: the list's own entries, whole days included, go back as they are.
+pub fn quiet_add(ui: &Ui, target: QuietTarget) {
+    let Some(shown) = quiet_pressed(ui, target) else {
+        quiet_paint(ui, target);
         return;
     };
-    let id = rules.instance_id.as_str();
+    let of = &shown.of;
     let (QuietRead::Read { list, .. }, true, Some(form)) =
-        (&rules.quiet.read, rules.quiet.can_write, rules.quiet.form.as_ref())
+        (&shown.quiet.read, shown.quiet.can_write, shown.quiet.form.as_ref())
     else {
-        paint::rescue(ui);
+        quiet_paint(ui, target);
         return;
     };
-    let new = match (form.days.contains(&true), minute_of(&form.start), minute_of(&form.end)) {
-        (false, _, _) => return quiet_problem(ui, id, FormProblem::NoDay),
-        (true, Some(start_minute), Some(end_minute)) => {
-            NewWeekly { days: form.days, start_minute, end_minute }
+    let new = if !form.days.contains(&true) {
+        return quiet_problem(ui, target, of, FormProblem::NoDay);
+    } else if form.whole_day {
+        NewWeekly::whole_days(form.days)
+    } else {
+        match (minute_of(&form.start), minute_of(&form.end)) {
+            (Some(start_minute), Some(end_minute)) if start_minute == end_minute => {
+                return quiet_problem(ui, target, of, FormProblem::SameTimes);
+            }
+            (Some(start_minute), Some(end_minute)) => {
+                NewWeekly { days: form.days, start_minute, end_minute }
+            }
+            _ => return quiet_problem(ui, target, of, FormProblem::NotTime),
         }
-        (true, _, _) => return quiet_problem(ui, id, FormProblem::NotTime),
     };
     let Some(list) = list.with_weekly(&new, local_utc_offset_minutes(), paint::now_ms()) else {
-        return quiet_problem(ui, id, FormProblem::NoDay);
+        return quiet_problem(ui, target, of, FormProblem::NoDay);
     };
     match ConfigEdit::quiet_times(&list) {
         Ok(edit) => {
@@ -2747,118 +2956,131 @@ pub fn quiet_add(ui: &Ui) {
                 form.problem = None;
                 form.adding = true;
             }
-            send_rules(ui, id, RuleItem::Quiet, edit);
+            send_quiet(ui, of, edit);
         }
-        Err(QuietNotSent::TooBig) => quiet_problem(ui, id, FormProblem::TooBig),
+        Err(QuietNotSent::TooBig) => quiet_problem(ui, target, of, FormProblem::TooBig),
         Err(QuietNotSent::NotTaken(why)) => {
-            let line =
-                format!("instance {id}: the quiet times with one added were not sent: {why}");
+            let line = format!("{of}: the quiet times with one added were not sent: {why}");
             report::log(CONFIG_THREAD, &line);
-            quiet_problem(ui, id, FormProblem::NotTaken);
+            quiet_problem(ui, target, of, FormProblem::NotTaken);
             ui.paint_log_notes();
         }
     }
 }
 
-/// What "add" found in the form open for `instance`: nothing was sent.
-fn quiet_problem(ui: &Ui, instance: &str, problem: FormProblem) {
+/// What "add" found in the form open for the list `of`: nothing was sent.
+fn quiet_problem(ui: &Ui, target: QuietTarget, of: &QuietOf, problem: FormProblem) {
     {
         let mut model = ui.model.borrow_mut();
         let form = &mut model.actions_mut().quiet_form;
-        if form.owner.as_deref() == Some(instance) {
+        if form.owner.as_ref() == Some(of) {
             form.problem = Some(problem);
         }
     }
-    paint::rescue(ui);
+    quiet_paint(ui, target);
 }
 
-/// A quiet time's "delete": the account's list without the one at `index`, every other as it
-/// is, sent once as a whole list. A list still too long for one value is said on the quiet
-/// times' line, and not sent. One of an entry the list has not is this program's fault, in the
-/// log.
-pub fn quiet_delete(ui: &Ui, index: i32) {
-    let Some(rules) = rules_pressed(ui) else {
-        paint::rescue(ui);
+/// A quiet time's "delete": the list the editor `target` shows without the one at `index`, every
+/// other as it is, sent once as a whole list. A list still too long for one value is said on the
+/// quiet times' line, and not sent. One of an entry the list has not is this program's fault, in
+/// the log.
+pub fn quiet_delete(ui: &Ui, target: QuietTarget, index: i32) {
+    let Some(shown) = quiet_pressed(ui, target) else {
+        quiet_paint(ui, target);
         return;
     };
-    let id = rules.instance_id.as_str();
-    let (QuietRead::Read { list, .. }, true) = (&rules.quiet.read, rules.quiet.can_write) else {
-        paint::rescue(ui);
+    let of = &shown.of;
+    let (QuietRead::Read { list, .. }, true) = (&shown.quiet.read, shown.quiet.can_write) else {
+        quiet_paint(ui, target);
         return;
     };
     let Some(list) = usize::try_from(index).ok().and_then(|index| list.without(index)) else {
-        let line =
-            format!("instance {id}: delete pressed on quiet time {index}, which its list has not");
+        let line = format!("{of}: delete pressed on quiet time {index}, which its list has not");
         report::log(RULES_LOG, &line);
-        paint::rescue(ui);
+        quiet_paint(ui, target);
         ui.paint_log_notes();
         return;
     };
     match ConfigEdit::quiet_times(&list) {
-        Ok(edit) => send_rules(ui, id, RuleItem::Quiet, edit),
+        Ok(edit) => send_quiet(ui, of, edit),
         // The list read may be the file's, which the bound on one online value does not hold,
         // and each entry goes back as the parser writes it, which may be longer than as it was
         // read: one entry fewer may still be too long. That is said, as "add"'s form says it,
-        // and nothing goes out.
+        // and nothing goes out: an account's on its rules' line, every account's on its own.
         Err(QuietNotSent::TooBig) => {
             {
                 let mut model = ui.model.borrow_mut();
                 let actions = model.actions_mut();
-                actions.rules_speak_of(id);
-                let at = SaidAt::Settings(Field::Rules(RuleItem::Quiet));
-                actions.said.insert(at, Said::QuietTooBig);
+                let field = match of {
+                    QuietOf::Instance(id) => {
+                        actions.rules_speak_of(id);
+                        Field::Rules(RuleItem::Quiet)
+                    }
+                    QuietOf::Host => Field::HostQuiet,
+                };
+                actions.said.insert(SaidAt::Settings(field), Said::QuietTooBig);
             }
-            paint::rescue(ui);
+            quiet_paint(ui, target);
         }
         // One entry fewer of a list the Runtime's parser took: that it does not take it is this
         // console's fault, in the log, and nothing goes out.
         Err(QuietNotSent::NotTaken(why)) => {
-            let line =
-                format!("instance {id}: the quiet times with one deleted were not sent: {why}");
+            let line = format!("{of}: the quiet times with one deleted were not sent: {why}");
             report::log(CONFIG_THREAD, &line);
-            paint::rescue(ui);
+            quiet_paint(ui, target);
             ui.paint_log_notes();
         }
     }
 }
 
 /// "Delete all": the first of two presses only asks.
-pub fn quiet_clear(ui: &Ui) {
-    if let Some(rules) = rules_pressed(ui).filter(|rules| rules.quiet.can_clear) {
-        ui.model.borrow_mut().actions_mut().rules_confirm = Some(rules.instance_id);
+pub fn quiet_clear(ui: &Ui, target: QuietTarget) {
+    if let Some(shown) = quiet_pressed(ui, target).filter(|shown| shown.quiet.can_clear) {
+        let mut model = ui.model.borrow_mut();
+        let actions = model.actions_mut();
+        match shown.of {
+            QuietOf::Instance(id) => actions.rules_confirm = Some(id),
+            QuietOf::Host => actions.host_confirm = true,
+        }
     }
-    paint::rescue(ui);
+    quiet_paint(ui, target);
 }
 
-/// The confirming press: the account's list set online to none at all, an empty list whatever
-/// the file names, sent once, if it can still be pressed; the question goes either way.
-pub fn quiet_clear_confirmed(ui: &Ui) {
-    let rules = rules_shown(ui);
-    ui.model.borrow_mut().actions_mut().rules_confirm = None;
-    match rules.filter(|rules| rules.quiet.confirming) {
-        Some(rules) => {
-            let id = rules.instance_id.as_str();
-            send_rules(ui, id, RuleItem::Quiet, ConfigEdit::quiet_times_none(id));
-        }
-        None => paint::rescue(ui),
+/// The confirming press: the list the editor `target` shows set online to none at all, an empty
+/// list whatever the file names, sent once, if it can still be pressed; the question goes either
+/// way.
+pub fn quiet_clear_confirmed(ui: &Ui, target: QuietTarget) {
+    let shown = quiet_shown(ui, target);
+    unconfirm_quiet(ui, target);
+    match shown.filter(|shown| shown.quiet.confirming) {
+        Some(shown) => send_quiet(ui, &shown.of, ConfigEdit::quiet_times_none(&shown.of)),
+        None => quiet_paint(ui, target),
     }
 }
 
 /// The confirmation's "cancel": the question goes, and nothing is sent.
-pub fn quiet_clear_cancelled(ui: &Ui) {
-    ui.model.borrow_mut().actions_mut().rules_confirm = None;
-    paint::rescue(ui);
+pub fn quiet_clear_cancelled(ui: &Ui, target: QuietTarget) {
+    unconfirm_quiet(ui, target);
+    quiet_paint(ui, target);
 }
 
 /// The quiet times' "back to the file's setting": the online list is dropped, once, which leaves
-/// none of the account's own when the file names none.
-pub fn quiet_back_to_file(ui: &Ui) {
-    match rules_pressed(ui).filter(|rules| rules.quiet.can_write && rules.quiet.back_to_file) {
-        Some(rules) => {
-            let id = rules.instance_id.as_str();
-            send_rules(ui, id, RuleItem::Quiet, ConfigEdit::quiet_times_back_to_file(id));
-        }
-        None => paint::rescue(ui),
+/// an account none of its own when the file names none, and every account the default, none.
+pub fn quiet_back_to_file(ui: &Ui, target: QuietTarget) {
+    let shown = quiet_pressed(ui, target)
+        .filter(|shown| shown.quiet.can_write && shown.quiet.back_to_file);
+    match shown {
+        Some(shown) => send_quiet(ui, &shown.of, ConfigEdit::quiet_times_back_to_file(&shown.of)),
+        None => quiet_paint(ui, target),
+    }
+}
+
+/// One change of the list `of`: an account's own as one of its rules (`send_rules`), every
+/// account's on its own line (`Field::HostQuiet`), each as any change of settings.
+fn send_quiet(ui: &Ui, of: &QuietOf, edit: ConfigEdit) {
+    match of {
+        QuietOf::Instance(id) => send_rules(ui, id, RuleItem::Quiet, edit),
+        QuietOf::Host => send_config(ui, edit, Field::HostQuiet),
     }
 }
 

@@ -1263,19 +1263,22 @@ pub struct Labels {
     pub rules_file_restart: &'static str,
     /// The account's own quiet times: what they do; the days of the week, Monday first; a weekly
     /// time (its days, start and end), one that ends the next day (its end), one of a whole day
-    /// (its days and start); a time once (from, until); the clock a time is of when it is not this
-    /// computer's (`UTC+9`); none of its own; its list not read. The form of a time to add: the
-    /// button that opens it, "from" and "to" its two fields, what each says when emptied (how a
-    /// time is written, not a time: the form opens with real times in them), "add",
-    /// how a time is read; why "add" sent nothing: no day ticked, a time not hours and minutes,
-    /// too long to save, not taken by the Runtime's own check. "Delete", and why it sent nothing:
-    /// the list without that time still too long to save. "Delete all", the question its first
-    /// press asks (the account) and its confirming button. The Runtime refused the list. Every
-    /// account's own quiet times: some, none, not read.
+    /// from 0:00 (its days), one of a whole day from another time (its days and start); a time
+    /// once (from, until); the clock a time is of when it is not this computer's (`UTC+9`); none
+    /// of its own; its list not read. The form of a time to add: the button that opens it, "from"
+    /// and "to" its two fields, what each says when emptied (how a time is written, not a time:
+    /// the form opens with real times in them), the "whole day" box (UI-3e1-c), "add", how a time
+    /// is read; why "add" sent nothing: no day ticked, a time not hours and minutes, the end the
+    /// same as the start without "whole day", too long to save, not taken by the Runtime's own
+    /// check. "Delete", and why it sent nothing: the list without that time still too long to
+    /// save. "Delete all", the question its first press asks (the account) and its confirming
+    /// button. The Runtime refused the list. Every account's own quiet times, under an account's:
+    /// some, none, not read (on the settings page as well).
     pub rules_quiet_note: &'static str,
     pub rules_weekdays: [&'static str; 7],
     pub rules_quiet_weekly: &'static str,
     pub rules_next_day: &'static str,
+    pub rules_quiet_weekly_day: &'static str,
     pub rules_quiet_weekly_whole: &'static str,
     pub rules_quiet_once: &'static str,
     pub rules_quiet_zone: &'static str,
@@ -1286,10 +1289,12 @@ pub struct Labels {
     pub rules_to: &'static str,
     pub rules_start_placeholder: &'static str,
     pub rules_end_placeholder: &'static str,
+    pub rules_whole_day: &'static str,
     pub rules_add: &'static str,
     pub rules_form_note: &'static str,
     pub rules_form_no_day: &'static str,
     pub rules_form_not_time: &'static str,
+    pub rules_form_same_time: &'static str,
     pub rules_form_too_big: &'static str,
     pub rules_form_not_taken: &'static str,
     pub rules_delete: &'static str,
@@ -1301,6 +1306,14 @@ pub struct Labels {
     pub rules_host_some: &'static str,
     pub rules_host_none: &'static str,
     pub rules_host_unread: &'static str,
+    /// The settings page's quiet times of every account (UI-3e1-c), heading its everyday group
+    /// under `setting_quiet_host`: what they do; none yet; that each account may have its own as
+    /// well, changed on the main page, and both count; the question the first press of "delete
+    /// all" asks.
+    pub rules_host_note: &'static str,
+    pub rules_host_empty: &'static str,
+    pub rules_host_also: &'static str,
+    pub rules_host_clear_ask: &'static str,
     /// The account's idle action: its two choices; what it is for; while paused; of an account
     /// with no device of its own; stopping the emulator in effect, which is not offered here; one
     /// in effect not known here; that either choice replaces it; not read; the Runtime refused it
@@ -2284,6 +2297,7 @@ pub const ZH: Labels = Labels {
     rules_weekdays: ["一", "二", "三", "四", "五", "六", "日"],
     rules_quiet_weekly: "每周 {} {} – {}",
     rules_next_day: "次日 {}",
+    rules_quiet_weekly_day: "每周 {} 整天",
     rules_quiet_weekly_whole: "每周 {} 从 {} 起整整一天",
     rules_quiet_once: "一次 {} – {}",
     rules_quiet_zone: "（{} 的时间）",
@@ -2294,10 +2308,12 @@ pub const ZH: Labels = Labels {
     rules_to: "到",
     rules_start_placeholder: "时:分",
     rules_end_placeholder: "时:分",
+    rules_whole_day: "整天",
     rules_add: "添加",
-    rules_form_note: "按这台电脑的时间；结束早于开始就是到第二天，相同就是整整一天",
+    rules_form_note: "按这台电脑的时间；结束早于开始就是到第二天。勾「整天」就是所选每天 0:00 到次日 0:00",
     rules_form_no_day: "请至少选一天",
     rules_form_not_time: "时间要写成 时:分，例如 23:00",
+    rules_form_same_time: "开始和结束是同一时间，没有添加。要一整天就勾「整天」；要去掉一段，按它旁边的「删除」",
     rules_form_too_big: "时段太多或太长，存不下；先删掉几段",
     rules_form_not_taken: "时段太多，或这一段 Runtime 不认，没有存；先删掉几段（详情见技术日志）",
     rules_delete: "删除",
@@ -2306,9 +2322,13 @@ pub const ZH: Labels = Labels {
     rules_clear_ask: "全部删除 {} 的免打扰时段？会在线设成「没有免打扰」，配置文件里写的也不再用；要用回文件里的，点「回到文件设定」。",
     rules_clear_confirm: "确认删除",
     rules_quiet_refused: "这组时段里有一条 Runtime 不认，什么都没变（Runtime 没说是哪一条）",
-    rules_host_some: "全部账号共用的免打扰时段也算在内（在设置页看）",
-    rules_host_none: "全部账号共用的免打扰时段：没有",
+    rules_host_some: "全部账号共用的免打扰时段也算在内（在设置页改）",
+    rules_host_none: "全部账号共用的免打扰时段：没有（在设置页可以加）",
     rules_host_unread: "全部账号共用的免打扰时段这里读不懂（详情见技术日志）",
+    rules_host_note: "时段内 Runtime 不会自己给任何一个号安排任务、不自动恢复、不自动拉起；你手动点的操作照常执行",
+    rules_host_empty: "还没有所有账号共用的免打扰时段",
+    rules_host_also: "每个号还可以有自己的免打扰，在主页那个号的「自动规则」里改；两边的时段都算",
+    rules_host_clear_ask: "全部删除所有账号共用的免打扰时段？会在线设成「没有」，配置文件里写的也不再用；要用回文件里的，点「回到文件设定」。",
     rules_idle_nothing: "不处理",
     rules_idle_close: "关闭游戏",
     rules_idle_note: "较长时间没有任务时，怎么处理这台；关闭游戏后，任务快到时会自动拉起",
@@ -3274,6 +3294,7 @@ pub const EN: Labels = Labels {
     rules_weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
     rules_quiet_weekly: "Every {}, {} – {}",
     rules_next_day: "{} the next day",
+    rules_quiet_weekly_day: "Every {}, the whole day",
     rules_quiet_weekly_whole: "Every {}, a whole day from {}",
     rules_quiet_once: "Once, {} – {}",
     rules_quiet_zone: "({} time)",
@@ -3284,10 +3305,12 @@ pub const EN: Labels = Labels {
     rules_to: "to",
     rules_start_placeholder: "hh:mm",
     rules_end_placeholder: "hh:mm",
+    rules_whole_day: "Whole Day",
     rules_add: "Add",
-    rules_form_note: "By this computer's clock; an end before the start is on the next day, and the same time makes a whole day",
+    rules_form_note: "By this computer's clock; an end before the start is on the next day. Whole Day is 0:00 to 0:00 the next day, on each day picked",
     rules_form_no_day: "Pick at least one day",
     rules_form_not_time: "Write times as hh:mm, e.g. 23:00",
+    rules_form_same_time: "The start and the end are the same time; nothing was added. For a whole day, tick Whole Day; to remove a time, press Delete beside it",
     rules_form_too_big: "Too many times to save; remove some first",
     rules_form_not_taken: "Too many times, or one the Runtime does not take; nothing was saved. Remove some first (see the technical log)",
     rules_delete: "Delete",
@@ -3296,9 +3319,13 @@ pub const EN: Labels = Labels {
     rules_clear_ask: "Delete all of {}'s quiet times? They are set online to none, and the configuration file's are no longer used; Back to File Setting brings those back.",
     rules_clear_confirm: "Confirm and Delete",
     rules_quiet_refused: "One of these times is not valid; nothing changed (the Runtime did not say which)",
-    rules_host_some: "The quiet times of all accounts count as well (see the settings page)",
-    rules_host_none: "Quiet times of all accounts: none",
+    rules_host_some: "The quiet times of all accounts count as well (change them on the settings page)",
+    rules_host_none: "Quiet times of all accounts: none (add them on the settings page)",
     rules_host_unread: "The quiet times of all accounts cannot be read here (see the technical log)",
+    rules_host_note: "During these times the Runtime schedules nothing for any account by itself, recovers nothing and starts nothing; what you press still runs",
+    rules_host_empty: "No quiet times for all accounts yet",
+    rules_host_also: "Each account can also have quiet times of its own, under its Auto Rules on the main page; both count",
+    rules_host_clear_ask: "Delete all quiet times of all accounts? They are set online to none, and the configuration file's are no longer used; Back to File Setting brings those back.",
     rules_idle_nothing: "Do Nothing",
     rules_idle_close: "Close the Game",
     rules_idle_note: "What is done with this device when it has no task for a while; a closed game is started again when a task is due",
