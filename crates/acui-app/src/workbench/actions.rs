@@ -104,7 +104,7 @@ use super::read::panic_message;
 use super::settings::{BackendGroup, SettingsView};
 use super::{failure_line, paint};
 use crate::launcher::spawn_worker;
-use crate::ledger::resume::{lifter, Lifter};
+use crate::ledger::resume::{lifter, Lifter, ResumeElsewhere};
 use crate::report;
 use crate::ui::{self, Ui};
 
@@ -915,9 +915,9 @@ pub struct ActionsView {
     pub backends_said: Option<Said>,
     pub backends_account: Option<String>,
     /// Accounts under a pause of their own, which lifting the global one leaves, and
-    /// whether Alice lifts any of those.
+    /// whether any of those is one only whoever set it lifts (`Lifter::Setter`).
     pub still_paused: usize,
-    pub alice_holds: bool,
+    pub setter_holds: bool,
     /// How many accounts still finish a scheduled run. `None` when that cannot be told:
     /// no answer of `Status` carries a version to judge it by, but the activity that is
     /// counted and the settings' version both came in 0.12.36 (R-0b, R-4), so a fact
@@ -932,7 +932,8 @@ pub struct ActionsView {
 }
 
 /// `config_failed`: the fact snapshot reads since the last one that came did not succeed.
-/// Not online, nothing records a failed read, so the link says it.
+/// Not online, nothing records a failed read, so the link says it. `elsewhere`: the pauses
+/// the settings file leaves to whoever set them.
 pub fn view(
     link: &Link,
     global: Option<&PauseFact>,
@@ -940,11 +941,12 @@ pub fn view(
     actions: &Actions,
     config: Option<&ConfigRead>,
     config_failed: bool,
+    elsewhere: &ResumeElsewhere,
 ) -> ActionsView {
     let online = matches!(link, Link::Online { .. });
     let open = online && !actions.out.contains_key(&GLOBAL_SCHEDULING);
     let resume = match global {
-        Some(pause) if open && lifter(&pause.reason) == Lifter::Window => {
+        Some(pause) if open && lifter(pause, elsewhere) == Lifter::Window => {
             if actions.confirming.as_ref() == Some(&pause.target) {
                 ResumeEntry::Confirming {
                     target: pause.target.clone(),
@@ -962,7 +964,7 @@ pub fn view(
     ActionsView {
         can_pause: open && global.is_none(),
         resume,
-        holding: global.map(|pause| lifter(&pause.reason)),
+        holding: global.map(|pause| lifter(pause, elsewhere)),
         scheduling_said: actions.said.get(&SaidAt::Scheduling).cloned(),
         settings_said: actions.said.get(&SaidAt::Settings(Field::TopBar)).cloned(),
         evidence_said: actions.said.get(&SaidAt::Settings(Field::EvidenceDays)).cloned(),
@@ -974,7 +976,7 @@ pub fn view(
                 .map(|instance| instance.alias.clone())
         }),
         still_paused: paused().count(),
-        alice_holds: paused().any(|pause| lifter(&pause.reason) == Lifter::Alice),
+        setter_holds: paused().any(|pause| lifter(pause, elsewhere) == Lifter::Setter),
         finishing: config.is_some_and(|read| read.version.is_some()).then(|| {
             instances
                 .iter()

@@ -21,7 +21,7 @@ use acui_source::workbench::{
 use acui_source::{PauseFact, PauseStage};
 
 use super::model::Link;
-use crate::ledger::resume::{lifter, Lifter};
+use crate::ledger::resume::{lifter, Lifter, ResumeElsewhere};
 
 pub struct CardView {
     pub alias: String,
@@ -221,7 +221,7 @@ pub fn down_view(alias: &str, down: Down, selected: bool) -> CardView {
 
 /// An account of the newest `Status`, its server in the newest fact snapshot or, when that
 /// names none, the one last seen this owner epoch (`server_last_seen`), that read's global
-/// pause, and what the schedule explanation reads leave.
+/// pause, and what the schedule explanation reads leave; who lifts a pause by `elsewhere`.
 pub fn card_view(
     instance: &InstanceLive,
     server: Option<&str>,
@@ -229,8 +229,9 @@ pub fn card_view(
     global: Option<&PauseFact>,
     schedule: Schedule<'_>,
     selected: bool,
+    elsewhere: &ResumeElsewhere,
 ) -> CardView {
-    let (band, main, notes) = said(instance, global, schedule);
+    let (band, main, notes) = said(instance, global, schedule, elsewhere);
     CardView {
         alias: instance.alias.clone(),
         game: instance.game_id.clone(),
@@ -248,6 +249,7 @@ fn said(
     instance: &InstanceLive,
     global: Option<&PauseFact>,
     schedule: Schedule<'_>,
+    elsewhere: &ResumeElsewhere,
 ) -> (Band, Line, Vec<Line>) {
     let row = schedule.row(&instance.alias);
     let fence = instance.fence.as_ref().map(fence_line);
@@ -275,22 +277,23 @@ fn said(
             let paused = instance
                 .pause
                 .as_ref()
-                .map(|pause| paused_line(pause, false))
-                .or_else(|| global.map(|pause| paused_line(pause, true)));
+                .map(|pause| paused_line(pause, false, elsewhere))
+                .or_else(|| global.map(|pause| paused_line(pause, true, elsewhere)));
             return (Band::Attention, fence, paused.into_iter().collect());
         }
     }
     if let Some(pause) = &instance.pause {
         let notes = doing.into_iter().chain(fence).collect();
-        return (Band::Attention, paused_line(pause, false), notes);
+        return (Band::Attention, paused_line(pause, false, elsewhere), notes);
     }
     if let Some(doing) = doing {
         let band = if global.is_some() || fence.is_some() { Band::Attention } else { Band::Ok };
-        let global = global.map(|pause| paused_line(pause, true));
+        let global = global.map(|pause| paused_line(pause, true, elsewhere));
         return (band, doing, global.into_iter().chain(fence).collect());
     }
     if let Some(pause) = global {
-        return (Band::Attention, paused_line(pause, true), fence.into_iter().collect());
+        let main = paused_line(pause, true, elsewhere);
+        return (Band::Attention, main, fence.into_iter().collect());
     }
     // With no pause a fence always shows, whatever the explanation says or fails to.
     if let Some(fence) = fence {
@@ -328,8 +331,8 @@ fn fence_line(fence: &FenceFact) -> Line {
     }
 }
 
-fn paused_line(pause: &PauseFact, everyone: bool) -> Line {
-    Line::Paused { everyone, by: lifter(&pause.reason), reason: pause.reason.clone() }
+fn paused_line(pause: &PauseFact, everyone: bool, elsewhere: &ResumeElsewhere) -> Line {
+    Line::Paused { everyone, by: lifter(pause, elsewhere), reason: pause.reason.clone() }
 }
 
 /// The one activity the Runtime names; which of several an instance shows is the

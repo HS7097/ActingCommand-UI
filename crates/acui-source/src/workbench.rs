@@ -104,6 +104,13 @@ pub mod rules;
 /// no second press.
 pub const CONSOLE_PAUSE_ALL: &str = "console_pause_all";
 
+/// Whether `reason` is a name the Runtime takes as a pause's reason, by the contract's own
+/// check (`SchedulingPauseReason::new`: 1 to 64 bytes of `[a-z0-9_.-]`). The console's
+/// settings name reasons it offers no resume for, and one no pause can carry names none.
+pub fn pause_reason_valid(reason: &str) -> bool {
+    SchedulingPauseReason::new(reason).is_ok()
+}
+
 /// The client's own spelling of the pause's operation
 /// (`ContractLocation::PauseScheduling`).
 const PAUSE_SCHEDULING: &str = "pause_scheduling";

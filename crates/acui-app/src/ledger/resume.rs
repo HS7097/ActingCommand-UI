@@ -16,12 +16,18 @@
 //! The line belongs to the session of the window it came back in: a reopen
 //! starts the new session without it, which reads the status itself.
 //!
-//! Two kinds of pause offer no resume, only why: the one Alice lifts herself
-//! (`alice-116-scheduler-stop`), and a deployment's, which the installer
-//! lifts. The contract keeps no actor with a pause and no prefix of its
-//! reason, so both are known by the reason alone.
+//! Three kinds of pause offer no resume, only why: one whose reason the settings
+//! file lists (`resume_elsewhere_reasons`), which only whoever set it lifts; a
+//! deployment's, which the installer lifts; and one the Lab's rescue module set
+//! for an operation, which the operation lifts as it finishes, but for a stop's
+//! (`down`), which stays until it is lifted from the Lab. The
+//! contract keeps no actor with a pause and no prefix of its reason, so all are
+//! known by the reason alone. While that line cannot be taken, every pause but
+//! a deployment's, a Lab rescue's and this console's own "pause all", a global
+//! one, is of the first kind (`ResumeElsewhere`).
 
 use acui_rows::format_full;
+use acui_source::workbench::CONSOLE_PAUSE_ALL;
 use acui_source::{
     resume_paused, ClientFailure, PauseFact, PauseStage, PauseTarget, ResumeOutcome,
 };
@@ -33,28 +39,79 @@ use crate::ledger::{find, LedgerHandle};
 use crate::strings::{fill, outcome_short, Labels};
 use crate::{launcher, report, ui, LedgerWindow, PauseItem};
 
-/// The reason of the pause only Alice lifts (decision 116).
-const ALICE_STOP: &str = "alice-116-scheduler-stop";
 /// The reasons of a deployment's pause, which the installer lifts: acsetup's
 /// update (UI-2c1) and `install restart` without `--hold` (R-15b v4); and the
 /// operator's own deployments, by their prefix.
 const DEPLOY_REASONS: [&str; 2] = ["acsetup_update", "install_restart"];
 const DEPLOY_PREFIX: &str = "deploy-";
 
+/// The words of the Lab rescue module's own pause reasons, `lab-<word>-<unix ms>`,
+/// one per operation that pauses (since 0.12.48): Runtime
+/// `crates/lab-rescue/src/rescue.rs`, `hold_reason` and its only callers, `down`,
+/// `deploy` and `rollback`, `config replace` and `config restore`, and `place`;
+/// it hands back only its own (`contracts/install-cli.md`, "The Lab's rescue
+/// module").
+const LAB_RESCUE_WORDS: [&str; 6] = ["config", "deploy", "down", "place", "restore", "rollback"];
+
+/// Whether `reason` is exactly of that shape: `lab-`, one of those words, `-`, digits.
+fn lab_rescue(reason: &str) -> bool {
+    let Some((word, ms)) = reason.strip_prefix("lab-").and_then(|r| r.split_once('-')) else {
+        return false;
+    };
+    LAB_RESCUE_WORDS.contains(&word) && !ms.is_empty() && ms.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// The pauses only whoever set them lifts, by their reasons: the settings
+/// file's `resume_elsewhere_reasons` (`settings`), none by default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumeElsewhere {
+    /// The reasons the line lists, each one the Runtime takes; none without it.
+    Listed(Vec<String>),
+    /// The line, or the file, could not be read, so which reasons it lists is
+    /// not known: until it is fixed, every pause but this console's own
+    /// "pause all", which is global only (`pause_global`), is one.
+    Unusable,
+}
+
+impl Default for ResumeElsewhere {
+    fn default() -> Self {
+        Self::Listed(Vec::new())
+    }
+}
+
+impl ResumeElsewhere {
+    fn names(&self, pause: &PauseFact) -> bool {
+        match self {
+            Self::Listed(reasons) => reasons.iter().any(|listed| *listed == pause.reason),
+            Self::Unusable => {
+                pause.reason != CONSOLE_PAUSE_ALL || pause.target.instance_alias().is_some()
+            }
+        }
+    }
+}
+
 /// Who lifts a pause.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Lifter {
     /// Another tool set it: this window may resume it.
     Window,
-    Alice,
+    /// Whoever set it lifts it, and this console does not (`ResumeElsewhere`).
+    Setter,
     Installer,
+    /// The Lab's rescue module set it for an operation, which lifts it as it
+    /// finishes; a stop's (`down`, Runtime `rescue.rs`, which only holds) and
+    /// one left behind are lifted from the Lab (`lab_rescue`).
+    LabRescue,
 }
 
-pub(crate) fn lifter(reason: &str) -> Lifter {
-    if reason == ALICE_STOP {
-        Lifter::Alice
-    } else if DEPLOY_REASONS.contains(&reason) || reason.starts_with(DEPLOY_PREFIX) {
+pub(crate) fn lifter(pause: &PauseFact, elsewhere: &ResumeElsewhere) -> Lifter {
+    let reason = pause.reason.as_str();
+    if DEPLOY_REASONS.contains(&reason) || reason.starts_with(DEPLOY_PREFIX) {
         Lifter::Installer
+    } else if lab_rescue(reason) {
+        Lifter::LabRescue
+    } else if elsewhere.names(pause) {
+        Lifter::Setter
     } else {
         Lifter::Window
     }
@@ -148,7 +205,7 @@ pub fn paint(window: &LedgerWindow, ledger: &LedgerHandle, state: &LedgerState, 
     match pauses(state) {
         Ok(facts) => {
             for fact in facts {
-                let (text, resumable) = pause_text(labels, fact);
+                let (text, resumable) = pause_text(labels, fact, &ledger.open.resume_elsewhere);
                 let target = (resumable && !busy).then(|| fact.target.clone());
                 let confirming =
                     target.is_some() && resume.confirming.as_ref() == target.as_ref();
@@ -217,13 +274,14 @@ fn unread(labels: &Labels, failure: &ClientFailure) -> (String, &'static str) {
 /// A pause's line, and whether a person may resume it here: one another tool
 /// set, global, or an instance's whose device is handed back — the Runtime
 /// refuses the resume of one still draining or handing it back.
-fn pause_text(labels: &Labels, fact: &PauseFact) -> (String, bool) {
+fn pause_text(labels: &Labels, fact: &PauseFact, elsewhere: &ResumeElsewhere) -> (String, bool) {
     let scope = scope_text(labels, &fact.target);
     let (revision, since) = (fact.revision.to_string(), format_full(fact.since_unix_ms));
     let values: [&str; 4] = [&scope, &fact.reason, &revision, &since];
-    match lifter(&fact.reason) {
-        Lifter::Alice => (fill(labels.pause_alice, &values), false),
+    match lifter(fact, elsewhere) {
+        Lifter::Setter => (fill(labels.pause_setter, &values), false),
         Lifter::Installer => (fill(labels.pause_deploy, &values), false),
+        Lifter::LabRescue => (fill(labels.pause_lab_rescue, &values), false),
         Lifter::Window => {
             let mut text = fill(labels.pause_other_tool, &values);
             let resumable = match fact.stage {
