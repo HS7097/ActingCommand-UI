@@ -1223,6 +1223,7 @@ fn rules_read(
                 IdleNow::Nothing => (true, false, None),
                 IdleNow::CloseGame => (false, true, None),
                 IdleNow::StopEmulator => (false, false, Some(labels.rules_idle_stop)),
+                IdleNow::Auto => (false, false, Some(labels.rules_idle_auto)),
                 IdleNow::Other(word) => {
                     let line = format!("instance {id}: no words for idle action {word:?}");
                     tell_once(ui, &line, false);

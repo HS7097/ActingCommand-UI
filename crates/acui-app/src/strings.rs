@@ -677,6 +677,7 @@ pub struct Labels {
     pub setting_idle_none: &'static str,
     pub setting_idle_close_app: &'static str,
     pub setting_idle_stop_emulator: &'static str,
+    pub setting_idle_auto: &'static str,
     pub setting_priority_normal: &'static str,
     pub setting_priority_low: &'static str,
     pub setting_days: &'static str,
@@ -1302,15 +1303,16 @@ pub struct Labels {
     pub rules_host_none: &'static str,
     pub rules_host_unread: &'static str,
     /// The account's idle action: its two choices; what it is for; while paused; of an account
-    /// with no device of its own; stopping the emulator in effect, which is not offered here; one
-    /// in effect not known here; that either choice replaces it; not read; the Runtime refused it
-    /// for the emulator's start.
+    /// with no device of its own; stopping the emulator in effect, which is not offered here;
+    /// IDLE-2's `auto` in effect, likewise not offered here; one in effect not known here; that
+    /// either choice replaces it; not read; the Runtime refused it for the emulator's start.
     pub rules_idle_nothing: &'static str,
     pub rules_idle_close: &'static str,
     pub rules_idle_note: &'static str,
     pub rules_idle_paused: &'static str,
     pub rules_idle_no_device: &'static str,
     pub rules_idle_stop: &'static str,
+    pub rules_idle_auto: &'static str,
     pub rules_idle_other: &'static str,
     pub rules_idle_replace: &'static str,
     pub rules_idle_unread: &'static str,
@@ -1862,6 +1864,7 @@ pub const ZH: Labels = Labels {
     setting_idle_none: "什么都不做",
     setting_idle_close_app: "关闭游戏",
     setting_idle_stop_emulator: "关闭模拟器",
+    setting_idle_auto: "按空闲时长自动选",
     setting_priority_normal: "正常",
     setting_priority_low: "低",
     setting_days: "{} 天",
@@ -2315,6 +2318,7 @@ pub const ZH: Labels = Labels {
     rules_idle_paused: "暂停中，空闲动作暂不执行",
     rules_idle_no_device: "这个号没有自己的设备，空闲动作对它不起作用",
     rules_idle_stop: "现在是「关闭模拟器」，这里不再提供",
+    rules_idle_auto: "现在是「按空闲时长自动选」，这里不提供",
     rules_idle_other: "现在的设定这里认不出",
     rules_idle_replace: "选任一项就改掉它",
     rules_idle_unread: "读不到这个号的空闲时设定，这里先不能改",
@@ -2852,6 +2856,7 @@ pub const EN: Labels = Labels {
     setting_idle_none: "do nothing",
     setting_idle_close_app: "close the game",
     setting_idle_stop_emulator: "stop the emulator",
+    setting_idle_auto: "choose by the idle time",
     setting_priority_normal: "normal",
     setting_priority_low: "low",
     setting_days: "{} days",
@@ -3305,6 +3310,7 @@ pub const EN: Labels = Labels {
     rules_idle_paused: "While paused, no idle action is taken",
     rules_idle_no_device: "This account has no device of its own, so no idle action applies to it",
     rules_idle_stop: "It is now “stop the emulator”, which is no longer offered here",
+    rules_idle_auto: "It is now “choose by the idle time”, which is not offered here",
     rules_idle_other: "What it is set to now is not known here",
     rules_idle_replace: "Picking either replaces it",
     rules_idle_unread: "This account's idle action cannot be read, so it cannot be changed for now",
