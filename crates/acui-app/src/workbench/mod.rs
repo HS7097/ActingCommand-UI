@@ -686,9 +686,10 @@ fn tasks_landed(ui: &Ui, alias: &str, read: Result<TasksRead, ClientFailure>) {
 }
 
 /// The switches' read of `alias` (UI-3f2), taken as the list's is: a failure and its end each one
-/// line of the log. A Runtime that said it has none is said once for its owner epoch, and the slow
-/// thread reads them no more in it (`tasks_sync`); a view that names no version of the account's own
-/// scope, which the contract never leaves out, is said once too, and has no switch.
+/// line of the log. A Runtime that said it has none is said once for its owner epoch, with the code
+/// that said so and not quietly, and the slow thread reads them no more in it (`tasks_sync`); a
+/// view that names no version of the account's own scope, which the contract never leaves out, is
+/// said once too, and has no switch.
 fn packs_landed(ui: &Ui, alias: &str, read: Result<PacksRead, ClientFailure>) {
     let landed = ui.model.borrow_mut().apply_packs(alias, read, Instant::now());
     let thread = Lane::Slow.name();
@@ -700,12 +701,13 @@ fn packs_landed(ui: &Ui, alias: &str, read: Result<PacksRead, ClientFailure>) {
         }
         News::Recovered => report::log(thread, &format!("task switches of {alias} read again")),
     }
-    if let Some(epoch) = &landed.unsupported {
+    // Not quiet: it holds for the whole epoch, in which no switch shows.
+    if let Some((epoch, code)) = &landed.unsupported {
         let line = format!(
-            "the Runtime of owner epoch {epoch} has no task switches (PackScheduleView \
-             not_implemented or unknown): not read again in it"
+            "the Runtime of owner epoch {epoch} has no task switches (PackScheduleView of \
+             {alias}: {code}): none offered and not read again in that epoch"
         );
-        report::log_quiet(thread, &line);
+        report::log(thread, &line);
         tasks_sync(ui);
     }
     if landed.unversioned {

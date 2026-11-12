@@ -20,12 +20,14 @@
 //! that has no such write (`not_implemented`) is kept for its owner epoch, as one whose view said
 //! so is, and has no switch in it.
 //!
-//! What a press came to is said under its row, with when it landed, until that row is pressed
-//! again, the list shows another account or shows anew, or the Runtime starts again; one that took
-//! says nothing, its row's source line says what holds now. A restart lets go of a press out: its
-//! answer, when it lands, is the log's only. Every answer goes in the log, from the thread, with
-//! the version it named and its codes: quietly when it took or met another tool's change; as the
-//! problem it is otherwise.
+//! What a press came to is said under its row, with when it landed (not on the line that it is
+//! out, nor of a conflict, a thread refused or a restart), until that row is pressed again, the
+//! list shows another account than it last did, or the Runtime starts again: the list hidden and
+//! shown again (another tab or page, the window minimized, a Runtime that stops answering a while)
+//! keeps it. One that took says nothing, its row's source line says what holds now. A restart lets
+//! go of a press out: its answer, when it lands, is the log's only. Every answer goes in the log,
+//! from the thread, with the version it named and its codes: quietly when it took or met another
+//! tool's change; as the problem it is otherwise.
 //!
 //! `Switches` and what it says hold no words, as the `Model` they are part of; `paint` makes them.
 
@@ -52,6 +54,9 @@ const THREAD: &str = "acui-act-pack";
 pub struct Switches {
     /// By alias.
     slots: BTreeMap<String, Slot>,
+    /// The account whose list showed last, while it shows and after it is hidden: what its presses
+    /// came to stays until the list shows another account (`follow`).
+    listed: Option<String>,
     /// The owner epoch whose Runtime answered the view or a write `not_implemented`, or did not
     /// know the view.
     unsupported: Option<String>,
@@ -168,15 +173,26 @@ impl Switches {
         }
     }
 
-    /// The list shows anew, or another account's: what each press came to goes, but for one out,
-    /// and none waits any more for a read of before, since none counts after an answer that
-    /// counted as a write.
-    pub fn follow(&mut self) {
+    /// The list shows `wanted`'s from now on, or nothing (another tab or page, the window minimized,
+    /// the Runtime not answering): none waits any more for a read of before, since none counts
+    /// after an answer that counted as a write. What each press came to stays through all of that,
+    /// and goes only as its row is pressed again (`press`), the Runtime starts again (`restarted`),
+    /// or here, as the list shows another account than it last did: then what the presses of the
+    /// account it showed came to goes, but for one out.
+    pub fn follow(&mut self, wanted: Option<&str>) {
         for slot in self.slots.values_mut() {
             if matches!(slot.stage, Stage::Behind) {
                 slot.stage = Stage::Idle;
             }
-            slot.said.retain(|_, said| *said == SwitchSaid::Sending);
+        }
+        let Some(wanted) = wanted else {
+            return;
+        };
+        let left = self.listed.replace(wanted.to_owned());
+        if let Some(left) = left.filter(|left| left.as_str() != wanted) {
+            if let Some(slot) = self.slots.get_mut(&left) {
+                slot.said.retain(|_, said| *said == SwitchSaid::Sending);
+            }
         }
     }
 
@@ -343,8 +359,9 @@ impl Landing {
             }
             PackOutcome::NotImplemented(failure) => {
                 let line = format!(
-                    "{prefix}: this Runtime has no such write (not_implemented), none offered \
-                     in its owner epoch: {}",
+                    "{prefix}: the Runtime of owner epoch {} has no task switches \
+                     (EditPackSchedule not_implemented), none offered in that epoch: {}",
+                    request.epoch,
                     failure_line(failure)
                 );
                 report::log(THREAD, &line);

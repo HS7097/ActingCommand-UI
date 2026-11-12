@@ -2883,7 +2883,7 @@ fn pack_row(ui: &Ui, labels: &Labels, row: &PackRow) -> TaskRowData {
             (false, false, false, labels.tasks_switch_not_here.to_owned(), None)
         }
         SwitchSlot::Offered(PackSwitch { state, enabled, said }) => {
-            let note = source_text(labels, state);
+            let note = pack_source_text(labels, state);
             let said = said.as_ref().map(|said| switch_said_text(ui, labels, said));
             (true, state.on, *enabled, note, said)
         }
@@ -2951,7 +2951,7 @@ fn not_here_told(ui: &Ui, package: &str, listed: bool) {
 /// that decided: the account's own rows, its server's, its game's or the pack's default, on or off,
 /// and until when when that row ends; with no row, when that changes, or nothing at all, which the
 /// list's note says (Workflow #429 plan, 177; the console's own setting off since when it began).
-fn source_text(labels: &Labels, state: &PackState) -> String {
+fn pack_source_text(labels: &Labels, state: &PackState) -> String {
     let word = if state.on { labels.tasks_source_on } else { labels.tasks_source_off };
     let layer = match state.source {
         PackSource::Instance if !state.on => {

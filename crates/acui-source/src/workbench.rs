@@ -277,11 +277,13 @@ impl ReadLane {
         let epoch = code(&client.runtime_info().owner_epoch());
         match client.pack_schedule_view(alias) {
             Ok(view) => Ok(pack::packs_read(epoch, alias, &view)),
-            Err(error) if pack::view_unsupported(&error) => {
-                self.settled(error);
-                Ok(pack::packs_unsupported(epoch, alias))
-            }
-            Err(error) => Err(self.settled(error)),
+            Err(error) => match pack::view_unsupported(&error) {
+                Some(code) => {
+                    self.settled(error);
+                    Ok(pack::packs_unsupported(epoch, alias, code))
+                }
+                None => Err(self.settled(error)),
+            },
         }
     }
 

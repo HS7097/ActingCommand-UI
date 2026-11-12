@@ -51,8 +51,10 @@ const OPERATION_UNSUPPORTED: &str = "runtime_operation_unsupported";
 const VERSION_CONFLICT: &str = "fact_observation_version_conflict";
 const NOT_NEWER: &str = "fact_observation_not_newer";
 const SCHEDULE_INVALID: &str = "session_pack_schedule_invalid";
-/// What those refusals say beyond their code: the scope's version now, and where the rows broke a
-/// rule (a JSON pointer into the request; the empty one when the list stored is what does not read).
+/// What those refusals say beyond their code: the scope's version now, and where a list broke a
+/// rule, a JSON pointer: into the request, `/package_id` or `/rows…`, when its rows are what the
+/// Runtime does not take; into the scope's list stored, the empty one or a row's `/<n>…`, when that
+/// is what does not read ([`stored_pointer`]).
 const CURRENT_VERSION: &str = "current_version";
 const FIELD: &str = "field";
 /// The pointer of an edit's rows: more rows than one scope holds.
@@ -71,8 +73,9 @@ pub struct PacksRead {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PacksAnswer {
     /// This Runtime has no task switches: it refused the view `not_implemented` (before 0.12.55),
-    /// or does not know the request (before 0.12.30). Nothing was recorded.
-    Unsupported,
+    /// or does not know the request (before 0.12.30, the client's `runtime_operation_unsupported`).
+    /// Nothing was recorded. `code` is which of the two, for the log.
+    Unsupported { code: &'static str },
     Read(PackStates),
 }
 
@@ -87,8 +90,10 @@ pub struct PackStates {
     pub packages: Vec<PackState>,
 }
 
-/// One package as the view said it. The view's version and its server's and game's scopes stay
-/// here; nothing of this is shown but `on`, `source` and the times.
+/// One package as the view said it. The version of the instance's own scope is kept beside the
+/// packages ([`PackStates::version`]); the view's server's and game's scopes and their versions are
+/// not kept at all, the console writing neither. Nothing of this is shown but `on`, `source` and
+/// the times.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackState {
     pub package_id: String,
@@ -228,7 +233,8 @@ pub enum PackRefusal {
     NotNewer,
     /// The scope would hold more rows than it may, of every package together (`/rows`).
     TooMany,
-    /// The scope's list stored does not read (the empty pointer).
+    /// The scope's list stored does not read: a pointer into it, not into the request, the empty
+    /// one or a row's `/<n>…` ([`stored_pointer`]).
     StoredUnreadable,
     /// Any other rule the rows broke: this program's fault.
     Invalid,
@@ -304,7 +310,9 @@ fn answered(error: &RuntimeClientError) -> bool {
 ///    have got the request out;
 /// 2. a conflict of versions, with the version now;
 /// 3. a Runtime without the write;
-/// 4. any other refusal, why by its receipt's code and, of rows it does not take, by its pointer.
+/// 4. any other refusal, why by its receipt's code and, of a list it does not take, by its pointer:
+///    the request's `/rows` alone is the scope's bound, any other of the request's is this
+///    program's fault, and one into the list stored is that list ([`stored_pointer`]).
 fn failed(error: RuntimeClientError) -> PackOutcome {
     if !answered(&error) {
         return PackOutcome::Unconfirmed(ClientFailure::from(error));
@@ -327,21 +335,37 @@ fn failed(error: RuntimeClientError) -> PackOutcome {
     let why = match (top, field.as_deref()) {
         (NOT_NEWER, _) => PackRefusal::NotNewer,
         (SCHEDULE_INVALID, Some(ROWS_POINTER)) => PackRefusal::TooMany,
-        (SCHEDULE_INVALID, Some("")) => PackRefusal::StoredUnreadable,
+        (SCHEDULE_INVALID, Some(pointer)) if stored_pointer(pointer) => {
+            PackRefusal::StoredUnreadable
+        }
         (SCHEDULE_INVALID, _) => PackRefusal::Invalid,
         _ => PackRefusal::Other,
     };
     PackOutcome::Refused { why, failure: ClientFailure::from(error), field }
 }
 
-/// Whether a failed view says the Runtime has none: a refusal `not_implemented` it went on after,
-/// or the client's own word that the Runtime does not know the request.
-pub(super) fn view_unsupported(error: &RuntimeClientError) -> bool {
-    error.code().spelling() == OPERATION_UNSUPPORTED
-        || (answered(error)
-            && error
-                .receipt_outcome()
-                .is_some_and(|outcome| outcome.code().as_str() == NOT_IMPLEMENTED))
+/// Whether a refusal's pointer is into the scope's list stored, not into the request: the empty
+/// one, the list as a whole (not a list, or more rows than the bound), or one of its rows, `/<n>`
+/// or `/<n>/<member>`, as the Runtime reads the list it holds before it replaces the package's rows
+/// in it (Runtime 0.12.55, `pack_schedule::read_rows`). The request's own all begin with a name,
+/// `/package_id` or `/rows`.
+fn stored_pointer(pointer: &str) -> bool {
+    let row = |rest: &str| rest.starts_with(|c: char| c.is_ascii_digit());
+    pointer.is_empty() || pointer.strip_prefix('/').is_some_and(row)
+}
+
+/// Whether a failed view says the Runtime has none, and the code that says so: the client's own
+/// word that the Runtime does not know the request, or a refusal `not_implemented` it went on
+/// after; none for any other failure.
+pub(super) fn view_unsupported(error: &RuntimeClientError) -> Option<&'static str> {
+    if error.code().spelling() == OPERATION_UNSUPPORTED {
+        return Some(OPERATION_UNSUPPORTED);
+    }
+    let refused = answered(error)
+        && error
+            .receipt_outcome()
+            .is_some_and(|outcome| outcome.code().as_str() == NOT_IMPLEMENTED);
+    refused.then_some(NOT_IMPLEMENTED)
 }
 
 /// The view of `alias` as the console reads it: the version of the instance's own scope, and each
@@ -359,9 +383,9 @@ pub(super) fn packs_read(epoch: String, alias: &str, view: &PackScheduleView) ->
     }
 }
 
-/// A Runtime's answer that it has no view.
-pub(super) fn packs_unsupported(epoch: String, alias: &str) -> PacksRead {
-    PacksRead { epoch, alias: alias.to_owned(), answer: PacksAnswer::Unsupported }
+/// A Runtime's answer that it has no view, by the code that says so ([`view_unsupported`]).
+pub(super) fn packs_unsupported(epoch: String, alias: &str, code: &'static str) -> PacksRead {
+    PacksRead { epoch, alias: alias.to_owned(), answer: PacksAnswer::Unsupported { code } }
 }
 
 fn pack_state(package: &PackSchedulePackage) -> PackState {

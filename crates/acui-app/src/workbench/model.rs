@@ -337,8 +337,9 @@ pub struct PacksLanded {
     pub news: News<ClientFailure>,
     /// The read's fault is over.
     pub fault_cleared: bool,
-    /// It said, for the first time in this owner epoch, that its Runtime has no switches.
-    pub unsupported: Option<String>,
+    /// It said, for the first time in this owner epoch, that its Runtime has no switches: that
+    /// epoch, and the code that said so.
+    pub unsupported: Option<(String, &'static str)>,
     /// It named no version of the account's own scope.
     pub unversioned: bool,
 }
@@ -732,7 +733,8 @@ impl Model {
     /// The slow thread is told to read the list of `wanted` from now on, or none: whether that
     /// changed. A change lets go of all that was read, its switches' too, so the list says it is
     /// reading until an answer of that account comes, and closes its line of tasks without a
-    /// package; and so does what each press of a switch came to (`Switches::follow`).
+    /// package. What each press of a switch came to is not let go by the list hidden and shown
+    /// again, only by its showing another account than it last did (`Switches::follow`).
     pub fn tasks_follow(&mut self, wanted: Option<&str>) -> bool {
         if self.tasks.of.as_deref() == wanted {
             return false;
@@ -740,7 +742,7 @@ impl Model {
         self.tasks = TasksSlice { of: wanted.map(str::to_owned), ..TasksSlice::default() };
         self.packs = PacksSlice { of: wanted.map(str::to_owned), ..PacksSlice::default() };
         self.tasks_fold_open = false;
-        self.switches.follow();
+        self.switches.follow(wanted);
         true
     }
 
@@ -829,9 +831,9 @@ impl Model {
             Ok(read) if read.epoch != *epoch || read.alias != alias => News::Nothing,
             Ok(read) => {
                 match &read.answer {
-                    PacksAnswer::Unsupported => {
+                    PacksAnswer::Unsupported { code } => {
                         if self.switches.view_unsupported(epoch) {
-                            landed.unsupported = Some(epoch.clone());
+                            landed.unsupported = Some((epoch.clone(), *code));
                         }
                     }
                     PacksAnswer::Read(states) => landed.unversioned = states.version.is_none(),
@@ -881,7 +883,7 @@ impl Model {
         match (&self.packs.error, &self.packs.value) {
             (Some(_), _) if ours => SwitchesNow::Unreadable,
             (None, Some(read)) if ours => match &read.answer {
-                PacksAnswer::Unsupported => SwitchesNow::Unsupported,
+                PacksAnswer::Unsupported { .. } => SwitchesNow::Unsupported,
                 PacksAnswer::Read(states) if states.version.is_none() => SwitchesNow::Unreadable,
                 PacksAnswer::Read(states) => SwitchesNow::Read {
                     states,

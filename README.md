@@ -674,17 +674,22 @@ something else (another tool, the Lab, an agent) changed it since, the Runtime r
 and changes nothing, the row says in amber "This account's task switches were changed elsewhere and are
 refreshed: check them, then press again", and nothing is sent again; `fact_observation_not_newer`
 (another list landed in the same millisecond) is sent once more at once on the same connection. One write
-of an account is out at a time: while it is, and after its answer until a read of the view begun after
-it has come, every switch of the account is off. What each press came to shows under its row, with when,
-until that row is pressed again, the list shows another account or shows anew, or the Runtime restarts;
-one that took says nothing more. A package the view names that this round's evaluation does not match
-still has a row ("This round's evaluation does not match it"); one the list has that the view does not
-name has no switch and says "This task pack cannot be switched on or off on its own here", and the
-technical log hears of it once. The view is read on the list's terms (the main page of a window that is
-not minimized, this tab, the Runtime online, that account only), every 60 seconds, 60 after a failure, and
-at once when the tab, the account or the owner epoch changes, a write lands, or after a conflict; nothing
-new for 180 seconds counts as unreadable, the note above the rows says in amber that the task switches
-cannot be read right now, and no switch shows while the list's rows still do. A Runtime before 0.12.55
+of an account is out at a time: while it is out, and after an answer that may have changed the switches
+or says something else did (it took, a conflict, the same millisecond twice, not confirmed) until a read
+of the view begun after it has come, every switch of the account is greyed out, still showing what was
+read before; after any other refusal, or a write not sent, they come back at once. What each press came
+to shows under its row, with when it landed (but for "Changing…", a conflict, a thread that could not
+start and a restart), until that row is pressed again, the list shows another account, or the Runtime
+restarts; the list hidden and shown again (another tab or page, the window minimized, the Runtime not
+answering a while) keeps it, and one that took says nothing more. A package the view names that this
+round's evaluation does not match still has a row ("This round's evaluation does not match it"); one the
+list has that the view does not name has no switch and says "This task pack cannot be switched on or off
+on its own here", and the technical log hears of it once. The view is read on the list's terms (the main
+page of a window that is not minimized, this tab, the Runtime online, that account only), every 60
+seconds, 60 after a failure, and at once when the tab, the account or the owner epoch changes, a write
+lands, or after a conflict; nothing new for 180 seconds counts as unreadable, the note above the rows
+says in amber that the task switches cannot be read right now, and no switch shows while the list's rows
+still do. A Runtime before 0.12.55
 (the view answers `not_implemented`, or before 0.12.30 is not known) has the note say that this version of
 the Runtime cannot switch single tasks, and the view is not read again in that owner epoch. Each read has
 the Runtime bring its fact store up to the ledger under the fact write gate, so it is read seldom; the
