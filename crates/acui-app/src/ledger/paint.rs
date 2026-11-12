@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use acui_model::{
-    BasisVia, DisplayRow, FrameGroup, FrameTarget, InstanceCard, Mark, Overlay, QueryError,
-    RecoveryGroup, ViewModel, ALL_TABS,
+    stop_marked, BasisVia, DisplayRow, FrameGroup, FrameTarget, InstanceCard, Mark, Overlay,
+    QueryError, RecoveryGroup, ViewModel, ALL_TABS,
 };
 use acui_rows::outcome::CONSOLE_RUNTIME_OWNER_CHANGED;
 use acui_rows::{
@@ -359,13 +359,16 @@ pub fn refresh(
             },
             DisplayRow::Event { event, folded } => {
                 let raw_type = code(&event.event_type);
+                // A run a person stopped (UI-3e3): no failure, so not in a failure's red, its
+                // level the Runtime's still.
+                let stopped = stop_marked(event);
                 RowItem {
                     recovery: false,
                     folded: *folded,
                     sequence_text: event.sequence.to_string().into(),
                     clock: format_clock(event.timestamp_unix_ms).into(),
                     level: labels.levels[severity_index(event.severity)].into(),
-                    level_tone: severity_tone(event.severity),
+                    level_tone: if stopped { STOPPED_TONE } else { severity_tone(event.severity) },
                     module: module_text(labels, event.origin.module()).into(),
                     event_name: event_text(labels, &raw_type).into(),
                     event_raw: raw_type.into(),
@@ -379,7 +382,14 @@ pub fn refresh(
                         },
                     }
                     .into(),
-                    note: if *folded { labels.recovered_badge } else { "" }.into(),
+                    note: if *folded {
+                        labels.recovered_badge
+                    } else if stopped {
+                        labels.stopped_badge
+                    } else {
+                        ""
+                    }
+                    .into(),
                     link_id: links_named(&event.links)
                         .first()
                         .map(|(_, value)| short_id(value))
@@ -1317,6 +1327,10 @@ const fn severity_index(severity: EventSeverity) -> usize {
         EventSeverity::Fatal => 5,
     }
 }
+
+/// The colour band of a row that records a run a person stopped (`stop_marked`): info's, whatever
+/// its level.
+const STOPPED_TONE: i32 = 1;
 
 const fn severity_tone(severity: EventSeverity) -> i32 {
     match severity {

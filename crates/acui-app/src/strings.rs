@@ -166,6 +166,8 @@ pub struct Labels {
     pub gap_prefix: &'static str,
     pub join: &'static str,
     pub recovered_badge: &'static str,
+    /// Beside a row that records a run a person stopped (UI-3e3, `acui_model::stop_marked`).
+    pub stopped_badge: &'static str,
     pub integrity_ok: &'static str,
     /// An offline SQLite root: since LN-OFF-1 the opening checks the head,
     /// the tail and the eviction proofs only, and earlier records are
@@ -1552,6 +1554,7 @@ pub const ZH: Labels = Labels {
     gap_prefix: "；缺口 ",
     join: "；",
     recovered_badge: "已恢复",
+    stopped_badge: "已停下",
     integrity_ok: "完整",
     integrity_ok_sqlite: "打开时的检查通过（较早的记录读到时再校验）",
     integrity_bad: "不完整：读全={} · 损坏尾部={}",
@@ -2555,6 +2558,7 @@ pub const EN: Labels = Labels {
     gap_prefix: "; gap ",
     join: "; ",
     recovered_badge: "Recovered",
+    stopped_badge: "Stopped",
     integrity_ok: "Intact",
     integrity_ok_sqlite: "Passed the opening check (earlier records are verified as they are read)",
     integrity_bad: "Not intact: read_complete={} · corrupt tail={}",
