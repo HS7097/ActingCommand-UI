@@ -1690,9 +1690,40 @@ uncertainty of the estimates is assessed here.
   derive rounds its value.
 - **A pass** moves the group's derives, in every environment, to those values; every rule that reads one moves with it, and
   every other rule keeps its point value. Its joint price vector is computed again, as the steady state computes it, from
-  the three solves to the selection, skipping what the vector does not read (the prices of the rules, the least losses,
-  HiGHS's marginals, the forcing costs, and the range of an activity some optimum runs, which is never in K). A pass whose
-  values are all the point values is the steady state's own vector.
+  the three solves to the selection, skipping what the vector does not read (the tie probes, the prices of the rules, the
+  least losses, HiGHS's marginals, the forcing costs, and the range of an activity some optimum runs, which is never in
+  K). A pass whose values are all the point values is the steady state's own vector. The tie probes (PASS-TIMING) decide
+  `objective_tier_tie` and their `lp_probe_unverified`, warnings and gaps of the coverage section that a pass has neither
+  of; they run after everything else of the three solves and change nothing another LP reads, so the vector is,
+  coordinate by coordinate, what it was with them (`src/acmodel/core/flow.py`, `_Solver.tiers` and `_Solver.ties`). The
+  steady state still runs them.
+- **Timing** (PASS-TIMING). Each pass records how long it took, `timing_ms`, on a monotonic clock, in whole milliseconds
+  rounded down: `{source, stages, total}`. `source` says how its vector was found: `solved` (computed in the pass's own
+  graph), `steady_state` (the steady state's own vector, not solved again) or `cache` (a vector that came from the
+  cache, which keeps no timing; a pass's graph computes without the cache, so an export writes none today). `stages`,
+  only for `solved` (null otherwise), holds every stage, 0 for one that did not run; each is the time from the end of
+  the stage before it to its own end, so the stages never overlap:
+
+  | Stage | What it times |
+  |---|---|
+  | `model` | the program built from the pass's graph (the call that solves it) |
+  | `optimum` | S3, V alone, and its basis |
+  | `acquisition` | S1, A alone (0 when A has no term) |
+  | `value` | S2, V with A ≥ A* (0 when A has no term) |
+  | `dual` | S3's dual, its exact check and optimal point, S3's optimal face and D* in their complementary-slackness form |
+  | `projections` | each pool's projection per step: the re-solves at ±grain and the LPs on D* |
+  | `intervals` | each pool's interval on D* |
+  | `most` | the most an optimum of S3 runs each activity |
+  | `ranges` | each activity's range on D* that K needs |
+  | `selection` | steps 1 and 3 of the selection, and the withheld coordinates |
+  | `max_min` | the lexicographic max-min over K |
+  | `check` | the vector's exact check as a point of D*, and the activities' values at it |
+
+  `total` is the whole pass, from its start to its vector (the moved rules computed again, the program built, every
+  stage), so it is at least the sum of the stages. The timing is in that one place: no pass reads it, and neither the
+  vector's value (nor the cache), the price provenance files (so no `binds`), the shared tree, `estimates`, `counts` nor
+  any other member of prices.json holds any of it. Two exports of the same inputs by the same tool, libraries and
+  configuration differ in it alone.
 - **What it finds:** each pool's price range over the steady state and every pass (`impact`); and the activities whose
   class flips: the sign of their value at the vector (positive, zero, negative) is not the same in the steady state and in
   every pass. The Runtime's zero band, which needs the pools' scales and the rules' effects, is PRICE-4b's; an activity that
@@ -1712,7 +1743,7 @@ uncertainty of the estimates is assessed here.
 | `prices` | one entry per pool, by id (below) |
 | `slots` | the slot resources, by id: no pools, so not priced here |
 | `estimates` | each provisional derive the steady state read, by id: `rule`, `value` (its point value), `estimate` (as written, or null), `components`, `assessed`, and `skipped` (null, `structural_gap` or `estimate_missing`) |
-| `impact` | the assessment's groups, each `{rules, unknowns, passes, prices, flips}`: its derives; the unknowns they move by; each pass's `at` (each unknown's point or end, or the derive's `low` or `high`) and `values` (each derive's moved value); the pools whose price moves in it, with `low` and `high`; and the activities whose class flips in it |
+| `impact` | the assessment's groups, each `{rules, unknowns, passes, prices, flips}`: its derives; the unknowns they move by; each pass's `at` (each unknown's point or end, or the derive's `low` or `high`), `values` (each derive's moved value) and `timing_ms` (PASS-TIMING, "Timing" above: `source`, `solved`, `steady_state` or `cache`; `stages`, each stage's milliseconds by name, or null; `total`, the pass's milliseconds; integers); the pools whose price moves in it, with `low` and `high`; and the activities whose class flips in it |
 | `counts` | the pools of each class, and how many are `exported` and `pending` |
 | `evaluator` | the evaluator digest (#424 PRICE-REUSE; `cli.md`, "Cache", "The evaluator digest"): `sha256`, over the other three; `source`, the digest of the tool's source files; `libraries`, the versions of the libraries the steady state's node declares (`numpy`, `python`, `scipy`); `config`, every configuration key but those that never change a result and those only the plan reads (both listed, key by key, in `cli.md`), by its dotted name (`expr.max_bits`, `lp.grain`, `unknowns.seed`, …), sorted, with its value: an integer (its decimal text beyond ±(2<sup>53</sup> − 1)), a string or a boolean. Every file written from PRICE-REUSE on has it; an earlier one may not. It is in neither `versions` nor a price's provenance file |
 | `reused_assessment` | only in a file whose assessment was taken over (`--reuse-assessment`, below): `prices_sha256`, the sha256 of the earlier prices.json's bytes; its `versions`; `shared`, each of its shared trees' digest by root; `evaluator`, its evaluator digest's `sha256`; `members`, what was taken over (`estimates.assessed`, `estimates.skipped`, `impact`, `prices.flips`, `prices.impact`) |
@@ -1749,7 +1780,9 @@ is read first (`model_file_invalid` when there is none, or it is no prices file)
    for the same pools and estimates); everything else is computed as without the option: the coverage, the joint vector,
    the provenance files and `binds`, the acceptances of exports.json with what they lack (`acceptance_incomplete` reads the
    flips taken over), the counts. prices.json records `reused_assessment`; without that member it is, byte for byte, the
-   file the full export writes from the same inputs, and the provenance files are the full export's.
+   file the full export writes from the same inputs, but for each pass's `timing_ms`, and the provenance files are the
+   full export's. The groups are taken over with their passes' `timing_ms` as they are (PASS-TIMING): it records the
+   earlier run, which computed them; this one timed none.
 
 Anything that differs is `reuse_refused` (exit 5; one error per member, `member` such as `versions.rules`,
 `evaluator.config.lp.grain` or `shared.economy:steady`, `expected` the earlier value and `found` this export's, `none` for
@@ -1767,7 +1800,8 @@ records of it.
 
 **What it costs.** One steady state, then one vector per pass that moves something. Each pass solves as much of the
 steady state as its vector needs, so a model whose open components read many estimates pays roughly that many times.
-An export that takes its assessment over pays the steady state alone.
+An export that takes its assessment over pays the steady state alone. What each pass paid, stage by stage, is its
+`timing_ms`.
 
 ### `acmodel verify prices <model> --state <file>`
 

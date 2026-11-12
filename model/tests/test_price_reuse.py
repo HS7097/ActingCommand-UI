@@ -34,6 +34,7 @@ from test_prices import (  # noqa: F401  (acmodel is a fixture)
     export,
     flips_fixture,
     redescribed,
+    untimed_doc,
 )
 
 PINNED = {"numpy": "2.5.4", "scipy": "1.18.1"}  # the pins the fake system reports (conftest.py)
@@ -354,7 +355,8 @@ def test_an_acceptance_added_after_the_export_reads_the_flips_taken_over(tmp_pat
     take the assessment over. flips_fixture, exported in full and its out folder kept aside; then s is accepted listing
     act.p only (incomplete: `acceptance_incomplete`, naming act.q) and v listing both flips (exported). The full export
     and the one that takes the earlier assessment over answer the same and write the same files, prices.json but for
-    `reused_assessment`."""
+    `reused_assessment` and its passes' `timing_ms` (PASS-TIMING: taken over, it is the earlier run's, not this full
+    export's)."""
     folder = flips_fixture(tmp_path)
     out, kept = base(folder) / "out", tmp_path / "earlier"
     export(acmodel, folder)
@@ -388,7 +390,7 @@ def test_an_acceptance_added_after_the_export_reads_the_flips_taken_over(tmp_pat
             assert taken[name] == full[name], name
     prices = json.loads(taken["prices.json"])
     marker = prices.pop("reused_assessment")
-    assert policy.delivered(prices) == full["prices.json"]
+    assert policy.delivered(untimed_doc(prices)) == policy.delivered(untimed_doc(json.loads(full["prices.json"])))
     assert marker["prices_sha256"] == hashlib.sha256((kept / "prices.json").read_bytes()).hexdigest()
     assert doc["data"]["reused_assessment"]["file"] == str(kept / "prices.json")
     assert {key: doc["data"][key] for key in ("counts", "unit_milli")} == {
