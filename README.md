@@ -1543,8 +1543,10 @@ records of the console's own requests — the start press, shutdown and resume r
 status read appends nothing), the only control entry points are the launcher's two buttons (start /
 request shutdown, see above), its owner-unlock entry (a confirmed `actingd unlock-owner`) and the ledger
 window's confirmed conditional resume (end of "Launcher"), and there
-is no approval entry point; of the console crates only `acui-model` carries tests, four unit tests of the
-pure function `stop_marked`'s decision (UI-3e3), and CI builds the workspace without running tests. The
+is no approval entry point; of the console crates only `acui-model` carries tests, four unit tests of
+`stopped`, the pure decision inside `stop_marked` (UI-3e3). CI builds the workspace and then runs just the
+crates that hold unit tests of pure functions, now `cargo test --locked -p acui-model`; the UI and the
+workspace as a whole are not tested. The
 launcher is in
 `crates/acui-app/src/launcher.rs`, where the paths come from in `install.rs`, the technical log and the
 startup-failure window in `report.rs`, and the client operations — probe, request shutdown, recording

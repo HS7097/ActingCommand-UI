@@ -1049,7 +1049,7 @@ Runtime 的看门狗是一个计划任务，所以 acsetup 不替人设置。要
 
 `slint` 1.17.x，`default-features = false`；账本对监控台只读（监控台发出的请求——启动按钮、关闭
 请求、恢复请求——由 Runtime 自己记账；状态读取不留账本记录），控制入口只有启动器的两个按钮（启动 /
-请求关闭，见上）、启动器的解锁入口（经确认的 `actingd unlock-owner`）与账本窗口里经确认的有条件恢复（见「启动器」一节末尾），没有审批入口；监控台的 crate 只有 `acui-model` 带四条单元测试（纯函数 `stop_marked` 的判定，UI-3e3），别的不带测试，CI 只构建工作区、不跑测试。启动器在
+请求关闭，见上）、启动器的解锁入口（经确认的 `actingd unlock-owner`）与账本窗口里经确认的有条件恢复（见「启动器」一节末尾），没有审批入口；监控台的 crate 只有 `acui-model` 带四条单元测试（测的是 `stop_marked` 里那个纯函数判定 `stopped`，UI-3e3），别的不带测试。CI 构建工作区之后，只跑带纯函数单元测试的 crate，现在是 `cargo test --locked -p acui-model`；界面和整个工作区不跑测试。启动器在
 `crates/acui-app/src/launcher.rs`，路径从哪来在 `install.rs`，技术日志与启动失败窗口在 `report.rs`，
 探测、请求关闭、记下启动按钮、在线开台时的状态与事实读取、有条件恢复这几个客户端操作在 `acui-source`
 （`probe_runtime` / `request_shutdown` / `record_start` / `instance_facts` / `resume_paused`）。
