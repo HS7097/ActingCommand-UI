@@ -1689,20 +1689,114 @@ uncertainty of the estimates is assessed here.
   `high` is a group of its own, with two passes: its lowest `low` and its highest `high`. A moved value is rounded as the
   derive rounds its value.
 - **A pass** moves the group's derives, in every environment, to those values; every rule that reads one moves with it, and
-  every other rule keeps its point value. Its joint price vector is computed again, as the steady state computes it, from
-  the three solves to the selection, skipping what the vector does not read (the tie probes, the prices of the rules, the
-  least losses, HiGHS's marginals, the forcing costs, and the range of an activity some optimum runs, which is never in
-  K). A pass whose values are all the point values is the steady state's own vector. The tie probes (PASS-TIMING) decide
-  `objective_tier_tie` and their `lp_probe_unverified`, warnings and gaps of the coverage section that a pass has neither
-  of; they run after everything else of the three solves and change nothing another LP reads, so the vector is,
-  coordinate by coordinate, what it was with them (`src/acmodel/core/flow.py`, `_Solver.tiers` and `_Solver.ties`). The
-  steady state still runs them.
-- **Timing** (PASS-TIMING). Each pass records how long it took, `timing_ms`, on a monotonic clock, in whole milliseconds
-  rounded down: `{source, stages, total}`. `source` says how its vector was found: `solved` (computed in the pass's own
-  graph), `steady_state` (the steady state's own vector, not solved again) or `cache` (a vector that came from the
-  cache, which keeps no timing; a pass's graph computes without the cache, so an export writes none today). `stages`,
-  only for `solved` (null otherwise), holds every stage, 0 for one that did not run; each is the time from the end of
-  the stage before it to its own end, so the stages never overlap:
+  every other rule keeps its point value. A pass whose values are all the point values is the steady state's own vector
+  (`by` `steady_state`). Any other pass is offered to the certificate first (below, #430 METHOD-C), which proves without
+  solving that the pass's joint price vector is the steady state's (`by` `certified`). A pass it does not prove, and
+  every pass when `impact.certify` is false (`cli.md`, "Configuration"), has its joint price vector computed again, as
+  the steady state computes it, from the three solves to the selection, skipping what the vector does not read (the tie
+  probes, the prices of the rules, the least losses, HiGHS's marginals, the forcing costs, and the range of an activity
+  some optimum runs, which is never in K) (`by` `solved`). The tie probes (PASS-TIMING) decide `objective_tier_tie` and
+  their `lp_probe_unverified`, warnings and gaps of the coverage section that a pass has neither of; they run after
+  everything else of the three solves and change nothing another LP reads, so the vector is, coordinate by coordinate,
+  what it was with them (`src/acmodel/core/flow.py`, `_Solver.tiers` and `_Solver.ties`). The steady state still runs
+  them.
+- **The certificate** (#430 METHOD-C, "D* invariance"). It reads what the steady state's own computation found, held in
+  memory and never in its value, the cache or a file: S3's program and its exact optimum x*; S3's dual and the exact
+  optimal point y* that the strong-duality check found; D*, in its complementary-slackness form with x* (`_restricted`);
+  S3's optimal face, in its form with y* (`_optimal_face`); P, A, A* and V0; K, the coordinates of the max-min; and the
+  joint vector with each activity's value at it. Where A has terms, S1 and S2 are read only through P, A and A*.
+  1. **J.** The pass's program is built from the pass's graph and not solved: S3's program as the steady state builds it
+     (`_program`). It is compared with the steady state's, row by row and column by column. The pass can be proven only
+     when the two have the same columns with the same bounds, the same rows with the same senses and right sides, the
+     same objective, and differ only in coefficients of activities' execution columns (one per activity and step), and
+     there only in balance rows, overflow bounds and regen stops. J is the set of the columns whose coefficients differ;
+     a J activity is an activity with a column in J. A pass whose program differs anywhere else (a cap's, a limit's or a
+     regen's value, the members of a limit or an income cap, a move's bound, a goal sink's or a demand row's column, any
+     bound or right side) is solved. A pass whose J is empty (no rule it moves reaches a coefficient of S3's program) is
+     proven with no LP.
+  2. **C1** (no optimum runs J). For each column j of J, the least of its dual slack s_j = (Aᵀy + w − c)_j over D*, with
+     the steady state's coefficients, is above 0. A column that x* runs is tight on all of D* and fails at once, so does
+     one whose slack at y* is 0; any other is an exact LP on D*. C1 reads the steady state alone, so each column is
+     decided once per assessment and every pass that has it in J reads that answer.
+  3. **C2** (no optimum runs J after the move). For each column j of J, the least of its dual slack over D*, with the
+     pass's coefficients, is above 0: an exact LP on D* per column and pass.
+  4. **C3** (K stays K). No J activity is in the steady state's K, and none would enter it with the pass's coefficients:
+     its value on D* (what it produces less what it consumes, at the pools' coordinates) does not reach 0 from a finite
+     least value below 0 and no higher. No LP is needed for an activity that moves out of or into a store (never in K),
+     nor for one whose columns lie in balance rows only: its value is then minus the mean of its columns' dual slacks
+     over the steps, which C2 keeps below 0 on all of D*. Otherwise the greatest of its value on D* is an exact LP, and
+     its least one more when the greatest is 0.
+  5. **C4** (no tier conflict). When A has no term, it holds. Otherwise P and A (term by term) must be the steady
+     state's, no J activity is in P, and the walk below must hold; then A*' = A* and V*' = V0' = V0, so the pass has no
+     `objective_tier_conflict`, and S1 and S2 are not solved. A pass whose walk fails is solved (re-solving S1, and S2
+     where A* moves, instead of the whole pass is a later slice, C-2b).
+     - *The walk* (static: the program's structure only, every step at once). An entity in one of whose rows a column of
+       a J activity differs is *short* where that activity brings in net less of it at the steady state's coefficients
+       than at the pass's, *long* where more, and both where its net is the same and another of its rows differs (an
+       overflow bound, a regen stop). Every taker of a short entity is stopped: an activity whose net amount on it is
+       below 0 or that moves out of it, a goal sink of it, a demand row that costs it. A stopped activity makes short
+       each entity it brings in more of than it takes, long each it takes more of than it brings in, and both each it
+       brings in and takes alike; a stopped goal sink or demand row makes long each other entity it takes. This is
+       repeated until nothing more is stopped. The walk holds when no activity of P and no demand row whose `main` is
+       not 0 is stopped; no stopped activity is counted by an income cap (a J activity that is not stopped keeps what
+       it earns there: item 1 leaves its income caps' rows as they were); and every short or long entity can hold more.
+     - *An entity that can hold more*: one with no hard cap, storage cap, regen stop or read cap (its stock is free
+       above, and its cyclic row only asks the cycle to end with at least its opening stock); one with a hard cap and no
+       other (what overflows is income the cap blocks, and every step's income, every window's for a `void_at_reset`
+       cap, may overflow); or one with a storage cap or a regen stop that nothing but its own regen brings in
+       (production is lost at the cap, at most what the regen brings, and with no other income the stock never has to
+       pass the cap). A short entity (or one that is both) must also have no regen that brings less than 0 in a step,
+       since its takers are all stopped and its stock may then only rise. Any other entity fails the walk: a store or
+       regen stop that an activity or a move fills too, a read cap, more than one cap.
+  6. **Why it is exact** (the original proposal's appendix B2). C1: every optimum of S3 has x_J = 0, so x* is feasible
+     for the pass and V0' ≥ V0. C2: every point of D* is dual feasible for the pass at the cost V0, so V0' ≤ V0; so
+     V0' = V0 and D* ⊆ D*'. A point of D*' that broke an old row of J would give, on its segment to a point of D* (all
+     of it dual feasible but for J's rows, at the cost V0), a point of D* where a slack of J is 0, against C1: so
+     D*' = D*. C2 is strict, so every optimum of the pass has x_J = 0, where the two programs are one: S3's optimal
+     face, each `most` and each range on D* outside J are the steady state's. With C3, K, its functions and their ends
+     are the same, so each step of the selection is the same LP on the same face, and the vector is the steady state's,
+     coordinate by coordinate. C4: the steady state's optimum of S2 is an optimum of S3 (V* = V0), so it runs no J, is
+     feasible for the pass and gives A*' ≥ A*. A solution of the pass with each stopped activity, its moves, each
+     stopped sink and demand row set to 0, and each short or long entity's stock laid again (a hard cap's overflow, a
+     store's or a regen stop's lost production taking what is no longer used, as late as the cap asks, from a start
+     stock the cycle returns to: the stock at the cycle's end is a monotone and continuous function of the start, below
+     the cap at the cap and at least the start where the start is the solution's own, or 0 for a short entity) is a
+     solution of the steady state's program with the same A: so A*' ≤ A*. That optimum of S2 then gives
+     V*' ≥ V0 = V0', and V*' ≤ V0' always.
+  7. **A proven pass** (`by` `certified`). Each pool's coordinate is the steady state's, and each activity's value at the
+     vector the steady state's, but a J activity's, which is computed at that vector with the pass's amounts (null for
+     one that moves out of or into a store). Nothing is solved again.
+  8. **Exact or not at all.** Every LP of the certificate is solved on D*'s complementary-slackness form and reads only
+     a certified optimum or HiGHS's unbounded status ("Exactness and failures"). One that is not certified (the pivot
+     cap included) or fails (`lp_solve_failed`, `lp_numeric_check_failed`) refuses the certificate: the pass is solved.
+     Nothing warns, nothing blocks: the certificate never approximates and never refuses an export. A blocked program
+     of the pass is the pass's refusal (`impact_blocked`), as a blocked vector is.
+  9. **What refused it** (#430, 11-12). With `impact.certify` true, each pass records `refused_by`: for a pass the
+     certificate does not prove, the first condition that refused it, `program` (its program differs from the steady
+     state's elsewhere than item 1 allows), `c1`, `c2`, `c3` or `c4` (that condition does not hold) or `lp_unverified`
+     (an LP of the certificate is not certified or fails, item 8); null for a proven pass and for the steady state's
+     own vector. The conditions are taken in that order, and each one's columns or activities in order (by activity,
+     then step): the first that fails, or whose LP is not certified or fails, decides. With `impact.certify` false no
+     pass has the member. So why a pass was solved reads from the export, without running the assessment again.
+  10. **The probes.** A proven pass reads no probe of its own: its K, its `most` and its ranges are the steady state's,
+      whose probes in an assessed component are all verified (an unverified `most`, `range` or tie makes its component
+      a structural gap, whose estimates are skipped; a forcing cost alone, the one that does not, no price reads). So a
+      proven pass is the steady state's vector. Solving the same pass computes its own probes on its own program, and
+      one that the pivot cap leaves unverified drops its activity from K (`_Solver.joint`), so a solved vector may
+      differ from the exact one. Where `verify passes` finds a proven pass whose solved vector differs, that solve's
+      unverified probes are looked at first (`certificate_mismatch`, `unverified`).
+  11. **A steady state from the cache.** The cache keeps none of what the certificate reads (`flow.encode`). An
+      assessment whose steady state came from the cache computes it again once, at its start, before any pass, without
+      the cache. The value computed again, as the cache keeps it, in canonical JSON, must be the cached one byte for
+      byte; otherwise `steady_state_mismatch` (exit 6), and nothing is assessed or written. Then the assessment reads
+      the one computed again: it never falls back to solving every pass, and nothing the certificate reads goes into
+      the cache. `export prices` computes without the cache, so an export of today never takes this way. No node's
+      value changes, so the `economy` kind's evaluator version stays 11.
+- **Timing** (PASS-TIMING; #430 METHOD-C). Each pass records how long it took, `timing_ms`, on a monotonic clock, in
+  whole milliseconds rounded down: `{stages, total}`, or null. How its vector was found is said by its `by` alone;
+  `timing_ms` only times. `stages`, only for `by` `solved` (null for `certified` and `steady_state`, which run no
+  stage), holds every stage, 0 for one that did not run; each is the time from the end of the stage before it to its
+  own end, so the stages never overlap:
 
   | Stage | What it times |
   |---|---|
@@ -1719,11 +1813,19 @@ uncertainty of the estimates is assessed here.
   | `max_min` | the lexicographic max-min over K |
   | `check` | the vector's exact check as a point of D*, and the activities' values at it |
 
-  `total` is the whole pass, from its start to its vector (the moved rules computed again, the program built, every
-  stage), so it is at least the sum of the stages. The timing is in that one place: no pass reads it, and neither the
-  vector's value (nor the cache), the price provenance files (so no `binds`), the shared tree, `estimates`, `counts` nor
-  any other member of prices.json holds any of it. Two exports of the same inputs by the same tool, libraries and
-  configuration differ in it alone.
+  `total` is the whole pass, from its start to its vector: for `solved`, the moved rules computed again, the program
+  built and every stage, so at least the sum of the stages; for `certified`, the moved rules computed again, the
+  program built and compared, and the certificate's LPs; for `steady_state`, the comparison of its values with the
+  point values. `timing_ms` is null where no time of the pass is there to give: a pass whose vector came from the
+  cache, which keeps no timing (`by` `solved`: only a solve gives a vector node). A pass's graph computes without the
+  cache, so an export writes none today. A pass that an assessment resuming from a checkpoint takes back (C-3,
+  "Stopping and resuming") is no such pass: it comes back with the `by`, `refused_by`, vector and `timing_ms` of the
+  run that computed it, as they are, as `--reuse-assessment` takes a group over ("Taking an assessment over"); how
+  they are kept and taken back is C-3's contract. The member `source` that PASS-TIMING wrote is gone, with no reading
+  of it kept (#430, 11-12): `by` says what it said. The timing is in that one place: no pass reads it, and neither the
+  vector's value (nor the cache), the price provenance files (so no `binds`), the shared tree, `estimates`, `counts`
+  nor any other member of prices.json holds any of it. Two exports of the same inputs by the same tool, libraries and
+  configuration differ in it alone; with `impact.certify` set otherwise, in it, `by` and `refused_by` alone.
 - **What it finds:** each pool's price range over the steady state and every pass (`impact`); and the activities whose
   class flips: the sign of their value at the vector (positive, zero, negative) is not the same in the steady state and in
   every pass. The Runtime's zero band, which needs the pools' scales and the rules' effects, is PRICE-4b's; an activity that
@@ -1743,7 +1845,7 @@ uncertainty of the estimates is assessed here.
 | `prices` | one entry per pool, by id (below) |
 | `slots` | the slot resources, by id: no pools, so not priced here |
 | `estimates` | each provisional derive the steady state read, by id: `rule`, `value` (its point value), `estimate` (as written, or null), `components`, `assessed`, and `skipped` (null, `structural_gap` or `estimate_missing`) |
-| `impact` | the assessment's groups, each `{rules, unknowns, passes, prices, flips}`: its derives; the unknowns they move by; each pass's `at` (each unknown's point or end, or the derive's `low` or `high`), `values` (each derive's moved value) and `timing_ms` (PASS-TIMING, "Timing" above: `source`, `solved`, `steady_state` or `cache`; `stages`, each stage's milliseconds by name, or null; `total`, the pass's milliseconds; integers); the pools whose price moves in it, with `low` and `high`; and the activities whose class flips in it |
+| `impact` | the assessment's groups, each `{rules, unknowns, passes, prices, flips}`: its derives; the unknowns they move by; each pass's `at` (each unknown's point or end, or the derive's `low` or `high`), `values` (each derive's moved value), `by` (#430 METHOD-C: how its vector was found, `solved`, `certified` or `steady_state`; "A pass", "The certificate"), `refused_by` (#430 METHOD-C, only with `impact.certify` true: the first condition of the certificate that refused the pass, `program`, `c1`, `c2`, `c3`, `c4` or `lp_unverified`, or null for a `certified` or `steady_state` pass; "The certificate") and `timing_ms` (PASS-TIMING, "Timing" above: null, or `stages`, each stage's milliseconds by name, or null, and `total`, the pass's milliseconds; integers); the pools whose price moves in it, with `low` and `high`; and the activities whose class flips in it |
 | `counts` | the pools of each class, and how many are `exported` and `pending` |
 | `evaluator` | the evaluator digest (#424 PRICE-REUSE; `cli.md`, "Cache", "The evaluator digest"): `sha256`, over the other three; `source`, the digest of the tool's source files; `libraries`, the versions of the libraries the steady state's node declares (`numpy`, `python`, `scipy`); `config`, every configuration key but those that never change a result and those only the plan reads (both listed, key by key, in `cli.md`), by its dotted name (`expr.max_bits`, `lp.grain`, `unknowns.seed`, …), sorted, with its value: an integer (its decimal text beyond ±(2<sup>53</sup> − 1)), a string or a boolean. Every file written from PRICE-REUSE on has it; an earlier one may not. It is in neither `versions` nor a price's provenance file |
 | `reused_assessment` | only in a file whose assessment was taken over (`--reuse-assessment`, below): `prices_sha256`, the sha256 of the earlier prices.json's bytes; its `versions`; `shared`, each of its shared trees' digest by root; `evaluator`, its evaluator digest's `sha256`; `members`, what was taken over (`estimates.assessed`, `estimates.skipped`, `impact`, `prices.flips`, `prices.impact`) |
@@ -1780,9 +1882,14 @@ is read first (`model_file_invalid` when there is none, or it is no prices file)
    for the same pools and estimates); everything else is computed as without the option: the coverage, the joint vector,
    the provenance files and `binds`, the acceptances of exports.json with what they lack (`acceptance_incomplete` reads the
    flips taken over), the counts. prices.json records `reused_assessment`; without that member it is, byte for byte, the
-   file the full export writes from the same inputs, but for each pass's `timing_ms`, and the provenance files are the
-   full export's. The groups are taken over with their passes' `timing_ms` as they are (PASS-TIMING): it records the
-   earlier run, which computed them; this one timed none.
+   file the full export writes from the same inputs, but for each pass's `by`, `refused_by` and `timing_ms`, and the
+   provenance files are the full export's. The groups are taken over with their passes' `by`, `refused_by` and
+   `timing_ms` as they are (PASS-TIMING; #430 METHOD-C): they record the earlier run, which computed them with
+   `impact.certify` as it was then (no key of the evaluator digest, `cli.md`), and this one timed none. Each pass taken
+   over has a `by` of the three and a `timing_ms` of the shape above; either every pass of the file has a `refused_by`
+   or none has, and where it has, it is one of the six conditions when its `by` is `solved` and null otherwise ("The
+   certificate"). Otherwise `model_file_invalid` at the pass: a file written before C-2a (`timing_ms` with `source`, or
+   a pass without `by`) is never taken over, and its evaluator digest's `source` is not this tool's anyway.
 
 Anything that differs is `reuse_refused` (exit 5; one error per member, `member` such as `versions.rules`,
 `evaluator.config.lp.grain` or `shared.economy:steady`, `expected` the earlier value and `found` this export's, `none` for
@@ -1798,10 +1905,17 @@ writes nothing into the model folder); nothing is deleted. `data` holds `path`, 
 written now), and with `--reuse-assessment` `reused_assessment`: the earlier prices.json's `file` and what this one
 records of it.
 
-**What it costs.** One steady state, then one vector per pass that moves something. Each pass solves as much of the
-steady state as its vector needs, so a model whose open components read many estimates pays roughly that many times.
-An export that takes its assessment over pays the steady state alone. What each pass paid, stage by stage, is its
-`timing_ms`.
+**What it costs.** One steady state, then, for each pass that moves something, the certificate or one vector. The
+certificate builds the pass's program without solving it and solves LPs on D* only: C1 once per column of J per
+assessment, C2 once per column of J per pass, and C3 at most two per J activity that needs them. A proven pass pays that
+alone. A pass it does not prove pays it and then its vector, which solves as much of the steady state as the vector
+needs, so a model whose open components read many estimates that the certificate does not prove pays roughly that many
+times. An export that takes its assessment over pays the steady state alone; an assessment whose steady state came from
+the cache pays it twice ("The certificate"). What each pass paid is its `timing_ms`; how, its `by`.
+
+**Stopping and resuming** (#430 METHOD-C C-3). An assessment must be able to stop at a checkpoint between passes and go
+on pass by pass; how, and what it keeps, is C-3's contract. A pass it takes back comes back as the run that computed it
+recorded it, with its `by`, `refused_by`, vector and `timing_ms`, as `--reuse-assessment` takes a group over ("Timing").
 
 ### `acmodel verify prices <model> --state <file>`
 
@@ -1826,6 +1940,57 @@ cache, then:
 Every problem is reported at once (exit 6); nothing but the state root's copy is ever written. `data` holds `path`,
 `model_id`, `state`, `file` (prices.json) and `shared`, by root: `sha256`, `recomputed`, `nodes`, `file` (the state root's
 copy) and `restored`. It costs one steady state, without the impact assessment.
+
+### `acmodel verify passes <model> --state <file> --pass <name> …` (#430 METHOD-C)
+
+The spot check of the certificate: a change of the model or of the tool may change which passes it proves, and this
+command checks chosen passes both ways without an export. It runs the model as `export prices` does, without the cache,
+computes the steady state with the keys under `lp` and `economy`, and the estimates the impact assessment assesses with
+their groups and passes ("The impact assessment"). Then, for each pass named, in the order named:
+1. the certificate ("The certificate"), whatever `impact.certify` says: whether it proves the pass, and else the first
+   condition that refuses it;
+2. the pass's vector solved, as a pass with `impact.certify` false computes it, with the activities whose `most` or
+   range that solve could not verify (so left out of its K);
+3. for a proven pass, the two vectors compared exactly: each pool's coordinate and each activity's value at the vector.
+
+A pass whose values are all the point values is checked too: its J is empty, and its solve computes the steady state's
+own vector again.
+
+**The passes named**, one way of the two, never both:
+- `--pass <name>`, given once per pass, in that order;
+- `--passes-file <file>`: UTF-8 text without a BOM, one name per line, in that order. A line ends at LF, a CR just
+  before it being part of the line end (CRLF); one line end at the end of the file ends its last line. Nothing else is
+  taken off a line.
+
+A name is as `export prices` names a pass (`export_refused`, `value`): each `<id>=<point>` of its `at`, sorted by id,
+joined by `,` (`pt.a.b=low`; `unk.c=v1,unk.d=high`). Ids, points and ends hold neither `,` nor `=`. The name says its
+group too: a `low` and `high` group by its derive, an `of` group by the unknowns it moves, which no other group moves.
+Before the model is run, each of these is one error, and then nothing is run:
+- both ways given, `usage_invalid` (`argument_unexpected`, `argument` `--passes-file`); neither, `usage_invalid`
+  (`argument_missing`, `argument` `--pass`);
+- a file that cannot be read, begins with a BOM or is not UTF-8, `model_file_invalid` (`unreadable`, `bom_present`,
+  `utf8_invalid`; `format` `pass_list`, the empty pointer);
+- an empty name (an empty `--pass`; an empty line of the file, or an empty file), `usage_invalid` (`pass_empty`,
+  `argument` the option); a name given again, each time after its first, `usage_invalid` (`argument_unexpected`,
+  `argument` the name).
+
+After the steady state and before any pass is computed, each name that is no pass of the assessment (a skipped estimate
+has none) is `usage_invalid` (`pass_unknown`, `argument` the name), and no pass is computed.
+
+`data.passes` holds one entry per pass named, in that order: `pass`, its name; `rules`, its group's derives; `by`, what
+an export with `impact.certify` true records for it; `certified`, whether the certificate proves it; `refused`, null, or
+`{condition, columns, activities}`: the first condition that refused it, as an export records it in `refused_by`
+(`program`, `c1`, `c2`, `c3`, `c4`, `lp_unverified`; "The certificate"), and the columns or activities it names;
+`matches`, null for a pass not proven, else whether the two vectors agree; `differs`, `{pools, activities}`, each id
+whose value differs with both values (`certified`, `solved`), both empty when they agree; `unverified`, the activities
+the solve left out of K for a probe it could not verify; `timing_ms`, `{certificate, solve}`, the milliseconds each side
+took.
+
+A proven pass whose two vectors differ is `certificate_mismatch` (exit 6), one error per pass, once every pass named is
+computed: the proof makes the proven vector the exact one, so a difference is a defect, or that solve's unverified probe
+(look there first: "The certificate", the probes). A pass the certificate does not prove is reported, and no error. A
+blocked steady state or pass is refused as `export prices` refuses it (`export_refused`, exit 5). Nothing is written: no
+`out/`, no provenance file or shared tree, no cache entry.
 
 ## Bindings: `bindings.json`, `bindings check` and `bindings apply`
 
