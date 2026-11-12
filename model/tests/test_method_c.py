@@ -255,7 +255,7 @@ def test_the_steady_state_and_the_vector_are_what_they_were_and_hold_the_rest_be
     assert sorted(economy_flow.encode(found, [])) == sorted(economy_flow.FORMAT["economy"])
     assert isinstance(found.held, economy_flow.Held)
     assert (was.held, vector.held, was_vector.held) == (None, None, None)
-    assert EVALUATORS["economy"].version == 11
+    assert EVALUATORS["economy"].version == 12
 
 
 def kept_nodes(state_root: Path) -> list[tuple[Any, ...]]:
@@ -265,10 +265,11 @@ def kept_nodes(state_root: Path) -> list[tuple[Any, ...]]:
         return index.execute("SELECT kind, node, spec, key, value, deps FROM nodes ORDER BY key").fetchall()
 
 
-def test_the_cache_keeps_what_it_kept_and_the_economy_version_stays_11(tmp_path, economy, monkeypatch):
+def test_the_cache_keeps_what_it_kept_and_the_economy_version_is_12(tmp_path, economy, monkeypatch):
     """cyclic_fixture's steady state and plan by `acmodel economy`, through a cache of its own, now and as before this
     slice (`as_before`): the same answer, the same cache entries (each node's spec, key, value hash and trace), the
-    economy's two among them, and the same run outputs, byte for byte. The economy's evaluator version is 11 still."""
+    economy's two among them, and the same run outputs, byte for byte. The economy's evaluator version is 12: this slice
+    left it at 11, and #430's second try of an LP on D* moved it."""
     folder = cyclic_fixture(tmp_path / "model")
     now_root, before_root = tmp_path / "now", tmp_path / "before"
 
@@ -286,7 +287,7 @@ def test_the_cache_keeps_what_it_kept_and_the_economy_version_stays_11(tmp_path,
     run_id = doc["data"]["run_id"]
     outputs = [root / "runs" / run_id / "outputs.json" for root in (now_root, before_root)]
     assert outputs[0].read_bytes() == outputs[1].read_bytes()
-    assert EVALUATORS["economy"].version == 11
+    assert EVALUATORS["economy"].version == 12
 
 
 def test_an_export_writes_what_it_wrote_before(tmp_path, acmodel, monkeypatch):
