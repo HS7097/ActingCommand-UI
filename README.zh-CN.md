@@ -171,7 +171,7 @@
 是 `StopInstanceRun` 停下的调度运行的结算，旁边的终局照旧是带 `contained_task_cancelled` 的 `task.failed`；建在 v0.12.53 上的控制台
 解不了它（离线时含它的页整页失败，在线时 `runtime_receipt_decode_failed`），这一版解得了。v0.12.55 起 Runtime 也停调度器派的运行，
 由 actinglab `task stop` 或 Lab 的工具发；MCP `ac_stop_run` 和 actinglab `run stop` 照旧拒绝所有调度运行；这个控制台的
-「停下这次运行」仍只停直接运行。v0.12.54 的配置修订 28 加了 `idle.action` 的值 `auto` 和键 `idle.return_home_min_gap_ms`、
+「停下这次运行」也停它（#429 UI-3e3，见「启动器」一节的救援条）。v0.12.54 的配置修订 28 加了 `idle.action` 的值 `auto` 和键 `idle.return_home_min_gap_ms`、
 `idle.stop_emulator_min_gap_ms`，每个也可按实例设（#386 IDLE-2），以及 `instance.<实例编号>.scheduling.pool_lines`（#428 SCHED-C1e），
 新键在 `ui_tier` 里都是 `hidden`，设置页不多出行；设置页把 `auto` 写成「按空闲时长自动选」，号的规则面板写
 「现在是『按空闲时长自动选』，这里不提供」，也不提供这一选项。请求 `PackScheduleView`、`EditPackSchedule` 有了成功码 `request_pack_schedule_view_completed`、
@@ -675,19 +675,30 @@ Runtime 才回话，所以按下去可能要半分钟左右，这期间卡片上
 --instance <别名>` 暂停一个实例、用带同样参数的 `actingctl resume` 恢复，或用 MCP 工具 `ac_pause` /
 `ac_resume`（见「智能体用的 MCP」一节）。
 
-实时画面上方的救援条在这个号有活动时多一行「停下这次运行」（#429 UI-3e2，R-6 第一片，Runtime v0.12.53 起）。
-只有别的工具直接发起的运行能按：最近一次状态读取里这个号的活动是 `direct_run`，并带着它的 `request_id`（比如
-Lab 的 `run start`、`actingctl task-run`、MCP 的 `ac_run_pack` 起的运行）。调度器派的运行和 Runtime 自己发起
-的步骤不发请求，按钮灰着并写明原因（调度器派的那种用卡片上的「暂停这个号」停）；v0.12.55 起 Runtime 也能停调度器派的运行，
-但这个控制台还不发（留给后面一片）。按一下就发，不问第二遍：在后台
+实时画面上方的救援条在这个号有活动时多一行「停下这次运行」（#429 UI-3e2，R-6 第一片，Runtime v0.12.53 起；
+UI-3e3，R-6b，调度器派的运行 Runtime v0.12.55 起）。最近一次状态读取里这个号的活动带着它的 `request_id` 时能按：
+别的工具直接发起的运行（`direct_run`，比如 Lab 的 `run start`、`actingctl task-run`、MCP 的 `ac_run_pack` 起的
+运行），和调度器派的运行（`policy_run`，全局暂停下「正在收尾」的也算）。Runtime 自己的步骤（启动、恢复、空闲时的
+收尾）不发请求，按钮灰着并写明原因。按一下就发，不问第二遍：在后台
 线程用一条新的「人」连接发一次 `StopInstanceRun`，`wait_ms` 5 秒；Runtime 让这次运行停在下一个检查点，再用这次
 运行自己的租约复位设备，然后回答。结果写在这一行下面，带时刻；屏上不出码、不出请求号，被停运行的请求号只写进技术
 日志。回答说还没停下（`settled: false`）或者结果未确认时，等同一个 owner epoch 里、这次回答之后的一次状态读取
 显示这次运行已经不在了，再补发一次，读复位的结果；最多补发这一次，没有定时重发，被拒或没发出去也不重发。Runtime
 重启了、这个号不在列表里了、读取线程没了，就写结果不明，不补发；运行一直不结束就一直等，不另设上限。v0.12.53
-之前的 Runtime 答 `not_implemented`（不入账），之后这一轮 Runtime 里按钮灰着。别的控制台或工具已经请停时，这里
+之前的 Runtime 答 `not_implemented`（不入账），之后这一轮 Runtime 里两种运行的按钮都灰着。别的控制台或工具已经请停时，这里
 看不出来；再按只多三条账本记录（`ui.action`、`command.received`，再加 `command.validated` 或
 `command.rejected`），结果照样能读到。
+
+调度器派的运行停下的只是这一次：任务没有关，冷却从派发算起，冷却过后触发条件还成立就会再派；不想它再跑，用卡片上的
+「暂停这个号」。所以停下了（复位成功、复位失败，或者它先因别的原因结束了）的结果行后面接一句「这个任务没有关：冷却过后
+条件还成立会再跑；不想它再跑，用卡片上的「暂停这个号」」；没停下或不知道停没停下时不接。停下不算失败：不重试、不退避、
+不暂停任务、不起恢复梯子。直接运行的结果行和以前一样。控制台读不到正在跑的 Runtime 的版本，所以调度运行先放开：
+v0.12.53、v0.12.54 会拒绝停调度运行（`run_origin` 是 `policy`，入账三条，结果行红一次），之后这一轮 Runtime 里调度运行的
+按钮灰着，写「这个版本的 Runtime 还不能停调度器派的运行，0.12.55 起可以」，直接运行照常能按。账本窗口里，停下的调度运行
+记的 `task.failed`（`contained_task_cancelled`）、`policy.execution_recorded`（结果 `stopped`）和调度驱动那条
+`runtime.failed`，备注栏写「已停下」，不按失败的红色显示，类型名和级别字照 Runtime 记的；运行恢复分组行由账本推出，
+可能照旧把它们算成「第 N 条失败，未见恢复」。「日常任务」页签里这一轮已经结束的派发写「这一轮已结束」，跑完和被停下的
+分不出来。
 
 - **有条件恢复（账本窗口）**：技术行下面按最近一次状态读取列出全局暂停和各实例的暂停（理由、修订、
   起始时间），全局与实例各按各的范围。别的工具或监控台自己加的暂停（全局的，或设备已交还的实例暂停；
@@ -1038,7 +1049,7 @@ Runtime 的看门狗是一个计划任务，所以 acsetup 不替人设置。要
 
 `slint` 1.17.x，`default-features = false`；账本对监控台只读（监控台发出的请求——启动按钮、关闭
 请求、恢复请求——由 Runtime 自己记账；状态读取不留账本记录），控制入口只有启动器的两个按钮（启动 /
-请求关闭，见上）、启动器的解锁入口（经确认的 `actingd unlock-owner`）与账本窗口里经确认的有条件恢复（见「启动器」一节末尾），没有审批入口；监控台的 crate 不带测试，CI 只构建工作区、不跑测试。启动器在
+请求关闭，见上）、启动器的解锁入口（经确认的 `actingd unlock-owner`）与账本窗口里经确认的有条件恢复（见「启动器」一节末尾），没有审批入口；监控台的 crate 只有 `acui-model` 带四条单元测试（纯函数 `stop_marked` 的判定，UI-3e3），别的不带测试，CI 只构建工作区、不跑测试。启动器在
 `crates/acui-app/src/launcher.rs`，路径从哪来在 `install.rs`，技术日志与启动失败窗口在 `report.rs`，
 探测、请求关闭、记下启动按钮、在线开台时的状态与事实读取、有条件恢复这几个客户端操作在 `acui-source`
 （`probe_runtime` / `request_shutdown` / `record_start` / `instance_facts` / `resume_paused`）。

@@ -976,7 +976,8 @@ pub struct Labels {
     /// read; that not every task is listed. The account's own line of tasks without a package, and
     /// why, in grey; the Runtime's own reading task. A group of no `ui.json` group; a package with
     /// no summary; its two badges. What a row says: running, not for the scheduler; scheduled, and
-    /// while paused; done, or not started, this round; a paused reason; the other reasons of its
+    /// while paused; ended this round (it ran, was stopped, or did not start; UI-3e3), or not
+    /// started; a paused reason; the other reasons of its
     /// tasks (their sentences), how they are joined, and that there are more.
     pub tasks_tab: &'static str,
     pub tasks_down: &'static str,
@@ -2134,7 +2135,7 @@ pub const ZH: Labels = Labels {
     tasks_running_direct: "正在跑（不是调度安排的）",
     tasks_scheduled: "已安排",
     tasks_scheduled_paused: "已安排（暂停中，不会开始）",
-    tasks_completed: "这一轮已跑完",
+    tasks_completed: "这一轮已结束",
     tasks_rejected: "这一轮没能开始",
     tasks_paused: "暂停中，不开始新任务",
     tasks_also: "另有：{}",
@@ -3138,7 +3139,7 @@ pub const EN: Labels = Labels {
     tasks_running_direct: "Running (not scheduled)",
     tasks_scheduled: "Scheduled",
     tasks_scheduled_paused: "Scheduled (paused; will not start)",
-    tasks_completed: "Done this round",
+    tasks_completed: "Ended this round",
     tasks_rejected: "Could not start this round",
     tasks_paused: "Paused; no new tasks start",
     tasks_also: "Also: {}",
