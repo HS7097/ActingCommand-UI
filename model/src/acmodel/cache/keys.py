@@ -113,6 +113,8 @@ class Evaluator:
 # its data, status, warnings, blocks and reads) is what it was: the probes only gave warnings, which the vector never
 # kept, and the stages' times (`flow.Economy.timing`) are never encoded. The steady state, the plan and the quick look
 # compute what they did.
+# METHOD-C: `economy` stays 11. The steady state hands what the certificate reads (`flow.Economy.held`) in memory only:
+# `flow.encode` keeps none of it, so what its node keeps is what it was, and every node computes what it did.
 EVALUATORS: dict[str, Evaluator] = {
     "economy": Evaluator(11, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),

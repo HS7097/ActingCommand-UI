@@ -99,6 +99,17 @@ value at the vector, nothing else, and nothing else reads it. It also times each
 a monotonic clock: what `Economy.timing` holds, which is no part of its value (`encode` keeps no timing, so neither does
 the cache) and which only the pass's `timing_ms` in prices.json shows (`core.impact`).
 
+**What the certificate reads** (#430 METHOD-C C-1; contracts/formats.md, "`acmodel export prices`", "The certificate").
+The steady state hands the impact assessment the objects its own computation found that the certificate reads (`Held`:
+S3's program and its exact optimum x*, S3's dual and the exact optimal point y* of it, D* and S3's optimal face in their
+complementary-slackness forms, P, A, A* and V0, K, the vector and each activity's value at it), beside its value
+(`Economy.held`) and never in it: `encode` keeps none of it, so neither does the cache, and every node keeps what it
+kept. `build_program` builds S3's program from a graph (the steady state's, or a pass's `graph.Moved`) as the solve
+builds it, and solves nothing; `compare_programs` compares a pass's program with the steady state's, and gives J (the
+activities' execution columns whose coefficients differ, only in balance rows, overflow bounds and regen stops) or where
+the two differ elsewhere. `steady_again` computes the steady state again without the cache, for an assessment whose
+steady state the cache gave (`core.impact`).
+
 **The re-solves at ±grain** (PRICE-2d, `_Solver.regrain`). One grain more or less of a resource's income moves only right
 sides of S3's program, so each re-solve starts from S3: S3's basis proves it where it stays primal feasible
 (`exact.shifted`, `exact.ranging`); else HiGHS's instance of S3 gets only the moved row ends and goes on from S3's
@@ -143,7 +154,7 @@ from acmodel.codes import (
     STATE_READING_MISSING,
 )
 from acmodel.config import EconomySettings
-from acmodel.core import coverage, exact
+from acmodel.core import common, coverage, exact
 from acmodel.core.common import CONFIRMED, PROVISIONAL, RULE_STATUS, Need, worst
 from acmodel.core.unknown import read as unknowns_read, rule_status
 from acmodel.envelope import Failure, error
@@ -251,7 +262,10 @@ class Economy:
     read, the graph nodes, data rows and gates its outputs rest on (the provenance of `price:` and
     `activity_value:`, PRICE-2b-1). A vector the pass computed also holds how long each of its stages took (`timing`,
     PASS-TIMING: whole milliseconds by `STAGES`), which is no part of its value: `encode` leaves it out, so the cache
-    never keeps it and a value the cache gives has none, and it is not compared."""
+    never keeps it and a value the cache gives has none, and it is not compared. A steady state this run computed also
+    holds what its own computation found that the certificate reads (`held`, #430 METHOD-C: `Held`), in memory only and
+    no part of its value either: `encode` leaves it out too, so a steady state the cache gives has none, and it is not
+    compared."""
 
     data: dict[str, Any] | None = None
     status: str = CONFIRMED
@@ -260,6 +274,7 @@ class Economy:
     blocked_by: frozenset[int] = frozenset()
     reads: tuple[tuple[str, ...], ...] = ()
     timing: dict[str, int] | None = field(default=None, compare=False)
+    held: Held | None = field(default=None, compare=False, repr=False)
 
     @property
     def blocked(self) -> bool:
@@ -1466,6 +1481,148 @@ def _income_moves(model: _Model, resource: str, step: int, amount: Fraction) -> 
     return moves
 
 
+# S3's program built and not solved, and two of them compared (#430 METHOD-C; contracts/formats.md, "`acmodel export
+# prices`", "The certificate", item 1) -------------------------------------------------------------------------------
+
+# The rows in which a coefficient of an activity's execution column may differ between a pass's program and the steady
+# state's: the balances, the overflow bounds and the regen stops.
+J_ROWS = ("balance", "overflow", "stop")
+
+
+@dataclass(frozen=True)
+class Built:
+    """S3's program built from a graph and not solved (`build_program`): the model it is built from (`_Model`) and the
+    program; both None when the model's reading is blocked or refused, with the errors that block it among the graph's
+    (`blocked_by`), as the steady state's node would be blocked by them."""
+
+    model: _Model | None
+    program: _Program | None
+    blocked_by: frozenset[int] = frozenset()
+
+    @property
+    def blocked(self) -> bool:
+        return bool(self.blocked_by)
+
+
+def _read(graph: Graph, built: str) -> tuple[_Reader, _Model | None]:
+    """The model of one program read from `graph` (`built`, steady or plan), as every economy node reads it: the
+    structure (`_shape`), then the values (`_Reader.model`), which raise `Need` until every node they read is computed.
+    None for the model when the reading is blocked or refused (the reader holds why)."""
+    graph.depend(("economy_model",))
+    reader = _Reader(graph, _shape(graph, built), built)
+    return reader, reader.model(graph.economy)
+
+
+def _computed(graph: Graph, attempt: Callable[[], Any]) -> Any:
+    """`attempt()`, once each graph node it needs (`Need`) is computed in `graph`, as `Graph.run` computes one (through
+    its cache when it has one); `attempt` starts again after each, as a node's computation does in `solve`."""
+    compute = graph.compute if graph.cache is None else graph.cached
+    while True:
+        try:
+            return attempt()
+        except Need as need:
+            common.solve([need.key], compute, graph.results)
+
+
+def build_program(graph: Graph) -> Built:
+    """S3's program from `graph` (the steady state's graph, or a pass's `graph.Moved`), built and not solved: the model
+    read in the reference state as the steady state reads it (`_read`, which `compute` reads it with), then `_program`
+    of that model, the call `_Solver.tiers` makes for S3. So it is the program a solve of the steady state, or of the
+    vector, builds, row by row and column by column: the same row keys, senses, right sides, groups and coefficients,
+    the same columns with the same bounds, the same objective. A node of `graph` it needs that is not computed yet is
+    computed first (`_computed`); nothing is solved, and nothing of the program is kept anywhere."""
+
+    def attempt() -> Built:
+        reader, model = _read(graph, STEADY)
+        if model is None:
+            return Built(None, None, graph.register(reader.refused) | frozenset(reader.blocked))
+        return Built(model, _program(model))
+
+    return _computed(graph, attempt)
+
+
+@dataclass(frozen=True)
+class Compared:
+    """A pass's program compared with the steady state's (`compare_programs`). `columns` is J: the activities' execution
+    columns (`("x", activity, step)`) whose coefficients differ, by activity and then step, empty when the two programs
+    are one; None when the two differ anywhere else, and then `elsewhere` says where they first do: `part` (`column`,
+    `row`, `coefficient` or `objective`), the `row` and `column` it is at (by token, where it has them), the `member` of
+    a row (`row` for a row only one program has, `sense`, `rhs`, `group`), and the value on each side (`steady`, `pass`:
+    a number or a sense as its text, a column's bounds as `[lower, upper, integer]`, a row as its token, null for a side
+    without it)."""
+
+    columns: tuple[Key, ...] | None
+    elsewhere: dict[str, Any] | None = None
+
+    @property
+    def activities(self) -> tuple[str, ...]:
+        """The J activities, each with a column in J, by id."""
+        return tuple(sorted({key[1] for key in self.columns or ()}))
+
+
+def _keyed(program: _Program) -> dict[Key, _Row]:
+    """A program's rows by key; two rows with one key are a defect of the builder."""
+    rows = {row.key: row for row in program.rows}
+    if len(rows) != len(program.rows):
+        raise ValueError("a program holds two rows of one key")
+    return rows
+
+
+def _bounds(found: tuple[Fraction, Fraction | None, bool] | None) -> list[Any] | None:
+    return None if found is None else [str(found[0]), _text(found[1]), found[2]]
+
+
+def compare_programs(steady: _Program, moved: _Program) -> Compared:
+    """J, or where the pass's program `moved` differs from the steady state's `steady` elsewhere (`Compared`;
+    contracts/formats.md, "The certificate", item 1). The two may differ only in coefficients of activities' execution
+    columns, and there only in balance rows, overflow bounds and regen stops (`J_ROWS`); then J is the set of those
+    columns. Anything else that differs is where the program differs elsewhere, and the first such difference is given,
+    in this order: the columns, by key (one that only one program has, or whose bounds differ: lower, upper, integer);
+    the rows, by key (one that only one program has; then its sense, right side and group; then its coefficients, by
+    column); the objective, by column. Every comparison is of exact fractions; a coefficient a row does not list is 0.
+    Nothing is solved: this reads the two programs only."""
+    zero = Fraction(0)
+
+    def shown(value: Any) -> str | None:
+        return None if value is None else str(value)
+
+    for key in sorted(set(steady.variables) | set(moved.variables)):
+        before, after = steady.variables.get(key), moved.variables.get(key)
+        if before != after:
+            found = {"part": "column", "column": _token(key), "steady": _bounds(before), "pass": _bounds(after)}
+            return Compared(None, found)
+    rows, pass_rows = _keyed(steady), _keyed(moved)
+    columns: set[Key] = set()
+    for key in sorted(set(rows) | set(pass_rows)):
+        before, after = rows.get(key), pass_rows.get(key)
+        row = _token(key)
+        if before is None or after is None:
+            found = {
+                "part": "row", "row": row, "member": "row", "steady": None if before is None else row,
+                "pass": None if after is None else row,
+            }
+            return Compared(None, found)
+        for member in ("sense", "rhs", "group"):
+            old, new = getattr(before, member), getattr(after, member)
+            if old != new:
+                found = {"part": "row", "row": row, "member": member, "steady": shown(old), "pass": shown(new)}
+                return Compared(None, found)
+        for column in sorted(set(before.coefficients) | set(after.coefficients)):
+            old, new = before.coefficients.get(column, zero), after.coefficients.get(column, zero)
+            if old == new:
+                continue
+            if column[0] == "x" and key[0] in J_ROWS:
+                columns.add(column)
+                continue
+            found = {"part": "coefficient", "row": row, "column": _token(column), "steady": str(old), "pass": str(new)}
+            return Compared(None, found)
+    for column in sorted(set(steady.objective) | set(moved.objective)):
+        old, new = steady.objective.get(column, zero), moved.objective.get(column, zero)
+        if old != new:
+            return Compared(None, {"part": "objective", "column": _token(column), "steady": str(old), "pass": str(new)})
+    return Compared(tuple(sorted(columns)))
+
+
 # The dual (PRICE-2b-1; #424 ACM-PRICE addendum 2.1 §2.2 step 2) -------------------------------------------------
 
 
@@ -2315,6 +2472,51 @@ class _Tiers:
     optimal: tuple[dict[Key, Any], tuple[_Row, ...]]  # S3's optimal face by complementary slackness (`_optimal_face`)
     seed: _Seed | None  # S3's basis, a start for an LP on that face (PRICE-2e)
     unverified: tuple[dict[str, Any], ...] = ()  # `lp_probe_unverified` of the tie probes (PRICE-2c)
+    # #430 METHOD-C: A's terms (`acquisition`), the function S1 maximised; none when A has no term (`Held`)
+    terms: dict[Key, Fraction] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _Chosen:
+    """What `_Solver.joint` chose (#430 METHOD-C, for `Held`): K, the max-min's coordinates by id, each its function on
+    D*, the low and high ends of its range there and whether it is two-sided (`_Solver.max_min`); the joint vector, each
+    pool's coordinate; and each activity's value at it, None for one that moves out of or into a store. All exact."""
+
+    coordinates: dict[str, tuple[dict[Key, Fraction], Fraction, Fraction, bool]]
+    vector: dict[str, Fraction]
+    values: dict[str, Fraction | None]
+
+
+@dataclass(frozen=True, eq=False)
+class Held:
+    """What the steady state's own computation found that the certificate reads (#430 METHOD-C; contracts/formats.md,
+    "`acmodel export prices`", "The certificate"), handed to the impact assessment beside the steady state's value
+    (`Economy.held`) and held in memory only: never in its value, the cache or a file. Each member is the object
+    `_Solver.steady` itself computed with; none is computed again for it (`_Solver.handed`).
+
+    - `program`: S3's program (`_Tiers.program`), and `x`, its exact optimum x* (`_Tiers.base.x`);
+    - `dual`: S3's dual (`_Tiers.dual`), and `point`, the exact optimal point y* of it that the strong-duality check
+      found (`_Tiers.point`, `duality`);
+    - `restricted`: D*, in its complementary-slackness form with x* (`_restricted`), on which every LP on D* of the
+      steady state is solved;
+    - `optimal`: S3's optimal face, in its complementary-slackness form with y* (`_Tiers.optimal`, `_optimal_face`);
+    - `protected`: P, the protected acquisitions by id (`acquirers`, `protects`); `acquisition`, A's terms
+      (`acquisition`; none when A has no term); `acquired`, A* (0 then); and `value`, V0, S3's optimum;
+    - `coordinates`, `vector` and `values`: K, the joint vector and each activity's value at it (`_Chosen`)."""
+
+    program: _Program
+    x: dict[Key, Fraction]
+    dual: _Dual
+    point: dict[Key, Fraction]
+    restricted: tuple[dict[Key, Any], tuple[_Row, ...]]
+    optimal: tuple[dict[Key, Any], tuple[_Row, ...]]
+    protected: tuple[str, ...]
+    acquisition: dict[Key, Fraction]
+    acquired: Fraction
+    value: Fraction
+    coordinates: dict[str, tuple[dict[Key, Fraction], Fraction, Fraction, bool]]
+    vector: dict[str, Fraction]
+    values: dict[str, Fraction | None]
 
 
 class _Solver:
@@ -2335,6 +2537,10 @@ class _Solver:
         self.rebuilds: list[float] = []
         # PRICE-2d: how each side of a resource's re-solves at ±grain was found (`grain_way`); a diagnosis, never output
         self.grain_ways: dict[str, int] = {}
+        # #430 METHOD-C: what the last `joint` chose (K, the vector, the activities' values at it), and what `steady`
+        # hands the impact assessment (`Held`, `handed`); None until they run. Neither is output; nothing reads them here
+        self.chosen: _Chosen | None = None
+        self.held: Held | None = None
 
     def lap(self, stage: str) -> None:
         """The end of a stage of the vector (PASS-TIMING, `_Clock.lap`); nothing without a clock. It reads the clock only,
@@ -2920,7 +3126,9 @@ class _Solver:
         - **`lean`** (the vector, PRICE-4a): only what the vector reads. The range of an activity is probed only when no
           optimum runs it (`most` 0: only such an activity is in K), and no forcing cost is computed; the activities'
           other judgements are then null. The vector is the same: every step of the selection is an LP's optimal
-          value over the same K. Its stages end on the solver's clock (`lap`, PASS-TIMING), which `steady` has none of."""
+          value over the same K. Its stages end on the solver's clock (`lap`, PASS-TIMING), which `steady` has none of.
+        - **What it chose** (#430 METHOD-C): K, the vector and each activity's value at it, exact, are kept on the solver
+          (`chosen`, `_Chosen`) for `steady` to hand on (`Held`); nothing here reads them, and nothing above changes."""
         model, steps, zero, one = self.model, self.model.steps, Fraction(0), Fraction(1)
         variables = on_face[0]
         warnings: list[dict[str, Any]] = []
@@ -3041,6 +3249,7 @@ class _Solver:
             for resource in model.resources
         }
         activities: dict[str, Any] = {}
+        at_vector: dict[str, Fraction | None] = {}
         for activity in model.activities:
             count, cost = most[activity], zero
             if lean:  # the vector reads no forcing cost
@@ -3069,6 +3278,7 @@ class _Solver:
                      if name == activity and entity in vector),
                     zero,
                 )
+            at_vector[activity] = value
             doubtful = unverified[activity]
             activities[activity] = {
                 "value": _text(value),
@@ -3079,6 +3289,7 @@ class _Solver:
                 "input_bound": None if FORCING in doubtful else cost is None,
                 "unverified": list(doubtful),
             }
+        self.chosen = _Chosen(coordinates, vector, at_vector)  # #430 METHOD-C: what it chose, exact (`Held`)
         return {"prices": prices, "max_min": stages, "activities": activities}, warnings
 
     def member(self, dual: _Dual, program: _Program, optimum: Fraction) -> None:
@@ -3166,7 +3377,9 @@ class _Solver:
             point = self.duality(dual, base.value)
             optimal = _optimal_face(dual, program, point)
             self.lap("dual")
-            return _Tiers(program, base, Fraction(0), base, (), face, records, (), dual, point, optimal, seed)
+            return _Tiers(
+                program, base, Fraction(0), base, (), face, records, (), dual, point, optimal, seed, terms=acquired,
+            )
         first = self.optimal(_program(model, objective=acquired), ACQUISITION)
         self.lap("acquisition")
         floors = _floor(ACQUISITION, acquired, first.value)
@@ -3186,7 +3399,7 @@ class _Solver:
         ties, unverified = self.ties(floors, optimal, seed, second, base, dual, point) if tie_probes else ([], [])
         return _Tiers(
             program, base, first.value, second, floors, face, records, tuple(ties), dual, point, optimal, seed,
-            tuple(unverified),
+            tuple(unverified), terms=acquired,
         )
 
     def tier_conflict(
@@ -3281,7 +3494,9 @@ class _Solver:
 
     def steady(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """The steady state. A resource's price in a step is the projection of its balance row's dual on D*
-        (PRICE-2b-1); its re-solves at plus and minus one grain (`grain`) and HiGHS's marginal cross-check it."""
+        (PRICE-2b-1); its re-solves at plus and minus one grain (`grain`) and HiGHS's marginal cross-check it. It also
+        keeps on the solver what the certificate reads (`held`, #430 METHOD-C: `handed`), which `compute` hands on beside
+        the value and never in it."""
         model, steps = self.model, self.model.steps
         tiers = self.tiers()
         program, base, optimum = tiers.program, tiers.base, tiers.base.value
@@ -3305,6 +3520,7 @@ class _Solver:
             values[activity] = [_price(self.value(activity, prices, step)) for step in range(steps)]
         joint, judged = self.joint(dual, tiers.point, optimum, prices, on_face, base.x, tiers.optimal, tiers.seed)
         warnings += judged
+        self.held = self.handed(tiers, on_face)
         data = {
             "cycle": {"steps": steps, "step_seconds": STEP_SECONDS},
             **self.shown_tiers(tiers),
@@ -3322,6 +3538,21 @@ class _Solver:
             "relaxed": model.shown_relaxed(),
         }
         return data, warnings
+
+    def handed(self, tiers: _Tiers, on_face: tuple[dict[Key, Any], tuple[_Row, ...]]) -> Held:
+        """What the steady state hands the impact assessment (#430 METHOD-C, `Held`): the objects `steady` computed
+        with, as they are: its three solves (`tiers`), D* in its complementary-slackness form (`on_face`, the one
+        `steady` computes once for every LP on D*) and what `joint` chose (`chosen`). Nothing is computed again; P is
+        read off the acquisitions `tiers` already judged (`protects`)."""
+        chosen = self.chosen
+        if chosen is None:  # `joint` runs before this, always
+            raise ValueError("the steady state hands on what the selection chose before it ran")
+        return Held(
+            program=tiers.program, x=tiers.base.x, dual=tiers.dual, point=tiers.point, restricted=on_face,
+            optimal=tiers.optimal, protected=tuple(record["activity"] for record in tiers.records if protects(record)),
+            acquisition=tiers.terms, acquired=tiers.acquired, value=tiers.base.value,
+            coordinates=chosen.coordinates, vector=chosen.vector, values=chosen.values,
+        )
 
     def projections(
         self, tiers: _Tiers, on_face: tuple[dict[Key, Any], tuple[_Row, ...]], warnings: list[dict[str, Any]] | None,
@@ -3491,13 +3722,11 @@ class _Solver:
 def compute(graph: Graph, solve: str) -> Economy:
     """The economy node `solve` (steady, plan, quick or vector) of `graph`. It raises `Need` until every node it reads is
     computed, as every graph node does. The quick look and the vector read and build the steady state's program. The
-    vector times its stages (PASS-TIMING, `_Clock`), from the start of the call that computes it: `Economy.timing`."""
+    vector times its stages (PASS-TIMING, `_Clock`), from the start of the call that computes it: `Economy.timing`. The
+    steady state holds what the certificate reads (#430 METHOD-C, `Held`): `Economy.held`, never encoded."""
     clock = _Clock() if solve == VECTOR else None
-    graph.depend(("economy_model",))
     built = STEADY if solve in (QUICK, VECTOR) else solve
-    shape = _shape(graph, built)
-    reader = _Reader(graph, shape, built)
-    model = reader.model(graph.economy)
+    reader, model = _read(graph, built)
     if model is None:
         return Economy(blocked_by=graph.register(reader.refused) | frozenset(reader.blocked))
     status = reader.inputs()
@@ -3529,5 +3758,13 @@ def compute(graph: Graph, solve: str) -> Economy:
     per_account = solve == PLAN
     return Economy(
         {"status": status, "per_account": per_account, **data}, status, per_account, tuple(warnings),
-        reads=tuple(reader.reads),
+        reads=tuple(reader.reads), held=solver.held,
     )
+
+
+def steady_again(graph: Graph) -> Economy:
+    """The steady state of `graph` computed again, without the cache (#430 METHOD-C; contracts/formats.md, "The
+    certificate", item 11): `compute` itself, never `Graph.cached`, so no kept value is looked up and nothing is kept,
+    and the value holds what the certificate reads (`Economy.held`). It is not put into `graph`. A node it needs that
+    `graph` has not computed is computed first, as `graph` computes one (`_computed`)."""
+    return _computed(graph, lambda: compute(graph, STEADY))

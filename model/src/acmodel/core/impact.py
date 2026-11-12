@@ -36,6 +36,17 @@ price moves and which activities change sign. `export prices` reads it for the a
 - **Refusals**: an estimate whose `of`, `low` or `high` is blocked or needs the account state, and a pass whose vector is
   blocked, refuse the export (`export_refused`, `impact_blocked`, the estimated derive as its output, with the errors that
   block it, each needed by it): nothing is approximated.
+- **What the certificate reads** (#430 METHOD-C C-1; contracts/formats.md, "The certificate"). The assessment takes what
+  the steady state's own computation found that the certificate reads (`flow.Held`, `flow.Economy.held`), in memory
+  only, and keeps it (`_Assessor.held`); a pass that moves a value is still solved as above, so no vector, `timing_ms`
+  or `source` changes.
+- **A steady state from the cache** (item 11). The cache keeps none of it (`flow.encode`), so an assessment whose steady
+  state came from the cache computes it again once, at its start, before any pass, without the cache
+  (`flow.steady_again`). Its value as the cache keeps it (`Graph.encode`, canonical JSON) must be the cached one's byte
+  for byte; otherwise `steady_state_mismatch` (exit 6: `expected` the sha256 of the cached value's, `found` of the one
+  computed again), and nothing is assessed or written: the assessment never falls back to solving every pass. Then the
+  assessment reads the one computed again; nothing it holds goes into the cache. `export prices` computes without the
+  cache, so an export never takes this way.
 """
 
 from __future__ import annotations
@@ -45,8 +56,9 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import TYPE_CHECKING, Any
 
+from acmodel.cache.keys import canonical, digest
 from acmodel.check.walk import at
-from acmodel.codes import EXPORT_REFUSED
+from acmodel.codes import EXPORT_REFUSED, STEADY_STATE_MISMATCH
 from acmodel.core import flow
 from acmodel.core.common import solve
 from acmodel.core.coverage import node_of
@@ -155,6 +167,9 @@ class _Assessor:
             activity: None if entry["value"] is None else Fraction(entry["value"])
             for activity, entry in joint["activities"].items()
         }
+        # #430 METHOD-C: what the certificate reads, from the steady state's own computation (module docstring, "What
+        # the certificate reads"; `_again` makes sure it is there). Kept, and read by nothing yet: every pass is solved.
+        self.held: flow.Held | None = steady.held
 
     def refuse(self, entry: Entry, label: str, blocked_by: frozenset[int], *, reason: str = "impact_blocked") -> Failure:
         """`export_refused` (`impact_blocked`) of an estimated derive, at its estimate, and the errors that block it."""
@@ -272,12 +287,32 @@ def _timing(source: str, stages: dict[str, int] | None, started: int) -> dict[st
     return {"source": source, "stages": None if stages is None else dict(stages), "total": total}
 
 
+def _again(graph: Graph, steady: flow.Economy) -> flow.Economy:
+    """The steady state the assessment reads (module docstring, "A steady state from the cache"): `steady` itself when it
+    holds what the certificate reads, as one computed in this run does; otherwise (the cache gave it) the steady state
+    computed again once, without the cache (`flow.steady_again`), whose value as the cache keeps it (`Graph.encode`,
+    canonical JSON) must be `steady`'s byte for byte (the cache gives back the bytes it kept: decoding them and encoding
+    the value again is the same text), else `steady_state_mismatch`."""
+    if steady.held is not None:
+        return steady
+    again = flow.steady_again(graph)
+    kept, found = canonical(graph.encode(steady)), canonical(graph.encode(again))
+    if found != kept:
+        detail = {
+            "path": graph.checker.model.manifest.path, "output": flow.OUTPUTS[flow.STEADY], "expected": digest(kept),
+            "found": digest(found),
+        }
+        raise Failure(error(STEADY_STATE_MISMATCH, detail))
+    return again
+
+
 def assess(
     graph: Graph, steady: flow.Economy, reach: dict[str, set[str]], gaps: set[str], missing: set[str]
 ) -> Assessment:
     """The impact assessment (module docstring) of the steady state `steady` of `graph`. `reach` is what `reached`
     gives, `gaps` the components that are structural gaps and `missing` those that hold a provisional derive without an
-    estimate."""
+    estimate. A steady state the cache gave is computed again first, before anything else (`_again`)."""
+    steady = _again(graph, steady)
     assessor = _Assessor(graph, steady)
     checker = graph.checker
     skipped: dict[str, str] = {}

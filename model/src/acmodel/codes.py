@@ -80,6 +80,11 @@ LOCATION_REFUSED = "location_refused"
 # #424 PRICE-REUSE: `export prices --reuse-assessment` names an earlier prices.json whose versions, shared tree or evaluator
 # digest are not this export's (or that records no evaluator digest): nothing is taken over, computed further or written.
 REUSE_REFUSED = "reuse_refused"
+# #430 METHOD-C: the impact assessment's steady state came from the cache and, computed again without it, is another
+# value (`core.impact`): nothing is assessed or written. And a pass that the certificate proves whose vector solved is not
+# the steady state's (`acmodel verify passes`).
+STEADY_STATE_MISMATCH = "steady_state_mismatch"
+CERTIFICATE_MISMATCH = "certificate_mismatch"
 
 EXIT_OK = 0
 
@@ -154,4 +159,6 @@ EXIT_STATUS = {
     SHARED_TREE_MISMATCH: 6,
     LOCATION_REFUSED: 5,
     REUSE_REFUSED: 5,
+    STEADY_STATE_MISMATCH: 6,
+    CERTIFICATE_MISMATCH: 6,
 }
