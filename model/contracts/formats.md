@@ -1391,6 +1391,12 @@ constraint that makes it 0 (an LP fact).
   - Every other program takes HiGHS's infeasible as its answer, with no second try, as before: the model's own S3
     (the **Infeasible** line above), S1 and S2, the least losses, a price re-solve, the dual's least cost and the
     probes.
+  - **Second tries are counted** (#430 C-2a). Each second try above, from scratch and without presolve, of an LP that
+    HiGHS first found infeasible on D* (`again_infeasible`) or ended with a status that is none of optimal, infeasible
+    and unbounded (`again_other`), is counted where it ran: in the `lps` of the stage, in the pass's `timing_ms` or in
+    `steady_timing_ms` ("Timing", "The steady state's timing"). A second try that HiGHS answers is no failure: its
+    answer is made exact and checked as any other, so it warns of nothing and is only counted. One it does not answer
+    is the error above, as before.
   - `lp_solve_failed` names the solve on the dual it comes from (`step`: `least_cost` for the dual's least cost, or
     the LP on D*'s), and for status 2 HiGHS's text (`raw_text`), as it already did for every other status.
 
@@ -1791,8 +1797,9 @@ uncertainty of the estimates is assessed here.
   8. **Exact or not at all.** Every LP of the certificate is solved on D*'s complementary-slackness form and reads only
      a certified optimum or HiGHS's unbounded status ("Exactness and failures"). One that is not certified (the pivot
      cap included) or fails (`lp_solve_failed`, `lp_numeric_check_failed`) refuses the certificate: the pass is solved.
-     Nothing warns, nothing blocks: the certificate never approximates and never refuses an export. A blocked program
-     of the pass is the pass's refusal (`impact_blocked`), as a blocked vector is.
+     Nothing warns, nothing blocks: the certificate never approximates and never refuses an export. Its LPs, and their
+     second tries, are counted in the pass's `timing_ms` (`lps`, `certificate`; "Timing"), and warn of nothing. A
+     blocked program of the pass is the pass's refusal (`impact_blocked`), as a blocked vector is.
   9. **What refused it** (#430, 11-12). With `impact.certify` true, each pass records `refused_by`: for a pass the
      certificate does not prove, the first condition that refused it, `program` (its program differs from the steady
      state's elsewhere than item 1 allows), `c1`, `c2`, `c3` or `c4` (that condition does not hold) or `lp_unverified`
@@ -1815,11 +1822,11 @@ uncertainty of the estimates is assessed here.
       the cache. `export prices` computes without the cache, so an export of today never takes this way. No node's
       value changes, so C-0 left the `economy` kind's evaluator version at 11; the D* LP retry (#430, 11-13) moved it
       to 12, as an LP on D* can now give what it refused before (`cache/keys.py`).
-- **Timing** (PASS-TIMING; #430 METHOD-C). Each pass records how long it took, `timing_ms`, on a monotonic clock, in
-  whole milliseconds rounded down: `{stages, total}`, or null. How its vector was found is said by its `by` alone;
-  `timing_ms` only times. `stages`, only for `by` `solved` (null for `certified` and `steady_state`, which run no
-  stage), holds every stage, 0 for one that did not run; each is the time from the end of the stage before it to its
-  own end, so the stages never overlap:
+- **Timing** (PASS-TIMING; #430 METHOD-C; #430 C-2a, the LPs). Each pass records how long it took and what HiGHS ran
+  for it, `timing_ms`, on a monotonic clock, in whole milliseconds rounded down: `{stages, lps, total}`, or null. How
+  its vector was found is said by its `by` alone; `timing_ms` times and counts, and decides nothing. `stages`, only for
+  `by` `solved` (null for `certified` and `steady_state`, which run no stage), holds every stage, 0 for one that did
+  not run; each is the time from the end of the stage before it to its own end, so the stages never overlap:
 
   | Stage | What it times |
   |---|---|
@@ -1836,6 +1843,17 @@ uncertainty of the estimates is assessed here.
   | `max_min` | the lexicographic max-min over K |
   | `check` | the vector's exact check as a point of D*, and the activities' values at it |
 
+  `lps` (#430 C-2a) holds, for each stage of the table and for `certificate` (the certificate's own LPs, "The
+  certificate"), what HiGHS ran there, each an integer: `runs`, each time HiGHS solved an LP (an LP that S3's instance
+  solves again at ±grain, PRICE-2d, is one; a second try is one more); `again_infeasible` and `again_other`, its second
+  tries ("Exactness and failures", "Other failures": of an LP on D* it first found infeasible, and of one whose first
+  status was none of optimal, infeasible and unbounded); `highs_ms`, the time of those runs; and `exact_ms`, the time
+  spent making their answers exact and checking them (`core.exact` and the exact checks). Every pass has all of them,
+  0 where nothing ran: a `steady_state` pass's are all 0, and a `certified` pass has the certificate's alone. The
+  counts do not depend on the clock (where the time chooses the way, PRICE-2d, both ways are exact work, and neither
+  runs HiGHS); the times do. So a pass that is slower shows whether it solved more LPs or each took longer, and
+  whether HiGHS or the exact work took it.
+
   `total` is the whole pass, from its start to its vector: for `solved`, the moved rules computed again, the program
   built and every stage, so at least the sum of the stages; for `certified`, the moved rules computed again, the
   program built and compared, and the certificate's LPs; for `steady_state`, the comparison of its values with the
@@ -1845,10 +1863,31 @@ uncertainty of the estimates is assessed here.
   "Stopping and resuming") is no such pass: it comes back with the `by`, `refused_by`, vector and `timing_ms` of the
   run that computed it, as they are, as `--reuse-assessment` takes a group over ("Taking an assessment over"); how
   they are kept and taken back is C-3's contract. The member `source` that PASS-TIMING wrote is gone, with no reading
-  of it kept (#430, 11-12): `by` says what it said. The timing is in that one place: no pass reads it, and neither the
-  vector's value (nor the cache), the price provenance files (so no `binds`), the shared tree, `estimates`, `counts`
-  nor any other member of prices.json holds any of it. Two exports of the same inputs by the same tool, libraries and
+  of it kept (#430, 11-12): `by` says what it said. The timing is in two places, each pass's `timing_ms` and the
+  steady state's `steady_timing_ms` (below): no pass reads it, and neither a node's value (the vector's, the steady
+  state's, so nor the cache), the price provenance files (so no `binds`), the shared tree, `estimates`, `counts` nor
+  any other member of prices.json holds any of it. No node's value changes with it, so the `economy` kind's evaluator
+  version stays 12 (#430 C-2a; `cache/keys.py`). Two exports of the same inputs by the same tool, libraries and
   configuration differ in it alone; with `impact.certify` set otherwise, in it, `by` and `refused_by` alone.
+- **The steady state's timing** (#430 C-2a). `export prices` computes its steady state without the cache, on the same
+  clock, and records it as a solved pass records its own: `steady_timing_ms`, `{stages, lps, total}`, or null. Its
+  `stages` are the vector's twelve and the four the vector skips, in the order the steady state runs them:
+
+  | Stage | What it times |
+  |---|---|
+  | `ties` | the tie probes, after `dual` (`objective_tier_tie`) |
+  | `losses` | the least losses |
+  | `rules` | the prices of the rules (their re-solves and HiGHS's marginals) and the activities' values per step, after `projections` |
+  | `forcing` | the forcing costs, after `check` |
+
+  so `model`, `optimum`, `acquisition`, `value`, `dual`, `ties`, `losses`, `projections`, `rules`, `intervals`,
+  `most`, `ranges`, `selection`, `max_min`, `check`, `forcing`; its `projections` holds HiGHS's marginals and their
+  cross-checks too, and its `ranges` every range the judgements read. `lps` holds the same members for each of them
+  (no `certificate`). `total` is the steady state's node, from its start to its value. It is null only where the
+  steady state the export reads holds no timing; an export computes it in the run, and one that came from the cache
+  is computed again ("The certificate", item 11), so it always has one. An export that takes its assessment over
+  records its own steady state's. `acmodel economy` shows none of it: its `data` and the run's outputs are the value,
+  which the cache keeps and which holds no timing.
 - **What it finds:** each pool's price range over the steady state and every pass (`impact`); and the activities whose
   class flips: the sign of their value at the vector (positive, zero, negative) is not the same in the steady state and in
   every pass. The Runtime's zero band, which needs the pools' scales and the rules' effects, is PRICE-4b's; an activity that
@@ -1868,7 +1907,8 @@ uncertainty of the estimates is assessed here.
 | `prices` | one entry per pool, by id (below) |
 | `slots` | the slot resources, by id: no pools, so not priced here |
 | `estimates` | each provisional derive the steady state read, by id: `rule`, `value` (its point value), `estimate` (as written, or null), `components`, `assessed`, and `skipped` (null, `structural_gap` or `estimate_missing`) |
-| `impact` | the assessment's groups, each `{rules, unknowns, passes, prices, flips}`: its derives; the unknowns they move by; each pass's `at` (each unknown's point or end, or the derive's `low` or `high`), `values` (each derive's moved value), `by` (#430 METHOD-C: how its vector was found, `solved`, `certified` or `steady_state`; "A pass", "The certificate"), `refused_by` (#430 METHOD-C, only with `impact.certify` true: the first condition of the certificate that refused the pass, `program`, `c1`, `c2`, `c3`, `c4` or `lp_unverified`, or null for a `certified` or `steady_state` pass; "The certificate") and `timing_ms` (PASS-TIMING, "Timing" above: null, or `stages`, each stage's milliseconds by name, or null, and `total`, the pass's milliseconds; integers); the pools whose price moves in it, with `low` and `high`; and the activities whose class flips in it |
+| `impact` | the assessment's groups, each `{rules, unknowns, passes, prices, flips}`: its derives; the unknowns they move by; each pass's `at` (each unknown's point or end, or the derive's `low` or `high`), `values` (each derive's moved value), `by` (#430 METHOD-C: how its vector was found, `solved`, `certified` or `steady_state`; "A pass", "The certificate"), `refused_by` (#430 METHOD-C, only with `impact.certify` true: the first condition of the certificate that refused the pass, `program`, `c1`, `c2`, `c3`, `c4` or `lp_unverified`, or null for a `certified` or `steady_state` pass; "The certificate") and `timing_ms` (PASS-TIMING; #430 C-2a; "Timing" above: null, or `stages`, each stage's milliseconds by name, or null, `lps`, each stage's and the certificate's LPs by name, `runs`, `again_infeasible`, `again_other`, `highs_ms` and `exact_ms`, and `total`, the pass's milliseconds; integers); the pools whose price moves in it, with `low` and `high`; and the activities whose class flips in it |
+| `steady_timing_ms` | #430 C-2a: the steady state's `stages`, `lps` and `total`, as a solved pass's `timing_ms` but over its sixteen stages ("The steady state's timing"), or null; integers. Every file written from C-2a on has it; an earlier one does not |
 | `counts` | the pools of each class, and how many are `exported` and `pending` |
 | `evaluator` | the evaluator digest (#424 PRICE-REUSE; `cli.md`, "Cache", "The evaluator digest"): `sha256`, over the other three; `source`, the digest of the tool's source files; `libraries`, the versions of the libraries the steady state's node declares (`numpy`, `python`, `scipy`); `config`, every configuration key but those that never change a result and those only the plan reads (both listed, key by key, in `cli.md`), by its dotted name (`expr.max_bits`, `lp.grain`, `unknowns.seed`, …), sorted, with its value: an integer (its decimal text beyond ±(2<sup>53</sup> − 1)), a string or a boolean. Every file written from PRICE-REUSE on has it; an earlier one may not. It is in neither `versions` nor a price's provenance file |
 | `reused_assessment` | only in a file whose assessment was taken over (`--reuse-assessment`, below): `prices_sha256`, the sha256 of the earlier prices.json's bytes; its `versions`; `shared`, each of its shared trees' digest by root; `evaluator`, its evaluator digest's `sha256`; `members`, what was taken over (`estimates.assessed`, `estimates.skipped`, `impact`, `prices.flips`, `prices.impact`) |
@@ -1886,10 +1926,10 @@ and `provenance`, its provenance file. The provisional derives its component rea
 
 `acmodel.prices.v1`, which `export prices` wrote before, is the same but for one member: each pool's entry also lists
 `estimates`, the provisional derives its component read (the same list for every pool of a component), and it has
-neither `evaluator` nor `reused_assessment`. A v1 file is still read, by that version's format, and verified: `verify
-prices` checks it as it checks a v2 file, and `bindings check` reads its coverage from either. `export prices` writes v2
-only. The two members PRICE-REUSE added are optional members of v2, with no new `schema_version`: a v2 file written
-before them is still a v2 file, read as before.
+none of `evaluator`, `reused_assessment` and `steady_timing_ms`. A v1 file is still read, by that version's format, and
+verified: `verify prices` checks it as it checks a v2 file, and `bindings check` reads its coverage from either.
+`export prices` writes v2 only. The two members PRICE-REUSE added, and `steady_timing_ms` (#430 C-2a), are optional
+members of v2, with no new `schema_version`: a v2 file written before them is still a v2 file, read as before.
 
 **Taking an assessment over** (`--reuse-assessment <folder>`, #424 PRICE-REUSE). The impact assessment is the bulk of an
 export's time, and it reads neither exports.json (the acceptances are applied after it) nor the account state; so an
@@ -1905,14 +1945,16 @@ is read first (`model_file_invalid` when there is none, or it is no prices file)
    for the same pools and estimates); everything else is computed as without the option: the coverage, the joint vector,
    the provenance files and `binds`, the acceptances of exports.json with what they lack (`acceptance_incomplete` reads the
    flips taken over), the counts. prices.json records `reused_assessment`; without that member it is, byte for byte, the
-   file the full export writes from the same inputs, but for each pass's `by`, `refused_by` and `timing_ms`, and the
-   provenance files are the full export's. The groups are taken over with their passes' `by`, `refused_by` and
-   `timing_ms` as they are (PASS-TIMING; #430 METHOD-C): they record the earlier run, which computed them with
-   `impact.certify` as it was then (no key of the evaluator digest, `cli.md`), and this one timed none. Each pass taken
-   over has a `by` of the three and a `timing_ms` of the shape above; either every pass of the file has a `refused_by`
-   or none has, and where it has, it is one of the six conditions when its `by` is `solved` and null otherwise ("The
-   certificate"). Otherwise `model_file_invalid` at the pass: a file written before C-2a (`timing_ms` with `source`, or
-   a pass without `by`) is never taken over, and its evaluator digest's `source` is not this tool's anyway.
+   file the full export writes from the same inputs, but for each pass's `by`, `refused_by` and `timing_ms` and for
+   `steady_timing_ms`, and the provenance files are the full export's. The groups are taken over with their passes'
+   `by`, `refused_by` and `timing_ms` as they are (PASS-TIMING; #430 METHOD-C): they record the earlier run, which
+   computed them with `impact.certify` as it was then (no key of the evaluator digest, `cli.md`), and this one timed
+   none; its `steady_timing_ms` is its own steady state's, and the earlier file's is neither read nor taken over. Each
+   pass taken over has a `by` of the three and a `timing_ms` of the shape above (with its `lps`); either every pass of
+   the file has a `refused_by` or none has, and where it has, it is one of the six conditions when its `by` is
+   `solved` and null otherwise ("The certificate"). Otherwise `model_file_invalid` at the pass: a file written before
+   C-2a (`timing_ms` with `source` or without `lps`, or a pass without `by`) is never taken over, and its evaluator
+   digest's `source` is not this tool's anyway.
 
 Anything that differs is `reuse_refused` (exit 5; one error per member, `member` such as `versions.rules`,
 `evaluator.config.lp.grain` or `shared.economy:steady`, `expected` the earlier value and `found` this export's, `none` for
@@ -1934,7 +1976,9 @@ assessment, C2 once per column of J per pass, and C3 at most two per J activity 
 alone. A pass it does not prove pays it and then its vector, which solves as much of the steady state as the vector
 needs, so a model whose open components read many estimates that the certificate does not prove pays roughly that many
 times. An export that takes its assessment over pays the steady state alone; an assessment whose steady state came from
-the cache pays it twice ("The certificate"). What each pass paid is its `timing_ms`; how, its `by`.
+the cache pays it twice ("The certificate"). What each pass paid is its `timing_ms`, and the steady state its
+`steady_timing_ms`: each stage's time, and the LPs HiGHS ran there and how long they took (#430 C-2a); how a pass's
+vector was found, its `by`.
 
 **Stopping and resuming** (#430 METHOD-C C-3). An assessment must be able to stop at a checkpoint between passes and go
 on pass by pass; how, and what it keeps, is C-3's contract. A pass it takes back comes back as the run that computed it
