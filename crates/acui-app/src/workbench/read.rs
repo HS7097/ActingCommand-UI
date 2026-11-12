@@ -18,6 +18,10 @@
 //! one account with its candidate rows, on the explanation's clock: the event loop names the
 //! account in a slot of its own (`TasksFor`), which the thread reads when that read comes due,
 //! and with the slot empty it never comes due. It waits on the policy lock as the cards' does.
+//! Beside it, of the same account named in the same slot, its task switches (UI-3f2,
+//! `PackScheduleView`), on a slower clock of their own: they change only as a person presses one,
+//! as another tool writes them, or as a row of them ends, and each read holds the fact write gate
+//! a moment. Not at all in an owner epoch whose Runtime said it has none: the slot says so.
 //!
 //! A thread reads what is due, hands each result to the event loop, and sleeps
 //! until the next is due or it is poked. It ends once the event loop lets its
@@ -40,6 +44,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use acui_source::workbench::pack::PacksRead;
 use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, ReadLane, StartRead, TasksRead};
 use acui_source::ClientFailure;
 
@@ -47,7 +52,7 @@ use crate::launcher::spawn_worker;
 use crate::report;
 
 /// `READS` has one row for each `Read`, in its order: `Tally` counts by it.
-const READ_KINDS: usize = 5;
+const READ_KINDS: usize = 6;
 
 #[rustfmt::skip]
 static READS: [Cadence; READ_KINDS] = [
@@ -58,11 +63,22 @@ static READS: [Cadence; READ_KINDS] = [
     Cadence { read: Read::Start,   lane: Lane::Slow, every: None },
     // Only while an account's task list shows: the slot names it (`TasksFor`).
     Cadence { read: Read::Tasks,   lane: Lane::Slow, every: Some(Every { shown: secs(15), minimized: None,           failed: secs(30) }) },
+    // The same list's switches, while the slot names them too (`Listed::packs`).
+    Cadence { read: Read::Packs,   lane: Lane::Slow, every: Some(Every { shown: secs(60), minimized: None,           failed: secs(60) }) },
 ];
 
-/// The account whose daily task list shows, while it does (UI-3f1): the event loop writes it,
-/// and the slow thread reads it as the list's read comes due. Empty, that read is never due.
-pub type TasksFor = Arc<Mutex<Option<String>>>;
+/// The account whose daily task list shows, while it does (UI-3f1), and whether its switches are
+/// read (UI-3f2): the event loop writes it, and the slow thread reads it as either read comes due.
+/// Empty, neither is ever due.
+pub type TasksFor = Arc<Mutex<Option<Listed>>>;
+
+/// What the slot names: the account, and whether its switches are read beside its list, which they
+/// are not in an owner epoch whose Runtime said it has none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    pub alias: String,
+    pub packs: bool,
+}
 
 /// How many times in one owner epoch the start report is asked for, and how long after a
 /// failure it is asked again.
@@ -76,6 +92,10 @@ const LONG_READ: Duration = secs(2);
 /// list's, no longer counts as what the schedule says now. Far above the slow thread's own
 /// times, so a read that waits behind a slow one is not called unreadable.
 pub const EXPLAIN_TOO_OLD: Duration = secs(60);
+
+/// An account's switches not read again for this long no longer count as what holds now: three
+/// of their reads' times, so a read that waits behind a slow one is not called unreadable.
+pub const PACKS_TOO_OLD: Duration = secs(180);
 
 /// How long a thread with nothing due sleeps: a window coming back pokes it.
 const NOTHING_DUE: Duration = secs(3600);
@@ -111,6 +131,8 @@ pub enum Read {
     Start,
     /// An account's daily task list (UI-3f1).
     Tasks,
+    /// That list's switches (UI-3f2).
+    Packs,
 }
 
 impl Read {
@@ -121,6 +143,7 @@ impl Read {
             Self::Config => "fact snapshot",
             Self::Start => "start report",
             Self::Tasks => "task list",
+            Self::Packs => "pack schedule",
         }
     }
 
@@ -155,12 +178,13 @@ impl Lane {
     }
 }
 
-/// Reads now, without waiting for their time: every read of the thread its clock makes, or
-/// only the one named.
+/// Reads now, without waiting for their time: every read of the thread its clock makes, only
+/// the one named, or an account's task list and its switches, both of a list shown anew.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Poke {
     All,
     Only(Read),
+    List,
 }
 
 impl Poke {
@@ -169,6 +193,7 @@ impl Poke {
         match self {
             Self::All => READS[read as usize].every.is_some(),
             Self::Only(only) => only == read,
+            Self::List => matches!(read, Read::Tasks | Read::Packs),
         }
     }
 }
@@ -181,6 +206,8 @@ pub enum Landing {
     Start(Result<StartRead, ClientFailure>),
     /// Of the account the slot named: a failure says which, as an answer does.
     Tasks { alias: String, read: Result<TasksRead, ClientFailure> },
+    /// The same account's switches, likewise.
+    Packs { alias: String, read: Result<PacksRead, ClientFailure> },
     /// The read panicked: the panic's message, for the log.
     Panicked { read: Read, message: String },
 }
@@ -194,6 +221,7 @@ impl Landing {
                 | Self::Config(Ok(_))
                 | Self::Start(Ok(_))
                 | Self::Tasks { read: Ok(_), .. }
+                | Self::Packs { read: Ok(_), .. }
         )
     }
 }
@@ -248,9 +276,15 @@ impl Due {
     /// When this read is next due; `None` while the table stops it. A poke waits
     /// out a stop: the window coming back reads it anyway. One without a clock is due
     /// only when poked, minimized or not. The task list's is never due while no account's
-    /// list shows (`listed`), poked or not: it waits for one.
-    fn at(&self, shown: bool, listed: bool, now: Instant) -> Option<Instant> {
-        if self.cadence.read == Read::Tasks && !listed {
+    /// list shows (`listed`), poked or not: it waits for one; nor are its switches' while the
+    /// slot does not name them.
+    fn at(&self, shown: bool, listed: Option<&Listed>, now: Instant) -> Option<Instant> {
+        let waits = match self.cadence.read {
+            Read::Tasks => listed.is_none(),
+            Read::Packs => !listed.is_some_and(|listed| listed.packs),
+            Read::Status | Read::Explain | Read::Config | Read::Start => false,
+        };
+        if waits {
             return None;
         }
         let Some(clock) = &self.cadence.every else {
@@ -299,13 +333,14 @@ fn run(
         .filter(|cadence| cadence.lane == lane)
         .map(|cadence| Due { cadence, last: None, failed: false, poked: false })
         .collect();
-    // The account the task list's read is of as it comes due; none, it does not come due.
+    // The account the task list's and its switches' reads are of as they come due; none, they do
+    // not come due.
     let listed = || tasks_for.lock().unwrap_or_else(|held| held.into_inner()).clone();
     loop {
         let now = Instant::now();
         let is_shown = shown.load(Ordering::SeqCst);
-        let is_listed = listed().is_some();
-        let next = plan.iter().filter_map(|due| due.at(is_shown, is_listed, now)).min();
+        let is_listed = listed();
+        let next = plan.iter().filter_map(|due| due.at(is_shown, is_listed.as_ref(), now)).min();
         let wait = next.map_or(NOTHING_DUE, |at| at.saturating_duration_since(now));
         match commands.recv_timeout(wait) {
             Ok(poke) => mark(&mut plan, poke),
@@ -322,9 +357,9 @@ fn run(
         }
         for due in &mut plan {
             let now = Instant::now();
-            let alias = listed();
+            let listed_now = listed();
             let is_due = due
-                .at(shown.load(Ordering::SeqCst), alias.is_some(), now)
+                .at(shown.load(Ordering::SeqCst), listed_now.as_ref(), now)
                 .is_some_and(|at| at <= now);
             if !is_due {
                 continue;
@@ -332,7 +367,7 @@ fn run(
             let read = due.cadence.read;
             // Before the read: the event loop lets it go if a write lands meanwhile.
             let generation = write_gen.load(Ordering::SeqCst);
-            let asked = alias.as_deref();
+            let asked = listed_now.as_ref().map(|listed| listed.alias.as_str());
             let landing = match catch_unwind(AssertUnwindSafe(|| {
                 read_on(read, &mut connection, asked)
             })) {
@@ -362,8 +397,9 @@ fn mark(plan: &mut [Due], poke: Poke) {
     }
 }
 
-/// `read` on `connection`; the task list's of the account `listed` names, which it always does
-/// when that read is due (`Due::at`): an empty alias would be refused as no alias at all.
+/// `read` on `connection`; the task list's and its switches' of the account `listed` names, which
+/// it always does when either read is due (`Due::at`): an empty alias would be refused as no alias
+/// at all.
 fn read_on(read: Read, connection: &mut ReadLane, listed: Option<&str>) -> Landing {
     match read {
         Read::Status => Landing::Live(connection.read_live()),
@@ -373,6 +409,10 @@ fn read_on(read: Read, connection: &mut ReadLane, listed: Option<&str>) -> Landi
         Read::Tasks => {
             let alias = listed.unwrap_or_default();
             Landing::Tasks { alias: alias.to_owned(), read: connection.read_tasks(alias) }
+        }
+        Read::Packs => {
+            let alias = listed.unwrap_or_default();
+            Landing::Packs { alias: alias.to_owned(), read: connection.read_packs(alias) }
         }
     }
 }

@@ -10,11 +10,12 @@
 //! 4. Nothing here calls `Session::open`, `OnlineSource::pin`, `source.query` or
 //!    `monitor_status`. The two reading threads read `Status`, `ScheduleExplanation`
 //!    without candidates and, while an account's daily task list shows, of that one account
-//!    with them (UI-3f1), and `RuntimeFactSnapshot`, none of which walks the ledger or takes
-//!    a ledger record. The picture's thread is the one exception: it reads ledger pages,
-//!    which take no record either, and frames' material, whose read takes none when it
-//!    succeeds or finds the file gone and one for any other failure; so a frame it failed
-//!    to read is not read again, and it reads only while the picture shows (`preview`).
+//!    with them (UI-3f1) and its `PackScheduleView` (UI-3f2), and `RuntimeFactSnapshot`, none of
+//!    which walks the ledger or takes a ledger record. The picture's thread is the one
+//!    exception: it reads ledger pages, which take no record either, and frames' material,
+//!    whose read takes none when it succeeds or finds the file gone and one for any other
+//!    failure; so a frame it failed to read is not read again, and it reads only while the
+//!    picture shows (`preview`).
 //! 5. How many writes have landed (`wrote`) is no concern of the picture: a frame is
 //!    history, which no write changes, so no picture read is let go for a write, and
 //!    nothing the picture does counts as one, not even its refresh (`refresh`): the frame
@@ -25,7 +26,10 @@
 //!    the other, or a switch of that device's backends, is out for the same account
 //!    (`Model::device_busy`, the one place that says so). A person's stop of an account's run
 //!    (`stop`, UI-3e2) is a write too, its answer counting one, but no work of the device's: it
-//!    is not in `device_busy`, and neither holds back the other.
+//!    is not in `device_busy`, and neither holds back the other. So is a person's switch of one
+//!    task package of an account on its daily task list (`switch`, UI-3f2), whose answer counts
+//!    one when it may have changed the account's switches or says another tool did; one of them
+//!    is out for an account at a time, and holds nothing else back.
 //!
 //! Another thread runs the Runtime's `actingctl` (`tools`), only when asked: `packs` for the
 //! task names and the picture proportions each game's standard pack declares, and `watchdog
@@ -58,10 +62,11 @@
 //! more as a fact snapshot lands, which its question before an emulator's stop reads.
 //!
 //! The right column has two tabs (UI-3f1), the `Model`'s too (`tab_picked`): the live view and
-//! that same account's daily task list (`tasks`), only words. The picture reads only under its
-//! own tab, and the list only under its: which account's list the slow thread reads, if any, is
-//! told it in one place (`tasks_sync`), each time that may change, as for the picture. A list
-//! shown anew, or of another account, lets go of what was read and is read at once.
+//! that same account's daily task list (`tasks`), with a switch for each of its task packages
+//! (UI-3f2). The picture reads only under its own tab, and the list and its switches only under
+//! its: which account's list the slow thread reads, if any, and whether its switches too, is told
+//! it in one place (`tasks_sync`), each time that may change, as for the picture. A list shown
+//! anew, or of another account, lets go of what was read and is read at once, its switches too.
 //!
 //! A read that fails is no event to log each time: the log gets a change, as it
 //! happens, so a failure that repeats every few seconds is one line, and its end
@@ -78,6 +83,7 @@ pub mod refresh;
 pub mod rescue;
 pub mod settings;
 pub mod stop;
+pub mod switch;
 pub mod tasks;
 pub mod tools;
 
@@ -86,13 +92,14 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use acui_source::workbench::pack::PacksRead;
 use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, StartRead, TasksRead};
 use acui_source::{ClientFailure, RuntimeFacts};
 use slint::{ComponentHandle, Timer, TimerMode};
 
 use self::model::{Link, News, Page, RightTab};
 use self::preview::{Order, PreviewTally};
-use self::read::{Lane, Landing, Poke, Read, Tally, TasksFor, START_RETRY, START_TRIES};
+use self::read::{Lane, Landing, Listed, Poke, Read, Tally, TasksFor, START_RETRY, START_TRIES};
 use self::tools::{Job, NamesRead, ToolFailure, WatchdogRead};
 use crate::launcher;
 use crate::report;
@@ -304,31 +311,34 @@ pub fn tasks_fold_toggled(ui: &Ui) {
 }
 
 /// Which account's daily task list the slow thread is to read now, if any (`Model::tasks_wanted`),
-/// into its slot (`TasksFor`), the one place that says so: a list shown anew, or of another
-/// account, starts afresh and is read at once. Each time this may change: a `Status` read, a page
-/// or a tab gone to, the window minimized or back, a card picked, a reading thread gone.
+/// and whether its switches too (`Model::packs_wanted`), into its slot (`TasksFor`), the one place
+/// that says so: a list shown anew, or of another account, starts afresh and is read at once, its
+/// switches with it. Each time this may change: a `Status` read, a page or a tab gone to, the
+/// window minimized or back, a card picked, a reading thread gone, a Runtime that said it has no
+/// switches.
 fn tasks_sync(ui: &Ui) {
     if tasks_follow(ui) {
-        ask(ui, Read::Tasks.lane(), Poke::Only(Read::Tasks));
+        ask(ui, Read::Tasks.lane(), Poke::List);
     }
 }
 
 /// `tasks_sync` but for its poke: whether the list is to be read at once. A caller that pokes the
 /// slow thread for all its reads right after asks for it there, so that it is read once.
 fn tasks_follow(ui: &Ui) -> bool {
-    let (wanted, changed) = {
+    let (listed, changed) = {
         let mut model = ui.model.borrow_mut();
         let wanted = model.tasks_wanted();
         let changed = model.tasks_follow(wanted.as_deref());
-        (wanted, changed)
+        let packs = model.packs_wanted();
+        (wanted.map(|alias| Listed { alias, packs }), changed)
     };
     if let Some(reading) = ui.reading.borrow().as_ref() {
         let mut slot = reading.tasks_for.lock().unwrap_or_else(|held| held.into_inner());
-        if *slot != wanted {
-            *slot = wanted.clone();
+        if *slot != listed {
+            *slot = listed.clone();
         }
     }
-    changed && wanted.is_some()
+    changed && listed.is_some()
 }
 
 /// A `Status` read now: a request of the launcher's is over.
@@ -363,6 +373,9 @@ fn ask(ui: &Ui, lane: Lane, poke: Poke) {
     }
     if lane == Read::Tasks.lane() && poke.asks(Read::Tasks) {
         ui.model.borrow_mut().tasks_asked(Instant::now());
+    }
+    if lane == Read::Packs.lane() && poke.asks(Read::Packs) {
+        ui.model.borrow_mut().packs_asked(Instant::now());
     }
     let gone = ui.reading.borrow_mut().as_mut().is_some_and(|reading| reading.poke(lane, poke));
     if gone {
@@ -461,10 +474,11 @@ fn check_shown() {
         .as_ref()
         .is_some_and(|reading| !reading.shown.swap(shown, Ordering::SeqCst) && shown);
     if !came_back && list_fresh {
-        ask(&ui, Read::Tasks.lane(), Poke::Only(Read::Tasks));
+        ask(&ui, Read::Tasks.lane(), Poke::List);
     }
     if came_back {
-        // Every read of the slow thread, the task list's among them while it shows.
+        // Every read of the slow thread, the task list's and its switches' among them while it
+        // shows.
         poke(&ui, Lane::Live);
         poke(&ui, Lane::Slow);
         let owed = ui.reading.borrow().as_ref().is_some_and(|reading| reading.names_owed);
@@ -499,6 +513,7 @@ fn landed(landing: Landing, generation: u64) {
         Landing::Live(read) => live_landed(&ui, read),
         Landing::Explain(read) => explain_landed(&ui, read),
         Landing::Tasks { alias, read } => tasks_landed(&ui, &alias, read),
+        Landing::Packs { alias, read } => packs_landed(&ui, &alias, read),
         Landing::Config(read) => config_landed(&ui, read),
         Landing::Start(read) => {
             start_landed(&ui, read.map_err(|failure| failure_line(&failure)));
@@ -549,12 +564,14 @@ fn live_landed(ui: &Ui, read: LiveRead) {
         poke(ui, Lane::Slow);
         ask_start(ui);
     } else if list_fresh && !landed.switch_over {
-        ask(ui, Read::Tasks.lane(), Poke::Only(Read::Tasks));
+        ask(ui, Read::Tasks.lane(), Poke::List);
     }
-    // No refresh of the picture out holds across a restart, nor any operation of a device.
+    // No refresh of the picture out holds across a restart, nor any operation of a device, nor a
+    // switch of a task.
     if landed.epoch_changed {
         refresh::restarted(ui);
         rescue::restarted(ui);
+        switch::restarted(ui);
     }
     // A stop of a run is judged by a read online only, of its own epoch or another: its follow-up,
     // or a restart's letting it go (`stop`).
@@ -661,6 +678,44 @@ fn tasks_landed(ui: &Ui, alias: &str, read: Result<TasksRead, ClientFailure>) {
             report::log(thread, &line);
         }
         News::Recovered => report::log(thread, &format!("task list of {alias} read again")),
+    }
+    if landed.fault_cleared {
+        ui.paint_notices();
+    }
+    paint::tasks(ui);
+}
+
+/// The switches' read of `alias` (UI-3f2), taken as the list's is: a failure and its end each one
+/// line of the log. A Runtime that said it has none is said once for its owner epoch, and the slow
+/// thread reads them no more in it (`tasks_sync`); a view that names no version of the account's own
+/// scope, which the contract never leaves out, is said once too, and has no switch.
+fn packs_landed(ui: &Ui, alias: &str, read: Result<PacksRead, ClientFailure>) {
+    let landed = ui.model.borrow_mut().apply_packs(alias, read, Instant::now());
+    let thread = Lane::Slow.name();
+    match &landed.news {
+        News::Nothing => {}
+        News::Failed(failure) => {
+            let line = format!("task switches of {alias} failed: {}", failure_line(failure));
+            report::log(thread, &line);
+        }
+        News::Recovered => report::log(thread, &format!("task switches of {alias} read again")),
+    }
+    if let Some(epoch) = &landed.unsupported {
+        let line = format!(
+            "the Runtime of owner epoch {epoch} has no task switches (PackScheduleView \
+             not_implemented or unknown): not read again in it"
+        );
+        report::log_quiet(thread, &line);
+        tasks_sync(ui);
+    }
+    if landed.unversioned {
+        let line = format!(
+            "the task switches of {alias} name no version of the account's own scope: no switch \
+             is offered"
+        );
+        if ui.model.borrow_mut().first_told(&line) {
+            report::log(thread, &line);
+        }
     }
     if landed.fault_cleared {
         ui.paint_notices();

@@ -1,6 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! What an account's daily task list says (UI-3f1), as a pure function of what the reads left: no
-//! words and no Slint here, `paint` makes both of a view. Only words: no switch (`SwitchSlot`).
+//! words and no Slint here, `paint` makes both of a view. Each package's row has a switch (UI-3f2,
+//! `SwitchSlot`), as the account's `PackScheduleView` read beside the list leaves it: on while the
+//! Runtime schedules the package, which layer decided and until when, and what the last press of
+//! it came to (`switch`). A read of the list does not wait for one of its switches, nor the other
+//! way round: neither is the same snapshot as the other in any case.
+//!
+//! The rows are the packages the list's read names and those the view names, each once: a package
+//! the view names that no line of the evaluation is of says so (`TaskSaid::NotDecided`), and one
+//! the view does not name has no switch, which a grey note says: the configuration on disk and the
+//! one running differ, or the Runtime could not read that package, and a row written for it would
+//! be a row of a package nothing schedules. A package the view decides by the account's own rows
+//! without naming what is below them has none either (`pack::offered`).
 //!
 //! A row is a task package. Which packages an account has is read off its own evaluation: each
 //! task of it decides for every instance it matches, so each package the Runtime can schedule on
@@ -21,12 +32,16 @@
 //! The rows keep one order, so that a read every 15 seconds moves none: by the groups and the
 //! order of the game's `ui.json`, the rest after them under "other"; without the file, by name.
 
+use std::collections::BTreeMap;
+
+use acui_source::workbench::pack::{self, PackState, PackStates};
 use acui_source::workbench::{
     ActivityKind, DispatchStage, InstanceLive, TaskRow, TasksEntry, TasksRead,
 };
 use acui_source::ClientFailure;
 
 use super::card::{Down, Line, ReasonClass};
+use super::switch::SwitchSaid;
 use super::tools::{NameTable, PackTable, PackUi};
 use crate::strings::Language;
 
@@ -80,17 +95,22 @@ pub struct TaskList {
     pub unmatched: Vec<TaskLine>,
     /// Whether their line is open.
     pub fold_open: bool,
+    /// What the list says of its switches above the rows.
+    pub switches: SwitchesNote,
 }
 
-impl TaskList {
-    /// Whether no row offers a switch, which the list's note says until UI-3f2: R-8 says each
-    /// package's own source instead.
-    pub fn switches_closed(&self) -> bool {
-        self.groups
-            .iter()
-            .flat_map(|group| &group.rows)
-            .all(|row| row.switch == SwitchSlot::NotOffered)
-    }
+/// What the list says of its switches above its rows (UI-3f2), by what their read left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchesNote {
+    /// No answer of this account and epoch yet: nothing.
+    Reading,
+    /// Read: what a switch turned off does, and what one never set does.
+    Read,
+    /// This Runtime has none: every task goes by its standard pack's rules.
+    Unsupported,
+    /// They cannot be read now, or nothing new of them came for too long: in amber, and no switch
+    /// is drawn.
+    Unreadable,
 }
 
 /// The packages of one group, in the list's order.
@@ -123,10 +143,26 @@ pub struct PackRow {
     pub switch: SwitchSlot,
 }
 
-/// A row's switch: none is offered before UI-3f2, which reads each package's schedule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A row's switch (UI-3f2).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SwitchSlot {
-    NotOffered,
+    /// No view of this account and epoch now: the list's note says why.
+    Hidden,
+    /// No switch, and a grey note that this package is not switched on its own here: the view
+    /// does not name it (`listed` false), or decides it by the account's own rows without naming
+    /// what is below them. The log hears of each once (`paint`).
+    NotHere { listed: bool },
+    Offered(PackSwitch),
+}
+
+/// A switch drawn: the package as the view said it; whether it can be pressed, which none of the
+/// account's can while a press of one is out or its answer waits for a read of them; and what its
+/// last press came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackSwitch {
+    pub state: PackState,
+    pub enabled: bool,
+    pub said: Option<SwitchSaid>,
 }
 
 /// A task under the account itself: by its id, or the Runtime's reading task by words.
@@ -154,6 +190,9 @@ pub enum TaskSaid {
     /// A candidate row's reason: `why` its code with the value that chose its words, for the
     /// log of an `Unlisted` one, and `wake` the row's own; none on an other sentence.
     Reason { class: ReasonClass, why: String, wake: Option<u64> },
+    /// The switches' view names the package, and no line of this round's evaluation is of it: so
+    /// mostly when the names cannot be read, and its tasks are all under the account itself.
+    NotDecided,
 }
 
 /// What the list's read left for the account shown: no answer of this account and epoch yet,
@@ -165,10 +204,26 @@ pub enum TasksNow<'a> {
     Read(&'a TasksRead),
 }
 
+/// What the switches' read left for the account shown (UI-3f2): no answer of this account and
+/// epoch yet; a Runtime that has none; one that cannot be read now; or the packages' states, as of
+/// a view that named the version of the account's own scope, whether the switches can be pressed
+/// now, and what each package's last press came to, by package id.
+#[derive(Clone, Copy)]
+pub enum SwitchesNow<'a> {
+    Reading,
+    Unsupported,
+    Unreadable,
+    Read {
+        states: &'a PackStates,
+        enabled: bool,
+        said: Option<&'a BTreeMap<String, SwitchSaid>>,
+    },
+}
+
 /// What the list is made of: the account as the newest `Status` lists it, whether a pause holds
 /// it, its state above the rows (`held`), its read, the names and the packages' table of the
 /// newest `packs` answer while it gave them, whether its line of tasks without a package is open,
-/// and the language whose names order rows no `ui.json` orders.
+/// the language whose names order rows no `ui.json` orders, and its switches.
 pub struct Listing<'a> {
     pub instance: &'a InstanceLive,
     pub paused: bool,
@@ -179,6 +234,7 @@ pub struct Listing<'a> {
     pub names_unreadable: bool,
     pub fold_open: bool,
     pub language: Language,
+    pub switches: SwitchesNow<'a>,
 }
 
 /// The package `task` runs, by the installation rows of the newest `packs` answer: the one place
@@ -214,6 +270,12 @@ pub fn view(listing: Listing<'_>) -> TasksView {
         return TasksView::NotInTable;
     };
     let (rows, unmatched) = pack_rows(&listing, entry);
+    let switches = match listing.switches {
+        SwitchesNow::Reading => SwitchesNote::Reading,
+        SwitchesNow::Unsupported => SwitchesNote::Unsupported,
+        SwitchesNow::Unreadable => SwitchesNote::Unreadable,
+        SwitchesNow::Read { .. } => SwitchesNote::Read,
+    };
     TasksView::Listed(TaskList {
         held: listing.held,
         evaluated_at,
@@ -222,6 +284,7 @@ pub fn view(listing: Listing<'_>) -> TasksView {
         groups: grouped(rows, listing.packs, listing.names, listing.language),
         unmatched,
         fold_open: listing.fold_open,
+        switches,
     })
 }
 
@@ -240,7 +303,8 @@ fn unreadable(failure: Option<&ClientFailure>) -> Unreadable {
 }
 
 /// The packages' rows, in the order each first comes (the package run now, the selected task's,
-/// then the candidates'), and the tasks no package was found for.
+/// the candidates', then those only the switches' view names), and the tasks no package was found
+/// for.
 fn pack_rows(listing: &Listing<'_>, entry: &TasksEntry) -> (Vec<PackRow>, Vec<TaskLine>) {
     let packs = listing.packs;
     // By package, its candidate rows in the Runtime's order.
@@ -284,6 +348,11 @@ fn pack_rows(listing: &Listing<'_>, entry: &TasksEntry) -> (Vec<PackRow>, Vec<Ta
             }
         }
     }
+    if let SwitchesNow::Read { states, .. } = listing.switches {
+        for state in &states.packages {
+            place(&mut found, &state.package_id);
+        }
+    }
     let rows = found
         .into_iter()
         .map(|(package, tasks)| {
@@ -297,9 +366,12 @@ fn pack_rows(listing: &Listing<'_>, entry: &TasksEntry) -> (Vec<PackRow>, Vec<Ta
                 .map(|(_, said)| said);
             let (said, also, more) = match running.or(chosen) {
                 Some(said) => (said.clone(), Vec::new(), false),
+                // Only the switches' view names it.
+                None if tasks.is_empty() => (TaskSaid::NotDecided, Vec::new(), false),
                 None => reasons(&tasks),
             };
             let facts = packs.and_then(|packs| packs.pack(&package));
+            let switch = switch_slot(listing.switches, &package);
             PackRow {
                 irreversible: facts.is_some_and(|facts| facts.irreversible),
                 risky: facts.and_then(|facts| facts.ui.as_ref()).is_some_and(|ui| ui.risky),
@@ -307,11 +379,29 @@ fn pack_rows(listing: &Listing<'_>, entry: &TasksEntry) -> (Vec<PackRow>, Vec<Ta
                 said,
                 also,
                 more,
-                switch: SwitchSlot::NotOffered,
+                switch,
             }
         })
         .collect();
     (rows, unmatched)
+}
+
+/// The switch of `package`'s row, by what the switches' read left: none drawn while there is no
+/// view, none either, with a note, while the view does not name the package or names no layer
+/// below the account's own rows that decide it (`pack::offered`); else as the view says it.
+fn switch_slot(switches: SwitchesNow<'_>, package: &str) -> SwitchSlot {
+    let SwitchesNow::Read { states, enabled, said } = switches else {
+        return SwitchSlot::Hidden;
+    };
+    match states.packages.iter().find(|state| state.package_id == package) {
+        None => SwitchSlot::NotHere { listed: false },
+        Some(state) if !pack::offered(state) => SwitchSlot::NotHere { listed: true },
+        Some(state) => SwitchSlot::Offered(PackSwitch {
+            state: state.clone(),
+            enabled,
+            said: said.and_then(|said| said.get(package)).cloned(),
+        }),
+    }
 }
 
 /// Where `package` is in `found`, put at its end the first time.
