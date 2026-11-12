@@ -126,6 +126,9 @@ class Evaluator:
 # holds this version: not the versions (`tool` is `acmodel.__version__`), the provenance documents nor thresholds.json, and
 # prices.json's evaluator digest takes only the libraries `economy` declares (its `source` moves with the code, as for every
 # change of it). So no `binds` moves, and no export is stale for it.
+# #430 C-2a: `economy` stays 12. The vector and the steady state now count what HiGHS ran in each stage and the steady
+# state times its stages too (`flow.Economy.lps`, `timing`, `total`), beside the value and never in it: `flow.encode`
+# keeps none of it, so what each node keeps is what it was, and every node computes what it did.
 EVALUATORS: dict[str, Evaluator] = {
     "economy": Evaluator(12, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),

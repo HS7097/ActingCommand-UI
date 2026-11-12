@@ -23,12 +23,18 @@ price moves and which activities change sign. `export prices` reads it for the a
   rule at its point value; a rule that reads a moved one moves with it (`graph.Moved`). A pass whose values are all the
   point values is the steady state's own vector and is not solved again. The vector runs no tie probe (PASS-TIMING): it
   reads no tie, so its coordinates are those it had with them (`flow._Solver.vector`).
-- **Timing** (PASS-TIMING). Each pass records how long it took (`timing_ms`): `source`, how its vector was found
-  (`solved`, in the pass's own graph; `steady_state`, the steady state's own, not solved again; `cache`, a vector node's
-  value that came from the cache, which keeps no timing); `stages`, each stage's whole milliseconds by `flow.STAGES`
-  (`Economy.timing`; null unless solved); and `total`, the whole pass's (`_Assessor.vector`); both on `flow.CLOCK`.
-  It is shown in that one place: the vector node's value, the provenance documents, the shared tree, `estimates`,
-  `counts` and every other member hold none of it, so no `binds` moves with it.
+- **How its vector was found** (`by`, #430 METHOD-C; contracts/formats.md, "A pass"): `solved`, in the pass's own graph
+  (also when the vector node's value came from the cache); `steady_state`, the steady state's own, not solved again; and
+  `certified`, by the certificate, which C-2a-2 runs (none is written yet).
+- **Timing** (PASS-TIMING; #430 C-2a). Each pass records how long it took and what HiGHS ran for it (`timing_ms`):
+  `stages`, each stage's whole milliseconds by `flow.STAGES` (`Economy.timing`; null unless solved); `lps`, by each of
+  those stages and `certificate` (the certificate's own LPs, 0 until C-2a-2), its runs, its second tries of the two
+  kinds and the time of the runs and of their exact work (`flow.LP_COUNTS`; `Economy.lps`; all 0 for `steady_state`);
+  and `total`, the whole pass's (`_Assessor.vector`); all on `flow.CLOCK`. A pass whose vector came from the cache,
+  which keeps no timing, has none: `timing_ms` is null. The member `source` that PASS-TIMING wrote is gone: `by` says
+  what it said. The timing is shown in each pass and, for the steady state, in prices.json's `steady_timing_ms`
+  (`export.prices`): the vector node's value, the provenance documents, the shared tree, `estimates`, `counts` and every
+  other member hold none of it, so no `binds` moves with it.
 - **What it finds**: each pool's price range over the steady state and every pass, and the activities whose class flips:
   the sign of their value at the vector (positive, zero, negative) is not the same in the steady state and in every pass.
   The Runtime's zero band, which needs the pools' scales and the rules' effects, is PRICE-4b's; an activity that moves out
@@ -38,8 +44,7 @@ price moves and which activities change sign. `export prices` reads it for the a
   block it, each needed by it): nothing is approximated.
 - **What the certificate reads** (#430 METHOD-C C-1; contracts/formats.md, "The certificate"). The assessment takes what
   the steady state's own computation found that the certificate reads (`flow.Held`, `flow.Economy.held`), in memory
-  only, and keeps it (`_Assessor.held`); a pass that moves a value is still solved as above, so no vector, `timing_ms`
-  or `source` changes.
+  only, and keeps it (`_Assessor.held`); a pass that moves a value is still solved as above, so no vector changes.
 - **A steady state from the cache** (item 11). The cache keeps none of it (`flow.encode`), so an assessment whose steady
   state came from the cache computes it again once, at its start, before any pass, without the cache
   (`flow.steady_again`). Its value as the cache keeps it (`Graph.encode`, canonical JSON) must be the cached one's byte
@@ -76,9 +81,13 @@ if TYPE_CHECKING:
 # Why an estimate the steady state read is not assessed: every price of its components is pending whatever it is.
 GAP, MISSING = "structural_gap", "estimate_missing"
 LOW, HIGH = "low", "high"
-# PASS-TIMING: how a pass's vector was found (`timing_ms.source`, module docstring): solved in the pass's own graph, every
-# stage timed; the steady state's own, not solved again; or a vector node's value from the cache, with no stage times.
-TIMING, SOLVED, STEADY_STATE, CACHE = "timing_ms", "solved", "steady_state", "cache"
+# #430 METHOD-C: how a pass's vector was found (`by`, module docstring): solved in the pass's own graph; proven by the
+# certificate without solving (C-2a-2; never written yet); or the steady state's own, not solved again.
+BY, SOLVED, CERTIFIED, STEADY_STATE = "by", "solved", "certified", "steady_state"
+# PASS-TIMING, #430 C-2a: a pass's timing (`timing_ms`: `stages`, `lps`, `total`), and the member of its `lps` that
+# holds the certificate's own LPs beside the vector's stages (`PASS_LPS`, every member of a pass's `lps`).
+TIMING, CERTIFICATE = "timing_ms", "certificate"
+PASS_LPS = (*flow.STAGES, CERTIFICATE)
 
 
 def _derive(checker: Checker, key: tuple[str, ...]) -> str | None:
@@ -261,12 +270,13 @@ class _Assessor:
 
     def vector(
         self, group: list[_Estimate], label: str, values: dict[str, Any], base: dict
-    ) -> tuple[dict, dict, dict[str, Any]]:
-        """The vector of one pass: each pool's coordinate and each activity's value; and its `timing_ms` (module
-        docstring), which nothing here reads."""
+    ) -> tuple[dict, dict, str, dict[str, Any] | None]:
+        """The vector of one pass: each pool's coordinate and each activity's value; how it was found (`by`); and its
+        `timing_ms` (module docstring), which nothing here reads."""
         started = flow.CLOCK()
         if all(item.point is not None and values[item.entry.id] == item.point for item in group):
-            return self.prices, self.values, _timing(STEADY_STATE, None, started)  # the steady state's own vector
+            # the steady state's own vector: nothing solved, so no stage and no LP
+            return self.prices, self.values, STEADY_STATE, _timing(None, flow.no_lps(flow.STAGES), started)
         graph = Moved(self.graph, base, values)
         solve([flow.VECTOR_NODE], graph.compute, graph.results)
         result = graph.results[flow.VECTOR_NODE]
@@ -276,15 +286,18 @@ class _Assessor:
         values_at = {
             activity: None if value is None else Fraction(value) for activity, value in result.data["activities"].items()
         }
-        stages = result.timing
-        return prices, values_at, _timing(SOLVED if stages is not None else CACHE, stages, started)
+        if result.timing is None or result.lps is None:  # a value the cache gave: it keeps no timing
+            return prices, values_at, SOLVED, None
+        return prices, values_at, SOLVED, _timing(result.timing, result.lps, started)
 
 
-def _timing(source: str, stages: dict[str, int] | None, started: int) -> dict[str, Any]:
-    """A pass's `timing_ms` (module docstring): how its vector was found, its stages' times (None unless solved) and the
-    whole pass's, from `started` on `flow.CLOCK`, in whole milliseconds rounded down."""
+def _timing(stages: dict[str, int] | None, lps: dict[str, dict[str, int]], started: int) -> dict[str, Any]:
+    """A pass's `timing_ms` (module docstring): its stages' times (None unless solved), what HiGHS ran in each stage of
+    the vector (`lps`) with the certificate's own LPs (none: 0 until C-2a-2) and the whole pass's time, from `started`
+    on `flow.CLOCK`, in whole milliseconds rounded down."""
     total = (flow.CLOCK() - started) // flow.NANOSECONDS_PER_MS
-    return {"source": source, "stages": None if stages is None else dict(stages), "total": total}
+    counted = {**{stage: dict(lps[stage]) for stage in flow.STAGES}, **flow.no_lps((CERTIFICATE,))}
+    return {"stages": None if stages is None else dict(stages), "lps": counted, "total": total}
 
 
 def _again(graph: Graph, steady: flow.Economy) -> flow.Economy:
@@ -341,7 +354,7 @@ def assess(
         passes = []
         for where, values in assessor.passes(group):
             label = ",".join(f"{name}={point}" for name, point in sorted(where.items()))
-            prices, at_values, timing = assessor.vector(group, label, values, base)
+            prices, at_values, by, timing = assessor.vector(group, label, values, base)
             for pool, price in prices.items():
                 low, high = group_ranges[pool]
                 group_ranges[pool] = (min(low, price), max(high, price))
@@ -350,7 +363,7 @@ def assess(
                     group_signs[activity].add(_sign(value))
             passes.append({
                 "at": dict(sorted(where.items())), "values": {d: _text(v) for d, v in sorted(values.items())},
-                TIMING: timing,
+                BY: by, TIMING: timing,
             })
         moved = {pool: pair for pool, pair in group_ranges.items() if pair[0] != pair[1]}
         flipped = sorted(activity for activity, found in group_signs.items() if len(found) > 1)
