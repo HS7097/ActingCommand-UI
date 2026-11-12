@@ -1813,7 +1813,8 @@ uncertainty of the estimates is assessed here.
       byte; otherwise `steady_state_mismatch` (exit 6), and nothing is assessed or written. Then the assessment reads
       the one computed again: it never falls back to solving every pass, and nothing the certificate reads goes into
       the cache. `export prices` computes without the cache, so an export of today never takes this way. No node's
-      value changes, so the `economy` kind's evaluator version stays 11.
+      value changes, so C-0 left the `economy` kind's evaluator version at 11; the D* LP retry (#430, 11-13) moved it
+      to 12, as an LP on D* can now give what it refused before (`cache/keys.py`).
 - **Timing** (PASS-TIMING; #430 METHOD-C). Each pass records how long it took, `timing_ms`, on a monotonic clock, in
   whole milliseconds rounded down: `{stages, total}`, or null. How its vector was found is said by its `by` alone;
   `timing_ms` only times. `stages`, only for `by` `solved` (null for `certified` and `steady_state`, which run no
