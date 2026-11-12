@@ -391,11 +391,11 @@ def test_the_quick_look_still_names_what_it_cannot_rule_out(tmp_path, economy, m
     assert quick["data"]["quick"]["coverage"] == steady_of(full)["coverage"]
 
 
-def test_the_economy_kind_is_version_11_and_no_entry_of_version_10_is_reused(tmp_path):
-    """PROBE-GAP bumps the `economy` kind's evaluator version to 11 (`cache/keys.py`): a steady state that version 10
-    kept is never served, so it is computed again, to the same output; a second run of one version reuses its own, as
-    before. The run id moves with the version."""
-    assert EVALUATORS["economy"].version == 11
+def test_the_economy_kind_is_version_12_and_no_entry_of_version_10_is_reused(tmp_path):
+    """PROBE-GAP bumped the `economy` kind's evaluator version to 11, and #430's second try of an LP on D* to 12
+    (`cache/keys.py`): a steady state that version 10 kept is never served, so it is computed again, to the same output; a
+    second run of one version reuses its own, as before. The run id moves with the version."""
+    assert EVALUATORS["economy"].version == 12
     folder = surplus_fixture(tmp_path / "fixture")
     state_root = tmp_path / "state"
     older = {**EVALUATORS, "economy": replace(EVALUATORS["economy"], version=10)}

@@ -51,6 +51,9 @@ BINDING_MISMATCH = "binding_mismatch"
 BINDING_UNBOUND_LITERAL = "binding_unbound_literal"
 BINDING_UNSUPPORTED = "binding_unsupported"
 LP_INFEASIBLE = "lp_infeasible"
+# #430: an LP on D* that HiGHS finds infeasible twice, and that the exact point the solve holds for it does not meet: the
+# LP is not the one the solve meant to build (a defect of acmodel), not a numerical failure (`lp_numeric_check_failed`).
+LP_INVARIANT_BROKEN = "lp_invariant_broken"
 LP_NUMERIC_CHECK_FAILED = "lp_numeric_check_failed"
 LP_SOLVE_FAILED = "lp_solve_failed"
 LP_DUAL_DISAGREES = "lp_dual_disagrees"  # acmodel economy: a warning, the price stands
@@ -138,6 +141,7 @@ EXIT_STATUS = {
     BINDING_UNBOUND_LITERAL: 6,
     BINDING_UNSUPPORTED: 5,
     LP_INFEASIBLE: 1,
+    LP_INVARIANT_BROKEN: 1,
     LP_NUMERIC_CHECK_FAILED: 1,
     LP_SOLVE_FAILED: 1,
     LP_DUAL_DISAGREES: 0,

@@ -1087,7 +1087,9 @@ one dual optimal point, never a pick per pool: with V = min(A, B, C), each pool'
   The least cost, solved and checked exactly, must be V0 exactly. Every LP on D* is solved on its
   complementary-slackness form, which needs no strong-duality row (below; the selection too since PRICE-2e), and every
   solution there is checked exactly against every row and bound of that form; the joint vector also at the
-  strong-duality row, exactly. Any of these failing is `lp_numeric_check_failed` (stage `dual`); it blocks the steady
+  strong-duality row, exactly. Any of these failing is `lp_numeric_check_failed` (stage `dual`); so is an LP on D* that
+  HiGHS finds infeasible on both its tries although the exact point the solve holds for it meets it, and one that point
+  does not meet is `lp_invariant_broken` (#430; "Exactness and failures", "Other failures"). Each blocks the steady
   state, so that no price is exportable without the whole vector (§2.6), and with it the plan.
 - **The projection.** A pool's coordinate π_r is the mean over the cycle of its balance rows' duals (the average
   price: an activity's value is linear in the prices, so its value at the mean is the mean of its values per step).
@@ -1371,6 +1373,26 @@ constraint that makes it 0 (an LP fact).
   `unchecked`.
 - **Other failures.** An unbounded program, or another status HiGHS ends with after a second try without presolve, is
   `lp_solve_failed`.
+  - **An LP on D* that HiGHS finds infeasible** (#430) is a numerical failure, never "infeasible": every LP on D* (a
+    projection's end, a pool's interval, each step of the selection and its withheld pools, each stage and probe of the
+    max-min, the vector's exact check; stage `dual`) has a solution by construction, an exact point the solve already
+    holds: the dual point of the strong-duality check, which meets D*'s complementary-slackness form, and then the
+    solution of the LP that found the value of the selection's last fixing row, which meets that row and every one
+    before it (with the max-min's level at 0 in its first stage, each coordinate's function lying within its range on
+    D*; a stage's optimum, with a probe's distance at the stage's level, for its probes and the next stage). HiGHS's
+    answer that it is infeasible is followed by a second try, from scratch and without presolve. When HiGHS finds it
+    infeasible again, the point is checked exactly against every bound and row of the LP: it meets them all,
+    `lp_numeric_check_failed` (`constraint` `solver_status`, `found` 2, `bound` =0); it breaks one, the LP is not the
+    one the solve meant to build, `lp_invariant_broken`, at the first bound or row it breaks. Each names the LP's
+    `step` (`projection`, `interval`, `selection`, `max_min`, `check`), HiGHS's text of its second answer (`raw_text`)
+    and that HiGHS ran it twice (`tries`). Where the solve holds no such point (a pool fixed at 0, unbounded both ways,
+    which no LP's solution reached, until the next LP's solution), it is `lp_solve_failed` (status 2) with the same
+    three. No tolerance is widened and no pass is left out of the assessment: each blocks as before.
+  - Every other program takes HiGHS's infeasible as its answer, with no second try, as before: the model's own S3
+    (the **Infeasible** line above), S1 and S2, the least losses, a price re-solve, the dual's least cost and the
+    probes.
+  - `lp_solve_failed` names the solve on the dual it comes from (`step`: `least_cost` for the dual's least cost, or
+    the LP on D*'s), and for status 2 HiGHS's text (`raw_text`), as it already did for every other status.
 
 ### Output
 
@@ -1791,7 +1813,8 @@ uncertainty of the estimates is assessed here.
       byte; otherwise `steady_state_mismatch` (exit 6), and nothing is assessed or written. Then the assessment reads
       the one computed again: it never falls back to solving every pass, and nothing the certificate reads goes into
       the cache. `export prices` computes without the cache, so an export of today never takes this way. No node's
-      value changes, so the `economy` kind's evaluator version stays 11.
+      value changes, so C-0 left the `economy` kind's evaluator version at 11; the D* LP retry (#430, 11-13) moved it
+      to 12, as an LP on D* can now give what it refused before (`cache/keys.py`).
 - **Timing** (PASS-TIMING; #430 METHOD-C). Each pass records how long it took, `timing_ms`, on a monotonic clock, in
   whole milliseconds rounded down: `{stages, total}`, or null. How its vector was found is said by its `by` alone;
   `timing_ms` only times. `stages`, only for `by` `solved` (null for `certified` and `steady_state`, which run no

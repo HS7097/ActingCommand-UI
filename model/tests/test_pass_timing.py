@@ -161,9 +161,10 @@ def test_the_vector_runs_no_tie_probe_and_each_coordinate_is_what_it_was(tmp_pat
 
     The vector of the model now runs no tie probe; as it was computed before (`before`), its tie probes run once and
     find act.train. Both give that point, coordinate by coordinate, and the same activity values, and what the cache
-    would keep of the node is the same, member by member (so `economy` stays at version 11: a kept vector is still
-    right). The steady state of the same graph still runs the probes and still warns of the tie, and its joint vector is
-    the vector's. The node holds its stages' times, which the cache's encoding leaves out and equality does not read."""
+    would keep of the node is the same, member by member (so this slice left `economy` at version 11: a kept vector is
+    still right; it is 12 since #430's second try of an LP on D*). The steady state of the same graph still runs the
+    probes and still warns of the tie, and its joint vector is the vector's. The node holds its stages' times, which the
+    cache's encoding leaves out and equality does not read."""
     folder = shared_fixture(tmp_path, "10", most="10")
     ties = watched_ties(monkeypatch)
     graph = graph_of(folder)
@@ -190,7 +191,7 @@ def test_the_vector_runs_no_tie_probe_and_each_coordinate_is_what_it_was(tmp_pat
     kept_now, kept_before = economy_flow.encode(found, []), economy_flow.encode(was, [])
     assert kept_now == kept_before and sorted(kept_now) == sorted(economy_flow.FORMAT["economy"])
     assert found == was
-    assert EVALUATORS["economy"].version == 11
+    assert EVALUATORS["economy"].version == 12
     assert list(found.timing) == list(economy_flow.STAGES) and all(type(ms) is int for ms in found.timing.values())
 
 
