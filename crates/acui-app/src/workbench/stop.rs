@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! A person's stop of one run of an account (UI-3e2): the rescue bar's "stop this run", which asks
-//! the Runtime to stop the run the newest `Status` names, at its next checkpoint, and to reset the
-//! device itself after it (`stop_run`, Workflow #429 R-6's first slice, Runtime 0.12.53). Only a
-//! run another tool started (`direct_run`) is sent: a run the scheduler dispatched, or one the
-//! Runtime started for itself, would only be refused, so its button stays off and says why
+//! A person's stop of one run of an account (UI-3e2, UI-3e3): the rescue bar's "stop this run",
+//! which asks the Runtime to stop the run the newest `Status` names, at its next checkpoint, and to
+//! reset the device itself after it (`stop_run`, Workflow #429 R-6's first slice, Runtime 0.12.53;
+//! R-6b, 0.12.55). A run another tool started (`direct_run`) is sent, and so is one the scheduler
+//! dispatched (`policy_run`), which a Runtime 0.12.55 or later stops as the other: this run only,
+//! its task staying on, so that it runs again after its cooldown while its trigger holds. A step
+//! the Runtime started for itself would only be refused, so its button stays off and says why
 //! (`Stops::row`). One press sends it: nothing asks first.
 //!
 //! Each account has a slot of its own (`Stops`, in the `Model` beside `Rescue`), and its tickets
@@ -30,7 +32,10 @@
 //! The button stays off while a stop of the account is out, or waits for a run that still stops,
 //! and for `RESCUE_COOLDOWN` after an answer lands or a restart let one go; after one not known,
 //! no longer than that: while the run is there, a press is a new stop. A Runtime that answered it
-//! has no stop (`not_implemented`, one before 0.12.53) keeps it off until another owner epoch.
+//! has no stop (`not_implemented`, one before 0.12.53) keeps it off until another owner epoch; one
+//! that refused a scheduled run as the scheduler's (`run_origin` `policy`: 0.12.53 and 0.12.54,
+//! which stop only a direct run) keeps it off for scheduled runs until another owner epoch. Nothing
+//! else tells the console which Runtime it reads: no read it makes names a revision.
 //! What the last stop came to is said under the button, with when it landed, until the account's
 //! `Status` shows another run; the card and the picture say what holds now.
 //!
@@ -63,14 +68,17 @@ use crate::ui::{self, Ui};
 /// The stop's thread, also what its lines in the technical log are under.
 const THREAD: &str = "acui-act-stop";
 
-/// Each account's stop of its run this run, and the owner epoch whose Runtime said it has no stop;
-/// on the event loop only.
+/// Each account's stop of its run this run, the owner epoch whose Runtime said it has no stop, and
+/// the one whose Runtime refused a scheduled run as the scheduler's; on the event loop only. Both
+/// are of the whole Runtime, not of an account.
 #[derive(Default)]
 pub struct Stops {
     /// By alias.
     slots: BTreeMap<String, StopSlot>,
     /// The owner epoch whose Runtime answered `not_implemented`.
     unsupported: Option<String>,
+    /// The owner epoch whose Runtime refused a stop with `run_origin` `policy`.
+    policy_refused: Option<String>,
 }
 
 /// One account's: what is out or awaited; what the last stop came to, and the runs that is of; the
@@ -103,21 +111,25 @@ enum Stage {
 }
 
 /// One request of a stop: its ticket; the run it stops and that run's package, for R-8's close of
-/// the task and the log; the owner epoch online when it was pressed; and, of a follow-up, the
-/// first's ticket.
+/// the task and the log; whether the scheduler dispatched that run, as the `Status` it was pressed
+/// on said, for the words of what it came to and the log; the owner epoch online when it was
+/// pressed; and, of a follow-up, the first's ticket.
 #[derive(Debug, Clone)]
 struct Request {
     ticket: RescueTicket,
     run: RunKey,
     package: Option<String>,
+    scheduled: bool,
     epoch: String,
     follows: Option<RescueTicket>,
 }
 
-/// What a press of an account's "stop this run" would stop now (`Model::stop_target`).
+/// What a press of an account's "stop this run" would stop now (`Model::stop_target`): the run, its
+/// package, whether the scheduler dispatched it (`policy_run`), and the owner epoch online.
 pub struct StopTarget {
     pub run: RunKey,
     pub package: Option<String>,
+    pub scheduled: bool,
     pub epoch: String,
 }
 
@@ -139,14 +151,18 @@ pub enum CloseWhy {
     CoolingDown,
     /// This owner epoch's Runtime answered that it has no stop.
     Unsupported,
-    /// A run another tool started, which a press asks the Runtime to stop: the one that can be
-    /// pressed.
+    /// A run another tool started, which a press asks the Runtime to stop: one of the two that can
+    /// be pressed.
     DirectRun,
-    /// A direct run whose status names no request: nothing to stop it by. The log hears of it.
+    /// A direct or scheduled run whose status names no request: nothing to stop it by. The log
+    /// hears of it.
     Unidentified,
-    /// A run the scheduler dispatched, one finishing under the global pause too: the account's own
-    /// pause on its card stops it.
-    Scheduled,
+    /// A run the scheduler dispatched, one finishing under the global pause too, which a press asks
+    /// the Runtime to stop: this run only, its task staying on. The other that can be pressed.
+    ScheduledRun,
+    /// A run the scheduler dispatched, while this owner epoch's Runtime refused a stop of one as
+    /// the scheduler's (`run_origin` `policy`): one before 0.12.55.
+    ScheduledUnsupported,
     /// A step the Runtime started itself: a host's run, or its recovery ladder.
     RuntimeOwn,
     /// A reconnect, a self-check, an emulator's control: no task runs.
@@ -159,8 +175,9 @@ pub enum CloseWhy {
 pub enum StopSaid {
     /// The first request is out.
     Sending,
-    /// The run ended, and the Runtime's own reset after it went as `reset` says.
-    Stopped { at_ms: u64, reset: Reset },
+    /// The run ended, and the Runtime's own reset after it went as `reset` says. `scheduled`: the
+    /// scheduler dispatched it, as the `Status` the stop was pressed on said, so its task stays on.
+    Stopped { at_ms: u64, reset: Reset, scheduled: bool },
     /// The first answered that the run still stops: its follow-up waits for it to go.
     Asked { at_ms: u64 },
     /// The follow-up is out, the run gone from `Status`.
@@ -213,8 +230,10 @@ impl Stops {
     /// The row of `instance`, which the newest `Status` read at the owner epoch `epoch` lists, while
     /// it does something: the first of these that holds. A stop of it is out, or waits for a run
     /// that still stops; its last landed a moment ago; this epoch's Runtime has no stop; and then
-    /// what it does, of which only a direct run that names its request can be stopped. Whether its
-    /// picture is withdrawn is the bar's to say (`Rescue::view`).
+    /// what it does, of which a direct run and a scheduled run that name their request can be
+    /// stopped, a scheduled one but while this epoch's Runtime refused one as the scheduler's. The
+    /// Runtime's own steps are never sent: a ladder's request is its claim's, not a run's. Whether
+    /// its picture is withdrawn is the bar's to say (`Rescue::view`).
     pub fn row(&self, instance: &InstanceLive, epoch: &str) -> Option<CloseRow> {
         let activity = instance.activity.as_ref()?;
         let slot = self.slots.get(&instance.alias);
@@ -226,16 +245,22 @@ impl Stops {
             CloseWhy::Unsupported
         } else {
             match activity.kind {
-                ActivityKind::DirectRun if activity.run.is_some() => CloseWhy::DirectRun,
-                ActivityKind::DirectRun => CloseWhy::Unidentified,
-                ActivityKind::PolicyRun => CloseWhy::Scheduled,
+                ActivityKind::DirectRun | ActivityKind::PolicyRun if activity.run.is_none() => {
+                    CloseWhy::Unidentified
+                }
+                ActivityKind::DirectRun => CloseWhy::DirectRun,
+                ActivityKind::PolicyRun if self.policy_refused.as_deref() == Some(epoch) => {
+                    CloseWhy::ScheduledUnsupported
+                }
+                ActivityKind::PolicyRun => CloseWhy::ScheduledRun,
                 ActivityKind::HostRun | ActivityKind::Ladder => CloseWhy::RuntimeOwn,
                 ActivityKind::Reconnect
                 | ActivityKind::Selfcheck
                 | ActivityKind::EmulatorControl => CloseWhy::NoTask,
             }
         };
-        Some(CloseRow { offered: why == CloseWhy::DirectRun, why })
+        let offered = matches!(why, CloseWhy::DirectRun | CloseWhy::ScheduledRun);
+        Some(CloseRow { offered, why })
     }
 
     /// What the last stop of `alias` came to, while it is said.
@@ -273,7 +298,8 @@ impl Stops {
     /// What the stop of `alias` under `ticket` came to, landing at `at_ms` while the account's
     /// newest `Status` names the run `seen`: none when that ticket is not the one out, which a
     /// restart let go; else whether its cooldown runs from now, which it does but while the first
-    /// waits for a run that still stops. A Runtime that has no stop is kept for its owner epoch.
+    /// waits for a run that still stops. A Runtime that has no stop is kept for its owner epoch, and
+    /// so is one that refused a run as the scheduler's.
     fn settle(
         &mut self,
         alias: &str,
@@ -293,9 +319,15 @@ impl Stops {
         if let Some(run) = seen.filter(|run| !slot.runs.contains(run)) {
             slot.runs.push(run);
         }
-        let (said, waits) = landing.said(at_ms, request.follows.is_some());
-        if matches!(said, StopSaid::Refused { why: Refusal::NotImplemented, .. }) {
-            self.unsupported = Some(request.epoch.clone());
+        let (said, waits) = landing.said(at_ms, request.follows.is_some(), request.scheduled);
+        match &said {
+            StopSaid::Refused { why: Refusal::NotImplemented, .. } => {
+                self.unsupported = Some(request.epoch.clone());
+            }
+            StopSaid::Refused { why: Refusal::NotStoppable, origin: Some(Origin::Policy), .. } => {
+                self.policy_refused = Some(request.epoch.clone());
+            }
+            _ => {}
         }
         slot.said = Some(said);
         let cools = waits != Some(false);
@@ -342,6 +374,9 @@ impl Stops {
     ) -> Review {
         if self.unsupported.as_deref().is_some_and(|said| said != epoch) {
             self.unsupported = None;
+        }
+        if self.policy_refused.as_deref().is_some_and(|said| said != epoch) {
+            self.policy_refused = None;
         }
         let mut review = Review::default();
         for (alias, slot) in &mut self.slots {
@@ -449,13 +484,14 @@ enum Landing {
 }
 
 impl Landing {
-    /// What it came to, before its words, as it lands at `at_ms`; and, of the first request
-    /// (`follow_up` false), whether its follow-up is to wait for the run to go (`Some`): one that
-    /// still stops (`false`), or one whose answer is not known (`true`).
-    fn said(self, at_ms: u64, follow_up: bool) -> (StopSaid, Option<bool>) {
+    /// What it came to, before its words, as it lands at `at_ms`, of a run the scheduler
+    /// dispatched or not (`scheduled`); and, of the first request (`follow_up` false), whether its
+    /// follow-up is to wait for the run to go (`Some`): one that still stops (`false`), or one
+    /// whose answer is not known (`true`).
+    fn said(self, at_ms: u64, follow_up: bool, scheduled: bool) -> (StopSaid, Option<bool>) {
         match self {
             Self::Answer(StopOutcome::Stopped { reset: Some(reset), .. }) => {
-                (StopSaid::Stopped { at_ms, reset }, None)
+                (StopSaid::Stopped { at_ms, reset, scheduled }, None)
             }
             Self::Answer(StopOutcome::Stopped { reset: None, .. }) if follow_up => {
                 (StopSaid::Unsettled { at_ms }, None)
@@ -570,12 +606,13 @@ fn then(first: bool) -> &'static str {
     }
 }
 
-/// The log's words for one request: its ticket, the account, the run it stops and its package,
-/// and of a follow-up the first's ticket.
+/// The log's words for one request: its ticket, the account, the run it stops, which kind of run
+/// that is and its package, and of a follow-up the first's ticket.
 fn prefix(alias: &str, request: &Request) -> String {
     let package = request.package.as_deref().unwrap_or("(none named)");
+    let kind = if request.scheduled { "policy run" } else { "direct run" };
     let mut prefix = format!(
-        "ticket {} of {alias}, stop run {} of package {package}",
+        "ticket {} of {alias}, stop run {} ({kind}) of package {package}",
         request.ticket.number(),
         request.run.line()
     );
@@ -612,6 +649,7 @@ fn press(ui: &Ui, alias: &str) {
             ticket: rescue.ticket(),
             run: target.run,
             package: target.package,
+            scheduled: target.scheduled,
             epoch: target.epoch,
             follows: None,
         };

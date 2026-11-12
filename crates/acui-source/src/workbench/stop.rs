@@ -7,10 +7,13 @@
 //! to show after it is the next `Status`'s. Nothing out of here names a wire type: what came back
 //! is a [`StopOutcome`].
 //!
-//! Only a run a client started (`direct_run`) is stopped: one the scheduler dispatched or the
-//! Runtime started for itself is refused, and nothing is stopped. A Runtime before 0.12.53 has no
-//! stop at all: it refuses `not_implemented` and records nothing ([`Refusal::NotImplemented`]);
-//! nothing else tells the console so, since it reads no version of the Runtime.
+//! A run a client started (`direct_run`) is stopped, and since 0.12.55 one the scheduler
+//! dispatched (`policy_run`) too: only a step the Runtime started for itself is refused
+//! (`run_origin` `host`), and nothing is stopped. 0.12.53 and 0.12.54 refuse a scheduled run as
+//! well, with `run_origin` `policy`, which only they answer ([`Origin::Policy`]). A Runtime before
+//! 0.12.53 has no stop at all: it refuses `not_implemented` and records nothing
+//! ([`Refusal::NotImplemented`]); nothing else tells the console so, since it reads no version of
+//! the Runtime.
 //!
 //! The connection is that of a person's change of settings ([`super::configure`]), asking for
 //! the full receipt, at the client's default io timeout: never the reading lane's, whose one
@@ -99,7 +102,8 @@ pub enum Reset {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
     /// No client may stop this run (`scheduled_contained_task_not_client_cancellable`): the
-    /// scheduler's or the Runtime's own, which `origin` names.
+    /// Runtime's own, which `origin` names; since 0.12.55 only that, and on 0.12.53 and 0.12.54 the
+    /// scheduler's too.
     NotStoppable,
     /// The instance neither runs this run nor stopped it last
     /// (`contained_task_cancellation_identity_missing`): it ended before the stop came, or a stop
@@ -115,7 +119,8 @@ pub enum Refusal {
 /// Who started a run no client may stop (`run_origin`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
-    /// The scheduler: a policy run.
+    /// The scheduler: a policy run. Only 0.12.53 and 0.12.54 answer it; 0.12.55 stops a policy run,
+    /// and refuses only the Runtime's own steps (`Host`). The token stays registered.
     Policy,
     /// The Runtime itself: a startup package, a recovery ladder's rung, or another step of its own.
     Host,
