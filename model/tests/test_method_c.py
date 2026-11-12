@@ -65,10 +65,13 @@ from test_prices import (  # noqa: F401 (the fixture `acmodel`)
 
 STEADY, VECTOR = economy_flow.NODES[economy_flow.STEADY], economy_flow.VECTOR_NODE
 # flips_fixture's one group, without its passes' `timing_ms` (test_prices.py works it out): s's price over [1, 2], and
-# act.p and act.q flip.
+# act.p and act.q flip; both passes are solved (#430 C-2a: each says so, `by`).
 FLIPS_GROUP = {
     "rules": ["pt.k"], "unknowns": [],
-    "passes": [{"at": {"pt.k": "low"}, "values": {"pt.k": "1/2"}}, {"at": {"pt.k": "high"}, "values": {"pt.k": "2"}}],
+    "passes": [
+        {"at": {"pt.k": "low"}, "values": {"pt.k": "1/2"}, "by": "solved"},
+        {"at": {"pt.k": "high"}, "values": {"pt.k": "2"}, "by": "solved"},
+    ],
     "prices": {"res.s": {"low": "1", "high": "2"}}, "flips": ["act.p", "act.q"],
 }
 
