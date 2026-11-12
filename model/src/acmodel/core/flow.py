@@ -122,6 +122,14 @@ is converted with `Fraction(x).limit_denominator(lp.max_denominator)`. Every sol
 bound, integrality and row (`lp_numeric_check_failed`). Objective values, prices and losses are computed from the
 checked fractions, never from the solver's floats.
 
+**An LP on D* that HiGHS finds infeasible** (#430). Every LP on D* (a projection's end, a pool's interval, each step of
+the selection and of the max-min, the vector's exact check) has a solution by construction: an exact point the solve
+already holds meets it (`_Solver.lp`, `witness`). So HiGHS's answer that it is infeasible is a numerical failure: the LP
+is solved again from scratch without presolve, and when HiGHS finds it infeasible again, that point is checked exactly
+against its every bound and row: it meets them all, `lp_numeric_check_failed`; it breaks one, the LP was built wrong,
+`lp_invariant_broken`. Every other program (S3, S1, S2, the least losses, a re-solve, the dual's least cost, a probe)
+takes HiGHS's infeasible as its answer, as before.
+
 **Infeasibility.** An infeasible program names a minimal set of conflicting rule groups (`lp_infeasible`): each
 group (a regen, cap, limit or read cap, and in a plan each opening stock) is dropped in turn, in id order, and
 stays dropped while the rest is still infeasible.
@@ -144,6 +152,7 @@ from acmodel.codes import (
     EXPR_EVAL_FAILED,
     LP_DUAL_DISAGREES,
     LP_INFEASIBLE,
+    LP_INVARIANT_BROKEN,
     LP_NUMERIC_CHECK_FAILED,
     LP_PROBE_UNVERIFIED,
     LP_SOLVE_FAILED,
@@ -219,6 +228,14 @@ _Pair = tuple[Fraction | None, Fraction | None]  # a price: its low and high end
 # projections, the selection, the ranges and the forcing costs) and of the judgements' primal solves (the most an
 # optimum runs an activity).
 DUAL, JUDGEMENT = "dual", "judgement"
+# #430: the steps of the solves on the dual, which the errors of one name (`step`): the dual's least cost (`duality`),
+# and the LPs on D*, each of which has a solution by construction (`_Solver.lp`, `witness`): a projection's end, a pool's
+# interval, the selection's steps 1 and 3 and its withheld pools, the max-min's stages and probes (`MAX_MIN`, below, the
+# same word), and the vector's exact check.
+LEAST_COST, PROJECTION, INTERVAL, SELECTION, CHECK = "least_cost", "projection", "interval", "selection", "check"
+# #430: what `lp_numeric_check_failed` names for an LP on D* that HiGHS finds infeasible twice although an exact point
+# meets it (`_Solver.unsolved`): HiGHS's status (`found` 2, infeasible) where it must be 0 (optimal)
+SOLVER_STATUS = "solver_status"
 FACE: Key = ("duality", "face", 0)  # the strong-duality row: the dual's cost at the primal optimum
 LEVEL: Key = ("t", "level", 0)  # the max-min's level, a variable of its stage
 PROBE: Key = ("t", "probe", 0)  # the distance of one coordinate, a variable of the probe of a stage
@@ -1821,6 +1838,7 @@ class _Solution:
     # a certified optimum's program as `core.exact` read it, its vertex and the arrays (the order of its rows)
     basis: tuple[Any, Any, Any] | None = None
     solver: Any = None  # PRICE-2d: S3's HiGHS instance (`lp` with `keep`), for its re-solves at ±grain (`_Grained`)
+    message: str | None = None  # #430: HiGHS's text of an infeasible LP, for the error that reports it (`_said`)
 
 
 @dataclass(frozen=True)
@@ -2369,6 +2387,25 @@ def _meets(rows: tuple[_Row, ...], x: dict[Key, Fraction]) -> bool:
     return True
 
 
+def _unmet(program: _Program, point: dict[Key, Fraction]) -> dict[str, str] | None:
+    """The first bound or row of `program` that `point` breaks exactly, as `_violation` finds it (the bounds by variable,
+    then the rows in canonical order); a variable it holds no value for breaks its lower bound (`found` null). None when
+    it meets them all (#430, `_Solver.unsolved`). The point may hold other variables too: only the program's are read."""
+    for key in sorted(program.variables):
+        if key not in point:
+            return {"constraint": _token(key), "found": "null", "bound": f">={program.variables[key][0]}"}
+    return _violation(program, point)
+
+
+def _said(found: _Solution, step: str | None = None) -> dict[str, Any]:
+    """What `lp_solve_failed` names of an LP that HiGHS found infeasible (#430): the step of a solve on the dual (`step`)
+    and HiGHS's text (`raw_text`), where each is known."""
+    shown: dict[str, Any] = {} if step is None else {"step": step}
+    if found.message is not None:
+        shown["raw_text"] = found.message
+    return shown
+
+
 @dataclass(frozen=True)
 class _Seed:
     """S3's basis as HiGHS ended at it (PRICE-2e), each column's and each row's status by key, and S3's exact optimum
@@ -2599,11 +2636,22 @@ class _Solver:
 
     def lp(
         self, program: _Program, stage: str, *, check: bool = True, unbounded: bool = False, warm: bool = False,
-        keep: bool = False, seed: _Seed | None = None,
+        keep: bool = False, seed: _Seed | None = None, witness: tuple[str, dict[Key, Fraction] | None] | None = None,
     ) -> _Solution:
         """An LP, solved by HiGHS (`_highs`) and made exact from its basis (`vertex`). With `unbounded`, an objective
         without a maximum is the status `unbounded` (an end of a projection that is null, PRICE-2b-1); else it is
         `lp_solve_failed`. With `keep` (S3, PRICE-2d), the solution holds the HiGHS instance that solved it.
+
+        With `witness` (#430: an LP on D*, which has a solution by construction), its step (`step`, of the errors below)
+        and an exact point that meets every one of its bounds and rows: D*'s by the strong-duality check (`duality`), and
+        then the solution of the LP that added the selection's last fixing row (`joint`, `max_min`); None where the solve
+        holds none (a pool fixed at 0, unbounded both ways, until the next LP's solution). HiGHS's answer that such an LP
+        is infeasible is then a numerical failure, not an answer: the LP is solved again from scratch without presolve
+        (`_highs`; the instance that solves it holds its rows, so the next LP on that face, warm, goes on from it), once
+        in all (a first status other than 0, 2 and 3 already has its second try so). When HiGHS finds it infeasible
+        again, the point is checked exactly against every bound and row of the LP (`unsolved`). Every other LP (S3, S1,
+        S2, the least losses, a price re-solve, the dual's least cost, a probe) takes HiGHS's infeasible as its answer, as
+        before; and an LP on D* that HiGHS solves the first time takes the same way it did.
 
         With `warm` (the LPs on one face, which differ only in their objective: the projections, the intervals, the
         ranges on D*, PRICE-2c; and since PRICE-2e the `most` probes on S3's optimal face, and the selection on D*,
@@ -2628,17 +2676,28 @@ class _Solver:
                 self.warm[id(program.variables)] = (program.variables, program.rows, arrays, result.solver)
                 while len(self.warm) > WARM_FACES:  # the face whose LPs came longest ago
                     self.warm.pop(next(iter(self.warm)))
+        tries = 1
         if result.status not in (0, 2, 3):  # "unbounded or infeasible" from presolve, or numerical trouble
-            result = _highs(arrays, False)
+            result, tries = _highs(arrays, False), 2
+        elif result.status == 2 and witness is not None:  # an LP on D* has a solution: HiGHS erred (#430)
+            result, tries = _highs(arrays, False), 2
+            if warm and result.solver is not None:  # it holds these rows: the next LP on this face goes on from it
+                self.warm[id(program.variables)] = (program.variables, program.rows, arrays, result.solver)
+                while len(self.warm) > WARM_FACES:  # the face whose LPs came longest ago
+                    self.warm.pop(next(iter(self.warm)))
+        if result.status == 2 and witness is not None:
+            raise self.unsolved(program, stage, witness, result.message, tries)
         if result.status == 2:
-            return _Solution("infeasible")
+            return _Solution("infeasible", message=result.message)
         if result.status == 3 and unbounded:
             return _Solution("unbounded")
+        shown = {} if witness is None else {"step": witness[0], "tries": tries}  # #430: an LP on D*
         if result.status == 3:
-            raise self.failure(LP_SOLVE_FAILED, stage=stage, reason="unbounded", status=3)
+            raise self.failure(LP_SOLVE_FAILED, stage=stage, reason="unbounded", status=3, **shown)
         if result.status != 0:
             raise self.failure(
-                LP_SOLVE_FAILED, stage=stage, reason="solver_status", status=int(result.status), raw_text=result.message
+                LP_SOLVE_FAILED, stage=stage, reason="solver_status", status=int(result.status), raw_text=result.message,
+                **shown,
             )
         if not check:
             return _Solution("optimal")
@@ -2654,6 +2713,29 @@ class _Solver:
             basis=(self.last_problem, found, arrays) if certified else None,
             solver=result.solver if keep else None,
         )
+
+    def unsolved(
+        self, program: _Program, stage: str, witness: tuple[str, dict[Key, Fraction] | None], text: str, tries: int
+    ) -> Failure:
+        """The error of an LP on D* that HiGHS found infeasible on both its tries (#430; `lp`, `witness`), told apart by
+        the exact point the solve holds for it, checked exactly against the LP's every bound and row (`_unmet`):
+        - it meets them all, so the LP has a solution and HiGHS's answer is a numerical failure: `lp_numeric_check_failed`,
+          at HiGHS's status (`constraint` solver_status, `found` 2, infeasible, `bound` =0, optimal);
+        - it breaks one, so the LP is not the one the solve meant to build (a defect, not a numerical failure):
+          `lp_invariant_broken`, at the first it breaks (its `constraint`, `found` and `bound`, as `_violation` gives them);
+        - none is held (`lp`): `lp_solve_failed` (status 2).
+        Each names the step, HiGHS's text of its second answer (`raw_text`) and how many times it ran the LP (`tries`).
+        Nothing is relaxed, and nothing is left out: the steady state, or the pass, is blocked."""
+        step, point = witness
+        shown = {"step": step, "raw_text": text, "tries": tries}
+        if point is None:
+            return self.failure(LP_SOLVE_FAILED, stage=stage, reason="solver_status", status=2, **shown)
+        broken = _unmet(program, point)
+        if broken is None:
+            return self.failure(
+                LP_NUMERIC_CHECK_FAILED, stage=stage, constraint=SOLVER_STATUS, found="2", bound="=0", **shown
+            )
+        return self.failure(LP_INVARIANT_BROKEN, stage=stage, **broken, **shown)
 
     def probe(
         self, program: _Program, stage: str, *, unbounded: bool = False, warm: bool = False, seed: _Seed | None = None
@@ -2981,24 +3063,36 @@ class _Solver:
 
     def extreme(
         self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: Any, function: dict[Key, Fraction],
-        sense: int,
+        sense: int, witness: tuple[str, dict[Key, Fraction] | None] | None = None,
     ) -> Fraction | None:
         """The greatest (`sense` 1) or least (-1) value of a linear function on the solutions of `rows` (D*, or a face
         of it), exact; None when it is unbounded. The rows always have a solution: they hold the dual point that the
-        strong-duality check found (`lp_solve_failed`, stage `dual`, otherwise)."""
+        strong-duality check found (`lp_solve_failed`, stage `dual`, otherwise). With `witness` (#430: an LP on D*), its
+        step and an exact point of `rows` (`lp`, `witness`)."""
+        return self.extreme_at(variables, rows, function, sense, witness)[0]
+
+    def extreme_at(
+        self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: Any, function: dict[Key, Fraction],
+        sense: int, witness: tuple[str, dict[Key, Fraction] | None] | None = None,
+    ) -> tuple[Fraction | None, dict[Key, Fraction] | None]:
+        """`extreme`, and an exact point that meets `rows` (#430, what the selection holds for its next LP on D*): the
+        solution that reaches the extreme; where it is unbounded, `witness`'s point (None without one)."""
         program = _Program(variables, tuple(rows), _nonzero({key: sense * value for key, value in function.items()}))
-        found = self.lp(program, DUAL, unbounded=True, warm=True)
+        found = self.lp(program, DUAL, unbounded=True, warm=True, witness=witness)
         if found.status == "unbounded":
-            return None
-        if found.status != "optimal":
-            raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2)
-        return sense * found.value
+            return None, (None if witness is None else witness[1])
+        if found.status != "optimal":  # an LP with a `witness` never ends here (`lp` raises)
+            step = None if witness is None else witness[0]
+            raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2, **_said(found, step))
+        return sense * found.value, found.x
 
     def ends(
-        self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: Any, function: dict[Key, Fraction]
+        self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: Any, function: dict[Key, Fraction],
+        witness: tuple[str, dict[Key, Fraction] | None] | None = None,
     ) -> _Pair:
-        """A linear function's least and greatest values on the solutions of `rows`, None where unbounded."""
-        return self.extreme(variables, rows, function, -1), self.extreme(variables, rows, function, 1)
+        """A linear function's least and greatest values on the solutions of `rows`, None where unbounded; `witness` as
+        `extreme` takes it."""
+        return self.extreme(variables, rows, function, -1, witness), self.extreme(variables, rows, function, 1, witness)
 
     def probed_ends(
         self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: Any, function: dict[Key, Fraction]
@@ -3022,7 +3116,9 @@ class _Solver:
         activities no optimum runs (`_never`, PRICE-2c)."""
         found = self.lp(_Program(dual.variables, dual.rows, {key: -value for key, value in dual.cost.items()}), DUAL)
         if found.status != "optimal":  # the primal has an optimum, so its dual has one
-            raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2)
+            raise self.failure(
+                LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2, **_said(found, LEAST_COST)
+            )
         least = -found.value
         if least != optimum:
             raise self.failure(
@@ -3033,23 +3129,33 @@ class _Solver:
     def max_min(
         self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: list[_Row],
         coordinates: dict[str, tuple[dict[Key, Fraction], Fraction, Fraction, bool]],
-    ) -> tuple[dict[str, Fraction], list[dict[str, Any]]]:
+        met: dict[Key, Fraction] | None = None,
+    ) -> tuple[dict[str, Fraction], list[dict[str, Any]], dict[Key, Fraction] | None]:
         """The lexicographic max-min of addendum 2.1 §2.2 step 4.2 over K (`coordinates`: id -> its function, the low
         and high ends of its range on D*, and whether it is two-sided, `_distance`), on the solutions of `rows`. A
         stage maximises the level t that every free coordinate's distance reaches; a coordinate whose distance is t
         in every optimum of the stage (its probe, the most it reaches while the others reach t, is t) is fixed at its
         value there, one value by convexity, and its row added to `rows`. Each stage fixes at least one, so it ends;
         none fixed is `lp_numeric_check_failed` (stage `dual`). Returns the fixed values and the stages, each
-        `{level, fixed}` (the coordinates it fixed, by id)."""
+        `{level, fixed}` (the coordinates it fixed, by id).
+
+        #430: each LP here is on D* (`lp`, `witness`, step `max_min`), and `met` is an exact point that meets `rows`
+        (None for none). With the level at 0 it meets the first stage: each coordinate's function lies within its range
+        on D* at every point of D*. A stage's optimum meets each of its probes with the probe's distance at the stage's
+        level (the others' rows hold at that level, and so does its own), and the next stage, at the same level, with
+        the rows that fix what the stage fixed (each at its value there). Also returns such a point of `rows` as the
+        max-min leaves them: the last stage's optimum (its level and probe variables are no variable of D*, so an LP on D*
+        reads none of them), or `met` when no stage ran."""
         zero, one = Fraction(0), Fraction(1)
         free = dict(coordinates)
         fixed: dict[str, Fraction] = {}
         stages: list[dict[str, Any]] = []
+        at = None if met is None else {**met, LEVEL: zero}
         while free:
             names = sorted(free)
             levels = [row for name in names for row in _distance(name, *free[name], LEVEL)]
             stage = _Program({**variables, LEVEL: (zero, None, False)}, (*rows, *levels), {LEVEL: one})
-            best = self.optimal(stage, DUAL)
+            best = self.optimal(stage, DUAL, witness=(MAX_MIN, at))
             level = best.value
             newly = []
             for name in names:
@@ -3058,7 +3164,7 @@ class _Solver:
                     {**variables, PROBE: (zero, None, False)}, (*rows, *others, *_distance(name, *free[name], PROBE)),
                     {PROBE: one},
                 )
-                if self.optimal(probe, DUAL).value <= level:
+                if self.optimal(probe, DUAL, witness=(MAX_MIN, {**best.x, PROBE: level})).value <= level:
                     newly.append(name)
             if not newly:
                 raise self.failure(
@@ -3069,7 +3175,8 @@ class _Solver:
                 fixed[name] = sum((coefficient * best.x[key] for key, coefficient in function.items()), zero)
                 rows.append(_Row(("fix", name, 0), function, "eq", fixed[name], None))
             stages.append({"level": str(level), "fixed": newly})
-        return fixed, stages
+            at = best.x  # its level is this stage's: it meets the next stage, and the rows that fix what this one fixed
+        return fixed, stages, (at if stages else met)
 
     def joint(
         self, dual: _Dual, point: dict[Key, Fraction], optimum: Fraction, prices: dict[str, list[_Pair]],
@@ -3128,7 +3235,12 @@ class _Solver:
           other judgements are then null. The vector is the same: every step of the selection is an LP's optimal
           value over the same K. Its stages end on the solver's clock (`lap`, PASS-TIMING), which `steady` has none of.
         - **What it chose** (#430 METHOD-C): K, the vector and each activity's value at it, exact, are kept on the solver
-          (`chosen`, `_Chosen`) for `steady` to hand on (`Held`); nothing here reads them, and nothing above changes."""
+          (`chosen`, `_Chosen`) for `steady` to hand on (`Held`); nothing here reads them, and nothing above changes.
+        - **An exact point of each LP on D*** (#430; `lp`, `witness`). `point`, the strong-duality check's, meets D*
+          (the intervals'); each fixing row holds the value the solution of an LP found, which that solution meets, so it
+          meets the rows so far (the selection's next LP, the max-min's, the check's), but a pool fixed at 0 (unbounded
+          both ways), which no solution reached: none is held then, until the next LP's solution. It is read only where
+          HiGHS finds such an LP infeasible on both its tries, and never changes a value."""
         model, steps, zero, one = self.model, self.model.steps, Fraction(0), Fraction(1)
         variables = on_face[0]
         warnings: list[dict[str, Any]] = []
@@ -3151,7 +3263,7 @@ class _Solver:
                 mean = sum((low for low, _ in prices[resource]), zero) / steps
                 intervals[resource] = (mean, mean)
             else:
-                intervals[resource] = self.ends(*on_face, pools[resource])
+                intervals[resource] = self.ends(*on_face, pools[resource], (INTERVAL, point))
         self.lap("intervals")
         most: dict[str, Fraction | None] = {}
         runs: dict[str, dict[Key, Fraction]] = {}  # activity -> its `most` probe's solution
@@ -3199,19 +3311,25 @@ class _Solver:
         rows = list(on_face[1])  # D* without the strong-duality row (PRICE-2e), and the fixing rows after it
         chosen: dict[str, tuple[Fraction, str]] = {}
         goals = {resource for _, resource, _ in model.goals}
+        # #430: an exact point that meets `rows`, which each LP on them holds (`lp`, `witness`): the dual point of the
+        # strong-duality check, then the solution of the LP that found the value each fixing row holds
+        met: dict[Key, Fraction] | None = point
 
-        def fix(resource: str, value: Fraction | None, by: str) -> None:
+        def fix(resource: str, value: Fraction | None, by: str, at: dict[Key, Fraction] | None) -> None:
+            nonlocal met
             if value is None:  # an end that D* bounds is bounded on every face of it
                 raise self.failure(LP_NUMERIC_CHECK_FAILED, stage=DUAL, constraint=PRICE + resource, found="null", bound=by)
             rows.append(_Row(("fix", PRICE + resource, 0), pools[resource], "eq", value, None))
             chosen[resource] = (value, by)
+            met = at  # the solution that reached `value` meets the new row; none is held for a pool fixed at 0
 
         for resource in model.resources:  # steps 1 and 3
             low, high = intervals[resource]
             if low is not None and low == high:
                 chosen[resource] = (low, EXACT)
             elif low is not None and high is None and resource in goals:
-                fix(resource, self.extreme(variables, rows, pools[resource], -1), ONE_MORE)
+                least, at = self.extreme_at(variables, rows, pools[resource], -1, (SELECTION, met))
+                fix(resource, least, ONE_MORE, at)
         self.lap("selection")
         coordinates: dict[str, tuple[dict[Key, Fraction], Fraction, Fraction, bool]] = {}
         for resource in model.resources:
@@ -3223,7 +3341,7 @@ class _Solver:
                 continue
             if most[activity] == 0 and low is not None and high == 0 and low < 0:
                 coordinates[ACTIVITY_VALUE + activity] = (worth[activity], low, high, False)
-        fixed, stages = self.max_min(variables, rows, coordinates)  # step 2
+        fixed, stages, met = self.max_min(variables, rows, coordinates, met)  # step 2
         for resource in model.resources:
             if PRICE + resource in fixed:
                 chosen[resource] = (fixed[PRICE + resource], MAX_MIN)
@@ -3231,14 +3349,18 @@ class _Solver:
         for resource in model.resources:  # the withheld coordinates, free through the max-min
             if resource in chosen:
                 continue
-            low = self.extreme(variables, rows, pools[resource], -1)
+            low, at = self.extreme_at(variables, rows, pools[resource], -1, (SELECTION, met))
             if low is not None:
-                fix(resource, low, ONE_MORE)
+                fix(resource, low, ONE_MORE, at)
                 continue
-            high = self.extreme(variables, rows, pools[resource], 1)
-            fix(resource, high if high is not None else zero, ONE_LESS if high is not None else ZERO)
+            high, at = self.extreme_at(variables, rows, pools[resource], 1, (SELECTION, met))
+            if high is not None:
+                fix(resource, high, ONE_LESS, at)
+            else:
+                fix(resource, zero, ZERO, None)
         self.lap("selection")
-        self.member(dual, _Program(variables, tuple(rows), {}), optimum)  # the vector is a point of D*, checked exactly
+        # the vector is a point of D*, checked exactly
+        self.member(dual, _Program(variables, tuple(rows), {}), optimum, met)
         self.lap("check")
         vector = {resource: chosen[resource][0] for resource in model.resources}
         prices = {
@@ -3292,15 +3414,18 @@ class _Solver:
         self.chosen = _Chosen(coordinates, vector, at_vector)  # #430 METHOD-C: what it chose, exact (`Held`)
         return {"prices": prices, "max_min": stages, "activities": activities}, warnings
 
-    def member(self, dual: _Dual, program: _Program, optimum: Fraction) -> None:
+    def member(
+        self, dual: _Dual, program: _Program, optimum: Fraction, met: dict[Key, Fraction] | None = None
+    ) -> None:
         """The joint vector's exact check (PRICE-2e): a solution of `program` (D* in its complementary-slackness form
         with every coordinate fixed; `joint`), solved warm from the selection's last LP and checked exactly against its
         every bound and row as every solution is, then at the strong-duality row, which that form leaves out: its cost
         must be V0 exactly (complementary slackness makes it so; anything else is a defect). A failed check is
-        `lp_numeric_check_failed` (stage `dual`), and a program HiGHS finds infeasible `lp_solve_failed`, as before."""
-        found = self.lp(program, DUAL, warm=True)
-        if found.status != "optimal":
-            raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2)
+        `lp_numeric_check_failed` (stage `dual`). #430: `met` is an exact point that meets `program` (`joint`), so a
+        program HiGHS finds infeasible is solved again, and then told apart by it (`lp`, `witness`, step `check`)."""
+        found = self.lp(program, DUAL, warm=True, witness=(CHECK, met))
+        if found.status != "optimal":  # an LP with a `witness` never ends here (`lp` raises)
+            raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2, **_said(found, CHECK))
         cost = sum((value * found.x[key] for key, value in dual.cost.items() if found.x[key]), Fraction(0))
         if cost != optimum:
             raise self.failure(
@@ -3341,12 +3466,16 @@ class _Solver:
                     dual += -base.le[("move", flow, step)] * float(base.x[("x", activity, step)])
         return dual
 
-    def optimal(self, program: _Program, stage: str) -> _Solution:
+    def optimal(
+        self, program: _Program, stage: str, witness: tuple[str, dict[Key, Fraction] | None] | None = None
+    ) -> _Solution:
         """The optimum of a program that has one: the program of the optimum with rows that a solution of it meets
-        (a floor at an optimum, a probe), or another objective over the same rows."""
-        solution = self.lp(program, stage)
-        if solution.status != "optimal":
-            raise self.failure(LP_SOLVE_FAILED, stage=stage, reason="solver_status", status=2)
+        (a floor at an optimum, a probe), or another objective over the same rows. With `witness` (#430: the max-min's
+        LPs on D*), its step and an exact point that meets it (`lp`, `witness`); S1 and S2 have none."""
+        solution = self.lp(program, stage, witness=witness)
+        if solution.status != "optimal":  # an LP with a `witness` never ends here (`lp` raises)
+            step = None if witness is None else witness[0]
+            raise self.failure(LP_SOLVE_FAILED, stage=stage, reason="solver_status", status=2, **_said(solution, step))
         return solution
 
     def tiers(self, *, tie_probes: bool = True) -> _Tiers:
@@ -3575,10 +3704,10 @@ class _Solver:
                 grain = self.price(optimum, lambda delta: self.regrain(resource, step, delta), known)
                 if _pinned(model, resource, grain):
                     price = grain  # the chords pin the projection (PRICE-2c): no LP on D*
-                else:  # each end that S3's basis does not prove is an LP on D*
-                    function = dual.duals[("balance", resource, step)]
-                    low = sides[0] if sides[0] is not None else self.extreme(*on_face, function, -1)
-                    high = sides[1] if sides[1] is not None else self.extreme(*on_face, function, 1)
+                else:  # each end that S3's basis does not prove is an LP on D*, which S3's exact dual point meets
+                    function, witness = dual.duals[("balance", resource, step)], (PROJECTION, tiers.point)
+                    low = sides[0] if sides[0] is not None else self.extreme(*on_face, function, -1, witness)
+                    high = sides[1] if sides[1] is not None else self.extreme(*on_face, function, 1, witness)
                     price = (low, high)
                 if warnings is not None:
                     marginal = self.marginal(-base.eq[("balance", resource, step)])
@@ -3642,7 +3771,7 @@ class _Solver:
         """The least overflow and lost production among the lexicographic optima (`tiers.face`)."""
         least = self.lp(_program(self.model, added=tiers.face, least_losses=True), "losses")
         if least.status != "optimal":
-            raise self.failure(LP_SOLVE_FAILED, stage="losses", reason="solver_status", status=2)
+            raise self.failure(LP_SOLVE_FAILED, stage="losses", reason="solver_status", status=2, **_said(least))
         return least
 
     def tier_warnings(self, tiers: _Tiers) -> list[dict[str, Any]]:

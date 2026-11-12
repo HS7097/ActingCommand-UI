@@ -115,6 +115,14 @@ class Evaluator:
 # compute what they did.
 # METHOD-C: `economy` stays 11. The steady state hands what the certificate reads (`flow.Economy.held`) in memory only:
 # `flow.encode` keeps none of it, so what its node keeps is what it was, and every node computes what it did.
+# #430 (an LP on D* that HiGHS finds infeasible): `economy` stays 11. An LP on D* that HiGHS solves the first time takes the
+# way it took, and the exact point each LP on D* holds is read only where HiGHS finds that LP infeasible twice, so every
+# value that was not blocked is what it was: the forcing costs and every other probe are untouched (none of them is an LP on
+# D* with a point), and no export written so far met such an LP (it would have been refused). What changes is a value that
+# was blocked there (`lp_solve_failed`, stage `dual`, status 2, at a projection, an interval, the selection, the max-min or
+# the vector's check): it may now be solved, or blocked by another error, and a status 2 of S1, S2, the least losses or the
+# dual's least cost names HiGHS's text. The cache gives back such a blocked value as version 11 kept it for the same keys;
+# `export prices` never reads the cache, and the steady state of another state root computes it again.
 EVALUATORS: dict[str, Evaluator] = {
     "economy": Evaluator(11, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
