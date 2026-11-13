@@ -1016,7 +1016,8 @@ fn make_shortcuts(run: &mut Run<'_>, plan: &Plan) -> Result<Said, Said> {
     Ok(Said::new("已建", "created").with(made.join(", ")))
 }
 
-/// `actinglab up`, judged by [`runtime::judge_up`]: exit 0 and no post-start check `fail`. The
+/// `actinglab up`, judged by [`runtime::judge_up`]: exit 0 and no post-start check of the
+/// failing class `fail`; one outside that class that fails (a slow ledger open) is noted. The
 /// Runtime counts as maybe running from the moment it is asked to start.
 fn up(run: &mut Run<'_>, failed: Said) -> Result<Said, Said> {
     run.left.running = true;
@@ -1026,9 +1027,12 @@ fn up(run: &mut Run<'_>, failed: Said) -> Result<Said, Said> {
     let read = runtime::judge_up(answer.code, answer.line.as_ref())
         .map_err(|problem| failed.with_said(&problem).with(answer.reason()))?;
     let mut summary = Said::new("已就绪", "ready").with(format!(
-        "{} post-start checks, none failed",
+        "{} post-start checks, none of the failing class failed",
         read.checks.unwrap_or_default()
     ));
+    if !read.failed.is_empty() {
+        summary = summary.with(format!("noted: {}", runtime::failed_checks_text(&read.failed)));
+    }
     if let Some(pid) = read.pid {
         summary = summary.with(format!("pid {pid}"));
     }

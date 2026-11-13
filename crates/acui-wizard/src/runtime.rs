@@ -300,6 +300,9 @@ pub fn started_pid(line: &Value) -> Option<u64> {
 pub struct FailedCheck {
     pub id: String,
     pub values: Value,
+    /// The row's `fail_class`: whether the Runtime counts this check as a failure of the start
+    /// (`postcheck.rs` `CheckRow::fails_class`). A row that does not say counts as one.
+    pub fail_class: bool,
 }
 
 /// What the wizard reads of `up`'s result line.
@@ -337,6 +340,7 @@ pub fn read_up(line: &Value) -> UpRead {
             .map(|row| FailedCheck {
                 id: row["id"].as_str().unwrap_or("?").to_owned(),
                 values: row.get("values").cloned().unwrap_or(Value::Null),
+                fail_class: row["fail_class"].as_bool().unwrap_or(true),
             })
             .collect(),
         caveat,
@@ -361,8 +365,10 @@ fn exit_not_zero(code: Option<i32>) -> Said {
         .with(format!("exit {}", code.map_or_else(|| "(none)".to_owned(), |code| code.to_string())))
 }
 
-/// `up`'s answer judged: exit 0, the post-start checks listed, and none `fail`; else why not,
-/// the failed checks named with their values.
+/// `up`'s answer judged: exit 0, the post-start checks listed, and none of the failing class
+/// `fail`; else why not, those checks named with their values. A check outside that class (the
+/// Runtime's `open`, a slow ledger open) that `fail`s is no failure of the install: it stays in
+/// [`UpRead::failed`] for the caller to note.
 pub fn judge_up(code: Option<i32>, line: Option<&Value>) -> Result<UpRead, Said> {
     if code != Some(0) {
         return Err(exit_not_zero(code));
@@ -374,8 +380,9 @@ pub fn judge_up(code: Option<i32>, line: Option<&Value>) -> Result<UpRead, Said>
             "the answer lists no post-start checks (post_check.checks)",
         ));
     }
-    if !read.failed.is_empty() {
-        return Err(Said::new("启动后检查有不通过的项", "post-start checks failed").with(failed_checks_text(&read.failed)));
+    let blocking: Vec<FailedCheck> = read.failed.iter().filter(|check| check.fail_class).cloned().collect();
+    if !blocking.is_empty() {
+        return Err(Said::new("启动后检查有不通过的项", "post-start checks failed").with(failed_checks_text(&blocking)));
     }
     Ok(read)
 }
@@ -623,16 +630,23 @@ mod tests {
         assert_eq!(
             read.failed,
             vec![
-                FailedCheck { id: "open".into(), values: json!({"slow": true}) },
-                FailedCheck { id: "pauses".into(), values: json!({"missing": ["first-start"]}) },
+                FailedCheck { id: "open".into(), values: json!({"slow": true}), fail_class: false },
+                FailedCheck { id: "pauses".into(), values: json!({"missing": ["first-start"]}), fail_class: true },
             ]
         );
         assert_eq!(read.caveat.as_deref(), Some("install_command_done"));
+        // Only the failing class fails the start; the slow open is not named among the reasons.
         let problem = judge_up(Some(0), Some(&failed)).unwrap_err();
-        assert!(problem.en.contains(r#"open {"slow":true}; pauses {"missing":["first-start"]}"#), "{problem}");
-        // A bare list of rows reads the same; a row without an id or values still counts.
+        assert!(problem.en.contains(r#"pauses {"missing":["first-start"]}"#), "{problem}");
+        assert!(!problem.en.contains("open"), "{problem}");
+        // A check outside the failing class that fails alone is no failure: it is kept to note.
+        let mut slow = started();
+        slow["post_check"]["checks"][1] = json!({"id": "open", "result": "fail", "fail_class": false, "values": {"slow": true}});
+        let read = judge_up(Some(0), Some(&slow)).expect("a slow open alone passes");
+        assert_eq!(read.failed, vec![FailedCheck { id: "open".into(), values: json!({"slow": true}), fail_class: false }]);
+        // A bare list of rows reads the same; a row without an id, values or class still counts.
         let bare = json!({"post_check": [{"result": "fail"}, {"id": "config", "result": "pass"}]});
-        assert_eq!(read_up(&bare).failed, vec![FailedCheck { id: "?".into(), values: Value::Null }]);
+        assert_eq!(read_up(&bare).failed, vec![FailedCheck { id: "?".into(), values: Value::Null, fail_class: true }]);
         assert_eq!(read_up(&bare).checks, Some(2));
         // Exit 1, no line, no checks listed.
         assert!(judge_up(Some(1), Some(&started())).is_err());
