@@ -10,9 +10,9 @@ three-column interface: instance card, timeline, detail pane.
 
 It is not part of the Runtime; it is the Runtime's **external, detachable client**.
 
-> The `acsetup.exe` in the builds is the newly written 0.12 setup wizard (UI-W2): it installs the Runtime,
-> its tools and the console from an install set into one new folder; see "Setup wizard acsetup". The UI
-> releases published so far do not carry it; until one does, install with `actingctl install`.
+> `acsetup.exe` is the 0.12 setup wizard (UI-W2): it installs the Runtime, its tools and the console from
+> an install set into one new folder; see "Setup wizard acsetup". The releases carry it from UI v0.12.17
+> on; with an earlier one, install with `actingctl install`.
 
 This repository also holds the **setup wizard** `acsetup` (see "Setup wizard acsetup") and the fixed
 entry `acforward`, through which an A/B installation starts its programs. Like the Runtime, these
@@ -26,8 +26,9 @@ and guesses nothing.
   `acui-windows-<sha>.zip` with `SHA256SUMS` on this repository's
   [Releases](https://github.com/HS7097/ActingCommand-UI/releases). Every release is a pre-release, so
   GitHub marks none as "Latest": take the newest tag. The zip holds `acui.exe` (the console),
-  `acforward.exe` (the fixed entry), `LICENSE`, `README.md` and the `BUILD-MANIFEST.json` that binds them
-  to their commit; the releases published so far hold no `acsetup.exe` (branch builds carry it, see the note above). Each release is built
+  `acsetup.exe` (the setup wizard, from UI v0.12.17 on), `acforward.exe` (the fixed entry), `LICENSE`,
+  `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. The wizard installs from an
+  install set, which is put together apart from this zip (see "Setup wizard acsetup"). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
   of Runtime v0.12.47; the pin is now v0.12.58.
 - **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 29], `ledger` [3, 8],
@@ -1381,7 +1382,9 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    `actingcommand-actingd.exe`, and a registered watchdog task (which finds a stopped one too); its
    configuration uses an emulator when it binds it by index, name, `serial` or adb port. Without MuMu the
    page can be skipped: the set is installed without instances, to be added later.
-6. **Instances**: one row per ticked emulator: its name (by default "game-index"), game and server; under
+6. **Instances**: per ticked emulator, its name on a line of its own and below it the instance's name (by
+   default "game-index"), game and server, the game's box taking the rest of the line so a game's name in
+   both languages shows whole; under
    Advanced, the touch and capture methods (both `nemu_ipc` by default) and "Open this emulator when
    ActingCommand starts" (off by default). Names must differ, hold no space and not be too long: with two or
    more emulators on one game, the Runtime's schedule names each task copy `<id>@<name>`, at most 128 bytes,

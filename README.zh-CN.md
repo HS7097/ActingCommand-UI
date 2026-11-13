@@ -9,8 +9,8 @@
 
 它不是 Runtime 的一部分，是 Runtime 的**外部可拆客户端**。
 
-> 构建里的 `acsetup.exe` 是新写的 0.12 安装向导（UI-W2）：从一份安装集把 Runtime、工具和监控台装进一个新
-> 文件夹，见「安装向导 acsetup」一节。已经发布的 UI 版本里还没有它；它随发布出来之前，用 `actingctl install` 安装。
+> `acsetup.exe` 是 0.12 的安装向导（UI-W2）：从一份安装集把 Runtime、工具和监控台装进一个新文件夹，见
+> 「安装向导 acsetup」一节。UI v0.12.17 起随发布件一起发；更早的版本没有它，用 `actingctl install` 安装。
 
 本仓还放着**安装向导** `acsetup`（见「安装向导 acsetup」一节）与固定入口 `acforward`——A/B 安装经它拉起
 各个程序。与 Runtime 一样，这些程序不认识任何游戏：不含游戏逻辑，也不含游戏数据。游戏经 Runtime 加载的
@@ -21,8 +21,9 @@
 - **0.12 系列（UI v0.12.0 起）**，与此前每一版一样是预发布：本仓
   [Releases](https://github.com/HS7097/ActingCommand-UI/releases) 上的 `acui-windows-<sha>.zip` 与
   `SHA256SUMS`。每一版都是预发布，所以 GitHub 上没有标「Latest」的版本，取标签最新的那个。zip 里有
-  `acui.exe`（监控台）、`acforward.exe`（固定入口）、`LICENSE`、`README.md`，以及把它们绑到所在提交的
-  `BUILD-MANIFEST.json`；已发布的版本里还没有 `acsetup.exe`（分支构建里已经带上，见上方说明）。每一版都基于它所在提交钉的 Runtime
+  `acui.exe`（监控台）、`acsetup.exe`（安装向导，UI v0.12.17 起）、`acforward.exe`（固定入口）、`LICENSE`、
+  `README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。向导要从一份安装集安装，安装集另外拼，不在这个 zip
+  里（见「安装向导 acsetup」一节）。每一版都基于它所在提交钉的 Runtime
   源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 v0.12.58。
 - **可与 0.12 的 Runtime 搭配**：它声明 `actingd-config` [5, 29]、`ledger` [3, 8]、`runtime-client`
   [3, 8] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.47 到 v0.12.58：这几版的 `ledger` 上限都在
@@ -959,7 +960,8 @@ PP-OCR 的 Apache-2.0 许可）写在 `vision.licenses` 里，带了模型就至
    `actingcommand-actingd.exe`，和登记了的看门狗计划任务（停着的那套也能找到）；那一套的配置按模拟器序号、
    名字、`serial` 或 adb 端口绑了这台，都算用着。
    找不到 MuMu 时可以跳过：先装一套没有实例的，以后再加。
-6. **实例**：每台勾选的模拟器一行：名字（默认「游戏名-序号」）、游戏、区服；「高级设置」里是触控方式和
+6. **实例**：每台勾选的模拟器，名字单独占一行，下面一行是实例的名字（默认「游戏名-序号」）、游戏、区服；游戏框
+   占满这一行剩下的宽度，游戏的中英两个名字能完整显示。「高级设置」里是触控方式和
    截图方式（默认都是 `nemu_ipc`）以及「ActingCommand 启动时自动打开这台模拟器」（默认关）。名字不能重复，
    不能有空格，也不能太长：同一个游戏绑了两台以上模拟器时，Runtime 排程会把任务编号写成 `<编号>@<名字>`，
    整串不超过 128 字节，所以名字的上限按这个游戏 `schedule.json` 里最长的编号算出来。

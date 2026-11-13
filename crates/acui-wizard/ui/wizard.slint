@@ -776,42 +776,37 @@ component AccountLine inherits VerticalLayout {
     // Not `row`: every element has that one, for its place in a grid.
     in property <AccountRow> account;
     in property <int> index;
-    // The emulator column's width, the same as its head's.
-    in property <length> emulator-width;
+    // The name column's width and the server column's, the same as their heads'.
+    in property <length> name-width;
+    in property <length> server-width;
     spacing: 4px;
-    // One field high; higher only when the emulator's name takes a second line.
+    // The emulator on a line of its own above its fields, so that its name never narrows the
+    // game's box: a game's name holds both of its languages, and the box shows the whole of it,
+    // as does its list, which is as wide as the box.
+    Text {
+        text: root.account.emulator;
+        font-size: Scale.body-font;
+        font-weight: 600;
+        color: Look.text;
+        overflow: elide;
+    }
+    // One field high.
     HorizontalLayout {
         spacing: 8px;
-        height: max(32px, emulator-text.preferred-height);
-        // The whole name, wrapping at the column's width. Placed by hand, as MarkText is.
-        Rectangle {
-            width: root.emulator-width;
-            emulator-text := Text {
-                x: 0;
-                y: 0;
-                width: parent.width;
-                height: parent.height;
-                text: root.account.emulator;
-                font-size: Scale.body-font;
-                color: Look.text;
-                vertical-alignment: center;
-                wrap: word-wrap;
-            }
-        }
+        height: 32px;
         LineEdit {
             text: root.account.alias;
             font-size: Scale.body-font;
-            horizontal-stretch: 1;
-            min-width: 90px;
+            width: root.name-width;
             accessible-label: Strings.col-name;
             edited(text) => {
                 Wiz.alias-edited(root.index, text);
             }
         }
-        // As wide as its column's head: the std box asks for 160px of its own.
+        // The rest of the line: the std box asks for 160px of its own, so a floor is set too.
         game-box := SkinComboBox {
-            min-width: 140px;
-            max-width: 140px;
+            horizontal-stretch: 1;
+            min-width: 160px;
             model: root.account.games;
             current-index: root.account.game-index;
             selected(value) => {
@@ -819,8 +814,8 @@ component AccountLine inherits VerticalLayout {
             }
         }
         server-box := SkinComboBox {
-            min-width: 140px;
-            max-width: 140px;
+            min-width: root.server-width;
+            max-width: root.server-width;
             model: root.account.servers;
             current-index: root.account.server-index;
             enabled: root.account.game-index > 0;
@@ -830,7 +825,6 @@ component AccountLine inherits VerticalLayout {
         }
     }
     HorizontalLayout {
-        padding-left: root.emulator-width + 8px;
         alignment: start;
         FoldSwitch {
             open: root.account.advanced;
@@ -840,7 +834,6 @@ component AccountLine inherits VerticalLayout {
         }
     }
     if root.account.advanced: VerticalLayout {
-        padding-left: root.emulator-width + 8px;
         spacing: 6px;
         HorizontalLayout {
             spacing: 8px;
@@ -900,11 +893,13 @@ component AccountLine inherits VerticalLayout {
 }
 
 component AccountsPage inherits ScrollView {
-    // The emulator column: a usual MuMu name on one line where the window leaves room, never
-    // under 110px (a longer name takes a second line), never over 220px; the name column takes
-    // the rest. The head and every row use this width, so the columns line up. 16px is the
-    // room kept for the scroll bar, 304px the two 140px dropdowns and the three 8px gaps.
-    property <length> emulator-width: max(110px, min(220px, (root.visible-width - 16px - 304px) / 2));
+    // Each emulator's name heads its own lines; below it the name, the game and the server. The
+    // name column is 140px (an alias is short: the Runtime's limit is a few bytes past the
+    // longest task id), the server's 130px (a server's name is a few words), and the game's
+    // box takes the rest, so the longest name of a game in both languages shows whole at the
+    // window's usual size. The head and every line use these widths, so the columns line up.
+    property <length> name-width: 140px;
+    property <length> server-width: 130px;
     viewport-width: self.visible-width;
     VerticalLayout {
         padding-right: 16px;
@@ -915,26 +910,19 @@ component AccountsPage inherits ScrollView {
         HorizontalLayout {
             spacing: 8px;
             Text {
-                width: root.emulator-width;
-                text: Strings.col-emulator;
-                font-size: Scale.grey-font;
-                color: Look.text-secondary;
-            }
-            Text {
-                horizontal-stretch: 1;
-                min-width: 90px;
+                width: root.name-width;
                 text: Strings.col-name;
                 font-size: Scale.grey-font;
                 color: Look.text-secondary;
             }
             Text {
-                width: 140px;
+                horizontal-stretch: 1;
                 text: Strings.col-game;
                 font-size: Scale.grey-font;
                 color: Look.text-secondary;
             }
             Text {
-                width: 140px;
+                width: root.server-width;
                 text: Strings.col-server;
                 font-size: Scale.grey-font;
                 color: Look.text-secondary;
@@ -945,7 +933,8 @@ component AccountsPage inherits ScrollView {
             AccountLine {
                 account: row;
                 index: index;
-                emulator-width: root.emulator-width;
+                name-width: root.name-width;
+                server-width: root.server-width;
             }
             Rectangle { height: 4px; }
         }
