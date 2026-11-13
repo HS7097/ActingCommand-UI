@@ -47,6 +47,10 @@ pub enum Link {
     NoAnswer(ClientFailure),
     /// Something is wrong rather than merely down.
     Trouble(ClientFailure),
+    /// Root mode only: the Runtime the state root names is not the installation folder's,
+    /// or cannot be told to be, so nothing connected to it and nothing of it is read; the
+    /// lamp and the red words at the top say so (`identity`).
+    NotThisRoot,
     /// The thread that reads `Status` did not start, or is gone.
     ThreadFailed,
 }
@@ -417,6 +421,7 @@ impl Model {
             | Link::Absent(_)
             | Link::NoAnswer(_)
             | Link::Trouble(_)
+            | Link::NotThisRoot
             | Link::ThreadFailed => None,
         }
     }
@@ -589,7 +594,8 @@ impl Model {
     pub fn accounts_note(&self) -> AccountsNote {
         let unseen = self.seen_aliases.is_empty();
         match &self.link {
-            Link::Unknown => AccountsNote::Nothing,
+            // Nothing of that Runtime is read: the lamp and the red words at the top say why.
+            Link::Unknown | Link::NotThisRoot => AccountsNote::Nothing,
             Link::Online { .. } if self.instances.is_empty() => AccountsNote::NoneConfigured,
             Link::Online { .. } => AccountsNote::Nothing,
             Link::Absent(_) if unseen => AccountsNote::NotRunning,
@@ -1144,6 +1150,7 @@ impl Model {
             Link::Unknown => LinkNow::Pending,
             Link::Online { epoch, .. } => LinkNow::Online(epoch.as_str()),
             Link::Absent(_) => LinkNow::Offline(Offline::NotRunning),
+            Link::NotThisRoot => LinkNow::Offline(Offline::NotThisRoot),
             Link::NoAnswer(_) | Link::Trouble(_) | Link::ThreadFailed => {
                 LinkNow::Offline(Offline::Unreachable)
             }
@@ -1228,7 +1235,8 @@ impl Model {
         }
         let epoch = match &self.link {
             Link::Online { epoch, .. } => epoch.as_str(),
-            Link::Unknown => return None,
+            // Nothing of that Runtime is read, and no device of it is offered.
+            Link::Unknown | Link::NotThisRoot => return None,
             Link::Absent(_) | Link::NoAnswer(_) | Link::Trouble(_) | Link::ThreadFailed => {
                 let stop = self.stops.unread(alias);
                 return Some(RescueView::Offline { stop });
@@ -1493,6 +1501,7 @@ impl Model {
             LiveRead::NotConnected(failure) => Link::Absent(failure),
             LiveRead::NoAnswer(failure) => Link::NoAnswer(failure),
             LiveRead::Trouble(failure) => Link::Trouble(failure),
+            LiveRead::NotThisRoot(_) => Link::NotThisRoot,
         };
         self.leave_online();
         let previous = mem::replace(&mut self.link, down);

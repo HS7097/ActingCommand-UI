@@ -41,6 +41,13 @@ pub const CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN: &str =
 /// `runtime_owner_epoch_changed` means the same; the console detects it
 /// itself, so it states its own code.
 pub const CONSOLE_RUNTIME_OWNER_CHANGED: &str = "console_runtime_owner_changed";
+/// A console that belongs to an installation folder found its state root naming a Runtime
+/// that is not that folder's, or could not tell whether it is, and connected to nothing.
+pub const CONSOLE_RUNTIME_NOT_THIS_ROOT: &str = "console_runtime_not_this_root";
+/// A console that belongs to an installation folder found its state root's
+/// `runtime-info.json` naming a process that is gone, and connected to nothing: no Runtime
+/// runs there.
+pub const CONSOLE_RUNTIME_GONE: &str = "console_runtime_gone";
 /// A read of the committed time span asked its one bounded page — its page
 /// limit, once 64 pages of a cursor followed — and it came back without the
 /// event it must hold, and the console stopped.
@@ -57,12 +64,14 @@ pub const CONSOLE_ONLINE_PAGE_UNBOUNDED: &str = "console_online_page_unbounded";
 pub const CONSOLE_TIME_LOCATE_FAILED: &str = "console_time_locate_failed";
 
 /// Every code constant above: the code table must hold each of them.
-const UI_CODES: [&str; 9] = [
+const UI_CODES: [&str; 11] = [
     CONSOLE_INSTANCE_BINDING_MISSING,
     CONSOLE_STATUS_SOURCE_MISSING,
     CONSOLE_CLIENT_ACTION_TERMINAL_MISSING,
     CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN,
     CONSOLE_RUNTIME_OWNER_CHANGED,
+    CONSOLE_RUNTIME_NOT_THIS_ROOT,
+    CONSOLE_RUNTIME_GONE,
     CONSOLE_TIME_SPAN_PAGE_LIMIT,
     CONSOLE_WINDOW_PAGE_LIMIT,
     CONSOLE_ONLINE_PAGE_UNBOUNDED,

@@ -48,6 +48,7 @@ use super::paint;
 use super::picture::Doing;
 use super::read::panic_message;
 use super::stop::{CloseRow, StopLine};
+use crate::identity;
 use crate::launcher::spawn_worker;
 use crate::report;
 use crate::ui::{self, Ui};
@@ -142,8 +143,9 @@ pub enum Rescued {
     },
     /// Nothing says what became of it: it may have happened. It is not sent again.
     Unconfirmed(DeviceOp),
-    /// No connection: nothing was sent.
-    NotSent(DeviceOp),
+    /// No connection: nothing was sent. In root mode, because the Runtime up is not the
+    /// installation folder's (the `bool`, `identity::not_this_root`).
+    NotSent(DeviceOp, bool),
     /// The system refused the thread: nothing was sent. The error is the system's.
     NoThread { error: String },
     /// One was out across a restart.
@@ -483,7 +485,9 @@ impl Landing {
                 holder: refusal.holder,
                 denied: refusal.denied,
             },
-            Self::Answer(DeviceOutcome::NotSent(_)) => Rescued::NotSent(op),
+            Self::Answer(DeviceOutcome::NotSent(failure)) => {
+                Rescued::NotSent(op, identity::not_this_root(&failure))
+            }
             Self::Answer(DeviceOutcome::Unconfirmed(_)) | Self::Panicked(_) => {
                 Rescued::Unconfirmed(op)
             }

@@ -85,6 +85,7 @@ use super::paint;
 use super::read::panic_message;
 use super::rescue::{Rescue, RescueTicket, RESCUE_COOLDOWN};
 use super::switch::Switches;
+use crate::identity;
 use crate::launcher::spawn_worker;
 use crate::report;
 use crate::ui::{self, Ui};
@@ -265,8 +266,9 @@ pub enum StopSaid {
     /// The thread of "close this task" panicked: whether its close was written, and whether the
     /// run was stopped after it, are both not known. Nothing is sent again.
     ClosePanicked { at_ms: u64 },
-    /// No connection: nothing was sent.
-    NotSent { at_ms: u64 },
+    /// No connection: nothing was sent. In root mode, because the Runtime up is not the
+    /// installation folder's (`not_this_root`, `identity::not_this_root`).
+    NotSent { at_ms: u64, not_this_root: bool },
     /// The system refused the thread: nothing was sent. The error is the system's.
     NoThread { at_ms: u64, error: String },
     /// One was out, or awaited, across a restart: what came of it is not known.
@@ -610,7 +612,10 @@ impl Landing {
                 let (said, waits) = stop_said(stop, at_ms, false);
                 return Settled { said, waits, task: Some(TaskClose::NotListed) };
             }
-            Self::Close(CloseAnswer::NotSent(_)) => (StopSaid::NotSent { at_ms }, None),
+            Self::Close(CloseAnswer::NotSent(failure)) => {
+                let not_this_root = identity::not_this_root(&failure);
+                (StopSaid::NotSent { at_ms, not_this_root }, None)
+            }
             Self::Close(CloseAnswer::Unsupported { .. }) => {
                 (StopSaid::CloseRefused { at_ms, why: CloseRefusal::Unsupported }, None)
             }
@@ -724,7 +729,10 @@ fn stop_said(outcome: StopOutcome, at_ms: u64, follow_up: bool) -> (StopSaid, Op
             };
             (said, None)
         }
-        StopOutcome::NotSent { .. } => (StopSaid::NotSent { at_ms }, None),
+        StopOutcome::NotSent { failure, .. } => {
+            let not_this_root = identity::not_this_root(&failure);
+            (StopSaid::NotSent { at_ms, not_this_root }, None)
+        }
         StopOutcome::Unconfirmed { .. } => {
             (StopSaid::Unconfirmed { at_ms }, (!follow_up).then_some(true))
         }
@@ -748,7 +756,9 @@ fn not_closed(outcome: PackOutcome, at_ms: u64) -> StopSaid {
         }
         PackOutcome::NotImplemented(_) => CloseRefusal::Unsupported,
         // Not reached: the write goes on the connection the view was read on.
-        PackOutcome::NotSent(_) => return StopSaid::NotSent { at_ms },
+        PackOutcome::NotSent(failure) => {
+            return StopSaid::NotSent { at_ms, not_this_root: identity::not_this_root(&failure) };
+        }
         // `Edited` is not reached: a close row that took is followed by the stop.
         PackOutcome::Unconfirmed(_) | PackOutcome::Edited { .. } => {
             return StopSaid::CloseUnconfirmed { at_ms };

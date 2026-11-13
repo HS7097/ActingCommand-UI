@@ -1,12 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The one file this program reads and writes itself: its preferences and
-//! the three paths the launcher needs, in the per-user config directory. Never
+//! The one file this program reads and writes itself: its preferences and,
+//! outside an installation folder, the three paths the launcher needs. Never
 //! inside a state root, and never anything else — a state root is the read
 //! face's to touch, not this one's.
 //!
-//! `<config_dir>/ActingCommand/acui.toml`, with `lang`, `text_size` and
+//! Which file (`load`, once at the start): outside any single-location root, the
+//! per-user `<config_dir>/ActingCommand/acui.toml`, as ever. In one
+//! (`install::place`), that root's own `<root>\acui.toml`, beside its
+//! `actingd.config.json`: always once it is there; before that, the per-user file
+//! only when its `actingd_config` names this root's configuration (a root set up
+//! through the per-user file before the console was put in it, whose settings stay
+//! with it), else the root's own, its defaults until a box first saves it. In a
+//! root the per-user file is used in no other case. A root's own file takes no path
+//! key, since in a root every path comes from the root: each such line is a warning,
+//! and kept.
+//!
+//! The keys: `lang`, `text_size` and
 //! `theme`, and the optional `state_root`, `actingd_config` and `actingd_exe`
-//! (absolute paths, written as TOML literal strings in single quotes), and
+//! (absolute paths, written as TOML literal strings in single quotes; the per-user
+//! file's only), and
 //! `preview_frame_gap_seconds`, the least time between two frames the workbench's
 //! picture reads (`workbench::preview::frame_gap`), which no box here writes. And
 //! `resume_elsewhere_reasons`, which no box writes either: a one-line array of the
@@ -23,11 +35,13 @@
 //! there but cannot be read is never written over.
 
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use acui_source::place::{root_settings, RootSettings};
 use acui_source::workbench::pause_reason_valid;
 
+use crate::install::{same_place, ROOT_CONFIG};
 use crate::ledger::resume::ResumeElsewhere;
 use crate::strings::{fill, Labels, Language};
 use crate::workbench::preview::{self, MIN_FRAME_GAP};
@@ -183,6 +197,9 @@ pub enum SettingsIssue {
     /// console's own, its "pause all" and its "pause this account", offers a resume
     /// (`ResumeElsewhere::Unusable`).
     UnusableReasons { path: PathBuf, line: usize, value: String },
+    /// A path key in a root's own file, which takes every path from the root: the
+    /// line has no effect and is kept; counted from 1.
+    PathKeyIgnored { path: PathBuf, line: usize, key: String },
     /// A save refused because the file could not be read at the start.
     SaveBlocked { path: PathBuf },
     /// A save that was tried and failed; the file is as it was.
@@ -198,7 +215,10 @@ const HEADER: &str = "# ActingCommand 监控台 / ActingCommand Console";
 
 impl SettingsIssue {
     pub fn is_error(&self) -> bool {
-        !matches!(self, Self::UnknownValue { .. } | Self::Malformed { .. })
+        !matches!(
+            self,
+            Self::UnknownValue { .. } | Self::Malformed { .. } | Self::PathKeyIgnored { .. }
+        )
     }
 
     pub fn text(&self, labels: &Labels) -> String {
@@ -219,6 +239,10 @@ impl SettingsIssue {
                 labels.settings_reasons_unusable,
                 &[&path.display().to_string(), &line.to_string(), value],
             ),
+            Self::PathKeyIgnored { path, line, key } => fill(
+                labels.settings_path_key_ignored,
+                &[&path.display().to_string(), &line.to_string(), key],
+            ),
             Self::SaveBlocked { path } => {
                 fill(labels.settings_save_blocked, &[&path.display().to_string()])
             }
@@ -238,16 +262,49 @@ pub struct SettingsFile {
     save_blocked: bool,
 }
 
-/// What `load` found: the settings, the file, and the file's problems in line order.
+/// What `load` found: the settings, the file, the file's problems in line order,
+/// and which file it was.
 pub struct Loaded {
     pub settings: Settings,
     pub file: SettingsFile,
     pub issues: Vec<SettingsIssue>,
+    pub chosen: Chosen,
 }
+
+/// Which file `load` took, for the technical log.
+#[derive(Debug, Clone)]
+pub enum Chosen {
+    /// Outside any single-location root: the per-user file, as ever.
+    Global,
+    /// A root's own file; and the per-user one, when it is there, not used.
+    Root { unused_global: Option<PathBuf> },
+    /// The per-user file, which names this root's configuration, the root having no
+    /// file of its own yet.
+    GlobalNamesRoot,
+}
+
+impl Chosen {
+    /// The log's line on the per-user file in a root, if there is one to say.
+    pub fn log_text(&self) -> Option<String> {
+        match self {
+            Self::Global | Self::Root { unused_global: None } => None,
+            Self::Root { unused_global: Some(path) } => {
+                Some(format!("global acui.toml not used: {}", path.display()))
+            }
+            Self::GlobalNamesRoot => Some(
+                "global acui.toml used: it names this root's configuration, and the root has no acui.toml yet"
+                    .to_owned(),
+            ),
+        }
+    }
+}
+
+/// A root's own settings file, beside its configuration.
+const FILE_NAME: &str = "acui.toml";
 
 /// `%APPDATA%\ActingCommand\acui.toml` on Windows, `$XDG_CONFIG_HOME` (or
 /// `$HOME/.config`) elsewhere. `None` when the platform states neither.
-pub fn path() -> Option<PathBuf> {
+pub fn global_path() -> Option<PathBuf> {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else {
@@ -255,25 +312,53 @@ pub fn path() -> Option<PathBuf> {
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
     }?;
-    Some(base.join("ActingCommand").join("acui.toml"))
+    Some(base.join("ActingCommand").join(FILE_NAME))
 }
 
-/// Reads the keys. A missing file is the first run: the defaults, and no issue.
-/// Anything else that keeps a key from being read is an issue, and the key
-/// keeps its default; a key given twice takes its last line. A path key is kept
-/// as written; whether it is absolute is checked where it is used, so the
-/// report names the key. Unknown keys are not read and not an issue. The pause
+/// The settings of this run: outside a single-location root (`root` is `None`) the
+/// per-user file, read as ever; in one, the file the module's head says, as
+/// `acui_source::place::root_settings` decides it. A file that cannot be looked at
+/// counts as there, so that what is wrong with it is said. The per-user file is read
+/// only when it could decide: there, and the root's own not.
+pub fn load(root: Option<&Path>) -> Loaded {
+    let Some(root) = root else {
+        return read(global_path(), false, Chosen::Global);
+    };
+    let there = |path: &PathBuf| !matches!(path.try_exists(), Ok(false));
+    let global = global_path().filter(there);
+    let own = root.join(FILE_NAME);
+    let own_there = there(&own);
+    if let (false, Some(global)) = (own_there, &global) {
+        let loaded = read(Some(global.clone()), false, Chosen::GlobalNamesRoot);
+        let names_root = loaded
+            .settings
+            .actingd_config
+            .as_deref()
+            .is_some_and(|config| same_place(config, &root.join(ROOT_CONFIG)));
+        if root_settings(own_there, names_root) == RootSettings::Global {
+            return loaded;
+        }
+    }
+    read(Some(own), true, Chosen::Root { unused_global: global })
+}
+
+/// Reads the keys of the file at `path`. A missing file is the first run: the
+/// defaults, and no issue. Anything else that keeps a key from being read is an
+/// issue, and the key keeps its default; a key given twice takes its last line. A
+/// path key is kept as written; whether it is absolute is checked where it is used,
+/// so the report names the key; a root's own file (`root_file`) takes none. Unknown
+/// keys are not read and not an issue. The pause
 /// reasons fail closed instead: a file there that cannot be read, no config
 /// directory to look in, or any line of their key that cannot be taken leaves
 /// them unknown (`ResumeElsewhere::Unusable`), whatever another line of it says.
-pub fn load() -> Loaded {
+fn read(path: Option<PathBuf>, root_file: bool, chosen: Chosen) -> Loaded {
     let mut settings = Settings::default();
     let mut issues = Vec::new();
-    let Some(path) = path() else {
+    let Some(path) = path else {
         issues.push(SettingsIssue::NoConfigDir);
         settings.resume_elsewhere = ResumeElsewhere::Unusable;
         let file = SettingsFile { path: None, save_blocked: false };
-        return Loaded { settings, file, issues };
+        return Loaded { settings, file, issues, chosen };
     };
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -282,7 +367,7 @@ pub fn load() -> Loaded {
             issues.push(SettingsIssue::Unreadable { path: path.clone(), error: error.to_string() });
             settings.resume_elsewhere = ResumeElsewhere::Unusable;
             let file = SettingsFile { path: Some(path), save_blocked: true };
-            return Loaded { settings, file, issues };
+            return Loaded { settings, file, issues, chosen };
         }
     };
     for (index, line) in text.lines().enumerate() {
@@ -327,6 +412,13 @@ pub fn load() -> Loaded {
                 Some(theme) => settings.theme = theme,
                 None => issues.push(unknown("theme")),
             },
+            "state_root" | "actingd_config" | "actingd_exe" if root_file => {
+                issues.push(SettingsIssue::PathKeyIgnored {
+                    path: path.clone(),
+                    line: number,
+                    key: key.to_owned(),
+                });
+            }
             "state_root" => settings.state_root = path_value(value),
             "actingd_config" => settings.actingd_config = path_value(value),
             "actingd_exe" => settings.actingd_exe = path_value(value),
@@ -372,7 +464,7 @@ pub fn load() -> Loaded {
         }
     }
     let file = SettingsFile { path: Some(path), save_blocked: false };
-    Loaded { settings, file, issues }
+    Loaded { settings, file, issues, chosen }
 }
 
 /// One line as the parser reads it.
@@ -440,6 +532,11 @@ fn reasons(value: &str) -> Option<Vec<String>> {
 }
 
 impl SettingsFile {
+    /// Where this run reads and saves its settings; `None` with no config directory.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
     /// Writes the language, and nothing else.
     pub fn save_language(&self, language: Language) -> Result<(), SettingsIssue> {
         self.save_key("lang", &format!("\"{}\"", language.wire()))

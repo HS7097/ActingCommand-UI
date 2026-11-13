@@ -55,6 +55,7 @@ use super::failure_line;
 use super::paint;
 use super::read::{panic_message, PACKS_PROBE_AFTER};
 use super::rescue::RescueTicket;
+use crate::identity;
 use crate::launcher::spawn_worker;
 use crate::report;
 use crate::ui::{self, Ui};
@@ -146,8 +147,9 @@ pub enum SwitchSaid {
     Invalid { at_ms: u64 },
     /// Any other refusal: its codes, the host's before the Runtime's, for its words.
     Refused { at_ms: u64, codes: Vec<String> },
-    /// No connection: nothing was sent.
-    NotSent { at_ms: u64 },
+    /// No connection: nothing was sent. In root mode, because the Runtime up is not the
+    /// installation folder's (`not_this_root`, `identity::not_this_root`).
+    NotSent { at_ms: u64, not_this_root: bool },
     /// Nothing says what became of it: it may have happened.
     Unconfirmed { at_ms: u64 },
     /// The system refused the thread: nothing was sent. The error is the system's.
@@ -426,7 +428,10 @@ impl Landing {
                 PackOutcome::NotImplemented(_) => {
                     (None, After { reread: false, unsupported: true })
                 }
-                PackOutcome::NotSent(_) => (Some(SwitchSaid::NotSent { at_ms }), settled),
+                PackOutcome::NotSent(failure) => {
+                    let not_this_root = identity::not_this_root(&failure);
+                    (Some(SwitchSaid::NotSent { at_ms, not_this_root }), settled)
+                }
                 PackOutcome::Unconfirmed(_) => (Some(SwitchSaid::Unconfirmed { at_ms }), reread),
             },
             Self::Panicked(_) => (Some(SwitchSaid::Unconfirmed { at_ms }), reread),

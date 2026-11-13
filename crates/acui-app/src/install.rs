@@ -1,33 +1,85 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Where this run's state root, actingd configuration and actingd executable
-//! come from: an installed console takes them from its installation selection,
-//! which `--state-root` may only repeat; otherwise `--state-root`, else
-//! acui.toml. Neither is a silent default: with both missing the workbench says so
-//! in plain words, and the technical log gets the usage. One function, so that what
-//! replaces this derivation replaces it whole.
-//! So too for where the Runtime's `actingctl` is, and how it is pointed at this
-//! run's configuration (`tool_paths`).
+//! come from, decided once at the start (`place`, then `resolve`), in four tiers:
+//!
+//! 1. An installation selection (a slot of an A/B installation): all three from it,
+//!    which `--state-root` and `--root` may only repeat.
+//! 2. `--root <folder>`: a single-location root named on the command line, one that
+//!    holds `runtime\BUILD-MANIFEST.json` and has no installation selection
+//!    (`install\active.json`) in it or above it.
+//! 3. Where this program is: `<root>\ui\acui.exe` of such a root, by this program's own
+//!    path as the system resolves it (a `ui` that is a link is judged by where it leads).
+//!    A console that sits in a root may be given no other one by `--root`.
+//! 4. Neither: `--state-root`, else acui.toml's `state_root`, and the two paths from
+//!    acui.toml, as ever.
+//!
+//! The judgment itself is `acui_source::place`'s, over what is found here: this module
+//! looks at the files and hands it the facts.
+//!
+//! In a root all three come from it, as the Runtime's own tools find them: the
+//! configuration `<root>\actingd.config.json`, the state root its `state_root` as
+//! written, which must be absolute, and actingd `<root>\runtime\actingcommand-actingd.exe`;
+//! `--state-root` may only repeat that state root, and acui.toml's path keys are not
+//! taken. A root that lacks one of them, or a folder that is only half a root, is said
+//! in red, and never stood in for by acui.toml: a console in a root does not reach
+//! another installation by itself. Which acui.toml the run reads and writes goes by the
+//! same place (`settings::load`). A state root used as written may still lead to another
+//! installation's Runtime, through a configuration copied from it: in a root nothing is
+//! asked of a Runtime before it is checked to be the root's (`identity`).
+//!
+//! None of it is a silent default: with no state root the workbench says so in plain
+//! words, and the technical log gets the usage. One place, so that what replaces this
+//! derivation replaces it whole. So too for where the Runtime's `actingctl` is, and how
+//! it is pointed at this run's configuration (`tool_paths`).
 
 use std::fmt;
+use std::fs::File;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
-use acui_installation::Snapshot;
+use acui_installation::{Snapshot, INSTALL_SELECTION_PATH, MAX_CONFIG_BYTES};
+use acui_source::place::{
+    self as rules, GivenRoot, PlaceFacts, Refused, RootLook, Selection, Tier,
+};
+pub use acui_source::place::RootBy;
+use serde_json::Value;
 
 use crate::settings::Settings;
 use crate::strings::{fill, Labels};
 use crate::Args;
 
 const ACTINGCTL: &str = "actingctl.exe";
+const ACTINGD: &str = "actingcommand-actingd.exe";
 /// The configuration of a root without an installation selection, as `actingctl` finds it.
-const ROOT_CONFIG: &str = "actingd.config.json";
+pub const ROOT_CONFIG: &str = "actingd.config.json";
+/// The folder of a root that holds the Runtime's programs, and the manifest in it that
+/// marks a single-location root (Runtime contracts/install-cli.md, Layout).
+const RUNTIME: &str = "runtime";
+const BUILD_MANIFEST: &str = "BUILD-MANIFEST.json";
+/// The folder of a root this program sits in.
+const UI: &str = "ui";
 
 /// What the launcher and the read face start from.
 pub struct InstallPaths {
     /// The installation inputs of this process, retained across all UI actions.
     pub installation: Option<Snapshot>,
+    /// The installation folder these come from: the selection's root, or a
+    /// single-location root; `None` for `--state-root` and acui.toml. For the
+    /// settings page and the log.
+    pub root: Option<PathBuf>,
     pub state_root: PathBuf,
     pub actingd_config: Option<PathBuf>,
     pub actingd_exe: Option<PathBuf>,
+    /// The tier they came from, for the log, and for the check of the Runtime in a root.
+    pub origin: Origin,
+}
+
+/// The tier the paths came from.
+pub enum Origin {
+    Selected,
+    Root(RootBy),
+    /// `--state-root` when it was given, else acui.toml.
+    Legacy { state_root_given: bool },
 }
 
 /// Why there are no paths to start from.
@@ -35,12 +87,24 @@ pub enum InstallIssue {
     /// This process's installation selection could not be read, as
     /// acui-installation words it.
     Selection(String),
+    /// The same, for a program in an installation folder named `A` or `B`, which the
+    /// selection reader takes for a slot.
+    SelectionSlotNamed(String),
     /// `--state-root` names another root than the installation selected.
     StateRootDiffers { requested: PathBuf, selected: PathBuf },
     /// acui.toml's `state_root` is not absolute.
     StateRootNotAbsolute(PathBuf),
     /// Neither `--state-root` nor acui.toml names a state root.
     NoStateRoot,
+    /// `--root` names another folder than the installation this console belongs to.
+    RootDiffers { given: PathBuf, root: PathBuf },
+    /// `--root` names no single-location root: not absolute, without
+    /// `runtime\BUILD-MANIFEST.json`, or with an installation selection in it or above it.
+    RootArgNotRoot(PathBuf),
+    /// The single-location root this console belongs to lacks what its paths come from.
+    RootIncomplete { root: PathBuf, problems: Vec<RootProblem> },
+    /// `--state-root` names another state root than the root's configuration.
+    RootStateRootDiffers { root: PathBuf, requested: PathBuf, configured: PathBuf },
 }
 
 impl InstallIssue {
@@ -49,6 +113,11 @@ impl InstallIssue {
     pub fn text(&self, labels: &Labels) -> String {
         match self {
             Self::Selection(error) => fill(labels.install_selection_failed, &[error]),
+            Self::SelectionSlotNamed(error) => format!(
+                "{}\n{}",
+                fill(labels.install_selection_failed, &[error]),
+                labels.root_named_slot
+            ),
             Self::StateRootDiffers { requested, selected } => fill(
                 labels.state_root_differs,
                 &[&requested.display().to_string(), &selected.display().to_string()],
@@ -57,16 +126,103 @@ impl InstallIssue {
                 fill(labels.state_root_not_absolute, &[&root.display().to_string()])
             }
             Self::NoStateRoot => labels.no_state_root.to_owned(),
+            Self::RootDiffers { given, root } => fill(
+                labels.root_differs,
+                &[&given.display().to_string(), &root.display().to_string()],
+            ),
+            Self::RootArgNotRoot(given) => {
+                fill(labels.root_arg_not_root, &[&given.display().to_string()])
+            }
+            Self::RootIncomplete { root, problems } => {
+                let parts: Vec<String> = problems.iter().map(|problem| problem.text(labels)).collect();
+                fill(
+                    labels.root_incomplete,
+                    &[&root.display().to_string(), &parts.join(labels.root_problem_separator)],
+                )
+            }
+            Self::RootStateRootDiffers { root, requested, configured } => fill(
+                labels.root_state_root_differs,
+                &[
+                    &root.display().to_string(),
+                    &requested.display().to_string(),
+                    &configured.display().to_string(),
+                ],
+            ),
         }
     }
 
     /// What the technical log gets: the same, and the usage too when no state root
-    /// is named at all.
+    /// is named at all; for a root that lacks something, each path looked at and
+    /// what the system said of it, as written.
     pub fn log_text(&self, labels: &Labels) -> String {
         match self {
             Self::NoStateRoot => format!("{}\n{}", labels.no_state_root, labels.usage),
-            Self::Selection(_) | Self::StateRootDiffers { .. } | Self::StateRootNotAbsolute(_) => {
-                self.text(labels)
+            Self::RootIncomplete { problems, .. } => {
+                let mut text = self.text(labels);
+                for problem in problems {
+                    text.push('\n');
+                    text.push_str(&problem.detail());
+                }
+                text
+            }
+            Self::Selection(_)
+            | Self::SelectionSlotNamed(_)
+            | Self::StateRootDiffers { .. }
+            | Self::StateRootNotAbsolute(_)
+            | Self::RootDiffers { .. }
+            | Self::RootArgNotRoot(_)
+            | Self::RootStateRootDiffers { .. } => self.text(labels),
+        }
+    }
+}
+
+/// What a single-location root lacks, with the path it was looked for at and, but
+/// for what was read and found wanting, what the system said.
+pub enum RootProblem {
+    /// `runtime\BUILD-MANIFEST.json`: without it the folder is only half a root.
+    NoManifest { path: PathBuf, error: String },
+    NoActingd { path: PathBuf, error: String },
+    NoConfig { path: PathBuf, error: String },
+    ConfigUnreadable { path: PathBuf, error: String },
+    /// Larger than actingd reads it up to.
+    ConfigTooLarge { path: PathBuf },
+    ConfigNotJson { path: PathBuf, error: String },
+    /// No string `state_root` (also when the configuration is not a JSON object).
+    NoStateRoot { path: PathBuf },
+    StateRootNotAbsolute { path: PathBuf, value: PathBuf },
+}
+
+impl RootProblem {
+    /// One part of the red bar's list.
+    fn text(&self, labels: &Labels) -> String {
+        match self {
+            Self::NoManifest { .. } => labels.root_no_manifest.to_owned(),
+            Self::NoActingd { .. } => labels.root_no_actingd.to_owned(),
+            Self::NoConfig { .. } => labels.root_no_config.to_owned(),
+            Self::ConfigUnreadable { error, .. } => fill(labels.root_config_unreadable, &[error]),
+            Self::ConfigTooLarge { .. } => labels.root_config_too_large.to_owned(),
+            Self::ConfigNotJson { error, .. } => fill(labels.root_config_not_json, &[error]),
+            Self::NoStateRoot { .. } => labels.root_no_state_root.to_owned(),
+            Self::StateRootNotAbsolute { value, .. } => {
+                fill(labels.root_state_root_not_absolute, &[&value.display().to_string()])
+            }
+        }
+    }
+
+    /// The path and what the system said of it: the log's.
+    fn detail(&self) -> String {
+        match self {
+            Self::NoManifest { path, error }
+            | Self::NoActingd { path, error }
+            | Self::NoConfig { path, error }
+            | Self::ConfigUnreadable { path, error }
+            | Self::ConfigNotJson { path, error } => format!("{}: {error}", path.display()),
+            Self::ConfigTooLarge { path } => {
+                format!("{}: larger than {MAX_CONFIG_BYTES} bytes", path.display())
+            }
+            Self::NoStateRoot { path } => format!("{}: no string state_root", path.display()),
+            Self::StateRootNotAbsolute { path, value } => {
+                format!("{}: state_root {} is not absolute", path.display(), value.display())
             }
         }
     }
@@ -144,8 +300,232 @@ pub fn tool_paths(
     })
 }
 
-pub fn resolve(args: &Args, settings: &Settings) -> Result<InstallPaths, InstallIssue> {
-    let installation = Snapshot::for_current_process().map_err(InstallIssue::Selection)?;
+/// Where this run's paths and its settings file come from.
+pub struct Place {
+    /// The tier, or why none gives paths.
+    pub source: Result<Source, InstallIssue>,
+    /// The single-location root whose own acui.toml this run may use: the one this
+    /// program sits in, whether or not it is whole, and also when the installation
+    /// selection could not be read, else the one `--root` names. `None` with an
+    /// installation selection, in a slot of an A/B installation whose selection could
+    /// not be read, and outside any root: the per-user acui.toml, as ever.
+    pub settings_root: Option<PathBuf>,
+}
+
+/// The tier the paths come from, before `--state-root` is weighed.
+pub enum Source {
+    Selected(Snapshot),
+    Root(RootPaths),
+    Legacy,
+}
+
+/// What a whole single-location root gives.
+pub struct RootPaths {
+    root: PathBuf,
+    by: RootBy,
+    config: PathBuf,
+    state_root: PathBuf,
+    actingd_exe: PathBuf,
+}
+
+/// The tier, read once: the installation selection (`Snapshot::for_current_process`,
+/// called here only), the folder this program's `ui\` sits in and the folder `given` by
+/// `--root`, each looked at here, and judged by `acui_source::place::place`. `given` is
+/// `None` when the command line could not be read: then where this program is decides
+/// alone.
+pub fn place(given: Option<&Path>) -> Place {
+    let own = own_folder();
+    let selected = Snapshot::for_current_process();
+    let given = given.map(|path| GivenRoot {
+        path: path.to_path_buf(),
+        absolute: path.is_absolute(),
+        look: look(path),
+        same_as_selected: matches!(&selected, Ok(Some(snapshot)) if same_place(path, &snapshot.root)),
+        same_as_own: own.as_ref().is_some_and(|(root, _)| same_place(path, root)),
+    });
+    let selection = match selected {
+        Ok(Some(snapshot)) => {
+            let root = plain(&snapshot.root);
+            Selection::Selected { selection: snapshot, root }
+        }
+        Ok(None) => Selection::Unselected,
+        Err(error) => Selection::Failed(error),
+    };
+    let placed = rules::place(PlaceFacts { selection, own, given });
+    let source = match placed.tier {
+        Ok(Tier::Selected(snapshot)) => Ok(Source::Selected(snapshot)),
+        Ok(Tier::Root { root, by }) => root_paths(root, by),
+        Ok(Tier::Legacy) => Ok(Source::Legacy),
+        Err(Refused::Selection(error)) if slot_named_root() => {
+            Err(InstallIssue::SelectionSlotNamed(error))
+        }
+        Err(Refused::Selection(error)) => Err(InstallIssue::Selection(error)),
+        Err(Refused::RootDiffers { given, root }) => Err(InstallIssue::RootDiffers { given, root }),
+        Err(Refused::RootArgNotRoot(given)) => Err(InstallIssue::RootArgNotRoot(given)),
+    };
+    Place { source, settings_root: placed.settings_root }
+}
+
+/// The folder this program's `ui\` (so named in any case) sits in, as a person writes it,
+/// and what is in it; `None` when this program sits in no folder named `ui`, or its own
+/// path cannot be resolved. Found on the canonical path, as the contract finds a
+/// program's root, so a `ui` that is a link counts by where it leads.
+fn own_folder() -> Option<(PathBuf, RootLook)> {
+    let exe = std::env::current_exe().and_then(|exe| exe.canonicalize()).ok()?;
+    let root = exe
+        .parent()
+        .filter(|folder| folder.file_name().is_some_and(|name| name.eq_ignore_ascii_case(UI)))?
+        .parent()?;
+    let root = plain(root);
+    let look = look(&root);
+    Some((root, look))
+}
+
+/// What `folder` holds that says whether it is a single-location root. Either
+/// installation selection that cannot be looked at counts as there (`present`), so that a
+/// folder is never taken for a root on a guess; so does a configuration, so that what is
+/// wrong with it is said.
+fn look(folder: &Path) -> RootLook {
+    let runtime = folder.join(RUNTIME);
+    RootLook {
+        manifest: runtime.join(BUILD_MANIFEST).is_file(),
+        config: present(&folder.join(ROOT_CONFIG)),
+        runtime: runtime.is_dir(),
+        selection: present(&folder.join(INSTALL_SELECTION_PATH)),
+        selection_above: folder
+            .parent()
+            .is_some_and(|above| present(&above.join(INSTALL_SELECTION_PATH))),
+    }
+}
+
+/// Whether this program sits in `ui\` of an installation folder named `A` or `B`, one
+/// with `runtime\BUILD-MANIFEST.json` and no installation selection above it: the
+/// selection reader takes such a folder for a slot (names spelt as it compares them).
+fn slot_named_root() -> bool {
+    let Ok(exe) = std::env::current_exe().and_then(|exe| exe.canonicalize()) else {
+        return false;
+    };
+    let Some(ui) = exe.parent() else {
+        return false;
+    };
+    let Some(root) = ui.parent() else {
+        return false;
+    };
+    fn named(path: &Path, names: &[&str]) -> bool {
+        path.file_name().and_then(|name| name.to_str()).is_some_and(|name| names.contains(&name))
+    }
+    look(&plain(root)).slot_named(named(ui, &[UI]) && named(root, &["A", "B"]))
+}
+
+/// What `root` gives, each lack said: its manifest, actingd, and the configuration's
+/// absolute `state_root`, read whole up to the size actingd reads it to (as the
+/// Runtime's `configured_state_root` does), and used as written.
+fn root_paths(root: PathBuf, by: RootBy) -> Result<Source, InstallIssue> {
+    let mut problems = Vec::new();
+    let manifest = root.join(RUNTIME).join(BUILD_MANIFEST);
+    if let Err(error) = file_there(&manifest) {
+        problems.push(RootProblem::NoManifest { path: manifest, error });
+    }
+    let actingd_exe = root.join(RUNTIME).join(ACTINGD);
+    if let Err(error) = file_there(&actingd_exe) {
+        problems.push(RootProblem::NoActingd { path: actingd_exe.clone(), error });
+    }
+    let config = root.join(ROOT_CONFIG);
+    match configured_state_root(&config) {
+        Ok(state_root) if problems.is_empty() => {
+            Ok(Source::Root(RootPaths { root, by, config, state_root, actingd_exe }))
+        }
+        Ok(_) => Err(InstallIssue::RootIncomplete { root, problems }),
+        Err(problem) => {
+            problems.push(problem);
+            Err(InstallIssue::RootIncomplete { root, problems })
+        }
+    }
+}
+
+/// `Ok` when `path` is a file; else what the system said, or that it is no file.
+fn file_there(path: &Path) -> Result<(), String> {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(()),
+        Ok(_) => Err("not a file".to_owned()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Whether something is at `path`; a place that cannot be looked at counts as one.
+fn present(path: &Path) -> bool {
+    !matches!(path.try_exists(), Ok(false))
+}
+
+/// The absolute `state_root` of the configuration `config`.
+fn configured_state_root(config: &Path) -> Result<PathBuf, RootProblem> {
+    let path = config.to_path_buf();
+    let file = match File::open(config) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Err(RootProblem::NoConfig { path, error: error.to_string() });
+        }
+        Err(error) => return Err(RootProblem::ConfigUnreadable { path, error: error.to_string() }),
+    };
+    let mut bytes = Vec::new();
+    if let Err(error) = file.take(MAX_CONFIG_BYTES as u64 + 1).read_to_end(&mut bytes) {
+        return Err(RootProblem::ConfigUnreadable { path, error: error.to_string() });
+    }
+    if bytes.len() > MAX_CONFIG_BYTES {
+        return Err(RootProblem::ConfigTooLarge { path });
+    }
+    let document: Value = match serde_json::from_slice(&bytes) {
+        Ok(document) => document,
+        Err(error) => return Err(RootProblem::ConfigNotJson { path, error: error.to_string() }),
+    };
+    let Some(state_root) = document.get("state_root").and_then(Value::as_str) else {
+        return Err(RootProblem::NoStateRoot { path });
+    };
+    let state_root = PathBuf::from(state_root);
+    if !state_root.is_absolute() {
+        return Err(RootProblem::StateRootNotAbsolute { path, value: state_root });
+    }
+    Ok(state_root)
+}
+
+/// A canonical Windows path without its `\\?\` (or `\\?\UNC\`) prefix, as a person
+/// writes it and as the Runtime's tools are given it.
+pub fn plain(path: &Path) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => path.to_path_buf(),
+    }
+}
+
+/// Whether two paths name the same place: as written, else, both being there, as
+/// the system resolves them.
+pub fn same_place(left: &Path, right: &Path) -> bool {
+    left == right
+        || matches!(
+            (left.canonicalize(), right.canonicalize()),
+            (Ok(left), Ok(right)) if left == right
+        )
+}
+
+/// The paths of the tier `place` found, with `--state-root` weighed against it.
+pub fn resolve(args: &Args, source: Source, settings: &Settings) -> Result<InstallPaths, InstallIssue> {
+    let installation = match source {
+        Source::Root(found) => return in_root(args, found),
+        Source::Selected(snapshot) => Some(snapshot),
+        Source::Legacy => None,
+    };
+    // The selection's root is canonical: it is shown, and logged, as a person writes it.
+    let root = installation.as_ref().map(|snapshot| plain(&snapshot.root));
+    let origin = match &installation {
+        Some(_) => Origin::Selected,
+        None => Origin::Legacy { state_root_given: args.state_root.is_some() },
+    };
     let mut stored_root = settings.state_root.clone();
     let mut actingd_config = settings.actingd_config.clone();
     let mut actingd_exe = settings.actingd_exe.clone();
@@ -159,7 +539,7 @@ pub fn resolve(args: &Args, settings: &Settings) -> Result<InstallPaths, Install
         }
         stored_root = Some(state_root);
         actingd_config = Some(snapshot.config_path().map_err(InstallIssue::Selection)?);
-        actingd_exe = Some(snapshot.slot_root().join("runtime").join("actingcommand-actingd.exe"));
+        actingd_exe = Some(snapshot.slot_root().join("runtime").join(ACTINGD));
     }
     // `--state-root` is this run's; the file's `state_root` stands in for it.
     let state_root = match &args.state_root {
@@ -170,5 +550,72 @@ pub fn resolve(args: &Args, settings: &Settings) -> Result<InstallPaths, Install
             None => return Err(InstallIssue::NoStateRoot),
         },
     };
-    Ok(InstallPaths { installation, state_root, actingd_config, actingd_exe })
+    Ok(InstallPaths { installation, root, state_root, actingd_config, actingd_exe, origin })
+}
+
+/// A whole single-location root's paths; `--state-root` may only repeat its state root.
+fn in_root(args: &Args, found: RootPaths) -> Result<InstallPaths, InstallIssue> {
+    let RootPaths { root, by, config, state_root, actingd_exe } = found;
+    if let Some(requested) =
+        args.state_root.as_ref().filter(|requested| !same_place(requested, &state_root))
+    {
+        return Err(InstallIssue::RootStateRootDiffers {
+            root,
+            requested: requested.clone(),
+            configured: state_root,
+        });
+    }
+    Ok(InstallPaths {
+        installation: None,
+        root: Some(root),
+        state_root,
+        actingd_config: Some(config),
+        actingd_exe: Some(actingd_exe),
+        origin: Origin::Root(by),
+    })
+}
+
+impl InstallPaths {
+    /// The technical log's one line on where this run's paths came from, and the
+    /// settings file it reads and writes.
+    pub fn log_line(&self, settings: Option<&Path>) -> String {
+        let shown = |path: Option<&PathBuf>| {
+            path.map_or_else(|| "none".to_owned(), |path| path.display().to_string())
+        };
+        let settings = settings
+            .map_or_else(|| "none (no config directory)".to_owned(), |path| path.display().to_string());
+        match &self.origin {
+            Origin::Selected => {
+                let slot = self
+                    .installation
+                    .as_ref()
+                    .map_or_else(|| "none".to_owned(), |snapshot| format!("{:?}", snapshot.selection.slot));
+                format!(
+                    "selection: root={} slot={slot} config={} state_root={} settings={settings}",
+                    shown(self.root.as_ref()),
+                    shown(self.actingd_config.as_ref()),
+                    self.state_root.display(),
+                )
+            }
+            Origin::Root(by) => {
+                let by = match by {
+                    RootBy::Exe => "exe",
+                    RootBy::Arg => "--root",
+                };
+                // Not an error: a fresh root's state root is made when the Runtime first starts.
+                let missing = if self.state_root.is_dir() { "" } else { " (no state root folder there yet)" };
+                format!(
+                    "root mode ({by}): root={} config={} state_root={}{missing} actingd={} settings={settings}",
+                    shown(self.root.as_ref()),
+                    shown(self.actingd_config.as_ref()),
+                    self.state_root.display(),
+                    shown(self.actingd_exe.as_ref()),
+                )
+            }
+            Origin::Legacy { state_root_given } => {
+                let from = if *state_root_given { "--state-root" } else { "acui.toml" };
+                format!("legacy: state_root from {from}, paths from acui.toml {settings}")
+            }
+        }
+    }
 }

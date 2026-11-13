@@ -8,7 +8,9 @@
 //! its next read, whatever owner epoch it then reaches. This is why it does not
 //! reuse `Rebuilding`, which refuses another epoch since a session's pins were
 //! stated by the first one. Every read states its epoch; dropping a read of an
-//! epoch that is gone is the caller's.
+//! epoch that is gone is the caller's. Every connection here, a lane's as a person's,
+//! is made through `runtime_connection`: in root mode a Runtime that is not the
+//! installation folder's is not connected to at all ([`LiveRead::NotThisRoot`]).
 //!
 //! Lanes ask only what is answered from memory or takes no ledger record:
 //! `Status`, `ScheduleExplanation` of every instance without its candidate rows and, for an
@@ -107,8 +109,8 @@ use actingcommand_runtime_config::{
 };
 
 use super::{
-    global_pause_fact, instance_pause_fact, ClientFailure, OnlineSource, PauseFact,
-    RUNTIME_RESULT_UNEXPECTED,
+    global_pause_fact, instance_pause_fact, runtime_connection, ClientFailure, NoConnection,
+    OnlineSource, PauseFact, RUNTIME_RESULT_UNEXPECTED,
 };
 
 pub mod backends;
@@ -122,6 +124,12 @@ pub mod stop;
 /// code. A pause of this reason is one a person pressed here, so lifting it asks for
 /// no second press.
 pub const CONSOLE_PAUSE_ALL: &str = "console_pause_all";
+
+/// The reason the setup wizard (acsetup) gives the global pause it sets right after a new
+/// installation's first start, so that a person looks over every account before anything is
+/// played. Another tool's pause like any other, lifted with "put all on duty" and its
+/// confirmation; only the words for it are its own.
+pub const SETUP_FIRST_START: &str = "first-start";
 
 /// The reason this console's "pause this account" gives, a pause of one instance's scope
 /// ([`pause_account`]), likewise a free name and no outcome code, and likewise lifted on the
@@ -175,7 +183,9 @@ const POOL_LINE_HOLD: &str = "pool_line_hold";
 /// One reading thread's connection: actor `ui`, source `ui`, channel `ui`, at its
 /// own io timeout. The client holds its lock for a whole exchange and latches the
 /// connection on a timeout, so a read that must not wait for a slow one needs a
-/// lane of its own.
+/// lane of its own. Made through `runtime_connection`, as every connection is: in
+/// root mode a Runtime not taken for the installation folder's is not connected to,
+/// and nothing is read.
 pub struct ReadLane {
     root: PathBuf,
     io: Duration,
@@ -192,13 +202,13 @@ impl ReadLane {
     pub fn read_live(&mut self) -> LiveRead {
         let client = match self.connection() {
             Ok(client) => client,
-            Err(error) => return live_failure(error),
+            Err(not) => return live_failure(not),
         };
         let info = client.runtime_info();
         let (pid, epoch) = (info.pid(), code(&info.owner_epoch()));
         match client.status() {
             Ok(status) => LiveRead::Read(Box::new(live_snapshot(pid, epoch, &status))),
-            Err(error) => live_failure(self.settled(error)),
+            Err(error) => live_failure(NoConnection::Failed(self.settled(error))),
         }
     }
 
@@ -247,35 +257,35 @@ impl ReadLane {
     /// reads go through here.
     fn asked_once_more<T>(
         &mut self,
-        mut ask: impl FnMut(&mut Self) -> Result<T, RuntimeClientError>,
+        mut ask: impl FnMut(&mut Self) -> Result<T, NoConnection>,
     ) -> Result<T, ClientFailure> {
         let kept = self.client.is_some();
         let asked = match ask(self) {
-            Err(error) if kept && connection_ended(&error) => ask(self),
+            Err(NoConnection::Failed(error)) if kept && connection_ended(&error) => ask(self),
             asked => asked,
         };
         asked.map_err(ClientFailure::from)
     }
 
-    fn ask_explain(&mut self) -> Result<ExplainRead, RuntimeClientError> {
+    fn ask_explain(&mut self) -> Result<ExplainRead, NoConnection> {
         let client = self.connection()?;
         let epoch = code(&client.runtime_info().owner_epoch());
         match client.schedule_explanation(None, false) {
             Ok(explanation) => Ok(explain_read(epoch, &explanation)),
-            Err(error) => Err(self.settled(error)),
+            Err(error) => Err(NoConnection::Failed(self.settled(error))),
         }
     }
 
-    fn ask_tasks(&mut self, alias: &str) -> Result<TasksRead, RuntimeClientError> {
+    fn ask_tasks(&mut self, alias: &str) -> Result<TasksRead, NoConnection> {
         let client = self.connection()?;
         let epoch = code(&client.runtime_info().owner_epoch());
         match client.schedule_explanation(Some(alias), true) {
             Ok(explanation) => Ok(tasks_read(epoch, alias, &explanation)),
-            Err(error) => Err(self.settled(error)),
+            Err(error) => Err(NoConnection::Failed(self.settled(error))),
         }
     }
 
-    fn ask_packs(&mut self, alias: &str) -> Result<pack::PacksRead, RuntimeClientError> {
+    fn ask_packs(&mut self, alias: &str) -> Result<pack::PacksRead, NoConnection> {
         let client = self.connection()?;
         let epoch = code(&client.runtime_info().owner_epoch());
         match client.pack_schedule_view(alias) {
@@ -285,35 +295,35 @@ impl ReadLane {
                     self.settled(error);
                     Ok(pack::packs_unsupported(epoch, alias, code))
                 }
-                None => Err(self.settled(error)),
+                None => Err(NoConnection::Failed(self.settled(error))),
             },
         }
     }
 
-    fn ask_config(&mut self) -> Result<ConfigRead, RuntimeClientError> {
+    fn ask_config(&mut self) -> Result<ConfigRead, NoConnection> {
         let client = self.connection()?;
         let epoch = code(&client.runtime_info().owner_epoch());
         match client.runtime_fact_snapshot_versioned() {
             Ok((snapshot, version)) => Ok(config_read(epoch, &snapshot, version)),
-            Err(error) => Err(self.settled(error)),
+            Err(error) => Err(NoConnection::Failed(self.settled(error))),
         }
     }
 
-    fn ask_start(&mut self) -> Result<StartRead, RuntimeClientError> {
+    fn ask_start(&mut self) -> Result<StartRead, NoConnection> {
         let client = self.connection()?;
         let epoch = code(&client.runtime_info().owner_epoch());
         match client.start_report() {
             Ok(report) => Ok(start_read(epoch, &report)),
-            Err(error) => Err(self.settled(error)),
+            Err(error) => Err(NoConnection::Failed(self.settled(error))),
         }
     }
 
-    /// The connection to ask on, made first when there is none.
-    fn connection(&mut self) -> Result<RuntimeClient, RuntimeClientError> {
+    /// The connection to ask on, made first when there is none (`runtime_connection`).
+    fn connection(&mut self) -> Result<RuntimeClient, NoConnection> {
         if let Some(client) = &self.client {
             return Ok(client.clone());
         }
-        let client = RuntimeClient::connect(
+        let client = runtime_connection(
             RuntimeClientConfig::new(
                 self.root.as_path(),
                 RuntimeChannel::Ui,
@@ -353,6 +363,11 @@ pub enum LiveRead {
     /// by what halted it until a restart. This does not pass by itself, so it is
     /// shown as an error.
     Trouble(ClientFailure),
+    /// Root mode only: the Runtime the state root names is not the installation
+    /// folder's, or cannot be told to be, so nothing was connected to it and nothing
+    /// read (`CONSOLE_RUNTIME_NOT_THIS_ROOT`). One whose process is gone is
+    /// `NotConnected`, with the console's own `CONSOLE_RUNTIME_GONE`.
+    NotThisRoot(ClientFailure),
     Read(Box<LiveSnapshot>),
 }
 
@@ -371,8 +386,11 @@ const RUNTIME_SILENT_CODES: &[&str] = &[
     "runtime_owner_epoch_changed",
 ];
 
-fn live_failure(error: RuntimeClientError) -> LiveRead {
-    match Unreached::of(error) {
+fn live_failure(not: NoConnection) -> LiveRead {
+    if let NoConnection::NotThisRoot = not {
+        return LiveRead::NotThisRoot(ClientFailure::from(not));
+    }
+    match Unreached::of(not) {
         Unreached::NotConnected(failure) => LiveRead::NotConnected(failure),
         Unreached::NoAnswer(failure) => LiveRead::NoAnswer(failure),
         Unreached::Trouble(failure) => LiveRead::Trouble(failure),
@@ -392,8 +410,14 @@ impl Unreached {
     /// Of the Runtime's own refusals only `runtime_unavailable` passes, and only when
     /// the host has not halted: a halted host keeps the code of what halted it, which
     /// may be this one, and says so by the refusal being fatal. `ClientFailure` does
-    /// not carry that, so this looks at the client's error.
-    fn of(error: RuntimeClientError) -> Self {
+    /// not carry that, so this looks at the client's error. In root mode a Runtime the
+    /// console did not connect to (`runtime_connection`) is `NotConnected`, with the
+    /// console's own code: nothing of it is read.
+    fn of(not: NoConnection) -> Self {
+        let error = match not {
+            NoConnection::Failed(error) => error,
+            not => return Self::NotConnected(ClientFailure::from(not)),
+        };
         let unavailable = error.projection().is_some_and(|refusal| {
             refusal.code == RuntimeErrorCode::RuntimeUnavailable && !refusal.fatal
         });
@@ -697,7 +721,7 @@ const RANGE_MAX: &str = "range_max";
 /// its default: the client may give up, or its connection fail, while the switch goes on, and its
 /// unconfirmed answer is then a [`backends::UnconfirmedSwitch`]'s.
 pub fn configure(root: &Path, edit: &ConfigEdit, expected: Option<u64>) -> ConfigOutcome {
-    let connected = RuntimeClient::connect(configure_config(root));
+    let connected = runtime_connection(configure_config(root));
     let client = match connected {
         Ok(client) => client,
         Err(error) => return ConfigOutcome::NotSent(ClientFailure::from(error)),
