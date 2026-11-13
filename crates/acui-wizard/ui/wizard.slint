@@ -737,9 +737,10 @@ component AccountLine inherits VerticalLayout {
                 Wiz.alias-edited(root.index, text);
             }
         }
+        // As wide as its column's head: the std box asks for 160px of its own.
         game-box := SkinComboBox {
-            width: 140px;
-            min-width: 100px;
+            min-width: 140px;
+            max-width: 140px;
             model: root.account.games;
             current-index: root.account.game-index;
             selected(value) => {
@@ -747,8 +748,8 @@ component AccountLine inherits VerticalLayout {
             }
         }
         server-box := SkinComboBox {
-            width: 140px;
-            min-width: 100px;
+            min-width: 140px;
+            max-width: 140px;
             model: root.account.servers;
             current-index: root.account.server-index;
             enabled: root.account.game-index > 0;
