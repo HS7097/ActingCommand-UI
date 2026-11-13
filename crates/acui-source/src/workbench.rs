@@ -123,6 +123,12 @@ pub mod stop;
 /// no second press.
 pub const CONSOLE_PAUSE_ALL: &str = "console_pause_all";
 
+/// The reason the setup wizard (acsetup) gives the global pause it sets right after a new
+/// installation's first start, so that a person looks over every account before anything is
+/// played. Another tool's pause like any other, lifted with "put all on duty" and its
+/// confirmation; only the words for it are its own.
+pub const SETUP_FIRST_START: &str = "first-start";
+
 /// The reason this console's "pause this account" gives, a pause of one instance's scope
 /// ([`pause_account`]), likewise a free name and no outcome code, and likewise lifted on the
 /// account's card with one press. As a name the Runtime takes it is 21 bytes of `[a-z_]`.

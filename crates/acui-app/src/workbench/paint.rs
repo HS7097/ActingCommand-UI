@@ -31,7 +31,7 @@ use acui_source::workbench::stop::{stop_time, Origin as RunOrigin, Refusal, Rese
 use acui_source::workbench::{
     PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
     SettingValue, TasksRead, ValueProblem, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, MODE_FULL,
-    MODE_OBSERVE, MODE_PACE,
+    MODE_OBSERVE, MODE_PACE, SETUP_FIRST_START,
 };
 use slint::{Image, Model as _, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
@@ -2562,6 +2562,9 @@ pub fn actions(ui: &Ui) {
         ResumeEntry::OnePress(_) | ResumeEntry::TwoSteps(_)
     ));
     let statement = match &view.resume {
+        ResumeEntry::Confirming { reason, .. } if reason.as_str() == SETUP_FIRST_START => {
+            labels.resume_all_statement_first_start.to_owned()
+        }
         ResumeEntry::Confirming { reason, .. } => {
             fill(labels.resume_all_statement, &[reason.as_str()])
         }
@@ -3023,6 +3026,7 @@ fn held_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
     };
     let said = match (*everyone, reason.as_str()) {
         (true, CONSOLE_PAUSE_ALL) => return line_text(ui, labels, line),
+        (true, SETUP_FIRST_START) => labels.tasks_paused_first_start,
         (true, _) => labels.tasks_paused_other_all,
         (false, CONSOLE_PAUSE_ACCOUNT) => labels.tasks_paused_account,
         (false, _) => labels.tasks_paused_other,
@@ -3376,6 +3380,9 @@ fn line_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
                 Lifter::LabRescue => labels.card_paused_lab_rescue.to_owned(),
                 Lifter::Window if *everyone && reason.as_str() == CONSOLE_PAUSE_ALL => {
                     labels.card_paused_console.to_owned()
+                }
+                Lifter::Window if *everyone && reason.as_str() == SETUP_FIRST_START => {
+                    labels.card_paused_first_start.to_owned()
                 }
                 Lifter::Window if *everyone => {
                     fill(labels.card_paused_other_all, &[reason.as_str()])
