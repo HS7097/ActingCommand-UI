@@ -15,7 +15,8 @@
 //! A standard package's own files go to `<root>\licenses\<game>\<path>`, `path` a plain relative
 //! path (each once per game); the ones it must not go without are named in
 //! `bundles[].required_files`, and a set that lacks one is refused. The vision set must carry
-//! ONNX Runtime's licence and notices beside the library ([`ORT_LICENSE`], [`ORT_NOTICES`]). It
+//! ONNX Runtime's two files exactly as the Runtime pins them ([`ORT_PINS`]), and its licence and
+//! notices beside the library ([`ORT_LICENSE`], [`ORT_NOTICES`]). It
 //! may carry DirectML ([`DIRECTML_LIBRARY`], only the file the Runtime pins), and then DirectML's
 //! own licence files too ([`DIRECTML_LICENSES`]); the configuration still names the CPU provider.
 //! The licences of the vision models (`vision.licenses`, at least one with a model) go to
@@ -51,6 +52,19 @@ pub const VISION_PROVIDER: &str = "cpu";
 /// The file a vision root needs whenever `vision` is configured (Runtime
 /// `contracts/vision-model-folders.md`).
 pub const ORT_LIBRARY: &str = "ort/onnxruntime.dll";
+/// The library ONNX Runtime loads its providers through, needed beside [`ORT_LIBRARY`] for every
+/// provider, the CPU's too ("Loading").
+pub const ORT_PROVIDERS_SHARED: &str = "ort/onnxruntime_providers_shared.dll";
+/// The two ONNX Runtime files as the Runtime pins them (ONNX Runtime 1.24.4, taken from its
+/// DirectML build): `actingd check-config` checks both against these sizes and SHA-256 and
+/// refuses a vision root whose files differ, and a start refuses it too (Runtime
+/// `apps/actingd/src/config.rs`, the vision root's pin check; `vision_runtime_unavailable`). A set
+/// that carries other files would fail only at the install's start, so the set check refuses it
+/// first.
+pub const ORT_PINS: [(&str, u64, &str); 2] = [
+    (ORT_LIBRARY, 17_328_152, "e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40"),
+    (ORT_PROVIDERS_SHARED, 22_040, "265c8daf29637cb259cac8be9f08f2cd45f3883f0f0e4949cbfddd5b4cbec3b6"),
+];
 /// ONNX Runtime's licence and its third-party notices, which go wherever the library goes.
 pub const ORT_LICENSE: &str = "ort/licenses/onnxruntime/LICENSE";
 pub const ORT_NOTICES: &str = "ort/licenses/onnxruntime/ThirdPartyNotices.txt";
@@ -226,7 +240,8 @@ fn commit_like(text: &str) -> bool {
 /// plainly inside the set folder with a size and a SHA-256, each game once and a plain folder
 /// name, each of a game's own files at a plain relative path and each path once in its game,
 /// each of its `required_files` among them, a
-/// CPU vision set with ONNX Runtime, its licence and notices and at least one model, each vision
+/// CPU vision set with ONNX Runtime's two files as the Runtime pins them, its licence and notices
+/// and at least one model, each vision
 /// path once and below `ort/` or `models/<model_ref>/`; DirectML, when carried, the pinned file
 /// with its three licence files; at least one vision licence (a model is carried), each at a
 /// plain relative path, each once, and no game whose folder would be theirs.
@@ -335,8 +350,18 @@ pub fn set_problems(set: &InstallSet) -> Vec<Said> {
         }
         models |= placed && segments.first() == Some(&"models");
     }
-    if !paths.contains(&ORT_LIBRARY.to_ascii_lowercase()) {
-        problems.push(Said::new("视觉文件缺少 ONNX Runtime", "the vision set lacks ONNX Runtime").with(ORT_LIBRARY));
+    for (pinned, size, sha256) in ORT_PINS {
+        match set.vision.files.iter().find(|file| file.path.eq_ignore_ascii_case(pinned)) {
+            None => problems.push(Said::new("视觉文件缺少 ONNX Runtime", "the vision set lacks ONNX Runtime").with(pinned)),
+            Some(file) if file.size != size || !file.sha256.eq_ignore_ascii_case(sha256) => problems.push(
+                Said::new(
+                    "ONNX Runtime 不是 Runtime 钉住的那一版（1.24.4），Runtime 会拒绝启动",
+                    "ONNX Runtime is not the one the Runtime pins (1.24.4); the Runtime would refuse to start",
+                )
+                .with(format!("{pinned}: {} bytes {}, pinned {size} bytes {sha256}", file.size, file.sha256)),
+            ),
+            Some(_) => {}
+        }
     }
     for required in [ORT_LICENSE, ORT_NOTICES] {
         if !paths.contains(&required.to_ascii_lowercase()) {
@@ -1052,6 +1077,11 @@ mod tests {
             case("vision path", |set| set["vision"]["files"][1]["path"] = json!("bin/x.dll")),
             case("model folder", |set| set["vision"]["files"][6]["path"] = json!("models/keys.txt")),
             case("no ort", |set| set["vision"]["files"][0]["path"] = json!("ort/other.dll")),
+            // Both ONNX Runtime files, each exactly as the Runtime pins it.
+            case("ort size", |set| set["vision"]["files"][0]["size"] = json!(17328153)),
+            case("ort sha256", |set| set["vision"]["files"][0]["sha256"] = json!(sha('a'))),
+            case("no providers_shared", |set| set["vision"]["files"][1]["path"] = json!("ort/other_shared.dll")),
+            case("providers_shared sha256", |set| set["vision"]["files"][1]["sha256"] = json!(sha('b'))),
             case("no model", |set| {
                 let files = set["vision"]["files"].as_array_mut().unwrap();
                 files.retain(|file| !file["path"].as_str().unwrap().starts_with("models/"));
