@@ -30,9 +30,9 @@ and guesses nothing.
   `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. The wizard installs from an
   install set, which is put together apart from this zip (see "Setup wizard acsetup"). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
-  of Runtime v0.12.47; the pin is now v0.12.58.
+  of Runtime v0.12.47; the pin is now v0.12.59.
 - **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 29], `ledger` [3, 8],
-  `runtime-client` [3, 8] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.58: each of
+  `runtime-client` [3, 8] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.59: each of
   them declares a `ledger` maximum within [3, 8] and an `actingd-config` and a `runtime-client` range
   that meet the console's. The ledger of v0.12.55 and later (revision 8) is one way: once such a Runtime has run on
   a state root, no Runtime before v0.12.55 opens it, and a console whose `ledger` range ends at 7 may fail to
@@ -228,7 +228,10 @@ was read and Read Earlier is not offered, moving "Show up to" again or a tab or 
 locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
 reopening, which read without it.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.58
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.59 (`803fdfa3`). Against
+v0.12.58 it raises only `package` to 11; `actingd-config`, `ledger` and `runtime-client` stay, and so do the
+console's ranges; ledger-forensics depends on one more crate, `actingcommand-display-adapter` (which depends
+on the contract only), and `Cargo.lock` lists it. Each note below says from which release
 (#434 LAB-6S1a, v0.12.58: `runtime-client` revision 8 adds an optional `initiator` to `BindChannel`, to
 its answer `ChannelBound` and to every receipt of a connection that declared one, taken only on the `lab`
 channel and never written on `ui`, so this console, which binds `ui` and declares none, sends and reads
@@ -352,7 +355,7 @@ with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 
 v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 8, ledger revision 8):
 
 ```
-rev = "ef94d950a102a595fa0bde974b8d77ad54329b48"
+rev = "803fdfa3c382edafc7547f48d55ff7c662774383"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -629,7 +632,7 @@ or on a handset scrcpy, for capture), with where the value comes from (the confi
 online, when and through which way) and the device's latest self-check. Apply switches that device at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.58, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.59, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -1258,7 +1261,7 @@ through or was stopped.
   module's `instance add` (Runtime INST-5) sets on the instance it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
-  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.58 has
+  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.59 has
   both. An instance
   pause still draining or handing its device back gets none either: the Runtime refuses its resume
   then. Each line shows its pause's reason verbatim, whatever the operator wrote.
