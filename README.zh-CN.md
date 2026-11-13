@@ -9,8 +9,8 @@
 
 它不是 Runtime 的一部分，是 Runtime 的**外部可拆客户端**。
 
-> 构建里的 `acsetup.exe` 是新写的 0.12 安装向导（UI-W2）：从一份安装集把 Runtime、工具和监控台装进一个新
-> 文件夹，见「安装向导 acsetup」一节。已经发布的 UI 版本里还没有它；它随发布出来之前，用 `actingctl install` 安装。
+> `acsetup.exe` 是 0.12 的安装向导（UI-W2）：从一份安装集把 Runtime、工具和监控台装进一个新文件夹，见
+> 「安装向导 acsetup」一节。UI v0.12.17 起随发布件一起发；更早的版本没有它，用 `actingctl install` 安装。
 
 本仓还放着**安装向导** `acsetup`（见「安装向导 acsetup」一节）与固定入口 `acforward`——A/B 安装经它拉起
 各个程序。与 Runtime 一样，这些程序不认识任何游戏：不含游戏逻辑，也不含游戏数据。游戏经 Runtime 加载的
@@ -21,8 +21,9 @@
 - **0.12 系列（UI v0.12.0 起）**，与此前每一版一样是预发布：本仓
   [Releases](https://github.com/HS7097/ActingCommand-UI/releases) 上的 `acui-windows-<sha>.zip` 与
   `SHA256SUMS`。每一版都是预发布，所以 GitHub 上没有标「Latest」的版本，取标签最新的那个。zip 里有
-  `acui.exe`（监控台）、`acforward.exe`（固定入口）、`LICENSE`、`README.md`，以及把它们绑到所在提交的
-  `BUILD-MANIFEST.json`；已发布的版本里还没有 `acsetup.exe`（分支构建里已经带上，见上方说明）。每一版都基于它所在提交钉的 Runtime
+  `acui.exe`（监控台）、`acsetup.exe`（安装向导，UI v0.12.17 起）、`acforward.exe`（固定入口）、`LICENSE`、
+  `README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。向导要从一份安装集安装，安装集另外拼，不在这个 zip
+  里（见「安装向导 acsetup」一节）。每一版都基于它所在提交钉的 Runtime
   源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 v0.12.58。
 - **可与 0.12 的 Runtime 搭配**：它声明 `actingd-config` [5, 29]、`ledger` [3, 8]、`runtime-client`
   [3, 8] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.47 到 v0.12.58：这几版的 `ledger` 上限都在
