@@ -337,9 +337,13 @@ pub struct PacksLanded {
     pub news: News<ClientFailure>,
     /// The read's fault is over.
     pub fault_cleared: bool,
-    /// It said, for the first time in this owner epoch, that its Runtime has no switches: that
-    /// epoch, and the code that said so.
-    pub unsupported: Option<(String, &'static str)>,
+    /// It said that its Runtime has no switches, for the first time in this owner epoch or again,
+    /// as a read that asked once more (`Switches::probe`): that epoch, the code that said so, and
+    /// whether again. The view is read no more from now.
+    pub unsupported: Option<(String, &'static str, bool)>,
+    /// It showed the switches of a Runtime that said before, in this owner epoch, that it has none:
+    /// that word is let go.
+    pub supported: bool,
     /// It named no version of the account's own scope.
     pub unversioned: bool,
 }
@@ -725,9 +729,19 @@ impl Model {
     }
 
     /// Whether the list's switches are read beside it (UI-3f2): online, but for an owner epoch whose
-    /// Runtime said it has none.
+    /// Runtime said it has none, while no read asks it once more (`packs_probe`).
     pub fn packs_wanted(&self) -> bool {
         self.online_epoch().is_some_and(|epoch| !self.switches.unsupported(epoch))
+    }
+
+    /// The list is shown anew at `now`, its tab opened or another account's: whether its switches
+    /// are read once more, the Runtime online having said a while ago that it has none
+    /// (`Switches::probe`).
+    pub fn packs_probe(&mut self, now: Instant) -> bool {
+        let Some(epoch) = self.online_epoch().map(str::to_owned) else {
+            return false;
+        };
+        self.switches.probe(&epoch, now)
     }
 
     /// The slow thread is told to read the list of `wanted` from now on, or none: whether that
@@ -809,8 +823,9 @@ impl Model {
 
     /// One read of the switches of `alias` (UI-3f2), held to the account the list follows and the
     /// owner epoch online as a read of the list is. One that counts is the read a press's answer
-    /// waited for (`Switches::read`), and one that says its Runtime has none keeps that for its
-    /// epoch (`Switches::view_unsupported`).
+    /// waited for (`Switches::read`); one that says its Runtime has none keeps that for its epoch
+    /// (`Switches::view_unsupported`), and one that shows the switches lets go of having said so
+    /// (`Switches::view_supported`).
     pub fn apply_packs(
         &mut self,
         alias: &str,
@@ -818,8 +833,13 @@ impl Model {
         now: Instant,
     ) -> PacksLanded {
         let fault_cleared = self.packs_fault.take().is_some();
-        let mut landed =
-            PacksLanded { news: News::Nothing, fault_cleared, unsupported: None, unversioned: false };
+        let mut landed = PacksLanded {
+            news: News::Nothing,
+            fault_cleared,
+            unsupported: None,
+            supported: false,
+            unversioned: false,
+        };
         let Link::Online { epoch, .. } = &self.link else {
             return landed;
         };
@@ -832,11 +852,14 @@ impl Model {
             Ok(read) => {
                 match &read.answer {
                     PacksAnswer::Unsupported { code } => {
-                        if self.switches.view_unsupported(epoch) {
-                            landed.unsupported = Some((epoch.clone(), *code));
+                        if let Some(again) = self.switches.view_unsupported(epoch, now) {
+                            landed.unsupported = Some((epoch.clone(), *code, again));
                         }
                     }
-                    PacksAnswer::Read(states) => landed.unversioned = states.version.is_none(),
+                    PacksAnswer::Read(states) => {
+                        landed.unversioned = states.version.is_none();
+                        landed.supported = self.switches.view_supported(epoch);
+                    }
                 }
                 self.switches.read(alias);
                 let recovered = slice.error.take().is_some();

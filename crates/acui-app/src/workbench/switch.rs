@@ -18,7 +18,11 @@
 //! that the switches come back within a moment. A conflict of versions is not sent again: what to
 //! press depends on what the other tool wrote, so the person looks and presses again. A Runtime
 //! that has no such write (`not_implemented`) is kept for its owner epoch, as one whose view said
-//! so is, and has no switch in it.
+//! so is, and has no switch in it; but what said so may have been a connection that ended just
+//! before its answer and was made again in the same epoch, so the list shown anew (its tab opened,
+//! another account) `PACKS_PROBE_AFTER` or longer after it reads the view once more
+//! (`Switches::probe`): an answer that says so again keeps it from then on, one that shows the
+//! switches lets it go.
 //!
 //! The rescue bar's "close this task" (`stop`, UI-3e2b) writes the same off of its run's package,
 //! and holds the account's slot while it is out (`Switches::close_begin`), so that it and a switch
@@ -43,12 +47,13 @@ use std::collections::BTreeMap;
 use std::mem;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
+use std::time::Instant;
 
 use acui_source::workbench::pack::{edit, EditAnswer, PackChange, PackOutcome, PackRefusal};
 
 use super::failure_line;
 use super::paint;
-use super::read::panic_message;
+use super::read::{panic_message, PACKS_PROBE_AFTER};
 use super::rescue::RescueTicket;
 use crate::launcher::spawn_worker;
 use crate::report;
@@ -66,11 +71,19 @@ pub struct Switches {
     /// The account whose list showed last, while it shows and after it is hidden: what its presses
     /// came to stays until the list shows another account (`follow`).
     listed: Option<String>,
-    /// The owner epoch whose Runtime answered the view or a write `not_implemented`, or did not
-    /// know the view.
-    unsupported: Option<String>,
+    /// What the Runtime of an owner epoch said last of its switches: that it has none, the view or
+    /// a write `not_implemented`, or the view not known.
+    unsupported: Option<NoSwitches>,
     /// How many presses went out this run: each one's ticket.
     issued: u64,
+}
+
+/// A Runtime's word that it has no switches: its owner epoch, when it said so, and whether a read
+/// of the view asks it once more (`Switches::probe`).
+struct NoSwitches {
+    epoch: String,
+    at: Instant,
+    probing: bool,
 }
 
 /// One account's: where its one press stands, and what each of its packages' last press came to.
@@ -153,17 +166,51 @@ struct After {
 }
 
 impl Switches {
-    /// Whether the Runtime of owner epoch `epoch` said it has no switches.
+    /// Whether the Runtime of owner epoch `epoch` said it has no switches, and no read asks it once
+    /// more.
     pub fn unsupported(&self, epoch: &str) -> bool {
-        self.unsupported.as_deref() == Some(epoch)
+        self.unsupported.as_ref().is_some_and(|said| said.epoch == epoch && !said.probing)
     }
 
-    /// The Runtime of owner epoch `epoch` said its view has no switches: whether that is news.
-    pub fn view_unsupported(&mut self, epoch: &str) -> bool {
-        if self.unsupported(epoch) {
+    /// The Runtime of owner epoch `epoch` said at `now` that it has no switches, its view or a
+    /// write: none when that is no news, it having said so and no read asking it once more; else
+    /// whether it says so again, to a read that asked it once more (`probe`). The view is read no
+    /// more in that epoch from now, but as the list is shown anew `PACKS_PROBE_AFTER` from now or
+    /// later.
+    pub fn view_unsupported(&mut self, epoch: &str, now: Instant) -> Option<bool> {
+        let again = match &self.unsupported {
+            Some(said) if said.epoch == epoch && !said.probing => return None,
+            Some(said) => said.epoch == epoch,
+            None => false,
+        };
+        self.unsupported = Some(NoSwitches { epoch: epoch.to_owned(), at: now, probing: false });
+        Some(again)
+    }
+
+    /// A read of the view in owner epoch `epoch` showed the switches: whether that lets go of its
+    /// Runtime's word that it has none, which a connection that ended just before its answer may
+    /// have given.
+    pub fn view_supported(&mut self, epoch: &str) -> bool {
+        if !self.unsupported.as_ref().is_some_and(|said| said.epoch == epoch) {
             return false;
         }
-        self.unsupported = Some(epoch.to_owned());
+        self.unsupported = None;
+        true
+    }
+
+    /// The list is shown anew in owner epoch `epoch` at `now`, its tab opened or another account's:
+    /// whether its view is read once more, its Runtime having said `PACKS_PROBE_AFTER` ago or
+    /// longer that it has no switches. It is read from now on, as when nothing said so, until an
+    /// answer says so again (`view_unsupported`) or shows the switches (`view_supported`).
+    pub fn probe(&mut self, epoch: &str, now: Instant) -> bool {
+        let Some(said) = self.unsupported.as_mut() else {
+            return false;
+        };
+        let due = now.saturating_duration_since(said.at) >= PACKS_PROBE_AFTER;
+        if said.epoch != epoch || said.probing || !due {
+            return false;
+        }
+        said.probing = true;
         true
     }
 
@@ -273,9 +320,16 @@ impl Switches {
         Some(request)
     }
 
-    /// What the press of `alias` under `ticket` came to, landing at `at_ms`: none when that ticket
-    /// is not the one out, which a restart let go.
-    fn settle(&mut self, alias: &str, ticket: u64, landing: Landing, at_ms: u64) -> Option<After> {
+    /// What the press of `alias` under `ticket` came to, landing at `at_ms` (`now` on the event
+    /// loop's clock): none when that ticket is not the one out, which a restart let go.
+    fn settle(
+        &mut self,
+        alias: &str,
+        ticket: u64,
+        landing: Landing,
+        at_ms: u64,
+        now: Instant,
+    ) -> Option<After> {
         let slot = self.slots.get_mut(alias)?;
         let request = match mem::take(&mut slot.stage) {
             Stage::Out(request) if request.ticket == ticket => request,
@@ -291,7 +345,7 @@ impl Switches {
         };
         slot.stage = if after.reread { Stage::Behind } else { Stage::Idle };
         if after.unsupported {
-            self.unsupported = Some(request.epoch);
+            self.view_unsupported(&request.epoch, now);
         }
         Some(after)
     }
@@ -301,7 +355,7 @@ impl Switches {
     /// wait for a read, and what another epoch's Runtime said of its switches. The lines for the
     /// log.
     fn restarted(&mut self, epoch: &str) -> Vec<String> {
-        if self.unsupported.as_deref().is_some_and(|said| said != epoch) {
+        if self.unsupported.as_ref().is_some_and(|said| said.epoch != epoch) {
             self.unsupported = None;
         }
         let mut lines = Vec::new();
@@ -497,10 +551,11 @@ fn send(ui: &Ui, root: PathBuf, alias: &str, request: Request) {
 /// An answer, on the event loop. One whose ticket is no longer the one out, which a restart let go,
 /// changes nothing shown: only the log had it. One that may have changed the switches, or says
 /// another tool did, is a write: the reads begun before it are let go, and read again at once. A
-/// Runtime that has no such write reads them no more in its owner epoch (`super::tasks_sync`).
+/// Runtime that has no such write reads them no more in its owner epoch (`super::tasks_sync`), but
+/// once more as the list is shown anew a while after (`Switches::probe`).
 fn landed(ui: &Ui, alias: &str, ticket: u64, landing: Landing) {
-    let at_ms = paint::now_ms();
-    let after = ui.model.borrow_mut().switches_mut().settle(alias, ticket, landing, at_ms);
+    let (at_ms, now) = (paint::now_ms(), Instant::now());
+    let after = ui.model.borrow_mut().switches_mut().settle(alias, ticket, landing, at_ms, now);
     let Some(after) = after else {
         let line = format!(
             "pack ticket {ticket} of {alias}: its answer came after a restart let it go, and \

@@ -696,7 +696,11 @@ lands, or after a conflict; nothing new for 180 seconds counts as unreadable, th
 says in amber that the task switches cannot be read right now, and no switch shows while the list's rows
 still do. A Runtime before 0.12.55
 (the view answers `not_implemented`, or before 0.12.30 is not known) has the note say that this version of
-the Runtime cannot switch single tasks, and the view is not read again in that owner epoch. Each read has
+the Runtime cannot switch single tasks, and the view is not read on its clock again in that owner epoch;
+but since what said so may have been a connection that ended just before its answer and was made again in
+the same owner epoch, the tab opened or another account picked 60 seconds or more after it reads the view
+once more: an answer that says so again keeps it, one that shows the switches lets it go and the view is
+read as usual. Each read has
 the Runtime bring its fact store up to the ledger under the fact write gate, so it is read seldom; the
 technical log's read counts at the end of a run call it `pack schedule`. The Runtime's own reading of
 account data (`_fact_refresh`) is not held by a row that turns a package off; a package only a row still
@@ -1049,7 +1053,9 @@ nor withdraw, and its run is only stopped: "This task pack is not one of this ac
 only this run was stopped". A view that is not read does nothing ("Not closed: …"); a view or a close row
 answered `not_implemented` (before 0.12.55), or a view the Runtime does not know, does nothing either,
 and Close This Task then stays off for that Runtime's owner epoch ("This Runtime cannot close a task from
-here yet"), as the Daily Tasks switches are not read then. Once closed, the line begins "Closed this task
+here yet"), as the Daily Tasks switches are not read then (and, as when the view itself said so, Daily
+Tasks opened 60 seconds or more after reads the view once more, and switches it finds bring the button
+back). Once closed, the line begins "Closed this task
 (hh:mm:ss); it is no longer scheduled", followed by what the stop came to, and once the run stopped, "To
 bring the task back, turn it on under Daily Tasks": that is the way back, where its row then says "Set
 for this account: turned off (since hh:mm)". The follow-up only stops; it writes no close row again.

@@ -64,6 +64,7 @@ use std::collections::BTreeMap;
 use std::mem;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use acui_source::workbench::pack::{
     close_then_stop, CloseAnswer, EditAnswer, PackOutcome, PackRefusal,
@@ -1011,7 +1012,7 @@ fn landed(ui: &Ui, alias: &str, request: &Request, landing: Landing) {
         let counted = model.stops_mut().settle(alias, ticket, landing, at_ms, seen);
         let no_switches = unsupported
             && counted.is_some()
-            && model.switches_mut().view_unsupported(&request.epoch);
+            && model.switches_mut().view_unsupported(&request.epoch, Instant::now()).is_some();
         (counted, reading_gone, no_switches)
     };
     let Some(cools) = counted else {

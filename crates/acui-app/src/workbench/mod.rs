@@ -325,15 +325,24 @@ fn tasks_sync(ui: &Ui) {
 }
 
 /// `tasks_sync` but for its poke: whether the list is to be read at once. A caller that pokes the
-/// slow thread for all its reads right after asks for it there, so that it is read once.
+/// slow thread for all its reads right after asks for it there, so that it is read once. A list
+/// shown anew reads its switches once more, too, when the Runtime said a while ago that it has
+/// none (`Model::packs_probe`): what said so may have been a connection that ended just before its
+/// answer and was made again in the same owner epoch.
 fn tasks_follow(ui: &Ui) -> bool {
-    let (listed, changed) = {
+    let (listed, changed, probed) = {
         let mut model = ui.model.borrow_mut();
         let wanted = model.tasks_wanted();
         let changed = model.tasks_follow(wanted.as_deref());
+        let probed = changed && wanted.is_some() && model.packs_probe(Instant::now());
         let packs = model.packs_wanted();
-        (wanted.map(|alias| Listed { alias, packs }), changed)
+        (wanted.map(|alias| Listed { alias, packs }), changed, probed)
     };
+    if probed {
+        let line = "the Runtime said a minute or more ago that it has no task switches: the list \
+                    shown anew reads its PackScheduleView once more";
+        report::log_quiet(Lane::Slow.name(), line);
+    }
     if let Some(reading) = ui.reading.borrow().as_ref() {
         let mut slot = reading.tasks_for.lock().unwrap_or_else(|held| held.into_inner());
         if *slot != listed {
@@ -689,9 +698,11 @@ fn tasks_landed(ui: &Ui, alias: &str, read: Result<TasksRead, ClientFailure>) {
 
 /// The switches' read of `alias` (UI-3f2), taken as the list's is: a failure and its end each one
 /// line of the log. A Runtime that said it has none is said once for its owner epoch, with the code
-/// that said so and not quietly, and the slow thread reads them no more in it (`tasks_sync`); a
-/// view that names no version of the account's own scope, which the contract never leaves out, is
-/// said once too, and has no switch.
+/// that said so and not quietly, and the slow thread reads them no more in it (`tasks_sync`), but
+/// once more as the list is shown anew a while after (`tasks_follow`): an answer that says so again
+/// is said quietly, and stops the reads again; one that shows the switches is said, and they are
+/// read from then on. A view that names no version of the account's own scope, which the contract
+/// never leaves out, is said once too, and has no switch.
 fn packs_landed(ui: &Ui, alias: &str, read: Result<PacksRead, ClientFailure>) {
     let landed = ui.model.borrow_mut().apply_packs(alias, read, Instant::now());
     let thread = Lane::Slow.name();
@@ -703,11 +714,30 @@ fn packs_landed(ui: &Ui, alias: &str, read: Result<PacksRead, ClientFailure>) {
         }
         News::Recovered => report::log(thread, &format!("task switches of {alias} read again")),
     }
-    // Not quiet: it holds for the whole epoch, in which no switch shows.
-    if let Some((epoch, code)) = &landed.unsupported {
+    // Not quiet the first time: it holds for the epoch, in which no switch shows.
+    if let Some((epoch, code, again)) = &landed.unsupported {
+        if *again {
+            let line = format!(
+                "the Runtime of owner epoch {epoch} says again that it has no task switches \
+                 (PackScheduleView of {alias}: {code}): none offered, read again only as the list \
+                 is shown anew a minute or more from now"
+            );
+            report::log_quiet(thread, &line);
+        } else {
+            let line = format!(
+                "the Runtime of owner epoch {epoch} has no task switches (PackScheduleView of \
+                 {alias}: {code}): none offered, read again in that epoch only as the list is \
+                 shown anew a minute or more from now"
+            );
+            report::log(thread, &line);
+        }
+        tasks_sync(ui);
+    }
+    // What said before that it has none was not so: the slot names the switches again.
+    if landed.supported {
         let line = format!(
-            "the Runtime of owner epoch {epoch} has no task switches (PackScheduleView of \
-             {alias}: {code}): none offered and not read again in that epoch"
+            "task switches of {alias} read: the Runtime's earlier word in this owner epoch that it \
+             has none is let go"
         );
         report::log(thread, &line);
         tasks_sync(ui);
