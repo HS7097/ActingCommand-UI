@@ -10,7 +10,9 @@ three-column interface: instance card, timeline, detail pane.
 
 It is not part of the Runtime; it is the Runtime's **external, detachable client**.
 
-> **acsetup is not shipped with the builds for now; UI-2a brings it back. Until then, install with `actingctl install`.**
+> The `acsetup.exe` in the builds is the newly written 0.12 setup wizard (UI-W2): it installs the Runtime,
+> its tools and the console from an install set into one new folder; see "Setup wizard acsetup". The UI
+> releases published so far do not carry it; until one does, install with `actingctl install`.
 
 This repository also holds the **setup wizard** `acsetup` (see "Setup wizard acsetup") and the fixed
 entry `acforward`, through which an A/B installation starts its programs. Like the Runtime, these
@@ -25,7 +27,7 @@ and guesses nothing.
   [Releases](https://github.com/HS7097/ActingCommand-UI/releases). Every release is a pre-release, so
   GitHub marks none as "Latest": take the newest tag. The zip holds `acui.exe` (the console),
   `acforward.exe` (the fixed entry), `LICENSE`, `README.md` and the `BUILD-MANIFEST.json` that binds them
-  to their commit; `acsetup.exe` is not in it for now (see the note above). Each release is built
+  to their commit; the releases published so far hold no `acsetup.exe` (branch builds carry it, see the note above). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
   of Runtime v0.12.47; the pin is now v0.12.58.
 - **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 29], `ledger` [3, 8],
@@ -647,8 +649,8 @@ then the settings page says so in red. While the Runtime does not answer, no old
 `actingctl watchdog status` runs once in the background (read-only; `install`, `uninstall` and
 `run-once` are never run), and the page says "On", "Off", "May not work" or "Cannot be read" of the
 watchdog's scheduled task as it reports it, the last two with the reason in the technical log. After
-the Runtime started again it is read again the next time the page is opened. It is not the wizard's
-"Start at boot" option; how the watchdog is set up is at the end of "Setup wizard acsetup". Both pages are always there and only one shows at a
+the Runtime started again it is read again the next time the page is opened. The setup wizard's "Run
+ActingCommand automatically after sign-in" (page 7) installs this very watchdog (see "Setup wizard acsetup"). Both pages are always there and only one shows at a
 time, so what the boxes hold stays when you switch away and back.
 The ledger window,
 "Advanced Troubleshooting and Ledger History", opens only when asked: from that button, or at the start
@@ -986,9 +988,8 @@ no actor with a pause, only its reason, so the pauses that must not be lifted fr
 their reasons: a pause with one of them gets neither Put All on Duty, Resume This Account nor "Resume
 Scheduling…", only the words "this pause is to be lifted by whoever set it", on the top bar, on the
 account cards and in the ledger window. No box writes the key, and a save of another key keeps its line byte for byte, like any
-line; but the setup wizard's fresh install and first migration write the file anew with only `lang`,
-`text_size` and the three paths (see "Setup wizard acsetup"), so after either one the line is gone, with
-nothing said, and has to be written again. It is one line, its key bare or in quotes, a TOML array of
+line; the 0.12 setup wizard never writes this global file (it writes only `<root>\acui.toml` in the root
+it installs, with the one line `lang`; see "Setup wizard acsetup"), so it never drops the line. It is one line, its key bare or in quotes, a TOML array of
 strings in double or single quotes, a trailing comma allowed; `[]`, or no line at all, is the default:
 none. Each item must be a reason the Runtime itself takes for a pause (checked by the Runtime's own
 `SchedulingPauseReason`: 1–64 characters of `a-z`, `0-9`, `_`, `.` and `-`), so there is nothing to
@@ -1272,415 +1273,278 @@ instance page in a later version.
 
 ## Setup wizard acsetup
 
-> **acsetup is not shipped with the builds for now; UI-2a brings it back. Until then, install with `actingctl install`.**
+`acsetup.exe` (`crates/acui-wizard`) is the 0.12 setup wizard: it installs ActingCommand's Runtime, its
+tools and the console into **one new folder** (what the Runtime calls a single-location root) and
+connects the signed-in games in the MuMu emulator. Opened from Explorer it is a window with the console's
+look and icon. It opens in the language Windows shows its own interface in (Chinese on a Chinese Windows,
+English otherwise) and switches between 中文 and English at the top right at any time; with a command it
+is a command line (see below). It goes on no network, downloads nothing, and does not change any
+ActingCommand already on the computer.
 
-`crates/acui-setup` is a standalone binary `acsetup.exe` (a Slint window, the same styling and icon as the
-console) that installs the release files from the umbrella repository's
-[Releases](https://github.com/HS7097/ActingCommand/releases) into a **per-user** installation. It ships
-together with the UI repository's Windows build (`acui-windows-<sha>.zip`, an Actions artifact of a
-branch or pull-request build or an asset of a UI Release `vX.Y.Z`, contains `acui.exe`, `acsetup.exe` and the stable entry `acforward.exe`). The same program comes in two editions, and a person downloads only one of them: the
-online `acsetup.exe`, which fetches the release itself or takes a folder a person filled by hand, and
-the offline `acsetup-full-<tag>.exe`, which carries one whole release (see "Offline edition" below). One window,
-next only (the instances step can also be skipped), five steps; each page shows where its work stands
-the way an installer does, and the full account goes to the install log (see "Progress and the install
-log" below):
+**The install set.** The wizard installs from an "install set" only: a folder holding `install-set.json`
+(`actingcommand.install-set.v1`) and every file it lists — the Runtime zip, the Tools zip, the console
+zip, one standard pack zip per game (with the licence and notice files that go beside it) and the
+text-recognition (vision) files — each with its size and SHA-256. The wizard looks for `install-set.json`
+next to itself first and asks for the folder when there is none. It checks every file's size and SHA-256,
+each of the three program zips file by file against its own `BUILD-MANIFEST.json` (with the commit the set
+names), the `interfaces` of the console's and the Runtime's manifests as the Runtime's
+`contracts/component-interfaces.md` checks them (`runtime-client` and `actingd-config` must overlap, the
+Runtime's highest `ledger` and `runtime-outcomes` revisions must lie in the console's range), and each
+standard pack's `bundle.json`, `applications.json`, `schedule.json` and `interfaces.json` (its `package`
+revision must lie within the range this Runtime declares). The vision files must carry ONNX Runtime's
+`ort/licenses/onnxruntime/LICENSE` and `ThirdPartyNotices.txt`. They may carry DirectML, `ort/DirectML.dll`,
+only the file the Runtime pins (DirectML 1.15.4: 18,527,776 bytes, SHA-256
+`9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1`, Runtime
+`crates/vision-ffi/src/runtime_pin.rs`), and then must carry its licence files too, the three the Runtime's
+tool registry (`scripts/windows-tools/windows-tool-sources.v1.json`, `directml-1.15.4`) has copied beside it:
+`ort/licenses/directml/LICENSE.txt`, `LICENSE-CODE.txt` and `ThirdPartyNotices.txt`. The configuration still
+names the CPU provider (`vision.execution_provider` `cpu`): a run on the CPU loads only
+`onnxruntime_providers_shared.dll` and `onnxruntime.dll` whether or not `DirectML.dll` lies beside them, and
+neither `check-config` nor a start looks at it for `cpu` (Runtime `contracts/vision-model-folders.md`,
+"Loading"); selecting DirectML and the graphics card comes later. The licences of the text-recognition models
+(the Apache-2.0 licence of PP-OCR, for one) are `vision.licenses`, at least one when the set carries a
+model, laid at `<root>\licenses\vision\<path>` by the rules of a pack's own files below. Anything wrong stops it before anything is
+written: a damaged file, a pack or console that does not match this version and a set it cannot read each
+get a plain sentence, with the technical detail in small print below. Whoever gives you the package puts
+the set together.
 
-0. **Location**: the install root only (changeable, default `%LOCALAPPDATA%\Programs\ActingCommand`, no
-   administrator needed), the free space on that volume, and whether an installation is already here
-   (reading selected MEMBERS or the original root manifests before migration; if there is one, the
-   run is an **upgrade**, see below). Next creates the root and the install log. On a fresh install this step also requires a usable state root and an install root free of single quotes (the console's settings hold those paths as TOML literal strings), and stops here otherwise. A wizard running from a business slot or an original program directory stops here. The verified fixed
-   management entry at `<root>/ui/acsetup.exe` can upgrade the business slots. The offline edition adds to the free-space line what extracting its release takes.
-1. **Install** (**Upgrade** on an installed root, see below), one page from the download to the
-   layout; on success the next page follows by itself. By default online. On entering, the umbrella
-   [Releases](https://github.com/HS7097/ActingCommand/releases) are asked over HTTPS for one release: the
-   newest stable release when there is one (GitHub's `releases/latest`), else the newest pre-release by
-   publication time (today the umbrella publishes `vX.Y.Z` pre-releases; the old daily `build-*`
-   pre-releases are discontinued and stay on the page for reference only); never a draft. Its tag, name, date, kind and size are shown and logged. "安装 / Install" fetches `SHA256SUMS`,
-   `MEMBERS.json` and then every other file `SHA256SUMS` lists — nothing else — into
-   `<install root>\downloads\<tag>\`, each through a `.part` file renamed once its length is the length
-   the release states, with a progress line per tenth for a file of a MiB or more; a file already there is
-   fetched again, never trusted, and a failed one's `.part` file is removed. The tag and every file name
-   are used only if they are letters, digits, `.`, `-` and `_`, do not start with a dot and are no Windows
-   device name. HTTPS only, redirects included; a connection quiet for a minute fails. Ticking **Offline**
-   instead takes a folder that already holds one release's files (default `%USERPROFILE%\Downloads`,
-   typed in). A failed lookup is stated on the page and in the log, with "重新查询 / Look up again" and
-   Offline both open; a failed fetch stops the run. This is the program's only network code (`ureq`,
-   blocking, rustls with the Mozilla root set compiled in); the Runtime has none.
-   The offline edition has neither the lookup nor the Offline tick: the page names the release it
-   carries — its tag and the two commits of its `MEMBERS.json`, checked at start — and "安装 / Install"
-   extracts it into `<install root>\downloads\<tag>\`, each file through a `.part` file whose length and
-   sha256 must match before it is renamed (a rename a scanner holds up is retried a few times).
-   The folder — fetched, offline or extracted — is then verified and laid out on the same page. It must hold `SHA256SUMS`, `MEMBERS.json`,
-   `actingcommand-runtime-<sha>.zip`, `actingcommand-tools-<sha>.zip` and `acui-windows-<sha>.zip`
-   (`<sha>` taken from `MEMBERS.json`'s `runtime_sha` / `ui_sha`; the three zips must appear in
-   `SHA256SUMS`). `SHA256SUMS` is checked entry by entry; the archives are extracted into the temporary
-   directory `.staging-<unix_ms>` under the install root, split into `runtime\`, `ui\` and `tools\`;
-   nothing ever runs from it. Then, against the `BUILD-MANIFEST.json` each zip
-   carries, the source repository, the commit id (equal to the MEMBERS sha), the Runtime's
-   `runtime_payload_layout` (`distribution-v1`) and the size and sha256 of every entry in `files[]` are
-   checked; a file in the zip that the manifest does not list also counts as a mismatch. Any mismatch
-   stops it, worded as "the content differs from what it was at creation" — this is an integrity
-   statement, not an authorization tone. Nothing inside the zips is run during verification. The program core (the Runtime and UI payloads) is prepared in the fresh A slot
-   or the spare slot; the Tools files go to the install root's `tools\`, where only files whose content
-   changed are replaced. A replaced file is kept, nothing there is deleted, and a file the release does
-   not know is left as it is — such as `actingcommand-device-test.exe`, which Runtime v0.11.6 no longer
-   ships; move it away by hand. Each slot retains its original manifests and MEMBERS; candidate and download
-   materials remain available. The finish page reads `tools\platform-tools\source.properties` at the
-   install root.
-2. **Options**, the configuration already written. Right after the layout, on the install page and
-   inside its do-not-close span, the fresh install is configured with no question asked: the state root
-   is `<install root>\state` (it must not exist or must be an empty directory — checked on step 0,
-   before anything is fetched; **a state root that already holds content is never taken over**);
-   `secret_fingerprint_salt` is generated as the hex of 32 bytes from the system random source
-   (`getrandom`; **not displayed, not logged**). The private configuration under
-   `install/generations/<generation>/actingd.config.json` is qualified, console settings are written,
-   and `install/active.json` is committed atomically. The configuration contains only `schema_version`, `state_root`,
-   `bind_host` (127.0.0.1), `bind_port` (0), `secret_fingerprint_salt` and `instances` (empty) — the
-   Runtime's parser is `deny_unknown_fields`, so not one extra field is written. The console settings
-   `%APPDATA%\ActingCommand\acui.toml` get `state_root`, `actingd_config` and `actingd_exe` (the format
-   of the "Settings file" section, single-quoted literals; existing `lang` / `text_size` kept verbatim).
-   Configuration and Runtime settings name the fixed root argument alias and executable entry.
-   The way it writes matches `crates/acui-app/src/settings.rs`, but `acui-setup` does not depend on
-   `acui-app` and is a small duplicate writer. `instances` stays empty here; the instances step fills it.
-   The options page then offers four ticks, written together off the event loop (a failure is said on
-   the page, which can be used again):
-   - **Start at boot** (unchecked by default): only when checked does it write `ActingCommand.cmd` in
-     the per-user Startup folder (the shell's `FOLDERID_Startup`), whose content is `@echo off` followed by
-     `start "" "<install root>\runtime\actingcommand-actingd.exe" --config "<install root>\actingd.config.json"`;
-     only when "also launch the console" is checked as well does it add one more line,
-     `start "" "<install root>\ui\acui.exe"`. acsetup does not appear in the batch file. Unchecked, it
-     writes nothing; a file of the same name already there is left alone, and mentioned in the log. An
-     install root containing `%` cannot be quoted verbatim in a .cmd, so with the tick on this step
-     fails and says so; the page stays usable.
-   - **Start menu shortcut** (checked by default) and **desktop shortcut** (unchecked by default): an
-     `ActingCommand.lnk` to `<install root>\ui\acui.exe`, working in `ui\`, in the per-user Start
-     menu's Programs (`FOLDERID_Programs`) or on the desktop (`FOLDERID_Desktop`, so a redirected or
-     OneDrive desktop is found where Explorer finds it), written through the shell's own `IShellLink`.
-     Unchecked writes nothing; the finish page lists the shortcuts written.
-3. **Instances**, optional, looked for as soon as the page opens: "跳过 / Skip" leaves `instances`
-   empty, to be filled in by hand later (see "Instance configuration"); the finish page says so. Where MuMu is comes from the Runtime's own `check-config` (`mumu_root`: its path
-   and source — `ACTINGCOMMAND_NEMU_FOLDER`, a running MuMu, the per-user or machine uninstall registry,
-   the vendor folders; see the
-   Runtime's `contracts/actingd-check-config.md`), or from the folder a person names when none is found;
-   either way it is pinned into the configuration's `mumu_root` through the same candidate and
-   `check-config` as below, so a second MuMu install cannot take the instances over later. A Runtime too
-   old to say where MuMu is leaves it unpinned, as a note. A Runtime is then started from the install
-   root as on an upgrade below (one that answers is shut down and started again: it has no instance yet),
-   and `actingctl emulator discover` lists the instances from MuMu's own inventory — no emulator is
-   started or stopped; a single instance is ticked for the person. "重新查找 / Find again" repeats it.
-   An empty MuMu field finds MuMu afresh. The resources are the resource repositories' **bundles** the
-   release carries: its `MEMBERS.json` names each in `bundles[]` with its sha256, and the file is in the
-   download folder, already checked against `SHA256SUMS`; on the first discovery the wizard holds each
-   to be listed in `SHA256SUMS` under that same sha256, checks the file's sha256 once more and reads it.
-   A bundle that fails any of this is named in the notes; the configuration plan cannot be
-   submitted while a required release bundle is unreadable.
-   **No URL is asked for, and no hash is typed by hand.** A bundle holds
-   `applications.json` (the game, its display name `label` when given, and each server's label and
-   Android package name) and `bundle.json` (every pack's path, package id, server, sha256 and size, and
-   each server's default pack in `default_packs`). A bundle whose `bundle.json` is
-   `actingcommand.bundle.v2` (the contract's `BundleIndexV2`) maps each package id to a
-   content directory `packs/<digest>/` named by its `content-directory.v1` digest, and a server's
-   default pack is the one `applications.json` names in `servers.<server>.default_package_id`; v1 is
-   read as before. `actingcommand.bundle.v3` adds the required `maintenance` array, with
-   `package_id`, `server` and `uses` (`startup`, `prerequisite`, `return_home`) per entry.
-   The shared contract strictly decodes and validates v2/v3. Every actual v3 pack passes
-   hash/Containment and `PreparedContainedTask::describe_path`, then the shared
-   `validate_bundle_maintenance` checks identity, use qualifications and the bundle's chains.
-   Admission has a 120-second deadline and runs no task or provider. Unknown versions, fields,
-   uses, references and invalid qualifications fail explicitly. The page lists the programs and package names they
-   support — in the shape "`<label>`：`<server label>` `<Android package name>`", as the bundle's
-   `applications.json` states them (the game id when a bundle gives no `label`) — whether each came with the release, and two kinds of server as not offered:
-   one that names a default pack but no package name, and one with a package name but no default pack.
-   A local bundle file can be added at any time — it is the way in while the release carries none: its
-   absolute path, "加入 / Add", no hash; a second bundle for a game already
-   offered (whatever the case of its name) is refused. Each ticked instance takes an alias (default `mumu-<index>`) and
-   **its own choice** of "program · server · package name", one per server that has both a package
-   name and a default pack;
-   when there is only one, it is chosen for every instance. The wizard knows no game and guesses none.
-   "写入实例 / Apply" first stages and verifies the bundles, builds the configuration plan and
-   resolves conflicts, then confirms Runtime shutdown before placing installed material under
-   `<install root>\packages\<game>\`. ZIP bundles go under `bundles\<bundle-sha256>\`, retaining
-   older files even when their pack names are reused. A v2/v3 pack is
-   streamed file by file into `<digest>.part\`, each file hashed as it is written, and renamed to
-   `<digest>\` only once the files, bytes and `content-directory.v1` digest are the index's; a
-   `<digest>\` already there is read whole and reused when its digest matches, and otherwise renamed
-   `<digest>.broken-<unix>` (kept, said in the notes) and unpacked again; a failed unpack is kept under
-   that name too. Older directories and zips are left in place, and neither declaration is written into
-   the install root. Logs, per instance,
-   the program, the pack's package id, path and sha256; then writes one entry per ticked instance —
-   alias, a new `instance_id` (`instance_` + 32 hex from the OS RNG), `instance_index`, the chosen
-   server's package name, `touch_backend` `adb_shell_input`, `capture_backend` `adb` (until a first
-   `nemu_ipc` frame is confirmed on the real machine), and the absolute path of that server's default
-   pack (for v2 its `<digest>\` directory, which a Runtime with content-directory support admits in
-   full) as `resource_package`. The selected game/server's maintenance uses supply the existing
-   `startup_package`, `prerequisite_packages` and `return_home_packages`; a return-home use also
-   registers its prerequisite reference. No business control or trigger is added. Equal complete
-   bindings reuse the current value. Conflicts show current/proposed values and their sources for
-   an explicit Keep/Use choice; Cancel stops the plan, and an unanswered choice expires after
-   30 minutes. Missing declarations do not delete existing bindings. The merged candidate's actual
-   old and new references are admitted again and checked through descriptor qualifications and
-   `PrerequisiteChain`, including every retained binding; unresolved material rejects the plan.
-   acsetup prepares a private successor generation and preserves relative-path meaning. The target's
-   `check-config` checks it; current generation and exact baseline bytes must match before atomic
-   selection commit. Prior generations remain intact. A pre-start failure restores
-   the original configuration and leaves Runtime stopped; incomplete restoration stops setup.
-   Once committed, Runtime is restarted on it and `actingctl
-   status` must answer. A failure before the configuration is replaced is said on the page and in the log
-   and leaves the page usable; one after it stops the run, as does any failed log write. Leaving this step
-   asks again, for the summary, what `mumu_root` is and whether a Runtime answers.
-4. **Finish**: the summary — what was installed (runtime and ui commits, and the release tag, the
-   offline folder or the carried release), the paths, and every note from the steps. "启动监控台 / Open console" launches
-   `<install root>\ui\acui.exe` detached and closes the wizard; "finish" only closes. A Runtime the
-   instances step started keeps running; when none runs, the console's launcher starts one.
+The files that go beside a standard pack are its game's `files`, laid at `<root>\licenses\<game>\<path>`;
+`path` is a plain relative path, each once per game. `required_files` names the `path`s the pack must not
+go without (the licence and attribution of what it carries from elsewhere, an AGPL-3.0 project's for one);
+a set that lacks one of them is refused:
 
-**A/B installation and upgrade**: each slot, `<root>/A` and `<root>/B`, keeps the program core:
-the Runtime and UI payloads, their original build manifests and exact MEMBERS (a retained v0.11.1
-slot also keeps its own Tools). The Tools, state, content-addressed resources, models, downloads,
-logs and private configuration generations stay outside the slots.
-acsetup owns the sole `install/active.json` selection: slot, generation, MEMBERS identity and
-hash-bound config/provider inputs are committed together. Configuration edits also use its
-writer lock and an exact active-generation/byte comparison.
-
-Downloads, full verification, spare-slot materialization, resource admission and configuration
-planning precede shutdown. Existing instances retain their identities and business settings;
-associations and maintenance conflicts use the same explicit choices as the instances page.
-Private generations preserve relative-path meaning and retain shared model paths; only a v0.11.1
-slot's generation keeps a provider manifest bound to that slot's tools. The target's own `check-config` checks the unselected candidate.
-
-Permanent empty `install/slot-A.lock` and `slot-B.lock` files locate shared OS occupancy.
-Consumers hold shared locks; materialization requires exclusive occupancy and native exclusion
-of older MCP/Tools/ADB consumers. An occupied spare slot stops materialization while downloads
-and the current selection remain available. Shared ADB services are not ended to free a slot.
-Replaced spare material is retained under `install/retained-<slot>-<time>`.
-
-The Host performs natural drain under its lifecycle admission and commits formal atomic shutdown.
-acsetup requires the exact accepted owner, closed owner journal and process exit before changing
-selection. Failed status alone does not prove closure: a stopped installation must pass the
-formal cold owner/writer gate. Each switch also runs the target's `ledger-maintenance verify`
-against current quiescent data. This updates owner.lock epoch/revision; material or budget
-failures leave compatibility unproved.
-
-When Runtime was running, acsetup starts the new slot held before Provider, verifies its exact
-ticket/process, then releases it through the same Host. Drain, held and release each use a
-60-second Host deadline. Controls have a 75-second client limit; cold verification has 150
-seconds around the Runtime's existing limits. Unknown submissions are not repeated: acsetup
-queries the original transition. Unresolved closure stops the switch. It does not kill an
-unresolved control/maintenance process. The Host's released result confirms preparation and
-this transition's original user-pause restoration. A previously stopped Runtime stays stopped.
-acsetup starts every Runtime in one way: WMI `Win32_Process.Create`,
-with `Win32_ProcessStartup.ShowWindow = 0`, starts `cmd.exe`, which runs actingd and appends its
-output to `<root>\actingd-<time>.log`. The Runtime therefore has a hidden window, belongs to no
-app job and not to the job of whatever ran acsetup, and no window can be closed under it. The
-started actingd reads the selection just committed. When it ends at once, acsetup's error
-quotes the log's FATAL line.
-
-**Component interfaces**: whether a Runtime, a UI, acsetup itself and the
-resource bundles of a run can work together is judged from what each declares, not from a list
-of release pairs. A build manifest's `interfaces` object (a bundle's optional zip-root
-`interfaces.json`) gives, per interface, the revisions the component reads, `[min, max]`; a
-writer writes `max`. The vocabulary, the bump rule and the two checks are the Runtime's
-`contracts/component-interfaces.md`: data one component writes and others read (`ledger`,
-`install-selection`, `package`) passes when the writer's `max` lies in each reader's range; a
-live exchange (`install-control`, `runtime-client`) passes when the two ranges meet, and uses
-the highest common revision. The Runtime's configuration (`actingd-config`) has three parties:
-acsetup writes it, the console edits it and the Runtime reads it, so the three need one
-revision they all speak; two pairwise checks are not enough. acsetup's own declaration is
-`crates/acui-setup/component-interfaces.json`, compiled into acsetup and written into the UI
-manifest by the build; it follows the Runtime crates this UI is built on. Releases built
-before declarations (Runtime and UI v0.11.0 to v0.11.2) are read from a built-in table, and any
-other undeclared program is refused; a bundle without `interfaces.json` counts as `package`
-[1, 1]. Before any question and before anything
-changes, a fresh install, a first migration and an A/B upgrade check the release's Runtime and
-UI against each other, against the Runtime they take over and against acsetup; a Runtime laid
-into a new slot must also have Tools layout 2 or 3 (a slot holds only the program core). The
-release's bundles, a bundle the wizard adds and the instances step's bundles are checked
-against the Runtime that will run them and against acsetup. A rollback checks the retained
-slot the same way. Every unmet edge is listed, naming the interface, both components and their
-ranges; the run stops with nothing changed (exit code 6 on the command line, 1 for
-`--rollback`). The negotiated `install-control` revision says how acsetup closes and starts a
-Runtime: 0 is the cold protocol, 1 the Host installation transition. The fixed entries in
-`<root>\runtime\` and `<root>\ui\` read `install/active.json` as well, so an A/B upgrade
-replaces every one whose bytes differ from the release's `acforward.exe`; the previous one is
-kept under `install\entries-<generation>\`, and a running entry keeps running from there.
-
-The first migration accepts old-layout programs whose interfaces it can drive (declared, or
-v0.11.0 and v0.11.1 from the built-in table), prepares A and closes the old Runtime through the
-`install-control` revision both speak — the atomic idle shutdown of the cold protocol for
-v0.11.0; Busy leaves the switch uncommitted. Original root programs,
-configuration and console settings are retained under `install/initial-backup-<generation>`.
-Fixed root entries use `acforward.exe` to pin a complete selection, inherit stdio and return the
-actual exit code. Root `actingd.config.json` is an argument alias for the selected private input,
-with no writable file at that path. Boot entries, shortcuts and MCP retain fixed root paths.
-MCP gets explicit root/state-root arguments; conflicting locations are rejected.
-
-Running UI/MCP/Tools processes retain their own generations and materials. Reopen the process to
-use a successor. The v0.11.0 UI is an observation entry explicitly bound to shared state. Its
-settings contain the root Runtime entry and config alias; reading the absent alias in its old
-editor fails visibly. Effective editing belongs to the fixed acsetup manager. acsetup controls
-a Runtime that speaks only `install-control` 0 (v0.11.0) through its actual cold startup
-behavior.
-
-**Explicit rollback**: run `<root>/ui/acsetup.exe --rollback` to select the retained other slot.
-Its complete manifests are rechecked, and candidate inputs are replanned from current business
-settings. After confirmed owner closure, its `check-config` and `ledger-maintenance verify`
-must pass against the latest data. These gates do not prove Provider/device readiness. An earlier
-release can also be provided through the normal installer with the page's confirmation.
-Publication time is only a prompt heuristic; the cold gate remains mandatory. A Runtime that
-speaks only `install-control` 0 (v0.11.0) uses cold startup.
-
-Rollback has limits, because a newer Runtime may change the state root for good. Once a Runtime
-v0.11.3 or later has written the ledger at revision 2, a slot with Runtime v0.11.2 or earlier is
-refused (exit code 1, nothing changed). Once Runtime v0.11.6's frame retention cleaner has run,
-Runtime v0.11.5 and earlier refuse that state root. With a large state root, an upgrade from
-v0.11.1–v0.11.3 to v0.11.4 is one-way in practice.
-
-acsetup is a windowed program, so a console prompt returns at once when `--rollback` or
-`--replace-manager` is typed directly. The work runs without the console (closing the window does
-not stop it), and when it ends its result line (or `失败 / FAILED: …`) and the log path appear in
-that console. Every run writes its result as the last line of `<root>/acsetup-<time>.log`. To wait
-for the result and see the exit code (0 success, 1 failure) in an interactive PowerShell window:
-
-```powershell
-$p = Start-Process -FilePath '<install root>\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
-$null = $p.Handle; $p.WaitForExit(); "exit code: $($p.ExitCode)"
+```json
+"bundles": [
+  {
+    "game": "arknights", "file": "bundles/arknights-resources.zip", "size": 123, "sha256": "…",
+    "files": [
+      {"path": "pack-files/NOTICE.md", "file": "bundles/arknights/NOTICE.md", "size": 1, "sha256": "…"},
+      {"path": "LICENSES/MaaAssistantArknights/LICENSE", "file": "bundles/arknights/LICENSE", "size": 1, "sha256": "…"}
+    ],
+    "required_files": ["pack-files/NOTICE.md", "LICENSES/MaaAssistantArknights/LICENSE"]
+  }
+]
 ```
 
-In a script, pass the exit code on instead (do not paste this into an interactive window: `exit`
-closes it, and the result line with it):
+The vision files and the models' licences:
 
-```powershell
-$p = Start-Process -FilePath '<install root>\ui\acsetup.exe' -ArgumentList '--rollback' -PassThru -NoNewWindow
-$null = $p.Handle; $p.WaitForExit(); exit $p.ExitCode
+```json
+"vision": {
+  "provider": "cpu",
+  "files": [
+    {"path": "ort/onnxruntime.dll", "file": "vision/onnxruntime.dll", "size": 17328152, "sha256": "…"},
+    {"path": "ort/onnxruntime_providers_shared.dll", "file": "vision/onnxruntime_providers_shared.dll", "size": 22040, "sha256": "…"},
+    {"path": "ort/licenses/onnxruntime/LICENSE", "file": "vision/onnxruntime/LICENSE", "size": 1094, "sha256": "…"},
+    {"path": "ort/licenses/onnxruntime/ThirdPartyNotices.txt", "file": "vision/onnxruntime/ThirdPartyNotices.txt", "size": 331175, "sha256": "…"},
+    {"path": "ort/DirectML.dll", "file": "vision/DirectML.dll", "size": 18527776, "sha256": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1"},
+    {"path": "ort/licenses/directml/LICENSE.txt", "file": "vision/directml/LICENSE.txt", "size": 1, "sha256": "…"},
+    {"path": "ort/licenses/directml/LICENSE-CODE.txt", "file": "vision/directml/LICENSE-CODE.txt", "size": 1, "sha256": "…"},
+    {"path": "ort/licenses/directml/ThirdPartyNotices.txt", "file": "vision/directml/ThirdPartyNotices.txt", "size": 1, "sha256": "…"},
+    {"path": "models/PP-OCRv6_medium/det.onnx", "file": "vision/det.onnx", "size": 62032837, "sha256": "…"},
+    {"path": "models/PP-OCRv6_medium/rec.onnx", "file": "vision/rec.onnx", "size": 76554979, "sha256": "…"},
+    {"path": "models/PP-OCRv6_medium/keys.txt", "file": "vision/keys.txt", "size": 74947, "sha256": "…"}
+  ],
+  "licenses": [
+    {"path": "PaddleOCR/LICENSE", "file": "vision/PaddleOCR/LICENSE", "size": 1, "sha256": "…"}
+  ]
+}
 ```
 
-Before a new Runtime start attempt, only the complete original transaction can restore a
-committed selection. First-migration recovery also restores root programs/configuration/settings.
-Incomplete restoration retains recovery materials and leaves Runtime stopped. After the first
-start attempt, the selected generation and entire ledger remain in place. Any explicit later
-rollback rechecks the latest data. Unconfirmed closure never starts a second Runtime.
+**Ten pages.** Pages 1 to 8 only gather choices and run read-only checks; nothing is written. Cancel or
+closing the window on those pages asks first, and quitting leaves nothing behind.
 
-**Command line**: any argument but `--commit-config`, `--rollback` and
-`--replace-manager` runs acsetup without its window. `acsetup --root <root> (--plan | --yes)
-[--conflicts new|old] [--associate <alias>=<bundle>/<server>]… [--allow-downgrade] [--online |
---from <folder>]` installs or upgrades; every question the wizard would ask is answered by a flag,
-and a question without its flag stops before anything changes. `--plan` lists every change and
-difference and writes nothing under the root: its log and its scratch copy go to `%TEMP%`. Exit
-codes: 0 done, 1 failed, 2 usage, 3 binding differences without `--conflicts`, 4 a downgrade without
-`--allow-downgrade`, 5 an association without `--associate`, 6 incompatible interfaces (see
-"Component interfaces"); 2 to 6 stop before the installation changes. `acsetup --help` prints the
-whole list.
+1. **Welcome**: what will be installed and what to have ready (64-bit Windows 10 or 11, MuMu installed with
+   the game signed in, about how much disk space). The games are named as their packs name them: before the
+   set is checked, the wizard reads only the small `applications.json` of each standard pack zip for its
+   name, and shows the folder name when that cannot be read.
+2. **Files**: the install set is checked with a progress bar and a line in plain words under it (how many
+   files are checked, which program or game was just checked); repositories and commits go to the setup
+   log only. Then its versions and games are listed.
+3. **Location**: by default `X:\ActingCommand` on the first local fixed drive other than the system's, else
+   `%USERPROFILE%\ActingCommand`; when that one exists and is not empty, `-2`, `-3`, … are tried. Type a
+   folder or pick one with Browse… (the folder picker belongs to the wizard's window, which takes no input
+   while it is open); once typing pauses, each rule gets a ✓ or ✗: the folder does not exist
+   or is empty, its last name is not `A` or `B`, the path holds no `'` or `%`, it is not inside another
+   ActingCommand, it is none of ActingCommand's per-user folders `%APPDATA%\ActingCommand` (the global
+   console settings `acui.toml` live there) and `%LOCALAPPDATA%\ActingCommand` (the console's and the
+   Runtime's logs, which every watchdog reads), lies in none and holds none, and the disk has room. Any ✗
+   keeps Next off. The window writes sizes in GB and MB (counted in 1024s, as Explorer does); the setup log
+   and the command line write GiB and MiB.
+4. **Games**: tick the games to install; every game of the set is listed, all ticked by default.
+5. **Emulator**: MuMu is found read-only (as the Runtime finds it: a running MuMu, the registry's uninstall
+   entries, the MuMu folders in Program Files) and `MuMuManager.exe info -v all` lists its emulators (no
+   window, within 10 seconds); no emulator is opened or closed. No emulator is ticked to begin with: the
+   person ticks the ones to hand over, and Next with none ticked asks first. The page says what the
+   wizard calls an instance from here on: each emulator ticked becomes one instance in ActingCommand, one
+   signed-in game in one emulator. An emulator another ActingCommand on this computer already uses is
+   greyed, and ticking it asks first. The other installations are found two ways: a running
+   `actingcommand-actingd.exe`, and a registered watchdog task (which finds a stopped one too); its
+   configuration uses an emulator when it binds it by index, name, `serial` or adb port. Without MuMu the
+   page can be skipped: the set is installed without instances, to be added later.
+6. **Instances**: one row per ticked emulator: its name (by default "game-index"), game and server; under
+   Advanced, the touch and capture methods (both `nemu_ipc` by default) and "Open this emulator when
+   ActingCommand starts" (off by default). Names must differ, hold no space and not be too long: with two or
+   more emulators on one game, the Runtime's schedule names each task copy `<id>@<name>`, at most 128 bytes,
+   so a name's limit follows from the longest id in that game's `schedule.json`.
+7. **Options**: desktop and Start menu shortcuts (on by default); run automatically after sign-in (the
+   Runtime's watchdog scheduled task, **off by default**; leave it off when another ActingCommand on this
+   computer already runs automatically); start when setup finishes (on); on the first start, keep every
+   instance paused (on: ActingCommand starts playing only after you check each instance in the console and
+   press "Put All on Duty"). Only a Runtime the wizard started takes the pause, so the pause goes with the
+   start: without "start when setup finishes" it is greyed out and unticked, and the page says that the
+   instances then go on duty at the first start (a plan file with instances that asks for the pause without
+   the start is refused). The watchdog needs no rule: it never starts a root that never started, so without
+   "start when setup finishes" the installation stays down until you start it.
+8. **Confirm**: the location, versions, games, instances, options, the folders created and the files written,
+   all listed (with `licenses` when a chosen game or the text-recognition models bring licence files, and
+   `install-wizard.config.json` with instances, the start and the pause); with instances and no first
+   pause, a note that they go on duty as soon as ActingCommand starts. Page 3 says the same of the
+   folders. Once Install is pressed there is no going back to the earlier pages.
+9. **Install**: step by step, each done, skipped or failed, the step under way with a line of detail and a
+   progress bar. Before writing, the install files, the emulators and the folder are checked once more. A
+   failed step stops the install; what was written stays as it is, and the wizard deletes nothing. Closing
+   the window while it installs is held off.
+10. **Finish**: where it was installed, where the setup log is and which shortcuts were created. "Open
+    console" (the new root's `ui\acui.exe`, started apart from the wizard and without any `ACTINGCOMMAND_…`
+    or `ACTINGLAB_…` variable the wizard inherited) and "Open folder" are for the person to press; the wizard
+    opens nothing by itself. The page also says how to add instances later, since the console cannot add
+    them yet: run the wizard again into another folder (a second, separate ActingCommand), or wait for a
+    later version. After a failure the page says which step and why, offers to copy the error and
+    to open the setup log (which holds the paths of the install folder and others, the profile folder
+    written as `%USERPROFILE%`), and lists how to undo what the install actually did, item by item. A
+    Runtime it started that may be running without a pause the install confirmed (no pause asked for, the
+    pause not set yet, or not confirmed by the start that brought the instances or by the last read) is
+    closed formally before the failure is shown, and the list says it is stopped; a Runtime that may still
+    run is listed with whether it is under the first pause, or that the pause is not confirmed and it may be
+    playing, and how to stop it (open `<root>\ui\acui.exe` and press "Request Shutdown", or run
+    `"<root>\runtime\actingctl.exe" request-shutdown --state-root "<root>\state"`); when step 13 failed
+    after its close, the Runtime is already stopped and keeps the first pause for its next start. Then a
+    watchdog it installed (`"<root>\runtime\actingctl.exe" watchdog uninstall --root "<root>"`), the
+    shortcuts it created (their paths); deleting the folder comes last.
 
-**Resource-only update**: `acsetup --root <root> --resources <bundle.zip> [--sums
-<SHA256SUMS>] (--plan | --yes) [--conflicts new|old] [--associate …]` puts one resource repository
-bundle (v2 or v3; a v1 bundle needs a full upgrade) into an existing A/B installation and changes
-neither the programs nor the slot. Neither `--online`, `--from` nor `--allow-downgrade` goes with it;
-both editions take it, and the offline edition's carried release is then not used. Under the writer
-lock it checks the zip against its line in the `SHA256SUMS` beside it (or `--sums`), reads the
-bundle, checks the interfaces of the selected slot's programs, acsetup and the bundle, stages and
-admits every pack (and qualifies a v3 maintenance declaration), and compares every pack with
-`packages\<game>\<digest>\`: present and equal is reused, absent is new, and present but different
-stops the run with nothing changed — such a directory is never moved or deleted; rename it aside by
-hand or run a full upgrade, which sets it aside. It then plans the bindings the bundle declares
-(startup, prerequisite, return-home) with the same association and conflict rules as an upgrade
-(exit codes 5 and 3 without their flags), and lists every binding that changes. With no new pack and
-no binding change it stops: nothing to do. Otherwise it places the new packs, each through
-`<digest>.part`; when no binding changes, that is all — no new generation, no restart. When bindings
-change, it prepares a new generation, qualifies the whole chain, runs the selected slot's
-`check-config`, closes the Runtime (drain and atomic shutdown when it runs, the cold gate when not),
-commits, and starts it again when it was running. A difference in path spelling alone is no change.
-The summary names the zip, the packs placed and reused, every binding changed, the generation (or
-"configuration unchanged"), the Runtime and the unchanged programs and slot. `--plan` runs the same
-checks and writes nothing under the root. A typical run is
-`acsetup.exe --root <root> --resources <dir>\<bundle>.zip --plan`, then `--yes --conflicts new`.
-In the wizard, step 0 offers the tick "只更新资源（程序不变）/ Update resources only (programs
-unchanged)" on an A/B installation (on an old layout it says a full upgrade comes first). Next then
-makes the same checks as for an upgrade (the root, the rule against running from a program folder
-of it, the log) and opens step 7, "只更新资源 / Update resources": the bundle zip's absolute
-path, optionally another `SHA256SUMS`, and "更新资源 / Update resources". The run is the command
-line's: it takes the writer lock before it clears leftover staging, and the association page
-(step 5) and the conflict page (step 6) answer its
-questions; Cancel on either changes nothing. The window cannot be closed until the run has ended.
-Success leads to the finish page with the summary above and "启动监控台 / Open console", which
-starts the console through the installation's fixed entry; a failure page says what stands.
+**What it lays down:**
 
-**Temporary directories**: each run removes its own `.staging-<time>` (the instances step's
-`.staging-resources-<time>`, `--replace-manager`'s `install\manager-source-<time>`) once it has
-ended, whether it succeeded or not, and logs it; one it cannot remove is a note in the summary and
-is removed when the next run starts, as is one a killed run left behind.
+```text
+<root>\
+  runtime\              the Runtime
+  tools\                the tools
+  ui\                   the console (acui.exe)
+  packages\<game>\      standard packs, in the installed layout the Runtime reads
+  licenses\<game>\      the licence and notice files beside a standard pack (when the set has them)
+  licenses\vision\      the text-recognition models' licences (when the set has them)
+  vision\               text recognition: ort\ (with ONNX Runtime's licence files, and DirectML.dll with
+                        its own in ort\licenses\directml\ when the set carries it) and models\<model>\
+  state\                the records (the state root)
+  actingd.config.json   the Runtime's configuration
+  install-wizard.config.json  the full configuration with the instances (with instances and the first
+                        pause only; once in place, the same as the line above)
+  actingd.config.json.prev-<ms>  the configuration without the instances, kept by `config replace`
+                        when step 13 puts the full one in place
+  acui.toml             this installation's console settings (the language only)
+  install-wizard.log    the setup log
+```
 
-**Fixed management entry**: `<root>/ui/acsetup.exe` retains its own original build manifest and
-MEMBERS in `install/manager`; business-slot rollback keeps it. To replace it, close the fixed
-manager (every `<root>/ui/acsetup.exe` window) and run any verified, unmodified copy of the
-release's acsetup except the fixed manager itself, for example the new slot's
-`<root>/<slot>/ui/acsetup.exe` or the release's own acsetup:
-`& "<root>\<slot>\ui\acsetup.exe" --replace-manager "<absolute-install-root>" "<absolute-release-directory>"`
-(in PowerShell a quoted program path needs `&`). An A/B upgrade replaces an older fixed manager
-by itself; when it was started from the fixed manager, its summary gives this exact command.
-The directory contains normal release files and SHA256SUMS. Native occupancy must prove the old
-manager exited; the running executable must match the verified UI payload. Prior management
-material and identity are retained. Slot-contained acsetup originals remain intact.
+The fifteen steps of page 9, in order: create the folders and the setup log; lay out the Runtime, the Tools
+and the console, each file checked against its `BUILD-MANIFEST.json`; place the vision files, each against
+its hash, and the models' licences in `licenses\vision\`; lay out the standard packs (each zip's SHA-256 computed once more right before, against the set)
+and place the files beside each, each against its hash, in `licenses\<game>\`; check each game with
+`actinglab standard-pack check`; write the configuration (as `actingd.config.json.part` first); put it in
+place only once `actingd check-config` passes; hand the root to the Runtime's own installer with `actinglab
+adopt`; write the console settings; create the shortcuts (named after the root folder, such as
+"ActingCommand Console (AC2)", with a number when that name is taken: someone else's is never touched);
+start (`actinglab up`: exit 0, and none of the post-start checks its answer lists under
+`post_check.checks` with `fail_class` true may be `fail`, else the step fails naming each failed check with
+its values, since a start reports a failed check without refusing; one outside that class that fails, a
+slow ledger open for one, is noted only); pause for the first start (`actinglab pause --reason
+first-start`); connect the instances: stop the Runtime, put the configuration with the instances in place,
+start it again (below); confirm the Runtime is online with `actinglab status`; install the watchdog
+(`actinglab watchdog install`). Steps not chosen show "Skipped". Every child program runs without a window;
+the window shows each answer's reading, and the setup log has it too, with the answer's whole output on a
+line of its own.
 
-**Progress and installation log**: bounded installation operations go to `<root>/acsetup-<time>.log`.
-Runtime results come from formal Host/CLI and GlobalLedger; spawned Runtime process logs retain
-startup/fatal lines. Log failures stop the operation. Pages show phase, progress and explicit
-errors; failure materials, generations, program backups and hashed resources remain available.
-The wizard cannot close while committing installation/configuration inputs. Preparation aims to
-reduce downtime; cold verification and startup duration require actual measurement.
+Why the instances come last: a global pause stops no run already under way, so a Runtime started with its
+instances could dispatch between the start and the pause. With instances and the first pause, step 7
+checks the full configuration, keeps it as `install-wizard.config.json` and puts in place the same
+configuration without the instances (the same salt, state root and MuMu folder, through `check-config`
+too); once the Runtime runs it and the pause is set, step 13 connects the instances in three parts, each
+answer checked:
 
-**Offline edition**: `acsetup-full-<tag>.exe` is `acsetup.exe` byte for byte, then `SHA256SUMS` and
-every file it lists in its order — `MEMBERS.json` among them, and the resource repositories' bundles —
-then an index, then a trailer of exactly 125 bytes:
-`ACSETUP-PAYLOAD-1 <payload start, %020d> <index length, %020d> <index sha256>\n`. The index's first
-line is `acsetup-payload v1 <tag>`; each further line is `<sha256> <length> <name>` for one file, with the
-same names, order and sha256 as `SHA256SUMS` and a `SHA256SUMS` line first. Which edition runs is read
-from the executable itself before any window: the end of the PE image — the furthest raw data of any
-section, from a minimal hand-written reading of the DOS header, PE signature, COFF header, optional
-header, data directories and section table, all in checked arithmetic — against the file's effective
-end: its length, or, once signed, the certificate table's offset less at most seven NUL bytes of
-padding — a certificate table that does not end exactly at the end of the file is damage. Equal is the
-online edition; more must be a whole payload: trailer shape, payload start equal
-to the image end, index at most 1 MiB and matching its sha256, lengths adding up exactly to the effective
-end, names as the online fetch allows and also not starting with `-`, not ending in `.` or `.part`, and
-unique without regard to case, `SHA256SUMS` and `MEMBERS.json` read from the payload and matching the
-index, and a tag of the old daily shape `build-r<7>-u<7>` matching `MEMBERS.json`'s commits (a
-`vX.Y.Z` tag names no commit, so there is nothing to match). Anything else — a truncated file,
-a damaged trailer, index or header — stops the wizard on its failure page before it writes anything,
-naming what was expected and what was found, saying that nothing has been written and there is no log
-yet, and pointing at downloading it again (checked against its `.sha256`) or the online `acsetup.exe`; it
-never falls back to the network. The file stays open from that check to the extraction. The index and
-`SHA256SUMS` guard against damage, not tampering: trust comes from downloading over HTTPS from the
-Releases page and the `.sha256` beside each installer, as for the online edition. Windows SmartScreen
-and some virus scanners may warn about a new, unsigned installer with data after its image; that is
-expected, not a defect of the wizard. Both installers are assembled for each umbrella release, and the
-offline one is read back independently before it is published.
+1. the formal close, `"<root>\runtime\actingctl.exe" request-shutdown --state-root "<root>\state" --wait 60`,
+   which must answer `runtime_shutdown_completed` (not `actinglab down`: its stop keeps a hold of its own
+   that the console does not lift);
+2. `actinglab config replace install-wizard.config.json --sha <its SHA-256>` with no Runtime running: it
+   checks the file with this build's `check-config` and swaps it, the replaced one kept as
+   `actingd.config.json.prev-<ms>`; its answer must say `runtime_running` false, and the file in place is
+   read back against the full configuration's SHA-256;
+3. `actinglab up` again, judged as step 11's.
 
-**Things it never does**: it does not install a service, does not create a scheduled task, does not change
-PATH, does not write the registry; does not modify the configuration template; does not touch a state root
-that already holds content; goes on the network only to list and fetch the umbrella release — the
-offline edition not at all; stops or starts the Runtime only on an upgrade, in the
-instances step and in a resource-only update whose bindings change, as above;
-does not unpack a sealed resource pack — the Runtime loads it (a v1 bundle's packs are taken out whole; a v2 bundle's packs are content directories, laid out file by file as above). On Linux the crate compiles as usual (CI runs `--workspace` on both legs), and running it exits
-immediately with `acsetup v1 is Windows-only`.
+The global pause is a persisted runtime fact that every start that is not installer-held restores before
+any instance is prepared (Runtime `contracts/scheduling-pause.md`, "Persistence, no expiry"), so the start
+of part 3 comes up paused. The wizard does not run `config replace` on the running Runtime: on a test
+machine (0.12.58) it was refused that way twice, `install_command_refused` with `post_check_failed`
+(`count` 1), although the file had been swapped and the Runtime restarted with its pause restored. The row
+that failed is `no_seeding`: a new root's state is still tagged `seed` on its first restarts, which `up`'s
+own check passes (with `earlier_runtime` false) and the restart inside `config replace` does not; it fails
+the same with no instance and an unchanged configuration, and the note `guard_failed` `foreign_pauses` (the
+first pause) comes either way and fails nothing. In the order above the same machine passed every part: the
+close completed, `config replace` answered `install_command_done` with `runtime_running` false, `up` exited
+0 with all ten post-start checks passed, and `status` showed the first pause, the instances, and the first
+task waiting on the global pause. The last read is the status once: online, the global pause still the
+first-start one, no instance running a task (a run is a failure, never a success), and every configured
+instance present. Until it passes, the pause counts as not confirmed, and a failure there closes the
+Runtime.
 
-The Runtime's watchdog is a scheduled task, so acsetup does not set it up. To have a Runtime that is
-gone without a formal close (a crash, a closed window, a reboot) started again, run
-`<install root>\runtime\actingctl.exe watchdog install --root <install root>` once from a normal (not
-elevated) PowerShell of the user the Runtime runs for (Runtime v0.11.3 and later; `watchdog status`
-shows its state). Run `watchdog uninstall` before removing an installation. Its rules are in the
-Runtime's `distribution/windows/INSTALL.md`.
+The watchdog comes last, after the last read: it never starts a root that never started, one closed
+formally or one the installer is working on, and starts only one whose last start ended in an error
+(Runtime `contracts/runtime-watchdog.md`, "Decision", rows 3, 5, 6 and 7a). Last, it cannot start again a
+start the wizard just reported failed, and a failure before it leaves no task.
 
-Seven dependencies are added for the wizard (the offline edition's reading of its own executable is
-hand-written and adds none), each with its purpose noted in `[workspace.dependencies]` or the crate's
-`Cargo.toml`: `actingcommand-contract` (bundle index v2/v3 and the `content-directory.v1` digest, one
-implementation; the console's rev, and it brings only `serde`, `serde_json` and `sha2`),
-`actingcommand-execution-kernel` (the offline, hash-admitted pack qualifications, at the same rev),
-`sha2` (verification), `zip` (`default-features = false`, only `deflate` enabled, the same version line
-the Runtime locks), `getrandom` (the salt and `instance_id`), `ureq` (the fetch; `default-features = false` with only `tls`:
-rustls, its `ring` provider and the compiled-in `webpki-roots`, so no system TLS library) and, on
-Windows only, `windows` 0.62 (`Win32_Foundation`, `Win32_System_Com`, `Win32_System_RestartManager`,
-`Win32_UI_Shell`: the Startup, Start menu and desktop folders through `SHGetKnownFolderPath`, shortcuts
-through `IShellLinkW` + `IPersistFile`, and the Restart Manager to find the processes that still hold a
-slot's files; the version Slint already locks, so the lock gains no crate).
+**Other ActingCommand installations are left alone:** the wizard writes only the folder it creates, plus the
+shortcuts and the watchdog task you tick; it never writes the global
+`%APPDATA%\ActingCommand\acui.toml`, touches no other installation or state root, and starts or stops no
+emulator. Every child program it runs (and "Open console") gets none of the `ACTINGCOMMAND_…` and
+`ACTINGLAB_…` variables the wizard inherited, only the initiator it sets itself for the Lab's, so a wizard started where
+another state root is named still acts on its own root only. It reads another ActingCommand for one thing
+only: it finds each installation's root from the running `actingcommand-actingd.exe` and from the
+registered watchdog tasks (`Get-ScheduledTask` in a hidden Windows PowerShell, read only, as the Runtime
+reads its tasks), reads that root's `actingd.config.json` and nothing else, and marks on page 5 the
+emulators it binds.
+
+**Uninstalling:** there is no uninstaller. Stop the Runtime with "Request Shutdown" in this installation's
+console; if automatic start is on, then run `"<root>\runtime\actingctl.exe" watchdog uninstall --root
+"<root>"` (the console's settings page only shows the watchdog); then delete the whole `<root>` folder and
+the shortcuts the wizard made (the finish page lists them).
+
+**Command line:** with a command no window opens, and the output goes to the calling console (the release
+build is a window program; its command line attaches to the parent's console).
+
+```text
+acsetup check-set --set <install set folder>
+    checks the install set only and prints what it holds
+acsetup discover [--mumu-root <MuMu folder>]
+    lists MuMu's emulators and those another ActingCommand uses (read only)
+acsetup install --set <install set folder> --root <new install folder> --plan <plan.json>
+    installs as the plan says, with the steps of page 9
+```
+
+Exit codes: 0 done, 1 failed (stderr says which step and why, and lists how to undo what the install did,
+as the failure page does), 2 usage. The plan file holds what the
+window gathers on pages 1 to 8 (`actingcommand.install-wizard-plan.v1`): `language` (`zh` or `en`), `games`
+(game folder names), an optional `mumu_root`, `instances` (each with `index`, `alias`, `game`, `server`, and
+optionally `touch_backend`, `capture_backend`, `start_emulator`, `confirmed_in_use`) and `options`
+(`desktop_shortcut`, `start_menu_shortcut`, `watchdog`, `start_after_install`, `pause_first_start`, with the
+window's defaults). Its rules are the window's; a plan that breaks one stops before anything is written.
+
+**Dependencies:** `crates/acui-wizard` uses Slint (the window, the same workspace dependency as the
+console), `serde`, `serde_json`, `sha2` (verification), `zip` (`default-features = false`, only `deflate`,
+the version line the Runtime locks), `getrandom` (the configuration's `secret_fingerprint_salt` and each
+`instance_id`) and, on Windows only, `windows` 0.62 (`Win32_Foundation`, `Win32_System_Com`,
+`Win32_System_RestartManager`, `Win32_UI_Shell`: the Start menu and desktop folders through
+`SHGetKnownFolderPath`, shortcuts through `IShellLinkW` + `IPersistFile`, the folder picker through
+`IFileOpenDialog`; the version Slint already locks, so the lock gains no crate). The exe carries the
+console's icon, compiled in by `winresource`. The 0.11 wizard `crates/acui-setup` is out of the workspace,
+its code left as it is; its A/B slots, online download, upgrades and resource-only updates are not part of
+the new wizard.
 
 The console's Win7 Aero frame adds this repository's `acui-glass` crate and no other crate to the lock. It
 turns on Slint's `raw-window-handle-06` feature to reach the native window, and `acui-glass` uses
@@ -1763,7 +1627,11 @@ is no approval entry point; of the console crates only two carry tests: `acui-mo
 `stopped`, the pure decision inside `stop_marked` (UI-3e3), and `acui-source`, six unit tests of
 `pack::switch`, the pure decision of what a press of a task switch writes (UI-3f2). CI builds the workspace
 and then runs just the crates that hold unit tests of pure functions, now
-`cargo test --locked -p acui-model -p acui-source`; the UI and the workspace as a whole are not tested. The
+`cargo test --locked -p acui-model -p acui-source -p acui-wizard` (`acui-wizard` is the setup wizard, with
+tests of the pure functions that only compute: the install set, the folder rules, the layout mapping, the
+configuration, the name rules, the console's interface edges, the variables a child does not inherit,
+what the Runtime's answers say, which emulators another installation binds and what a failure left to
+undo); the UI and the workspace as a whole are not tested. The
 launcher is in
 `crates/acui-app/src/launcher.rs`, where the paths come from in `install.rs`, the technical log and the
 startup-failure window in `report.rs`, and the client operations — probe, request shutdown, recording
@@ -1771,8 +1639,8 @@ the start press, the online open's status and fact reads, and the conditional re
 `request_shutdown` / `record_start` / `instance_facts` / `resume_paused`).
 
 Every background worker — the probe at startup, the whole start (probe, launch, readiness poll and its
-record), request shutdown, unlock-owner, a conditional resume, a frame read, and every acsetup worker (release lookup, install or
-upgrade, writing the options, discovery, reading resources, writing instances, settling) — is started through
+record), request shutdown, unlock-owner, a conditional resume, a frame read, and every worker of the setup
+wizard (checking the install set, checking the folder, the emulator search, the folder picker, the install) — is started through
 `std::thread::Builder`. A thread the system refuses is stated, with the OS error, where that action
 reports, and what the worker would have cleared (the probe, start, shutdown, unlock or resume in flight, the save
 in progress, the frame request) is reset: never a panic on the event loop. A start whose thread cannot
@@ -1781,11 +1649,11 @@ said as that, not as a kill that failed.
 
 Three more crates sit outside these four layers. `acui-glass` is the native half of the Win7 Aero frame,
 used by `acui-app` through a safe face that knows nothing of Slint: all the console's Win32 and WinRT window
-code and its unsafe code for them are there, and off Windows it only says it cannot. `acui-setup` (binary `acsetup`) is the setup wizard; it
-depends on none of the four layers; besides `acui-installation` it uses Slint, `serde`, `serde_json`,
-`anyhow` and the dependencies listed under "Setup wizard acsetup", the shared contract and
-execution-kernel's offline package qualifications among them.
-`acui-installation` provides the shared installation-selection consumer for the console and the wizard,
+code and its unsafe code for them are there, and off Windows it only says it cannot. `acui-wizard` (binary
+`acsetup`) is the 0.12 setup wizard: a back-end library with the window and the command line that share
+it; it depends on none of the four layers (its dependencies are under "Setup wizard acsetup"). The 0.11
+wizard `acui-setup` is out of the workspace.
+`acui-installation` provides the shared installation-selection consumer for the console,
 and the binary `acforward`, the fixed entry.
 
 ## Icon
@@ -1797,8 +1665,9 @@ The application icon is the black single-figure "commander" mark; the assets are
 - **Executable icon**: in `build.rs`, `#[cfg(windows)]` calls `winresource` to compile `acui.ico` into the
   exe's resource section; this dependency hangs under `[target.'cfg(windows)'.build-dependencies]` and is
   not compiled on Linux.
-- **acsetup**: the same assets, not copied: `crates/acui-setup/build.rs` and `ui/setup.slint` point at
-  those two files in `crates/acui-app/assets/` with relative paths.
+- **acsetup**: the same assets, not copied: `crates/acui-wizard/build.rs` and `ui/wizard.slint` point at
+  those two files in `crates/acui-app/assets/` with relative paths; `ui/wizard.slint` imports the
+  console's kit `crates/acui-app/ui/kit/` the same way.
 
 ## What the read face blocks
 
