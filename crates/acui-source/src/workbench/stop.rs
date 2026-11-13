@@ -7,6 +7,11 @@
 //! to show after it is the next `Status`'s. Nothing out of here names a wire type: what came back
 //! is a [`StopOutcome`].
 //!
+//! A person's "close this task" of a run the scheduler dispatched (UI-3e2b) closes the task
+//! first, and only once its close row took sends this same stop, on the connection its close went
+//! out on; of a package the account's view does not list, it writes no row and sends the stop
+//! alone ([`stop_on`], `super::pack::close_then_stop`).
+//!
 //! A run a client started (`direct_run`) is stopped, and since 0.12.55 one the scheduler
 //! dispatched (`policy_run`) too: only a step the Runtime started for itself is refused
 //! (`run_origin` `host`), and nothing is stopped. 0.12.53 and 0.12.54 refuse a scheduled run as
@@ -138,6 +143,14 @@ pub fn stop_run(root: &Path, alias: &str, run: RunKey) -> StopOutcome {
             return StopOutcome::NotSent { failure: ClientFailure::from(error), chain };
         }
     };
+    stop_on(&client, alias, run)
+}
+
+/// The stop of [`stop_run`] on a connection already made, one `StopInstanceRun` waiting
+/// [`STOP_WAIT`]: a person's "close this task" sends it on the connection its view and its close
+/// row went out on, once the close row took, or when the view does not list the run's package
+/// (`super::pack::close_then_stop`). Sent once, whatever comes back.
+pub(super) fn stop_on(client: &RuntimeClient, alias: &str, run: RunKey) -> StopOutcome {
     match client.stop_instance_run(alias, run.0, STOP_WAIT) {
         Ok(answer) => stopped(answer),
         Err(error) => failed(error),
