@@ -328,7 +328,7 @@ jobs:
           }
           Write-Host "$($uiCodes.Count) codes / $($uiLocations.Count) locations checked against Runtime $rev (merged catalog SHA-256 $catalogSha)"
       - run: cargo build --locked --release --workspace
-      # Unit tests of pure functions only (Workflow #429, Alice 181=A): list just the crates that
+      # Unit tests of pure functions only (Workflow #429, the owner's ruling 181 (A)): list just the crates that
       # hold such tests; the UI and the workspace as a whole are not tested here. A red here is
       # red: it is not re-run to green.
       - name: Unit tests of pure functions
