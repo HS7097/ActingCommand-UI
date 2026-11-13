@@ -23,9 +23,10 @@ pub use tabs::{tab_from_name, tab_name, ALL_TABS};
 use acui_rows::outcome::CONSOLE_ROUTINE_PERFORMANCE_TYPE_UNKNOWN;
 use acui_rows::{
     code, page_source_complete, payload_value, ArtifactEvictionObservation, ArtifactKind,
-    EventQuery, EventSeverity, InstanceId, LedgerCount, LedgerEventPosition, LedgerRecoveryGap,
-    LedgerRecoveryState, LedgerRunRecovery, LedgerView, OpenReport, OriginModule, PortBindings,
-    PortEntry, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, PublicEventPayload,
+    EventQuery, EventSeverity, EventType, InstanceId, LedgerCount, LedgerEventPosition,
+    LedgerRecoveryGap, LedgerRecoveryState, LedgerRunRecovery, LedgerView, OpenReport,
+    OriginModule, PolicyExecutionOutcome, PortBindings, PortEntry, ProjectedArtifactReference,
+    ProjectedEvent, ProjectionPayload, PublicEventPayload, RuntimeErrorCode,
     RuntimeEventQueryPage, TaskSemanticFact, WriterFacts, MAX_RUNTIME_EVENT_QUERY_EVENTS,
 };
 
@@ -780,4 +781,73 @@ fn task_fact(event: &ProjectedEvent) -> Option<&TaskSemanticFact> {
         return None;
     };
     task.task_semantic_fact()
+}
+
+/// The top code of the outcome a stopped scheduled run's records carry: on a scheduled run only a
+/// person's `StopInstanceRun` causes it (Runtime 0.12.55, Workflow #429 R-6b).
+const CONTAINED_TASK_CANCELLED: &str = RuntimeErrorCode::ContainedTaskCancelled.as_str();
+
+/// Whether `event` records a run a person stopped (UI-3e3), as the `Ui` profile projects it
+/// (`Public`, read as `task_fact` reads it): a stopped scheduled run's terminal, a `task.failed`,
+/// and the scheduler driver's `runtime.failed` after it, whose outcome's top code is
+/// `contained_task_cancelled`; and the policy's record of the run, a `policy.execution_recorded`
+/// of the result kind `stopped`, neither a success nor a failure of its task. The ledger window
+/// marks these rows as stopped, not in a failure's red; their type and level stay as the Runtime
+/// recorded them. A stopped direct run writes `task.cancelled`, none of these.
+pub fn stop_marked(event: &ProjectedEvent) -> bool {
+    let ProjectionPayload::Public(payload) = &event.payload else {
+        return false;
+    };
+    let payload = match payload.as_ref() {
+        PublicEventPayload::Task(payload)
+        | PublicEventPayload::Runtime(payload)
+        | PublicEventPayload::Policy(payload) => payload,
+        _ => return false,
+    };
+    let top_code = payload.outcome().map(|outcome| outcome.code().as_str());
+    let policy_stopped = payload
+        .policy_execution_outcome()
+        .map(|result| matches!(result, PolicyExecutionOutcome::Stopped { .. }));
+    stopped(event.event_type, top_code, policy_stopped)
+}
+
+/// `stop_marked` of what a record's projection states: its event type; its outcome's top code,
+/// when it carries one; and, of one that states the policy's result of a run, whether that is
+/// `stopped`. A policy record goes by its result alone, a terminal by its code alone.
+fn stopped(event_type: EventType, top_code: Option<&str>, policy_stopped: Option<bool>) -> bool {
+    match event_type {
+        EventType::TaskFailed | EventType::RuntimeFailed => {
+            top_code == Some(CONTAINED_TASK_CANCELLED)
+        }
+        EventType::PolicyExecutionRecorded => policy_stopped == Some(true),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_terminal_of_a_stop_is_marked() {
+        assert!(stopped(EventType::TaskFailed, Some(CONTAINED_TASK_CANCELLED), None));
+    }
+
+    #[test]
+    fn a_failed_terminal_of_another_code_is_not_marked() {
+        let deadline = RuntimeErrorCode::ContainedTaskDeadlineExceeded.as_str();
+        assert!(!stopped(EventType::TaskFailed, Some(deadline), None));
+    }
+
+    #[test]
+    fn a_stopped_policy_result_is_marked() {
+        let recorded = EventType::PolicyExecutionRecorded;
+        assert!(stopped(recorded, Some(CONTAINED_TASK_CANCELLED), Some(true)));
+    }
+
+    #[test]
+    fn a_failed_policy_result_is_not_marked() {
+        let recorded = EventType::PolicyExecutionRecorded;
+        assert!(!stopped(recorded, Some(CONTAINED_TASK_CANCELLED), Some(false)));
+    }
 }

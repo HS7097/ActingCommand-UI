@@ -761,10 +761,12 @@ REUSED_ASSESSMENT = Object({
     "members": ListOf(TEXT),
 })
 PRICES_V1 = _prices("acmodel.prices.v1", PRICE_ENTRY)
+# #430 C-2a: the steady state's own timing (`steady_timing_ms`), analysis only, so any JSON as the other members of the
+# analysis are; a v2 file written before it has none.
 PRICES = _prices(
     "acmodel.prices.v2",
     {name: spec for name, spec in PRICE_ENTRY.items() if name != "estimates"},
-    {"evaluator": EVALUATOR, "reused_assessment": REUSED_ASSESSMENT},
+    {"evaluator": EVALUATOR, "reused_assessment": REUSED_ASSESSMENT, "steady_timing_ms": ANY},
 )
 # What `export prices --reuse-assessment` takes over from an earlier v2 file (#424 PRICE-REUSE), which the format above
 # passes on as any JSON: each estimate's `assessed` and `skipped`, each pool's `impact` and the groups.
@@ -773,6 +775,46 @@ _ESTIMATE = Object({
     "skipped": Either(string=Choice("structural_gap", "estimate_missing"), null=ANY),
 })
 _IMPACT_RANGE = Either(object=Object({"low": TEXT, "high": TEXT}), null=ANY)
+# #430 METHOD-C, C-2a: what each pass of a group taken over holds (contracts/formats.md, "Taking an assessment over",
+# step 3), beside its `at` and `values`: `by`, how its vector was found; `refused_by`, only with `impact.certify` true,
+# the condition of the certificate that refused a solved pass, null for any other; and `timing_ms`, null or `{stages,
+# lps, total}`: `stages` null or each stage of the vector (`core.flow.STAGES`), `lps` each of those stages and
+# `certificate`, each with every member of `core.flow.LP_COUNTS`, every number an integer. The names are the ones
+# `core.impact` and `core.flow` write.
+PASS_BY = ("solved", "certified", "steady_state")
+REFUSED_BY = ("program", "c1", "c2", "c3", "c4", "lp_unverified")
+PASS_STAGES = (
+    "model", "optimum", "acquisition", "value", "dual", "projections", "intervals", "most", "ranges", "selection",
+    "max_min", "check",
+)
+PASS_LPS = (*PASS_STAGES, "certificate")
+LP_COUNTS = ("runs", "again_infeasible", "again_other", "highs_ms", "exact_ms")
+_COUNT = Integer(0, MAX)
+_TIMING = Object({
+    "stages": Either(object=Object({stage: _COUNT for stage in PASS_STAGES}), null=ANY),
+    "lps": Object({stage: Object({name: _COUNT for name in LP_COUNTS}) for stage in PASS_LPS}),
+    "total": _COUNT,
+})
+
+
+def _refused_by(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """A pass's `refused_by`, where it has one: one of the conditions when its `by` is `solved`, null otherwise."""
+    if "refused_by" not in value:
+        return True
+    found = value["refused_by"]
+    if value["by"] == "solved" and found is None:
+        return ctx.refuse("value_invalid", pointer(ref, "refused_by"), expected=list(REFUSED_BY), literal="null")
+    if value["by"] != "solved" and found is not None:
+        return ctx.refuse("value_invalid", pointer(ref, "refused_by"), expected=["null"], literal=found)
+    return True
+
+
+_PASS = Object(
+    {"at": ANY, "values": ANY, "by": Choice(*PASS_BY), "timing_ms": Either(object=_TIMING, null=ANY)},
+    {"refused_by": Either(string=Choice(*REFUSED_BY), null=ANY)},
+    _refused_by,
+)
+_GROUP = Object({"rules": ANY, "unknowns": ANY, "passes": ListOf(_PASS), "prices": ANY, "flips": ANY})
 
 
 def _read(path: Path | str, fmt: Format, *older: Format, raw: bytes | None = None) -> dict[str, Any]:
@@ -842,10 +884,24 @@ def read_prices(path: Path | str, raw: bytes | None = None) -> dict[str, Any]:
 def check_assessment(doc: dict[str, Any], path: Path | str) -> None:
     """The members of an earlier v2 prices.json (`doc`, read by `read_prices`) that `export prices --reuse-assessment`
     takes over (#424 PRICE-REUSE): each estimate as `export prices` lists it, each pool's `impact` (null, or `low` and
-    `high`), and the groups (`impact`, a list). Each problem is `model_file_invalid` at its pointer."""
+    `high`), and the groups (`impact`, a list), each pass of each group with its `by` and its `timing_ms` (#430 C-2a,
+    `_PASS`), and either every pass with a `refused_by` or none. Each problem is `model_file_invalid` at its pointer, a
+    pass's at that pass: a file written before C-2a (`timing_ms` with `source` or without `lps`, a pass without `by`) is
+    never taken over. Only a file taken over is checked so: `verify prices` and `bindings check` read the groups as any
+    JSON, so a file written before C-2a is still read and verified."""
     ctx = Context(path, doc["schema_version"])
     ListOf(_ESTIMATE).check(doc["estimates"], "/estimates", ctx)
-    ListOf(ANY).check(doc["impact"], "/impact", ctx)
+    ListOf(_GROUP).check(doc["impact"], "/impact", ctx)
+    groups = doc["impact"] if isinstance(doc["impact"], list) else []
+    found = [
+        (pointer(pointer(pointer("/impact", group), "passes"), index), "refused_by" in each)
+        for group, entry in enumerate(groups) if isinstance(entry, dict) and isinstance(entry.get("passes"), list)
+        for index, each in enumerate(entry["passes"]) if isinstance(each, dict)
+    ]
+    if any(has for _, has in found):  # every pass has a `refused_by`, or none has
+        for where, has in found:
+            if not has:
+                ctx.refuse("member_missing", pointer(where, "refused_by"), key="refused_by")
     for index, entry in enumerate(doc["prices"]):
         _IMPACT_RANGE.check(entry["impact"], pointer(pointer("/prices", index), "impact"), ctx)
     if ctx.errors:

@@ -739,7 +739,8 @@ fn close_text(labels: &Labels, why: CloseWhy) -> &'static str {
         CloseWhy::Unsupported => labels.stop_unsupported,
         CloseWhy::DirectRun => labels.stop_note,
         CloseWhy::Unidentified => labels.stop_unidentified,
-        CloseWhy::Scheduled => labels.stop_scheduled,
+        CloseWhy::ScheduledRun => labels.stop_note_scheduled,
+        CloseWhy::ScheduledUnsupported => labels.stop_scheduled_unsupported,
         CloseWhy::RuntimeOwn => labels.rescue_close_system,
         CloseWhy::NoTask => labels.rescue_close_no_task,
     }
@@ -747,21 +748,35 @@ fn close_text(labels: &Labels, why: CloseWhy) -> &'static str {
 
 /// What the account's last stop of a run came to in words, each that landed with when, and
 /// whether that is a failure: never a code, a count or an id, which the log has. After a reset
-/// that failed, or a run that ended before the stop's reset, the card says what holds now.
+/// that failed, or a run that ended before the stop's reset, the card says what holds now. A
+/// scheduled run that ended says too that its task is not closed (`stop_scheduled_again`), which
+/// nothing says while it is not known to have ended.
 fn stop_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
     let timed = |text: &str, at_ms: u64| fill(labels.stop_at, &[text, &format_second(at_ms)]);
     match said {
         StopSaid::Sending => (labels.stop_sending.to_owned(), false),
-        StopSaid::Stopped { at_ms, reset: Reset::Done } => {
-            (fill(labels.stop_done, &[&format_second(*at_ms)]), false)
-        }
-        StopSaid::Stopped { at_ms, reset: Reset::NotNeeded } => {
-            (fill(labels.stop_not_needed, &[&format_second(*at_ms)]), false)
-        }
-        StopSaid::Stopped { at_ms, reset: Reset::Failed { cause, .. } } => {
-            let codes: Vec<&str> = cause.as_deref().into_iter().collect();
-            let words = stop_words(ui, labels, &codes);
-            (fill(labels.stop_reset_failed, &[&format_second(*at_ms), &words]), true)
+        StopSaid::Stopped { at_ms, reset, scheduled } => {
+            let at = format_second(*at_ms);
+            let (text, failed) = match (reset, scheduled) {
+                (Reset::Done, false) => (fill(labels.stop_done, &[&at]), false),
+                (Reset::Done, true) => (fill(labels.stop_done_scheduled, &[&at]), false),
+                (Reset::NotNeeded, _) => (fill(labels.stop_not_needed, &[&at]), false),
+                (Reset::Failed { cause, .. }, _) => {
+                    let codes: Vec<&str> = cause.as_deref().into_iter().collect();
+                    let words = stop_words(ui, labels, &codes);
+                    let template = if *scheduled {
+                        labels.stop_reset_failed_scheduled
+                    } else {
+                        labels.stop_reset_failed
+                    };
+                    (fill(template, &[&at, &words]), true)
+                }
+            };
+            if *scheduled {
+                (fill(labels.rescue_then, &[&text, labels.stop_scheduled_again]), failed)
+            } else {
+                (text, failed)
+            }
         }
         StopSaid::Asked { at_ms } => {
             (fill(labels.stop_asked, &[&format_second(*at_ms)]), false)
@@ -774,8 +789,11 @@ fn stop_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
             let at = format_second(*at_ms);
             let nothing_done = fill(labels.stop_at, &[labels.rescue_nothing_done, &at]);
             match (why, origin) {
+                // A Runtime before 0.12.55, which stops only a direct run: scheduled runs stay
+                // off for its owner epoch (`CloseWhy::ScheduledUnsupported`).
                 (Refusal::NotStoppable, Some(RunOrigin::Policy)) => {
-                    (fill(labels.rescue_then, &[labels.stop_scheduled, &nothing_done]), true)
+                    let sentence = labels.stop_scheduled_unsupported;
+                    (fill(labels.rescue_then, &[sentence, &nothing_done]), true)
                 }
                 (Refusal::NotStoppable, Some(RunOrigin::Host)) => {
                     (fill(labels.rescue_then, &[labels.rescue_close_system, &nothing_done]), true)
@@ -1095,11 +1113,13 @@ fn rescue_own_words(labels: &Labels, code: &str) -> Option<&'static str> {
 /// the problem it is: no provenance, which a Runtime states of every instance, so no device
 /// button is drawn; no capability profile of an instance that drives a device of its own, which
 /// a Runtime states of every such instance (only a fixture has none), so no emulator's row; and a
-/// direct run whose status names no request, which the contract says it always does, so it cannot
-/// be stopped from here.
+/// direct or scheduled run whose status names no request, which the contract says each always
+/// does, so it cannot be stopped from here.
 fn rescue_told(ui: &Ui, alias: &str, rows: &RescueRows) {
     if rows.close.is_some_and(|row| row.why == CloseWhy::Unidentified) {
-        let line = format!("{alias}: its status names a direct run without its request: no stop");
+        let line = format!(
+            "{alias}: its status names a direct or policy run without its request: no stop"
+        );
         if ui.model.borrow_mut().first_told(&line) {
             report::log(RESCUE_LOG, &line);
         }

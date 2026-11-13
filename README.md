@@ -238,8 +238,8 @@ settlement of a scheduled run a `StopInstanceRun` stopped, beside its `task.fail
 `contained_task_cancelled`, which a console built on v0.12.53 cannot decode (offline the page that holds
 it fails whole, online `runtime_receipt_decode_failed`) and this one decodes; from v0.12.55 the Runtime
 stops a scheduled run too, asked by actinglab `task stop` or the Lab's tool, while MCP `ac_stop_run` and
-actinglab `run stop` still refuse every scheduled run, and this console's Stop This Run still stops only a
-direct run; v0.12.54's configuration revision 28 adds the value `auto` of `idle.action` and the keys
+actinglab `run stop` still refuse every scheduled run, and this console's Stop This Run stops it too
+(#429 UI-3e3, see the rescue bar under "Launcher"); v0.12.54's configuration revision 28 adds the value `auto` of `idle.action` and the keys
 `idle.return_home_min_gap_ms` and `idle.stop_emulator_min_gap_ms`, each also per instance (#386 IDLE-2),
 and `instance.<instance id>.scheduling.pool_lines` (#428 SCHED-C1e), every new key `hidden` in `ui_tier`,
 so the settings page shows no new row; the settings page shows `auto` as "choose by the idle time", and
@@ -1009,12 +1009,12 @@ as before, and the ledger window resumes those it may (below). From the command 
 `ac_pause` / `ac_resume` (see "MCP for agents"), still pause and resume one instance.
 
 Over the live view, the rescue bar has one more row while the account does something: **Stop This Run**
-(#429 UI-3e2, R-6's first slice, Runtime v0.12.53 or later). It can be pressed only for a run another tool
-started: the account's activity in the last status read is `direct_run`, naming its `request_id` (a run
-of the Lab's `run start`, `actingctl task-run` or the MCP tool `ac_run_pack`, say). A run the scheduler
-dispatched and a step the Runtime started itself send nothing: the button stays off and says why (a
-scheduled one is stopped with Pause This Account on its card); from v0.12.55 the Runtime can stop a
-scheduled run too, but this console does not send that yet (a later slice). One press sends it, with no second
+(#429 UI-3e2, R-6's first slice, Runtime v0.12.53 or later; UI-3e3, R-6b, a scheduled run from Runtime
+v0.12.55). It can be pressed while the account's activity in the last status read names its
+`request_id`: a run another tool started (`direct_run`: a run of the Lab's `run start`, `actingctl
+task-run` or the MCP tool `ac_run_pack`, say), and a run the scheduler dispatched (`policy_run`, one
+finishing under the global pause included). The Runtime's own steps (starting, recovering or winding
+down when idle) send nothing: the button stays off and says why. One press sends it, with no second
 question: one `StopInstanceRun` on a worker thread over a fresh person's connection, `wait_ms` 5 s; the
 Runtime stops the run at its next checkpoint, resets the device itself with the run's own lease, and
 answers. What it came to is said under the row, with when; never a code or a request id on screen, and
@@ -1025,9 +1025,27 @@ it on a timer, and a refusal or one not sent is not sent again. A Runtime that r
 longer listed or a reading thread gone leaves the result unknown, and nothing more is sent; a run that
 does not end is waited for as long as it runs, with no limit of the console's own. A Runtime before
 v0.12.53 answers `not_implemented` (which records nothing), and the button then stays off for that
-Runtime's owner epoch. Whether another console or tool already asked the run to stop is not seen here:
-another press costs only three more ledger records (`ui.action`, `command.received`, then
-`command.validated` or `command.rejected`), and still reads the result.
+Runtime's owner epoch, for both kinds of run. Whether another console or tool already asked the run to
+stop is not seen here: another press costs only three more ledger records (`ui.action`,
+`command.received`, then `command.validated` or `command.rejected`), and still reads the result.
+
+A stop of a scheduled run ends this run only: the task is not closed, its cooldown counts from the
+dispatch, and it is dispatched again after its cooldown while its trigger still holds; Pause This Account
+on its card keeps it from running. So the line of a stop that ended the run (its reset done, its reset
+failed, or the run ended for another reason first) goes on with "The task is not closed: after its
+cooldown it runs again if its condition still holds; to keep it from running, use Pause This Account on
+its card"; a stop not known to have ended the run says nothing of the kind. A stop is no failure: nothing
+retries, backs off, pauses the task or starts a ladder. A direct run's lines are as before. The console
+reads no version of the running Runtime, so scheduled runs can be pressed at first: v0.12.53 and
+v0.12.54 refuse a stop of one (`run_origin` `policy`, three ledger records, the line red once), and the
+button then stays off for scheduled runs for that Runtime's owner epoch, saying "This version of the
+Runtime cannot stop a run the scheduler started yet; from 0.12.55 it can", while a direct run can still
+be pressed. In the ledger window, a stopped scheduled run's `task.failed` (`contained_task_cancelled`),
+its `policy.execution_recorded` (result `stopped`) and the scheduler driver's `runtime.failed` say
+Stopped beside them, not in a failure's red, their type and level as the Runtime recorded them; the
+run's recovery header is the ledger's, and may still count them as failures with no recovery seen. On
+the Daily Tasks tab a dispatch that is over this round says "Ended this round", whether its run ran
+through or was stopped.
 
 - **Conditional resume (ledger window)**: below the technical lines the window lists the global pause and
   each instance's pause of its last status read (reason, revision, since), each by its own scope. One
@@ -1566,8 +1584,12 @@ records of the console's own requests — the start press, shutdown and resume r
 status read appends nothing), the only control entry points are the launcher's two buttons (start /
 request shutdown, see above), its owner-unlock entry (a confirmed `actingd unlock-owner`) and the ledger
 window's confirmed conditional resume (end of "Launcher"), and there
-is no approval entry point; the console crates carry no tests, and CI builds the workspace without running
-tests. The launcher is in
+is no approval entry point; of the console crates only two carry tests: `acui-model`, four unit tests of
+`stopped`, the pure decision inside `stop_marked` (UI-3e3), and `acui-source`, six unit tests of
+`pack::switch`, the pure decision of what a press of a task switch writes (UI-3f2). CI builds the workspace
+and then runs just the crates that hold unit tests of pure functions, now
+`cargo test --locked -p acui-model -p acui-source`; the UI and the workspace as a whole are not tested. The
+launcher is in
 `crates/acui-app/src/launcher.rs`, where the paths come from in `install.rs`, the technical log and the
 startup-failure window in `report.rs`, and the client operations — probe, request shutdown, recording
 the start press, the online open's status and fact reads, and the conditional resume — are in `acui-source` (`probe_runtime` /

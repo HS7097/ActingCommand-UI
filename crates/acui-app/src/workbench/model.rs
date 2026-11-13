@@ -992,9 +992,10 @@ impl Model {
         &mut self.stops
     }
 
-    /// What a press of "stop this run" on `alias`'s bar would stop now (UI-3e2): while its rescue
-    /// bar offers that button, the run the newest `Status` names for the account, its package,
-    /// and the owner epoch online; none while it cannot be pressed.
+    /// What a press of "stop this run" on `alias`'s bar would stop now (UI-3e2, UI-3e3): while its
+    /// rescue bar offers that button, the run the newest `Status` names for the account, its
+    /// package, whether the scheduler dispatched it, and the owner epoch online; none while it
+    /// cannot be pressed.
     pub fn stop_target(&self, alias: &str) -> Option<StopTarget> {
         let Some(RescueView::Online(rows)) = self.rescue_view(alias) else {
             return None;
@@ -1005,7 +1006,12 @@ impl Model {
         let epoch = self.online_epoch()?.to_owned();
         let instance = self.instances.iter().find(|instance| instance.alias == alias)?;
         let activity = instance.activity.as_ref()?;
-        Some(StopTarget { run: activity.run?, package: activity.package_id.clone(), epoch })
+        Some(StopTarget {
+            run: activity.run?,
+            package: activity.package_id.clone(),
+            scheduled: activity.kind == ActivityKind::PolicyRun,
+            epoch,
+        })
     }
 
     /// The run the newest `Status` names for `alias`, if any; none while no Runtime answers.

@@ -22,6 +22,8 @@ export struct RowItem {
     // row links no instance at all.
     port: string,
     link-id: string,
+    // A recovery header's line; else a folded row's "recovered", a row of a
+    // run a person stopped "stopped" (UI-3e3), or empty.
     note: string,
 }
 
@@ -1226,7 +1228,7 @@ export component LedgerWindow inherits Window {
                                     if !row.recovery: Text { text: row.event-name; font-size: Scale.list-font; width: head.w-event; overflow: elide; color: Look.text; vertical-alignment: center; }
                                     if !row.recovery: Text { text: row.event-raw; font-size: Scale.grey-font; width: head.w-raw; overflow: elide; color: Look.text-faint; vertical-alignment: center; }
                                     if !row.recovery: Text { text: row.port; font-size: Scale.list-font; width: head.w-port; overflow: elide; vertical-alignment: center; color: Look.text-strong; }
-                                    if row.folded: Text { text: row.note; font-size: Scale.grey-font; color: Severity.warning; vertical-alignment: center; }
+                                    if !row.recovery && row.note != "": Text { text: row.note; font-size: Scale.grey-font; color: row.folded ? Severity.warning : Severity.info; vertical-alignment: center; }
                                     if !row.recovery: Text { text: row.link-id; font-size: Scale.grey-font; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; color: Look.text-caption; overflow: elide; }
                                 }
                                 TouchArea {
