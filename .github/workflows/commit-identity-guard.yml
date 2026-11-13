@@ -52,6 +52,13 @@ jobs:
           fi
 
           echo "checking range: $RANGE"
+          # Read the log first: inside a process substitution a failing git log would be invisible to
+          # set -e, the loop would run zero times and the guard would pass. An empty log fails too.
+          log="$(git log --format=$'%H\t%ae\t%ce' $RANGE)"
+          if [ -z "$log" ]; then
+            echo "::error::commit identity guard read no commit in $RANGE"
+            exit 1
+          fi
           bad=0
           count=0
           while IFS=$'\t' read -r sha ae ce; do
@@ -62,7 +69,7 @@ jobs:
                 bad=1
               fi
             done
-          done < <(git log --format=$'%H\t%ae\t%ce' $RANGE)
+          done <<< "$log"
 
           if [ "$bad" -ne 0 ]; then
             echo "::error::commit identity guard failed: only the HS7097 family noreply identities may author or commit. Fix git user.email and rewrite the branch's own commits before merge."
