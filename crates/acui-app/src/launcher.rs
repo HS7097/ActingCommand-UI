@@ -50,7 +50,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use acui_installation::Snapshot;
+use acui_installation::{Snapshot, INSTALL_ROOT_ENV, INSTALL_SELECTION_ENV};
 use acui_source::{
     probe_runtime, record_start, request_shutdown, ClientFailure, RuntimeFacts, SHUTDOWN_ATTEMPTS,
 };
@@ -757,12 +757,16 @@ fn log_path() -> Result<PathBuf, Phrase> {
 
 /// Exactly `actingcommand-actingd --config <actingd_config>`, detached, with
 /// both output streams in the log file. Nothing is inherited from the console
-/// but the environment.
+/// but the environment, and of that not the two installation selection variables
+/// without a selection (`clear_selection`).
 fn spawn(exe: &Path, config: &Path, log: &Path, installation: Option<&Snapshot>) -> std::io::Result<Child> {
     let stdout = File::create(log)?;
     let stderr = stdout.try_clone()?;
     let mut command = Command::new(exe);
-    if let Some(snapshot) = installation { snapshot.apply_to(&mut command).map_err(std::io::Error::other)?; }
+    match installation {
+        Some(snapshot) => snapshot.apply_to(&mut command).map_err(std::io::Error::other)?,
+        None => clear_selection(&mut command),
+    }
     command
         .arg("--config")
         .arg(config)
@@ -775,6 +779,17 @@ fn spawn(exe: &Path, config: &Path, log: &Path, installation: Option<&Snapshot>)
         command.creation_flags(DETACHED_PROCESS);
     }
     command.spawn()
+}
+
+/// A run without an installation selection (a single-location root, or the paths of
+/// acui.toml) passes none on: the Runtime's start rules (contracts/install-cli.md,
+/// "Clear the selection variables") have whoever starts a Runtime, or runs
+/// `actingd unlock-owner` through the fixed entry, clear
+/// `ACTINGCOMMAND_INSTALL_ROOT` and `ACTINGCOMMAND_INSTALL_SELECTION` first. Only a
+/// process that fixed its own selection hands it to a program of its own slot
+/// (`Snapshot::apply_to`).
+fn clear_selection(command: &mut Command) {
+    command.env_remove(INSTALL_ROOT_ENV).env_remove(INSTALL_SELECTION_ENV);
 }
 
 /// The confirming press, in a ledger window. The entry is withdrawn in every
@@ -942,7 +957,10 @@ fn run_unlock(
     installation: Option<&Snapshot>,
 ) -> Result<(ExitStatus, Vec<u8>, Vec<u8>), Phrase> {
     let mut command = Command::new(exe);
-    if let Some(snapshot) = installation { snapshot.apply_to(&mut command).map_err(verbatim)?; }
+    match installation {
+        Some(snapshot) => snapshot.apply_to(&mut command).map_err(verbatim)?,
+        None => clear_selection(&mut command),
+    }
     command
         .arg("unlock-owner")
         .arg("--config")
