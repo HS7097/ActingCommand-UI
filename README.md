@@ -779,23 +779,38 @@ own path decides, as the system resolves it: when `ui` is a junction or a link, 
 where it leads, so the folder it leads to must itself be named `ui`, and the one above that is the
 installation folder.
 
-**Whether the Runtime reached is this installation folder's**: in root mode the state root is the one the
-configuration names, as written, so a configuration copied from another installation leads the console to
-that installation's Runtime (on this machine, perhaps the one in daily use). So in root mode, before the
-console asks a Runtime anything — Request Shutdown, recording a Start, Pause All and Put All on Duty, an
-account's pause and resume, a resume in the ledger window, a change of settings, a device's operation, a
-refresh of the picture, switching or closing a task, stopping a run — it checks: the program file of the
-process the Runtime's own `runtime-info.json` names, as the system gives it and resolves it (links
-followed, `\\?\` dropped), must lie in `<install folder>\runtime\`, or in a kept build's
-`<install folder>\install\builds\<commit>\runtime\`. When it does not, or this cannot be told (the process
-cannot be opened, its program file cannot be had or resolved), nothing is sent: the workbench's lamp turns
-red with "The Running Runtime Is Not This Installation Folder's", the red words at the top name the
-process, its program file (or why it cannot be told) and the installation folder, and the ledger windows
-add the same after the Runtime's status. Every button pressed meanwhile says it sent nothing, with the code
-`console_runtime_not_this_root`, and the technical log has a line each time; Start, finding such a Runtime
-up, launches nothing and records nothing. The check comes after the connection is made and before the
-request (the connection itself is the same a read makes); reads online are not checked and show as ever.
-Outside root mode (an A/B installation, the settings file's paths) there is no such check.
+**Whether the Runtime at the state root is this installation folder's**: in root mode the state root is the
+one the configuration names, as written, so a configuration copied from another installation leads the
+console to that installation's Runtime (on this machine, perhaps the one in daily use). So in root mode the
+console checks the Runtime its state root names before it connects to it at all, for its reads (the
+workbench's status, schedule, settings and picture, the ledger windows, the launcher's probes) as for a
+person's requests (Request Shutdown, recording a Start, Pause All and Put All on Duty, an account's pause and
+resume, a resume in the ledger window, a change of settings, a device's operation, a refresh of the picture,
+switching or closing a task, stopping a run). It takes the process id from the state root's
+`runtime-info.json`, reading the file alone, and asks the system for that process's program file, which, as
+the system resolves it (links followed, `\\?\` dropped), must lie in `<install folder>\runtime\`, or in a
+kept build's `<install folder>\install\builds\<commit>\runtime\`. When it does not, or this cannot be told
+(the program file cannot be had or resolved), the console connects to nothing at that state root: no
+handshake, no read, no request. The workbench's lamp turns red with "The Running Runtime Is Not This
+Installation Folder's", the red words at the top name the process, its program file (or why it cannot be
+told) and the installation folder, the ledger windows show the same as the Runtime's status, and nothing
+read online is shown; Start launches nothing and records nothing, and the settings page's
+`actingctl watchdog status`, which asks a Runtime it finds for its health, is not run either (the page says
+whether the Runtime is started again automatically cannot be read, and the technical log says why). A
+button pressed meanwhile says under it that nothing was sent because the running Runtime is not this
+installation folder's; the code
+`console_runtime_not_this_root` is not shown there, only in the technical log's line of that press. What
+the check found is kept for that process and its owner epoch and asked again once the Runtime changes; each
+new finding goes into the technical log once. A `runtime-info.json` whose process no longer exists (a
+Runtime that ended without removing it) names no running Runtime: nothing is connected to it either, the
+lamp says the Runtime is not running, and Start is offered. Outside root mode (an A/B installation, the
+settings file's paths) there is no such check.
+
+Two cases the check cannot cover. `unlock-owner` runs this installation folder's own actingd with the
+folder's own configuration and connects to no Runtime, so there is nothing to check. And when the
+configuration names a state root copied from another installation and that installation's Runtime is not
+running at the time, Start launches this folder's actingd, as its configuration says, on that state root:
+with no running Runtime to check, this cannot be told.
 
 Logs are not kept per installation folder yet: the technical log and actingd's start logs both stay in the
 global `%LOCALAPPDATA%\ActingCommand\logs\` (see "When the start fails" and "Launcher"), the consoles of
