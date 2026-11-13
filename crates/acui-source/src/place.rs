@@ -375,7 +375,10 @@ mod tests {
         assert_eq!(placed, decided(Ok(Tier::Selected("slot B")), None));
     }
 
-    /// The third review point: a selection above that cannot be looked at counts as there.
+    /// The third review point, as far as it is judgment: a root named like a slot is said only
+    /// when no installation selection is above it. That one above which cannot be looked at
+    /// counts as there is the caller's finding (`present` in the console's `install`), which
+    /// comes in here as `selection_above` set.
     #[test]
     fn a_root_named_like_a_slot_is_said_only_without_a_selection_above() {
         assert!(WHOLE.slot_named(true));
@@ -426,6 +429,9 @@ mod tests {
         ] {
             assert!(!runs_from_root(program, OWN), "{program}");
         }
+        // A folder beside `runtime` whose name only begins like it is none of the root's.
+        assert!(!runs_from_root(r"X:\Root\runtime-other\x.exe", r"X:\Root"));
+        assert!(!runs_from_root(r"X:\Root\runtime2\x.exe", r"X:\Root"));
         assert!(!runs_from_root(r"C:\Installs\Ours\runtime\actingd.exe", ""));
         assert!(!runs_from_root(r"C:\Installs\Ours\runtime\actingd.exe", r"C:\Installs\.\Ours"));
     }

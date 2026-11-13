@@ -501,7 +501,6 @@ fn doing_text(labels: &Labels, doing: Doing) -> &'static str {
     }
 }
 
-/// What a refresh came to in words, and whether that is a failure.
 /// What a press that was not sent says: that the Runtime found up is not this installation
 /// folder's, when that is why (`launcher::refusing_not_this_root`); else `generic`, as ever.
 fn not_sent(labels: &Labels, generic: &str) -> String {
@@ -512,6 +511,7 @@ fn not_sent(labels: &Labels, generic: &str) -> String {
     }
 }
 
+/// What a refresh came to in words, and whether that is a failure.
 fn refreshed_text(ui: &Ui, labels: &Labels, said: &Refreshed) -> (String, bool) {
     match said {
         Refreshed::Sending => (labels.refresh_sending.to_owned(), false),
