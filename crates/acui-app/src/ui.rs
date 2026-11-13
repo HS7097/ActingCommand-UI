@@ -450,7 +450,9 @@ impl Ui {
 
     /// The workbench's lines that only the language changes: why this run has
     /// no state root, and the Runtime's configuration file, where an instance
-    /// is added by hand for now. And the accounts note, the cards, the live view, the Runtime's
+    /// is added by hand for now; on the settings page, the installation folder this
+    /// run's paths come from, if any, and the settings file the boxes save to. And
+    /// the accounts note, the cards, the live view, the Runtime's
     /// settings and what its start report says of them, which reads change too, and whether
     /// the Runtime is started again when it is gone; and which page shows, which only a press
     /// changes.
@@ -473,6 +475,17 @@ impl Ui {
         };
         window.set_config_path(path.into());
         window.set_config_note(note.into());
+        let root = self.launcher.as_ref().ok().and_then(|launcher| launcher.root.as_ref());
+        let place = match (root, self.settings.path()) {
+            (Some(root), Some(file)) => fill(
+                labels.place_root_settings,
+                &[&root.display().to_string(), &file.display().to_string()],
+            ),
+            (Some(root), None) => fill(labels.place_root, &[&root.display().to_string()]),
+            (None, Some(file)) => fill(labels.place_settings, &[&file.display().to_string()]),
+            (None, None) => String::new(),
+        };
+        window.set_place_note(place.into());
         self.paint_accounts_note();
         self.paint_names_note();
         workbench::paint::page(self);

@@ -103,6 +103,9 @@ const UNLOCK_POLL: Duration = Duration::from_millis(100);
 /// The state root and the two launcher paths, as this run resolved them, and
 /// the requests in flight.
 pub struct Launcher {
+    /// The installation folder the paths come from, when they come from one: shown
+    /// on the settings page.
+    pub root: Option<PathBuf>,
     pub state_root: PathBuf,
     pub actingd_config: Option<PathBuf>,
     pub actingd_exe: Option<PathBuf>,
@@ -120,8 +123,10 @@ pub struct Launcher {
 
 impl Launcher {
     pub fn new(paths: InstallPaths) -> Self {
-        let InstallPaths { installation, state_root, actingd_config, actingd_exe } = paths;
+        let InstallPaths { installation, root, state_root, actingd_config, actingd_exe, origin: _ } =
+            paths;
         Self {
+            root,
             state_root,
             actingd_config,
             actingd_exe,

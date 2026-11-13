@@ -57,6 +57,9 @@ slint::include_modules!();
 
 #[derive(Default)]
 struct Args {
+    /// `--root`: the single-location root this run belongs to; a console that sits in
+    /// one may only repeat it (`install::place`).
+    root: Option<PathBuf>,
     state_root: Option<PathBuf>,
     tab: Option<LedgerView>,
     /// `--lang` overrides the settings file for this run only.
@@ -77,6 +80,10 @@ fn parse_args() -> Result<Args> {
     let mut argv = std::env::args().skip(1);
     while let Some(flag) = argv.next() {
         match flag.as_str() {
+            "--root" => match argv.next() {
+                Some(path) => args.root = Some(PathBuf::from(path)),
+                None => bail!("--root 缺少路径 / --root needs a path"),
+            },
             "--state-root" => match argv.next() {
                 Some(path) => args.state_root = Some(PathBuf::from(path)),
                 None => bail!("--state-root 缺少路径 / --state-root needs a path"),
@@ -133,11 +140,15 @@ fn parse_args() -> Result<Args> {
 }
 
 /// Every way out of a start goes through `report`: the usage, a command line
-/// it cannot read, and whatever stops `run`, each with its exit code.
+/// it cannot read, and whatever stops `run`, each with its exit code. Where the
+/// paths come from is placed first, by the installation selection, `--root` and
+/// where this program is, since the settings file goes by the same place; a command
+/// line that cannot be read places by where this program is alone.
 fn main() -> ExitCode {
     report::begin();
-    let loaded = settings::load();
     let parsed = parse_args();
+    let place = install::place(parsed.as_ref().ok().and_then(|args| args.root.as_deref()));
+    let loaded = settings::load(place.settings_root.as_deref());
     // A failure is said in the language this run would have shown: `--lang`
     // when the command line got that far, else the file's.
     let language = parsed
@@ -160,7 +171,7 @@ fn main() -> ExitCode {
     if args.help {
         return report::help(labels, factor);
     }
-    match run(args, loaded, language) {
+    match run(args, place, loaded, language) {
         Ok(()) => ExitCode::SUCCESS,
         Err(fatal) => report::fatal(&fatal, labels, factor),
     }
@@ -174,15 +185,30 @@ fn main() -> ExitCode {
 /// start only for `--tab` or `--source`: the fixed entry passes `--state-root`
 /// on every start, and that alone opens none. Once the event loop is over the
 /// reading threads are told to end, the windows are hidden and let go, and then
-/// the shared state.
-fn run(args: Args, loaded: settings::Loaded, language: Language) -> Result<(), Fatal> {
+/// the shared state. Where the paths and the settings file came from goes to the
+/// technical log once, as an entry that does not by itself put the log on the windows.
+fn run(
+    args: Args,
+    place: install::Place,
+    loaded: settings::Loaded,
+    language: Language,
+) -> Result<(), Fatal> {
     let labels = language.labels();
-    let stored = loaded.settings;
-    let launcher = install::resolve(&args, &stored).map(Launcher::new);
-    if let Err(issue) = &launcher {
-        report::log("startup", &issue.log_text(labels));
+    let settings::Loaded { settings: stored, file, issues, chosen } = loaded;
+    let resolved = place.source.and_then(|source| install::resolve(&args, source, &stored));
+    match &resolved {
+        Ok(paths) => report::log_quiet("place", &paths.log_line(file.path())),
+        Err(issue) => {
+            report::log("startup", &issue.log_text(labels));
+            let shown = file.path().map_or_else(|| "none".to_owned(), |path| path.display().to_string());
+            report::log_quiet("place", &format!("settings={shown}"));
+        }
     }
-    let ui = Ui::new(language, &stored, loaded.file, loaded.issues, launcher);
+    if let Some(text) = chosen.log_text() {
+        report::log_quiet("place", &text);
+    }
+    let launcher = resolved.map(Launcher::new);
+    let ui = Ui::new(language, &stored, file, issues, launcher);
     if let Some(page) = args.page {
         workbench::show_page(&ui, page);
     }
