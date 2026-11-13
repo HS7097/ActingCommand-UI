@@ -290,7 +290,12 @@ fn run_install(set_dir: &Path, root: &Path, plan_path: &Path) -> ExitCode {
                 println!("  所有号已暂停：在监控台确认无误后点「全部开始执勤」 / every account is paused: after a look in the console, press \"put all on duty\"");
             }
             if done.watchdog {
-                println!("  看门狗已装；删除这个文件夹前先在监控台设置页或用 actingctl watchdog uninstall 停掉 / the watchdog is installed; before deleting this folder, remove it in the console's settings or with actingctl watchdog uninstall");
+                let actingctl = done.root.join("runtime").join("actingctl.exe");
+                println!(
+                    "  看门狗已装；删除这个文件夹前先运行 / the watchdog is installed; before deleting this folder, run: \"{}\" watchdog uninstall --root \"{}\"",
+                    actingctl.display(),
+                    done.root.display()
+                );
             }
             ExitCode::SUCCESS
         }

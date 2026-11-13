@@ -1717,7 +1717,12 @@ fn paint_finish(state: &State, wiz: &Wiz<'_>) {
             wiz.set_finished_ok(true);
             wiz.set_finish_body(fill(body, &[&root]).into());
             wiz.set_finish_next(if done.paused { l.finish_next } else { l.finish_next_plain }.into());
-            wiz.set_finish_note(fill(l.uninstall_note, &[&root]).into());
+            let note = if done.watchdog {
+                fill(l.uninstall_note_watchdog, &[&root, &root, &root])
+            } else {
+                fill(l.uninstall_note, &[&root])
+            };
+            wiz.set_finish_note(note.into());
             wiz.set_finish_transcript(SharedString::new());
             wiz.set_finish_has_log(true);
         }
