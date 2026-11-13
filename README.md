@@ -1292,7 +1292,18 @@ names), the `interfaces` of the console's and the Runtime's manifests as the Run
 Runtime's highest `ledger` and `runtime-outcomes` revisions must lie in the console's range), and each
 standard pack's `bundle.json`, `applications.json`, `schedule.json` and `interfaces.json` (its `package`
 revision must lie within the range this Runtime declares). The vision files must carry ONNX Runtime's
-`ort/licenses/onnxruntime/LICENSE` and `ThirdPartyNotices.txt`. Anything wrong stops it before anything is
+`ort/licenses/onnxruntime/LICENSE` and `ThirdPartyNotices.txt`. They may carry DirectML, `ort/DirectML.dll`,
+only the file the Runtime pins (DirectML 1.15.4: 18,527,776 bytes, SHA-256
+`9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1`, Runtime
+`crates/vision-ffi/src/runtime_pin.rs`), and then must carry its licence files too, the three the Runtime's
+tool registry (`scripts/windows-tools/windows-tool-sources.v1.json`, `directml-1.15.4`) has copied beside it:
+`ort/licenses/directml/LICENSE.txt`, `LICENSE-CODE.txt` and `ThirdPartyNotices.txt`. The configuration still
+names the CPU provider (`vision.execution_provider` `cpu`): a run on the CPU loads only
+`onnxruntime_providers_shared.dll` and `onnxruntime.dll` whether or not `DirectML.dll` lies beside them, and
+neither `check-config` nor a start looks at it for `cpu` (Runtime `contracts/vision-model-folders.md`,
+"Loading"); selecting DirectML and the graphics card comes later. The licences of the text-recognition models
+(the Apache-2.0 licence of PP-OCR, for one) are `vision.licenses`, optional, laid at
+`<root>\licenses\vision\<path>` by the rules of a pack's own files below. Anything wrong stops it before anything is
 written: a damaged file, a pack or console that does not match this version and a set it cannot read each
 get a plain sentence, with the technical detail in small print below. Whoever gives you the package puts
 the set together.
@@ -1310,6 +1321,30 @@ The files that go beside a standard pack are its game's `files`, laid at `<root>
     ]
   }
 ]
+```
+
+The vision files and the models' licences:
+
+```json
+"vision": {
+  "provider": "cpu",
+  "files": [
+    {"path": "ort/onnxruntime.dll", "file": "vision/onnxruntime.dll", "size": 17328152, "sha256": "…"},
+    {"path": "ort/onnxruntime_providers_shared.dll", "file": "vision/onnxruntime_providers_shared.dll", "size": 22040, "sha256": "…"},
+    {"path": "ort/licenses/onnxruntime/LICENSE", "file": "vision/onnxruntime/LICENSE", "size": 1094, "sha256": "…"},
+    {"path": "ort/licenses/onnxruntime/ThirdPartyNotices.txt", "file": "vision/onnxruntime/ThirdPartyNotices.txt", "size": 331175, "sha256": "…"},
+    {"path": "ort/DirectML.dll", "file": "vision/DirectML.dll", "size": 18527776, "sha256": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1"},
+    {"path": "ort/licenses/directml/LICENSE.txt", "file": "vision/directml/LICENSE.txt", "size": 1, "sha256": "…"},
+    {"path": "ort/licenses/directml/LICENSE-CODE.txt", "file": "vision/directml/LICENSE-CODE.txt", "size": 1, "sha256": "…"},
+    {"path": "ort/licenses/directml/ThirdPartyNotices.txt", "file": "vision/directml/ThirdPartyNotices.txt", "size": 1, "sha256": "…"},
+    {"path": "models/PP-OCRv6_medium/det.onnx", "file": "vision/det.onnx", "size": 62032837, "sha256": "…"},
+    {"path": "models/PP-OCRv6_medium/rec.onnx", "file": "vision/rec.onnx", "size": 76554979, "sha256": "…"},
+    {"path": "models/PP-OCRv6_medium/keys.txt", "file": "vision/keys.txt", "size": 74947, "sha256": "…"}
+  ],
+  "licenses": [
+    {"path": "PaddleOCR/LICENSE", "file": "vision/PaddleOCR/LICENSE", "size": 1, "sha256": "…"}
+  ]
+}
 ```
 
 **Ten pages.** Pages 1 to 8 only gather choices and run read-only checks; nothing is written. Cancel or
@@ -1355,8 +1390,9 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    press "Put All on Duty"). The options set no rule on one another: the watchdog never starts a root that
    never started, so without "start when setup finishes" the installation stays down until you start it.
 8. **Confirm**: the location, versions, games, instances, options, the folders created and the files written,
-   all listed (with `licenses` when a game brings licence files, and `install-wizard.config.json` with
-   instances, the start and the pause). Once Install is pressed there is no going back to the earlier pages.
+   all listed (with `licenses` when a chosen game or the text-recognition models bring licence files, and
+   `install-wizard.config.json` with instances, the start and the pause). Page 3 says the same of the
+   folders. Once Install is pressed there is no going back to the earlier pages.
 9. **Install**: step by step, each done, skipped or failed, the step under way with a line of detail and a
    progress bar. Before writing, the install files, the emulators and the folder are checked once more. A
    failed step stops the install; what was written stays as it is, and the wizard deletes nothing. Closing
@@ -1368,10 +1404,11 @@ closing the window on those pages asks first, and quitting leaves nothing behind
     them yet: run the wizard again into another folder (a second, separate ActingCommand), or wait for a
     later version. After a failure the page says which step and why, offers to copy the error and
     to open the setup log, and lists how to undo what the install actually did, item by item: a Runtime it
-    started (whether it is paused, and how to stop it: open `<root>\ui\acui.exe` and press "Request
-    Shutdown", or run `"<root>\runtime\actingctl.exe" request-shutdown --state-root "<root>\state"`), a
-    watchdog it installed (`"<root>\runtime\actingctl.exe" watchdog uninstall --root "<root>"`), the
-    shortcuts it created (their paths); deleting the folder comes last.
+    started and may have left running (whether it is paused, and how to stop it: open `<root>\ui\acui.exe`
+    and press "Request Shutdown", or run `"<root>\runtime\actingctl.exe" request-shutdown --state-root
+    "<root>\state"`), or, when step 13 failed after its close, that the Runtime is already stopped and keeps
+    the first pause for its next start; a watchdog it installed (`"<root>\runtime\actingctl.exe" watchdog
+    uninstall --root "<root>"`), the shortcuts it created (their paths); deleting the folder comes last.
 
 **What it lays down:**
 
@@ -1382,40 +1419,64 @@ closing the window on those pages asks first, and quitting leaves nothing behind
   ui\                   the console (acui.exe)
   packages\<game>\      standard packs, in the installed layout the Runtime reads
   licenses\<game>\      the licence and notice files beside a standard pack (when the set has them)
-  vision\               text recognition: ort\ (with ONNX Runtime's licence files) and models\<model>\
+  licenses\vision\      the text-recognition models' licences (when the set has them)
+  vision\               text recognition: ort\ (with ONNX Runtime's licence files, and DirectML.dll with
+                        its own in ort\licenses\directml\ when the set carries it) and models\<model>\
   state\                the records (the state root)
   actingd.config.json   the Runtime's configuration
   install-wizard.config.json  the full configuration with the instances (with instances and the first
                         pause only; once in place, the same as the line above)
+  actingd.config.json.prev-<ms>  the configuration without the instances, kept by `config replace`
+                        when step 13 puts the full one in place
   acui.toml             this installation's console settings (the language only)
   install-wizard.log    the setup log
 ```
 
 The fifteen steps of page 9, in order: create the folders and the setup log; lay out the Runtime, the Tools
 and the console, each file checked against its `BUILD-MANIFEST.json`; place the vision files, each against
-its hash; lay out the standard packs (each zip's SHA-256 computed once more right before, against the set)
+its hash, and the models' licences in `licenses\vision\`; lay out the standard packs (each zip's SHA-256 computed once more right before, against the set)
 and place the files beside each, each against its hash, in `licenses\<game>\`; check each game with
 `actinglab standard-pack check`; write the configuration (as `actingd.config.json.part` first); put it in
 place only once `actingd check-config` passes; hand the root to the Runtime's own installer with `actinglab
 adopt`; write the console settings; create the shortcuts (named after the root folder, such as
 "ActingCommand Console (AC2)", with a number when that name is taken: someone else's is never touched);
-start (`actinglab up`); pause for the first start (`actinglab pause --reason first-start`); connect the
-instances (`actinglab config replace`); install the watchdog (`actinglab watchdog install`); confirm the
-Runtime is online with `actinglab status`. Steps not chosen show "Skipped". Every child program runs without
-a window, its output in the setup log.
+start (`actinglab up`: exit 0, and none of the post-start checks its answer lists under
+`post_check.checks` may be `fail`, else the step fails naming each failed check with its values, since a
+start reports a failed check without refusing); pause for the first start (`actinglab pause --reason
+first-start`); connect the instances: stop the Runtime, put the configuration with the instances in place,
+start it again (below); install the watchdog (`actinglab watchdog install`); confirm the Runtime is online
+with `actinglab status`. Steps not chosen show "Skipped". Every child program runs without a window, its
+output in the setup log.
 
 Why the instances come last: a global pause stops no run already under way, so a Runtime started with its
 instances could dispatch between the start and the pause. With instances and the first pause, step 7
 checks the full configuration, keeps it as `install-wizard.config.json` and puts in place the same
 configuration without the instances (the same salt, state root and MuMu folder, through `check-config`
-too); once the Runtime runs it and the pause is set, step 13 puts the full one in place with the Runtime's
-own `config replace`: it checks the file with this build's `check-config`, then, the Runtime running, takes
-its own hold, closes it formally, swaps the file (the replaced one kept as `actingd.config.json.prev-<ms>`)
-and starts it again; it hands back only its own hold and leaves the global pause as it is. The global pause
-is a persisted runtime fact that every start that is not installer-held restores before any instance is
-prepared (Runtime `contracts/scheduling-pause.md`, "Persistence, no expiry"). The last step reads the
-status once: online, the first pause still there, no instance running a task (a run is a failure, never a
-success), and every configured instance present.
+too); once the Runtime runs it and the pause is set, step 13 connects the instances in three parts, each
+answer checked:
+
+1. the formal close, `"<root>\runtime\actingctl.exe" request-shutdown --state-root "<root>\state" --wait 60`,
+   which must answer `runtime_shutdown_completed` (not `actinglab down`: its stop keeps a hold of its own
+   that the console does not lift);
+2. `actinglab config replace install-wizard.config.json --sha <its SHA-256>` with no Runtime running: it
+   checks the file with this build's `check-config` and swaps it, the replaced one kept as
+   `actingd.config.json.prev-<ms>`; its answer must say `runtime_running` false, and the file in place is
+   read back against the full configuration's SHA-256;
+3. `actinglab up` again, judged as step 11's.
+
+The global pause is a persisted runtime fact that every start that is not installer-held restores before
+any instance is prepared (Runtime `contracts/scheduling-pause.md`, "Persistence, no expiry"), so the start
+of part 3 comes up paused. The wizard does not run `config replace` on the running Runtime: on a test
+machine (0.12.58) it was refused that way twice, `install_command_refused` with `post_check_failed`
+(`count` 1) and the notes `install_caveat_noted`, `guard_failed` and `foreign_pauses`, although the file had
+been swapped and the Runtime restarted with its pause restored. Its operation counts the wizard's own pause
+as another tool's (Runtime `crates/lab-rescue/src/install/config_swap.rs` opens it with no acknowledgement,
+and `config replace` takes neither `--known-pause` nor `--ack-guard`); that is asked of the Runtime. In the
+order above the same machine passed every part: the close completed, `config replace` answered
+`install_command_done` with `runtime_running` false, `up` exited 0 with all ten post-start checks passed,
+and `status` showed the first pause, the instances, and the first task waiting on the global pause. The
+last step reads the status once: online, the global pause still the first-start one, no instance running a
+task (a run is a failure, never a success), and every configured instance present.
 
 The watchdog comes last: it never starts a root that never started, one closed formally or one the
 installer is working on, and starts only one whose last start ended in an error (Runtime
@@ -1426,7 +1487,7 @@ wizard just reported failed, and a failure before it leaves no task.
 shortcuts and the watchdog task you tick; it never writes the global
 `%APPDATA%\ActingCommand\acui.toml`, touches no other installation or state root, and starts or stops no
 emulator. Every child program it runs (and "Open console") gets none of the `ACTINGCOMMAND_…` and
-`ACTINGLAB_…` variables the wizard inherited, only the initiator it sets itself, so a wizard started where
+`ACTINGLAB_…` variables the wizard inherited, only the initiator it sets itself for the Lab's, so a wizard started where
 another state root is named still acts on its own root only. It reads another ActingCommand for one thing
 only: it finds each installation's root from the running `actingcommand-actingd.exe` and from the
 registered watchdog tasks (`Get-ScheduledTask` in a hidden Windows PowerShell, read only, as the Runtime

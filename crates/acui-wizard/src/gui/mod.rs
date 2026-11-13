@@ -1717,12 +1717,14 @@ fn paint_confirm(state: &State, wiz: &Wiz<'_>) {
         value: if chosen.is_empty() { l.options_none.to_owned() } else { chosen.join(l.list_separator) }.into(),
     });
     // What the install will make of these choices: a licence folder for a game that brings
-    // licence files, and the full configuration kept while the first start runs without it.
+    // licence files or for the text-recognition models' licences, and the full configuration kept
+    // while the first start runs without it.
     let licences = state.verified().is_some_and(|set| {
-        state
-            .chosen_games()
-            .iter()
-            .any(|game| set.bundle(&game.game).is_some_and(|bundle| !bundle.entry.files.is_empty()))
+        !set.set.vision.licenses.is_empty()
+            || state
+                .chosen_games()
+                .iter()
+                .any(|game| set.bundle(&game.game).is_some_and(|bundle| !bundle.entry.files.is_empty()))
     });
     let mut folders = l.folders_value.to_owned();
     if licences {

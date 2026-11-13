@@ -74,6 +74,13 @@ impl Said {
         }
         self
     }
+
+    /// This sentence with another after it, each language's half after its own.
+    pub fn with_said(mut self, detail: &Said) -> Self {
+        self.zh = format!("{}：{}", self.zh, detail.zh);
+        self.en = format!("{}: {}", self.en, detail.en);
+        self
+    }
 }
 
 /// Both halves on one line, as the log and stderr carry them.

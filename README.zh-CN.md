@@ -880,7 +880,17 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
 `interfaces`：`runtime-client`、`actingd-config` 两边要有交集，`ledger`、`runtime-outcomes` 要 Runtime 的最高
 修订落在监控台的区间里；每个标准包核它的 `bundle.json`、`applications.json`、`schedule.json` 与
 `interfaces.json`（`package` 修订要落在这一版 Runtime 声明的区间里）。视觉文件必须带上 ONNX Runtime 的
-`ort/licenses/onnxruntime/LICENSE` 和 `ThirdPartyNotices.txt`。哪一项不对就停下，什么也不写：文件坏了、
+`ort/licenses/onnxruntime/LICENSE` 和 `ThirdPartyNotices.txt`。视觉文件里可以带 DirectML（`ort/DirectML.dll`），
+只认 Runtime 钉住的那一个（DirectML 1.15.4：18,527,776 字节，SHA-256
+`9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1`，见 Runtime
+`crates/vision-ffi/src/runtime_pin.rs`）；带了它，就必须同时带上它的许可文件，即 Runtime 工具登记表
+（`scripts/windows-tools/windows-tool-sources.v1.json` 的 `directml-1.15.4`）要放在它旁边的三个：
+`ort/licenses/directml/LICENSE.txt`、`LICENSE-CODE.txt` 和 `ThirdPartyNotices.txt`。配置仍写 CPU 提供方
+（`vision.execution_provider` 为 `cpu`）：CPU 运行只加载 `onnxruntime_providers_shared.dll` 和 `onnxruntime.dll`，
+旁边有没有 `DirectML.dll` 都一样，`cpu` 时 `check-config` 和启动也都不看它（Runtime
+`contracts/vision-model-folders.md`「Loading」）；选用 DirectML 和显卡是下一步的事。文字识别模型的许可（例如
+PP-OCR 的 Apache-2.0 许可）写在可选的 `vision.licenses` 里，装到 `<根>\licenses\vision\<path>`，规则与下面标准包
+旁边的文件相同。哪一项不对就停下，什么也不写：文件坏了、
 和这一版不配套、读不懂，各有一句人话，技术细节写在下面一行小字里。安装集由提供安装包的人拼好交给你。
 
 标准包旁边的文件写在这个游戏的 `files` 里，装到 `<根>\licenses\<游戏>\<path>`；`path` 只能是普通的相对路径，
@@ -896,6 +906,30 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
     ]
   }
 ]
+```
+
+视觉文件和模型的许可：
+
+```json
+"vision": {
+  "provider": "cpu",
+  "files": [
+    {"path": "ort/onnxruntime.dll", "file": "vision/onnxruntime.dll", "size": 17328152, "sha256": "…"},
+    {"path": "ort/onnxruntime_providers_shared.dll", "file": "vision/onnxruntime_providers_shared.dll", "size": 22040, "sha256": "…"},
+    {"path": "ort/licenses/onnxruntime/LICENSE", "file": "vision/onnxruntime/LICENSE", "size": 1094, "sha256": "…"},
+    {"path": "ort/licenses/onnxruntime/ThirdPartyNotices.txt", "file": "vision/onnxruntime/ThirdPartyNotices.txt", "size": 331175, "sha256": "…"},
+    {"path": "ort/DirectML.dll", "file": "vision/DirectML.dll", "size": 18527776, "sha256": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1"},
+    {"path": "ort/licenses/directml/LICENSE.txt", "file": "vision/directml/LICENSE.txt", "size": 1, "sha256": "…"},
+    {"path": "ort/licenses/directml/LICENSE-CODE.txt", "file": "vision/directml/LICENSE-CODE.txt", "size": 1, "sha256": "…"},
+    {"path": "ort/licenses/directml/ThirdPartyNotices.txt", "file": "vision/directml/ThirdPartyNotices.txt", "size": 1, "sha256": "…"},
+    {"path": "models/PP-OCRv6_medium/det.onnx", "file": "vision/det.onnx", "size": 62032837, "sha256": "…"},
+    {"path": "models/PP-OCRv6_medium/rec.onnx", "file": "vision/rec.onnx", "size": 76554979, "sha256": "…"},
+    {"path": "models/PP-OCRv6_medium/keys.txt", "file": "vision/keys.txt", "size": 74947, "sha256": "…"}
+  ],
+  "licenses": [
+    {"path": "PaddleOCR/LICENSE", "file": "vision/PaddleOCR/LICENSE", "size": 1, "sha256": "…"}
+  ]
+}
 ```
 
 **十步**。第 1 到 8 页只收集选择、做只读的检查，不写任何东西；在这些页上按「取消」或关窗都会先问一句，
@@ -932,9 +966,9 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
    暂停（默认开：在监控台看过每个实例都正常后，按「全部开始执勤」才开始操作游戏）。
    这几个选项之间没有限制：看门狗从不拉起一个从没启动过的根，没勾「装完马上启动」时，这一套会一直停着，
    直到你自己启动它。
-8. **确认**：把安装位置、版本、游戏、实例、选项、会建的文件夹和会写的文件列一遍（游戏带许可文件时多一个
-   `licenses`；有实例又勾了启动和暂停时多一个 `install-wizard.config.json`）。按「开始安装」后不能再
-   回到前面几页。
+8. **确认**：把安装位置、版本、游戏、实例、选项、会建的文件夹和会写的文件列一遍（选的游戏或文字识别模型带
+   许可文件时多一个 `licenses`；有实例又勾了启动和暂停时多一个 `install-wizard.config.json`）。第 3 页说到文件夹
+   时也这样写。按「开始安装」后不能再回到前面几页。
 9. **安装**：逐步显示，每步完成、跳过或失败，进行中的一步下面有一行细节和进度条。写入之前先把安装文件、
    模拟器和安装位置再核一遍。任何一步失败就停下，已经写下的东西原样留着，向导不删除任何东西。安装中关窗会被
    拦住。
@@ -942,10 +976,11 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
     与向导分开运行，不带向导自己继承来的任何 `ACTINGCOMMAND_…`、`ACTINGLAB_…` 环境变量）和
     「打开安装文件夹」都由人自己按，向导不自动打开任何东西。这一页还写明以后怎么加实例（监控台现在还不能直接
     添加）：再运行一次向导装到另一个文件夹（那是另一套，分开运行），或者等以后的新版。失败时这一页写明在哪一步、为什么，可以复制错误
-    信息、打开安装记录，并按向导真的做过的几样逐项写怎么收拾：启动过 Runtime 的，写它有没有暂停，以及怎么停
-    （打开 `<根>\ui\acui.exe` 按「请求关闭」，或运行 `"<根>\runtime\actingctl.exe" request-shutdown --state-root
-    "<根>\state"`）；装过看门狗的，写 `"<根>\runtime\actingctl.exe" watchdog uninstall --root "<根>"`；建过快捷方式的，
-    列出路径；最后才是删除整个文件夹。
+    信息、打开安装记录，并按向导真的做过的几样逐项写怎么收拾：启动过 Runtime、它可能还开着的，写它有没有暂停，
+    以及怎么停（打开 `<根>\ui\acui.exe` 按「请求关闭」，或运行 `"<根>\runtime\actingctl.exe" request-shutdown
+    --state-root "<根>\state"`）；第 13 步在停下 Runtime 之后失败的，写明它已经停下、不用再停，首次暂停留到下次启动；
+    装过看门狗的，写 `"<根>\runtime\actingctl.exe" watchdog uninstall --root "<根>"`；建过快捷方式的，列出路径；
+    最后才是删除整个文件夹。
 
 **装成什么样**：
 
@@ -956,31 +991,49 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
   ui\                   监控台（acui.exe）
   packages\<游戏>\      标准包，按 Runtime 读的已安装布局铺开
   licenses\<游戏>\      标准包旁边的许可、声明文件（安装集里有才建）
-  vision\               文字识别：ort\（含 ONNX Runtime 的许可文件）与 models\<模型>\
+  licenses\vision\      文字识别模型的许可（安装集里有才建）
+  vision\               文字识别：ort\（含 ONNX Runtime 的许可文件；安装集带 DirectML 时还有 DirectML.dll，
+                        它的许可在 ort\licenses\directml\）与 models\<模型>\
   state\                运行记录（状态根）
   actingd.config.json   Runtime 的配置
   install-wizard.config.json  带实例的完整配置（有实例又先暂停时才写，换上之后与上一行相同）
+  actingd.config.json.prev-<毫秒>  不带实例的那份配置，第 13 步换上完整配置时由 `config replace` 留下
   acui.toml             这一套监控台的设置（只写语言）
   install-wizard.log    安装记录
 ```
 
 第 9 页的十五步依次是：建文件夹和安装记录；铺开 Runtime、Tools 和监控台，每个文件都对 `BUILD-MANIFEST.json`
-核一遍；放视觉文件并逐个核哈希；铺标准包（铺之前对 zip 再算一次 SHA-256，和安装集对上才铺），并把它旁边的
+核一遍；放视觉文件并逐个核哈希，模型的许可放进 `licenses\vision\`；铺标准包（铺之前对 zip 再算一次 SHA-256，和安装集对上才铺），并把它旁边的
 许可文件逐个核哈希放进 `licenses\<游戏>\`；用 `actinglab standard-pack check` 检查每个游戏；写配置（先写成
 `actingd.config.json.part`）；`actingd check-config` 通过才改名就位；`actinglab adopt` 把这个根交给 Runtime
 自己的安装器；写监控台设置；建快捷方式（名字带根文件夹名，如「ActingCommand 监控台（AC2）」，同名的已经在
-就加序号，从不动别人的）；启动（`actinglab up`）；首次暂停（`actinglab pause --reason first-start`）；接上实例
-（`actinglab config replace`）；装看门狗（`actinglab watchdog install`）；`actinglab status` 确认在线。没勾的步骤
-显示「跳过」。所有子程序都不开窗口，输出写进安装记录。
+就加序号，从不动别人的）；启动（`actinglab up`：退出码要是 0，答复里 `post_check.checks` 列出的启动后检查不能有
+`fail`，有就报错并逐项写出失败项和它的数值——启动遇到检查不过只报告、不拒绝）；首次暂停（`actinglab pause --reason
+first-start`）；接上实例：先停下 Runtime，换上带实例的配置，再启动（见下文）；装看门狗（`actinglab watchdog
+install`）；`actinglab status` 确认在线。没勾的步骤显示「跳过」。所有子程序都不开窗口，输出写进安装记录。
 
 为什么实例最后才接上：全局暂停不打断已经在跑的任务，带着实例启动的 Runtime 在启动和暂停之间就可能派出任务。
 所以有实例又勾了「先暂停」时，第 7 步核过带实例的完整配置后，先把它留成 `install-wizard.config.json`，放进去的是
 同一份配置去掉实例（盐、状态根、MuMu 位置都不变，也过一遍 `check-config`）；Runtime 带着它启动、挂上暂停之后，
-第 13 步用 Runtime 自己的 `config replace` 换上完整配置：它先用这一版的 `check-config` 校验，Runtime 在运行就
-自己挂保持、正式关闭、换文件（被换下的留成 `actingd.config.json.prev-<毫秒>`）、再启动，保持只交还它自己挂的，
-全局暂停原样留着。全局暂停是持久的运行事实，每次不是安装器保持的启动都会在准备任何实例之前把它恢复
-（Runtime `contracts/scheduling-pause.md`「Persistence, no expiry」）。最后一步读一次状态：要在线、首次暂停还在、
-没有实例在跑任务（有就报错，绝不报成功），配置里的实例都在。
+第 13 步分三段接上实例，每段都核答复：
+
+1. 正式关闭：`"<根>\runtime\actingctl.exe" request-shutdown --state-root "<根>\state" --wait 60`，要答
+   `runtime_shutdown_completed`（不用 `actinglab down`：它的关闭会挂一个自己的保持，监控台解不开）；
+2. Runtime 停着时运行 `actinglab config replace install-wizard.config.json --sha <它的 SHA-256>`：只用这一版的
+   `check-config` 校验并换文件，被换下的留成 `actingd.config.json.prev-<毫秒>`；答复里要有 `runtime_running` 为
+   false，换完再读一遍就位的文件，哈希要等于完整配置的；
+3. 再运行 `actinglab up`，按第 11 步的同样标准核。
+
+全局暂停是持久的运行事实，每次不是安装器保持的启动都会在准备任何实例之前把它恢复（Runtime
+`contracts/scheduling-pause.md`「Persistence, no expiry」），所以第 3 段启动起来就是暂停着的。向导不在 Runtime
+运行时跑 `config replace`：在一台实验机上（0.12.58）这样做两次都被判失败，`install_command_refused`、
+`post_check_failed`（`count` 1），另带提醒 `install_caveat_noted`、`guard_failed`、`foreign_pauses`，可实际上文件已经
+换了、Runtime 也重启了，暂停也恢复了。原因是这次操作把向导自己挂的暂停当成了别的工具的（Runtime
+`crates/lab-rescue/src/install/config_swap.rs` 打开操作时不带任何确认，`config replace` 也不收 `--known-pause`、
+`--ack-guard`），这已作为需求交给 Runtime。按上面的顺序，同一台机器上每段都过：关闭完成；`config replace` 答
+`install_command_done`、`runtime_running` 为 false；`up` 退出码 0，十项启动后检查全过；`status` 里首次暂停还在、
+实例都接上了，第一个任务挂在全局暂停上等着。最后一步读一次状态：要在线、全局暂停仍是首次暂停、没有实例在跑任务
+（有就报错，绝不报成功），配置里的实例都在。
 
 看门狗放在最后：它从不拉起从没启动过的根、正式关掉的根和安装器正在动的根，只拉起上次启动以出错收场的
 （Runtime `contracts/runtime-watchdog.md`「Decision」第 3、5、6、7a 行）。装在最后，向导刚报失败的启动不会
@@ -988,8 +1041,8 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
 
 **不碰已有的 ActingCommand**：向导只写它新建的那个文件夹，外加你勾选的快捷方式和看门狗计划任务；它从不写
 全局的 `%APPDATA%\ActingCommand\acui.toml`，不碰别的安装和别的状态根，也不启动或关闭任何模拟器。它运行的每个
-子程序（以及「打开监控台」）都去掉了向导自己继承来的所有 `ACTINGCOMMAND_…`、`ACTINGLAB_…` 环境变量，只带它
-自己设的发起者，所以从带着别的状态根变量的环境里启动，也只动这一套。它读别的 ActingCommand 只为一件事：
+子程序（以及「打开监控台」）都去掉了向导自己继承来的所有 `ACTINGCOMMAND_…`、`ACTINGLAB_…` 环境变量，Lab 的程序
+只带它自己设的发起者，所以从带着别的状态根变量的环境里启动，也只动这一套。它读别的 ActingCommand 只为一件事：
 从正在运行的 `actingcommand-actingd.exe` 和登记了的看门狗计划任务（在隐藏的 Windows PowerShell 里只读地
 跑 `Get-ScheduledTask`，与 Runtime 读计划任务的办法相同）找出各套的根，只读那一套根下的
 `actingd.config.json`，看它绑了哪些模拟器，好在第 5 页标出来。

@@ -299,7 +299,7 @@ pub const ZH: Labels = Labels {
     root_per_user: "这里是 ActingCommand 放设置和日志的文件夹（{}），或者在它里面、包着它。请换个地方，比如另建一个文件夹。",
     root_no_space: "磁盘空间不够：需要约 {}，只剩 {}。",
     root_space_unknown: "读不出这块磁盘还剩多少空间，请换个地方。",
-    root_folders: "向导会在里面建这些文件夹：runtime（程序）、tools（工具）、ui（监控台）、packages（游戏资源）、vision（文字识别）、state（运行记录）；游戏资源带着许可文件时，还有 licenses（许可文件）。",
+    root_folders: "向导会在里面建这些文件夹：runtime（程序）、tools（工具）、ui（监控台）、packages（游戏资源）、vision（文字识别）、state（运行记录）；安装文件带着许可文件时（游戏资源的或文字识别模型的），还有 licenses（许可文件）。",
 
     games_body: "勾选要让 ActingCommand 代你操作的游戏。没勾的以后可以再装。",
     games_row_one: "{} · {} 个区服",
@@ -368,7 +368,7 @@ pub const ZH: Labels = Labels {
     folders_value: "runtime、tools、ui、packages、vision、state",
     folder_licenses: "licenses",
     files_value: "actingd.config.json（设置）、acui.toml（监控台设置）、install-wizard.log（安装记录）",
-    file_full_config: "install-wizard.config.json（带实例的设置，暂停之后换上）",
+    file_full_config: "install-wizard.config.json（带实例的设置：暂停之后先停下 ActingCommand，再换上）",
     confirm_note: "按「开始安装」后，向导会把文件写进 {}。安装时请不要关窗口。开始以后就不能再回到前面几页了。",
 
     install_steps: [
@@ -384,7 +384,7 @@ pub const ZH: Labels = Labels {
         "建立快捷方式",
         "启动 ActingCommand",
         "先让所有实例暂停",
-        "接上实例",
+        "接上实例（先停下 ActingCommand，换上带实例的设置，再启动）",
         "设置开机自动运行",
         "确认 ActingCommand 已在运行",
     ],
@@ -495,7 +495,7 @@ pub const EN: Labels = Labels {
     root_per_user: "This is the folder where ActingCommand keeps its settings and logs ({}), or lies in it or holds it. Choose another place, such as a new folder of its own.",
     root_no_space: "Not enough disk space: about {} is needed and {} is free.",
     root_space_unknown: "The free space on this disk cannot be read. Choose another place.",
-    root_folders: "The wizard creates these folders inside it: runtime (programs), tools, ui (console), packages (game resources), vision (text recognition), state (records); and licenses, when the game resources come with licence files.",
+    root_folders: "The wizard creates these folders inside it: runtime (programs), tools, ui (console), packages (game resources), vision (text recognition), state (records); and licenses, when the setup files come with licence files (for the game resources or the text-recognition model).",
 
     games_body: "Tick the games you want ActingCommand to play for you. You can add the others later.",
     games_row_one: "{} · {} server",
@@ -564,7 +564,7 @@ pub const EN: Labels = Labels {
     folders_value: "runtime, tools, ui, packages, vision, state",
     folder_licenses: "licenses",
     files_value: "actingd.config.json (settings), acui.toml (console settings), install-wizard.log (setup log)",
-    file_full_config: "install-wizard.config.json (the settings with the instances, put in place after the pause)",
+    file_full_config: "install-wizard.config.json (the settings with the instances: after the pause, ActingCommand is stopped and they are put in place)",
     confirm_note: "When you press Install, the wizard writes files into {}. Keep this window open while it installs. Once it starts you cannot go back to the earlier pages.",
 
     install_steps: [
@@ -580,7 +580,7 @@ pub const EN: Labels = Labels {
         "Create shortcuts",
         "Start ActingCommand",
         "Keep every instance paused",
-        "Connect the instances",
+        "Connect the instances (stop ActingCommand, switch to the settings with them, start again)",
         "Set up automatic start",
         "Confirm ActingCommand is running",
     ],

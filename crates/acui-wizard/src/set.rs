@@ -14,7 +14,11 @@
 //!
 //! A standard package's own files go to `<root>\licenses\<game>\<path>`, `path` a plain relative
 //! path (each once per game). The vision set must carry ONNX Runtime's licence and notices
-//! beside the library ([`ORT_LICENSE`], [`ORT_NOTICES`]).
+//! beside the library ([`ORT_LICENSE`], [`ORT_NOTICES`]). It may carry DirectML
+//! ([`DIRECTML_LIBRARY`], only the file the Runtime pins), and then DirectML's own licence files
+//! too ([`DIRECTML_LICENSES`]); the configuration still names the CPU provider. The licences of
+//! the vision models (`vision.licenses`, optional) go to `<root>\licenses\vision\<path>`, by the
+//! rules of a standard package's own files.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -39,7 +43,9 @@ use crate::text::Said;
 
 pub const SET_FILE: &str = "install-set.json";
 pub const SET_SCHEMA: &str = "actingcommand.install-set.v1";
-/// The one provider a set carries in v1 (DirectML later).
+/// The one execution provider the configuration names in v1. A set may already carry DirectML
+/// ([`DIRECTML_LIBRARY`]); the configuration that selects it (and its `directml_device`) comes
+/// later.
 pub const VISION_PROVIDER: &str = "cpu";
 /// The file a vision root needs whenever `vision` is configured (Runtime
 /// `contracts/vision-model-folders.md`).
@@ -47,8 +53,30 @@ pub const ORT_LIBRARY: &str = "ort/onnxruntime.dll";
 /// ONNX Runtime's licence and its third-party notices, which go wherever the library goes.
 pub const ORT_LICENSE: &str = "ort/licenses/onnxruntime/LICENSE";
 pub const ORT_NOTICES: &str = "ort/licenses/onnxruntime/ThirdPartyNotices.txt";
-/// The root's folder for the files that go beside the standard packages, one folder per game.
+/// DirectML, which a vision root holds for the DirectML provider only: a run on the CPU loads
+/// exactly `onnxruntime_providers_shared.dll` and `onnxruntime.dll` whether or not it lies
+/// beside them, and neither check-config nor a start looks at it for a `cpu` section (Runtime
+/// `contracts/vision-model-folders.md`, "Loading"; `apps/actingd/src/config.rs` `inspect`).
+pub const DIRECTML_LIBRARY: &str = "ort/DirectML.dll";
+/// The one DirectML a set may carry: DirectML 1.15.4 as the Runtime pins it (Runtime
+/// `crates/vision-ffi/src/runtime_pin.rs` `DIRECTML_RUNTIME_PIN`, the `pinned_files` of
+/// `directml-1.15.4` in `scripts/windows-tools/windows-tool-sources.v1.json`).
+pub const DIRECTML_SIZE: u64 = 18_527_776;
+pub const DIRECTML_SHA256: &str = "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1";
+/// DirectML's licence files, which go wherever it goes: the three files the Runtime's tool
+/// registry has whoever places DirectML copy to `ort/licenses/directml/` (`directml-1.15.4`,
+/// `placement_note`; `contracts/vision-model-folders.md`, "Pinned files").
+pub const DIRECTML_LICENSES: [&str; 3] = [
+    "ort/licenses/directml/LICENSE.txt",
+    "ort/licenses/directml/LICENSE-CODE.txt",
+    "ort/licenses/directml/ThirdPartyNotices.txt",
+];
+/// The root's folder for the licence and notice files that go beside what the set installs:
+/// one folder per game for a standard package's own files, and [`VISION_LICENSES_DIR`] for the
+/// vision models'.
 pub const LICENSES_DIR: &str = "licenses";
+/// The folder under [`LICENSES_DIR`] for `vision.licenses`.
+pub const VISION_LICENSES_DIR: &str = "vision";
 const SET_FILE_LIMIT: u64 = 1 << 20;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -115,6 +143,10 @@ impl BundleEntry {
 pub struct VisionEntry {
     pub provider: String,
     pub files: Vec<VisionFile>,
+    /// The licences of the vision models (PP-OCR's, for one), each laid at
+    /// `<root>\licenses\vision\<path>`; optional.
+    #[serde(default)]
+    pub licenses: Vec<PlacedFile>,
 }
 
 /// A file laid as it is: where it goes (`path`, `/`-separated, below its folder in the root),
@@ -157,7 +189,18 @@ impl InstallSet {
         for vision in &self.vision.files {
             files.push((format!("vision {}", vision.path), vision.file_ref()));
         }
+        for licence in &self.vision.licenses {
+            files.push((format!("vision licence {}", licence.path), licence.file_ref()));
+        }
         files
+    }
+
+    /// Whether the set carries DirectML ([`DIRECTML_LIBRARY`]).
+    pub fn carries_directml(&self) -> bool {
+        self.vision
+            .files
+            .iter()
+            .any(|file| file.path.eq_ignore_ascii_case(DIRECTML_LIBRARY))
     }
 }
 
@@ -177,7 +220,9 @@ fn commit_like(text: &str) -> bool {
 /// plainly inside the set folder with a size and a SHA-256, each game once and a plain folder
 /// name, each of a game's own files at a plain relative path and each path once in its game, a
 /// CPU vision set with ONNX Runtime, its licence and notices and at least one model, each vision
-/// path once and below `ort/` or `models/<model_ref>/`.
+/// path once and below `ort/` or `models/<model_ref>/`; DirectML, when carried, the pinned file
+/// with its three licence files; each vision licence at a plain relative path, each once, and no
+/// game whose folder would be theirs.
 pub fn set_problems(set: &InstallSet) -> Vec<Said> {
     let mut problems = Vec::new();
     if set.schema_version != SET_SCHEMA {
@@ -289,6 +334,58 @@ pub fn set_problems(set: &InstallSet) -> Vec<Said> {
     if !models {
         problems.push(Said::new("视觉文件里没有模型", "the vision set holds no model"));
     }
+    if let Some(directml) = set
+        .vision
+        .files
+        .iter()
+        .find(|file| file.path.eq_ignore_ascii_case(DIRECTML_LIBRARY))
+    {
+        if directml.size != DIRECTML_SIZE || !directml.sha256.eq_ignore_ascii_case(DIRECTML_SHA256) {
+            problems.push(
+                Said::new(
+                    "DirectML.dll 不是 Runtime 钉住的那一版（DirectML 1.15.4）",
+                    "DirectML.dll is not the one the Runtime pins (DirectML 1.15.4)",
+                )
+                .with(format!(
+                    "{} bytes {}, pinned {DIRECTML_SIZE} bytes {DIRECTML_SHA256}",
+                    directml.size, directml.sha256
+                )),
+            );
+        }
+        for required in DIRECTML_LICENSES {
+            if !paths.contains(&required.to_ascii_lowercase()) {
+                problems.push(
+                    Said::new("带了 DirectML，却缺少它的许可文件", "the vision set carries DirectML without its licence files")
+                        .with(required),
+                );
+            }
+        }
+    }
+    let mut licences = BTreeSet::new();
+    for licence in &set.vision.licenses {
+        if !safe_relative(&licence.path) {
+            problems.push(
+                Said::new(
+                    "视觉模型许可文件的位置不是普通的相对路径",
+                    "a vision model's licence file is not placed at a plain relative path",
+                )
+                .with(&licence.path),
+            );
+        } else if !licences.insert(licence.path.to_ascii_lowercase()) {
+            problems.push(
+                Said::new("视觉模型许可文件的位置重复", "a vision model's licence file is placed twice").with(&licence.path),
+            );
+        }
+    }
+    if !set.vision.licenses.is_empty() && games.contains(VISION_LICENSES_DIR) {
+        problems.push(
+            Said::new(
+                "有个游戏的文件夹名和视觉模型许可文件的文件夹撞名",
+                "a game's folder name is the folder of the vision models' licence files",
+            )
+            .with(format!("{LICENSES_DIR}/{VISION_LICENSES_DIR}")),
+        );
+    }
     problems
 }
 
@@ -368,6 +465,7 @@ pub struct VerifiedSet {
     /// The Runtime's `package` range, from its own manifest.
     pub package_range: [u64; 2],
     pub bundles: Vec<VerifiedBundle>,
+    /// The bytes of the vision files and of the vision models' licences.
     pub vision_bytes: u64,
 }
 
@@ -569,7 +667,7 @@ pub fn verify_set(dir: &Path, report: &mut dyn FnMut(Event)) -> Result<VerifiedS
         )));
         bundles.push(bundle);
     }
-    let vision_bytes = set.vision.files.iter().map(|file| file.size).sum();
+    let vision_bytes = set.vision.files.iter().chain(&set.vision.licenses).map(|file| file.size).sum();
     Ok(VerifiedSet {
         dir: dir.to_path_buf(),
         set,
@@ -786,6 +884,111 @@ mod tests {
         assert_eq!(what, "standard package azurlane file pack-files/NOTICE.md");
         assert_eq!((file.file.as_str(), file.size), ("bundles/azurlane/NOTICE.md", 3));
         assert_eq!(set.bundles[0].files[1].path, "LICENSES/Upstream/LICENSE");
+    }
+
+    /// `good()` with DirectML as the Runtime pins it (Runtime `crates/vision-ffi/src/runtime_pin.rs`)
+    /// and its three licence files (sizes and digests of these three are placeholders), and the
+    /// OCR model's licence in `vision.licenses`.
+    fn with_directml() -> Value {
+        let mut set = good();
+        let files = set["vision"]["files"].as_array_mut().unwrap();
+        files.push(json!({"path": "ort/DirectML.dll", "file": "vision/DirectML.dll", "size": 18527776,
+            "sha256": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1"}));
+        for (name, fill) in [("LICENSE.txt", '1'), ("LICENSE-CODE.txt", '2'), ("ThirdPartyNotices.txt", '3')] {
+            let path = format!("ort/licenses/directml/{name}");
+            let file = format!("vision/directml/{name}");
+            files.push(json!({"path": path, "file": file, "size": 100, "sha256": sha(fill)}));
+        }
+        set["vision"]["licenses"] = json!([
+            {"path": "PaddleOCR/LICENSE", "file": "vision/PaddleOCR-LICENSE", "size": 11357, "sha256": sha('4')}
+        ]);
+        set
+    }
+
+    #[test]
+    fn directml_with_its_licences_and_the_model_licence_are_taken() {
+        assert_eq!(problems(with_directml()), Vec::<Said>::new());
+        let set = parse_install_set(&serde_json::to_vec(&with_directml()).unwrap()).unwrap();
+        assert!(set.carries_directml());
+        assert_eq!(set.vision.provider, VISION_PROVIDER);
+        // 13 of good(), DirectML and its three licence files, the model's licence.
+        let files = set.files();
+        assert_eq!(files.len(), 18);
+        let (what, file) = files.last().unwrap();
+        assert_eq!(what, "vision licence PaddleOCR/LICENSE");
+        assert_eq!((file.file.as_str(), file.size), ("vision/PaddleOCR-LICENSE", 11357));
+        assert_eq!(set.vision.licenses[0].path, "PaddleOCR/LICENSE");
+        // Without either, the set reads as before.
+        let plain = parse_install_set(&serde_json::to_vec(&good()).unwrap()).unwrap();
+        assert!(!plain.carries_directml());
+        assert!(plain.vision.licenses.is_empty());
+        // The file name is compared as Windows compares names.
+        let mut other_case = with_directml();
+        other_case["vision"]["files"][7]["path"] = json!("ort/directml.DLL");
+        let other_case = parse_install_set(&serde_json::to_vec(&other_case).unwrap()).unwrap();
+        assert!(other_case.carries_directml());
+        assert_eq!(set_problems(&other_case), Vec::<Said>::new());
+    }
+
+    /// Where `with_directml()` lists DirectML among the vision files.
+    fn directml_at(set: &Value) -> usize {
+        let files = set["vision"]["files"].as_array().unwrap();
+        files.iter().position(|file| file["path"] == json!("ort/DirectML.dll")).unwrap()
+    }
+
+    #[test]
+    fn directml_off_its_pin_or_without_a_licence_file_and_bad_model_licences_are_named() {
+        let cases = vec![
+            case("directml size", |set| {
+                let at = directml_at(set);
+                set["vision"]["files"][at]["size"] = json!(18527777)
+            }),
+            case("directml sha256", |set| {
+                let at = directml_at(set);
+                set["vision"]["files"][at]["sha256"] = json!(sha('a'))
+            }),
+            case("no directml licence", |set| {
+                let files = set["vision"]["files"].as_array_mut().unwrap();
+                files.retain(|file| file["path"] != json!("ort/licenses/directml/LICENSE.txt"));
+            }),
+            case("no directml code licence", |set| {
+                let files = set["vision"]["files"].as_array_mut().unwrap();
+                files.retain(|file| file["path"] != json!("ort/licenses/directml/LICENSE-CODE.txt"));
+            }),
+            case("no directml notices", |set| {
+                let files = set["vision"]["files"].as_array_mut().unwrap();
+                files.retain(|file| file["path"] != json!("ort/licenses/directml/ThirdPartyNotices.txt"));
+            }),
+            case("licence escaping", |set| set["vision"]["licenses"][0]["path"] = json!("../LICENSE")),
+            case("licence absolute", |set| set["vision"]["licenses"][0]["path"] = json!("C:/LICENSE")),
+            case("licence rooted", |set| set["vision"]["licenses"][0]["path"] = json!("/LICENSE")),
+            case("licence backslash", |set| set["vision"]["licenses"][0]["path"] = json!("PaddleOCR\\LICENSE")),
+            case("licence empty", |set| set["vision"]["licenses"][0]["path"] = json!("")),
+            case("licence empty segment", |set| set["vision"]["licenses"][0]["path"] = json!("PaddleOCR//LICENSE")),
+            case("licence twice", |set| {
+                let copy = json!({"path": "paddleocr/license", "file": "vision/other", "size": 1, "sha256": sha('5')});
+                set["vision"]["licenses"].as_array_mut().unwrap().push(copy);
+            }),
+            case("licence outside the set", |set| set["vision"]["licenses"][0]["file"] = json!("../LICENSE")),
+            case("licence sha256", |set| set["vision"]["licenses"][0]["sha256"] = json!("4")),
+            case("licence size", |set| set["vision"]["licenses"][0]["size"] = json!(0)),
+            case("a game in the licences' folder", |set| set["bundles"][0]["game"] = json!("Vision")),
+        ];
+        for (name, change) in cases {
+            let mut set = with_directml();
+            change(&mut set);
+            assert!(!problems(set).is_empty(), "{name}");
+        }
+        // A DirectML licence file alone, without DirectML, is only a file below ort/.
+        let mut alone = good();
+        alone["vision"]["files"].as_array_mut().unwrap().push(json!(
+            {"path": "ort/licenses/directml/LICENSE.txt", "file": "vision/directml/LICENSE.txt", "size": 1, "sha256": sha('6')}
+        ));
+        assert_eq!(problems(alone), Vec::<Said>::new());
+        // A game folder named like the licences' folder is fine while the set has no model licence.
+        let mut game = good();
+        game["bundles"][0]["game"] = json!("vision");
+        assert_eq!(problems(game), Vec::<Said>::new());
     }
 
     #[test]

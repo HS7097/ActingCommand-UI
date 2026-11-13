@@ -10,7 +10,8 @@
 //! layout of the standard packages (`actinglab standard-pack check`), the offline emulator
 //! discovery (`MuMuManager.exe info -v all`, read only), the vision files (each against its
 //! pinned SHA-256) and the first start's pause (a pause the console can lift), set before the
-//! instances are bound (the Runtime's `config replace` puts them in place under the pause).
+//! instances are bound (the Runtime is then closed, its `config replace` puts them in place, and
+//! its next start restores the pause before any instance is prepared).
 //!
 //! It never writes the console's global settings file, never touches another installation,
 //! and never deletes anything: a failed step stops the install and leaves what it wrote, and

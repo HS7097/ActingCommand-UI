@@ -2,7 +2,9 @@
 //! The Runtime's own programs, run from the new root, each through the face the Runtime's route
 //! leads to (Runtime `contracts/lab-two-entries.md`: `actingctl` leaves with LAB-7, the Lab's
 //! rows take its place): a row of `tools\actinglab.exe` wherever one serves the step, the
-//! Runtime's own `runtime\actingcommand-actingd.exe check-config` where none can yet. Every Lab
+//! Runtime's own `runtime\actingcommand-actingd.exe check-config` where none can yet, and
+//! `runtime\actingctl.exe request-shutdown` for step 13's close, the form tried on a test machine
+//! (the Lab's formal stop, `down`, keeps a hold the console does not lift). Every Lab
 //! process the wizard starts is `ACTINGCOMMAND_INITIATOR=Lab-救急` (the same contract, §4.2: the
 //! word for "a Lab process the UI starts outside its workbench: the launcher, acsetup, the
 //! settings page"). Each answers one JSON line on stdout, read past members it does not know
@@ -14,21 +16,37 @@
 //! | configuration check | `runtime\actingcommand-actingd.exe check-config --config <candidate> --install-root <root>` (`apps/actingd/src/check_config.rs` `run`) | the Lab's `check-config` row checks the root's own configuration file and needs it in place to locate the root (`crates/lab-ops/src/locate.rs`; `crates/lab-rescue/src/rescue.rs` `check_config`); the candidate is checked before it is put in place |
 //! | standard packages | `actinglab --json standard-pack check --root <game root>` (`apps/actinglab/src/standard_pack_cli.rs`) | the one command; it reads only the game root, no configuration |
 //! | adopt | `actinglab --json adopt` (rescue row; `rescue.rs` `installer` → `install adopt --root`) | served row; journals the initiator |
-//! | start | `actinglab --json up` (rescue row; on a single-location root `install start`: `rescue.rs` `up`) | served row; the installer's start with its post-start checks |
+//! | start | `actinglab --json up` (rescue row; on a single-location root `install start`: `rescue.rs` `up`; `crates/lab-rescue/src/install/deploy.rs` `start_command`) | served row; the installer's start with its post-start checks, which a start reports and never refuses on (`deploy.rs`: a `Start` operation ends done whatever `failed` holds), so the wizard reads them ([`judge_up`]) |
 //! | first pause | `actinglab --json pause --reason first-start` (core row, global without an instance: `crates/lab-ops/src/scheduling.rs`) | served row; Lab envelopes are taken since 0.12.58 (LAB-6S1b) |
-//! | the instances | `actinglab --json config replace <full configuration> --sha <its SHA-256>` (rescue row: `rescue.rs` `config_swap` and `commit`; `crates/lab-rescue/src/install/config_swap.rs`) | served row: the live build's check-config first, then, with the Runtime running, its own hold (which keeps a global pause), the close, the swap with the replaced file kept as `actingd.config.json.prev-<ms>`, the start, the post-start checks, `alive` and the release of its own hold only (`contracts/install-cli.md`, "The Lab's rescue module") |
+//! | the instances, 1: close | `runtime\actingctl.exe request-shutdown --state-root <root>\state --wait 60` (`apps/actingctl/src/main.rs` `Command::RequestShutdown`; `crates/lab-ops/src/shutdown.rs` `wait`) | the formal close, answered `runtime_shutdown_completed` once the owner closed and its process exited ([`judge_shutdown`]); not `actinglab down`, whose installer stop keeps a hold of its own (`lab-down-<ms>`, `rescue.rs` `down`) that the console does not lift |
+//! | the instances, 2: swap | `actinglab --json config replace <full configuration> --sha <its SHA-256>` (rescue row: `rescue.rs` `config_swap` and `commit`; `crates/lab-rescue/src/install/config_swap.rs`) | served row: with no Runtime running, the live build's check-config of the file and the swap alone, the replaced file kept as `actingd.config.json.prev-<ms>`; the answer says `runtime_running` false ([`judge_replace`]) |
+//! | the instances, 3: start | `actinglab --json up`, as above | the start reads the new file, restores the pause first, and checks itself |
 //! | status | `actinglab --json status` (core row: `crates/lab-ops/src/overview.rs`, `daemon.online`) | served row |
 //! | watchdog | `actinglab --json watchdog install` (rescue row: `rescue.rs` `watchdog`) | served row |
 //!
-//! Why the instances come by `config replace`: a global pause stops no run already under way
-//! (`contracts/scheduling-pause.md`, "Global pause"), so a Runtime started with its instances
-//! could dispatch in the moment between the start and the pause. The wizard starts the Runtime
-//! with a configuration without instances, sets the pause, and only then puts the full
-//! configuration in place. The pause is a runtime fact that survives a restart; every start that
-//! is not installer-held, the module's included, restores it before any physical instance is
-//! prepared and before the policy driver runs (`scheduling-pause.md`, "Persistence, no expiry";
-//! `install-cli.md`, the module's "Why the reason and the alias"), and `config replace` sets no
-//! global pause of its own and hands back only its own (`install-cli.md`, INST-5b).
+//! Why the instances come by a close, a `config replace` and an `up`: a global pause stops no
+//! run already under way (`contracts/scheduling-pause.md`, "Global pause"), so a Runtime started
+//! with its instances could dispatch in the moment between the start and the pause. The wizard
+//! starts the Runtime with a configuration without instances, sets the pause, and only then puts
+//! the full configuration in place. The pause is a runtime fact that survives a close; every
+//! start that is not installer-held restores it before any physical instance is prepared and
+//! before the policy driver runs (`scheduling-pause.md`, "Persistence, no expiry").
+//!
+//! The full configuration is not put in place on the running Runtime. On a test machine
+//! (2026-11-13, 0.12.58), `config replace` on the running Runtime under the first-start pause
+//! answered `install_command_refused` with `post_check_failed` (`count` 1) and the notes
+//! `install_caveat_noted`, `guard_failed` and `foreign_pauses`, twice; yet the file had been
+//! swapped and the Runtime restarted, its pause restored before the instances were prepared
+//! (`scheduling_pause_restored` in the actingd log). The operation counts the wizard's own pause
+//! as another tool's: it opens with no acknowledgement (`config_swap.rs` `open`, `acknowledged`
+//! empty) and `config replace` takes neither `--known-pause` nor `--ack-guard`; that is asked of
+//! the Runtime. Closed first, the same machine passed every part: the close answered
+//! `runtime_shutdown_completed`; `config replace` answered `install_command_done` with
+//! `runtime_running` false and kept the replaced file; `up` exited 0 with all ten post-start
+//! checks passed (`ready`, `open`, `no_seeding`, `bindings`, `packs`, `pauses`, `instructions`,
+//! `no_dispatch`, `new_keys`, `config`); `status` showed the global pause still `first-start`,
+//! the instances there and the first task waiting on `dispatch_paused_global`. An `up` with the
+//! first-start pause already set and no instance exited 0 too.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -37,11 +55,18 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::child::{self, json_line, outcome_of, outcome_text, OnTimeout, Spec};
+use crate::config::STATE_DIR;
 use crate::text::Said;
 use crate::winpath::strip_verbatim;
 
 pub const ACTINGD_EXE: &str = "actingcommand-actingd.exe";
+pub const ACTINGCTL_EXE: &str = "actingctl.exe";
 pub const ACTINGLAB_EXE: &str = "actinglab.exe";
+/// `request-shutdown --wait`'s seconds: as long as `actingctl restart` waits for its close
+/// (Runtime `crates/lab-rescue/src/runtime_start.rs` `SHUTDOWN_WAIT`).
+pub const SHUTDOWN_WAIT_SECONDS: u64 = 60;
+/// What `request-shutdown --wait` answers once the Runtime closed and its process exited.
+pub const SHUTDOWN_COMPLETED: &str = "runtime_shutdown_completed";
 pub const INITIATOR_VARIABLE: &str = "ACTINGCOMMAND_INITIATOR";
 pub const RESCUE_INITIATOR: &str = "Lab-救急";
 pub const CHECK_CONFIG_SCHEMA: &str = "actingcommand.actingd.check-config.v2";
@@ -62,9 +87,11 @@ pub const PACK_CHECK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 pub const ADOPT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 pub const UP_TIMEOUT: Duration = Duration::from_secs(25 * 60);
 pub const PAUSE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-/// A close (its drain bounded by `install.stop.drain_timeout_ms`), a start as long as `up`'s and
-/// the wait for `alive` within `install.start.ready_timeout_ms`.
-pub const CONFIG_REPLACE_TIMEOUT: Duration = Duration::from_secs(50 * 60);
+/// With no Runtime running: the live build's check-config of the file (as long as the wizard's
+/// own) and the swap.
+pub const CONFIG_REPLACE_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+/// The close: its wait ([`SHUTDOWN_WAIT_SECONDS`]) and room to connect and answer.
+pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3 * 60);
 pub const STATUS_TIMEOUT: Duration = Duration::from_secs(3 * 60);
 pub const WATCHDOG_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// What an instance does now that is a task run (`activity.kind`, Runtime
@@ -139,6 +166,10 @@ pub fn actingd(root: &Path) -> PathBuf {
 
 pub fn actinglab(root: &Path) -> PathBuf {
     root.join("tools").join(ACTINGLAB_EXE)
+}
+
+pub fn actingctl(root: &Path) -> PathBuf {
+    root.join("runtime").join(ACTINGCTL_EXE)
 }
 
 /// `check-config`'s answer, with the MuMu install root it reports.
@@ -218,8 +249,24 @@ pub fn pause_all(root: &Path, reason: &str) -> Result<Answer, Said> {
     lab(root, &words(&["pause", "--reason", reason]), PAUSE_TIMEOUT, OnTimeout::Leave)
 }
 
+/// `<root>\runtime\actingctl.exe request-shutdown --state-root <root>\state --wait 60`: the
+/// Runtime of the root asked to close, and the wait for its owner to close and its process to
+/// exit. actingctl is no Lab process: it takes no initiator, and prints its one line without
+/// `--json`. The state root is written as the configuration writes it.
+pub fn request_shutdown(root: &Path) -> Result<Answer, Said> {
+    let state_root = strip_verbatim(&root.join(STATE_DIR).to_string_lossy());
+    let spec = Spec::new(&actingctl(root))
+        .arg("request-shutdown")
+        .arg("--state-root")
+        .arg(state_root)
+        .arg("--wait")
+        .arg(SHUTDOWN_WAIT_SECONDS.to_string())
+        .cwd(root);
+    answer(&spec, SHUTDOWN_TIMEOUT, OnTimeout::Leave)
+}
+
 /// `actinglab --json config replace <file> --sha <sha256>`: the root's configuration replaced by
-/// `file` (see the module's description).
+/// `file`; the wizard runs it with no Runtime running (see the module's description).
 pub fn config_replace(root: &Path, file: &Path, sha256: &str) -> Result<Answer, Said> {
     let mut list = words(&["config", "replace"]);
     list.push(file.as_os_str().to_os_string());
@@ -246,6 +293,152 @@ pub fn started_pid(line: &Value) -> Option<u64> {
     line["outcome"]["values"]["pid"]
         .as_u64()
         .or_else(|| line["start"]["ready"]["pid"].as_u64())
+}
+
+/// One post-start check whose `result` is `fail`: its id and its values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FailedCheck {
+    pub id: String,
+    pub values: Value,
+}
+
+/// What the wizard reads of `up`'s result line.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct UpRead {
+    /// [`started_pid`].
+    pub pid: Option<u64>,
+    /// How many post-start checks the line lists; `None` when it lists none.
+    pub checks: Option<usize>,
+    /// Each listed check whose `result` is `fail`, in the line's order.
+    pub failed: Vec<FailedCheck>,
+    /// The top outcome's code when its category is `warning`.
+    pub caveat: Option<String>,
+}
+
+/// `up`'s line read: on a single-location root its `post_check` is the post-start step's
+/// evidence `{commit, checks: [{id, result, fail_class, values}], failed}` (Runtime
+/// `crates/lab-rescue/src/install/deploy.rs`, the `Start` answer and the `PostCheck` step;
+/// `crates/lab-rescue/src/install/postcheck.rs` `CheckRow`); a bare list of rows, as a refusal
+/// carries them, is read the same way.
+pub fn read_up(line: &Value) -> UpRead {
+    let rows = match &line["post_check"] {
+        Value::Array(rows) => Some(rows),
+        evidence => evidence["checks"].as_array(),
+    };
+    let outcome = outcome_of(line);
+    let caveat = (outcome.category.as_deref() == Some("warning")).then(|| outcome.code.clone()).flatten();
+    UpRead {
+        pid: started_pid(line),
+        checks: rows.map(Vec::len),
+        failed: rows
+            .into_iter()
+            .flatten()
+            .filter(|row| row["result"].as_str() == Some("fail"))
+            .map(|row| FailedCheck {
+                id: row["id"].as_str().unwrap_or("?").to_owned(),
+                values: row.get("values").cloned().unwrap_or(Value::Null),
+            })
+            .collect(),
+        caveat,
+    }
+}
+
+/// The failed checks for a person: each id with its values.
+pub fn failed_checks_text(failed: &[FailedCheck]) -> String {
+    failed
+        .iter()
+        .map(|check| format!("{} {}", check.id, check.values))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn no_line() -> Said {
+    Said::new("答复里没有结果行", "the answer has no result line")
+}
+
+fn exit_not_zero(code: Option<i32>) -> Said {
+    Said::new("命令没有成功", "the command did not succeed")
+        .with(format!("exit {}", code.map_or_else(|| "(none)".to_owned(), |code| code.to_string())))
+}
+
+/// `up`'s answer judged: exit 0, the post-start checks listed, and none `fail`; else why not,
+/// the failed checks named with their values.
+pub fn judge_up(code: Option<i32>, line: Option<&Value>) -> Result<UpRead, Said> {
+    if code != Some(0) {
+        return Err(exit_not_zero(code));
+    }
+    let read = read_up(line.ok_or_else(no_line)?);
+    if read.checks.is_none() {
+        return Err(Said::new(
+            "答复里没有启动后检查（post_check.checks）",
+            "the answer lists no post-start checks (post_check.checks)",
+        ));
+    }
+    if !read.failed.is_empty() {
+        return Err(Said::new("启动后检查有不通过的项", "post-start checks failed").with(failed_checks_text(&read.failed)));
+    }
+    Ok(read)
+}
+
+/// `request-shutdown --wait`'s answer judged: exit 0, the outcome [`SHUTDOWN_COMPLETED`] and the
+/// wait's `shutdown.state` `completed` (Runtime `apps/actingctl/src/main.rs`
+/// `Command::RequestShutdown`; `crates/lab-ops/src/shutdown.rs` `wait`); else why not.
+pub fn judge_shutdown(code: Option<i32>, line: Option<&Value>) -> Result<(), Said> {
+    if code != Some(0) {
+        return Err(exit_not_zero(code));
+    }
+    let line = line.ok_or_else(no_line)?;
+    let outcome = outcome_of(line);
+    if outcome.code.as_deref() != Some(SHUTDOWN_COMPLETED) {
+        return Err(Said::new(
+            format!("没有看到关闭完成（{SHUTDOWN_COMPLETED}）"),
+            format!("the close was not seen to complete ({SHUTDOWN_COMPLETED})"),
+        )
+        .with(outcome.code.unwrap_or_else(|| "?".to_owned())));
+    }
+    if line["shutdown"]["state"].as_str() != Some("completed") {
+        return Err(Said::new("关闭的等待没有报告完成", "the wait for the close reports no completion")
+            .with(line["shutdown"].to_string()));
+    }
+    Ok(())
+}
+
+/// What `config replace` answered.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Replaced {
+    /// The top outcome's code.
+    pub code: Option<String>,
+    /// `backup`: where the replaced configuration was kept, without the verbatim prefix.
+    pub backup: Option<String>,
+}
+
+/// `config replace`'s answer judged for a Runtime the wizard closed: exit 0 and `runtime_running`
+/// false (Runtime `crates/lab-rescue/src/rescue.rs` `commit`: without a running Runtime the swap
+/// alone); a Runtime running again, or a line that does not say, is no success.
+pub fn judge_replace(code: Option<i32>, line: Option<&Value>) -> Result<Replaced, Said> {
+    if code != Some(0) {
+        return Err(exit_not_zero(code));
+    }
+    let line = line.ok_or_else(no_line)?;
+    match line.get("runtime_running") {
+        Some(Value::Bool(false)) => {}
+        Some(Value::Bool(true)) => {
+            return Err(Said::new(
+                "换配置时 Runtime 又在运行了（向导刚把它停下）",
+                "a Runtime was running again when the configuration was swapped (the wizard had just closed it)",
+            ))
+        }
+        _ => {
+            return Err(Said::new(
+                "答复没有说明 Runtime 是否在运行（runtime_running）",
+                "the answer does not say whether a Runtime runs (runtime_running)",
+            ))
+        }
+    }
+    Ok(Replaced {
+        code: outcome_of(line).code,
+        backup: line["backup"].as_str().map(strip_verbatim),
+    })
 }
 
 /// What the wizard reads of `status`'s result line (the overview, Runtime
@@ -306,6 +499,148 @@ mod tests {
         );
         assert_eq!(started_pid(&json!({"outcome": {"values": {"pid": "41"}}})), None);
         assert_eq!(started_pid(&json!({"outcome": {"code": "install_command_done"}})), None);
+    }
+
+    /// The close as it answered on a test machine (2026-11-13), in the members Runtime
+    /// `apps/actingctl/src/main.rs` (`Command::RequestShutdown`) and `crates/lab-ops/src/shutdown.rs`
+    /// write; the receipt and the numbers abbreviated.
+    fn closed() -> Value {
+        json!({
+            "receipt": {"request_id": "…", "state": "…"},
+            "shutdown": {"state": "completed", "closed_at_unix_ms": 1763035920000u64, "elapsed_ms": 1800},
+            "outcome": {"schema_version": "actingcommand.outcome.v1", "code": "runtime_shutdown_completed", "category": "success"}
+        })
+    }
+
+    #[test]
+    fn a_close_counts_only_once_it_completed() {
+        assert_eq!(judge_shutdown(Some(0), Some(&closed())), Ok(()));
+        assert!(judge_shutdown(Some(1), Some(&closed())).is_err());
+        assert!(judge_shutdown(None, Some(&closed())).is_err());
+        assert!(judge_shutdown(Some(0), None).is_err());
+        // Asked but not waited for.
+        let mut requested = closed();
+        requested["outcome"]["code"] = json!("runtime_shutdown_requested");
+        requested.as_object_mut().unwrap().remove("shutdown");
+        let problem = judge_shutdown(Some(0), Some(&requested)).unwrap_err();
+        assert!(problem.en.contains("runtime_shutdown_requested"), "{problem}");
+        // A wait that reports no completion.
+        let mut waiting = closed();
+        waiting["shutdown"] = json!({"state": "waiting"});
+        assert!(judge_shutdown(Some(0), Some(&waiting)).is_err());
+    }
+
+    /// `config replace` with no Runtime running, as it answered on the test machine after the
+    /// close (2026-11-13), in the members Runtime `crates/lab-rescue/src/rescue.rs` `commit`
+    /// writes; the steps' results and the outcome's values abbreviated.
+    fn replaced() -> Value {
+        json!({
+            "backup": "X:\\Root\\actingd.config.json.prev-1763035921000",
+            "runtime_running": false,
+            "steps": [
+                {"step": "check_config", "outcome": {"code": "install_command_done", "category": "success"}, "result": {}},
+                {"step": "swap", "outcome": {"code": "install_command_done", "category": "success"}, "result": {}}
+            ],
+            "outcome": {"schema_version": "actingcommand.outcome.v1", "code": "install_command_done", "category": "success"}
+        })
+    }
+
+    #[test]
+    fn a_replace_counts_only_with_no_runtime_running() {
+        assert_eq!(
+            judge_replace(Some(0), Some(&replaced())),
+            Ok(Replaced {
+                code: Some("install_command_done".into()),
+                backup: Some(r"X:\Root\actingd.config.json.prev-1763035921000".into()),
+            })
+        );
+        let mut verbatim = replaced();
+        verbatim["backup"] = json!(r"\\?\X:\Root\actingd.config.json.prev-1");
+        assert_eq!(
+            judge_replace(Some(0), Some(&verbatim)).unwrap().backup.as_deref(),
+            Some(r"X:\Root\actingd.config.json.prev-1")
+        );
+        // A Runtime that runs again, and a line that does not say (the answer for a file equal
+        // to the live one carries `unchanged` instead).
+        let mut running = replaced();
+        running["runtime_running"] = json!(true);
+        assert!(judge_replace(Some(0), Some(&running)).is_err());
+        let unchanged = json!({"unchanged": true, "steps": [], "outcome": {"code": "install_command_done", "category": "success"}});
+        assert!(judge_replace(Some(0), Some(&unchanged)).is_err());
+        assert!(judge_replace(Some(0), None).is_err());
+        // On the running Runtime the test machine had it refused twice (codes as reported, their
+        // nesting abbreviated), though the file was swapped.
+        let refused = json!({
+            "steps": [],
+            "outcome": {"code": "install_command_refused", "category": "error", "causes": [
+                {"code": "post_check_failed", "category": "error", "relation": "caused_by", "values": {"count": 1}},
+                {"code": "install_caveat_noted", "category": "warning", "relation": "related", "causes": [
+                    {"code": "guard_failed", "category": "warning", "relation": "related"},
+                    {"code": "foreign_pauses", "category": "warning", "relation": "related"}
+                ]}
+            ]}
+        });
+        assert!(judge_replace(Some(1), Some(&refused)).is_err());
+    }
+
+    /// `up` as it answered on the test machine after the swap (2026-11-13): exit 0 and ten
+    /// post-start checks, all `pass`, in the members Runtime `crates/lab-rescue/src/install/
+    /// deploy.rs` (the `Start` answer) and `postcheck.rs` (`CheckRow`) write; the values
+    /// abbreviated.
+    fn started() -> Value {
+        let ids = ["ready", "open", "no_seeding", "bindings", "packs", "pauses", "instructions", "no_dispatch", "new_keys", "config"];
+        let checks: Vec<Value> = ids
+            .iter()
+            .map(|id| json!({"id": id, "result": "pass", "fail_class": *id != "open", "values": {}}))
+            .collect();
+        json!({
+            "operation_id": "…",
+            "start": {"ready": {"pid": 4242, "owner_epoch": "…"}, "log": "…"},
+            "post_check": {"commit": "ef94d950a102a595fa0bde974b8d77ad54329b48", "checks": checks, "failed": []},
+            "outcome": {"schema_version": "actingcommand.outcome.v1", "code": "install_command_done", "category": "success", "values": {"pid": 4242}}
+        })
+    }
+
+    #[test]
+    fn up_counts_only_with_no_post_start_check_failed() {
+        let read = judge_up(Some(0), Some(&started())).expect("it passes");
+        assert_eq!(read.pid, Some(4242));
+        assert_eq!(read.checks, Some(10));
+        assert!(read.failed.is_empty());
+        assert_eq!(read.caveat, None);
+        // `not_evaluated` is no failure.
+        let mut unevaluated = started();
+        unevaluated["post_check"]["checks"][1]["result"] = json!("not_evaluated");
+        assert!(judge_up(Some(0), Some(&unevaluated)).is_ok());
+        // A start reports failed checks and still exits 0: each is named with its values.
+        let mut failed = started();
+        failed["post_check"]["checks"][5] =
+            json!({"id": "pauses", "result": "fail", "fail_class": true, "values": {"missing": ["first-start"]}});
+        failed["post_check"]["checks"][1] = json!({"id": "open", "result": "fail", "fail_class": false, "values": {"slow": true}});
+        failed["post_check"]["failed"] = json!(["pauses"]);
+        failed["outcome"]["category"] = json!("warning");
+        let read = read_up(&failed);
+        assert_eq!(
+            read.failed,
+            vec![
+                FailedCheck { id: "open".into(), values: json!({"slow": true}) },
+                FailedCheck { id: "pauses".into(), values: json!({"missing": ["first-start"]}) },
+            ]
+        );
+        assert_eq!(read.caveat.as_deref(), Some("install_command_done"));
+        let problem = judge_up(Some(0), Some(&failed)).unwrap_err();
+        assert!(problem.en.contains(r#"open {"slow":true}; pauses {"missing":["first-start"]}"#), "{problem}");
+        // A bare list of rows reads the same; a row without an id or values still counts.
+        let bare = json!({"post_check": [{"result": "fail"}, {"id": "config", "result": "pass"}]});
+        assert_eq!(read_up(&bare).failed, vec![FailedCheck { id: "?".into(), values: Value::Null }]);
+        assert_eq!(read_up(&bare).checks, Some(2));
+        // Exit 1, no line, no checks listed.
+        assert!(judge_up(Some(1), Some(&started())).is_err());
+        assert!(judge_up(Some(0), None).is_err());
+        let mut unchecked = started();
+        unchecked.as_object_mut().unwrap().remove("post_check");
+        assert!(judge_up(Some(0), Some(&unchecked)).is_err());
+        assert_eq!(read_up(&unchecked).checks, None);
     }
 
     #[test]

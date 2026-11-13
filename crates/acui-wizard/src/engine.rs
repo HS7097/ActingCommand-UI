@@ -9,11 +9,16 @@
 //! The order departs from the design in two places:
 //!
 //! - With instances and the first-start pause, the Runtime first starts with the same
-//!   configuration without its instances, the pause is set, and only then does the Runtime's own
-//!   `config replace` put the full configuration in place and restart it: a global pause stops
-//!   no run already under way, so a Runtime started with its instances could dispatch before the
-//!   pause holds. The pause survives the restart and is back before any instance is prepared
-//!   (`runtime`'s description, "Why the instances come by `config replace`").
+//!   configuration without its instances, and the pause is set: a global pause stops no run
+//!   already under way, so a Runtime started with its instances could dispatch before the pause
+//!   holds. Step 13 then connects the instances in three parts, each answer checked: the formal
+//!   close (`actingctl request-shutdown --wait 60`, `runtime_shutdown_completed`), the full
+//!   configuration put in place by the Runtime's `config replace` while no Runtime runs
+//!   (`runtime_running` false), and the installer's start again (`actinglab up`, exit 0, no
+//!   post-start check `fail`). The pause survives the close and is back before any instance is
+//!   prepared. `config replace` on the running Runtime was refused on a test machine although it
+//!   swapped and restarted (`runtime`'s description, "Why the instances come by a close, a
+//!   `config replace` and an `up`").
 //! - The watchdog is installed after the start, the pause and the instances. It never starts a
 //!   root that never started, nor one closed formally, nor one the installer is working on; it
 //!   does start one whose last start ended in an error (Runtime `contracts/runtime-watchdog.md`,
@@ -41,7 +46,7 @@ use crate::plan::{plan_problems, Plan};
 use crate::platform;
 use crate::root::{check_root, text_issues};
 use crate::runtime::{self, FIRST_START_REASON};
-use crate::set::{verify_set, PlacedFile, VerifiedSet, LICENSES_DIR};
+use crate::set::{verify_set, PlacedFile, VerifiedSet, DIRECTML_LIBRARY, LICENSES_DIR, VISION_LICENSES_DIR};
 use crate::text::{Lang, Said};
 use crate::winpath::{last_segment, strip_verbatim};
 
@@ -103,7 +108,10 @@ impl Step {
             Step::Shortcuts => Said::new("建快捷方式", "Create the shortcuts"),
             Step::Start => Said::new("启动 Runtime", "Start the Runtime"),
             Step::Pause => Said::new("首次启动先暂停所有实例", "Pause every instance for the first start"),
-            Step::Bind => Said::new("换上带实例的配置", "Put the configuration with the instances in place"),
+            Step::Bind => Said::new(
+                "接上实例：先停下 Runtime，换上带实例的配置，再启动",
+                "Connect the instances: stop the Runtime, put the configuration with the instances in place, start it again",
+            ),
             Step::Watchdog => Said::new("装看门狗（开机自动运行）", "Install the watchdog (start at logon)"),
             Step::Status => Said::new("确认 Runtime 在线", "Confirm the Runtime is online"),
         }
@@ -119,9 +127,10 @@ pub enum Event {
     Failed(Step, Said),
     /// A line of what was done or found (also in the log).
     Line(Said),
-    /// What the checks before the install just did, in a person's words: no path, repository
-    /// or commit (the `Line` beside it carries those, for the log and the command line). The
-    /// window shows these while the checks run; nothing writes them down.
+    /// What the checks before the install just did, or which part of a step of several parts
+    /// runs now (step 13's close, swap and start), in a person's words: no path, repository or
+    /// commit (the `Line` beside it carries those, for the log and the command line). The
+    /// window shows these as they come; nothing writes them down.
     Plain(Said),
     /// Bytes done of the current step's (or the set check's) total.
     Bytes { done: u64, total: u64 },
@@ -131,10 +140,13 @@ pub enum Event {
 /// removes before the folder can be deleted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Left {
-    /// The wizard ran the Runtime's start: a Runtime of the root may be running (a start that
-    /// did not answer in time was left running).
-    pub started: bool,
-    /// The first-start pause is set.
+    /// A Runtime of the root may be running: the wizard ran its start (a start that did not
+    /// answer in time, or failed, may have left it running) and has not seen it closed since.
+    pub running: bool,
+    /// The wizard closed the Runtime it had started (step 13's formal close answered
+    /// `runtime_shutdown_completed`) and has not started it again.
+    pub closed: bool,
+    /// The first-start pause is set: a runtime fact the root's next start restores.
     pub paused: bool,
     /// The wizard ran `watchdog install`: the root's watchdog task may be registered.
     pub watchdog: bool,
@@ -144,14 +156,14 @@ pub struct Left {
 
 /// What a person does about what a failed install left, in order, each with the command or the
 /// button that does it: stop the Runtime it started (the console's "Request Shutdown", or
-/// `actingctl request-shutdown`), remove the watchdog task it registered (`actingctl watchdog
-/// uninstall`), delete the shortcuts it created; then delete the folder. Only what the install
-/// did is named.
+/// `actingctl request-shutdown`), or, when the wizard closed it itself, that there is none to
+/// stop; remove the watchdog task it registered (`actingctl watchdog uninstall`), delete the
+/// shortcuts it created; then delete the folder. Only what the install did is named.
 pub fn cleanup(root: &Path, left: &Left) -> Vec<Said> {
     let root = strip_verbatim(&root.to_string_lossy()).trim_end_matches(['\\', '/']).to_owned();
     let actingctl = format!("\"{root}\\runtime\\actingctl.exe\"");
     let mut steps = Vec::new();
-    if left.started {
+    if left.running {
         let zh = format!(
             "打开 {root}\\ui\\acui.exe 按「请求关闭」，或者运行 {actingctl} request-shutdown --state-root \"{root}\\state\""
         );
@@ -160,13 +172,25 @@ pub fn cleanup(root: &Path, left: &Left) -> Vec<Said> {
         );
         steps.push(if left.paused {
             Said::new(
-                format!("ActingCommand 已经启动，挂着首次暂停。先停下它：{zh}。"),
-                format!("ActingCommand has started, under the first-start pause. Stop it first: {en}."),
+                format!("ActingCommand 已经启动过，挂着首次暂停，可能还开着。先停下它：{zh}。"),
+                format!("ActingCommand has been started, under the first-start pause, and may still be running. Stop it first: {en}."),
             )
         } else {
             Said::new(
                 format!("ActingCommand 可能还开着，而且没有暂停。先停下它：{zh}。"),
                 format!("ActingCommand may still be running, and it is not paused. Stop it first: {en}."),
+            )
+        });
+    } else if left.closed {
+        steps.push(if left.paused {
+            Said::new(
+                "ActingCommand 已经停下了（向导换配置之前正式关闭了它），不用再停；首次暂停记在它的运行记录里，下次启动时会先恢复。",
+                "ActingCommand is already stopped (the wizard closed it formally before switching the configuration), so there is nothing to stop; the first-start pause is kept in its records and comes back first at its next start.",
+            )
+        } else {
+            Said::new(
+                "ActingCommand 已经停下了（向导正式关闭了它），不用再停。",
+                "ActingCommand is already stopped (the wizard closed it formally), so there is nothing to stop.",
             )
         });
     }
@@ -690,6 +714,8 @@ fn copy_checked(source: &Path, target: &Path, placed: &PlacedFile) -> Result<u64
     Ok(size)
 }
 
+/// The vision files below `<root>\vision` (DirectML's with them when the set carries it), then
+/// the vision models' licences below `<root>\licenses\vision`, each read back against the set.
 fn place_vision(run: &mut Run<'_>, set: &VerifiedSet) -> Result<Said, Said> {
     let vision = run.root.join("vision");
     let total = set.vision_bytes;
@@ -698,11 +724,33 @@ fn place_vision(run: &mut Run<'_>, set: &VerifiedSet) -> Result<Said, Said> {
         done += copy_checked(&set.dir.join(&file.file), &under(&vision, &file.path), file)?;
         run.bytes(done, total);
     }
-    Ok(Said::new("已放并核对", "placed and checked").with(format!(
+    if set.set.carries_directml() {
+        run.say(Said::new(
+            "已放 DirectML 和它的许可文件（这一版配置仍用 CPU）",
+            "DirectML and its licence files placed (this version's configuration still uses the CPU)",
+        )
+        .with(under(&vision, DIRECTML_LIBRARY).display()))?;
+    }
+    let licences = run.root.join(LICENSES_DIR).join(VISION_LICENSES_DIR);
+    for licence in &set.set.vision.licenses {
+        let target = under(&licences, &licence.path);
+        done += copy_checked(&set.dir.join(&licence.file), &target, licence)?;
+        run.say(Said::new("已放视觉模型的许可文件", "a vision model's licence file placed").with(format!(
+            "{} ← {}",
+            target.display(),
+            licence.file
+        )))?;
+        run.bytes(done, total);
+    }
+    let mut summary = Said::new("已放并核对", "placed and checked").with(format!(
         "{} ({} files)",
         vision.display(),
         set.set.vision.files.len()
-    )))
+    ));
+    if !set.set.vision.licenses.is_empty() {
+        summary = summary.with(format!("{} ({} licence files)", licences.display(), set.set.vision.licenses.len()));
+    }
+    Ok(summary)
 }
 
 fn lay_packs(run: &mut Run<'_>, set: &VerifiedSet, games: &[String]) -> Result<Said, Said> {
@@ -968,21 +1016,30 @@ fn make_shortcuts(run: &mut Run<'_>, plan: &Plan) -> Result<Said, Said> {
     Ok(Said::new("已建", "created").with(made.join(", ")))
 }
 
-fn start(run: &mut Run<'_>) -> Result<Said, Said> {
-    run.left.started = true;
+/// `actinglab up`, judged by [`runtime::judge_up`]: exit 0 and no post-start check `fail`. The
+/// Runtime counts as maybe running from the moment it is asked to start.
+fn up(run: &mut Run<'_>, failed: Said) -> Result<Said, Said> {
+    run.left.running = true;
+    run.left.closed = false;
     let answer = runtime::up(&run.root.clone())?;
     run.say(Said::new("up 答复", "up answered").with(answer.reason()))?;
-    if !answer.ok() {
-        return Err(Said::new("Runtime 没有起来", "the Runtime did not start").with(answer.reason()));
-    }
-    let mut summary = Said::new("已就绪", "ready");
-    if let Some(pid) = answer.line.as_ref().and_then(runtime::started_pid) {
+    let read = runtime::judge_up(answer.code, answer.line.as_ref())
+        .map_err(|problem| failed.with_said(&problem).with(answer.reason()))?;
+    let mut summary = Said::new("已就绪", "ready").with(format!(
+        "{} post-start checks, none failed",
+        read.checks.unwrap_or_default()
+    ));
+    if let Some(pid) = read.pid {
         summary = summary.with(format!("pid {pid}"));
     }
-    if answer.outcome.category.as_deref() == Some("warning") {
-        summary = summary.with(format!("caveat {}", answer.outcome.code.clone().unwrap_or_default()));
+    if let Some(caveat) = read.caveat {
+        summary = summary.with(format!("caveat {caveat}"));
     }
     Ok(summary)
+}
+
+fn start(run: &mut Run<'_>) -> Result<Said, Said> {
+    up(run, Said::new("Runtime 没有正常起来", "the Runtime did not start cleanly"))
 }
 
 fn pause(run: &mut Run<'_>) -> Result<Said, Said> {
@@ -999,17 +1056,35 @@ fn pause(run: &mut Run<'_>) -> Result<Said, Said> {
     .with(format!("reason {FIRST_START_REASON}")))
 }
 
-/// The full configuration at `full` put in place by the Runtime's `config replace` (bound to its
-/// SHA-256), which restarts the Runtime under the pause; then the file in place read back.
+/// Step 13 (see the module's description), three parts, each answer judged: the formal close
+/// ([`runtime::judge_shutdown`]); the full configuration at `full` put in place by the Runtime's
+/// `config replace` (bound to its SHA-256) while no Runtime runs ([`runtime::judge_replace`]),
+/// and the file in place read back; the installer's start again ([`runtime::judge_up`]), which
+/// restores the pause before any instance is prepared.
 fn bind(run: &mut Run<'_>, full: &Path, count: usize) -> Result<Said, Said> {
     let root = run.root.clone();
     let (sha256, _) = sha256_file(full, &mut |_: u64| {})
         .map_err(|error| io_said("读不出完整配置", "the full configuration cannot be read", full, error))?;
-    let answer = runtime::config_replace(&root, full, &sha256)?;
-    run.say(Said::new("config replace 答复", "config replace answered").with(answer.reason()))?;
-    if !answer.ok() {
-        return Err(Said::new("没能换上带实例的配置", "the configuration with the instances was not put in place").with(answer.reason()));
-    }
+
+    run.plain(Said::new("正在停下 ActingCommand……", "Stopping ActingCommand…"));
+    let closed = runtime::request_shutdown(&root)?;
+    run.say(Said::new("request-shutdown 答复", "request-shutdown answered").with(closed.reason()))?;
+    runtime::judge_shutdown(closed.code, closed.line.as_ref()).map_err(|problem| {
+        Said::new("没能先停下 Runtime", "the Runtime could not be closed first")
+            .with_said(&problem)
+            .with(closed.reason())
+    })?;
+    run.left.running = false;
+    run.left.closed = true;
+
+    run.plain(Said::new("正在换上带实例的设置……", "Switching to the settings with the instances…"));
+    let swapped = runtime::config_replace(&root, full, &sha256)?;
+    run.say(Said::new("config replace 答复", "config replace answered").with(swapped.reason()))?;
+    let replaced = runtime::judge_replace(swapped.code, swapped.line.as_ref()).map_err(|problem| {
+        Said::new("没能换上带实例的配置", "the configuration with the instances was not put in place")
+            .with_said(&problem)
+            .with(swapped.reason())
+    })?;
     let live = root.join(CONFIG_FILE);
     let (now, _) = sha256_file(&live, &mut |_: u64| {})
         .map_err(|error| io_said("读不出配置文件", "the configuration cannot be read", &live, error))?;
@@ -1017,8 +1092,21 @@ fn bind(run: &mut Run<'_>, full: &Path, count: usize) -> Result<Said, Said> {
         return Err(Said::new("就位的配置不是带实例的那一份", "the configuration in place is not the one with the instances")
             .with(format!("{}: {now}, expected {sha256}", live.display())));
     }
-    Ok(Said::new("已换上，Runtime 带着实例重启了", "in place; the Runtime restarted with the instances")
-        .with(format!("{count} instances, {}", answer.outcome.code.clone().unwrap_or_default())))
+    run.say(Said::new("带实例的配置已换上（Runtime 停着）", "the configuration with the instances is in place (no Runtime running)")
+        .with(format!(
+            "{}, replaced file kept as {}",
+            replaced.code.as_deref().unwrap_or("?"),
+            replaced.backup.as_deref().unwrap_or("?")
+        )))?;
+
+    run.plain(Said::new("正在重新启动 ActingCommand……", "Starting ActingCommand again…"));
+    let started = up(run, Said::new("换上配置以后 Runtime 没有正常起来", "the Runtime did not start cleanly with the new configuration"))?;
+    Ok(Said::new(
+        "已停下、换上带实例的配置、再启动",
+        "closed, the configuration with the instances put in place, started again",
+    )
+    .with(format!("{count} instances"))
+    .with_said(&started))
 }
 
 fn watchdog(run: &mut Run<'_>) -> Result<Said, Said> {
@@ -1047,11 +1135,23 @@ fn status(run: &mut Run<'_>, paused: bool, aliases: &[String]) -> Result<Said, S
     if !read.online {
         return Err(Said::new("Runtime 没有应答", "the Runtime does not answer").with(answer.reason()));
     }
-    if paused && read.global_pause.is_none() {
-        return Err(Said::new(
-            "Runtime 在线，但状态里看不到首次暂停",
-            "the Runtime is online, but its status shows no first-start pause",
-        ));
+    if paused {
+        match read.global_pause.as_deref() {
+            Some(FIRST_START_REASON) => {}
+            Some(other) => {
+                return Err(Said::new(
+                    "Runtime 在线，但全局暂停不是首次暂停",
+                    "the Runtime is online, but its global pause is not the first-start pause",
+                )
+                .with(format!("reason {other}")))
+            }
+            None => {
+                return Err(Said::new(
+                    "Runtime 在线，但状态里看不到首次暂停",
+                    "the Runtime is online, but its status shows no first-start pause",
+                ))
+            }
+        }
     }
     if paused && !read.running.is_empty() {
         return Err(Said::new(
@@ -1104,7 +1204,8 @@ mod tests {
         let all = cleanup(
             root,
             &Left {
-                started: true,
+                running: true,
+                closed: false,
                 paused: true,
                 watchdog: true,
                 shortcuts: vec![PathBuf::from(r"X:\Desk\a.lnk"), PathBuf::from(r"X:\Menu\b.lnk")],
@@ -1119,9 +1220,20 @@ mod tests {
         assert!(all[2].en.contains(r"X:\Desk\a.lnk, X:\Menu\b.lnk"));
         assert!(all[3].en.starts_with("Then delete the whole"));
         // A start without the pause says so.
-        let running = cleanup(root, &Left { started: true, ..Left::default() });
+        let running = cleanup(root, &Left { running: true, ..Left::default() });
         assert_eq!(running.len(), 2);
         assert!(running[0].zh.contains("没有暂停") && running[0].en.contains("not paused"));
+        // Step 13 closed the Runtime and failed before it started again: nothing to stop, the
+        // pause kept; no command to stop it is given.
+        let closed = cleanup(root, &Left { closed: true, paused: true, ..Left::default() });
+        assert_eq!(closed.len(), 2);
+        assert!(closed[0].zh.contains("不用再停") && closed[0].en.contains("nothing to stop"), "{}", closed[0]);
+        assert!(closed[0].zh.contains("首次暂停"));
+        assert!(!closed[0].en.contains("request-shutdown"));
+        assert!(closed[1].en.starts_with("Then delete the whole"));
+        // Started again after the close: the start counts, the close no longer does.
+        let again = cleanup(root, &Left { running: true, closed: true, paused: true, ..Left::default() });
+        assert!(again[0].en.contains("request-shutdown") && again[0].en.contains("may still be running"), "{}", again[0]);
         // Shortcuts alone.
         let shortcuts = cleanup(root, &Left { shortcuts: vec![PathBuf::from(r"X:\Desk\a.lnk")], ..Left::default() });
         assert_eq!(shortcuts.len(), 2);

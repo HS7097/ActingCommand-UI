@@ -199,9 +199,11 @@ fn print_set(set: &VerifiedSet) {
         );
     }
     println!(
-        "  视觉 / vision {}: {} files, {}",
+        "  视觉 / vision {}: {} files{}, {} model licence files, {}",
         set.set.vision.provider,
         set.set.vision.files.len(),
+        if set.set.carries_directml() { " (with DirectML, unused by the cpu provider)" } else { "" },
+        set.set.vision.licenses.len(),
         size_text(set.vision_bytes)
     );
     println!(

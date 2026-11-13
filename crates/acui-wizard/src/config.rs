@@ -40,8 +40,8 @@ pub const CONFIG_FILE: &str = "actingd.config.json";
 pub const CONFIG_PART: &str = "actingd.config.json.part";
 /// The full configuration, with the instances, while the first start runs without them
 /// ([`without_instances`]): checked with the other, kept beside it, and put in place by the
-/// Runtime's `config replace` once the first-start pause holds. The wizard deletes nothing, so it
-/// stays, the same bytes as the configuration then in place.
+/// Runtime's `config replace` once the first-start pause holds and the Runtime is closed. The
+/// wizard deletes nothing, so it stays, the same bytes as the configuration then in place.
 pub const FULL_CONFIG: &str = "install-wizard.config.json";
 pub const CONFIG_SCHEMA: &str = "actingcommand.actingd.config.v1";
 pub const STATE_DIR: &str = "state";
