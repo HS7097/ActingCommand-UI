@@ -15,13 +15,13 @@ pub use display::{event_type_names, format_bytes, module_names};
 
 pub use actingcommand_contract::{
     ArtifactEvictionObservation, ArtifactKind, ClientActionKind, ClientActionRecord, EventActor,
-    EventLinks, EventQuery, EventSeverity, EventSource, InstanceId, LedgerEventPosition,
+    EventLinks, EventQuery, EventSeverity, EventSource, EventType, InstanceId, LedgerEventPosition,
     LedgerRecoveryGap, LedgerRecoveryState,
     LedgerRunRecovery, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS, OriginModule,
-    ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
-    PublicEventPayload, RuntimeEventQueryCursor, RuntimeEventQueryPage,
-    RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit, RuntimeMaterialReadState, Sensitivity,
-    TaskSemanticFact,
+    PolicyExecutionOutcome, ProjectedArtifactReference, ProjectedEvent, ProjectionPayload,
+    ProjectionProfile, PublicEventPayload, RuntimeErrorCode, RuntimeEventQueryCursor,
+    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeMaterialReadLimit,
+    RuntimeMaterialReadState, Sensitivity, TaskSemanticFact,
 };
 use actingcommand_contract::LedgerPageLimit;
 

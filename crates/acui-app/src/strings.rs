@@ -166,6 +166,8 @@ pub struct Labels {
     pub gap_prefix: &'static str,
     pub join: &'static str,
     pub recovered_badge: &'static str,
+    /// Beside a row that records a run a person stopped (UI-3e3, `acui_model::stop_marked`).
+    pub stopped_badge: &'static str,
     pub integrity_ok: &'static str,
     /// An offline SQLite root: since LN-OFF-1 the opening checks the head,
     /// the tail and the eviction proofs only, and earlier records are
@@ -974,7 +976,8 @@ pub struct Labels {
     /// read; that not every task is listed. The account's own line of tasks without a package, and
     /// why, in grey; the Runtime's own reading task. A group of no `ui.json` group; a package with
     /// no summary; its two badges. What a row says: running, not for the scheduler; scheduled, and
-    /// while paused; done, or not started, this round; a paused reason; the other reasons of its
+    /// while paused; ended this round (it ran, was stopped, or did not start; UI-3e3), or not
+    /// started; a paused reason; the other reasons of its
     /// tasks (their sentences), how they are joined, and that there are more.
     pub tasks_tab: &'static str,
     pub tasks_down: &'static str,
@@ -1135,15 +1138,19 @@ pub struct Labels {
     pub rescue_seen_off: &'static str,
     pub rescue_seen_off_start: &'static str,
     pub rescue_game_fault: &'static str,
-    /// Beside "stop this run" (UI-3e2), what a press does or why it cannot be pressed, besides that
-    /// one was just pressed (`rescue_cooling`): a run another tool started, which a press asks the
-    /// Runtime to stop, the Runtime then resetting the device; this Runtime cannot stop a run from
-    /// here; a direct run whose identity was not read; a task the scheduler dispatched, which the
-    /// card's own pause of the account stops; a step the Runtime started itself; no task runs.
+    /// Beside "stop this run" (UI-3e2, UI-3e3), what a press does or why it cannot be pressed,
+    /// besides that one was just pressed (`rescue_cooling`): a run another tool started, which a
+    /// press asks the Runtime to stop, the Runtime then resetting the device; this Runtime cannot
+    /// stop a run from here; a run whose identity was not read; a run the scheduler dispatched,
+    /// which a press asks the Runtime to stop, this run only, its task staying on; a Runtime that
+    /// cannot stop a run the scheduler dispatched yet (one before 0.12.55, which also ends a
+    /// refused stop's line); a step the Runtime started itself (which also ends a refused stop's
+    /// line); no task runs.
     pub stop_note: &'static str,
     pub stop_unsupported: &'static str,
     pub stop_unidentified: &'static str,
-    pub stop_scheduled: &'static str,
+    pub stop_note_scheduled: &'static str,
+    pub stop_scheduled_unsupported: &'static str,
     pub rescue_close_system: &'static str,
     pub rescue_close_no_task: &'static str,
     /// What the last stop of a run came to, under its button, each that landed with when (time):
@@ -1153,11 +1160,18 @@ pub struct Labels {
     /// read; refused by a Runtime that cannot stop a run; the run ended before the stop; ended, its
     /// reset's result not read; the stop as a refusal names it (`rescue_refused`); unconfirmed; the
     /// account gone from the Runtime's list; the console reading no status. And a sentence with
-    /// the time it was said (the sentence, the time).
+    /// the time it was said (the sentence, the time). Of a run the scheduler dispatched (UI-3e3):
+    /// this one run stopped and the device reset (time); stopped, and its reset failed (time, why);
+    /// and, after either or after one that ended for another reason first (`rescue_then`), that its
+    /// task is not closed and runs again after its cooldown while its trigger holds, which the
+    /// account's own pause on its card keeps from running.
     pub stop_sending: &'static str,
     pub stop_done: &'static str,
     pub stop_not_needed: &'static str,
     pub stop_reset_failed: &'static str,
+    pub stop_done_scheduled: &'static str,
+    pub stop_reset_failed_scheduled: &'static str,
+    pub stop_scheduled_again: &'static str,
     pub stop_asked: &'static str,
     pub stop_reading: &'static str,
     pub stop_unsettled: &'static str,
@@ -1541,6 +1555,7 @@ pub const ZH: Labels = Labels {
     gap_prefix: "；缺口 ",
     join: "；",
     recovered_badge: "已恢复",
+    stopped_badge: "已停下",
     integrity_ok: "完整",
     integrity_ok_sqlite: "打开时的检查通过（较早的记录读到时再校验）",
     integrity_bad: "不完整：读全={} · 损坏尾部={}",
@@ -2120,7 +2135,7 @@ pub const ZH: Labels = Labels {
     tasks_running_direct: "正在跑（不是调度安排的）",
     tasks_scheduled: "已安排",
     tasks_scheduled_paused: "已安排（暂停中，不会开始）",
-    tasks_completed: "这一轮已跑完",
+    tasks_completed: "这一轮已结束",
     tasks_rejected: "这一轮没能开始",
     tasks_paused: "暂停中，不开始新任务",
     tasks_also: "另有：{}",
@@ -2211,13 +2226,17 @@ pub const ZH: Labels = Labels {
     stop_note: "这次运行是别的工具发起的，按下就请 Runtime 停下它，之后由 Runtime 复位设备",
     stop_unsupported: "这一版 Runtime 还不支持在这里停下运行",
     stop_unidentified: "没读到这次运行的身份，这里停不了",
-    stop_scheduled: "这是自动调度的任务，用卡片上的「暂停这个号」可以停它",
-    rescue_close_system: "这是 Runtime 自己发起的步骤，不能在这里停",
+    stop_note_scheduled: "这次运行是调度器派的：按下就请 Runtime 停下这一次，之后由 Runtime 复位设备；这个任务不会因此关掉",
+    stop_scheduled_unsupported: "这个版本的 Runtime 还不能停调度器派的运行，0.12.55 起可以",
+    rescue_close_system: "这是 Runtime 自己的步骤（启动、恢复、空闲时的收尾），人停不了它",
     rescue_close_no_task: "现在没有在跑的任务",
     stop_sending: "正在停下…（这次运行会停在下一个检查点，之后由 Runtime 复位设备）",
     stop_done: "已停下（{}），Runtime 已复位设备",
     stop_not_needed: "这次运行在这里停下之前已经因别的原因结束（{}），Runtime 这里没有复位设备；现在怎样以卡片为准",
     stop_reset_failed: "已停下（{}），但设备复位没成功：{}。这台被隔离了，现在怎样以卡片为准",
+    stop_done_scheduled: "已停下这一次运行（{}），Runtime 已复位设备",
+    stop_reset_failed_scheduled: "已停下这一次运行（{}），但设备复位没成功：{}。这台被隔离了，现在怎样以卡片为准",
+    stop_scheduled_again: "这个任务没有关：冷却过后条件还成立会再跑；不想它再跑，用卡片上的「暂停这个号」",
     stop_asked: "已经请它停下（{}），等它在下一个检查点停下…",
     stop_reading: "正在读停止的结果…",
     stop_unsettled: "已经请它停下，但这里没读到最后结果（{}）；现在怎样以卡片为准。不会再自动发。",
@@ -2540,6 +2559,7 @@ pub const EN: Labels = Labels {
     gap_prefix: "; gap ",
     join: "; ",
     recovered_badge: "Recovered",
+    stopped_badge: "Stopped",
     integrity_ok: "Intact",
     integrity_ok_sqlite: "Passed the opening check (earlier records are verified as they are read)",
     integrity_bad: "Not intact: read_complete={} · corrupt tail={}",
@@ -3119,7 +3139,7 @@ pub const EN: Labels = Labels {
     tasks_running_direct: "Running (not scheduled)",
     tasks_scheduled: "Scheduled",
     tasks_scheduled_paused: "Scheduled (paused; will not start)",
-    tasks_completed: "Done this round",
+    tasks_completed: "Ended this round",
     tasks_rejected: "Could not start this round",
     tasks_paused: "Paused; no new tasks start",
     tasks_also: "Also: {}",
@@ -3210,13 +3230,17 @@ pub const EN: Labels = Labels {
     stop_note: "Another tool started this run: a press asks the Runtime to stop it, and the Runtime then resets the device",
     stop_unsupported: "This Runtime cannot stop a run from here yet",
     stop_unidentified: "This run's identity was not read, so it cannot be stopped from here",
-    stop_scheduled: "This task was scheduled automatically: Pause This Account on its card stops it",
-    rescue_close_system: "This is a step the Runtime started itself: it cannot be stopped from here",
+    stop_note_scheduled: "The scheduler started this run: a press asks the Runtime to stop this one run, and the Runtime then resets the device; the task itself stays on",
+    stop_scheduled_unsupported: "This version of the Runtime cannot stop a run the scheduler started yet; from 0.12.55 it can",
+    rescue_close_system: "This is the Runtime's own step (starting, recovering or winding down when idle): a person cannot stop it",
     rescue_close_no_task: "No task is running now",
     stop_sending: "Stopping… (the run stops at its next checkpoint, and the Runtime then resets the device)",
     stop_done: "Stopped ({}); the Runtime reset the device",
     stop_not_needed: "The run had already ended for another reason before this stop reached it ({}); the Runtime did not reset the device for it; see the card for what holds now",
     stop_reset_failed: "Stopped ({}), but the device's reset failed: {}. The device is fenced; see the card for what holds now",
+    stop_done_scheduled: "Stopped this one run ({}); the Runtime reset the device",
+    stop_reset_failed_scheduled: "Stopped this one run ({}), but the device's reset failed: {}. The device is fenced; see the card for what holds now",
+    stop_scheduled_again: "The task is not closed: after its cooldown it runs again if its condition still holds; to keep it from running, use Pause This Account on its card",
     stop_asked: "Asked to stop ({}); waiting for it to stop at its next checkpoint…",
     stop_reading: "Reading what came of the stop…",
     stop_unsettled: "Asked to stop, but its final result was not read here ({}); see the card for what holds now. Not sent again by itself.",

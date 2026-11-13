@@ -842,8 +842,8 @@ pub struct FenceFact {
 }
 
 /// What an instance does now. `policy_run` and `direct_run` always name a package. `run`: the
-/// request of what it does (`request_id`), the run's identity a stop of it names (UI-3e2), which
-/// a `direct_run` always states; never shown.
+/// request of what it does (`request_id`), the run's identity a stop of it names (UI-3e2, UI-3e3),
+/// which a `direct_run` and a `policy_run` always state; never shown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivityFact {
     pub kind: ActivityKind,

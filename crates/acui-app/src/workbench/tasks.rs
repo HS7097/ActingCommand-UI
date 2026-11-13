@@ -148,7 +148,8 @@ pub enum TaskSaid {
     RunningDirect,
     /// Selected, and its dispatch is under way; while a pause holds, it does not start.
     Scheduled { paused: bool },
-    /// Selected, and its dispatch is over: it ran, or it did not start.
+    /// Selected, and its dispatch is over: it ran, a person stopped it (UI-3e3), or it did not
+    /// start. The dispatch's stage does not tell them apart.
     Completed,
     Rejected,
     /// A candidate row's reason: `why` its code with the value that chose its words, for the
