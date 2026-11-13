@@ -170,12 +170,12 @@
 #429 R-6b（R-6b1、R-6b2）并进这两个修订，不再升号：`policy.execution_recorded` 多了第三种结果 `stopped`（`outcome`、`runtime_ms`），
 是 `StopInstanceRun` 停下的调度运行的结算，旁边的终局照旧是带 `contained_task_cancelled` 的 `task.failed`；建在 v0.12.53 上的控制台
 解不了它（离线时含它的页整页失败，在线时 `runtime_receipt_decode_failed`），这一版解得了。v0.12.55 起 Runtime 也停调度器派的运行，
-由 actinglab `task stop` 或 Lab 的工具发；MCP `ac_stop_run` 和 actinglab `run stop` 照旧拒绝所有调度运行；这个控制台的
-「停下这次运行」也停它（#429 UI-3e3，见「启动器」一节的救援条）。v0.12.54 的配置修订 28 加了 `idle.action` 的值 `auto` 和键 `idle.return_home_min_gap_ms`、
+由 actinglab `task stop` 或 Lab 的工具发；MCP `ac_stop_run` 和 actinglab `run stop` 照旧拒绝所有调度运行；这个控制台对
+调度运行的按钮是「关闭这个任务」：先关掉这个任务，再停下这一次（#429 UI-3e3、UI-3e2b，见「启动器」一节的救援条）。v0.12.54 的配置修订 28 加了 `idle.action` 的值 `auto` 和键 `idle.return_home_min_gap_ms`、
 `idle.stop_emulator_min_gap_ms`，每个也可按实例设（#386 IDLE-2），以及 `instance.<实例编号>.scheduling.pool_lines`（#428 SCHED-C1e），
 新键在 `ui_tier` 里都是 `hidden`，设置页不多出行；设置页把 `auto` 写成「按空闲时长自动选」，号的规则面板写
 「现在是『按空闲时长自动选』，这里不提供」，也不提供这一选项。请求 `PackScheduleView`、`EditPackSchedule` 有了成功码 `request_pack_schedule_view_completed`、
-`request_edit_pack_schedule_completed`（#429 R-8），控制台读一个号的 `PackScheduleView`、写本号范围的 `EditPackSchedule`（「日常任务」的开关，见下）。`contained_task_state_invalid` 用可选的值写明是什么无效：
+`request_edit_pack_schedule_completed`（#429 R-8），控制台读一个号的 `PackScheduleView`、写本号范围的 `EditPackSchedule`（「日常任务」的开关，见下；救援条的「关闭这个任务」也写同一行）。`contained_task_state_invalid` 用可选的值写明是什么无效：
 `state_problem`（词表 `state_problem`：`held_state_unusable`、`no_move_from_page`、`runtime_invariant`、`transition_refused`）、
 `phase_id`、`package_id`、`page_id`、`pack_operation_id`（#428 DIAG-SI），`runtime-outcomes` 仍是 1。嵌入的结果码目录多了 5 个码
 （这两个成功码，以及 `consumption_fact_unusable`、`policy_fact_rows_exceeded`、`selection_decided_on_lower_bound`）、9 个键、
@@ -461,6 +461,8 @@ Runtime 重启过就等下次进设置页再读。它和安装向导的「开机
 改动，已刷新，请确认后再点一次」，不自动重发；`fact_observation_not_newer`（同一毫秒里先落了别的表）在同一条连接上马上
 重发一次。一个号一次只出去一个写：在途时，以及答复可能改了开关或说别处改过（改成了、版本冲突、同一毫秒两次、结果未确认）
 之后、到落地后才开始的那次视图读到之前，这个号的开关都灰着，显示的仍是之前读到的状态；别的拒绝、没发出去的，开关马上回来。
+救援条的「关闭这个任务」（见「启动器」一节）写的是和「关」同一行，也算这个号的一个写：它在途时这个号的开关都灰着，
+它可能写上了（写上了、结果未确认）时也等落地后的视图；开关的写在途时，救援条那个按钮灰着，写「正在改这个号的任务开关，稍等」。
 每次按下的结果写在那一行下面，带落地时刻（「正在改…」、版本冲突、线程起不来、Runtime 重启这几种不带），直到这一行再被按、
 清单换号或 Runtime 重启；清单藏起来再出现（换页签、换页、最小化、Runtime 一时没响应）结果照旧留着；成功不另写。
 视图里有、这一轮评估对不上的包也照样一行（「这一轮的评估里对不上它」）；清单里有、视图里没有的包不给开关，
@@ -696,26 +698,34 @@ Runtime 才回话，所以按下去可能要半分钟左右，这期间卡片上
 --instance <别名>` 暂停一个实例、用带同样参数的 `actingctl resume` 恢复，或用 MCP 工具 `ac_pause` /
 `ac_resume`（见「智能体用的 MCP」一节）。
 
-实时画面上方的救援条在这个号有活动时多一行「停下这次运行」（#429 UI-3e2，R-6 第一片，Runtime v0.12.53 起；
-UI-3e3，R-6b，调度器派的运行 Runtime v0.12.55 起）。最近一次状态读取里这个号的活动带着它的 `request_id` 时能按：
-别的工具直接发起的运行（`direct_run`，比如 Lab 的 `run start`、`actingctl task-run`、MCP 的 `ac_run_pack` 起的
-运行），和调度器派的运行（`policy_run`，全局暂停下「正在收尾」的也算）。Runtime 自己的步骤（启动、恢复、空闲时的
-收尾）不发请求，按钮灰着并写明原因。按一下就发，不问第二遍：在后台
-线程用一条新的「人」连接发一次 `StopInstanceRun`，`wait_ms` 5 秒；Runtime 让这次运行停在下一个检查点，再用这次
-运行自己的租约复位设备，然后回答。结果写在这一行下面，带时刻；屏上不出码、不出请求号，被停运行的请求号只写进技术
-日志。回答说还没停下（`settled: false`）或者结果未确认时，等同一个 owner epoch 里、这次回答之后的一次状态读取
-显示这次运行已经不在了，再补发一次，读复位的结果；最多补发这一次，没有定时重发，被拒或没发出去也不重发。Runtime
-重启了、这个号不在列表里了、读取线程没了，就写结果不明，不补发；运行一直不结束就一直等，不另设上限。v0.12.53
-之前的 Runtime 答 `not_implemented`（不入账），之后这一轮 Runtime 里两种运行的按钮都灰着。别的控制台或工具已经请停时，这里
-看不出来；再按只多三条账本记录（`ui.action`、`command.received`，再加 `command.validated` 或
-`command.rejected`），结果照样能读到。
+实时画面上方的救援条在这个号有活动时多一行：别的工具直接发起的运行是「停下这次运行」（#429 UI-3e2，R-6 第一片，
+Runtime v0.12.53 起），调度器派的运行是「关闭这个任务」（UI-3e2b，R-8 和 R-6b，Runtime v0.12.55 起）；调度运行没有
+只停不关的按钮。最近一次状态读取里这个号的活动带着它的 `request_id` 时能按：别的工具直接发起的运行（`direct_run`，
+比如 Lab 的 `run start`、`actingctl task-run`、MCP 的 `ac_run_pack` 起的运行），和带着 `request_id`、`package_id`
+的调度运行（`policy_run`，全局暂停下「正在收尾」的也算）。Runtime 自己的步骤（启动、恢复、空闲时的收尾）不发请求，
+按钮灰着并写明原因。按一下就发，不问第二遍；暂停、免打扰、围栏都不挡它。「停下这次运行」在后台线程用一条新的「人」
+连接发一次 `StopInstanceRun`，`wait_ms` 5 秒；Runtime 让这次运行停在下一个检查点，再用这次运行自己的租约复位设备，
+然后回答。结果写在这一行下面，带时刻；屏上不出码、不出请求号，被停运行的请求号只写进技术日志。回答说还没停下
+（`settled: false`）或者结果未确认时，等同一个 owner epoch 里、这次回答之后的一次状态读取显示这次运行已经不在了，
+再补发一次停止，读复位的结果；最多补发这一次，没有定时重发，被拒或没发出去也不重发。Runtime 重启了、这个号不在列表里了、
+读取线程没了，就写结果不明，不补发；运行一直不结束就一直等，不另设上限。v0.12.53 之前的 Runtime 答 `not_implemented`
+（不入账），之后这一轮 Runtime 里两种按钮都灰着。别的控制台或工具已经请停时，这里看不出来；再按只多三条账本记录
+（`ui.action`、`command.received`，再加 `command.validated` 或 `command.rejected`），结果照样能读到。
 
-调度器派的运行停下的只是这一次：任务没有关，冷却从派发算起，冷却过后触发条件还成立就会再派；不想它再跑，用卡片上的
-「暂停这个号」。所以停下了（复位成功、复位失败，或者它先因别的原因结束了）的结果行后面接一句「这个任务没有关：冷却过后
-条件还成立会再跑；不想它再跑，用卡片上的「暂停这个号」」；没停下或不知道停没停下时不接。停下不算失败：不重试、不退避、
-不暂停任务、不起恢复梯子。直接运行的结果行和以前一样。控制台读不到正在跑的 Runtime 的版本，所以调度运行先放开：
-v0.12.53、v0.12.54 会拒绝停调度运行（`run_origin` 是 `policy`，入账三条，结果行红一次），之后这一轮 Runtime 里调度运行的
-按钮灰着，写「这个版本的 Runtime 还不能停调度器派的运行，0.12.55 起可以」，直接运行照常能按。账本窗口里，停下的调度运行
+「关闭这个任务」先关掉这个任务，再停下这一次，都在同一条新的「人」连接上：先读这个号的 `PackScheduleView`；这次运行的
+包在视图里，就写本号范围这个包的一条从现在起、没有结束的「不安排」（和「日常任务」里开关「关」写的同一行，不带版本，
+所以别的包刚被改过也不会顶成冲突；`fact_observation_not_newer` 马上重发一次），回执 Completed 之后才发上面那次停止；
+关闭行没写上（被拒、没发出去、结果未确认）就不停，结果行写「没能关闭：…。这一次也没有停」或「关闭有没有写上，这里不知道…」。
+包不在视图里（这个号的日常任务不跑它：读数维护，或者派发之后目录换了代）不写关闭行，只停，结果行写「这个任务包不在这个号的
+日常任务里，这里只停下了这一次」：这种行清单上看不见、撤不掉。视图读失败，什么都不做（「没能关闭：…」）；视图或关闭行答
+`not_implemented`（0.12.55 之前），或者不认这个请求，也什么都不做，之后这一轮 Runtime 里「关闭这个任务」灰着（「这一版
+Runtime 还不支持在这里关闭任务」），「日常任务」也不读开关。关上以后结果行开头是「已关闭这个
+任务（hh:mm:ss），之后不再安排」，后面接停止的结果，停下了还写「要恢复，到「日常任务」里打开它」：这就是撤销，
+清单里这一行显示「本号设置：已关闭（自 hh:mm 起）」。补发的那次只停，不再写关闭行。关闭在途时这个号的开关都灰着；
+开关的写在途时这个按钮灰着（「正在改这个号的任务开关，稍等」）。账本里关闭是一条 `fact.published`，停止三条，补发再三条。
+既有日常任务、又兼读数的包，关闭行关掉的是它的日常任务，读数维护（`_fact_refresh`）照样会派。排队中、准备中的调度运行
+在状态读数里没有，按不到；要它们不跑，用「暂停这个号」。停下不算失败：不重试、不退避、不暂停任务、不起恢复梯子。
+直接运行的结果行和以前一样，不写关闭行。账本窗口里，停下的调度运行
 记的 `task.failed`（`contained_task_cancelled`）、`policy.execution_recorded`（结果 `stopped`）和调度驱动那条
 `runtime.failed`，备注栏写「已停下」，不按失败的红色显示，类型名和级别字照 Runtime 记的；运行恢复分组行由账本推出，
 可能照旧把它们算成「第 N 条失败，未见恢复」。「日常任务」页签里这一轮已经结束的派发写「这一轮已结束」，跑完和被停下的
