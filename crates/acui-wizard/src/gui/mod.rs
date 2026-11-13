@@ -1631,7 +1631,7 @@ fn paint_confirm(state: &State, wiz: &Wiz<'_>) {
                 .zip(account.server.as_deref())
                 .and_then(|(game, server)| game.server(server))
                 .map_or("?", |server| server.label.as_str());
-            fill(
+            let mut line = fill(
                 l.account_value,
                 &[
                     &format!("#{} {}", account.index, account.name),
@@ -1639,7 +1639,19 @@ fn paint_confirm(state: &State, wiz: &Wiz<'_>) {
                     game.map_or("?", |game| game.label.as_str()),
                     server,
                 ],
-            )
+            );
+            // What the advanced fold changed from its defaults, so the list is the whole plan.
+            if account.touch != DEFAULT_BACKEND || account.capture != DEFAULT_BACKEND {
+                line.push_str(&format!(
+                    " · {} {} / {} {}",
+                    l.touch_label, account.touch, l.capture_label, account.capture
+                ));
+            }
+            if account.start_emulator {
+                line.push_str(" · ");
+                line.push_str(l.start_emulator_short);
+            }
+            line
         })
         .collect();
     summary.push(KeyValue {

@@ -400,13 +400,14 @@ component Tick {
 component StepLine {
     in property <int> number;
     in property <string> label;
-    in property <int> state;
+    // StepItem's `state`.
+    in property <int> phase;
     height: 30px;
     accessible-role: text;
     accessible-label: root.label;
     Rectangle {
         border-radius: Look.radius;
-        background: root.state == 1 ? Look.selection : transparent;
+        background: root.phase== 1 ? Look.selection : transparent;
     }
     HorizontalLayout {
         padding-left: 8px;
@@ -418,13 +419,13 @@ component StepLine {
                 width: 20px;
                 height: 20px;
                 border-radius: 10px;
-                background: root.state == 2 ? Look.status-ok
-                    : root.state == 4 ? Look.status-fault
-                    : root.state == 1 ? Look.accent
+                background: root.phase== 2 ? Look.status-ok
+                    : root.phase== 4 ? Look.status-fault
+                    : root.phase== 1 ? Look.accent
                     : transparent;
-                border-width: root.state == 0 || root.state == 3 ? 1px : 0px;
+                border-width: root.phase== 0 || root.phase== 3 ? 1px : 0px;
                 border-color: Look.text-faint;
-                if root.state == 2: Path {
+                if root.phase== 2: Path {
                     x: 0;
                     y: 0;
                     width: 20px;
@@ -436,7 +437,7 @@ component StepLine {
                     stroke-width: 2px;
                     fill: transparent;
                 }
-                if root.state == 4: Path {
+                if root.phase== 4: Path {
                     x: 0;
                     y: 0;
                     width: 20px;
@@ -448,14 +449,14 @@ component StepLine {
                     stroke-width: 2px;
                     fill: transparent;
                 }
-                if root.state == 0 || root.state == 1 || root.state == 3: Text {
+                if root.phase== 0 || root.phase== 1 || root.phase== 3: Text {
                     x: 0;
                     y: 0;
                     width: 20px;
                     height: 20px;
                     text: root.number;
                     font-size: 11px;
-                    color: root.state == 1 ? Look.accent-text : Look.text-faint;
+                    color: root.phase== 1 ? Look.accent-text : Look.text-faint;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     accessible-role: none;
@@ -465,8 +466,8 @@ component StepLine {
         Text {
             text: root.label;
             font-size: Scale.body-font;
-            font-weight: root.state == 1 ? 700 : 400;
-            color: root.state == 1 ? Look.text : root.state == 0 || root.state == 3 ? Look.text-faint : Look.text-secondary;
+            font-weight: root.phase== 1 ? 700 : 400;
+            color: root.phase== 1 ? Look.text : root.phase== 0 || root.phase== 3 ? Look.text-faint : Look.text-secondary;
             vertical-alignment: center;
             overflow: elide;
             horizontal-stretch: 1;
@@ -712,21 +713,22 @@ component FoldSwitch {
 
 // One account's row of the table, and its fold of advanced settings.
 component AccountLine inherits VerticalLayout {
-    in property <AccountRow> row;
+    // Not `row`: every element has that one, for its place in a grid.
+    in property <AccountRow> account;
     in property <int> index;
     spacing: 4px;
     HorizontalLayout {
         spacing: 8px;
         Text {
             width: 110px;
-            text: root.row.emulator;
+            text: root.account.emulator;
             font-size: Scale.body-font;
             color: Look.text;
             vertical-alignment: center;
             overflow: elide;
         }
         LineEdit {
-            text: root.row.alias;
+            text: root.account.alias;
             font-size: Scale.body-font;
             horizontal-stretch: 1;
             min-width: 90px;
@@ -738,8 +740,8 @@ component AccountLine inherits VerticalLayout {
         game-box := SkinComboBox {
             width: 140px;
             min-width: 100px;
-            model: root.row.games;
-            current-index: root.row.game-index;
+            model: root.account.games;
+            current-index: root.account.game-index;
             selected(value) => {
                 Wiz.game-picked(root.index, self.current-index);
             }
@@ -747,9 +749,9 @@ component AccountLine inherits VerticalLayout {
         server-box := SkinComboBox {
             width: 140px;
             min-width: 100px;
-            model: root.row.servers;
-            current-index: root.row.server-index;
-            enabled: root.row.game-index > 0;
+            model: root.account.servers;
+            current-index: root.account.server-index;
+            enabled: root.account.game-index > 0;
             selected(value) => {
                 Wiz.server-picked(root.index, self.current-index);
             }
@@ -759,13 +761,13 @@ component AccountLine inherits VerticalLayout {
         padding-left: 118px;
         alignment: start;
         FoldSwitch {
-            open: root.row.advanced;
+            open: root.account.advanced;
             toggled => {
                 Wiz.advanced-toggled(root.index);
             }
         }
     }
-    if root.row.advanced: VerticalLayout {
+    if root.account.advanced: VerticalLayout {
         padding-left: 118px;
         spacing: 6px;
         HorizontalLayout {
@@ -781,7 +783,7 @@ component AccountLine inherits VerticalLayout {
             SkinComboBox {
                 width: 170px;
                 model: Strings.touch-options;
-                current-index: root.row.touch-index;
+                current-index: root.account.touch-index;
                 selected(value) => {
                     Wiz.touch-picked(root.index, self.current-index);
                 }
@@ -800,7 +802,7 @@ component AccountLine inherits VerticalLayout {
             SkinComboBox {
                 width: 170px;
                 model: Strings.capture-options;
-                current-index: root.row.capture-index;
+                current-index: root.account.capture-index;
                 selected(value) => {
                     Wiz.capture-picked(root.index, self.current-index);
                 }
@@ -808,7 +810,7 @@ component AccountLine inherits VerticalLayout {
         }
         Tick {
             text: Strings.start-emulator;
-            checked: root.row.start-emulator;
+            checked: root.account.start-emulator;
             toggled => {
                 Wiz.start-toggled(root.index);
             }
@@ -817,9 +819,9 @@ component AccountLine inherits VerticalLayout {
     }
     // The boxes follow the row whenever the Rust side changes it (a game picked anew resets
     // the server), since a pick by hand ends their bindings to it.
-    changed row => {
-        game-box.current-index = root.row.game-index;
-        server-box.current-index = root.row.server-index;
+    changed account => {
+        game-box.current-index = root.account.game-index;
+        server-box.current-index = root.account.server-index;
     }
 }
 
@@ -862,7 +864,7 @@ component AccountsPage inherits ScrollView {
         for row[index] in Wiz.accounts: VerticalLayout {
             spacing: 2px;
             AccountLine {
-                row: row;
+                account: row;
                 index: index;
             }
             Rectangle { height: 4px; }
@@ -1083,7 +1085,7 @@ export component WizardWindow inherits Window {
                 for step[index] in Wiz.steps: StepLine {
                     number: index + 1;
                     label: step.label;
-                    state: step.state;
+                    phase: step.state;
                 }
             }
         }
