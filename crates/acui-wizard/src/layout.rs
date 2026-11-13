@@ -18,6 +18,7 @@ pub const BUNDLE_SCHEMA: &str = "actingcommand.bundle.v4";
 pub const BUNDLE_FILE: &str = "bundle.json";
 pub const INTERFACES_FILE: &str = "interfaces.json";
 pub const APPLICATIONS_FILE: &str = "applications.json";
+pub const SCHEDULE_FILE: &str = "schedule.json";
 /// The root files a bundle zip may carry (Runtime `place.rs` `ROOT_FILES`).
 pub const ROOT_FILES: [&str; 9] = [
     "bundle.json",

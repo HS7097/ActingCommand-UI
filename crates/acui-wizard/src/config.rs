@@ -14,7 +14,8 @@
 //! - `mumu_root` absolute, when known; `standard_packs.root` `packages` (relative to the file's
 //!   folder; composer mode requires it); `vision.execution_provider` `cpu` (the vision root is
 //!   then `<root>\vision`);
-//! - `instances[]`: `alias` (1 to 256 bytes, no control character), `instance_id`
+//! - `instances[]`: `alias` (1 to 256 bytes, no control character; the wizard holds it to the
+//!   schedule's stricter rule, see `alias`), `instance_id`
 //!   (`instance_` and 32 lowercase hex digits, minted here), `instance_index` (the MuMu index;
 //!   no `instance_name`, `serial` or `port`), `application_id` (required for a discovery binding:
 //!   `application_identity_missing`), `touch_backend` and `capture_backend` (required, never
@@ -50,7 +51,6 @@ pub const CAPTURE_BACKENDS: [&str; 3] = ["adb", "droidcast_raw", "nemu_ipc"];
 /// Today's production pair (the same table: "Nemu capture beside any touch backend is today's
 /// production"), the wizard's default.
 pub const DEFAULT_BACKEND: &str = "nemu_ipc";
-const MAX_ALIAS_BYTES: usize = 256;
 
 /// One instance of the configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,23 +183,6 @@ pub fn is_instance_id(text: &str) -> bool {
     })
 }
 
-/// What is wrong with `alias` (Runtime `crates/actingcommand-contract/src/runtime.rs`, the alias
-/// rule: 1 to 256 bytes, no control character), or `None`.
-pub fn alias_problem(alias: &str) -> Option<Said> {
-    if alias.is_empty() || alias.len() > MAX_ALIAS_BYTES {
-        return Some(Said::new("别名要 1 到 256 字节", "an alias is 1 to 256 bytes").with(alias));
-    }
-    if alias.chars().any(char::is_control) {
-        return Some(Said::new("别名里不能有控制字符", "an alias holds no control character").with(alias.escape_debug()));
-    }
-    None
-}
-
-/// The alias the window offers for an instance: `<game>-<index>`.
-pub fn default_alias(game: &str, index: u16) -> String {
-    format!("{game}-{index}")
-}
-
 /// What is wrong with a backend pair, or `None`: each one an emulator takes, and Nemu touch only
 /// beside Nemu capture (Runtime `contracts/runtime-config.md`, the backend pairing).
 pub fn backend_problem(touch: &str, capture: &str) -> Option<Said> {
@@ -317,16 +300,11 @@ mod tests {
     }
 
     #[test]
-    fn identifiers_aliases_and_backends_follow_the_runtimes_rules() {
+    fn identifiers_and_backends_follow_the_runtimes_rules() {
         assert!(is_instance_id("instance_0123456789abcdef0123456789abcdef"));
         assert!(!is_instance_id("instance_0123456789ABCDEF0123456789abcdef"));
         assert!(!is_instance_id("instance_0123"));
         assert!(!is_instance_id("0123456789abcdef0123456789abcdef"));
-        assert_eq!(alias_problem("碧蓝航线-5"), None);
-        assert!(alias_problem("").is_some());
-        assert!(alias_problem(&"a".repeat(257)).is_some());
-        assert!(alias_problem("a\tb").is_some());
-        assert_eq!(default_alias("azurlane", 5), "azurlane-5");
         assert_eq!(backend_problem("nemu_ipc", "nemu_ipc"), None);
         assert_eq!(backend_problem("maatouch", "adb"), None);
         assert!(backend_problem("nemu_ipc", "adb").is_some());

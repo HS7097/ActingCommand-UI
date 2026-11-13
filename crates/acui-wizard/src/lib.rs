@@ -14,6 +14,7 @@
 //! It never writes the console's global settings file, never touches another installation,
 //! and never deletes anything: a failed step stops the install and leaves what it wrote.
 
+pub mod alias;
 pub mod apps;
 pub mod archive;
 pub mod child;

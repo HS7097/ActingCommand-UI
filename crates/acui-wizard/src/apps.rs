@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+use crate::alias::MAX_ALIAS_BYTES;
 use crate::text::Said;
 
 pub const APPLICATIONS_SCHEMA: &str = "actingcommand.applications.v1";
@@ -36,6 +37,9 @@ pub struct Game {
     /// Its display name: the table's `label`, else the folder name.
     pub label: String,
     pub servers: Vec<Server>,
+    /// The most bytes an alias of an instance playing this game may take (`alias::alias_limit`
+    /// of the longest id in its `schedule.json`); 256 until the set check reads that file.
+    pub alias_limit: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,5 +99,6 @@ pub fn parse_applications(bytes: &[u8]) -> Result<Game, Said> {
         game: file.game,
         label,
         servers,
+        alias_limit: MAX_ALIAS_BYTES,
     })
 }

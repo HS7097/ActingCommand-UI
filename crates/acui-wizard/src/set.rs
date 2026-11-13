@@ -16,13 +16,14 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::alias::{alias_limit, longest_item_id};
 use crate::apps::{parse_applications, Game};
 use crate::archive::{safe_relative, Archive};
 use crate::digest::{is_sha256, sha256_file};
 use crate::engine::Event;
 use crate::layout::{
     parse_bundle, plain_name, plan_layout, BundleIndex, APPLICATIONS_FILE, BUNDLE_FILE,
-    INTERFACES_FILE,
+    INTERFACES_FILE, SCHEDULE_FILE,
 };
 use crate::manifest::{
     check_identity, package_edge, parse_manifest, speaks, BuildManifest, Program, MANIFEST_FILE,
@@ -239,6 +240,47 @@ pub fn set_problems(set: &InstallSet) -> Vec<Said> {
     problems
 }
 
+/// What kind of trouble a set check met, for the window to say it in a person's words; the
+/// sentence with every detail is [`SetError::said`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetFault {
+    /// `install-set.json` cannot be read or breaks a rule of its own, or the set as a whole does
+    /// not fit (the Runtime declares no package interface).
+    Unusable,
+    /// A file of the set (its name in the set folder) is missing, of another size or SHA-256,
+    /// or a zip whose contents do not match what it declares.
+    Damaged { file: String },
+    /// A game's standard package (its display name, else its folder name) speaks a package
+    /// interface outside the Runtime's range.
+    Mismatch { game: String },
+}
+
+/// Why a set check stopped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetError {
+    pub fault: SetFault,
+    pub said: Said,
+}
+
+impl SetError {
+    fn unusable(said: Said) -> Self {
+        Self { fault: SetFault::Unusable, said }
+    }
+
+    fn damaged(file: &str, said: Said) -> Self {
+        Self {
+            fault: SetFault::Damaged { file: file.to_owned() },
+            said,
+        }
+    }
+}
+
+impl From<SetError> for Said {
+    fn from(error: SetError) -> Self {
+        error.said
+    }
+}
+
 /// A program zip, checked.
 #[derive(Debug, Clone)]
 pub struct VerifiedProgram {
@@ -316,9 +358,9 @@ pub fn beside_program() -> Option<PathBuf> {
     dir.join(SET_FILE).is_file().then_some(dir)
 }
 
-/// Reads and checks the install set in `dir` (see the module's description); `report` hears a
-/// line per file checked and the bytes hashed.
-pub fn verify_set(dir: &Path, report: &mut dyn FnMut(Event)) -> Result<VerifiedSet, Said> {
+/// The set file in `dir`, read and parsed but not checked against its files: what the window's
+/// first page shows before the check.
+pub fn read_set_file(dir: &Path) -> Result<InstallSet, Said> {
     let set_path = dir.join(SET_FILE);
     let unreadable = |error: &dyn std::fmt::Display| {
         Said::new("install-set.json 读不出", "install-set.json cannot be read")
@@ -329,12 +371,18 @@ pub fn verify_set(dir: &Path, report: &mut dyn FnMut(Event)) -> Result<VerifiedS
         return Err(unreadable(&"larger than 1 MiB"));
     }
     let bytes = fs::read(&set_path).map_err(|error| unreadable(&error))?;
-    let set = parse_install_set(&bytes)?;
+    parse_install_set(&bytes)
+}
+
+/// Reads and checks the install set in `dir` (see the module's description); `report` hears a
+/// line per file checked and the bytes hashed.
+pub fn verify_set(dir: &Path, report: &mut dyn FnMut(Event)) -> Result<VerifiedSet, SetError> {
+    let set = read_set_file(dir).map_err(SetError::unusable)?;
     let problems = set_problems(&set);
     if !problems.is_empty() {
         let zh: Vec<String> = problems.iter().map(|problem| problem.zh.clone()).collect();
         let en: Vec<String> = problems.iter().map(|problem| problem.en.clone()).collect();
-        return Err(Said::new(zh.join("；"), en.join("; ")));
+        return Err(SetError::unusable(Said::new(zh.join("；"), en.join("; "))));
     }
     report(Event::Line(
         Said::new("读到安装集", "install set read").with(format!(
@@ -349,13 +397,19 @@ pub fn verify_set(dir: &Path, report: &mut dyn FnMut(Event)) -> Result<VerifiedS
         let path = dir.join(&file.file);
         let size = fs::metadata(&path)
             .map_err(|error| {
-                Said::new("安装集缺少文件", "a file of the install set is missing")
-                    .with(format!("{what}: {}: {error}", path.display()))
+                SetError::damaged(
+                    &file.file,
+                    Said::new("安装集缺少文件", "a file of the install set is missing")
+                        .with(format!("{what}: {}: {error}", path.display())),
+                )
             })?
             .len();
         if size != file.size {
-            return Err(Said::new("文件大小与安装集不符", "the file size does not match the install set")
-                .with(format!("{what}: {}: expected {}, found {size}", path.display(), file.size)));
+            return Err(SetError::damaged(
+                &file.file,
+                Said::new("文件大小与安装集不符", "the file size does not match the install set")
+                    .with(format!("{what}: {}: expected {}, found {size}", path.display(), file.size)),
+            ));
         }
     }
     let total: u64 = files.iter().map(|(_, file)| file.size).sum();
@@ -367,11 +421,17 @@ pub fn verify_set(dir: &Path, report: &mut dyn FnMut(Event)) -> Result<VerifiedS
             report(Event::Bytes { done, total });
         })
         .map_err(|error| {
-            Said::new("文件读不出", "the file cannot be read").with(format!("{}: {error}", path.display()))
+            SetError::damaged(
+                &file.file,
+                Said::new("文件读不出", "the file cannot be read").with(format!("{}: {error}", path.display())),
+            )
         })?;
         if !sha256.eq_ignore_ascii_case(&file.sha256) {
-            return Err(Said::new("文件的 SHA-256 与安装集不符", "the file's SHA-256 does not match the install set")
-                .with(format!("{what}: {}: expected {}, found {sha256}", path.display(), file.sha256)));
+            return Err(SetError::damaged(
+                &file.file,
+                Said::new("文件的 SHA-256 与安装集不符", "the file's SHA-256 does not match the install set")
+                    .with(format!("{what}: {}: expected {}, found {sha256}", path.display(), file.sha256)),
+            ));
         }
         report(Event::Line(
             Said::new("已核对", "checked").with(format!("{what}: {} ({} bytes)", file.file, file.size)),
@@ -387,7 +447,7 @@ pub fn verify_set(dir: &Path, report: &mut dyn FnMut(Event)) -> Result<VerifiedS
             Program::Console => (&set.console.zip, &set.console.commit),
         };
         let zip = dir.join(&file.file);
-        programs.push(verify_program(program, &zip, commit, report)?);
+        programs.push(verify_program(program, &zip, commit, report).map_err(|said| SetError::damaged(&file.file, said))?);
     }
     let runtime_manifest = &programs[0].manifest;
     let package_range = runtime_manifest
@@ -395,10 +455,10 @@ pub fn verify_set(dir: &Path, report: &mut dyn FnMut(Event)) -> Result<VerifiedS
         .as_ref()
         .and_then(|declaration| speaks(declaration, "package"))
         .ok_or_else(|| {
-            Said::new(
+            SetError::unusable(Said::new(
                 "Runtime 的 BUILD-MANIFEST.json 没有声明 package 接口",
                 "the Runtime's BUILD-MANIFEST.json declares no package interface",
-            )
+            ))
         })?;
 
     // Each standard package zip.
@@ -481,57 +541,66 @@ fn verify_program(
     })
 }
 
-fn verify_bundle(entry: &BundleEntry, zip: &Path, package_range: [u64; 2]) -> Result<VerifiedBundle, Said> {
-    let game_said = |said: Said| said.with(format!("{} ({})", entry.game, entry.file));
-    let mut archive = Archive::open(zip)?;
-    let index = parse_bundle(&archive.read_small(BUNDLE_FILE)?).map_err(game_said)?;
+/// One standard package zip: its `bundle.json`, its `applications.json` (the game's name and
+/// servers), its `schedule.json` when it carries one (the alias limit), its `interfaces.json`
+/// against the Runtime's range, and its installed layout. A package of another range is a
+/// [`SetFault::Mismatch`]; anything else wrong with the zip is [`SetFault::Damaged`].
+fn verify_bundle(entry: &BundleEntry, zip: &Path, package_range: [u64; 2]) -> Result<VerifiedBundle, SetError> {
+    let damaged = |said: Said| SetError::damaged(&entry.file, said.with(format!("{} ({})", entry.game, entry.file)));
+    let mut archive = Archive::open(zip).map_err(damaged)?;
+    let index = parse_bundle(&archive.read_small(BUNDLE_FILE).map_err(damaged)?).map_err(damaged)?;
     if index.game != entry.game {
-        return Err(game_said(
+        return Err(damaged(
             Said::new("bundle.json 的游戏与安装集不符", "bundle.json names another game than the install set")
                 .with(&index.game),
         ));
     }
+    let mut game = parse_applications(&archive.read_small(APPLICATIONS_FILE).map_err(damaged)?).map_err(damaged)?;
+    if game.game != entry.game {
+        return Err(damaged(
+            Said::new("applications.json 的游戏与安装集不符", "applications.json names another game than the install set")
+                .with(&game.game),
+        ));
+    }
+    if archive.size_of(SCHEDULE_FILE).is_some() {
+        let longest = longest_item_id(&archive.read_small(SCHEDULE_FILE).map_err(damaged)?).map_err(damaged)?;
+        game.alias_limit = alias_limit(longest);
+    }
     let declaration: serde_json::Value = {
-        let bytes = archive.read_small(INTERFACES_FILE)?;
+        let bytes = archive.read_small(INTERFACES_FILE).map_err(damaged)?;
         let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes).to_vec();
         serde_json::from_slice(&bytes).map_err(|error| {
-            game_said(Said::new("interfaces.json 读不懂", "interfaces.json does not parse").with(error))
+            damaged(Said::new("interfaces.json 读不懂", "interfaces.json does not parse").with(error))
         })?
     };
     let package = speaks(&declaration, "package").ok_or_else(|| {
-        game_said(Said::new(
+        damaged(Said::new(
             "interfaces.json 没有声明 package 接口",
             "interfaces.json declares no package interface",
         ))
     })?;
     if !package_edge(package, package_range) {
-        return Err(game_said(
-            Said::new(
+        return Err(SetError {
+            fault: SetFault::Mismatch { game: game.label.clone() },
+            said: Said::new(
                 "标准包的 package 接口不在这个 Runtime 支持的范围内",
                 "the standard package's package interface is outside this Runtime's range",
             )
             .with(format!(
-                "package [{}, {}], Runtime [{}, {}]",
-                package[0], package[1], package_range[0], package_range[1]
+                "{} ({}): package [{}, {}], Runtime [{}, {}]",
+                entry.game, entry.file, package[0], package[1], package_range[0], package_range[1]
             )),
-        ));
-    }
-    let game = parse_applications(&archive.read_small(APPLICATIONS_FILE)?).map_err(game_said)?;
-    if game.game != entry.game {
-        return Err(game_said(
-            Said::new("applications.json 的游戏与安装集不符", "applications.json names another game than the install set")
-                .with(&game.game),
-        ));
+        });
     }
     for pack in &index.packs {
         if game.server(&pack.server).is_none() {
-            return Err(game_said(
+            return Err(damaged(
                 Said::new("包的区服不在 applications.json 里", "a pack's server is not in applications.json")
                     .with(format!("{} → {}", pack.package_id, pack.server)),
             ));
         }
     }
-    let layout = plan_layout(&archive.names(), &index).map_err(game_said)?;
+    let layout = plan_layout(&archive.names(), &index).map_err(damaged)?;
     let bytes = layout
         .iter()
         .map(|(name, _)| archive.size_of(name).unwrap_or(0))

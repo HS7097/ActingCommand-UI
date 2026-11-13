@@ -8,8 +8,9 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::alias::{alias_problem, MAX_ALIAS_BYTES};
 use crate::apps::Game;
-use crate::config::{alias_problem, backend_problem, DEFAULT_BACKEND};
+use crate::config::{backend_problem, DEFAULT_BACKEND};
 use crate::text::{Lang, Said};
 
 pub const PLAN_SCHEMA: &str = "actingcommand.install-wizard-plan.v1";
@@ -102,8 +103,9 @@ pub fn parse_plan(bytes: &[u8]) -> Result<Plan, Said> {
 
 /// Every rule of a plan against the games of the install set: the schema and language; each
 /// game in the set and chosen once; each instance once by index and by alias (aliases compared
-/// as the Runtime compares them, byte for byte), its alias valid, its game chosen, its server
-/// one of the game's, its backends a valid pair; and a first-start pause the wizard can set: with
+/// as the Runtime compares them, byte for byte), its alias valid for its game (`alias`: no
+/// whitespace, within the game's alias limit), its game chosen, its server one of the game's,
+/// its backends a valid pair; and a first-start pause the wizard can set: with
 /// the watchdog on, the watchdog starts the Runtime within a minute, so the pause needs the
 /// wizard's own start.
 pub fn plan_problems(plan: &Plan, games: &[Game]) -> Vec<Said> {
@@ -132,10 +134,17 @@ pub fn plan_problems(plan: &Plan, games: &[Game]) -> Vec<Said> {
         if !indexes.insert(instance.index) {
             problems.push(Said::new("同一台模拟器实例选了两次", "one emulator instance is chosen twice").with(&named));
         }
-        if let Some(problem) = alias_problem(&instance.alias) {
-            problems.push(problem);
+        let limit = games
+            .iter()
+            .find(|known| known.game == instance.game)
+            .map_or(MAX_ALIAS_BYTES, |game| game.alias_limit);
+        if let Some(problem) = alias_problem(&instance.alias, limit) {
+            problems.push(problem.with(format!("#{}", instance.index)));
         } else if !aliases.insert(instance.alias.as_str()) {
-            problems.push(Said::new("别名重复", "the alias is used twice").with(&named));
+            problems.push(
+                Said::new("有两个账号用了同一个名字，请改成不同的", "Two accounts have the same name; give them different names")
+                    .with(&named),
+            );
         }
         if !chosen.contains(instance.game.as_str()) {
             problems.push(
@@ -177,6 +186,8 @@ mod tests {
                 Server { server: "cn".into(), label: "国服".into(), application_id: "com.bilibili.azurlane".into() },
                 Server { server: "jp".into(), label: "日服".into(), application_id: "com.YoStarJP.AzurLane".into() },
             ],
+            // A schedule whose longest id is 115 bytes leaves 12 for an alias.
+            alias_limit: crate::alias::alias_limit(115),
         }]
     }
 
@@ -220,6 +231,10 @@ mod tests {
             GOOD.replace("\"index\": 6", "\"index\": 5"),
             GOOD.replace("日服号", "azurlane-5"),
             GOOD.replace("日服号", ""),
+            GOOD.replace("日服号", "日服 号"),
+            GOOD.replace("日服号", "日服\u{3000}号"),
+            // 13 bytes, one over the game's limit; 12 is still fine (below).
+            GOOD.replace("日服号", "日服号号a"),
             GOOD.replace("\"server\": \"jp\"", "\"server\": \"kr\""),
             GOOD.replace("[\"azurlane\"]", "[]"),
             GOOD.replace("\"capture_backend\": \"adb\"", "\"capture_backend\": \"auto\""),
@@ -232,6 +247,8 @@ mod tests {
         for text in broken {
             assert!(!plan_problems(&plan(&text), &games()).is_empty(), "{text}");
         }
+        // An alias of exactly the game's limit, twelve bytes, is fine.
+        assert_eq!(plan_problems(&plan(&GOOD.replace("日服号", "日服号号")), &games()), Vec::<Said>::new());
         // The watchdog without the wizard's start is fine when no pause is asked for.
         let quiet = GOOD.replace(
             "{\"watchdog\": false}",

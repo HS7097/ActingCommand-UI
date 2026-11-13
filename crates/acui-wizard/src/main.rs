@@ -138,7 +138,7 @@ fn check_set(dir: &Path) -> ExitCode {
     let mut print = printer();
     let set = match verify_set(dir, &mut print) {
         Ok(set) => set,
-        Err(said) => return failed(&said),
+        Err(error) => return failed(&error.said),
     };
     print_set(&set);
     println!("全部核对通过 / every file checked");
