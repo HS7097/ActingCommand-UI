@@ -147,7 +147,11 @@ export enum TaskTone { plain, accent, warning }
 // One line of the account's daily task list (UI-3f1), in words: a group's title alone; or a task
 // package's name, whether it is irreversible and whether it is risky, why it runs or not now in
 // its colour, the other reasons of its tasks, and its summary. Under the account's own line, a
-// task without a package: its id for a name, and why.
+// task without a package: its id for a name, and why. A package's switch (UI-3f2): the package a
+// press names (never shown), whether the switch shows, ticked while the Runtime schedules it, and
+// whether it can be pressed; in grey under the name where its state comes from, or that it has no
+// switch here; what its last press came to, red when that failed and amber when it asks to look
+// again.
 export struct TaskRowData {
     heading: string,
     name: string,
@@ -157,20 +161,30 @@ export struct TaskRowData {
     tone: TaskTone,
     also: string,
     summary: string,
+    package: string,
+    switch-shown: bool,
+    switch-on: bool,
+    switch-enabled: bool,
+    switch-note: string,
+    switch-said: string,
+    switch-failed: bool,
+    switch-warning: bool,
 }
 
 // Above the list's rows, in words: what it says instead of them, red or amber when that says a
-// failure; the account's pause or fence, which holds them all; whether the note on switches shows;
-// which round of the evaluation they are of; whether the names cannot be read, and whether not
-// every task is listed; whether the account's own line of tasks without a package shows, whether
-// it is open, and whether its note on why goes with it: not when it holds only the Runtime's own
-// reading task, which is no package's on any configuration.
+// failure; the account's pause or fence, which holds them all; what its switches do, or why there
+// are none, amber when they cannot be read (UI-3f2); which round of the evaluation they are of;
+// whether the names cannot be read, and whether not every task is listed; whether the account's
+// own line of tasks without a package shows, whether it is open, and whether its note on why goes
+// with it: not when it holds only the Runtime's own reading task, which is no package's on any
+// configuration.
 export struct TaskListData {
     instead: string,
     instead-failed: bool,
     instead-warning: bool,
     held: string,
-    switches: bool,
+    switches: string,
+    switches-warning: bool,
     evaluated: string,
     names-unreadable: bool,
     cut-short: bool,
@@ -473,12 +487,11 @@ export global Strings {
     in property <string> picture-title;
     in property <string> picture-overlays;
     // The right column's second tab, the account's daily task list (UI-3f1); and on it, in grey,
-    // that none of its tasks starts while paused, that tasks are not switched singly yet, in amber
-    // that the names cannot be read, in grey that not every task is listed; the account's own line
-    // of tasks without a package and, in grey, why; the two badges of a package.
+    // that none of its tasks starts while paused, in amber that the names cannot be read, in grey
+    // that not every task is listed; the account's own line of tasks without a package and, in
+    // grey, why; the two badges of a package.
     in property <string> tasks-tab;
     in property <string> tasks-held-note;
-    in property <string> tasks-switches;
     in property <string> tasks-names-unreadable;
     in property <string> tasks-cut-short;
     in property <string> tasks-fold;
@@ -2170,11 +2183,37 @@ component RulesPanel {
     }
 }
 
-// One line of the daily task list (UI-3f1): a group's title; or a package's name, cut short
-// before its badges are, the badges after it in amber; under it why it runs or not now, which
-// wraps; the other reasons of its tasks in grey, which wrap; its summary in grey, cut short.
+// A package's switch on the daily task list (UI-3f2): ticked while the Runtime schedules it. It
+// shows what the newest read says (`on`); a press says what it was pressed to and puts the box back,
+// so the box moves only as a read moves it.
+component PackSwitch {
+    in property <bool> on;
+    in property <bool> enabled;
+    callback toggled(bool);
+    HorizontalLayout {
+        padding: 0;
+        tick := SkinCheckBox {
+            checked: root.on;
+            enabled: root.enabled;
+            toggled => {
+                root.toggled(self.checked);
+                self.checked = root.on;
+            }
+        }
+    }
+    changed on => {
+        tick.checked = root.on;
+    }
+}
+
+// One line of the daily task list (UI-3f1): a group's title; or a package's switch where it has
+// one (UI-3f2), its name, cut short before its badges are, the badges after it in amber; under it
+// in grey where the switch's state comes from, or that it has none here, which wraps; what its last
+// press came to, which wraps; why it runs or not now, which wraps; the other reasons of its tasks
+// in grey, which wrap; its summary in grey, cut short.
 component TaskLineView {
     in property <TaskRowData> line;
+    callback switch-toggled(bool);
     vertical-stretch: 0;
     VerticalLayout {
         spacing: 2px;
@@ -2189,6 +2228,14 @@ component TaskLineView {
         }
         if root.line.heading == "": HorizontalLayout {
             spacing: 8px;
+            if root.line.switch-shown: PackSwitch {
+                on: root.line.switch-on;
+                enabled: root.line.switch-enabled;
+                horizontal-stretch: 0;
+                toggled(pressed) => {
+                    root.switch-toggled(pressed);
+                }
+            }
             Text {
                 text: root.line.name;
                 font-size: Scale.body-font;
@@ -2215,6 +2262,19 @@ component TaskLineView {
                 horizontal-stretch: 0;
             }
             Rectangle { horizontal-stretch: 1; }
+        }
+        if root.line.switch-note != "": Text {
+            text: root.line.switch-note;
+            font-size: Scale.grey-font;
+            color: Look.text-caption;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.line.switch-said != "": Notice {
+            text: root.line.switch-said;
+            failed: root.line.switch-failed;
+            warning: root.line.switch-warning;
         }
         if root.line.heading == "": Text {
             text: root.line.said;
@@ -2244,17 +2304,19 @@ component TaskLineView {
 }
 
 // The account's daily task list on the workbench (UI-3f1), under its own tab in the right
-// column: only words, no switch. What it says instead of its rows; else above them the account's
-// pause or fence, and in grey that none of its tasks starts meanwhile; the note on switches; which
-// round they are of; that the names cannot be read, and that not every task is listed. Then the
-// account's own line of tasks without a package, marked while open, and while open why, in grey
-// (`fold-note`), and those tasks; then the groups' titles and their packages. All of it wraps but
-// a name and a summary; the whole card scrolls when it is too short for it.
+// column, a switch on each package's line where it has one (UI-3f2), which a press names by its
+// package. What it says instead of its rows; else above them the account's pause or fence, and in
+// grey that none of its tasks starts meanwhile; what its switches do, or in amber that they cannot
+// be read; which round they are of; that the names cannot be read, and that not every task is
+// listed. Then the account's own line of tasks without a package, marked while open, and while
+// open why, in grey (`fold-note`), and those tasks; then the groups' titles and their packages.
+// All of it wraps but a name and a summary; the whole card scrolls when it is too short for it.
 component TaskList {
     in property <TaskListData> data;
     in property <[TaskRowData]> rows;
     in property <[TaskRowData]> fold-lines;
     callback fold-toggled();
+    callback switch-toggled(string, bool);
     vertical-stretch: 0;
     VerticalLayout {
         spacing: 6px;
@@ -2275,10 +2337,10 @@ component TaskList {
             min-height: self.preferred-height;
             vertical-stretch: 0;
         }
-        if root.data.switches: Text {
-            text: Strings.tasks-switches;
+        if root.data.switches != "": Text {
+            text: root.data.switches;
             font-size: Scale.grey-font;
-            color: Look.text-caption;
+            color: root.data.switches-warning ? Severity.warning : Look.text-caption;
             wrap: word-wrap;
             min-height: self.preferred-height;
             vertical-stretch: 0;
@@ -2326,6 +2388,9 @@ component TaskList {
         }
         for item in root.rows: TaskLineView {
             line: item;
+            switch-toggled(pressed) => {
+                root.switch-toggled(item.package, pressed);
+            }
         }
     }
 }
@@ -2642,9 +2707,11 @@ export component WorkbenchWindow inherits Window {
     callback account-picked(string);
     callback account-pause(string);
     callback account-resume(string);
-    // A tab of the right column; the daily task list's line of tasks without a package.
+    // A tab of the right column; the daily task list's line of tasks without a package; a
+    // package's switch on it, by its package, pressed to on or off (UI-3f2).
     callback right-tab-picked(WorkbenchTab);
     callback tasks-fold-toggled();
+    callback task-switch-toggled(string, bool);
     // The box beside the picture's title, as it is now.
     callback picture-overlays-toggled(bool);
     // The button under the picture that refreshes it.
@@ -3433,6 +3500,9 @@ export component WorkbenchWindow inherits Window {
                                         fold-lines: root.task-fold-lines;
                                         fold-toggled => {
                                             root.tasks-fold-toggled();
+                                        }
+                                        switch-toggled(package, pressed) => {
+                                            root.task-switch-toggled(package, pressed);
                                         }
                                     }
                                     if !root.picture-tab: Rectangle {

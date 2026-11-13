@@ -971,14 +971,13 @@ pub struct Labels {
     /// yet; this account not in the round's evaluation. Above its rows, in grey: that none starts
     /// meanwhile, under the account's pause or fence in its card's words but for three pauses:
     /// this console's own of the account, which is lifted on its card, not below the list, and
-    /// another tool's of the account or of all, without the reason it wrote; that tasks are not
-    /// switched singly yet; which round they are of (time); in amber that the names cannot be
-    /// read; that not every task is listed. The account's own line of tasks without a package, and
-    /// why, in grey; the Runtime's own reading task. A group of no `ui.json` group; a package with
-    /// no summary; its two badges. What a row says: running, not for the scheduler; scheduled, and
-    /// while paused; ended this round (it ran, was stopped, or did not start; UI-3e3), or not
-    /// started; a paused reason; the other reasons of its
-    /// tasks (their sentences), how they are joined, and that there are more.
+    /// another tool's of the account or of all, without the reason it wrote; which round they are
+    /// of (time); in amber that the names cannot be read; that not every task is listed. The
+    /// account's own line of tasks without a package, and why, in grey; the Runtime's own reading
+    /// task. A group of no `ui.json` group; a package with no summary; its two badges. What a row
+    /// says: running, not for the scheduler; scheduled, and while paused; ended this round (it ran,
+    /// was stopped, or did not start; UI-3e3), or not started; a paused reason; the other reasons
+    /// of its tasks (their sentences), how they are joined, and that there are more.
     pub tasks_tab: &'static str,
     pub tasks_down: &'static str,
     pub tasks_reading: &'static str,
@@ -991,7 +990,6 @@ pub struct Labels {
     pub tasks_paused_account: &'static str,
     pub tasks_paused_other: &'static str,
     pub tasks_paused_other_all: &'static str,
-    pub tasks_switches: &'static str,
     pub tasks_evaluated: &'static str,
     pub tasks_names_unreadable: &'static str,
     pub tasks_cut_short: &'static str,
@@ -1012,6 +1010,44 @@ pub struct Labels {
     pub tasks_also: &'static str,
     pub tasks_also_join: &'static str,
     pub tasks_also_more: &'static str,
+    /// The daily task list's switches (UI-3f2). Above the rows, in grey: what turning one off does
+    /// and that one never set goes by its standard pack's rules; that this Runtime has none; in
+    /// amber, that they cannot be read now. A package only the switches' view names, for which this
+    /// round's evaluation has no line; one that has no switch here, in grey. Where a switch's state
+    /// comes from, in grey under its name: set for the account, inherited from its server or its
+    /// game, the standard pack's default, each with on or off (the account's own off as turned
+    /// off); since when (the account's own off without an end), until when (time); with no row,
+    /// when it changes (time). What its last press came to: being changed; changed elsewhere and
+    /// read again; changed elsewhere at the same moment (time); too many records (time); the
+    /// records stored do not read (time); this program's fault (time); another refusal's reason
+    /// (its words, time); not sent (time); not confirmed (time); no thread (the system's words);
+    /// a restart of the Runtime meanwhile.
+    pub tasks_switches_read: &'static str,
+    pub tasks_switches_unsupported: &'static str,
+    pub tasks_switches_unreadable: &'static str,
+    pub tasks_not_decided: &'static str,
+    pub tasks_switch_not_here: &'static str,
+    pub tasks_source_own: &'static str,
+    pub tasks_source_server: &'static str,
+    pub tasks_source_game: &'static str,
+    pub tasks_source_pack_default: &'static str,
+    pub tasks_source_on: &'static str,
+    pub tasks_source_off: &'static str,
+    pub tasks_source_own_off: &'static str,
+    pub tasks_source_since: &'static str,
+    pub tasks_source_until: &'static str,
+    pub tasks_source_changes: &'static str,
+    pub tasks_switch_sending: &'static str,
+    pub tasks_switch_conflict: &'static str,
+    pub tasks_switch_not_newer: &'static str,
+    pub tasks_switch_too_many: &'static str,
+    pub tasks_switch_stored_unreadable: &'static str,
+    pub tasks_switch_invalid: &'static str,
+    pub tasks_switch_refused: &'static str,
+    pub tasks_switch_not_sent: &'static str,
+    pub tasks_switch_unconfirmed: &'static str,
+    pub tasks_switch_no_thread: &'static str,
+    pub tasks_switch_restarted: &'static str,
     /// The workbench's live view, in its right column: its title, beside which the alias of
     /// the account picked shows. What it says while no frame shows: the account's latest
     /// frame is being looked for; there is no account to show the picture of.
@@ -2062,7 +2098,7 @@ pub const ZH: Labels = Labels {
     card_why_quiet_soon: "快到休息时间，不再开始新任务",
     card_why_update_wait: "等游戏更新",
     card_why_pack_problem: "任务包还没加载",
-    card_why_closed: "本号已关闭此任务",
+    card_why_closed: "这个任务已关闭",
     card_why_paced: "稍后开始",
     card_why_queue: "排队等并发空位",
     card_why_remedy_wait: "等任务重试",
@@ -2120,7 +2156,6 @@ pub const ZH: Labels = Labels {
     tasks_paused_account: "已用「暂停这个号」暂停，可用这个号卡片上的「恢复这个号」恢复",
     tasks_paused_other: "已被其他工具暂停，可在「排障与账本」里恢复",
     tasks_paused_other_all: "已被其他工具暂停，可用「全部开始执勤」恢复",
-    tasks_switches: "现在每个任务都按标准包的规则安排，单独开关任务还没开放。",
     tasks_evaluated: "按 {} 那一轮评估",
     tasks_names_unreadable: "任务名称读不到，下面按编号显示",
     tasks_cut_short: "还有任务没列出（超过一次能读的上限）",
@@ -2141,6 +2176,32 @@ pub const ZH: Labels = Labels {
     tasks_also: "另有：{}",
     tasks_also_join: "；",
     tasks_also_more: "等",
+    tasks_switches_read: "关掉的任务不再安排，正在跑的那一次照常跑完。没设置过的按标准包的规则安排。",
+    tasks_switches_unsupported: "这一版 Runtime 还不支持单独开关任务，下面的任务都按标准包的规则安排。",
+    tasks_switches_unreadable: "任务开关暂时读不到，稍后会自动再读",
+    tasks_not_decided: "这一轮的评估里对不上它",
+    tasks_switch_not_here: "这个任务包这里不能单独开关",
+    tasks_source_own: "本号设置：{}",
+    tasks_source_server: "继承自区服：{}",
+    tasks_source_game: "继承自游戏：{}",
+    tasks_source_pack_default: "标准包默认：{}",
+    tasks_source_on: "打开",
+    tasks_source_off: "关闭",
+    tasks_source_own_off: "已关闭",
+    tasks_source_since: "{}（自 {} 起）",
+    tasks_source_until: "{}，到 {} 为止",
+    tasks_source_changes: "{} 起改变",
+    tasks_switch_sending: "正在改…",
+    tasks_switch_conflict: "这个号的任务开关已被其他地方改动，已刷新，请确认后再点一次",
+    tasks_switch_not_newer: "刚好有别的地方同时在改这个号的任务开关，没改成（{}）；再点一次即可",
+    tasks_switch_too_many: "没能改：这个号的任务开关记录太多，写不下了（{}）",
+    tasks_switch_stored_unreadable: "没能改：这个号已有的任务开关记录读不了（{}）",
+    tasks_switch_invalid: "没能改：程序的问题，已记入日志（{}）",
+    tasks_switch_refused: "没能改：{}（{}）",
+    tasks_switch_not_sent: "没有发出去：连不上 Runtime（{}）",
+    tasks_switch_unconfirmed: "结果未确认：可能已经改了（{}）。开关显示的是重读后的情况",
+    tasks_switch_no_thread: "没有发出去：{}",
+    tasks_switch_restarted: "Runtime 重启了，这次改动的结果不明；开关显示的是重读后的情况",
     picture_title: "实时画面",
     picture_looking: "正在找这个号最近的画面…",
     picture_no_account: "还没有账号",
@@ -3066,7 +3127,7 @@ pub const EN: Labels = Labels {
     card_why_quiet_soon: "Quiet hours are close; no new tasks start",
     card_why_update_wait: "Waiting for the game to update",
     card_why_pack_problem: "The task packs are not loaded yet",
-    card_why_closed: "This task is turned off for this account",
+    card_why_closed: "This task is turned off",
     card_why_paced: "Starts a little later",
     card_why_queue: "Waiting for a free run slot",
     card_why_remedy_wait: "Waiting to retry the task",
@@ -3124,7 +3185,6 @@ pub const EN: Labels = Labels {
     tasks_paused_account: "Paused with Pause This Account; Resume This Account on its card resumes it",
     tasks_paused_other: "Paused by another tool; it can be resumed in Troubleshooting and Ledger",
     tasks_paused_other_all: "Paused by another tool; Put All on Duty resumes it",
-    tasks_switches: "Every task is scheduled by its standard pack's rules for now; switching single tasks on or off is not offered yet.",
     tasks_evaluated: "As evaluated in the round of {}",
     tasks_names_unreadable: "Task names cannot be read; the tasks below show their IDs",
     tasks_cut_short: "Some tasks are not listed (more than one read can hold)",
@@ -3145,6 +3205,32 @@ pub const EN: Labels = Labels {
     tasks_also: "Also: {}",
     tasks_also_join: " · ",
     tasks_also_more: ", and others",
+    tasks_switches_read: "A task turned off is not scheduled any more; a run of it already going finishes as usual. Tasks never set are scheduled by their standard pack's rules.",
+    tasks_switches_unsupported: "This version of the Runtime cannot switch single tasks on or off; the tasks below are all scheduled by their standard pack's rules.",
+    tasks_switches_unreadable: "The task switches cannot be read right now; they are read again by themselves shortly",
+    tasks_not_decided: "This round's evaluation does not match it",
+    tasks_switch_not_here: "This task pack cannot be switched on or off on its own here",
+    tasks_source_own: "Set for this account: {}",
+    tasks_source_server: "Inherited from the server: {}",
+    tasks_source_game: "Inherited from the game: {}",
+    tasks_source_pack_default: "The standard pack's default: {}",
+    tasks_source_on: "on",
+    tasks_source_off: "off",
+    tasks_source_own_off: "turned off",
+    tasks_source_since: "{} (since {})",
+    tasks_source_until: "{}, until {}",
+    tasks_source_changes: "Changes at {}",
+    tasks_switch_sending: "Changing…",
+    tasks_switch_conflict: "This account's task switches were changed elsewhere and are refreshed: check them, then press again",
+    tasks_switch_not_newer: "Something else changed this account's task switches at the same moment, and this did not go through ({}); press again",
+    tasks_switch_too_many: "Not changed: this account has too many task switch records to hold another ({})",
+    tasks_switch_stored_unreadable: "Not changed: this account's task switch records cannot be read ({})",
+    tasks_switch_invalid: "Not changed: a fault of this program, written to the technical log ({})",
+    tasks_switch_refused: "Not changed: {} ({})",
+    tasks_switch_not_sent: "Not sent: the Runtime cannot be reached ({})",
+    tasks_switch_unconfirmed: "The result is not confirmed: it may have changed ({}). The switch shows what was read again since",
+    tasks_switch_no_thread: "Not sent: {}",
+    tasks_switch_restarted: "The Runtime restarted: what came of this change is not known; the switch shows what was read again since",
     picture_title: "Live View",
     picture_looking: "Looking for this account's latest picture…",
     picture_no_account: "No accounts yet",

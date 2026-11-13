@@ -537,7 +537,8 @@ fn language_index(language: Language) -> i32 {
 /// The workbench's controls. The top bar's page button switches between the
 /// accounts and the settings; a card picked is the account whose picture shows (`workbench`),
 /// the right column's two tabs switch between its live view and its daily task list, whose
-/// line of tasks without a package opens and closes (`workbench`, UI-3f1),
+/// line of tasks without a package opens and closes (`workbench`, UI-3f1) and whose packages'
+/// switches turn them on or off for the account (`workbench::switch`, UI-3f2),
 /// the box beside the picture's title draws on it or not (`workbench::preview`), the
 /// button under it refreshes it (`workbench::refresh`), and the rescue bar over it operates
 /// that account's device, its confirmation's two buttons included (`workbench::rescue`), and
@@ -609,6 +610,11 @@ fn install_workbench(window: &WorkbenchWindow) {
     window.on_tasks_fold_toggled(|| {
         if let Some(ui) = current() {
             workbench::tasks_fold_toggled(&ui);
+        }
+    });
+    window.on_task_switch_toggled(|package, on| {
+        if let Some(ui) = current() {
+            workbench::switch::toggled(&ui, &package, on);
         }
     });
     window.on_rules_toggled(|| {
@@ -951,7 +957,6 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_picture_overlays(labels.picture_overlays.into());
     global.set_tasks_tab(labels.tasks_tab.into());
     global.set_tasks_held_note(labels.tasks_held_note.into());
-    global.set_tasks_switches(labels.tasks_switches.into());
     global.set_tasks_names_unreadable(labels.tasks_names_unreadable.into());
     global.set_tasks_cut_short(labels.tasks_cut_short.into());
     global.set_tasks_fold(labels.tasks_fold.into());

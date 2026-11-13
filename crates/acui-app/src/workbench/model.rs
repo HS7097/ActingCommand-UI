@@ -12,6 +12,7 @@ use std::mem;
 use std::time::Instant;
 
 use acui_source::workbench::device::DeviceOp;
+use acui_source::workbench::pack::{self, PacksAnswer, PacksRead};
 use acui_source::workbench::{
     ActivityKind, ConfigRead, ExplainRead, FenceFact, InstanceLive, LiveRead, LiveSnapshot,
     PresetProblem, RunKey, StartRead, TasksRead,
@@ -24,11 +25,12 @@ use super::picture::{
     Doing, LinkNow, Offline, PictureView, Pictures, PreviewGate, RefreshHold, RefreshView,
 };
 use super::preview::{Order, Target};
-use super::read::{Lane, Read, EXPLAIN_TOO_OLD, START_TRIES};
+use super::read::{Lane, Read, EXPLAIN_TOO_OLD, PACKS_TOO_OLD, START_TRIES};
 use super::rescue::{Rescue, RescueHold, RescueView, Watch};
 use super::settings::{self, AutostartView, SettingsView, StartView};
 use super::stop::{Review, StopTarget, Stops};
-use super::tasks::{self, Listing, TasksNow, TasksView};
+use super::switch::{Request, SwitchTarget, Switches};
+use super::tasks::{self, Listing, SwitchesNow, TasksNow, TasksView};
 use super::tools::{Displays, NameTable, NamesRead, PackTable, WatchdogRead};
 use crate::ledger::resume::ResumeElsewhere;
 use crate::strings::{fill, Labels, Language};
@@ -153,6 +155,16 @@ struct TasksSlice {
     asked_at: Option<Instant>,
 }
 
+/// The same list's switches' read (UI-3f2), of the account it follows, on the same terms.
+#[derive(Default)]
+struct PacksSlice {
+    of: Option<String>,
+    value: Option<PacksRead>,
+    read_at: Option<Instant>,
+    error: Option<ClientFailure>,
+    asked_at: Option<Instant>,
+}
+
 /// Why the left column has no account to show, when no read has left one there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountsNote {
@@ -237,13 +249,17 @@ pub struct Model {
     /// The fact snapshot read's. It shares a thread with the explanation and fails on
     /// its own: neither read's success says the other's panic is over.
     config_fault: Option<Fault>,
-    /// The daily task list's read's, likewise (UI-3f1).
+    /// The daily task list's read's, likewise (UI-3f1), and its switches' (UI-3f2).
     tasks_fault: Option<Fault>,
+    packs_fault: Option<Fault>,
     /// The right column's tab, and its daily task list's read and whether its line of tasks
-    /// without a package is open (UI-3f1).
+    /// without a package is open (UI-3f1); its switches' read, and each account's presses of them
+    /// (UI-3f2), which a restart lets go of (`super::switch::restarted`).
     right_tab: RightTab,
     tasks: TasksSlice,
     tasks_fold_open: bool,
+    packs: PacksSlice,
+    switches: Switches,
     /// The lines the log got about codes the cards have no words for: once each.
     told_codes: BTreeSet<String>,
     actions: Actions,
@@ -316,6 +332,18 @@ pub struct TasksLanded {
     pub fault_cleared: bool,
 }
 
+/// What a read of the list's switches changed, for what the event loop does next.
+pub struct PacksLanded {
+    pub news: News<ClientFailure>,
+    /// The read's fault is over.
+    pub fault_cleared: bool,
+    /// It said, for the first time in this owner epoch, that its Runtime has no switches: that
+    /// epoch, and the code that said so.
+    pub unsupported: Option<(String, &'static str)>,
+    /// It named no version of the account's own scope.
+    pub unversioned: bool,
+}
+
 /// What a fact snapshot read changed, for what the event loop does next.
 pub struct ConfigLanded {
     pub news: News<ClientFailure>,
@@ -353,9 +381,12 @@ impl Model {
             slow_fault: None,
             config_fault: None,
             tasks_fault: None,
+            packs_fault: None,
             right_tab: RightTab::Picture,
             tasks: TasksSlice::default(),
             tasks_fold_open: false,
+            packs: PacksSlice::default(),
+            switches: Switches::default(),
             told_codes: BTreeSet::new(),
             actions: Actions::default(),
             page: Page::Main,
@@ -548,6 +579,7 @@ impl Model {
             .chain(self.slow_fault.iter())
             .chain(self.config_fault.iter())
             .chain(self.tasks_fault.iter())
+            .chain(self.packs_fault.iter())
     }
 
     pub fn accounts_note(&self) -> AccountsNote {
@@ -692,21 +724,36 @@ impl Model {
         self.instances.iter().any(|instance| instance.alias == alias).then(|| alias.to_owned())
     }
 
+    /// Whether the list's switches are read beside it (UI-3f2): online, but for an owner epoch whose
+    /// Runtime said it has none.
+    pub fn packs_wanted(&self) -> bool {
+        self.online_epoch().is_some_and(|epoch| !self.switches.unsupported(epoch))
+    }
+
     /// The slow thread is told to read the list of `wanted` from now on, or none: whether that
-    /// changed. A change lets go of all that was read, so the list says it is reading until an
-    /// answer of that account comes, and closes its line of tasks without a package.
+    /// changed. A change lets go of all that was read, its switches' too, so the list says it is
+    /// reading until an answer of that account comes, and closes its line of tasks without a
+    /// package. What each press of a switch came to is not let go by the list hidden and shown
+    /// again, only by its showing another account than it last did (`Switches::follow`).
     pub fn tasks_follow(&mut self, wanted: Option<&str>) -> bool {
         if self.tasks.of.as_deref() == wanted {
             return false;
         }
         self.tasks = TasksSlice { of: wanted.map(str::to_owned), ..TasksSlice::default() };
+        self.packs = PacksSlice { of: wanted.map(str::to_owned), ..PacksSlice::default() };
         self.tasks_fold_open = false;
+        self.switches.follow(wanted);
         true
     }
 
     /// The slow thread was told to read the list now.
     pub fn tasks_asked(&mut self, now: Instant) {
         self.tasks.asked_at = Some(now);
+    }
+
+    /// The slow thread was told to read its switches now.
+    pub fn packs_asked(&mut self, now: Instant) {
+        self.packs.asked_at = Some(now);
     }
 
     /// The list's line of tasks without a package opened, or closed.
@@ -760,10 +807,133 @@ impl Model {
             && since.is_some_and(|since| now.saturating_duration_since(since) > EXPLAIN_TOO_OLD)
     }
 
+    /// One read of the switches of `alias` (UI-3f2), held to the account the list follows and the
+    /// owner epoch online as a read of the list is. One that counts is the read a press's answer
+    /// waited for (`Switches::read`), and one that says its Runtime has none keeps that for its
+    /// epoch (`Switches::view_unsupported`).
+    pub fn apply_packs(
+        &mut self,
+        alias: &str,
+        read: Result<PacksRead, ClientFailure>,
+        now: Instant,
+    ) -> PacksLanded {
+        let fault_cleared = self.packs_fault.take().is_some();
+        let mut landed =
+            PacksLanded { news: News::Nothing, fault_cleared, unsupported: None, unversioned: false };
+        let Link::Online { epoch, .. } = &self.link else {
+            return landed;
+        };
+        let slice = &mut self.packs;
+        if slice.of.as_deref() != Some(alias) {
+            return landed;
+        }
+        let news = match read {
+            Ok(read) if read.epoch != *epoch || read.alias != alias => News::Nothing,
+            Ok(read) => {
+                match &read.answer {
+                    PacksAnswer::Unsupported { code } => {
+                        if self.switches.view_unsupported(epoch) {
+                            landed.unsupported = Some((epoch.clone(), *code));
+                        }
+                    }
+                    PacksAnswer::Read(states) => landed.unversioned = states.version.is_none(),
+                }
+                self.switches.read(alias);
+                let recovered = slice.error.take().is_some();
+                slice.value = Some(read);
+                slice.read_at = Some(now);
+                if recovered {
+                    News::Recovered
+                } else {
+                    News::Nothing
+                }
+            }
+            Err(failure) if slice.error.as_ref() == Some(&failure) => News::Nothing,
+            Err(failure) => {
+                slice.error = Some(failure.clone());
+                News::Failed(failure)
+            }
+        };
+        landed.news = news;
+        landed
+    }
+
+    /// Nothing new of the switches for too long, while the window shows: what was read is not
+    /// what holds now.
+    fn packs_late(&self, now: Instant) -> bool {
+        let since = self.packs.read_at.max(self.packs.asked_at);
+        self.shown
+            && since.is_some_and(|since| now.saturating_duration_since(since) > PACKS_TOO_OLD)
+    }
+
+    /// What the reads leave of the switches of `alias`, whose list shows, at `now`: none while no
+    /// answer of this account and epoch has come, nor after a failure, a panic or a thread gone, or
+    /// for too long; none in an owner epoch whose Runtime has none; else the answer, each switch
+    /// off while a press of the account is out or its answer waits for a read
+    /// (`Switches::busy`), and what each press came to.
+    fn switches_now(&self, alias: &str, now: Instant) -> SwitchesNow<'_> {
+        if self.online_epoch().is_some_and(|epoch| self.switches.unsupported(epoch)) {
+            return SwitchesNow::Unsupported;
+        }
+        let thread_gone = matches!(self.slow_fault, Some(Fault::NoThread(_)));
+        if self.packs_fault.is_some() || thread_gone || self.packs_late(now) {
+            return SwitchesNow::Unreadable;
+        }
+        let ours = self.packs.of.as_deref() == Some(alias);
+        match (&self.packs.error, &self.packs.value) {
+            (Some(_), _) if ours => SwitchesNow::Unreadable,
+            (None, Some(read)) if ours => match &read.answer {
+                PacksAnswer::Unsupported { .. } => SwitchesNow::Unsupported,
+                PacksAnswer::Read(states) if states.version.is_none() => SwitchesNow::Unreadable,
+                PacksAnswer::Read(states) => SwitchesNow::Read {
+                    states,
+                    enabled: !self.switches.busy(alias),
+                    said: self.switches.said(alias),
+                },
+            },
+            _ => SwitchesNow::Reading,
+        }
+    }
+
+    /// What a press of the switch of `package` to `on` would write now (UI-3f2), on the list of
+    /// the account it shows, while it shows: none but while the switches drawn can be pressed
+    /// (`switches_now`) and the press writes something (`pack::switch`), with the version of the
+    /// account's own scope they were read at.
+    fn switch_target(
+        &self,
+        package: &str,
+        on: bool,
+        now: Instant,
+    ) -> Option<(String, SwitchTarget)> {
+        let alias = self.tasks_wanted()?;
+        let epoch = self.online_epoch()?.to_owned();
+        let SwitchesNow::Read { states, enabled: true, .. } = self.switches_now(&alias, now) else {
+            return None;
+        };
+        let expected = states.version?;
+        let state = states.packages.iter().find(|state| state.package_id == package)?;
+        let change = pack::switch(state, on)?;
+        let target = SwitchTarget { package: package.to_owned(), change, expected, epoch };
+        Some((alias, target))
+    }
+
+    /// The switch of `package` pressed to `on`: the account and the request to send, none when it
+    /// cannot be pressed now (`switch_target`) or one of the account is out.
+    pub fn switch_pressed(&mut self, package: &str, on: bool) -> Option<(String, Request)> {
+        let (alias, target) = self.switch_target(package, on, Instant::now())?;
+        let request = self.switches.press(&alias, target)?;
+        Some((alias, request))
+    }
+
+    pub fn switches_mut(&mut self) -> &mut Switches {
+        &mut self.switches
+    }
+
     /// The daily task list of the account whose picture the right column names (UI-3f1), as the
     /// reads leave it at `now`: no row of an answer that is not of this account and epoch, or not
     /// new, or after a failure. Above its rows the account's pause or fence as its card says it.
-    /// Rows no `ui.json` orders go by their names in `language`.
+    /// Rows no `ui.json` orders go by their names in `language`. Each package's switch as the
+    /// switches' read leaves it (`switches_now`, UI-3f2), which the rows do not wait for.
     pub fn tasks_view(&self, now: Instant, language: Language) -> TasksView {
         if let Some(down) = Down::of(&self.link) {
             return TasksView::Down(down);
@@ -802,6 +972,7 @@ impl Model {
             names_unreadable: self.names_unreadable(),
             fold_open: self.tasks_fold_open,
             language,
+            switches: self.switches_now(&instance.alias, now),
         })
     }
 
@@ -1319,8 +1490,10 @@ impl Model {
             }
             self.explain = Slice::empty();
             self.config = Slice::empty();
-            // Still of the same account: the poke this epoch's first read gives reads it anew.
+            // Still of the same account: the poke this epoch's first read gives reads it anew, its
+            // switches too.
             self.tasks = TasksSlice { of: self.tasks.of.take(), ..TasksSlice::default() };
+            self.packs = PacksSlice { of: self.packs.of.take(), ..PacksSlice::default() };
             self.servers_seen.clear();
             self.start = StartSlice::default();
             self.epoch = Some(epoch.clone());
@@ -1416,6 +1589,7 @@ impl Model {
             Read::Explain => &mut self.slow_fault,
             Read::Config => &mut self.config_fault,
             Read::Tasks => &mut self.tasks_fault,
+            Read::Packs => &mut self.packs_fault,
             // A start report's panic is one of its failures (`start_failed`), not a fault
             // of a read that a later one of its kind clears: there is no later one.
             Read::Start => return false,

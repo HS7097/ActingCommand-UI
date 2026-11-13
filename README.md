@@ -245,8 +245,9 @@ and `instance.<instance id>.scheduling.pool_lines` (#428 SCHED-C1e), every new k
 so the settings page shows no new row; the settings page shows `auto` as "choose by the idle time", and
 an account's rules panel says "It is now “choose by the idle time”, which is not offered here" and does
 not offer it; the requests `PackScheduleView` and `EditPackSchedule` gained the success codes
-`request_pack_schedule_view_completed` and `request_edit_pack_schedule_completed` (#429 R-8), neither a
-request the console makes; `contained_task_state_invalid` says what was invalid with the optional values
+`request_pack_schedule_view_completed` and `request_edit_pack_schedule_completed` (#429 R-8), and the
+console reads an account's `PackScheduleView` and writes `EditPackSchedule` of the account's own scope
+(the Daily Tasks switches, below); `contained_task_state_invalid` says what was invalid with the optional values
 `state_problem` (vocabulary `state_problem`: `held_state_unusable`, `no_move_from_page`,
 `runtime_invariant`, `transition_refused`), `phase_id`, `package_id`, `page_id` and `pack_operation_id`
 (#428 DIAG-SI), `runtime-outcomes` still 1; in the outcome-code catalog it embeds five codes (those two
@@ -632,8 +633,8 @@ the workbench ends the program, except while an unlock runs (see "Launcher").
 
 The main page's right column has two tabs, **Live View** and **Daily Tasks**, before the alias of the
 account picked on the left; the tab picked stays for the run, across accounts and pages, Live View being
-the first. Daily Tasks is that account's task packages, read only and with no switch (a note above the
-rows says single tasks cannot be switched on or off yet): one row per package, with its name (its
+the first. Daily Tasks is that account's task packages, those the Runtime's switch view lists with a
+switch at the front of their row (see the next paragraph): one row per package, with its name (its
 package id when the game's `ui.json` gives none), "Irreversible" when the Runtime derives it so and
 "Risky" when its `ui.json` entry names a risk word (the word itself is not shown), why it runs or does
 not run now in a sentence, and its `ui.json` summary in grey ("No description given" without one). The
@@ -657,6 +658,46 @@ online: every 15 seconds, 30 after a failure, and at once when the tab, the acco
 changes; the live view reads nothing meanwhile. While the Runtime does not answer, a read fails, nothing
 new came for 60 seconds, the account is not in the evaluation or none was made yet, no row shows, only
 why.
+
+The switches (#429 R-8, from Runtime 0.12.55) are drawn from that account's `PackScheduleView` alone:
+ticked means the Runtime schedules the package now. Under the name, in grey, where that comes from: "Set
+for this account: turned off (since hh:mm)", "Set for this account: on", "Inherited from the server: off",
+"Inherited from the game: on", "The standard pack's default: …" (not before R-9), with ", until hh:mm"
+when its row ends; a package no row decides now says nothing (the note above the rows says that tasks
+never set go by their standard pack's rules), or "Changes at hh:mm" when a row of it begins later. The
+console writes the account's own layer only: off is one row from now on, without an end, that the package
+is not scheduled; on goes back to normal, withdrawing the account's own rows of it when they decide it and
+the layer below schedules it, and else one row from now on that it is. Either replaces every row of that
+package for the account, rows that begin later included, and no other package's; a run of it already
+going finishes as usual. Each write names the version of the account's own scope the view gave; when
+something else (another tool, the Lab, an agent) changed it since, the Runtime refuses it as a conflict
+and changes nothing, the row says in amber "This account's task switches were changed elsewhere and are
+refreshed: check them, then press again", and nothing is sent again; `fact_observation_not_newer`
+(another list landed in the same millisecond) is sent once more at once on the same connection. One write
+of an account is out at a time: while it is out, and after an answer that may have changed the switches
+or says something else did (it took, a conflict, the same millisecond twice, not confirmed) until a read
+of the view begun after it has come, every switch of the account is greyed out, still showing what was
+read before; after any other refusal, or a write not sent, they come back at once. What each press came
+to shows under its row, with when it landed (but for "Changing…", a conflict, a thread that could not
+start and a restart), until that row is pressed again, the list shows another account, or the Runtime
+restarts; the list hidden and shown again (another tab or page, the window minimized, the Runtime not
+answering a while) keeps it, and one that took says nothing more. A package the view names that this
+round's evaluation does not match still has a row ("This round's evaluation does not match it"); one the
+list has that the view does not name has no switch and says "This task pack cannot be switched on or off
+on its own here", and the technical log hears of it once. The view is read on the list's terms (the main
+page of a window that is not minimized, this tab, the Runtime online, that account only), every 60
+seconds, 60 after a failure, and at once when the tab, the account or the owner epoch changes, a write
+lands, or after a conflict; nothing new for 180 seconds counts as unreadable, the note above the rows
+says in amber that the task switches cannot be read right now, and no switch shows while the list's rows
+still do. A Runtime before 0.12.55
+(the view answers `not_implemented`, or before 0.12.30 is not known) has the note say that this version of
+the Runtime cannot switch single tasks, and the view is not read again in that owner epoch. Each read has
+the Runtime bring its fact store up to the ledger under the fact write gate, so it is read seldom; the
+technical log's read counts at the end of a run call it `pack schedule`. The Runtime's own reading of
+account data (`_fact_refresh`) is not held by a row that turns a package off; a package only a row still
+names, which no task of the account uses any more, is not in the view, so it is neither shown nor
+withdrawn here. Once a package turned off reaches the deferral step, the card and the list say "This task
+is turned off".
 
 `--state-root` applies to this run only and overrides `state_root` in the settings file; if neither is
 present the workbench still opens, with a red bar at its top that says in plain words that there is no
@@ -1543,10 +1584,11 @@ records of the console's own requests — the start press, shutdown and resume r
 status read appends nothing), the only control entry points are the launcher's two buttons (start /
 request shutdown, see above), its owner-unlock entry (a confirmed `actingd unlock-owner`) and the ledger
 window's confirmed conditional resume (end of "Launcher"), and there
-is no approval entry point; of the console crates only `acui-model` carries tests, four unit tests of
-`stopped`, the pure decision inside `stop_marked` (UI-3e3). CI builds the workspace and then runs just the
-crates that hold unit tests of pure functions, now `cargo test --locked -p acui-model`; the UI and the
-workspace as a whole are not tested. The
+is no approval entry point; of the console crates only two carry tests: `acui-model`, four unit tests of
+`stopped`, the pure decision inside `stop_marked` (UI-3e3), and `acui-source`, six unit tests of
+`pack::switch`, the pure decision of what a press of a task switch writes (UI-3f2). CI builds the workspace
+and then runs just the crates that hold unit tests of pure functions, now
+`cargo test --locked -p acui-model -p acui-source`; the UI and the workspace as a whole are not tested. The
 launcher is in
 `crates/acui-app/src/launcher.rs`, where the paths come from in `install.rs`, the technical log and the
 startup-failure window in `report.rs`, and the client operations — probe, request shutdown, recording

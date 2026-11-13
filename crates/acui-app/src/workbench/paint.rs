@@ -12,7 +12,7 @@
 //! picture's refresh, painted with it. And over the picture the account's rescue bar, and while
 //! it says so the account's rules panel in the picture's place (UI-3e1-b). And which of the right
 //! column's two tabs shows, and under the second the account's daily task list (UI-3f1), its
-//! reasons in the cards' words.
+//! reasons in the cards' words, and its packages' switches (UI-3f2).
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -24,6 +24,7 @@ use acui_source::workbench::backends::{
     SwitchVersion,
 };
 use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
+use acui_source::workbench::pack::{PackSource, PackState};
 use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietOf, QuietRead, QuietShown};
 use acui_source::workbench::stop::{Origin as RunOrigin, Refusal, Reset};
@@ -53,8 +54,10 @@ use super::settings::{
     SettingLine, SettingsView, StartView,
 };
 use super::stop::{CloseWhy, StopSaid};
+use super::switch::SwitchSaid;
 use super::tasks::{
-    GroupTitle, PackRow, TaskLine, TaskList, TaskName, TaskSaid, TasksView, Unreadable,
+    GroupTitle, PackRow, PackSwitch, SwitchSlot, SwitchesNote, TaskLine, TaskList, TaskName,
+    TaskSaid, TasksView, Unreadable,
 };
 use crate::ledger::paint::models;
 use crate::ledger::resume::Lifter;
@@ -74,6 +77,9 @@ const PICTURE_LOG: &str = preview::THREAD;
 const REFRESH_LOG: &str = super::refresh::THREAD;
 /// And those about the rescue bar's words (each operation's own are under its thread's name).
 const RESCUE_LOG: &str = "acui-rescue";
+/// And those about the daily task list's switches' words (each press's own are under its thread's
+/// name, `switch`).
+const TASKS_LOG: &str = "acui-tasks";
 
 /// The codes a device's operation is refused or fails with that the rescue bar has words of its
 /// own for, before the code table's (`rescue_code_words`); only looked up, never shown. A request
@@ -2744,11 +2750,12 @@ fn refusal_text(labels: &Labels, why: &RefusalWhy) -> String {
 
 /// Which of the right column's two tabs shows, and under the second the account's daily task
 /// list (UI-3f1), from its view: why there are no rows, or above them the account's pause or
-/// fence in its card's words, that no task is switched on or off from here yet, which evaluation
-/// they are of, that the names cannot be read and that not every task is listed; the account's
-/// own line of tasks without a package, and its tasks while open; then each group's title and
-/// its packages, each with its name, badges, sentence, other sentences and summary. Under the
-/// live view the list holds nothing. Each list changes only where its rows do.
+/// fence in its card's words, what its switches do or why there are none (UI-3f2), which
+/// evaluation they are of, that the names cannot be read and that not every task is listed; the
+/// account's own line of tasks without a package, and its tasks while open; then each group's
+/// title and its packages, each with its switch, name, badges, where its switch's state comes
+/// from, what its last press came to, sentence, other sentences and summary. Under the live view
+/// the list holds nothing. Each list changes only where its rows do.
 pub fn tasks(ui: &Ui) {
     let Some(window) = ui.workbench() else {
         return;
@@ -2818,12 +2825,19 @@ fn task_list(
     list: &TaskList,
 ) -> (TaskListData, Vec<TaskRowData>, Vec<TaskRowData>) {
     let held = list.held.as_ref().map_or_else(String::new, |line| held_text(ui, labels, line));
+    let (switches, switches_warning) = match list.switches {
+        SwitchesNote::Reading => ("", false),
+        SwitchesNote::Read => (labels.tasks_switches_read, false),
+        SwitchesNote::Unsupported => (labels.tasks_switches_unsupported, false),
+        SwitchesNote::Unreadable => (labels.tasks_switches_unreadable, true),
+    };
     let data = TaskListData {
         instead: SharedString::new(),
         instead_failed: false,
         instead_warning: false,
         held: held.into(),
-        switches: list.switches_closed(),
+        switches: switches.into(),
+        switches_warning,
         evaluated: fill(labels.tasks_evaluated, &[&format_minute(list.evaluated_at)]).into(),
         names_unreadable: list.names_unreadable,
         cut_short: list.cut_short,
@@ -2877,10 +2891,29 @@ fn held_text(ui: &Ui, labels: &Labels, line: &Line) -> String {
     }
 }
 
-/// One package: its name, its badges, why it runs or not now, the other reasons of its tasks,
-/// and its summary, or that it has none.
+/// One package: its switch, its name, its badges, where its switch's state comes from or that it
+/// has none here, what the last press of it came to, why it runs or not now, the other reasons of
+/// its tasks, and its summary, or that it has none.
 fn pack_row(ui: &Ui, labels: &Labels, row: &PackRow) -> TaskRowData {
     let (said, tone) = task_said_text(ui, labels, &row.said);
+    let (switch_shown, switch_on, switch_enabled, switch_note, switch_said) = match &row.switch {
+        SwitchSlot::Hidden => (false, false, false, String::new(), None),
+        SwitchSlot::NotHere { listed } => {
+            not_here_told(ui, &row.package_id, *listed);
+            (false, false, false, labels.tasks_switch_not_here.to_owned(), None)
+        }
+        SwitchSlot::Offered(PackSwitch { state, enabled, said }) => {
+            let note = pack_source_text(labels, state);
+            let said = said.as_ref().map(|said| switch_said_text(ui, labels, said));
+            (true, state.on, *enabled, note, said)
+        }
+    };
+    let (switch_said, switch_failed, switch_warning) = match switch_said {
+        Some((text, SaidTone::Plain)) => (text, false, false),
+        Some((text, SaidTone::Warning)) => (text, false, true),
+        Some((text, SaidTone::Failed)) => (text, true, false),
+        None => (String::new(), false, false),
+    };
     // Each other sentence without its wake, and more of them said to be more, never how many.
     let also = if row.also.is_empty() {
         String::new()
@@ -2907,7 +2940,123 @@ fn pack_row(ui: &Ui, labels: &Labels, row: &PackRow) -> TaskRowData {
         tone,
         also: also.into(),
         summary: summary.unwrap_or_else(|| labels.tasks_no_summary.to_owned()).into(),
+        package: row.package_id.as_str().into(),
+        switch_shown,
+        switch_on,
+        switch_enabled,
+        switch_note: switch_note.into(),
+        switch_said: switch_said.into(),
+        switch_failed,
+        switch_warning,
     }
+}
+
+/// A package the list shows without a switch, to the log the first time only: the view does not
+/// name it (`listed` false), or decides it by the account's own rows without naming what is below
+/// them, which the contract never leaves out.
+fn not_here_told(ui: &Ui, package: &str, listed: bool) {
+    let alias = ui.model.borrow().picture_account().unwrap_or_default().to_owned();
+    let why = if listed {
+        "decides it by the account's own rows and names nothing below them"
+    } else {
+        "does not name it"
+    };
+    let line = format!("task switches of {alias}: the view {why}; package {package} has no switch");
+    if ui.model.borrow_mut().first_told(&line) {
+        report::log(TASKS_LOG, &line);
+    }
+}
+
+/// Where a package's switch's state comes from, in grey under its name, with the times of the row
+/// that decided: the account's own rows, its server's, its game's or the pack's default, on or off,
+/// and until when when that row ends; with no row, when that changes, or nothing at all, which the
+/// list's note says (Workflow #429 plan, 177; the console's own setting off since when it began).
+fn pack_source_text(labels: &Labels, state: &PackState) -> String {
+    let word = if state.on { labels.tasks_source_on } else { labels.tasks_source_off };
+    let layer = match state.source {
+        PackSource::Instance if !state.on => {
+            let off = fill(labels.tasks_source_own, &[labels.tasks_source_own_off]);
+            return match state.row {
+                Some(row) => match row.until_ms {
+                    Some(until) => fill(labels.tasks_source_until, &[&off, &format_minute(until)]),
+                    None => fill(labels.tasks_source_since, &[&off, &format_minute(row.from_ms)]),
+                },
+                None => off,
+            };
+        }
+        PackSource::Instance => labels.tasks_source_own,
+        PackSource::Server => labels.tasks_source_server,
+        PackSource::Game => labels.tasks_source_game,
+        PackSource::PackDefault => labels.tasks_source_pack_default,
+        PackSource::None => {
+            return state.next_change_ms.map_or_else(String::new, |at| {
+                fill(labels.tasks_source_changes, &[&format_minute(at)])
+            });
+        }
+    };
+    let said = fill(layer, &[word]);
+    match state.row.and_then(|row| row.until_ms) {
+        Some(until) => fill(labels.tasks_source_until, &[&said, &format_minute(until)]),
+        None => said,
+    }
+}
+
+/// The colour of what a press came to: as the grey lines are, amber while the person is the one to
+/// look again, red for a failure.
+enum SaidTone {
+    Plain,
+    Warning,
+    Failed,
+}
+
+/// What the last press of a package's switch came to, in words, with when it landed: never a code,
+/// a version or a count, which the log has.
+fn switch_said_text(ui: &Ui, labels: &Labels, said: &SwitchSaid) -> (String, SaidTone) {
+    let at = |template: &str, at_ms: u64| fill(template, &[&format_second(at_ms)]);
+    match said {
+        SwitchSaid::Sending => (labels.tasks_switch_sending.to_owned(), SaidTone::Plain),
+        SwitchSaid::Conflict => (labels.tasks_switch_conflict.to_owned(), SaidTone::Warning),
+        SwitchSaid::NotNewer { at_ms } => {
+            (at(labels.tasks_switch_not_newer, *at_ms), SaidTone::Failed)
+        }
+        SwitchSaid::TooMany { at_ms } => {
+            (at(labels.tasks_switch_too_many, *at_ms), SaidTone::Failed)
+        }
+        SwitchSaid::StoredUnreadable { at_ms } => {
+            (at(labels.tasks_switch_stored_unreadable, *at_ms), SaidTone::Failed)
+        }
+        SwitchSaid::Invalid { at_ms } => (at(labels.tasks_switch_invalid, *at_ms), SaidTone::Failed),
+        SwitchSaid::Refused { at_ms, codes } => {
+            let codes: Vec<&str> = codes.iter().map(String::as_str).collect();
+            let words = switch_words(ui, labels, &codes);
+            let text = fill(labels.tasks_switch_refused, &[&words, &format_second(*at_ms)]);
+            (text, SaidTone::Failed)
+        }
+        SwitchSaid::NotSent { at_ms } => {
+            (at(labels.tasks_switch_not_sent, *at_ms), SaidTone::Failed)
+        }
+        SwitchSaid::Unconfirmed { at_ms } => {
+            (at(labels.tasks_switch_unconfirmed, *at_ms), SaidTone::Failed)
+        }
+        SwitchSaid::NoThread { error } => {
+            let why = fill(labels.thread_failed, &[error.as_str()]);
+            (fill(labels.tasks_switch_no_thread, &[why.as_str()]), SaidTone::Failed)
+        }
+        SwitchSaid::Restarted => (labels.tasks_switch_restarted.to_owned(), SaidTone::Plain),
+    }
+}
+
+/// A switch's refusal in plain words, never its code (`codes`, the host's before the Runtime's),
+/// as a stop's (`stop_words`); else that it is not known here, which the log hears of once.
+fn switch_words(ui: &Ui, labels: &Labels, codes: &[&str]) -> String {
+    if let Some(words) = code_words(labels, codes) {
+        return words;
+    }
+    let line = format!("no words for a task switch refused with codes {codes:?}");
+    if ui.model.borrow_mut().first_told(&line) {
+        report::log(TASKS_LOG, &line);
+    }
+    labels.rescue_cause_unknown.to_owned()
 }
 
 /// One task under the account itself: by its id, the Runtime's reading task by words.
@@ -2935,6 +3084,7 @@ fn task_said_text(ui: &Ui, labels: &Labels, said: &TaskSaid) -> (String, TaskTon
         }
         TaskSaid::Completed => (labels.tasks_completed.to_owned(), TaskTone::Plain),
         TaskSaid::Rejected => (labels.tasks_rejected.to_owned(), TaskTone::Plain),
+        TaskSaid::NotDecided => (labels.tasks_not_decided.to_owned(), TaskTone::Plain),
         TaskSaid::Reason { class, why, wake } => {
             let words = match class {
                 ReasonClass::ControlGate => labels.tasks_paused.to_owned(),

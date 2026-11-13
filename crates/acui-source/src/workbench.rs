@@ -13,9 +13,13 @@
 //! Lanes ask only what is answered from memory or takes no ledger record:
 //! `Status`, `ScheduleExplanation` of every instance without its candidate rows and, for an
 //! account's task list (UI-3f1), of that one instance with them ([`ReadLane::read_tasks`]),
-//! `RuntimeFactSnapshot` and `StartReport`. The picture's lane ([`preview::PreviewLane`],
-//! UI-3c) is the one exception: it reads ledger pages, which take no record either but are
-//! read from the ledger, and frames' material, whose read takes no record when it succeeds or
+//! `RuntimeFactSnapshot` and `StartReport`; and for that list's switches (UI-3f2), that one
+//! instance's `PackScheduleView` ([`ReadLane::read_packs`]), answered from memory once the
+//! Runtime has brought its fact store up to the ledger under the fact write gate, a read of the
+//! ledger's newest records on its writer's thread that is nearly always empty. The picture's lane
+//! ([`preview::PreviewLane`], UI-3c) is the one exception: it reads ledger pages, which take no
+//! record either but are read from the ledger, and frames' material, whose read takes no record
+//! when it succeeds or
 //! finds the file gone, and one for any other failure. How often is the caller's, too: a lane keeps
 //! no clock, and asks again by itself in one case only, a read on a connection that turns
 //! out to have ended (`ReadLane::asked_once_more`; the picture lane's pages likewise).
@@ -46,13 +50,15 @@
 //! of settings ([`configure`]), in the picture's file a person's refresh of the picture
 //! ([`preview::observe_frame`]), and in the device's a person's operation of a device: its
 //! reconnect and self-check, its emulator's control, its game's launch and restart
-//! ([`device::operate`], UI-3e1-a), and in the stop's a person's stop of one run of an account
-//! ([`stop::stop_run`], UI-3e2). Like the conditional resume beside them (`resume_paused`)
-//! each goes out once on a fresh person's connection, and never again by itself, whatever
-//! comes back, with one exception: a stop that answered that the run still stops, or whose
-//! answer is not known, is asked once more, on another fresh connection, once a `Status` shows
-//! the run gone, so that its reset's result is read (the console's `stop`, not this crate,
-//! decides when).
+//! ([`device::operate`], UI-3e1-a), in the stop's a person's stop of one run of an account
+//! ([`stop::stop_run`], UI-3e2), and in the pack's a person's switch of one task package of an
+//! account, on or off ([`pack::edit`], UI-3f2). Like the conditional resume beside them
+//! (`resume_paused`) each goes out once on a fresh person's connection, and never again by itself,
+//! whatever comes back, with two exceptions: a stop that answered that the run still stops, or
+//! whose answer is not known, is asked once more, on another fresh connection, once a `Status`
+//! shows the run gone, so that its reset's result is read (the console's `stop`, not this crate,
+//! decides when); and a switch the Runtime refused `fact_observation_not_newer`, which its contract
+//! says to send again, is sent once more at once on the same connection.
 //!
 //! An instance's touch and capture backends (HS-U, Runtime 0.12.39's #402 HS-2) are settings
 //! too, but not rows of the page's tiers: [`backends`] reads them as each device instance's
@@ -104,6 +110,7 @@ use super::{
 
 pub mod backends;
 pub mod device;
+pub mod pack;
 pub mod preview;
 pub mod rules;
 pub mod stop;
@@ -205,6 +212,14 @@ impl ReadLane {
         self.asked_once_more(|lane| lane.ask_tasks(alias))
     }
 
+    /// One `PackScheduleView` of the one instance `alias`: that account's task switches (UI-3f2).
+    /// A Runtime that has none says so as its answer ([`pack::PacksAnswer::Unsupported`]), not
+    /// as a failure: one before 0.12.30, which drops the connection on it, costs this lane its
+    /// connection, as any fatal failure does.
+    pub fn read_packs(&mut self, alias: &str) -> Result<pack::PacksRead, ClientFailure> {
+        self.asked_once_more(|lane| lane.ask_packs(alias))
+    }
+
     /// One `RuntimeFactSnapshot`, and the settings' version read under the same gate,
     /// so what it says of the configuration is of that version.
     pub fn read_config(&mut self) -> Result<ConfigRead, ClientFailure> {
@@ -254,6 +269,21 @@ impl ReadLane {
         match client.schedule_explanation(Some(alias), true) {
             Ok(explanation) => Ok(tasks_read(epoch, alias, &explanation)),
             Err(error) => Err(self.settled(error)),
+        }
+    }
+
+    fn ask_packs(&mut self, alias: &str) -> Result<pack::PacksRead, RuntimeClientError> {
+        let client = self.connection()?;
+        let epoch = code(&client.runtime_info().owner_epoch());
+        match client.pack_schedule_view(alias) {
+            Ok(view) => Ok(pack::packs_read(epoch, alias, &view)),
+            Err(error) => match pack::view_unsupported(&error) {
+                Some(code) => {
+                    self.settled(error);
+                    Ok(pack::packs_unsupported(epoch, alias, code))
+                }
+                None => Err(self.settled(error)),
+            },
         }
     }
 

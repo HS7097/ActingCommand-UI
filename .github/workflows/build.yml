@@ -332,7 +332,7 @@ jobs:
       # hold such tests; the UI and the workspace as a whole are not tested here. A red here is
       # red: it is not re-run to green.
       - name: Unit tests of pure functions
-        run: cargo test --locked -p acui-model
+        run: cargo test --locked -p acui-model -p acui-source
 
       # Windows only: stage the console and the stable entry with a build manifest in the
       # same shape as the Runtime's exact-SHA artifacts, so the umbrella can fetch

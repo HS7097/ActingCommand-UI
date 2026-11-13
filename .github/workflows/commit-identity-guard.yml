@@ -1,0 +1,78 @@
+name: commit-identity-guard
+
+# Every commit a pull request brings, and every commit pushed to main, must be authored and
+# committed by one of the three HS7097 family accounts under its GitHub noreply address, or by
+# GitHub's own web committer. No personal address is listed here or accepted. Ported from the
+# Runtime repository's guard (coordinator, 11-12), without its personal address.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# One group per pull request, so a new push to a pull request cancels that branch's older run;
+# every push to main gets its own group (the run id) and is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify-author-identity:
+    name: verify commit author identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify every commit author/committer email is a family noreply identity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Exact allowlist: the three family accounts' noreply addresses, in the numeric and
+          # the legacy form, and GitHub's web committer. Nothing else.
+          ALLOW='^(103177863\+HS7097@users\.noreply\.github\.com|HS7097@users\.noreply\.github\.com|310586811\+HS7097ViW@users\.noreply\.github\.com|HS7097ViW@users\.noreply\.github\.com|306820463\+HS7097Agt@users\.noreply\.github\.com|HS7097Agt@users\.noreply\.github\.com|noreply@github\.com)$'
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE^{commit}"; then
+              RANGE="${{ github.sha }} -1"
+            else
+              RANGE="$BEFORE..${{ github.sha }}"
+            fi
+          fi
+
+          echo "checking range: $RANGE"
+          # Read the log first: inside a process substitution a failing git log would be invisible to
+          # set -e, the loop would run zero times and the guard would pass. An empty log fails too.
+          log="$(git log --format=$'%H\t%ae\t%ce' $RANGE)"
+          if [ -z "$log" ]; then
+            echo "::error::commit identity guard read no commit in $RANGE"
+            exit 1
+          fi
+          bad=0
+          count=0
+          while IFS=$'\t' read -r sha ae ce; do
+            count=$((count + 1))
+            for mail in "$ae" "$ce"; do
+              if ! [[ "$mail" =~ $ALLOW ]]; then
+                echo "::error::commit $sha carries an identity outside the family noreply list: $mail"
+                bad=1
+              fi
+            done
+          done <<< "$log"
+
+          if [ "$bad" -ne 0 ]; then
+            echo "::error::commit identity guard failed: only the HS7097 family noreply identities may author or commit. Fix git user.email and rewrite the branch's own commits before merge."
+            exit 1
+          fi
+          echo "all $count commit identities are family noreply identities"
