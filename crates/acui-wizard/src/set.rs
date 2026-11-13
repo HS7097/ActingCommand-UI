@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The install set: one folder holding `install-set.json` (`actingcommand.install-set.v1`, this
 //! repository's own format) and every file it names — the Runtime and Tools zips, the console
-//! zip, one standard package zip per game and the vision files — each with its size and SHA-256.
-//! The wizard installs nothing else and downloads nothing.
+//! zip, one standard package zip per game with the files that go beside it (its licenses and
+//! notices, `bundles[].files`), and the vision files — each with its size and SHA-256. The
+//! wizard installs nothing else and downloads nothing.
 //!
 //! Checking a set reads it only: each file against its size and SHA-256; each program zip
 //! against its own `BUILD-MANIFEST.json` (the repository and the commit the set names, every
-//! entry's size and SHA-256, no entry it does not list); each standard package zip's
-//! `bundle.json`, its `applications.json`, its installed layout, and its `interfaces.json`,
-//! whose `package` maximum must lie within the range the Runtime zip's own manifest declares.
+//! entry's size and SHA-256, no entry it does not list); the console's interfaces against the
+//! Runtime's ([`console_problems`]); each standard package zip's `bundle.json`, its
+//! `applications.json`, its installed layout, and its `interfaces.json`, whose `package` maximum
+//! must lie within the range the Runtime zip's own manifest declares.
+//!
+//! A standard package's own files go to `<root>\licenses\<game>\<path>`, `path` a plain relative
+//! path (each once per game). The vision set must carry ONNX Runtime's licence and notices
+//! beside the library ([`ORT_LICENSE`], [`ORT_NOTICES`]).
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -26,7 +32,8 @@ use crate::layout::{
     INTERFACES_FILE, SCHEDULE_FILE,
 };
 use crate::manifest::{
-    check_identity, package_edge, parse_manifest, speaks, BuildManifest, Program, MANIFEST_FILE,
+    check_identity, console_problems, package_edge, parse_manifest, speaks, BuildManifest, Program,
+    MANIFEST_FILE,
 };
 use crate::text::Said;
 
@@ -37,6 +44,11 @@ pub const VISION_PROVIDER: &str = "cpu";
 /// The file a vision root needs whenever `vision` is configured (Runtime
 /// `contracts/vision-model-folders.md`).
 pub const ORT_LIBRARY: &str = "ort/onnxruntime.dll";
+/// ONNX Runtime's licence and its third-party notices, which go wherever the library goes.
+pub const ORT_LICENSE: &str = "ort/licenses/onnxruntime/LICENSE";
+pub const ORT_NOTICES: &str = "ort/licenses/onnxruntime/ThirdPartyNotices.txt";
+/// The root's folder for the files that go beside the standard packages, one folder per game.
+pub const LICENSES_DIR: &str = "licenses";
 const SET_FILE_LIMIT: u64 = 1 << 20;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,6 +95,10 @@ pub struct BundleEntry {
     pub repository: Option<String>,
     #[serde(default)]
     pub tag: Option<String>,
+    /// The files that go beside the package (its licences and notices, which its release hangs
+    /// beside the zip): each laid at `<root>\licenses\<game>\<path>`.
+    #[serde(default)]
+    pub files: Vec<PlacedFile>,
 }
 
 impl BundleEntry {
@@ -101,16 +117,20 @@ pub struct VisionEntry {
     pub files: Vec<VisionFile>,
 }
 
-/// A vision file: where it goes below the vision root, and the file of the set.
+/// A file laid as it is: where it goes (`path`, `/`-separated, below its folder in the root),
+/// and the file of the set with its size and SHA-256.
 #[derive(Debug, Clone, Deserialize)]
-pub struct VisionFile {
+pub struct PlacedFile {
     pub path: String,
     pub file: String,
     pub size: u64,
     pub sha256: String,
 }
 
-impl VisionFile {
+/// A vision file: where it goes below the vision root.
+pub type VisionFile = PlacedFile;
+
+impl PlacedFile {
     pub fn file_ref(&self) -> FileRef {
         FileRef {
             file: self.file.clone(),
@@ -130,6 +150,9 @@ impl InstallSet {
         ];
         for bundle in &self.bundles {
             files.push((format!("standard package {}", bundle.game), bundle.file_ref()));
+            for placed in &bundle.files {
+                files.push((format!("standard package {} file {}", bundle.game, placed.path), placed.file_ref()));
+            }
         }
         for vision in &self.vision.files {
             files.push((format!("vision {}", vision.path), vision.file_ref()));
@@ -152,8 +175,9 @@ fn commit_like(text: &str) -> bool {
 
 /// Every rule of a set file that needs no file read: its schema, the two commits, each file
 /// plainly inside the set folder with a size and a SHA-256, each game once and a plain folder
-/// name, a CPU vision set with ONNX Runtime and at least one model, each vision path once and
-/// below `ort/` or `models/<model_ref>/`.
+/// name, each of a game's own files at a plain relative path and each path once in its game, a
+/// CPU vision set with ONNX Runtime, its licence and notices and at least one model, each vision
+/// path once and below `ort/` or `models/<model_ref>/`.
 pub fn set_problems(set: &InstallSet) -> Vec<Said> {
     let mut problems = Vec::new();
     if set.schema_version != SET_SCHEMA {
@@ -203,6 +227,23 @@ pub fn set_problems(set: &InstallSet) -> Vec<Said> {
         } else if !games.insert(bundle.game.to_ascii_lowercase()) {
             problems.push(Said::new("游戏重复", "the game is listed twice").with(&bundle.game));
         }
+        let mut placed = BTreeSet::new();
+        for file in &bundle.files {
+            if !safe_relative(&file.path) {
+                problems.push(
+                    Said::new(
+                        "标准包随带文件的位置不是普通的相对路径",
+                        "a standard package's own file is not placed at a plain relative path",
+                    )
+                    .with(format!("{}: {}", bundle.game, file.path)),
+                );
+            } else if !placed.insert(file.path.to_ascii_lowercase()) {
+                problems.push(
+                    Said::new("标准包随带文件的位置重复", "a standard package's own file is placed twice")
+                        .with(format!("{}: {}", bundle.game, file.path)),
+                );
+            }
+        }
     }
     if set.vision.provider != VISION_PROVIDER {
         problems.push(
@@ -231,8 +272,19 @@ pub fn set_problems(set: &InstallSet) -> Vec<Said> {
         }
         models |= placed && segments.first() == Some(&"models");
     }
-    if !paths.contains(ORT_LIBRARY) {
+    if !paths.contains(&ORT_LIBRARY.to_ascii_lowercase()) {
         problems.push(Said::new("视觉文件缺少 ONNX Runtime", "the vision set lacks ONNX Runtime").with(ORT_LIBRARY));
+    }
+    for required in [ORT_LICENSE, ORT_NOTICES] {
+        if !paths.contains(&required.to_ascii_lowercase()) {
+            problems.push(
+                Said::new(
+                    "视觉文件缺少 ONNX Runtime 的许可文件",
+                    "the vision set lacks ONNX Runtime's licence files",
+                )
+                .with(required),
+            );
+        }
     }
     if !models {
         problems.push(Said::new("视觉文件里没有模型", "the vision set holds no model"));
@@ -253,6 +305,9 @@ pub enum SetFault {
     /// A game's standard package (its display name, else its folder name) speaks a package
     /// interface outside the Runtime's range.
     Mismatch { game: String },
+    /// The console and the Runtime of the set do not speak a common revision of an interface
+    /// they share (`manifest::console_problems`).
+    ConsoleMismatch,
 }
 
 /// Why a set check stopped.
@@ -344,7 +399,7 @@ impl VerifiedSet {
             .bundles
             .iter()
             .filter(|bundle| games.contains(&bundle.entry.game))
-            .map(|bundle| bundle.bytes)
+            .map(|bundle| bundle.bytes + bundle.entry.files.iter().map(|file| file.size).sum::<u64>())
             .sum();
         programs + bundles + self.vision_bytes + STATE_ROOM
     }
@@ -471,6 +526,23 @@ pub fn verify_set(dir: &Path, report: &mut dyn FnMut(Event)) -> Result<VerifiedS
         programs.push(verify_program(program, &zip, commit, report).map_err(|said| SetError::damaged(&file.file, said))?);
     }
     let runtime_manifest = &programs[0].manifest;
+    let console_manifest = &programs[2].manifest;
+    let edges = console_problems(console_manifest.interfaces.as_ref(), runtime_manifest.interfaces.as_ref());
+    if !edges.is_empty() {
+        let zh: Vec<String> = edges.iter().map(|problem| problem.zh.clone()).collect();
+        let en: Vec<String> = edges.iter().map(|problem| problem.en.clone()).collect();
+        return Err(SetError {
+            fault: SetFault::ConsoleMismatch,
+            said: Said::new(zh.join("；"), en.join("; ")).with(format!(
+                "console {} {}, Runtime {} {}",
+                set.console.tag, set.console.commit, set.runtime.tag, set.runtime.commit
+            )),
+        });
+    }
+    report(Event::Line(Said::new(
+        "监控台与 Runtime 的接口配套",
+        "the console's interfaces match the Runtime's",
+    )));
     let package_range = runtime_manifest
         .interfaces
         .as_ref()
@@ -673,7 +745,11 @@ mod tests {
             },
             "bundles": [
                 {"game": "azurlane", "file": "bundles/azurlane-resources-1234567.zip", "size": 10,
-                 "sha256": sha('d'), "repository": "owner/azurlane-resources", "tag": "v1"}
+                 "sha256": sha('d'), "repository": "owner/azurlane-resources", "tag": "v1",
+                 "files": [
+                    {"path": "pack-files/NOTICE.md", "file": "bundles/azurlane/NOTICE.md", "size": 3, "sha256": sha('e')},
+                    {"path": "LICENSES/Upstream/LICENSE", "file": "bundles/azurlane/LICENSE", "size": 4, "sha256": sha('f')}
+                 ]}
             ],
             "vision": {"provider": "cpu", "files": [
                 {"path": "ort/onnxruntime.dll", "file": "vision/onnxruntime.dll", "size": 17328152,
@@ -703,7 +779,22 @@ mod tests {
     fn the_designed_set_has_no_problem() {
         assert_eq!(problems(good()), Vec::<Said>::new());
         let set = parse_install_set(&serde_json::to_vec(&good()).unwrap()).unwrap();
-        // Three program zips, one bundle, seven vision files.
+        // Three program zips, one bundle with its two files, seven vision files.
+        assert_eq!(set.files().len(), 13);
+        let files = set.files();
+        let (what, file) = &files[4];
+        assert_eq!(what, "standard package azurlane file pack-files/NOTICE.md");
+        assert_eq!((file.file.as_str(), file.size), ("bundles/azurlane/NOTICE.md", 3));
+        assert_eq!(set.bundles[0].files[1].path, "LICENSES/Upstream/LICENSE");
+    }
+
+    #[test]
+    fn a_bundle_without_files_reads_with_none() {
+        let mut bare = good();
+        bare["bundles"][0].as_object_mut().unwrap().remove("files");
+        let set = parse_install_set(&serde_json::to_vec(&bare).unwrap()).expect("a set");
+        assert!(set.bundles[0].files.is_empty());
+        assert_eq!(set_problems(&set), Vec::<Said>::new());
         assert_eq!(set.files().len(), 11);
     }
 
@@ -736,6 +827,27 @@ mod tests {
                 let files = set["vision"]["files"].as_array_mut().unwrap();
                 files.retain(|file| !file["path"].as_str().unwrap().starts_with("models/"));
             }),
+            case("no ort licence", |set| {
+                let files = set["vision"]["files"].as_array_mut().unwrap();
+                files.retain(|file| file["path"] != json!("ort/licenses/onnxruntime/LICENSE"));
+            }),
+            case("no ort notices", |set| {
+                let files = set["vision"]["files"].as_array_mut().unwrap();
+                files.retain(|file| file["path"] != json!("ort/licenses/onnxruntime/ThirdPartyNotices.txt"));
+            }),
+            case("bundle file escaping", |set| set["bundles"][0]["files"][0]["path"] = json!("../NOTICE.md")),
+            case("bundle file absolute", |set| set["bundles"][0]["files"][0]["path"] = json!("C:/NOTICE.md")),
+            case("bundle file rooted", |set| set["bundles"][0]["files"][0]["path"] = json!("/NOTICE.md")),
+            case("bundle file backslash", |set| set["bundles"][0]["files"][0]["path"] = json!("pack-files\\NOTICE.md")),
+            case("bundle file empty", |set| set["bundles"][0]["files"][0]["path"] = json!("")),
+            case("bundle file twice", |set| {
+                set["bundles"][0]["files"][1]["path"] = json!("Pack-Files/notice.md")
+            }),
+            case("bundle file outside the set", |set| {
+                set["bundles"][0]["files"][1]["file"] = json!("../LICENSE")
+            }),
+            case("bundle file sha256", |set| set["bundles"][0]["files"][1]["sha256"] = json!("f")),
+            case("bundle file size", |set| set["bundles"][0]["files"][1]["size"] = json!(0)),
         ];
         for (name, change) in cases {
             let mut set = good();

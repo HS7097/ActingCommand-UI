@@ -9,12 +9,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// The variables a launcher hands down to name an A/B installation (Runtime
-/// `crates/actingcommand-contract/src/installation.rs` `INSTALL_ROOT_ENV`,
-/// `INSTALL_SELECTION_ENV`); the console started from here must not read another root's.
-#[cfg_attr(not(windows), allow(dead_code))]
-pub const SELECTION_VARIABLES: [&str; 2] = ["ACTINGCOMMAND_INSTALL_ROOT", "ACTINGCOMMAND_INSTALL_SELECTION"];
-
 /// Whether `path` may take a new installation as far as its own folder goes: absent, or an
 /// empty folder.
 fn unused(path: &Path) -> bool {
@@ -53,7 +47,7 @@ mod imp {
 
     use acui_wizard::Lang;
 
-    use super::{first_unused, SELECTION_VARIABLES};
+    use super::first_unused;
 
     /// `DETACHED_PROCESS` and `CREATE_NEW_PROCESS_GROUP`: the console gets none of the wizard's
     /// console and none of its Ctrl+C, and outlives it.
@@ -149,7 +143,9 @@ mod imp {
     }
 
     /// `X:\ActingCommand` on the first local fixed drive other than the system's, else
-    /// `%LOCALAPPDATA%\ActingCommand`; with `-2`, `-3`, … when that is already in use.
+    /// `%USERPROFILE%\ActingCommand`; with `-2`, `-3`, … when that is already in use. Never in
+    /// `%LOCALAPPDATA%` or `%APPDATA%`: their `ActingCommand` folders are the console's and
+    /// actingd's per-user folders, which the root checks refuse.
     pub fn default_root() -> PathBuf {
         let system = std::env::var("SystemDrive")
             .ok()
@@ -170,8 +166,8 @@ mod imp {
         });
         let base = match fixed {
             Some(letter) => PathBuf::from(format!("{letter}:\\ActingCommand")),
-            None => match std::env::var_os("LOCALAPPDATA") {
-                Some(local) => PathBuf::from(local).join("ActingCommand"),
+            None => match std::env::var_os("USERPROFILE").filter(|profile| !profile.is_empty()) {
+                Some(profile) => PathBuf::from(profile).join("ActingCommand"),
                 None => PathBuf::from(format!("{system}:\\ActingCommand")),
             },
         };
@@ -231,14 +227,14 @@ mod imp {
     }
 
     /// `<root>\ui\acui.exe`, started in `<root>\ui`, apart from the wizard: no console, no
-    /// standard handles, no A/B selection handed down. The child is never waited on.
+    /// standard handles, and none of the Runtime's or the Lab's variables the wizard was started
+    /// with (an A/B selection, a state root: `acui_wizard::child::cleared_variables`), so it
+    /// reads this root only. The child is never waited on.
     pub fn start_console(root: &Path) -> io::Result<()> {
         use std::os::windows::process::CommandExt;
         let ui = root.join("ui");
         let mut command = Command::new(ui.join("acui.exe"));
-        for variable in SELECTION_VARIABLES {
-            command.env_remove(variable);
-        }
+        acui_wizard::child::clear_inherited(&mut command);
         command
             .current_dir(&ui)
             .stdin(Stdio::null())

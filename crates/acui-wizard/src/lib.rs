@@ -9,10 +9,12 @@
 //! Runtime program afterwards: the first configuration (`actingd check-config`), the cold
 //! layout of the standard packages (`actinglab standard-pack check`), the offline emulator
 //! discovery (`MuMuManager.exe info -v all`, read only), the vision files (each against its
-//! pinned SHA-256) and the first start's pause (a pause the console can lift).
+//! pinned SHA-256) and the first start's pause (a pause the console can lift), set before the
+//! instances are bound (the Runtime's `config replace` puts them in place under the pause).
 //!
 //! It never writes the console's global settings file, never touches another installation,
-//! and never deletes anything: a failed step stops the install and leaves what it wrote.
+//! and never deletes anything: a failed step stops the install and leaves what it wrote, and
+//! says what to stop and remove before the folder is deleted ([`cleanup`]).
 
 pub mod alias;
 pub mod apps;
@@ -35,5 +37,5 @@ pub mod set;
 pub mod text;
 pub mod winpath;
 
-pub use engine::{install, Done, Event, Failure, Request, Step};
+pub use engine::{cleanup, install, Done, Event, Failure, Left, Request, Step};
 pub use text::{Lang, Said};

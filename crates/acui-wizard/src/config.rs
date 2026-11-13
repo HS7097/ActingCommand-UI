@@ -38,6 +38,11 @@ use crate::text::Said;
 pub const CONFIG_FILE: &str = "actingd.config.json";
 /// The candidate written before `check-config` passes; renamed into place after.
 pub const CONFIG_PART: &str = "actingd.config.json.part";
+/// The full configuration, with the instances, while the first start runs without them
+/// ([`without_instances`]): checked with the other, kept beside it, and put in place by the
+/// Runtime's `config replace` once the first-start pause holds. The wizard deletes nothing, so it
+/// stays, the same bytes as the configuration then in place.
+pub const FULL_CONFIG: &str = "install-wizard.config.json";
 pub const CONFIG_SCHEMA: &str = "actingcommand.actingd.config.v1";
 pub const STATE_DIR: &str = "state";
 pub const PACKAGES_DIR: &str = "packages";
@@ -157,6 +162,18 @@ pub fn render(document: &Value) -> String {
 pub fn with_mumu_root(document: &Value, root: &str) -> Value {
     let mut document = document.clone();
     document["mumu_root"] = json!(root);
+    document
+}
+
+/// `document` without its instances and the policy that names them: the configuration the first
+/// start runs with, everything else as it is (the same salt, state root, MuMu folder, packages
+/// and vision), so that no instance exists before the first-start pause holds.
+pub fn without_instances(document: &Value) -> Value {
+    let mut document = document.clone();
+    document["instances"] = json!([]);
+    if let Some(members) = document.as_object_mut() {
+        members.remove("policy");
+    }
     document
 }
 
@@ -297,6 +314,25 @@ mod tests {
         let text = render(&pinned);
         assert!(text.ends_with("}\n") && !text.starts_with('\u{feff}'));
         assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), pinned);
+    }
+
+    #[test]
+    fn the_first_start_runs_the_same_configuration_without_its_instances() {
+        let mumu = Some("C:\\MuMu");
+        let full = build(&input(vec![instance("azurlane-5", 5, "cn"), instance("azurlane-6", 6, "jp")], mumu));
+        let start = without_instances(&full);
+        // What a configuration without instances is: the control plane, nothing else changed.
+        assert_eq!(start, build(&input(Vec::new(), mumu)));
+        assert_eq!(start["instances"], json!([]));
+        assert_eq!(start.get("policy"), None);
+        for kept in ["schema_version", "state_root", "bind_host", "bind_port", "secret_fingerprint_salt", "mumu_root", "standard_packs", "vision"] {
+            assert_eq!(start[kept], full[kept], "{kept}");
+        }
+        // The full one is left as it was.
+        assert_eq!(full["instances"].as_array().map(Vec::len), Some(2));
+        assert!(full.get("policy").is_some());
+        // A document already without instances stays as it is.
+        assert_eq!(without_instances(&start), start);
     }
 
     #[test]

@@ -163,7 +163,6 @@ export global Wiz {
     in property <bool> opt-watchdog;
     in property <bool> opt-start;
     in property <bool> opt-pause;
-    in property <string> options-problem;
     // 8 Confirm.
     in property <[KeyValue]> summary;
     in property <string> confirm-note;
@@ -975,7 +974,6 @@ component OptionsPage inherits ScrollView {
             padding-left: 26px;
             Caption { text: Strings.opt-pause-note; }
         }
-        if Wiz.options-problem != "": Problem { text: Wiz.options-problem; }
     }
 }
 

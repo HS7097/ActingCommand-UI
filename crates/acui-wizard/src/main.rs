@@ -25,7 +25,7 @@ use acui_wizard::occupancy::{self, OtherRoot};
 use acui_wizard::plan::parse_plan;
 use acui_wizard::root::size_text;
 use acui_wizard::set::{verify_set, VerifiedSet};
-use acui_wizard::{install, Event, Request, Said, Step};
+use acui_wizard::{cleanup, install, Event, Request, Said, Step};
 
 const USAGE: &str = "\
 acsetup — ActingCommand 安装向导 / setup wizard (0.12)
@@ -35,8 +35,8 @@ acsetup — ActingCommand 安装向导 / setup wizard (0.12)
   acsetup check-set --set <安装集文件夹 / install set folder>
       只核对安装集，打印摘要 / checks the install set only and prints what it holds
   acsetup discover [--mumu-root <MuMu 文件夹 / folder>]
-      列出 MuMu 实例和别的 ActingCommand 用着的实例（只读）
-      / lists the MuMu instances and those another ActingCommand uses (read only)
+      列出 MuMu 里的模拟器和别的 ActingCommand 用着的模拟器（只读）
+      / lists MuMu's emulators and those another ActingCommand uses (read only)
   acsetup install --set <文件夹 / folder> --root <新的安装文件夹 / new install folder> --plan <plan.json>
       照计划安装 / installs as the plan says
 
@@ -188,13 +188,14 @@ fn print_set(set: &VerifiedSet) {
             .map(|server| format!("{} {} ({})", server.server, server.label, server.application_id))
             .collect();
         println!(
-            "  游戏 / game {} 「{}」: {} packs, package [{}, {}], servers {}",
+            "  游戏 / game {} 「{}」: {} packs, package [{}, {}], servers {}, {} licence files",
             bundle.entry.game,
             bundle.game.label,
             bundle.index.packs.len(),
             bundle.package[0],
             bundle.package[1],
-            servers.join("; ")
+            servers.join("; "),
+            bundle.entry.files.len()
         );
     }
     println!(
@@ -239,31 +240,35 @@ fn print_discovery(discovery: &Discovery, others: &[OtherRoot]) {
     }
     for instance in &discovery.instances {
         let state = if instance.running { "运行中 / running" } else { "未运行 / stopped" };
+        let port = instance.adb_port.map_or_else(String::new, |port| format!(" adb {port}"));
         let used = match occupancy::used_by(others, instance) {
             Some((other, alias)) => format!(
                 "；已被别的 ActingCommand 用着 / in use by another ActingCommand: {} ({alias})",
-                other.root.as_ref().map_or_else(|| format!("pid {}", other.pid), |root| root.display().to_string())
+                other.name()
             ),
             None => String::new(),
         };
-        println!("  #{} {} [{state}]{used}", instance.index, instance.name);
+        println!("  #{} {} [{state}]{port}{used}", instance.index, instance.name);
     }
     for other in others {
+        let process = other.pid.map_or_else(|| "(watchdog task)".to_owned(), |pid| format!("pid {pid}"));
         let root = other.root.as_ref().map_or_else(|| "?".to_owned(), |root| root.display().to_string());
         match (&other.instances, &other.unknown) {
             (Some(instances), _) => {
                 let listed: Vec<String> = instances
                     .iter()
-                    .map(|used| match (used.index, &used.name) {
-                        (Some(index), _) => format!("{} #{index}", used.alias),
-                        (None, Some(name)) => format!("{} \"{name}\"", used.alias),
-                        (None, None) => format!("{} (adb)", used.alias),
+                    .map(|used| match (used.index, &used.name, &used.serial, used.port) {
+                        (Some(index), _, _, _) => format!("{} #{index}", used.alias),
+                        (None, Some(name), _, _) => format!("{} \"{name}\"", used.alias),
+                        (None, None, Some(serial), _) => format!("{} {serial}", used.alias),
+                        (None, None, None, Some(port)) => format!("{} adb {port}", used.alias),
+                        (None, None, None, None) => format!("{} ?", used.alias),
                     })
                     .collect();
-                println!("ActingCommand pid {} {root}: {}", other.pid, listed.join(", "));
+                println!("ActingCommand {process} {root}: {}", listed.join(", "));
             }
-            (None, Some(reason)) => println!("ActingCommand pid {} {root}: ? ({reason})", other.pid),
-            (None, None) => println!("ActingCommand pid {} {root}: ?", other.pid),
+            (None, Some(reason)) => println!("ActingCommand {process} {root}: ? ({reason})"),
+            (None, None) => println!("ActingCommand {process} {root}: ?"),
         }
     }
 }
@@ -286,7 +291,7 @@ fn run_install(set_dir: &Path, root: &Path, plan_path: &Path) -> ExitCode {
             println!("  配置 / configuration: {}", done.config.display());
             println!("  日志 / log: {}", done.log.display());
             for shortcut in &done.shortcuts {
-                println!("  快捷方式 / shortcut: {}", shortcut.display());
+                println!("  已建快捷方式 / shortcut created: {}", shortcut.display());
             }
             if done.paused {
                 println!("  所有实例已暂停：在监控台确认无误后点「全部开始执勤」 / every instance is paused: after a look in the console, press \"put all on duty\"");
@@ -307,10 +312,10 @@ fn run_install(set_dir: &Path, root: &Path, plan_path: &Path) -> ExitCode {
                 eprintln!("日志 / log: {}", log.display());
             }
             if failure.wrote {
-                eprintln!(
-                    "已写的东西原样留着；这个文件夹可以整个删掉重来（向导不自动删） / what was written stays as it is; the folder may be deleted whole and the install started again (the wizard deletes nothing): {}",
-                    root.display()
-                );
+                eprintln!("已写的东西原样留着，向导不删除任何东西；要重来，请照下面做 / what was written stays as it is, the wizard deletes nothing; to start again:");
+                for (at, step) in cleanup(root, &failure.left).iter().enumerate() {
+                    eprintln!("  {}. {step}", at + 1);
+                }
             }
             ExitCode::FAILURE
         }

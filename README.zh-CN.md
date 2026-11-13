@@ -800,12 +800,30 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
 任何东西，也不改动电脑上已有的 ActingCommand。
 
 **安装集**。向导只从「安装集」装：一个文件夹，里面有 `install-set.json`（`actingcommand.install-set.v1`）
-和它列出的每个文件——Runtime zip、Tools zip、监控台 zip、每个游戏一个标准包 zip、文字识别（视觉）用的
-文件——每个都写明大小和 SHA-256。向导先找自己旁边的 `install-set.json`，找不到就请人选文件夹。它逐个核对
-大小与 SHA-256，再按三个程序 zip 自带的 `BUILD-MANIFEST.json` 逐文件核对（提交号要与安装集写的一致），
-每个标准包核它的 `bundle.json`、`applications.json`、`schedule.json` 与 `interfaces.json`（`package` 修订要
-落在这一版 Runtime 声明的区间里）。哪一项不对就停下，什么也不写：文件坏了、和这一版不配套、读不懂，各有
-一句人话，技术细节写在下面一行小字里。安装集由提供安装包的人拼好交给你。
+和它列出的每个文件——Runtime zip、Tools zip、监控台 zip、每个游戏一个标准包 zip（以及挂在它旁边的许可、
+声明文件）、文字识别（视觉）用的文件——每个都写明大小和 SHA-256。向导先找自己旁边的 `install-set.json`，
+找不到就请人选文件夹。它逐个核对大小与 SHA-256，再按三个程序 zip 自带的 `BUILD-MANIFEST.json` 逐文件核对
+（提交号要与安装集写的一致）；按 Runtime `contracts/component-interfaces.md` 核监控台和 Runtime 两份清单里的
+`interfaces`：`runtime-client`、`actingd-config` 两边要有交集，`ledger`、`runtime-outcomes` 要 Runtime 的最高
+修订落在监控台的区间里；每个标准包核它的 `bundle.json`、`applications.json`、`schedule.json` 与
+`interfaces.json`（`package` 修订要落在这一版 Runtime 声明的区间里）。视觉文件必须带上 ONNX Runtime 的
+`ort/licenses/onnxruntime/LICENSE` 和 `ThirdPartyNotices.txt`。哪一项不对就停下，什么也不写：文件坏了、
+和这一版不配套、读不懂，各有一句人话，技术细节写在下面一行小字里。安装集由提供安装包的人拼好交给你。
+
+标准包旁边的文件写在这个游戏的 `files` 里，装到 `<根>\licenses\<游戏>\<path>`；`path` 只能是普通的相对路径，
+同一个游戏里不能重复：
+
+```json
+"bundles": [
+  {
+    "game": "arknights", "file": "bundles/arknights-resources.zip", "size": 123, "sha256": "…",
+    "files": [
+      {"path": "pack-files/NOTICE.md", "file": "bundles/arknights/NOTICE.md", "size": 1, "sha256": "…"},
+      {"path": "LICENSES/MaaAssistantArknights/LICENSE", "file": "bundles/arknights/LICENSE", "size": 1, "sha256": "…"}
+    ]
+  }
+]
+```
 
 **十步**。第 1 到 8 页只收集选择、做只读的检查，不写任何东西；在这些页上按「取消」或关窗都会先问一句，
 退出不留任何东西。
@@ -816,9 +834,11 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
 2. **安装文件**：核对安装集，带进度条，进度条下面一行用人话写核到哪了（核了几个文件、刚核完哪个程序或游戏）；
    仓库名和提交号只写进安装记录。核完列出版本和游戏。
 3. **安装位置**：默认是系统盘以外第一个本地固定盘的 `X:\ActingCommand`，没有这样的盘就用
-   `%LOCALAPPDATA%\ActingCommand`；默认的已经存在且不空时，依次试 `-2`、`-3`……。可以直接输入，也可以按
+   `%USERPROFILE%\ActingCommand`；默认的已经存在且不空时，依次试 `-2`、`-3`……。可以直接输入，也可以按
    「浏览…」选（选文件夹的窗口属于向导窗口，开着时向导不接受操作）；输入停下后逐条检查并打 ✓ / ✗：文件夹不存在或是空的、最后一级不叫 `A` 或 `B`、路径里没有
-   `'` 和 `%`、不在另一套 ActingCommand 里面、磁盘剩余空间够。有一条 ✗ 就不能往下。窗口里的大小写 GB、MB
+   `'` 和 `%`、不在另一套 ActingCommand 里面、不是 ActingCommand 每个用户的文件夹 `%APPDATA%\ActingCommand`
+   （全局的监控台设置 `acui.toml` 在那里）和 `%LOCALAPPDATA%\ActingCommand`（监控台和 Runtime 的日志在那里，
+   各套看门狗都读），也不在它们里面、不包着它们、磁盘剩余空间够。有一条 ✗ 就不能往下。窗口里的大小写 GB、MB
    （按 1024 算，与资源管理器一致）；安装记录和命令行写 GiB、MiB。
 4. **游戏**：勾选要装的游戏，安装集里有的都列出来，默认全勾。
 5. **模拟器**：只读地找 MuMu（找法与 Runtime 相同：正在运行的 MuMu、注册表里的卸载项、Program Files 里的
@@ -826,7 +846,9 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
    任何模拟器。所有模拟器默认都不勾，由人自己勾要交出去的那几台；一台都没勾就按「下一步」会先问一句。
    这一页说明向导从这里起说的「实例」：每台勾选的模拟器在 ActingCommand 里叫一个实例，即一台模拟器里
    登录好的一个游戏。
-   已被这台电脑上另一套正在运行的 ActingCommand 用着的模拟器灰字标出，勾上要先确认一次。
+   已被这台电脑上另一套 ActingCommand 用着的模拟器灰字标出，勾上要先确认一次。另一套从两处找：正在运行的
+   `actingcommand-actingd.exe`，和登记了的看门狗计划任务（停着的那套也能找到）；那一套的配置按模拟器序号、
+   名字、`serial` 或 adb 端口绑了这台，都算用着。
    找不到 MuMu 时可以跳过：先装一套没有实例的，以后再加。
 6. **实例**：每台勾选的模拟器一行：名字（默认「游戏名-序号」）、游戏、区服；「高级设置」里是触控方式和
    截图方式（默认都是 `nemu_ipc`）以及「ActingCommand 启动时自动打开这台模拟器」（默认关）。名字不能重复，
@@ -835,15 +857,22 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
 7. **选项**：桌面快捷方式与开始菜单快捷方式（默认开）；开机后自动运行（即 Runtime 的看门狗计划任务，
    **默认关**；这台电脑上已有另一套在自动运行时请别开）；装完马上启动（默认开）；第一次启动时先让所有实例
    暂停（默认开：在监控台看过每个实例都正常后，按「全部开始执勤」才开始操作游戏）。
-8. **确认**：把安装位置、版本、游戏、实例、选项、会建的文件夹和会写的文件列一遍。按「开始安装」后不能再
+   这几个选项之间没有限制：看门狗从不拉起一个从没启动过的根，没勾「装完马上启动」时，这一套会一直停着，
+   直到你自己启动它。
+8. **确认**：把安装位置、版本、游戏、实例、选项、会建的文件夹和会写的文件列一遍（游戏带许可文件时多一个
+   `licenses`；有实例又勾了启动和暂停时多一个 `install-wizard.config.json`）。按「开始安装」后不能再
    回到前面几页。
 9. **安装**：逐步显示，每步完成、跳过或失败，进行中的一步下面有一行细节和进度条。写入之前先把安装文件、
    模拟器和安装位置再核一遍。任何一步失败就停下，已经写下的东西原样留着，向导不删除任何东西。安装中关窗会被
    拦住。
-10. **完成**：写明装在哪里、安装记录在哪里。「打开监控台」（从新装的根启动 `ui\acui.exe`，与向导分开运行）和
+10. **完成**：写明装在哪里、安装记录在哪里、建了哪些快捷方式。「打开监控台」（从新装的根启动 `ui\acui.exe`，
+    与向导分开运行，不带向导自己继承来的任何 `ACTINGCOMMAND_…`、`ACTINGLAB_…` 环境变量）和
     「打开安装文件夹」都由人自己按，向导不自动打开任何东西。这一页还写明以后怎么加实例（监控台现在还不能直接
     添加）：再运行一次向导装到另一个文件夹（那是另一套，分开运行），或者等以后的新版。失败时这一页写明在哪一步、为什么，可以复制错误
-    信息、打开安装记录，并说明这个文件夹可以整个删掉再重来。
+    信息、打开安装记录，并按向导真的做过的几样逐项写怎么收拾：启动过 Runtime 的，写它有没有暂停，以及怎么停
+    （打开 `<根>\ui\acui.exe` 按「请求关闭」，或运行 `"<根>\runtime\actingctl.exe" request-shutdown --state-root
+    "<根>\state"`）；装过看门狗的，写 `"<根>\runtime\actingctl.exe" watchdog uninstall --root "<根>"`；建过快捷方式的，
+    列出路径；最后才是删除整个文件夹。
 
 **装成什么样**：
 
@@ -853,28 +882,48 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
   tools\                工具
   ui\                   监控台（acui.exe）
   packages\<游戏>\      标准包，按 Runtime 读的已安装布局铺开
-  vision\               文字识别：ort\ 与 models\<模型>\
+  licenses\<游戏>\      标准包旁边的许可、声明文件（安装集里有才建）
+  vision\               文字识别：ort\（含 ONNX Runtime 的许可文件）与 models\<模型>\
   state\                运行记录（状态根）
   actingd.config.json   Runtime 的配置
+  install-wizard.config.json  带实例的完整配置（有实例又先暂停时才写，换上之后与上一行相同）
   acui.toml             这一套监控台的设置（只写语言）
   install-wizard.log    安装记录
 ```
 
-第 9 页的步骤依次是：建文件夹和安装记录；铺开 Runtime、Tools 和监控台，每个文件都对 `BUILD-MANIFEST.json`
-核一遍；放视觉文件并逐个核哈希；铺标准包；用 `actinglab standard-pack check` 检查每个游戏；写配置（先写成
+第 9 页的十五步依次是：建文件夹和安装记录；铺开 Runtime、Tools 和监控台，每个文件都对 `BUILD-MANIFEST.json`
+核一遍；放视觉文件并逐个核哈希；铺标准包（铺之前对 zip 再算一次 SHA-256，和安装集对上才铺），并把它旁边的
+许可文件逐个核哈希放进 `licenses\<游戏>\`；用 `actinglab standard-pack check` 检查每个游戏；写配置（先写成
 `actingd.config.json.part`）；`actingd check-config` 通过才改名就位；`actinglab adopt` 把这个根交给 Runtime
-自己的安装器；写监控台设置；建快捷方式；启动（`actinglab up`）；首次暂停（`actinglab pause --reason
-first-start`）；装看门狗（`actinglab watchdog install`）；`actinglab status` 确认在线。没勾的步骤显示「跳过」。
-看门狗放在启动和暂停之后，免得它抢先把 Runtime 拉起来、来不及暂停。所有子程序都不开窗口，输出写进安装记录。
+自己的安装器；写监控台设置；建快捷方式（名字带根文件夹名，如「ActingCommand 监控台（AC2）」，同名的已经在
+就加序号，从不动别人的）；启动（`actinglab up`）；首次暂停（`actinglab pause --reason first-start`）；接上实例
+（`actinglab config replace`）；装看门狗（`actinglab watchdog install`）；`actinglab status` 确认在线。没勾的步骤
+显示「跳过」。所有子程序都不开窗口，输出写进安装记录。
+
+为什么实例最后才接上：全局暂停不打断已经在跑的任务，带着实例启动的 Runtime 在启动和暂停之间就可能派出任务。
+所以有实例又勾了「先暂停」时，第 7 步核过带实例的完整配置后，先把它留成 `install-wizard.config.json`，放进去的是
+同一份配置去掉实例（盐、状态根、MuMu 位置都不变，也过一遍 `check-config`）；Runtime 带着它启动、挂上暂停之后，
+第 13 步用 Runtime 自己的 `config replace` 换上完整配置：它先用这一版的 `check-config` 校验，Runtime 在运行就
+自己挂保持、正式关闭、换文件（被换下的留成 `actingd.config.json.prev-<毫秒>`）、再启动，保持只交还它自己挂的，
+全局暂停原样留着。全局暂停是持久的运行事实，每次不是安装器保持的启动都会在准备任何实例之前把它恢复
+（Runtime `contracts/scheduling-pause.md`「Persistence, no expiry」）。最后一步读一次状态：要在线、首次暂停还在、
+没有实例在跑任务（有就报错，绝不报成功），配置里的实例都在。
+
+看门狗放在最后：它从不拉起从没启动过的根、正式关掉的根和安装器正在动的根，只拉起上次启动以出错收场的
+（Runtime `contracts/runtime-watchdog.md`「Decision」第 3、5、6、7a 行）。装在最后，向导刚报失败的启动不会
+被它在背后再拉起来；前面哪一步失败，也不会留下计划任务。
 
 **不碰已有的 ActingCommand**：向导只写它新建的那个文件夹，外加你勾选的快捷方式和看门狗计划任务；它从不写
-全局的 `%APPDATA%\ActingCommand\acui.toml`，不碰别的安装和别的状态根，也不启动或关闭任何模拟器。它读别的
-ActingCommand 只为一件事：找出正在运行的 `actingcommand-actingd.exe`，只读那一套根下的
+全局的 `%APPDATA%\ActingCommand\acui.toml`，不碰别的安装和别的状态根，也不启动或关闭任何模拟器。它运行的每个
+子程序（以及「打开监控台」）都去掉了向导自己继承来的所有 `ACTINGCOMMAND_…`、`ACTINGLAB_…` 环境变量，只带它
+自己设的发起者，所以从带着别的状态根变量的环境里启动，也只动这一套。它读别的 ActingCommand 只为一件事：
+从正在运行的 `actingcommand-actingd.exe` 和登记了的看门狗计划任务（在隐藏的 Windows PowerShell 里只读地
+跑 `Get-ScheduledTask`，与 Runtime 读计划任务的办法相同）找出各套的根，只读那一套根下的
 `actingd.config.json`，看它绑了哪些模拟器，好在第 5 页标出来。
 
-**卸载**：没有卸载程序。开了「开机后自动运行」的，先运行
+**卸载**：没有卸载程序。先在这一套的监控台按「请求关闭」停下 Runtime；开了「开机后自动运行」的，再运行
 `"<根>\runtime\actingctl.exe" watchdog uninstall --root "<根>"` 把看门狗关掉（监控台的设置页只能查看它）；
-再关掉这一套的监控台和 Runtime，删除整个 `<根>` 文件夹和向导建的快捷方式即可。
+然后删除整个 `<根>` 文件夹和向导建的快捷方式（完成页列出了它们）即可。
 
 **命令行**：带子命令时不开窗口，输出写到调用它的控制台（Release 版是窗口程序，命令行模式会挂到父控制台上）。
 
@@ -887,7 +936,7 @@ acsetup install --set <安装集文件夹> --root <新的安装文件夹> --plan
     照计划安装，步骤与窗口第 9 页相同
 ```
 
-退出码：0 完成，1 失败（stderr 写明哪一步、为什么），2 用法。计划文件是窗口在第 1 到 8 页收集的那些选择
+退出码：0 完成，1 失败（stderr 写明哪一步、为什么，以及和失败页一样逐项写怎么收拾），2 用法。计划文件是窗口在第 1 到 8 页收集的那些选择
 （`actingcommand.install-wizard-plan.v1`）：`language`（`zh` 或 `en`）、`games`（游戏文件夹名）、可选的
 `mumu_root`、`instances`（每台的 `index`、`alias`、`game`、`server`，可选 `touch_backend`、`capture_backend`、
 `start_emulator`、`confirmed_in_use`）和 `options`（`desktop_shortcut`、`start_menu_shortcut`、`watchdog`、
@@ -960,7 +1009,7 @@ acsetup install --set <安装集文件夹> --root <新的安装文件夹> --plan
 
 `slint` 1.17.x，`default-features = false`；账本对监控台只读（监控台发出的请求——启动按钮、关闭
 请求、恢复请求——由 Runtime 自己记账；状态读取不留账本记录），控制入口只有启动器的两个按钮（启动 /
-请求关闭，见上）、启动器的解锁入口（经确认的 `actingd unlock-owner`）与账本窗口里经确认的有条件恢复（见「启动器」一节末尾），没有审批入口；监控台的 crate 只有两个带测试：`acui-model` 四条单元测试（测的是 `stop_marked` 里那个纯函数判定 `stopped`，UI-3e3），`acui-source` 六条单元测试（测的是 `pack::switch`，即按下任务开关时写什么的纯函数判定，UI-3f2），别的不带测试。CI 构建工作区之后，只跑带纯函数单元测试的 crate，现在是 `cargo test --locked -p acui-model -p acui-source -p acui-wizard`（`acui-wizard` 是安装向导，测的是安装集、安装位置、布局映射、配置生成、名字规则这些只算数的纯函数）；界面和整个工作区不跑测试。启动器在
+请求关闭，见上）、启动器的解锁入口（经确认的 `actingd unlock-owner`）与账本窗口里经确认的有条件恢复（见「启动器」一节末尾），没有审批入口；监控台的 crate 只有两个带测试：`acui-model` 四条单元测试（测的是 `stop_marked` 里那个纯函数判定 `stopped`，UI-3e3），`acui-source` 六条单元测试（测的是 `pack::switch`，即按下任务开关时写什么的纯函数判定，UI-3f2），别的不带测试。CI 构建工作区之后，只跑带纯函数单元测试的 crate，现在是 `cargo test --locked -p acui-model -p acui-source -p acui-wizard`（`acui-wizard` 是安装向导，测的是安装集、安装位置、布局映射、配置生成、名字规则、监控台与 Runtime 的接口配套、子程序不继承哪些环境变量、Runtime 答复的读法、别的安装绑了哪些模拟器、失败后要收拾什么这些只算数的纯函数）；界面和整个工作区不跑测试。启动器在
 `crates/acui-app/src/launcher.rs`，路径从哪来在 `install.rs`，技术日志与启动失败窗口在 `report.rs`，
 探测、请求关闭、记下启动按钮、在线开台时的状态与事实读取、有条件恢复这几个客户端操作在 `acui-source`
 （`probe_runtime` / `request_shutdown` / `record_start` / `instance_facts` / `resume_paused`）。

@@ -1172,14 +1172,34 @@ ActingCommand already on the computer.
 
 **The install set.** The wizard installs from an "install set" only: a folder holding `install-set.json`
 (`actingcommand.install-set.v1`) and every file it lists — the Runtime zip, the Tools zip, the console
-zip, one standard pack zip per game and the text-recognition (vision) files — each with its size and
-SHA-256. The wizard looks for `install-set.json` next to itself first and asks for the folder when there is
-none. It checks every file's size and SHA-256, each of the three program zips file by file against its own
-`BUILD-MANIFEST.json` (with the commit the set names), and each standard pack's `bundle.json`,
-`applications.json`, `schedule.json` and `interfaces.json` (its `package` revision must lie within the range
-this Runtime declares). Anything wrong stops it before anything is written: a damaged file, a pack that
-does not match this version and a set it cannot read each get a plain sentence, with the technical detail in
-small print below. Whoever gives you the package puts the set together.
+zip, one standard pack zip per game (with the licence and notice files that go beside it) and the
+text-recognition (vision) files — each with its size and SHA-256. The wizard looks for `install-set.json`
+next to itself first and asks for the folder when there is none. It checks every file's size and SHA-256,
+each of the three program zips file by file against its own `BUILD-MANIFEST.json` (with the commit the set
+names), the `interfaces` of the console's and the Runtime's manifests as the Runtime's
+`contracts/component-interfaces.md` checks them (`runtime-client` and `actingd-config` must overlap, the
+Runtime's highest `ledger` and `runtime-outcomes` revisions must lie in the console's range), and each
+standard pack's `bundle.json`, `applications.json`, `schedule.json` and `interfaces.json` (its `package`
+revision must lie within the range this Runtime declares). The vision files must carry ONNX Runtime's
+`ort/licenses/onnxruntime/LICENSE` and `ThirdPartyNotices.txt`. Anything wrong stops it before anything is
+written: a damaged file, a pack or console that does not match this version and a set it cannot read each
+get a plain sentence, with the technical detail in small print below. Whoever gives you the package puts
+the set together.
+
+The files that go beside a standard pack are its game's `files`, laid at `<root>\licenses\<game>\<path>`;
+`path` is a plain relative path, each once per game:
+
+```json
+"bundles": [
+  {
+    "game": "arknights", "file": "bundles/arknights-resources.zip", "size": 123, "sha256": "…",
+    "files": [
+      {"path": "pack-files/NOTICE.md", "file": "bundles/arknights/NOTICE.md", "size": 1, "sha256": "…"},
+      {"path": "LICENSES/MaaAssistantArknights/LICENSE", "file": "bundles/arknights/LICENSE", "size": 1, "sha256": "…"}
+    ]
+  }
+]
+```
 
 **Ten pages.** Pages 1 to 8 only gather choices and run read-only checks; nothing is written. Cancel or
 closing the window on those pages asks first, and quitting leaves nothing behind.
@@ -1192,21 +1212,26 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    files are checked, which program or game was just checked); repositories and commits go to the setup
    log only. Then its versions and games are listed.
 3. **Location**: by default `X:\ActingCommand` on the first local fixed drive other than the system's, else
-   `%LOCALAPPDATA%\ActingCommand`; when that one exists and is not empty, `-2`, `-3`, … are tried. Type a
+   `%USERPROFILE%\ActingCommand`; when that one exists and is not empty, `-2`, `-3`, … are tried. Type a
    folder or pick one with Browse… (the folder picker belongs to the wizard's window, which takes no input
    while it is open); once typing pauses, each rule gets a ✓ or ✗: the folder does not exist
    or is empty, its last name is not `A` or `B`, the path holds no `'` or `%`, it is not inside another
-   ActingCommand, and the disk has room. Any ✗ keeps Next off. The window writes sizes in GB and MB
-   (counted in 1024s, as Explorer does); the setup log and the command line write GiB and MiB.
+   ActingCommand, it is none of ActingCommand's per-user folders `%APPDATA%\ActingCommand` (the global
+   console settings `acui.toml` live there) and `%LOCALAPPDATA%\ActingCommand` (the console's and the
+   Runtime's logs, which every watchdog reads), lies in none and holds none, and the disk has room. Any ✗
+   keeps Next off. The window writes sizes in GB and MB (counted in 1024s, as Explorer does); the setup log
+   and the command line write GiB and MiB.
 4. **Games**: tick the games to install; every game of the set is listed, all ticked by default.
 5. **Emulator**: MuMu is found read-only (as the Runtime finds it: a running MuMu, the registry's uninstall
    entries, the MuMu folders in Program Files) and `MuMuManager.exe info -v all` lists its emulators (no
    window, within 10 seconds); no emulator is opened or closed. No emulator is ticked to begin with: the
    person ticks the ones to hand over, and Next with none ticked asks first. The page says what the
    wizard calls an instance from here on: each emulator ticked becomes one instance in ActingCommand, one
-   signed-in game in one emulator. An emulator another running
-   ActingCommand on this computer already uses is greyed, and ticking it asks first. Without MuMu the page
-   can be skipped: the set is installed without instances, to be added later.
+   signed-in game in one emulator. An emulator another ActingCommand on this computer already uses is
+   greyed, and ticking it asks first. The other installations are found two ways: a running
+   `actingcommand-actingd.exe`, and a registered watchdog task (which finds a stopped one too); its
+   configuration uses an emulator when it binds it by index, name, `serial` or adb port. Without MuMu the
+   page can be skipped: the set is installed without instances, to be added later.
 6. **Instances**: one row per ticked emulator: its name (by default "game-index"), game and server; under
    Advanced, the touch and capture methods (both `nemu_ipc` by default) and "Open this emulator when
    ActingCommand starts" (off by default). Names must differ, hold no space and not be too long: with two or
@@ -1216,19 +1241,26 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    Runtime's watchdog scheduled task, **off by default**; leave it off when another ActingCommand on this
    computer already runs automatically); start when setup finishes (on); on the first start, keep every
    instance paused (on: ActingCommand starts playing only after you check each instance in the console and
-   press "Put All on Duty").
+   press "Put All on Duty"). The options set no rule on one another: the watchdog never starts a root that
+   never started, so without "start when setup finishes" the installation stays down until you start it.
 8. **Confirm**: the location, versions, games, instances, options, the folders created and the files written,
-   all listed. Once Install is pressed there is no going back to the earlier pages.
+   all listed (with `licenses` when a game brings licence files, and `install-wizard.config.json` with
+   instances, the start and the pause). Once Install is pressed there is no going back to the earlier pages.
 9. **Install**: step by step, each done, skipped or failed, the step under way with a line of detail and a
    progress bar. Before writing, the install files, the emulators and the folder are checked once more. A
    failed step stops the install; what was written stays as it is, and the wizard deletes nothing. Closing
    the window while it installs is held off.
-10. **Finish**: where it was installed and where the setup log is. "Open console" (the new root's
-    `ui\acui.exe`, started apart from the wizard) and "Open folder" are for the person to press; the wizard
+10. **Finish**: where it was installed, where the setup log is and which shortcuts were created. "Open
+    console" (the new root's `ui\acui.exe`, started apart from the wizard and without any `ACTINGCOMMAND_…`
+    or `ACTINGLAB_…` variable the wizard inherited) and "Open folder" are for the person to press; the wizard
     opens nothing by itself. The page also says how to add instances later, since the console cannot add
     them yet: run the wizard again into another folder (a second, separate ActingCommand), or wait for a
     later version. After a failure the page says which step and why, offers to copy the error and
-    to open the setup log, and says the folder may be deleted whole to start again.
+    to open the setup log, and lists how to undo what the install actually did, item by item: a Runtime it
+    started (whether it is paused, and how to stop it: open `<root>\ui\acui.exe` and press "Request
+    Shutdown", or run `"<root>\runtime\actingctl.exe" request-shutdown --state-root "<root>\state"`), a
+    watchdog it installed (`"<root>\runtime\actingctl.exe" watchdog uninstall --root "<root>"`), the
+    shortcuts it created (their paths); deleting the folder comes last.
 
 **What it lays down:**
 
@@ -1238,35 +1270,62 @@ closing the window on those pages asks first, and quitting leaves nothing behind
   tools\                the tools
   ui\                   the console (acui.exe)
   packages\<game>\      standard packs, in the installed layout the Runtime reads
-  vision\               text recognition: ort\ and models\<model>\
+  licenses\<game>\      the licence and notice files beside a standard pack (when the set has them)
+  vision\               text recognition: ort\ (with ONNX Runtime's licence files) and models\<model>\
   state\                the records (the state root)
   actingd.config.json   the Runtime's configuration
+  install-wizard.config.json  the full configuration with the instances (with instances and the first
+                        pause only; once in place, the same as the line above)
   acui.toml             this installation's console settings (the language only)
   install-wizard.log    the setup log
 ```
 
-The steps of page 9, in order: create the folders and the setup log; lay out the Runtime, the Tools and the
-console, each file checked against its `BUILD-MANIFEST.json`; place the vision files, each against its
-hash; lay out the standard packs; check each game with `actinglab standard-pack check`; write the
-configuration (as `actingd.config.json.part` first); put it in place only once `actingd check-config`
-passes; hand the root to the Runtime's own installer with `actinglab adopt`; write the console settings;
-create the shortcuts; start (`actinglab up`); pause for the first start (`actinglab pause --reason
-first-start`); install the watchdog (`actinglab watchdog install`); confirm the Runtime is online with
-`actinglab status`. Steps not chosen show "Skipped". The watchdog comes after the start and the pause, so
-it cannot start the Runtime before the pause is set. Every child program runs without a window, its output
-in the setup log.
+The fifteen steps of page 9, in order: create the folders and the setup log; lay out the Runtime, the Tools
+and the console, each file checked against its `BUILD-MANIFEST.json`; place the vision files, each against
+its hash; lay out the standard packs (each zip's SHA-256 computed once more right before, against the set)
+and place the files beside each, each against its hash, in `licenses\<game>\`; check each game with
+`actinglab standard-pack check`; write the configuration (as `actingd.config.json.part` first); put it in
+place only once `actingd check-config` passes; hand the root to the Runtime's own installer with `actinglab
+adopt`; write the console settings; create the shortcuts (named after the root folder, such as
+"ActingCommand Console (AC2)", with a number when that name is taken: someone else's is never touched);
+start (`actinglab up`); pause for the first start (`actinglab pause --reason first-start`); connect the
+instances (`actinglab config replace`); install the watchdog (`actinglab watchdog install`); confirm the
+Runtime is online with `actinglab status`. Steps not chosen show "Skipped". Every child program runs without
+a window, its output in the setup log.
+
+Why the instances come last: a global pause stops no run already under way, so a Runtime started with its
+instances could dispatch between the start and the pause. With instances and the first pause, step 7
+checks the full configuration, keeps it as `install-wizard.config.json` and puts in place the same
+configuration without the instances (the same salt, state root and MuMu folder, through `check-config`
+too); once the Runtime runs it and the pause is set, step 13 puts the full one in place with the Runtime's
+own `config replace`: it checks the file with this build's `check-config`, then, the Runtime running, takes
+its own hold, closes it formally, swaps the file (the replaced one kept as `actingd.config.json.prev-<ms>`)
+and starts it again; it hands back only its own hold and leaves the global pause as it is. The global pause
+is a persisted runtime fact that every start that is not installer-held restores before any instance is
+prepared (Runtime `contracts/scheduling-pause.md`, "Persistence, no expiry"). The last step reads the
+status once: online, the first pause still there, no instance running a task (a run is a failure, never a
+success), and every configured instance present.
+
+The watchdog comes last: it never starts a root that never started, one closed formally or one the
+installer is working on, and starts only one whose last start ended in an error (Runtime
+`contracts/runtime-watchdog.md`, "Decision", rows 3, 5, 6 and 7a). Last, it cannot start again a start the
+wizard just reported failed, and a failure before it leaves no task.
 
 **Other ActingCommand installations are left alone:** the wizard writes only the folder it creates, plus the
 shortcuts and the watchdog task you tick; it never writes the global
 `%APPDATA%\ActingCommand\acui.toml`, touches no other installation or state root, and starts or stops no
-emulator. It reads another ActingCommand for one thing only: it finds the running
-`actingcommand-actingd.exe`, reads that root's `actingd.config.json` and nothing else, and marks on page 5 the
+emulator. Every child program it runs (and "Open console") gets none of the `ACTINGCOMMAND_…` and
+`ACTINGLAB_…` variables the wizard inherited, only the initiator it sets itself, so a wizard started where
+another state root is named still acts on its own root only. It reads another ActingCommand for one thing
+only: it finds each installation's root from the running `actingcommand-actingd.exe` and from the
+registered watchdog tasks (`Get-ScheduledTask` in a hidden Windows PowerShell, read only, as the Runtime
+reads its tasks), reads that root's `actingd.config.json` and nothing else, and marks on page 5 the
 emulators it binds.
 
-**Uninstalling:** there is no uninstaller. If automatic start is on, run
-`"<root>\runtime\actingctl.exe" watchdog uninstall --root "<root>"` first (the console's settings page only
-shows the watchdog); then close this installation's console and Runtime and delete the whole `<root>`
-folder and the shortcuts the wizard made.
+**Uninstalling:** there is no uninstaller. Stop the Runtime with "Request Shutdown" in this installation's
+console; if automatic start is on, then run `"<root>\runtime\actingctl.exe" watchdog uninstall --root
+"<root>"` (the console's settings page only shows the watchdog); then delete the whole `<root>` folder and
+the shortcuts the wizard made (the finish page lists them).
 
 **Command line:** with a command no window opens, and the output goes to the calling console (the release
 build is a window program; its command line attaches to the parent's console).
@@ -1280,7 +1339,8 @@ acsetup install --set <install set folder> --root <new install folder> --plan <p
     installs as the plan says, with the steps of page 9
 ```
 
-Exit codes: 0 done, 1 failed (stderr says which step and why), 2 usage. The plan file holds what the
+Exit codes: 0 done, 1 failed (stderr says which step and why, and lists how to undo what the install did,
+as the failure page does), 2 usage. The plan file holds what the
 window gathers on pages 1 to 8 (`actingcommand.install-wizard-plan.v1`): `language` (`zh` or `en`), `games`
 (game folder names), an optional `mumu_root`, `instances` (each with `index`, `alias`, `game`, `server`, and
 optionally `touch_backend`, `capture_backend`, `start_emulator`, `confirmed_in_use`) and `options`
@@ -1381,7 +1441,9 @@ is no approval entry point; of the console crates only two carry tests: `acui-mo
 and then runs just the crates that hold unit tests of pure functions, now
 `cargo test --locked -p acui-model -p acui-source -p acui-wizard` (`acui-wizard` is the setup wizard, with
 tests of the pure functions that only compute: the install set, the folder rules, the layout mapping, the
-configuration and the name rules); the UI and the workspace as a whole are not tested. The
+configuration, the name rules, the console's interface edges, the variables a child does not inherit,
+what the Runtime's answers say, which emulators another installation binds and what a failure left to
+undo); the UI and the workspace as a whole are not tested. The
 launcher is in
 `crates/acui-app/src/launcher.rs`, where the paths come from in `install.rs`, the technical log and the
 startup-failure window in `report.rs`, and the client operations — probe, request shutdown, recording

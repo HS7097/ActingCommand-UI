@@ -3,10 +3,22 @@
 //! the root, the install set, the plan, the emulators — then the steps that write, in order,
 //! each heard as started, finished (with what it did), skipped (with why) or failed (with why).
 //! A failed step stops the install; what was written stays as it is, and nothing is deleted.
+//! The failure carries what the install left that a person stops or removes first ([`Left`],
+//! [`cleanup`]).
 //!
-//! The order departs from the design in one place: the watchdog is installed after the start
-//! and the first pause, since its task starts a Runtime that is down within a minute and would
-//! start this one before the pause is set (Runtime `contracts/runtime-watchdog.md`).
+//! The order departs from the design in two places:
+//!
+//! - With instances and the first-start pause, the Runtime first starts with the same
+//!   configuration without its instances, the pause is set, and only then does the Runtime's own
+//!   `config replace` put the full configuration in place and restart it: a global pause stops
+//!   no run already under way, so a Runtime started with its instances could dispatch before the
+//!   pause holds. The pause survives the restart and is back before any instance is prepared
+//!   (`runtime`'s description, "Why the instances come by `config replace`").
+//! - The watchdog is installed after the start, the pause and the instances. It never starts a
+//!   root that never started, nor one closed formally, nor one the installer is working on; it
+//!   does start one whose last start ended in an error (Runtime `contracts/runtime-watchdog.md`,
+//!   "Decision", rows 3, 5, 6 and 7a). Installed last, it cannot start again a Runtime whose start
+//!   the install just reported failed, and an install that fails earlier leaves no task.
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -16,7 +28,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::archive::Archive;
-use crate::config::{self, ConfigInput, ConfigInstance, CONFIG_FILE, CONFIG_PART, PACKAGES_DIR, STATE_DIR};
+use crate::config::{
+    self, ConfigInput, ConfigInstance, CONFIG_FILE, CONFIG_PART, FULL_CONFIG, PACKAGES_DIR, STATE_DIR,
+};
 use crate::console;
 use crate::digest::sha256_file;
 use crate::log::InstallLog;
@@ -27,7 +41,7 @@ use crate::plan::{plan_problems, Plan};
 use crate::platform;
 use crate::root::{check_root, text_issues};
 use crate::runtime::{self, FIRST_START_REASON};
-use crate::set::{verify_set, VerifiedSet};
+use crate::set::{verify_set, PlacedFile, VerifiedSet, LICENSES_DIR};
 use crate::text::{Lang, Said};
 use crate::winpath::{last_segment, strip_verbatim};
 
@@ -46,12 +60,13 @@ pub enum Step {
     Shortcuts,
     Start,
     Pause,
+    Bind,
     Watchdog,
     Status,
 }
 
 impl Step {
-    pub const ALL: [Step; 14] = [
+    pub const ALL: [Step; 15] = [
         Step::Prepare,
         Step::Programs,
         Step::Vision,
@@ -64,11 +79,12 @@ impl Step {
         Step::Shortcuts,
         Step::Start,
         Step::Pause,
+        Step::Bind,
         Step::Watchdog,
         Step::Status,
     ];
 
-    /// 1 to 14.
+    /// 1 to 15.
     pub fn number(self) -> usize {
         Step::ALL.iter().position(|step| *step == self).map_or(0, |at| at + 1)
     }
@@ -78,7 +94,7 @@ impl Step {
             Step::Prepare => Said::new("建安装文件夹和日志", "Create the install folder and the log"),
             Step::Programs => Said::new("铺 Runtime、Tools 和监控台", "Lay out the Runtime, the Tools and the console"),
             Step::Vision => Said::new("放视觉文件", "Place the vision files"),
-            Step::Packs => Said::new("铺标准包", "Lay out the standard packages"),
+            Step::Packs => Said::new("铺标准包和随带的许可文件", "Lay out the standard packages and their licence files"),
             Step::PackCheck => Said::new("检查标准包", "Check the standard packages"),
             Step::Config => Said::new("生成配置", "Write the configuration"),
             Step::CheckConfig => Said::new("用 Runtime 校验配置", "Check the configuration with the Runtime"),
@@ -87,6 +103,7 @@ impl Step {
             Step::Shortcuts => Said::new("建快捷方式", "Create the shortcuts"),
             Step::Start => Said::new("启动 Runtime", "Start the Runtime"),
             Step::Pause => Said::new("首次启动先暂停所有实例", "Pause every instance for the first start"),
+            Step::Bind => Said::new("换上带实例的配置", "Put the configuration with the instances in place"),
             Step::Watchdog => Said::new("装看门狗（开机自动运行）", "Install the watchdog (start at logon)"),
             Step::Status => Said::new("确认 Runtime 在线", "Confirm the Runtime is online"),
         }
@@ -110,14 +127,95 @@ pub enum Event {
     Bytes { done: u64, total: u64 },
 }
 
+/// What the install did that outlives its folder or keeps running: what a person stops or
+/// removes before the folder can be deleted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Left {
+    /// The wizard ran the Runtime's start: a Runtime of the root may be running (a start that
+    /// did not answer in time was left running).
+    pub started: bool,
+    /// The first-start pause is set.
+    pub paused: bool,
+    /// The wizard ran `watchdog install`: the root's watchdog task may be registered.
+    pub watchdog: bool,
+    /// The shortcuts the wizard created.
+    pub shortcuts: Vec<PathBuf>,
+}
+
+/// What a person does about what a failed install left, in order, each with the command or the
+/// button that does it: stop the Runtime it started (the console's "Request Shutdown", or
+/// `actingctl request-shutdown`), remove the watchdog task it registered (`actingctl watchdog
+/// uninstall`), delete the shortcuts it created; then delete the folder. Only what the install
+/// did is named.
+pub fn cleanup(root: &Path, left: &Left) -> Vec<Said> {
+    let root = strip_verbatim(&root.to_string_lossy()).trim_end_matches(['\\', '/']).to_owned();
+    let actingctl = format!("\"{root}\\runtime\\actingctl.exe\"");
+    let mut steps = Vec::new();
+    if left.started {
+        let zh = format!(
+            "打开 {root}\\ui\\acui.exe 按「请求关闭」，或者运行 {actingctl} request-shutdown --state-root \"{root}\\state\""
+        );
+        let en = format!(
+            "open {root}\\ui\\acui.exe and press \"Request Shutdown\", or run {actingctl} request-shutdown --state-root \"{root}\\state\""
+        );
+        steps.push(if left.paused {
+            Said::new(
+                format!("ActingCommand 已经启动，挂着首次暂停。先停下它：{zh}。"),
+                format!("ActingCommand has started, under the first-start pause. Stop it first: {en}."),
+            )
+        } else {
+            Said::new(
+                format!("ActingCommand 可能还开着，而且没有暂停。先停下它：{zh}。"),
+                format!("ActingCommand may still be running, and it is not paused. Stop it first: {en}."),
+            )
+        });
+    }
+    if left.watchdog {
+        steps.push(Said::new(
+            format!("关掉开机自动运行（看门狗）：运行 {actingctl} watchdog uninstall --root \"{root}\"。"),
+            format!("Turn the automatic start (the watchdog) off: run {actingctl} watchdog uninstall --root \"{root}\"."),
+        ));
+    }
+    if !left.shortcuts.is_empty() {
+        let list: Vec<String> = left.shortcuts.iter().map(|path| path.display().to_string()).collect();
+        steps.push(Said::new(
+            format!("删掉向导建的快捷方式：{}。", list.join("、")),
+            format!("Delete the shortcuts the wizard created: {}.", list.join(", ")),
+        ));
+    }
+    steps.push(if steps.is_empty() {
+        Said::new(
+            format!("可以删除整个 {root} 文件夹，再重新运行向导。"),
+            format!("The whole {root} folder may be deleted and the wizard run again."),
+        )
+    } else {
+        Said::new(
+            format!("做完上面几项，再删除整个 {root} 文件夹，就可以重新运行向导。"),
+            format!("Then delete the whole {root} folder and run the wizard again."),
+        )
+    });
+    steps
+}
+
+/// The name of the console's shortcut for the root folder named `folder`: attempt 1 is the plain
+/// name, each later one adds its number, for when a shortcut of that name is already there.
+pub fn shortcut_name(lang: Lang, folder: &str, attempt: u32) -> String {
+    let label = if attempt <= 1 { folder.to_owned() } else { format!("{folder} {attempt}") };
+    match lang {
+        Lang::Zh => format!("ActingCommand 监控台（{label}）.lnk"),
+        Lang::En => format!("ActingCommand Console ({label}).lnk"),
+    }
+}
+
 /// Why the install stopped: the step (`None` for the checks before anything is written), the
-/// reason, the log when there is one, and whether anything was written.
+/// reason, the log when there is one, whether anything was written, and what was left.
 #[derive(Debug, Clone)]
 pub struct Failure {
     pub step: Option<Step>,
     pub reason: Said,
     pub log: Option<PathBuf>,
     pub wrote: bool,
+    pub left: Left,
 }
 
 impl fmt::Display for Failure {
@@ -185,6 +283,7 @@ struct Run<'a> {
     root: PathBuf,
     lang: Lang,
     wrote: bool,
+    left: Left,
     summary: Vec<(Step, Said)>,
 }
 
@@ -221,6 +320,7 @@ impl Run<'_> {
             reason,
             log: self.log.path().map(Path::to_path_buf),
             wrote: self.wrote,
+            left: self.left.clone(),
         }
     }
 
@@ -287,6 +387,7 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
         root: request.root.clone(),
         lang: request.plan.lang(),
         wrote: false,
+        left: Left::default(),
         summary: Vec::new(),
     };
     let checked = match check(request, &mut run) {
@@ -295,6 +396,11 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
     };
     let plan = &request.plan;
     let root = request.root.clone();
+    let started = plan.options.start_after_install;
+    let paused = started && plan.options.pause_first_start;
+    // The Runtime starts without its instances, which come once the pause holds.
+    let staged = paused && !checked.bound.is_empty();
+    let aliases: Vec<String> = checked.bound.iter().map(|bound| bound.alias.clone()).collect();
 
     run.step(Step::Prepare, |run| prepare(run))?;
     run.step(Step::Programs, |run| lay_programs(run, &checked.set))?;
@@ -308,25 +414,25 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
         Ok(summary)
     })?;
     let config_path = root.join(CONFIG_FILE);
-    run.step(Step::CheckConfig, |run| check_config(run, &part, &config_path, checked.mumu_root.is_some()))?;
+    let full_path = staged.then(|| root.join(FULL_CONFIG));
+    run.step(Step::CheckConfig, |run| {
+        check_config(run, &part, &config_path, checked.mumu_root.is_some(), full_path.as_deref())
+    })?;
     run.step(Step::Adopt, |run| adopt(run))?;
     run.step(Step::ConsoleSettings, |run| {
         let path = console::write_settings(&run.root, run.lang)?;
         Ok(Said::new("已写", "written").with(path.display()))
     })?;
-    let mut shortcuts = Vec::new();
     if plan.options.desktop_shortcut || plan.options.start_menu_shortcut {
-        run.step(Step::Shortcuts, |run| make_shortcuts(run, plan, &mut shortcuts))?;
+        run.step(Step::Shortcuts, |run| make_shortcuts(run, plan))?;
     } else {
         run.skip(Step::Shortcuts, Said::new("没有勾选", "not chosen"))?;
     }
-    let started = plan.options.start_after_install;
     if started {
         run.step(Step::Start, |run| start(run))?;
     } else {
         run.skip(Step::Start, Said::new("没有勾选「装完就启动」", "\"start after install\" was not chosen"))?;
     }
-    let paused = started && plan.options.pause_first_start;
     if paused {
         run.step(Step::Pause, |run| pause(run))?;
     } else if plan.options.pause_first_start {
@@ -334,13 +440,24 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
     } else {
         run.skip(Step::Pause, Said::new("没有勾选", "not chosen"))?;
     }
+    match &full_path {
+        Some(full) => run.step(Step::Bind, |run| bind(run, full, aliases.len()))?,
+        None if aliases.is_empty() => run.skip(Step::Bind, Said::new("没有实例", "no instance"))?,
+        None => run.skip(
+            Step::Bind,
+            Said::new(
+                format!("实例已随第 {} 步的配置就位", Step::CheckConfig.number()),
+                format!("the instances came with the configuration of step {}", Step::CheckConfig.number()),
+            ),
+        )?,
+    }
     if plan.options.watchdog {
         run.step(Step::Watchdog, |run| watchdog(run))?;
     } else {
         run.skip(Step::Watchdog, Said::new("没有勾选（默认关）", "not chosen (off by default)"))?;
     }
     if started {
-        run.step(Step::Status, |run| status(run, paused))?;
+        run.step(Step::Status, |run| status(run, paused, &aliases))?;
     } else {
         run.skip(Step::Status, Said::new("向导没有启动 Runtime", "the wizard did not start the Runtime"))?;
     }
@@ -352,7 +469,7 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
         console: root.join("ui").join("acui.exe"),
         config: config_path,
         log,
-        shortcuts,
+        shortcuts: run.left.shortcuts.clone(),
         started,
         paused,
         watchdog: plan.options.watchdog,
@@ -418,39 +535,39 @@ fn check(request: &Request, run: &mut Run<'_>) -> Result<Checked, Said> {
             return Err(Said::new("没找到 MuMu 模拟器", "no MuMu emulator was found"));
         };
         mumu_root = Some(strip_verbatim(&found.root.to_string_lossy()));
-        run.say(Said::new("MuMu 实例", "MuMu instances").with(
+        run.say(Said::new("MuMu 里的模拟器", "the emulators in MuMu").with(
             discovery
                 .instances
                 .iter()
-                .map(|instance| format!("#{} {}{}", instance.index, instance.name, if instance.running { " (running)" } else { "" }))
+                .map(|instance| {
+                    let port = instance.adb_port.map_or_else(String::new, |port| format!(" adb {port}"));
+                    format!("#{} {}{}{port}", instance.index, instance.name, if instance.running { " (running)" } else { "" })
+                })
                 .collect::<Vec<_>>()
                 .join(", "),
         ))?;
         for wanted in &plan.instances {
             let Some(instance) = discovery.instances.iter().find(|instance| instance.index == wanted.index) else {
                 return Err(Said::new(
-                    format!("MuMu 里没有序号为 {} 的实例", wanted.index),
-                    format!("MuMu has no instance with index {}", wanted.index),
+                    format!("MuMu 里没有序号为 {} 的模拟器", wanted.index),
+                    format!("MuMu has no emulator with index {}", wanted.index),
                 ));
             };
             if let Some((other, alias)) = occupancy::used_by(&scanned, instance) {
-                let whose = other
-                    .root
-                    .as_ref()
-                    .map_or_else(|| format!("pid {}", other.pid), |root| root.display().to_string());
+                let whose = other.name();
                 if !wanted.confirmed_in_use {
                     return Err(Said::new(
                         format!(
-                            "实例 #{}「{}」已被别的 ActingCommand 用着（{whose}，别名 {alias}）；确定要用就在计划里写 confirmed_in_use",
+                            "模拟器 #{}「{}」已被别的 ActingCommand 用着（{whose}，别名 {alias}）；确定要用就在计划里写 confirmed_in_use",
                             instance.index, instance.name
                         ),
                         format!(
-                            "instance #{} \"{}\" is in use by another ActingCommand ({whose}, alias {alias}); to take it anyway the plan says confirmed_in_use",
+                            "emulator #{} \"{}\" is in use by another ActingCommand ({whose}, alias {alias}); to take it anyway the plan says confirmed_in_use",
                             instance.index, instance.name
                         ),
                     ));
                 }
-                run.say(Said::new("确认过：使用另一套正在用的实例", "confirmed: an instance another installation uses is taken")
+                run.say(Said::new("确认过：使用另一套正在用的模拟器", "confirmed: an emulator another installation uses is taken")
                     .with(format!("#{} ({whose}, {alias})", instance.index)))?;
             }
         }
@@ -545,36 +662,40 @@ fn lay_programs(run: &mut Run<'_>, set: &VerifiedSet) -> Result<Said, Said> {
     Ok(Said::new("已铺并核对", "laid out and checked").with(counts.join(", ")))
 }
 
+/// The set's file `placed` copied from `source` to `target`, a new file (its folders created),
+/// then read back against the set's size and SHA-256; returns the bytes written.
+fn copy_checked(source: &Path, target: &Path, placed: &PlacedFile) -> Result<u64, Said> {
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| io_said("建不了文件夹", "the folder cannot be created", parent, error))?;
+    }
+    let mut input = fs::File::open(source).map_err(|error| io_said("读不出安装集里的文件", "a file of the install set cannot be read", source, error))?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target)
+        .map_err(|error| io_said("新建不了文件", "the file cannot be created", target, error))?;
+    io::copy(&mut input, &mut output).map_err(|error| io_said("复制失败", "the copy failed", target, error))?;
+    output.sync_all().map_err(|error| io_said("写盘失败", "the file could not be written to disk", target, error))?;
+    drop(output);
+    let (sha256, size) = sha256_file(target, &mut |_: u64| {})
+        .map_err(|error| io_said("读不回刚写的文件", "the file just written cannot be read back", target, error))?;
+    if size != placed.size || !sha256.eq_ignore_ascii_case(&placed.sha256) {
+        return Err(Said::new("放好的文件与安装集不符", "the file placed does not match the install set").with(format!(
+            "{}: expected {} bytes {}, found {size} bytes {sha256}",
+            target.display(),
+            placed.size,
+            placed.sha256
+        )));
+    }
+    Ok(size)
+}
+
 fn place_vision(run: &mut Run<'_>, set: &VerifiedSet) -> Result<Said, Said> {
     let vision = run.root.join("vision");
     let total = set.vision_bytes;
     let mut done = 0u64;
     for file in &set.set.vision.files {
-        let source = set.dir.join(&file.file);
-        let target = under(&vision, &file.path);
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|error| io_said("建不了文件夹", "the folder cannot be created", parent, error))?;
-        }
-        let mut input = fs::File::open(&source).map_err(|error| io_said("读不出视觉文件", "the vision file cannot be read", &source, error))?;
-        let mut output = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&target)
-            .map_err(|error| io_said("新建不了文件", "the file cannot be created", &target, error))?;
-        io::copy(&mut input, &mut output).map_err(|error| io_said("复制失败", "the copy failed", &target, error))?;
-        output.sync_all().map_err(|error| io_said("写盘失败", "the file could not be written to disk", &target, error))?;
-        drop(output);
-        let (sha256, size) = sha256_file(&target, &mut |_: u64| {})
-            .map_err(|error| io_said("读不回刚写的文件", "the file just written cannot be read back", &target, error))?;
-        if size != file.size || !sha256.eq_ignore_ascii_case(&file.sha256) {
-            return Err(Said::new("视觉文件与安装集不符", "the vision file does not match the install set").with(format!(
-                "{}: expected {} bytes {}, found {size} bytes {sha256}",
-                target.display(),
-                file.size,
-                file.sha256
-            )));
-        }
-        done += size;
+        done += copy_checked(&set.dir.join(&file.file), &under(&vision, &file.path), file)?;
         run.bytes(done, total);
     }
     Ok(Said::new("已放并核对", "placed and checked").with(format!(
@@ -587,10 +708,31 @@ fn place_vision(run: &mut Run<'_>, set: &VerifiedSet) -> Result<Said, Said> {
 fn lay_packs(run: &mut Run<'_>, set: &VerifiedSet, games: &[String]) -> Result<Said, Said> {
     let packages = run.root.join(PACKAGES_DIR);
     let chosen: Vec<_> = games.iter().filter_map(|game| set.bundle(game)).collect();
-    let total: u64 = chosen.iter().map(|bundle| bundle.bytes).sum();
+    let total: u64 = chosen
+        .iter()
+        .map(|bundle| bundle.bytes + bundle.entry.files.iter().map(|file| file.size).sum::<u64>())
+        .sum();
     let mut done = 0u64;
     let mut laid = Vec::new();
     for bundle in chosen {
+        // The zip once more against the set, right before it is laid: the set's folder is not
+        // the wizard's, and the check before the install was a while ago.
+        let (sha256, size) = sha256_file(&bundle.zip, &mut |_: u64| {})
+            .map_err(|error| io_said("读不出标准包 zip", "the standard package zip cannot be read", &bundle.zip, error))?;
+        if size != bundle.entry.size || !sha256.eq_ignore_ascii_case(&bundle.entry.sha256) {
+            return Err(Said::new(
+                "标准包 zip 与安装集不符（核对之后被改过）",
+                "the standard package zip does not match the install set (it changed after the check)",
+            )
+            .with(format!(
+                "{}: expected {} bytes {}, found {size} bytes {sha256}",
+                bundle.zip.display(),
+                bundle.entry.size,
+                bundle.entry.sha256
+            )));
+        }
+        run.say(Said::new("标准包 zip 铺之前又核了一次 SHA-256", "the standard package zip's SHA-256 checked again before it is laid")
+            .with(format!("{} {sha256}", bundle.entry.file)))?;
         let game_root = packages.join(&bundle.entry.game);
         fs::create_dir(&game_root).map_err(|error| io_said("建不了文件夹", "the folder cannot be created", &game_root, error))?;
         let mut archive = Archive::open(&bundle.zip)?;
@@ -611,7 +753,21 @@ fn lay_packs(run: &mut Run<'_>, set: &VerifiedSet, games: &[String]) -> Result<S
             bundle.entry.file,
             bundle.index.packs.len()
         )))?;
-        laid.push(bundle.entry.game.clone());
+        let licenses = run.root.join(LICENSES_DIR).join(&bundle.entry.game);
+        for file in &bundle.entry.files {
+            let target = under(&licenses, &file.path);
+            done += copy_checked(&set.dir.join(&file.file), &target, file)?;
+            run.say(Said::new("已放标准包随带的文件", "a standard package's own file placed").with(format!(
+                "{} ← {}",
+                target.display(),
+                file.file
+            )))?;
+            run.bytes(done, total);
+        }
+        laid.push(match bundle.entry.files.len() {
+            0 => bundle.entry.game.clone(),
+            count => format!("{} (+{count} licence files)", bundle.entry.game),
+        });
     }
     if laid.is_empty() {
         return Ok(Said::new("没有选游戏，不铺包", "no game chosen, nothing laid out"));
@@ -699,7 +855,11 @@ fn write_new(path: &Path, text: &str) -> Result<(), Said> {
         .map_err(|error| io_said("写不进文件", "the file cannot be written", path, error))
 }
 
-fn check_config(run: &mut Run<'_>, part: &Path, config_path: &Path, pinned: bool) -> Result<Said, Said> {
+/// `check-config` of the candidate at `part`, with the MuMu folder the Runtime found pinned when
+/// none was given, then put in place. With `full` (instances and the first-start pause), the
+/// checked candidate is kept there instead, and the same configuration without its instances is
+/// checked and put in place for the first start.
+fn check_config(run: &mut Run<'_>, part: &Path, config_path: &Path, pinned: bool, full: Option<&Path>) -> Result<Said, Said> {
     let root = run.root.clone();
     let mut checked = runtime::check_config(&root, part)?;
     run.say(Said::new("check-config 答复", "check-config answered").with(checked.answer.reason()))?;
@@ -728,8 +888,40 @@ fn check_config(run: &mut Run<'_>, part: &Path, config_path: &Path, pinned: bool
         return Err(Said::new("配置文件已经在了，向导不覆盖", "a configuration file is already there; the wizard never overwrites one")
             .with(config_path.display()));
     }
-    fs::rename(part, config_path).map_err(|error| io_said("配置改不了名", "the configuration cannot be renamed into place", config_path, error))?;
-    let mut summary = Said::new("通过并就位", "passed and in place").with(config_path.display());
+    let mut summary = match full {
+        None => {
+            fs::rename(part, config_path)
+                .map_err(|error| io_said("配置改不了名", "the configuration cannot be renamed into place", config_path, error))?;
+            Said::new("通过并就位", "passed and in place").with(config_path.display())
+        }
+        Some(full) => {
+            if full.exists() {
+                return Err(Said::new("完整配置的文件已经在了，向导不覆盖", "the full configuration's file is already there; the wizard never overwrites one")
+                    .with(full.display()));
+            }
+            fs::rename(part, full)
+                .map_err(|error| io_said("完整配置改不了名", "the full configuration cannot be renamed", full, error))?;
+            run.say(Said::new("带实例的完整配置已通过，先留着，暂停之后再换上", "the full configuration with the instances passed; it waits until the pause holds")
+                .with(full.display()))?;
+            let text = fs::read_to_string(full).map_err(|error| io_said("读不回完整配置", "the full configuration cannot be read back", full, error))?;
+            let document: Value = serde_json::from_str(&text)
+                .map_err(|error| Said::new("完整配置读不懂", "the full configuration does not parse").with(error))?;
+            write_new(part, &config::render(&config::without_instances(&document)))?;
+            let first = runtime::check_config(&root, part)?;
+            run.say(Said::new("check-config 答复（首次启动用的配置，不带实例）", "check-config answered (the first start's configuration, without instances)")
+                .with(first.answer.reason()))?;
+            if !first.passed {
+                return Err(Said::new("Runtime 不接受首次启动用的配置", "the Runtime refuses the first start's configuration").with(first.answer.reason()));
+            }
+            fs::rename(part, config_path)
+                .map_err(|error| io_said("配置改不了名", "the configuration cannot be renamed into place", config_path, error))?;
+            Said::new(
+                "通过；先放不带实例的配置，带实例的完整配置等暂停之后换上",
+                "passed; the configuration without instances is in place, the full one waits for the pause",
+            )
+            .with(format!("{}, {}", config_path.display(), full.display()))
+        }
+    };
     if let Some(found) = mumu {
         summary = summary.with(format!("mumu_root {found}"));
     }
@@ -745,13 +937,12 @@ fn adopt(run: &mut Run<'_>) -> Result<Said, Said> {
     Ok(Said::new("已接管", "taken").with(answer.outcome.code.clone().unwrap_or_default()))
 }
 
-fn make_shortcuts(run: &mut Run<'_>, plan: &Plan, made: &mut Vec<PathBuf>) -> Result<Said, Said> {
+/// The shortcuts asked for, each under a name of its own that names the root folder
+/// ([`shortcut_name`]): a shortcut already there under a name is never touched, the next name is
+/// taken.
+fn make_shortcuts(run: &mut Run<'_>, plan: &Plan) -> Result<Said, Said> {
     let root = run.root.clone();
     let folder = last_segment(&root.to_string_lossy()).unwrap_or("ActingCommand").to_owned();
-    let name = match run.lang {
-        Lang::Zh => format!("ActingCommand 监控台 ({folder}).lnk"),
-        Lang::En => format!("ActingCommand Console ({folder}).lnk"),
-    };
     let target = root.join("ui").join("acui.exe");
     let workdir = root.join("ui");
     let mut wanted = Vec::new();
@@ -761,44 +952,31 @@ fn make_shortcuts(run: &mut Run<'_>, plan: &Plan, made: &mut Vec<PathBuf>) -> Re
     if plan.options.start_menu_shortcut {
         wanted.push(platform::start_menu_programs_dir()?);
     }
-    let mut kept = Vec::new();
+    let mut made = Vec::new();
     for dir in wanted {
-        let lnk = dir.join(&name);
-        if lnk.exists() {
-            run.say(Said::new("同名快捷方式已经在了，没有改动它", "a shortcut of that name is already there and was left as it is")
-                .with(lnk.display()))?;
-            kept.push(lnk.display().to_string());
-            continue;
-        }
+        let Some(lnk) = (1..=99u32)
+            .map(|attempt| dir.join(shortcut_name(run.lang, &folder, attempt)))
+            .find(|lnk| fs::symlink_metadata(lnk).is_err())
+        else {
+            return Err(Said::new("快捷方式的名字都已被占用", "every name for the shortcut is taken").with(dir.display()));
+        };
         platform::create_shortcut(&lnk, &target, &workdir, "ActingCommand 监控台 / ActingCommand Console")?;
+        run.left.shortcuts.push(lnk.clone());
         run.say(Said::new("已建快捷方式", "shortcut created").with(lnk.display()))?;
-        made.push(lnk);
+        made.push(lnk.display().to_string());
     }
-    let mut summary = Said::new("已建", "created").with(
-        made.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join(", "),
-    );
-    if !kept.is_empty() {
-        summary = summary.with(format!("kept {}", kept.join(", ")));
-    }
-    Ok(summary)
+    Ok(Said::new("已建", "created").with(made.join(", ")))
 }
 
 fn start(run: &mut Run<'_>) -> Result<Said, Said> {
+    run.left.started = true;
     let answer = runtime::up(&run.root.clone())?;
     run.say(Said::new("up 答复", "up answered").with(answer.reason()))?;
     if !answer.ok() {
         return Err(Said::new("Runtime 没有起来", "the Runtime did not start").with(answer.reason()));
     }
-    // On a single-location root `up` is the installer's start: its result line carries the
-    // Runtime's process as the outcome's `pid` value and as `start.ready.pid` (Runtime
-    // `crates/lab-rescue/src/install/deploy.rs`, the start's receipt). Neither may be there (a
-    // start that was found already under way); then no pid is said.
-    let pid = answer
-        .member("outcome")
-        .and_then(|outcome| outcome["values"]["pid"].as_u64())
-        .or_else(|| answer.member("start").and_then(|start| start["ready"]["pid"].as_u64()));
     let mut summary = Said::new("已就绪", "ready");
-    if let Some(pid) = pid {
+    if let Some(pid) = answer.line.as_ref().and_then(runtime::started_pid) {
         summary = summary.with(format!("pid {pid}"));
     }
     if answer.outcome.category.as_deref() == Some("warning") {
@@ -813,6 +991,7 @@ fn pause(run: &mut Run<'_>) -> Result<Said, Said> {
     if !answer.ok() {
         return Err(Said::new("没能暂停", "the pause was refused").with(answer.reason()));
     }
+    run.left.paused = true;
     Ok(Said::new(
         "已暂停所有实例；在监控台确认无误后点「全部开始执勤」",
         "every instance is paused; after a look in the console, press \"put all on duty\"",
@@ -820,7 +999,30 @@ fn pause(run: &mut Run<'_>) -> Result<Said, Said> {
     .with(format!("reason {FIRST_START_REASON}")))
 }
 
+/// The full configuration at `full` put in place by the Runtime's `config replace` (bound to its
+/// SHA-256), which restarts the Runtime under the pause; then the file in place read back.
+fn bind(run: &mut Run<'_>, full: &Path, count: usize) -> Result<Said, Said> {
+    let root = run.root.clone();
+    let (sha256, _) = sha256_file(full, &mut |_: u64| {})
+        .map_err(|error| io_said("读不出完整配置", "the full configuration cannot be read", full, error))?;
+    let answer = runtime::config_replace(&root, full, &sha256)?;
+    run.say(Said::new("config replace 答复", "config replace answered").with(answer.reason()))?;
+    if !answer.ok() {
+        return Err(Said::new("没能换上带实例的配置", "the configuration with the instances was not put in place").with(answer.reason()));
+    }
+    let live = root.join(CONFIG_FILE);
+    let (now, _) = sha256_file(&live, &mut |_: u64| {})
+        .map_err(|error| io_said("读不出配置文件", "the configuration cannot be read", &live, error))?;
+    if !now.eq_ignore_ascii_case(&sha256) {
+        return Err(Said::new("就位的配置不是带实例的那一份", "the configuration in place is not the one with the instances")
+            .with(format!("{}: {now}, expected {sha256}", live.display())));
+    }
+    Ok(Said::new("已换上，Runtime 带着实例重启了", "in place; the Runtime restarted with the instances")
+        .with(format!("{count} instances, {}", answer.outcome.code.clone().unwrap_or_default())))
+}
+
 fn watchdog(run: &mut Run<'_>) -> Result<Said, Said> {
+    run.left.watchdog = true;
     let answer = runtime::watchdog_install(&run.root.clone())?;
     run.say(Said::new("watchdog install 答复", "watchdog install answered").with(answer.reason()))?;
     if !answer.ok() {
@@ -829,33 +1031,109 @@ fn watchdog(run: &mut Run<'_>) -> Result<Said, Said> {
     Ok(Said::new("已装", "installed").with(answer.outcome.code.clone().unwrap_or_default()))
 }
 
-fn status(run: &mut Run<'_>, paused: bool) -> Result<Said, Said> {
+/// The last read: the Runtime answers; with the pause, the pause holds and no instance runs a
+/// task (a run under way means the pause came too late: that is a failure, never a success);
+/// every instance the configuration binds is there.
+fn status(run: &mut Run<'_>, paused: bool, aliases: &[String]) -> Result<Said, Said> {
     let answer = runtime::status(&run.root.clone())?;
     run.say(Said::new("status 答复", "status answered").with(crate::child::clipped(&answer.stdout, 3000)))?;
     if !answer.ok() {
         return Err(Said::new("状态读不出", "the status cannot be read").with(answer.reason()));
     }
-    let online = answer.member("daemon").and_then(|daemon| daemon["online"].as_bool()) == Some(true);
-    if !online {
+    let Some(line) = answer.line.as_ref() else {
+        return Err(Said::new("状态读不懂", "the status does not parse").with(answer.reason()));
+    };
+    let read = runtime::read_status(line);
+    if !read.online {
         return Err(Said::new("Runtime 没有应答", "the Runtime does not answer").with(answer.reason()));
     }
-    let instances = answer.member("instances").and_then(Value::as_array).map_or(0, Vec::len);
-    let pause = answer.member("global_pause").map(|pause| {
-        pause["pause_reason"]
-            .as_str()
-            .or_else(|| pause["reason"].as_str())
-            .unwrap_or("?")
-            .to_owned()
-    });
-    if paused && pause.is_none() {
+    if paused && read.global_pause.is_none() {
         return Err(Said::new(
             "Runtime 在线，但状态里看不到首次暂停",
             "the Runtime is online, but its status shows no first-start pause",
         ));
     }
-    let mut summary = Said::new("在线", "online").with(format!("{instances} instances"));
-    if let Some(reason) = pause {
+    if paused && !read.running.is_empty() {
+        return Err(Said::new(
+            "暂停之后仍有任务在跑：ActingCommand 已经在操作游戏，首次暂停没有挡住",
+            "tasks run after the pause: ActingCommand is already operating the games, and the first-start pause did not hold them",
+        )
+        .with(read.running.join(", ")));
+    }
+    let missing: Vec<&str> = aliases
+        .iter()
+        .filter(|alias| !read.aliases.contains(alias))
+        .map(String::as_str)
+        .collect();
+    if !missing.is_empty() {
+        return Err(Said::new("Runtime 的状态里缺少这些实例", "the Runtime's status lacks these instances").with(missing.join(", ")));
+    }
+    let mut summary = Said::new("在线", "online").with(format!("{} instances", read.aliases.len()));
+    if let Some(reason) = read.global_pause {
         summary = summary.with(format!("global pause {reason}"));
     }
     Ok(summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_steps_are_numbered_in_their_order() {
+        assert_eq!(Step::ALL.len(), 15);
+        for (at, step) in Step::ALL.iter().enumerate() {
+            assert_eq!(step.number(), at + 1);
+            assert!(!step.title().zh.is_empty() && !step.title().en.is_empty());
+        }
+        // The instances come after the pause, the watchdog after them.
+        assert!(Step::Pause.number() < Step::Bind.number());
+        assert!(Step::Bind.number() < Step::Watchdog.number());
+        assert!(Step::Watchdog.number() < Step::Status.number());
+    }
+
+    #[test]
+    fn a_failure_names_only_what_the_install_left() {
+        let root = Path::new(r"\\?\X:\Root\");
+        // Nothing but the folder.
+        let nothing = cleanup(root, &Left::default());
+        assert_eq!(nothing.len(), 1);
+        assert!(nothing[0].zh.contains(r"X:\Root 文件夹"), "{}", nothing[0]);
+        assert!(!nothing[0].zh.contains(r"\\?\"));
+        // Everything: the Runtime, its pause, the watchdog, two shortcuts, then the folder.
+        let all = cleanup(
+            root,
+            &Left {
+                started: true,
+                paused: true,
+                watchdog: true,
+                shortcuts: vec![PathBuf::from(r"X:\Desk\a.lnk"), PathBuf::from(r"X:\Menu\b.lnk")],
+            },
+        );
+        assert_eq!(all.len(), 4);
+        assert!(all[0].zh.contains("挂着首次暂停"));
+        assert!(all[0].en.contains(r#""X:\Root\runtime\actingctl.exe" request-shutdown --state-root "X:\Root\state""#), "{}", all[0]);
+        assert!(all[0].zh.contains(r"X:\Root\ui\acui.exe 按「请求关闭」"));
+        assert!(all[1].en.contains(r#""X:\Root\runtime\actingctl.exe" watchdog uninstall --root "X:\Root""#), "{}", all[1]);
+        assert!(all[2].zh.contains(r"X:\Desk\a.lnk、X:\Menu\b.lnk"));
+        assert!(all[2].en.contains(r"X:\Desk\a.lnk, X:\Menu\b.lnk"));
+        assert!(all[3].en.starts_with("Then delete the whole"));
+        // A start without the pause says so.
+        let running = cleanup(root, &Left { started: true, ..Left::default() });
+        assert_eq!(running.len(), 2);
+        assert!(running[0].zh.contains("没有暂停") && running[0].en.contains("not paused"));
+        // Shortcuts alone.
+        let shortcuts = cleanup(root, &Left { shortcuts: vec![PathBuf::from(r"X:\Desk\a.lnk")], ..Left::default() });
+        assert_eq!(shortcuts.len(), 2);
+        assert!(!shortcuts.iter().any(|said| said.en.contains("actingctl")));
+    }
+
+    #[test]
+    fn a_shortcut_names_its_root_folder_and_numbers_a_taken_name() {
+        assert_eq!(shortcut_name(Lang::Zh, "AC2", 1), "ActingCommand 监控台（AC2）.lnk");
+        assert_eq!(shortcut_name(Lang::Zh, "AC2", 2), "ActingCommand 监控台（AC2 2）.lnk");
+        assert_eq!(shortcut_name(Lang::En, "AC2", 1), "ActingCommand Console (AC2).lnk");
+        assert_eq!(shortcut_name(Lang::En, "AC2", 3), "ActingCommand Console (AC2 3).lnk");
+        assert_eq!(shortcut_name(Lang::En, "AC2", 0), "ActingCommand Console (AC2).lnk");
+    }
 }

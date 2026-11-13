@@ -197,6 +197,94 @@ pub fn package_edge(bundle: [u64; 2], runtime: [u64; 2]) -> bool {
     runtime[0] <= bundle[1] && bundle[1] <= runtime[1]
 }
 
+/// The interfaces between the console (U\*) and the Runtime (R\*) of a fresh install, each with
+/// its check (Runtime `contracts/component-interfaces.md`, "Checks per operation"; a fresh
+/// install has no previous Runtime): `runtime-client` U\* ∩ R\*; `ledger` R\*.max in U\*;
+/// `actingd-config` U\* ∩ R\* (the configuration the wizard writes is the Runtime's own
+/// `check-config`'s to judge); `runtime-outcomes` R\*.max in U\*, a side that does not declare it
+/// counting as [0, 0] ("Parse rules"). The other interfaces have no edge between these two:
+/// `package` is the bundles' and the installer's, `install-control` the installer's, and
+/// `install-selection` has none on a single-location root.
+pub const CONSOLE_EDGES: [(&str, Edge); 4] = [
+    ("runtime-client", Edge::Overlap),
+    ("ledger", Edge::RuntimeMaxInConsole),
+    ("actingd-config", Edge::Overlap),
+    ("runtime-outcomes", Edge::RuntimeMaxInConsole),
+];
+
+/// How two ranges of one interface must meet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    /// The two ranges share a revision.
+    Overlap,
+    /// The Runtime's highest revision lies in the console's range.
+    RuntimeMaxInConsole,
+}
+
+/// The interface an absent name counts as ("Parse rules": only those added after v1 have a
+/// default).
+fn default_range(interface: &str) -> Option<[u64; 2]> {
+    (interface == "runtime-outcomes").then_some([0, 0])
+}
+
+/// Whether `declaration` is a v1 declaration at all: its schema and a `speaks` object.
+fn declares(declaration: &Value) -> bool {
+    declaration.get("schema_version").and_then(Value::as_str) == Some(INTERFACES_SCHEMA)
+        && declaration.get("speaks").is_some_and(Value::is_object)
+}
+
+/// Every edge of [`CONSOLE_EDGES`] the console's declaration (its `BUILD-MANIFEST.json`
+/// `interfaces`) and the Runtime's fail, in a person's words with both ranges; a missing or
+/// invalid declaration is one problem.
+pub fn console_problems(console: Option<&Value>, runtime: Option<&Value>) -> Vec<Said> {
+    let mut problems = Vec::new();
+    for (side, declaration) in [("监控台", console), ("Runtime", runtime)] {
+        if !declaration.is_some_and(declares) {
+            let en = if side == "Runtime" { "the Runtime" } else { "the console" };
+            problems.push(Said::new(
+                format!("{side}的 BUILD-MANIFEST.json 没有有效的接口声明"),
+                format!("{en}'s BUILD-MANIFEST.json declares no valid interfaces"),
+            ));
+        }
+    }
+    let (Some(console), Some(runtime)) = (console, runtime) else {
+        return problems;
+    };
+    if !problems.is_empty() {
+        return problems;
+    }
+    for (interface, edge) in CONSOLE_EDGES {
+        let range = |declaration: &Value| speaks(declaration, interface).or_else(|| default_range(interface));
+        let (Some(ours), Some(theirs)) = (range(console), range(runtime)) else {
+            problems.push(
+                Said::new(
+                    format!("监控台或 Runtime 没有声明 {interface} 接口"),
+                    format!("the console or the Runtime declares no {interface} interface"),
+                )
+                .with(interface),
+            );
+            continue;
+        };
+        let met = match edge {
+            Edge::Overlap => ours[0] <= theirs[1] && theirs[0] <= ours[1],
+            Edge::RuntimeMaxInConsole => ours[0] <= theirs[1] && theirs[1] <= ours[1],
+        };
+        if !met {
+            problems.push(
+                Said::new(
+                    format!("监控台和这一版 Runtime 的 {interface} 接口不配套"),
+                    format!("the console and this Runtime do not meet on {interface}"),
+                )
+                .with(format!(
+                    "console [{}, {}], Runtime [{}, {}]",
+                    ours[0], ours[1], theirs[0], theirs[1]
+                )),
+            );
+        }
+    }
+    problems
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +353,68 @@ mod tests {
         assert!(package_edge([10, 10], runtime));
         assert!(!package_edge([11, 11], runtime));
         assert!(!package_edge([1, 2], runtime));
+    }
+
+    fn declaration(speaks: Value) -> Value {
+        json!({"schema_version": INTERFACES_SCHEMA, "speaks": speaks})
+    }
+
+    /// The UI's and the Runtime's declarations of 0.12.58 (this repository's
+    /// crates/acui-setup/component-interfaces.json and the Runtime's
+    /// distribution/windows/component-interfaces.json).
+    fn console() -> Value {
+        declaration(json!({
+            "actingd-config": [5, 29], "install-selection": [1, 1], "install-control": [0, 1],
+            "ledger": [3, 8], "runtime-client": [3, 8], "package": [1, 2], "runtime-outcomes": [1, 1]
+        }))
+    }
+
+    fn runtime() -> Value {
+        declaration(json!({
+            "actingd-config": [5, 29], "install-selection": [1, 1], "install-control": [0, 1],
+            "ledger": [3, 8], "runtime-client": [3, 8], "package": [3, 10], "runtime-outcomes": [1, 1]
+        }))
+    }
+
+    #[test]
+    fn the_console_and_the_runtime_meet_on_their_four_edges() {
+        // The console's `package` [1, 2] is no edge with the Runtime's [3, 10]: it is the
+        // bundles' and the installer's.
+        assert_eq!(console_problems(Some(&console()), Some(&runtime())), Vec::<Said>::new());
+        fn with(side: fn() -> Value, interface: &str, range: Value) -> Value {
+            let mut declaration = side();
+            declaration["speaks"][interface] = range;
+            declaration
+        }
+        let fails = |console: Value, runtime: Value, interface: &str| {
+            let problems = console_problems(Some(&console), Some(&runtime));
+            assert_eq!(problems.len(), 1, "{interface}: {problems:?}");
+            assert!(problems[0].en.contains(interface), "{problems:?}");
+        };
+        // runtime-client and actingd-config: the ranges overlap, or the edge fails.
+        fails(with(console, "runtime-client", json!([1, 2])), runtime(), "runtime-client");
+        fails(console(), with(runtime, "actingd-config", json!([30, 31])), "actingd-config");
+        assert!(console_problems(Some(&with(console, "runtime-client", json!([8, 9]))), Some(&runtime())).is_empty());
+        // ledger: the Runtime's highest revision in the console's range, not a mere overlap.
+        fails(console(), with(runtime, "ledger", json!([3, 9])), "ledger");
+        assert!(console_problems(Some(&with(console, "ledger", json!([8, 8]))), Some(&runtime())).is_empty());
+        // runtime-outcomes: undeclared counts as [0, 0].
+        let mut undeclared = console();
+        undeclared["speaks"].as_object_mut().unwrap().remove("runtime-outcomes");
+        fails(undeclared, runtime(), "runtime-outcomes");
+        // A v1 interface missing on either side.
+        let mut missing = runtime();
+        missing["speaks"].as_object_mut().unwrap().remove("ledger");
+        fails(console(), missing, "ledger");
+    }
+
+    #[test]
+    fn a_console_without_a_declaration_is_refused() {
+        assert_eq!(console_problems(None, Some(&runtime())).len(), 1);
+        assert_eq!(console_problems(Some(&runtime()), None).len(), 1);
+        assert_eq!(console_problems(None, None).len(), 2);
+        let other = json!({"schema_version": "actingcommand.component-interfaces.v2", "speaks": {}});
+        assert_eq!(console_problems(Some(&other), Some(&runtime())).len(), 1);
+        assert_eq!(console_problems(Some(&json!({"schema_version": INTERFACES_SCHEMA})), Some(&runtime())).len(), 1);
     }
 }

@@ -31,7 +31,7 @@ use acui_wizard::platform;
 use acui_wizard::root::{check_root, is_installation_root, plain_size, text_issues, RootIssue};
 use acui_wizard::set::{self, InstallSet, SetError, SetFault, VerifiedSet, SET_FILE};
 use acui_wizard::winpath::strip_verbatim;
-use acui_wizard::{install, Done, Event, Failure, Lang, Request, Said, Step};
+use acui_wizard::{cleanup, install, Done, Event, Failure, Lang, Left, Request, Said, Step};
 
 use crate::desktop;
 use labels::{fill, Labels, EN, ZH};
@@ -943,12 +943,7 @@ impl App {
                 .instances
                 .iter()
                 .map(|instance| {
-                    let taken = occupancy::used_by(&others, instance).map(|(other, _)| {
-                        other
-                            .root
-                            .as_ref()
-                            .map_or_else(|| format!("pid {}", other.pid), |root| root.display().to_string())
-                    });
+                    let taken = occupancy::used_by(&others, instance).map(|(other, _)| other.name());
                     // Nothing is ticked for the person: they tick the emulators they hand over.
                     // A search again keeps what they ticked.
                     let before = previous.iter().find(|(index, _, _)| *index == instance.index);
@@ -1145,6 +1140,7 @@ impl App {
                 reason: Said::new(fill(ZH.worker_failed, &[&error]), fill(EN.worker_failed, &[&error])),
                 log: None,
                 wrote: false,
+                left: Left::default(),
             };
             self.install_finished(Err(failure));
             return;
@@ -1250,7 +1246,8 @@ fn can_next(state: &State) -> bool {
         GAMES => state.games.iter().any(|(_, picked)| *picked),
         EMULATORS => matches!(state.emu, EmuState::Done { .. }),
         ACCOUNTS => account_problems(state).is_empty(),
-        OPTIONS => options_problem(&state.options).is_none(),
+        // The options have no rule among themselves (`acui_wizard::plan::plan_problems`).
+        OPTIONS => true,
         CONFIRM => matches!(state.install, InstallState::NotStarted),
         _ => false,
     }
@@ -1346,6 +1343,7 @@ fn paint_files(state: &State, wiz: &Wiz<'_>) {
             error = match &failure.fault {
                 SetFault::Damaged { file } => fill(l.set_damaged, &[file]),
                 SetFault::Mismatch { game } => fill(l.set_mismatch, &[game]),
+                SetFault::ConsoleMismatch => l.set_console_mismatch.to_owned(),
                 SetFault::Unusable => l.set_unusable.to_owned(),
             };
             detail = fill(l.details, &[failure.said.in_lang(lang)]);
@@ -1384,6 +1382,7 @@ fn root_line(line: &RootLine, l: &Labels) -> (i32, String) {
                 RootIssue::NotEmpty => l.root_not_empty.to_owned(),
                 RootIssue::Unreadable(_) => l.root_unreadable.to_owned(),
                 RootIssue::InsideRoot(other) => fill(l.root_inside, &[other]),
+                RootIssue::PerUserFolder(folder) => fill(l.root_per_user, &[folder]),
                 RootIssue::NoSpace { needed, free } => fill(l.root_no_space, &[&plain_size(*needed), &plain_size(*free)]),
                 RootIssue::SpaceUnknown(_) => l.root_space_unknown.to_owned(),
             },
@@ -1463,12 +1462,7 @@ fn paint_emulators(state: &State, wiz: &Wiz<'_>) {
         let unknown: Vec<String> = others
             .iter()
             .filter(|other| other.instances.is_none())
-            .map(|other| {
-                other
-                    .root
-                    .as_ref()
-                    .map_or_else(|| format!("pid {}", other.pid), |root| root.display().to_string())
-            })
+            .map(|other| other.name())
             .collect();
         if !unknown.is_empty() {
             caution = fill(l.emu_unknown, &[&unknown.join(l.list_separator)]);
@@ -1621,19 +1615,13 @@ fn account_problems(state: &State) -> Vec<String> {
     problems
 }
 
-fn options_problem(options: &PlanOptions) -> Option<()> {
-    (options.watchdog && options.pause_first_start && !options.start_after_install).then_some(())
-}
-
 fn paint_options(state: &State, wiz: &Wiz<'_>) {
-    let l = state.labels();
     let options = &state.options;
     wiz.set_opt_desktop(options.desktop_shortcut);
     wiz.set_opt_start_menu(options.start_menu_shortcut);
     wiz.set_opt_watchdog(options.watchdog);
     wiz.set_opt_start(options.start_after_install);
     wiz.set_opt_pause(options.pause_first_start);
-    wiz.set_options_problem(if options_problem(options).is_some() { l.options_conflict } else { "" }.into());
 }
 
 fn plan_of(state: &State) -> Plan {
@@ -1728,8 +1716,26 @@ fn paint_confirm(state: &State, wiz: &Wiz<'_>) {
         key: l.key_options.into(),
         value: if chosen.is_empty() { l.options_none.to_owned() } else { chosen.join(l.list_separator) }.into(),
     });
-    summary.push(KeyValue { key: l.key_folders.into(), value: l.folders_value.into() });
-    summary.push(KeyValue { key: l.key_files.into(), value: l.files_value.into() });
+    // What the install will make of these choices: a licence folder for a game that brings
+    // licence files, and the full configuration kept while the first start runs without it.
+    let licences = state.verified().is_some_and(|set| {
+        state
+            .chosen_games()
+            .iter()
+            .any(|game| set.bundle(&game.game).is_some_and(|bundle| !bundle.entry.files.is_empty()))
+    });
+    let mut folders = l.folders_value.to_owned();
+    if licences {
+        folders.push_str(l.list_separator);
+        folders.push_str(l.folder_licenses);
+    }
+    let mut files = l.files_value.to_owned();
+    if !state.accounts.is_empty() && options.start_after_install && options.pause_first_start {
+        files.push_str(l.list_separator);
+        files.push_str(l.file_full_config);
+    }
+    summary.push(KeyValue { key: l.key_folders.into(), value: folders.into() });
+    summary.push(KeyValue { key: l.key_files.into(), value: files.into() });
     wiz.set_summary(model(summary));
     wiz.set_confirm_note(fill(l.confirm_note, &[&root]).into());
 }
@@ -1783,11 +1789,17 @@ fn paint_finish(state: &State, wiz: &Wiz<'_>) {
             wiz.set_finish_body(fill(body, &[&root]).into());
             wiz.set_finish_next(if done.paused { l.finish_next } else { l.finish_next_plain }.into());
             wiz.set_finish_more(l.finish_more.into());
-            let note = if done.watchdog {
+            let mut note = String::new();
+            if !done.shortcuts.is_empty() {
+                let made: Vec<String> = done.shortcuts.iter().map(|path| path.display().to_string()).collect();
+                note.push_str(&fill(l.finish_shortcuts, &[&made.join(l.list_separator)]));
+                note.push('\n');
+            }
+            note.push_str(&if done.watchdog {
                 fill(l.uninstall_note_watchdog, &[&root, &root, &root])
             } else {
                 fill(l.uninstall_note, &[&root])
-            };
+            });
             wiz.set_finish_note(note.into());
             wiz.set_finish_transcript(SharedString::new());
             wiz.set_finish_has_log(true);
@@ -1798,7 +1810,18 @@ fn paint_finish(state: &State, wiz: &Wiz<'_>) {
                 .map_or(l.failed_checks_step, |step| l.install_steps.get(step.number().saturating_sub(1)).copied().unwrap_or(""));
             wiz.set_finished_ok(false);
             wiz.set_finish_body(fill(l.failed_at, &[step, &said(&failure.reason, lang)]).into());
-            wiz.set_finish_next(if failure.wrote { fill(l.failed_kept, &[&root, &root]) } else { l.failed_nothing.to_owned() }.into());
+            // What the install left, in the order a person undoes it, then the folder: only
+            // what it did (`acui_wizard::cleanup`).
+            let next = if failure.wrote {
+                let mut text = fill(l.failed_kept, &[&root]);
+                for (at, line) in cleanup(&state.root(), &failure.left).iter().enumerate() {
+                    text.push_str(&format!("\n{}. {}", at + 1, line.in_lang(lang)));
+                }
+                text
+            } else {
+                l.failed_nothing.to_owned()
+            };
+            wiz.set_finish_next(next.into());
             wiz.set_finish_more(SharedString::new());
             wiz.set_finish_note(SharedString::new());
             wiz.set_finish_transcript(transcript(state, failure).into());
@@ -1844,7 +1867,7 @@ fn root_report(text: &str, needed: u64) -> RootReport {
         }
     }
     for issue in &issues {
-        if matches!(issue, RootIssue::InsideRoot(_)) {
+        if matches!(issue, RootIssue::InsideRoot(_) | RootIssue::PerUserFolder(_)) {
             lines.push(RootLine::Issue(issue.clone()));
         }
     }

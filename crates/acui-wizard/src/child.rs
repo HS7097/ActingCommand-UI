@@ -2,11 +2,11 @@
 //! The programs the wizard runs: always without a window, with no input, both output streams
 //! read whole on threads of their own, within a time limit. A read-only child past its time is
 //! ended; a child that changes the installation is never ended (it is left running and the
-//! install stops, saying so). The variables that would make a Runtime program read another
-//! installation's selection, change its output's detail or claim another initiator are removed
-//! from every child's environment.
+//! install stops, saying so). Every variable of the Runtime's and the Lab's own
+//! (`ACTINGCOMMAND_…`, `ACTINGLAB_…`) is removed from every child's environment, whatever the
+//! wizard was started with ([`cleared_variables`]); a child gets only those its [`Spec`] sets.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -26,19 +26,46 @@ const OUTPUT_LIMIT: usize = 8 << 20;
 /// them would hold them).
 const PIPE_GRACE: Duration = Duration::from_secs(30);
 
-/// Removed from every child's environment: the A/B selection a launcher hands down (Runtime
-/// `crates/actingcommand-contract/src/installation.rs` `INSTALL_ROOT_ENV`,
-/// `INSTALL_SELECTION_ENV`), the console's observer mode (`acui-installation` `OBSERVER_UI_ENV`),
-/// the outcome detail switch (`crates/lab-ops/src/cli_line.rs` `DETAIL_VARIABLE`), and the
-/// initiator and its detached-run marker (`contracts/lab-two-entries.md` §4.2).
-const CLEARED: [&str; 6] = [
-    "ACTINGCOMMAND_INSTALL_ROOT",
-    "ACTINGCOMMAND_INSTALL_SELECTION",
-    "ACTINGCOMMAND_OBSERVER_UI",
-    "ACTINGCOMMAND_DETAIL",
-    "ACTINGCOMMAND_INITIATOR",
-    "ACTINGCOMMAND_DETACHED_RUN",
-];
+/// The prefixes of the variables the Runtime's programs and the Lab read. Among them: the state
+/// root a Lab core command takes over its own root's whenever it is set
+/// (`ACTINGCOMMAND_RUNTIME_STATE_ROOT`, which an MCP server's child and the tests set; Runtime
+/// `apps/actinglab/src/cli_module/place.rs` `place`), the A/B selection a launcher hands down
+/// (`ACTINGCOMMAND_INSTALL_ROOT`, `ACTINGCOMMAND_INSTALL_SELECTION`), the console's observer
+/// mode, the outcome detail switch, the initiator and its detached-run marker
+/// (`contracts/lab-two-entries.md` §4.2), the Lab's configuration and session folders
+/// (`ACTINGLAB_CONFIG_PATH`, `ACTINGLAB_SESSION_STATE_DIR`) and the test switches. A list of
+/// names would miss the next one a Runtime adds; the prefixes do not.
+pub const CLEARED_PREFIXES: [&str; 2] = ["ACTINGCOMMAND_", "ACTINGLAB_"];
+
+/// The names among `names` (an environment's variable names) a child of the wizard must not
+/// inherit: each that begins with one of [`CLEARED_PREFIXES`], ASCII case folded as Windows
+/// folds variable names. What the wizard sets for a child itself (the initiator) is set again
+/// after these are removed.
+pub fn cleared_variables(names: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
+    names
+        .into_iter()
+        .filter(|name| {
+            let text = name.to_string_lossy();
+            CLEARED_PREFIXES.iter().any(|prefix| {
+                text.len() >= prefix.len()
+                    && text.is_char_boundary(prefix.len())
+                    && text[..prefix.len()].eq_ignore_ascii_case(prefix)
+            })
+        })
+        .collect()
+}
+
+/// [`cleared_variables`] of this process's own environment.
+pub fn inherited_to_clear() -> Vec<OsString> {
+    cleared_variables(std::env::vars_os().map(|(name, _)| name))
+}
+
+/// Removes every variable of [`inherited_to_clear`] from `command`.
+pub fn clear_inherited(command: &mut Command) {
+    for name in inherited_to_clear() {
+        command.env_remove(OsStr::new(&name));
+    }
+}
 
 /// What to do with a child that is still running at its time limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,9 +167,7 @@ pub fn run(spec: &Spec, timeout: Duration, on_timeout: OnTimeout) -> Result<Outp
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for name in CLEARED {
-        command.env_remove(name);
-    }
+    clear_inherited(&mut command);
     for (name, value) in &spec.env {
         command.env(name, value);
     }
@@ -353,5 +378,43 @@ mod tests {
         assert_eq!(json_line("no json here\n[1,2]\n"), None);
         assert_eq!(json_line("\u{feff}{\"a\":1}"), Some(json!({"a": 1})));
         assert_eq!(outcome_of(&json!({"a": 1})), Outcome::default());
+    }
+
+    #[test]
+    fn every_runtime_and_lab_variable_is_cleared_by_its_prefix() {
+        let names = [
+            "PATH",
+            "ACTINGCOMMAND_RUNTIME_STATE_ROOT",
+            "ACTINGCOMMAND_INSTALL_ROOT",
+            "ACTINGCOMMAND_INITIATOR",
+            "actingcommand_detail",
+            "ACTINGLAB_CONFIG_PATH",
+            "ActingLab_Session_State_Dir",
+            "ACTINGCOMMAND_A_LATER_ONE",
+            "ACTINGCOMMANDX",
+            "ACTINGLAB",
+            "MY_ACTINGCOMMAND_STATE",
+            "",
+            "ACTINGCOMMAND_",
+        ];
+        let cleared = cleared_variables(names.iter().map(OsString::from));
+        let cleared: Vec<&str> = cleared.iter().map(|name| name.to_str().unwrap()).collect();
+        assert_eq!(
+            cleared,
+            vec![
+                "ACTINGCOMMAND_RUNTIME_STATE_ROOT",
+                "ACTINGCOMMAND_INSTALL_ROOT",
+                "ACTINGCOMMAND_INITIATOR",
+                "actingcommand_detail",
+                "ACTINGLAB_CONFIG_PATH",
+                "ActingLab_Session_State_Dir",
+                "ACTINGCOMMAND_A_LATER_ONE",
+                "ACTINGCOMMAND_",
+            ]
+        );
+        // A name with a character of more than one byte where the prefix ends is no match and
+        // no panic.
+        assert!(cleared_variables([OsString::from("ACTINGLAB\u{e9}X")]).is_empty());
+        assert!(cleared_variables([OsString::from("ACTINGCOMMAN\u{e9}_X")]).is_empty());
     }
 }

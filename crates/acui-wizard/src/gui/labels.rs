@@ -54,6 +54,8 @@ pub struct Labels {
     pub set_not_here: &'static str,
     pub set_damaged: &'static str,
     pub set_mismatch: &'static str,
+    /// The console and the Runtime of the set do not go together.
+    pub set_console_mismatch: &'static str,
     pub set_unusable: &'static str,
     pub choose_folder: &'static str,
     pub set_dialog_title: &'static str,
@@ -80,6 +82,8 @@ pub struct Labels {
     pub root_unreadable: &'static str,
     pub root_inside: &'static str,
     pub root_contains: &'static str,
+    /// ActingCommand's per-user folder for settings and logs, or a folder in it or around it.
+    pub root_per_user: &'static str,
     pub root_no_space: &'static str,
     pub root_space_unknown: &'static str,
     pub root_folders: &'static str,
@@ -137,7 +141,6 @@ pub struct Labels {
     pub opt_start: &'static str,
     pub opt_pause: &'static str,
     pub opt_pause_note: &'static str,
-    pub options_conflict: &'static str,
 
     // 8 Confirm.
     pub key_root: &'static str,
@@ -150,11 +153,15 @@ pub struct Labels {
     pub options_short: [&'static str; 5],
     pub options_none: &'static str,
     pub folders_value: &'static str,
+    /// After the folders, when a game chosen comes with licence files.
+    pub folder_licenses: &'static str,
     pub files_value: &'static str,
+    /// After the files, when the instances come after the first-start pause.
+    pub file_full_config: &'static str,
     pub confirm_note: &'static str,
 
     // 9 Install, in the order the install runs them (`Step::ALL`).
-    pub install_steps: [&'static str; 14],
+    pub install_steps: [&'static str; 15],
     pub install_skipped: &'static str,
     pub install_pre: &'static str,
 
@@ -164,6 +171,8 @@ pub struct Labels {
     pub finish_installed: &'static str,
     pub finish_next: &'static str,
     pub finish_next_plain: &'static str,
+    /// The shortcuts the install created, listed.
+    pub finish_shortcuts: &'static str,
     pub open_console: &'static str,
     pub open_folder: &'static str,
     /// How to add instances later: the console cannot add them yet.
@@ -261,6 +270,7 @@ pub const ZH: Labels = Labels {
     set_not_here: "这个文件夹里没有 install-set.json。请选择安装文件所在的那个文件夹。",
     set_damaged: "{} 不完整或被改动过。请重新下载整个安装包，再运行向导。",
     set_mismatch: "安装文件里的 {} 资源和这一版 ActingCommand 不配套。请向提供安装包的人要配套的版本。",
+    set_console_mismatch: "安装文件里的监控台和这一版 ActingCommand 不配套。请向提供安装包的人要配套的版本。",
     set_unusable: "这些安装文件向导读不懂，可能不是给这个向导用的。请向提供安装包的人要一份新的。",
     choose_folder: "选择文件夹…",
     set_dialog_title: "选择安装文件所在的文件夹",
@@ -286,9 +296,10 @@ pub const ZH: Labels = Labels {
     root_unreadable: "这个位置打不开，请换个地方。",
     root_inside: "这个位置在另一套 ActingCommand（{}）里面，请换个地方。",
     root_contains: "这个文件夹里面已经有一套 ActingCommand（{}），请换个地方。",
+    root_per_user: "这里是 ActingCommand 放设置和日志的文件夹（{}），或者在它里面、包着它。请换个地方，比如另建一个文件夹。",
     root_no_space: "磁盘空间不够：需要约 {}，只剩 {}。",
     root_space_unknown: "读不出这块磁盘还剩多少空间，请换个地方。",
-    root_folders: "向导会在里面建这些文件夹：runtime（程序）、tools（工具）、ui（监控台）、packages（游戏资源）、vision（文字识别）、state（运行记录）。",
+    root_folders: "向导会在里面建这些文件夹：runtime（程序）、tools（工具）、ui（监控台）、packages（游戏资源）、vision（文字识别）、state（运行记录）；游戏资源带着许可文件时，还有 licenses（许可文件）。",
 
     games_body: "勾选要让 ActingCommand 代你操作的游戏。没勾的以后可以再装。",
     games_row_one: "{} · {} 个区服",
@@ -304,7 +315,7 @@ pub const ZH: Labels = Labels {
     emu_take_ask: "这台模拟器已经交给另一套 ActingCommand 了。两套同时操作同一台会互相打架。确定也交给这一套吗？",
     emu_take_yes: "仍然勾选",
     emu_take_no: "不勾",
-    emu_unknown: "这台电脑上还有一套 ActingCommand 在运行（{}），向导读不出它在用哪几台模拟器。勾选前请自己确认没有和它重复。",
+    emu_unknown: "这台电脑上还有一套 ActingCommand（{}），向导读不出它在用哪几台模拟器。勾选前请自己确认没有和它重复。",
     search_again: "重新查找",
     skip_step: "跳过这一步",
     emu_absent: "没有找到 MuMu 模拟器。可以先装好模拟器再点「重新查找」；也可以跳过这一步，先装 ActingCommand，以后再添加实例（实例：一台模拟器里登录好的一个游戏）。",
@@ -338,7 +349,6 @@ pub const ZH: Labels = Labels {
     opt_start: "装完马上启动 ActingCommand",
     opt_pause: "第一次启动时，先让所有实例暂停",
     opt_pause_note: "建议勾选。在监控台里看过每个实例都正常后，按「全部开始执勤」，ActingCommand 才会开始操作游戏。",
-    options_conflict: "勾了「开机后自动运行」又要「先让所有实例暂停」时，请同时勾选「装完马上启动」：不然 ActingCommand 会在一分钟内自己启动，来不及先暂停。",
 
     key_root: "安装位置",
     key_accounts: "实例",
@@ -356,7 +366,9 @@ pub const ZH: Labels = Labels {
     ],
     options_none: "都不选",
     folders_value: "runtime、tools、ui、packages、vision、state",
+    folder_licenses: "licenses",
     files_value: "actingd.config.json（设置）、acui.toml（监控台设置）、install-wizard.log（安装记录）",
+    file_full_config: "install-wizard.config.json（带实例的设置，暂停之后换上）",
     confirm_note: "按「开始安装」后，向导会把文件写进 {}。安装时请不要关窗口。开始以后就不能再回到前面几页了。",
 
     install_steps: [
@@ -372,6 +384,7 @@ pub const ZH: Labels = Labels {
         "建立快捷方式",
         "启动 ActingCommand",
         "先让所有实例暂停",
+        "接上实例",
         "设置开机自动运行",
         "确认 ActingCommand 已在运行",
     ],
@@ -383,6 +396,7 @@ pub const ZH: Labels = Labels {
     finish_installed: "ActingCommand 已装到 {}。打开监控台后按「启动」即可运行。",
     finish_next: "下一步：打开监控台，看一看每个实例的状态；确认没问题后按「全部开始执勤」。",
     finish_next_plain: "下一步：打开监控台，看一看每个实例的状态。",
+    finish_shortcuts: "已建快捷方式：{}",
     open_console: "打开监控台",
     open_folder: "打开安装文件夹",
     finish_more: "以后要加实例：监控台里现在还不能直接添加。可以再运行一次安装向导，装到另一个文件夹（那是另一套 ActingCommand，和这一套分开运行）；也可以等以后的新版支持。",
@@ -390,7 +404,7 @@ pub const ZH: Labels = Labels {
     uninstall_note_watchdog: "卸载时，先运行 \"{}\\runtime\\actingctl.exe\" watchdog uninstall --root \"{}\" 关掉开机后自动运行，再删除整个 {} 文件夹即可。",
     failed_at: "在「{}」这一步出了问题：{}。",
     failed_checks_step: "写入前的检查",
-    failed_kept: "已经写进 {} 的文件都原样留着，没有删除。你可以把下面的错误信息和安装记录发给提供安装包的人；也可以删除整个 {} 文件夹，再重新运行向导。",
+    failed_kept: "已经写进 {} 的文件都原样留着，向导没有删除任何东西。可以把下面的错误信息和安装记录发给提供安装包的人。要重新安装，请依次：",
     failed_nothing: "还没有写入任何文件。可以把下面的错误信息发给提供安装包的人，或者改好以后重新运行向导。",
     copy_error: "复制错误信息",
     open_log: "打开安装记录",
@@ -452,6 +466,7 @@ pub const EN: Labels = Labels {
     set_not_here: "This folder has no install-set.json. Choose the folder that holds the setup files.",
     set_damaged: "{} is incomplete or has been changed. Download the whole setup package again and rerun the wizard.",
     set_mismatch: "The {} resources in this package do not match this version of ActingCommand. Ask whoever gave you the package for a matching one.",
+    set_console_mismatch: "The console in this package does not match this version of ActingCommand. Ask whoever gave you the package for a matching one.",
     set_unusable: "The wizard cannot read these setup files; they may not be meant for it. Ask whoever gave you the package for a new one.",
     choose_folder: "Choose folder…",
     set_dialog_title: "Choose the folder that holds the setup files",
@@ -477,9 +492,10 @@ pub const EN: Labels = Labels {
     root_unreadable: "This place cannot be opened. Choose another place.",
     root_inside: "This location is inside another ActingCommand ({}). Choose another place.",
     root_contains: "This folder already contains an ActingCommand ({}). Choose another place.",
+    root_per_user: "This is the folder where ActingCommand keeps its settings and logs ({}), or lies in it or holds it. Choose another place, such as a new folder of its own.",
     root_no_space: "Not enough disk space: about {} is needed and {} is free.",
     root_space_unknown: "The free space on this disk cannot be read. Choose another place.",
-    root_folders: "The wizard creates these folders inside it: runtime (programs), tools, ui (console), packages (game resources), vision (text recognition), state (records).",
+    root_folders: "The wizard creates these folders inside it: runtime (programs), tools, ui (console), packages (game resources), vision (text recognition), state (records); and licenses, when the game resources come with licence files.",
 
     games_body: "Tick the games you want ActingCommand to play for you. You can add the others later.",
     games_row_one: "{} · {} server",
@@ -495,7 +511,7 @@ pub const EN: Labels = Labels {
     emu_take_ask: "This emulator already belongs to another ActingCommand. Two of them operating the same emulator will get in each other's way. Hand it to this one as well?",
     emu_take_yes: "Tick anyway",
     emu_take_no: "Leave it",
-    emu_unknown: "Another ActingCommand is running on this computer ({}), and the wizard cannot tell which emulators it uses. Before you tick one, make sure it is not one of those.",
+    emu_unknown: "There is another ActingCommand on this computer ({}), and the wizard cannot tell which emulators it uses. Before you tick one, make sure it is not one of those.",
     search_again: "Search again",
     skip_step: "Skip this step",
     emu_absent: "MuMu was not found. Install it and press Search again, or skip this step, install ActingCommand now and add instances later (an instance is one signed-in game in one emulator).",
@@ -510,7 +526,7 @@ pub const EN: Labels = Labels {
     col_name: "Name",
     col_game: "Game",
     col_server: "Server",
-    name_hint: "The name is just for you to recognise it, such as \"Arknights-Global\".",
+    name_hint: "The name is just for you to recognise it, such as \"Arknights-Bilibili\".",
     pick: "Choose…",
     advanced: "Advanced",
     touch_label: "Touch method",
@@ -529,7 +545,6 @@ pub const EN: Labels = Labels {
     opt_start: "Start ActingCommand when setup finishes",
     opt_pause: "On the first start, keep every instance paused",
     opt_pause_note: "Recommended. ActingCommand starts playing only after you check every instance in the console and press \"Put All on Duty\".",
-    options_conflict: "With \"Run automatically after sign-in\" and \"keep every instance paused\" both on, also tick \"Start ActingCommand when setup finishes\": otherwise ActingCommand starts by itself within a minute, before the pause can be set.",
 
     key_root: "Location",
     key_accounts: "Instances",
@@ -547,7 +562,9 @@ pub const EN: Labels = Labels {
     ],
     options_none: "None",
     folders_value: "runtime, tools, ui, packages, vision, state",
+    folder_licenses: "licenses",
     files_value: "actingd.config.json (settings), acui.toml (console settings), install-wizard.log (setup log)",
+    file_full_config: "install-wizard.config.json (the settings with the instances, put in place after the pause)",
     confirm_note: "When you press Install, the wizard writes files into {}. Keep this window open while it installs. Once it starts you cannot go back to the earlier pages.",
 
     install_steps: [
@@ -563,6 +580,7 @@ pub const EN: Labels = Labels {
         "Create shortcuts",
         "Start ActingCommand",
         "Keep every instance paused",
+        "Connect the instances",
         "Set up automatic start",
         "Confirm ActingCommand is running",
     ],
@@ -574,6 +592,7 @@ pub const EN: Labels = Labels {
     finish_installed: "ActingCommand is installed in {}. Open the console and press Start to run it.",
     finish_next: "Next: open the console and check each instance; when all looks right, press \"Put All on Duty\".",
     finish_next_plain: "Next: open the console and check each instance.",
+    finish_shortcuts: "Shortcuts created: {}",
     open_console: "Open console",
     open_folder: "Open folder",
     finish_more: "To add instances later: the console cannot add them yet. Run this wizard again and install into another folder (that is a second ActingCommand, running apart from this one), or wait for a later version that can.",
@@ -581,7 +600,7 @@ pub const EN: Labels = Labels {
     uninstall_note_watchdog: "To uninstall, first run \"{}\\runtime\\actingctl.exe\" watchdog uninstall --root \"{}\" to turn automatic start off, then delete the whole {} folder.",
     failed_at: "Something went wrong at \"{}\": {}.",
     failed_checks_step: "the checks before writing",
-    failed_kept: "Files already written to {} are left as they are. Send the error and the setup log below to whoever gave you the package, or delete the whole {} folder and run the wizard again.",
+    failed_kept: "Files already written to {} are left as they are; the wizard deleted nothing. You can send the error and the setup log below to whoever gave you the package. To install again:",
     failed_nothing: "Nothing has been written yet. Send the error below to whoever gave you the package, or fix the problem and run the wizard again.",
     copy_error: "Copy error",
     open_log: "Open setup log",

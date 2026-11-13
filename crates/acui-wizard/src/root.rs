@@ -13,6 +13,10 @@
 //! - absent, or an empty folder;
 //! - inside no other root, holding no other root: no ancestor with `runtime\BUILD-MANIFEST.json`
 //!   or `install\active.json` (an empty folder holds nothing, so it holds no root);
+//! - not one of ActingCommand's per-user folders, `%APPDATA%\ActingCommand` (the console's global
+//!   settings file `acui.toml` is there: the wizard's own `<root>\acui.toml` would become it) and
+//!   `%LOCALAPPDATA%\ActingCommand` (the console's and actingd's logs, which every watchdog
+//!   reads), nor inside one, nor holding one ([`per_user_issue`]);
 //! - enough free space on its drive.
 
 use std::fs;
@@ -21,7 +25,10 @@ use std::path::Path;
 
 use crate::platform;
 use crate::text::Said;
-use crate::winpath::{drive_absolute, last_segment, network_or_device};
+use crate::winpath::{drive_absolute, last_segment, network_or_device, within};
+
+/// The name of ActingCommand's folder in `%APPDATA%` and in `%LOCALAPPDATA%`.
+pub const PER_USER_FOLDER: &str = "ActingCommand";
 
 /// One rule a chosen folder breaks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +44,9 @@ pub enum RootIssue {
     NotEmpty,
     Unreadable(String),
     InsideRoot(String),
+    /// One of ActingCommand's per-user folders, the folder named: the root is it, lies in it or
+    /// holds it.
+    PerUserFolder(String),
     NoSpace { needed: u64, free: u64 },
     SpaceUnknown(String),
 }
@@ -79,6 +89,11 @@ impl RootIssue {
                 "The path is inside another ActingCommand installation",
             )
             .with(other),
+            Self::PerUserFolder(folder) => Said::new(
+                "这个位置是 ActingCommand 每个用户共用的设置和日志文件夹，或在它里面、或包着它，不能装在这里",
+                "This is ActingCommand's per-user folder for settings and logs, or lies in it or holds it; it cannot take an installation",
+            )
+            .with(folder),
             // In the units the window uses: the window shows this one when the install's own
             // checks stop on it.
             Self::NoSpace { needed, free } => Said::new(
@@ -154,6 +169,27 @@ pub fn is_installation_root(dir: &Path) -> bool {
         || dir.join("install").join("active.json").is_file()
 }
 
+/// ActingCommand's per-user folders on this machine, `%APPDATA%\ActingCommand` and
+/// `%LOCALAPPDATA%\ActingCommand`, those whose variable is set.
+pub fn per_user_folders() -> Vec<String> {
+    ["APPDATA", "LOCALAPPDATA"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(|base| base.to_string_lossy().trim_end_matches(['\\', '/']).to_owned())
+        .filter(|base| !base.is_empty())
+        .map(|base| format!("{base}\\{PER_USER_FOLDER}"))
+        .collect()
+}
+
+/// [`RootIssue::PerUserFolder`] when `root` is one of `folders` (ActingCommand's per-user folders,
+/// [`per_user_folders`]), lies in one or holds one; paths compared as Windows compares them.
+pub fn per_user_issue(root: &str, folders: &[String]) -> Option<RootIssue> {
+    folders
+        .iter()
+        .find(|folder| within(root, folder) || within(folder, root))
+        .map(|folder| RootIssue::PerUserFolder(folder.clone()))
+}
+
 /// Every rule `root` breaks, with `needed` bytes of free space required; an empty list is a
 /// usable root.
 pub fn check_root(root: &Path, needed: u64) -> Vec<RootIssue> {
@@ -161,6 +197,9 @@ pub fn check_root(root: &Path, needed: u64) -> Vec<RootIssue> {
     let mut issues = text_issues(&text);
     if !issues.is_empty() {
         return issues;
+    }
+    if let Some(issue) = per_user_issue(&text, &per_user_folders()) {
+        issues.push(issue);
     }
     match fs::metadata(root) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -201,7 +240,7 @@ mod tests {
             "D:\\ActingCommand",
             "d:/ActingCommand/测试",
             "E:\\AC Test\\root\\",
-            "C:\\Users\\x\\AB",
+            "X:\\Root\\AB",
             "D:\\a\\Bee",
         ] {
             assert_eq!(text_issues(good), Vec::new(), "{good}");
@@ -220,7 +259,7 @@ mod tests {
         assert_eq!(text_issues("D:/"), vec![RootIssue::DriveRoot]);
         assert_eq!(text_issues("D:\\ac\\A"), vec![RootIssue::SlotName]);
         assert_eq!(text_issues("D:\\ac\\b\\"), vec![RootIssue::SlotName]);
-        assert_eq!(text_issues("D:\\Alice's"), vec![RootIssue::Quote]);
+        assert_eq!(text_issues("X:\\Root\\it's"), vec![RootIssue::Quote]);
         assert_eq!(text_issues("D:\\100%"), vec![RootIssue::Percent]);
         assert_eq!(
             text_issues("D:\\it's 100%\\a"),
@@ -242,6 +281,7 @@ mod tests {
             RootIssue::NotEmpty,
             RootIssue::Unreadable("x".into()),
             RootIssue::InsideRoot("X:\\other".into()),
+            RootIssue::PerUserFolder("X:\\Profile\\AppData\\Roaming\\ActingCommand".into()),
             RootIssue::NoSpace { needed: 3 << 30, free: 1 << 30 },
             RootIssue::SpaceUnknown("x".into()),
         ] {
@@ -250,6 +290,43 @@ mod tests {
         }
         assert_eq!(size_text(3 << 30), "3.0 GiB");
         assert_eq!(size_text(512 << 20), "512 MiB");
+    }
+
+    #[test]
+    fn the_per_user_folders_and_their_neighbours_are_refused() {
+        let folders = vec![
+            "X:\\Profile\\AppData\\Roaming\\ActingCommand".to_owned(),
+            "X:\\Profile\\AppData\\Local\\ActingCommand".to_owned(),
+        ];
+        let refused = |root: &str, folder: usize| {
+            assert_eq!(
+                per_user_issue(root, &folders),
+                Some(RootIssue::PerUserFolder(folders[folder].clone())),
+                "{root}"
+            );
+        };
+        // The folder itself, in any spelling Windows takes for it.
+        refused("X:\\Profile\\AppData\\Roaming\\ActingCommand", 0);
+        refused("x:/profile/appdata/roaming/actingcommand/", 0);
+        refused("X:\\Profile\\AppData\\Local\\ActingCommand", 1);
+        // Inside one.
+        refused("X:\\Profile\\AppData\\Roaming\\ActingCommand\\Root", 0);
+        refused("X:\\Profile\\AppData\\Local\\ActingCommand\\logs\\Root", 1);
+        // Holding one (the first named wins).
+        refused("X:\\Profile\\AppData", 0);
+        refused("X:\\Profile\\AppData\\Local", 1);
+        refused("X:\\Profile", 0);
+        // Beside them, or only alike in name.
+        for fine in [
+            "X:\\Profile\\ActingCommand",
+            "X:\\Profile\\AppData\\Roaming\\ActingCommand-2",
+            "X:\\Profile\\AppData\\Local\\ActingCommandRoot",
+            "X:\\Root\\Games",
+            "Y:\\Profile\\AppData\\Roaming\\ActingCommand",
+        ] {
+            assert_eq!(per_user_issue(fine, &folders), None, "{fine}");
+        }
+        assert_eq!(per_user_issue("X:\\Profile", &[]), None);
     }
 
     #[test]

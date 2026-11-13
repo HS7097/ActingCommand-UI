@@ -105,9 +105,9 @@ pub fn parse_plan(bytes: &[u8]) -> Result<Plan, Said> {
 /// game in the set and chosen once; each instance once by index and by alias (aliases compared
 /// as the Runtime compares them, byte for byte), its alias valid for its game (`alias`: no
 /// whitespace, within the game's alias limit), its game chosen, its server one of the game's,
-/// its backends a valid pair; and a first-start pause the wizard can set: with
-/// the watchdog on, the watchdog starts the Runtime within a minute, so the pause needs the
-/// wizard's own start.
+/// its backends a valid pair. The options have no rule among themselves: the watchdog never
+/// starts a root that never started (Runtime `contracts/runtime-watchdog.md`, "Decision", row 3),
+/// so with the wizard's start left out the root stays down until a person starts it.
 pub fn plan_problems(plan: &Plan, games: &[Game]) -> Vec<Said> {
     let mut problems = Vec::new();
     if plan.schema_version != PLAN_SCHEMA {
@@ -132,7 +132,7 @@ pub fn plan_problems(plan: &Plan, games: &[Game]) -> Vec<Said> {
     for instance in &plan.instances {
         let named = format!("#{} {}", instance.index, instance.alias);
         if !indexes.insert(instance.index) {
-            problems.push(Said::new("同一台模拟器实例选了两次", "one emulator instance is chosen twice").with(&named));
+            problems.push(Said::new("同一台模拟器选了两次", "one emulator is chosen twice").with(&named));
         }
         let limit = games
             .iter()
@@ -162,13 +162,6 @@ pub fn plan_problems(plan: &Plan, games: &[Game]) -> Vec<Said> {
         if let Some(problem) = backend_problem(&instance.touch_backend, &instance.capture_backend) {
             problems.push(problem.with(&named));
         }
-    }
-    let options = &plan.options;
-    if options.watchdog && options.pause_first_start && !options.start_after_install {
-        problems.push(Said::new(
-            "开了看门狗时，它会在一分钟内自己拉起 Runtime，首次暂停只能在向导自己启动时挂上：请勾选「装完就启动」，或取消「首次先暂停」",
-            "With the watchdog on, it starts the Runtime within a minute, and the first-start pause can only be set when the wizard starts it: choose \"start after install\", or turn the pause off",
-        ));
     }
     problems
 }
@@ -239,21 +232,21 @@ mod tests {
             GOOD.replace("[\"azurlane\"]", "[]"),
             GOOD.replace("\"capture_backend\": \"adb\"", "\"capture_backend\": \"auto\""),
             GOOD.replace("\"maatouch\"", "\"nemu_ipc\""),
-            GOOD.replace(
-                "{\"watchdog\": false}",
-                "{\"watchdog\": true, \"start_after_install\": false}",
-            ),
         ];
         for text in broken {
             assert!(!plan_problems(&plan(&text), &games()).is_empty(), "{text}");
         }
         // An alias of exactly the game's limit, twelve bytes, is fine.
         assert_eq!(plan_problems(&plan(&GOOD.replace("日服号", "日服号号")), &games()), Vec::<Said>::new());
-        // The watchdog without the wizard's start is fine when no pause is asked for.
-        let quiet = GOOD.replace(
-            "{\"watchdog\": false}",
+        // Any choice of the options is fine: the watchdog leaves a root that never started down,
+        // so it needs neither the wizard's start nor the pause turned off.
+        for options in [
+            "{\"watchdog\": true, \"start_after_install\": false}",
             "{\"watchdog\": true, \"start_after_install\": false, \"pause_first_start\": false}",
-        );
-        assert_eq!(plan_problems(&plan(&quiet), &games()), Vec::<Said>::new());
+            "{\"watchdog\": true, \"start_after_install\": true, \"pause_first_start\": true}",
+        ] {
+            let text = GOOD.replace("{\"watchdog\": false}", options);
+            assert_eq!(plan_problems(&plan(&text), &games()), Vec::<Said>::new(), "{options}");
+        }
     }
 }

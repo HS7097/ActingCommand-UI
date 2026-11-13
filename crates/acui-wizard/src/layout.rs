@@ -139,17 +139,27 @@ pub fn place_of(
         }
         [directory, rest @ ..] if *directory == NOTICES_DIRECTORY && !rest.is_empty() => {
             // A pack named like the notices folder would take that folder (place.rs).
-            if pack_ids
-                .iter()
-                .any(|id| id.eq_ignore_ascii_case(NOTICES_DIRECTORY))
-            {
+            if takes_folder(pack_ids, NOTICES_DIRECTORY) {
                 return Err(unknown());
             }
             Ok(Placement::Lay(name.to_owned()))
         }
-        [directory, _file] if *directory == LOADING_DIRECTORY => Ok(Placement::Lay(name.to_owned())),
+        [directory, _file] if *directory == LOADING_DIRECTORY => {
+            // The same for the loading folder: the pack's files and the loading pictures would
+            // share one folder of the game root.
+            if takes_folder(pack_ids, LOADING_DIRECTORY) {
+                return Err(unknown());
+            }
+            Ok(Placement::Lay(name.to_owned()))
+        }
         _ => Err(unknown()),
     }
+}
+
+/// Whether a pack of `pack_ids` is named like the game root's folder `folder` (Windows folds
+/// case), so that its installed folder would be that one.
+fn takes_folder(pack_ids: &BTreeSet<String>, folder: &str) -> bool {
+    pack_ids.iter().any(|id| id.eq_ignore_ascii_case(folder))
 }
 
 /// The whole layout of a bundle zip with these entries: each entry laid with its target below
@@ -308,6 +318,39 @@ mod tests {
         ]);
         let refused = plan_layout(&zip, &index).expect_err("one path twice");
         assert!(refused.en.contains("land on one path"), "{refused}");
+    }
+
+    #[test]
+    fn the_notices_and_loading_folders_are_laid_unless_a_pack_takes_their_name() {
+        fn ids(list: &[&str]) -> BTreeSet<String> {
+            list.iter().map(|id| (*id).to_owned()).collect()
+        }
+        let tables = BTreeSet::new();
+        let packs = ids(&["azurlane.daily"]);
+        // The notices folder at any depth, the loading folder one level deep.
+        assert_eq!(
+            place_of("notices/licenses/assets.txt", &packs, &tables),
+            Ok(Placement::Lay("notices/licenses/assets.txt".to_owned()))
+        );
+        assert_eq!(place_of("notices/readme.md", &packs, &tables), Ok(Placement::Lay("notices/readme.md".to_owned())));
+        assert_eq!(place_of("loading/title.png", &packs, &tables), Ok(Placement::Lay("loading/title.png".to_owned())));
+        assert!(place_of("loading/deep/title.png", &packs, &tables).is_err());
+        assert!(place_of("notices", &packs, &tables).is_err());
+        // A pack named like either folder, in any case, would land in it: its entries are refused.
+        for taken in ["notices", "Notices", "NOTICES"] {
+            let packs = ids(&["azurlane.daily", taken]);
+            assert!(place_of("notices/readme.md", &packs, &tables).is_err(), "{taken}");
+            assert_eq!(place_of("loading/title.png", &packs, &tables), Ok(Placement::Lay("loading/title.png".to_owned())));
+        }
+        for taken in ["loading", "Loading"] {
+            let packs = ids(&["azurlane.daily", taken]);
+            assert!(place_of("loading/title.png", &packs, &tables).is_err(), "{taken}");
+            assert_eq!(place_of("notices/readme.md", &packs, &tables), Ok(Placement::Lay("notices/readme.md".to_owned())));
+        }
+        // A pack named alike in part only takes nothing.
+        let packs = ids(&["notices.extra", "loading-screens"]);
+        assert!(place_of("notices/readme.md", &packs, &tables).is_ok());
+        assert!(place_of("loading/title.png", &packs, &tables).is_ok());
     }
 
     #[test]
