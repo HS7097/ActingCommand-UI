@@ -399,7 +399,7 @@ CI 编译 PR 与推送到 `main` 以外分支的提交；推送 `main` 不编译
 ## 运行
 
 ```
-acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--account <alias>] [--lang <zh|en>]
+acui [--root <install_folder>] [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--account <alias>] [--lang <zh|en>]
 acui --help
 ```
 
@@ -481,7 +481,24 @@ Runtime 还不支持单独开关任务」，这次启动里不再按时读；但
 写明没有可用的状态根、该怎么办（用法和键名只进技术日志），「启动」「请求关闭」「排障与账本」停用，不猜
 默认值。经 A/B 安装的固定入口
 `<安装根>\ui\acui.exe` 启动时，状态根、配置与 Runtime 程序改取自安装的选择，`--state-root` 与之不同就拒绝
-（同样写在红条里）。`--source` 选账本窗口的读面（见上）。`--tab` 指定账本窗口的启动页签（截图与复核用），
+（同样写在红条里）。
+
+**安装文件夹（根模式）**：直接从单一位置安装文件夹里的 `<安装文件夹>\ui\acui.exe` 启动时（文件夹里有
+`runtime\BUILD-MANIFEST.json`、没有 `install\active.json`，与 Runtime 自己认根的规则相同；`ui` 不分大小写），
+三条路径都取自这个文件夹，与 Runtime 自己的工具找到的一样：配置是 `<安装文件夹>\actingd.config.json`（最多读
+1 MiB），状态根是其中 `state_root` 写的绝对路径（照写的用，不假定就是 `<安装文件夹>\state`；目录还不存在不算错，
+只记进技术日志），Runtime 程序是 `<安装文件夹>\runtime\actingcommand-actingd.exe`。设置文件里的三个路径键这时一律
+不用，`--state-root` 与配置写的不同就拒绝。不在安装文件夹里的监控台可以用 `--root <安装文件夹>` 指定一个（绝对
+路径，同样要有 `runtime\BUILD-MANIFEST.json`）；本身就在安装文件夹里的监控台，`--root` 只能重复这个文件夹，A/B
+安装下 `--root` 也只能重复安装的根，否则红条写明。这个文件夹缺东西——缺 Runtime 程序、缺配置、配置读不出或不是
+JSON、没写 `state_root` 或不是绝对路径，或者只有 `actingd.config.json` / `runtime\` 而没有 manifest 的半成品——
+红条逐项写明缺什么、请重新运行安装向导修复，**不会**退回去用别处的设置文件、悄悄连到别的安装；技术日志里每一项
+带路径与系统报错原文。四档的先后：A/B 安装的选择 → `--root` → 程序所在的安装文件夹 → `--state-root` 与设置
+文件。不在任何安装文件夹里的监控台（例如装在 `%LOCALAPPDATA%\Programs` 下的那种）照旧走最后一档，读写与以前一样。
+安装文件夹不能直接叫 `A` 或 `B`：读安装选择的规则会把它当成 A/B 的槽而报错，这时红条多一句说明。工作台设置页
+「外观」下面一行写这个监控台用的安装文件夹和设置保存在哪个文件里。
+
+`--source` 选账本窗口的读面（见上）。`--tab` 指定账本窗口的启动页签（截图与复核用），
 取值就是视图自己的 wire 名。`--page` 同类：只决定开窗时工作台显示哪一页，`main` 是主页（默认），`settings`
 是设置页（截图用）。`--account` 也同类：开窗时选中哪张账号卡（不给时选第一张；列出的账号里没有这个别名时也选第一张，并写进技术日志）。`--lang` 只对**这一次运行**有效，覆盖设置文件里的语言，不写回设置文件。
 
@@ -501,14 +518,16 @@ Runtime 宿主，留下一个小的 v0.12 状态根（带端口的实例绑定�
 启动走不下去时——命令行看不懂、工作台窗口建不出来——监控台
 另开一个窗口写明原因，同时写到启动它的那个控制台（如果有），并追加进技术日志。命令行看不懂时退出码为 2，
 其余为 1。连这个窗口也建不出来时，用系统消息框说。`--help` 把用法印在那个控制台上，没有控制台就用同一个
-窗口显示，退出码 0。读不出本安装的选择、`--state-root` 与安装的选择不一致、`state_root` 不是绝对路径、
-没有状态根，都不算启动失败：工作台照开，顶部红条先写一句人话、再附原文，并记入技术日志；没有状态根时红条
+窗口显示，退出码 0。读不出本安装的选择、`--state-root` 与安装的选择或安装文件夹的配置不一致、`state_root` 不是绝对路径、
+安装文件夹不完整、`--root` 不是安装文件夹或不是本监控台所在的那个、没有状态根，都不算启动失败：工作台照开，顶部红条先写一句人话、再附原文，并记入技术日志；没有状态根时红条
 只写人话，用法连同键名只进技术日志。
 
 技术日志是 `%LOCALAPPDATA%\ActingCommand\logs\acui-<启动时的 unix 毫秒>.log`（其他平台在
 `$XDG_STATE_HOME`，没有就在 `$HOME/.local/state` 下），与 actingd 的启动日志同一目录。有第一条要写时
-才创建，只记失败：启动失败或没有可用的状态根、设置文件的问题、后台线程交不回窗口的结果、账本窗口建不
-出来或显示不出来、账本读线程起不来或意外终止。账本读面打不开不算启动失败：账本窗口照开，在账本区写明
+才创建，记的是失败：启动失败或没有可用的状态根、设置文件的问题、后台线程交不回窗口的结果、账本窗口建不
+出来或显示不出来、账本读线程起不来或意外终止。此外每次开台记一行 `place`：路径取自哪一档（`selection`、
+`root mode (exe|--root)`、`legacy`）、各是什么、用的是哪个设置文件，根模式下全局设置文件在却没用、或因为它指向这个
+安装文件夹而用了它，再记一行；这几行不算失败，单凭它们窗口顶部不写日志位置。账本读面打不开不算启动失败：账本窗口照开，在账本区写明
 原因（见「数据来源」）。文件建出来以后，每个窗口顶部写明它在哪；写不进去时，那里改写原因。
 
 ## 界面语言、字号与主题
@@ -545,12 +564,29 @@ Runtime 宿主，留下一个小的 v0.12 状态根（带端口的实例绑定�
 
 ### 设置文件
 
-语言、字号与主题存在按用户区分的配置目录下：
+语言、字号与主题存在设置文件 `acui.toml` 里。用哪一个，开台时定一次，之后整次运行只读写这一个：
 
-```
-Windows:  %APPDATA%\ActingCommand\acui.toml
-Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml（没有就用 $HOME/.config/…）
-```
+- **不在任何安装文件夹里的监控台**，以及 A/B 安装：按用户区分的配置目录下的那个（下称全局设置文件），与以前一样：
+
+  ```
+  Windows:  %APPDATA%\ActingCommand\acui.toml
+  Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml（没有就用 $HOME/.config/…）
+  ```
+
+- **根模式**（见「运行」）：这个安装文件夹自己的 `<安装文件夹>\acui.toml`，与 `actingd.config.json` 放在一起
+  （不放进 `ui\`：那是程序目录，更新时会整个换掉）。按顺序：
+  1. `<安装文件夹>\acui.toml` 在，就用它（看不清在不在也算在，好把读不出的原因写出来）。
+  2. 不在，但全局设置文件在，而且它的 `actingd_config` 指的正是这个安装文件夹的 `actingd.config.json`（同一个
+     文件），就继续用全局设置文件：这是原本靠全局设置文件配置、后来才把监控台放进 `ui\` 的安装，它的设置（包括
+     `resume_elsewhere_reasons`）不会因此突然失效。技术日志记一行。
+  3. 其余情况都用 `<安装文件夹>\acui.toml`：还没有时按默认值运行，第一次在下拉框里改设置时才建出来。根模式下
+     除了第 2 条，全局设置文件一概不用（它在却没用时，技术日志记一行）。
+
+  安装文件夹自己的设置文件不认三个路径键：根模式下路径一律取自安装文件夹，这里写了也不起作用，每一行都用黄字
+  写明、原样保留，绝不悄悄生效。安装向导要预设语言时，就按行写这个文件（例如只有一行 `lang = "en"`），从不写
+  全局设置文件。
+
+工作台设置页「外观」下面一行写这次用的安装文件夹（如果有）和设置保存在哪个文件。
 
 ```toml
 # zh | en
@@ -559,7 +595,7 @@ lang = "zh"
 text_size = "standard"
 # flat | aero；由「主题」下拉框设定，工作台和账本窗口按它绘制
 theme = "flat"
-# 可选，绝对路径
+# 可选，绝对路径；只有全局设置文件认，根模式下不用
 state_root = '<install root>\state'
 actingd_config = '<install root>\actingd.config.json'
 actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'
@@ -573,7 +609,7 @@ resume_elsewhere_reasons = []
 
 开台时读一次；下拉框一改，就只写这一个键：先重读文件，换掉这个键的最后一行（没有就追加一行），其余
 各行——注释、路径键、监控台不认识的键（例如 `install_root`）、解析不了的行——逐字节保留；结果先写进
-旁边的 `acui.toml.tmp`，再替换原文件。**这是监控台唯一自己读写的文件**（启动器创建、早退后读回的
+旁边的 `acui.toml.tmp`，再替换原文件。**选中的这个文件是监控台唯一自己读写的文件**（启动器创建、早退后读回的
 actingd 启动日志，以及监控台自己的技术日志除外，见各自那一节）：它不在任何状态根里，状态根依旧全归
 读面。文件不存在就是首次运行：按默认值（中文、标准、flat）来，不提示。其余情况都在每个窗口顶部写明文件与
 行号：取值不认识、某行不是 `key = value`，黄字，按默认值处理、原行保留；文件在却读不出（权限、不是
@@ -621,7 +657,10 @@ PID 与 owner epoch（或客户端错误码），下面是上一次请求的技�
   绝对路径，都写明是哪个键，什么也不拉。stdout / stderr 都进监控台**自己**目录下的日志：
   `%LOCALAPPDATA%\ActingCommand\logs\actingd-<unix_ms>.log`（Linux：`$XDG_STATE_HOME` 或
   `$HOME/.local/state` 下同名路径），目录由监控台建，**永不在状态根里**。Windows 下用
-  `DETACHED_PROCESS` 拉起：守护进程不继承监控台的控制台，收不到它的 Ctrl+C。
+  `DETACHED_PROCESS` 拉起：守护进程不继承监控台的控制台，收不到它的 Ctrl+C。没有安装选择时（根模式，或设置
+  文件的路径），拉起 actingd 和跑 `unlock-owner`（见下）之前都先清掉 `ACTINGCOMMAND_INSTALL_ROOT` 与
+  `ACTINGCOMMAND_INSTALL_SELECTION` 两个环境变量，照 Runtime 契约 install-cli 的启动规则；A/B 安装照旧把自己的
+  安装选择交给本槽的程序。
 - **就绪判定**：最多 60 次、每次 500 ms。每次先 `try_wait()`：子进程已退出就停下，写退出码、
   该日志里 actingd 的终态结果——最后一行带 `actingcommand.outcome.v1` 信封且有码的 `OUTCOME actingd:`
   行（runtime-outcomes 1），显示与它同次写入、紧挨在前的开发者行的**原文**，没有就显示这行结果行

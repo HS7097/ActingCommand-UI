@@ -566,7 +566,7 @@ On the frame, beside the event's own geometry:
 ## Running
 
 ```
-acui [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--account <alias>] [--lang <zh|en>]
+acui [--root <install_folder>] [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--account <alias>] [--lang <zh|en>]
 acui --help
 ```
 
@@ -717,7 +717,32 @@ state root to use and what to do (the usage and the key names go to the technica
 Request Shutdown and "Troubleshooting and Ledger" are off; no default is guessed. Started through an A/B installation's fixed
 entry `<install root>\ui\acui.exe`, the console takes the state root, the configuration and the Runtime
 program from the installation's selection instead, and refuses a `--state-root` that differs from it (in
-the same red bar). `--source` selects the ledger window's read face (see above).
+the same red bar).
+
+**Installation folder (root mode)**: started directly as `<install folder>\ui\acui.exe` of a
+single-location installation folder (one with `runtime\BUILD-MANIFEST.json` and no `install\active.json`,
+the rule the Runtime itself finds a root by; `ui` in any case), the console takes all three paths from
+that folder, as the Runtime's own tools find them: the configuration `<install folder>\actingd.config.json`
+(read up to 1 MiB), the state root as its `state_root` names it, an absolute path used as written (not
+assumed to be `<install folder>\state`; a folder not there yet is no error, only a line in the technical
+log), and the Runtime program `<install folder>\runtime\actingcommand-actingd.exe`. The settings file's
+three path keys are not used then, and a `--state-root` that differs from the configuration's is refused. A
+console outside any installation folder may name one with `--root <install folder>` (absolute, and with
+`runtime\BUILD-MANIFEST.json` too); a console inside one may only repeat that folder with `--root`, and on
+an A/B installation `--root` may only repeat its root, or the red bar says so. A folder that lacks
+something — the Runtime program, the configuration, a configuration that cannot be read or is not JSON,
+no `state_root` or one that is not absolute, or a half-made folder with `actingd.config.json` or `runtime\`
+but no manifest — is said in the red bar part by part, with the advice to run the installer again to
+repair it, and is **never** stood in for by the settings file of somewhere else, so the console does not
+quietly reach another installation; the technical log has each part with its path and the system's own
+error text. The four tiers in order: an A/B installation's selection → `--root` → the installation folder
+the program is in → `--state-root` and the settings file. A console outside any installation folder (such
+as one installed under `%LOCALAPPDATA%\Programs`) takes the last tier as ever, and reads and writes as it
+did. An installation folder must not be named `A` or `B`: the selection reader takes it for an A/B slot and
+fails, and the red bar then says so in one more line. On the workbench's settings page, a line under
+"Appearance" names the installation folder this console uses and the file its settings are saved in.
+
+`--source` selects the ledger window's read face (see above).
 `--tab` specifies the ledger window's startup tab (for screenshots and review), and its values are the
 views' own wire names. `--page` is of the same kind: it only picks the workbench page the window opens on,
 `main` (the default) or `settings` (for screenshots). `--account` is of the same kind too: the account card
@@ -748,16 +773,21 @@ window of its own with the reason, written to the console the program was starte
 and appended to the technical log. The exit code is 2 for a command line the console does not understand
 and 1 otherwise. When not even that window can be made, a system message box says it. `--help` prints the
 usage on that console, or shows it in the same window when there is none, and exits 0. An installation
-selection it cannot read, a `--state-root` that differs from it, a `state_root` that is not absolute, or no
-state root at all is no failed start: the workbench opens with a red bar, plain words first and then the
+selection it cannot read, a `--state-root` that differs from it or from the installation folder's
+configuration, a `state_root` that is not absolute, an incomplete installation folder, a `--root` that is
+no installation folder or not the one the console is in, or no state root at all is no failed start: the workbench opens with a red bar, plain words first and then the
 original, and the technical log has it too; for no state root at all the red bar has the plain words
 only, and the usage with its key names goes to the technical log.
 
 The technical log is `%LOCALAPPDATA%\ActingCommand\logs\acui-<start unix ms>.log` (elsewhere under
 `$XDG_STATE_HOME`, else `$HOME/.local/state`), beside actingd's start logs. It is created by its first
-entry and holds failures only: a failed start or no state root to use, a problem of the settings file, a
+entry and holds failures: a failed start or no state root to use, a problem of the settings file, a
 result a background thread could not hand back to the window, a ledger window that could not be made or
-shown, a ledger reader thread that could not start or that panicked. A
+shown, a ledger reader thread that could not start or that panicked. Besides, every start writes one
+`place` line: the tier the paths came from (`selection`, `root mode (exe|--root)`, `legacy`), what they
+are and which settings file is used, and in root mode one more line when the global settings file is there
+but not used, or used because it names this installation folder; these are no failures, and on their own
+they put no word of the log on the windows. A
 read face that does not open is no failed start: the ledger window stays and says why in its ledger area
 (see above). Once it exists, the top of every window says where it is; when it
 cannot be written, the windows say that instead.
@@ -808,12 +838,36 @@ displayed verbatim, not guessed**.
 
 ### Settings file
 
-Language, text size and theme are stored under the per-user configuration directory:
+Language, text size and theme are stored in a settings file, `acui.toml`. Which one is decided once at
+startup, and the whole run reads and writes that one only:
 
-```
-Windows:  %APPDATA%\ActingCommand\acui.toml
-Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml (falls back to $HOME/.config/…)
-```
+- **A console outside any installation folder**, and an A/B installation: the one under the per-user
+  configuration directory (the global settings file below), as ever:
+
+  ```
+  Windows:  %APPDATA%\ActingCommand\acui.toml
+  Linux:    $XDG_CONFIG_HOME/ActingCommand/acui.toml (falls back to $HOME/.config/…)
+  ```
+
+- **Root mode** (see "Running"): the installation folder's own `<install folder>\acui.toml`, beside its
+  `actingd.config.json` (not in `ui\`, the program folder, which an update replaces whole). In order:
+  1. When `<install folder>\acui.toml` is there, it is used (one that cannot be looked at counts as
+     there, so that what is wrong with it is said).
+  2. When it is not, but the global settings file is, and its `actingd_config` names this installation
+     folder's `actingd.config.json` (the same file), the global settings file is still used: an
+     installation set up through the global settings file before the console was put in its `ui\` keeps
+     its settings, `resume_elsewhere_reasons` among them. The technical log says so.
+  3. Otherwise `<install folder>\acui.toml`: the defaults while it is not there, and it is made by the
+     first change in a dropdown. In root mode the global settings file is used in no other case (when it is
+     there and not used, the technical log says so).
+
+  An installation folder's own settings file takes none of the three path keys: in root mode every path
+  comes from the installation folder, so such a line has no effect, is said in amber, line by line, and is
+  kept as it is; it never quietly takes effect. An installer that presets the language writes this file line
+  by line (a single line `lang = "en"`, say), and never the global settings file.
+
+On the workbench's settings page, a line under "Appearance" names the installation folder in use, if any,
+and the file the settings are saved in.
 
 ```toml
 # zh | en
@@ -822,7 +876,7 @@ lang = "zh"
 text_size = "standard"
 # flat | aero; set from the theme dropdown, the workbench and the ledger windows are drawn by it
 theme = "flat"
-# optional, absolute paths
+# optional, absolute paths; the global settings file's only, not used in root mode
 state_root = '<install root>\state'
 actingd_config = '<install root>\actingd.config.json'
 actingd_exe = '<install root>\runtime\actingcommand-actingd.exe'
@@ -838,8 +892,8 @@ resume_elsewhere_reasons = []
 It is read once at startup, and a dropdown change writes its one key: the file is read again, the last
 line of that key is replaced (or a line appended), and every other line — comments, the path keys, keys
 the console does not know such as `install_root`, lines it cannot parse — is kept byte for byte; the
-result goes to `acui.toml.tmp` beside it, which then replaces the file. **This is the only file the
-console itself reads and writes**, besides the actingd start logs the launcher creates and, after an
+result goes to `acui.toml.tmp` beside it, which then replaces the file. **The file so chosen is the only
+file the console itself reads and writes**, besides the actingd start logs the launcher creates and, after an
 early exit, reads back, and its own technical log (see those sections): it is not inside any state root,
 and the state root still belongs entirely to the read face. A missing file is a first run: the defaults
 (Chinese, standard, flat) are used and nothing is said. Anything else is said at the top of every window,
@@ -905,7 +959,11 @@ finished only says so. Of probes in flight, only the newest one's answer is show
   **own** directory: `%LOCALAPPDATA%\ActingCommand\logs\actingd-<unix_ms>.log` (Linux: the same path under
   `$XDG_STATE_HOME` or `$HOME/.local/state`); the directory is created by the console and is **never
   inside the state root**. On Windows it is launched with `DETACHED_PROCESS`: the daemon does not inherit
-  the console program's console, and does not receive its Ctrl+C.
+  the console program's console, and does not receive its Ctrl+C. Without an installation selection (root
+  mode, or the settings file's paths), both this launch and `unlock-owner` (below) first clear the two
+  environment variables `ACTINGCOMMAND_INSTALL_ROOT` and `ACTINGCOMMAND_INSTALL_SELECTION`, as the
+  Runtime contract install-cli's start rules have it; an A/B installation still hands its own selection to
+  the programs of its slot.
 - **Readiness decision**: at most 60 attempts, 500 ms each. Each attempt does `try_wait()` first: if the
   child process has exited it stops and states the exit code, actingd's terminal outcome in that log —
   its last `OUTCOME actingd:` line holding an `actingcommand.outcome.v1` envelope with a code
