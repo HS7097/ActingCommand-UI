@@ -305,6 +305,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "acui-wizard"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "sha2",
+ "windows",
+ "zip",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

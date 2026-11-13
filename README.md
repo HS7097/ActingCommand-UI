@@ -11,6 +11,8 @@ three-column interface: instance card, timeline, detail pane.
 It is not part of the Runtime; it is the Runtime's **external, detachable client**.
 
 > **acsetup is not shipped with the builds for now; UI-2a brings it back. Until then, install with `actingctl install`.**
+>
+> The new 0.12 setup wizard is in progress (UI-W2): the `acsetup.exe` in the builds is the new one, for now a command line only (`check-set`, `discover`, `install`); its window and its full description come with the next slice. The "Setup wizard acsetup" section below still describes the old one.
 
 This repository also holds the **setup wizard** `acsetup` (see "Setup wizard acsetup") and the fixed
 entry `acforward`, through which an A/B installation starts its programs. Like the Runtime, these

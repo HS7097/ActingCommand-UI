@@ -332,12 +332,12 @@ jobs:
       # hold such tests; the UI and the workspace as a whole are not tested here. A red here is
       # red: it is not re-run to green.
       - name: Unit tests of pure functions
-        run: cargo test --locked -p acui-model -p acui-source
+        run: cargo test --locked -p acui-model -p acui-source -p acui-wizard
 
       # Windows only: stage the console and the stable entry with a build manifest in the
       # same shape as the Runtime's exact-SHA artifacts, so the umbrella can fetch
-      # and verify them by commit SHA. Nothing below changes the build itself. acsetup is
-      # out of the workspace from UI-0a until UI-2a (Workflow #429 v5 F), so it is not staged.
+      # and verify them by commit SHA. Nothing below changes the build itself. acsetup is the
+      # 0.12 setup wizard (crates/acui-wizard, UI-W2); the 0.11 one stays out of the workspace.
       - name: Stage Windows artifact with build manifest
         if: runner.os == 'Windows'
         id: stage
@@ -350,9 +350,10 @@ jobs:
           $name = "acui-windows-$sha"
           $dir = Join-Path $env:RUNNER_TEMP $name
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
-          $payload = @('acui.exe', 'acforward.exe', 'LICENSE', 'README.md')
+          $payload = @('acui.exe', 'acforward.exe', 'acsetup.exe', 'LICENSE', 'README.md')
           Copy-Item -LiteralPath 'target\release\acui.exe' -Destination (Join-Path $dir 'acui.exe')
           Copy-Item -LiteralPath 'target\release\acforward.exe' -Destination (Join-Path $dir 'acforward.exe')
+          Copy-Item -LiteralPath 'target\release\acsetup.exe' -Destination (Join-Path $dir 'acsetup.exe')
           Copy-Item -LiteralPath 'LICENSE' -Destination (Join-Path $dir 'LICENSE')
           Copy-Item -LiteralPath 'README.md' -Destination (Join-Path $dir 'README.md')
           $files = foreach ($f in $payload) {
