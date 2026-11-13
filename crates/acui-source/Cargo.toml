@@ -13,3 +13,5 @@ actingcommand-ledger-forensics = { workspace = true }
 actingcommand-runtime-client = { workspace = true }
 actingcommand-runtime-config = { workspace = true }
 anyhow = { workspace = true }
+# runtime-info.json, read as the client reads it, before a console in root mode connects.
+serde_json = { workspace = true }

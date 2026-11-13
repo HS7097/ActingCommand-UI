@@ -211,7 +211,8 @@ pub fn start(ui: &Ui, frame_gap: Duration) {
         }
     };
     let (live, slow) = (spawned(Lane::Live), spawned(Lane::Slow));
-    let tools = tools::spawn(launcher.tool_paths()).map_err(|error| error.to_string());
+    let tools = tools::spawn(launcher.tool_paths(), launcher.state_root.clone())
+        .map_err(|error| error.to_string());
     let preview_tally = Arc::new(PreviewTally::default());
     let generation = ui.model.borrow().pictures().generation();
     let root = launcher.state_root.clone();
@@ -548,10 +549,14 @@ fn live_landed(ui: &Ui, read: LiveRead) {
         let link_changed = landed.previous != *model.link();
         (landed, link_changed, model.accounts_note() != note)
     };
-    // Painting the launcher goes through every ledger window: only for news.
+    // Painting the launcher goes through every ledger window: only for news. So do the
+    // notices, which say, in root mode, whether a Runtime up is the installation folder's.
     let status_changed = ui.launcher_view.borrow_mut().live(probe);
     if status_changed || link_changed {
         launcher::paint(ui);
+    }
+    if status_changed {
+        ui.paint_notices();
     }
     if note_changed {
         ui.paint_accounts_note();
@@ -855,7 +860,8 @@ fn probe_of(read: &LiveRead) -> Result<RuntimeFacts, ClientFailure> {
         }
         LiveRead::NotConnected(failure)
         | LiveRead::NoAnswer(failure)
-        | LiveRead::Trouble(failure) => Err(failure.clone()),
+        | LiveRead::Trouble(failure)
+        | LiveRead::NotThisRoot(failure) => Err(failure.clone()),
     }
 }
 
@@ -877,7 +883,8 @@ fn log_link(previous: &Link, link: &Link) {
         }
         (_, Link::NoAnswer(failure)) => format!("no answer: {}", failure_line(failure)),
         (_, Link::Trouble(failure)) => format!("trouble: {}", failure_line(failure)),
-        (_, Link::Unknown | Link::ThreadFailed) => return,
+        // What the check found is in the log already, once for each Runtime (`identity`).
+        (_, Link::Unknown | Link::NotThisRoot | Link::ThreadFailed) => return,
     };
     report::log(Lane::Live.name(), &line);
 }

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The read face, and the only place that touches a state root.
 //!
-//! The console never joins a path into the state root, never opens `ledger/`,
+//! The console never joins a path into the state root but one, `runtime-info.json`,
+//! which a console that belongs to an installation folder reads as the client
+//! does before it connects (`runtime_connection`); it never opens `ledger/`,
 //! `artifacts/` or `runtime-state.sqlite`, and never spawns a CLI. Everything
-//! below goes through the Runtime's own entries. Offline, `GlobalLedger` picks
+//! else goes through the Runtime's own entries. Offline, `GlobalLedger` picks
 //! the medium and opens a bounded snapshot at one pinned point,
 //! `query_view_page` projects the formal page (at most 256 records or 768 KiB,
 //! with a cursor to the rest), and `read_material_complete` resolves, guards
@@ -22,20 +24,26 @@
 //! resume of the one scheduling pause a status read reported (`resume_paused`).
 //! Every connection a session keeps is rebuilt after the client latched it
 //! (see `Rebuilding`); what a person does goes out on a fresh connection each
-//! time. The workbench's own reads, which follow the Runtime across restarts,
-//! are in `workbench`.
+//! time. Every connection to a Runtime, a read's as a person's, is made in one
+//! place (`runtime_connection`), where a console that belongs to an installation
+//! folder first has the Runtime its state root names checked to be that folder's
+//! (`guard_connections`), before anything is connected: one that is not, or cannot
+//! be told to be, is not connected to at all. The workbench's own reads, which
+//! follow the Runtime across restarts, are in `workbench`; where the console
+//! belongs, as plain judgment, is in `place`.
 
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use acui_rows::outcome::{
     CONSOLE_CLIENT_ACTION_TERMINAL_MISSING, CONSOLE_INSTANCE_BINDING_MISSING,
-    CONSOLE_ONLINE_PAGE_UNBOUNDED, CONSOLE_RUNTIME_OWNER_CHANGED, CONSOLE_STATUS_SOURCE_MISSING,
+    CONSOLE_ONLINE_PAGE_UNBOUNDED, CONSOLE_RUNTIME_GONE, CONSOLE_RUNTIME_NOT_THIS_ROOT,
+    CONSOLE_RUNTIME_OWNER_CHANGED, CONSOLE_STATUS_SOURCE_MISSING,
 };
 use acui_rows::{
     code, page_source_complete, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord,
@@ -48,8 +56,8 @@ use acui_rows::{
 use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{
     FactValue, InstanceId, InstancePauseStage, InstancePauseState, OwnerEpoch, RuntimeFactRecord,
-    RuntimeFactScope, RuntimeFactSnapshot, RuntimeResult, SchedulingPauseExpectation,
-    SchedulingPauseScope, SchedulingPauseState,
+    RuntimeFactScope, RuntimeFactSnapshot, RuntimeInfo, RuntimeResult, SchedulingPauseExpectation,
+    SchedulingPauseScope, SchedulingPauseState, RUNTIME_INFO_FILE,
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerEvidenceConfig, GlobalLedgerMetadata,
@@ -62,6 +70,7 @@ use actingcommand_runtime_client::{
 };
 use anyhow::{anyhow, bail, Result};
 
+pub mod place;
 pub mod workbench;
 
 /// The console's cap on one material, on either face: 8 MiB, the bound it kept
@@ -412,8 +421,9 @@ pub struct OnlineSource {
 }
 
 /// How a kept connection is made again: `OnlineSource::connect` for the main
-/// and the material connection, `LedgerPages::connect` for the page one.
-type Connect = fn(&Path) -> Result<RuntimeClient, RuntimeClientError>;
+/// and the material connection, `LedgerPages::connect` for the page one, each
+/// through `runtime_connection`.
+type Connect = fn(&Path) -> Result<RuntimeClient, NoConnection>;
 
 /// A connection the session keeps — the main, the page or the material one —
 /// rebuilt after the client latched it. R-0c (Runtime contracts/runtime-interface.md,
@@ -440,7 +450,9 @@ struct Rebuilding {
 
 /// Why a rebuild left the latched connection in place.
 enum RebuildFailed {
-    Connect(RuntimeClientError),
+    /// No connection: the client's failure, or, in root mode, a Runtime not connected to
+    /// (`runtime_connection`).
+    Connect(NoConnection),
     /// The new connection reached a Runtime of another owner epoch.
     OwnerEpochChanged,
 }
@@ -471,15 +483,18 @@ impl RebuildFailed {
     }
 
     /// As a read's error shows it: `prefix`, then the reason, as text. A
-    /// Runtime of another owner epoch also carries the console's own code
-    /// beneath that text, for `console_code`; the text is the same either way.
+    /// Runtime of another owner epoch, and one not connected to in root mode,
+    /// also carries the console's own code beneath that text, for
+    /// `console_code`; the text is the same either way.
     fn into_error(self, prefix: &str) -> anyhow::Error {
         let text = format!("{prefix}{self}");
-        match self {
-            Self::Connect(_) => anyhow!(text),
-            Self::OwnerEpochChanged => {
-                anyhow::Error::new(ConsoleCode(CONSOLE_RUNTIME_OWNER_CHANGED)).context(text)
-            }
+        let code = match &self {
+            Self::Connect(not) => not.console_code(),
+            Self::OwnerEpochChanged => Some(CONSOLE_RUNTIME_OWNER_CHANGED),
+        };
+        match code {
+            Some(code) => anyhow::Error::new(ConsoleCode(code)).context(text),
+            None => anyhow!(text),
         }
     }
 }
@@ -569,8 +584,8 @@ struct LedgerPages {
 }
 
 impl LedgerPages {
-    fn connect(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
-        RuntimeClient::connect(
+    fn connect(root: &Path) -> Result<RuntimeClient, NoConnection> {
+        runtime_connection(
             RuntimeClientConfig::new(root, RuntimeChannel::Ui, EventActor::Ui, EventSource::Ui)
                 .with_io_timeout(LEDGER_PAGE_IO_TIMEOUT),
         )
@@ -580,8 +595,7 @@ impl LedgerPages {
     /// epoch, the one the main connection reached. A failed connect fails the
     /// online face as its main connect does.
     fn open(root: &Path, owner_epoch: OwnerEpoch) -> Result<Self> {
-        let client = Self::connect(root)
-            .map_err(|error| anyhow!("在线读面不可用 / online source unavailable: {error}"))?;
+        let client = Self::connect(root).map_err(|not| online_unavailable(&not))?;
         if client.runtime_info().owner_epoch() != owner_epoch {
             bail!("在线读面不可用 / online source unavailable: {CONSOLE_RUNTIME_OWNER_CHANGED}");
         }
@@ -832,9 +846,10 @@ impl OnlineSource {
     /// on its own — the status and facts read at open, follow polls, probes,
     /// and, on a connection of their own, material reads and the status read
     /// again after a person's resume; pages go through the session's page
-    /// connection (`LedgerPages`).
-    fn connect(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
-        RuntimeClient::connect(RuntimeClientConfig::new(
+    /// connection (`LedgerPages`). Made through `runtime_connection`, as every
+    /// connection is.
+    fn connect(root: &Path) -> Result<RuntimeClient, NoConnection> {
+        runtime_connection(RuntimeClientConfig::new(
             root,
             RuntimeChannel::Ui,
             EventActor::Ui,
@@ -852,9 +867,10 @@ impl OnlineSource {
     /// contracts/runtime-interface.md, #389 U-2). Every press takes a fresh one
     /// and drops it after: a connection the client latched (R-0c: a receipt
     /// timeout, or any fatal failure) is never asked again, and nothing written
-    /// is sent twice. The console keeps no write connection.
-    fn connect_as_person(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
-        RuntimeClient::connect(RuntimeClientConfig::new(
+    /// is sent twice. The console keeps no write connection. Made through
+    /// `runtime_connection`, as every connection is.
+    fn connect_as_person(root: &Path) -> Result<RuntimeClient, NoConnection> {
+        runtime_connection(RuntimeClientConfig::new(
             root,
             RuntimeChannel::Ui,
             EventActor::User,
@@ -893,8 +909,7 @@ impl OnlineSource {
     /// epoch, as the page connection is made (`LedgerPages::open`): a failed
     /// connect fails the online face as its main connect does.
     fn open_material(root: &Path, owner_epoch: OwnerEpoch) -> Result<Rebuilding> {
-        let client = Self::connect(root)
-            .map_err(|error| anyhow!("在线读面不可用 / online source unavailable: {error}"))?;
+        let client = Self::connect(root).map_err(|not| online_unavailable(&not))?;
         if client.runtime_info().owner_epoch() != owner_epoch {
             bail!("在线读面不可用 / online source unavailable: {CONSOLE_RUNTIME_OWNER_CHANGED}");
         }
@@ -1132,7 +1147,9 @@ pub enum OfflineReason {
     /// `auto`: the client found no `runtime-info.json` in the state root.
     RuntimeInfoAbsent,
     /// `auto`: the state root names a Runtime, but the client could not
-    /// connect to it. Carries the client's own error code and operation.
+    /// connect to it. Carries the client's own error code and operation; in
+    /// root mode also the console's own `CONSOLE_RUNTIME_GONE`, for a Runtime
+    /// whose process is gone, which nothing connected to.
     ConnectFailed { code: &'static str, operation: &'static str },
 }
 
@@ -1164,9 +1181,12 @@ impl Session {
     /// offline face: when the client could not reach a Runtime, it is
     /// `OfflineOffered`, with the reason, and the ledger is not touched. A
     /// Runtime that was reached but stated no ledger head (`OnlineSource::pin`)
-    /// is an error in every mode. `Offline` opens the offline face; one the
-    /// ledger refuses to open is not an error of the session: it is
-    /// `Unopened`, with the ledger's own error.
+    /// is an error in every mode. In root mode a Runtime not taken for the
+    /// installation folder's (`runtime_connection`) is an error in every mode
+    /// too, with the console's own code, and nothing of it is read, offline
+    /// either; one whose process is gone is a Runtime that does not run.
+    /// `Offline` opens the offline face; one the ledger refuses to open is not
+    /// an error of the session: it is `Unopened`, with the ledger's own error.
     pub fn open(state_root: impl Into<PathBuf>, mode: SourceMode) -> Result<Self> {
         let root = state_root.into();
         match mode {
@@ -1176,7 +1196,7 @@ impl Session {
                     return OnlineSource::pin(root, client)
                         .map(|source| Self::Open(ReadSource::Online(source)))
                 }
-                Err(error) if mode == SourceMode::Auto => {
+                Err(NoConnection::Failed(error)) if mode == SourceMode::Auto => {
                     let reason = match error.code().spelling() {
                         "runtime_info_unavailable" => OfflineReason::RuntimeInfoAbsent,
                         code => OfflineReason::ConnectFailed {
@@ -1186,7 +1206,14 @@ impl Session {
                     };
                     return Ok(Self::OfflineOffered { root, reason });
                 }
-                Err(error) => bail!("在线读面不可用 / online source unavailable: {error}"),
+                Err(NoConnection::Gone) if mode == SourceMode::Auto => {
+                    let reason = OfflineReason::ConnectFailed {
+                        code: CONSOLE_RUNTIME_GONE,
+                        operation: CONNECT_RUNTIME,
+                    };
+                    return Ok(Self::OfflineOffered { root, reason });
+                }
+                Err(not) => return Err(online_unavailable(&not)),
             },
         }
         let reason = OfflineReason::Requested;
@@ -1318,13 +1345,20 @@ impl ReadSource {
     }
 }
 
-/// The Runtime a state root names, as one fresh connect learned it: the pid
-/// and owner epoch from its own `runtime-info.json`, after the client's
-/// owner-epoch check on connect.
+/// The Runtime a state root names: the pid and owner epoch from its own
+/// `runtime-info.json`, as one fresh connect learned them, after the client's
+/// owner-epoch check on connect; or, for the guard of a console in root mode
+/// (`guard_connections`), as the file states them before anything connects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeFacts {
     pub pid: u32,
     pub owner_epoch: String,
+}
+
+impl RuntimeFacts {
+    fn of(info: &RuntimeInfo) -> Self {
+        Self { pid: info.pid(), owner_epoch: code(&info.owner_epoch()) }
+    }
 }
 
 /// A client operation that did not succeed: the client's own error code and
@@ -1353,11 +1387,179 @@ impl From<RuntimeClientError> for ClientFailure {
 }
 
 /// One connect, nothing else: the launcher's "is a Runtime running here"
-/// question, answered by the client's own discovery and owner-epoch check.
+/// question, answered by the client's own discovery and owner-epoch check. In
+/// root mode a Runtime not taken for the installation folder's is not connected
+/// to, and answers with the console's own code (`runtime_connection`).
 pub fn probe_runtime(state_root: &Path) -> Result<RuntimeFacts, ClientFailure> {
     let client = OnlineSource::connect(state_root)?;
-    let info = client.runtime_info();
-    Ok(RuntimeFacts { pid: info.pid(), owner_epoch: code(&info.owner_epoch()) })
+    Ok(RuntimeFacts::of(client.runtime_info()))
+}
+
+/// What the guard of a console in root mode (`guard_connections`) says of the Runtime a
+/// state root names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+    /// It is the installation folder's: it is connected to as ever.
+    Admitted,
+    /// It is not the installation folder's, or cannot be told to be: nothing is connected to
+    /// it, to read or to ask (`CONSOLE_RUNTIME_NOT_THIS_ROOT`).
+    NotThisRoot,
+    /// The process its `runtime-info.json` names is gone: no Runtime runs there, and nothing is
+    /// connected to the address the file names (`CONSOLE_RUNTIME_GONE`).
+    Gone,
+}
+
+/// The check every connection to a Runtime passes before it is made, set once at the start by
+/// a console that belongs to an installation folder (`guard_connections`): given the Runtime
+/// the state root's `runtime-info.json` names, read from the file alone, whether it may be
+/// connected to at all. No other console sets one, and its connections go to whatever Runtime
+/// its state root names, as ever.
+type ConnectionGuard = Box<dyn Fn(&RuntimeFacts) -> Admission + Send + Sync>;
+
+static CONNECTION_GUARD: OnceLock<ConnectionGuard> = OnceLock::new();
+
+/// Sets the check of `CONNECTION_GUARD`, for the whole run; false when one was set already,
+/// which then stays.
+pub fn guard_connections(
+    guard: impl Fn(&RuntimeFacts) -> Admission + Send + Sync + 'static,
+) -> bool {
+    CONNECTION_GUARD.set(Box::new(guard)).is_ok()
+}
+
+/// Why no connection was made: the client's failure, or, in root mode, the guard
+/// (`guard_connections`) keeping the console from the Runtime the state root names, before
+/// anything was connected. The client's failures of a request on a connection made come back
+/// as `Failed` too, where a read hands them on with these.
+pub(crate) enum NoConnection {
+    Failed(RuntimeClientError),
+    NotThisRoot,
+    Gone,
+}
+
+impl NoConnection {
+    /// The console's own code of a Runtime the guard kept the console from; `None` for the
+    /// client's failure, which carries its own.
+    fn console_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Failed(_) => None,
+            Self::NotThisRoot => Some(CONSOLE_RUNTIME_NOT_THIS_ROOT),
+            Self::Gone => Some(CONSOLE_RUNTIME_GONE),
+        }
+    }
+}
+
+impl From<RuntimeClientError> for NoConnection {
+    fn from(error: RuntimeClientError) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl fmt::Display for NoConnection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Failed(error) => write!(formatter, "{error}"),
+            Self::NotThisRoot => formatter.write_str(CONSOLE_RUNTIME_NOT_THIS_ROOT),
+            Self::Gone => formatter.write_str(CONSOLE_RUNTIME_GONE),
+        }
+    }
+}
+
+impl From<NoConnection> for ClientFailure {
+    /// A Runtime the guard kept the console from is the console's own code, at the client's
+    /// connect operation.
+    fn from(not: NoConnection) -> Self {
+        let code = match not {
+            NoConnection::Failed(error) => return Self::from(error),
+            NoConnection::NotThisRoot => CONSOLE_RUNTIME_NOT_THIS_ROOT,
+            NoConnection::Gone => CONSOLE_RUNTIME_GONE,
+        };
+        Self { code, operation: CONNECT_RUNTIME, runtime_code: None, host: None }
+    }
+}
+
+/// A connect of the online read face that failed, as the face's error: with the console's own
+/// code beneath the text when the guard kept the console from the Runtime (`console_code`).
+fn online_unavailable(not: &NoConnection) -> anyhow::Error {
+    let text = format!("在线读面不可用 / online source unavailable: {not}");
+    match not.console_code() {
+        Some(code) => anyhow::Error::new(ConsoleCode(code)).context(text),
+        None => anyhow!(text),
+    }
+}
+
+/// The client's own bound on `runtime-info.json`, which it reads whole before it connects.
+const MAX_RUNTIME_INFO_BYTES: u64 = 64 * 1024;
+
+/// The one way any connection to a Runtime is made — a read's (the workbench's lanes, the
+/// picture's, the ledger window's main, page and material connections, the launcher's probe)
+/// and a person's (a launcher press, a shutdown request, a pause or a resume, a change of
+/// settings, a device's operation, a refresh of the picture, a task's switch or close, a
+/// run's stop, a discovery) alike.
+///
+/// Without a guard, `config` connected, as ever. In root mode (`guard_connections`) the guard
+/// is asked first, of the Runtime the state root's `runtime-info.json` names, read as the
+/// client reads it (`stated_runtime`), and nothing is connected unless it is admitted: no
+/// handshake, no read, no request. A file that does not read so is left to the client, whose
+/// own discovery fails on it before it connects. The client reads the file again itself:
+/// should it name another Runtime by then, the guard is asked of that one too, and a refused
+/// connection is let go before anything is sent on it.
+pub(crate) fn runtime_connection(
+    config: RuntimeClientConfig,
+) -> Result<RuntimeClient, NoConnection> {
+    let Some(guard) = CONNECTION_GUARD.get() else {
+        return RuntimeClient::connect(config).map_err(NoConnection::Failed);
+    };
+    let stated = stated_runtime(config.state_root());
+    if let Some(stated) = &stated {
+        admitted(guard(stated))?;
+    }
+    let client = RuntimeClient::connect(config).map_err(NoConnection::Failed)?;
+    let reached = RuntimeFacts::of(client.runtime_info());
+    if stated.as_ref() != Some(&reached) {
+        admitted(guard(&reached))?;
+    }
+    Ok(client)
+}
+
+/// Whether a tool this console runs that connects to the Runtime by itself (the Runtime's
+/// `actingctl watchdog status`, which asks a Runtime it finds for its health) may be run on
+/// `state_root`: not, in root mode, while the Runtime its `runtime-info.json` names is one the
+/// guard keeps the console from (`Admission::NotThisRoot`). Without a guard, without a file that
+/// reads, and for a Runtime whose process is gone, it may: there is nothing there the console
+/// would keep itself from.
+pub fn tool_may_connect(state_root: &Path) -> bool {
+    let Some(guard) = CONNECTION_GUARD.get() else {
+        return true;
+    };
+    match stated_runtime(state_root) {
+        Some(stated) => guard(&stated) != Admission::NotThisRoot,
+        None => true,
+    }
+}
+
+/// `Ok` for a Runtime the guard admitted; else why nothing is connected.
+fn admitted(admission: Admission) -> Result<(), NoConnection> {
+    match admission {
+        Admission::Admitted => Ok(()),
+        Admission::NotThisRoot => Err(NoConnection::NotThisRoot),
+        Admission::Gone => Err(NoConnection::Gone),
+    }
+}
+
+/// The Runtime `state_root`'s `runtime-info.json` names, read from the file alone as the
+/// client reads it before it connects: a file of at most `MAX_RUNTIME_INFO_BYTES`, in the
+/// contract's own shape, passing its own checks. `None` when it is not there or does not read
+/// so.
+fn stated_runtime(state_root: &Path) -> Option<RuntimeFacts> {
+    let path = state_root.join(RUNTIME_INFO_FILE);
+    let metadata = std::fs::metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_RUNTIME_INFO_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    let info = serde_json::from_slice::<RuntimeInfo>(&bytes).ok()?;
+    info.validate().ok()?;
+    Some(RuntimeFacts::of(&info))
 }
 
 /// What one `read_instances` found: the instances as the card shows them, and

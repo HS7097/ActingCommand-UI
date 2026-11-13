@@ -106,7 +106,9 @@ impl Ui {
         issues: Vec<SettingsIssue>,
         launcher: Result<Launcher, InstallIssue>,
     ) -> Rc<Self> {
-        let launcher_view = LauncherView::new(launcher.is_ok());
+        let checked_root =
+            launcher.as_ref().ok().and_then(|launcher| launcher.checked_root.clone());
+        let launcher_view = LauncherView::new(launcher.is_ok(), checked_root);
         let ui = Rc::new(Self {
             language: Cell::new(language),
             text_size: Cell::new(stored.text_size),
@@ -393,8 +395,9 @@ impl Ui {
     }
 
     /// The top of every window: the settings file's problems, errors first; on
-    /// the workbench, what it could not do itself or read; and where the technical log
-    /// is. A save's failure stays until a save succeeds; one that only repeats
+    /// the workbench, what it could not do itself or read, and in root mode a Runtime up
+    /// that it asks nothing, not being the installation folder's; and where the technical
+    /// log is. A save's failure stays until a save succeeds; one that only repeats
     /// a problem found at the start is not said twice.
     pub fn paint_notices(&self) {
         let labels = self.labels();
@@ -411,6 +414,9 @@ impl Ui {
                 }
             }
             let mut own = Vec::new();
+            if let Some(why) = self.launcher_view.borrow().not_this_root_text(labels) {
+                own.push(why);
+            }
             if let Some(error) = &notices.window {
                 own.push(fill(labels.window_failed, &[error]));
             }
@@ -450,7 +456,9 @@ impl Ui {
 
     /// The workbench's lines that only the language changes: why this run has
     /// no state root, and the Runtime's configuration file, where an instance
-    /// is added by hand for now. And the accounts note, the cards, the live view, the Runtime's
+    /// is added by hand for now; on the settings page, the installation folder this
+    /// run's paths come from, if any, and the settings file the boxes save to. And
+    /// the accounts note, the cards, the live view, the Runtime's
     /// settings and what its start report says of them, which reads change too, and whether
     /// the Runtime is started again when it is gone; and which page shows, which only a press
     /// changes.
@@ -467,12 +475,26 @@ impl Ui {
         let config = self.launcher.as_ref().ok().and_then(|launcher| {
             launcher.actingd_config.as_ref()
         });
-        let (path, note) = match config {
-            Some(path) => (path.display().to_string(), ""),
-            None => (String::new(), labels.config_path_missing),
+        // With no paths at all the red bar above says why; only a run that has them but
+        // no configuration among them is told to set one up.
+        let (path, note) = match (config, self.launcher.is_err()) {
+            (Some(path), _) => (path.display().to_string(), ""),
+            (None, true) => (String::new(), labels.config_see_issue),
+            (None, false) => (String::new(), labels.config_path_missing),
         };
         window.set_config_path(path.into());
         window.set_config_note(note.into());
+        let root = self.launcher.as_ref().ok().and_then(|launcher| launcher.root.as_ref());
+        let place = match (root, self.settings.path()) {
+            (Some(root), Some(file)) => fill(
+                labels.place_root_settings,
+                &[&root.display().to_string(), &file.display().to_string()],
+            ),
+            (Some(root), None) => fill(labels.place_root, &[&root.display().to_string()]),
+            (None, Some(file)) => fill(labels.place_settings, &[&file.display().to_string()]),
+            (None, None) => String::new(),
+        };
+        window.set_place_note(place.into());
         self.paint_accounts_note();
         self.paint_names_note();
         workbench::paint::page(self);
