@@ -355,7 +355,7 @@ with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 
 v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 8, ledger revision 8):
 
 ```
-rev = "ef94d950a102a595fa0bde974b8d77ad54329b48"
+rev = "803fdfa3c382edafc7547f48d55ff7c662774383"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.

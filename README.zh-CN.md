@@ -249,7 +249,7 @@ v0.12.38 起读帧的账本查找由读者池在写线程外回答，#422 RA-1�
 照旧），说 0.12 协议（`runtime-client` 修订 8、账本修订 8）：
 
 ```
-rev = "ef94d950a102a595fa0bde974b8d77ad54329b48"
+rev = "803fdfa3c382edafc7547f48d55ff7c662774383"
 ```
 
 六个 crate（contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
