@@ -224,7 +224,7 @@ impl Run<'_> {
         )) {
             return Err(self.fail(Some(step), reason));
         }
-        match work(self) {
+        match work(&mut *self) {
             Ok(summary) => {
                 if let Err(reason) = self.say(Said::new(
                     format!("第 {} 步完成：{}", step.number(), summary.zh),
