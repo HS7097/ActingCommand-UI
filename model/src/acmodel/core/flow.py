@@ -93,9 +93,25 @@ one point of D*, never a pick per pool. Steps:
 only the impact assessment computes (`core.impact`), each pass in its own graph with some estimates moved: the steady
 state's program read as the steady state reads it, the three solves, the projections and the selection, exactly as
 `steady` finds them, so its joint vector is the steady state's for that model; it skips what the vector does not read
-(the prices of the rules, the least losses, HiGHS's marginals, the forcing costs, and the range of an activity that some
-optimum runs, which is never in the max-min's K). It shows each pool's coordinate and each activity's value at the
-vector, nothing else, and nothing else reads it.
+(the tie probes, the prices of the rules, the least losses, HiGHS's marginals, the forcing costs, and the range of an
+activity that some optimum runs, which is never in the max-min's K). It shows each pool's coordinate and each activity's
+value at the vector, nothing else, and nothing else reads it. It also times each of its stages (`STAGES`, PASS-TIMING) on
+a monotonic clock, and counts what HiGHS ran in each (#430 C-2a, `LP_COUNTS`: its runs, its second tries of the two
+kinds, and the time of the runs and of making their answers exact): what `Economy.timing` and `Economy.lps` hold, which
+are no part of its value (`encode` keeps neither, so neither does the cache) and which only the pass's `timing_ms` in
+prices.json shows (`core.impact`). The steady state times and counts its own the same way, over its sixteen stages
+(`STEADY_STAGES`), which only `steady_timing_ms` in prices.json shows (`export.prices`).
+
+**What the certificate reads** (#430 METHOD-C C-1; contracts/formats.md, "`acmodel export prices`", "The certificate").
+The steady state hands the impact assessment the objects its own computation found that the certificate reads (`Held`:
+S3's program and its exact optimum x*, S3's dual and the exact optimal point y* of it, D* and S3's optimal face in their
+complementary-slackness forms, P, A, A* and V0, K, the vector and each activity's value at it), beside its value
+(`Economy.held`) and never in it: `encode` keeps none of it, so neither does the cache, and every node keeps what it
+kept. `build_program` builds S3's program from a graph (the steady state's, or a pass's `graph.Moved`) as the solve
+builds it, and solves nothing; `compare_programs` compares a pass's program with the steady state's, and gives J (the
+activities' execution columns whose coefficients differ, only in balance rows, overflow bounds and regen stops) or where
+the two differ elsewhere. `steady_again` computes the steady state again without the cache, for an assessment whose
+steady state the cache gave (`core.impact`).
 
 **The re-solves at ±grain** (PRICE-2d, `_Solver.regrain`). One grain more or less of a resource's income moves only right
 sides of S3's program, so each re-solve starts from S3: S3's basis proves it where it stays primal feasible
@@ -108,6 +124,14 @@ fails, and for a MILP, the variables at a bound are fixed and the rows they leav
 is converted with `Fraction(x).limit_denominator(lp.max_denominator)`. Every solution is checked exactly against every
 bound, integrality and row (`lp_numeric_check_failed`). Objective values, prices and losses are computed from the
 checked fractions, never from the solver's floats.
+
+**An LP on D* that HiGHS finds infeasible** (#430). Every LP on D* (a projection's end, a pool's interval, each step of
+the selection and of the max-min, the vector's exact check) has a solution by construction: an exact point the solve
+already holds meets it (`_Solver.lp`, `witness`). So HiGHS's answer that it is infeasible is a numerical failure: the LP
+is solved again from scratch without presolve, and when HiGHS finds it infeasible again, that point is checked exactly
+against its every bound and row: it meets them all, `lp_numeric_check_failed`; it breaks one, the LP was built wrong,
+`lp_invariant_broken`. Every other program (S3, S1, S2, the least losses, a re-solve, the dual's least cost, a probe)
+takes HiGHS's infeasible as its answer, as before.
 
 **Infeasibility.** An infeasible program names a minimal set of conflicting rule groups (`lp_infeasible`): each
 group (a regen, cap, limit or read cap, and in a plan each opening stock) is dropped in turn, in id order, and
@@ -131,6 +155,7 @@ from acmodel.codes import (
     EXPR_EVAL_FAILED,
     LP_DUAL_DISAGREES,
     LP_INFEASIBLE,
+    LP_INVARIANT_BROKEN,
     LP_NUMERIC_CHECK_FAILED,
     LP_PROBE_UNVERIFIED,
     LP_SOLVE_FAILED,
@@ -141,7 +166,7 @@ from acmodel.codes import (
     STATE_READING_MISSING,
 )
 from acmodel.config import EconomySettings
-from acmodel.core import coverage, exact
+from acmodel.core import common, coverage, exact
 from acmodel.core.common import CONFIRMED, PROVISIONAL, RULE_STATUS, Need, worst
 from acmodel.core.unknown import read as unknowns_read, rule_status
 from acmodel.envelope import Failure, error
@@ -165,6 +190,34 @@ QUICK_NODE = ("economy", QUICK)
 VECTOR = "vector"
 VECTOR_NODE = ("economy", VECTOR)
 OUTPUTS = {STEADY: "economy:steady", PLAN: "economy:plan", QUICK: "economy:quick", VECTOR: "economy:vector"}
+# PASS-TIMING: the stages of one pass's vector, in the order they run (contracts/formats.md, "`acmodel export prices`",
+# the pass's `timing_ms`): the program built from the pass's graph (`model`); S3 (`optimum`), S1 (`acquisition`) and S2
+# (`value`), the latter two 0 when A has no term; S3's dual, its exact optimal point and the two faces in their
+# complementary-slackness form (`dual`); the projections (`projections`); the pools' intervals on D* (`intervals`); the
+# `most` probes (`most`); the probes of the activities' ranges, which decide K (`ranges`); the selection's steps 1 and 3
+# and the withheld coordinates (`selection`); the max-min over K (`max_min`); and the vector's exact check and the
+# activities' values at it (`check`). The clock (`CLOCK`) is monotonic, in nanoseconds; it times only, never decides.
+STAGES = (
+    "model", "optimum", "acquisition", "value", "dual", "projections", "intervals", "most", "ranges", "selection",
+    "max_min", "check",
+)
+# #430 C-2a: the stages of the steady state's own timing (`steady_timing_ms`; contracts/formats.md, "The steady state's
+# timing"): the vector's twelve and the four the vector skips, in the order the steady state runs them: the tie probes
+# (`ties`, after `dual`), the least losses (`losses`), the prices of the rules and the activities' values per step
+# (`rules`, after `projections`) and the forcing costs (`forcing`, after `check`).
+STEADY_STAGES = (
+    "model", "optimum", "acquisition", "value", "dual", "ties", "losses", "projections", "rules", "intervals", "most",
+    "ranges", "selection", "max_min", "check", "forcing",
+)
+# #430 C-2a: what a stage's `lps` holds of the LPs HiGHS ran there: each run (`runs`; a second try is one more), the
+# second tries of an LP on D* it first found infeasible (`again_infeasible`) and of one whose first status was none of
+# optimal, infeasible and unbounded (`again_other`), the time of those runs (`highs_ms`) and the time spent making their
+# answers exact and checking them (`exact_ms`). The counts never read the clock; the times (`LP_TIMES`) do.
+LP_COUNTS = ("runs", "again_infeasible", "again_other", "highs_ms", "exact_ms")
+LP_TIMES = ("highs_ms", "exact_ms")
+AGAIN_INFEASIBLE, AGAIN_OTHER = "again_infeasible", "again_other"
+CLOCK = time.perf_counter_ns
+NANOSECONDS_PER_MS = 1_000_000
 # The rule kinds the economy reads, and of them the kinds it does not model yet. A pool's declared zero (`no_use`)
 # is read by the coverage section only (`core.coverage`, PRICE-2b-2).
 RULE_KINDS = ("cap", "cooldown", "exchange", "flow", "gate", "limit", "no_use", "objective", "regen")
@@ -193,6 +246,14 @@ _Pair = tuple[Fraction | None, Fraction | None]  # a price: its low and high end
 # projections, the selection, the ranges and the forcing costs) and of the judgements' primal solves (the most an
 # optimum runs an activity).
 DUAL, JUDGEMENT = "dual", "judgement"
+# #430: the steps of the solves on the dual, which the errors of one name (`step`): the dual's least cost (`duality`),
+# and the LPs on D*, each of which has a solution by construction (`_Solver.lp`, `witness`): a projection's end, a pool's
+# interval, the selection's steps 1 and 3 and its withheld pools, the max-min's stages and probes (`MAX_MIN`, below, the
+# same word), and the vector's exact check.
+LEAST_COST, PROJECTION, INTERVAL, SELECTION, CHECK = "least_cost", "projection", "interval", "selection", "check"
+# #430: what `lp_numeric_check_failed` names for an LP on D* that HiGHS finds infeasible twice although an exact point
+# meets it (`_Solver.unsolved`): HiGHS's status (`found` 2, infeasible) where it must be 0 (optimal)
+SOLVER_STATUS = "solver_status"
 FACE: Key = ("duality", "face", 0)  # the strong-duality row: the dual's cost at the primal optimum
 LEVEL: Key = ("t", "level", 0)  # the max-min's level, a variable of its stage
 PROBE: Key = ("t", "probe", 0)  # the distance of one coordinate, a variable of the probe of a stage
@@ -234,7 +295,15 @@ WARM_FACES = 2
 class Economy:
     """The value of an economy node: its output as `economy` shows it, or the errors that block it; and what it
     read, the graph nodes, data rows and gates its outputs rest on (the provenance of `price:` and
-    `activity_value:`, PRICE-2b-1)."""
+    `activity_value:`, PRICE-2b-1). A vector the pass computed also holds how long each of its stages took (`timing`,
+    PASS-TIMING: whole milliseconds by `STAGES`), which is no part of its value: `encode` leaves it out, so the cache
+    never keeps it and a value the cache gives has none, and it is not compared. A steady state this run computed also
+    holds what its own computation found that the certificate reads (`held`, #430 METHOD-C: `Held`), in memory only and
+    no part of its value either: `encode` leaves it out too, so a steady state the cache gives has none, and it is not
+    compared. #430 C-2a: a vector or a steady state computed now also holds what HiGHS ran in each stage (`lps`, by
+    stage, `LP_COUNTS`) and the whole node's time (`total`, whole milliseconds from the start of the call that computed
+    it to its value), and a steady state its stages' times (`timing`, by `STEADY_STAGES`); none of them is part of the
+    value, encoded or compared either."""
 
     data: dict[str, Any] | None = None
     status: str = CONFIRMED
@@ -242,6 +311,10 @@ class Economy:
     warnings: tuple[dict[str, Any], ...] = ()
     blocked_by: frozenset[int] = frozenset()
     reads: tuple[tuple[str, ...], ...] = ()
+    timing: dict[str, int] | None = field(default=None, compare=False)
+    held: Held | None = field(default=None, compare=False, repr=False)
+    lps: dict[str, dict[str, int]] | None = field(default=None, compare=False, repr=False)
+    total: int | None = field(default=None, compare=False)
 
     @property
     def blocked(self) -> bool:
@@ -1448,6 +1521,148 @@ def _income_moves(model: _Model, resource: str, step: int, amount: Fraction) -> 
     return moves
 
 
+# S3's program built and not solved, and two of them compared (#430 METHOD-C; contracts/formats.md, "`acmodel export
+# prices`", "The certificate", item 1) -------------------------------------------------------------------------------
+
+# The rows in which a coefficient of an activity's execution column may differ between a pass's program and the steady
+# state's: the balances, the overflow bounds and the regen stops.
+J_ROWS = ("balance", "overflow", "stop")
+
+
+@dataclass(frozen=True)
+class Built:
+    """S3's program built from a graph and not solved (`build_program`): the model it is built from (`_Model`) and the
+    program; both None when the model's reading is blocked or refused, with the errors that block it among the graph's
+    (`blocked_by`), as the steady state's node would be blocked by them."""
+
+    model: _Model | None
+    program: _Program | None
+    blocked_by: frozenset[int] = frozenset()
+
+    @property
+    def blocked(self) -> bool:
+        return bool(self.blocked_by)
+
+
+def _read(graph: Graph, built: str) -> tuple[_Reader, _Model | None]:
+    """The model of one program read from `graph` (`built`, steady or plan), as every economy node reads it: the
+    structure (`_shape`), then the values (`_Reader.model`), which raise `Need` until every node they read is computed.
+    None for the model when the reading is blocked or refused (the reader holds why)."""
+    graph.depend(("economy_model",))
+    reader = _Reader(graph, _shape(graph, built), built)
+    return reader, reader.model(graph.economy)
+
+
+def _computed(graph: Graph, attempt: Callable[[], Any]) -> Any:
+    """`attempt()`, once each graph node it needs (`Need`) is computed in `graph`, as `Graph.run` computes one (through
+    its cache when it has one); `attempt` starts again after each, as a node's computation does in `solve`."""
+    compute = graph.compute if graph.cache is None else graph.cached
+    while True:
+        try:
+            return attempt()
+        except Need as need:
+            common.solve([need.key], compute, graph.results)
+
+
+def build_program(graph: Graph) -> Built:
+    """S3's program from `graph` (the steady state's graph, or a pass's `graph.Moved`), built and not solved: the model
+    read in the reference state as the steady state reads it (`_read`, which `compute` reads it with), then `_program`
+    of that model, the call `_Solver.tiers` makes for S3. So it is the program a solve of the steady state, or of the
+    vector, builds, row by row and column by column: the same row keys, senses, right sides, groups and coefficients,
+    the same columns with the same bounds, the same objective. A node of `graph` it needs that is not computed yet is
+    computed first (`_computed`); nothing is solved, and nothing of the program is kept anywhere."""
+
+    def attempt() -> Built:
+        reader, model = _read(graph, STEADY)
+        if model is None:
+            return Built(None, None, graph.register(reader.refused) | frozenset(reader.blocked))
+        return Built(model, _program(model))
+
+    return _computed(graph, attempt)
+
+
+@dataclass(frozen=True)
+class Compared:
+    """A pass's program compared with the steady state's (`compare_programs`). `columns` is J: the activities' execution
+    columns (`("x", activity, step)`) whose coefficients differ, by activity and then step, empty when the two programs
+    are one; None when the two differ anywhere else, and then `elsewhere` says where they first do: `part` (`column`,
+    `row`, `coefficient` or `objective`), the `row` and `column` it is at (by token, where it has them), the `member` of
+    a row (`row` for a row only one program has, `sense`, `rhs`, `group`), and the value on each side (`steady`, `pass`:
+    a number or a sense as its text, a column's bounds as `[lower, upper, integer]`, a row as its token, null for a side
+    without it)."""
+
+    columns: tuple[Key, ...] | None
+    elsewhere: dict[str, Any] | None = None
+
+    @property
+    def activities(self) -> tuple[str, ...]:
+        """The J activities, each with a column in J, by id."""
+        return tuple(sorted({key[1] for key in self.columns or ()}))
+
+
+def _keyed(program: _Program) -> dict[Key, _Row]:
+    """A program's rows by key; two rows with one key are a defect of the builder."""
+    rows = {row.key: row for row in program.rows}
+    if len(rows) != len(program.rows):
+        raise ValueError("a program holds two rows of one key")
+    return rows
+
+
+def _bounds(found: tuple[Fraction, Fraction | None, bool] | None) -> list[Any] | None:
+    return None if found is None else [str(found[0]), _text(found[1]), found[2]]
+
+
+def compare_programs(steady: _Program, moved: _Program) -> Compared:
+    """J, or where the pass's program `moved` differs from the steady state's `steady` elsewhere (`Compared`;
+    contracts/formats.md, "The certificate", item 1). The two may differ only in coefficients of activities' execution
+    columns, and there only in balance rows, overflow bounds and regen stops (`J_ROWS`); then J is the set of those
+    columns. Anything else that differs is where the program differs elsewhere, and the first such difference is given,
+    in this order: the columns, by key (one that only one program has, or whose bounds differ: lower, upper, integer);
+    the rows, by key (one that only one program has; then its sense, right side and group; then its coefficients, by
+    column); the objective, by column. Every comparison is of exact fractions; a coefficient a row does not list is 0.
+    Nothing is solved: this reads the two programs only."""
+    zero = Fraction(0)
+
+    def shown(value: Any) -> str | None:
+        return None if value is None else str(value)
+
+    for key in sorted(set(steady.variables) | set(moved.variables)):
+        before, after = steady.variables.get(key), moved.variables.get(key)
+        if before != after:
+            found = {"part": "column", "column": _token(key), "steady": _bounds(before), "pass": _bounds(after)}
+            return Compared(None, found)
+    rows, pass_rows = _keyed(steady), _keyed(moved)
+    columns: set[Key] = set()
+    for key in sorted(set(rows) | set(pass_rows)):
+        before, after = rows.get(key), pass_rows.get(key)
+        row = _token(key)
+        if before is None or after is None:
+            found = {
+                "part": "row", "row": row, "member": "row", "steady": None if before is None else row,
+                "pass": None if after is None else row,
+            }
+            return Compared(None, found)
+        for member in ("sense", "rhs", "group"):
+            old, new = getattr(before, member), getattr(after, member)
+            if old != new:
+                found = {"part": "row", "row": row, "member": member, "steady": shown(old), "pass": shown(new)}
+                return Compared(None, found)
+        for column in sorted(set(before.coefficients) | set(after.coefficients)):
+            old, new = before.coefficients.get(column, zero), after.coefficients.get(column, zero)
+            if old == new:
+                continue
+            if column[0] == "x" and key[0] in J_ROWS:
+                columns.add(column)
+                continue
+            found = {"part": "coefficient", "row": row, "column": _token(column), "steady": str(old), "pass": str(new)}
+            return Compared(None, found)
+    for column in sorted(set(steady.objective) | set(moved.objective)):
+        old, new = steady.objective.get(column, zero), moved.objective.get(column, zero)
+        if old != new:
+            return Compared(None, {"part": "objective", "column": _token(column), "steady": str(old), "pass": str(new)})
+    return Compared(tuple(sorted(columns)))
+
+
 # The dual (PRICE-2b-1; #424 ACM-PRICE addendum 2.1 §2.2 step 2) -------------------------------------------------
 
 
@@ -1646,6 +1861,7 @@ class _Solution:
     # a certified optimum's program as `core.exact` read it, its vertex and the arrays (the order of its rows)
     basis: tuple[Any, Any, Any] | None = None
     solver: Any = None  # PRICE-2d: S3's HiGHS instance (`lp` with `keep`), for its re-solves at ±grain (`_Grained`)
+    message: str | None = None  # #430: HiGHS's text of an infeasible LP, for the error that reports it (`_said`)
 
 
 @dataclass(frozen=True)
@@ -2194,6 +2410,25 @@ def _meets(rows: tuple[_Row, ...], x: dict[Key, Fraction]) -> bool:
     return True
 
 
+def _unmet(program: _Program, point: dict[Key, Fraction]) -> dict[str, str] | None:
+    """The first bound or row of `program` that `point` breaks exactly, as `_violation` finds it (the bounds by variable,
+    then the rows in canonical order); a variable it holds no value for breaks its lower bound (`found` null). None when
+    it meets them all (#430, `_Solver.unsolved`). The point may hold other variables too: only the program's are read."""
+    for key in sorted(program.variables):
+        if key not in point:
+            return {"constraint": _token(key), "found": "null", "bound": f">={program.variables[key][0]}"}
+    return _violation(program, point)
+
+
+def _said(found: _Solution, step: str | None = None) -> dict[str, Any]:
+    """What `lp_solve_failed` names of an LP that HiGHS found infeasible (#430): the step of a solve on the dual (`step`)
+    and HiGHS's text (`raw_text`), where each is known."""
+    shown: dict[str, Any] = {} if step is None else {"step": step}
+    if found.message is not None:
+        shown["raw_text"] = found.message
+    return shown
+
+
 @dataclass(frozen=True)
 class _Seed:
     """S3's basis as HiGHS ended at it (PRICE-2e), each column's and each row's status by key, and S3's exact optimum
@@ -2260,6 +2495,68 @@ def _never(dual: _Dual, point: dict[Key, Fraction], keys: list[Key]) -> bool:
     return True
 
 
+class _Clock:
+    """How long each stage of a pass's vector took (PASS-TIMING, `STAGES`), on the monotonic clock `CLOCK`: each stage is
+    the time from the end of the stage before it (the first, from the clock's start) to its own end, summed over each time
+    it ends; a stage that does not run is 0. So the stages never overlap, and their sum is the time from the start to the
+    last end. Only the vector and the steady state have one (`compute`; the steady state's over `STEADY_STAGES`, #430
+    C-2a); the other solves time nothing.
+
+    #430 C-2a: what HiGHS ran (`ran`, each run and its second try's kind; `exact`, the exact work on its answers) is
+    counted the same way: what came since the last end goes to the stage that ends next, by `LP_COUNTS`. A stage the
+    clock does not have is a defect (`KeyError`), never left out."""
+
+    def __init__(self, stages: tuple[str, ...] = STAGES) -> None:
+        self.stages = stages
+        self.spent = dict.fromkeys(stages, 0)
+        self.counted = {stage: dict.fromkeys(LP_COUNTS, 0) for stage in stages}
+        self.pending = dict.fromkeys(LP_COUNTS, 0)  # since the last end; the times in nanoseconds
+        self.started = self.since = CLOCK()
+
+    def lap(self, stage: str) -> None:
+        now = CLOCK()
+        self.spent[stage] += now - self.since
+        self.since = now
+        counted = self.counted[stage]
+        for name, amount in self.pending.items():
+            counted[name] += amount
+        self.pending = dict.fromkeys(LP_COUNTS, 0)
+
+    def ran(self, nanoseconds: int, again: str | None) -> None:
+        """One HiGHS run of an LP, which took `nanoseconds`: a second try of the kind `again`, or None for a first."""
+        self.pending["runs"] += 1
+        self.pending["highs_ms"] += nanoseconds
+        if again is not None:
+            self.pending[again] += 1
+
+    def exact(self, nanoseconds: int) -> None:
+        """The time spent making HiGHS's answer exact and checking it."""
+        self.pending["exact_ms"] += nanoseconds
+
+    def ms(self) -> dict[str, int]:
+        """Each stage's time in whole milliseconds, rounded down, by its stages (`STAGES` for a vector)."""
+        return {stage: self.spent[stage] // NANOSECONDS_PER_MS for stage in self.stages}
+
+    def lps(self) -> dict[str, dict[str, int]]:
+        """What HiGHS ran in each stage (`LP_COUNTS`), the times in whole milliseconds rounded down, by its stages."""
+        return {
+            stage: {
+                name: amount // NANOSECONDS_PER_MS if name in LP_TIMES else amount
+                for name, amount in self.counted[stage].items()
+            }
+            for stage in self.stages
+        }
+
+    def total(self) -> int:
+        """The time from the clock's start to now, in whole milliseconds rounded down."""
+        return (CLOCK() - self.started) // NANOSECONDS_PER_MS
+
+
+def no_lps(stages: tuple[str, ...]) -> dict[str, dict[str, int]]:
+    """`lps` with nothing run in any of `stages` (#430 C-2a): every member 0."""
+    return {stage: dict.fromkeys(LP_COUNTS, 0) for stage in stages}
+
+
 @dataclass(frozen=True)
 class _Tiers:
     """The steady state's three solves (`_Solver.tiers`; PRICE-2a), which PRICE-2b's dual reads."""
@@ -2271,18 +2568,66 @@ class _Tiers:
     floors: tuple[_Row, ...]  # S2's added row: A ≥ A*
     face: tuple[_Row, ...]  # the rows of the lexicographic optima: A ≥ A*, V ≥ V*
     records: list[dict[str, Any]]  # the acquisitions (`acquirers`), protected or not
-    ties: tuple[str, ...]  # `objective_tier_tie`
+    ties: tuple[str, ...]  # `objective_tier_tie` (none probed for the vector: `tiers`, `tie_probes`)
     dual: _Dual  # S3's dual (PRICE-2b-1), checked exactly (`duality`)
     point: dict[Key, Fraction]  # an exact optimal point of it: the dual slacks of complementary slackness (PRICE-2c)
     optimal: tuple[dict[Key, Any], tuple[_Row, ...]]  # S3's optimal face by complementary slackness (`_optimal_face`)
     seed: _Seed | None  # S3's basis, a start for an LP on that face (PRICE-2e)
     unverified: tuple[dict[str, Any], ...] = ()  # `lp_probe_unverified` of the tie probes (PRICE-2c)
+    # #430 METHOD-C: A's terms (`acquisition`), the function S1 maximised; none when A has no term (`Held`)
+    terms: dict[Key, Fraction] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _Chosen:
+    """What `_Solver.joint` chose (#430 METHOD-C, for `Held`): K, the max-min's coordinates by id, each its function on
+    D*, the low and high ends of its range there and whether it is two-sided (`_Solver.max_min`); the joint vector, each
+    pool's coordinate; and each activity's value at it, None for one that moves out of or into a store. All exact."""
+
+    coordinates: dict[str, tuple[dict[Key, Fraction], Fraction, Fraction, bool]]
+    vector: dict[str, Fraction]
+    values: dict[str, Fraction | None]
+
+
+@dataclass(frozen=True, eq=False)
+class Held:
+    """What the steady state's own computation found that the certificate reads (#430 METHOD-C; contracts/formats.md,
+    "`acmodel export prices`", "The certificate"), handed to the impact assessment beside the steady state's value
+    (`Economy.held`) and held in memory only: never in its value, the cache or a file. Each member is the object
+    `_Solver.steady` itself computed with; none is computed again for it (`_Solver.handed`).
+
+    - `program`: S3's program (`_Tiers.program`), and `x`, its exact optimum x* (`_Tiers.base.x`);
+    - `dual`: S3's dual (`_Tiers.dual`), and `point`, the exact optimal point y* of it that the strong-duality check
+      found (`_Tiers.point`, `duality`);
+    - `restricted`: D*, in its complementary-slackness form with x* (`_restricted`), on which every LP on D* of the
+      steady state is solved;
+    - `optimal`: S3's optimal face, in its complementary-slackness form with y* (`_Tiers.optimal`, `_optimal_face`);
+    - `protected`: P, the protected acquisitions by id (`acquirers`, `protects`); `acquisition`, A's terms
+      (`acquisition`; none when A has no term); `acquired`, A* (0 then); and `value`, V0, S3's optimum;
+    - `coordinates`, `vector` and `values`: K, the joint vector and each activity's value at it (`_Chosen`)."""
+
+    program: _Program
+    x: dict[Key, Fraction]
+    dual: _Dual
+    point: dict[Key, Fraction]
+    restricted: tuple[dict[Key, Any], tuple[_Row, ...]]
+    optimal: tuple[dict[Key, Any], tuple[_Row, ...]]
+    protected: tuple[str, ...]
+    acquisition: dict[Key, Fraction]
+    acquired: Fraction
+    value: Fraction
+    coordinates: dict[str, tuple[dict[Key, Fraction], Fraction, Fraction, bool]]
+    vector: dict[str, Fraction]
+    values: dict[str, Fraction | None]
 
 
 class _Solver:
-    def __init__(self, model: _Model, settings: EconomySettings) -> None:
+    def __init__(self, model: _Model, settings: EconomySettings, clock: _Clock | None = None) -> None:
         self.model = model
         self.settings = settings
+        # PASS-TIMING: the vector's stages (`lap`); #430 C-2a: the steady state's too, and what HiGHS ran in each
+        # (`ran`, `spent_exact`); None for every other solve
+        self.clock = clock
         # PRICE-2c: the last LP solved with `warm` (its variables and rows, held so that they stay the objects they are;
         # its arrays; the HiGHS instance that holds it), for the next LP on the same rows with another objective.
         # PRICE-2e: one per face (by its variables: D* and S3's optimal face, `WARM_FACES`), so that LPs on the two that
@@ -2296,6 +2641,32 @@ class _Solver:
         self.rebuilds: list[float] = []
         # PRICE-2d: how each side of a resource's re-solves at ±grain was found (`grain_way`); a diagnosis, never output
         self.grain_ways: dict[str, int] = {}
+        # #430 METHOD-C: what the last `joint` chose (K, the vector, the activities' values at it), and what `steady`
+        # hands the impact assessment (`Held`, `handed`); None until they run. Neither is output; nothing reads them here
+        self.chosen: _Chosen | None = None
+        self.held: Held | None = None
+
+    def lap(self, stage: str) -> None:
+        """The end of a stage of the vector or of the steady state (PASS-TIMING, #430 C-2a; `_Clock.lap`); nothing
+        without a clock. It reads the clock only, so no solve differs for it."""
+        if self.clock is not None:
+            self.clock.lap(stage)
+
+    def reading(self) -> int | None:
+        """The clock's reading now, where a HiGHS run or its exact work starts (#430 C-2a); None without a clock."""
+        return None if self.clock is None else CLOCK()
+
+    def ran(self, started: int | None, again: str | None = None) -> None:
+        """A HiGHS run of an LP that started at `started` (`reading`) has ended (#430 C-2a, `_Clock.ran`): counted, a
+        second try of the kind `again`, and timed. Nothing without a clock; it reads the clock only."""
+        if self.clock is not None and started is not None:
+            self.clock.ran(CLOCK() - started, again)
+
+    def spent_exact(self, started: int | None) -> None:
+        """The exact work on a HiGHS answer that started at `started` (`reading`) has ended (#430 C-2a, `_Clock.exact`).
+        Nothing without a clock; it reads the clock only."""
+        if self.clock is not None and started is not None:
+            self.clock.exact(CLOCK() - started)
 
     def failure(self, code: str, **detail: Any) -> Failure:
         return Failure(error(code, {"path": self.model.path, "solve": self.model.solve, **detail}))
@@ -2348,11 +2719,22 @@ class _Solver:
 
     def lp(
         self, program: _Program, stage: str, *, check: bool = True, unbounded: bool = False, warm: bool = False,
-        keep: bool = False, seed: _Seed | None = None,
+        keep: bool = False, seed: _Seed | None = None, witness: tuple[str, dict[Key, Fraction] | None] | None = None,
     ) -> _Solution:
         """An LP, solved by HiGHS (`_highs`) and made exact from its basis (`vertex`). With `unbounded`, an objective
         without a maximum is the status `unbounded` (an end of a projection that is null, PRICE-2b-1); else it is
         `lp_solve_failed`. With `keep` (S3, PRICE-2d), the solution holds the HiGHS instance that solved it.
+
+        With `witness` (#430: an LP on D*, which has a solution by construction), its step (`step`, of the errors below)
+        and an exact point that meets every one of its bounds and rows: D*'s by the strong-duality check (`duality`), and
+        then the solution of the LP that added the selection's last fixing row (`joint`, `max_min`); None where the solve
+        holds none (a pool fixed at 0, unbounded both ways, until the next LP's solution). HiGHS's answer that such an LP
+        is infeasible is then a numerical failure, not an answer: the LP is solved again from scratch without presolve
+        (`_highs`; the instance that solves it holds its rows, so the next LP on that face, warm, goes on from it), once
+        in all (a first status other than 0, 2 and 3 already has its second try so). When HiGHS finds it infeasible
+        again, the point is checked exactly against every bound and row of the LP (`unsolved`). Every other LP (S3, S1,
+        S2, the least losses, a price re-solve, the dual's least cost, a probe) takes HiGHS's infeasible as its answer, as
+        before; and an LP on D* that HiGHS solves the first time takes the same way it did.
 
         With `warm` (the LPs on one face, which differ only in their objective: the projections, the intervals, the
         ranges on D*, PRICE-2c; and since PRICE-2e the `most` probes on S3's optimal face, and the selection on D*,
@@ -2361,37 +2743,62 @@ class _Solver:
         given to the HiGHS instance that solved that one, with its objective changed and those rows added
         (`_highs_again`), so HiGHS starts from the basis it ended at. With `seed` (PRICE-2e: an LP on S3's optimal face
         that S3's optimum meets), a new instance starts from S3's basis (`_highs_seeded`). Only where HiGHS starts
-        differs: the exact vertex and its certificate are the new LP's own."""
+        differs: the exact vertex and its certificate are the new LP's own.
+
+        #430 C-2a: on the clock, each HiGHS run here is counted and timed (`ran`), each second try by its kind
+        (`again_other`, `again_infeasible`), and so is the exact work on the answer (`vertex`, `spent_exact`); they read
+        the clock only, so no solve differs for them."""
         result = None
         held = self.warm.pop(id(program.variables), None) if warm else None
         added = None if held is None else _added(held[1], program.rows)
         if added is not None:
             arrays = _extended(held[2], program, added)
+            started = self.reading()
             result = _highs_again(held[3], arrays, added)
+            self.ran(started)
             if result.solver is not None:  # it ran: the instance holds these rows now (else it is dropped)
                 self.warm[id(program.variables)] = (program.variables, program.rows, arrays, held[3])
         else:
             arrays = _arrays(program)
+            started = self.reading()
             result = _highs(arrays, True) if seed is None else _highs_seeded(arrays, seed)
+            self.ran(started)
             if warm and result.solver is not None:
                 self.warm[id(program.variables)] = (program.variables, program.rows, arrays, result.solver)
                 while len(self.warm) > WARM_FACES:  # the face whose LPs came longest ago
                     self.warm.pop(next(iter(self.warm)))
+        tries = 1
         if result.status not in (0, 2, 3):  # "unbounded or infeasible" from presolve, or numerical trouble
-            result = _highs(arrays, False)
+            started = self.reading()
+            result, tries = _highs(arrays, False), 2
+            self.ran(started, AGAIN_OTHER)
+        elif result.status == 2 and witness is not None:  # an LP on D* has a solution: HiGHS erred (#430)
+            started = self.reading()
+            result, tries = _highs(arrays, False), 2
+            self.ran(started, AGAIN_INFEASIBLE)
+            if warm and result.solver is not None:  # it holds these rows: the next LP on this face goes on from it
+                self.warm[id(program.variables)] = (program.variables, program.rows, arrays, result.solver)
+                while len(self.warm) > WARM_FACES:  # the face whose LPs came longest ago
+                    self.warm.pop(next(iter(self.warm)))
+        if result.status == 2 and witness is not None:
+            raise self.unsolved(program, stage, witness, result.message, tries)
         if result.status == 2:
-            return _Solution("infeasible")
+            return _Solution("infeasible", message=result.message)
         if result.status == 3 and unbounded:
             return _Solution("unbounded")
+        shown = {} if witness is None else {"step": witness[0], "tries": tries}  # #430: an LP on D*
         if result.status == 3:
-            raise self.failure(LP_SOLVE_FAILED, stage=stage, reason="unbounded", status=3)
+            raise self.failure(LP_SOLVE_FAILED, stage=stage, reason="unbounded", status=3, **shown)
         if result.status != 0:
             raise self.failure(
-                LP_SOLVE_FAILED, stage=stage, reason="solver_status", status=int(result.status), raw_text=result.message
+                LP_SOLVE_FAILED, stage=stage, reason="solver_status", status=int(result.status), raw_text=result.message,
+                **shown,
             )
         if not check:
             return _Solution("optimal")
+        started = self.reading()
         x, found = self.vertex(program, arrays, result, stage)
+        self.spent_exact(started)
         duals = list(result.duals)
         le = _marginals(arrays.le, duals[: len(arrays.le)])
         eq = _marginals(arrays.eq, duals[len(arrays.le):])
@@ -2403,6 +2810,29 @@ class _Solver:
             basis=(self.last_problem, found, arrays) if certified else None,
             solver=result.solver if keep else None,
         )
+
+    def unsolved(
+        self, program: _Program, stage: str, witness: tuple[str, dict[Key, Fraction] | None], text: str, tries: int
+    ) -> Failure:
+        """The error of an LP on D* that HiGHS found infeasible on both its tries (#430; `lp`, `witness`), told apart by
+        the exact point the solve holds for it, checked exactly against the LP's every bound and row (`_unmet`):
+        - it meets them all, so the LP has a solution and HiGHS's answer is a numerical failure: `lp_numeric_check_failed`,
+          at HiGHS's status (`constraint` solver_status, `found` 2, infeasible, `bound` =0, optimal);
+        - it breaks one, so the LP is not the one the solve meant to build (a defect, not a numerical failure):
+          `lp_invariant_broken`, at the first it breaks (its `constraint`, `found` and `bound`, as `_violation` gives them);
+        - none is held (`lp`): `lp_solve_failed` (status 2).
+        Each names the step, HiGHS's text of its second answer (`raw_text`) and how many times it ran the LP (`tries`).
+        Nothing is relaxed, and nothing is left out: the steady state, or the pass, is blocked."""
+        step, point = witness
+        shown = {"step": step, "raw_text": text, "tries": tries}
+        if point is None:
+            return self.failure(LP_SOLVE_FAILED, stage=stage, reason="solver_status", status=2, **shown)
+        broken = _unmet(program, point)
+        if broken is None:
+            return self.failure(
+                LP_NUMERIC_CHECK_FAILED, stage=stage, constraint=SOLVER_STATUS, found="2", bound="=0", **shown
+            )
+        return self.failure(LP_INVARIANT_BROKEN, stage=stage, **broken, **shown)
 
     def probe(
         self, program: _Program, stage: str, *, unbounded: bool = False, warm: bool = False, seed: _Seed | None = None
@@ -2637,7 +3067,11 @@ class _Solver:
         - the vertex is checked exactly against every bound and row it changes (`_Grained.violation`).
         Where HiGHS does not end optimal there (an infeasible re-solve: a new LP decides that, as before), where no
         certified vertex comes of it, and where the income moves more than right sides, the re-solve is a new LP, as
-        before (`resolved`)."""
+        before (`resolved`).
+
+        #430 C-2a: on the clock, HiGHS's run here is counted and timed (`ran`; no second try: a new LP is another run),
+        and so is the exact work on its answer (the update or the new elimination and the check, `spent_exact`), which
+        ever way the time chose."""
         grained = self.grained
         moves = None if grained is None or grained.solver is None else self.grain_moves(resource, step, delta)
         if moves is not None:
@@ -2648,9 +3082,11 @@ class _Solver:
                         math.inf if problem.upper[n + place] is None else _float(problem.upper[n + place]))
                 for place in moves
             }
+            started = self.reading()
             run, restored = _highs_moved(
                 grained.solver, grained.saved, ends, {place: grained.ends[place] for place in moves}, n, m
             )
+            self.ran(started)
             if not restored:
                 raise self.failure(
                     LP_SOLVE_FAILED, stage="price", reason="solver_status", status=4, raw_text="changeRowBounds"
@@ -2664,6 +3100,7 @@ class _Solver:
                     self.update_most = min(self.update_most, entered)
                     return True
 
+                begun = self.reading()
                 vertex: exact.Vertex | exact.Refused | str = exact.reoptimum(
                     problem, grained.factored, run.statuses, self.update_most, stop
                 )
@@ -2676,10 +3113,12 @@ class _Solver:
                 if isinstance(vertex, exact.Vertex):
                     x = dict(zip(grained.arrays.columns, vertex.x, strict=True))
                     broken = grained.violation(x, moves)
+                    self.spent_exact(begun)
                     if broken is not None:  # a certified vertex meets every row by construction: a defect
                         raise self.failure(LP_NUMERIC_CHECK_FAILED, stage="price", **broken)
                     self.grain_way(way)
                     return self.objective(grained.program, x)
+                self.spent_exact(begun)
                 self.grain_way("new_lp_not_certified")
             else:
                 self.grain_way(f"new_lp_status_{run.status}")
@@ -2730,24 +3169,36 @@ class _Solver:
 
     def extreme(
         self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: Any, function: dict[Key, Fraction],
-        sense: int,
+        sense: int, witness: tuple[str, dict[Key, Fraction] | None] | None = None,
     ) -> Fraction | None:
         """The greatest (`sense` 1) or least (-1) value of a linear function on the solutions of `rows` (D*, or a face
         of it), exact; None when it is unbounded. The rows always have a solution: they hold the dual point that the
-        strong-duality check found (`lp_solve_failed`, stage `dual`, otherwise)."""
+        strong-duality check found (`lp_solve_failed`, stage `dual`, otherwise). With `witness` (#430: an LP on D*), its
+        step and an exact point of `rows` (`lp`, `witness`)."""
+        return self.extreme_at(variables, rows, function, sense, witness)[0]
+
+    def extreme_at(
+        self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: Any, function: dict[Key, Fraction],
+        sense: int, witness: tuple[str, dict[Key, Fraction] | None] | None = None,
+    ) -> tuple[Fraction | None, dict[Key, Fraction] | None]:
+        """`extreme`, and an exact point that meets `rows` (#430, what the selection holds for its next LP on D*): the
+        solution that reaches the extreme; where it is unbounded, `witness`'s point (None without one)."""
         program = _Program(variables, tuple(rows), _nonzero({key: sense * value for key, value in function.items()}))
-        found = self.lp(program, DUAL, unbounded=True, warm=True)
+        found = self.lp(program, DUAL, unbounded=True, warm=True, witness=witness)
         if found.status == "unbounded":
-            return None
-        if found.status != "optimal":
-            raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2)
-        return sense * found.value
+            return None, (None if witness is None else witness[1])
+        if found.status != "optimal":  # an LP with a `witness` never ends here (`lp` raises)
+            step = None if witness is None else witness[0]
+            raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2, **_said(found, step))
+        return sense * found.value, found.x
 
     def ends(
-        self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: Any, function: dict[Key, Fraction]
+        self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: Any, function: dict[Key, Fraction],
+        witness: tuple[str, dict[Key, Fraction] | None] | None = None,
     ) -> _Pair:
-        """A linear function's least and greatest values on the solutions of `rows`, None where unbounded."""
-        return self.extreme(variables, rows, function, -1), self.extreme(variables, rows, function, 1)
+        """A linear function's least and greatest values on the solutions of `rows`, None where unbounded; `witness` as
+        `extreme` takes it."""
+        return self.extreme(variables, rows, function, -1, witness), self.extreme(variables, rows, function, 1, witness)
 
     def probed_ends(
         self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: Any, function: dict[Key, Fraction]
@@ -2771,7 +3222,9 @@ class _Solver:
         activities no optimum runs (`_never`, PRICE-2c)."""
         found = self.lp(_Program(dual.variables, dual.rows, {key: -value for key, value in dual.cost.items()}), DUAL)
         if found.status != "optimal":  # the primal has an optimum, so its dual has one
-            raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2)
+            raise self.failure(
+                LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2, **_said(found, LEAST_COST)
+            )
         least = -found.value
         if least != optimum:
             raise self.failure(
@@ -2782,23 +3235,33 @@ class _Solver:
     def max_min(
         self, variables: dict[Key, tuple[Fraction, Fraction | None, bool]], rows: list[_Row],
         coordinates: dict[str, tuple[dict[Key, Fraction], Fraction, Fraction, bool]],
-    ) -> tuple[dict[str, Fraction], list[dict[str, Any]]]:
+        met: dict[Key, Fraction] | None = None,
+    ) -> tuple[dict[str, Fraction], list[dict[str, Any]], dict[Key, Fraction] | None]:
         """The lexicographic max-min of addendum 2.1 §2.2 step 4.2 over K (`coordinates`: id -> its function, the low
         and high ends of its range on D*, and whether it is two-sided, `_distance`), on the solutions of `rows`. A
         stage maximises the level t that every free coordinate's distance reaches; a coordinate whose distance is t
         in every optimum of the stage (its probe, the most it reaches while the others reach t, is t) is fixed at its
         value there, one value by convexity, and its row added to `rows`. Each stage fixes at least one, so it ends;
         none fixed is `lp_numeric_check_failed` (stage `dual`). Returns the fixed values and the stages, each
-        `{level, fixed}` (the coordinates it fixed, by id)."""
+        `{level, fixed}` (the coordinates it fixed, by id).
+
+        #430: each LP here is on D* (`lp`, `witness`, step `max_min`), and `met` is an exact point that meets `rows`
+        (None for none). With the level at 0 it meets the first stage: each coordinate's function lies within its range
+        on D* at every point of D*. A stage's optimum meets each of its probes with the probe's distance at the stage's
+        level (the others' rows hold at that level, and so does its own), and the next stage, at the same level, with
+        the rows that fix what the stage fixed (each at its value there). Also returns such a point of `rows` as the
+        max-min leaves them: the last stage's optimum (its level and probe variables are no variable of D*, so an LP on D*
+        reads none of them), or `met` when no stage ran."""
         zero, one = Fraction(0), Fraction(1)
         free = dict(coordinates)
         fixed: dict[str, Fraction] = {}
         stages: list[dict[str, Any]] = []
+        at = None if met is None else {**met, LEVEL: zero}
         while free:
             names = sorted(free)
             levels = [row for name in names for row in _distance(name, *free[name], LEVEL)]
             stage = _Program({**variables, LEVEL: (zero, None, False)}, (*rows, *levels), {LEVEL: one})
-            best = self.optimal(stage, DUAL)
+            best = self.optimal(stage, DUAL, witness=(MAX_MIN, at))
             level = best.value
             newly = []
             for name in names:
@@ -2807,7 +3270,7 @@ class _Solver:
                     {**variables, PROBE: (zero, None, False)}, (*rows, *others, *_distance(name, *free[name], PROBE)),
                     {PROBE: one},
                 )
-                if self.optimal(probe, DUAL).value <= level:
+                if self.optimal(probe, DUAL, witness=(MAX_MIN, {**best.x, PROBE: level})).value <= level:
                     newly.append(name)
             if not newly:
                 raise self.failure(
@@ -2818,7 +3281,8 @@ class _Solver:
                 fixed[name] = sum((coefficient * best.x[key] for key, coefficient in function.items()), zero)
                 rows.append(_Row(("fix", name, 0), function, "eq", fixed[name], None))
             stages.append({"level": str(level), "fixed": newly})
-        return fixed, stages
+            at = best.x  # its level is this stage's: it meets the next stage, and the rows that fix what this one fixed
+        return fixed, stages, (at if stages else met)
 
     def joint(
         self, dual: _Dual, point: dict[Key, Fraction], optimum: Fraction, prices: dict[str, list[_Pair]],
@@ -2875,7 +3339,15 @@ class _Solver:
         - **`lean`** (the vector, PRICE-4a): only what the vector reads. The range of an activity is probed only when no
           optimum runs it (`most` 0: only such an activity is in K), and no forcing cost is computed; the activities'
           other judgements are then null. The vector is the same: every step of the selection is an LP's optimal
-          value over the same K."""
+          value over the same K. Its stages end on the solver's clock (`lap`, PASS-TIMING); the steady state's forcing
+          costs end on it too (#430 C-2a, `forcing`, after each activity's), which a pass's clock has no stage for.
+        - **What it chose** (#430 METHOD-C): K, the vector and each activity's value at it, exact, are kept on the solver
+          (`chosen`, `_Chosen`) for `steady` to hand on (`Held`); nothing here reads them, and nothing above changes.
+        - **An exact point of each LP on D*** (#430; `lp`, `witness`). `point`, the strong-duality check's, meets D*
+          (the intervals'); each fixing row holds the value the solution of an LP found, which that solution meets, so it
+          meets the rows so far (the selection's next LP, the max-min's, the check's), but a pool fixed at 0 (unbounded
+          both ways), which no solution reached: none is held then, until the next LP's solution. It is read only where
+          HiGHS finds such an LP infeasible on both its tries, and never changes a value."""
         model, steps, zero, one = self.model, self.model.steps, Fraction(0), Fraction(1)
         variables = on_face[0]
         warnings: list[dict[str, Any]] = []
@@ -2898,7 +3370,8 @@ class _Solver:
                 mean = sum((low for low, _ in prices[resource]), zero) / steps
                 intervals[resource] = (mean, mean)
             else:
-                intervals[resource] = self.ends(*on_face, pools[resource])
+                intervals[resource] = self.ends(*on_face, pools[resource], (INTERVAL, point))
+        self.lap("intervals")
         most: dict[str, Fraction | None] = {}
         runs: dict[str, dict[Key, Fraction]] = {}  # activity -> its `most` probe's solution
         worth: dict[str, dict[Key, Fraction]] = {}
@@ -2919,6 +3392,7 @@ class _Solver:
                     most[activity] = None if found.status == "unbounded" else found.value
                     if found.status != "unbounded":  # an optimum of S3 that runs it `most`: its forcing cost's x*
                         runs[activity] = found.x
+            self.lap("most")
             if model.touches_store(activity):
                 continue
             value: dict[Key, Fraction] = {}
@@ -2940,22 +3414,30 @@ class _Solver:
                 note(RANGE, activity, ends)
             else:
                 ranges[activity] = ends
+            self.lap("ranges")
         rows = list(on_face[1])  # D* without the strong-duality row (PRICE-2e), and the fixing rows after it
         chosen: dict[str, tuple[Fraction, str]] = {}
         goals = {resource for _, resource, _ in model.goals}
+        # #430: an exact point that meets `rows`, which each LP on them holds (`lp`, `witness`): the dual point of the
+        # strong-duality check, then the solution of the LP that found the value each fixing row holds
+        met: dict[Key, Fraction] | None = point
 
-        def fix(resource: str, value: Fraction | None, by: str) -> None:
+        def fix(resource: str, value: Fraction | None, by: str, at: dict[Key, Fraction] | None) -> None:
+            nonlocal met
             if value is None:  # an end that D* bounds is bounded on every face of it
                 raise self.failure(LP_NUMERIC_CHECK_FAILED, stage=DUAL, constraint=PRICE + resource, found="null", bound=by)
             rows.append(_Row(("fix", PRICE + resource, 0), pools[resource], "eq", value, None))
             chosen[resource] = (value, by)
+            met = at  # the solution that reached `value` meets the new row; none is held for a pool fixed at 0
 
         for resource in model.resources:  # steps 1 and 3
             low, high = intervals[resource]
             if low is not None and low == high:
                 chosen[resource] = (low, EXACT)
             elif low is not None and high is None and resource in goals:
-                fix(resource, self.extreme(variables, rows, pools[resource], -1), ONE_MORE)
+                least, at = self.extreme_at(variables, rows, pools[resource], -1, (SELECTION, met))
+                fix(resource, least, ONE_MORE, at)
+        self.lap("selection")
         coordinates: dict[str, tuple[dict[Key, Fraction], Fraction, Fraction, bool]] = {}
         for resource in model.resources:
             low, high = intervals[resource]
@@ -2966,20 +3448,27 @@ class _Solver:
                 continue
             if most[activity] == 0 and low is not None and high == 0 and low < 0:
                 coordinates[ACTIVITY_VALUE + activity] = (worth[activity], low, high, False)
-        fixed, stages = self.max_min(variables, rows, coordinates)  # step 2
+        fixed, stages, met = self.max_min(variables, rows, coordinates, met)  # step 2
         for resource in model.resources:
             if PRICE + resource in fixed:
                 chosen[resource] = (fixed[PRICE + resource], MAX_MIN)
+        self.lap("max_min")
         for resource in model.resources:  # the withheld coordinates, free through the max-min
             if resource in chosen:
                 continue
-            low = self.extreme(variables, rows, pools[resource], -1)
+            low, at = self.extreme_at(variables, rows, pools[resource], -1, (SELECTION, met))
             if low is not None:
-                fix(resource, low, ONE_MORE)
+                fix(resource, low, ONE_MORE, at)
                 continue
-            high = self.extreme(variables, rows, pools[resource], 1)
-            fix(resource, high if high is not None else zero, ONE_LESS if high is not None else ZERO)
-        self.member(dual, _Program(variables, tuple(rows), {}), optimum)  # the vector is a point of D*, checked exactly
+            high, at = self.extreme_at(variables, rows, pools[resource], 1, (SELECTION, met))
+            if high is not None:
+                fix(resource, high, ONE_LESS, at)
+            else:
+                fix(resource, zero, ZERO, None)
+        self.lap("selection")
+        # the vector is a point of D*, checked exactly
+        self.member(dual, _Program(variables, tuple(rows), {}), optimum, met)
+        self.lap("check")
         vector = {resource: chosen[resource][0] for resource in model.resources}
         prices = {
             resource: {
@@ -2989,6 +3478,7 @@ class _Solver:
             for resource in model.resources
         }
         activities: dict[str, Any] = {}
+        at_vector: dict[str, Fraction | None] = {}
         for activity in model.activities:
             count, cost = most[activity], zero
             if lean:  # the vector reads no forcing cost
@@ -3010,6 +3500,8 @@ class _Solver:
                     cost = None
                 else:
                     cost = None if found.status == "unbounded" else found.value
+            if not lean:  # #430 C-2a: the steady state's stage `forcing` (a pass's clock has none)
+                self.lap("forcing")
             value = None
             if activity in worth:
                 value = sum(
@@ -3017,6 +3509,7 @@ class _Solver:
                      if name == activity and entity in vector),
                     zero,
                 )
+            at_vector[activity] = value
             doubtful = unverified[activity]
             activities[activity] = {
                 "value": _text(value),
@@ -3027,17 +3520,21 @@ class _Solver:
                 "input_bound": None if FORCING in doubtful else cost is None,
                 "unverified": list(doubtful),
             }
+        self.chosen = _Chosen(coordinates, vector, at_vector)  # #430 METHOD-C: what it chose, exact (`Held`)
         return {"prices": prices, "max_min": stages, "activities": activities}, warnings
 
-    def member(self, dual: _Dual, program: _Program, optimum: Fraction) -> None:
+    def member(
+        self, dual: _Dual, program: _Program, optimum: Fraction, met: dict[Key, Fraction] | None = None
+    ) -> None:
         """The joint vector's exact check (PRICE-2e): a solution of `program` (D* in its complementary-slackness form
         with every coordinate fixed; `joint`), solved warm from the selection's last LP and checked exactly against its
         every bound and row as every solution is, then at the strong-duality row, which that form leaves out: its cost
         must be V0 exactly (complementary slackness makes it so; anything else is a defect). A failed check is
-        `lp_numeric_check_failed` (stage `dual`), and a program HiGHS finds infeasible `lp_solve_failed`, as before."""
-        found = self.lp(program, DUAL, warm=True)
-        if found.status != "optimal":
-            raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2)
+        `lp_numeric_check_failed` (stage `dual`). #430: `met` is an exact point that meets `program` (`joint`), so a
+        program HiGHS finds infeasible is solved again, and then told apart by it (`lp`, `witness`, step `check`)."""
+        found = self.lp(program, DUAL, warm=True, witness=(CHECK, met))
+        if found.status != "optimal":  # an LP with a `witness` never ends here (`lp` raises)
+            raise self.failure(LP_SOLVE_FAILED, stage=DUAL, reason="solver_status", status=2, **_said(found, CHECK))
         cost = sum((value * found.x[key] for key, value in dual.cost.items() if found.x[key]), Fraction(0))
         if cost != optimum:
             raise self.failure(
@@ -3078,22 +3575,31 @@ class _Solver:
                     dual += -base.le[("move", flow, step)] * float(base.x[("x", activity, step)])
         return dual
 
-    def optimal(self, program: _Program, stage: str) -> _Solution:
+    def optimal(
+        self, program: _Program, stage: str, witness: tuple[str, dict[Key, Fraction] | None] | None = None
+    ) -> _Solution:
         """The optimum of a program that has one: the program of the optimum with rows that a solution of it meets
-        (a floor at an optimum, a probe), or another objective over the same rows."""
-        solution = self.lp(program, stage)
-        if solution.status != "optimal":
-            raise self.failure(LP_SOLVE_FAILED, stage=stage, reason="solver_status", status=2)
+        (a floor at an optimum, a probe), or another objective over the same rows. With `witness` (#430: the max-min's
+        LPs on D*), its step and an exact point that meets it (`lp`, `witness`); S1 and S2 have none."""
+        solution = self.lp(program, stage, witness=witness)
+        if solution.status != "optimal":  # an LP with a `witness` never ends here (`lp` raises)
+            step = None if witness is None else witness[0]
+            raise self.failure(LP_SOLVE_FAILED, stage=stage, reason="solver_status", status=2, **_said(solution, step))
         return solution
 
-    def tiers(self) -> _Tiers:
+    def tiers(self, *, tie_probes: bool = True) -> _Tiers:
         """The three solves (#424 ACM-PRICE addendum 2.1 §4.2). S3 maximises V alone: an infeasible one is
         `lp_infeasible`, and its optimum V0 is the objective. S1 maximises A, giving A*; S2 maximises V with A ≥ A*,
         giving V*. When A has no term, A* is 0 and S2 is S3. V* above V0 cannot be (S3 relaxes S2) and is
         `lp_numeric_check_failed`; V0 above V*, exactly, is `objective_tier_conflict`. Then S3's dual, checked exactly
         (`duality`; PRICE-2c moves it before the ties, which read its optimal point), S3's optimal face in the form
         complementary slackness with that point gives it (`_optimal_face`) and S3's basis (`_seed`; PRICE-2e), and the
-        ties."""
+        ties.
+
+        Without `tie_probes` (the vector, PASS-TIMING) the tie probes are not run, and `ties` and `unverified` are empty:
+        they come last, after everything else here is computed, and only `tier_warnings` reads them, which the vector
+        never calls; each probe reads the face, S3's optimum and its basis and changes none of them, nor any state of the
+        solver another LP reads (`ties`), so every other member, and every LP after it, is the same."""
         model = self.model
         value, acquired = total_value(model), acquisition(model)
         program = _program(model)
@@ -3101,14 +3607,19 @@ class _Solver:
         if base.status != "optimal":
             raise Failure(self.conflict())
         seed = _seed(base)  # before any re-solve moves S3's instance
+        self.lap("optimum")
         records = acquirers(model)
         if not acquired:
             face = _floor(VALUE, value, base.value)
             dual = _dual(program)
             point = self.duality(dual, base.value)
             optimal = _optimal_face(dual, program, point)
-            return _Tiers(program, base, Fraction(0), base, (), face, records, (), dual, point, optimal, seed)
+            self.lap("dual")
+            return _Tiers(
+                program, base, Fraction(0), base, (), face, records, (), dual, point, optimal, seed, terms=acquired,
+            )
         first = self.optimal(_program(model, objective=acquired), ACQUISITION)
+        self.lap("acquisition")
         floors = _floor(ACQUISITION, acquired, first.value)
         second = self.optimal(_program(model, added=floors), VALUE)
         if second.value > base.value:
@@ -3117,14 +3628,16 @@ class _Solver:
             )
         if base.value > second.value:
             raise Failure(self.tier_conflict(acquired, records, first.value, second, base))
+        self.lap("value")
         face = floors + _floor(VALUE, value, second.value)
         dual = _dual(program)
         point = self.duality(dual, base.value)
         optimal = _optimal_face(dual, program, point)
-        ties, unverified = self.ties(floors, optimal, seed, second, base, dual, point)
+        self.lap("dual")
+        ties, unverified = self.ties(floors, optimal, seed, second, base, dual, point) if tie_probes else ([], [])
         return _Tiers(
             program, base, first.value, second, floors, face, records, tuple(ties), dual, point, optimal, seed,
-            tuple(unverified),
+            tuple(unverified), terms=acquired,
         )
 
     def tier_conflict(
@@ -3178,7 +3691,12 @@ class _Solver:
         - **The faces without the dense row** (PRICE-2e). S3's optima are its optimal face in the form complementary
           slackness gives it (`optimal`, `_optimal_face`), with no row V ≥ V0; S2's are those with A ≥ A* (`floors`),
           since V* = V0 here, so the row V ≥ V* is not needed either: the same sets as before, so the same answers. A
-          probe that S3's optimum meets (on S3 always: it does not run the activity) starts from S3's basis (`seed`)."""
+          probe that S3's optimum meets (on S3 always: it does not run the activity) starts from S3's basis (`seed`).
+        - **What they leave as it was** (PASS-TIMING: why the vector may skip them). Each probe is an LP of its own: a new
+          program over the face's variables and rows (new tuples; nothing it is given is changed), solved by a new HiGHS
+          instance (`_highs_seeded` reads `seed`'s statuses, or `_highs`), never `warm`, so the instances held for later
+          LPs (`warm`, S3's own in `base`) are untouched; of the solver it sets only `last_problem`, which only the LP that
+          set it reads (`lp`). A probe that fails is caught (`probe`), so the probes never raise."""
         model, one = self.model, Fraction(1)
         variables, rows = optimal
         found: list[str] = []
@@ -3214,15 +3732,26 @@ class _Solver:
 
     def steady(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """The steady state. A resource's price in a step is the projection of its balance row's dual on D*
-        (PRICE-2b-1); its re-solves at plus and minus one grain (`grain`) and HiGHS's marginal cross-check it."""
+        (PRICE-2b-1); its re-solves at plus and minus one grain (`grain`) and HiGHS's marginal cross-check it. It also
+        keeps on the solver what the certificate reads (`held`, #430 METHOD-C: `handed`), which `compute` hands on beside
+        the value and never in it.
+
+        #430 C-2a: its stages end on the solver's clock (`lap`, `STEADY_STAGES`) as the vector's do, and four more: the
+        tie probes (`ties`, which `tiers` runs last), the least losses (`losses`), the prices of the rules with the
+        activities' values (`rules`) and the forcing costs (`forcing`, in `joint`). D* in its complementary-slackness
+        form ends `dual` again, as it does in the vector. They read the clock only, so nothing computed differs."""
         model, steps = self.model, self.model.steps
         tiers = self.tiers()
+        self.lap("ties")
         program, base, optimum = tiers.program, tiers.base, tiers.base.value
         least = self.least_losses(tiers)
+        self.lap("losses")
         warnings = self.tier_warnings(tiers)
         dual = tiers.dual  # S3's, which every price re-solve changes, checked exactly (`duality`)
         on_face = _restricted(dual, program, base.x)  # D*, for every LP on it (PRICE-2e: the selection's too)
+        self.lap("dual")
         prices, grains, marginals = self.projections(tiers, on_face, warnings)
+        self.lap("projections")
         rule_prices: dict[str, tuple[Fraction, Fraction | None]] = {}
         rule_marginals: dict[str, Fraction] = {}
         for rule, value in model.priced():
@@ -3236,8 +3765,10 @@ class _Solver:
                 values[activity] = None
                 continue
             values[activity] = [_price(self.value(activity, prices, step)) for step in range(steps)]
+        self.lap("rules")
         joint, judged = self.joint(dual, tiers.point, optimum, prices, on_face, base.x, tiers.optimal, tiers.seed)
         warnings += judged
+        self.held = self.handed(tiers, on_face)
         data = {
             "cycle": {"steps": steps, "step_seconds": STEP_SECONDS},
             **self.shown_tiers(tiers),
@@ -3255,6 +3786,21 @@ class _Solver:
             "relaxed": model.shown_relaxed(),
         }
         return data, warnings
+
+    def handed(self, tiers: _Tiers, on_face: tuple[dict[Key, Any], tuple[_Row, ...]]) -> Held:
+        """What the steady state hands the impact assessment (#430 METHOD-C, `Held`): the objects `steady` computed
+        with, as they are: its three solves (`tiers`), D* in its complementary-slackness form (`on_face`, the one
+        `steady` computes once for every LP on D*) and what `joint` chose (`chosen`). Nothing is computed again; P is
+        read off the acquisitions `tiers` already judged (`protects`)."""
+        chosen = self.chosen
+        if chosen is None:  # `joint` runs before this, always
+            raise ValueError("the steady state hands on what the selection chose before it ran")
+        return Held(
+            program=tiers.program, x=tiers.base.x, dual=tiers.dual, point=tiers.point, restricted=on_face,
+            optimal=tiers.optimal, protected=tuple(record["activity"] for record in tiers.records if protects(record)),
+            acquisition=tiers.terms, acquired=tiers.acquired, value=tiers.base.value,
+            coordinates=chosen.coordinates, vector=chosen.vector, values=chosen.values,
+        )
 
     def projections(
         self, tiers: _Tiers, on_face: tuple[dict[Key, Any], tuple[_Row, ...]], warnings: list[dict[str, Any]] | None,
@@ -3277,10 +3823,10 @@ class _Solver:
                 grain = self.price(optimum, lambda delta: self.regrain(resource, step, delta), known)
                 if _pinned(model, resource, grain):
                     price = grain  # the chords pin the projection (PRICE-2c): no LP on D*
-                else:  # each end that S3's basis does not prove is an LP on D*
-                    function = dual.duals[("balance", resource, step)]
-                    low = sides[0] if sides[0] is not None else self.extreme(*on_face, function, -1)
-                    high = sides[1] if sides[1] is not None else self.extreme(*on_face, function, 1)
+                else:  # each end that S3's basis does not prove is an LP on D*, which S3's exact dual point meets
+                    function, witness = dual.duals[("balance", resource, step)], (PROJECTION, tiers.point)
+                    low = sides[0] if sides[0] is not None else self.extreme(*on_face, function, -1, witness)
+                    high = sides[1] if sides[1] is not None else self.extreme(*on_face, function, 1, witness)
                     price = (low, high)
                 if warnings is not None:
                     marginal = self.marginal(-base.eq[("balance", resource, step)])
@@ -3295,10 +3841,16 @@ class _Solver:
         """One pass of the impact assessment (module docstring, "The vector"; PRICE-4a): the joint price vector as
         `steady` finds it, each pool's coordinate (`prices`) and each activity's value at it (`activities`, null for
         one that moves out of or into a store), and nothing else. Its warnings are not the steady state's and are not
-        returned: a probe this pass cannot verify only leaves its activity out of K here, as `steady` does."""
-        tiers = self.tiers()
+        returned: a probe this pass cannot verify only leaves its activity out of K here, as `steady` does.
+
+        PASS-TIMING: the tie probes are not run (`tiers`, `tie_probes`): a tie is a warning and a gap of the coverage
+        section, which the vector has neither of, and nothing here reads `tiers.ties` or `tiers.unverified`; so every
+        coordinate is what it was with them. Each stage ends on the solver's clock (`lap`, `STAGES`)."""
+        tiers = self.tiers(tie_probes=False)
         on_face = _restricted(tiers.dual, tiers.program, tiers.base.x)
+        self.lap("dual")
         prices, _, _ = self.projections(tiers, on_face, None)
+        self.lap("projections")
         joint, _ = self.joint(
             tiers.dual, tiers.point, tiers.base.value, prices, on_face, tiers.base.x, tiers.optimal, tiers.seed,
             lean=True,
@@ -3307,6 +3859,7 @@ class _Solver:
             "prices": {resource: entry["value"] for resource, entry in joint["prices"].items()},
             "activities": {activity: entry["value"] for activity, entry in joint["activities"].items()},
         }
+        self.lap("check")
         return data, []
 
     def quick(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -3337,7 +3890,7 @@ class _Solver:
         """The least overflow and lost production among the lexicographic optima (`tiers.face`)."""
         least = self.lp(_program(self.model, added=tiers.face, least_losses=True), "losses")
         if least.status != "optimal":
-            raise self.failure(LP_SOLVE_FAILED, stage="losses", reason="solver_status", status=2)
+            raise self.failure(LP_SOLVE_FAILED, stage="losses", reason="solver_status", status=2, **_said(least))
         return least
 
     def tier_warnings(self, tiers: _Tiers) -> list[dict[str, Any]]:
@@ -3416,23 +3969,27 @@ class _Solver:
 
 def compute(graph: Graph, solve: str) -> Economy:
     """The economy node `solve` (steady, plan, quick or vector) of `graph`. It raises `Need` until every node it reads is
-    computed, as every graph node does. The quick look and the vector read and build the steady state's program."""
-    graph.depend(("economy_model",))
+    computed, as every graph node does. The quick look and the vector read and build the steady state's program. The
+    vector times its stages (PASS-TIMING, `_Clock`), from the start of the call that computes it: `Economy.timing`. The
+    steady state holds what the certificate reads (#430 METHOD-C, `Held`): `Economy.held`, never encoded. #430 C-2a: the
+    steady state times its stages too (`STEADY_STAGES`), and both count what HiGHS ran in each stage (`Economy.lps`)
+    and give the node's whole time (`Economy.total`); none of it is encoded, and the quick look and the plan have no
+    clock."""
+    clock = _Clock(STAGES if solve == VECTOR else STEADY_STAGES) if solve in (VECTOR, STEADY) else None
     built = STEADY if solve in (QUICK, VECTOR) else solve
-    shape = _shape(graph, built)
-    reader = _Reader(graph, shape, built)
-    model = reader.model(graph.economy)
+    reader, model = _read(graph, built)
     if model is None:
         return Economy(blocked_by=graph.register(reader.refused) | frozenset(reader.blocked))
     status = reader.inputs()
-    solver = _Solver(model, graph.economy)
+    solver = _Solver(model, graph.economy, clock)
+    solver.lap("model")
     solves = {QUICK: solver.quick, VECTOR: solver.vector, STEADY: solver.steady, PLAN: solver.plan}
     try:
         data, warnings = solves[solve]()
     except Failure as failure:
         return Economy(blocked_by=graph.register(failure.errors))
-    if solve == VECTOR:  # one pass of the impact assessment: nothing but the vector (`core.impact`)
-        return Economy(data, status, False, (), reads=tuple(reader.reads))
+    if solve == VECTOR:  # one pass of the impact assessment: nothing but the vector (`core.impact`), and its timing
+        return Economy(data, status, False, (), reads=tuple(reader.reads), **_timed(clock))
     if solve == QUICK:
         # Its status says what it is, never the worst of what it read: no reader takes it for a steady state's. The
         # coverage is the steady state's as far as these solves know it (`coverage.NEEDS_LATER_STAGES`).
@@ -3452,5 +4009,19 @@ def compute(graph: Graph, solve: str) -> Economy:
     per_account = solve == PLAN
     return Economy(
         {"status": status, "per_account": per_account, **data}, status, per_account, tuple(warnings),
-        reads=tuple(reader.reads),
+        reads=tuple(reader.reads), held=solver.held, **({} if clock is None else _timed(clock)),
     )
+
+
+def _timed(clock: _Clock) -> dict[str, Any]:
+    """What a node computed on `clock` holds beside its value (#430 C-2a; `Economy`): its stages' times (`timing`), what
+    HiGHS ran in each (`lps`) and its whole time so far (`total`)."""
+    return {"timing": clock.ms(), "lps": clock.lps(), "total": clock.total()}
+
+
+def steady_again(graph: Graph) -> Economy:
+    """The steady state of `graph` computed again, without the cache (#430 METHOD-C; contracts/formats.md, "The
+    certificate", item 11): `compute` itself, never `Graph.cached`, so no kept value is looked up and nothing is kept,
+    and the value holds what the certificate reads (`Economy.held`). It is not put into `graph`. A node it needs that
+    `graph` has not computed is computed first, as `graph` computes one (`_computed`)."""
+    return _computed(graph, lambda: compute(graph, STEADY))

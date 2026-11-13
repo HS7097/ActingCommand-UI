@@ -109,8 +109,28 @@ class Evaluator:
 # (`core.coverage`), so the coverage section, `price_status` and the steady state's status change where one was, and
 # version 10's entries are not reused. The tool's version (`acmodel.__version__`) stays: it is `versions.tool`, in
 # every price's provenance document, so a bump would move every price's `binds` (contracts/formats.md, "Coverage").
+# PASS-TIMING: `economy` stays 11. The vector runs no tie probe and times its stages, but what its node keeps (`flow.encode`:
+# its data, status, warnings, blocks and reads) is what it was: the probes only gave warnings, which the vector never
+# kept, and the stages' times (`flow.Economy.timing`) are never encoded. The steady state, the plan and the quick look
+# compute what they did.
+# METHOD-C: `economy` stays 11. The steady state hands what the certificate reads (`flow.Economy.held`) in memory only:
+# `flow.encode` keeps none of it, so what its node keeps is what it was, and every node computes what it did.
+# #430 (an LP on D* that HiGHS finds infeasible): `economy` 12. Such an LP is solved a second time without presolve, so for
+# the same model a value that version 11 kept blocked there (`lp_solve_failed`, stage `dual`, status 2, at a projection, an
+# interval, the selection, the max-min or the vector's check) may now be solved, or blocked by another error; and a status 2
+# of S1, S2, the least losses or the dual's least cost names HiGHS's text. An LP on D* that HiGHS solves the first time takes
+# the way it took, and the exact point each LP on D* holds is read only where HiGHS finds that LP infeasible twice, so every
+# value that was not blocked is what it was: the forcing costs and every other probe are untouched (none of them is an LP on
+# D* with a point), and no export written so far met such an LP (it would have been refused). But the cache would give back
+# a value version 11 kept blocked there as it was, for the same keys, so version 11's entries are not reused. No document
+# holds this version: not the versions (`tool` is `acmodel.__version__`), the provenance documents nor thresholds.json, and
+# prices.json's evaluator digest takes only the libraries `economy` declares (its `source` moves with the code, as for every
+# change of it). So no `binds` moves, and no export is stale for it.
+# #430 C-2a: `economy` stays 12. The vector and the steady state now count what HiGHS ran in each stage and the steady
+# state times its stages too (`flow.Economy.lps`, `timing`, `total`), beside the value and never in it: `flow.encode`
+# keeps none of it, so what each node keeps is what it was, and every node computes what it did.
 EVALUATORS: dict[str, Evaluator] = {
-    "economy": Evaluator(11, ("numpy", "python", "scipy")),
+    "economy": Evaluator(12, ("numpy", "python", "scipy")),
     "engine": Evaluator(1),
     "flow": Evaluator(3),
     "general": Evaluator(3),

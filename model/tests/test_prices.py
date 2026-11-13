@@ -90,6 +90,24 @@ def picked(entry: dict[str, Any], *keys: str) -> dict[str, Any]:
     return {key: entry[key] for key in keys}
 
 
+TIMING = "timing_ms"
+
+
+def untimed(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The assessment's groups without each pass's `timing_ms` (PASS-TIMING), which records how long that run took and so
+    differs from run to run: each pass's `at`, `values` and `by` (#430 METHOD-C, how its vector was found)."""
+    return [
+        {**group, "passes": [{key: value for key, value in each.items() if key != TIMING} for each in group["passes"]]}
+        for group in groups
+    ]
+
+
+def untimed_doc(doc: dict[str, Any]) -> dict[str, Any]:
+    """prices.json without its passes' `timing_ms` (`untimed`) and without the steady state's own timing
+    (`steady_timing_ms`, #430 C-2a), which differs from run to run too."""
+    return {**{key: value for key, value in doc.items() if key != "steady_timing_ms"}, "impact": untimed(doc["impact"])}
+
+
 def canonical_digest(doc: Any) -> str:
     """The sha256 of a document's canonical JSON (JCS), as a provenance document names a shared tree by."""
     return hashlib.sha256(jcs.dumps(doc)).hexdigest()
@@ -293,9 +311,12 @@ def test_an_accepted_provisional_price_is_exported_until_what_it_binds_changes(t
     assert prices["estimates"] == [{
         "rule": "pt.b", "value": "3", "estimate": ESTIMATE_B, "components": ["act.b"], "assessed": True, "skipped": None,
     }]
-    assert prices["impact"] == [{
+    assert untimed(prices["impact"]) == [{
         "rules": ["pt.b"], "unknowns": [],
-        "passes": [{"at": {"pt.b": "low"}, "values": {"pt.b": "2"}}, {"at": {"pt.b": "high"}, "values": {"pt.b": "4"}}],
+        "passes": [
+            {"at": {"pt.b": "low"}, "values": {"pt.b": "2"}, "by": "solved"},
+            {"at": {"pt.b": "high"}, "values": {"pt.b": "4"}, "by": "solved"},
+        ],
         "prices": {}, "flips": [],
     }]
     binds = found["res.b"]["binds"]
@@ -367,9 +388,12 @@ def test_the_assessment_moves_an_estimate_to_its_ends_and_an_acceptance_must_lis
         "impact": {"low": "1", "high": "2"}, "flips": ["act.p", "act.q"],
     }
     assert picked(found["res.v"], "impact", "flips") == {"impact": {"low": "1", "high": "1"}, "flips": ["act.p", "act.q"]}
-    assert delivered(folder)["impact"] == [{
+    assert untimed(delivered(folder)["impact"]) == [{
         "rules": ["pt.k"], "unknowns": [],
-        "passes": [{"at": {"pt.k": "low"}, "values": {"pt.k": "1/2"}}, {"at": {"pt.k": "high"}, "values": {"pt.k": "2"}}],
+        "passes": [
+            {"at": {"pt.k": "low"}, "values": {"pt.k": "1/2"}, "by": "solved"},
+            {"at": {"pt.k": "high"}, "values": {"pt.k": "2"}, "by": "solved"},
+        ],
         "prices": {"res.s": {"low": "1", "high": "2"}}, "flips": ["act.p", "act.q"],
     }]
     given = {"ref": "R-2", "until": "check list item 2", "binds": found["res.s"]["binds"], "scope": "game",
@@ -439,11 +463,11 @@ def test_an_estimate_of_variants_is_moved_to_each_variant(tmp_path, acmodel):
         "joint": {"value": "1/20", "interval": "1/20", "by": "exact", "withheld": None},
         "impact": {"low": "1/30", "high": "1/10"}, "flips": [],
     }
-    assert delivered(folder)["impact"] == [{
+    assert untimed(delivered(folder)["impact"]) == [{
         "rules": ["pt.price"], "unknowns": ["unk.offer"],
         "passes": [
-            {"at": {"unk.offer": "cheap"}, "values": {"pt.price": "10"}},
-            {"at": {"unk.offer": "dear"}, "values": {"pt.price": "30"}},
+            {"at": {"unk.offer": "cheap"}, "values": {"pt.price": "10"}, "by": "solved"},
+            {"at": {"unk.offer": "dear"}, "values": {"pt.price": "30"}, "by": "solved"},
         ],
         "prices": {"res.c": {"low": "1/30", "high": "1/10"}}, "flips": [],
     }]

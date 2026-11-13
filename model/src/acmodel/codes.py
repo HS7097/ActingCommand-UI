@@ -51,6 +51,9 @@ BINDING_MISMATCH = "binding_mismatch"
 BINDING_UNBOUND_LITERAL = "binding_unbound_literal"
 BINDING_UNSUPPORTED = "binding_unsupported"
 LP_INFEASIBLE = "lp_infeasible"
+# #430: an LP on D* that HiGHS finds infeasible twice, and that the exact point the solve holds for it does not meet: the
+# LP is not the one the solve meant to build (a defect of acmodel), not a numerical failure (`lp_numeric_check_failed`).
+LP_INVARIANT_BROKEN = "lp_invariant_broken"
 LP_NUMERIC_CHECK_FAILED = "lp_numeric_check_failed"
 LP_SOLVE_FAILED = "lp_solve_failed"
 LP_DUAL_DISAGREES = "lp_dual_disagrees"  # acmodel economy: a warning, the price stands
@@ -80,6 +83,11 @@ LOCATION_REFUSED = "location_refused"
 # #424 PRICE-REUSE: `export prices --reuse-assessment` names an earlier prices.json whose versions, shared tree or evaluator
 # digest are not this export's (or that records no evaluator digest): nothing is taken over, computed further or written.
 REUSE_REFUSED = "reuse_refused"
+# #430 METHOD-C: the impact assessment's steady state came from the cache and, computed again without it, is another
+# value (`core.impact`): nothing is assessed or written. And a pass that the certificate proves whose vector solved is not
+# the steady state's (`acmodel verify passes`).
+STEADY_STATE_MISMATCH = "steady_state_mismatch"
+CERTIFICATE_MISMATCH = "certificate_mismatch"
 
 EXIT_OK = 0
 
@@ -133,6 +141,7 @@ EXIT_STATUS = {
     BINDING_UNBOUND_LITERAL: 6,
     BINDING_UNSUPPORTED: 5,
     LP_INFEASIBLE: 1,
+    LP_INVARIANT_BROKEN: 1,
     LP_NUMERIC_CHECK_FAILED: 1,
     LP_SOLVE_FAILED: 1,
     LP_DUAL_DISAGREES: 0,
@@ -154,4 +163,6 @@ EXIT_STATUS = {
     SHARED_TREE_MISMATCH: 6,
     LOCATION_REFUSED: 5,
     REUSE_REFUSED: 5,
+    STEADY_STATE_MISMATCH: 6,
+    CERTIFICATE_MISMATCH: 6,
 }

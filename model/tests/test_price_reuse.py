@@ -34,6 +34,7 @@ from test_prices import (  # noqa: F401  (acmodel is a fixture)
     export,
     flips_fixture,
     redescribed,
+    untimed_doc,
 )
 
 PINNED = {"numpy": "2.5.4", "scipy": "1.18.1"}  # the pins the fake system reports (conftest.py)
@@ -311,7 +312,8 @@ def test_prices_json_records_the_evaluator_digest_and_nothing_else_moves(tmp_pat
 def test_an_export_that_takes_the_assessment_over_writes_the_full_exports_files(tmp_path, acmodel, assessed):
     """The same inputs, exported in full, then again taking the assessment over from the model's own out folder: the
     assessment does not run, every price's provenance file is the full export's byte for byte, and prices.json is too once
-    `reused_assessment` is taken out. That member records the earlier prices.json's sha256, its versions, its shared
+    `reused_assessment` is taken out, and `steady_timing_ms`, which records this run's own steady state (#430 C-2a).
+    That member records the earlier prices.json's sha256, its versions, its shared
     tree's digest, its evaluator's digest and the members taken over; the envelope adds the earlier file. The flips and the
     impact range taken over are flips_fixture's (s over [1, 2], act.p and act.q). `verify prices` reads the file."""
     folder = flips_fixture(tmp_path)
@@ -332,7 +334,10 @@ def test_an_export_that_takes_the_assessment_over_writes_the_full_exports_files(
             assert taken[name] == full[name], name
     prices = json.loads(taken["prices.json"])
     marker = prices.pop("reused_assessment")
-    assert policy.delivered(prices) == full["prices.json"]
+    prices.pop("steady_timing_ms")
+    assert policy.delivered(prices) == policy.delivered(
+        {key: value for key, value in earlier.items() if key != "steady_timing_ms"}
+    )
     assert marker == {
         "prices_sha256": hashlib.sha256(full["prices.json"]).hexdigest(),
         "versions": earlier["versions"],
@@ -354,7 +359,8 @@ def test_an_acceptance_added_after_the_export_reads_the_flips_taken_over(tmp_pat
     take the assessment over. flips_fixture, exported in full and its out folder kept aside; then s is accepted listing
     act.p only (incomplete: `acceptance_incomplete`, naming act.q) and v listing both flips (exported). The full export
     and the one that takes the earlier assessment over answer the same and write the same files, prices.json but for
-    `reused_assessment`."""
+    `reused_assessment`, its passes' `timing_ms` (PASS-TIMING: taken over, it is the earlier run's, not this full
+    export's) and `steady_timing_ms` (#430 C-2a: each export's own)."""
     folder = flips_fixture(tmp_path)
     out, kept = base(folder) / "out", tmp_path / "earlier"
     export(acmodel, folder)
@@ -388,7 +394,7 @@ def test_an_acceptance_added_after_the_export_reads_the_flips_taken_over(tmp_pat
             assert taken[name] == full[name], name
     prices = json.loads(taken["prices.json"])
     marker = prices.pop("reused_assessment")
-    assert policy.delivered(prices) == full["prices.json"]
+    assert policy.delivered(untimed_doc(prices)) == policy.delivered(untimed_doc(json.loads(full["prices.json"])))
     assert marker["prices_sha256"] == hashlib.sha256((kept / "prices.json").read_bytes()).hexdigest()
     assert doc["data"]["reused_assessment"]["file"] == str(kept / "prices.json")
     assert {key: doc["data"][key] for key in ("counts", "unit_milli")} == {
