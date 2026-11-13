@@ -548,10 +548,14 @@ fn live_landed(ui: &Ui, read: LiveRead) {
         let link_changed = landed.previous != *model.link();
         (landed, link_changed, model.accounts_note() != note)
     };
-    // Painting the launcher goes through every ledger window: only for news.
+    // Painting the launcher goes through every ledger window: only for news. So do the
+    // notices, which say, in root mode, whether a Runtime up is the installation folder's.
     let status_changed = ui.launcher_view.borrow_mut().live(probe);
     if status_changed || link_changed {
         launcher::paint(ui);
+    }
+    if status_changed {
+        ui.paint_notices();
     }
     if note_changed {
         ui.paint_accounts_note();

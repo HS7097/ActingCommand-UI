@@ -328,6 +328,14 @@ pub struct Labels {
     /// The lamp and the ledger windows' status when this run has no paths at all: the red
     /// bar above says why and what to do, so this only points at it.
     pub launcher_unavailable: &'static str,
+    /// In an installation folder (root mode): the lamp when the Runtime found up is not the
+    /// folder's, or cannot be told to be; and the plain line of a press that left it alone.
+    pub launcher_not_this_root: &'static str,
+    pub launcher_not_this_root_line: &'static str,
+    /// The same, in red at the top of the workbench and after the ledger windows' status:
+    /// pid, program file, installation folder; pid, installation folder, why it cannot be told.
+    pub runtime_not_this_root: &'static str,
+    pub runtime_root_unverified: &'static str,
     pub launcher_busy: &'static str,
     /// A plain sentence, then the short words of the outcome code behind it.
     pub launcher_because: &'static str,
@@ -1776,6 +1784,10 @@ pub const ZH: Labels = Labels {
     launcher_stop_failed: "停止请求没有成功",
     launcher_not_configured: "启动所需的路径没有配置，请按安装说明填写设置文件，或从安装文件夹里的 ui\\acui.exe 启动",
     launcher_unavailable: "这次运行用不了「启动」：原因和办法见上方红条",
+    launcher_not_this_root: "在运行的 Runtime 不是这个安装文件夹的",
+    launcher_not_this_root_line: "没有动它：连上的 Runtime 不是这个安装文件夹的，或者核对不了，详见上面的红字",
+    runtime_not_this_root: "状态根上在运行的 Runtime（进程 {}，程序 {}）不是这个安装文件夹 {} 的。本监控台只读它，不向它发任何请求：「请求关闭」、暂停、恢复、改设置、操作设备、开关任务都不发，「启动」也不动它。请检查这个安装文件夹的 actingd.config.json 里的 state_root 是不是抄了别的安装的状态根。",
+    runtime_root_unverified: "核对不了状态根上在运行的 Runtime（进程 {}）是不是这个安装文件夹 {} 的：{}。核对得了之前，本监控台只读它，不向它发任何请求：「请求关闭」、暂停、恢复、改设置、操作设备、开关任务都不发，「启动」也不动它。",
     launcher_busy: "上一次请求还没完成",
     launcher_because: "{}：{}",
     launcher_see_ledger: "详情见「排障与账本」",
@@ -2850,6 +2862,10 @@ pub const EN: Labels = Labels {
     launcher_stop_failed: "The Stop Request Did Not Go Through",
     launcher_not_configured: "A Path the Start Needs Is Not Set; Fill In the Settings File as the Installation Guide Says, or Start ui\\acui.exe Inside the Installation Folder",
     launcher_unavailable: "Start Is Unavailable This Run; See the Red Bar Above for Why and What to Do",
+    launcher_not_this_root: "The Running Runtime Is Not This Installation Folder's",
+    launcher_not_this_root_line: "Left Alone: the Runtime Reached Is Not This Installation Folder's, or Cannot Be Told to Be; See the Red Words Above",
+    runtime_not_this_root: "The Runtime running at the state root (process {}, program {}) is not the installation folder {}'s. This console only reads it and asks it nothing: no Request Shutdown, pause, resume, change of settings, device operation or task switch is sent, and Start leaves it alone. Check whether the state_root in this installation folder's actingd.config.json was copied from another installation.",
+    runtime_root_unverified: "Whether the Runtime running at the state root (process {}) is the installation folder {}'s cannot be told: {}. Until it can, this console only reads it and asks it nothing: no Request Shutdown, pause, resume, change of settings, device operation or task switch is sent, and Start leaves it alone.",
     launcher_busy: "The Previous Request Has Not Finished",
     launcher_because: "{}: {}",
     launcher_see_ledger: "Details in Troubleshooting and Ledger",

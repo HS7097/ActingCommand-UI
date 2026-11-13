@@ -52,7 +52,7 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeCli
 
 use super::stop::{stop_on, StopOutcome};
 use super::{configure_config, RunKey};
-use crate::{ClientFailure, Spelling};
+use crate::{person_connection, ClientFailure, Spelling};
 
 /// The codes a refusal of the view or of a write is told apart by: a Runtime without them; another
 /// writer's change of the scope since its version was read; another list of the scope landed in
@@ -267,7 +267,7 @@ pub fn edit(
     change: PackChange,
     expected: u64,
 ) -> EditAnswer {
-    let client = match RuntimeClient::connect(configure_config(root)) {
+    let client = match person_connection(configure_config(root)) {
         Ok(client) => client,
         Err(error) => {
             let outcome = PackOutcome::NotSent(ClientFailure::from(error));
@@ -341,7 +341,7 @@ pub enum CloseAnswer {
 /// `not_implemented` says the Runtime has no task switches; the client's word that it does not
 /// know the view is a connection that ended before its answer ([`CloseAnswer::ViewDropped`]).
 pub fn close_then_stop(root: &Path, alias: &str, package: &str, run: RunKey) -> CloseAnswer {
-    let client = match RuntimeClient::connect(configure_config(root)) {
+    let client = match person_connection(configure_config(root)) {
         Ok(client) => client,
         Err(error) => return CloseAnswer::NotSent(ClientFailure::from(error)),
     };

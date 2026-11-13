@@ -107,8 +107,8 @@ use actingcommand_runtime_config::{
 };
 
 use super::{
-    global_pause_fact, instance_pause_fact, ClientFailure, OnlineSource, PauseFact,
-    RUNTIME_RESULT_UNEXPECTED,
+    global_pause_fact, instance_pause_fact, person_connection, ClientFailure, OnlineSource,
+    PauseFact, RUNTIME_RESULT_UNEXPECTED,
 };
 
 pub mod backends;
@@ -703,7 +703,7 @@ const RANGE_MAX: &str = "range_max";
 /// its default: the client may give up, or its connection fail, while the switch goes on, and its
 /// unconfirmed answer is then a [`backends::UnconfirmedSwitch`]'s.
 pub fn configure(root: &Path, edit: &ConfigEdit, expected: Option<u64>) -> ConfigOutcome {
-    let connected = RuntimeClient::connect(configure_config(root));
+    let connected = person_connection(configure_config(root));
     let client = match connected {
         Ok(client) => client,
         Err(error) => return ConfigOutcome::NotSent(ClientFailure::from(error)),

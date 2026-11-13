@@ -22,20 +22,24 @@
 //! resume of the one scheduling pause a status read reported (`resume_paused`).
 //! Every connection a session keeps is rebuilt after the client latched it
 //! (see `Rebuilding`); what a person does goes out on a fresh connection each
-//! time. The workbench's own reads, which follow the Runtime across restarts,
-//! are in `workbench`.
+//! time, and every such connection is made in one place (`person_connection`),
+//! where a console that belongs to an installation folder first has the Runtime it
+//! reached checked to be that folder's (`guard_requests`). The workbench's own reads,
+//! which follow the Runtime across restarts, are in `workbench`; where the console
+//! belongs, as plain judgment, is in `place`.
 
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use acui_rows::outcome::{
     CONSOLE_CLIENT_ACTION_TERMINAL_MISSING, CONSOLE_INSTANCE_BINDING_MISSING,
-    CONSOLE_ONLINE_PAGE_UNBOUNDED, CONSOLE_RUNTIME_OWNER_CHANGED, CONSOLE_STATUS_SOURCE_MISSING,
+    CONSOLE_ONLINE_PAGE_UNBOUNDED, CONSOLE_RUNTIME_NOT_THIS_ROOT, CONSOLE_RUNTIME_OWNER_CHANGED,
+    CONSOLE_STATUS_SOURCE_MISSING,
 };
 use acui_rows::{
     code, page_source_complete, ArtifactEvictionObservation, ClientActionKind, ClientActionRecord,
@@ -853,9 +857,10 @@ impl OnlineSource {
     /// contracts/runtime-interface.md, #389 U-2). Every press takes a fresh one
     /// and drops it after: a connection the client latched (R-0c: a receipt
     /// timeout, or any fatal failure) is never asked again, and nothing written
-    /// is sent twice. The console keeps no write connection.
-    fn connect_as_person(root: &Path) -> Result<RuntimeClient, RuntimeClientError> {
-        RuntimeClient::connect(RuntimeClientConfig::new(
+    /// is sent twice. The console keeps no write connection. Made through
+    /// `person_connection`, as every person's connection is.
+    fn connect_as_person(root: &Path) -> Result<RuntimeClient, NoPersonConnection> {
+        person_connection(RuntimeClientConfig::new(
             root,
             RuntimeChannel::Ui,
             EventActor::User,
@@ -1359,6 +1364,59 @@ pub fn probe_runtime(state_root: &Path) -> Result<RuntimeFacts, ClientFailure> {
     let client = OnlineSource::connect(state_root)?;
     let info = client.runtime_info();
     Ok(RuntimeFacts { pid: info.pid(), owner_epoch: code(&info.owner_epoch()) })
+}
+
+/// The check every person's request passes before it goes out, set once at the start by a
+/// console that belongs to an installation folder (`guard_requests`): given the pid the Runtime
+/// a person's connection reached states (its `runtime-info.json`, after the client's own
+/// owner-epoch check), whether that Runtime may be asked anything. No other console sets one,
+/// and its requests go to whatever Runtime its state root names, as ever.
+type RequestGuard = Box<dyn Fn(u32) -> bool + Send + Sync>;
+
+static REQUEST_GUARD: OnceLock<RequestGuard> = OnceLock::new();
+
+/// Sets the check of `REQUEST_GUARD`, for the whole run; false when one was set already, which
+/// then stays.
+pub fn guard_requests(guard: impl Fn(u32) -> bool + Send + Sync + 'static) -> bool {
+    REQUEST_GUARD.set(Box::new(guard)).is_ok()
+}
+
+/// Why no person's connection was made: the client's failure, or the guard
+/// (`guard_requests`) refusing the Runtime the connection reached. Either way no request
+/// went out: a refused connection is let go right after the client's connect, which sends
+/// nothing a person asked for.
+pub(crate) enum NoPersonConnection {
+    Failed(RuntimeClientError),
+    Refused,
+}
+
+impl From<NoPersonConnection> for ClientFailure {
+    /// A refusal is the console's own `CONSOLE_RUNTIME_NOT_THIS_ROOT`, at the client's connect.
+    fn from(not: NoPersonConnection) -> Self {
+        match not {
+            NoPersonConnection::Failed(error) => Self::from(error),
+            NoPersonConnection::Refused => Self {
+                code: CONSOLE_RUNTIME_NOT_THIS_ROOT,
+                operation: CONNECT_RUNTIME,
+                runtime_code: None,
+                host: None,
+            },
+        }
+    }
+}
+
+/// The one way a person's connection is made, whatever it then sends — a launcher press, a
+/// shutdown request, a pause or a resume, a change of settings, a device's operation, a
+/// refresh of the picture, a task's switch or close, a run's stop, a discovery: `config`
+/// connected, then the guard, when one is set, asked of the Runtime it reached.
+pub(crate) fn person_connection(
+    config: RuntimeClientConfig,
+) -> Result<RuntimeClient, NoPersonConnection> {
+    let client = RuntimeClient::connect(config).map_err(NoPersonConnection::Failed)?;
+    match REQUEST_GUARD.get() {
+        Some(guard) if !guard(client.runtime_info().pid()) => Err(NoPersonConnection::Refused),
+        _ => Ok(client),
+    }
 }
 
 /// What one `read_instances` found: the instances as the card shows them, and

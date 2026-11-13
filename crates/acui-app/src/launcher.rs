@@ -40,6 +40,12 @@
 //! is doing; a press's own probe counts only until the next of them. A status
 //! that finds a Runtime up is also what offers a ledger window of `auto` that
 //! reads nothing for want of one, or reads offline, to read it online.
+//!
+//! In an installation folder (root mode) a Runtime found up is checked to be that
+//! folder's (`identity`) before anything is done to it: one that is not, or cannot be
+//! told to be, gets the lamp in red and the reason at the top of the workbench and after
+//! the ledger windows' status. Start then leaves it alone and records nothing; Request
+//! Shutdown is kept from it where every person's request is (`acui_source::guard_requests`).
 
 use std::fs::File;
 use std::io::{self, Read};
@@ -51,12 +57,14 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use acui_installation::{Snapshot, INSTALL_ROOT_ENV, INSTALL_SELECTION_ENV};
+use acui_rows::outcome::CONSOLE_RUNTIME_NOT_THIS_ROOT;
 use acui_source::{
     probe_runtime, record_start, request_shutdown, ClientFailure, RuntimeFacts, SHUTDOWN_ATTEMPTS,
 };
 use serde_json::Value;
 
-use crate::install::{self, InstallPaths, ToolIssue, ToolPaths};
+use crate::identity::{self, NotThisRoot};
+use crate::install::{self, InstallPaths, Origin, ToolIssue, ToolPaths};
 use crate::phrase::{phrase, verbatim, Line, Phrase};
 use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
@@ -106,6 +114,9 @@ pub struct Launcher {
     /// The installation folder the paths come from, when they come from one: shown
     /// on the settings page.
     pub root: Option<PathBuf>,
+    /// In root mode, that folder again: the one whose Runtime alone this console asks
+    /// anything (`identity`). `None` with an installation selection, or acui.toml's paths.
+    pub checked_root: Option<PathBuf>,
     pub state_root: PathBuf,
     pub actingd_config: Option<PathBuf>,
     pub actingd_exe: Option<PathBuf>,
@@ -123,10 +134,15 @@ pub struct Launcher {
 
 impl Launcher {
     pub fn new(paths: InstallPaths) -> Self {
-        let InstallPaths { installation, root, state_root, actingd_config, actingd_exe, origin: _ } =
+        let InstallPaths { installation, root, state_root, actingd_config, actingd_exe, origin } =
             paths;
+        let checked_root = match origin {
+            Origin::Root(_) => root.clone(),
+            Origin::Selected | Origin::Legacy { .. } => None,
+        };
         Self {
             root,
+            checked_root,
             state_root,
             actingd_config,
             actingd_exe,
@@ -173,6 +189,9 @@ pub enum LauncherKind {
     StopFailed { code: Option<String> },
     /// A path the start needs is not set, or not absolute.
     NotConfigured,
+    /// In root mode, the Runtime reached is not the installation folder's, or cannot be told
+    /// to be: the press left it alone.
+    NotThisRoot,
     /// A request of the same kind has not finished.
     Busy,
 }
@@ -193,6 +212,7 @@ impl LauncherKind {
                 because(labels, labels.launcher_stop_failed, code.as_deref())
             }
             Self::NotConfigured => labels.launcher_not_configured.to_owned(),
+            Self::NotThisRoot => labels.launcher_not_this_root_line.to_owned(),
             Self::Busy => labels.launcher_busy.to_owned(),
         }
     }
@@ -205,6 +225,7 @@ impl LauncherKind {
                 | Self::NeedsUnlock
                 | Self::StopFailed { .. }
                 | Self::NotConfigured
+                | Self::NotThisRoot
         )
     }
 }
@@ -264,19 +285,68 @@ pub struct LauncherView {
     line: Option<LauncherLine>,
     unlock_offered: bool,
     unlock_line: Option<Line>,
+    /// In root mode, the installation folder a Runtime found up must be the one of
+    /// (`Launcher::checked_root`).
+    checked_root: Option<PathBuf>,
+    /// What the check said of the Runtime the status found up; `None` outside root mode,
+    /// and while none is found.
+    identity: Option<Judged>,
+}
+
+/// The check of one Runtime (`identity::check`): asked of the system once per pid and
+/// owner epoch, which a restart changes.
+struct Judged {
+    pid: u32,
+    owner_epoch: String,
+    verdict: Result<(), NotThisRoot>,
 }
 
 impl LauncherView {
     /// Before the first probe: checking, or with no state root, nothing to
-    /// check.
-    pub fn new(installed: bool) -> Self {
+    /// check. `checked_root` in root mode.
+    pub fn new(installed: bool, checked_root: Option<PathBuf>) -> Self {
         Self {
             status: if installed { Status::Checking } else { Status::Unavailable },
             probe_seq: 0,
             line: None,
             unlock_offered: false,
             unlock_line: None,
+            checked_root,
+            identity: None,
         }
+    }
+
+    /// In root mode, the check of the Runtime `probe` found up, kept for its pid and owner
+    /// epoch; nothing to keep when none is up, or the probe could not run.
+    fn judge(&mut self, probe: Option<&Result<RuntimeFacts, ClientFailure>>) {
+        let Some(root) = &self.checked_root else {
+            return;
+        };
+        let Some(Ok(facts)) = probe else {
+            self.identity = None;
+            return;
+        };
+        let judged = self.identity.as_ref().is_some_and(|judged| {
+            judged.pid == facts.pid && judged.owner_epoch == facts.owner_epoch
+        });
+        if !judged {
+            self.identity = Some(Judged {
+                pid: facts.pid,
+                owner_epoch: facts.owner_epoch.clone(),
+                verdict: identity::check(root, facts.pid),
+            });
+        }
+    }
+
+    /// Why the Runtime found up is not taken for the installation folder's, if it is not.
+    fn not_this_root(&self) -> Option<&NotThisRoot> {
+        self.identity.as_ref().and_then(|judged| judged.verdict.as_ref().err())
+    }
+
+    /// The same in plain words, for the top of the workbench.
+    pub fn not_this_root_text(&self, labels: &Labels) -> Option<String> {
+        let root = self.checked_root.as_ref()?;
+        self.not_this_root().map(|why| why.text(labels, root))
     }
 
     /// Whether the newest probe that answered found a Runtime up.
@@ -297,24 +367,28 @@ impl LauncherView {
 
     fn probed(&mut self, seq: u64, probe: Result<RuntimeFacts, ClientFailure>) {
         if seq == self.probe_seq {
+            self.judge(Some(&probe));
             self.status = Status::Probed(probe);
         }
     }
 
     fn probe_failed(&mut self, seq: u64, error: String) {
         if seq == self.probe_seq {
+            self.judge(None);
             self.status = Status::Failed(error);
         }
     }
 
     /// A `Status` read of the workbench's: it now stands for the newest probe,
     /// so a one-off probe still out says nothing. Whether the status changed, so
-    /// the windows are painted only for news.
+    /// the windows are painted only for news; the check of a Runtime found up
+    /// changes only with it.
     pub fn live(&mut self, probe: Result<RuntimeFacts, ClientFailure>) -> bool {
         self.probe_seq += 1;
         if matches!(&self.status, Status::Probed(current) if *current == probe) {
             return false;
         }
+        self.judge(Some(&probe));
         self.status = Status::Probed(probe);
         true
     }
@@ -322,6 +396,7 @@ impl LauncherView {
     /// The thread behind those reads did not start, or is gone: why.
     pub fn reading_failed(&mut self, error: String) {
         self.probe_seq += 1;
+        self.judge(None);
         self.status = Status::Failed(error);
     }
 
@@ -333,6 +408,8 @@ impl LauncherView {
     /// reads themselves failed, since a start probes first. It is off for no answer
     /// and for trouble: a Runtime may still be there, and a start would only record
     /// a press on it or race its stopping. One that is gone reads as not running next.
+    /// In root mode a Runtime up that is not the installation folder's, or cannot be told
+    /// to be, is said in red, and Start is off as for any Runtime up.
     fn lamp(&self, labels: &Labels, link: &Link) -> Lamp {
         let starting = matches!(
             self.line.as_ref().map(|line| &line.kind),
@@ -341,6 +418,9 @@ impl LauncherView {
         let (tone, text, down) = match &self.status {
             Status::Unavailable => (StatusTone::Fault, labels.launcher_unavailable, false),
             Status::Failed(_) => (StatusTone::Fault, labels.launcher_check_failed, true),
+            Status::Probed(Ok(_)) if self.not_this_root().is_some() => {
+                (StatusTone::Fault, labels.launcher_not_this_root, false)
+            }
             Status::Probed(Ok(_)) => (StatusTone::Ok, labels.launcher_running, false),
             _ if starting => (StatusTone::Attention, labels.launcher_starting, false),
             Status::Checking => (StatusTone::Offline, labels.launcher_checking, false),
@@ -359,12 +439,16 @@ impl LauncherView {
     }
 
     /// The status with its pid and owner epoch, or the client's code, for the
-    /// ledger windows.
+    /// ledger windows; in root mode, and why a Runtime up is not taken for the
+    /// installation folder's.
     fn status_text(&self, labels: &Labels) -> String {
         match &self.status {
             Status::Unavailable => labels.launcher_unavailable.to_owned(),
             Status::Checking => labels.launcher_checking.to_owned(),
-            Status::Probed(probe) => probe_text(labels, probe),
+            Status::Probed(probe) => match self.not_this_root_text(labels) {
+                Some(why) => format!("{} · {why}", probe_text(labels, probe)),
+                None => probe_text(labels, probe),
+            },
             Status::Failed(error) => fill(labels.thread_failed, &[error]),
         }
     }
@@ -503,6 +587,7 @@ pub fn start(ui: &Ui) {
         actingd_exe: launcher.actingd_exe.clone(),
         actingd_config: launcher.actingd_config.clone(),
         installation: launcher.installation.clone(),
+        checked_root: launcher.checked_root.clone(),
         starting: Arc::clone(&launcher.starting),
         probe_seq: seq,
     };
@@ -527,17 +612,28 @@ struct StartJob {
     actingd_exe: Option<PathBuf>,
     actingd_config: Option<PathBuf>,
     installation: Option<Snapshot>,
+    /// In root mode, the installation folder a Runtime found up must be the one of.
+    checked_root: Option<PathBuf>,
     starting: Arc<AtomicBool>,
     probe_seq: u64,
 }
 
 /// The whole start, on `acui-start`: probe; already running, record the press;
 /// otherwise check the two paths, make the log, launch, and poll for readiness.
-/// Its last word clears `starting`, so no start press lands between that line
-/// and the unlock offer.
+/// In root mode a Runtime found up, at the probe or while polling, is first checked
+/// to be the installation folder's: one that is not, or cannot be told to be, is left
+/// alone, with nothing recorded on it and nothing launched. Its last word clears
+/// `starting`, so no start press lands between that line and the unlock offer.
 fn run_start(job: StartJob) {
-    let StartJob { state_root, actingd_exe, actingd_config, installation, starting, probe_seq } =
-        job;
+    let StartJob {
+        state_root,
+        actingd_exe,
+        actingd_config,
+        installation,
+        checked_root,
+        starting,
+        probe_seq,
+    } = job;
     // The last word of this start, painted with `starting` cleared.
     let finish = |line: LauncherLine, facts: Option<RuntimeFacts>, offer_unlock: bool| {
         let starting = Arc::clone(&starting);
@@ -551,8 +647,13 @@ fn run_start(job: StartJob) {
         });
     };
     let probe = probe_runtime(&state_root);
+    let elsewhere = probe.as_ref().ok().and_then(|facts| foreign(checked_root.as_deref(), facts));
     let running = probe.is_ok();
     post("acui-start", move |view| view.probed(probe_seq, probe));
+    if let Some(technical) = elsewhere {
+        finish(LauncherLine::new(LauncherKind::NotThisRoot, technical, true), None, false);
+        return;
+    }
     if running {
         let already = phrase(|labels| labels.already_running.to_owned());
         let line = LauncherLine::new(LauncherKind::Running, already, false);
@@ -642,6 +743,12 @@ fn run_start(job: StartJob) {
         }
         match probe_runtime(&state_root) {
             Ok(facts) => {
+                // Not the one launched: nothing is recorded on it.
+                if let Some(technical) = foreign(checked_root.as_deref(), &facts) {
+                    let line = LauncherLine::new(LauncherKind::NotThisRoot, technical, true);
+                    outcome = Some((line, None, false));
+                    break;
+                }
                 let (pid, epoch) = (facts.pid.to_string(), facts.owner_epoch.clone());
                 let record = record_start(&state_root, true);
                 let failed = record.is_err();
@@ -672,6 +779,16 @@ fn run_start(job: StartJob) {
     let line = if facts.is_none() { LauncherLine { log: Some(log), ..line } } else { line };
     finish(line, facts, offer_unlock);
     // `child` is dropped here: not killed, not waited on.
+}
+
+/// In root mode (`checked_root`), the technical words for why the Runtime `facts` names is
+/// not taken for the installation folder's (`identity::check`); `None` when it is, and
+/// outside root mode.
+fn foreign(checked_root: Option<&Path>, facts: &RuntimeFacts) -> Option<Phrase> {
+    let root = checked_root?;
+    let why = identity::check(root, facts.pid).err()?;
+    let root = root.to_path_buf();
+    Some(phrase(move |labels| why.text(labels, &root)))
 }
 
 /// Both configured paths, or the words naming the first one that is missing
@@ -1111,11 +1228,19 @@ pub fn shutdown(ui: &Ui) {
                 (LauncherKind::StopRequested, technical)
             }
             Err(failure) => {
-                let code = failure.runtime_code.clone().unwrap_or_else(|| failure.code.to_owned());
+                // In root mode, kept from a Runtime that is not the installation folder's, or
+                // cannot be told to be, before the press was recorded or anything was sent.
+                let kind = if failure.code == CONSOLE_RUNTIME_NOT_THIS_ROOT {
+                    LauncherKind::NotThisRoot
+                } else {
+                    let code =
+                        failure.runtime_code.clone().unwrap_or_else(|| failure.code.to_owned());
+                    LauncherKind::StopFailed { code: Some(code) }
+                };
                 let technical = phrase(move |labels| {
                     failure_text(labels, labels.shutdown_refused, labels.shutdown_failed, &failure)
                 });
-                (LauncherKind::StopFailed { code: Some(code) }, technical)
+                (kind, technical)
             }
         };
         let technical = phrase(move |labels| {
@@ -1186,7 +1311,7 @@ fn failure_text(labels: &Labels, refused: &str, failed: &str, failure: &ClientFa
 
 /// Hands a worker's news to the event loop: it goes into the launcher's view,
 /// and every window paints the launcher again in the language shown at that
-/// moment.
+/// moment, and the notices, which say what a probe's check of the Runtime found.
 fn post(what: &str, update: impl FnOnce(&mut LauncherView) + Send + 'static) {
     report::post(what, move || {
         let Some(ui) = crate::ui::current() else {
@@ -1194,6 +1319,7 @@ fn post(what: &str, update: impl FnOnce(&mut LauncherView) + Send + 'static) {
         };
         update(&mut *ui.launcher_view.borrow_mut());
         paint(&ui);
+        ui.paint_notices();
     });
 }
 
@@ -1206,6 +1332,7 @@ fn post_last(what: &str, update: impl FnOnce(&mut LauncherView) + Send + 'static
         };
         update(&mut *ui.launcher_view.borrow_mut());
         paint(&ui);
+        ui.paint_notices();
         workbench::poke_live(&ui);
     });
 }

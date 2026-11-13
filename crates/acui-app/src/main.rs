@@ -25,9 +25,11 @@
 //! what it has to print goes to the console it was started from, if any.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
-// The native window work is acui-glass's; `report` is the one exception here.
+// The native window work is acui-glass's; `report` and `identity` are the exceptions here.
 #![deny(unsafe_code)]
 
+#[allow(unsafe_code)]
+mod identity;
 mod install;
 mod launcher;
 mod ledger;
@@ -187,6 +189,8 @@ fn main() -> ExitCode {
 /// reading threads are told to end, the windows are hidden and let go, and then
 /// the shared state. Where the paths and the settings file came from goes to the
 /// technical log once, as an entry that does not by itself put the log on the windows.
+/// In an installation folder (root mode) every person's request is first checked to
+/// reach that folder's Runtime (`identity`), from before anything can be pressed.
 fn run(
     args: Args,
     place: install::Place,
@@ -208,6 +212,11 @@ fn run(
         report::log_quiet("place", &text);
     }
     let launcher = resolved.map(Launcher::new);
+    if let Some(root) = launcher.as_ref().ok().and_then(|launcher| launcher.checked_root.clone()) {
+        if !acui_source::guard_requests(move |pid| identity::allowed(&root, pid)) {
+            report::log("place", "the check of the Runtime's requests was set already");
+        }
+    }
     let ui = Ui::new(language, &stored, file, issues, launcher);
     if let Some(page) = args.page {
         workbench::show_page(&ui, page);

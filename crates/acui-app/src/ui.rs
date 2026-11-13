@@ -106,7 +106,9 @@ impl Ui {
         issues: Vec<SettingsIssue>,
         launcher: Result<Launcher, InstallIssue>,
     ) -> Rc<Self> {
-        let launcher_view = LauncherView::new(launcher.is_ok());
+        let checked_root =
+            launcher.as_ref().ok().and_then(|launcher| launcher.checked_root.clone());
+        let launcher_view = LauncherView::new(launcher.is_ok(), checked_root);
         let ui = Rc::new(Self {
             language: Cell::new(language),
             text_size: Cell::new(stored.text_size),
@@ -393,8 +395,9 @@ impl Ui {
     }
 
     /// The top of every window: the settings file's problems, errors first; on
-    /// the workbench, what it could not do itself or read; and where the technical log
-    /// is. A save's failure stays until a save succeeds; one that only repeats
+    /// the workbench, what it could not do itself or read, and in root mode a Runtime up
+    /// that it asks nothing, not being the installation folder's; and where the technical
+    /// log is. A save's failure stays until a save succeeds; one that only repeats
     /// a problem found at the start is not said twice.
     pub fn paint_notices(&self) {
         let labels = self.labels();
@@ -411,6 +414,9 @@ impl Ui {
                 }
             }
             let mut own = Vec::new();
+            if let Some(why) = self.launcher_view.borrow().not_this_root_text(labels) {
+                own.push(why);
+            }
             if let Some(error) = &notices.window {
                 own.push(fill(labels.window_failed, &[error]));
             }

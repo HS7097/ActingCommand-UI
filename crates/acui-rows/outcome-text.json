@@ -101,6 +101,18 @@
         "handling": "请重新打开监控台，连接当前运行的 Runtime。"
       }
     },
+    "console_runtime_not_this_root": {
+      "en": {
+        "sentence": "The Runtime this console reached is not the one of the installation folder the console belongs to, or the console could not tell, so nothing was sent to it.",
+        "short": "Not this installation's Runtime",
+        "handling": "Stop that Runtime from its own console, or check that the state_root in this installation folder's actingd.config.json is this installation's own; the red words at the top of the workbench say which Runtime it is."
+      },
+      "zh-Hans": {
+        "sentence": "本监控台连上的 Runtime 不是它所在安装文件夹的，或者核对不了，所以什么也没有发给它。",
+        "short": "不是本安装的 Runtime",
+        "handling": "请从那个 Runtime 自己的监控台关掉它，或检查这个安装文件夹的 actingd.config.json 里的 state_root 是不是本安装自己的；工作台上方的红字写明了是哪个 Runtime。"
+      }
+    },
     "console_status_source_missing": {
       "en": {
         "sentence": "The Runtime's instance status did not say which ledger position it was read at, so the instances' live status is not shown. The event list is not affected.",

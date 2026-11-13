@@ -46,7 +46,7 @@ use actingcommand_runtime_client::{
 
 use super::backends::links;
 use super::{configure_config, RunKey};
-use crate::ClientFailure;
+use crate::{person_connection, ClientFailure, NoPersonConnection};
 
 /// How long the Runtime is asked to wait for the run's end before it answers (`wait_ms`), the
 /// first request's and the follow-up's alike: a run whose next checkpoint comes within it answers
@@ -163,11 +163,15 @@ pub fn stop_time(follow_up: bool, at_ms: u64) -> StopTime {
 /// once, whatever comes back. The client checks that an answer is of `run`, and that it states a
 /// reset exactly when the run ended.
 pub fn stop_run(root: &Path, alias: &str, run: RunKey) -> StopOutcome {
-    let client = match RuntimeClient::connect(configure_config(root)) {
+    let client = match person_connection(configure_config(root)) {
         Ok(client) => client,
-        Err(error) => {
+        Err(NoPersonConnection::Failed(error)) => {
             let chain = chain(&error.outcome());
             return StopOutcome::NotSent { failure: ClientFailure::from(error), chain };
+        }
+        Err(refused) => {
+            let failure = ClientFailure::from(refused);
+            return StopOutcome::NotSent { chain: failure.code.to_owned(), failure };
         }
     };
     stop_on(&client, alias, run)
