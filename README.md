@@ -1164,7 +1164,7 @@ instance page in a later version.
 
 `acsetup.exe` (`crates/acui-wizard`) is the 0.12 setup wizard: it installs ActingCommand's Runtime, its
 tools and the console into **one new folder** (what the Runtime calls a single-location root) and
-connects the game accounts in the MuMu emulator. Opened from Explorer it is a window with the console's
+connects the signed-in games in the MuMu emulator. Opened from Explorer it is a window with the console's
 look and icon. It opens in the language Windows shows its own interface in (Chinese on a Chinese Windows,
 English otherwise) and switches between 中文 and English at the top right at any time; with a command it
 is a command line (see below). It goes on no network, downloads nothing, and does not change any
@@ -1202,10 +1202,12 @@ closing the window on those pages asks first, and quitting leaves nothing behind
 5. **Emulator**: MuMu is found read-only (as the Runtime finds it: a running MuMu, the registry's uninstall
    entries, the MuMu folders in Program Files) and `MuMuManager.exe info -v all` lists its emulators (no
    window, within 10 seconds); no emulator is opened or closed. No emulator is ticked to begin with: the
-   person ticks the ones to hand over, and Next with none ticked asks first. An emulator another running
+   person ticks the ones to hand over, and Next with none ticked asks first. The page says what the
+   wizard calls an instance from here on: each emulator ticked becomes one instance in ActingCommand, one
+   signed-in game in one emulator. An emulator another running
    ActingCommand on this computer already uses is greyed, and ticking it asks first. Without MuMu the page
-   can be skipped: the set is installed without accounts, to be added later.
-6. **Accounts**: one row per ticked emulator: its name (by default "game-index"), game and server; under
+   can be skipped: the set is installed without instances, to be added later.
+6. **Instances**: one row per ticked emulator: its name (by default "game-index"), game and server; under
    Advanced, the touch and capture methods (both `nemu_ipc` by default) and "Open this emulator when
    ActingCommand starts" (off by default). Names must differ, hold no space and not be too long: with two or
    more emulators on one game, the Runtime's schedule names each task copy `<id>@<name>`, at most 128 bytes,
@@ -1213,9 +1215,9 @@ closing the window on those pages asks first, and quitting leaves nothing behind
 7. **Options**: desktop and Start menu shortcuts (on by default); run automatically after sign-in (the
    Runtime's watchdog scheduled task, **off by default**; leave it off when another ActingCommand on this
    computer already runs automatically); start when setup finishes (on); on the first start, keep every
-   account paused (on: ActingCommand starts playing only after you check each account in the console and
+   instance paused (on: ActingCommand starts playing only after you check each instance in the console and
    press "Put All on Duty").
-8. **Confirm**: the location, versions, games, accounts, options, the folders created and the files written,
+8. **Confirm**: the location, versions, games, instances, options, the folders created and the files written,
    all listed. Once Install is pressed there is no going back to the earlier pages.
 9. **Install**: step by step, each done, skipped or failed, the step under way with a line of detail and a
    progress bar. Before writing, the install files, the emulators and the folder are checked once more. A
@@ -1223,7 +1225,7 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    the window while it installs is held off.
 10. **Finish**: where it was installed and where the setup log is. "Open console" (the new root's
     `ui\acui.exe`, started apart from the wizard) and "Open folder" are for the person to press; the wizard
-    opens nothing by itself. The page also says how to add accounts later, since the console cannot add
+    opens nothing by itself. The page also says how to add instances later, since the console cannot add
     them yet: run the wizard again into another folder (a second, separate ActingCommand), or wait for a
     later version. After a failure the page says which step and why, offers to copy the error and
     to open the setup log, and says the folder may be deleted whole to start again.

@@ -86,7 +86,7 @@ impl Step {
             Step::ConsoleSettings => Said::new("写监控台设置", "Write the console's settings"),
             Step::Shortcuts => Said::new("建快捷方式", "Create the shortcuts"),
             Step::Start => Said::new("启动 Runtime", "Start the Runtime"),
-            Step::Pause => Said::new("首次启动先暂停所有号", "Pause every account for the first start"),
+            Step::Pause => Said::new("首次启动先暂停所有实例", "Pause every instance for the first start"),
             Step::Watchdog => Said::new("装看门狗（开机自动运行）", "Install the watchdog (start at logon)"),
             Step::Status => Said::new("确认 Runtime 在线", "Confirm the Runtime is online"),
         }
@@ -814,8 +814,8 @@ fn pause(run: &mut Run<'_>) -> Result<Said, Said> {
         return Err(Said::new("没能暂停", "the pause was refused").with(answer.reason()));
     }
     Ok(Said::new(
-        "已暂停所有号；在监控台确认无误后点「全部开始执勤」",
-        "every account is paused; after a look in the console, press \"put all on duty\"",
+        "已暂停所有实例；在监控台确认无误后点「全部开始执勤」",
+        "every instance is paused; after a look in the console, press \"put all on duty\"",
     )
     .with(format!("reason {FIRST_START_REASON}")))
 }

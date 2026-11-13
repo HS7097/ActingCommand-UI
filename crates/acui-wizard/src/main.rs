@@ -289,7 +289,7 @@ fn run_install(set_dir: &Path, root: &Path, plan_path: &Path) -> ExitCode {
                 println!("  快捷方式 / shortcut: {}", shortcut.display());
             }
             if done.paused {
-                println!("  所有号已暂停：在监控台确认无误后点「全部开始执勤」 / every account is paused: after a look in the console, press \"put all on duty\"");
+                println!("  所有实例已暂停：在监控台确认无误后点「全部开始执勤」 / every instance is paused: after a look in the console, press \"put all on duty\"");
             }
             if done.watchdog {
                 let actingctl = done.root.join("runtime").join("actingctl.exe");

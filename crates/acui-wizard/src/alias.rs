@@ -83,11 +83,11 @@ pub fn alias_issue(alias: &str, limit: usize) -> Option<AliasIssue> {
 }
 
 /// The whole sentence for an alias that cannot be used: "名字 {名字} 用不了：{原因}", or, for an
-/// empty one, that an account has no name.
+/// empty one, that an instance has no name.
 pub fn alias_problem(alias: &str, limit: usize) -> Option<Said> {
     let issue = alias_issue(alias, limit)?;
     if issue == AliasIssue::Empty {
-        return Some(Said::new("有账号的名字空着，请给它起一个名字", "An account has no name; give it one"));
+        return Some(Said::new("有实例的名字空着，请给它起一个名字", "An instance has no name; give it one"));
     }
     let shown = if issue == AliasIssue::Control {
         alias.escape_debug().to_string()

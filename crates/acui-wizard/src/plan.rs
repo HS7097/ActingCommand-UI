@@ -142,7 +142,7 @@ pub fn plan_problems(plan: &Plan, games: &[Game]) -> Vec<Said> {
             problems.push(problem.with(format!("#{}", instance.index)));
         } else if !aliases.insert(instance.alias.as_str()) {
             problems.push(
-                Said::new("有两个账号用了同一个名字，请改成不同的", "Two accounts have the same name; give them different names")
+                Said::new("有两个实例用了同一个名字，请改成不同的", "Two instances have the same name; give them different names")
                     .with(&named),
             );
         }
