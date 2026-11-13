@@ -186,11 +186,16 @@ struct Run<'a> {
 
 impl Run<'_> {
     fn say(&mut self, said: Said) -> Result<(), Said> {
-        self.log
-            .line(&said.to_string())
-            .map_err(|error| Said::new("日志写不进去", "the log cannot be written").with(error))?;
+        self.note(&said)?;
         (self.report)(Event::Line(said));
         Ok(())
+    }
+
+    /// A line for the log only: what the step events already tell whoever listens.
+    fn note(&mut self, said: &Said) -> Result<(), Said> {
+        self.log
+            .line(&said.to_string())
+            .map_err(|error| Said::new("日志写不进去", "the log cannot be written").with(error))
     }
 
     fn fail(&mut self, step: Option<Step>, reason: Said) -> Failure {
@@ -215,10 +220,11 @@ impl Run<'_> {
         }
     }
 
-    /// Runs one step: heard as started, then finished with its summary, or failed.
+    /// Runs one step: heard as started, then finished with its summary, or failed. The log
+    /// gets a line at each end; listeners hear the events alone, so nothing is said twice.
     fn step(&mut self, step: Step, work: impl FnOnce(&mut Self) -> Result<Said, Said>) -> Result<(), Failure> {
         (self.report)(Event::Started(step));
-        if let Err(reason) = self.say(Said::new(
+        if let Err(reason) = self.note(&Said::new(
             format!("开始第 {} 步：{}", step.number(), step.title().zh),
             format!("step {} begins: {}", step.number(), step.title().en),
         )) {
@@ -226,7 +232,7 @@ impl Run<'_> {
         }
         match work(&mut *self) {
             Ok(summary) => {
-                if let Err(reason) = self.say(Said::new(
+                if let Err(reason) = self.note(&Said::new(
                     format!("第 {} 步完成：{}", step.number(), summary.zh),
                     format!("step {} done: {}", step.number(), summary.en),
                 )) {
@@ -241,7 +247,7 @@ impl Run<'_> {
     }
 
     fn skip(&mut self, step: Step, why: Said) -> Result<(), Failure> {
-        if let Err(reason) = self.say(Said::new(
+        if let Err(reason) = self.note(&Said::new(
             format!("跳过第 {} 步「{}」：{}", step.number(), step.title().zh, why.zh),
             format!("step {} \"{}\" skipped: {}", step.number(), step.title().en, why.en),
         )) {
@@ -331,7 +337,9 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
         run.skip(Step::Status, Said::new("向导没有启动 Runtime", "the wizard did not start the Runtime"))?;
     }
     let log = run.log.path().map(Path::to_path_buf).unwrap_or_else(|| root.join(crate::log::LOG_FILE));
-    let _ = run.say(Said::new("安装完成", "the install is complete").with(root.display()));
+    // The log only: the caller says the end itself, from `Done`. A log that takes no more
+    // lines now changes nothing of an install that is complete.
+    let _ = run.note(&Said::new("安装完成", "the install is complete").with(root.display()));
     Ok(Done {
         console: root.join("ui").join("acui.exe"),
         config: config_path,
@@ -771,8 +779,18 @@ fn start(run: &mut Run<'_>) -> Result<Said, Said> {
     if !answer.ok() {
         return Err(Said::new("Runtime 没有起来", "the Runtime did not start").with(answer.reason()));
     }
-    let pid = answer.member("pid").map(Value::to_string).unwrap_or_else(|| "?".to_owned());
-    let mut summary = Said::new("已就绪", "ready").with(format!("pid {pid}"));
+    // On a single-location root `up` is the installer's start: its result line carries the
+    // Runtime's process as the outcome's `pid` value and as `start.ready.pid` (Runtime
+    // `crates/lab-rescue/src/install/deploy.rs`, the start's receipt). Neither may be there (a
+    // start that was found already under way); then no pid is said.
+    let pid = answer
+        .member("outcome")
+        .and_then(|outcome| outcome["values"]["pid"].as_u64())
+        .or_else(|| answer.member("start").and_then(|start| start["ready"]["pid"].as_u64()));
+    let mut summary = Said::new("已就绪", "ready");
+    if let Some(pid) = pid {
+        summary = summary.with(format!("pid {pid}"));
+    }
     if answer.outcome.category.as_deref() == Some("warning") {
         summary = summary.with(format!("caveat {}", answer.outcome.code.clone().unwrap_or_default()));
     }
