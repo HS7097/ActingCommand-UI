@@ -1375,8 +1375,8 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    entries, the MuMu folders in Program Files) and `MuMuManager.exe info -v all` lists its emulators (no
    window, within 10 seconds); no emulator is opened or closed. No emulator is ticked to begin with: the
    person ticks the ones to hand over, and Next with none ticked asks first. The page says what the
-   wizard calls an instance from here on: each emulator ticked becomes one instance in ActingCommand, one
-   signed-in game in one emulator. An emulator another ActingCommand on this computer already uses is
+   wizard calls an instance from here on: each emulator ticked becomes one instance in ActingCommand: the
+   emulator itself, with the games signed in on it. An emulator another ActingCommand on this computer already uses is
    greyed, and ticking it asks first. The other installations are found two ways: a running
    `actingcommand-actingd.exe`, and a registered watchdog task (which finds a stopped one too); its
    configuration uses an emulator when it binds it by index, name, `serial` or adb port. Without MuMu the
