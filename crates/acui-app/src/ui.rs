@@ -974,6 +974,7 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_rescue_game_launch(labels.rescue_game_launch.into());
     global.set_rescue_game_restart(labels.rescue_game_restart.into());
     global.set_rescue_stop_run(labels.rescue_stop_run.into());
+    global.set_rescue_close_task(labels.rescue_close_task.into());
     global.set_rescue_rules(labels.rescue_rules.into());
     global.set_rules_close(labels.rules_close.into());
     global.set_rules_add_open(labels.rules_add_open.into());

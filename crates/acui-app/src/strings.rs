@@ -1137,7 +1137,8 @@ pub struct Labels {
     pub refresh_restarted: &'static str,
     /// Under the live view's title, the rescue bar (UI-3e1-a), whose buttons the window draws
     /// itself: reconnect and check; the emulator's row, its caption, start, stop and restart; the
-    /// game's row, its caption, launch and restart; "stop this run" (UI-3e2).
+    /// game's row, its caption, launch and restart; "stop this run" (UI-3e2), and in its place of a
+    /// run the scheduler dispatched "close this task" (UI-3e2b).
     pub rescue_check: &'static str,
     pub rescue_emulator: &'static str,
     pub rescue_emulator_start: &'static str,
@@ -1147,6 +1148,7 @@ pub struct Labels {
     pub rescue_game_launch: &'static str,
     pub rescue_game_restart: &'static str,
     pub rescue_stop_run: &'static str,
+    pub rescue_close_task: &'static str,
     /// Why every device button is off: no Runtime answers; the device is being handed over; its
     /// picture is being refreshed; its backends are being switched, or may still be; one was
     /// just operated; it runs a task; it recovers by itself; it does something else (the card's
@@ -1174,21 +1176,24 @@ pub struct Labels {
     pub rescue_seen_off: &'static str,
     pub rescue_seen_off_start: &'static str,
     pub rescue_game_fault: &'static str,
-    /// Beside "stop this run" (UI-3e2, UI-3e3), what a press does or why it cannot be pressed,
-    /// besides that one was just pressed (`rescue_cooling`): a run another tool started, which a
-    /// press asks the Runtime to stop, the Runtime then resetting the device; this Runtime cannot
-    /// stop a run from here; a run whose identity was not read; a run the scheduler dispatched,
-    /// which a press asks the Runtime to stop, this run only, its task staying on; a Runtime that
-    /// cannot stop a run the scheduler dispatched yet (one before 0.12.55, which also ends a
-    /// refused stop's line); a step the Runtime started itself (which also ends a refused stop's
-    /// line); no task runs.
+    /// Beside "stop this run" (UI-3e2), what a press does or why it cannot be pressed, besides that
+    /// one was just pressed (`rescue_cooling`): a run another tool started, which a press asks the
+    /// Runtime to stop, the Runtime then resetting the device; this Runtime cannot stop a run from
+    /// here; a run whose identity was not read; a step the Runtime started itself (which also ends
+    /// a refused stop's line); no task runs.
     pub stop_note: &'static str,
     pub stop_unsupported: &'static str,
     pub stop_unidentified: &'static str,
-    pub stop_note_scheduled: &'static str,
-    pub stop_scheduled_unsupported: &'static str,
     pub rescue_close_system: &'static str,
     pub rescue_close_no_task: &'static str,
+    /// Beside "close this task" of a run the scheduler dispatched (UI-3e2b): what a press does,
+    /// that the task is no longer scheduled, this run stopped, and how to open it again; that a
+    /// switch of the account's task list is being changed (beside "stop this run" too); this
+    /// Runtime cannot close a task from here; the task's identity was not read.
+    pub close_task_note: &'static str,
+    pub close_task_busy: &'static str,
+    pub close_task_unsupported: &'static str,
+    pub close_task_unidentified: &'static str,
     /// What the last stop of a run came to, under its button, each that landed with when (time):
     /// out; stopped and the device reset; ended for another reason before this stop, the Runtime
     /// resetting nothing for it; stopped, and its reset failed (time, why); asked, and waited for
@@ -1196,18 +1201,13 @@ pub struct Labels {
     /// read; refused by a Runtime that cannot stop a run; the run ended before the stop; ended, its
     /// reset's result not read; the stop as a refusal names it (`rescue_refused`); unconfirmed; the
     /// account gone from the Runtime's list; the console reading no status. And a sentence with
-    /// the time it was said (the sentence, the time). Of a run the scheduler dispatched (UI-3e3):
-    /// this one run stopped and the device reset (time); stopped, and its reset failed (time, why);
-    /// and, after either or after one that ended for another reason first (`rescue_then`), that its
-    /// task is not closed and runs again after its cooldown while its trigger holds, which the
-    /// account's own pause on its card keeps from running.
+    /// the time it was said (the sentence, the time). And, in place of the time of stopped, ended
+    /// for another reason and ended with its reset's result not read, when a follow-up said so,
+    /// that this is when the console learned it (time), not when the Runtime ended the run.
     pub stop_sending: &'static str,
     pub stop_done: &'static str,
     pub stop_not_needed: &'static str,
     pub stop_reset_failed: &'static str,
-    pub stop_done_scheduled: &'static str,
-    pub stop_reset_failed_scheduled: &'static str,
-    pub stop_scheduled_again: &'static str,
     pub stop_asked: &'static str,
     pub stop_reading: &'static str,
     pub stop_unsettled: &'static str,
@@ -1219,6 +1219,45 @@ pub struct Labels {
     pub stop_unlisted: &'static str,
     pub stop_no_status: &'static str,
     pub stop_at: &'static str,
+    pub stop_learned_at: &'static str,
+    /// What the last "close this task" came to (UI-3e2b), under its button, each that landed with
+    /// when (time). Out, its close and the stop after it. Its close not written, the run not
+    /// stopped either: this Runtime cannot close a task from here, nothing done (time); another
+    /// write of the account's switches at the same moment, to press again (time); too many records
+    /// to hold another (time); the records held cannot be read (time); the view's connection ended
+    /// before its answer (time); refused (why, time); not known whether written (time), the task
+    /// list's switch saying so; a program error, whether closed and whether stopped both not known
+    /// (time), the card and the task list saying what holds. Written: that the task is
+    /// closed and no longer scheduled (time), and after it (`rescue_then`) what the stop came to:
+    /// this run stopped and the device reset (time), with how to open the task again; stopped, and
+    /// the reset failed (time, why); asked, and waited for (time); the run ended before the stop;
+    /// not stopped, as the scheduler's run of a Runtime that cannot stop one (time); not stopped,
+    /// a step of the Runtime's own (time); not stopped (why, time); unconfirmed (time). After a
+    /// restart, out or awaited (`rescue_runtime_restarted`, `rescue_then`), that the task list's
+    /// switch says whether it is closed. Of a package the account's daily tasks do not run, before
+    /// what the stop came to (`rescue_then`): that only this run was stopped, when it stopped; else
+    /// that nothing was closed here.
+    pub close_task_sending: &'static str,
+    pub close_task_refused_unsupported: &'static str,
+    pub close_task_not_newer: &'static str,
+    pub close_task_too_many: &'static str,
+    pub close_task_stored_unreadable: &'static str,
+    pub close_task_view_dropped: &'static str,
+    pub close_task_refused: &'static str,
+    pub close_task_unconfirmed: &'static str,
+    pub close_task_panicked: &'static str,
+    pub close_task_done: &'static str,
+    pub close_task_stop_done: &'static str,
+    pub close_task_stop_reset_failed: &'static str,
+    pub close_task_stop_asked: &'static str,
+    pub close_task_stop_run_ended: &'static str,
+    pub close_task_stop_policy: &'static str,
+    pub close_task_stop_host: &'static str,
+    pub close_task_stop_refused: &'static str,
+    pub close_task_stop_unconfirmed: &'static str,
+    pub close_task_restarted: &'static str,
+    pub close_task_not_listed: &'static str,
+    pub close_task_not_listed_unclosed: &'static str,
     /// The question a press that closes the game asks (the account): a stop of the emulator; one
     /// whose watch starts it again, or may (the account, the setting's name); a restart of the
     /// emulator; a restart of the game. The confirming button's words: a stop's, a restart's.
@@ -2268,6 +2307,7 @@ pub const ZH: Labels = Labels {
     rescue_game_launch: "启动",
     rescue_game_restart: "重启",
     rescue_stop_run: "停下这次运行",
+    rescue_close_task: "关闭这个任务",
     rescue_offline: "Runtime 没有运行或连不上，不能操作设备",
     rescue_handing_over: "正在交接设备",
     rescue_refreshing: "正在刷新画面，稍等",
@@ -2287,28 +2327,49 @@ pub const ZH: Labels = Labels {
     stop_note: "这次运行是别的工具发起的，按下就请 Runtime 停下它，之后由 Runtime 复位设备",
     stop_unsupported: "这一版 Runtime 还不支持在这里停下运行",
     stop_unidentified: "没读到这次运行的身份，这里停不了",
-    stop_note_scheduled: "这次运行是调度器派的：按下就请 Runtime 停下这一次，之后由 Runtime 复位设备；这个任务不会因此关掉",
-    stop_scheduled_unsupported: "这个版本的 Runtime 还不能停调度器派的运行，0.12.55 起可以",
     rescue_close_system: "这是 Runtime 自己的步骤（启动、恢复、空闲时的收尾），人停不了它",
     rescue_close_no_task: "现在没有在跑的任务",
+    close_task_note: "按下就不再安排这个任务，并停下这一次；要恢复，到「日常任务」里打开它",
+    close_task_busy: "正在改这个号的任务开关，稍等",
+    close_task_unsupported: "这一版 Runtime 还不支持在这里关闭任务",
+    close_task_unidentified: "没读到这个任务的身份，这里关不了",
     stop_sending: "正在停下…（这次运行会停在下一个检查点，之后由 Runtime 复位设备）",
     stop_done: "已停下（{}），Runtime 已复位设备",
     stop_not_needed: "这次运行在这里停下之前已经因别的原因结束（{}），Runtime 这里没有复位设备；现在怎样以卡片为准",
     stop_reset_failed: "已停下（{}），但设备复位没成功：{}。这台被隔离了，现在怎样以卡片为准",
-    stop_done_scheduled: "已停下这一次运行（{}），Runtime 已复位设备",
-    stop_reset_failed_scheduled: "已停下这一次运行（{}），但设备复位没成功：{}。这台被隔离了，现在怎样以卡片为准",
-    stop_scheduled_again: "这个任务没有关：冷却过后条件还成立会再跑；不想它再跑，用卡片上的「暂停这个号」",
     stop_asked: "已经请它停下（{}），等它在下一个检查点停下…",
     stop_reading: "正在读停止的结果…",
     stop_unsettled: "已经请它停下，但这里没读到最后结果（{}）；现在怎样以卡片为准。不会再自动发。",
     stop_refused_unsupported: "这一版 Runtime 还不支持在这里停下运行，什么都没做（{}）",
     stop_run_ended: "这次运行在停下之前已经结束了，什么都没做（{}）",
-    stop_run_ended_unread: "这次运行已经结束，但复位的结果这里没读到（{}）；现在怎样以卡片为准",
+    stop_run_ended_unread: "这次运行已经结束（{}），但复位的结果这里没读到；现在怎样以卡片为准",
     stop_op: "停下这次运行",
     stop_unconfirmed: "结果未确认：可能已经执行（{}）。卡片和画面是现在的情况；不会自己定时重发。",
     stop_unlisted: "这个号不在 Runtime 的列表里了，这次停止的结果不明",
     stop_no_status: "控制台读不到 Runtime 的状态了，这次停止的结果不明",
     stop_at: "{}（{}）",
+    stop_learned_at: "{} 得知",
+    close_task_sending: "正在关闭这个任务，再停下这一次…",
+    close_task_refused_unsupported: "这一版 Runtime 还不支持在这里关闭任务，什么都没做（{}）",
+    close_task_not_newer: "没能关闭：刚好有别的地方同时在改这个号的任务开关（{}）。这一次也没有停；再按一次即可",
+    close_task_too_many: "没能关闭：这个号的任务开关记录太多，写不下了（{}）。这一次也没有停",
+    close_task_stored_unreadable: "没能关闭：这个号已有的任务开关记录读不了（{}）。这一次也没有停",
+    close_task_view_dropped: "没能关闭：读这个号的任务开关时，连接在回答之前断了（{}）。这一次也没有停",
+    close_task_refused: "没能关闭：{}（{}）。这一次也没有停",
+    close_task_unconfirmed: "关闭有没有写上，这里不知道（{}）；这一次没有停。到「日常任务」看它的开关",
+    close_task_panicked: "程序出错了：这个任务有没有关闭、这一次有没有停，这里都不知道（{}）。现在怎样以卡片为准，任务开关到「日常任务」看",
+    close_task_done: "已关闭这个任务（{}），之后不再安排",
+    close_task_stop_done: "这一次也已停下（{}），Runtime 已复位设备。要恢复，到「日常任务」里打开它",
+    close_task_stop_reset_failed: "这一次也已停下（{}），但设备复位没成功：{}。这台被隔离了，现在怎样以卡片为准",
+    close_task_stop_asked: "已经请这一次停下（{}），等它在下一个检查点停下…",
+    close_task_stop_run_ended: "这一次在停下之前已经结束了",
+    close_task_stop_policy: "但这一次没停下：这一版 Runtime 停不了调度器派的运行，它会跑完（{}）",
+    close_task_stop_host: "但这一次没停下：这是 Runtime 自己的步骤（{}）",
+    close_task_stop_refused: "但这一次没停下：{}（{}）",
+    close_task_stop_unconfirmed: "停下这一次的结果未确认：可能已经执行（{}）。卡片和画面是现在的情况；不会自己定时重发。",
+    close_task_restarted: "任务开关以「日常任务」为准",
+    close_task_not_listed: "这个任务包不在这个号的日常任务里，这里只停下了这一次",
+    close_task_not_listed_unclosed: "这个任务包不在这个号的日常任务里，这里没有关闭什么",
     rescue_confirm_stop: "关闭 {} 的模拟器？游戏会一起关掉。",
     rescue_confirm_stop_watched: "关闭 {} 的模拟器？游戏会一起关掉。这个号开了「{}」，Runtime 稍后会把它重新拉起；要它保持关着，先暂停这个号。",
     rescue_confirm_stop_maybe_watched: "关闭 {} 的模拟器？游戏会一起关掉。如果这个号开了「{}」，Runtime 稍后会把它重新拉起；要它保持关着，先暂停这个号。",
@@ -3297,6 +3358,7 @@ pub const EN: Labels = Labels {
     rescue_game_launch: "Launch",
     rescue_game_restart: "Restart",
     rescue_stop_run: "Stop This Run",
+    rescue_close_task: "Close This Task",
     rescue_offline: "The Runtime is not running or cannot be reached: no device can be operated",
     rescue_handing_over: "The device is being handed over",
     rescue_refreshing: "Its picture is being refreshed: wait a moment",
@@ -3316,28 +3378,49 @@ pub const EN: Labels = Labels {
     stop_note: "Another tool started this run: a press asks the Runtime to stop it, and the Runtime then resets the device",
     stop_unsupported: "This Runtime cannot stop a run from here yet",
     stop_unidentified: "This run's identity was not read, so it cannot be stopped from here",
-    stop_note_scheduled: "The scheduler started this run: a press asks the Runtime to stop this one run, and the Runtime then resets the device; the task itself stays on",
-    stop_scheduled_unsupported: "This version of the Runtime cannot stop a run the scheduler started yet; from 0.12.55 it can",
     rescue_close_system: "This is the Runtime's own step (starting, recovering or winding down when idle): a person cannot stop it",
     rescue_close_no_task: "No task is running now",
+    close_task_note: "A press stops scheduling this task and stops this run; to bring it back, turn it on under Daily Tasks",
+    close_task_busy: "This account's task switches are being changed; a moment",
+    close_task_unsupported: "This Runtime cannot close a task from here yet",
+    close_task_unidentified: "This task's identity was not read, so it cannot be closed from here",
     stop_sending: "Stopping… (the run stops at its next checkpoint, and the Runtime then resets the device)",
     stop_done: "Stopped ({}); the Runtime reset the device",
     stop_not_needed: "The run had already ended for another reason before this stop reached it ({}); the Runtime did not reset the device for it; see the card for what holds now",
     stop_reset_failed: "Stopped ({}), but the device's reset failed: {}. The device is fenced; see the card for what holds now",
-    stop_done_scheduled: "Stopped this one run ({}); the Runtime reset the device",
-    stop_reset_failed_scheduled: "Stopped this one run ({}), but the device's reset failed: {}. The device is fenced; see the card for what holds now",
-    stop_scheduled_again: "The task is not closed: after its cooldown it runs again if its condition still holds; to keep it from running, use Pause This Account on its card",
     stop_asked: "Asked to stop ({}); waiting for it to stop at its next checkpoint…",
     stop_reading: "Reading what came of the stop…",
     stop_unsettled: "Asked to stop, but its final result was not read here ({}); see the card for what holds now. Not sent again by itself.",
     stop_refused_unsupported: "This Runtime cannot stop a run from here yet; nothing was done ({})",
     stop_run_ended: "The run had already ended before this stop reached it; nothing was done ({})",
-    stop_run_ended_unread: "The run has ended, but what came of its reset was not read here ({}); see the card for what holds now",
+    stop_run_ended_unread: "The run has ended ({}), but what came of its reset was not read here; see the card for what holds now",
     stop_op: "Stopping this run",
     stop_unconfirmed: "Unconfirmed: it may have happened ({}). The card and picture show what holds now; it is not sent again on a timer.",
     stop_unlisted: "This account is no longer in the Runtime's list: what came of this stop is not known",
     stop_no_status: "The console can no longer read the Runtime's status: what came of this stop is not known",
     stop_at: "{} ({})",
+    stop_learned_at: "learned at {}",
+    close_task_sending: "Closing this task, then stopping this run…",
+    close_task_refused_unsupported: "This Runtime cannot close a task from here yet; nothing was done ({})",
+    close_task_not_newer: "Not closed: something else changed this account's task switches at the same moment ({}). This run was not stopped either; press again",
+    close_task_too_many: "Not closed: this account has too many task switch records to hold another ({}). This run was not stopped either",
+    close_task_stored_unreadable: "Not closed: this account's task switch records cannot be read ({}). This run was not stopped either",
+    close_task_view_dropped: "Not closed: the connection ended before this account's task switches were read ({}). This run was not stopped either",
+    close_task_refused: "Not closed: {} ({}). This run was not stopped either",
+    close_task_unconfirmed: "Whether the close was written is not known here ({}); this run was not stopped. See its switch under Daily Tasks",
+    close_task_panicked: "A program error happened: whether this task was closed and whether this run stopped are both unknown here ({}). See the card for what holds now, and Daily Tasks for its switch",
+    close_task_done: "Closed this task ({}); it is no longer scheduled",
+    close_task_stop_done: "This run stopped too ({}); the Runtime reset the device. To bring the task back, turn it on under Daily Tasks",
+    close_task_stop_reset_failed: "This run stopped too ({}), but the device's reset failed: {}. The device is fenced; see the card for what holds now",
+    close_task_stop_asked: "Asked this run to stop ({}); waiting for it to stop at its next checkpoint…",
+    close_task_stop_run_ended: "This run had already ended before the stop",
+    close_task_stop_policy: "But this run did not stop: this Runtime cannot stop a run the scheduler started, and it runs to its end ({})",
+    close_task_stop_host: "But this run did not stop: it is the Runtime's own step ({})",
+    close_task_stop_refused: "But this run did not stop: {} ({})",
+    close_task_stop_unconfirmed: "Stopping this run is unconfirmed: it may have happened ({}). The card and picture show what holds now; it is not sent again on a timer.",
+    close_task_restarted: "The task switches under Daily Tasks say whether it is closed",
+    close_task_not_listed: "This task pack is not one of this account's daily tasks, so only this run was stopped",
+    close_task_not_listed_unclosed: "This task pack is not one of this account's daily tasks, so nothing was closed here",
     rescue_confirm_stop: "Stop {}'s emulator? The game closes with it.",
     rescue_confirm_stop_watched: "Stop {}'s emulator? The game closes with it. “{}” is on for this account, so the Runtime will start it again shortly; pause this account to keep it off.",
     rescue_confirm_stop_maybe_watched: "Stop {}'s emulator? The game closes with it. If “{}” is on for this account, the Runtime will start it again shortly; pause this account to keep it off.",

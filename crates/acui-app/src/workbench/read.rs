@@ -21,7 +21,9 @@
 //! Beside it, of the same account named in the same slot, its task switches (UI-3f2,
 //! `PackScheduleView`), on a slower clock of their own: they change only as a person presses one,
 //! as another tool writes them, or as a row of them ends, and each read holds the fact write gate
-//! a moment. Not at all in an owner epoch whose Runtime said it has none: the slot says so.
+//! a moment. Not at all in an owner epoch whose Runtime said it has none, the slot says so, but
+//! once more as the list is shown anew `PACKS_PROBE_AFTER` or longer after it said so, until an
+//! answer says so again or shows the switches.
 //!
 //! A thread reads what is due, hands each result to the event loop, and sleeps
 //! until the next is due or it is poked. It ends once the event loop lets its
@@ -73,7 +75,7 @@ static READS: [Cadence; READ_KINDS] = [
 pub type TasksFor = Arc<Mutex<Option<Listed>>>;
 
 /// What the slot names: the account, and whether its switches are read beside its list, which they
-/// are not in an owner epoch whose Runtime said it has none.
+/// are not in an owner epoch whose Runtime said it has none, but while a read asks it once more.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listed {
     pub alias: String,
@@ -96,6 +98,11 @@ pub const EXPLAIN_TOO_OLD: Duration = secs(60);
 /// An account's switches not read again for this long no longer count as what holds now: three
 /// of their reads' times, so a read that waits behind a slow one is not called unreadable.
 pub const PACKS_TOO_OLD: Duration = secs(180);
+
+/// How long after a Runtime said it has no switches the list shown anew reads its view once more
+/// (`Switches::probe`): one of their reads' times. What said so may have been a connection that
+/// ended just before its answer and was made again in the same owner epoch.
+pub const PACKS_PROBE_AFTER: Duration = secs(60);
 
 /// How long a thread with nothing due sleeps: a window coming back pokes it.
 const NOTHING_DUE: Duration = secs(3600);

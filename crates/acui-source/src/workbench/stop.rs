@@ -7,6 +7,11 @@
 //! to show after it is the next `Status`'s. Nothing out of here names a wire type: what came back
 //! is a [`StopOutcome`].
 //!
+//! A person's "close this task" of a run the scheduler dispatched (UI-3e2b) closes the task
+//! first, and only once its close row took sends this same stop, on the connection its close went
+//! out on; of a package the account's view does not list, it writes no row and sends the stop
+//! alone ([`stop_on`], `super::pack::close_then_stop`).
+//!
 //! A run a client started (`direct_run`) is stopped, and since 0.12.55 one the scheduler
 //! dispatched (`policy_run`) too: only a step the Runtime started for itself is refused
 //! (`run_origin` `host`), and nothing is stopped. 0.12.53 and 0.12.54 refuse a scheduled run as
@@ -22,6 +27,12 @@
 //! caller's thread, so that is never the event loop's. A receipt that does not come in time
 //! latches this connection and is unconfirmed: the client's own word is to read `Status` and stop
 //! again on a new connection, which is the caller's to decide.
+//!
+//! When an answer that the run stopped or ended is said to have come, [`stop_time`] decides: the
+//! first request's answer comes within its wait, as the run ends, and is said at its time; a
+//! follow-up's comes once a `Status` showed the run gone, after the Runtime ended it, and is said
+//! as the time the console learned it ([`StopTime`]). The run's own end is the ledger's; nothing
+//! here reads it.
 
 use std::path::Path;
 use std::time::Duration;
@@ -126,6 +137,27 @@ pub enum Origin {
     Host,
 }
 
+/// When an answer that a run stopped or ended landed (unix ms), as a person is told it: as its
+/// time, or as the time the console learned it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopTime {
+    /// The first request's answer, which came within its wait ([`STOP_WAIT`]) as the run ended.
+    At(u64),
+    /// A follow-up's answer, sent once a `Status` showed the run gone: when the console learned
+    /// that the run had ended, not when the Runtime ended it, which was before.
+    LearnedAt(u64),
+}
+
+/// How the time of an answer of a stop landing at `at_ms` is said ([`StopTime`]): of a follow-up
+/// (`follow_up`), as the time the console learned what it says; else as its time.
+pub fn stop_time(follow_up: bool, at_ms: u64) -> StopTime {
+    if follow_up {
+        StopTime::LearnedAt(at_ms)
+    } else {
+        StopTime::At(at_ms)
+    }
+}
+
 /// One person's stop of the run `run` of the instance `alias` names: a fresh person's connection,
 /// one `StopInstanceRun` waiting [`STOP_WAIT`] for the run's end, and the connection let go. Sent
 /// once, whatever comes back. The client checks that an answer is of `run`, and that it states a
@@ -138,6 +170,14 @@ pub fn stop_run(root: &Path, alias: &str, run: RunKey) -> StopOutcome {
             return StopOutcome::NotSent { failure: ClientFailure::from(error), chain };
         }
     };
+    stop_on(&client, alias, run)
+}
+
+/// The stop of [`stop_run`] on a connection already made, one `StopInstanceRun` waiting
+/// [`STOP_WAIT`]: a person's "close this task" sends it on the connection its view and its close
+/// row went out on, once the close row took, or when the view does not list the run's package
+/// (`super::pack::close_then_stop`). Sent once, whatever comes back.
+pub(super) fn stop_on(client: &RuntimeClient, alias: &str, run: RunKey) -> StopOutcome {
     match client.stop_instance_run(alias, run.0, STOP_WAIT) {
         Ok(answer) => stopped(answer),
         Err(error) => failed(error),
@@ -212,4 +252,21 @@ fn chain(outcome: &Outcome) -> String {
         line.push_str(&format!(" [{} {}]", link.relation().as_str(), chain(link.outcome())));
     }
     line
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{stop_time, StopTime};
+
+    const LANDED_MS: u64 = 1_794_549_812_000;
+
+    #[test]
+    fn an_answer_within_the_first_wait_is_said_at_its_time() {
+        assert_eq!(stop_time(false, LANDED_MS), StopTime::At(LANDED_MS));
+    }
+
+    #[test]
+    fn a_follow_up_answer_is_said_as_the_time_it_was_learned() {
+        assert_eq!(stop_time(true, LANDED_MS), StopTime::LearnedAt(LANDED_MS));
+    }
 }

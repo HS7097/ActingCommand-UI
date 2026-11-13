@@ -7,10 +7,11 @@
 //! Unlike a refresh's, an operation's answer counts a write for the reads (`super::wrote`): it
 //! changes what they show of the account, its activity, its emulator's reading and its fence.
 //!
-//! The bar's "stop this run" (UI-3e2) is the account's stop of its run, not an operation of its
-//! device: its slot is `stop`'s, beside these, its row drawn here by what `stop` says of it
-//! (`Stops::row`), and its tickets taken from the same count as these (`Rescue::ticket`). It is
-//! the one press whose request may go once more by itself, and only once: a stop that answered
+//! The bar's "stop this run" (UI-3e2), and "close this task" in its place of a run the scheduler
+//! dispatched (UI-3e2b), is the account's stop of its run, not an operation of its device: its slot
+//! is `stop`'s, beside these, its row drawn here by what `stop` says of it (`Stops::row`, which the
+//! `Model` hands over), and its tickets taken from the same count as these (`Rescue::ticket`). It
+//! is the one press whose request may go once more by itself, and only once: a stop that answered
 //! its run still stops, or whose answer is not known, is asked again once a `Status` shows the run
 //! gone, so that its reset's result is read (`stop`).
 //!
@@ -46,7 +47,7 @@ use super::failure_line;
 use super::paint;
 use super::picture::Doing;
 use super::read::panic_message;
-use super::stop::{CloseRow, StopSaid, Stops};
+use super::stop::{CloseRow, StopLine};
 use crate::launcher::spawn_worker;
 use crate::report;
 use crate::ui::{self, Ui};
@@ -179,7 +180,7 @@ pub enum RescueView {
     /// earlier `Status` said decides which rows there would be. Over it, once the thread that
     /// reads `Status` is gone, what a stop of the account's run out or awaited then came to
     /// (`Stops::unread`): no read online comes again to draw it.
-    Offline { stop: Option<StopSaid> },
+    Offline { stop: Option<StopLine> },
     Online(RescueRows),
 }
 
@@ -210,12 +211,13 @@ pub struct RescueRows {
     pub emulator: Option<EmulatorRow>,
     /// The game's: of an instance that drives a device of its own.
     pub game: Option<GameRow>,
-    /// "Stop this run" (UI-3e2), while the instance does something and its picture is not
-    /// withdrawn: whether it can be pressed, and why not or what a press does (`Stops::row`).
+    /// "Stop this run" (UI-3e2), or "close this task" of a run the scheduler dispatched
+    /// (UI-3e2b), while the instance does something and its picture is not withdrawn: which of the
+    /// two, whether it can be pressed, and why not or what a press does (`Stops::row`).
     pub close: Option<CloseRow>,
-    /// What the account's last stop of a run came to, while it is said: drawn under that row, and
-    /// without it too.
-    pub stop: Option<StopSaid>,
+    /// What the account's last stop of a run came to, of a close what became of the task too,
+    /// while it is said: drawn under that row, and without it too.
+    pub stop: Option<StopLine>,
     /// Why every device button is off, if anything is.
     pub hold: Option<RescueHold>,
     /// The operation whose confirmation is asked, while its button can be pressed.
@@ -403,8 +405,9 @@ impl Rescue {
     /// person's maintenance. A fence holds back only the game's: the check lifts it, and so does
     /// a start of the emulator that succeeds. `watch` is what a stop of its emulator would meet;
     /// `file_value_lifts`, that a switch back to the file's backends lifts the fence too. "Stop
-    /// this run" and what the last stop came to are `stops`' to say, of the Runtime online at the
-    /// owner epoch `epoch`; `hold` holds that button back no more than a stop holds the others.
+    /// this run" or "close this task" (`close`) and what the last stop came to (`stop`) are the
+    /// account's stops' to say (`Stops::row`, `Stops::said`), the row drawn but while the picture
+    /// is withdrawn; `hold` holds that button back no more than a stop holds the others.
     #[allow(clippy::too_many_arguments)]
     pub fn view(
         &self,
@@ -413,8 +416,8 @@ impl Rescue {
         hold: Option<RescueHold>,
         watch: Watch,
         file_value_lifts: bool,
-        stops: &Stops,
-        epoch: &str,
+        close: Option<CloseRow>,
+        stop: Option<StopLine>,
     ) -> RescueRows {
         let alias = instance.alias.as_str();
         let drawn = instance.physical && !withdrawn;
@@ -430,7 +433,7 @@ impl Rescue {
         let on = instance.emulator_on.map(|at_ms| ButtonWhy::EmulatorOn { at_ms });
         let faulty = instance.fence.is_some() || instance.ladder_busy;
         let game_why = off(discovered).or_else(|| faulty.then_some(ButtonWhy::Fault));
-        let close = stops.row(instance, epoch).filter(|_| !withdrawn);
+        let close = close.filter(|_| !withdrawn);
         let rows = RescueRows {
             check: drawn.then(|| button(off(discovered))),
             check_urgent: instance.fence.is_some(),
@@ -442,7 +445,7 @@ impl Rescue {
             }),
             game: drawn.then(|| GameRow { launch: button(game_why), restart: button(game_why) }),
             close,
-            stop: stops.said(alias).cloned(),
+            stop,
             hold,
             confirming: None,
             said: self.said(alias).cloned(),

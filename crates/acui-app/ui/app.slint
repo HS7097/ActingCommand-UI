@@ -246,9 +246,9 @@ export struct BackendGroupItem {
 // under that row, when the device's backends group can lift its fence too (#402 HS-5c), so. The
 // emulator's row, each of its three buttons where its control is offered and whether it can
 // be pressed, and at the row's end why one cannot. The game's row, its two buttons, and why not.
-// "Stop this run" (UI-3e2) while the account does something, whether it can be pressed, and what a
-// press does or why not; under it, and without it too, what the account's last stop came to, red
-// when it failed. The question a press that closes the game asks, and its confirming button's
+// "Stop this run" (UI-3e2) while the account does something, "close this task" in its place of a
+// run the scheduler dispatched (UI-3e2b), whether it can be pressed, and what a press does or why
+// not; under it, and without it too, what the account's last stop came to, red when it failed. The question a press that closes the game asks, and its confirming button's
 // words. What the last operation came to, red when it failed. "Auto rules" at the first row's end
 // (UI-3e1-b), and whether the account's rules panel is open in the picture's place.
 export struct RescueBar {
@@ -272,6 +272,7 @@ export struct RescueBar {
     game-restart-offered: bool,
     game-note: string,
     close-shown: bool,
+    close-task: bool,
     close-offered: bool,
     close-reason: string,
     close-line: string,
@@ -504,7 +505,7 @@ export global Strings {
     in property <string> refresh-cost;
     // The rescue bar under the live view's title: "reconnect and check"; the emulator's row, its
     // caption and its three buttons; the game's row, its caption and its two buttons; "stop this
-    // run".
+    // run", and "close this task" in its place of a run the scheduler dispatched.
     in property <string> rescue-check;
     in property <string> rescue-emulator;
     in property <string> rescue-emulator-start;
@@ -514,6 +515,7 @@ export global Strings {
     in property <string> rescue-game-launch;
     in property <string> rescue-game-restart;
     in property <string> rescue-stop-run;
+    in property <string> rescue-close-task;
     // "Auto rules" at the end of the rescue bar's first row, and on the rules panel that opens:
     // "close". Of either editor of quiet times, the account's on that panel and every account's on
     // the settings page, whose titles and notes are their data's: the button that opens the form
@@ -2716,7 +2718,8 @@ export component WorkbenchWindow inherits Window {
     callback picture-overlays-toggled(bool);
     // The button under the picture that refreshes it.
     callback refresh-frame();
-    // A button of the rescue bar; its confirmation's button, and "cancel"; its "stop this run".
+    // A button of the rescue bar; its confirmation's button, and "cancel"; its "stop this run" or
+    // "close this task".
     callback rescue-pressed(RescueOp);
     callback rescue-confirmed();
     callback rescue-cancelled();
@@ -3289,16 +3292,17 @@ export component WorkbenchWindow inherits Window {
                                             horizontal-stretch: 1;
                                         }
                                     }
-                                    // "Stop this run" (UI-3e2), pressed only when it can be: one
-                                    // press sends it. Beside it what a press does, or why not; under
-                                    // it what the last stop came to, which stays once the row goes.
-                                    // Both before why the device's buttons are off: a run that holds
-                                    // them back may be the one this row stops.
+                                    // "Stop this run" (UI-3e2), or "close this task" of a run the
+                                    // scheduler dispatched (UI-3e2b), pressed only when it can be:
+                                    // one press sends it. Beside it what a press does, or why not;
+                                    // under it what the last stop came to, which stays once the row
+                                    // goes. Both before why the device's buttons are off: a run that
+                                    // holds them back may be the one this row stops.
                                     if root.picture-tab && root.rescue.shown && root.rescue.close-shown: HorizontalLayout {
                                         spacing: 14px;
                                         vertical-stretch: 0;
                                         SkinButton {
-                                            text: Strings.rescue-stop-run;
+                                            text: root.rescue.close-task ? Strings.rescue-close-task : Strings.rescue-stop-run;
                                             enabled: root.rescue.close-offered;
                                             clicked => {
                                                 root.rescue-close-pressed();

@@ -238,8 +238,9 @@ settlement of a scheduled run a `StopInstanceRun` stopped, beside its `task.fail
 `contained_task_cancelled`, which a console built on v0.12.53 cannot decode (offline the page that holds
 it fails whole, online `runtime_receipt_decode_failed`) and this one decodes; from v0.12.55 the Runtime
 stops a scheduled run too, asked by actinglab `task stop` or the Lab's tool, while MCP `ac_stop_run` and
-actinglab `run stop` still refuse every scheduled run, and this console's Stop This Run stops it too
-(#429 UI-3e3, see the rescue bar under "Launcher"); v0.12.54's configuration revision 28 adds the value `auto` of `idle.action` and the keys
+actinglab `run stop` still refuse every scheduled run, and this console's button for a scheduled run is
+Close This Task, which closes the task and then stops this run (#429 UI-3e3, UI-3e2b, see the rescue bar
+under "Launcher"); v0.12.54's configuration revision 28 adds the value `auto` of `idle.action` and the keys
 `idle.return_home_min_gap_ms` and `idle.stop_emulator_min_gap_ms`, each also per instance (#386 IDLE-2),
 and `instance.<instance id>.scheduling.pool_lines` (#428 SCHED-C1e), every new key `hidden` in `ui_tier`,
 so the settings page shows no new row; the settings page shows `auto` as "choose by the idle time", and
@@ -247,7 +248,7 @@ an account's rules panel says "It is now “choose by the idle time”, which is
 not offer it; the requests `PackScheduleView` and `EditPackSchedule` gained the success codes
 `request_pack_schedule_view_completed` and `request_edit_pack_schedule_completed` (#429 R-8), and the
 console reads an account's `PackScheduleView` and writes `EditPackSchedule` of the account's own scope
-(the Daily Tasks switches, below); `contained_task_state_invalid` says what was invalid with the optional values
+(the Daily Tasks switches, below, and the rescue bar's Close This Task, which writes the same row); `contained_task_state_invalid` says what was invalid with the optional values
 `state_problem` (vocabulary `state_problem`: `held_state_unusable`, `no_move_from_page`,
 `runtime_invariant`, `transition_refused`), `phase_id`, `package_id`, `page_id` and `pack_operation_id`
 (#428 DIAG-SI), `runtime-outcomes` still 1; in the outcome-code catalog it embeds five codes (those two
@@ -677,7 +678,12 @@ refreshed: check them, then press again", and nothing is sent again; `fact_obser
 of an account is out at a time: while it is out, and after an answer that may have changed the switches
 or says something else did (it took, a conflict, the same millisecond twice, not confirmed) until a read
 of the view begun after it has come, every switch of the account is greyed out, still showing what was
-read before; after any other refusal, or a write not sent, they come back at once. What each press came
+read before; after any other refusal, or a write not sent, they come back at once. The rescue bar's Close
+This Task (see "Launcher") writes the same row as off and is one write of the account too: while it is
+out every switch of the account is greyed out, and after one that may have written (it took, or is not
+confirmed) they wait for a read of the view begun after it; while a switch's write is out, that button,
+and Stop This Run of a run another tool started too, is greyed out and says "This account's task
+switches are being changed; a moment". What each press came
 to shows under its row, with when it landed (but for "Changing…", a conflict, a thread that could not
 start and a restart), until that row is pressed again, the list shows another account, or the Runtime
 restarts; the list hidden and shown again (another tab or page, the window minimized, the Runtime not
@@ -691,7 +697,13 @@ lands, or after a conflict; nothing new for 180 seconds counts as unreadable, th
 says in amber that the task switches cannot be read right now, and no switch shows while the list's rows
 still do. A Runtime before 0.12.55
 (the view answers `not_implemented`, or before 0.12.30 is not known) has the note say that this version of
-the Runtime cannot switch single tasks, and the view is not read again in that owner epoch. Each read has
+the Runtime cannot switch single tasks, and the view is not read on its clock again in that owner epoch;
+but since what said so may have been a connection that ended just before its answer and was made again in
+the same owner epoch, the list shown anew 60 seconds or more after it (the tab opened, another account
+picked, the window restored from minimized, the main page shown again, the Runtime answering again after
+a while) reads the view once more: an answer that says so again keeps it, one that shows the switches
+lets it go and the view is read as usual; a list hidden again before that read lands drops it, and what
+was said before holds until the list is shown anew again. Each read has
 the Runtime bring its fact store up to the ledger under the fact write gate, so it is read seldom; the
 technical log's read counts at the end of a run call it `pack schedule`. The Runtime's own reading of
 account data (`_fact_refresh`) is not held by a row that turns a package off; a package only a row still
@@ -1009,38 +1021,64 @@ as before, and the ledger window resumes those it may (below). From the command 
 `ac_pause` / `ac_resume` (see "MCP for agents"), still pause and resume one instance.
 
 Over the live view, the rescue bar has one more row while the account does something: **Stop This Run**
-(#429 UI-3e2, R-6's first slice, Runtime v0.12.53 or later; UI-3e3, R-6b, a scheduled run from Runtime
-v0.12.55). It can be pressed while the account's activity in the last status read names its
-`request_id`: a run another tool started (`direct_run`: a run of the Lab's `run start`, `actingctl
-task-run` or the MCP tool `ac_run_pack`, say), and a run the scheduler dispatched (`policy_run`, one
-finishing under the global pause included). The Runtime's own steps (starting, recovering or winding
-down when idle) send nothing: the button stays off and says why. One press sends it, with no second
-question: one `StopInstanceRun` on a worker thread over a fresh person's connection, `wait_ms` 5 s; the
+for a run another tool started (#429 UI-3e2, R-6's first slice, Runtime v0.12.53 or later), and **Close
+This Task** for a run the scheduler dispatched (UI-3e2b, R-8 and R-6b, Runtime v0.12.55 or later); a
+scheduled run has no button that only stops it. It can be pressed while the account's activity in the
+last status read names its `request_id`: a run another tool started (`direct_run`: a run of the Lab's
+`run start`, `actingctl task-run` or the MCP tool `ac_run_pack`, say), and a scheduled run that names its
+`package_id` too (`policy_run`, one finishing under the global pause included). The Runtime's own steps
+(starting, recovering or winding down when idle) send nothing: the button stays off and says why. One
+press sends it, with no second question, and no pause, quiet time or fence holds it back. Stop This Run
+sends one `StopInstanceRun` on a worker thread over a fresh person's connection, `wait_ms` 5 s; the
 Runtime stops the run at its next checkpoint, resets the device itself with the run's own lease, and
 answers. What it came to is said under the row, with when; never a code or a request id on screen, and
 the stopped run's request id only in the technical log. After an answer that the run still stops
-(`settled: false`), or one not confirmed, it is sent once more, and only once, when a status read of the
-same owner epoch, begun after that answer, shows the run gone, to read the reset's result; nothing sends
-it on a timer, and a refusal or one not sent is not sent again. A Runtime that restarted, an account no
-longer listed or a reading thread gone leaves the result unknown, and nothing more is sent; a run that
-does not end is waited for as long as it runs, with no limit of the console's own. A Runtime before
-v0.12.53 answers `not_implemented` (which records nothing), and the button then stays off for that
-Runtime's owner epoch, for both kinds of run. Whether another console or tool already asked the run to
-stop is not seen here: another press costs only three more ledger records (`ui.action`,
-`command.received`, then `command.validated` or `command.rejected`), and still reads the result.
+(`settled: false`), or one not confirmed, the stop is sent once more, and only once, when a status read
+of the same owner epoch, begun after that answer, shows the run gone, to read the reset's result;
+nothing sends it on a timer, and a refusal or one not sent is not sent again. That the run stopped or
+had ended, as the follow-up reads it, is said with the time the console learned it ("Stopped (learned
+at hh:mm:ss)"), not the time the Runtime ended the run, which was earlier; an answer within the first
+request's wait is said with its time alone. A Runtime that restarted,
+an account no longer listed or a reading thread gone leaves the result unknown, and nothing more is
+sent; a run that does not end is waited for as long as it runs, with no limit of the console's own. A
+Runtime before v0.12.53 answers `not_implemented` (which records nothing), and both buttons then stay
+off for that Runtime's owner epoch. Whether another console or tool already asked the run to stop is not
+seen here: another press costs only three more ledger records (`ui.action`, `command.received`, then
+`command.validated` or `command.rejected`), and still reads the result.
 
-A stop of a scheduled run ends this run only: the task is not closed, its cooldown counts from the
-dispatch, and it is dispatched again after its cooldown while its trigger still holds; Pause This Account
-on its card keeps it from running. So the line of a stop that ended the run (its reset done, its reset
-failed, or the run ended for another reason first) goes on with "The task is not closed: after its
-cooldown it runs again if its condition still holds; to keep it from running, use Pause This Account on
-its card"; a stop not known to have ended the run says nothing of the kind. A stop is no failure: nothing
-retries, backs off, pauses the task or starts a ladder. A direct run's lines are as before. The console
-reads no version of the running Runtime, so scheduled runs can be pressed at first: v0.12.53 and
-v0.12.54 refuse a stop of one (`run_origin` `policy`, three ledger records, the line red once), and the
-button then stays off for scheduled runs for that Runtime's owner epoch, saying "This version of the
-Runtime cannot stop a run the scheduler started yet; from 0.12.55 it can", while a direct run can still
-be pressed. In the ledger window, a stopped scheduled run's `task.failed` (`contained_task_cancelled`),
+Close This Task closes the task first and then stops this run, on one fresh person's connection: it reads
+the account's `PackScheduleView`; when the run's package is in it, it writes one row of the account's own
+scope from now on, without an end, that the package is not scheduled (the very row the Daily Tasks
+switch writes when turned off, naming no version, so that another package changed a moment ago does not
+make it a conflict; `fact_observation_not_newer` is sent once more at once), and only once that is
+Completed sends the stop above. A close row not written (refused, not sent, not confirmed) stops nothing,
+and the line says "Not closed: …. This run was not stopped either" or that whether the close was written
+is not known. A package the view does not name (the account's daily tasks do not run it: a reading's
+maintenance, or the catalog changed since the dispatch) gets no row, which the list could neither show
+nor withdraw, and its run is only stopped: once it stopped, "This task pack is not one of this account's
+daily tasks, so only this run was stopped"; otherwise (not confirmed, still stopping, refused, a restart
+and the like) "This task pack is not one of this account's daily tasks, so nothing was closed here",
+followed by what the stop came to. A view that is not read does nothing ("Not closed: …"); a view whose
+connection ended before its answer (the client's `runtime_operation_unsupported`) is a view not read too
+("Not closed: the connection ended before this account's task switches were read …. This run was not
+stopped either"), not a Runtime without task switches. A view or a close row answered `not_implemented`
+(before 0.12.55) does nothing either, and Close This Task then stays off for that Runtime's owner epoch
+("This Runtime cannot close a task from here yet"), as the Daily Tasks switches are not read then (and,
+as when the view itself said so, Daily Tasks shown anew 60 seconds or more after reads the view once
+more, and switches it finds bring the button back). A program error (its thread panicked) says that
+whether the task was closed and whether this run stopped are both unknown, the card and Daily Tasks
+saying what holds, and nothing is sent again. Once closed, the line begins "Closed this task
+(hh:mm:ss); it is no longer scheduled", followed by what the stop came to, and once the run stopped, "To
+bring the task back, turn it on under Daily Tasks": that is the way back, where its row then says "Set
+for this account: turned off (since hh:mm)". The follow-up only stops; it writes no close row again.
+While the close is out every switch of the account is greyed out; while a switch's write is out the button
+is, and Stop This Run too ("This account's task switches are being changed; a moment"). In the ledger, the close is one
+`fact.published`, the stop three records, a follow-up three more. Of a package that has daily tasks and
+also reads account data, the close row closes its daily tasks, and the Runtime's reading of account data
+(`_fact_refresh`) is dispatched as before. A scheduled run still queued or being prepared is not in the
+status read and cannot be pressed; Pause This Account keeps such runs from going. A stop is no failure:
+nothing retries, backs off, pauses the task or starts a ladder. A direct run's lines are as before, and
+it writes no close row. In the ledger window, a stopped scheduled run's `task.failed` (`contained_task_cancelled`),
 its `policy.execution_recorded` (result `stopped`) and the scheduler driver's `runtime.failed` say
 Stopped beside them, not in a failure's red, their type and level as the Runtime recorded them; the
 run's recovery header is the ledger's, and may still count them as failures with no recovery seen. On

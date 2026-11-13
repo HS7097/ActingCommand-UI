@@ -52,13 +52,16 @@
 //! reconnect and self-check, its emulator's control, its game's launch and restart
 //! ([`device::operate`], UI-3e1-a), in the stop's a person's stop of one run of an account
 //! ([`stop::stop_run`], UI-3e2), and in the pack's a person's switch of one task package of an
-//! account, on or off ([`pack::edit`], UI-3f2). Like the conditional resume beside them
-//! (`resume_paused`) each goes out once on a fresh person's connection, and never again by itself,
-//! whatever comes back, with two exceptions: a stop that answered that the run still stops, or
-//! whose answer is not known, is asked once more, on another fresh connection, once a `Status`
-//! shows the run gone, so that its reset's result is read (the console's `stop`, not this crate,
-//! decides when); and a switch the Runtime refused `fact_observation_not_newer`, which its contract
-//! says to send again, is sent once more at once on the same connection.
+//! account, on or off ([`pack::edit`], UI-3f2), and a person's "close this task" of a run the
+//! scheduler dispatched, which reads the account's view, writes the switch's off of the run's
+//! package and then stops the run, all on one connection ([`pack::close_then_stop`], UI-3e2b).
+//! Like the conditional resume beside them (`resume_paused`) each goes out once on a fresh
+//! person's connection, and never again by itself, whatever comes back, with two exceptions: a
+//! stop that answered that the run still stops, or whose answer is not known, is asked once more,
+//! on another fresh connection, once a `Status` shows the run gone, so that its reset's result is
+//! read (the console's `stop`, not this crate, decides when); and a switch or a close the Runtime
+//! refused `fact_observation_not_newer`, which its contract says to send again, is sent once more
+//! at once on the same connection.
 //!
 //! An instance's touch and capture backends (HS-U, Runtime 0.12.39's #402 HS-2) are settings
 //! too, but not rows of the page's tiers: [`backends`] reads them as each device instance's

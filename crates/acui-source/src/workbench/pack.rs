@@ -2,7 +2,9 @@
 //! An account's task switches (UI-3f2; Workflow #429 R-8, Runtime 0.12.55): what the Runtime says
 //! of each task package of one instance, read with `PackScheduleView` ([`super::ReadLane::read_packs`],
 //! [`PacksRead`]); what a press of one package's switch writes ([`switch`]); and that write, one
-//! `EditPackSchedule` of the instance's own scope ([`edit`]). Nothing out of here names a wire type.
+//! `EditPackSchedule` of the instance's own scope ([`edit`]). And the rescue bar's "close this task"
+//! of a run the scheduler dispatched (UI-3e2b), which writes the switch's off of the run's package
+//! and then stops the run ([`close_then_stop`]). Nothing out of here names a wire type.
 //!
 //! The view lists, once each and by package id, every package a task of the instance's active
 //! catalog runs; of each, whether it is schedulable now, which layer decided (the instance's own
@@ -25,6 +27,16 @@
 //! and the time taken anew: `fact_observation_not_newer`, which the Runtime answers when another
 //! list of that scope landed in the same millisecond, and whose contract says to send again.
 //!
+//! "Close this task" goes on one fresh person's connection too, in this order: the instance's view,
+//! read to see whether the run's package is one the instance's active catalog runs; when it is, the
+//! same open row that it is not schedulable, from now on, naming no version, since what it writes
+//! depends on nothing read, so that no other package's change since meets it as a conflict, with
+//! `fact_observation_not_newer` sent again once, as a switch's is; and once that took, and only
+//! then, the run's stop ([`super::stop::stop_run`]'s, on the same connection, so that it cannot
+//! fail to connect). A package the view does not list gets no row: the account's task list could
+//! neither show it nor withdraw it, and the Runtime would name it every round. Its run is only
+//! stopped. Nothing of it is sent again here.
+//!
 //! The connection is that of a person's change of settings ([`super::configure`]): a fresh
 //! person's one, asking for the full receipt, let go after the write. Its answer is waited for on
 //! the caller's thread, so that is never the event loop's.
@@ -38,7 +50,8 @@ use actingcommand_contract::{
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeClientErrorClass};
 
-use super::configure_config;
+use super::stop::{stop_on, StopOutcome};
+use super::{configure_config, RunKey};
 use crate::{ClientFailure, Spelling};
 
 /// The codes a refusal of the view or of a write is told apart by: a Runtime without them; another
@@ -265,7 +278,8 @@ pub fn edit(
 }
 
 /// The write of [`edit`] on a connection already made, with a version or without one (which
-/// compares nothing): `fact_observation_not_newer` sent once more on it, the time taken anew.
+/// compares nothing): `fact_observation_not_newer` sent once more on it, the time taken anew. The
+/// close row of [`close_then_stop`] is this write of an off, without one.
 fn edit_on(
     client: &RuntimeClient,
     alias: &str,
@@ -286,6 +300,75 @@ fn edit_on(
         Err(error) => failed(error),
     };
     EditAnswer { outcome, resent }
+}
+
+/// What became of one [`close_then_stop`], step by step as they went out: the run's stop follows
+/// only a close row the Runtime took, or a package the view does not list, which gets no row.
+#[derive(Debug, Clone)]
+pub enum CloseAnswer {
+    /// No connection: nothing was sent.
+    NotSent(ClientFailure),
+    /// This Runtime has no task switches: it answered the view `not_implemented` (before 0.12.55),
+    /// `code` saying so, for the log. Nothing was written, and the run was not stopped.
+    Unsupported { code: &'static str, failure: ClientFailure },
+    /// The view was not read: nothing was written, and the run was not stopped. A read changes
+    /// nothing, so whatever failed leaves nothing uncertain.
+    ViewFailed(ClientFailure),
+    /// The view was not read either, its connection having ended before its answer: the client's
+    /// `runtime_operation_unsupported`, which it reports once it made the connection again in the
+    /// same owner epoch. Of a Runtime that has the view, as every one this console runs with does,
+    /// that is no word that it has no task switches. Nothing was written, and the run was not
+    /// stopped.
+    ViewDropped(ClientFailure),
+    /// The close row was not written, or may have been: what its write came to, which is never
+    /// `Edited`. The run was not stopped.
+    NotClosed(EditAnswer),
+    /// The close row was written: the scope's version after it, and whether it went a second time
+    /// after `fact_observation_not_newer`, both for the log; when its write was answered (unix ms),
+    /// before the stop's wait, for its words. Then the run's stop.
+    Closed { version: u64, resent: bool, at_ms: u64, stop: StopOutcome },
+    /// The view lists no such package: no row was written, and the run's stop went alone.
+    NotListed(StopOutcome),
+}
+
+/// One person's "close this task" of the run `run` of the instance `alias`, which runs the package
+/// `package` (UI-3e2b): a fresh person's connection; the instance's `PackScheduleView`; when it
+/// lists `package`, one `EditPackSchedule` of the instance's own scope that writes an open row from
+/// now on that `package` is not schedulable, naming no version, `fact_observation_not_newer` sent
+/// once more at once; once that took, and only then, the run's stop ([`super::stop::stop_run`]'s);
+/// when the view does not list `package`, the stop alone; and the connection let go. A view or a
+/// close that fails stops nothing, and nothing is sent again. Only a view answered
+/// `not_implemented` says the Runtime has no task switches; the client's word that it does not
+/// know the view is a connection that ended before its answer ([`CloseAnswer::ViewDropped`]).
+pub fn close_then_stop(root: &Path, alias: &str, package: &str, run: RunKey) -> CloseAnswer {
+    let client = match RuntimeClient::connect(configure_config(root)) {
+        Ok(client) => client,
+        Err(error) => return CloseAnswer::NotSent(ClientFailure::from(error)),
+    };
+    let view = match client.pack_schedule_view(alias) {
+        Ok(view) => view,
+        Err(error) if error.code().spelling() == OPERATION_UNSUPPORTED => {
+            return CloseAnswer::ViewDropped(ClientFailure::from(error));
+        }
+        Err(error) => {
+            return match view_unsupported(&error) {
+                Some(code) => {
+                    CloseAnswer::Unsupported { code, failure: ClientFailure::from(error) }
+                }
+                None => CloseAnswer::ViewFailed(ClientFailure::from(error)),
+            };
+        }
+    };
+    if !view.packages.iter().any(|listed| listed.package_id == package) {
+        return CloseAnswer::NotListed(stop_on(&client, alias, run));
+    }
+    match edit_on(&client, alias, package, PackChange::Set(false), None) {
+        EditAnswer { outcome: PackOutcome::Edited { version }, resent } => {
+            let at_ms = now_ms();
+            CloseAnswer::Closed { version, resent, at_ms, stop: stop_on(&client, alias, run) }
+        }
+        answer => CloseAnswer::NotClosed(answer),
+    }
 }
 
 /// Whether the Runtime answered a write `fact_observation_not_newer` and went on: the one refusal
