@@ -60,6 +60,10 @@ export struct AccountRow {
 // The words that never change while a language is shown.
 export global Strings {
     in property <string> window-title;
+    // The title over the step bar, a line each.
+    in property <string> side-name;
+    in property <string> side-title;
+    in property <string> picking-note;
     in property <string> back;
     in property <string> cancel;
     in property <string> browse;
@@ -174,6 +178,7 @@ export global Wiz {
     in property <bool> finished-ok;
     in property <string> finish-body;
     in property <string> finish-next;
+    in property <string> finish-more;
     in property <string> finish-note;
     in property <string> finish-transcript;
     in property <bool> finish-has-log;
@@ -315,6 +320,68 @@ component MarkRow inherits HorizontalLayout {
         font-size: Scale.body-font;
         color: Look.text-faint;
         horizontal-stretch: 0;
+    }
+}
+
+// A mark and its words beside it, the words wrapping under themselves; it has no detail.
+// Placed by hand, as KeyValueCard is and for its reason.
+component MarkText inherits Rectangle {
+    in property <MarkLine> line;
+    height: max(17px, words.preferred-height);
+    Mark {
+        x: 0;
+        y: 1px;
+        kind: root.line.mark;
+    }
+    words := Text {
+        x: 24px;
+        y: 0;
+        width: max(0px, root.width - 24px);
+        text: root.line.text;
+        font-size: Scale.body-font;
+        font-weight: root.line.mark == 4 ? 700 : 400;
+        color: root.line.mark == 2 ? Look.status-fault : root.line.mark == 3 ? Look.text-faint : Look.text;
+        wrap: word-wrap;
+    }
+}
+
+// A framed list of keys and their values: a long value wraps under itself, beside its key.
+// The rows are placed by hand, and the card takes the height its texts ask for at the width
+// they get. Inside a layout that a `for` or an `if` repeats, Slint 1.17 measures a wrapping
+// text at the row's unwrapped width, so a long value's second line was cut off.
+component KeyValueCard inherits Rectangle {
+    in property <[KeyValue]> lines;
+    in property <length> key-width;
+    height: card.preferred-height;
+    card := Card {
+        x: 0;
+        y: 0;
+        width: root.width;
+        VerticalLayout {
+            padding: Look.pad;
+            spacing: 8px;
+            for line in root.lines: Rectangle {
+                height: max(key-text.preferred-height, value-text.preferred-height);
+                key-text := Text {
+                    x: 0;
+                    y: 0;
+                    width: root.key-width;
+                    text: line.key;
+                    font-size: Scale.body-font;
+                    color: Look.text-secondary;
+                    wrap: word-wrap;
+                }
+                value-text := Text {
+                    x: root.key-width + 12px;
+                    y: 0;
+                    width: max(0px, parent.width - root.key-width - 12px);
+                    text: line.value;
+                    font-size: Scale.body-font;
+                    color: Look.text;
+                    wrap: word-wrap;
+                }
+            }
+        }
     }
 }
 
@@ -526,24 +593,9 @@ component SetPage inherits ScrollView {
         }
         if Wiz.set-error != "": Problem { text: Wiz.set-error; }
         if Wiz.set-error-detail != "": Caption { text: Wiz.set-error-detail; }
-        if Wiz.set-summary.length > 0: Card {
-            VerticalLayout {
-                padding: Look.pad;
-                spacing: 6px;
-                for line in Wiz.set-summary: HorizontalLayout {
-                    spacing: 12px;
-                    Text {
-                        text: line.key;
-                        width: 90px;
-                        font-size: Scale.body-font;
-                        color: Look.text-secondary;
-                    }
-                    Body {
-                        text: line.value;
-                        horizontal-stretch: 1;
-                    }
-                }
-            }
+        if Wiz.set-summary.length > 0: KeyValueCard {
+            lines: Wiz.set-summary;
+            key-width: 90px;
         }
         if Wiz.set-choosable: HorizontalLayout {
             alignment: start;
@@ -584,7 +636,7 @@ component RootPage inherits ScrollView {
                 }
             }
         }
-        for line in Wiz.root-lines: MarkRow { line: line; }
+        for line in Wiz.root-lines: MarkText { line: line; }
         if Wiz.root-status != "": Caption { text: Wiz.root-status; }
         Rectangle { height: 4px; }
         Caption { text: Strings.root-folders; }
@@ -933,49 +985,34 @@ component ConfirmPage inherits ScrollView {
         padding-right: 16px;
         spacing: 10px;
         alignment: start;
-        Card {
-            VerticalLayout {
-                padding: Look.pad;
-                spacing: 8px;
-                for line in Wiz.summary: HorizontalLayout {
-                    spacing: 12px;
-                    Text {
-                        text: line.key;
-                        width: 110px;
-                        font-size: Scale.body-font;
-                        color: Look.text-secondary;
-                    }
-                    Body {
-                        text: line.value;
-                        horizontal-stretch: 1;
-                    }
-                }
-            }
+        KeyValueCard {
+            lines: Wiz.summary;
+            key-width: 110px;
         }
         Body { text: Wiz.confirm-note; }
     }
 }
 
 component InstallPage inherits ScrollView {
+    // The checks before the first step: each of their rows on its own, for the sentence on
+    // top to wrap (see KeyValueCard).
+    property <bool> checking: Wiz.install-current < 0 && Wiz.install-pre != "";
     viewport-width: self.visible-width;
     VerticalLayout {
         padding-right: 16px;
         spacing: 6px;
         alignment: start;
-        if Wiz.install-current < 0 && Wiz.install-pre != "": VerticalLayout {
-            spacing: 6px;
-            Body { text: Wiz.install-pre; }
-            ProgressIndicator {
-                progress: Wiz.install-progress;
-                indeterminate: Wiz.install-indeterminate;
-            }
-            Caption {
-                text: Wiz.install-detail;
-                wrap: no-wrap;
-                overflow: elide;
-            }
-            Rectangle { height: 6px; }
+        if root.checking: Body { text: Wiz.install-pre; }
+        if root.checking: ProgressIndicator {
+            progress: Wiz.install-progress;
+            indeterminate: Wiz.install-indeterminate;
         }
+        if root.checking: Caption {
+            text: Wiz.install-detail;
+            wrap: no-wrap;
+            overflow: elide;
+        }
+        if root.checking: Rectangle { height: 6px; }
         for line[index] in Wiz.install-steps: VerticalLayout {
             spacing: 4px;
             MarkRow { line: line; }
@@ -1051,6 +1088,7 @@ component FinishPage inherits ScrollView {
             }
         }
         if Wiz.finish-action != "": Problem { text: Wiz.finish-action; }
+        if Wiz.finish-more != "": Caption { text: Wiz.finish-more; }
         if Wiz.finish-note != "": Caption { text: Wiz.finish-note; }
     }
 }
@@ -1075,12 +1113,21 @@ export component WizardWindow inherits Window {
                 padding-top: 18px;
                 spacing: 4px;
                 alignment: start;
+                // Two lines of their own: the bar is too narrow for the title in one, and
+                // wrapping would break it inside a word.
                 Text {
-                    text: Strings.window-title;
+                    text: Strings.side-name;
                     font-size: Scale.head-font;
                     font-weight: 700;
                     color: Look.card-title;
-                    wrap: word-wrap;
+                    overflow: elide;
+                }
+                Text {
+                    text: Strings.side-title;
+                    font-size: Scale.head-font;
+                    font-weight: 700;
+                    color: Look.card-title;
+                    overflow: elide;
                 }
                 Rectangle { height: 10px; }
                 for step[index] in Wiz.steps: StepLine {
@@ -1210,6 +1257,39 @@ export component WizardWindow inherits Window {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // While a folder picker is open. The picker is owned by this window, so Windows already
+    // holds the window's input; the veil holds clicks and keys as well, should the picker have
+    // opened without an owner, and says where to look.
+    if Wiz.picking: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        background: #00000033;
+        init => {
+            keys.focus();
+        }
+        TouchArea { }
+        keys := FocusScope {
+            key-pressed(event) => {
+                return accept;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                Card {
+                    width: min(400px, root.width - 80px);
+                    VerticalLayout {
+                        padding: 18px;
+                        Body { text: Strings.picking-note; }
                     }
                 }
             }

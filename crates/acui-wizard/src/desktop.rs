@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! What the window asks of Windows beyond the back end: the caller's console for the command
-//! line (the release build is a window program), the shell's folder picker, the default
-//! install location, the console started apart from the wizard, Explorer, and a message box
-//! for a window that cannot open. On any other platform each fails loud or says it on stderr.
+//! line (the release build is a window program), the user's interface language, the shell's
+//! folder picker, the default install location, the console started apart from the wizard,
+//! Explorer, and a message box for a window that cannot open. On any other platform each fails
+//! loud or says it on stderr; the window opens in Chinese there.
 
 use std::fs;
 use std::io;
@@ -50,6 +51,8 @@ mod imp {
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
 
+    use acui_wizard::Lang;
+
     use super::{first_unused, SELECTION_VARIABLES};
 
     /// `DETACHED_PROCESS` and `CREATE_NEW_PROCESS_GROUP`: the console gets none of the wizard's
@@ -67,11 +70,28 @@ mod imp {
         fn GetStdHandle(which: u32) -> *mut c_void;
         fn SetStdHandle(which: u32, handle: *mut c_void) -> i32;
         fn GetFileType(handle: *mut c_void) -> u32;
+        fn GetUserDefaultUILanguage() -> u16;
     }
 
     #[link(name = "user32")]
     extern "system" {
         fn MessageBoxW(window: *mut c_void, text: *const u16, caption: *const u16, kind: u32) -> i32;
+        fn GetActiveWindow() -> *mut c_void;
+    }
+
+    /// The language the window opens in: the one Windows shows its own interface in for this
+    /// user, Chinese or else English.
+    pub fn system_lang() -> Lang {
+        // SAFETY: a plain query of the user's interface language.
+        Lang::from_windows_language(unsafe { GetUserDefaultUILanguage() })
+    }
+
+    /// The active window of the calling thread, as a number a worker can take; `None` when the
+    /// thread has none.
+    pub fn active_window() -> Option<isize> {
+        // SAFETY: a plain query about the calling thread's own windows.
+        let window = unsafe { GetActiveWindow() };
+        (!window.is_null()).then_some(window as isize)
     }
 
     const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
@@ -159,9 +179,11 @@ mod imp {
     }
 
     /// The shell's folder picker, on the calling thread (a worker of the window's, in an
-    /// apartment of its own); `None` when the person cancels.
-    pub fn pick_folder(title: &str) -> Result<Option<PathBuf>, String> {
+    /// apartment of its own); `None` when the person cancels. Owned by `owner` (the window's
+    /// handle), it stays above that window, and the window takes no input until it closes.
+    pub fn pick_folder(title: &str, owner: Option<isize>) -> Result<Option<PathBuf>, String> {
         use windows::core::HSTRING;
+        use windows::Win32::Foundation::HWND;
         use windows::Win32::System::Com::{
             CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER,
             COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
@@ -194,7 +216,7 @@ mod imp {
                 .SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST)
                 .map_err(|error| error.to_string())?;
             dialog.SetTitle(&HSTRING::from(title)).map_err(|error| error.to_string())?;
-            if let Err(error) = dialog.Show(None) {
+            if let Err(error) = dialog.Show(owner.map(|window| HWND(window as *mut c_void))) {
                 if error.code().0 as u32 == CANCELLED {
                     return Ok(None);
                 }
@@ -254,18 +276,28 @@ mod imp {
     use std::io;
     use std::path::{Path, PathBuf};
 
+    use acui_wizard::Lang;
+
     use super::first_unused;
 
     const WINDOWS_ONLY: &str = "只在 Windows 上可用 / available on Windows only";
 
     pub fn attach_console() {}
 
+    pub fn system_lang() -> Lang {
+        Lang::Zh
+    }
+
+    pub fn active_window() -> Option<isize> {
+        None
+    }
+
     pub fn default_root() -> PathBuf {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp"));
         first_unused(home.join("ActingCommand"))
     }
 
-    pub fn pick_folder(_title: &str) -> Result<Option<PathBuf>, String> {
+    pub fn pick_folder(_title: &str, _owner: Option<isize>) -> Result<Option<PathBuf>, String> {
         Err(WINDOWS_ONLY.to_owned())
     }
 
@@ -282,4 +314,6 @@ mod imp {
     }
 }
 
-pub use imp::{alert, attach_console, default_root, open_with_explorer, pick_folder, start_console};
+pub use imp::{
+    active_window, alert, attach_console, default_root, open_with_explorer, pick_folder, start_console, system_lang,
+};

@@ -19,6 +19,9 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 # The window (UI-W2b), drawn with the console's kit.
 slint = { workspace = true }
+# The window's own handle, for the folder picker it owns: Slint hands it out as a
+# HasWindowHandle (the version Slint and acui-glass already lock).
+raw-window-handle = { workspace = true }
 zip = { workspace = true }
 getrandom = { workspace = true }
 

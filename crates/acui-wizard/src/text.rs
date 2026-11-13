@@ -27,6 +27,19 @@ impl Lang {
             Self::En => "en",
         }
     }
+
+    /// The language for a Windows language identifier (what `GetUserDefaultUILanguage`
+    /// answers): Chinese when its primary language is Chinese (`LANG_CHINESE`, in any script or
+    /// region), English for every other.
+    pub const fn from_windows_language(id: u16) -> Self {
+        const PRIMARY_LANGUAGE_MASK: u16 = 0x03ff;
+        const LANG_CHINESE: u16 = 0x04;
+        if (id & PRIMARY_LANGUAGE_MASK) == LANG_CHINESE {
+            Self::Zh
+        } else {
+            Self::En
+        }
+    }
 }
 
 /// One sentence for people, in Chinese and in English.
@@ -67,5 +80,22 @@ impl Said {
 impl fmt::Display for Said {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{} / {}", self.zh, self.en)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chinese_in_any_script_or_region_is_chinese_and_the_rest_english() {
+        // zh-CN, zh-TW, zh-HK, zh-SG, zh-MO, zh-Hans, zh-Hant.
+        for id in [0x0804, 0x0404, 0x0c04, 0x1004, 0x1404, 0x0004, 0x7c04] {
+            assert_eq!(Lang::from_windows_language(id), Lang::Zh, "{id:#06x}");
+        }
+        // en-US, en-GB, ja-JP, ko-KR, de-DE, and no language at all.
+        for id in [0x0409, 0x0809, 0x0411, 0x0412, 0x0407, 0x0000] {
+            assert_eq!(Lang::from_windows_language(id), Lang::En, "{id:#06x}");
+        }
     }
 }

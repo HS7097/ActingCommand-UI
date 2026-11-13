@@ -1165,8 +1165,9 @@ instance page in a later version.
 `acsetup.exe` (`crates/acui-wizard`) is the 0.12 setup wizard: it installs ActingCommand's Runtime, its
 tools and the console into **one new folder** (what the Runtime calls a single-location root) and
 connects the game accounts in the MuMu emulator. Opened from Explorer it is a window with the console's
-look and icon, switchable between 中文 and English at the top right at any time; with a command it is a
-command line (see below). It goes on no network, downloads nothing, and does not change any
+look and icon. It opens in the language Windows shows its own interface in (Chinese on a Chinese Windows,
+English otherwise) and switches between 中文 and English at the top right at any time; with a command it
+is a command line (see below). It goes on no network, downloads nothing, and does not change any
 ActingCommand already on the computer.
 
 **The install set.** The wizard installs from an "install set" only: a folder holding `install-set.json`
@@ -1184,18 +1185,25 @@ small print below. Whoever gives you the package puts the set together.
 closing the window on those pages asks first, and quitting leaves nothing behind.
 
 1. **Welcome**: what will be installed and what to have ready (64-bit Windows 10 or 11, MuMu installed with
-   the game signed in, about how much disk space).
-2. **Files**: the install set is checked with a progress bar; then its versions and games are listed.
+   the game signed in, about how much disk space). The games are named as their packs name them: before the
+   set is checked, the wizard reads only the small `applications.json` of each standard pack zip for its
+   name, and shows the folder name when that cannot be read.
+2. **Files**: the install set is checked with a progress bar and a line in plain words under it (how many
+   files are checked, which program or game was just checked); repositories and commits go to the setup
+   log only. Then its versions and games are listed.
 3. **Location**: by default `X:\ActingCommand` on the first local fixed drive other than the system's, else
    `%LOCALAPPDATA%\ActingCommand`; when that one exists and is not empty, `-2`, `-3`, … are tried. Type a
-   folder or pick one with Browse…; once typing pauses, each rule gets a ✓ or ✗: the folder does not exist
+   folder or pick one with Browse… (the folder picker belongs to the wizard's window, which takes no input
+   while it is open); once typing pauses, each rule gets a ✓ or ✗: the folder does not exist
    or is empty, its last name is not `A` or `B`, the path holds no `'` or `%`, it is not inside another
-   ActingCommand, and the disk has room. Any ✗ keeps Next off.
+   ActingCommand, and the disk has room. Any ✗ keeps Next off. The window writes sizes in GB and MB
+   (counted in 1024s, as Explorer does); the setup log and the command line write GiB and MiB.
 4. **Games**: tick the games to install; every game of the set is listed, all ticked by default.
 5. **Emulator**: MuMu is found read-only (as the Runtime finds it: a running MuMu, the registry's uninstall
    entries, the MuMu folders in Program Files) and `MuMuManager.exe info -v all` lists its emulators (no
-   window, within 10 seconds); no emulator is opened or closed. An emulator another running ActingCommand
-   on this computer already uses is greyed and unticked, and ticking it asks first. Without MuMu the page
+   window, within 10 seconds); no emulator is opened or closed. No emulator is ticked to begin with: the
+   person ticks the ones to hand over, and Next with none ticked asks first. An emulator another running
+   ActingCommand on this computer already uses is greyed, and ticking it asks first. Without MuMu the page
    can be skipped: the set is installed without accounts, to be added later.
 6. **Accounts**: one row per ticked emulator: its name (by default "game-index"), game and server; under
    Advanced, the touch and capture methods (both `nemu_ipc` by default) and "Open this emulator when
@@ -1215,7 +1223,9 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    the window while it installs is held off.
 10. **Finish**: where it was installed and where the setup log is. "Open console" (the new root's
     `ui\acui.exe`, started apart from the wizard) and "Open folder" are for the person to press; the wizard
-    opens nothing by itself. After a failure the page says which step and why, offers to copy the error and
+    opens nothing by itself. The page also says how to add accounts later, since the console cannot add
+    them yet: run the wizard again into another folder (a second, separate ActingCommand), or wait for a
+    later version. After a failure the page says which step and why, offers to copy the error and
     to open the setup log, and says the folder may be deleted whole to start again.
 
 **What it lays down:**

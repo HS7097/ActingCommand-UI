@@ -374,8 +374,27 @@ pub fn read_set_file(dir: &Path) -> Result<InstallSet, Said> {
     parse_install_set(&bytes)
 }
 
+/// A game's display name from its standard package zip, read before the set is checked: the
+/// `label` of the zip's `applications.json`, one small entry, so the first page can name the
+/// game; `None` when it cannot be read, and the folder name stands in. Nothing here is trusted:
+/// the check reads the same entry again once the zip's SHA-256 has matched.
+pub fn unchecked_label(dir: &Path, entry: &BundleEntry) -> Option<String> {
+    if !safe_relative(&entry.file) {
+        return None;
+    }
+    let mut archive = Archive::open(&dir.join(&entry.file)).ok()?;
+    let game = parse_applications(&archive.read_small(APPLICATIONS_FILE).ok()?).ok()?;
+    (game.game == entry.game).then_some(game.label)
+}
+
+/// "3 of 11 files checked", as a person reads it while the files are hashed.
+fn files_checked(done: usize, total: usize) -> Said {
+    Said::new(format!("已核对 {done}/{total} 个文件"), format!("{done} of {total} files checked"))
+}
+
 /// Reads and checks the install set in `dir` (see the module's description); `report` hears a
-/// line per file checked and the bytes hashed.
+/// line per file checked (with its path, repository and commit, for the log), the same news in
+/// a person's words ([`Event::Plain`], for the window), and the bytes hashed.
 pub fn verify_set(dir: &Path, report: &mut dyn FnMut(Event)) -> Result<VerifiedSet, SetError> {
     let set = read_set_file(dir).map_err(SetError::unusable)?;
     let problems = set_problems(&set);
@@ -414,7 +433,8 @@ pub fn verify_set(dir: &Path, report: &mut dyn FnMut(Event)) -> Result<VerifiedS
     }
     let total: u64 = files.iter().map(|(_, file)| file.size).sum();
     let mut done = 0u64;
-    for (what, file) in &files {
+    report(Event::Plain(files_checked(0, files.len())));
+    for (index, (what, file)) in files.iter().enumerate() {
         let path = dir.join(&file.file);
         let (sha256, _) = sha256_file(&path, &mut |chunk: u64| {
             done += chunk;
@@ -436,6 +456,7 @@ pub fn verify_set(dir: &Path, report: &mut dyn FnMut(Event)) -> Result<VerifiedS
         report(Event::Line(
             Said::new("已核对", "checked").with(format!("{what}: {} ({} bytes)", file.file, file.size)),
         ));
+        report(Event::Plain(files_checked(index + 1, files.len())));
     }
 
     // Each program zip against its own manifest.
@@ -465,10 +486,16 @@ pub fn verify_set(dir: &Path, report: &mut dyn FnMut(Event)) -> Result<VerifiedS
     let mut bundles = Vec::new();
     for entry in &set.bundles {
         let zip = dir.join(&entry.file);
-        bundles.push(verify_bundle(entry, &zip, package_range)?);
+        let bundle = verify_bundle(entry, &zip, package_range)?;
         report(Event::Line(
             Said::new("标准包已核对", "standard package checked").with(format!("{} ({})", entry.game, entry.file)),
         ));
+        let label = &bundle.game.label;
+        report(Event::Plain(Said::new(
+            format!("已核对：{label}的游戏资源"),
+            format!("Checked: the game resources of {label}"),
+        )));
+        bundles.push(bundle);
     }
     let vision_bytes = set.vision.files.iter().map(|file| file.size).sum();
     Ok(VerifiedSet {
@@ -533,6 +560,10 @@ fn verify_program(
         )
         .with(format!("{} @ {}", manifest.repository, manifest.commit_sha)),
     ));
+    report(Event::Plain(Said::new(
+        format!("已核对：{}（{} 个文件）", label.zh, manifest.files.len()),
+        format!("Checked: {} ({} files)", label.en, manifest.files.len()),
+    )));
     Ok(VerifiedProgram {
         program,
         zip: zip.to_path_buf(),

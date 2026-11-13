@@ -79,12 +79,14 @@ impl RootIssue {
                 "The path is inside another ActingCommand installation",
             )
             .with(other),
+            // In the units the window uses: the window shows this one when the install's own
+            // checks stop on it.
             Self::NoSpace { needed, free } => Said::new(
-                format!("磁盘空间不够：需要约 {}，只剩 {}", size_text(*needed), size_text(*free)),
+                format!("磁盘空间不够：需要约 {}，只剩 {}", plain_size(*needed), plain_size(*free)),
                 format!(
                     "Not enough disk space: about {} needed, {} free",
-                    size_text(*needed),
-                    size_text(*free)
+                    plain_size(*needed),
+                    plain_size(*free)
                 ),
             ),
             Self::SpaceUnknown(detail) => {
@@ -94,14 +96,24 @@ impl RootIssue {
     }
 }
 
-/// `n` bytes as people read them, in MiB or GiB.
+/// `n` bytes in MiB or GiB, as the log and the command line write them.
 pub fn size_text(bytes: u64) -> String {
+    sized(bytes, "GiB", "MiB")
+}
+
+/// `n` bytes as the window says them: counted in 1024s like [`size_text`], named GB and MB as
+/// Explorer names them, so the numbers match what a person sees there.
+pub fn plain_size(bytes: u64) -> String {
+    sized(bytes, "GB", "MB")
+}
+
+fn sized(bytes: u64, large: &str, small: &str) -> String {
     const MIB: f64 = 1024.0 * 1024.0;
     let mib = bytes as f64 / MIB;
     if mib >= 1024.0 {
-        format!("{:.1} GiB", mib / 1024.0)
+        format!("{:.1} {large}", mib / 1024.0)
     } else {
-        format!("{mib:.0} MiB")
+        format!("{mib:.0} {small}")
     }
 }
 
@@ -238,5 +250,13 @@ mod tests {
         }
         assert_eq!(size_text(3 << 30), "3.0 GiB");
         assert_eq!(size_text(512 << 20), "512 MiB");
+    }
+
+    #[test]
+    fn the_window_counts_in_1024s_and_says_gb_and_mb() {
+        assert_eq!(plain_size(3 << 30), "3.0 GB");
+        assert_eq!(plain_size((3 << 30) / 2), "1.5 GB");
+        assert_eq!(plain_size(512 << 20), "512 MB");
+        assert_eq!(plain_size(1 << 30), "1.0 GB");
     }
 }

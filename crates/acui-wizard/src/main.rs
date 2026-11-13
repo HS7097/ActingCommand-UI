@@ -139,6 +139,8 @@ fn printer() -> impl FnMut(Event) {
         Event::Skipped(step, said) => println!("[{}/{}] 跳过 / skipped: {said}", step.number(), Step::ALL.len()),
         Event::Failed(step, said) => eprintln!("[{}/{}] 失败 / failed: {said}", step.number(), Step::ALL.len()),
         Event::Line(said) => println!("  {said}"),
+        // The window's words for what the lines here say in full.
+        Event::Plain(_) => {}
         Event::Bytes { done, total } => {
             let tenth = if total == 0 { 10 } else { done.saturating_mul(10) / total };
             if tenth != shown {

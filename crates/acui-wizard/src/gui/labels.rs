@@ -9,6 +9,10 @@ use acui_wizard::Lang;
 
 pub struct Labels {
     pub window_title: &'static str,
+    /// The window's title over the step bar, in two lines of their own: the bar is too narrow
+    /// for it in one, and a break of its own would fall inside a word.
+    pub side_name: &'static str,
+    pub side_title: &'static str,
     pub steps: [&'static str; 10],
     pub titles: [&'static str; 10],
     pub finish_failed_title: &'static str,
@@ -28,6 +32,8 @@ pub struct Labels {
     pub window_failed: &'static str,
     pub worker_failed: &'static str,
     pub dialog_failed: &'static str,
+    /// Over the window while a folder picker is open.
+    pub picking_note: &'static str,
 
     // 1 Welcome.
     pub welcome_body: &'static str,
@@ -160,6 +166,8 @@ pub struct Labels {
     pub finish_next_plain: &'static str,
     pub open_console: &'static str,
     pub open_folder: &'static str,
+    /// How to add accounts later: the console cannot add them yet.
+    pub finish_more: &'static str,
     pub uninstall_note: &'static str,
     /// With the watchdog installed: the console's settings page only reads the watchdog, so the
     /// note names the Runtime's own command that removes it.
@@ -202,6 +210,8 @@ pub fn fill(template: &str, values: &[&str]) -> String {
 
 pub const ZH: Labels = Labels {
     window_title: "ActingCommand 安装向导",
+    side_name: "ActingCommand",
+    side_title: "安装向导",
     steps: ["欢迎", "安装文件", "安装位置", "游戏", "模拟器", "账号", "选项", "确认", "安装", "完成"],
     titles: [
         "欢迎使用 ActingCommand",
@@ -232,6 +242,7 @@ pub const ZH: Labels = Labels {
     window_failed: "安装向导的窗口打不开：{}",
     worker_failed: "向导没能在后台开始这项工作：{}",
     dialog_failed: "选择文件夹的窗口打不开：{}",
+    picking_note: "请在打开的窗口里选好文件夹。",
 
     welcome_body: "这个向导会把 ActingCommand 装进你选的一个文件夹，并把模拟器里的游戏账号接上。大约需要 5 分钟。",
     welcome_what_head: "将要安装",
@@ -374,6 +385,7 @@ pub const ZH: Labels = Labels {
     finish_next_plain: "下一步：打开监控台，看一看每个账号的状态。",
     open_console: "打开监控台",
     open_folder: "打开安装文件夹",
+    finish_more: "以后要加账号：监控台里现在还不能直接添加。可以再运行一次安装向导，装到另一个文件夹（那是另一套 ActingCommand，和这一套分开运行）；也可以等以后的新版支持。",
     uninstall_note: "卸载时，删除整个 {} 文件夹即可。",
     uninstall_note_watchdog: "卸载时，先运行 \"{}\\runtime\\actingctl.exe\" watchdog uninstall --root \"{}\" 关掉开机后自动运行，再删除整个 {} 文件夹即可。",
     failed_at: "在「{}」这一步出了问题：{}。",
@@ -387,6 +399,8 @@ pub const ZH: Labels = Labels {
 
 pub const EN: Labels = Labels {
     window_title: "ActingCommand Setup",
+    side_name: "ActingCommand",
+    side_title: "Setup",
     steps: [
         "Welcome", "Files", "Location", "Games", "Emulator", "Accounts", "Options", "Confirm", "Install", "Finish",
     ],
@@ -419,6 +433,7 @@ pub const EN: Labels = Labels {
     window_failed: "The setup window cannot open: {}",
     worker_failed: "The wizard could not start this work in the background: {}",
     dialog_failed: "The folder picker cannot open: {}",
+    picking_note: "Choose the folder in the window that opened.",
 
     welcome_body: "This wizard installs ActingCommand into a folder you choose and connects the game accounts in your emulator. It takes about 5 minutes.",
     welcome_what_head: "What will be installed",
@@ -561,6 +576,7 @@ pub const EN: Labels = Labels {
     finish_next_plain: "Next: open the console and check each account.",
     open_console: "Open console",
     open_folder: "Open folder",
+    finish_more: "To add accounts later: the console cannot add them yet. Run this wizard again and install into another folder (that is a second ActingCommand, running apart from this one), or wait for a later version that can.",
     uninstall_note: "To uninstall, delete the whole {} folder.",
     uninstall_note_watchdog: "To uninstall, first run \"{}\\runtime\\actingctl.exe\" watchdog uninstall --root \"{}\" to turn automatic start off, then delete the whole {} folder.",
     failed_at: "Something went wrong at \"{}\": {}.",

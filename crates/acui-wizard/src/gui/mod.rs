@@ -28,7 +28,7 @@ use acui_wizard::mumu::{self, Discovery, MumuInstance, MINIMUM_VERSION};
 use acui_wizard::occupancy::{self, OtherRoot};
 use acui_wizard::plan::{Plan, PlanInstance, PlanOptions, PLAN_SCHEMA};
 use acui_wizard::platform;
-use acui_wizard::root::{check_root, is_installation_root, size_text, text_issues, RootIssue};
+use acui_wizard::root::{check_root, is_installation_root, plain_size, text_issues, RootIssue};
 use acui_wizard::set::{self, InstallSet, SetError, SetFault, VerifiedSet, SET_FILE};
 use acui_wizard::winpath::strip_verbatim;
 use acui_wizard::{install, Done, Event, Failure, Lang, Request, Said, Step};
@@ -54,6 +54,26 @@ const ROOT_PAUSE: Duration = Duration::from_millis(300);
 /// The space the first page states before the set is checked: what a set with one game
 /// takes, rounded up.
 const SPACE_GUESS_GB: &str = "2";
+
+/// The set file as read, unchecked, for the first page.
+struct Preview {
+    set: InstallSet,
+    /// Each game's display name (else its folder name), in the set's order.
+    games: Vec<String>,
+}
+
+/// The set file in `dir` and its games' names, before the check: the names come from each
+/// standard package zip's `applications.json` alone, so the first page names the games as
+/// people know them.
+fn read_preview(dir: &Path) -> Option<Preview> {
+    let set = set::read_set_file(dir).ok()?;
+    let games = set
+        .bundles
+        .iter()
+        .map(|bundle| set::unchecked_label(dir, bundle).unwrap_or_else(|| bundle.game.clone()))
+        .collect();
+    Some(Preview { set, games })
+}
 
 enum SetState {
     /// No folder holding `install-set.json` is known; `wrong_pick` when the last folder picked
@@ -145,8 +165,7 @@ struct State {
     /// Why the last folder picker did not open.
     picker_error: Option<String>,
     set_dir: Option<PathBuf>,
-    /// The set file as read, unchecked, for the first page.
-    preview: Option<InstallSet>,
+    preview: Option<Preview>,
     set: SetState,
     set_generation: u64,
     root_text: String,
@@ -262,7 +281,8 @@ fn said(said: &Said, lang: Lang) -> String {
 
 /// The window, until it is closed; the exit code says whether an install failed.
 pub fn run() -> ExitCode {
-    let lang = Lang::Zh;
+    // The language Windows speaks to this user; the switch at the top right changes it.
+    let lang = desktop::system_lang();
     let labels = Labels::of(lang);
     let window = match WizardWindow::new() {
         Ok(window) => window,
@@ -273,7 +293,7 @@ pub fn run() -> ExitCode {
     };
     window.global::<Look>().set_skin(Skin::Flat);
     let set_dir = set::beside_program();
-    let preview = set_dir.as_deref().and_then(|dir| set::read_set_file(dir).ok());
+    let preview = set_dir.as_deref().and_then(read_preview);
     let set = if set_dir.is_some() { SetState::Waiting } else { SetState::Missing { wrong_pick: false } };
     let state = State {
         lang,
@@ -380,6 +400,9 @@ impl App {
         let l = self.state.borrow().labels();
         let strings = self.window.global::<Strings>();
         strings.set_window_title(l.window_title.into());
+        strings.set_side_name(l.side_name.into());
+        strings.set_side_title(l.side_title.into());
+        strings.set_picking_note(l.picking_note.into());
         strings.set_back(l.back.into());
         strings.set_cancel(l.cancel.into());
         strings.set_browse(l.browse.into());
@@ -592,12 +615,16 @@ impl App {
     }
 
     fn close_requested(&self) -> CloseRequestResponse {
-        let (page, running, asking) = {
+        let (page, running, asking, picking) = {
             let state = self.state.borrow();
-            (state.page, matches!(state.install, InstallState::Running), state.ask.is_some())
+            (state.page, matches!(state.install, InstallState::Running), state.ask.is_some(), state.picking)
         };
         if page == FINISH {
             return CloseRequestResponse::HideWindow;
+        }
+        // A folder picker is open over the window: it is answered first.
+        if picking {
+            return CloseRequestResponse::KeepWindowShown;
         }
         if running {
             self.ask(Ask::Busy);
@@ -666,7 +693,9 @@ impl App {
                         post(move |app| app.set_progress(generation, done, total, None));
                     }
                 }
-                Event::Line(line) => post(move |app| {
+                // The check's words for a person; its full lines (paths, repositories and
+                // commits) go into the setup log when the install checks the set again.
+                Event::Plain(line) => post(move |app| {
                     let (done, total) = match &app.state.borrow().set {
                         SetState::Checking { done, total, .. } => (*done, *total),
                         _ => (0, 0),
@@ -745,8 +774,11 @@ impl App {
             let title = if for_set { l.set_dialog_title } else { l.root_dialog_title };
             title.to_owned()
         };
+        // The picker is owned by this window, so it opens above it and the window takes no
+        // input until it closes; the window also draws a veil of its own meanwhile (`picking`).
+        let owner = self.handle();
         let spawned = spawn("acsetup-folder-picker", move || {
-            let picked = desktop::pick_folder(&title);
+            let picked = desktop::pick_folder(&title, owner);
             post(move |app| app.picked(for_set, picked));
         });
         if let Err(error) = spawned {
@@ -755,6 +787,18 @@ impl App {
             state.picker_error = Some(error);
         }
         self.paint();
+    }
+
+    /// This window's handle, for a dialog it owns: Slint's own, else the active window of this
+    /// thread (the window's thread, whose only window this is); `None` when neither is there.
+    fn handle(&self) -> Option<isize> {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let handle = self.window.window().window_handle();
+        let from_slint = match HasWindowHandle::window_handle(&handle).map(|handle| handle.as_raw()) {
+            Ok(RawWindowHandle::Win32(win32)) => Some(win32.hwnd.get()),
+            _ => None,
+        };
+        from_slint.or_else(desktop::active_window)
     }
 
     fn picked(&self, for_set: bool, picked: Result<Option<PathBuf>, String>) {
@@ -778,7 +822,7 @@ impl App {
             {
                 let mut state = self.state.borrow_mut();
                 if holds_set {
-                    state.preview = set::read_set_file(&dir).ok();
+                    state.preview = read_preview(&dir);
                     state.set_dir = Some(dir);
                     state.set = SetState::Waiting;
                 } else {
@@ -905,11 +949,13 @@ impl App {
                             .as_ref()
                             .map_or_else(|| format!("pid {}", other.pid), |root| root.display().to_string())
                     });
+                    // Nothing is ticked for the person: they tick the emulators they hand over.
+                    // A search again keeps what they ticked.
                     let before = previous.iter().find(|(index, _, _)| *index == instance.index);
                     let (picked, confirmed) = match before {
                         Some((_, _, confirmed)) if taken.is_some() && !confirmed => (false, false),
                         Some((_, picked, confirmed)) => (*picked, *confirmed),
-                        None => (taken.is_none(), false),
+                        None => (false, false),
                     };
                     EmuRow { instance: instance.clone(), taken, picked, confirmed }
                 })
@@ -1138,7 +1184,14 @@ impl App {
                     state.current = Some(at(step));
                     state.detail = Some(reason);
                 }
-                Event::Line(line) => state.detail = Some(line),
+                // The checks before the first step say what they do in `Plain` lines; their
+                // full lines (paths, repositories, commits) are the log's.
+                Event::Line(line) => {
+                    if state.marks.iter().any(|mark| *mark != StepMark::Waiting) {
+                        state.detail = Some(line);
+                    }
+                }
+                Event::Plain(line) => state.detail = Some(line),
                 Event::Bytes { done, total } => state.bytes = Some((done, total)),
             }
         }
@@ -1230,10 +1283,10 @@ fn paint_welcome(state: &State, wiz: &Wiz<'_>) {
             l.welcome_what,
             &[&set.set.runtime.tag, &set.set.console.tag, &game_labels(&set.games(), l.list_separator)],
         ),
-        (None, Some(preview)) => {
-            let games: Vec<&str> = preview.bundles.iter().map(|bundle| bundle.game.as_str()).collect();
-            fill(l.welcome_what, &[&preview.runtime.tag, &preview.console.tag, &games.join(l.list_separator)])
-        }
+        (None, Some(preview)) => fill(
+            l.welcome_what,
+            &[&preview.set.runtime.tag, &preview.set.console.tag, &preview.games.join(l.list_separator)],
+        ),
         (None, None) => l.welcome_what_unknown.to_owned(),
     };
     wiz.set_welcome_what(what.into());
@@ -1279,7 +1332,7 @@ fn paint_files(state: &State, wiz: &Wiz<'_>) {
         SetState::Ready(set) => {
             let files = set.set.files();
             let bytes: u64 = files.iter().map(|(_, file)| file.size).sum();
-            status = fill(l.set_checked, &[&files.len().to_string(), &size_text(bytes)]);
+            status = fill(l.set_checked, &[&files.len().to_string(), &plain_size(bytes)]);
             summary.push(KeyValue {
                 key: l.key_version.into(),
                 value: fill(l.version_value, &[&set.set.runtime.tag, &set.set.console.tag]).into(),
@@ -1316,7 +1369,7 @@ fn root_line(line: &RootLine, l: &Labels) -> (i32, String) {
     match line {
         RootLine::Fresh => (1, l.root_fresh.to_owned()),
         RootLine::Empty => (1, l.root_empty.to_owned()),
-        RootLine::Space { free, need } => (1, fill(l.root_space, &[&size_text(*free), &size_text(*need)])),
+        RootLine::Space { free, need } => (1, fill(l.root_space, &[&plain_size(*free), &plain_size(*need)])),
         RootLine::Contains(root) => (2, fill(l.root_contains, &[root])),
         RootLine::Worker(error) => (2, fill(l.worker_failed, &[error])),
         RootLine::Issue(issue) => (
@@ -1331,7 +1384,7 @@ fn root_line(line: &RootLine, l: &Labels) -> (i32, String) {
                 RootIssue::NotEmpty => l.root_not_empty.to_owned(),
                 RootIssue::Unreadable(_) => l.root_unreadable.to_owned(),
                 RootIssue::InsideRoot(other) => fill(l.root_inside, &[other]),
-                RootIssue::NoSpace { needed, free } => fill(l.root_no_space, &[&size_text(*needed), &size_text(*free)]),
+                RootIssue::NoSpace { needed, free } => fill(l.root_no_space, &[&plain_size(*needed), &plain_size(*free)]),
                 RootIssue::SpaceUnknown(_) => l.root_space_unknown.to_owned(),
             },
         ),
@@ -1729,6 +1782,7 @@ fn paint_finish(state: &State, wiz: &Wiz<'_>) {
             wiz.set_finished_ok(true);
             wiz.set_finish_body(fill(body, &[&root]).into());
             wiz.set_finish_next(if done.paused { l.finish_next } else { l.finish_next_plain }.into());
+            wiz.set_finish_more(l.finish_more.into());
             let note = if done.watchdog {
                 fill(l.uninstall_note_watchdog, &[&root, &root, &root])
             } else {
@@ -1745,6 +1799,7 @@ fn paint_finish(state: &State, wiz: &Wiz<'_>) {
             wiz.set_finished_ok(false);
             wiz.set_finish_body(fill(l.failed_at, &[step, &said(&failure.reason, lang)]).into());
             wiz.set_finish_next(if failure.wrote { fill(l.failed_kept, &[&root, &root]) } else { l.failed_nothing.to_owned() }.into());
+            wiz.set_finish_more(SharedString::new());
             wiz.set_finish_note(SharedString::new());
             wiz.set_finish_transcript(transcript(state, failure).into());
             wiz.set_finish_has_log(failure.log.is_some());

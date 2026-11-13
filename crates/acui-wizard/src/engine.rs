@@ -102,6 +102,10 @@ pub enum Event {
     Failed(Step, Said),
     /// A line of what was done or found (also in the log).
     Line(Said),
+    /// What the checks before the install just did, in a person's words: no path, repository
+    /// or commit (the `Line` beside it carries those, for the log and the command line). The
+    /// window shows these while the checks run; nothing writes them down.
+    Plain(Said),
     /// Bytes done of the current step's (or the set check's) total.
     Bytes { done: u64, total: u64 },
 }
@@ -260,6 +264,10 @@ impl Run<'_> {
     fn bytes(&mut self, done: u64, total: u64) {
         (self.report)(Event::Bytes { done, total });
     }
+
+    fn plain(&mut self, said: Said) {
+        (self.report)(Event::Plain(said));
+    }
 }
 
 /// `base` joined with a `/`-separated relative path.
@@ -391,9 +399,11 @@ fn check(request: &Request, run: &mut Run<'_>) -> Result<Checked, Said> {
         return Err(joined(issues.iter().map(|issue| issue.said()).collect()));
     }
     run.say(Said::new("安装位置可用", "the install folder is usable").with(request.root.display()))?;
+    run.plain(Said::new("已核对：安装位置可以用", "Checked: the install folder can be used"));
 
     let mut mumu_root = plan.mumu_root.clone();
     if !plan.instances.is_empty() {
+        run.plain(Said::new("正在核对模拟器……", "Checking the emulators…"));
         let mut lines = Vec::new();
         let given = plan.mumu_root.as_deref().map(Path::new);
         let discovery = mumu::discover(given, &mut |said: Said| lines.push(said));

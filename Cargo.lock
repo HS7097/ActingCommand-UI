@@ -309,6 +309,7 @@ name = "acui-wizard"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.4.3",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "sha2",
