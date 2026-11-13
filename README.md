@@ -1381,7 +1381,9 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    `actingcommand-actingd.exe`, and a registered watchdog task (which finds a stopped one too); its
    configuration uses an emulator when it binds it by index, name, `serial` or adb port. Without MuMu the
    page can be skipped: the set is installed without instances, to be added later.
-6. **Instances**: one row per ticked emulator: its name (by default "game-index"), game and server; under
+6. **Instances**: per ticked emulator, its name on a line of its own and below it the instance's name (by
+   default "game-index"), game and server, the game's box taking the rest of the line so a game's name in
+   both languages shows whole; under
    Advanced, the touch and capture methods (both `nemu_ipc` by default) and "Open this emulator when
    ActingCommand starts" (off by default). Names must differ, hold no space and not be too long: with two or
    more emulators on one game, the Runtime's schedule names each task copy `<id>@<name>`, at most 128 bytes,
