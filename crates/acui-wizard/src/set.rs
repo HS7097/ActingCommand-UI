@@ -56,11 +56,11 @@ pub const ORT_LIBRARY: &str = "ort/onnxruntime.dll";
 /// provider, the CPU's too ("Loading").
 pub const ORT_PROVIDERS_SHARED: &str = "ort/onnxruntime_providers_shared.dll";
 /// The two ONNX Runtime files as the Runtime pins them (ONNX Runtime 1.24.4, taken from its
-/// DirectML build): `actingd check-config` checks both against these sizes and SHA-256 and
-/// refuses a vision root whose files differ, and a start refuses it too (Runtime
-/// `apps/actingd/src/config.rs`, the vision root's pin check; `vision_runtime_unavailable`). A set
-/// that carries other files would fail only at the install's start, so the set check refuses it
-/// first.
+/// DirectML build). The Runtime checks both against these sizes and SHA-256 only for a
+/// `directml` section, and refuses a vision root whose files differ (`vision_runtime_unavailable`;
+/// Runtime `apps/actingd/src/config.rs` `check_runtime_pin`, called on the DirectML branch only);
+/// for `cpu` it does not hash them. The set check requires them all the same, so that an install
+/// set holds this one pinned build whichever provider is chosen.
 pub const ORT_PINS: [(&str, u64, &str); 2] = [
     (ORT_LIBRARY, 17_328_152, "e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40"),
     (ORT_PROVIDERS_SHARED, 22_040, "265c8daf29637cb259cac8be9f08f2cd45f3883f0f0e4949cbfddd5b4cbec3b6"),
@@ -355,8 +355,8 @@ pub fn set_problems(set: &InstallSet) -> Vec<Said> {
             None => problems.push(Said::new("视觉文件缺少 ONNX Runtime", "the vision set lacks ONNX Runtime").with(pinned)),
             Some(file) if file.size != size || !file.sha256.eq_ignore_ascii_case(sha256) => problems.push(
                 Said::new(
-                    "ONNX Runtime 不是 Runtime 钉住的那一版（1.24.4），Runtime 会拒绝启动",
-                    "ONNX Runtime is not the one the Runtime pins (1.24.4); the Runtime would refuse to start",
+                    "ONNX Runtime 不是 Runtime 钉住的那一版（1.24.4）：用显卡时 Runtime 会拒绝它，安装集只收钉住的这一套",
+                    "ONNX Runtime is not the one the Runtime pins (1.24.4): the Runtime refuses it for the graphics card, and an install set holds the pinned build only",
                 )
                 .with(format!("{pinned}: {} bytes {}, pinned {size} bytes {sha256}", file.size, file.sha256)),
             ),
