@@ -1535,6 +1535,25 @@ optionally `touch_backend`, `capture_backend`, `start_emulator`, `confirmed_in_u
 (`desktop_shortcut`, `start_menu_shortcut`, `watchdog`, `start_after_install`, `pause_first_start`, with the
 window's defaults). Its rules are the window's; a plan that breaks one stops before anything is written.
 
+**Putting an install set together:** `tools/make_install_set.py` (Python 3, standard library only) writes
+the set the wizard reads, in the same format; the two change together. It only copies files, hashes them
+and zips the console's folder; it runs nothing it copies, and it deletes and overwrites nothing: **the
+output folder must not exist yet**. It checks each input as it copies: the Runtime and Tools zips against
+their `SHA256SUMS`, the console's folder against its `BUILD-MANIFEST.json`, each pack zip against the
+`SHA256SUMS` beside it (when there is one) and its `bundle.json`'s game, and each vision file against the
+size and SHA-256 pinned in the script.
+
+```text
+python tools/make_install_set.py --out <new folder> --label <the set's name>
+    --runtime-dir <folder with the Runtime release's two zips and SHA256SUMS> --runtime-tag <tag>
+    --console-dir <this repository's release zip, unpacked> --console-tag <tag>
+    --wizard <acsetup.exe from the same folder>
+    --bundle <game>=<pack zip>                      one per game
+    --bundle-file <game>=<path below licenses\<game>\>=<file>   each listed in required_files too
+    --vision <path below vision\>=<file>            the seven pinned files, DirectML's four all or none
+    --vision-license <path below licenses\vision\>=<file>        required when a model is given
+```
+
 **Dependencies:** `crates/acui-wizard` uses Slint (the window, the same workspace dependency as the
 console), `serde`, `serde_json`, `sha2` (verification), `zip` (`default-features = false`, only `deflate`,
 the version line the Runtime locks), `getrandom` (the configuration's `secret_fingerprint_salt` and each

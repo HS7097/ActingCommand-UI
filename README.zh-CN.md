@@ -1076,6 +1076,23 @@ acsetup install --set <安装集文件夹> --root <新的安装文件夹> --plan
 `start_emulator`、`confirmed_in_use`）和 `options`（`desktop_shortcut`、`start_menu_shortcut`、`watchdog`、
 `start_after_install`、`pause_first_start`，缺省与窗口相同）。规则与窗口相同，不合规则就在写任何东西之前停下。
 
+**拼安装集**：`tools/make_install_set.py`（Python 3，只用标准库）拼出向导读的安装集，格式就是向导认的那一种，
+两边一起改。它只复制文件、算哈希、把监控台的文件夹打成 zip，不运行它复制的任何东西，也不删除、不覆盖任何东西：
+**输出文件夹必须是新的，事先不能存在**。复制时逐项核对：Runtime 和 Tools 的 zip 对它们的 `SHA256SUMS`，监控台的
+文件夹对它的 `BUILD-MANIFEST.json`，每个标准包 zip 对旁边的 `SHA256SUMS`（有就核）和它 `bundle.json` 里的游戏，
+每个识别文件对脚本里钉住的大小和 SHA-256。
+
+```text
+python tools/make_install_set.py --out <新文件夹> --label <安装集的名字>
+    --runtime-dir <放着 Runtime 发布件两个 zip 和 SHA256SUMS 的文件夹> --runtime-tag <标签>
+    --console-dir <本仓发布件 zip 解开后的文件夹> --console-tag <标签>
+    --wizard <同一个文件夹里的 acsetup.exe>
+    --bundle <游戏>=<标准包 zip>                    每个游戏一个
+    --bundle-file <游戏>=<licenses\<游戏>\ 下的路径>=<文件>   同时写进 required_files
+    --vision <vision\ 下的路径>=<文件>              钉住的七个；DirectML 的四个要么都带，要么都不带
+    --vision-license <licenses\vision\ 下的路径>=<文件>      给了模型就必须给
+```
+
 **依赖**：`crates/acui-wizard` 用 Slint（窗口，与监控台同一份工作区依赖）、`serde`、`serde_json`、`sha2`（校验）、
 `zip`（`default-features = false`，只开 `deflate`，与 Runtime 锁定的同一版本线）、`getrandom`（配置的
 `secret_fingerprint_salt` 与每台的 `instance_id`），以及仅限 Windows 的 `windows` 0.62（`Win32_Foundation`、
