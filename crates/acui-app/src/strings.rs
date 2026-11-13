@@ -325,6 +325,9 @@ pub struct Labels {
     pub launcher_stop_requested: &'static str,
     pub launcher_stop_failed: &'static str,
     pub launcher_not_configured: &'static str,
+    /// The lamp and the ledger windows' status when this run has no paths at all: the red
+    /// bar above says why and what to do, so this only points at it.
+    pub launcher_unavailable: &'static str,
     pub launcher_busy: &'static str,
     /// A plain sentence, then the short words of the outcome code behind it.
     pub launcher_because: &'static str,
@@ -527,6 +530,8 @@ pub struct Labels {
     pub add_instance_note: &'static str,
     pub config_file: &'static str,
     pub config_path_missing: &'static str,
+    /// The same place when this run has no paths at all: the red bar above says why.
+    pub config_see_issue: &'static str,
     /// The settings page, under how the windows look: the installation folder this
     /// run's paths come from and the settings file (folder, file); the folder alone;
     /// the file alone.
@@ -1764,6 +1769,7 @@ pub const ZH: Labels = Labels {
     launcher_stop_requested: "已请求 Runtime 停止",
     launcher_stop_failed: "停止请求没有成功",
     launcher_not_configured: "启动所需的路径没有配置，请按安装说明填写设置文件，或从安装文件夹里的 ui\\acui.exe 启动",
+    launcher_unavailable: "这次运行用不了「启动」：原因和办法见上方红条",
     launcher_busy: "上一次请求还没完成",
     launcher_because: "{}：{}",
     launcher_see_ledger: "详情见「排障与账本」",
@@ -1883,6 +1889,7 @@ pub const ZH: Labels = Labels {
     add_instance_note: "等 Runtime 支持；现在请按安装说明手工编辑配置文件",
     config_file: "配置文件",
     config_path_missing: "还没有配置 Runtime 的配置文件：请按安装说明填写设置文件，或从安装文件夹里的 ui\\acui.exe 启动",
+    config_see_issue: "这次运行用不了 Runtime 的配置文件：原因见上方红条",
     place_root_settings: "这个监控台用的安装文件夹：{}；设置保存在 {}",
     place_root: "这个监控台用的安装文件夹：{}",
     place_settings: "设置保存在 {}",
@@ -2833,6 +2840,7 @@ pub const EN: Labels = Labels {
     launcher_stop_requested: "The Runtime Was Asked to Stop",
     launcher_stop_failed: "The Stop Request Did Not Go Through",
     launcher_not_configured: "A Path the Start Needs Is Not Set; Fill In the Settings File as the Installation Guide Says, or Start ui\\acui.exe Inside the Installation Folder",
+    launcher_unavailable: "Start Is Unavailable This Run; See the Red Bar Above for Why and What to Do",
     launcher_busy: "The Previous Request Has Not Finished",
     launcher_because: "{}: {}",
     launcher_see_ledger: "Details in Troubleshooting and Ledger",
@@ -2952,6 +2960,7 @@ pub const EN: Labels = Labels {
     add_instance_note: "Waits for Runtime support; for now, edit the configuration file by hand as the installation guide says",
     config_file: "Configuration File",
     config_path_missing: "No Runtime configuration file is set: fill in the settings file as the installation guide says, or start ui\\acui.exe inside the installation folder",
+    config_see_issue: "This run cannot use the Runtime's configuration file; the red bar above says why",
     place_root_settings: "This console uses the installation folder {}; its settings are saved in {}",
     place_root: "This console uses the installation folder {}",
     place_settings: "Settings are saved in {}",

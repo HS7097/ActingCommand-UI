@@ -469,9 +469,12 @@ impl Ui {
         let config = self.launcher.as_ref().ok().and_then(|launcher| {
             launcher.actingd_config.as_ref()
         });
-        let (path, note) = match config {
-            Some(path) => (path.display().to_string(), ""),
-            None => (String::new(), labels.config_path_missing),
+        // With no paths at all the red bar above says why; only a run that has them but
+        // no configuration among them is told to set one up.
+        let (path, note) = match (config, self.launcher.is_err()) {
+            (Some(path), _) => (path.display().to_string(), ""),
+            (None, true) => (String::new(), labels.config_see_issue),
+            (None, false) => (String::new(), labels.config_path_missing),
         };
         window.set_config_path(path.into());
         window.set_config_note(note.into());

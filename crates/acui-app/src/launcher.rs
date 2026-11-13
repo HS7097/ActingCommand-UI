@@ -339,7 +339,7 @@ impl LauncherView {
             Some(LauncherKind::Checking | LauncherKind::Starting)
         );
         let (tone, text, down) = match &self.status {
-            Status::Unavailable => (StatusTone::Fault, labels.launcher_not_configured, false),
+            Status::Unavailable => (StatusTone::Fault, labels.launcher_unavailable, false),
             Status::Failed(_) => (StatusTone::Fault, labels.launcher_check_failed, true),
             Status::Probed(Ok(_)) => (StatusTone::Ok, labels.launcher_running, false),
             _ if starting => (StatusTone::Attention, labels.launcher_starting, false),
@@ -362,7 +362,7 @@ impl LauncherView {
     /// ledger windows.
     fn status_text(&self, labels: &Labels) -> String {
         match &self.status {
-            Status::Unavailable => labels.launcher_not_configured.to_owned(),
+            Status::Unavailable => labels.launcher_unavailable.to_owned(),
             Status::Checking => labels.launcher_checking.to_owned(),
             Status::Probed(probe) => probe_text(labels, probe),
             Status::Failed(error) => fill(labels.thread_failed, &[error]),
