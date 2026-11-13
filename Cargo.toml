@@ -5,11 +5,13 @@ members = [
     "crates/acui-model",
     "crates/acui-app",
     "crates/acui-glass",
-    # crates/acui-setup (acsetup) is out of the workspace from UI-0a until UI-2a
+    # crates/acui-setup (the 0.11 acsetup) is out of the workspace from UI-0a
     # (Workflow #429 v5 F, C.1): its bundle and maintenance code predates bundle
     # v4 and option 丙, so no compile-only fix keeps its behaviour. Its
     # component-interfaces.json stays where it is: build.yml reads it there.
     "crates/acui-installation",
+    # The 0.12 setup wizard (UI-W2), program acsetup.
+    "crates/acui-wizard",
 ]
 # The offline acceptance material maker (Workflow #429 E11) is its own package
 # with its own Cargo.lock, built only by .github/workflows/fixture.yml.
