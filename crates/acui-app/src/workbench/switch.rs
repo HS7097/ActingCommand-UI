@@ -20,6 +20,14 @@
 //! that has no such write (`not_implemented`) is kept for its owner epoch, as one whose view said
 //! so is, and has no switch in it.
 //!
+//! The rescue bar's "close this task" (`stop`, UI-3e2b) writes the same off of its run's package,
+//! and holds the account's slot while it is out (`Switches::close_begin`), so that it and a switch
+//! never both have a write of the account out: every switch of the account stays off while it is
+//! out, and after a close that may have written, until a read of the switches begun after it, as
+//! after a switch's answer; and "close this task" stays off while a switch is out
+//! (`Switches::writing`). What it came to is said on the rescue bar, not here; a Runtime that said
+//! to it that it has no task switches is kept here, as one whose view said so is.
+//!
 //! What a press came to is said under its row, with when it landed (not on the line that it is
 //! out, nor of a conflict, a thread refused or a restart), until that row is pressed again, the
 //! list shows another account than it last did, or the Runtime starts again: the list hidden and
@@ -41,6 +49,7 @@ use acui_source::workbench::pack::{edit, EditAnswer, PackChange, PackOutcome, Pa
 use super::failure_line;
 use super::paint;
 use super::read::panic_message;
+use super::rescue::RescueTicket;
 use crate::launcher::spawn_worker;
 use crate::report;
 use crate::ui::{self, Ui};
@@ -77,6 +86,10 @@ enum Stage {
     #[default]
     Idle,
     Out(Request),
+    /// The rescue bar's "close this task" of the account is out, under its ticket (`stop`); `behind`:
+    /// it went while an answer waited for a read, which it still waits for after a close that wrote
+    /// nothing.
+    Closing { ticket: RescueTicket, behind: bool },
     /// Its answer may have changed the switches, or says another tool did: they wait for a read of
     /// them begun after it, which is any read of them that counts from now on (`super::wrote`).
     Behind,
@@ -154,9 +167,47 @@ impl Switches {
         true
     }
 
-    /// Whether a press of `alias` is out, or its answer waits for a read of the switches.
+    /// Whether a press of `alias` is out, or its answer waits for a read of the switches, or the
+    /// rescue bar's "close this task" of it is out.
     pub fn busy(&self, alias: &str) -> bool {
         self.slots.get(alias).is_some_and(|slot| !matches!(slot.stage, Stage::Idle))
+    }
+
+    /// Whether a write of `alias`'s switches is out: a press of one, or "close this task". An
+    /// answer that waits for a read is none: that wait ends only with a read of the list, which
+    /// does not read while the rescue bar shows.
+    pub fn writing(&self, alias: &str) -> bool {
+        self.slots
+            .get(alias)
+            .is_some_and(|slot| matches!(slot.stage, Stage::Out(_) | Stage::Closing { .. }))
+    }
+
+    /// "Close this task" of `alias` under `ticket` goes out (`stop`): whether it may, which it may
+    /// but while a write of the account is out. It holds the account's slot until it lands.
+    pub fn close_begin(&mut self, alias: &str, ticket: RescueTicket) -> bool {
+        let slot = self.slots.entry(alias.to_owned()).or_default();
+        let behind = match slot.stage {
+            Stage::Idle => false,
+            Stage::Behind => true,
+            Stage::Out(_) | Stage::Closing { .. } => return false,
+        };
+        slot.stage = Stage::Closing { ticket, behind };
+        true
+    }
+
+    /// "Close this task" of `alias` under `ticket` landed, or did not go after all: the slot it held
+    /// goes back, to wait for a read of the switches when its close row may have been written
+    /// (`wrote`), or when it went while an answer waited for one. Nothing when that ticket no longer
+    /// holds it, which a restart let go.
+    pub fn close_landed(&mut self, alias: &str, ticket: RescueTicket, wrote: bool) {
+        let Some(slot) = self.slots.get_mut(alias) else {
+            return;
+        };
+        if let Stage::Closing { ticket: held, behind } = slot.stage {
+            if held == ticket {
+                slot.stage = if wrote || behind { Stage::Behind } else { Stage::Idle };
+            }
+        }
     }
 
     /// What each of `alias`'s packages' last press came to, by package id.
@@ -169,6 +220,9 @@ impl Switches {
         if let Some(slot) = self.slots.get_mut(alias) {
             if matches!(slot.stage, Stage::Behind) {
                 slot.stage = Stage::Idle;
+            }
+            if let Stage::Closing { behind, .. } = &mut slot.stage {
+                *behind = false;
             }
         }
     }
@@ -183,6 +237,9 @@ impl Switches {
         for slot in self.slots.values_mut() {
             if matches!(slot.stage, Stage::Behind) {
                 slot.stage = Stage::Idle;
+            }
+            if let Stage::Closing { behind, .. } = &mut slot.stage {
+                *behind = false;
             }
         }
         let Some(wanted) = wanted else {
@@ -264,7 +321,8 @@ impl Switches {
                     slot.said.insert(request.package.clone(), SwitchSaid::Sending);
                     Stage::Out(request)
                 }
-                Stage::Behind | Stage::Idle => Stage::Idle,
+                // A close out is let go with the stop it is part of, which says so (`stop`).
+                Stage::Closing { .. } | Stage::Behind | Stage::Idle => Stage::Idle,
             };
         }
         lines

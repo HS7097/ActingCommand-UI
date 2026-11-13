@@ -53,7 +53,7 @@ use super::settings::{
     self, AutostartView, BackendGroup, CheckEntry, ReportedAccount, ReportedLine, SelfCheckView,
     SettingLine, SettingsView, StartView,
 };
-use super::stop::{CloseWhy, StopSaid};
+use super::stop::{CloseRefusal, CloseWhy, StopLine, StopSaid, TaskClose};
 use super::switch::SwitchSaid;
 use super::tasks::{
     GroupTitle, PackRow, PackSwitch, SwitchSlot, SwitchesNote, TaskLine, TaskList, TaskName,
@@ -548,11 +548,12 @@ fn refusal_words(ui: &Ui, labels: &Labels, host: Option<&str>, class: Option<&st
 /// Else, of an account that drives a device of its own, its reconnect and check, its emulator's
 /// row while the Runtime offers its control, and its game's: each button pressed only when it may
 /// be, and at the row's end why one may not, or what the check does. While the account does
-/// something, "stop this run" (UI-3e2), pressed only when it may be, and beside it what a press
-/// does or why it may not; under it, without it too, what the account's last stop came to, red
-/// when it failed. Then why every device button is off, or the question a press that closes the
-/// game asks; and what the account's last operation came to, red when it failed. Set only when
-/// anything in it changed.
+/// something, "stop this run" (UI-3e2), or "close this task" of a run the scheduler dispatched
+/// (UI-3e2b), pressed only when it may be, and beside it what a press does or why it may not;
+/// under it, without it too, what the account's last stop came to, of a close what became of the
+/// task first, red when it failed. Then why every device button is off, or the question a press
+/// that closes the game asks; and what the account's last operation came to, red when it failed.
+/// Set only when anything in it changed.
 ///
 /// While the bar has rows, a fixture's account's as well, "auto rules" at the end of its first
 /// row; while that is open, the account's rules panel in the picture's place (`rules_panel`),
@@ -602,8 +603,8 @@ pub fn rescue(ui: &Ui) {
 }
 
 /// The bar's words for the rows of `alias`'s view. Why every device button is off stands only
-/// over device buttons: a fixture's account has none, only "stop this run" with its own words,
-/// which that reason does not hold back.
+/// over device buttons: a fixture's account has none, only "stop this run" or "close this task"
+/// with its own words, which that reason does not hold back.
 fn rescue_bar(ui: &Ui, labels: &Labels, alias: &str, rows: &RescueRows) -> RescueBar {
     let offered = |button: Option<Button>| button.is_some_and(|button| button.offered);
     let devices = rows.check.is_some() || rows.emulator.is_some() || rows.game.is_some();
@@ -646,6 +647,7 @@ fn rescue_bar(ui: &Ui, labels: &Labels, alias: &str, rows: &RescueRows) -> Rescu
         game_restart_offered: offered(rows.game.map(|row| row.restart)),
         game_note: game_note(labels, rows).into(),
         close_shown: rows.close.is_some(),
+        close_task: rows.close.is_some_and(|row| row.task),
         close_offered: rows.close.is_some_and(|row| row.offered),
         close_reason: rows.close.map_or("", |row| close_text(labels, row.why)).into(),
         close_line: close_line.into(),
@@ -730,52 +732,135 @@ fn game_note(labels: &Labels, rows: &RescueRows) -> String {
     }
 }
 
-/// Beside "stop this run": what a press does, or why it cannot be pressed; nothing while a stop is
-/// out or waits for the run, which the line under it says. Never the task's name, nor the run's.
+/// Beside "stop this run" or "close this task": what a press does, or why it cannot be pressed;
+/// nothing while a stop or a close is out or waits for the run, which the line under it says.
+/// Never the task's name, nor the run's.
 fn close_text(labels: &Labels, why: CloseWhy) -> &'static str {
     match why {
         CloseWhy::Stopping => "",
         CloseWhy::CoolingDown => labels.rescue_cooling,
+        CloseWhy::SwitchWriting => labels.close_task_busy,
         CloseWhy::Unsupported => labels.stop_unsupported,
+        CloseWhy::CloseUnsupported => labels.close_task_unsupported,
+        CloseWhy::CloseTask => labels.close_task_note,
+        CloseWhy::CloseUnidentified => labels.close_task_unidentified,
         CloseWhy::DirectRun => labels.stop_note,
         CloseWhy::Unidentified => labels.stop_unidentified,
-        CloseWhy::ScheduledRun => labels.stop_note_scheduled,
-        CloseWhy::ScheduledUnsupported => labels.stop_scheduled_unsupported,
         CloseWhy::RuntimeOwn => labels.rescue_close_system,
         CloseWhy::NoTask => labels.rescue_close_no_task,
     }
 }
 
 /// What the account's last stop of a run came to in words, each that landed with when, and
-/// whether that is a failure: never a code, a count or an id, which the log has. After a reset
-/// that failed, or a run that ended before the stop's reset, the card says what holds now. A
-/// scheduled run that ended says too that its task is not closed (`stop_scheduled_again`), which
-/// nothing says while it is not known to have ended.
-fn stop_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
+/// whether that is a failure: never a code, a count or an id, which the log has. Of "close this
+/// task": while it is out, that it closes the task and then stops the run; once its close row was
+/// written, that the task is closed and no longer scheduled, with when, and then what the stop
+/// came to, which says how to open the task again once the run stopped (`closed_stop_text`); of a
+/// package the account's daily tasks do not run, that only the run was stopped, before what the
+/// stop came to, but of a stop refused, whose words say what was done; of a close not written,
+/// why, and that the run was not stopped either. After a reset that failed, or a run that ended
+/// before the stop's reset, the card says what holds now.
+fn stop_text(ui: &Ui, labels: &Labels, line: &StopLine) -> (String, bool) {
+    match line.task {
+        Some(TaskClose::Closed { at_ms }) => {
+            let head = fill(labels.close_task_done, &[&format_second(at_ms)]);
+            let (rest, failed) = closed_stop_text(ui, labels, &line.said);
+            (fill(labels.rescue_then, &[&head, &rest]), failed)
+        }
+        Some(TaskClose::NotListed) if !matches!(line.said, StopSaid::Refused { .. }) => {
+            let (rest, failed) = stop_said_text(ui, labels, &line.said);
+            (fill(labels.rescue_then, &[labels.close_task_not_listed, &rest]), failed)
+        }
+        Some(TaskClose::Asked) => match &line.said {
+            StopSaid::Sending => (labels.close_task_sending.to_owned(), false),
+            StopSaid::Restarted { at_ms } => (close_restarted(labels, *at_ms), false),
+            said => stop_said_text(ui, labels, said),
+        },
+        Some(TaskClose::NotListed) | None => stop_said_text(ui, labels, &line.said),
+    }
+}
+
+/// What a stop came to after its task's close row was written, in words: the rest of its line,
+/// after the close's. The run stopped and reset says how to open the task again; what a stop alone
+/// says the same way (a run that ended for another reason first, the follow-up out or not settled,
+/// the follow-up's refusals, a request not sent, the account unlisted, no status read) is said so.
+fn closed_stop_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
+    match said {
+        StopSaid::Stopped { at_ms, reset: Reset::Done } => {
+            (fill(labels.close_task_stop_done, &[&format_second(*at_ms)]), false)
+        }
+        StopSaid::Stopped { at_ms, reset: Reset::Failed { cause, .. } } => {
+            let codes: Vec<&str> = cause.as_deref().into_iter().collect();
+            let words = stop_words(ui, labels, &codes);
+            (fill(labels.close_task_stop_reset_failed, &[&format_second(*at_ms), &words]), true)
+        }
+        StopSaid::Asked { at_ms } => {
+            (fill(labels.close_task_stop_asked, &[&format_second(*at_ms)]), false)
+        }
+        StopSaid::Refused { at_ms, why, origin, host, class, follow_up, .. } => {
+            let at = format_second(*at_ms);
+            match (why, origin) {
+                // The run ran out on its own between the `Status` and the press: no failure.
+                (Refusal::RunUnknown, _) if !*follow_up => {
+                    (labels.close_task_stop_run_ended.to_owned(), false)
+                }
+                // A Runtime with task switches and without R-6b, which no release is.
+                (Refusal::NotStoppable, Some(RunOrigin::Policy)) => {
+                    (fill(labels.close_task_stop_policy, &[&at]), true)
+                }
+                // The Runtime's own step took the device between the `Status` and the press.
+                (Refusal::NotStoppable, Some(RunOrigin::Host)) => {
+                    (fill(labels.close_task_stop_host, &[&at]), true)
+                }
+                (Refusal::RunUnknown, _) => stop_said_text(ui, labels, said),
+                (Refusal::NotStoppable, None) | (Refusal::NotImplemented | Refusal::Other, _) => {
+                    let codes: Vec<&str> =
+                        [host.as_deref(), class.as_deref()].into_iter().flatten().collect();
+                    let words = stop_words(ui, labels, &codes);
+                    (fill(labels.close_task_stop_refused, &[&words, &at]), true)
+                }
+            }
+        }
+        StopSaid::Unconfirmed { at_ms } => {
+            (fill(labels.close_task_stop_unconfirmed, &[&format_second(*at_ms)]), true)
+        }
+        StopSaid::Restarted { at_ms } => (close_restarted(labels, *at_ms), false),
+        StopSaid::Stopped { reset: Reset::NotNeeded, .. }
+        | StopSaid::Sending
+        | StopSaid::Reading
+        | StopSaid::Unsettled { .. }
+        | StopSaid::CloseRefused { .. }
+        | StopSaid::CloseUnconfirmed { .. }
+        | StopSaid::NotSent { .. }
+        | StopSaid::NoThread { .. }
+        | StopSaid::Unlisted { .. }
+        | StopSaid::NoStatus { .. } => stop_said_text(ui, labels, said),
+    }
+}
+
+/// A restart let "close this task" go, out or awaiting its stop's follow-up: what came of it is not
+/// known, and the daily task list's switch says whether the task is closed.
+fn close_restarted(labels: &Labels, at_ms: u64) -> String {
+    let at = format_second(at_ms);
+    let restarted = fill(labels.stop_at, &[labels.rescue_runtime_restarted, &at]);
+    fill(labels.rescue_then, &[&restarted, labels.close_task_restarted])
+}
+
+/// What a stop came to in words, as a stop alone says it (`stop_text`); and a close not written.
+fn stop_said_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
     let timed = |text: &str, at_ms: u64| fill(labels.stop_at, &[text, &format_second(at_ms)]);
     match said {
         StopSaid::Sending => (labels.stop_sending.to_owned(), false),
-        StopSaid::Stopped { at_ms, reset, scheduled } => {
+        StopSaid::Stopped { at_ms, reset } => {
             let at = format_second(*at_ms);
-            let (text, failed) = match (reset, scheduled) {
-                (Reset::Done, false) => (fill(labels.stop_done, &[&at]), false),
-                (Reset::Done, true) => (fill(labels.stop_done_scheduled, &[&at]), false),
-                (Reset::NotNeeded, _) => (fill(labels.stop_not_needed, &[&at]), false),
-                (Reset::Failed { cause, .. }, _) => {
+            match reset {
+                Reset::Done => (fill(labels.stop_done, &[&at]), false),
+                Reset::NotNeeded => (fill(labels.stop_not_needed, &[&at]), false),
+                Reset::Failed { cause, .. } => {
                     let codes: Vec<&str> = cause.as_deref().into_iter().collect();
                     let words = stop_words(ui, labels, &codes);
-                    let template = if *scheduled {
-                        labels.stop_reset_failed_scheduled
-                    } else {
-                        labels.stop_reset_failed
-                    };
-                    (fill(template, &[&at, &words]), true)
+                    (fill(labels.stop_reset_failed, &[&at, &words]), true)
                 }
-            };
-            if *scheduled {
-                (fill(labels.rescue_then, &[&text, labels.stop_scheduled_again]), failed)
-            } else {
-                (text, failed)
             }
         }
         StopSaid::Asked { at_ms } => {
@@ -789,12 +874,6 @@ fn stop_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
             let at = format_second(*at_ms);
             let nothing_done = fill(labels.stop_at, &[labels.rescue_nothing_done, &at]);
             match (why, origin) {
-                // A Runtime before 0.12.55, which stops only a direct run: scheduled runs stay
-                // off for its owner epoch (`CloseWhy::ScheduledUnsupported`).
-                (Refusal::NotStoppable, Some(RunOrigin::Policy)) => {
-                    let sentence = labels.stop_scheduled_unsupported;
-                    (fill(labels.rescue_then, &[sentence, &nothing_done]), true)
-                }
                 (Refusal::NotStoppable, Some(RunOrigin::Host)) => {
                     (fill(labels.rescue_then, &[labels.rescue_close_system, &nothing_done]), true)
                 }
@@ -807,7 +886,9 @@ fn stop_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
                 (Refusal::NotImplemented, _) => {
                     (fill(labels.stop_refused_unsupported, &[&at]), true)
                 }
-                (Refusal::NotStoppable, None) | (Refusal::Other, _) => {
+                // A run the scheduler dispatched is stopped after its close (`closed_stop_text`),
+                // whose words say a refusal as the scheduler's; here it is any other refusal.
+                (Refusal::NotStoppable, None | Some(RunOrigin::Policy)) | (Refusal::Other, _) => {
                     let codes: Vec<&str> =
                         [host.as_deref(), class.as_deref()].into_iter().flatten().collect();
                     let words = stop_words(ui, labels, &codes);
@@ -818,6 +899,10 @@ fn stop_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
         }
         StopSaid::Unconfirmed { at_ms } => {
             (fill(labels.stop_unconfirmed, &[&format_second(*at_ms)]), true)
+        }
+        StopSaid::CloseRefused { at_ms, why } => (close_refused_text(ui, labels, why, *at_ms), true),
+        StopSaid::CloseUnconfirmed { at_ms } => {
+            (fill(labels.close_task_unconfirmed, &[&format_second(*at_ms)]), true)
         }
         StopSaid::NotSent { at_ms } => (timed(labels.rescue_not_sent, *at_ms), true),
         StopSaid::NoThread { at_ms, error } => {
@@ -831,16 +916,35 @@ fn stop_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
     }
 }
 
+/// Why the close of "close this task" was not written, at `at_ms`, in words: that this Runtime
+/// cannot close a task from here, and nothing was done; or why, and that the run was not stopped
+/// either. Any other refusal's reason as a stop's (`stop_words`).
+fn close_refused_text(ui: &Ui, labels: &Labels, why: &CloseRefusal, at_ms: u64) -> String {
+    let at = format_second(at_ms);
+    match why {
+        CloseRefusal::Unsupported => fill(labels.close_task_refused_unsupported, &[&at]),
+        CloseRefusal::NotNewer => fill(labels.close_task_not_newer, &[&at]),
+        CloseRefusal::TooMany => fill(labels.close_task_too_many, &[&at]),
+        CloseRefusal::StoredUnreadable => fill(labels.close_task_stored_unreadable, &[&at]),
+        CloseRefusal::Other { codes } => {
+            let codes: Vec<&str> = codes.iter().map(String::as_str).collect();
+            let words = stop_words(ui, labels, &codes);
+            fill(labels.close_task_refused, &[&words, &at])
+        }
+    }
+}
+
 /// A stop's reason in plain words, never its code (`codes`, the host's before the Runtime's, or a
-/// failed reset's cause): as a device's operation's (`code_words`); else that it is not known
-/// here, which the log hears of once, as the problem it is (the stop's own line has its codes and
-/// its chain already).
+/// failed reset's cause; of a close not written, the client's own after them): as a device's
+/// operation's (`code_words`); else that it is not known here, which the log hears of once, as the
+/// problem it is (the stop's own line has its codes and its chain already).
 fn stop_words(ui: &Ui, labels: &Labels, codes: &[&str]) -> String {
     if let Some(words) = code_words(labels, codes) {
         return words;
     }
     let line = format!(
-        "no words for a stop of a run refused, or for its reset that failed, with codes {codes:?}"
+        "no words for a stop of a run or a close of its task refused, or for its reset that \
+         failed, with codes {codes:?}"
     );
     if ui.model.borrow_mut().first_told(&line) {
         report::log(RESCUE_LOG, &line);
@@ -1112,14 +1216,19 @@ fn rescue_own_words(labels: &Labels, code: &str) -> Option<&'static str> {
 /// What the status left out of an account's rows, into the log once for each account, each as
 /// the problem it is: no provenance, which a Runtime states of every instance, so no device
 /// button is drawn; no capability profile of an instance that drives a device of its own, which
-/// a Runtime states of every such instance (only a fixture has none), so no emulator's row; and a
-/// direct or scheduled run whose status names no request, which the contract says each always
-/// does, so it cannot be stopped from here.
+/// a Runtime states of every such instance (only a fixture has none), so no emulator's row; a
+/// direct run whose status names no request, or a scheduled run that names no request or no
+/// package, which the contract says each always does, so it cannot be stopped or closed from here.
 fn rescue_told(ui: &Ui, alias: &str, rows: &RescueRows) {
-    if rows.close.is_some_and(|row| row.why == CloseWhy::Unidentified) {
-        let line = format!(
-            "{alias}: its status names a direct or policy run without its request: no stop"
-        );
+    let unnamed = match rows.close.map(|row| row.why) {
+        Some(CloseWhy::Unidentified) => Some("a direct run without its request: no stop"),
+        Some(CloseWhy::CloseUnidentified) => {
+            Some("a policy run without its request or its package: no close")
+        }
+        _ => None,
+    };
+    if let Some(what) = unnamed {
+        let line = format!("{alias}: its status names {what}");
         if ui.model.borrow_mut().first_told(&line) {
             report::log(RESCUE_LOG, &line);
         }

@@ -29,7 +29,9 @@
 //!    is not in `device_busy`, and neither holds back the other. So is a person's switch of one
 //!    task package of an account on its daily task list (`switch`, UI-3f2), whose answer counts
 //!    one when it may have changed the account's switches or says another tool did; one of them
-//!    is out for an account at a time, and holds nothing else back.
+//!    is out for an account at a time, and holds nothing else back. A person's "close this task"
+//!    of a scheduled run (`stop`, UI-3e2b) writes that switch's off before it stops the run, and
+//!    is one of them too: it and a switch of the same account never both have a write out.
 //!
 //! Another thread runs the Runtime's `actingctl` (`tools`), only when asked: `packs` for the
 //! task names and the picture proportions each game's standard pack declares, and `watchdog
