@@ -43,11 +43,15 @@ evaluator digest and, once the steady state is computed, its shared tree's diges
 `reuse_refused`, one error per member that differs, and nothing is written. Each pool's `flips` and `impact`, each
 estimate's `assessed` and `skipped`, and the groups (`impact`) come from it; everything else is computed as without the
 option, and prices.json records where they came from (`reused_assessment`). Without that member it is the full export's
-file byte for byte, but for each pass's `timing_ms` (PASS-TIMING, `core.impact`): taken over with its group, it is the
-earlier run's.
+file byte for byte, but for each pass's `by` and `timing_ms` (PASS-TIMING, #430 METHOD-C, `core.impact`), which, taken
+over with its group, are the earlier run's, and for `steady_timing_ms`, which is this run's own. A pass taken over must
+have a `by` and a `timing_ms` of the shape `export prices` writes (`readers.check_assessment`, #430 C-2a).
 
-**Timing** (PASS-TIMING). Each pass of the groups records how long it took (`timing_ms`, `core.impact`); nothing else
-the export writes holds it: not the price provenance files (so no `binds`), the shared tree, `estimates` nor `counts`.
+**Timing** (PASS-TIMING; #430 C-2a). Each pass of the groups records how long it took and what HiGHS ran for it
+(`timing_ms`, `core.impact`), and the steady state records its own (`steady_timing_ms`: its sixteen stages' times, what
+HiGHS ran in each and its whole time, `flow.STEADY_STAGES`; null where the steady state read holds no timing); nothing
+else the export writes holds any: not the price provenance files (so no `binds`), the shared tree, `estimates` nor
+`counts`.
 """
 
 from __future__ import annotations
@@ -105,6 +109,8 @@ TAKEN = ("estimates.assessed", "estimates.skipped", "impact", "prices.flips", "p
 # Why `reuse_refused`: the earlier file records no evaluator digest, or a member differs; `none` stands for a side that
 # has no such member.
 NOT_RECORDED, DIFFERS, NONE = "not_recorded", "differs", "none"
+# #430 C-2a: the steady state's own timing in prices.json (module docstring, "Timing").
+STEADY_TIMING = "steady_timing_ms"
 
 
 def binds(doc: dict[str, Any]) -> str:
@@ -154,6 +160,17 @@ def _point(run: Run, derive: str) -> str | None:
             value = scenarios[0].value
             return str(value.seconds if type(value) is Duration else value)
     return None
+
+
+def steady_timing(steady: flow.Economy) -> dict[str, Any] | None:
+    """The steady state's `steady_timing_ms` (#430 C-2a; module docstring, "Timing"): its stages' times, what HiGHS ran
+    in each and its whole time, as it holds them (`flow.Economy`); null where it holds none (one the cache gave)."""
+    if steady.timing is None or steady.lps is None or steady.total is None:
+        return None
+    return {
+        "stages": dict(steady.timing), "lps": {stage: dict(counted) for stage, counted in steady.lps.items()},
+        "total": steady.total,
+    }
 
 
 def _steady(run: Run) -> flow.Economy:
@@ -429,6 +446,7 @@ def build(
         "slots": sorted(resource for resource in data["joint"]["prices"] if resource not in coverage["pools"]),
         "estimates": estimates,
         "impact": assessment.groups,
+        STEADY_TIMING: steady_timing(steady),  # this run's own, also when the assessment is taken over
         "counts": counts,
         EVALUATOR: recorded,
     }

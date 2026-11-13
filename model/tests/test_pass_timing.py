@@ -13,18 +13,17 @@ from __future__ import annotations
 import itertools
 import json
 import shutil
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from acmodel.cache import EVALUATORS
 from acmodel.cache.keys import canonical
 from acmodel.core import flow as economy_flow
-from acmodel.core import impact
 from acmodel.core.common import solve
 from acmodel.core.graph import Graph, Moved
 from acmodel.core.run import evaluate_model
 from acmodel.export import policy
+from acmodel.export import prices as price_export
 from test_economy import activity, flow, goal, limit, resource, shared_fixture
 from test_price_reuse import reuse, snapshot
 from test_prices import (  # noqa: F401 (the fixture `acmodel`)
@@ -109,12 +108,13 @@ def timings(doc: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def timed_at(value: Any, where: str = "") -> list[str]:
-    """The JSON pointer of every member named `timing…` anywhere in `value`."""
+    """The JSON pointer of every member whose name holds `timing` anywhere in `value` (a pass's `timing_ms`, and since
+    #430 C-2a the steady state's `steady_timing_ms`)."""
     found: list[str] = []
     if isinstance(value, dict):
         for key, inner in value.items():
             pointer = f"{where}/{key}"
-            if key.startswith("timing"):
+            if "timing" in key:
                 found.append(pointer)
             found += timed_at(inner, pointer)
     elif isinstance(value, list):
@@ -146,7 +146,10 @@ def tie_beside_estimate(folder: Path) -> Path:
 
 B_GROUP = {
     "rules": ["pt.b"], "unknowns": [],
-    "passes": [{"at": {"pt.b": "low"}, "values": {"pt.b": "2"}}, {"at": {"pt.b": "high"}, "values": {"pt.b": "4"}}],
+    "passes": [
+        {"at": {"pt.b": "low"}, "values": {"pt.b": "2"}, "by": "solved"},
+        {"at": {"pt.b": "high"}, "values": {"pt.b": "4"}, "by": "solved"},
+    ],
     "prices": {}, "flips": [],
 }
 
@@ -231,13 +234,15 @@ def test_a_pass_beside_a_tie_exports_what_it_exported_with_the_tie_probes(tmp_pa
 
 def test_each_pass_times_every_stage_and_one_not_solved_says_how_it_was_found(tmp_path, acmodel, monkeypatch):
     """With a clock that moves 1 ms at each reading (`ticking`):
-    - flips_fixture (test_prices.py): its two passes (pt.k at 1/2 and at 2) are solved. Each `timing_ms` has `source`
-      `solved`, every stage of `flow.STAGES` as a whole number of milliseconds, and `total`. A has no term there (no
-      limit or income cap counts act.p or act.q), so S1 and S2 are not solved: `acquisition` and `value` are 0; every
-      stage that always runs is at least 1 ms; `total`, the whole pass, is at least the sum of the stages.
+    - flips_fixture (test_prices.py): its two passes (pt.k at 1/2 and at 2) are solved: `by` `solved`. Each
+      `timing_ms` has every stage of `flow.STAGES` as a whole number of milliseconds, `lps` (#430 C-2a: each stage and
+      `certificate`, each with five integers), and `total`. A has no term there (no limit or income cap counts act.p or
+      act.q), so S1 and S2 are not solved: `acquisition` and `value` are 0; every stage that always runs is at least
+      1 ms; `total`, the whole pass, is at least the sum of the stages.
     - `tie_beside_estimate`: A has a term (act.get, act.b), so S1 and S2 are solved in each pass: at least 1 ms each.
     - two_parts with b estimated from 3 to 4, 3 being pt.b's point value: the pass at `low` is the steady state's own
-      vector, not solved again: `source` `steady_state`, `stages` null, and its `total`; the pass at `high` is solved."""
+      vector, not solved again: `by` `steady_state`, `stages` null, every count of `lps` 0, and its `total`; the pass
+      at `high` is solved."""
     ticking(monkeypatch, 1)
     flips = flips_fixture(tmp_path / "flips")
     tied = tie_beside_estimate(tmp_path / "tied")
@@ -247,8 +252,14 @@ def test_each_pass_times_every_stage_and_one_not_solved_says_how_it_was_found(tm
         status, doc = export(acmodel, folder)
         assert (status, doc["errors"], doc["warnings"]) == (0, [], []), folder
 
-    for timing in timings(delivered(flips)) + timings(delivered(tied)):
-        assert sorted(timing) == ["source", "stages", "total"] and timing["source"] == "solved"
+    for each in passes(delivered(flips)) + passes(delivered(tied)):
+        timing = each[TIMING]
+        assert sorted(timing) == ["lps", "stages", "total"] and each["by"] == "solved"
+        assert sorted(timing["lps"]) == sorted((*economy_flow.STAGES, "certificate"))
+        assert all(
+            sorted(entry) == sorted(economy_flow.LP_COUNTS) and all(type(n) is int for n in entry.values())
+            for entry in timing["lps"].values()
+        )
         stages = timing["stages"]
         assert sorted(stages) == sorted(economy_flow.STAGES)
         assert all(type(ms) is int and ms >= 0 for ms in (*stages.values(), timing["total"]))
@@ -263,17 +274,19 @@ def test_each_pass_times_every_stage_and_one_not_solved_says_how_it_was_found(tm
     assert (low["at"], low["values"], high["at"], high["values"]) == (
         {"pt.b": "low"}, {"pt.b": "3"}, {"pt.b": "high"}, {"pt.b": "4"}
     )
-    assert (low[TIMING]["source"], low[TIMING]["stages"]) == ("steady_state", None)
+    assert (low["by"], low[TIMING]["stages"]) == ("steady_state", None)
+    assert all(n == 0 for entry in low[TIMING]["lps"].values() for n in entry.values())
     assert type(low[TIMING]["total"]) is int and low[TIMING]["total"] >= 0
-    assert (high[TIMING]["source"], sorted(high[TIMING]["stages"])) == ("solved", sorted(economy_flow.STAGES))
+    assert (high["by"], sorted(high[TIMING]["stages"])) == ("solved", sorted(economy_flow.STAGES))
 
 
 def test_a_vector_the_cache_gives_holds_no_timing_and_its_pass_says_so(tmp_path, acmodel, monkeypatch):
     """A pass's graph computes without the cache (`graph.Moved`), so an export never takes a vector from it. Here each
     pass's vector is taken through the cache's encoding, as `Graph.cached` keeps a value and serves it again
-    (`Graph.encode`, canonical JSON, `Graph.decode`): the value served is the same, but holds no timing, so the pass says
-    `cache`, with no stages. flips_fixture's prices.json is then, without its passes' `timing_ms`, the plain export's
-    byte for byte, and so is every other file."""
+    (`Graph.encode`, canonical JSON, `Graph.decode`): the value served is the same, but holds no timing, so the pass has
+    none (#430 C-2a: its `timing_ms` is null, and its `by` `solved`, as only a solve gives a vector node).
+    flips_fixture's prices.json is then, without its timing, the plain export's byte for byte, and so is every other
+    file."""
     folder = flips_fixture(tmp_path)
     out = base(folder) / "out"
     export(acmodel, folder)
@@ -297,8 +310,7 @@ def test_a_vector_the_cache_gives_holds_no_timing_and_its_pass_says_so(tmp_path,
     assert served == [(True, None, True), (True, None, True)]
     cached = snapshot(out)
     found = json.loads(cached["prices.json"])
-    assert [(timing["source"], timing["stages"]) for timing in timings(found)] == [("cache", None), ("cache", None)]
-    assert all(type(timing["total"]) is int for timing in timings(found))
+    assert [(each["by"], each[TIMING]) for each in passes(found)] == [("solved", None), ("solved", None)]
     assert policy.delivered(untimed_doc(found)) == policy.delivered(untimed_doc(json.loads(plain["prices.json"])))
     for name in plain:
         if name != "prices.json":
@@ -309,24 +321,26 @@ def test_without_its_timing_prices_json_is_the_export_that_timed_nothing_and_not
     tmp_path, acmodel, app_dir, monkeypatch
 ):
     """flips_fixture, exported three times: with a clock that moves 1 ms at each reading, with one that moves 3 ms, and
-    with the assessment's groups written without any `timing_ms` (the export as it was before PASS-TIMING, but for the
-    vector's own path, which the tests above compare). The two timed files differ in their passes' `timing_ms`; taken
-    out, each is byte for byte the untimed file. `timing_ms` is in each pass and nowhere else of prices.json; no price's
-    provenance file holds any timing, and each is the same in the three exports, byte for byte, so is each `binds`;
-    the shared tree under the state root holds none either."""
+    with prices.json written without any timing (#430 C-2a: neither the passes' `timing_ms` nor the steady state's
+    `steady_timing_ms`; the export as it was before PASS-TIMING, but for the vector's own path, which the tests above
+    compare). The two timed files differ in their passes' `timing_ms`; taken out, with `steady_timing_ms`, each is byte
+    for byte the untimed file. The timing is in each pass's `timing_ms` and in `steady_timing_ms` and nowhere else of
+    prices.json; no price's provenance file holds any timing, and each is the same in the three exports, byte for byte,
+    so is each `binds`; the shared tree under the state root holds none either."""
     folder = flips_fixture(tmp_path)
     out = base(folder) / "out"
-    assess = impact.assess
+    build = price_export.build
 
-    def timing_nothing(*args: Any) -> impact.Assessment:
-        found = assess(*args)
-        return replace(found, groups=untimed(found.groups))
+    def timing_nothing(*args: Any) -> Any:
+        files, *rest = build(*args)
+        doc = json.loads(files[price_export.PRICES])
+        return ({**files, price_export.PRICES: policy.delivered(untimed_doc(doc))}, *rest)
 
     written = []
     for step in (1, 3, None):
         with monkeypatch.context() as patched:
             if step is None:
-                patched.setattr(impact, "assess", timing_nothing)
+                patched.setattr(price_export, "build", timing_nothing)
             else:
                 ticking(patched, step)
             status, doc = export(acmodel, folder)
@@ -338,7 +352,7 @@ def test_without_its_timing_prices_json_is_the_export_that_timed_nothing_and_not
     assert timings(first) != timings(second)
     assert timed_at(plain) == []
     assert policy.delivered(untimed_doc(first)) == policy.delivered(untimed_doc(second)) == none["prices.json"]
-    assert timed_at(first) == [f"/impact/0/passes/{index}/{TIMING}" for index in range(2)]
+    assert timed_at(first) == [f"/impact/0/passes/{index}/{TIMING}" for index in range(2)] + ["/steady_timing_ms"]
     assert sorted(one) == sorted(three) == sorted(none)
     for name in none:
         if name != "prices.json":
@@ -351,11 +365,11 @@ def test_without_its_timing_prices_json_is_the_export_that_timed_nothing_and_not
 
 
 def test_an_assessment_taken_over_keeps_the_timing_of_the_run_that_computed_it(tmp_path, acmodel, monkeypatch):
-    """`--reuse-assessment` (PRICE-REUSE) takes the groups over as they are, each pass's `timing_ms` with them: it records
-    the run that computed them. flips_fixture, exported with a clock of 1 ms a reading and its out folder kept aside, then
-    exported in full again with a clock of 3 ms; the export that takes the kept assessment over writes the kept groups,
-    timing and all, not the full export's, and is the full export's prices.json once `reused_assessment` and the
-    passes' `timing_ms` are taken out."""
+    """`--reuse-assessment` (PRICE-REUSE) takes the groups over as they are, each pass's `by` and `timing_ms` with them:
+    they record the run that computed them. flips_fixture, exported with a clock of 1 ms a reading and its out folder
+    kept aside, then exported in full again with a clock of 3 ms; the export that takes the kept assessment over writes
+    the kept groups, timing and all, not the full export's, and is the full export's prices.json once
+    `reused_assessment`, the passes' `timing_ms` and `steady_timing_ms` (#430 C-2a: this run's own) are taken out."""
     folder = flips_fixture(tmp_path)
     out, earlier_out = base(folder) / "out", tmp_path / "earlier"
     with monkeypatch.context() as patched:
@@ -374,6 +388,6 @@ def test_an_assessment_taken_over_keeps_the_timing_of_the_run_that_computed_it(t
     taken = json.loads((out / "prices.json").read_bytes())
     assert taken["impact"] == earlier["impact"]
     assert timings(taken) == timings(earlier) != timings(full)
-    assert all(timing["source"] == "solved" for timing in timings(taken))
+    assert all(each["by"] == "solved" for each in passes(taken))
     taken.pop("reused_assessment")
     assert policy.delivered(untimed_doc(taken)) == policy.delivered(untimed_doc(full))

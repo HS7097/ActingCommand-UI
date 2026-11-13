@@ -96,8 +96,11 @@ state's program read as the steady state reads it, the three solves, the project
 (the tie probes, the prices of the rules, the least losses, HiGHS's marginals, the forcing costs, and the range of an
 activity that some optimum runs, which is never in the max-min's K). It shows each pool's coordinate and each activity's
 value at the vector, nothing else, and nothing else reads it. It also times each of its stages (`STAGES`, PASS-TIMING) on
-a monotonic clock: what `Economy.timing` holds, which is no part of its value (`encode` keeps no timing, so neither does
-the cache) and which only the pass's `timing_ms` in prices.json shows (`core.impact`).
+a monotonic clock, and counts what HiGHS ran in each (#430 C-2a, `LP_COUNTS`: its runs, its second tries of the two
+kinds, and the time of the runs and of making their answers exact): what `Economy.timing` and `Economy.lps` hold, which
+are no part of its value (`encode` keeps neither, so neither does the cache) and which only the pass's `timing_ms` in
+prices.json shows (`core.impact`). The steady state times and counts its own the same way, over its sixteen stages
+(`STEADY_STAGES`), which only `steady_timing_ms` in prices.json shows (`export.prices`).
 
 **What the certificate reads** (#430 METHOD-C C-1; contracts/formats.md, "`acmodel export prices`", "The certificate").
 The steady state hands the impact assessment the objects its own computation found that the certificate reads (`Held`:
@@ -198,6 +201,21 @@ STAGES = (
     "model", "optimum", "acquisition", "value", "dual", "projections", "intervals", "most", "ranges", "selection",
     "max_min", "check",
 )
+# #430 C-2a: the stages of the steady state's own timing (`steady_timing_ms`; contracts/formats.md, "The steady state's
+# timing"): the vector's twelve and the four the vector skips, in the order the steady state runs them: the tie probes
+# (`ties`, after `dual`), the least losses (`losses`), the prices of the rules and the activities' values per step
+# (`rules`, after `projections`) and the forcing costs (`forcing`, after `check`).
+STEADY_STAGES = (
+    "model", "optimum", "acquisition", "value", "dual", "ties", "losses", "projections", "rules", "intervals", "most",
+    "ranges", "selection", "max_min", "check", "forcing",
+)
+# #430 C-2a: what a stage's `lps` holds of the LPs HiGHS ran there: each run (`runs`; a second try is one more), the
+# second tries of an LP on D* it first found infeasible (`again_infeasible`) and of one whose first status was none of
+# optimal, infeasible and unbounded (`again_other`), the time of those runs (`highs_ms`) and the time spent making their
+# answers exact and checking them (`exact_ms`). The counts never read the clock; the times (`LP_TIMES`) do.
+LP_COUNTS = ("runs", "again_infeasible", "again_other", "highs_ms", "exact_ms")
+LP_TIMES = ("highs_ms", "exact_ms")
+AGAIN_INFEASIBLE, AGAIN_OTHER = "again_infeasible", "again_other"
 CLOCK = time.perf_counter_ns
 NANOSECONDS_PER_MS = 1_000_000
 # The rule kinds the economy reads, and of them the kinds it does not model yet. A pool's declared zero (`no_use`)
@@ -282,7 +300,10 @@ class Economy:
     never keeps it and a value the cache gives has none, and it is not compared. A steady state this run computed also
     holds what its own computation found that the certificate reads (`held`, #430 METHOD-C: `Held`), in memory only and
     no part of its value either: `encode` leaves it out too, so a steady state the cache gives has none, and it is not
-    compared."""
+    compared. #430 C-2a: a vector or a steady state computed now also holds what HiGHS ran in each stage (`lps`, by
+    stage, `LP_COUNTS`) and the whole node's time (`total`, whole milliseconds from the start of the call that computed
+    it to its value), and a steady state its stages' times (`timing`, by `STEADY_STAGES`); none of them is part of the
+    value, encoded or compared either."""
 
     data: dict[str, Any] | None = None
     status: str = CONFIRMED
@@ -292,6 +313,8 @@ class Economy:
     reads: tuple[tuple[str, ...], ...] = ()
     timing: dict[str, int] | None = field(default=None, compare=False)
     held: Held | None = field(default=None, compare=False, repr=False)
+    lps: dict[str, dict[str, int]] | None = field(default=None, compare=False, repr=False)
+    total: int | None = field(default=None, compare=False)
 
     @property
     def blocked(self) -> bool:
@@ -2476,20 +2499,62 @@ class _Clock:
     """How long each stage of a pass's vector took (PASS-TIMING, `STAGES`), on the monotonic clock `CLOCK`: each stage is
     the time from the end of the stage before it (the first, from the clock's start) to its own end, summed over each time
     it ends; a stage that does not run is 0. So the stages never overlap, and their sum is the time from the start to the
-    last end. Only the vector has one (`compute`); the other solves time nothing."""
+    last end. Only the vector and the steady state have one (`compute`; the steady state's over `STEADY_STAGES`, #430
+    C-2a); the other solves time nothing.
 
-    def __init__(self) -> None:
-        self.spent = dict.fromkeys(STAGES, 0)
-        self.since = CLOCK()
+    #430 C-2a: what HiGHS ran (`ran`, each run and its second try's kind; `exact`, the exact work on its answers) is
+    counted the same way: what came since the last end goes to the stage that ends next, by `LP_COUNTS`. A stage the
+    clock does not have is a defect (`KeyError`), never left out."""
+
+    def __init__(self, stages: tuple[str, ...] = STAGES) -> None:
+        self.stages = stages
+        self.spent = dict.fromkeys(stages, 0)
+        self.counted = {stage: dict.fromkeys(LP_COUNTS, 0) for stage in stages}
+        self.pending = dict.fromkeys(LP_COUNTS, 0)  # since the last end; the times in nanoseconds
+        self.started = self.since = CLOCK()
 
     def lap(self, stage: str) -> None:
         now = CLOCK()
         self.spent[stage] += now - self.since
         self.since = now
+        counted = self.counted[stage]
+        for name, amount in self.pending.items():
+            counted[name] += amount
+        self.pending = dict.fromkeys(LP_COUNTS, 0)
+
+    def ran(self, nanoseconds: int, again: str | None) -> None:
+        """One HiGHS run of an LP, which took `nanoseconds`: a second try of the kind `again`, or None for a first."""
+        self.pending["runs"] += 1
+        self.pending["highs_ms"] += nanoseconds
+        if again is not None:
+            self.pending[again] += 1
+
+    def exact(self, nanoseconds: int) -> None:
+        """The time spent making HiGHS's answer exact and checking it."""
+        self.pending["exact_ms"] += nanoseconds
 
     def ms(self) -> dict[str, int]:
-        """Each stage's time in whole milliseconds, rounded down, by `STAGES`."""
-        return {stage: self.spent[stage] // NANOSECONDS_PER_MS for stage in STAGES}
+        """Each stage's time in whole milliseconds, rounded down, by its stages (`STAGES` for a vector)."""
+        return {stage: self.spent[stage] // NANOSECONDS_PER_MS for stage in self.stages}
+
+    def lps(self) -> dict[str, dict[str, int]]:
+        """What HiGHS ran in each stage (`LP_COUNTS`), the times in whole milliseconds rounded down, by its stages."""
+        return {
+            stage: {
+                name: amount // NANOSECONDS_PER_MS if name in LP_TIMES else amount
+                for name, amount in self.counted[stage].items()
+            }
+            for stage in self.stages
+        }
+
+    def total(self) -> int:
+        """The time from the clock's start to now, in whole milliseconds rounded down."""
+        return (CLOCK() - self.started) // NANOSECONDS_PER_MS
+
+
+def no_lps(stages: tuple[str, ...]) -> dict[str, dict[str, int]]:
+    """`lps` with nothing run in any of `stages` (#430 C-2a): every member 0."""
+    return {stage: dict.fromkeys(LP_COUNTS, 0) for stage in stages}
 
 
 @dataclass(frozen=True)
@@ -2560,7 +2625,9 @@ class _Solver:
     def __init__(self, model: _Model, settings: EconomySettings, clock: _Clock | None = None) -> None:
         self.model = model
         self.settings = settings
-        self.clock = clock  # PASS-TIMING: the vector's stages (`lap`); None for every other solve
+        # PASS-TIMING: the vector's stages (`lap`); #430 C-2a: the steady state's too, and what HiGHS ran in each
+        # (`ran`, `spent_exact`); None for every other solve
+        self.clock = clock
         # PRICE-2c: the last LP solved with `warm` (its variables and rows, held so that they stay the objects they are;
         # its arrays; the HiGHS instance that holds it), for the next LP on the same rows with another objective.
         # PRICE-2e: one per face (by its variables: D* and S3's optimal face, `WARM_FACES`), so that LPs on the two that
@@ -2580,10 +2647,26 @@ class _Solver:
         self.held: Held | None = None
 
     def lap(self, stage: str) -> None:
-        """The end of a stage of the vector (PASS-TIMING, `_Clock.lap`); nothing without a clock. It reads the clock only,
-        so no solve differs for it."""
+        """The end of a stage of the vector or of the steady state (PASS-TIMING, #430 C-2a; `_Clock.lap`); nothing
+        without a clock. It reads the clock only, so no solve differs for it."""
         if self.clock is not None:
             self.clock.lap(stage)
+
+    def reading(self) -> int | None:
+        """The clock's reading now, where a HiGHS run or its exact work starts (#430 C-2a); None without a clock."""
+        return None if self.clock is None else CLOCK()
+
+    def ran(self, started: int | None, again: str | None = None) -> None:
+        """A HiGHS run of an LP that started at `started` (`reading`) has ended (#430 C-2a, `_Clock.ran`): counted, a
+        second try of the kind `again`, and timed. Nothing without a clock; it reads the clock only."""
+        if self.clock is not None and started is not None:
+            self.clock.ran(CLOCK() - started, again)
+
+    def spent_exact(self, started: int | None) -> None:
+        """The exact work on a HiGHS answer that started at `started` (`reading`) has ended (#430 C-2a, `_Clock.exact`).
+        Nothing without a clock; it reads the clock only."""
+        if self.clock is not None and started is not None:
+            self.clock.exact(CLOCK() - started)
 
     def failure(self, code: str, **detail: Any) -> Failure:
         return Failure(error(code, {"path": self.model.path, "solve": self.model.solve, **detail}))
@@ -2660,27 +2743,39 @@ class _Solver:
         given to the HiGHS instance that solved that one, with its objective changed and those rows added
         (`_highs_again`), so HiGHS starts from the basis it ended at. With `seed` (PRICE-2e: an LP on S3's optimal face
         that S3's optimum meets), a new instance starts from S3's basis (`_highs_seeded`). Only where HiGHS starts
-        differs: the exact vertex and its certificate are the new LP's own."""
+        differs: the exact vertex and its certificate are the new LP's own.
+
+        #430 C-2a: on the clock, each HiGHS run here is counted and timed (`ran`), each second try by its kind
+        (`again_other`, `again_infeasible`), and so is the exact work on the answer (`vertex`, `spent_exact`); they read
+        the clock only, so no solve differs for them."""
         result = None
         held = self.warm.pop(id(program.variables), None) if warm else None
         added = None if held is None else _added(held[1], program.rows)
         if added is not None:
             arrays = _extended(held[2], program, added)
+            started = self.reading()
             result = _highs_again(held[3], arrays, added)
+            self.ran(started)
             if result.solver is not None:  # it ran: the instance holds these rows now (else it is dropped)
                 self.warm[id(program.variables)] = (program.variables, program.rows, arrays, held[3])
         else:
             arrays = _arrays(program)
+            started = self.reading()
             result = _highs(arrays, True) if seed is None else _highs_seeded(arrays, seed)
+            self.ran(started)
             if warm and result.solver is not None:
                 self.warm[id(program.variables)] = (program.variables, program.rows, arrays, result.solver)
                 while len(self.warm) > WARM_FACES:  # the face whose LPs came longest ago
                     self.warm.pop(next(iter(self.warm)))
         tries = 1
         if result.status not in (0, 2, 3):  # "unbounded or infeasible" from presolve, or numerical trouble
+            started = self.reading()
             result, tries = _highs(arrays, False), 2
+            self.ran(started, AGAIN_OTHER)
         elif result.status == 2 and witness is not None:  # an LP on D* has a solution: HiGHS erred (#430)
+            started = self.reading()
             result, tries = _highs(arrays, False), 2
+            self.ran(started, AGAIN_INFEASIBLE)
             if warm and result.solver is not None:  # it holds these rows: the next LP on this face goes on from it
                 self.warm[id(program.variables)] = (program.variables, program.rows, arrays, result.solver)
                 while len(self.warm) > WARM_FACES:  # the face whose LPs came longest ago
@@ -2701,7 +2796,9 @@ class _Solver:
             )
         if not check:
             return _Solution("optimal")
+        started = self.reading()
         x, found = self.vertex(program, arrays, result, stage)
+        self.spent_exact(started)
         duals = list(result.duals)
         le = _marginals(arrays.le, duals[: len(arrays.le)])
         eq = _marginals(arrays.eq, duals[len(arrays.le):])
@@ -2970,7 +3067,11 @@ class _Solver:
         - the vertex is checked exactly against every bound and row it changes (`_Grained.violation`).
         Where HiGHS does not end optimal there (an infeasible re-solve: a new LP decides that, as before), where no
         certified vertex comes of it, and where the income moves more than right sides, the re-solve is a new LP, as
-        before (`resolved`)."""
+        before (`resolved`).
+
+        #430 C-2a: on the clock, HiGHS's run here is counted and timed (`ran`; no second try: a new LP is another run),
+        and so is the exact work on its answer (the update or the new elimination and the check, `spent_exact`), which
+        ever way the time chose."""
         grained = self.grained
         moves = None if grained is None or grained.solver is None else self.grain_moves(resource, step, delta)
         if moves is not None:
@@ -2981,9 +3082,11 @@ class _Solver:
                         math.inf if problem.upper[n + place] is None else _float(problem.upper[n + place]))
                 for place in moves
             }
+            started = self.reading()
             run, restored = _highs_moved(
                 grained.solver, grained.saved, ends, {place: grained.ends[place] for place in moves}, n, m
             )
+            self.ran(started)
             if not restored:
                 raise self.failure(
                     LP_SOLVE_FAILED, stage="price", reason="solver_status", status=4, raw_text="changeRowBounds"
@@ -2997,6 +3100,7 @@ class _Solver:
                     self.update_most = min(self.update_most, entered)
                     return True
 
+                begun = self.reading()
                 vertex: exact.Vertex | exact.Refused | str = exact.reoptimum(
                     problem, grained.factored, run.statuses, self.update_most, stop
                 )
@@ -3009,10 +3113,12 @@ class _Solver:
                 if isinstance(vertex, exact.Vertex):
                     x = dict(zip(grained.arrays.columns, vertex.x, strict=True))
                     broken = grained.violation(x, moves)
+                    self.spent_exact(begun)
                     if broken is not None:  # a certified vertex meets every row by construction: a defect
                         raise self.failure(LP_NUMERIC_CHECK_FAILED, stage="price", **broken)
                     self.grain_way(way)
                     return self.objective(grained.program, x)
+                self.spent_exact(begun)
                 self.grain_way("new_lp_not_certified")
             else:
                 self.grain_way(f"new_lp_status_{run.status}")
@@ -3233,7 +3339,8 @@ class _Solver:
         - **`lean`** (the vector, PRICE-4a): only what the vector reads. The range of an activity is probed only when no
           optimum runs it (`most` 0: only such an activity is in K), and no forcing cost is computed; the activities'
           other judgements are then null. The vector is the same: every step of the selection is an LP's optimal
-          value over the same K. Its stages end on the solver's clock (`lap`, PASS-TIMING), which `steady` has none of.
+          value over the same K. Its stages end on the solver's clock (`lap`, PASS-TIMING); the steady state's forcing
+          costs end on it too (#430 C-2a, `forcing`, after each activity's), which a pass's clock has no stage for.
         - **What it chose** (#430 METHOD-C): K, the vector and each activity's value at it, exact, are kept on the solver
           (`chosen`, `_Chosen`) for `steady` to hand on (`Held`); nothing here reads them, and nothing above changes.
         - **An exact point of each LP on D*** (#430; `lp`, `witness`). `point`, the strong-duality check's, meets D*
@@ -3393,6 +3500,8 @@ class _Solver:
                     cost = None
                 else:
                     cost = None if found.status == "unbounded" else found.value
+            if not lean:  # #430 C-2a: the steady state's stage `forcing` (a pass's clock has none)
+                self.lap("forcing")
             value = None
             if activity in worth:
                 value = sum(
@@ -3625,15 +3734,24 @@ class _Solver:
         """The steady state. A resource's price in a step is the projection of its balance row's dual on D*
         (PRICE-2b-1); its re-solves at plus and minus one grain (`grain`) and HiGHS's marginal cross-check it. It also
         keeps on the solver what the certificate reads (`held`, #430 METHOD-C: `handed`), which `compute` hands on beside
-        the value and never in it."""
+        the value and never in it.
+
+        #430 C-2a: its stages end on the solver's clock (`lap`, `STEADY_STAGES`) as the vector's do, and four more: the
+        tie probes (`ties`, which `tiers` runs last), the least losses (`losses`), the prices of the rules with the
+        activities' values (`rules`) and the forcing costs (`forcing`, in `joint`). D* in its complementary-slackness
+        form ends `dual` again, as it does in the vector. They read the clock only, so nothing computed differs."""
         model, steps = self.model, self.model.steps
         tiers = self.tiers()
+        self.lap("ties")
         program, base, optimum = tiers.program, tiers.base, tiers.base.value
         least = self.least_losses(tiers)
+        self.lap("losses")
         warnings = self.tier_warnings(tiers)
         dual = tiers.dual  # S3's, which every price re-solve changes, checked exactly (`duality`)
         on_face = _restricted(dual, program, base.x)  # D*, for every LP on it (PRICE-2e: the selection's too)
+        self.lap("dual")
         prices, grains, marginals = self.projections(tiers, on_face, warnings)
+        self.lap("projections")
         rule_prices: dict[str, tuple[Fraction, Fraction | None]] = {}
         rule_marginals: dict[str, Fraction] = {}
         for rule, value in model.priced():
@@ -3647,6 +3765,7 @@ class _Solver:
                 values[activity] = None
                 continue
             values[activity] = [_price(self.value(activity, prices, step)) for step in range(steps)]
+        self.lap("rules")
         joint, judged = self.joint(dual, tiers.point, optimum, prices, on_face, base.x, tiers.optimal, tiers.seed)
         warnings += judged
         self.held = self.handed(tiers, on_face)
@@ -3852,8 +3971,11 @@ def compute(graph: Graph, solve: str) -> Economy:
     """The economy node `solve` (steady, plan, quick or vector) of `graph`. It raises `Need` until every node it reads is
     computed, as every graph node does. The quick look and the vector read and build the steady state's program. The
     vector times its stages (PASS-TIMING, `_Clock`), from the start of the call that computes it: `Economy.timing`. The
-    steady state holds what the certificate reads (#430 METHOD-C, `Held`): `Economy.held`, never encoded."""
-    clock = _Clock() if solve == VECTOR else None
+    steady state holds what the certificate reads (#430 METHOD-C, `Held`): `Economy.held`, never encoded. #430 C-2a: the
+    steady state times its stages too (`STEADY_STAGES`), and both count what HiGHS ran in each stage (`Economy.lps`)
+    and give the node's whole time (`Economy.total`); none of it is encoded, and the quick look and the plan have no
+    clock."""
+    clock = _Clock(STAGES if solve == VECTOR else STEADY_STAGES) if solve in (VECTOR, STEADY) else None
     built = STEADY if solve in (QUICK, VECTOR) else solve
     reader, model = _read(graph, built)
     if model is None:
@@ -3867,7 +3989,7 @@ def compute(graph: Graph, solve: str) -> Economy:
     except Failure as failure:
         return Economy(blocked_by=graph.register(failure.errors))
     if solve == VECTOR:  # one pass of the impact assessment: nothing but the vector (`core.impact`), and its timing
-        return Economy(data, status, False, (), reads=tuple(reader.reads), timing=clock.ms())
+        return Economy(data, status, False, (), reads=tuple(reader.reads), **_timed(clock))
     if solve == QUICK:
         # Its status says what it is, never the worst of what it read: no reader takes it for a steady state's. The
         # coverage is the steady state's as far as these solves know it (`coverage.NEEDS_LATER_STAGES`).
@@ -3887,8 +4009,14 @@ def compute(graph: Graph, solve: str) -> Economy:
     per_account = solve == PLAN
     return Economy(
         {"status": status, "per_account": per_account, **data}, status, per_account, tuple(warnings),
-        reads=tuple(reader.reads), held=solver.held,
+        reads=tuple(reader.reads), held=solver.held, **({} if clock is None else _timed(clock)),
     )
+
+
+def _timed(clock: _Clock) -> dict[str, Any]:
+    """What a node computed on `clock` holds beside its value (#430 C-2a; `Economy`): its stages' times (`timing`), what
+    HiGHS ran in each (`lps`) and its whole time so far (`total`)."""
+    return {"timing": clock.ms(), "lps": clock.lps(), "total": clock.total()}
 
 
 def steady_again(graph: Graph) -> Economy:

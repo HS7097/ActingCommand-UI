@@ -7,9 +7,10 @@ take HiGHS's infeasible as their answer, as before (contracts/formats.md, "Exact
 
 HiGHS's answers are given here as a test needs them (`Highs`, `arm_at`): each run is HiGHS's own, and only the status and
 the text it answers are replaced, at the first LP on D* of one step. The fixtures are the hand-solvable neutral models of
-test_economy.py, test_price_vector.py and test_prices.py, and one of their own (`withheld_fixture`); each docstring says by
-hand what the fixture gives. The methods of the solver as they were before this slice are kept here, line for line (the
-module's names qualified), to compare the two where no LP on D* fails. CI runs these tests on Windows and on Ubuntu."""
+test_economy.py, test_price_vector.py and test_prices.py, and two of their own (`withheld_fixture`, `no_point_fixture`);
+each docstring says by hand what the fixture gives. The methods of the solver as they were before this slice are kept
+here, line for line (the module's names qualified), to compare the two where no LP on D* fails. CI runs these tests on
+Windows and on Ubuntu."""
 
 from __future__ import annotations
 
@@ -72,6 +73,29 @@ def withheld_fixture(folder: Path) -> Path:
         ],
         {"fact.v": 0, "fact.r": 0, "fact.r_cap": 30},
         [unknown],
+    )
+
+
+def no_point_fixture(folder: Path) -> Path:
+    """withheld_fixture's r with nothing that brings it in, takes it or loses it: its regen brings 0 a day and stops at
+    its natural cap (reference 50), and no flow uses r; act.a brings 2 v a day for nothing, at most 3 times. By hand: V0
+    = 6, v is worth exactly 1. r's regen stops at a cap, so its stock ends the cycle exactly where it began, and the
+    regen brings 0, so r loses at most 0: one more r has nowhere to go and one less nowhere to come from, both
+    infeasible. So r's interval on D* has neither end; r is in no step of the selection and not in K, and the selection
+    withholds it (`no_room`): its least and its greatest on the face left are both unbounded, so it is fixed at 0
+    (`zero`), and no LP's solution reached that row: the solve holds no point for the next LP on D*, the vector's
+    exact check (`flow._Solver.joint`, `fix`)."""
+    return model(
+        folder, [DAY],
+        [resource("res.v", "fact.v"), resource("res.r", "fact.r"), activity("act.a")],
+        [
+            regen("regen.r", "res.r", "0", "1d", **{"while": "amount:res.r < read:fact.r_cap"}),
+            cap("cap.r.natural", "res.r", "soft_read", {"block_income_from": [], "other_income": "notice_only"},
+                reading="fact.r_cap", reference="50"),
+            flow("flow.a", "act.a", produces={"res.v": "2"}),
+            limit("limit.a", "act.a", "3", "day"),
+        ],
+        {"fact.v": 0, "fact.r": 0, "fact.r_cap": 30},
     )
 
 
@@ -164,14 +188,36 @@ def run(economy: Any, folder: Path, root: Path) -> tuple[int, dict[str, Any]]:
     return economy(folder, STEADY_ONLY, paths={"state_root": str(root)})
 
 
+def steady_lps(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """What HiGHS ran in each stage of each steady state computed (#430 C-2a, `flow.Economy.lps`), in order."""
+    found: list[dict[str, Any]] = []
+    compute = economy_flow.compute
+
+    def recording(graph: Any, solve: str) -> Any:
+        result = compute(graph, solve)
+        if solve == economy_flow.STEADY and result.lps is not None:
+            found.append(result.lps)
+        return result
+
+    monkeypatch.setattr(economy_flow, "compute", recording)
+    return found
+
+
 # The steps of the LPs on D* and the fixtures that solve one: ex2 has two pools' intervals, a max-min of two stages and
-# the vector's check; withheld_fixture a pool the selection withholds.
+# the vector's check; withheld_fixture a pool the selection withholds; cyclic_fixture a pool with a hard cap, r, whose
+# projection's ends S3's basis never proves (`_Solver.chords`, `_pinned`), so each is an LP on D* (#430 C-2a).
 SITES = [
     pytest.param(ex2, economy_flow.INTERVAL, id="interval"),
     pytest.param(ex2, economy_flow.MAX_MIN, id="max_min"),
     pytest.param(ex2, economy_flow.CHECK, id="check"),
     pytest.param(withheld_fixture, economy_flow.SELECTION, id="selection"),
+    pytest.param(cyclic_fixture, economy_flow.PROJECTION, id="projection"),
 ]
+# The stage of the steady state's timing (#430 C-2a, `flow.STEADY_STAGES`) that each step's LPs on D* run in.
+STAGE_OF = {
+    economy_flow.PROJECTION: "projections", economy_flow.INTERVAL: "intervals", economy_flow.MAX_MIN: "max_min",
+    economy_flow.CHECK: "check", economy_flow.SELECTION: "selection",
+}
 
 
 # 1. Infeasible once: solved again without presolve, and nothing changes ---------------------------------------------
@@ -181,15 +227,18 @@ SITES = [
 def test_an_lp_on_d_star_highs_finds_infeasible_once_is_solved_again_without_presolve_and_nothing_changes(
     tmp_path, economy, monkeypatch, fixture, step
 ):
-    """EX2 (test_price_vector.py: the vector a 3/7, b 3/7, c 1/7, v 1, in two max-min stages) and withheld_fixture (r
-    withheld at 0): HiGHS answers the first LP on D* of the step infeasible. That LP is solved a second time, from scratch
-    and without presolve (`_highs` with presolve off, the very next run), which HiGHS solves; the steady state is then the
-    one computed with no such answer, coordinate by coordinate, every judgement and warning alike."""
+    """EX2 (test_price_vector.py: the vector a 3/7, b 3/7, c 1/7, v 1, in two max-min stages), withheld_fixture (r
+    withheld at 0) and cyclic_fixture (r's hard cap: the ends of its projection, #430 C-2a): HiGHS answers the first LP
+    on D* of the step infeasible. That LP is solved a second time, from scratch and without presolve (`_highs` with
+    presolve off, the very next run), which HiGHS solves; the steady state is then the one computed with no such answer,
+    coordinate by coordinate, every judgement and warning alike. The second try is counted, once, in the stage the
+    step's LPs run in (#430 C-2a: `again_infeasible`), and no other second try is."""
     folder = fixture(tmp_path / "model")
     status, clean = run(economy, folder, tmp_path / "clean")
     with monkeypatch.context() as patched:
         highs = Highs(patched)
         seen = arm_at(patched, highs, step, [INFEASIBLE])
+        counted = steady_lps(patched)
         status_again, again = run(economy, folder, tmp_path / "again")
 
     assert (status, clean["errors"]) == (0, [])
@@ -198,6 +247,9 @@ def test_an_lp_on_d_star_highs_finds_infeasible_once_is_solved_again_without_pre
     assert highs.runs[seen["first"] + 1] is False
     assert again["data"]["steady"] == clean["data"]["steady"]
     assert again["warnings"] == clean["warnings"]
+    [lps] = counted
+    tries = [(stage, entry["again_infeasible"], entry["again_other"]) for stage, entry in lps.items()]
+    assert [found for found in tries if found[1:] != (0, 0)] == [(STAGE_OF[step], 1, 0)]
 
 
 # 2. and 3. Infeasible twice: the point tells a numerical failure from an LP built wrong -------------------------------
@@ -256,6 +308,40 @@ def test_an_lp_on_d_star_highs_finds_infeasible_twice_that_its_point_breaks_is_l
         "detail": {
             "path": model_path(folder), "solve": "steady", "stage": "dual", "step": step, **broken,
             "raw_text": "Infeasible", "tries": 2,
+        },
+        "needed_by": ["economy:steady"],
+    }]
+    assert doc["data"]["steady"] == {"status": "blocked"}
+
+
+def test_an_lp_on_d_star_with_no_point_in_hand_that_highs_finds_infeasible_twice_is_lp_solve_failed(
+    tmp_path, economy, monkeypatch
+):
+    """`no_point_fixture`: r is withheld (`no_room`) and fixed at 0 unbounded both ways (`zero`), so the solve holds no
+    point for the next LP on D*, the vector's exact check. HiGHS answers that check infeasible on both its tries (the
+    second without presolve): with no point to tell a numerical failure from an LP built wrong, it is `lp_solve_failed`,
+    stage dual, reason solver_status, status 2, with the step (check), HiGHS's text and the two tries. It blocks the
+    steady state."""
+    folder = no_point_fixture(tmp_path / "model")
+    status, clean = run(economy, folder, tmp_path / "clean")
+    with monkeypatch.context() as patched:
+        highs = Highs(patched)
+        seen = arm_at(patched, highs, economy_flow.CHECK, [INFEASIBLE, INFEASIBLE])
+        status_again, doc = run(economy, folder, tmp_path / "again")
+
+    assert (status, clean["errors"]) == (0, [])
+    withheld = clean["data"]["steady"]["joint"]["prices"]["res.r"]
+    assert (withheld["value"], withheld["by"], withheld["withheld"]["reason"]) == ("0", "zero", "no_room")
+    assert clean["data"]["steady"]["joint"]["prices"]["res.v"]["value"] == "1"
+    assert seen["point"] is None
+    assert highs.forced == [seen["first"], seen["first"] + 1]
+    assert highs.runs[seen["first"] + 1] is False
+    assert status_again == CODES["lp_solve_failed"]["exit"] == 1
+    assert doc["errors"] == [{
+        "code": "lp_solve_failed",
+        "detail": {
+            "path": model_path(folder), "solve": "steady", "stage": "dual", "reason": "solver_status", "status": 2,
+            "step": "check", "raw_text": "Infeasible", "tries": 2,
         },
         "needed_by": ["economy:steady"],
     }]

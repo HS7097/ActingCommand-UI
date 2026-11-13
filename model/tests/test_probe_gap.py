@@ -34,7 +34,7 @@ from test_economy import (
     write,
 )
 from test_price_vector import QUICK, ex2, joint, judged, large_fixture, surplus_fixture
-from test_prices import acmodel, delivered, export, priced  # noqa: F401 (the fixture `acmodel`)
+from test_prices import acmodel, delivered, export, priced, untimed_doc  # noqa: F401 (the fixture `acmodel`)
 
 PIVOTS = 20  # `lp.max_pivots` by default
 AT_CAP = exact.Refused(exact.PIVOT_CAP, PIVOTS)
@@ -136,8 +136,9 @@ def test_a_forcing_cost_alone_at_the_cap_is_no_gap_and_moves_no_price(tmp_path, 
     The warning stands and names it; `forcing_cost` and `input_bound` are null and `unverified` lists it. Nothing else
     moves: the steady state is the plain fixture's member by member but act.waste's entry of `joint.activities`, so its
     one static component holds no gap, and every price is confirmed for no reason, as the plain fixture's. `export
-    prices` writes the same prices.json (acmodel.prices.v2, its entries' members as before), each price with the same
-    `binds`: its provenance document reads the price's entry, its status and reasons, never a forcing cost."""
+    prices` writes the same prices.json (acmodel.prices.v2, its entries' members as before) but for the steady state's
+    own timing (#430 C-2a, `steady_timing_ms`), each price with the same `binds`: its provenance document reads the
+    price's entry, its status and reasons, never a forcing cost."""
     plain_folder = priced(surplus_fixture(tmp_path / "plain"))
     plain_status, plain = economy(plain_folder, "--steady-only")
     plain_exported = export(acmodel, plain_folder)
@@ -165,7 +166,7 @@ def test_a_forcing_cost_alone_at_the_cap_is_no_gap_and_moves_no_price(tmp_path, 
 
     assert (plain_exported[0], plain_exported[1]["errors"], exported[0], exported[1]["errors"]) == (0, [], 0, [])
     prices = delivered(folder)
-    assert prices == delivered(plain_folder)
+    assert untimed_doc(prices) == untimed_doc(delivered(plain_folder))  # #430 C-2a: each export's own timing aside
     assert prices["schema_version"] == "acmodel.prices.v2"
     assert {entry["pool"]: (entry["class"], entry["status"], entry["pending"]) for entry in prices["prices"]} == {
         pool: ("covered", "confirmed", []) for pool in SURPLUS_POOLS
