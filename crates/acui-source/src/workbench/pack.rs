@@ -566,6 +566,19 @@ mod tests {
     }
 
     #[test]
+    fn set_writes_one_open_row_from_now_and_withdraw_none() {
+        let now_ms = 1_794_532_592_345;
+        for schedulable in [false, true] {
+            let rows = PackChange::Set(schedulable).rows(now_ms);
+            assert_eq!(rows.len(), 1, "{schedulable}");
+            assert_eq!(rows[0].from_unix_ms, now_ms, "{schedulable}");
+            assert_eq!(rows[0].until_unix_ms, None, "{schedulable}");
+            assert_eq!(rows[0].schedulable, schedulable);
+        }
+        assert!(PackChange::Withdraw.rows(now_ms).is_empty());
+    }
+
+    #[test]
     fn as_pressed_writes_nothing() {
         assert_eq!(switch(&state(true, PackSource::None, None), true), None);
         let own = state(false, PackSource::Instance, Some((true, PackSource::None)));

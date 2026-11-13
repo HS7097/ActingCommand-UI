@@ -634,8 +634,8 @@ the workbench ends the program, except while an unlock runs (see "Launcher").
 
 The main page's right column has two tabs, **Live View** and **Daily Tasks**, before the alias of the
 account picked on the left; the tab picked stays for the run, across accounts and pages, Live View being
-the first. Daily Tasks is that account's task packages, each with a switch at the front of its row
-(see the next paragraph): one row per package, with its name (its
+the first. Daily Tasks is that account's task packages, those the Runtime's switch view lists with a
+switch at the front of their row (see the next paragraph): one row per package, with its name (its
 package id when the game's `ui.json` gives none), "Irreversible" when the Runtime derives it so and
 "Risky" when its `ui.json` entry names a risk word (the word itself is not shown), why it runs or does
 not run now in a sentence, and its `ui.json` summary in grey ("No description given" without one). The
