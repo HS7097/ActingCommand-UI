@@ -215,8 +215,9 @@ pub enum TaskClose {
     /// Not known to be closed: the close is out, was not written, or what came of it is not known;
     /// nothing after it was stopped.
     Asked,
-    /// Its close row was written, as the answer landed at this time (unix ms): the task is no
-    /// longer scheduled, and the run was asked to stop after it.
+    /// Its close row was written, its write answered at this time (unix ms), before the stop's
+    /// wait: the task is no longer scheduled, and the run was asked to stop after it. A follow-up
+    /// keeps it.
     Closed { at_ms: u64 },
     /// The account's view does not list the run's package: no row was written, and the run was
     /// only asked to stop.
@@ -593,9 +594,12 @@ impl Landing {
         let follow_up = request.follows.is_some();
         let (said, waits) = match self {
             Self::Answer(outcome) => stop_said(outcome, at_ms, follow_up),
-            Self::Close(CloseAnswer::Closed { stop, .. }) => {
+            // The close's time is its write's answer, not this landing, which the stop's wait
+            // came between.
+            Self::Close(CloseAnswer::Closed { at_ms: closed_ms, stop, .. }) => {
                 let (said, waits) = stop_said(stop, at_ms, false);
-                return Settled { said, waits, task: Some(TaskClose::Closed { at_ms }) };
+                let task = Some(TaskClose::Closed { at_ms: closed_ms });
+                return Settled { said, waits, task };
             }
             Self::Close(CloseAnswer::NotListed(stop)) => {
                 let (said, waits) = stop_said(stop, at_ms, false);
@@ -813,7 +817,7 @@ fn stop_line(outcome: &StopOutcome, first: bool) -> (String, bool) {
 /// close took, or its package is not listed, and its stop's would.
 fn close_line(answer: &CloseAnswer) -> (String, bool) {
     match answer {
-        CloseAnswer::Closed { version, resent, stop } => {
+        CloseAnswer::Closed { version, resent, stop, .. } => {
             let (stop, quiet) = stop_line(stop, true);
             let line = format!(
                 "closed{}, the list now at version {version}; then {stop}",

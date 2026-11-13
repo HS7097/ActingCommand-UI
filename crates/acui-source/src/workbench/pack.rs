@@ -324,8 +324,9 @@ pub enum CloseAnswer {
     /// `Edited`. The run was not stopped.
     NotClosed(EditAnswer),
     /// The close row was written: the scope's version after it, and whether it went a second time
-    /// after `fact_observation_not_newer`, both for the log. Then the run's stop.
-    Closed { version: u64, resent: bool, stop: StopOutcome },
+    /// after `fact_observation_not_newer`, both for the log; when its write was answered (unix ms),
+    /// before the stop's wait, for its words. Then the run's stop.
+    Closed { version: u64, resent: bool, at_ms: u64, stop: StopOutcome },
     /// The view lists no such package: no row was written, and the run's stop went alone.
     NotListed(StopOutcome),
 }
@@ -363,7 +364,8 @@ pub fn close_then_stop(root: &Path, alias: &str, package: &str, run: RunKey) -> 
     }
     match edit_on(&client, alias, package, PackChange::Set(false), None) {
         EditAnswer { outcome: PackOutcome::Edited { version }, resent } => {
-            CloseAnswer::Closed { version, resent, stop: stop_on(&client, alias, run) }
+            let at_ms = now_ms();
+            CloseAnswer::Closed { version, resent, at_ms, stop: stop_on(&client, alias, run) }
         }
         answer => CloseAnswer::NotClosed(answer),
     }
