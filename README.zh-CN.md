@@ -880,8 +880,11 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
 （提交号要与安装集写的一致）；按 Runtime `contracts/component-interfaces.md` 核监控台和 Runtime 两份清单里的
 `interfaces`：`runtime-client`、`actingd-config` 两边要有交集，`ledger`、`runtime-outcomes` 要 Runtime 的最高
 修订落在监控台的区间里；每个标准包核它的 `bundle.json`、`applications.json`、`schedule.json` 与
-`interfaces.json`（`package` 修订要落在这一版 Runtime 声明的区间里）。视觉文件必须带上 ONNX Runtime 的
-`ort/licenses/onnxruntime/LICENSE` 和 `ThirdPartyNotices.txt`。视觉文件里可以带 DirectML（`ort/DirectML.dll`），
+`interfaces.json`（`package` 修订要落在这一版 Runtime 声明的区间里）。视觉文件必须带上 ONNX Runtime 的两个文件，
+而且要和 Runtime 钉住的一模一样（`ort/onnxruntime.dll`，17,328,152 字节，SHA-256 `e7eedec6…bff40`；
+`ort/onnxruntime_providers_shared.dll`，22,040 字节，`265c8daf…ec3b6`）。用显卡（DirectML）时 Runtime 会拒绝别的版本；
+用 CPU 时 Runtime 不核这两个文件，可安装集照样只收钉住的这一套；
+还要带它的 `ort/licenses/onnxruntime/LICENSE` 和 `ThirdPartyNotices.txt`。视觉文件里可以带 DirectML（`ort/DirectML.dll`），
 只认 Runtime 钉住的那一个（DirectML 1.15.4：18,527,776 字节，SHA-256
 `9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1`，见 Runtime
 `crates/vision-ffi/src/runtime_pin.rs`）；带了它，就必须同时带上它的许可文件，即 Runtime 工具登记表
