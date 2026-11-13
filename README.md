@@ -1298,11 +1298,12 @@ only the file the Runtime pins (DirectML 1.15.4: 18,527,776 bytes, SHA-256
 `9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1`, Runtime
 `crates/vision-ffi/src/runtime_pin.rs`), and then must carry its licence files too, the three the Runtime's
 tool registry (`scripts/windows-tools/windows-tool-sources.v1.json`, `directml-1.15.4`) has copied beside it:
-`ort/licenses/directml/LICENSE.txt`, `LICENSE-CODE.txt` and `ThirdPartyNotices.txt`. The configuration still
-names the CPU provider (`vision.execution_provider` `cpu`): a run on the CPU loads only
+`ort/licenses/directml/LICENSE.txt`, `LICENSE-CODE.txt` and `ThirdPartyNotices.txt`. Only a set that carries
+DirectML offers the graphics card for text recognition on page 7 (below). Without that choice the
+configuration names the CPU provider (`vision.execution_provider` `cpu`): a run on the CPU loads only
 `onnxruntime_providers_shared.dll` and `onnxruntime.dll` whether or not `DirectML.dll` lies beside them, and
 neither `check-config` nor a start looks at it for `cpu` (Runtime `contracts/vision-model-folders.md`,
-"Loading"); selecting DirectML and the graphics card comes later. The licences of the text-recognition models
+"Loading"). The licences of the text-recognition models
 (the Apache-2.0 licence of PP-OCR, for one) are `vision.licenses`, at least one when the set carries a
 model, laid at `<root>\licenses\vision\<path>` by the rules of a pack's own files below. Anything wrong stops it before anything is
 written: a damaged file, a pack or console that does not match this version and a set it cannot read each
@@ -1397,14 +1398,32 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    start: without "start when setup finishes" it is greyed out and unticked, and the page says that the
    instances then go on duty at the first start (a plan file with instances that asks for the pause without
    the start is refused). The watchdog needs no rule: it never starts a root that never started, so without
-   "start when setup finishes" the installation stays down until you start it.
+   "start when setup finishes" the installation stays down until you start it. When the set carries
+   DirectML, one more: use the graphics card for text recognition (DirectML), **off by default** (text
+   recognition then runs on the CPU). The page reads this computer's graphics cards, read only and as the
+   Runtime reads them (Runtime `crates/vision-ffi/src/adapters.rs`): DXGI's adapters in their order, with
+   their name and dedicated video memory, and the kernel's adapter type and PCI location; `dxgi.dll` and
+   `gdi32.dll` from System32 only, no Direct3D device created. It offers only a card the Runtime resolves
+   its identity to (a physical adapter: the kernel's type read, rendering, and neither software,
+   indirect-display nor paravirtualized). Software adapters are not listed, nor another listing of a card
+   that is (an indirect-display or paravirtualized copy with its identity, which the Runtime passes over
+   too). A card that is not physical (a virtual machine's, a virtual display's, one whose type the kernel
+   does not give) and two physical cards of one identity that the Runtime cannot tell apart (its
+   `adapter_ambiguous`: both or neither with a PCI location) are listed greyed, each with why. Integrated
+   graphics are not left out. Ticked, the cards are listed with their name and dedicated video memory in
+   GB, the one with the most memory chosen first, and another may be chosen; beside a chosen card with less
+   than 2 GiB of its own the page says plainly that it looks like integrated graphics, that in tests its
+   text recognition did not fully match the CPU's and was no faster, and that leaving it off is advised.
+   The person decides. With no card to offer, or the cards unreadable, the box is greyed with the reason.
 8. **Confirm**: the location, versions, games, instances, options, the folders created and the files written,
    all listed (with `licenses` when a chosen game or the text-recognition models bring licence files, and
-   `install-wizard.config.json` with instances, the start and the pause); with instances and no first
+   `install-wizard.config.json` with instances, the start and the pause); when the set carries DirectML, what
+   does the text recognition (the CPU, or the graphics card by its name and identity); with instances and no first
    pause, a note that they go on duty as soon as ActingCommand starts. Page 3 says the same of the
    folders. Once Install is pressed there is no going back to the earlier pages.
 9. **Install**: step by step, each done, skipped or failed, the step under way with a line of detail and a
-   progress bar. Before writing, the install files, the emulators and the folder are checked once more. A
+   progress bar. Before writing, the install files, the emulators, the folder and the graphics card chosen
+   (the set carries DirectML and this computer offers the card) are checked once more. A
    failed step stops the install; what was written stays as it is, and the wizard deletes nothing. Closing
    the window while it installs is held off.
 10. **Finish**: where it was installed, where the setup log is and which shortcuts were created. "Open
@@ -1412,7 +1431,10 @@ closing the window on those pages asks first, and quitting leaves nothing behind
     or `ACTINGLAB_…` variable the wizard inherited) and "Open folder" are for the person to press; the wizard
     opens nothing by itself. The page also says how to add instances later, since the console cannot add
     them yet: run the wizard again into another folder (a second, separate ActingCommand), or wait for a
-    later version. After a failure the page says which step and why, offers to copy the error and
+    later version. With a graphics card, it says that the check during setup (`check-config`) does not prove
+    the card works: after the first task has run, open the console's performance status and look for
+    `vision_gpu_unavailable` (if the card cannot be used, ActingCommand runs on the CPU and says so there).
+    After a failure the page says which step and why, offers to copy the error and
     to open the setup log (which holds the paths of the install folder and others, the profile folder
     written as `%USERPROFILE%`), and lists how to undo what the install actually did, item by item. A
     Runtime it started that may be running without a pause the install confirmed (no pause asked for, the
@@ -1452,7 +1474,7 @@ and the console, each file checked against its `BUILD-MANIFEST.json`; place the 
 its hash, and the models' licences in `licenses\vision\`; lay out the standard packs (each zip's SHA-256 computed once more right before, against the set)
 and place the files beside each, each against its hash, in `licenses\<game>\`; check each game with
 `actinglab standard-pack check`; write the configuration (as `actingd.config.json.part` first); put it in
-place only once `actingd check-config` passes; hand the root to the Runtime's own installer with `actinglab
+place only once `actingd check-config` passes (the graphics card below); hand the root to the Runtime's own installer with `actinglab
 adopt`; write the console settings; create the shortcuts (named after the root folder, such as
 "ActingCommand Console (AC2)", with a number when that name is taken: someone else's is never touched);
 start (`actinglab up`: exit 0, and none of the post-start checks its answer lists under
@@ -1465,11 +1487,32 @@ start it again (below); confirm the Runtime is online with `actinglab status`; i
 the window shows each answer's reading, and the setup log has it too, with the answer's whole output on a
 line of its own.
 
+With a graphics card chosen, step 6 writes its `vision` section as the Runtime's `actingd-config`
+revision 27 takes it (Runtime `apps/actingd/src/config.rs`; `contracts/actingd-check-config.md`, "DirectML";
+inside the range the console and the Runtime already declare), the card named by its stable identity only
+(no DXGI index, no LUID) and the fallback to the CPU written out:
+
+```json
+"vision": {"execution_provider": "directml", "directml_device": {"expected_identity": "dxgi-pci:10de:2504:8a1f1043:a1"}, "gpu_fallback": "cpu"}
+```
+
+The first start's configuration without the instances has the same section. `check-config` hashes ONNX
+Runtime's two files against the DirectML build's pin, hashes `DirectML.dll` without loading it and lists
+the adapters (DXGI and the kernel's type) to resolve the identity, creating no Direct3D 12 device; when
+DirectML cannot be used it still passes, with a `vision_gpu_unavailable` note. So step 7 reads each answer
+that passed: the step fails when that note is there, or when `report.vision.directml` does not resolve the
+card chosen (its `expected_identity` the identity, `unavailable_reason` null, `resolved` an adapter its
+`adapters` list with that identity). The failure says why in plain words and to run the wizard again into
+a new folder without the option; the wizard never rewrites the configuration to the CPU on its own. That
+the step passes does not prove the card works: the first text recognition decides, and with `gpu_fallback`
+`cpu` the Runtime then runs on the CPU and shows `vision_gpu_unavailable` in the console's performance
+status.
+
 Why the instances come last: a global pause stops no run already under way, so a Runtime started with its
 instances could dispatch between the start and the pause. With instances and the first pause, step 7
 checks the full configuration, keeps it as `install-wizard.config.json` and puts in place the same
-configuration without the instances (the same salt, state root and MuMu folder, through `check-config`
-too); once the Runtime runs it and the pause is set, step 13 connects the instances in three parts, each
+configuration without the instances (the same salt, state root, MuMu folder and text recognition, through
+`check-config` too); once the Runtime runs it and the pause is set, step 13 connects the instances in three parts, each
 answer checked:
 
 1. the formal close, `"<root>\runtime\actingctl.exe" request-shutdown --state-root "<root>\state" --wait 60`,
@@ -1525,18 +1568,24 @@ build is a window program; its command line attaches to the parent's console).
 acsetup check-set --set <install set folder>
     checks the install set only and prints what it holds
 acsetup discover [--mumu-root <MuMu folder>]
-    lists MuMu's emulators and those another ActingCommand uses (read only)
+    lists MuMu's emulators, those another ActingCommand uses, and this computer's graphics cards (read only)
 acsetup install --set <install set folder> --root <new install folder> --plan <plan.json>
     installs as the plan says, with the steps of page 9
 ```
 
 Exit codes: 0 done, 1 failed (stderr says which step and why, and lists how to undo what the install did,
-as the failure page does), 2 usage. The plan file holds what the
+as the failure page does), 2 usage. `discover` lists every DXGI adapter with its name, dedicated video
+memory, identity, PCI location and whether it can be chosen for text recognition or why not (software
+adapters and other listings of a card included, which the window leaves out); adapters it cannot read make
+it exit 1. The plan file holds what the
 window gathers on pages 1 to 8 (`actingcommand.install-wizard-plan.v1`): `language` (`zh` or `en`), `games`
 (game folder names), an optional `mumu_root`, `instances` (each with `index`, `alias`, `game`, `server`, and
 optionally `touch_backend`, `capture_backend`, `start_emulator`, `confirmed_in_use`) and `options`
 (`desktop_shortcut`, `start_menu_shortcut`, `watchdog`, `start_after_install`, `pause_first_start`, with the
-window's defaults). Its rules are the window's; a plan that breaks one stops before anything is written.
+window's defaults, and an optional `directml_adapter`: the graphics card's identity as `discover` lists it,
+absent for the CPU). Its rules are the window's; a plan that breaks one stops before anything is written: a
+`directml_adapter` must be a `dxgi-pci:` identity, and the install refuses it when the set carries no
+DirectML or this computer does not offer that card.
 
 **Putting an install set together:** `tools/make_install_set.py` (Python 3, standard library only) writes
 the set the wizard reads, in the same format; the two change together. It only copies files, hashes them
@@ -1564,7 +1613,9 @@ the version line the Runtime locks), `getrandom` (the configuration's `secret_fi
 `instance_id`) and, on Windows only, `windows` 0.62 (`Win32_Foundation`, `Win32_System_Com`,
 `Win32_System_RestartManager`, `Win32_UI_Shell`: the Start menu and desktop folders through
 `SHGetKnownFolderPath`, shortcuts through `IShellLinkW` + `IPersistFile`, the folder picker through
-`IFileOpenDialog`; the version Slint already locks, so the lock gains no crate). The exe carries the
+`IFileOpenDialog`; the version Slint already locks, so the lock gains no crate). The graphics cards need no
+further binding: as the Runtime does, `dxgi.dll` and `gdi32.dll` are loaded from System32 only, their
+exports found with `GetProcAddress` and DXGI called through its vtable by hand. The exe carries the
 console's icon, compiled in by `winresource`. The 0.11 wizard `crates/acui-setup` is out of the workspace,
 its code left as it is; its A/B slots, online download, upgrades and resource-only updates are not part of
 the new wizard.

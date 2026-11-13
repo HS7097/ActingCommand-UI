@@ -33,6 +33,16 @@
 //! install confirmed ([`Pause`]) is closed formally before the failure is told; the failure says
 //! whether it was closed, or how to close it by hand.
 //!
+//! The graphics card for text recognition, when the plan names one (`options.directml_adapter`),
+//! is checked before anything is written: the set must carry DirectML, and this computer must
+//! offer the card ([`gpu::chosen`] over [`dxgi::adapters`]). Step 6 writes it into the
+//! configuration (and so into the first start's, which is the same less its instances); step 7
+//! then reads each `check-config` answer's `vision.directml` ([`gpu::judge_report`]): a card the
+//! Runtime does not resolve, or a `vision_gpu_unavailable` note, fails the step with what to do.
+//! The configuration is never rewritten to the CPU by the wizard. That `check-config` passes does
+//! not prove the card works: the first text recognition decides, and the finish says where to
+//! look.
+//!
 //! Every command's answer is logged twice: its reading for people, as the window shows it, and
 //! its whole stdout (up to 64 Ki characters) on a line of its own, so that a refusal's rows are
 //! in the log and not only their count.
@@ -50,6 +60,8 @@ use crate::config::{
 };
 use crate::console;
 use crate::digest::sha256_file;
+use crate::dxgi;
+use crate::gpu::{self, Chosen};
 use crate::log::InstallLog;
 use crate::manifest::{Program, MANIFEST_FILE};
 use crate::mumu;
@@ -322,6 +334,9 @@ pub struct Done {
     pub watchdog: bool,
     /// How many instances the configuration binds.
     pub instances: usize,
+    /// The graphics card the configuration names for text recognition; `None` for the CPU.
+    /// `check-config` resolved it, which does not prove it works.
+    pub directml: Option<Chosen>,
     /// What each step did, in order.
     pub summary: Vec<(Step, Said)>,
 }
@@ -343,6 +358,8 @@ struct Checked {
     set: VerifiedSet,
     mumu_root: Option<String>,
     bound: Vec<Bound>,
+    /// The graphics card the plan names, as this computer offers it.
+    directml: Option<Chosen>,
 }
 
 struct Run<'a> {
@@ -521,10 +538,11 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
     // The Runtime starts without its instances, which come once the pause holds.
     let staged = paused && !checked.bound.is_empty();
     let aliases: Vec<String> = checked.bound.iter().map(|bound| bound.alias.clone()).collect();
+    let directml = checked.directml.as_ref().map(|chosen| chosen.identity.as_str());
 
     run.step(Step::Prepare, |run| prepare(run))?;
     run.step(Step::Programs, |run| lay_programs(run, &checked.set))?;
-    run.step(Step::Vision, |run| place_vision(run, &checked.set))?;
+    run.step(Step::Vision, |run| place_vision(run, &checked.set, directml))?;
     run.step(Step::Packs, |run| lay_packs(run, &checked.set, &plan.games))?;
     run.step(Step::PackCheck, |run| check_packs(run, &plan.games))?;
     let mut part = PathBuf::new();
@@ -536,7 +554,7 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
     let config_path = root.join(CONFIG_FILE);
     let full_path = staged.then(|| root.join(FULL_CONFIG));
     run.step(Step::CheckConfig, |run| {
-        check_config(run, &part, &config_path, checked.mumu_root.is_some(), full_path.as_deref())
+        check_config(run, &part, &config_path, checked.mumu_root.is_some(), full_path.as_deref(), directml)
     })?;
     run.step(Step::Adopt, |run| adopt(run))?;
     run.step(Step::ConsoleSettings, |run| {
@@ -594,6 +612,7 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
         paused,
         watchdog: plan.options.watchdog,
         instances: aliases.len(),
+        directml: checked.directml.clone(),
         summary: run.summary,
         root,
     })
@@ -632,6 +651,10 @@ fn check(request: &Request, run: &mut Run<'_>) -> Result<Checked, Said> {
     if !problems.is_empty() {
         return Err(joined(problems));
     }
+    let directml = match &plan.options.directml_adapter {
+        None => None,
+        Some(identity) => Some(check_directml(run, &set, identity)?),
+    };
     let issues = check_root(&request.root, set.space_needed(&plan.games));
     if !issues.is_empty() {
         return Err(joined(issues.iter().map(|issue| issue.said()).collect()));
@@ -718,7 +741,40 @@ fn check(request: &Request, run: &mut Run<'_>) -> Result<Checked, Said> {
         set,
         mumu_root,
         bound,
+        directml,
     })
+}
+
+/// The graphics card the plan names (`identity`), before anything is written: the set carries
+/// DirectML, and this computer lists the card as one the option may name ([`gpu::chosen`]); a
+/// listing that cannot be read is a failure too. A card that looks like integrated graphics is
+/// noted with the options page's warning; the person decided.
+fn check_directml(run: &mut Run<'_>, set: &VerifiedSet, identity: &str) -> Result<Chosen, Said> {
+    if !set.set.carries_directml() {
+        return Err(Said::new(
+            "计划里选了用显卡做文字识别，可安装集里没有带 DirectML",
+            "the plan chooses the graphics card for text recognition, but the install set carries no DirectML",
+        )
+        .with(format!("options.directml_adapter {identity}")));
+    }
+    run.plain(Said::new("正在核对选的显卡……", "Checking the graphics card chosen…"));
+    let adapters = dxgi::adapters()?;
+    let chosen = gpu::chosen(&adapters, identity)?;
+    run.say(Said::new("文字识别用的显卡", "the graphics card for text recognition").with(format!(
+        "{} ({}), {} dedicated video memory",
+        chosen.name,
+        chosen.identity,
+        gpu::memory_gb(chosen.dedicated_video_memory)
+    )))?;
+    if gpu::looks_integrated(chosen.dedicated_video_memory) {
+        let warning = gpu::integrated_warning();
+        run.say(Said::new(
+            format!("{}：{}", chosen.name, warning.zh),
+            format!("{}: {}", chosen.name, warning.en),
+        ))?;
+    }
+    run.plain(Said::new("已核对：选的显卡在这台电脑上", "Checked: the graphics card chosen is on this computer"));
+    Ok(chosen)
 }
 
 fn joined(problems: Vec<Said>) -> Said {
@@ -811,9 +867,10 @@ fn copy_checked(source: &Path, target: &Path, placed: &PlacedFile) -> Result<u64
     Ok(size)
 }
 
-/// The vision files below `<root>\vision` (DirectML's with them when the set carries it), then
-/// the vision models' licences below `<root>\licenses\vision`, each read back against the set.
-fn place_vision(run: &mut Run<'_>, set: &VerifiedSet) -> Result<Said, Said> {
+/// The vision files below `<root>\vision` (DirectML's with them when the set carries it, whether
+/// or not a card was chosen), then the vision models' licences below `<root>\licenses\vision`,
+/// each read back against the set.
+fn place_vision(run: &mut Run<'_>, set: &VerifiedSet, directml: Option<&str>) -> Result<Said, Said> {
     let vision = run.root.join("vision");
     let total = set.vision_bytes;
     let mut done = 0u64;
@@ -822,11 +879,19 @@ fn place_vision(run: &mut Run<'_>, set: &VerifiedSet) -> Result<Said, Said> {
         run.bytes(done, total);
     }
     if set.set.carries_directml() {
-        run.say(Said::new(
-            "已放 DirectML 和它的许可文件（这一版配置仍用 CPU）",
-            "DirectML and its licence files placed (this version's configuration still uses the CPU)",
-        )
-        .with(under(&vision, DIRECTML_LIBRARY).display()))?;
+        let library = under(&vision, DIRECTML_LIBRARY);
+        run.say(match directml {
+            Some(identity) => Said::new(
+                "已放 DirectML 和它的许可文件（文字识别会用选的显卡）",
+                "DirectML and its licence files placed (text recognition will use the graphics card chosen)",
+            )
+            .with(format!("{}; {identity}", library.display())),
+            None => Said::new(
+                "已放 DirectML 和它的许可文件（没有选显卡：文字识别用 CPU）",
+                "DirectML and its licence files placed (no graphics card chosen: text recognition runs on the CPU)",
+            )
+            .with(library.display()),
+        })?;
     }
     let licences = run.root.join(LICENSES_DIR).join(VISION_LICENSES_DIR);
     for licence in &set.set.vision.licenses {
@@ -958,9 +1023,25 @@ fn write_config(run: &mut Run<'_>, checked: &Checked) -> Result<(PathBuf, Said),
         salt: config::mint_salt()?,
         mumu_root: checked.mumu_root.clone(),
         instances,
+        directml_adapter: checked.directml.as_ref().map(|chosen| chosen.identity.clone()),
     };
     let part = run.root.join(CONFIG_PART);
     write_new(&part, &config::render(&config::build(&input)))?;
+    run.say(match &checked.directml {
+        Some(chosen) => Said::new(
+            "文字识别：显卡（DirectML），用不上时改用 CPU",
+            "text recognition: the graphics card (DirectML), the CPU when it cannot be used",
+        )
+        .with(format!(
+            "{} ({}); execution_provider {}, gpu_fallback {}",
+            chosen.name,
+            chosen.identity,
+            config::DIRECTML_PROVIDER,
+            config::GPU_FALLBACK
+        )),
+        None => Said::new("文字识别：CPU", "text recognition: the CPU")
+            .with(format!("execution_provider {}", config::CPU_PROVIDER)),
+    })?;
     for instance in &input.instances {
         run.say(Said::new("实例", "instance").with(format!(
             "{} = MuMu #{} {}/{} {} ({} / {}{})",
@@ -996,17 +1077,43 @@ fn write_new(path: &Path, text: &str) -> Result<(), Said> {
         .map_err(|error| io_said("写不进文件", "the file cannot be written", path, error))
 }
 
+/// With the graphics card `chosen`, a passed `check-config` answer judged for it
+/// ([`gpu::judge_report`]): the card resolved and no `vision_gpu_unavailable` note, else the step
+/// fails with what to do, the configuration left as it is (never rewritten to the CPU). Without
+/// a card, nothing.
+fn directml_resolved(run: &mut Run<'_>, answer: &runtime::Answer, chosen: Option<&str>) -> Result<Option<gpu::Resolved>, Said> {
+    let Some(chosen) = chosen else {
+        return Ok(None);
+    };
+    let line = answer.line.clone().unwrap_or(Value::Null);
+    let resolved = gpu::judge_report(&line, chosen)?;
+    run.say(
+        Said::new("Runtime 找到了选的显卡（这还不能证明它能用）", "the Runtime resolved the graphics card chosen (which does not yet prove it works)")
+            .with(format!("{chosen}: {resolved}")),
+    )?;
+    Ok(Some(resolved))
+}
+
 /// `check-config` of the candidate at `part`, with the MuMu folder the Runtime found pinned when
 /// none was given, then put in place. With `full` (instances and the first-start pause), the
 /// checked candidate is kept there instead, and the same configuration without its instances is
-/// checked and put in place for the first start.
-fn check_config(run: &mut Run<'_>, part: &Path, config_path: &Path, pinned: bool, full: Option<&Path>) -> Result<Said, Said> {
+/// checked and put in place for the first start. With a graphics card (`directml`), every
+/// answer that passed is judged for it as well ([`directml_resolved`]).
+fn check_config(
+    run: &mut Run<'_>,
+    part: &Path,
+    config_path: &Path,
+    pinned: bool,
+    full: Option<&Path>,
+    directml: Option<&str>,
+) -> Result<Said, Said> {
     let root = run.root.clone();
     let mut checked = runtime::check_config(&root, part)?;
     run.answered(Said::new("check-config 答复", "check-config answered"), &checked.answer)?;
     if !checked.passed {
         return Err(Said::new("Runtime 不接受这份配置", "the Runtime refuses the configuration").with(checked.answer.reason()));
     }
+    let mut resolved = directml_resolved(run, &checked.answer, directml)?;
     let mut mumu = None;
     if !pinned {
         if let Some(found) = checked.mumu_root.clone() {
@@ -1022,6 +1129,7 @@ fn check_config(run: &mut Run<'_>, part: &Path, config_path: &Path, pinned: bool
             if !checked.passed {
                 return Err(Said::new("Runtime 不接受这份配置", "the Runtime refuses the configuration").with(checked.answer.reason()));
             }
+            resolved = directml_resolved(run, &checked.answer, directml)?;
             mumu = Some(found);
         }
     }
@@ -1056,6 +1164,7 @@ fn check_config(run: &mut Run<'_>, part: &Path, config_path: &Path, pinned: bool
             if !first.passed {
                 return Err(Said::new("Runtime 不接受首次启动用的配置", "the Runtime refuses the first start's configuration").with(first.answer.reason()));
             }
+            directml_resolved(run, &first.answer, directml)?;
             fs::rename(part, config_path)
                 .map_err(|error| io_said("配置改不了名", "the configuration cannot be renamed into place", config_path, error))?;
             Said::new(
@@ -1067,6 +1176,9 @@ fn check_config(run: &mut Run<'_>, part: &Path, config_path: &Path, pinned: bool
     };
     if let Some(found) = mumu {
         summary = summary.with(format!("mumu_root {found}"));
+    }
+    if let (Some(chosen), Some(resolved)) = (directml, resolved) {
+        summary = summary.with(format!("DirectML {chosen}: {resolved}"));
     }
     Ok(summary)
 }
