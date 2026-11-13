@@ -753,8 +753,9 @@ that folder, as the Runtime's own tools find them: the configuration `<install f
 assumed to be `<install folder>\state`; a folder not there yet is no error, only a line in the technical
 log), and the Runtime program `<install folder>\runtime\actingcommand-actingd.exe`. The settings file's
 three path keys are not used then, and a `--state-root` that differs from the configuration's is refused. A
-console outside any installation folder may name one with `--root <install folder>` (absolute, and with
-`runtime\BUILD-MANIFEST.json` too); a console inside one may only repeat that folder with `--root`, and on
+console outside any installation folder may name one with `--root <install folder>` (absolute, with
+`runtime\BUILD-MANIFEST.json` too, and with no `install\active.json` in it or in the folder above: one that
+has is an A/B installation or one of its slots); a console inside one may only repeat that folder with `--root`, and on
 an A/B installation `--root` may only repeat its root, or the red bar says so. A folder that lacks
 something — the Runtime program, the configuration, a configuration that cannot be read or is not JSON,
 no `state_root` or one that is not absolute, or a half-made folder with `actingd.config.json` or `runtime\`
@@ -765,8 +766,41 @@ error text. The four tiers in order: an A/B installation's selection → `--root
 the program is in → `--state-root` and the settings file. A console outside any installation folder (such
 as one installed under `%LOCALAPPDATA%\Programs`) takes the last tier as ever, and reads and writes as it
 did. An installation folder must not be named `A` or `B`: the selection reader takes it for an A/B slot and
-fails, and the red bar then says so in one more line. On the workbench's settings page, a line under
+fails, and the red bar then says so in one more line. When the selection cannot be read (a folder named
+`A` or `B`, or `ACTINGCOMMAND_INSTALL_ROOT` / `ACTINGCOMMAND_INSTALL_SELECTION` left behind by another
+process), this run has no paths, but its settings are still the installation folder's own (see "Settings
+file"), never the global settings file; a slot of an A/B installation (with `install\active.json` in the
+folder above) is no installation folder and keeps the global settings file. On the workbench's settings page, a line under
 "Appearance" names the installation folder this console uses and the file its settings are saved in.
+
+Only `<install folder>\ui\acui.exe` counts: a console put anywhere else in an installation folder (right
+in the root, say, or in `tools\`) does not take that folder and goes the last tier as ever. The program's
+own path decides, as the system resolves it: when `ui` is a junction or a link, the folder is found by
+where it leads, so the folder it leads to must itself be named `ui`, and the one above that is the
+installation folder.
+
+**Whether the Runtime reached is this installation folder's**: in root mode the state root is the one the
+configuration names, as written, so a configuration copied from another installation leads the console to
+that installation's Runtime (on this machine, perhaps the one in daily use). So in root mode, before the
+console asks a Runtime anything — Request Shutdown, recording a Start, Pause All and Put All on Duty, an
+account's pause and resume, a resume in the ledger window, a change of settings, a device's operation, a
+refresh of the picture, switching or closing a task, stopping a run — it checks: the program file of the
+process the Runtime's own `runtime-info.json` names, as the system gives it and resolves it (links
+followed, `\\?\` dropped), must lie in `<install folder>\runtime\`, or in a kept build's
+`<install folder>\install\builds\<commit>\runtime\`. When it does not, or this cannot be told (the process
+cannot be opened, its program file cannot be had or resolved), nothing is sent: the workbench's lamp turns
+red with "The Running Runtime Is Not This Installation Folder's", the red words at the top name the
+process, its program file (or why it cannot be told) and the installation folder, and the ledger windows
+add the same after the Runtime's status. Every button pressed meanwhile says it sent nothing, with the code
+`console_runtime_not_this_root`, and the technical log has a line each time; Start, finding such a Runtime
+up, launches nothing and records nothing. The check comes after the connection is made and before the
+request (the connection itself is the same a read makes); reads online are not checked and show as ever.
+Outside root mode (an A/B installation, the settings file's paths) there is no such check.
+
+Logs are not kept per installation folder yet: the technical log and actingd's start logs both stay in the
+global `%LOCALAPPDATA%\ActingCommand\logs\` (see "When the start fails" and "Launcher"), the consoles of
+every installation folder writing into the one directory, told apart only by the start time in each file's
+name; the technical log's `place` line of each start names the installation folder that run used.
 
 `--source` selects the ledger window's read face (see above).
 `--tab` specifies the ledger window's startup tab (for screenshots and review), and its values are the
@@ -1076,8 +1110,12 @@ global pause of scheduling: no new task is scheduled, and a task already running
 Put All on Duty lifts that global pause; a global pause another tool set is lifted only after the person
 confirms it, and a pause whose reason the settings file lists in `resume_elsewhere_reasons` (see
 "Settings file") is to be lifted by whoever set it, so it cannot be lifted there. The ledger window can
-resume, conditionally, a pause another tool set (below). Start at boot is an option of the setup wizard;
-see "Setup wizard acsetup".
+resume, conditionally, a pause another tool set (below). The global pause the setup wizard sets after a
+new installation's first start (reason `first-start`) has words of its own: Put All on Duty's
+confirmation, the account cards and the line under the task list say it is the pause after setup, to be
+lifted once all looks right; who lifts it, and how, is as for any other tool's global pause. Those words go
+by the reason string alone: a global pause another tool sets with the same reason `first-start` is shown
+the same way. Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
 
 Each account's card has a button of its own. While the account has no pause of its own it is **Pause
 This Account**: one `PauseScheduling` of that instance alone, with the console's own reason
