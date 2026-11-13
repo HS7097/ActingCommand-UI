@@ -763,20 +763,38 @@ component FoldSwitch {
 }
 
 // One account's row of the table, and its fold of advanced settings.
+//
+// Each line that holds a dropdown has a height of its own. Slint 1.17 measures the height of
+// what a `for` or an `if` repeats at that thing's preferred width, and hands the whole width
+// to every part of an inner HorizontalLayout whose height follows its width. The std
+// ComboBox's arrow is a square image, so each box asked to be as tall as the row is wide; the
+// page shrank the row to the height left over and the layout stretched the name box and both
+// dropdowns to it. A height of its own caps what the line asks for.
 component AccountLine inherits VerticalLayout {
     // Not `row`: every element has that one, for its place in a grid.
     in property <AccountRow> account;
     in property <int> index;
+    // The emulator column's width, the same as its head's.
+    in property <length> emulator-width;
     spacing: 4px;
+    // One field high; higher only when the emulator's name takes a second line.
     HorizontalLayout {
         spacing: 8px;
-        Text {
-            width: 110px;
-            text: root.account.emulator;
-            font-size: Scale.body-font;
-            color: Look.text;
-            vertical-alignment: center;
-            overflow: elide;
+        height: max(32px, emulator-text.preferred-height);
+        // The whole name, wrapping at the column's width. Placed by hand, as MarkText is.
+        Rectangle {
+            width: root.emulator-width;
+            emulator-text := Text {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: parent.height;
+                text: root.account.emulator;
+                font-size: Scale.body-font;
+                color: Look.text;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
         }
         LineEdit {
             text: root.account.alias;
@@ -810,7 +828,7 @@ component AccountLine inherits VerticalLayout {
         }
     }
     HorizontalLayout {
-        padding-left: 118px;
+        padding-left: root.emulator-width + 8px;
         alignment: start;
         FoldSwitch {
             open: root.account.advanced;
@@ -820,11 +838,12 @@ component AccountLine inherits VerticalLayout {
         }
     }
     if root.account.advanced: VerticalLayout {
-        padding-left: 118px;
+        padding-left: root.emulator-width + 8px;
         spacing: 6px;
         HorizontalLayout {
             spacing: 8px;
             alignment: start;
+            height: 32px;
             Text {
                 width: 110px;
                 text: Strings.touch-label;
@@ -844,6 +863,7 @@ component AccountLine inherits VerticalLayout {
         HorizontalLayout {
             spacing: 8px;
             alignment: start;
+            height: 32px;
             Text {
                 width: 110px;
                 text: Strings.capture-label;
@@ -878,6 +898,11 @@ component AccountLine inherits VerticalLayout {
 }
 
 component AccountsPage inherits ScrollView {
+    // The emulator column: a usual MuMu name on one line where the window leaves room, never
+    // under 110px (a longer name takes a second line), never over 220px; the name column takes
+    // the rest. The head and every row use this width, so the columns line up. 16px is the
+    // room kept for the scroll bar, 304px the two 140px dropdowns and the three 8px gaps.
+    property <length> emulator-width: max(110px, min(220px, (root.visible-width - 16px - 304px) / 2));
     viewport-width: self.visible-width;
     VerticalLayout {
         padding-right: 16px;
@@ -888,7 +913,7 @@ component AccountsPage inherits ScrollView {
         HorizontalLayout {
             spacing: 8px;
             Text {
-                width: 110px;
+                width: root.emulator-width;
                 text: Strings.col-emulator;
                 font-size: Scale.grey-font;
                 color: Look.text-secondary;
@@ -918,6 +943,7 @@ component AccountsPage inherits ScrollView {
             AccountLine {
                 account: row;
                 index: index;
+                emulator-width: root.emulator-width;
             }
             Rectangle { height: 4px; }
         }
