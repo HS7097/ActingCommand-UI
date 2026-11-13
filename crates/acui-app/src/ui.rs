@@ -985,6 +985,8 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_tasks_fold_note(labels.tasks_fold_note.into());
     global.set_tasks_irreversible(labels.tasks_irreversible.into());
     global.set_tasks_risky(labels.tasks_risky.into());
+    global.set_goals_tab(labels.goals_tab.into());
+    global.set_goals_later(labels.goals_later.into());
     global.set_refresh_frame(labels.refresh_frame.into());
     global.set_refresh_cost(labels.refresh_cost.into());
     global.set_rescue_check(labels.rescue_check.into());
