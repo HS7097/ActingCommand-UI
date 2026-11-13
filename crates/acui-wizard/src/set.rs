@@ -13,12 +13,13 @@
 //! must lie within the range the Runtime zip's own manifest declares.
 //!
 //! A standard package's own files go to `<root>\licenses\<game>\<path>`, `path` a plain relative
-//! path (each once per game). The vision set must carry ONNX Runtime's licence and notices
-//! beside the library ([`ORT_LICENSE`], [`ORT_NOTICES`]). It may carry DirectML
-//! ([`DIRECTML_LIBRARY`], only the file the Runtime pins), and then DirectML's own licence files
-//! too ([`DIRECTML_LICENSES`]); the configuration still names the CPU provider. The licences of
-//! the vision models (`vision.licenses`, optional) go to `<root>\licenses\vision\<path>`, by the
-//! rules of a standard package's own files.
+//! path (each once per game); the ones it must not go without are named in
+//! `bundles[].required_files`, and a set that lacks one is refused. The vision set must carry
+//! ONNX Runtime's licence and notices beside the library ([`ORT_LICENSE`], [`ORT_NOTICES`]). It
+//! may carry DirectML ([`DIRECTML_LIBRARY`], only the file the Runtime pins), and then DirectML's
+//! own licence files too ([`DIRECTML_LICENSES`]); the configuration still names the CPU provider.
+//! The licences of the vision models (`vision.licenses`, at least one with a model) go to
+//! `<root>\licenses\vision\<path>`, by the rules of a standard package's own files.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -127,6 +128,11 @@ pub struct BundleEntry {
     /// beside the zip): each laid at `<root>\licenses\<game>\<path>`.
     #[serde(default)]
     pub files: Vec<PlacedFile>,
+    /// The `path`s among `files` the package must not go without (the licence and attribution
+    /// of what it carries from elsewhere, an AGPL-3.0 project's for one): a set that lacks one
+    /// is refused.
+    #[serde(default)]
+    pub required_files: Vec<String>,
 }
 
 impl BundleEntry {
@@ -144,7 +150,7 @@ pub struct VisionEntry {
     pub provider: String,
     pub files: Vec<VisionFile>,
     /// The licences of the vision models (PP-OCR's, for one), each laid at
-    /// `<root>\licenses\vision\<path>`; optional.
+    /// `<root>\licenses\vision\<path>`; at least one when the set carries a model.
     #[serde(default)]
     pub licenses: Vec<PlacedFile>,
 }
@@ -218,11 +224,12 @@ fn commit_like(text: &str) -> bool {
 
 /// Every rule of a set file that needs no file read: its schema, the two commits, each file
 /// plainly inside the set folder with a size and a SHA-256, each game once and a plain folder
-/// name, each of a game's own files at a plain relative path and each path once in its game, a
+/// name, each of a game's own files at a plain relative path and each path once in its game,
+/// each of its `required_files` among them, a
 /// CPU vision set with ONNX Runtime, its licence and notices and at least one model, each vision
 /// path once and below `ort/` or `models/<model_ref>/`; DirectML, when carried, the pinned file
-/// with its three licence files; each vision licence at a plain relative path, each once, and no
-/// game whose folder would be theirs.
+/// with its three licence files; at least one vision licence (a model is carried), each at a
+/// plain relative path, each once, and no game whose folder would be theirs.
 pub fn set_problems(set: &InstallSet) -> Vec<Said> {
     let mut problems = Vec::new();
     if set.schema_version != SET_SCHEMA {
@@ -289,6 +296,17 @@ pub fn set_problems(set: &InstallSet) -> Vec<Said> {
                 );
             }
         }
+        for required in &bundle.required_files {
+            if !placed.contains(&required.to_ascii_lowercase()) {
+                problems.push(
+                    Said::new(
+                        "标准包必带的许可或声明文件不在安装集里",
+                        "a licence or notice file the standard package must carry is not in the set",
+                    )
+                    .with(format!("{}: {required}", bundle.game)),
+                );
+            }
+        }
     }
     if set.vision.provider != VISION_PROVIDER {
         problems.push(
@@ -333,6 +351,11 @@ pub fn set_problems(set: &InstallSet) -> Vec<Said> {
     }
     if !models {
         problems.push(Said::new("视觉文件里没有模型", "the vision set holds no model"));
+    } else if set.vision.licenses.is_empty() {
+        problems.push(Said::new(
+            "带了识别模型，却没有带模型的许可文件（vision.licenses）",
+            "the vision set carries a model without the models' licence files (vision.licenses)",
+        ));
     }
     if let Some(directml) = set
         .vision
@@ -847,7 +870,8 @@ mod tests {
                  "files": [
                     {"path": "pack-files/NOTICE.md", "file": "bundles/azurlane/NOTICE.md", "size": 3, "sha256": sha('e')},
                     {"path": "LICENSES/Upstream/LICENSE", "file": "bundles/azurlane/LICENSE", "size": 4, "sha256": sha('f')}
-                 ]}
+                 ],
+                 "required_files": ["pack-files/NOTICE.md", "LICENSES/Upstream/LICENSE"]}
             ],
             "vision": {"provider": "cpu", "files": [
                 {"path": "ort/onnxruntime.dll", "file": "vision/onnxruntime.dll", "size": 17328152,
@@ -864,6 +888,8 @@ mod tests {
                  "sha256": "9c09abf0957f7968c7586464b7397b84ad2387a0497a351af40e9acc71b673ba"},
                 {"path": "models/PP-OCRv6_medium/keys.txt", "file": "vision/keys.txt", "size": 74947,
                  "sha256": "b5f2bfe2bdd9448429e3e82b51c789775d9b42f2403d082b00662eb77e401c5d"}
+            ], "licenses": [
+                {"path": "PaddleOCR/LICENSE", "file": "vision/PaddleOCR-LICENSE", "size": 11376, "sha256": sha('4')}
             ]}
         })
     }
@@ -877,8 +903,10 @@ mod tests {
     fn the_designed_set_has_no_problem() {
         assert_eq!(problems(good()), Vec::<Said>::new());
         let set = parse_install_set(&serde_json::to_vec(&good()).unwrap()).unwrap();
-        // Three program zips, one bundle with its two files, seven vision files.
-        assert_eq!(set.files().len(), 13);
+        // Three program zips, one bundle with its two files, seven vision files, the model's
+        // licence.
+        assert_eq!(set.files().len(), 14);
+        assert_eq!(set.bundles[0].required_files.len(), 2);
         let files = set.files();
         let (what, file) = &files[4];
         assert_eq!(what, "standard package azurlane file pack-files/NOTICE.md");
@@ -911,17 +939,17 @@ mod tests {
         let set = parse_install_set(&serde_json::to_vec(&with_directml()).unwrap()).unwrap();
         assert!(set.carries_directml());
         assert_eq!(set.vision.provider, VISION_PROVIDER);
-        // 13 of good(), DirectML and its three licence files, the model's licence.
+        // 14 of good() (its model licence replaced by another), DirectML and its three licence
+        // files.
         let files = set.files();
         assert_eq!(files.len(), 18);
         let (what, file) = files.last().unwrap();
         assert_eq!(what, "vision licence PaddleOCR/LICENSE");
         assert_eq!((file.file.as_str(), file.size), ("vision/PaddleOCR-LICENSE", 11357));
         assert_eq!(set.vision.licenses[0].path, "PaddleOCR/LICENSE");
-        // Without either, the set reads as before.
+        // Without DirectML, the set reads as before.
         let plain = parse_install_set(&serde_json::to_vec(&good()).unwrap()).unwrap();
         assert!(!plain.carries_directml());
-        assert!(plain.vision.licenses.is_empty());
         // The file name is compared as Windows compares names.
         let mut other_case = with_directml();
         other_case["vision"]["files"][7]["path"] = json!("ort/directml.DLL");
@@ -985,20 +1013,18 @@ mod tests {
             {"path": "ort/licenses/directml/LICENSE.txt", "file": "vision/directml/LICENSE.txt", "size": 1, "sha256": sha('6')}
         ));
         assert_eq!(problems(alone), Vec::<Said>::new());
-        // A game folder named like the licences' folder is fine while the set has no model licence.
-        let mut game = good();
-        game["bundles"][0]["game"] = json!("vision");
-        assert_eq!(problems(game), Vec::<Said>::new());
     }
 
     #[test]
     fn a_bundle_without_files_reads_with_none() {
         let mut bare = good();
-        bare["bundles"][0].as_object_mut().unwrap().remove("files");
+        let bundle = bare["bundles"][0].as_object_mut().unwrap();
+        bundle.remove("files");
+        bundle.remove("required_files");
         let set = parse_install_set(&serde_json::to_vec(&bare).unwrap()).expect("a set");
-        assert!(set.bundles[0].files.is_empty());
+        assert!(set.bundles[0].files.is_empty() && set.bundles[0].required_files.is_empty());
         assert_eq!(set_problems(&set), Vec::<Said>::new());
-        assert_eq!(set.files().len(), 11);
+        assert_eq!(set.files().len(), 12);
     }
 
     type Change = Box<dyn Fn(&mut Value)>;
@@ -1051,6 +1077,16 @@ mod tests {
             }),
             case("bundle file sha256", |set| set["bundles"][0]["files"][1]["sha256"] = json!("f")),
             case("bundle file size", |set| set["bundles"][0]["files"][1]["size"] = json!(0)),
+            // A licence the package must carry, left out of the set; one named but not listed.
+            case("required file left out", |set| {
+                set["bundles"][0]["files"].as_array_mut().unwrap().remove(1);
+            }),
+            case("required file not listed", |set| {
+                set["bundles"][0]["required_files"].as_array_mut().unwrap().push(json!("LICENSES/Other/LICENSE"));
+            }),
+            case("no model licence", |set| {
+                set["vision"].as_object_mut().unwrap().remove("licenses");
+            }),
         ];
         for (name, change) in cases {
             let mut set = good();

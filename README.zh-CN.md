@@ -889,12 +889,13 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
 （`vision.execution_provider` 为 `cpu`）：CPU 运行只加载 `onnxruntime_providers_shared.dll` 和 `onnxruntime.dll`，
 旁边有没有 `DirectML.dll` 都一样，`cpu` 时 `check-config` 和启动也都不看它（Runtime
 `contracts/vision-model-folders.md`「Loading」）；选用 DirectML 和显卡是下一步的事。文字识别模型的许可（例如
-PP-OCR 的 Apache-2.0 许可）写在可选的 `vision.licenses` 里，装到 `<根>\licenses\vision\<path>`，规则与下面标准包
-旁边的文件相同。哪一项不对就停下，什么也不写：文件坏了、
+PP-OCR 的 Apache-2.0 许可）写在 `vision.licenses` 里，带了模型就至少要有一份，装到 `<根>\licenses\vision\<path>`，
+规则与下面标准包旁边的文件相同。哪一项不对就停下，什么也不写：文件坏了、
 和这一版不配套、读不懂，各有一句人话，技术细节写在下面一行小字里。安装集由提供安装包的人拼好交给你。
 
 标准包旁边的文件写在这个游戏的 `files` 里，装到 `<根>\licenses\<游戏>\<path>`；`path` 只能是普通的相对路径，
-同一个游戏里不能重复：
+同一个游戏里不能重复。`required_files` 列出这个包必须带着的那几个 `path`（它从别处带来的东西的许可和署名，
+比如一个 AGPL-3.0 项目的），安装集里缺了任何一个就拒：
 
 ```json
 "bundles": [
@@ -903,7 +904,8 @@ PP-OCR 的 Apache-2.0 许可）写在可选的 `vision.licenses` 里，装到 `<
     "files": [
       {"path": "pack-files/NOTICE.md", "file": "bundles/arknights/NOTICE.md", "size": 1, "sha256": "…"},
       {"path": "LICENSES/MaaAssistantArknights/LICENSE", "file": "bundles/arknights/LICENSE", "size": 1, "sha256": "…"}
-    ]
+    ],
+    "required_files": ["pack-files/NOTICE.md", "LICENSES/MaaAssistantArknights/LICENSE"]
   }
 ]
 ```
@@ -964,11 +966,13 @@ PP-OCR 的 Apache-2.0 许可）写在可选的 `vision.licenses` 里，装到 `<
 7. **选项**：桌面快捷方式与开始菜单快捷方式（默认开）；开机后自动运行（即 Runtime 的看门狗计划任务，
    **默认关**；这台电脑上已有另一套在自动运行时请别开）；装完马上启动（默认开）；第一次启动时先让所有实例
    暂停（默认开：在监控台看过每个实例都正常后，按「全部开始执勤」才开始操作游戏）。
-   这几个选项之间没有限制：看门狗从不拉起一个从没启动过的根，没勾「装完马上启动」时，这一套会一直停着，
-   直到你自己启动它。
+   只有向导启动的 Runtime 才挂得上暂停，所以暂停跟着启动走：没勾「装完马上启动」时，暂停这一项变灰、不勾，
+   页面上写明这时实例会在第一次启动时直接开始执勤（计划文件里有实例、要暂停却不启动的，直接拒）。看门狗不用
+   限制：它从不拉起一个从没启动过的根，没勾「装完马上启动」时，这一套会一直停着，直到你自己启动它。
 8. **确认**：把安装位置、版本、游戏、实例、选项、会建的文件夹和会写的文件列一遍（选的游戏或文字识别模型带
-   许可文件时多一个 `licenses`；有实例又勾了启动和暂停时多一个 `install-wizard.config.json`）。第 3 页说到文件夹
-   时也这样写。按「开始安装」后不能再回到前面几页。
+   许可文件时多一个 `licenses`；有实例又勾了启动和暂停时多一个 `install-wizard.config.json`）；有实例、第一次启动
+   不暂停时，多一行「注意」，写明 ActingCommand 一启动实例就开始执勤。第 3 页说到文件夹时也这样写。按「开始安装」
+   后不能再回到前面几页。
 9. **安装**：逐步显示，每步完成、跳过或失败，进行中的一步下面有一行细节和进度条。写入之前先把安装文件、
    模拟器和安装位置再核一遍。任何一步失败就停下，已经写下的东西原样留着，向导不删除任何东西。安装中关窗会被
    拦住。
@@ -976,11 +980,13 @@ PP-OCR 的 Apache-2.0 许可）写在可选的 `vision.licenses` 里，装到 `<
     与向导分开运行，不带向导自己继承来的任何 `ACTINGCOMMAND_…`、`ACTINGLAB_…` 环境变量）和
     「打开安装文件夹」都由人自己按，向导不自动打开任何东西。这一页还写明以后怎么加实例（监控台现在还不能直接
     添加）：再运行一次向导装到另一个文件夹（那是另一套，分开运行），或者等以后的新版。失败时这一页写明在哪一步、为什么，可以复制错误
-    信息、打开安装记录，并按向导真的做过的几样逐项写怎么收拾：启动过 Runtime、它可能还开着的，写它有没有暂停，
-    以及怎么停（打开 `<根>\ui\acui.exe` 按「请求关闭」，或运行 `"<根>\runtime\actingctl.exe" request-shutdown
-    --state-root "<根>\state"`）；第 13 步在停下 Runtime 之后失败的，写明它已经停下、不用再停，首次暂停留到下次启动；
-    装过看门狗的，写 `"<根>\runtime\actingctl.exe" watchdog uninstall --root "<根>"`；建过快捷方式的，列出路径；
-    最后才是删除整个文件夹。
+    信息、打开安装记录（里面写着安装位置等文件夹的路径，用户文件夹写成 `%USERPROFILE%`），并按向导真的做过的
+    几样逐项写怎么收拾。向导启动过、可能开着却没有已确认的暂停的 Runtime（没要暂停、还没挂上暂停，或者接上实例的
+    那次启动、最后一次读状态没能确认暂停），在显示失败之前先由向导正式关闭，清单上写它已经停下；还可能开着的，写它
+    是挂着首次暂停，还是暂停没有确认、可能已经在操作游戏，以及怎么停（打开 `<根>\ui\acui.exe` 按「请求关闭」，或运行
+    `"<根>\runtime\actingctl.exe" request-shutdown --state-root "<根>\state"`）；第 13 步在停下 Runtime 之后失败的，
+    写明它已经停下、不用再停，首次暂停留到下次启动。装过看门狗的，写 `"<根>\runtime\actingctl.exe" watchdog
+    uninstall --root "<根>"`；建过快捷方式的，列出路径；最后才是删除整个文件夹。
 
 **装成什么样**：
 
@@ -1007,10 +1013,12 @@ PP-OCR 的 Apache-2.0 许可）写在可选的 `vision.licenses` 里，装到 `<
 许可文件逐个核哈希放进 `licenses\<游戏>\`；用 `actinglab standard-pack check` 检查每个游戏；写配置（先写成
 `actingd.config.json.part`）；`actingd check-config` 通过才改名就位；`actinglab adopt` 把这个根交给 Runtime
 自己的安装器；写监控台设置；建快捷方式（名字带根文件夹名，如「ActingCommand 监控台（AC2）」，同名的已经在
-就加序号，从不动别人的）；启动（`actinglab up`：退出码要是 0，答复里 `post_check.checks` 列出的启动后检查不能有
-`fail`，有就报错并逐项写出失败项和它的数值——启动遇到检查不过只报告、不拒绝）；首次暂停（`actinglab pause --reason
-first-start`）；接上实例：先停下 Runtime，换上带实例的配置，再启动（见下文）；装看门狗（`actinglab watchdog
-install`）；`actinglab status` 确认在线。没勾的步骤显示「跳过」。所有子程序都不开窗口，输出写进安装记录。
+就加序号，从不动别人的）；启动（`actinglab up`：退出码要是 0，答复里 `post_check.checks` 列出的启动后检查中，
+`fail_class` 为 true 的不能有 `fail`，有就报错并逐项写出失败项和它的数值——启动遇到检查不过只报告、不拒绝；不属于
+这一类的不通过项，比如账本打开慢，只记下来）；首次暂停（`actinglab pause --reason first-start`）；接上实例：先停下
+Runtime，换上带实例的配置，再启动（见下文）；`actinglab status` 确认在线；装看门狗（`actinglab watchdog
+install`）。没勾的步骤显示「跳过」。所有子程序都不开窗口；窗口里只显示每条答复的一句话，安装记录里除了这句，还
+另起一行存下答复的完整输出。
 
 为什么实例最后才接上：全局暂停不打断已经在跑的任务，带着实例启动的 Runtime 在启动和暂停之间就可能派出任务。
 所以有实例又勾了「先暂停」时，第 7 步核过带实例的完整配置后，先把它留成 `install-wizard.config.json`，放进去的是
@@ -1027,15 +1035,15 @@ install`）；`actinglab status` 确认在线。没勾的步骤显示「跳过�
 全局暂停是持久的运行事实，每次不是安装器保持的启动都会在准备任何实例之前把它恢复（Runtime
 `contracts/scheduling-pause.md`「Persistence, no expiry」），所以第 3 段启动起来就是暂停着的。向导不在 Runtime
 运行时跑 `config replace`：在一台实验机上（0.12.58）这样做两次都被判失败，`install_command_refused`、
-`post_check_failed`（`count` 1），另带提醒 `install_caveat_noted`、`guard_failed`、`foreign_pauses`，可实际上文件已经
-换了、Runtime 也重启了，暂停也恢复了。原因是这次操作把向导自己挂的暂停当成了别的工具的（Runtime
-`crates/lab-rescue/src/install/config_swap.rs` 打开操作时不带任何确认，`config replace` 也不收 `--known-pause`、
-`--ack-guard`），这已作为需求交给 Runtime。按上面的顺序，同一台机器上每段都过：关闭完成；`config replace` 答
+`post_check_failed`（`count` 1），可实际上文件已经换了、Runtime 也重启了，暂停也恢复了。没过的是 `no_seeding`
+这一行：新装的根头几次启动时状态还标着 `seed`，`up` 自己的这一行带 `earlier_runtime` 为 false 判通过，
+`config replace` 里重启后的检查不放行；零实例、配置内容不变也一样被拒。另带的提醒 `guard_failed`、`foreign_pauses`
+（就是首次暂停）两种做法都有，不判失败。按上面的顺序，同一台机器上每段都过：关闭完成；`config replace` 答
 `install_command_done`、`runtime_running` 为 false；`up` 退出码 0，十项启动后检查全过；`status` 里首次暂停还在、
-实例都接上了，第一个任务挂在全局暂停上等着。最后一步读一次状态：要在线、全局暂停仍是首次暂停、没有实例在跑任务
-（有就报错，绝不报成功），配置里的实例都在。
+实例都接上了，第一个任务挂在全局暂停上等着。随后读一次状态：要在线、全局暂停仍是首次暂停、没有实例在跑任务
+（有就报错，绝不报成功），配置里的实例都在；这一步过了才算暂停已确认，没过就先关掉 Runtime。
 
-看门狗放在最后：它从不拉起从没启动过的根、正式关掉的根和安装器正在动的根，只拉起上次启动以出错收场的
+看门狗放在最后，在读状态之后：它从不拉起从没启动过的根、正式关掉的根和安装器正在动的根，只拉起上次启动以出错收场的
 （Runtime `contracts/runtime-watchdog.md`「Decision」第 3、5、6、7a 行）。装在最后，向导刚报失败的启动不会
 被它在背后再拉起来；前面哪一步失败，也不会留下计划任务。
 

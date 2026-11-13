@@ -297,6 +297,8 @@ fn run_install(set_dir: &Path, root: &Path, plan_path: &Path) -> ExitCode {
             }
             if done.paused {
                 println!("  所有实例已暂停：在监控台确认无误后点「全部开始执勤」 / every instance is paused: after a look in the console, press \"put all on duty\"");
+            } else if done.instances > 0 {
+                println!("  没有先暂停：ActingCommand 一启动，实例就开始执勤 / no first-start pause: the instances go on duty as soon as ActingCommand runs");
             }
             if done.watchdog {
                 let actingctl = done.root.join("runtime").join("actingctl.exe");

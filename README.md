@@ -1302,14 +1302,16 @@ names the CPU provider (`vision.execution_provider` `cpu`): a run on the CPU loa
 `onnxruntime_providers_shared.dll` and `onnxruntime.dll` whether or not `DirectML.dll` lies beside them, and
 neither `check-config` nor a start looks at it for `cpu` (Runtime `contracts/vision-model-folders.md`,
 "Loading"); selecting DirectML and the graphics card comes later. The licences of the text-recognition models
-(the Apache-2.0 licence of PP-OCR, for one) are `vision.licenses`, optional, laid at
-`<root>\licenses\vision\<path>` by the rules of a pack's own files below. Anything wrong stops it before anything is
+(the Apache-2.0 licence of PP-OCR, for one) are `vision.licenses`, at least one when the set carries a
+model, laid at `<root>\licenses\vision\<path>` by the rules of a pack's own files below. Anything wrong stops it before anything is
 written: a damaged file, a pack or console that does not match this version and a set it cannot read each
 get a plain sentence, with the technical detail in small print below. Whoever gives you the package puts
 the set together.
 
 The files that go beside a standard pack are its game's `files`, laid at `<root>\licenses\<game>\<path>`;
-`path` is a plain relative path, each once per game:
+`path` is a plain relative path, each once per game. `required_files` names the `path`s the pack must not
+go without (the licence and attribution of what it carries from elsewhere, an AGPL-3.0 project's for one);
+a set that lacks one of them is refused:
 
 ```json
 "bundles": [
@@ -1318,7 +1320,8 @@ The files that go beside a standard pack are its game's `files`, laid at `<root>
     "files": [
       {"path": "pack-files/NOTICE.md", "file": "bundles/arknights/NOTICE.md", "size": 1, "sha256": "…"},
       {"path": "LICENSES/MaaAssistantArknights/LICENSE", "file": "bundles/arknights/LICENSE", "size": 1, "sha256": "…"}
-    ]
+    ],
+    "required_files": ["pack-files/NOTICE.md", "LICENSES/MaaAssistantArknights/LICENSE"]
   }
 ]
 ```
@@ -1387,11 +1390,15 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    Runtime's watchdog scheduled task, **off by default**; leave it off when another ActingCommand on this
    computer already runs automatically); start when setup finishes (on); on the first start, keep every
    instance paused (on: ActingCommand starts playing only after you check each instance in the console and
-   press "Put All on Duty"). The options set no rule on one another: the watchdog never starts a root that
-   never started, so without "start when setup finishes" the installation stays down until you start it.
+   press "Put All on Duty"). Only a Runtime the wizard started takes the pause, so the pause goes with the
+   start: without "start when setup finishes" it is greyed out and unticked, and the page says that the
+   instances then go on duty at the first start (a plan file with instances that asks for the pause without
+   the start is refused). The watchdog needs no rule: it never starts a root that never started, so without
+   "start when setup finishes" the installation stays down until you start it.
 8. **Confirm**: the location, versions, games, instances, options, the folders created and the files written,
    all listed (with `licenses` when a chosen game or the text-recognition models bring licence files, and
-   `install-wizard.config.json` with instances, the start and the pause). Page 3 says the same of the
+   `install-wizard.config.json` with instances, the start and the pause); with instances and no first
+   pause, a note that they go on duty as soon as ActingCommand starts. Page 3 says the same of the
    folders. Once Install is pressed there is no going back to the earlier pages.
 9. **Install**: step by step, each done, skipped or failed, the step under way with a line of detail and a
    progress bar. Before writing, the install files, the emulators and the folder are checked once more. A
@@ -1403,12 +1410,17 @@ closing the window on those pages asks first, and quitting leaves nothing behind
     opens nothing by itself. The page also says how to add instances later, since the console cannot add
     them yet: run the wizard again into another folder (a second, separate ActingCommand), or wait for a
     later version. After a failure the page says which step and why, offers to copy the error and
-    to open the setup log, and lists how to undo what the install actually did, item by item: a Runtime it
-    started and may have left running (whether it is paused, and how to stop it: open `<root>\ui\acui.exe`
-    and press "Request Shutdown", or run `"<root>\runtime\actingctl.exe" request-shutdown --state-root
-    "<root>\state"`), or, when step 13 failed after its close, that the Runtime is already stopped and keeps
-    the first pause for its next start; a watchdog it installed (`"<root>\runtime\actingctl.exe" watchdog
-    uninstall --root "<root>"`), the shortcuts it created (their paths); deleting the folder comes last.
+    to open the setup log (which holds the paths of the install folder and others, the profile folder
+    written as `%USERPROFILE%`), and lists how to undo what the install actually did, item by item. A
+    Runtime it started that may be running without a pause the install confirmed (no pause asked for, the
+    pause not set yet, or not confirmed by the start that brought the instances or by the last read) is
+    closed formally before the failure is shown, and the list says it is stopped; a Runtime that may still
+    run is listed with whether it is under the first pause, or that the pause is not confirmed and it may be
+    playing, and how to stop it (open `<root>\ui\acui.exe` and press "Request Shutdown", or run
+    `"<root>\runtime\actingctl.exe" request-shutdown --state-root "<root>\state"`); when step 13 failed
+    after its close, the Runtime is already stopped and keeps the first pause for its next start. Then a
+    watchdog it installed (`"<root>\runtime\actingctl.exe" watchdog uninstall --root "<root>"`), the
+    shortcuts it created (their paths); deleting the folder comes last.
 
 **What it lays down:**
 
@@ -1441,12 +1453,14 @@ place only once `actingd check-config` passes; hand the root to the Runtime's ow
 adopt`; write the console settings; create the shortcuts (named after the root folder, such as
 "ActingCommand Console (AC2)", with a number when that name is taken: someone else's is never touched);
 start (`actinglab up`: exit 0, and none of the post-start checks its answer lists under
-`post_check.checks` may be `fail`, else the step fails naming each failed check with its values, since a
-start reports a failed check without refusing); pause for the first start (`actinglab pause --reason
+`post_check.checks` with `fail_class` true may be `fail`, else the step fails naming each failed check with
+its values, since a start reports a failed check without refusing; one outside that class that fails, a
+slow ledger open for one, is noted only); pause for the first start (`actinglab pause --reason
 first-start`); connect the instances: stop the Runtime, put the configuration with the instances in place,
-start it again (below); install the watchdog (`actinglab watchdog install`); confirm the Runtime is online
-with `actinglab status`. Steps not chosen show "Skipped". Every child program runs without a window, its
-output in the setup log.
+start it again (below); confirm the Runtime is online with `actinglab status`; install the watchdog
+(`actinglab watchdog install`). Steps not chosen show "Skipped". Every child program runs without a window;
+the window shows each answer's reading, and the setup log has it too, with the answer's whole output on a
+line of its own.
 
 Why the instances come last: a global pause stops no run already under way, so a Runtime started with its
 instances could dispatch between the start and the pause. With instances and the first pause, step 7
@@ -1468,20 +1482,22 @@ The global pause is a persisted runtime fact that every start that is not instal
 any instance is prepared (Runtime `contracts/scheduling-pause.md`, "Persistence, no expiry"), so the start
 of part 3 comes up paused. The wizard does not run `config replace` on the running Runtime: on a test
 machine (0.12.58) it was refused that way twice, `install_command_refused` with `post_check_failed`
-(`count` 1) and the notes `install_caveat_noted`, `guard_failed` and `foreign_pauses`, although the file had
-been swapped and the Runtime restarted with its pause restored. Its operation counts the wizard's own pause
-as another tool's (Runtime `crates/lab-rescue/src/install/config_swap.rs` opens it with no acknowledgement,
-and `config replace` takes neither `--known-pause` nor `--ack-guard`); that is asked of the Runtime. In the
-order above the same machine passed every part: the close completed, `config replace` answered
-`install_command_done` with `runtime_running` false, `up` exited 0 with all ten post-start checks passed,
-and `status` showed the first pause, the instances, and the first task waiting on the global pause. The
-last step reads the status once: online, the global pause still the first-start one, no instance running a
-task (a run is a failure, never a success), and every configured instance present.
+(`count` 1), although the file had been swapped and the Runtime restarted with its pause restored. The row
+that failed is `no_seeding`: a new root's state is still tagged `seed` on its first restarts, which `up`'s
+own check passes (with `earlier_runtime` false) and the restart inside `config replace` does not; it fails
+the same with no instance and an unchanged configuration, and the note `guard_failed` `foreign_pauses` (the
+first pause) comes either way and fails nothing. In the order above the same machine passed every part: the
+close completed, `config replace` answered `install_command_done` with `runtime_running` false, `up` exited
+0 with all ten post-start checks passed, and `status` showed the first pause, the instances, and the first
+task waiting on the global pause. The last read is the status once: online, the global pause still the
+first-start one, no instance running a task (a run is a failure, never a success), and every configured
+instance present. Until it passes, the pause counts as not confirmed, and a failure there closes the
+Runtime.
 
-The watchdog comes last: it never starts a root that never started, one closed formally or one the
-installer is working on, and starts only one whose last start ended in an error (Runtime
-`contracts/runtime-watchdog.md`, "Decision", rows 3, 5, 6 and 7a). Last, it cannot start again a start the
-wizard just reported failed, and a failure before it leaves no task.
+The watchdog comes last, after the last read: it never starts a root that never started, one closed
+formally or one the installer is working on, and starts only one whose last start ended in an error
+(Runtime `contracts/runtime-watchdog.md`, "Decision", rows 3, 5, 6 and 7a). Last, it cannot start again a
+start the wizard just reported failed, and a failure before it leaves no task.
 
 **Other ActingCommand installations are left alone:** the wizard writes only the folder it creates, plus the
 shortcuts and the watchdog task you tick; it never writes the global

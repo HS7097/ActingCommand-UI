@@ -105,9 +105,11 @@ pub fn parse_plan(bytes: &[u8]) -> Result<Plan, Said> {
 /// game in the set and chosen once; each instance once by index and by alias (aliases compared
 /// as the Runtime compares them, byte for byte), its alias valid for its game (`alias`: no
 /// whitespace, within the game's alias limit), its game chosen, its server one of the game's,
-/// its backends a valid pair. The options have no rule among themselves: the watchdog never
-/// starts a root that never started (Runtime `contracts/runtime-watchdog.md`, "Decision", row 3),
-/// so with the wizard's start left out the root stays down until a person starts it.
+/// its backends a valid pair; with instances, the first-start pause only together with the
+/// wizard's start, which alone can set it (a first start with the instances and without the
+/// pause the options page promised is never possible). The watchdog needs no rule: it never
+/// starts a root that never started (Runtime `contracts/runtime-watchdog.md`, "Decision", row
+/// 3), so with the wizard's start left out the root stays down until a person starts it.
 pub fn plan_problems(plan: &Plan, games: &[Game]) -> Vec<Said> {
     let mut problems = Vec::new();
     if plan.schema_version != PLAN_SCHEMA {
@@ -162,6 +164,12 @@ pub fn plan_problems(plan: &Plan, games: &[Game]) -> Vec<Said> {
         if let Some(problem) = backend_problem(&instance.touch_backend, &instance.capture_backend) {
             problems.push(problem.with(&named));
         }
+    }
+    if !plan.instances.is_empty() && plan.options.pause_first_start && !plan.options.start_after_install {
+        problems.push(Said::new(
+            "要首次先暂停，就得勾「装完就启动」：只有向导启动了 ActingCommand 才能挂上暂停；不想启动，就不勾首次暂停（那样第一次启动时实例会直接开始执勤）",
+            "The first-start pause needs \"start after install\": only a Runtime the wizard started takes the pause. Not to start it, leave the pause out too (the instances then go on duty at the first start)",
+        ));
     }
     problems
 }
@@ -238,15 +246,38 @@ mod tests {
         }
         // An alias of exactly the game's limit, twelve bytes, is fine.
         assert_eq!(plan_problems(&plan(&GOOD.replace("日服号", "日服号号")), &games()), Vec::<Said>::new());
-        // Any choice of the options is fine: the watchdog leaves a root that never started down,
-        // so it needs neither the wizard's start nor the pause turned off.
+        // The watchdog leaves a root that never started down, so it needs neither the wizard's
+        // start nor the pause turned off.
         for options in [
-            "{\"watchdog\": true, \"start_after_install\": false}",
             "{\"watchdog\": true, \"start_after_install\": false, \"pause_first_start\": false}",
             "{\"watchdog\": true, \"start_after_install\": true, \"pause_first_start\": true}",
+            "{\"watchdog\": false, \"start_after_install\": true, \"pause_first_start\": false}",
         ] {
             let text = GOOD.replace("{\"watchdog\": false}", options);
             assert_eq!(plan_problems(&plan(&text), &games()), Vec::<Said>::new(), "{options}");
         }
+        // With instances, the pause without the wizard's start (the pause is on by default) is
+        // refused: the first start would bring them unpaused.
+        for options in [
+            "{\"watchdog\": true, \"start_after_install\": false}",
+            "{\"start_after_install\": false, \"pause_first_start\": true}",
+        ] {
+            let text = GOOD.replace("{\"watchdog\": false}", options);
+            let problems = plan_problems(&plan(&text), &games());
+            assert_eq!(problems.len(), 1, "{options}");
+            assert!(problems[0].en.contains("start after install"), "{}", problems[0]);
+        }
+        // Without instances there is nothing the pause would hold back.
+        let none = GOOD
+            .replace("{\"watchdog\": false}", "{\"start_after_install\": false}")
+            .replace(
+                r#"{"index": 5, "alias": "azurlane-5", "game": "azurlane", "server": "cn"},
+            {"index": 6, "alias": "日服号", "game": "azurlane", "server": "jp",
+             "touch_backend": "maatouch", "capture_backend": "adb", "start_emulator": true}"#,
+                "",
+            );
+        let none = plan(&none);
+        assert!(none.instances.is_empty());
+        assert_eq!(plan_problems(&none, &games()), Vec::<Said>::new());
     }
 }

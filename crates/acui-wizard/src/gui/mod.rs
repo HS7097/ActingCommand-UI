@@ -437,6 +437,7 @@ impl App {
         strings.set_opt_start(l.opt_start.into());
         strings.set_opt_pause(l.opt_pause.into());
         strings.set_opt_pause_note(l.opt_pause_note.into());
+        strings.set_opt_pause_off_note(l.opt_pause_off_note.into());
         strings.set_open_console(l.open_console.into());
         strings.set_open_folder(l.open_folder.into());
         strings.set_copy_error(l.copy_error.into());
@@ -1095,8 +1096,13 @@ impl App {
                 0 => options.desktop_shortcut = !options.desktop_shortcut,
                 1 => options.start_menu_shortcut = !options.start_menu_shortcut,
                 2 => options.watchdog = !options.watchdog,
-                3 => options.start_after_install = !options.start_after_install,
-                4 => options.pause_first_start = !options.pause_first_start,
+                // Only a Runtime the wizard started takes the first-start pause, so the pause goes
+                // with the start (`plan_problems`): off with it, and back on, as advised, with it.
+                3 => {
+                    options.start_after_install = !options.start_after_install;
+                    options.pause_first_start = options.start_after_install;
+                }
+                4 if options.start_after_install => options.pause_first_start = !options.pause_first_start,
                 _ => {}
             }
         }
@@ -1716,6 +1722,10 @@ fn paint_confirm(state: &State, wiz: &Wiz<'_>) {
         key: l.key_options.into(),
         value: if chosen.is_empty() { l.options_none.to_owned() } else { chosen.join(l.list_separator) }.into(),
     });
+    // Said where it is decided: instances that go on duty at the first start.
+    if !state.accounts.is_empty() && !(options.start_after_install && options.pause_first_start) {
+        summary.push(KeyValue { key: l.key_attention.into(), value: l.attention_unpaused.into() });
+    }
     // What the install will make of these choices: a licence folder for a game that brings
     // licence files or for the text-recognition models' licences, and the full configuration kept
     // while the first start runs without it.
@@ -1784,6 +1794,8 @@ fn paint_finish(state: &State, wiz: &Wiz<'_>) {
                 l.finish_paused
             } else if done.started {
                 l.finish_running
+            } else if done.instances > 0 {
+                l.finish_installed_unpaused
             } else {
                 l.finish_installed
             };

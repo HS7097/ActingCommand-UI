@@ -98,6 +98,8 @@ export global Strings {
     in property <string> opt-start;
     in property <string> opt-pause;
     in property <string> opt-pause-note;
+    // Under the pause while the wizard's start is not chosen (the pause needs the start).
+    in property <string> opt-pause-off-note;
     in property <string> open-console;
     in property <string> open-folder;
     in property <string> copy-error;
@@ -991,14 +993,16 @@ component OptionsPage inherits ScrollView {
         }
         Tick {
             text: Strings.opt-pause;
-            checked: Wiz.opt-pause;
+            checked: Wiz.opt-pause && Wiz.opt-start;
+            enabled: Wiz.opt-start;
+            dim: !Wiz.opt-start;
             toggled => {
                 Wiz.option-toggled(4);
             }
         }
         HorizontalLayout {
             padding-left: 26px;
-            Caption { text: Strings.opt-pause-note; }
+            Caption { text: Wiz.opt-start ? Strings.opt-pause-note : Strings.opt-pause-off-note; }
         }
     }
 }

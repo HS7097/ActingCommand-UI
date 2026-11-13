@@ -19,11 +19,19 @@
 //!   before any instance is prepared. `config replace` on the running Runtime of a new root is
 //!   refused on its `no_seeding` row although it swapped and restarted (`runtime`'s description,
 //!   "Why the instances come by a close, a `config replace` and an `up`").
-//! - The watchdog is installed after the start, the pause and the instances. It never starts a
-//!   root that never started, nor one closed formally, nor one the installer is working on; it
-//!   does start one whose last start ended in an error (Runtime `contracts/runtime-watchdog.md`,
-//!   "Decision", rows 3, 5, 6 and 7a). Installed last, it cannot start again a Runtime whose start
-//!   the install just reported failed, and an install that fails earlier leaves no task.
+//! - The watchdog is installed last, after the start, the pause, the instances and the last
+//!   read. It never starts a root that never started, nor one closed formally, nor one the
+//!   installer is working on; it does start one whose last start ended in an error (Runtime
+//!   `contracts/runtime-watchdog.md`, "Decision", rows 3, 5, 6 and 7a). Installed last, it cannot
+//!   start again a Runtime whose start the install just reported failed, and an install that
+//!   fails earlier leaves no task.
+//!
+//! The first-start pause is a promise of the options page, so no path lets a first start bring
+//! the instances without it: a plan with instances that asks for the pause and leaves the
+//! wizard's start out is refused (`plan_problems`), since only a running Runtime takes the
+//! pause. Once a step fails, a Runtime of the root that may be running without a pause the
+//! install confirmed ([`Pause`]) is closed formally before the failure is told; the failure says
+//! whether it was closed, or how to close it by hand.
 //!
 //! Every command's answer is logged twice: its reading for people, as the window shows it, and
 //! its whole stdout (up to 64 Ki characters) on a line of its own, so that a refusal's rows are
@@ -70,8 +78,8 @@ pub enum Step {
     Start,
     Pause,
     Bind,
-    Watchdog,
     Status,
+    Watchdog,
 }
 
 impl Step {
@@ -89,8 +97,8 @@ impl Step {
         Step::Start,
         Step::Pause,
         Step::Bind,
-        Step::Watchdog,
         Step::Status,
+        Step::Watchdog,
     ];
 
     /// 1 to 15.
@@ -116,8 +124,8 @@ impl Step {
                 "接上实例：先停下 Runtime，换上带实例的配置，再启动",
                 "Connect the instances: stop the Runtime, put the configuration with the instances in place, start it again",
             ),
-            Step::Watchdog => Said::new("装看门狗（开机自动运行）", "Install the watchdog (start at logon)"),
             Step::Status => Said::new("确认 Runtime 在线", "Confirm the Runtime is online"),
+            Step::Watchdog => Said::new("装看门狗（开机自动运行）", "Install the watchdog (start at logon)"),
         }
     }
 }
@@ -140,6 +148,20 @@ pub enum Event {
     Bytes { done: u64, total: u64 },
 }
 
+/// The first-start pause as the install last knew it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Pause {
+    /// Not asked for, or not set yet.
+    #[default]
+    None,
+    /// Set, and no check since found it missing: a runtime fact the root's next start restores.
+    Held,
+    /// Set, then not confirmed: the start that brought the instances failed (its `pauses` check
+    /// among what may have failed), or the last step found no first-start pause or a task under
+    /// way. The Runtime may be playing the games.
+    Unconfirmed,
+}
+
 /// What the install did that outlives its folder or keeps running: what a person stops or
 /// removes before the folder can be deleted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -147,11 +169,13 @@ pub struct Left {
     /// A Runtime of the root may be running: the wizard ran its start (a start that did not
     /// answer in time, or failed, may have left it running) and has not seen it closed since.
     pub running: bool,
-    /// The wizard closed the Runtime it had started (step 13's formal close answered
-    /// `runtime_shutdown_completed`) and has not started it again.
+    /// The wizard closed the Runtime it had started (`runtime_shutdown_completed`: step 13's
+    /// formal close, or the close after a failure) and has not started it again.
     pub closed: bool,
-    /// The first-start pause is set: a runtime fact the root's next start restores.
-    pub paused: bool,
+    /// The close was the one after a failure ([`Run::stop_after_failure`]).
+    pub stopped_on_failure: bool,
+    /// The first-start pause.
+    pub pause: Pause,
     /// The wizard ran `watchdog install`: the root's watchdog task may be registered.
     pub watchdog: bool,
     /// The shortcuts the wizard created.
@@ -174,28 +198,42 @@ pub fn cleanup(root: &Path, left: &Left) -> Vec<Said> {
         let en = format!(
             "open {root}\\ui\\acui.exe and press \"Request Shutdown\", or run {actingctl} request-shutdown --state-root \"{root}\\state\""
         );
-        steps.push(if left.paused {
-            Said::new(
+        steps.push(match left.pause {
+            Pause::Held => Said::new(
                 format!("ActingCommand 已经启动过，挂着首次暂停，可能还开着。先停下它：{zh}。"),
                 format!("ActingCommand has been started, under the first-start pause, and may still be running. Stop it first: {en}."),
-            )
-        } else {
-            Said::new(
+            ),
+            Pause::Unconfirmed => Said::new(
+                format!("ActingCommand 可能还开着，首次暂停没有确认，它可能已经在操作游戏。先停下它：{zh}。"),
+                format!("ActingCommand may still be running, and its first-start pause is not confirmed: it may be playing the games already. Stop it first: {en}."),
+            ),
+            Pause::None => Said::new(
                 format!("ActingCommand 可能还开着，而且没有暂停。先停下它：{zh}。"),
                 format!("ActingCommand may still be running, and it is not paused. Stop it first: {en}."),
-            )
+            ),
         });
     } else if left.closed {
-        steps.push(if left.paused {
-            Said::new(
-                "ActingCommand 已经停下了（向导换配置之前正式关闭了它），不用再停；首次暂停记在它的运行记录里，下次启动时会先恢复。",
-                "ActingCommand is already stopped (the wizard closed it formally before switching the configuration), so there is nothing to stop; the first-start pause is kept in its records and comes back first at its next start.",
+        let (zh, en) = if left.stopped_on_failure {
+            (
+                "ActingCommand 已经停下了（安装没有通过，向导正式关闭了它），不用再停",
+                "ActingCommand is already stopped (the install failed, and the wizard closed it formally), so there is nothing to stop",
             )
         } else {
-            Said::new(
-                "ActingCommand 已经停下了（向导正式关闭了它），不用再停。",
-                "ActingCommand is already stopped (the wizard closed it formally), so there is nothing to stop.",
+            (
+                "ActingCommand 已经停下了（向导换配置之前正式关闭了它），不用再停",
+                "ActingCommand is already stopped (the wizard closed it formally before switching the configuration), so there is nothing to stop",
             )
+        };
+        steps.push(match left.pause {
+            Pause::Held => Said::new(
+                format!("{zh}；首次暂停记在它的运行记录里，下次启动时会先恢复。"),
+                format!("{en}; the first-start pause is kept in its records and comes back first at its next start."),
+            ),
+            Pause::Unconfirmed => Said::new(
+                format!("{zh}；首次暂停没有确认：下次启动以后，先在监控台看它是不是暂停着。"),
+                format!("{en}; the first-start pause is not confirmed: after its next start, look in the console whether it is paused."),
+            ),
+            Pause::None => Said::new(format!("{zh}。"), format!("{en}.")),
         });
     }
     if left.watchdog {
@@ -282,6 +320,8 @@ pub struct Done {
     pub started: bool,
     pub paused: bool,
     pub watchdog: bool,
+    /// How many instances the configuration binds.
+    pub instances: usize,
     /// What each step did, in order.
     pub summary: Vec<(Step, Said)>,
 }
@@ -356,6 +396,7 @@ impl Run<'_> {
         if let Some(step) = step {
             (self.report)(Event::Failed(step, reason.clone()));
         }
+        self.stop_after_failure();
         Failure {
             step,
             reason,
@@ -363,6 +404,44 @@ impl Run<'_> {
             wrote: self.wrote,
             left: self.left.clone(),
         }
+    }
+
+    /// After a failure, a Runtime of the root that may be running without a pause the install
+    /// confirmed ([`Pause::Held`]) is closed formally (`request-shutdown`, judged as step 13's
+    /// close is): a failed install leaves no Runtime playing the games. A close that is refused
+    /// or fails leaves `running` set, so the failure says how to stop it by hand ([`cleanup`]).
+    fn stop_after_failure(&mut self) {
+        if !self.left.running || self.left.pause == Pause::Held {
+            return;
+        }
+        self.plain(Said::new(
+            "安装没有通过，正在停下向导启动的 ActingCommand……",
+            "The install failed; stopping the ActingCommand the wizard started…",
+        ));
+        let root = self.root.clone();
+        let closed = runtime::request_shutdown(&root).and_then(|closed| {
+            if let Err(error) = self.answered(Said::new("request-shutdown 答复", "request-shutdown answered"), &closed) {
+                (self.report)(Event::Line(error));
+            }
+            runtime::judge_shutdown(closed.code, closed.line.as_ref()).map(|_| ()).map_err(|problem| problem.with(closed.reason()))
+        });
+        let said = match closed {
+            Ok(()) => {
+                self.left.running = false;
+                self.left.closed = true;
+                self.left.stopped_on_failure = true;
+                Said::new("安装没有通过，向导已经停下它启动的 ActingCommand", "the install failed; the wizard closed the ActingCommand it started")
+            }
+            Err(problem) => Said::new(
+                "安装没有通过，向导也没能停下它启动的 ActingCommand，请照下面的办法手工停",
+                "the install failed, and the wizard could not close the ActingCommand it started; stop it by hand as below",
+            )
+            .with_said(&problem),
+        };
+        if let Err(error) = self.note(&said) {
+            (self.report)(Event::Line(error));
+        }
+        (self.report)(Event::Line(said));
     }
 
     /// Runs one step: heard as started, then finished with its summary, or failed. The log
@@ -492,15 +571,15 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
             ),
         )?,
     }
-    if plan.options.watchdog {
-        run.step(Step::Watchdog, |run| watchdog(run))?;
-    } else {
-        run.skip(Step::Watchdog, Said::new("没有勾选（默认关）", "not chosen (off by default)"))?;
-    }
     if started {
         run.step(Step::Status, |run| status(run, paused, &aliases))?;
     } else {
         run.skip(Step::Status, Said::new("向导没有启动 Runtime", "the wizard did not start the Runtime"))?;
+    }
+    if plan.options.watchdog {
+        run.step(Step::Watchdog, |run| watchdog(run))?;
+    } else {
+        run.skip(Step::Watchdog, Said::new("没有勾选（默认关）", "not chosen (off by default)"))?;
     }
     let log = run.log.path().map(Path::to_path_buf).unwrap_or_else(|| root.join(crate::log::LOG_FILE));
     // The log only: the caller says the end itself, from `Done`. A log that takes no more
@@ -514,6 +593,7 @@ pub fn install(request: &Request, report: &mut dyn FnMut(Event)) -> Result<Done,
         started,
         paused,
         watchdog: plan.options.watchdog,
+        instances: aliases.len(),
         summary: run.summary,
         root,
     })
@@ -1067,7 +1147,7 @@ fn pause(run: &mut Run<'_>) -> Result<Said, Said> {
     if !answer.ok() {
         return Err(Said::new("没能暂停", "the pause was refused").with(answer.reason()));
     }
-    run.left.paused = true;
+    run.left.pause = Pause::Held;
     Ok(Said::new(
         "已暂停所有实例；在监控台确认无误后点「全部开始执勤」",
         "every instance is paused; after a look in the console, press \"put all on duty\"",
@@ -1119,7 +1199,11 @@ fn bind(run: &mut Run<'_>, full: &Path, count: usize) -> Result<Said, Said> {
         )))?;
 
     run.plain(Said::new("正在重新启动 ActingCommand……", "Starting ActingCommand again…"));
+    // The start brings the instances; until its checks pass (`pauses` among them), the pause
+    // is not confirmed.
+    run.left.pause = Pause::Unconfirmed;
     let started = up(run, Said::new("换上配置以后 Runtime 没有正常起来", "the Runtime did not start cleanly with the new configuration"))?;
+    run.left.pause = Pause::Held;
     Ok(Said::new(
         "已停下、换上带实例的配置、再启动",
         "closed, the configuration with the instances put in place, started again",
@@ -1142,6 +1226,12 @@ fn watchdog(run: &mut Run<'_>) -> Result<Said, Said> {
 /// task (a run under way means the pause came too late: that is a failure, never a success);
 /// every instance the configuration binds is there.
 fn status(run: &mut Run<'_>, paused: bool, aliases: &[String]) -> Result<Said, Said> {
+    // Until this read shows it whole, the pause is not confirmed: a failure here (no answer, no
+    // first-start pause, a task under way, an instance missing) closes the Runtime
+    // ([`Run::stop_after_failure`]).
+    if paused {
+        run.left.pause = Pause::Unconfirmed;
+    }
     let answer = runtime::status(&run.root.clone())?;
     run.answered(Said::new("status 答复", "status answered"), &answer)?;
     if !answer.ok() {
@@ -1187,6 +1277,9 @@ fn status(run: &mut Run<'_>, paused: bool, aliases: &[String]) -> Result<Said, S
     if !missing.is_empty() {
         return Err(Said::new("Runtime 的状态里缺少这些实例", "the Runtime's status lacks these instances").with(missing.join(", ")));
     }
+    if paused {
+        run.left.pause = Pause::Held;
+    }
     let mut summary = Said::new("在线", "online").with(format!("{} instances", read.aliases.len()));
     if let Some(reason) = read.global_pause {
         summary = summary.with(format!("global pause {reason}"));
@@ -1205,10 +1298,10 @@ mod tests {
             assert_eq!(step.number(), at + 1);
             assert!(!step.title().zh.is_empty() && !step.title().en.is_empty());
         }
-        // The instances come after the pause, the watchdog after them.
+        // The instances come after the pause, the last read after them, the watchdog last.
         assert!(Step::Pause.number() < Step::Bind.number());
-        assert!(Step::Bind.number() < Step::Watchdog.number());
-        assert!(Step::Watchdog.number() < Step::Status.number());
+        assert!(Step::Bind.number() < Step::Status.number());
+        assert!(Step::Status.number() < Step::Watchdog.number());
     }
 
     #[test]
@@ -1225,7 +1318,8 @@ mod tests {
             &Left {
                 running: true,
                 closed: false,
-                paused: true,
+                stopped_on_failure: false,
+                pause: Pause::Held,
                 watchdog: true,
                 shortcuts: vec![PathBuf::from(r"X:\Desk\a.lnk"), PathBuf::from(r"X:\Menu\b.lnk")],
             },
@@ -1244,15 +1338,29 @@ mod tests {
         assert!(running[0].zh.contains("没有暂停") && running[0].en.contains("not paused"));
         // Step 13 closed the Runtime and failed before it started again: nothing to stop, the
         // pause kept; no command to stop it is given.
-        let closed = cleanup(root, &Left { closed: true, paused: true, ..Left::default() });
+        let closed = cleanup(root, &Left { closed: true, pause: Pause::Held, ..Left::default() });
         assert_eq!(closed.len(), 2);
         assert!(closed[0].zh.contains("不用再停") && closed[0].en.contains("nothing to stop"), "{}", closed[0]);
-        assert!(closed[0].zh.contains("首次暂停"));
+        assert!(closed[0].zh.contains("首次暂停记在"));
         assert!(!closed[0].en.contains("request-shutdown"));
         assert!(closed[1].en.starts_with("Then delete the whole"));
         // Started again after the close: the start counts, the close no longer does.
-        let again = cleanup(root, &Left { running: true, closed: true, paused: true, ..Left::default() });
+        let again = cleanup(root, &Left { running: true, closed: true, pause: Pause::Held, ..Left::default() });
         assert!(again[0].en.contains("request-shutdown") && again[0].en.contains("may still be running"), "{}", again[0]);
+        // The pause not confirmed, and the Runtime not closed: it may be playing; never
+        // "under the first-start pause".
+        let unconfirmed = cleanup(root, &Left { running: true, pause: Pause::Unconfirmed, ..Left::default() });
+        assert!(unconfirmed[0].zh.contains("首次暂停没有确认") && unconfirmed[0].en.contains("may be playing"), "{}", unconfirmed[0]);
+        assert!(!unconfirmed[0].zh.contains("挂着首次暂停"));
+        assert!(unconfirmed[0].en.contains("request-shutdown"));
+        // Closed by the wizard after the failure: nothing to stop, and the pause still not
+        // confirmed for the next start.
+        let stopped = cleanup(
+            root,
+            &Left { closed: true, stopped_on_failure: true, pause: Pause::Unconfirmed, ..Left::default() },
+        );
+        assert!(stopped[0].zh.contains("安装没有通过") && stopped[0].en.contains("nothing to stop"), "{}", stopped[0]);
+        assert!(stopped[0].zh.contains("首次暂停没有确认") && !stopped[0].en.contains("request-shutdown"));
         // Shortcuts alone.
         let shortcuts = cleanup(root, &Left { shortcuts: vec![PathBuf::from(r"X:\Desk\a.lnk")], ..Left::default() });
         assert_eq!(shortcuts.len(), 2);
