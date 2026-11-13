@@ -15,15 +15,19 @@
 //!   close (`actingctl request-shutdown --wait 60`, `runtime_shutdown_completed`), the full
 //!   configuration put in place by the Runtime's `config replace` while no Runtime runs
 //!   (`runtime_running` false), and the installer's start again (`actinglab up`, exit 0, no
-//!   post-start check `fail`). The pause survives the close and is back before any instance is
-//!   prepared. `config replace` on the running Runtime was refused on a test machine although it
-//!   swapped and restarted (`runtime`'s description, "Why the instances come by a close, a
-//!   `config replace` and an `up`").
+//!   post-start check of the failing class `fail`). The pause survives the close and is back
+//!   before any instance is prepared. `config replace` on the running Runtime of a new root is
+//!   refused on its `no_seeding` row although it swapped and restarted (`runtime`'s description,
+//!   "Why the instances come by a close, a `config replace` and an `up`").
 //! - The watchdog is installed after the start, the pause and the instances. It never starts a
 //!   root that never started, nor one closed formally, nor one the installer is working on; it
 //!   does start one whose last start ended in an error (Runtime `contracts/runtime-watchdog.md`,
 //!   "Decision", rows 3, 5, 6 and 7a). Installed last, it cannot start again a Runtime whose start
 //!   the install just reported failed, and an install that fails earlier leaves no task.
+//!
+//! Every command's answer is logged twice: its reading for people, as the window shows it, and
+//! its whole stdout (up to 64 Ki characters) on a line of its own, so that a refusal's rows are
+//! in the log and not only their count.
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -315,6 +319,19 @@ impl Run<'_> {
     fn say(&mut self, said: Said) -> Result<(), Said> {
         self.note(&said)?;
         (self.report)(Event::Line(said));
+        Ok(())
+    }
+
+    /// A command's answer: `said` with [`runtime::Answer::reason`] to the log and whoever
+    /// listens, then the answer's whole stdout ([`runtime::Answer::log_stdout`]) on a line of its
+    /// own in the log only.
+    fn answered(&mut self, said: Said, answer: &runtime::Answer) -> Result<(), Said> {
+        self.say(said.with(answer.reason()))?;
+        if let Some(stdout) = answer.log_stdout() {
+            self.log
+                .line(&format!("  {} stdout: {stdout}", answer.command))
+                .map_err(|error| Said::new("日志写不进去", "the log cannot be written").with(error))?;
+        }
         Ok(())
     }
 
@@ -828,11 +845,7 @@ fn check_packs(run: &mut Run<'_>, games: &[String]) -> Result<Said, Said> {
     for game in games {
         let game_root = root.join(PACKAGES_DIR).join(game);
         let answer = runtime::standard_pack_check(&root, &game_root)?;
-        run.say(Said::new("standard-pack check 答复", "standard-pack check answered").with(format!(
-            "{}: {}",
-            game,
-            crate::child::clipped(&answer.stdout, 1500)
-        )))?;
+        run.answered(Said::new("standard-pack check 答复", "standard-pack check answered").with(game), &answer)?;
         if !answer.ok() {
             return Err(Said::new("标准包检查没有通过", "the standard package check failed")
                 .with(format!("{game}: {}", answer.reason())));
@@ -910,7 +923,7 @@ fn write_new(path: &Path, text: &str) -> Result<(), Said> {
 fn check_config(run: &mut Run<'_>, part: &Path, config_path: &Path, pinned: bool, full: Option<&Path>) -> Result<Said, Said> {
     let root = run.root.clone();
     let mut checked = runtime::check_config(&root, part)?;
-    run.say(Said::new("check-config 答复", "check-config answered").with(checked.answer.reason()))?;
+    run.answered(Said::new("check-config 答复", "check-config answered"), &checked.answer)?;
     if !checked.passed {
         return Err(Said::new("Runtime 不接受这份配置", "the Runtime refuses the configuration").with(checked.answer.reason()));
     }
@@ -925,7 +938,7 @@ fn check_config(run: &mut Run<'_>, part: &Path, config_path: &Path, pinned: bool
                 .map_err(|error| io_said("写不进配置候选", "the candidate cannot be written", part, error))?;
             run.say(Said::new("钉上 Runtime 找到的 MuMu 位置，再校验一次", "pinned the MuMu folder the Runtime found; checking again").with(&found))?;
             checked = runtime::check_config(&root, part)?;
-            run.say(Said::new("check-config 答复", "check-config answered").with(checked.answer.reason()))?;
+            run.answered(Said::new("check-config 答复", "check-config answered"), &checked.answer)?;
             if !checked.passed {
                 return Err(Said::new("Runtime 不接受这份配置", "the Runtime refuses the configuration").with(checked.answer.reason()));
             }
@@ -956,8 +969,10 @@ fn check_config(run: &mut Run<'_>, part: &Path, config_path: &Path, pinned: bool
                 .map_err(|error| Said::new("完整配置读不懂", "the full configuration does not parse").with(error))?;
             write_new(part, &config::render(&config::without_instances(&document)))?;
             let first = runtime::check_config(&root, part)?;
-            run.say(Said::new("check-config 答复（首次启动用的配置，不带实例）", "check-config answered (the first start's configuration, without instances)")
-                .with(first.answer.reason()))?;
+            run.answered(
+                Said::new("check-config 答复（首次启动用的配置，不带实例）", "check-config answered (the first start's configuration, without instances)"),
+                &first.answer,
+            )?;
             if !first.passed {
                 return Err(Said::new("Runtime 不接受首次启动用的配置", "the Runtime refuses the first start's configuration").with(first.answer.reason()));
             }
@@ -978,7 +993,7 @@ fn check_config(run: &mut Run<'_>, part: &Path, config_path: &Path, pinned: bool
 
 fn adopt(run: &mut Run<'_>) -> Result<Said, Said> {
     let answer = runtime::adopt(&run.root.clone())?;
-    run.say(Said::new("adopt 答复", "adopt answered").with(answer.reason()))?;
+    run.answered(Said::new("adopt 答复", "adopt answered"), &answer)?;
     if !answer.ok() {
         return Err(Said::new("Runtime 的安装器没有接管", "the Runtime's installer did not take the root").with(answer.reason()));
     }
@@ -1023,7 +1038,7 @@ fn up(run: &mut Run<'_>, failed: Said) -> Result<Said, Said> {
     run.left.running = true;
     run.left.closed = false;
     let answer = runtime::up(&run.root.clone())?;
-    run.say(Said::new("up 答复", "up answered").with(answer.reason()))?;
+    run.answered(Said::new("up 答复", "up answered"), &answer)?;
     let read = runtime::judge_up(answer.code, answer.line.as_ref())
         .map_err(|problem| failed.with_said(&problem).with(answer.reason()))?;
     let mut summary = Said::new("已就绪", "ready").with(format!(
@@ -1048,7 +1063,7 @@ fn start(run: &mut Run<'_>) -> Result<Said, Said> {
 
 fn pause(run: &mut Run<'_>) -> Result<Said, Said> {
     let answer = runtime::pause_all(&run.root.clone(), FIRST_START_REASON)?;
-    run.say(Said::new("pause 答复", "pause answered").with(answer.reason()))?;
+    run.answered(Said::new("pause 答复", "pause answered"), &answer)?;
     if !answer.ok() {
         return Err(Said::new("没能暂停", "the pause was refused").with(answer.reason()));
     }
@@ -1072,7 +1087,7 @@ fn bind(run: &mut Run<'_>, full: &Path, count: usize) -> Result<Said, Said> {
 
     run.plain(Said::new("正在停下 ActingCommand……", "Stopping ActingCommand…"));
     let closed = runtime::request_shutdown(&root)?;
-    run.say(Said::new("request-shutdown 答复", "request-shutdown answered").with(closed.reason()))?;
+    run.answered(Said::new("request-shutdown 答复", "request-shutdown answered"), &closed)?;
     runtime::judge_shutdown(closed.code, closed.line.as_ref()).map_err(|problem| {
         Said::new("没能先停下 Runtime", "the Runtime could not be closed first")
             .with_said(&problem)
@@ -1083,7 +1098,7 @@ fn bind(run: &mut Run<'_>, full: &Path, count: usize) -> Result<Said, Said> {
 
     run.plain(Said::new("正在换上带实例的设置……", "Switching to the settings with the instances…"));
     let swapped = runtime::config_replace(&root, full, &sha256)?;
-    run.say(Said::new("config replace 答复", "config replace answered").with(swapped.reason()))?;
+    run.answered(Said::new("config replace 答复", "config replace answered"), &swapped)?;
     let replaced = runtime::judge_replace(swapped.code, swapped.line.as_ref()).map_err(|problem| {
         Said::new("没能换上带实例的配置", "the configuration with the instances was not put in place")
             .with_said(&problem)
@@ -1116,7 +1131,7 @@ fn bind(run: &mut Run<'_>, full: &Path, count: usize) -> Result<Said, Said> {
 fn watchdog(run: &mut Run<'_>) -> Result<Said, Said> {
     run.left.watchdog = true;
     let answer = runtime::watchdog_install(&run.root.clone())?;
-    run.say(Said::new("watchdog install 答复", "watchdog install answered").with(answer.reason()))?;
+    run.answered(Said::new("watchdog install 答复", "watchdog install answered"), &answer)?;
     if !answer.ok() {
         return Err(Said::new("看门狗没装上", "the watchdog was not installed").with(answer.reason()));
     }
@@ -1128,7 +1143,7 @@ fn watchdog(run: &mut Run<'_>) -> Result<Said, Said> {
 /// every instance the configuration binds is there.
 fn status(run: &mut Run<'_>, paused: bool, aliases: &[String]) -> Result<Said, Said> {
     let answer = runtime::status(&run.root.clone())?;
-    run.say(Said::new("status 答复", "status answered").with(crate::child::clipped(&answer.stdout, 3000)))?;
+    run.answered(Said::new("status 答复", "status answered"), &answer)?;
     if !answer.ok() {
         return Err(Said::new("状态读不出", "the status cannot be read").with(answer.reason()));
     }

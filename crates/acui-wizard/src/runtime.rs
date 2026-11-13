@@ -33,20 +33,23 @@
 //! before the policy driver runs (`scheduling-pause.md`, "Persistence, no expiry").
 //!
 //! The full configuration is not put in place on the running Runtime. On a test machine
-//! (2026-11-13, 0.12.58), `config replace` on the running Runtime under the first-start pause
-//! answered `install_command_refused` with `post_check_failed` (`count` 1) and the notes
-//! `install_caveat_noted`, `guard_failed` and `foreign_pauses`, twice; yet the file had been
+//! (2026-11-13, 0.12.58), `config replace` on the running Runtime of a newly installed root
+//! answered `install_command_refused` with `post_check_failed` (`count` 1), yet the file had been
 //! swapped and the Runtime restarted, its pause restored before the instances were prepared
-//! (`scheduling_pause_restored` in the actingd log). The operation counts the wizard's own pause
-//! as another tool's: it opens with no acknowledgement (`config_swap.rs` `open`, `acknowledged`
-//! empty) and `config replace` takes neither `--known-pause` nor `--ack-guard`; that is asked of
-//! the Runtime. Closed first, the same machine passed every part: the close answered
-//! `runtime_shutdown_completed`; `config replace` answered `install_command_done` with
-//! `runtime_running` false and kept the replaced file; `up` exited 0 with all ten post-start
-//! checks passed (`ready`, `open`, `no_seeding`, `bindings`, `packs`, `pauses`, `instructions`,
-//! `no_dispatch`, `new_keys`, `config`); `status` showed the global pause still `first-start`,
-//! the instances there and the first task waiting on `dispatch_paused_global`. An `up` with the
-//! first-start pause already set and no instance exited 0 too.
+//! (`scheduling_pause_restored` in the actingd log). The row that failed is `no_seeding`
+//! (`failed_checks` in the answer): a new root's state is still tagged `seed` on its first
+//! restarts, which `up`'s own check passes (`tagged_state` `seed` with `earlier_runtime` false)
+//! and the restart inside `config replace` does not. It fails the same with no instance and the
+//! same configuration, and on an older root (`tagged_state` `load`) the same replace from no
+//! instance to one passed every row; the note `guard_failed` `foreign_pauses` (the first-start
+//! pause) comes either way and fails nothing. Closed first, a new root passed every part: the
+//! close answered `runtime_shutdown_completed`; `config replace` answered
+//! `install_command_done` with `runtime_running` false and kept the replaced file; `up` exited 0
+//! with all ten post-start checks passed (`ready`, `open`, `no_seeding`, `bindings`, `packs`,
+//! `pauses`, `instructions`, `no_dispatch`, `new_keys`, `config`); `status` showed the global
+//! pause still `first-start`, the instances there and the first task waiting on
+//! `dispatch_paused_global`. An `up` with the first-start pause already set and no instance
+//! exited 0 too.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -137,6 +140,14 @@ impl Answer {
             parts.push(child::clipped(&self.stderr, 1500));
         }
         child::clipped(&parts.join(" | "), 4000)
+    }
+
+    /// The answer's whole stdout as it came (up to 64 Ki characters), for the install log only,
+    /// so that whoever reads the log afterwards has every post-start row and `failed_checks` of
+    /// a refusal and not only its count; `None` when it wrote nothing. The window shows
+    /// [`Answer::reason`].
+    pub fn log_stdout(&self) -> Option<String> {
+        (!self.stdout.trim().is_empty()).then(|| child::clipped(&self.stdout, 65536))
     }
 
     /// The line's member `name`.
