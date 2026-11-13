@@ -514,7 +514,7 @@ impl Stops {
                 Stage::Waiting { request, .. } if listed.is_none() => {
                     slot.said = Some(StopSaid::Unlisted { at_ms });
                     review.lines.push(format!(
-                        "{}: the Runtime no longer lists the account; what came of it is not \
+                        "{}: the Runtime no longer lists the instance; what came of it is not \
                          known, not sent again",
                         prefix(alias, &request)
                     ));
@@ -843,7 +843,7 @@ fn close_line(answer: &CloseAnswer) -> (String, bool) {
         CloseAnswer::NotListed(stop) => {
             let (stop, quiet) = stop_line(stop, true);
             let line = format!(
-                "the account's PackScheduleView lists no such package, so no close row was \
+                "the instance's PackScheduleView lists no such package, so no close row was \
                  written; then {stop}"
             );
             (line, quiet)
@@ -859,7 +859,7 @@ fn close_line(answer: &CloseAnswer) -> (String, bool) {
         }
         CloseAnswer::ViewFailed(failure) => {
             let line = format!(
-                "the account's PackScheduleView was not read; nothing was written and the run was \
+                "the instance's PackScheduleView was not read; nothing was written and the run was \
                  not stopped: {}",
                 failure_line(failure)
             );
@@ -867,7 +867,7 @@ fn close_line(answer: &CloseAnswer) -> (String, bool) {
         }
         CloseAnswer::ViewDropped(failure) => {
             let line = format!(
-                "the account's PackScheduleView was not read, its connection having ended before \
+                "the instance's PackScheduleView was not read, its connection having ended before \
                  its answer (made again in the same owner epoch), not taken as no task switches; \
                  nothing was written and the run was not stopped: {}",
                 failure_line(failure)
