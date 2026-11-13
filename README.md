@@ -1294,8 +1294,9 @@ Runtime's highest `ledger` and `runtime-outcomes` revisions must lie in the cons
 standard pack's `bundle.json`, `applications.json`, `schedule.json` and `interfaces.json` (its `package`
 revision must lie within the range this Runtime declares). The vision files must carry ONNX Runtime's
 two files exactly as the Runtime pins them (`ort/onnxruntime.dll`, 17,328,152 bytes, SHA-256
-`e7eedec6…bff40`; `ort/onnxruntime_providers_shared.dll`, 22,040 bytes, `265c8daf…ec3b6`), since
-`check-config` and a start refuse any other, and its `ort/licenses/onnxruntime/LICENSE` and
+`e7eedec6…bff40`; `ort/onnxruntime_providers_shared.dll`, 22,040 bytes, `265c8daf…ec3b6`): with
+DirectML the Runtime refuses any other; with the CPU it does not check them, but a set holds this one pinned
+build either way. They must also carry its `ort/licenses/onnxruntime/LICENSE` and
 `ThirdPartyNotices.txt`. They may carry DirectML, `ort/DirectML.dll`,
 only the file the Runtime pins (DirectML 1.15.4: 18,527,776 bytes, SHA-256
 `9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1`, Runtime
