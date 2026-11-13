@@ -371,6 +371,9 @@ fn empty_text(labels: &Labels, why: &EmptyWhy) -> (String, bool) {
         EmptyWhy::Offline(Offline::Unreachable) => {
             (labels.picture_unreachable_empty.to_owned(), false)
         }
+        EmptyWhy::Offline(Offline::NotThisRoot) => {
+            (labels.picture_not_this_root_empty.to_owned(), false)
+        }
         EmptyWhy::Interrupted => (labels.picture_interrupted_empty.to_owned(), false),
         EmptyWhy::Freeze => (labels.picture_handing_over_empty.to_owned(), false),
         EmptyWhy::Fault(fault) => (fault_text(labels, fault), true),
@@ -382,6 +385,7 @@ fn dim_text(ui: &Ui, labels: &Labels, dim: &DimWhy, at: &str) -> String {
     match dim {
         DimWhy::Offline(Offline::NotRunning) => fill(labels.picture_not_running, &[at]),
         DimWhy::Offline(Offline::Unreachable) => fill(labels.picture_unreachable, &[at]),
+        DimWhy::Offline(Offline::NotThisRoot) => fill(labels.picture_not_this_root, &[at]),
         DimWhy::Freeze => fill(labels.picture_handing_over, &[at]),
         DimWhy::Fault(fault) => fault_text(labels, fault),
         DimWhy::Interrupted => fill(labels.picture_interrupted, &[at]),
@@ -501,10 +505,11 @@ fn doing_text(labels: &Labels, doing: Doing) -> &'static str {
     }
 }
 
-/// What a press that was not sent says: that the Runtime found up is not this installation
-/// folder's, when that is why (`launcher::refusing_not_this_root`); else `generic`, as ever.
-fn not_sent(labels: &Labels, generic: &str) -> String {
-    if crate::launcher::refusing_not_this_root() {
+/// What a press that was not sent says: that the Runtime up is not this installation folder's,
+/// when the press's own refusal says that is why (`not_this_root`, `identity::not_this_root`);
+/// else `generic`, as ever.
+fn not_sent(labels: &Labels, generic: &str, not_this_root: bool) -> String {
+    if not_this_root {
         labels.not_sent_not_this_root.to_owned()
     } else {
         generic.to_owned()
@@ -524,7 +529,9 @@ fn refreshed_text(ui: &Ui, labels: &Labels, said: &Refreshed) -> (String, bool) 
             (fill(labels.refresh_refused, &[&words]), true)
         }
         Refreshed::Unconfirmed => (labels.refresh_unconfirmed.to_owned(), true),
-        Refreshed::NotSent => (not_sent(labels, labels.refresh_not_sent), true),
+        Refreshed::NotSent { not_this_root } => {
+            (not_sent(labels, labels.refresh_not_sent, *not_this_root), true)
+        }
         Refreshed::NoThread { error } => {
             let why = fill(labels.thread_failed, &[error.as_str()]);
             (fill(labels.refresh_no_thread, &[why.as_str()]), true)
@@ -947,8 +954,8 @@ fn stop_said_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
         StopSaid::ClosePanicked { at_ms } => {
             (fill(labels.close_task_panicked, &[&format_second(*at_ms)]), true)
         }
-        StopSaid::NotSent { at_ms } => {
-            (timed(&not_sent(labels, labels.rescue_not_sent), *at_ms), true)
+        StopSaid::NotSent { at_ms, not_this_root } => {
+            (timed(&not_sent(labels, labels.rescue_not_sent, *not_this_root), *at_ms), true)
         }
         StopSaid::NoThread { at_ms, error } => {
             let why = fill(labels.thread_failed, &[error.as_str()]);
@@ -1038,7 +1045,9 @@ fn rescued_text(ui: &Ui, labels: &Labels, rows: &RescueRows, said: &Rescued) -> 
             (refused_text(ui, labels, *op, codes, holder.as_ref(), *denied), true)
         }
         Rescued::Unconfirmed(_) => (labels.rescue_unconfirmed.to_owned(), true),
-        Rescued::NotSent(_) => (not_sent(labels, labels.rescue_not_sent), true),
+        Rescued::NotSent(_, not_this_root) => {
+            (not_sent(labels, labels.rescue_not_sent, *not_this_root), true)
+        }
         Rescued::NoThread { error } => {
             let why = fill(labels.thread_failed, &[error.as_str()]);
             (fill(labels.rescue_no_thread, &[why.as_str()]), true)
@@ -1964,6 +1973,7 @@ pub fn settings(ui: &Ui) {
     let (note, failed) = match &view {
         SettingsView::NotRunning => (labels.settings_table_not_running.to_owned(), false),
         SettingsView::Unreachable => (labels.settings_table_unreachable.to_owned(), false),
+        SettingsView::NotThisRoot => (labels.settings_table_not_this_root.to_owned(), false),
         SettingsView::Reading => (labels.settings_table_reading.to_owned(), false),
         // The read's failure is in the log already, with the snapshot's (`config_landed`).
         SettingsView::Failed => {
@@ -2007,6 +2017,7 @@ pub fn settings(ui: &Ui) {
             evidence.as_ref(),
         ),
         SettingsView::NotRunning
+        | SettingsView::NotThisRoot
         | SettingsView::Unreachable
         | SettingsView::Reading
         | SettingsView::Failed
@@ -2024,6 +2035,7 @@ pub fn settings(ui: &Ui) {
             backends.as_slice()
         }
         SettingsView::NotRunning
+        | SettingsView::NotThisRoot
         | SettingsView::Unreachable
         | SettingsView::Reading
         | SettingsView::Failed
@@ -2032,6 +2044,7 @@ pub fn settings(ui: &Ui) {
     let (host, host_lines, host_form) = match &view {
         SettingsView::Read { host_quiet, .. } => host_quiet_data(ui, labels, host_quiet),
         SettingsView::NotRunning
+        | SettingsView::NotThisRoot
         | SettingsView::Unreachable
         | SettingsView::Reading
         | SettingsView::Failed
@@ -2712,7 +2725,9 @@ fn said_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, bool)
         }
         Said::Unsupported => (labels.resume_all_unsupported.to_owned(), true),
         Said::Unconfirmed => (labels.write_unconfirmed.to_owned(), true),
-        Said::NotSent => (not_sent(labels, labels.write_not_sent), true),
+        Said::NotSent { not_this_root } => {
+            (not_sent(labels, labels.write_not_sent, *not_this_root), true)
+        }
         Said::NoThread { error } => {
             let why = fill(labels.thread_failed, &[error.as_str()]);
             (fill(labels.write_no_thread, &[why.as_str()]), true)
@@ -3191,10 +3206,10 @@ fn switch_said_text(ui: &Ui, labels: &Labels, said: &SwitchSaid) -> (String, Sai
             let text = fill(labels.tasks_switch_refused, &[&words, &format_second(*at_ms)]);
             (text, SaidTone::Failed)
         }
-        SwitchSaid::NotSent { at_ms } if crate::launcher::refusing_not_this_root() => {
+        SwitchSaid::NotSent { at_ms, not_this_root: true } => {
             (at(labels.not_sent_not_this_root_at, *at_ms), SaidTone::Failed)
         }
-        SwitchSaid::NotSent { at_ms } => {
+        SwitchSaid::NotSent { at_ms, not_this_root: false } => {
             (at(labels.tasks_switch_not_sent, *at_ms), SaidTone::Failed)
         }
         SwitchSaid::Unconfirmed { at_ms } => {
@@ -3368,7 +3383,9 @@ fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) ->
         }
         AccountSaid::Unsupported => (labels.resume_all_unsupported.to_owned(), true),
         AccountSaid::Unconfirmed => (labels.write_unconfirmed.to_owned(), true),
-        AccountSaid::NotSent => (not_sent(labels, labels.write_not_sent), true),
+        AccountSaid::NotSent { not_this_root } => {
+            (not_sent(labels, labels.write_not_sent, *not_this_root), true)
+        }
         AccountSaid::NoThread { error } => {
             let why = fill(labels.thread_failed, &[error.as_str()]);
             (fill(labels.write_no_thread, &[why.as_str()]), true)
@@ -3449,6 +3466,7 @@ fn down_text(labels: &Labels, down: Down) -> &'static str {
         Down::NotRunning => labels.launcher_not_running,
         Down::NoAnswer => labels.link_no_answer,
         Down::Trouble => labels.link_trouble,
+        Down::NotThisRoot => labels.launcher_not_this_root,
         Down::NoThread => labels.launcher_check_failed,
     }
 }

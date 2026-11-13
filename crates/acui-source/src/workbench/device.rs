@@ -35,7 +35,7 @@ use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError, RuntimeCli
 
 use super::backends::{self, Holder};
 use super::configure_config;
-use crate::{person_connection, ClientFailure, RUNTIME_RESULT_UNEXPECTED};
+use crate::{runtime_connection, ClientFailure, RUNTIME_RESULT_UNEXPECTED};
 
 /// The io timeout of a device's connection, within the client's bound of 60 s. At the client's
 /// default of 5 s a game's receipt would be waited for 8 s, where its restart closes the
@@ -138,7 +138,7 @@ pub struct DeviceRefusal {
 /// client checks that an answer is of the request: an emulator's control by its instance and
 /// action, a self-check by its instance, a game's by its action (its answer names no instance).
 pub fn operate(root: &Path, alias: &str, op: DeviceOp) -> DeviceOutcome {
-    let connected = person_connection(configure_config(root).with_io_timeout(DEVICE_IO));
+    let connected = runtime_connection(configure_config(root).with_io_timeout(DEVICE_IO));
     let client = match connected {
         Ok(client) => client,
         Err(error) => return DeviceOutcome::NotSent(ClientFailure::from(error)),

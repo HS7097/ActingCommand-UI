@@ -189,8 +189,9 @@ fn main() -> ExitCode {
 /// reading threads are told to end, the windows are hidden and let go, and then
 /// the shared state. Where the paths and the settings file came from goes to the
 /// technical log once, as an entry that does not by itself put the log on the windows.
-/// In an installation folder (root mode) every person's request is first checked to
-/// reach that folder's Runtime (`identity`), from before anything can be pressed.
+/// In an installation folder (root mode) every connection to a Runtime, a read's as a
+/// person's, is first checked to reach that folder's Runtime (`identity`), from before
+/// anything is read or can be pressed: one that is not is not connected to at all.
 fn run(
     args: Args,
     place: install::Place,
@@ -213,8 +214,8 @@ fn run(
     }
     let launcher = resolved.map(Launcher::new);
     if let Some(root) = launcher.as_ref().ok().and_then(|launcher| launcher.checked_root.clone()) {
-        if !acui_source::guard_requests(move |pid| identity::allowed(&root, pid)) {
-            report::log("place", "the check of the Runtime's requests was set already");
+        if !acui_source::guard_connections(move |facts| identity::admit(&root, facts)) {
+            report::log("place", "the check of the Runtime's connections was set already");
         }
     }
     let ui = Ui::new(language, &stored, file, issues, launcher);

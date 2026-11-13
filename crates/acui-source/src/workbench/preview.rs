@@ -49,8 +49,8 @@ use actingcommand_runtime_client::{RuntimeClientError, RuntimeFlowOutput};
 
 use super::{connection_ended, InstanceKey, ReadLane, Unreached};
 use crate::{
-    ClientFailure, MaterialOutcome, MaterialReader, OnlineSource, Spelling, MAX_FRAME_BYTES,
-    RUNTIME_RESULT_UNEXPECTED,
+    ClientFailure, MaterialOutcome, MaterialReader, NoConnection, OnlineSource, Spelling,
+    MAX_FRAME_BYTES, RUNTIME_RESULT_UNEXPECTED,
 };
 
 /// The lane's io timeout: how long a page or a material range waits for its receipt,
@@ -521,7 +521,9 @@ impl PreviewLane {
     ) -> Result<(String, RuntimeEventQueryPage), Unreached> {
         let kept = self.lane.client.is_some();
         let asked = match self.ask_page(query, request) {
-            Err(error) if kept && connection_ended(&error) => self.ask_page(query, request),
+            Err(NoConnection::Failed(error)) if kept && connection_ended(&error) => {
+                self.ask_page(query, request)
+            }
             asked => asked,
         };
         asked.map_err(Unreached::of)
@@ -531,12 +533,12 @@ impl PreviewLane {
         &mut self,
         query: &EventQuery,
         request: &RuntimeEventQueryPageRequest,
-    ) -> Result<(String, RuntimeEventQueryPage), RuntimeClientError> {
+    ) -> Result<(String, RuntimeEventQueryPage), NoConnection> {
         let client = self.lane.connection()?;
         let epoch = code(&client.runtime_info().owner_epoch());
         match client.query_event_page(query.clone(), ProjectionProfile::Ui, request.clone()) {
             Ok(page) => Ok((epoch, page)),
-            Err(error) => Err(self.lane.settled(error)),
+            Err(error) => Err(NoConnection::Failed(self.lane.settled(error))),
         }
     }
 

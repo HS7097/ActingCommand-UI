@@ -80,9 +80,25 @@
       "review": "pending",
       "status": "active",
       "since": "1.0.0",
-      "description": "A console that belongs to a single-location installation folder (root mode: started as <root>\\ui\\acui.exe, or with --root) takes the state root its configuration names as written, so a configuration copied from another installation leads it to that installation's Runtime. Every person's connection (a launcher press, a shutdown request, a pause or resume, a change of settings, a device's operation, a refresh of the picture, a task's switch or close, a run's stop) is therefore checked right after the client's connect: the program file of the process the Runtime's runtime-info.json names, as the system gives it and resolves it, must be <root>\\runtime\\<file> or <root>\\install\\builds\\<commit>\\runtime\\<file>. When it is not, or the system cannot tell (the process cannot be opened, its program file cannot be read or resolved), the connection is let go and nothing a person asked for is sent; the code comes with operation connect_runtime. Reads are not checked. Start does the same check itself on a Runtime it finds up, and neither starts nor records anything then.",
-      "common_causes": "The installation folder's actingd.config.json names another installation's state root, copied by hand or by a tool; the folder's Runtime program sits outside the folder through a link; a process this console may not query.",
+      "description": "A console that belongs to a single-location installation folder (root mode: started as <root>\\ui\\acui.exe, or with --root) takes the state root its configuration names as written, so a configuration copied from another installation leads it to that installation's Runtime. Every connection the console makes to a Runtime, a read's (status, schedule, settings, events, frames, material, the launcher's probe) as a person's (a launcher press, a shutdown request, a pause or resume, a change of settings, a device's operation, a refresh of the picture, a task's switch or close, a run's stop), is therefore checked before anything is connected: the program file of the process the state root's runtime-info.json names, read from the file alone, as the system gives it and resolves it, must be <root>\\runtime\\<file> or <root>\\install\\builds\\<commit>\\runtime\\<file>. When it is not, or the system cannot tell (its program file cannot be read or resolved), nothing is connected, read or sent; the code comes with operation connect_runtime. Start, finding such a Runtime, neither starts nor records anything.",
+      "common_causes": "The installation folder's actingd.config.json names another installation's state root, copied by hand or by a tool; the folder's Runtime program sits outside the folder through a link; a process this console may not query; a process that took the pid of a Runtime that ended without removing its runtime-info.json.",
       "handling": "Stop that Runtime from its own console, or fix the state_root in this installation folder's actingd.config.json so that it names this installation's own state root; the workbench's red words name the Runtime's process and program."
+    },
+    "console_runtime_gone": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "ui",
+      "layer": "ui",
+      "uncertain": false,
+      "values": {
+        "operation": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "1.0.0",
+      "description": "A console that belongs to a single-location installation folder (root mode) checks the Runtime its state root's runtime-info.json names before it connects to it (see console_runtime_not_this_root). When the process the file names does not exist, no Runtime runs there: the console connects to nothing, not to the address the file names either, and takes the Runtime for not running, so Start is offered; the code comes with operation connect_runtime.",
+      "common_causes": "The Runtime ended without removing its runtime-info.json: it crashed, was killed, or the machine went down.",
+      "handling": "Start the Runtime again from this console; the Runtime writes a new runtime-info.json as it starts."
     },
     "console_status_source_missing": {
       "category": "error",

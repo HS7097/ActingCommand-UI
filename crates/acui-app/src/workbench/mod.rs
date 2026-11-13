@@ -211,7 +211,8 @@ pub fn start(ui: &Ui, frame_gap: Duration) {
         }
     };
     let (live, slow) = (spawned(Lane::Live), spawned(Lane::Slow));
-    let tools = tools::spawn(launcher.tool_paths()).map_err(|error| error.to_string());
+    let tools = tools::spawn(launcher.tool_paths(), launcher.state_root.clone())
+        .map_err(|error| error.to_string());
     let preview_tally = Arc::new(PreviewTally::default());
     let generation = ui.model.borrow().pictures().generation();
     let root = launcher.state_root.clone();
@@ -859,7 +860,8 @@ fn probe_of(read: &LiveRead) -> Result<RuntimeFacts, ClientFailure> {
         }
         LiveRead::NotConnected(failure)
         | LiveRead::NoAnswer(failure)
-        | LiveRead::Trouble(failure) => Err(failure.clone()),
+        | LiveRead::Trouble(failure)
+        | LiveRead::NotThisRoot(failure) => Err(failure.clone()),
     }
 }
 
@@ -881,7 +883,8 @@ fn log_link(previous: &Link, link: &Link) {
         }
         (_, Link::NoAnswer(failure)) => format!("no answer: {}", failure_line(failure)),
         (_, Link::Trouble(failure)) => format!("trouble: {}", failure_line(failure)),
-        (_, Link::Unknown | Link::ThreadFailed) => return,
+        // What the check found is in the log already, once for each Runtime (`identity`).
+        (_, Link::Unknown | Link::NotThisRoot | Link::ThreadFailed) => return,
     };
     report::log(Lane::Live.name(), &line);
 }

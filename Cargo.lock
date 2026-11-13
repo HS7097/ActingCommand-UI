@@ -302,6 +302,7 @@ dependencies = [
  "acui-model",
  "acui-rows",
  "anyhow",
+ "serde_json",
 ]
 
 [[package]]

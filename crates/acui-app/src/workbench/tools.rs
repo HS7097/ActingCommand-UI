@@ -241,6 +241,10 @@ pub enum WatchdogRead {
     /// This run cannot tell where `actingctl` is.
     NoTool(ToolIssue),
     Failed(ToolFailure),
+    /// Root mode: not run, since the Runtime the state root names is not the installation
+    /// folder's, and the command asks a Runtime it finds for its health
+    /// (`acui_source::tool_may_connect`).
+    NotThisRoot,
 }
 
 impl WatchdogRead {
@@ -264,6 +268,10 @@ impl WatchdogRead {
             }
             Self::NoTool(issue) => format!("no watchdog status: {issue}"),
             Self::Failed(failure) => format!("no watchdog status: {failure}"),
+            Self::NotThisRoot => "no watchdog status: not run, the Runtime at the state root is \
+                                  not this installation folder's and the command would ask it for \
+                                  its health"
+                .to_owned(),
         }
     }
 
@@ -275,7 +283,7 @@ impl WatchdogRead {
             Self::Report(report) => {
                 matches!(report.task, TaskState::Differs | TaskState::Unread) || report.says_wrong()
             }
-            Self::NoTool(_) | Self::Failed(_) => true,
+            Self::NoTool(_) | Self::Failed(_) | Self::NotThisRoot => true,
         }
     }
 }
@@ -404,14 +412,16 @@ impl Round {
 
 /// The thread: each round runs what was asked since the last, `packs` first. The sender
 /// is what keeps it there. Nothing joins it: letting the sender go while a child runs
-/// leaves that child to end on its own.
-pub fn spawn(paths: Result<ToolPaths, ToolIssue>) -> io::Result<Sender<Job>> {
+/// leaves that child to end on its own. `state_root` is this run's: in root mode
+/// `watchdog status`, which asks a Runtime it finds for its health, is not run while the
+/// Runtime there is not the installation folder's.
+pub fn spawn(paths: Result<ToolPaths, ToolIssue>, state_root: PathBuf) -> io::Result<Sender<Job>> {
     let (sender, commands) = mpsc::channel();
-    spawn_worker(THREAD, move || run(&paths, &commands))?;
+    spawn_worker(THREAD, move || run(&paths, &state_root, &commands))?;
     Ok(sender)
 }
 
-fn run(paths: &Result<ToolPaths, ToolIssue>, commands: &Receiver<Job>) {
+fn run(paths: &Result<ToolPaths, ToolIssue>, state_root: &Path, commands: &Receiver<Job>) {
     while let Ok(job) = commands.recv() {
         let mut round = Round::default();
         round.add(job);
@@ -433,9 +443,15 @@ fn run(paths: &Result<ToolPaths, ToolIssue>, commands: &Receiver<Job>) {
         }
         if let Some(ask) = round.watchdog {
             let started = Instant::now();
-            let read = match catch_unwind(AssertUnwindSafe(|| read_watchdog(paths))) {
-                Ok(read) => read,
-                Err(panic) => WatchdogRead::Failed(ToolFailure::Panicked(panic_message(&*panic))),
+            let read = if !acui_source::tool_may_connect(state_root) {
+                WatchdogRead::NotThisRoot
+            } else {
+                match catch_unwind(AssertUnwindSafe(|| read_watchdog(paths))) {
+                    Ok(read) => read,
+                    Err(panic) => {
+                        WatchdogRead::Failed(ToolFailure::Panicked(panic_message(&*panic)))
+                    }
+                }
             };
             let took = started.elapsed();
             report::post(THREAD, move || super::watchdog_read(ask, read, took));

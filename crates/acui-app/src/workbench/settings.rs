@@ -64,6 +64,9 @@ pub enum SettingsView {
     /// None can be read now: it does not answer, no thread reads it, or this run has no
     /// state root (`paint`'s to tell).
     Unreachable,
+    /// Root mode: the Runtime that runs is not the installation folder's, and nothing of it
+    /// is read.
+    NotThisRoot,
     /// Nothing has come back yet, or the Runtime answers and no fact snapshot of it has.
     Reading,
     /// The fact snapshot reads since the last that came failed.
@@ -179,6 +182,7 @@ pub fn view(
         Link::Online { .. } => {}
         Link::Unknown => return SettingsView::Reading,
         Link::Absent(_) => return SettingsView::NotRunning,
+        Link::NotThisRoot => return SettingsView::NotThisRoot,
         Link::NoAnswer(_) | Link::Trouble(_) | Link::ThreadFailed => {
             return SettingsView::Unreachable
         }
@@ -387,7 +391,8 @@ pub fn autostart_of(read: &WatchdogRead) -> AutostartView {
         WatchdogRead::NoTool(ToolIssue::NotUnderRuntime(_) | ToolIssue::OtherConfig { .. }) => {
             AutostartView::NotInstalledLayout
         }
-        WatchdogRead::Failed(_) => AutostartView::Unreadable,
+        // Root mode: not run, the Runtime up not being the installation folder's.
+        WatchdogRead::Failed(_) | WatchdogRead::NotThisRoot => AutostartView::Unreadable,
     }
 }
 

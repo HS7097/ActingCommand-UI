@@ -129,6 +129,7 @@ use super::model::{DeviceBusy, Link, Page};
 use super::read::panic_message;
 use super::settings::{BackendGroup, SettingsView};
 use super::{failure_line, paint};
+use crate::identity;
 use crate::launcher::spawn_worker;
 use crate::ledger::resume::{lifter, Lifter, ResumeElsewhere};
 use crate::report;
@@ -296,7 +297,9 @@ pub enum AccountSaid {
     /// A Runtime that cannot lift a pause on condition.
     Unsupported,
     Unconfirmed,
-    NotSent,
+    /// No connection: nothing was sent. In root mode, because the Runtime up is not the
+    /// installation folder's (`not_this_root`, `identity::not_this_root`).
+    NotSent { not_this_root: bool },
     /// The system refused the thread: nothing was sent. The error is the system's.
     NoThread { error: String },
     /// A press was out across a restart.
@@ -372,7 +375,9 @@ pub enum Said {
     /// A Runtime that cannot lift a pause on condition.
     Unsupported,
     Unconfirmed,
-    NotSent,
+    /// No connection: nothing was sent. In root mode, because the Runtime up is not the
+    /// installation folder's (`not_this_root`, `identity::not_this_root`).
+    NotSent { not_this_root: bool },
     /// The system refused the thread: nothing was sent. The error is the system's.
     NoThread { error: String },
     /// A write was out across a restart.
@@ -2100,8 +2105,9 @@ impl Written {
                     Said::Refused { write, code: code.to_owned() }
                 }
             }
-            Self::Pause(PauseOutcome::NotSent(_)) | Self::Resume(ResumeOutcome::NotSent(_)) => {
-                Said::NotSent
+            Self::Pause(PauseOutcome::NotSent(failure))
+            | Self::Resume(ResumeOutcome::NotSent(failure)) => {
+                Said::NotSent { not_this_root: identity::not_this_root(&failure) }
             }
             Self::Pause(PauseOutcome::Unconfirmed(_))
             | Self::Resume(ResumeOutcome::Unconfirmed(_)) => Said::Unconfirmed,
@@ -2119,7 +2125,9 @@ impl Written {
                 }
                 why => Said::ConfigRefused(why),
             },
-            Self::Config(ConfigOutcome::NotSent(_)) => Said::NotSent,
+            Self::Config(ConfigOutcome::NotSent(failure)) => {
+                Said::NotSent { not_this_root: identity::not_this_root(&failure) }
+            }
             // A switch may still go on: only a `Status` that shows it over lets a snapshot
             // judge it. The thread's panic too, which brings no answer at all.
             Self::Config(ConfigOutcome::Unconfirmed(_)) | Self::Panicked(_) => match write {
@@ -2336,8 +2344,9 @@ impl AccountWritten {
                     AccountSaid::Refused { write, code: code.to_owned() }
                 }
             }
-            Self::Pause(PauseOutcome::NotSent(_)) | Self::Resume(ResumeOutcome::NotSent(_)) => {
-                AccountSaid::NotSent
+            Self::Pause(PauseOutcome::NotSent(failure))
+            | Self::Resume(ResumeOutcome::NotSent(failure)) => {
+                AccountSaid::NotSent { not_this_root: identity::not_this_root(&failure) }
             }
             Self::Pause(PauseOutcome::Unconfirmed(_))
             | Self::Resume(ResumeOutcome::Unconfirmed(_))
@@ -2809,6 +2818,7 @@ fn quiet_shown(ui: &Ui, target: QuietTarget) -> Option<QuietNow> {
                     Some(QuietNow { of: QuietOf::Host, quiet: host_quiet.quiet })
                 }
                 SettingsView::NotRunning
+                | SettingsView::NotThisRoot
                 | SettingsView::Unreachable
                 | SettingsView::Reading
                 | SettingsView::Failed

@@ -61,6 +61,8 @@ pub enum Down {
     NotRunning,
     NoAnswer,
     Trouble,
+    /// Root mode: the Runtime up is not the installation folder's, and nothing of it is read.
+    NotThisRoot,
     NoThread,
 }
 
@@ -73,6 +75,7 @@ impl Down {
             Link::Absent(_) => Some(Self::NotRunning),
             Link::NoAnswer(_) => Some(Self::NoAnswer),
             Link::Trouble(_) => Some(Self::Trouble),
+            Link::NotThisRoot => Some(Self::NotThisRoot),
             Link::ThreadFailed => Some(Self::NoThread),
         }
     }

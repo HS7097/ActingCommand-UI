@@ -30,6 +30,7 @@ use super::paint;
 use super::picture::{RefreshTicket, Refreshed};
 use super::preview::{self, RefreshCount, REFRESH_COOLDOWN};
 use super::read::panic_message;
+use crate::identity;
 use crate::launcher::spawn_worker;
 use crate::report;
 use crate::ui::{self, Ui};
@@ -60,7 +61,10 @@ impl Landing {
                 let host = failure.host.map(|(code, _)| code);
                 (Refreshed::Refused { host, class: failure.runtime_code }, None, None)
             }
-            Self::Answer(ObserveOutcome::NotSent(_)) => (Refreshed::NotSent, None, None),
+            Self::Answer(ObserveOutcome::NotSent(failure)) => {
+                let not_this_root = identity::not_this_root(&failure);
+                (Refreshed::NotSent { not_this_root }, None, None)
+            }
             Self::Answer(ObserveOutcome::Unconfirmed(_)) | Self::Panicked(_) => {
                 (Refreshed::Unconfirmed, None, None)
             }

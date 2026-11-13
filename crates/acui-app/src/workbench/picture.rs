@@ -152,8 +152,9 @@ pub enum Refreshed {
     Refused { host: Option<String>, class: Option<String> },
     /// Nothing says what became of it: it may have captured one. It is not sent again.
     Unconfirmed,
-    /// No connection: nothing was sent.
-    NotSent,
+    /// No connection: nothing was sent. In root mode, because the Runtime up is not the
+    /// installation folder's (`not_this_root`, `identity::not_this_root`).
+    NotSent { not_this_root: bool },
     /// The system refused the thread: nothing was sent. The error is the system's.
     NoThread { error: String },
     /// One was out across a restart.
@@ -326,6 +327,9 @@ pub enum Offline {
     NotRunning,
     /// One may run, and does not answer, or reading it went wrong.
     Unreachable,
+    /// Root mode: the one that runs is not the installation folder's, and nothing of it is
+    /// read.
+    NotThisRoot,
 }
 
 /// What the picture area shows, before its words.
