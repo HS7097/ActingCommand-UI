@@ -26,8 +26,8 @@ use acui_source::workbench::backends::{
 };
 use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
 use acui_source::workbench::goals::{
-    Closed, Form, GoalRow, Goals, GoalsPage, Pending, PoolRow, Progress, Reading, Stored,
-    StoredGoal,
+    newer_than_this_console, Closed, Form, GoalRow, Goals, GoalsPage, Pending, PoolRow, Progress,
+    Reading, Stored, StoredGoal,
 };
 use acui_source::workbench::pack::{PackSource, PackState};
 use acui_source::workbench::preview::Overlay;
@@ -3001,6 +3001,9 @@ fn goals_data(labels: &Labels, view: &GoalsView) -> (GoalListData, Vec<GoalRowDa
         }
         GoalsView::NoAccount => instead(labels.picture_no_account.to_owned(), false, false),
         GoalsView::Reading => instead(labels.goals_reading.to_owned(), false, false),
+        GoalsView::Failed(failure) if newer_than_this_console(failure.code) => {
+            instead(fill(labels.goals_newer_answer, &[&failure_codes_text(failure)]), true, false)
+        }
         GoalsView::Failed(failure) => {
             instead(fill(labels.goals_failed, &[&failure_codes_text(failure)]), true, false)
         }

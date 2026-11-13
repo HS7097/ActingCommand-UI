@@ -1117,6 +1117,9 @@ pub struct Labels {
     pub goals_down: &'static str,
     pub goals_reading: &'static str,
     pub goals_failed: &'static str,
+    /// The goals read failed because the client could not decode the answer
+    /// (`goals::newer_than_this_console`); `{}` the codes.
+    pub goals_newer_answer: &'static str,
     pub goals_late: &'static str,
     pub goals_unsupported: &'static str,
     pub goals_later: &'static str,
@@ -2384,6 +2387,7 @@ pub const ZH: Labels = Labels {
     goals_down: "{} · 读不到目标",
     goals_reading: "正在读这个实例的目标…",
     goals_failed: "目标暂时读不到（{}），稍后会自动再读",
+    goals_newer_answer: "读不懂 Runtime 的答复：多半是这份目标记录或 Runtime 比这一版监控台新，需要更新版的监控台（{}）",
     goals_late: "目标有一阵没读到新的了，稍后会自动再读",
     goals_unsupported: "这一版 Runtime 读不了目标（{}）",
     goals_later: "这里暂时只能看：在这里设定目标要等以后的版本；现在可以用 Lab（命令行或 MCP）设定。",
@@ -3506,6 +3510,7 @@ pub const EN: Labels = Labels {
     goals_down: "{} · the goals cannot be read",
     goals_reading: "Reading this instance's goals…",
     goals_failed: "The goals cannot be read right now ({}); they are read again by themselves shortly",
+    goals_newer_answer: "The Runtime's answer cannot be read: most likely this goal record or the Runtime is newer than this console, which needs a newer console ({})",
     goals_late: "Nothing new of the goals came for a while; they are read again by themselves shortly",
     goals_unsupported: "This version of the Runtime cannot read goals ({})",
     goals_later: "Shown here only: setting goals here comes in a later version; the Lab (command line or MCP) can set them now.",

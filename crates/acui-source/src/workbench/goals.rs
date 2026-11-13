@@ -402,6 +402,22 @@ fn closed(reason: ResourceTargetsRejectionReason) -> Closed {
     }
 }
 
+/// The client's code for a receipt it cannot decode (Runtime `crates/runtime-client/src/codes.rs:19`
+/// at 803fdfa3, `runtime_receipt_decode_failed`). The view is decoded with the contract's strict
+/// types inside the receipt (`crates/runtime-client/src/client.rs:1941-1958`; the view, a
+/// condition, its state and a row all `deny_unknown_fields`:
+/// `crates/actingcommand-contract/src/resource_targets.rs:48`, `:57`, `:120`, `:213`), so a view
+/// of a shape newer than this console's client fails there, before any of it reaches [`page`].
+pub const RECEIPT_DECODE_FAILED: &str = "runtime_receipt_decode_failed";
+
+/// Whether a failed `ResourceTargetView` read, with the client's own `code`, is most likely an
+/// answer newer than this console: the client could not decode the receipt
+/// ([`RECEIPT_DECODE_FAILED`]). The Goals tab then says so, with the codes, instead of a bare
+/// read failure; a damaged answer reads the same, which is why it says "most likely".
+pub fn newer_than_this_console(code: &str) -> bool {
+    code == RECEIPT_DECODE_FAILED
+}
+
 /// A reason as the wire spells it (snake case); its variant's name should that ever fail.
 fn spelled(reason: ResourceTargetsRejectionReason) -> String {
     match serde_json::to_value(reason) {
@@ -413,9 +429,24 @@ fn spelled(reason: ResourceTargetsRejectionReason) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        page, Closed, Document, Form, GoalRow, Goals, Pending, PoolRow, Progress, Reading, Stored,
-        StoredGoal,
+        newer_than_this_console, page, Closed, Document, Form, GoalRow, Goals, Pending, PoolRow,
+        Progress, Reading, Stored, StoredGoal, RECEIPT_DECODE_FAILED,
     };
+
+    #[test]
+    fn only_an_undecodable_receipt_reads_as_newer_than_this_console() {
+        assert_eq!(RECEIPT_DECODE_FAILED, "runtime_receipt_decode_failed");
+        assert!(newer_than_this_console("runtime_receipt_decode_failed"));
+        for other in [
+            "runtime_receipt_invalid",
+            "runtime_operation_unsupported",
+            "runtime_unavailable",
+            "runtime_info_decode_failed",
+            "",
+        ] {
+            assert!(!newer_than_this_console(other), "{other}");
+        }
+    }
     use actingcommand_contract::ResourceTargetView;
     use serde_json::{json, Value};
 

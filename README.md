@@ -772,7 +772,11 @@ tab says so. The view is read on the switches' terms (the main page of a window 
 tab, the Runtime online, that instance only): every 60 seconds, 60 after a failure, and at once when the tab,
 the instance or the owner epoch changes or a write lands; the live view and the task list read nothing
 meanwhile. A read that fails shows no rows of an earlier one: it says in red "The goals cannot be read right
-now" with its codes (the host's, the Runtime's, the client's), and nothing new for 180 seconds says in amber
+now" with its codes (the host's, the Runtime's, the client's); when the client cannot decode the answer
+(`runtime_receipt_decode_failed`: the view is decoded with strict types inside the receipt, so a shape newer
+than this console's client fails there), it says in red instead "The Runtime's answer cannot be read: most
+likely this goal record or the Runtime is newer than this console, which needs a newer console", with the
+codes too; nothing new for 180 seconds says in amber
 that nothing new of the goals came for a while. A Runtime that does not have the view (it answers
 `not_implemented`, or does not know the request) says so with its code, and the view is not read again until
 the tab is shown anew. Each read takes the policy's locks and the fact write gate a moment, so it is read
