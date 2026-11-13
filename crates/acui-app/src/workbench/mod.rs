@@ -571,7 +571,7 @@ fn live_landed(ui: &Ui, read: LiveRead) {
     if let Some(alias) = &landed.unknown_account {
         report::log(
             "acui-picture",
-            &format!("--account {alias}: no account has that alias; the first one's picture shows"),
+            &format!("--account {alias}: no instance has that name; the first one's picture shows"),
         );
     }
     // Before the cards: the explanation's clock starts here, and they go by it. Every read of the
@@ -749,7 +749,7 @@ fn packs_landed(ui: &Ui, alias: &str, read: Result<PacksRead, ClientFailure>) {
     }
     if landed.unversioned {
         let line = format!(
-            "the task switches of {alias} name no version of the account's own scope: no switch \
+            "the task switches of {alias} name no version of the instance's own scope: no switch \
              is offered"
         );
         if ui.model.borrow_mut().first_told(&line) {

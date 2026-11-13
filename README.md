@@ -272,10 +272,10 @@ under "Launcher"); v0.12.54's configuration revision 28 adds the value `auto` of
 `idle.return_home_min_gap_ms` and `idle.stop_emulator_min_gap_ms`, each also per instance (#386 IDLE-2),
 and `instance.<instance id>.scheduling.pool_lines` (#428 SCHED-C1e), every new key `hidden` in `ui_tier`,
 so the settings page shows no new row; the settings page shows `auto` as "choose by the idle time", and
-an account's rules panel says "It is now “choose by the idle time”, which is not offered here" and does
+an instance's rules panel says "It is now “choose by the idle time”, which is not offered here" and does
 not offer it; the requests `PackScheduleView` and `EditPackSchedule` gained the success codes
 `request_pack_schedule_view_completed` and `request_edit_pack_schedule_completed` (#429 R-8), and the
-console reads an account's `PackScheduleView` and writes `EditPackSchedule` of the account's own scope
+console reads an instance's `PackScheduleView` and writes `EditPackSchedule` of the instance's own scope
 (the Daily Tasks switches, below, and the rescue bar's Close This Task, which writes the same row); `contained_task_state_invalid` says what was invalid with the optional values
 `state_problem` (vocabulary `state_problem`: `held_state_unusable`, `no_move_from_page`,
 `runtime_invariant`, `transition_refused`), `phase_id`, `package_id`, `page_id` and `pack_operation_id`
@@ -298,7 +298,7 @@ completes, which one built on v0.12.47, where the kind had no success code, woul
 run the scheduler or the Runtime itself started, `scheduled_contained_task_not_client_cancellable`, names who
 started it with the key `run_origin` (vocabulary `run_origin`: `policy`, `host`); from this version the
 console's Stop This Run on the rescue bar stops a run another tool started (see after Pause This
-Account); since v0.12.47 the interfaces the console meets have not moved (`actingd-config` [5, 27],
+Instance); since v0.12.47 the interfaces the console meets have not moved (`actingd-config` [5, 27],
 `ledger` [3, 7], `runtime-client` [3, 6], `StopInstanceRun` being a revision-3 kind; `package` [3, 8],
 since v0.12.50, is acsetup's), the contract crate otherwise only gained the runtime fact
 `config.catalog_provenance` (#428 SCHED-C1b), the list readings under `inventory.list.` (#428 S168-4), a
@@ -594,26 +594,26 @@ On the frame, beside the event's own geometry:
 ## Running
 
 ```
-acui [--root <install_folder>] [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--account <alias>] [--lang <zh|en>]
+acui [--root <install_folder>] [--state-root <state_root>] [--source <auto|offline|online>] [--tab <events|observation|changes|errors|health|lab>] [--page <main|settings>] [--account <instance_name>] [--lang <zh|en>]
 acui --help
 ```
 
 The main window is the **workbench**. Its top bar has a lamp with the Runtime in plain words, Start, a
 "Troubleshooting and Ledger" button and, at its far end, Settings; under it is the plain-words result of
-the last press. Then one of two pages. The main page has two columns: the left one is for the accounts,
-with an "Add Account or Device" button that is off (see "Instance configuration"); the right one has the
+the last press. Then one of two pages. The main page has two columns: the left one is for the instances,
+with an "Add Instance or Device" button that is off (see "Instance configuration"); the right one has the
 settings file's problems, what falls short of the theme and where the technical log is. Settings switches
 to the settings page, where the same button reads "Back to Workbench": first those same lines, then the
 Runtime's settings, then "Runtime" (Request Shutdown, "Start the Runtime again automatically") and
 "Appearance" (the text size, the language and the theme). The Runtime's settings come from the running Runtime (read again on going to the page), in two
 groups, "Everyday" and "Advanced": which keys show and in which group is the Runtime's own tiering, and the
 four settings of the performance preset are only on the top bar. Each says its value, where it comes
-from, how it is changed (shown only for now, changed under that account's Auto Rules on the main page,
+from, how it is changed (shown only for now, changed under that instance's Auto Rules on the main page,
 changed in the configuration file with a Runtime restart, or set by the installer) and when a change
 takes effect; one the file does not name and that has no default says "not set" rather than being left
-out. Everyday starts with the quiet times of all accounts (`scheduling.blackout.host`): one line per
+out. Everyday starts with the quiet times of all instances (`scheduling.blackout.host`): one line per
 time, each with Delete, then Add a Time…, Delete All (asked once) and Back to File Setting, the same
-form as an account's own under its Auto Rules on the main page; each change sends the whole list online
+form as an instance's own under its Auto Rules on the main page; each change sends the whole list online
 once; a start equal to its end is not sent, and Whole Day makes 0:00 to 0:00 the next day. Of the other
 rows, only "Days to keep unconfirmed evidence frames" is changed here: type a whole number and press
 Save, or empty the field and save to go
@@ -634,7 +634,7 @@ MuMu native capture: picking it brings that capture along, and picking another c
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
 switch too (both rows together when clearing one alone could break that pair), unless the file's value is
 the one in effect: then the device is left as it is, and the line says only that the file's value is back.
-The result has a line of its own under the top bar, naming the account, and a refusal says why in words:
+The result has a line of its own under the top bar, naming the instance, and a refusal says why in words:
 the device is busy (with what), played, fenced, not running, or the new backend did not open (and why: for
 MuMu native touch, say, the game package configured for the device is not installed; since v0.12.40 a game
 that is not running is no reason, and only a Runtime rolled back to v0.12.39 or earlier still gives it) and the
@@ -661,81 +661,81 @@ window's reader stops after the page in hand; opening it again is a new window a
 the workbench ends the program, except while an unlock runs (see "Launcher").
 
 The main page's right column has two tabs, **Live View** and **Daily Tasks**, before the alias of the
-account picked on the left; the tab picked stays for the run, across accounts and pages, Live View being
-the first. Daily Tasks is that account's task packages, those the Runtime's switch view lists with a
+instance picked on the left; the tab picked stays for the run, across instances and pages, Live View being
+the first. Daily Tasks is that instance's task packages, those the Runtime's switch view lists with a
 switch at the front of their row (see the next paragraph): one row per package, with its name (its
 package id when the game's `ui.json` gives none), "Irreversible" when the Runtime derives it so and
 "Risky" when its `ui.json` entry names a risk word (the word itself is not shown), why it runs or does
 not run now in a sentence, and its `ui.json` summary in grey ("No description given" without one). The
-sentence is "Running" (for a direct run, "not scheduled") while the status says the account runs that
-package; where the dispatch stands while the task selected for the account is one of the package's;
+sentence is "Running" (for a direct run, "not scheduled") while the status says the instance runs that
+package; where the dispatch stands while the task selected for the instance is one of the package's;
 else the words of the package's first candidate row in the Runtime's own order, chosen by its reason
 code (a `benefit_unknown` by its `benefit_gap`, a `pool_line_held` by its `pool_line_hold`), with
 "(earliest hh:mm)" when that row has a wake, and under it the other sentences of its tasks once each. The
-account cards say a reason in the same words. No reason code, count or scheduler number shows: a code
+instance cards say a reason in the same words. No reason code, count or scheduler number shows: a code
 the console has no words for says "Not scheduled right now", and the technical log hears of it once.
 With a `ui.json` the rows go by its groups and its order, the rest under "Other"; without one, by name.
 Which package a task runs comes from the `task_ids` of the same `actingctl packs` run the names come from:
 a task no row of it lists, and every task when that run failed or had warnings, is listed by its task id
-under "This account: some plans do not match a task pack", which opens. Above the rows: the account's
+under "This instance: some plans do not match a task pack", which opens. Above the rows: the instance's
 pause or fence in its card's words (another tool's pause without the reason it wrote), which round of the
 evaluation the rows are of ("As evaluated in the round of hh:mm"), and whether the names cannot be read or
 not every task is listed. The list reads one
-`ScheduleExplanation` of that one account with its candidate rows, answered from memory without the
+`ScheduleExplanation` of that one instance with its candidate rows, answered from memory without the
 ledger, only while its tab shows on the main page of a window that is not minimized and the Runtime is
-online: every 15 seconds, 30 after a failure, and at once when the tab, the account or the owner epoch
+online: every 15 seconds, 30 after a failure, and at once when the tab, the instance or the owner epoch
 changes; the live view reads nothing meanwhile. While the Runtime does not answer, a read fails, nothing
-new came for 60 seconds, the account is not in the evaluation or none was made yet, no row shows, only
+new came for 60 seconds, the instance is not in the evaluation or none was made yet, no row shows, only
 why.
 
-The switches (#429 R-8, from Runtime 0.12.55) are drawn from that account's `PackScheduleView` alone:
+The switches (#429 R-8, from Runtime 0.12.55) are drawn from that instance's `PackScheduleView` alone:
 ticked means the Runtime schedules the package now. Under the name, in grey, where that comes from: "Set
-for this account: turned off (since hh:mm)", "Set for this account: on", "Inherited from the server: off",
+for this instance: turned off (since hh:mm)", "Set for this instance: on", "Inherited from the server: off",
 "Inherited from the game: on", "The standard pack's default: …" (not before R-9), with ", until hh:mm"
 when its row ends; a package no row decides now says nothing (the note above the rows says that tasks
 never set go by their standard pack's rules), or "Changes at hh:mm" when a row of it begins later. The
-console writes the account's own layer only: off is one row from now on, without an end, that the package
-is not scheduled; on goes back to normal, withdrawing the account's own rows of it when they decide it and
+console writes the instance's own layer only: off is one row from now on, without an end, that the package
+is not scheduled; on goes back to normal, withdrawing the instance's own rows of it when they decide it and
 the layer below schedules it, and else one row from now on that it is. Either replaces every row of that
-package for the account, rows that begin later included, and no other package's; a run of it already
-going finishes as usual. Each write names the version of the account's own scope the view gave; when
+package for the instance, rows that begin later included, and no other package's; a run of it already
+going finishes as usual. Each write names the version of the instance's own scope the view gave; when
 something else (another tool, the Lab, an agent) changed it since, the Runtime refuses it as a conflict
-and changes nothing, the row says in amber "This account's task switches were changed elsewhere and are
+and changes nothing, the row says in amber "This instance's task switches were changed elsewhere and are
 refreshed: check them, then press again", and nothing is sent again; `fact_observation_not_newer`
 (another list landed in the same millisecond) is sent once more at once on the same connection. One write
-of an account is out at a time: while it is out, and after an answer that may have changed the switches
+of an instance is out at a time: while it is out, and after an answer that may have changed the switches
 or says something else did (it took, a conflict, the same millisecond twice, not confirmed) until a read
-of the view begun after it has come, every switch of the account is greyed out, still showing what was
+of the view begun after it has come, every switch of the instance is greyed out, still showing what was
 read before; after any other refusal, or a write not sent, they come back at once. The rescue bar's Close
-This Task (see "Launcher") writes the same row as off and is one write of the account too: while it is
-out every switch of the account is greyed out, and after one that may have written (it took, or is not
+This Task (see "Launcher") writes the same row as off and is one write of the instance too: while it is
+out every switch of the instance is greyed out, and after one that may have written (it took, or is not
 confirmed) they wait for a read of the view begun after it; while a switch's write is out, that button,
-and Stop This Run of a run another tool started too, is greyed out and says "This account's task
+and Stop This Run of a run another tool started too, is greyed out and says "This instance's task
 switches are being changed; a moment". What each press came
 to shows under its row, with when it landed (but for "Changing…", a conflict, a thread that could not
-start and a restart), until that row is pressed again, the list shows another account, or the Runtime
+start and a restart), until that row is pressed again, the list shows another instance, or the Runtime
 restarts; the list hidden and shown again (another tab or page, the window minimized, the Runtime not
 answering a while) keeps it, and one that took says nothing more. A package the view names that this
 round's evaluation does not match still has a row ("This round's evaluation does not match it"); one the
 list has that the view does not name has no switch and says "This task pack cannot be switched on or off
 on its own here", and the technical log hears of it once. The view is read on the list's terms (the main
-page of a window that is not minimized, this tab, the Runtime online, that account only), every 60
-seconds, 60 after a failure, and at once when the tab, the account or the owner epoch changes, a write
+page of a window that is not minimized, this tab, the Runtime online, that instance only), every 60
+seconds, 60 after a failure, and at once when the tab, the instance or the owner epoch changes, a write
 lands, or after a conflict; nothing new for 180 seconds counts as unreadable, the note above the rows
 says in amber that the task switches cannot be read right now, and no switch shows while the list's rows
 still do. A Runtime before 0.12.55
 (the view answers `not_implemented`, or before 0.12.30 is not known) has the note say that this version of
 the Runtime cannot switch single tasks, and the view is not read on its clock again in that owner epoch;
 but since what said so may have been a connection that ended just before its answer and was made again in
-the same owner epoch, the list shown anew 60 seconds or more after it (the tab opened, another account
+the same owner epoch, the list shown anew 60 seconds or more after it (the tab opened, another instance
 picked, the window restored from minimized, the main page shown again, the Runtime answering again after
 a while) reads the view once more: an answer that says so again keeps it, one that shows the switches
 lets it go and the view is read as usual; a list hidden again before that read lands drops it, and what
 was said before holds until the list is shown anew again. Each read has
 the Runtime bring its fact store up to the ledger under the fact write gate, so it is read seldom; the
 technical log's read counts at the end of a run call it `pack schedule`. The Runtime's own reading of
-account data (`_fact_refresh`) is not held by a row that turns a package off; a package only a row still
-names, which no task of the account uses any more, is not in the view, so it is neither shown nor
+instance data (`_fact_refresh`) is not held by a row that turns a package off; a package only a row still
+names, which no task of the instance uses any more, is not in the view, so it is neither shown nor
 withdrawn here. Once a package turned off reaches the deferral step, the card and the list say "This task
 is turned off".
 
@@ -786,7 +786,7 @@ one the configuration names, as written, so a configuration copied from another 
 console to that installation's Runtime (on this machine, perhaps the one in daily use). So in root mode the
 console checks the Runtime its state root names before it connects to it at all, for its reads (the
 workbench's status, schedule, settings and picture, the ledger windows, the launcher's probes) as for a
-person's requests (Request Shutdown, recording a Start, Pause All and Put All on Duty, an account's pause and
+person's requests (Request Shutdown, recording a Start, Pause All and Put All on Duty, an instance's pause and
 resume, a resume in the ledger window, a change of settings, a device's operation, a refresh of the picture,
 switching or closing a task, stopping a run). It takes the process id from the state root's
 `runtime-info.json`, reading the file alone, and asks the system for that process's program file, which, as
@@ -822,8 +822,8 @@ name; the technical log's `place` line of each start names the installation fold
 `--source` selects the ledger window's read face (see above).
 `--tab` specifies the ledger window's startup tab (for screenshots and review), and its values are the
 views' own wire names. `--page` is of the same kind: it only picks the workbench page the window opens on,
-`main` (the default) or `settings` (for screenshots). `--account` is of the same kind too: the account card
-selected when the window opens (the first card otherwise, and when no account of that alias is listed, which
+`main` (the default) or `settings` (for screenshots). `--account` is of the same kind too: the instance card
+selected when the window opens, by the instance's name (the first card otherwise, and when no instance of that name is listed, which
 the technical log says). `--lang` applies to **this run only**, overrides the language in the settings
 file, and is not written back to the settings file.
 
@@ -985,9 +985,9 @@ backslashes.
 
 `resume_elsewhere_reasons` names the pauses the console leaves to whoever set them. The Runtime keeps
 no actor with a pause, only its reason, so the pauses that must not be lifted from here are named by
-their reasons: a pause with one of them gets neither Put All on Duty, Resume This Account nor "Resume
+their reasons: a pause with one of them gets neither Put All on Duty, Resume This Instance nor "Resume
 Scheduling…", only the words "this pause is to be lifted by whoever set it", on the top bar, on the
-account cards and in the ledger window. No box writes the key, and a save of another key keeps its line byte for byte, like any
+instance cards and in the ledger window. No box writes the key, and a save of another key keeps its line byte for byte, like any
 line; the 0.12 setup wizard never writes this global file (it writes only `<root>\acui.toml` in the root
 it installs, with the one line `lang`; see "Setup wizard acsetup"), so it never drops the line. It is one line, its key bare or in quotes, a TOML array of
 strings in double or single quotes, a trailing comma allowed; `[]`, or no line at all, is the default:
@@ -998,7 +998,7 @@ an item not quoted or not such a reason, a comment after the value, a line of th
 key in quotes that do not pair — is said in red at the top of every window, with the file and the
 line, and **fails closed**: until it is fixed, whatever another line of the key says, no pause except
 the console's own two offers a resume anywhere in the console: Pause All, the global pause with reason
-`console_pause_all`, and Pause This Account, an instance's pause with reason `console_pause_account`
+`console_pause_all`, and Pause This Instance, an instance's pause with reason `console_pause_account`
 (see "Launcher"); either reason on the other scope gets none. A settings file that is there but
 cannot be read, or no configuration directory, fails closed the same way. A deployment's pause stays
 the installer's in any case, and a pause the Lab's rescue module set stays its operation's (see
@@ -1128,40 +1128,40 @@ confirms it, and a pause whose reason the settings file lists in `resume_elsewhe
 "Settings file") is to be lifted by whoever set it, so it cannot be lifted there. The ledger window can
 resume, conditionally, a pause another tool set (below). The global pause the setup wizard sets after a
 new installation's first start (reason `first-start`) has words of its own: Put All on Duty's
-confirmation, the account cards and the line under the task list say it is the pause after setup, to be
+confirmation, the instance cards and the line under the task list say it is the pause after setup, to be
 lifted once all looks right; who lifts it, and how, is as for any other tool's global pause. Those words go
 by the reason string alone: a global pause another tool sets with the same reason `first-start` is shown
 the same way. Start at boot is an option of the setup wizard; see "Setup wizard acsetup".
 
-Each account's card has a button of its own. While the account has no pause of its own it is **Pause
-This Account**: one `PauseScheduling` of that instance alone, with the console's own reason
+Each instance's card has a button of its own. While the instance has no pause of its own it is **Pause
+This Instance**: one `PauseScheduling` of that instance alone, with the console's own reason
 `console_pause_account` and the same drain timeout as Pause All (the lowest the Runtime takes, 1 s), sent
 once on a worker thread over a fresh person's connection (actor `user`) and never again by itself. No new
-task of that account is scheduled. Unlike the global pause an instance pause drains: a task still running
-on the account once that second has passed is asked to stop at its next checkpoint, and the Runtime
+task of that instance is scheduled. Unlike the global pause an instance pause drains: a task still running
+on the instance once that second has passed is asked to stop at its next checkpoint, and the Runtime
 answers once the device is handed back, so a press can take about half a minute, which the card says
 while it is out. Under the pause the console set there, once its device is handed back, the button is
-**Resume This Account**: one conditional `ResumeScheduling` of that instance, its condition the owner
+**Resume This Instance**: one conditional `ResumeScheduling` of that instance, its condition the owner
 epoch and the revision of the status read the card was painted from, so the Runtime refuses it and lifts
 nothing once that pause has changed. It goes at one press, without the confirmation Put All on Duty asks
 of another tool's pause, since the console set this pause itself. The resume connects the device again;
 a reconnect that fails is said in red with its code, and the resume stands. What a press came to is said
 on the card: done (a resume done while a global pause holds adds that no task is scheduled for the
-account until that one is lifted too); a pause that already holds, which keeps its reason; a refusal,
+instance until that one is lifted too); a pause that already holds, which keeps its reason; a refusal,
 in red, its code verbatim and the code's words (a fixture instance, for one, is refused with
 `fixture_execution_scope_forbidden`); or not confirmed, which is not sent again. While
 `resume_elsewhere_reasons` cannot be used the card still lifts this pause, as the top bar still lifts its
 own Pause All; a settings file that lists `console_pause_account` leaves it to "whoever set it", like
-any reason listed. The card resumes only the console's own account pause: any other pause of the
-account, another tool's or one set with `actingctl pause --instance`, is said on the card by who lifts it
+any reason listed. The card resumes only the console's own instance pause: any other pause of the
+instance, another tool's or one set with `actingctl pause --instance`, is said on the card by who lifts it
 as before, and the ledger window resumes those it may (below). From the command line, `actingctl pause
 --state-root <state root> --instance <alias>` and `actingctl resume` with the same flags, or the MCP tools
 `ac_pause` / `ac_resume` (see "MCP for agents"), still pause and resume one instance.
 
-Over the live view, the rescue bar has one more row while the account does something: **Stop This Run**
+Over the live view, the rescue bar has one more row while the instance does something: **Stop This Run**
 for a run another tool started (#429 UI-3e2, R-6's first slice, Runtime v0.12.53 or later), and **Close
 This Task** for a run the scheduler dispatched (UI-3e2b, R-8 and R-6b, Runtime v0.12.55 or later); a
-scheduled run has no button that only stops it. It can be pressed while the account's activity in the
+scheduled run has no button that only stops it. It can be pressed while the instance's activity in the
 last status read names its `request_id`: a run another tool started (`direct_run`: a run of the Lab's
 `run start`, `actingctl task-run` or the MCP tool `ac_run_pack`, say), and a scheduled run that names its
 `package_id` too (`policy_run`, one finishing under the global pause included). The Runtime's own steps
@@ -1177,7 +1177,7 @@ nothing sends it on a timer, and a refusal or one not sent is not sent again. Th
 had ended, as the follow-up reads it, is said with the time the console learned it ("Stopped (learned
 at hh:mm:ss)"), not the time the Runtime ended the run, which was earlier; an answer within the first
 request's wait is said with its time alone. A Runtime that restarted,
-an account no longer listed or a reading thread gone leaves the result unknown, and nothing more is
+an instance no longer listed or a reading thread gone leaves the result unknown, and nothing more is
 sent; a run that does not end is waited for as long as it runs, with no limit of the console's own. A
 Runtime before v0.12.53 answers `not_implemented` (which records nothing), and both buttons then stay
 off for that Runtime's owner epoch. Whether another console or tool already asked the run to stop is not
@@ -1185,20 +1185,20 @@ seen here: another press costs only three more ledger records (`ui.action`, `com
 `command.validated` or `command.rejected`), and still reads the result.
 
 Close This Task closes the task first and then stops this run, on one fresh person's connection: it reads
-the account's `PackScheduleView`; when the run's package is in it, it writes one row of the account's own
+the instance's `PackScheduleView`; when the run's package is in it, it writes one row of the instance's own
 scope from now on, without an end, that the package is not scheduled (the very row the Daily Tasks
 switch writes when turned off, naming no version, so that another package changed a moment ago does not
 make it a conflict; `fact_observation_not_newer` is sent once more at once), and only once that is
 Completed sends the stop above. A close row not written (refused, not sent, not confirmed) stops nothing,
 and the line says "Not closed: …. This run was not stopped either" or that whether the close was written
-is not known. A package the view does not name (the account's daily tasks do not run it: a reading's
+is not known. A package the view does not name (the instance's daily tasks do not run it: a reading's
 maintenance, or the catalog changed since the dispatch) gets no row, which the list could neither show
-nor withdraw, and its run is only stopped: once it stopped, "This task pack is not one of this account's
+nor withdraw, and its run is only stopped: once it stopped, "This task pack is not one of this instance's
 daily tasks, so only this run was stopped"; otherwise (not confirmed, still stopping, refused, a restart
-and the like) "This task pack is not one of this account's daily tasks, so nothing was closed here",
+and the like) "This task pack is not one of this instance's daily tasks, so nothing was closed here",
 followed by what the stop came to. A view that is not read does nothing ("Not closed: …"); a view whose
 connection ended before its answer (the client's `runtime_operation_unsupported`) is a view not read too
-("Not closed: the connection ended before this account's task switches were read …. This run was not
+("Not closed: the connection ended before this instance's task switches were read …. This run was not
 stopped either"), not a Runtime without task switches. A view or a close row answered `not_implemented`
 (before 0.12.55) does nothing either, and Close This Task then stays off for that Runtime's owner epoch
 ("This Runtime cannot close a task from here yet"), as the Daily Tasks switches are not read then (and,
@@ -1208,13 +1208,13 @@ whether the task was closed and whether this run stopped are both unknown, the c
 saying what holds, and nothing is sent again. Once closed, the line begins "Closed this task
 (hh:mm:ss); it is no longer scheduled", followed by what the stop came to, and once the run stopped, "To
 bring the task back, turn it on under Daily Tasks": that is the way back, where its row then says "Set
-for this account: turned off (since hh:mm)". The follow-up only stops; it writes no close row again.
-While the close is out every switch of the account is greyed out; while a switch's write is out the button
-is, and Stop This Run too ("This account's task switches are being changed; a moment"). In the ledger, the close is one
+for this instance: turned off (since hh:mm)". The follow-up only stops; it writes no close row again.
+While the close is out every switch of the instance is greyed out; while a switch's write is out the button
+is, and Stop This Run too ("This instance's task switches are being changed; a moment"). In the ledger, the close is one
 `fact.published`, the stop three records, a follow-up three more. Of a package that has daily tasks and
-also reads account data, the close row closes its daily tasks, and the Runtime's reading of account data
+also reads instance data, the close row closes its daily tasks, and the Runtime's reading of instance data
 (`_fact_refresh`) is dispatched as before. A scheduled run still queued or being prepared is not in the
-status read and cannot be pressed; Pause This Account keeps such runs from going. A stop is no failure:
+status read and cannot be pressed; Pause This Instance keeps such runs from going. A stop is no failure:
 nothing retries, backs off, pauses the task or starts a ladder. A direct run's lines are as before, and
 it writes no close row. In the ledger window, a stopped scheduled run's `task.failed` (`contained_task_cancelled`),
 its `policy.execution_recorded` (result `stopped`) and the scheduler driver's `runtime.failed` say
@@ -1247,14 +1247,14 @@ through or was stopped.
   `down`, the stop, whose pause stays until it is lifted from the Lab ("a Lab rescue operation set this
   pause, and the operation lifts it when it finishes; one a stop set (reason starting lab-down-) is not
   lifted by itself: like one an operation that has stopped left behind, lift it from the Lab"), on the
-  top bar and the account cards too. While
+  top bar and the instance cards too. While
   that settings line cannot be used, every pause but a deployment's, a Lab rescue's and the console's
-  own two (Pause All, the global pause with reason `console_pause_all`, and Pause This Account, an
+  own two (Pause All, the global pause with reason `console_pause_all`, and Pause This Instance, an
   instance's with reason `console_pause_account`) is of the first kind. Two pauses set for a person to
   lift after looking are neither a deployment's nor a Lab rescue's, so they carry "Resume Scheduling…"
   like another tool's pause unless `resume_elsewhere_reasons` lists their reason or, as just said, cannot
   be used, when they are of the first kind: `instance.added`, which the Lab's rescue
-  module's `instance add` (Runtime INST-5) sets on the account it has just added and which, unlike that
+  module's `instance add` (Runtime INST-5) sets on the instance it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
   No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.58 has
@@ -1267,7 +1267,7 @@ through or was stopped.
 The console no longer has an instance-configuration window. Until the Runtime's `install instance`
 lands, an instance can only be added by hand: edit the `instances` of the actingd configuration
 (`actingd_config`) as the Runtime's installation notes describe, then restart the Runtime. The
-workbench's "Add Account or Device" button is off for that reason, with this note under it and the path of that
+workbench's "Add Instance or Device" button is off for that reason, with this note under it and the path of that
 configuration file below, selectable to copy. Finding instances comes back with the console's own
 instance page in a later version.
 
@@ -1375,8 +1375,8 @@ closing the window on those pages asks first, and quitting leaves nothing behind
    entries, the MuMu folders in Program Files) and `MuMuManager.exe info -v all` lists its emulators (no
    window, within 10 seconds); no emulator is opened or closed. No emulator is ticked to begin with: the
    person ticks the ones to hand over, and Next with none ticked asks first. The page says what the
-   wizard calls an instance from here on: each emulator ticked becomes one instance in ActingCommand, one
-   signed-in game in one emulator. An emulator another ActingCommand on this computer already uses is
+   wizard calls an instance from here on: each emulator ticked becomes one instance in ActingCommand: the
+   emulator itself, with the games signed in on it. An emulator another ActingCommand on this computer already uses is
    greyed, and ticking it asks first. The other installations are found two ways: a running
    `actingcommand-actingd.exe`, and a registered watchdog task (which finds a stopped one too); its
    configuration uses an emulator when it binds it by index, name, `serial` or adb port. Without MuMu the
@@ -1536,6 +1536,26 @@ window gathers on pages 1 to 8 (`actingcommand.install-wizard-plan.v1`): `langua
 optionally `touch_backend`, `capture_backend`, `start_emulator`, `confirmed_in_use`) and `options`
 (`desktop_shortcut`, `start_menu_shortcut`, `watchdog`, `start_after_install`, `pause_first_start`, with the
 window's defaults). Its rules are the window's; a plan that breaks one stops before anything is written.
+
+**Putting an install set together:** `tools/make_install_set.py` (Python 3, standard library only) writes
+the set the wizard reads, in the same format; the two change together. It only copies files, hashes them
+and zips the console's folder; it runs nothing it copies, and it deletes and overwrites nothing: **the
+output folder must not exist yet**. It checks each input as it copies: the Runtime and Tools zips against
+their `SHA256SUMS`, the console's folder against its `BUILD-MANIFEST.json`, each pack zip against the
+`SHA256SUMS` beside it (a zip without one beside it, or not listed in it, stops the script) and its
+`bundle.json`'s game, and each vision file against the
+size and SHA-256 pinned in the script.
+
+```text
+python tools/make_install_set.py --out <new folder> --label <the set's name>
+    --runtime-dir <folder with the Runtime release's two zips and SHA256SUMS> --runtime-tag <tag>
+    --console-dir <this repository's release zip, unpacked> --console-tag <tag>
+    --wizard <acsetup.exe from the same folder>
+    --bundle <game>=<pack zip>                      one per game
+    --bundle-file <game>=<path below licenses\<game>\>=<file>   each listed in required_files too
+    --vision <path below vision\>=<file>            the seven pinned files, DirectML's four all or none
+    --vision-license <path below licenses\vision\>=<file>        required when a model is given
+```
 
 **Dependencies:** `crates/acui-wizard` uses Slint (the window, the same workspace dependency as the
 console), `serde`, `serde_json`, `sha2` (verification), `zip` (`default-features = false`, only `deflate`,

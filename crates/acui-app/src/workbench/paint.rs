@@ -3131,7 +3131,7 @@ fn pack_row(ui: &Ui, labels: &Labels, row: &PackRow) -> TaskRowData {
 fn not_here_told(ui: &Ui, package: &str, listed: bool) {
     let alias = ui.model.borrow().picture_account().unwrap_or_default().to_owned();
     let why = if listed {
-        "decides it by the account's own rows and names nothing below them"
+        "decides it by the instance's own rows and names nothing below them"
     } else {
         "does not name it"
     };

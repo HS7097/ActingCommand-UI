@@ -132,7 +132,7 @@ fn parse_args() -> Result<Args> {
             }
             "--account" => match argv.next() {
                 Some(alias) => args.account = Some(alias),
-                None => bail!("--account 缺少别名 / --account needs an alias"),
+                None => bail!("--account 缺少实例名 / --account needs an instance name"),
             },
             "--help" | "-h" => args.help = true,
             other => bail!("未知参数 / unknown argument: {other}"),
