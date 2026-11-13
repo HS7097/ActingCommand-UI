@@ -191,6 +191,15 @@ pub fn format_minute(timestamp_unix_ms: u64) -> String {
     }
 }
 
+/// `yyyy-mm-dd hh:mm` in local time, always with the date: for a time up to a year
+/// away, such as until when an instance's goals hold.
+pub fn format_date_minute(timestamp_unix_ms: u64) -> String {
+    match local(timestamp_unix_ms) {
+        Some(time) => time.format("%Y-%m-%d %H:%M").to_string(),
+        None => "—".to_string(),
+    }
+}
+
 /// `hh:mm:ss` in local time, with the month and day when that is not today, for when
 /// a picture was taken.
 pub fn format_second(timestamp_unix_ms: u64) -> String {

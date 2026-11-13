@@ -10,7 +10,8 @@
 //! 4. Nothing here calls `Session::open`, `OnlineSource::pin`, `source.query` or
 //!    `monitor_status`. The two reading threads read `Status`, `ScheduleExplanation`
 //!    without candidates and, while an account's daily task list shows, of that one account
-//!    with them (UI-3f1) and its `PackScheduleView` (UI-3f2), and `RuntimeFactSnapshot`, none of
+//!    with them (UI-3f1) and its `PackScheduleView` (UI-3f2), while its goals show, its
+//!    `ResourceTargetView` (Workflow #455 T1-C), and `RuntimeFactSnapshot`, none of
 //!    which walks the ledger or takes a ledger record. The picture's thread is the one
 //!    exception: it reads ledger pages, which take no record either, and frames' material,
 //!    whose read takes none when it succeeds or finds the file gone and one for any other
@@ -63,12 +64,13 @@
 //! account's rescue bar (`rescue`), painted with the picture's refresh whenever that is, and once
 //! more as a fact snapshot lands, which its question before an emulator's stop reads.
 //!
-//! The right column has two tabs (UI-3f1), the `Model`'s too (`tab_picked`): the live view and
+//! The right column has three tabs (UI-3f1), the `Model`'s too (`tab_picked`): the live view,
 //! that same account's daily task list (`tasks`), with a switch for each of its task packages
-//! (UI-3f2). The picture reads only under its own tab, and the list and its switches only under
-//! its: which account's list the slow thread reads, if any, and whether its switches too, is told
-//! it in one place (`tasks_sync`), each time that may change, as for the picture. A list shown
-//! anew, or of another account, lets go of what was read and is read at once, its switches too.
+//! (UI-3f2), and its goals (`goals`, Workflow #455 T1-C, read only). The picture reads only under
+//! its own tab, the list and its switches only under theirs, and the goals only under theirs:
+//! which account's list or goals the slow thread reads, if any, and whether its switches too, is
+//! told it in one place (`tasks_sync`), each time that may change, as for the picture. A tab shown
+//! anew, or of another account, lets go of what was read and is read at once.
 //!
 //! A read that fails is no event to log each time: the log gets a change, as it
 //! happens, so a failure that repeats every few seconds is one line, and its end
@@ -76,6 +78,7 @@
 
 pub mod actions;
 pub mod card;
+pub mod goals;
 pub mod model;
 pub mod paint;
 pub mod picture;
@@ -94,6 +97,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use acui_source::workbench::goals::{Form, GoalRow, GoalsAnswer, GoalsRead, Stored};
 use acui_source::workbench::pack::PacksRead;
 use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, StartRead, TasksRead};
 use acui_source::{ClientFailure, RuntimeFacts};
@@ -101,7 +105,9 @@ use slint::{ComponentHandle, Timer, TimerMode};
 
 use self::model::{Link, News, Page, RightTab};
 use self::preview::{Order, PreviewTally};
-use self::read::{Lane, Landing, Listed, Poke, Read, Tally, TasksFor, START_RETRY, START_TRIES};
+use self::read::{
+    Lane, Landing, List, Listed, Poke, Read, Tally, TasksFor, START_RETRY, START_TRIES,
+};
 use self::tools::{Job, NamesRead, ToolFailure, WatchdogRead};
 use crate::launcher;
 use crate::report;
@@ -295,7 +301,7 @@ pub fn account_picked(ui: &Ui, alias: &str) {
 }
 
 /// A tab of the right column picked (UI-3f1), by a click or from the keyboard: the live view,
-/// or the account's daily task list. Only the one shown reads.
+/// the account's daily task list, or its goals (Workflow #455 T1-C). Only the one shown reads.
 pub fn tab_picked(ui: &Ui, tab: RightTab) {
     let changed = ui.model.borrow_mut().pick_tab(tab);
     if changed {
@@ -314,22 +320,24 @@ pub fn tasks_fold_toggled(ui: &Ui) {
 }
 
 /// Which account's daily task list the slow thread is to read now, if any (`Model::tasks_wanted`),
-/// and whether its switches too (`Model::packs_wanted`), into its slot (`TasksFor`), the one place
-/// that says so: a list shown anew, or of another account, starts afresh and is read at once, its
-/// switches with it. Each time this may change: a `Status` read, a page or a tab gone to, the
-/// window minimized or back, a card picked, a reading thread gone, a Runtime that said it has no
-/// switches.
+/// and whether its switches too (`Model::packs_wanted`), or which account's goals
+/// (`Model::goals_wanted`) and whether they are read (`Model::goals_read_wanted`), into its slot
+/// (`TasksFor`), the one place that says so: a tab shown anew, or of another account, starts
+/// afresh and is read at once, the list's switches with it. Each time this may change: a `Status`
+/// read, a page or a tab gone to, the window minimized or back, a card picked, a reading thread
+/// gone, a Runtime that said it has no switches, or no goals to read.
 fn tasks_sync(ui: &Ui) {
     if tasks_follow(ui) {
         ask(ui, Read::Tasks.lane(), Poke::List);
     }
 }
 
-/// `tasks_sync` but for its poke: whether the list is to be read at once. A caller that pokes the
+/// `tasks_sync` but for its poke: whether the tab is to be read at once. A caller that pokes the
 /// slow thread for all its reads right after asks for it there, so that it is read once. A list
 /// shown anew reads its switches once more, too, when the Runtime said a while ago that it has
 /// none (`Model::packs_probe`): what said so may have been a connection that ended just before its
-/// answer and was made again in the same owner epoch.
+/// answer and was made again in the same owner epoch. Goals shown anew are read again, whatever
+/// was said of them before.
 fn tasks_follow(ui: &Ui) -> bool {
     let (listed, changed, probed) = {
         let mut model = ui.model.borrow_mut();
@@ -337,7 +345,15 @@ fn tasks_follow(ui: &Ui) -> bool {
         let changed = model.tasks_follow(wanted.as_deref());
         let probed = changed && wanted.is_some() && model.packs_probe(Instant::now());
         let packs = model.packs_wanted();
-        (wanted.map(|alias| Listed { alias, packs }), changed, probed)
+        let goals = model.goals_wanted();
+        let goals_changed = model.goals_follow(goals.as_deref());
+        let read = model.goals_read_wanted();
+        let listed = match (wanted, goals) {
+            (Some(alias), _) => Some(Listed { alias, list: List::Tasks { packs } }),
+            (None, Some(alias)) => Some(Listed { alias, list: List::Goals { read } }),
+            (None, None) => None,
+        };
+        (listed, changed || goals_changed, probed)
     };
     if probed {
         let line = "the Runtime said a minute or more ago that it has no task switches: the list \
@@ -388,6 +404,9 @@ fn ask(ui: &Ui, lane: Lane, poke: Poke) {
     }
     if lane == Read::Packs.lane() && poke.asks(Read::Packs) {
         ui.model.borrow_mut().packs_asked(Instant::now());
+    }
+    if lane == Read::Goals.lane() && poke.asks(Read::Goals) {
+        ui.model.borrow_mut().goals_asked(Instant::now());
     }
     let gone = ui.reading.borrow_mut().as_mut().is_some_and(|reading| reading.poke(lane, poke));
     if gone {
@@ -526,6 +545,7 @@ fn landed(landing: Landing, generation: u64) {
         Landing::Explain(read) => explain_landed(&ui, read),
         Landing::Tasks { alias, read } => tasks_landed(&ui, &alias, read),
         Landing::Packs { alias, read } => packs_landed(&ui, &alias, read),
+        Landing::Goals { alias, read } => goals_landed(&ui, &alias, read),
         Landing::Config(read) => config_landed(&ui, read),
         Landing::Start(read) => {
             start_landed(&ui, read.map_err(|failure| failure_line(&failure)));
@@ -754,6 +774,69 @@ fn packs_landed(ui: &Ui, alias: &str, read: Result<PacksRead, ClientFailure>) {
         );
         if ui.model.borrow_mut().first_told(&line) {
             report::log(thread, &line);
+        }
+    }
+    if landed.fault_cleared {
+        ui.paint_notices();
+    }
+    paint::tasks(ui);
+}
+
+/// The goals' read of `alias` (Workflow #455 T1-C), taken as the switches' is: a failure and its
+/// end each one line of the log, and the tab says the failure with its codes. A Runtime that said it
+/// has no such read is said once for its owner epoch, with the code that said so, and the slow
+/// thread reads the goals no more until the tab is shown anew (`tasks_sync`). What this console
+/// cannot read of an answer, a document of a newer form or a target that does not read, is said
+/// once too, beside what the tab says of it.
+fn goals_landed(ui: &Ui, alias: &str, read: Result<GoalsRead, ClientFailure>) {
+    let problems = match &read {
+        Ok(GoalsRead { answer: GoalsAnswer::Read(page), .. }) => {
+            let mut problems = Vec::new();
+            if let Stored::Document(document) = &page.stored {
+                if let Form::Newer(schema) = &document.form {
+                    problems.push(format!(
+                        "the goals of {alias} are stored as {schema}, which this console does not \
+                         read: shown as not readable here"
+                    ));
+                }
+            }
+            for row in &page.rows {
+                if let GoalRow::Unread { position } = row {
+                    problems.push(format!(
+                        "the target at index {position} of the goals of {alias} does not read as \
+                         an at_least target with an id and a resource: shown as not readable here"
+                    ));
+                }
+            }
+            problems
+        }
+        Ok(_) | Err(_) => Vec::new(),
+    };
+    let landed = ui.model.borrow_mut().apply_goals(alias, read, Instant::now());
+    let thread = Lane::Slow.name();
+    match &landed.news {
+        News::Nothing => {}
+        News::Failed(failure) => {
+            let line = format!("goals of {alias} failed: {}", failure_line(failure));
+            report::log(thread, &line);
+        }
+        News::Recovered => report::log(thread, &format!("goals of {alias} read again")),
+    }
+    if let Some((epoch, code)) = &landed.unsupported {
+        let line = format!(
+            "the Runtime of owner epoch {epoch} has no goals to read (ResourceTargetView of \
+             {alias}: {code}): not read again until the tab is shown anew"
+        );
+        if ui.model.borrow_mut().first_told(&line) {
+            report::log(thread, &line);
+        }
+        tasks_sync(ui);
+    }
+    if landed.counted {
+        for line in &problems {
+            if ui.model.borrow_mut().first_told(line) {
+                report::log(thread, line);
+            }
         }
     }
     if landed.fault_cleared {

@@ -18,7 +18,9 @@
 //! `RuntimeFactSnapshot` and `StartReport`; and for that list's switches (UI-3f2), that one
 //! instance's `PackScheduleView` ([`ReadLane::read_packs`]), answered from memory once the
 //! Runtime has brought its fact store up to the ledger under the fact write gate, a read of the
-//! ledger's newest records on its writer's thread that is nearly always empty. The picture's lane
+//! ledger's newest records on its writer's thread that is nearly always empty; and for that
+//! account's goals (Workflow #455 T1-C), its `ResourceTargetView` ([`ReadLane::read_goals`]), which
+//! records nothing and is computed under the same gate. The picture's lane
 //! ([`preview::PreviewLane`], UI-3c) is the one exception: it reads ledger pages, which take no
 //! record either but are read from the ledger, and frames' material, whose read takes no record
 //! when it succeeds or
@@ -115,6 +117,7 @@ use super::{
 
 pub mod backends;
 pub mod device;
+pub mod goals;
 pub mod pack;
 pub mod preview;
 pub mod rules;
@@ -233,6 +236,14 @@ impl ReadLane {
         self.asked_once_more(|lane| lane.ask_packs(alias))
     }
 
+    /// One `ResourceTargetView` of the one instance `alias`: that account's goals (Workflow #455
+    /// T1-C, read only), as its rows ([`goals::page`]). A Runtime that has no such read says so as
+    /// its answer ([`goals::GoalsAnswer::Unsupported`]), as for the switches, and one that does not
+    /// know the request costs this lane its connection, as any fatal failure does.
+    pub fn read_goals(&mut self, alias: &str) -> Result<goals::GoalsRead, ClientFailure> {
+        self.asked_once_more(|lane| lane.ask_goals(alias))
+    }
+
     /// One `RuntimeFactSnapshot`, and the settings' version read under the same gate,
     /// so what it says of the configuration is of that version.
     pub fn read_config(&mut self) -> Result<ConfigRead, ClientFailure> {
@@ -294,6 +305,21 @@ impl ReadLane {
                 Some(code) => {
                     self.settled(error);
                     Ok(pack::packs_unsupported(epoch, alias, code))
+                }
+                None => Err(NoConnection::Failed(self.settled(error))),
+            },
+        }
+    }
+
+    fn ask_goals(&mut self, alias: &str) -> Result<goals::GoalsRead, NoConnection> {
+        let client = self.connection()?;
+        let epoch = code(&client.runtime_info().owner_epoch());
+        match client.resource_target_view(alias) {
+            Ok(view) => Ok(goals::goals_read(epoch, alias, &view)),
+            Err(error) => match pack::view_unsupported(&error) {
+                Some(code) => {
+                    self.settled(error);
+                    Ok(goals::goals_unsupported(epoch, alias, code))
                 }
                 None => Err(NoConnection::Failed(self.settled(error))),
             },

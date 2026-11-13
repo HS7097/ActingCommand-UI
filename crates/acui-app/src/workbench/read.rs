@@ -25,6 +25,11 @@
 //! once more as the list is shown anew `PACKS_PROBE_AFTER` or longer after it said so, until an
 //! answer says so again or shows the switches.
 //!
+//! Or, while that account's Goals tab shows instead (Workflow #455 T1-C), its `ResourceTargetView`,
+//! on the switches' clock: it records nothing, but is computed under the policy's locks and the
+//! fact write gate, so it is read as seldom. Not after the Runtime said it has no such read,
+//! which the slot says too, until the tab is shown anew.
+//!
 //! A thread reads what is due, hands each result to the event loop, and sleeps
 //! until the next is due or it is poked. It ends once the event loop lets its
 //! sender go; nothing joins it, since it may be stuck in a read. A panic in a read
@@ -46,6 +51,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use acui_source::workbench::goals::GoalsRead;
 use acui_source::workbench::pack::PacksRead;
 use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, ReadLane, StartRead, TasksRead};
 use acui_source::ClientFailure;
@@ -54,7 +60,7 @@ use crate::launcher::spawn_worker;
 use crate::report;
 
 /// `READS` has one row for each `Read`, in its order: `Tally` counts by it.
-const READ_KINDS: usize = 6;
+const READ_KINDS: usize = 7;
 
 #[rustfmt::skip]
 static READS: [Cadence; READ_KINDS] = [
@@ -65,21 +71,33 @@ static READS: [Cadence; READ_KINDS] = [
     Cadence { read: Read::Start,   lane: Lane::Slow, every: None },
     // Only while an account's task list shows: the slot names it (`TasksFor`).
     Cadence { read: Read::Tasks,   lane: Lane::Slow, every: Some(Every { shown: secs(15), minimized: None,           failed: secs(30) }) },
-    // The same list's switches, while the slot names them too (`Listed::packs`).
+    // The same list's switches, while the slot names them too (`List::Tasks`).
     Cadence { read: Read::Packs,   lane: Lane::Slow, every: Some(Every { shown: secs(60), minimized: None,           failed: secs(60) }) },
+    // Only while an account's Goals tab shows, on the switches' clock (`List::Goals`).
+    Cadence { read: Read::Goals,   lane: Lane::Slow, every: Some(Every { shown: secs(60), minimized: None,           failed: secs(60) }) },
 ];
 
 /// The account whose daily task list shows, while it does (UI-3f1), and whether its switches are
-/// read (UI-3f2): the event loop writes it, and the slow thread reads it as either read comes due.
-/// Empty, neither is ever due.
+/// read (UI-3f2); or whose Goals tab shows (Workflow #455 T1-C), and whether they are read: the
+/// event loop writes it, and the slow thread reads it as any of those reads comes due. Empty, none
+/// is ever due.
 pub type TasksFor = Arc<Mutex<Option<Listed>>>;
 
-/// What the slot names: the account, and whether its switches are read beside its list, which they
-/// are not in an owner epoch whose Runtime said it has none, but while a read asks it once more.
+/// What the slot names: the account, and which of its tabs shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listed {
     pub alias: String,
-    pub packs: bool,
+    pub list: List,
+}
+
+/// Which of an account's tabs the slot names. The daily task list, and whether its switches are
+/// read beside it, which they are not in an owner epoch whose Runtime said it has none, but while a
+/// read asks it once more; or its goals, and whether they are read, which they are not once the
+/// Runtime said it has no such read, until the tab is shown anew.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum List {
+    Tasks { packs: bool },
+    Goals { read: bool },
 }
 
 /// How many times in one owner epoch the start report is asked for, and how long after a
@@ -103,6 +121,10 @@ pub const PACKS_TOO_OLD: Duration = secs(180);
 /// (`Switches::probe`): one of their reads' times. What said so may have been a connection that
 /// ended just before its answer and was made again in the same owner epoch.
 pub const PACKS_PROBE_AFTER: Duration = secs(60);
+
+/// An account's goals not read again for this long no longer count as what holds now, as for its
+/// switches.
+pub const GOALS_TOO_OLD: Duration = secs(180);
 
 /// How long a thread with nothing due sleeps: a window coming back pokes it.
 const NOTHING_DUE: Duration = secs(3600);
@@ -140,6 +162,8 @@ pub enum Read {
     Tasks,
     /// That list's switches (UI-3f2).
     Packs,
+    /// An account's goals (Workflow #455 T1-C).
+    Goals,
 }
 
 impl Read {
@@ -151,6 +175,7 @@ impl Read {
             Self::Start => "start report",
             Self::Tasks => "task list",
             Self::Packs => "pack schedule",
+            Self::Goals => "resource target view",
         }
     }
 
@@ -186,7 +211,8 @@ impl Lane {
 }
 
 /// Reads now, without waiting for their time: every read of the thread its clock makes, only
-/// the one named, or an account's task list and its switches, both of a list shown anew.
+/// the one named, or an account's tab shown anew: its task list and its switches, or its goals,
+/// whichever the slot names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Poke {
     All,
@@ -200,7 +226,7 @@ impl Poke {
         match self {
             Self::All => READS[read as usize].every.is_some(),
             Self::Only(only) => only == read,
-            Self::List => matches!(read, Read::Tasks | Read::Packs),
+            Self::List => matches!(read, Read::Tasks | Read::Packs | Read::Goals),
         }
     }
 }
@@ -215,6 +241,8 @@ pub enum Landing {
     Tasks { alias: String, read: Result<TasksRead, ClientFailure> },
     /// The same account's switches, likewise.
     Packs { alias: String, read: Result<PacksRead, ClientFailure> },
+    /// The goals of the account the slot named, likewise.
+    Goals { alias: String, read: Result<GoalsRead, ClientFailure> },
     /// The read panicked: the panic's message, for the log.
     Panicked { read: Read, message: String },
 }
@@ -229,6 +257,7 @@ impl Landing {
                 | Self::Start(Ok(_))
                 | Self::Tasks { read: Ok(_), .. }
                 | Self::Packs { read: Ok(_), .. }
+                | Self::Goals { read: Ok(_), .. }
         )
     }
 }
@@ -284,11 +313,13 @@ impl Due {
     /// out a stop: the window coming back reads it anyway. One without a clock is due
     /// only when poked, minimized or not. The task list's is never due while no account's
     /// list shows (`listed`), poked or not: it waits for one; nor are its switches' while the
-    /// slot does not name them.
+    /// slot does not name them, nor an account's goals while the slot does not name them.
     fn at(&self, shown: bool, listed: Option<&Listed>, now: Instant) -> Option<Instant> {
+        let named = |list: List| listed.is_some_and(|listed| listed.list == list);
         let waits = match self.cadence.read {
-            Read::Tasks => listed.is_none(),
-            Read::Packs => !listed.is_some_and(|listed| listed.packs),
+            Read::Tasks => !listed.is_some_and(|listed| matches!(listed.list, List::Tasks { .. })),
+            Read::Packs => !named(List::Tasks { packs: true }),
+            Read::Goals => !named(List::Goals { read: true }),
             Read::Status | Read::Explain | Read::Config | Read::Start => false,
         };
         if waits {
@@ -404,9 +435,9 @@ fn mark(plan: &mut [Due], poke: Poke) {
     }
 }
 
-/// `read` on `connection`; the task list's and its switches' of the account `listed` names, which
-/// it always does when either read is due (`Due::at`): an empty alias would be refused as no alias
-/// at all.
+/// `read` on `connection`; the task list's, its switches' and the goals' of the account `listed`
+/// names, which it always does when any of those reads is due (`Due::at`): an empty alias would be
+/// refused as no alias at all.
 fn read_on(read: Read, connection: &mut ReadLane, listed: Option<&str>) -> Landing {
     match read {
         Read::Status => Landing::Live(connection.read_live()),
@@ -420,6 +451,10 @@ fn read_on(read: Read, connection: &mut ReadLane, listed: Option<&str>) -> Landi
         Read::Packs => {
             let alias = listed.unwrap_or_default();
             Landing::Packs { alias: alias.to_owned(), read: connection.read_packs(alias) }
+        }
+        Read::Goals => {
+            let alias = listed.unwrap_or_default();
+            Landing::Goals { alias: alias.to_owned(), read: connection.read_goals(alias) }
         }
     }
 }

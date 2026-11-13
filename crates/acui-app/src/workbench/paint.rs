@@ -11,19 +11,24 @@
 //! column's live view, from its view, the frame's pixels once when it lands; and under it the
 //! picture's refresh, painted with it. And over the picture the account's rescue bar, and while
 //! it says so the account's rules panel in the picture's place (UI-3e1-b). And which of the right
-//! column's two tabs shows, and under the second the account's daily task list (UI-3f1), its
-//! reasons in the cards' words, and its packages' switches (UI-3f2).
+//! column's three tabs shows, under the second the account's daily task list (UI-3f1), its
+//! reasons in the cards' words, and its packages' switches (UI-3f2), and under the third its goals
+//! (Workflow #455 T1-C, read only).
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use acui_rows::outcome::explain;
-use acui_rows::{format_minute, format_second, local_utc_offset_minutes};
+use acui_rows::{format_date_minute, format_minute, format_second, local_utc_offset_minutes};
 use acui_source::workbench::backends::{
     unnamed_backend_words, AppIndexProblem, BackendRefusal, BackendRow, BackendWhy, CaptureCause,
     CheckStatus, FailedStep, Holder, InEffect, InstanceBackends, OpenFailure, SwitchRefusal,
     SwitchVersion,
 };
 use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
+use acui_source::workbench::goals::{
+    Closed, Form, GoalRow, Goals, GoalsPage, Pending, PoolRow, Progress, Reading, Stored,
+    StoredGoal,
+};
 use acui_source::workbench::pack::{PackSource, PackState};
 use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietOf, QuietRead, QuietShown};
@@ -33,6 +38,7 @@ use acui_source::workbench::{
     SettingValue, TasksRead, ValueProblem, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, MODE_FULL,
     MODE_OBSERVE, MODE_PACE, SETUP_FIRST_START,
 };
+use acui_source::ClientFailure;
 use slint::{Image, Model as _, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
 use super::actions::{
@@ -42,6 +48,7 @@ use super::actions::{
     StepperView, Write, PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
 };
 use super::card::{reason_logged, Band, CardView, Down, Line, ReasonClass};
+use super::goals::GoalsView;
 use super::model::{Fault, Page, RightTab};
 use super::picture::{
     DimWhy, Doing, EmptyWhy, Offline, Origin, OverlayView, PictureView, RefreshHold, RefreshWhyNot,
@@ -65,9 +72,9 @@ use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
 use crate::{
-    AccountCard, BackendGroupItem, IdlePick, OverlayItem, PresetChoice, QuietData, QuietEditor,
-    QuietLine, RescueBar, RescueOp, RulesData, SettingItem, StatusTone, TargetItem, TaskListData,
-    TaskRowData, TaskTone, WorkbenchPage, WorkbenchTab, WorkbenchWindow,
+    AccountCard, BackendGroupItem, GoalListData, GoalRowData, IdlePick, OverlayItem, PresetChoice,
+    QuietData, QuietEditor, QuietLine, RescueBar, RescueOp, RulesData, SettingItem, StatusTone,
+    TargetItem, TaskListData, TaskRowData, TaskTone, WorkbenchPage, WorkbenchTab, WorkbenchWindow,
 };
 
 /// What the technical log's lines about the settings page are under.
@@ -132,6 +139,7 @@ pub fn tab_picked(tab: WorkbenchTab) -> RightTab {
     match tab {
         WorkbenchTab::Picture => RightTab::Picture,
         WorkbenchTab::Tasks => RightTab::Tasks,
+        WorkbenchTab::Goals => RightTab::Goals,
     }
 }
 
@@ -2921,14 +2929,15 @@ fn refusal_text(labels: &Labels, why: &RefusalWhy) -> String {
     }
 }
 
-/// Which of the right column's two tabs shows, and under the second the account's daily task
+/// Which of the right column's three tabs shows, and under the second the account's daily task
 /// list (UI-3f1), from its view: why there are no rows, or above them the account's pause or
 /// fence in its card's words, what its switches do or why there are none (UI-3f2), which
 /// evaluation they are of, that the names cannot be read and that not every task is listed; the
 /// account's own line of tasks without a package, and its tasks while open; then each group's
 /// title and its packages, each with its switch, name, badges, where its switch's state comes
-/// from, what its last press came to, sentence, other sentences and summary. Under the live view
-/// the list holds nothing. Each list changes only where its rows do.
+/// from, what its last press came to, sentence, other sentences and summary. Under the third its
+/// goals (`goals`). Under another tab the list holds nothing. Each list changes only where its
+/// rows do.
 pub fn tasks(ui: &Ui) {
     let Some(window) = ui.workbench() else {
         return;
@@ -2938,12 +2947,13 @@ pub fn tasks(ui: &Ui) {
     let shown = match tab {
         RightTab::Picture => WorkbenchTab::Picture,
         RightTab::Tasks => WorkbenchTab::Tasks,
+        RightTab::Goals => WorkbenchTab::Goals,
     };
     if window.get_right_tab() != shown {
         window.set_right_tab(shown);
     }
     let view = match tab {
-        RightTab::Picture => None,
+        RightTab::Picture | RightTab::Goals => None,
         RightTab::Tasks => Some(ui.model.borrow().tasks_view(Instant::now(), labels.tongue)),
     };
     let (data, rows, fold) = match &view {
@@ -2954,6 +2964,232 @@ pub fn tasks(ui: &Ui) {
     sync(window.get_task_fold_lines(), fold, |rows| window.set_task_fold_lines(rows));
     if window.get_tasks() != data {
         window.set_tasks(data);
+    }
+    goals(ui, &window, labels, tab);
+}
+
+/// Under the third tab, the account's goals (Workflow #455 T1-C, read only), from their view: why
+/// there are no rows, a failure with its codes; or around the rows what cannot be read of the
+/// goals stored, when they were read, why there are none, and under them the old form's note and
+/// the validity. Each row as `goal_row` says. Under another tab the list holds nothing.
+fn goals(ui: &Ui, window: &WorkbenchWindow, labels: &Labels, tab: RightTab) {
+    let view = match tab {
+        RightTab::Goals => Some(ui.model.borrow().goals_view(Instant::now())),
+        RightTab::Picture | RightTab::Tasks => None,
+    };
+    let (data, rows) = match &view {
+        Some(view) => goals_data(labels, view),
+        None => (GoalListData::default(), Vec::new()),
+    };
+    sync(window.get_goal_rows(), rows, |rows| window.set_goal_rows(rows));
+    if window.get_goals() != data {
+        window.set_goals(data);
+    }
+}
+
+/// What the Goals tab says instead of its rows, or its page.
+fn goals_data(labels: &Labels, view: &GoalsView) -> (GoalListData, Vec<GoalRowData>) {
+    let instead = |text: String, failed: bool, warning: bool| GoalListData {
+        instead: text.into(),
+        instead_failed: failed,
+        instead_warning: warning,
+        ..GoalListData::default()
+    };
+    let data = match view {
+        GoalsView::Down(down) => {
+            instead(fill(labels.goals_down, &[down_text(labels, *down)]), false, false)
+        }
+        GoalsView::NoAccount => instead(labels.picture_no_account.to_owned(), false, false),
+        GoalsView::Reading => instead(labels.goals_reading.to_owned(), false, false),
+        GoalsView::Failed(failure) => {
+            instead(fill(labels.goals_failed, &[&failure_codes_text(failure)]), true, false)
+        }
+        GoalsView::Fault(fault) => instead(fault.text(labels), true, false),
+        GoalsView::Late => instead(labels.goals_late.to_owned(), false, true),
+        GoalsView::Unsupported(code) => {
+            instead(fill(labels.goals_unsupported, &[*code]), false, true)
+        }
+        GoalsView::Read(page) => return goals_page(labels, page),
+    };
+    (data, Vec::new())
+}
+
+/// A failure's codes for the words that say it: the host's before the Runtime's, then the
+/// client's own, each once.
+fn failure_codes_text(failure: &ClientFailure) -> String {
+    let mut codes: Vec<&str> = Vec::new();
+    if let Some((host, _)) = &failure.host {
+        codes.push(host.as_str());
+    }
+    if let Some(code) = &failure.runtime_code {
+        codes.push(code.as_str());
+    }
+    codes.push(failure.code);
+    codes.dedup();
+    codes.join(", ")
+}
+
+/// One read page of the Goals tab: above its rows, in amber, a document of a newer form or one the
+/// Runtime reads as none, when it was read, and why there are no rows (no task catalog active, or
+/// no resource declared); its rows; under them the old form's note and the document's validity.
+fn goals_page(labels: &Labels, page: &GoalsPage) -> (GoalListData, Vec<GoalRowData>) {
+    let document = match &page.stored {
+        Stored::Document(document) => Some(document),
+        Stored::None => None,
+    };
+    let form = document.map(|document| &document.form);
+    let mut notice: Vec<&str> = Vec::new();
+    if matches!(form, Some(Form::Newer(_))) {
+        notice.push(labels.goals_form_newer);
+    }
+    if page.stale_schema {
+        notice.push(labels.goals_stale);
+    }
+    let empty = if page.no_catalog {
+        labels.goals_no_catalog
+    } else if page.rows.is_empty() {
+        labels.goals_no_pools
+    } else {
+        ""
+    };
+    let old = if matches!(form, Some(Form::Old)) { labels.goals_form_old } else { "" };
+    let (validity, expired) = match document {
+        None => (labels.goals_none_set.to_owned(), false),
+        Some(document) => match (document.expired, document.valid_until_ms) {
+            (true, Some(until)) => {
+                (fill(labels.goals_expired, &[&format_date_minute(until)]), true)
+            }
+            (true, None) => (labels.goals_expired_undated.to_owned(), true),
+            (false, Some(until)) => {
+                (fill(labels.goals_valid_until, &[&format_date_minute(until)]), false)
+            }
+            (false, None) => (labels.goals_validity_unstated.to_owned(), true),
+        },
+    };
+    let data = GoalListData {
+        instead: SharedString::new(),
+        instead_failed: false,
+        instead_warning: false,
+        notice: notice.join("\n").into(),
+        read_at: fill(labels.goals_read_at, &[&format_minute(page.evaluated_at_ms)]).into(),
+        empty: empty.into(),
+        form: old.into(),
+        document: validity.into(),
+        document_warning: expired,
+    };
+    let rows = page.rows.iter().map(|row| goal_row(labels, row)).collect();
+    (data, rows)
+}
+
+/// One row of the Goals tab: the pool's id for its name, never a title made up for it. A pool a
+/// goal can name: its reading and its goal, and in grey under it that the pack gives it no step
+/// where it does not. A pool no goal can name: greyed, and why. A goal stored on a pool no longer
+/// offered: greyed, its goal and its reading, and in amber that it is no longer offered and why. A
+/// target that does not read: its place, in amber.
+fn goal_row(labels: &Labels, row: &GoalRow) -> GoalRowData {
+    match row {
+        GoalRow::Goal(pool) => pool_row(labels, pool, ""),
+        GoalRow::NoStep(pool) => pool_row(labels, pool, labels.goals_no_step),
+        GoalRow::Closed { pool, why } => GoalRowData {
+            name: pool.as_str().into(),
+            greyed: true,
+            note: fill(labels.goals_closed, &[&closed_text(labels, why)]).into(),
+            ..GoalRowData::default()
+        },
+        GoalRow::NoLongerOffered { goal, why } => {
+            let note = match why {
+                Some(why) => fill(labels.goals_no_longer_offered, &[&closed_text(labels, why)]),
+                None => labels.goals_no_longer_listed.to_owned(),
+            };
+            let reading = match goal.progress {
+                Progress::Computed { current, at_ms, .. } => {
+                    reading_text(labels, Reading::Read { current, at_ms })
+                }
+                Progress::Awaiting(_) | Progress::NoCondition => String::new(),
+            };
+            GoalRowData {
+                name: goal.pool.as_str().into(),
+                greyed: true,
+                reading: reading.into(),
+                goal: goal_text(labels, goal).into(),
+                goal_met: goal.progress.met(),
+                note: note.into(),
+                note_warning: true,
+            }
+        }
+        GoalRow::Unread { position } => GoalRowData {
+            name: fill(labels.goals_unread, &[&(position + 1).to_string()]).into(),
+            greyed: true,
+            note_warning: true,
+            ..GoalRowData::default()
+        },
+    }
+}
+
+/// A pool a goal can name, with `note` in grey under it.
+fn pool_row(labels: &Labels, pool: &PoolRow, note: &str) -> GoalRowData {
+    let (goal, met) = match &pool.goals {
+        Goals::Unknown => (labels.goals_target_unknown.to_owned(), false),
+        Goals::Set(goals) if goals.is_empty() => (labels.goals_target_none.to_owned(), false),
+        Goals::Set(goals) => {
+            let lines: Vec<String> = goals.iter().map(|goal| goal_text(labels, goal)).collect();
+            (lines.join("\n"), goals.iter().all(|goal| goal.progress.met()))
+        }
+    };
+    GoalRowData {
+        name: pool.pool.as_str().into(),
+        greyed: false,
+        reading: reading_text(labels, pool.reading).into(),
+        goal: goal.into(),
+        goal_met: met,
+        note: note.into(),
+        note_warning: false,
+    }
+}
+
+/// A stored goal's amount and how far it is: short by its gap, met, waiting for a reading and why,
+/// or its amount alone while its pool has no reading for the instance at all.
+fn goal_text(labels: &Labels, goal: &StoredGoal) -> String {
+    let amount = goal.amount.to_string();
+    match goal.progress {
+        Progress::Computed { gap: 0, .. } => fill(labels.goals_target_met, &[&amount]),
+        Progress::Computed { gap, .. } => {
+            fill(labels.goals_target_short, &[&amount, &gap.to_string()])
+        }
+        Progress::Awaiting(why) => {
+            fill(labels.goals_target_awaiting, &[amount.as_str(), pending_text(labels, why)])
+        }
+        Progress::NoCondition => fill(labels.goals_target_set, &[&amount]),
+    }
+}
+
+/// A pool's reading: its amount and when it was read, or why there is none.
+fn reading_text(labels: &Labels, reading: Reading) -> String {
+    match reading {
+        Reading::Read { current, at_ms } => {
+            fill(labels.goals_current, &[&current.to_string(), &format_minute(at_ms)])
+        }
+        Reading::Pending(Some(why)) => pending_text(labels, why).to_owned(),
+        Reading::Pending(None) => labels.goals_pending_unstated.to_owned(),
+    }
+}
+
+fn pending_text(labels: &Labels, why: Pending) -> &'static str {
+    match why {
+        Pending::Missing => labels.goals_pending_missing,
+        Pending::Expired => labels.goals_pending_expired,
+        Pending::LowConfidence => labels.goals_pending_low_confidence,
+        Pending::InvalidValue => labels.goals_pending_invalid,
+    }
+}
+
+/// Why no goal can name a pool, in the console's words; another reason by its code.
+fn closed_text(labels: &Labels, why: &Closed) -> String {
+    match why {
+        Closed::UnmappedTask => labels.goals_why_unmapped.to_owned(),
+        Closed::NotObservable => labels.goals_why_not_observable.to_owned(),
+        Closed::OutOfScope => labels.goals_why_out_of_scope.to_owned(),
+        Closed::Other(code) => fill(labels.goals_why_other, &[code]),
     }
 }
 

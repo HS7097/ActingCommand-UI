@@ -12,6 +12,7 @@ use std::mem;
 use std::time::Instant;
 
 use acui_source::workbench::device::DeviceOp;
+use acui_source::workbench::goals::{GoalsAnswer, GoalsRead};
 use acui_source::workbench::pack::{self, PacksAnswer, PacksRead};
 use acui_source::workbench::{
     ActivityKind, ConfigRead, ExplainRead, FenceFact, InstanceLive, LiveRead, LiveSnapshot,
@@ -21,11 +22,12 @@ use acui_source::{ClientFailure, PauseFact};
 
 use super::actions::{self, AccountEntry, Actions, ActionsView, PresetView, RulesView};
 use super::card::{self, CardView, Down, Schedule};
+use super::goals::GoalsView;
 use super::picture::{
     Doing, LinkNow, Offline, PictureView, Pictures, PreviewGate, RefreshHold, RefreshView,
 };
 use super::preview::{Order, Target};
-use super::read::{Lane, Read, EXPLAIN_TOO_OLD, PACKS_TOO_OLD, START_TRIES};
+use super::read::{Lane, Read, EXPLAIN_TOO_OLD, GOALS_TOO_OLD, PACKS_TOO_OLD, START_TRIES};
 use super::rescue::{Rescue, RescueHold, RescueView, Watch};
 use super::settings::{self, AutostartView, SettingsView, StartView};
 use super::stop::{Review, StopTarget, Stops};
@@ -138,13 +140,14 @@ impl Page {
     }
 }
 
-/// Which of the main page's right column's two tabs shows (UI-3f1): the live view, or the
-/// account's daily task list. For this run only, the live view first; it stays across accounts
-/// and pages.
+/// Which of the main page's right column's three tabs shows (UI-3f1): the live view, the
+/// account's daily task list, or its goals (Workflow #455 T1-C). For this run only, the live view
+/// first; it stays across accounts and pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RightTab {
     Picture,
     Tasks,
+    Goals,
 }
 
 /// The daily task list's read (UI-3f1), of the one account `of` names while its list shows:
@@ -164,6 +167,17 @@ struct TasksSlice {
 struct PacksSlice {
     of: Option<String>,
     value: Option<PacksRead>,
+    read_at: Option<Instant>,
+    error: Option<ClientFailure>,
+    asked_at: Option<Instant>,
+}
+
+/// The Goals tab's read (Workflow #455 T1-C), of the one account `of` names while that tab shows,
+/// on the same terms as the list's. Another account, or none, starts it anew.
+#[derive(Default)]
+struct GoalsSlice {
+    of: Option<String>,
+    value: Option<GoalsRead>,
     read_at: Option<Instant>,
     error: Option<ClientFailure>,
     asked_at: Option<Instant>,
@@ -253,17 +267,20 @@ pub struct Model {
     /// The fact snapshot read's. It shares a thread with the explanation and fails on
     /// its own: neither read's success says the other's panic is over.
     config_fault: Option<Fault>,
-    /// The daily task list's read's, likewise (UI-3f1), and its switches' (UI-3f2).
+    /// The daily task list's read's, likewise (UI-3f1), its switches' (UI-3f2), and the goals'
+    /// (Workflow #455 T1-C).
     tasks_fault: Option<Fault>,
     packs_fault: Option<Fault>,
+    goals_fault: Option<Fault>,
     /// The right column's tab, and its daily task list's read and whether its line of tasks
     /// without a package is open (UI-3f1); its switches' read, and each account's presses of them
-    /// (UI-3f2), which a restart lets go of (`super::switch::restarted`).
+    /// (UI-3f2), which a restart lets go of (`super::switch::restarted`); and its goals' read.
     right_tab: RightTab,
     tasks: TasksSlice,
     tasks_fold_open: bool,
     packs: PacksSlice,
     switches: Switches,
+    goals: GoalsSlice,
     /// The lines the log got about codes the cards have no words for: once each.
     told_codes: BTreeSet<String>,
     actions: Actions,
@@ -352,6 +369,18 @@ pub struct PacksLanded {
     pub unversioned: bool,
 }
 
+/// What a read of the goals changed, for what the event loop does next.
+pub struct GoalsLanded {
+    pub news: News<ClientFailure>,
+    /// The read's fault is over.
+    pub fault_cleared: bool,
+    /// It said that its Runtime has no such read: that owner epoch, and the code that said so.
+    /// The goals are read no more until the tab is shown anew.
+    pub unsupported: Option<(String, &'static str)>,
+    /// It is of the account the tab follows and of the owner epoch online, and it answered.
+    pub counted: bool,
+}
+
 /// What a fact snapshot read changed, for what the event loop does next.
 pub struct ConfigLanded {
     pub news: News<ClientFailure>,
@@ -390,11 +419,13 @@ impl Model {
             config_fault: None,
             tasks_fault: None,
             packs_fault: None,
+            goals_fault: None,
             right_tab: RightTab::Picture,
             tasks: TasksSlice::default(),
             tasks_fold_open: false,
             packs: PacksSlice::default(),
             switches: Switches::default(),
+            goals: GoalsSlice::default(),
             told_codes: BTreeSet::new(),
             actions: Actions::default(),
             page: Page::Main,
@@ -589,6 +620,7 @@ impl Model {
             .chain(self.config_fault.iter())
             .chain(self.tasks_fault.iter())
             .chain(self.packs_fault.iter())
+            .chain(self.goals_fault.iter())
     }
 
     pub fn accounts_note(&self) -> AccountsNote {
@@ -1003,6 +1035,134 @@ impl Model {
             language,
             switches: self.switches_now(&instance.alias, now),
         })
+    }
+
+    /// The account whose goals the slow thread is to read now (Workflow #455 T1-C), if any: the one
+    /// whose picture the right column names, on the main page of a window not minimized under the
+    /// Goals tab, while the Runtime answers and lists it, as for the daily task list.
+    pub fn goals_wanted(&self) -> Option<String> {
+        if self.page != Page::Main || !self.shown || self.right_tab != RightTab::Goals {
+            return None;
+        }
+        self.online_epoch()?;
+        let alias = self.picture_account()?;
+        self.instances.iter().any(|instance| instance.alias == alias).then(|| alias.to_owned())
+    }
+
+    /// Whether the goals the tab follows are read on their clock: not once its Runtime said it has
+    /// no such read, which holds until the tab is shown anew (`goals_follow`) or the owner epoch
+    /// changes.
+    pub fn goals_read_wanted(&self) -> bool {
+        !matches!(
+            &self.goals.value,
+            Some(GoalsRead { answer: GoalsAnswer::Unsupported { .. }, .. })
+        )
+    }
+
+    /// The slow thread is told to read the goals of `wanted` from now on, or none: whether that
+    /// changed. A change lets go of all that was read, so the tab says it is reading until an
+    /// answer of that account comes.
+    pub fn goals_follow(&mut self, wanted: Option<&str>) -> bool {
+        if self.goals.of.as_deref() == wanted {
+            return false;
+        }
+        self.goals = GoalsSlice { of: wanted.map(str::to_owned), ..GoalsSlice::default() };
+        true
+    }
+
+    /// The slow thread was told to read the goals now.
+    pub fn goals_asked(&mut self, now: Instant) {
+        self.goals.asked_at = Some(now);
+    }
+
+    /// One read of the goals of `alias`, held to the account the tab follows and the owner epoch
+    /// online as a read of the list is. One that says its Runtime has no such read says so
+    /// (`GoalsLanded::unsupported`), and is kept as the answer.
+    pub fn apply_goals(
+        &mut self,
+        alias: &str,
+        read: Result<GoalsRead, ClientFailure>,
+        now: Instant,
+    ) -> GoalsLanded {
+        let fault_cleared = self.goals_fault.take().is_some();
+        let mut landed =
+            GoalsLanded { news: News::Nothing, fault_cleared, unsupported: None, counted: false };
+        let Link::Online { epoch, .. } = &self.link else {
+            return landed;
+        };
+        let slice = &mut self.goals;
+        if slice.of.as_deref() != Some(alias) {
+            return landed;
+        }
+        landed.news = match read {
+            Ok(read) if read.epoch != *epoch || read.alias != alias => News::Nothing,
+            Ok(read) => {
+                if let GoalsAnswer::Unsupported { code } = &read.answer {
+                    landed.unsupported = Some((epoch.clone(), *code));
+                }
+                landed.counted = true;
+                let recovered = slice.error.take().is_some();
+                slice.value = Some(read);
+                slice.read_at = Some(now);
+                if recovered {
+                    News::Recovered
+                } else {
+                    News::Nothing
+                }
+            }
+            Err(failure) if slice.error.as_ref() == Some(&failure) => News::Nothing,
+            Err(failure) => {
+                slice.error = Some(failure.clone());
+                News::Failed(failure)
+            }
+        };
+        landed
+    }
+
+    /// Nothing new of the goals for too long, while the window shows: what was read is not what
+    /// holds now.
+    fn goals_late(&self, now: Instant) -> bool {
+        let since = self.goals.read_at.max(self.goals.asked_at);
+        self.shown
+            && since.is_some_and(|since| now.saturating_duration_since(since) > GOALS_TOO_OLD)
+    }
+
+    /// The Goals tab of the account whose picture the right column names (Workflow #455 T1-C), as
+    /// the reads leave it at `now`: no row of an answer that is not of this account and epoch, or
+    /// not new, or after a failure, which is said with its codes. A Runtime that has no such read
+    /// is said so, and no clock makes that late: nothing reads the goals then.
+    pub fn goals_view(&self, now: Instant) -> GoalsView {
+        if let Some(down) = Down::of(&self.link) {
+            return GoalsView::Down(down);
+        }
+        let Some(instance) = self
+            .picture_account()
+            .and_then(|alias| self.instances.iter().find(|instance| instance.alias == alias))
+        else {
+            return GoalsView::NoAccount;
+        };
+        if let Some(fault) = &self.goals_fault {
+            return GoalsView::Fault(fault.clone());
+        }
+        if let Some(fault @ Fault::NoThread(_)) = &self.slow_fault {
+            return GoalsView::Fault(fault.clone());
+        }
+        if self.goals.of.as_deref() != Some(instance.alias.as_str()) {
+            return GoalsView::Reading;
+        }
+        if let Some(failure) = &self.goals.error {
+            return GoalsView::Failed(failure.clone());
+        }
+        match &self.goals.value {
+            Some(GoalsRead { answer: GoalsAnswer::Unsupported { code }, .. }) => {
+                GoalsView::Unsupported(*code)
+            }
+            _ if self.goals_late(now) => GoalsView::Late,
+            Some(GoalsRead { answer: GoalsAnswer::Read(page), .. }) => {
+                GoalsView::Read(page.clone())
+            }
+            None => GoalsView::Reading,
+        }
     }
 
     pub fn pictures(&self) -> &Pictures {
@@ -1533,6 +1693,8 @@ impl Model {
             // switches too.
             self.tasks = TasksSlice { of: self.tasks.of.take(), ..TasksSlice::default() };
             self.packs = PacksSlice { of: self.packs.of.take(), ..PacksSlice::default() };
+            // The goals likewise, and what an earlier Runtime said of them goes with it.
+            self.goals = GoalsSlice { of: self.goals.of.take(), ..GoalsSlice::default() };
             self.servers_seen.clear();
             self.start = StartSlice::default();
             self.epoch = Some(epoch.clone());
@@ -1629,6 +1791,7 @@ impl Model {
             Read::Config => &mut self.config_fault,
             Read::Tasks => &mut self.tasks_fault,
             Read::Packs => &mut self.packs_fault,
+            Read::Goals => &mut self.goals_fault,
             // A start report's panic is one of its failures (`start_failed`), not a fault
             // of a read that a later one of its kind clears: there is no later one.
             Read::Start => return false,
