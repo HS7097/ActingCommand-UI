@@ -5,11 +5,16 @@
 //! 1. An installation selection (a slot of an A/B installation): all three from it,
 //!    which `--state-root` and `--root` may only repeat.
 //! 2. `--root <folder>`: a single-location root named on the command line, one that
-//!    holds `runtime\BUILD-MANIFEST.json` and no installation selection.
-//! 3. Where this program is: `<root>\ui\acui.exe` of such a root. A console that sits
-//!    in a root may be given no other one by `--root`.
+//!    holds `runtime\BUILD-MANIFEST.json` and has no installation selection
+//!    (`install\active.json`) in it or above it.
+//! 3. Where this program is: `<root>\ui\acui.exe` of such a root, by this program's own
+//!    path as the system resolves it (a `ui` that is a link is judged by where it leads).
+//!    A console that sits in a root may be given no other one by `--root`.
 //! 4. Neither: `--state-root`, else acui.toml's `state_root`, and the two paths from
 //!    acui.toml, as ever.
+//!
+//! The judgment itself is `acui_source::place`'s, over what is found here: this module
+//! looks at the files and hands it the facts.
 //!
 //! In a root all three come from it, as the Runtime's own tools find them: the
 //! configuration `<root>\actingd.config.json`, the state root its `state_root` as
@@ -18,7 +23,9 @@
 //! taken. A root that lacks one of them, or a folder that is only half a root, is said
 //! in red, and never stood in for by acui.toml: a console in a root does not reach
 //! another installation by itself. Which acui.toml the run reads and writes goes by the
-//! same place (`settings::load`).
+//! same place (`settings::load`). A state root used as written may still lead to another
+//! installation's Runtime, through a configuration copied from it: in a root nothing is
+//! asked of a Runtime before it is checked to be the root's (`identity`).
 //!
 //! None of it is a silent default: with no state root the workbench says so in plain
 //! words, and the technical log gets the usage. One place, so that what replaces this
@@ -31,6 +38,10 @@ use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
 use acui_installation::{Snapshot, INSTALL_SELECTION_PATH, MAX_CONFIG_BYTES};
+use acui_source::place::{
+    self as rules, GivenRoot, PlaceFacts, Refused, RootLook, Selection, Tier,
+};
+pub use acui_source::place::RootBy;
 use serde_json::Value;
 
 use crate::settings::Settings;
@@ -59,7 +70,7 @@ pub struct InstallPaths {
     pub state_root: PathBuf,
     pub actingd_config: Option<PathBuf>,
     pub actingd_exe: Option<PathBuf>,
-    /// The tier they came from, for the log.
+    /// The tier they came from, for the log, and for the check of the Runtime in a root.
     pub origin: Origin,
 }
 
@@ -69,13 +80,6 @@ pub enum Origin {
     Root(RootBy),
     /// `--state-root` when it was given, else acui.toml.
     Legacy { state_root_given: bool },
-}
-
-/// How a single-location root was found: where this program is, or `--root`.
-#[derive(Clone, Copy)]
-pub enum RootBy {
-    Exe,
-    Arg,
 }
 
 /// Why there are no paths to start from.
@@ -94,8 +98,8 @@ pub enum InstallIssue {
     NoStateRoot,
     /// `--root` names another folder than the installation this console belongs to.
     RootDiffers { given: PathBuf, root: PathBuf },
-    /// `--root` names no single-location root: not absolute, or without
-    /// `runtime\BUILD-MANIFEST.json`.
+    /// `--root` names no single-location root: not absolute, without
+    /// `runtime\BUILD-MANIFEST.json`, or with an installation selection in it or above it.
     RootArgNotRoot(PathBuf),
     /// The single-location root this console belongs to lacks what its paths come from.
     RootIncomplete { root: PathBuf, problems: Vec<RootProblem> },
@@ -301,9 +305,10 @@ pub struct Place {
     /// The tier, or why none gives paths.
     pub source: Result<Source, InstallIssue>,
     /// The single-location root whose own acui.toml this run may use: the one this
-    /// program sits in, whether or not it is whole, else the one `--root` names.
-    /// `None` with an installation selection, or one that could not be read, and
-    /// outside any root: the per-user acui.toml, as ever.
+    /// program sits in, whether or not it is whole, and also when the installation
+    /// selection could not be read, else the one `--root` names. `None` with an
+    /// installation selection, in a slot of an A/B installation whose selection could
+    /// not be read, and outside any root: the per-user acui.toml, as ever.
     pub settings_root: Option<PathBuf>,
 }
 
@@ -323,91 +328,93 @@ pub struct RootPaths {
     actingd_exe: PathBuf,
 }
 
-/// The tier, read once: the installation selection first (`Snapshot::for_current_process`,
-/// called here only), then the root `given` by `--root` or the one this program sits
-/// in, else acui.toml. `given` is `None` when the command line could not be read: then
-/// where this program is decides alone.
+/// The tier, read once: the installation selection (`Snapshot::for_current_process`,
+/// called here only), the folder this program's `ui\` sits in and the folder `given` by
+/// `--root`, each looked at here, and judged by `acui_source::place::place`. `given` is
+/// `None` when the command line could not be read: then where this program is decides
+/// alone.
 pub fn place(given: Option<&Path>) -> Place {
-    let selected = match Snapshot::for_current_process() {
-        Ok(selected) => selected,
-        Err(error) => {
-            let issue = if slot_named_root() {
-                InstallIssue::SelectionSlotNamed(error)
-            } else {
-                InstallIssue::Selection(error)
-            };
-            return Place { source: Err(issue), settings_root: None };
+    let own = own_folder();
+    let selected = Snapshot::for_current_process();
+    let given = given.map(|path| GivenRoot {
+        path: path.to_path_buf(),
+        absolute: path.is_absolute(),
+        look: look(path),
+        same_as_selected: matches!(&selected, Ok(Some(snapshot)) if same_place(path, &snapshot.root)),
+        same_as_own: own.as_ref().is_some_and(|(root, _)| same_place(path, root)),
+    });
+    let selection = match selected {
+        Ok(Some(snapshot)) => {
+            let root = plain(&snapshot.root);
+            Selection::Selected { selection: snapshot, root }
         }
+        Ok(None) => Selection::Unselected,
+        Err(error) => Selection::Failed(error),
     };
-    if let Some(snapshot) = selected {
-        let source = match given {
-            Some(given) if !same_place(given, &snapshot.root) => Err(InstallIssue::RootDiffers {
-                given: given.to_path_buf(),
-                root: snapshot.root.clone(),
-            }),
-            _ => Ok(Source::Selected(snapshot)),
-        };
-        return Place { source, settings_root: None };
-    }
-    let (root, by) = match (root_of_exe(), given) {
-        (Some(own), Some(given)) if !same_place(given, &own) => {
-            let source = Err(InstallIssue::RootDiffers { given: given.to_path_buf(), root: own.clone() });
-            return Place { source, settings_root: Some(own) };
+    let placed = rules::place(PlaceFacts { selection, own, given });
+    let source = match placed.tier {
+        Ok(Tier::Selected(snapshot)) => Ok(Source::Selected(snapshot)),
+        Ok(Tier::Root { root, by }) => root_paths(root, by),
+        Ok(Tier::Legacy) => Ok(Source::Legacy),
+        Err(Refused::Selection(error)) if slot_named_root() => {
+            Err(InstallIssue::SelectionSlotNamed(error))
         }
-        (Some(own), _) => (own, RootBy::Exe),
-        (None, Some(given))
-            if given.is_absolute() && given.join(RUNTIME).join(BUILD_MANIFEST).is_file() =>
-        {
-            (given.to_path_buf(), RootBy::Arg)
-        }
-        (None, Some(given)) => {
-            let source = Err(InstallIssue::RootArgNotRoot(given.to_path_buf()));
-            return Place { source, settings_root: None };
-        }
-        (None, None) => return Place { source: Ok(Source::Legacy), settings_root: None },
+        Err(Refused::Selection(error)) => Err(InstallIssue::Selection(error)),
+        Err(Refused::RootDiffers { given, root }) => Err(InstallIssue::RootDiffers { given, root }),
+        Err(Refused::RootArgNotRoot(given)) => Err(InstallIssue::RootArgNotRoot(given)),
     };
-    Place { source: root_paths(root.clone(), by), settings_root: Some(root) }
+    Place { source, settings_root: placed.settings_root }
 }
 
-/// The folder this program belongs to by where it is: `<root>\ui\acui.exe` (the
-/// folder's name in any case) of a root that holds `runtime\BUILD-MANIFEST.json`, or
-/// of one that is only half a root, with `actingd.config.json` or `runtime\` and no
-/// manifest, which is then said rather than passed over. Never an A/B root, one with
-/// `install\active.json`: that is the selection's. Judged on the canonical path,
-/// given as a person writes it (`plain`).
-fn root_of_exe() -> Option<PathBuf> {
+/// The folder this program's `ui\` (so named in any case) sits in, as a person writes it,
+/// and what is in it; `None` when this program sits in no folder named `ui`, or its own
+/// path cannot be resolved. Found on the canonical path, as the contract finds a
+/// program's root, so a `ui` that is a link counts by where it leads.
+fn own_folder() -> Option<(PathBuf, RootLook)> {
     let exe = std::env::current_exe().and_then(|exe| exe.canonicalize()).ok()?;
     let root = exe
         .parent()
         .filter(|folder| folder.file_name().is_some_and(|name| name.eq_ignore_ascii_case(UI)))?
         .parent()?;
-    if root.join(INSTALL_SELECTION_PATH).is_file() {
-        return None;
+    let root = plain(root);
+    let look = look(&root);
+    Some((root, look))
+}
+
+/// What `folder` holds that says whether it is a single-location root. Either
+/// installation selection that cannot be looked at counts as there (`present`), so that a
+/// folder is never taken for a root on a guess; so does a configuration, so that what is
+/// wrong with it is said.
+fn look(folder: &Path) -> RootLook {
+    let runtime = folder.join(RUNTIME);
+    RootLook {
+        manifest: runtime.join(BUILD_MANIFEST).is_file(),
+        config: present(&folder.join(ROOT_CONFIG)),
+        runtime: runtime.is_dir(),
+        selection: present(&folder.join(INSTALL_SELECTION_PATH)),
+        selection_above: folder
+            .parent()
+            .is_some_and(|above| present(&above.join(INSTALL_SELECTION_PATH))),
     }
-    let runtime = root.join(RUNTIME);
-    let belongs = runtime.join(BUILD_MANIFEST).is_file()
-        || present(&root.join(ROOT_CONFIG))
-        || runtime.is_dir();
-    belongs.then(|| plain(root))
 }
 
 /// Whether this program sits in `ui\` of an installation folder named `A` or `B`, one
 /// with `runtime\BUILD-MANIFEST.json` and no installation selection above it: the
-/// selection reader takes such a folder for a slot (case as it compares it).
+/// selection reader takes such a folder for a slot (names spelt as it compares them).
 fn slot_named_root() -> bool {
     let Ok(exe) = std::env::current_exe().and_then(|exe| exe.canonicalize()) else {
         return false;
     };
-    let Some(root) = exe
-        .parent()
-        .filter(|folder| folder.file_name().and_then(|name| name.to_str()) == Some(UI))
-        .and_then(Path::parent)
-    else {
+    let Some(ui) = exe.parent() else {
         return false;
     };
-    matches!(root.file_name().and_then(|name| name.to_str()), Some("A" | "B"))
-        && root.join(RUNTIME).join(BUILD_MANIFEST).is_file()
-        && root.parent().is_some_and(|above| !above.join(INSTALL_SELECTION_PATH).is_file())
+    let Some(root) = ui.parent() else {
+        return false;
+    };
+    fn named(path: &Path, names: &[&str]) -> bool {
+        path.file_name().and_then(|name| name.to_str()).is_some_and(|name| names.contains(&name))
+    }
+    look(&plain(root)).slot_named(named(ui, &[UI]) && named(root, &["A", "B"]))
 }
 
 /// What `root` gives, each lack said: its manifest, actingd, and the configuration's
@@ -483,7 +490,7 @@ fn configured_state_root(config: &Path) -> Result<PathBuf, RootProblem> {
 
 /// A canonical Windows path without its `\\?\` (or `\\?\UNC\`) prefix, as a person
 /// writes it and as the Runtime's tools are given it.
-fn plain(path: &Path) -> PathBuf {
+pub fn plain(path: &Path) -> PathBuf {
     let Some(text) = path.to_str() else {
         return path.to_path_buf();
     };
@@ -513,7 +520,8 @@ pub fn resolve(args: &Args, source: Source, settings: &Settings) -> Result<Insta
         Source::Selected(snapshot) => Some(snapshot),
         Source::Legacy => None,
     };
-    let root = installation.as_ref().map(|snapshot| snapshot.root.clone());
+    // The selection's root is canonical: it is shown, and logged, as a person writes it.
+    let root = installation.as_ref().map(|snapshot| plain(&snapshot.root));
     let origin = match &installation {
         Some(_) => Origin::Selected,
         None => Origin::Legacy { state_root_given: args.state_root.is_some() },

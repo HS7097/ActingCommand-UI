@@ -38,6 +38,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use acui_source::place::{root_settings, RootSettings};
 use acui_source::workbench::pause_reason_valid;
 
 use crate::install::{same_place, ROOT_CONFIG};
@@ -315,8 +316,10 @@ pub fn global_path() -> Option<PathBuf> {
 }
 
 /// The settings of this run: outside a single-location root (`root` is `None`) the
-/// per-user file, read as ever; in one, the file the module's head says. A file that
-/// cannot be looked at counts as there, so that what is wrong with it is said.
+/// per-user file, read as ever; in one, the file the module's head says, as
+/// `acui_source::place::root_settings` decides it. A file that cannot be looked at
+/// counts as there, so that what is wrong with it is said. The per-user file is read
+/// only when it could decide: there, and the root's own not.
 pub fn load(root: Option<&Path>) -> Loaded {
     let Some(root) = root else {
         return read(global_path(), false, Chosen::Global);
@@ -324,17 +327,16 @@ pub fn load(root: Option<&Path>) -> Loaded {
     let there = |path: &PathBuf| !matches!(path.try_exists(), Ok(false));
     let global = global_path().filter(there);
     let own = root.join(FILE_NAME);
-    if !there(&own) {
-        if let Some(global) = &global {
-            let loaded = read(Some(global.clone()), false, Chosen::GlobalNamesRoot);
-            let names_root = loaded
-                .settings
-                .actingd_config
-                .as_deref()
-                .is_some_and(|config| same_place(config, &root.join(ROOT_CONFIG)));
-            if names_root {
-                return loaded;
-            }
+    let own_there = there(&own);
+    if let (false, Some(global)) = (own_there, &global) {
+        let loaded = read(Some(global.clone()), false, Chosen::GlobalNamesRoot);
+        let names_root = loaded
+            .settings
+            .actingd_config
+            .as_deref()
+            .is_some_and(|config| same_place(config, &root.join(ROOT_CONFIG)));
+        if root_settings(own_there, names_root) == RootSettings::Global {
+            return loaded;
         }
     }
     read(Some(own), true, Chosen::Root { unused_global: global })

@@ -62,6 +62,7 @@ use actingcommand_runtime_client::{
 };
 use anyhow::{anyhow, bail, Result};
 
+pub mod place;
 pub mod workbench;
 
 /// The console's cap on one material, on either face: 8 MiB, the bound it kept
