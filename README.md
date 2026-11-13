@@ -1035,7 +1035,10 @@ answers. What it came to is said under the row, with when; never a code or a req
 the stopped run's request id only in the technical log. After an answer that the run still stops
 (`settled: false`), or one not confirmed, the stop is sent once more, and only once, when a status read
 of the same owner epoch, begun after that answer, shows the run gone, to read the reset's result;
-nothing sends it on a timer, and a refusal or one not sent is not sent again. A Runtime that restarted,
+nothing sends it on a timer, and a refusal or one not sent is not sent again. That the run stopped or
+had ended, as the follow-up reads it, is said with the time the console learned it ("Stopped (learned
+at hh:mm:ss)"), not the time the Runtime ended the run, which was earlier; an answer within the first
+request's wait is said with its time alone. A Runtime that restarted,
 an account no longer listed or a reading thread gone leaves the result unknown, and nothing more is
 sent; a run that does not end is waited for as long as it runs, with no limit of the console's own. A
 Runtime before v0.12.53 answers `not_implemented` (which records nothing), and both buttons then stay

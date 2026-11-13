@@ -1201,7 +1201,9 @@ pub struct Labels {
     /// read; refused by a Runtime that cannot stop a run; the run ended before the stop; ended, its
     /// reset's result not read; the stop as a refusal names it (`rescue_refused`); unconfirmed; the
     /// account gone from the Runtime's list; the console reading no status. And a sentence with
-    /// the time it was said (the sentence, the time).
+    /// the time it was said (the sentence, the time). And, in place of the time of stopped, ended
+    /// for another reason and ended with its reset's result not read, when a follow-up said so,
+    /// that this is when the console learned it (time), not when the Runtime ended the run.
     pub stop_sending: &'static str,
     pub stop_done: &'static str,
     pub stop_not_needed: &'static str,
@@ -1217,6 +1219,7 @@ pub struct Labels {
     pub stop_unlisted: &'static str,
     pub stop_no_status: &'static str,
     pub stop_at: &'static str,
+    pub stop_learned_at: &'static str,
     /// What the last "close this task" came to (UI-3e2b), under its button, each that landed with
     /// when (time). Out, its close and the stop after it. Its close not written, the run not
     /// stopped either: this Runtime cannot close a task from here, nothing done (time); another
@@ -2339,12 +2342,13 @@ pub const ZH: Labels = Labels {
     stop_unsettled: "已经请它停下，但这里没读到最后结果（{}）；现在怎样以卡片为准。不会再自动发。",
     stop_refused_unsupported: "这一版 Runtime 还不支持在这里停下运行，什么都没做（{}）",
     stop_run_ended: "这次运行在停下之前已经结束了，什么都没做（{}）",
-    stop_run_ended_unread: "这次运行已经结束，但复位的结果这里没读到（{}）；现在怎样以卡片为准",
+    stop_run_ended_unread: "这次运行已经结束（{}），但复位的结果这里没读到；现在怎样以卡片为准",
     stop_op: "停下这次运行",
     stop_unconfirmed: "结果未确认：可能已经执行（{}）。卡片和画面是现在的情况；不会自己定时重发。",
     stop_unlisted: "这个号不在 Runtime 的列表里了，这次停止的结果不明",
     stop_no_status: "控制台读不到 Runtime 的状态了，这次停止的结果不明",
     stop_at: "{}（{}）",
+    stop_learned_at: "{} 得知",
     close_task_sending: "正在关闭这个任务，再停下这一次…",
     close_task_refused_unsupported: "这一版 Runtime 还不支持在这里关闭任务，什么都没做（{}）",
     close_task_not_newer: "没能关闭：刚好有别的地方同时在改这个号的任务开关（{}）。这一次也没有停；再按一次即可",
@@ -3389,12 +3393,13 @@ pub const EN: Labels = Labels {
     stop_unsettled: "Asked to stop, but its final result was not read here ({}); see the card for what holds now. Not sent again by itself.",
     stop_refused_unsupported: "This Runtime cannot stop a run from here yet; nothing was done ({})",
     stop_run_ended: "The run had already ended before this stop reached it; nothing was done ({})",
-    stop_run_ended_unread: "The run has ended, but what came of its reset was not read here ({}); see the card for what holds now",
+    stop_run_ended_unread: "The run has ended ({}), but what came of its reset was not read here; see the card for what holds now",
     stop_op: "Stopping this run",
     stop_unconfirmed: "Unconfirmed: it may have happened ({}). The card and picture show what holds now; it is not sent again on a timer.",
     stop_unlisted: "This account is no longer in the Runtime's list: what came of this stop is not known",
     stop_no_status: "The console can no longer read the Runtime's status: what came of this stop is not known",
     stop_at: "{} ({})",
+    stop_learned_at: "learned at {}",
     close_task_sending: "Closing this task, then stopping this run…",
     close_task_refused_unsupported: "This Runtime cannot close a task from here yet; nothing was done ({})",
     close_task_not_newer: "Not closed: something else changed this account's task switches at the same moment ({}). This run was not stopped either; press again",

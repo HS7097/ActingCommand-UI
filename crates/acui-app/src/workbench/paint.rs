@@ -27,7 +27,7 @@ use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
 use acui_source::workbench::pack::{PackSource, PackState};
 use acui_source::workbench::preview::Overlay;
 use acui_source::workbench::rules::{IdleChoice, IdleNow, QuietOf, QuietRead, QuietShown};
-use acui_source::workbench::stop::{Origin as RunOrigin, Refusal, Reset};
+use acui_source::workbench::stop::{stop_time, Origin as RunOrigin, Refusal, Reset, StopTime};
 use acui_source::workbench::{
     PresetMember, PresetSetting, RefusalWhy, ReportedName, SettingName, SettingSource,
     SettingValue, TasksRead, ValueProblem, CONSOLE_PAUSE_ACCOUNT, CONSOLE_PAUSE_ALL, MODE_FULL,
@@ -752,8 +752,10 @@ fn close_text(labels: &Labels, why: CloseWhy) -> &'static str {
 }
 
 /// What the account's last stop of a run came to in words, each that landed with when, and
-/// whether that is a failure: never a code, a count or an id, which the log has. Of "close this
-/// task": while it is out, that it closes the task and then stops the run; once its close row was
+/// whether that is a failure: never a code, a count or an id, which the log has. That the run
+/// stopped or ended, as a follow-up said it, is with when the console learned it
+/// (`stop_time_text`); the close's own time is its write's. Of "close this task": while it is
+/// out, that it closes the task and then stops the run; once its close row was
 /// written, that the task is closed and no longer scheduled, with when, and then what the stop
 /// came to, which says how to open the task again once the run stopped (`closed_stop_text`); of a
 /// package the account's daily tasks do not run, before what the stop came to, that only the run
@@ -798,13 +800,14 @@ fn stop_text(ui: &Ui, labels: &Labels, line: &StopLine) -> (String, bool) {
 /// the follow-up's refusals, a request not sent, the account unlisted, no status read) is said so.
 fn closed_stop_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
     match said {
-        StopSaid::Stopped { at_ms, reset: Reset::Done } => {
-            (fill(labels.close_task_stop_done, &[&format_second(*at_ms)]), false)
+        StopSaid::Stopped { at, reset: Reset::Done } => {
+            (fill(labels.close_task_stop_done, &[&stop_time_text(labels, *at)]), false)
         }
-        StopSaid::Stopped { at_ms, reset: Reset::Failed { cause, .. } } => {
+        StopSaid::Stopped { at, reset: Reset::Failed { cause, .. } } => {
             let codes: Vec<&str> = cause.as_deref().into_iter().collect();
             let words = stop_words(ui, labels, &codes);
-            (fill(labels.close_task_stop_reset_failed, &[&format_second(*at_ms), &words]), true)
+            let at = stop_time_text(labels, *at);
+            (fill(labels.close_task_stop_reset_failed, &[&at, &words]), true)
         }
         StopSaid::Asked { at_ms } => {
             (fill(labels.close_task_stop_asked, &[&format_second(*at_ms)]), false)
@@ -859,13 +862,23 @@ fn close_restarted(labels: &Labels, at_ms: u64) -> String {
     fill(labels.rescue_then, &[&restarted, labels.close_task_restarted])
 }
 
+/// When an answer that the run stopped or ended landed, in words (`stop_time`): its time; of a
+/// follow-up, that this is when the console learned it (`stop_learned_at`), not when the Runtime
+/// ended the run, which was before.
+fn stop_time_text(labels: &Labels, at: StopTime) -> String {
+    match at {
+        StopTime::At(at_ms) => format_second(at_ms),
+        StopTime::LearnedAt(at_ms) => fill(labels.stop_learned_at, &[&format_second(at_ms)]),
+    }
+}
+
 /// What a stop came to in words, as a stop alone says it (`stop_text`); and a close not written.
 fn stop_said_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
     let timed = |text: &str, at_ms: u64| fill(labels.stop_at, &[text, &format_second(at_ms)]);
     match said {
         StopSaid::Sending => (labels.stop_sending.to_owned(), false),
-        StopSaid::Stopped { at_ms, reset } => {
-            let at = format_second(*at_ms);
+        StopSaid::Stopped { at, reset } => {
+            let at = stop_time_text(labels, *at);
             match reset {
                 Reset::Done => (fill(labels.stop_done, &[&at]), false),
                 Reset::NotNeeded => (fill(labels.stop_not_needed, &[&at]), false),
@@ -890,12 +903,16 @@ fn stop_said_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
                 (Refusal::NotStoppable, Some(RunOrigin::Host)) => {
                     (fill(labels.rescue_then, &[labels.rescue_close_system, &nothing_done]), true)
                 }
-                // The run ran out on its own between the `Status` and the press: no failure. Of
-                // the follow-up, the reset's result is not known.
+                // The run ran out on its own between the `Status` and the press: no failure.
                 (Refusal::RunUnknown, _) if !*follow_up => {
                     (fill(labels.stop_run_ended, &[&at]), false)
                 }
-                (Refusal::RunUnknown, _) => (fill(labels.stop_run_ended_unread, &[&at]), true),
+                // Of the follow-up, the reset's result is not known, and its time is when the
+                // console learned the run had ended.
+                (Refusal::RunUnknown, _) => {
+                    let learned = stop_time_text(labels, stop_time(*follow_up, *at_ms));
+                    (fill(labels.stop_run_ended_unread, &[&learned]), true)
+                }
                 (Refusal::NotImplemented, _) => {
                     (fill(labels.stop_refused_unsupported, &[&at]), true)
                 }

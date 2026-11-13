@@ -50,8 +50,10 @@
 //! view whose connection ended before its answer, which the client reports as a view it does not
 //! know, is a view not read, and keeps nothing. Nothing else tells the console which Runtime it
 //! reads: no read it makes names a revision. What the last stop came to is said under the button,
-//! with when it landed, until the account's `Status` shows another run; of a close, that the task
-//! was closed first, and when; the card and the picture say what holds now.
+//! with when it landed, until the account's `Status` shows another run: that the run stopped or
+//! ended, of a follow-up, with when the console learned it, not when the Runtime ended it
+//! (`stop_time`); of a close, that the task was closed first, and when its close row was written;
+//! the card and the picture say what holds now.
 //!
 //! Every answer goes in the log, from the thread, with the stopped run's request id, which the
 //! window never shows, of a close its package and both steps' codes, and of a failure its whole
@@ -70,7 +72,9 @@ use std::time::Instant;
 use acui_source::workbench::pack::{
     close_then_stop, CloseAnswer, EditAnswer, PackOutcome, PackRefusal,
 };
-use acui_source::workbench::stop::{stop_run, Origin, Refusal, Reset, StopOutcome};
+use acui_source::workbench::stop::{
+    stop_run, stop_time, Origin, Refusal, Reset, StopOutcome, StopTime,
+};
 use acui_source::workbench::{ActivityKind, InstanceLive, RunKey};
 use acui_source::ClientFailure;
 use slint::Timer;
@@ -230,8 +234,9 @@ pub enum TaskClose {
 pub enum StopSaid {
     /// The first request is out: of "close this task", its close and the stop after it.
     Sending,
-    /// The run ended, and the Runtime's own reset after it went as `reset` says.
-    Stopped { at_ms: u64, reset: Reset },
+    /// The run ended, and the Runtime's own reset after it went as `reset` says; of a follow-up,
+    /// its time is when the console learned that (`stop_time`).
+    Stopped { at: StopTime, reset: Reset },
     /// The first answered that the run still stops: its follow-up waits for it to go.
     Asked { at_ms: u64 },
     /// The follow-up is out, the run gone from `Status`.
@@ -701,7 +706,7 @@ impl Landing {
 fn stop_said(outcome: StopOutcome, at_ms: u64, follow_up: bool) -> (StopSaid, Option<bool>) {
     match outcome {
         StopOutcome::Stopped { reset: Some(reset), .. } => {
-            (StopSaid::Stopped { at_ms, reset }, None)
+            (StopSaid::Stopped { at: stop_time(follow_up, at_ms), reset }, None)
         }
         StopOutcome::Stopped { reset: None, .. } if follow_up => {
             (StopSaid::Unsettled { at_ms }, None)
