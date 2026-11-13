@@ -279,8 +279,13 @@ impl Switches {
     /// after an answer that counted as a write. What each press came to stays through all of that,
     /// and goes only as its row is pressed again (`press`), the Runtime starts again (`restarted`),
     /// or here, as the list shows another account than it last did: then what the presses of the
-    /// account it showed came to goes, but for one out.
+    /// account it showed came to goes, but for one out. A read that asked once more whether the
+    /// Runtime has no switches (`probe`) is let go with the rest, its answer dropped as it lands:
+    /// what was said before holds again until the list is shown anew and asks once more.
     pub fn follow(&mut self, wanted: Option<&str>) {
+        if let Some(said) = self.unsupported.as_mut() {
+            said.probing = false;
+        }
         for slot in self.slots.values_mut() {
             if matches!(slot.stage, Stage::Behind) {
                 slot.stage = Stage::Idle;
@@ -572,6 +577,8 @@ fn landed(ui: &Ui, alias: &str, ticket: u64, landing: Landing) {
         super::tasks_sync(ui);
     }
     paint::tasks(ui);
+    // The rescue bar's stop or close of the account was off while this write was out.
+    paint::rescue(ui);
     ui.paint_log_notes();
 }
 

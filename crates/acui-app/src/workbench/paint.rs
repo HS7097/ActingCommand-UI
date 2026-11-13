@@ -756,10 +756,11 @@ fn close_text(labels: &Labels, why: CloseWhy) -> &'static str {
 /// task": while it is out, that it closes the task and then stops the run; once its close row was
 /// written, that the task is closed and no longer scheduled, with when, and then what the stop
 /// came to, which says how to open the task again once the run stopped (`closed_stop_text`); of a
-/// package the account's daily tasks do not run, that only the run was stopped, before what the
-/// stop came to, but of a stop refused, whose words say what was done; of a close not written,
-/// why, and that the run was not stopped either. After a reset that failed, or a run that ended
-/// before the stop's reset, the card says what holds now.
+/// package the account's daily tasks do not run, before what the stop came to, that only the run
+/// was stopped when it stopped, and else that nothing was closed here; of a close not written,
+/// why, and that the run was not stopped either; of a close whose thread panicked, that neither is
+/// known. After a reset that failed, or a run that ended before the stop's reset, the card says
+/// what holds now.
 fn stop_text(ui: &Ui, labels: &Labels, line: &StopLine) -> (String, bool) {
     match line.task {
         Some(TaskClose::Closed { at_ms }) => {
@@ -767,16 +768,27 @@ fn stop_text(ui: &Ui, labels: &Labels, line: &StopLine) -> (String, bool) {
             let (rest, failed) = closed_stop_text(ui, labels, &line.said);
             (fill(labels.rescue_then, &[&head, &rest]), failed)
         }
-        Some(TaskClose::NotListed) if !matches!(line.said, StopSaid::Refused { .. }) => {
+        // Only a stop that settled as stopped says that only this run was stopped; any other says
+        // that nothing was closed here, and then what the stop came to.
+        Some(TaskClose::NotListed) => {
+            let stopped = matches!(
+                line.said,
+                StopSaid::Stopped { reset: Reset::Done | Reset::Failed { .. }, .. }
+            );
+            let head = if stopped {
+                labels.close_task_not_listed
+            } else {
+                labels.close_task_not_listed_unclosed
+            };
             let (rest, failed) = stop_said_text(ui, labels, &line.said);
-            (fill(labels.rescue_then, &[labels.close_task_not_listed, &rest]), failed)
+            (fill(labels.rescue_then, &[head, &rest]), failed)
         }
         Some(TaskClose::Asked) => match &line.said {
             StopSaid::Sending => (labels.close_task_sending.to_owned(), false),
             StopSaid::Restarted { at_ms } => (close_restarted(labels, *at_ms), false),
             said => stop_said_text(ui, labels, said),
         },
-        Some(TaskClose::NotListed) | None => stop_said_text(ui, labels, &line.said),
+        None => stop_said_text(ui, labels, &line.said),
     }
 }
 
@@ -831,6 +843,7 @@ fn closed_stop_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool)
         | StopSaid::Unsettled { .. }
         | StopSaid::CloseRefused { .. }
         | StopSaid::CloseUnconfirmed { .. }
+        | StopSaid::ClosePanicked { .. }
         | StopSaid::NotSent { .. }
         | StopSaid::NoThread { .. }
         | StopSaid::Unlisted { .. }
@@ -904,6 +917,9 @@ fn stop_said_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
         StopSaid::CloseUnconfirmed { at_ms } => {
             (fill(labels.close_task_unconfirmed, &[&format_second(*at_ms)]), true)
         }
+        StopSaid::ClosePanicked { at_ms } => {
+            (fill(labels.close_task_panicked, &[&format_second(*at_ms)]), true)
+        }
         StopSaid::NotSent { at_ms } => (timed(labels.rescue_not_sent, *at_ms), true),
         StopSaid::NoThread { at_ms, error } => {
             let why = fill(labels.thread_failed, &[error.as_str()]);
@@ -926,6 +942,7 @@ fn close_refused_text(ui: &Ui, labels: &Labels, why: &CloseRefusal, at_ms: u64) 
         CloseRefusal::NotNewer => fill(labels.close_task_not_newer, &[&at]),
         CloseRefusal::TooMany => fill(labels.close_task_too_many, &[&at]),
         CloseRefusal::StoredUnreadable => fill(labels.close_task_stored_unreadable, &[&at]),
+        CloseRefusal::ViewDropped => fill(labels.close_task_view_dropped, &[&at]),
         CloseRefusal::Other { codes } => {
             let codes: Vec<&str> = codes.iter().map(String::as_str).collect();
             let words = stop_words(ui, labels, &codes);

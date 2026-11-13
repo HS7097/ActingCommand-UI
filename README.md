@@ -681,8 +681,9 @@ of the view begun after it has come, every switch of the account is greyed out, 
 read before; after any other refusal, or a write not sent, they come back at once. The rescue bar's Close
 This Task (see "Launcher") writes the same row as off and is one write of the account too: while it is
 out every switch of the account is greyed out, and after one that may have written (it took, or is not
-confirmed) they wait for a read of the view begun after it; while a switch's write is out, that button is
-greyed out and says "This account's task switches are being changed; a moment". What each press came
+confirmed) they wait for a read of the view begun after it; while a switch's write is out, that button,
+and Stop This Run of a run another tool started too, is greyed out and says "This account's task
+switches are being changed; a moment". What each press came
 to shows under its row, with when it landed (but for "Changing…", a conflict, a thread that could not
 start and a restart), until that row is pressed again, the list shows another account, or the Runtime
 restarts; the list hidden and shown again (another tab or page, the window minimized, the Runtime not
@@ -698,9 +699,11 @@ still do. A Runtime before 0.12.55
 (the view answers `not_implemented`, or before 0.12.30 is not known) has the note say that this version of
 the Runtime cannot switch single tasks, and the view is not read on its clock again in that owner epoch;
 but since what said so may have been a connection that ended just before its answer and was made again in
-the same owner epoch, the tab opened or another account picked 60 seconds or more after it reads the view
-once more: an answer that says so again keeps it, one that shows the switches lets it go and the view is
-read as usual. Each read has
+the same owner epoch, the list shown anew 60 seconds or more after it (the tab opened, another account
+picked, the window restored from minimized, the main page shown again, the Runtime answering again after
+a while) reads the view once more: an answer that says so again keeps it, one that shows the switches
+lets it go and the view is read as usual; a list hidden again before that read lands drops it, and what
+was said before holds until the list is shown anew again. Each read has
 the Runtime bring its fact store up to the ledger under the fact write gate, so it is read seldom; the
 technical log's read counts at the end of a run call it `pack schedule`. The Runtime's own reading of
 account data (`_fact_refresh`) is not held by a row that turns a package off; a package only a row still
@@ -1049,18 +1052,24 @@ Completed sends the stop above. A close row not written (refused, not sent, not 
 and the line says "Not closed: …. This run was not stopped either" or that whether the close was written
 is not known. A package the view does not name (the account's daily tasks do not run it: a reading's
 maintenance, or the catalog changed since the dispatch) gets no row, which the list could neither show
-nor withdraw, and its run is only stopped: "This task pack is not one of this account's daily tasks, so
-only this run was stopped". A view that is not read does nothing ("Not closed: …"); a view or a close row
-answered `not_implemented` (before 0.12.55), or a view the Runtime does not know, does nothing either,
-and Close This Task then stays off for that Runtime's owner epoch ("This Runtime cannot close a task from
-here yet"), as the Daily Tasks switches are not read then (and, as when the view itself said so, Daily
-Tasks opened 60 seconds or more after reads the view once more, and switches it finds bring the button
-back). Once closed, the line begins "Closed this task
+nor withdraw, and its run is only stopped: once it stopped, "This task pack is not one of this account's
+daily tasks, so only this run was stopped"; otherwise (not confirmed, still stopping, refused, a restart
+and the like) "This task pack is not one of this account's daily tasks, so nothing was closed here",
+followed by what the stop came to. A view that is not read does nothing ("Not closed: …"); a view whose
+connection ended before its answer (the client's `runtime_operation_unsupported`) is a view not read too
+("Not closed: the connection ended before this account's task switches were read …. This run was not
+stopped either"), not a Runtime without task switches. A view or a close row answered `not_implemented`
+(before 0.12.55) does nothing either, and Close This Task then stays off for that Runtime's owner epoch
+("This Runtime cannot close a task from here yet"), as the Daily Tasks switches are not read then (and,
+as when the view itself said so, Daily Tasks shown anew 60 seconds or more after reads the view once
+more, and switches it finds bring the button back). A program error (its thread panicked) says that
+whether the task was closed and whether this run stopped are both unknown, the card and Daily Tasks
+saying what holds, and nothing is sent again. Once closed, the line begins "Closed this task
 (hh:mm:ss); it is no longer scheduled", followed by what the stop came to, and once the run stopped, "To
 bring the task back, turn it on under Daily Tasks": that is the way back, where its row then says "Set
 for this account: turned off (since hh:mm)". The follow-up only stops; it writes no close row again.
 While the close is out every switch of the account is greyed out; while a switch's write is out the button
-is ("This account's task switches are being changed; a moment"). In the ledger, the close is one
+is, and Stop This Run too ("This account's task switches are being changed; a moment"). In the ledger, the close is one
 `fact.published`, the stop three records, a follow-up three more. Of a package that has daily tasks and
 also reads account data, the close row closes its daily tasks, and the Runtime's reading of account data
 (`_fact_refresh`) is dispatched as before. A scheduled run still queued or being prepared is not in the

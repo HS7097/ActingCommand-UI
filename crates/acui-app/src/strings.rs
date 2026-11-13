@@ -1221,23 +1221,28 @@ pub struct Labels {
     /// when (time). Out, its close and the stop after it. Its close not written, the run not
     /// stopped either: this Runtime cannot close a task from here, nothing done (time); another
     /// write of the account's switches at the same moment, to press again (time); too many records
-    /// to hold another (time); the records held cannot be read (time); refused (why, time); not
-    /// known whether written (time), the task list's switch saying so. Written: that the task is
+    /// to hold another (time); the records held cannot be read (time); the view's connection ended
+    /// before its answer (time); refused (why, time); not known whether written (time), the task
+    /// list's switch saying so; a program error, whether closed and whether stopped both not known
+    /// (time), the card and the task list saying what holds. Written: that the task is
     /// closed and no longer scheduled (time), and after it (`rescue_then`) what the stop came to:
     /// this run stopped and the device reset (time), with how to open the task again; stopped, and
     /// the reset failed (time, why); asked, and waited for (time); the run ended before the stop;
     /// not stopped, as the scheduler's run of a Runtime that cannot stop one (time); not stopped,
     /// a step of the Runtime's own (time); not stopped (why, time); unconfirmed (time). After a
     /// restart, out or awaited (`rescue_runtime_restarted`, `rescue_then`), that the task list's
-    /// switch says whether it is closed. Of a package the account's daily tasks do not run, that
-    /// only this run was stopped, before what the stop came to (`rescue_then`).
+    /// switch says whether it is closed. Of a package the account's daily tasks do not run, before
+    /// what the stop came to (`rescue_then`): that only this run was stopped, when it stopped; else
+    /// that nothing was closed here.
     pub close_task_sending: &'static str,
     pub close_task_refused_unsupported: &'static str,
     pub close_task_not_newer: &'static str,
     pub close_task_too_many: &'static str,
     pub close_task_stored_unreadable: &'static str,
+    pub close_task_view_dropped: &'static str,
     pub close_task_refused: &'static str,
     pub close_task_unconfirmed: &'static str,
+    pub close_task_panicked: &'static str,
     pub close_task_done: &'static str,
     pub close_task_stop_done: &'static str,
     pub close_task_stop_reset_failed: &'static str,
@@ -1249,6 +1254,7 @@ pub struct Labels {
     pub close_task_stop_unconfirmed: &'static str,
     pub close_task_restarted: &'static str,
     pub close_task_not_listed: &'static str,
+    pub close_task_not_listed_unclosed: &'static str,
     /// The question a press that closes the game asks (the account): a stop of the emulator; one
     /// whose watch starts it again, or may (the account, the setting's name); a restart of the
     /// emulator; a restart of the game. The confirming button's words: a stop's, a restart's.
@@ -2344,8 +2350,10 @@ pub const ZH: Labels = Labels {
     close_task_not_newer: "没能关闭：刚好有别的地方同时在改这个号的任务开关（{}）。这一次也没有停；再按一次即可",
     close_task_too_many: "没能关闭：这个号的任务开关记录太多，写不下了（{}）。这一次也没有停",
     close_task_stored_unreadable: "没能关闭：这个号已有的任务开关记录读不了（{}）。这一次也没有停",
+    close_task_view_dropped: "没能关闭：读这个号的任务开关时，连接在回答之前断了（{}）。这一次也没有停",
     close_task_refused: "没能关闭：{}（{}）。这一次也没有停",
     close_task_unconfirmed: "关闭有没有写上，这里不知道（{}）；这一次没有停。到「日常任务」看它的开关",
+    close_task_panicked: "程序出错了：这个任务有没有关闭、这一次有没有停，这里都不知道（{}）。现在怎样以卡片为准，任务开关到「日常任务」看",
     close_task_done: "已关闭这个任务（{}），之后不再安排",
     close_task_stop_done: "这一次也已停下（{}），Runtime 已复位设备。要恢复，到「日常任务」里打开它",
     close_task_stop_reset_failed: "这一次也已停下（{}），但设备复位没成功：{}。这台被隔离了，现在怎样以卡片为准",
@@ -2357,6 +2365,7 @@ pub const ZH: Labels = Labels {
     close_task_stop_unconfirmed: "停下这一次的结果未确认：可能已经执行（{}）。卡片和画面是现在的情况；不会自己定时重发。",
     close_task_restarted: "任务开关以「日常任务」为准",
     close_task_not_listed: "这个任务包不在这个号的日常任务里，这里只停下了这一次",
+    close_task_not_listed_unclosed: "这个任务包不在这个号的日常任务里，这里没有关闭什么",
     rescue_confirm_stop: "关闭 {} 的模拟器？游戏会一起关掉。",
     rescue_confirm_stop_watched: "关闭 {} 的模拟器？游戏会一起关掉。这个号开了「{}」，Runtime 稍后会把它重新拉起；要它保持关着，先暂停这个号。",
     rescue_confirm_stop_maybe_watched: "关闭 {} 的模拟器？游戏会一起关掉。如果这个号开了「{}」，Runtime 稍后会把它重新拉起；要它保持关着，先暂停这个号。",
@@ -3391,8 +3400,10 @@ pub const EN: Labels = Labels {
     close_task_not_newer: "Not closed: something else changed this account's task switches at the same moment ({}). This run was not stopped either; press again",
     close_task_too_many: "Not closed: this account has too many task switch records to hold another ({}). This run was not stopped either",
     close_task_stored_unreadable: "Not closed: this account's task switch records cannot be read ({}). This run was not stopped either",
+    close_task_view_dropped: "Not closed: the connection ended before this account's task switches were read ({}). This run was not stopped either",
     close_task_refused: "Not closed: {} ({}). This run was not stopped either",
     close_task_unconfirmed: "Whether the close was written is not known here ({}); this run was not stopped. See its switch under Daily Tasks",
+    close_task_panicked: "A program error happened: whether this task was closed and whether this run stopped are both unknown here ({}). See the card for what holds now, and Daily Tasks for its switch",
     close_task_done: "Closed this task ({}); it is no longer scheduled",
     close_task_stop_done: "This run stopped too ({}); the Runtime reset the device. To bring the task back, turn it on under Daily Tasks",
     close_task_stop_reset_failed: "This run stopped too ({}), but the device's reset failed: {}. The device is fenced; see the card for what holds now",
@@ -3404,6 +3415,7 @@ pub const EN: Labels = Labels {
     close_task_stop_unconfirmed: "Stopping this run is unconfirmed: it may have happened ({}). The card and picture show what holds now; it is not sent again on a timer.",
     close_task_restarted: "The task switches under Daily Tasks say whether it is closed",
     close_task_not_listed: "This task pack is not one of this account's daily tasks, so only this run was stopped",
+    close_task_not_listed_unclosed: "This task pack is not one of this account's daily tasks, so nothing was closed here",
     rescue_confirm_stop: "Stop {}'s emulator? The game closes with it.",
     rescue_confirm_stop_watched: "Stop {}'s emulator? The game closes with it. “{}” is on for this account, so the Runtime will start it again shortly; pause this account to keep it off.",
     rescue_confirm_stop_maybe_watched: "Stop {}'s emulator? The game closes with it. If “{}” is on for this account, the Runtime will start it again shortly; pause this account to keep it off.",

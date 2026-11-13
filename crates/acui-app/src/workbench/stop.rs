@@ -45,12 +45,13 @@
 //! and for `RESCUE_COOLDOWN` after an answer lands or a restart let one go; after one not known,
 //! no longer than that: while the run is there, a press is a new stop. A Runtime that answered it
 //! has no stop (`not_implemented`, one before 0.12.53) keeps it off until another owner epoch; one
-//! that has no task switches (a close's view or close row `not_implemented`, or the view not known,
-//! before 0.12.55; or the daily task list's view said so) keeps "close this task" off until another
-//! owner epoch. Nothing else tells the console which Runtime it reads: no read it makes names a
-//! revision. What the last stop came to is said under the button, with when it landed, until the
-//! account's `Status` shows another run; of a close, that the task was closed first, and when; the
-//! card and the picture say what holds now.
+//! that has no task switches (a close's view or close row `not_implemented`, before 0.12.55; or the
+//! daily task list's view said so) keeps "close this task" off until another owner epoch. A close's
+//! view whose connection ended before its answer, which the client reports as a view it does not
+//! know, is a view not read, and keeps nothing. Nothing else tells the console which Runtime it
+//! reads: no read it makes names a revision. What the last stop came to is said under the button,
+//! with when it landed, until the account's `Status` shows another run; of a close, that the task
+//! was closed first, and when; the card and the picture say what holds now.
 //!
 //! Every answer goes in the log, from the thread, with the stopped run's request id, which the
 //! window never shows, of a close its package and both steps' codes, and of a failure its whole
@@ -255,6 +256,9 @@ pub enum StopSaid {
     CloseRefused { at_ms: u64, why: CloseRefusal },
     /// Nothing says whether the close of "close this task" was written; the run was not stopped.
     CloseUnconfirmed { at_ms: u64 },
+    /// The thread of "close this task" panicked: whether its close was written, and whether the
+    /// run was stopped after it, are both not known. Nothing is sent again.
+    ClosePanicked { at_ms: u64 },
     /// No connection: nothing was sent.
     NotSent { at_ms: u64 },
     /// The system refused the thread: nothing was sent. The error is the system's.
@@ -278,6 +282,8 @@ pub enum CloseRefusal {
     TooMany,
     /// What the Runtime holds of the account's switches does not read.
     StoredUnreadable,
+    /// The view's connection ended before its answer (`CloseAnswer::ViewDropped`): it was not read.
+    ViewDropped,
     /// Any other refusal, or the view not read: its codes, the host's before the Runtime's and then
     /// the client's own, for its words.
     Other { codes: Vec<String> },
@@ -603,19 +609,24 @@ impl Landing {
                 let why = CloseRefusal::Other { codes: failure_codes(&failure) };
                 (StopSaid::CloseRefused { at_ms, why }, None)
             }
+            Self::Close(CloseAnswer::ViewDropped(_)) => {
+                (StopSaid::CloseRefused { at_ms, why: CloseRefusal::ViewDropped }, None)
+            }
             Self::Close(CloseAnswer::NotClosed(EditAnswer { outcome, .. })) => {
                 (not_closed(outcome, at_ms), None)
             }
-            // Whether the close was written is not known; nothing after it went.
-            Self::Panicked(_) if request.close => (StopSaid::CloseUnconfirmed { at_ms }, None),
+            // It may have panicked after its stop went: whether the close was written, and whether
+            // the run stopped, are not known. Nothing is sent again.
+            Self::Panicked(_) if request.close => (StopSaid::ClosePanicked { at_ms }, None),
             Self::Panicked(_) => (StopSaid::Unconfirmed { at_ms }, (!follow_up).then_some(true)),
             Self::NoThread(error) => (StopSaid::NoThread { at_ms, error }, None),
         };
         Settled { said, waits, task: None }
     }
 
-    /// Of "close this task", whether its Runtime said it has no task switches: its view
-    /// `not_implemented` or not known, or its close row `not_implemented`.
+    /// Of "close this task", whether its Runtime said it has no task switches: its view or its
+    /// close row `not_implemented`. A view whose connection ended before its answer is no such
+    /// word (`CloseAnswer::ViewDropped`).
     fn close_unsupported(&self) -> bool {
         matches!(
             self,
@@ -641,6 +652,7 @@ impl Landing {
                 CloseAnswer::NotSent(_)
                 | CloseAnswer::Unsupported { .. }
                 | CloseAnswer::ViewFailed(_)
+                | CloseAnswer::ViewDropped(_)
                 | CloseAnswer::NotListed(_),
             )
             | Self::Answer(_)
@@ -660,8 +672,8 @@ impl Landing {
             Self::Close(answer) => close_line(answer),
             Self::Panicked(message) if request.close => (
                 format!(
-                    "panicked; whether the close row was written is not known, the run was not \
-                     stopped, not sent again: {message}"
+                    "panicked; whether the close row was written and whether the run was stopped \
+                     are both not known, not sent again: {message}"
                 ),
                 false,
             ),
@@ -830,6 +842,15 @@ fn close_line(answer: &CloseAnswer) -> (String, bool) {
             let line = format!(
                 "the account's PackScheduleView was not read; nothing was written and the run was \
                  not stopped: {}",
+                failure_line(failure)
+            );
+            (line, false)
+        }
+        CloseAnswer::ViewDropped(failure) => {
+            let line = format!(
+                "the account's PackScheduleView was not read, its connection having ended before \
+                 its answer (made again in the same owner epoch), not taken as no task switches; \
+                 nothing was written and the run was not stopped: {}",
                 failure_line(failure)
             );
             (line, false)

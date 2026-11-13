@@ -308,13 +308,18 @@ fn edit_on(
 pub enum CloseAnswer {
     /// No connection: nothing was sent.
     NotSent(ClientFailure),
-    /// This Runtime has no task switches: it answered the view `not_implemented` (before 0.12.55)
-    /// or did not know it (before 0.12.30), `code` saying which, for the log. Nothing was written,
-    /// and the run was not stopped.
+    /// This Runtime has no task switches: it answered the view `not_implemented` (before 0.12.55),
+    /// `code` saying so, for the log. Nothing was written, and the run was not stopped.
     Unsupported { code: &'static str, failure: ClientFailure },
     /// The view was not read: nothing was written, and the run was not stopped. A read changes
     /// nothing, so whatever failed leaves nothing uncertain.
     ViewFailed(ClientFailure),
+    /// The view was not read either, its connection having ended before its answer: the client's
+    /// `runtime_operation_unsupported`, which it reports once it made the connection again in the
+    /// same owner epoch. Of a Runtime that has the view, as every one this console runs with does,
+    /// that is no word that it has no task switches. Nothing was written, and the run was not
+    /// stopped.
+    ViewDropped(ClientFailure),
     /// The close row was not written, or may have been: what its write came to, which is never
     /// `Edited`. The run was not stopped.
     NotClosed(EditAnswer),
@@ -331,7 +336,9 @@ pub enum CloseAnswer {
 /// now on that `package` is not schedulable, naming no version, `fact_observation_not_newer` sent
 /// once more at once; once that took, and only then, the run's stop ([`super::stop::stop_run`]'s);
 /// when the view does not list `package`, the stop alone; and the connection let go. A view or a
-/// close that fails stops nothing, and nothing is sent again.
+/// close that fails stops nothing, and nothing is sent again. Only a view answered
+/// `not_implemented` says the Runtime has no task switches; the client's word that it does not
+/// know the view is a connection that ended before its answer ([`CloseAnswer::ViewDropped`]).
 pub fn close_then_stop(root: &Path, alias: &str, package: &str, run: RunKey) -> CloseAnswer {
     let client = match RuntimeClient::connect(configure_config(root)) {
         Ok(client) => client,
@@ -339,6 +346,9 @@ pub fn close_then_stop(root: &Path, alias: &str, package: &str, run: RunKey) -> 
     };
     let view = match client.pack_schedule_view(alias) {
         Ok(view) => view,
+        Err(error) if error.code().spelling() == OPERATION_UNSUPPORTED => {
+            return CloseAnswer::ViewDropped(ClientFailure::from(error));
+        }
         Err(error) => {
             return match view_unsupported(&error) {
                 Some(code) => {
