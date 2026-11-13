@@ -275,6 +275,17 @@ enum Status {
     Failed(String),
 }
 
+/// Whether the Runtime found up is, as last judged (`LauncherView::judge`), not the installation
+/// folder's: then every person's request is refused (`identity`), and a press's "not sent" line
+/// says that is why. Only a console in root mode ever judges so.
+static NOT_THIS_ROOT: AtomicBool = AtomicBool::new(false);
+
+/// Whether a press that was not sent was refused because the Runtime found up is not the
+/// installation folder's (`NOT_THIS_ROOT`), for its line to say so.
+pub fn refusing_not_this_root() -> bool {
+    NOT_THIS_ROOT.load(Ordering::Relaxed)
+}
+
 /// The launcher as the windows paint it. Workers change it only through jobs
 /// handed to the event loop.
 pub struct LauncherView {
@@ -319,6 +330,11 @@ impl LauncherView {
     /// In root mode, the check of the Runtime `probe` found up, kept for its pid and owner
     /// epoch; nothing to keep when none is up, or the probe could not run.
     fn judge(&mut self, probe: Option<&Result<RuntimeFacts, ClientFailure>>) {
+        self.judge_identity(probe);
+        NOT_THIS_ROOT.store(self.not_this_root().is_some(), Ordering::Relaxed);
+    }
+
+    fn judge_identity(&mut self, probe: Option<&Result<RuntimeFacts, ClientFailure>>) {
         let Some(root) = &self.checked_root else {
             return;
         };

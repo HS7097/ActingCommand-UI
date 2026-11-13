@@ -502,6 +502,16 @@ fn doing_text(labels: &Labels, doing: Doing) -> &'static str {
 }
 
 /// What a refresh came to in words, and whether that is a failure.
+/// What a press that was not sent says: that the Runtime found up is not this installation
+/// folder's, when that is why (`launcher::refusing_not_this_root`); else `generic`, as ever.
+fn not_sent(labels: &Labels, generic: &str) -> String {
+    if crate::launcher::refusing_not_this_root() {
+        labels.not_sent_not_this_root.to_owned()
+    } else {
+        generic.to_owned()
+    }
+}
+
 fn refreshed_text(ui: &Ui, labels: &Labels, said: &Refreshed) -> (String, bool) {
     match said {
         Refreshed::Sending => (labels.refresh_sending.to_owned(), false),
@@ -514,7 +524,7 @@ fn refreshed_text(ui: &Ui, labels: &Labels, said: &Refreshed) -> (String, bool) 
             (fill(labels.refresh_refused, &[&words]), true)
         }
         Refreshed::Unconfirmed => (labels.refresh_unconfirmed.to_owned(), true),
-        Refreshed::NotSent => (labels.refresh_not_sent.to_owned(), true),
+        Refreshed::NotSent => (not_sent(labels, labels.refresh_not_sent), true),
         Refreshed::NoThread { error } => {
             let why = fill(labels.thread_failed, &[error.as_str()]);
             (fill(labels.refresh_no_thread, &[why.as_str()]), true)
@@ -937,7 +947,9 @@ fn stop_said_text(ui: &Ui, labels: &Labels, said: &StopSaid) -> (String, bool) {
         StopSaid::ClosePanicked { at_ms } => {
             (fill(labels.close_task_panicked, &[&format_second(*at_ms)]), true)
         }
-        StopSaid::NotSent { at_ms } => (timed(labels.rescue_not_sent, *at_ms), true),
+        StopSaid::NotSent { at_ms } => {
+            (timed(&not_sent(labels, labels.rescue_not_sent), *at_ms), true)
+        }
         StopSaid::NoThread { at_ms, error } => {
             let why = fill(labels.thread_failed, &[error.as_str()]);
             let not_sent = fill(labels.rescue_no_thread, &[why.as_str()]);
@@ -1026,7 +1038,7 @@ fn rescued_text(ui: &Ui, labels: &Labels, rows: &RescueRows, said: &Rescued) -> 
             (refused_text(ui, labels, *op, codes, holder.as_ref(), *denied), true)
         }
         Rescued::Unconfirmed(_) => (labels.rescue_unconfirmed.to_owned(), true),
-        Rescued::NotSent(_) => (labels.rescue_not_sent.to_owned(), true),
+        Rescued::NotSent(_) => (not_sent(labels, labels.rescue_not_sent), true),
         Rescued::NoThread { error } => {
             let why = fill(labels.thread_failed, &[error.as_str()]);
             (fill(labels.rescue_no_thread, &[why.as_str()]), true)
@@ -2700,7 +2712,7 @@ fn said_text(labels: &Labels, view: &ActionsView, said: &Said) -> (String, bool)
         }
         Said::Unsupported => (labels.resume_all_unsupported.to_owned(), true),
         Said::Unconfirmed => (labels.write_unconfirmed.to_owned(), true),
-        Said::NotSent => (labels.write_not_sent.to_owned(), true),
+        Said::NotSent => (not_sent(labels, labels.write_not_sent), true),
         Said::NoThread { error } => {
             let why = fill(labels.thread_failed, &[error.as_str()]);
             (fill(labels.write_no_thread, &[why.as_str()]), true)
@@ -3179,6 +3191,9 @@ fn switch_said_text(ui: &Ui, labels: &Labels, said: &SwitchSaid) -> (String, Sai
             let text = fill(labels.tasks_switch_refused, &[&words, &format_second(*at_ms)]);
             (text, SaidTone::Failed)
         }
+        SwitchSaid::NotSent { at_ms } if crate::launcher::refusing_not_this_root() => {
+            (at(labels.not_sent_not_this_root_at, *at_ms), SaidTone::Failed)
+        }
         SwitchSaid::NotSent { at_ms } => {
             (at(labels.tasks_switch_not_sent, *at_ms), SaidTone::Failed)
         }
@@ -3353,7 +3368,7 @@ fn account_said_text(labels: &Labels, said: &AccountSaid, global_holds: bool) ->
         }
         AccountSaid::Unsupported => (labels.resume_all_unsupported.to_owned(), true),
         AccountSaid::Unconfirmed => (labels.write_unconfirmed.to_owned(), true),
-        AccountSaid::NotSent => (labels.write_not_sent.to_owned(), true),
+        AccountSaid::NotSent => (not_sent(labels, labels.write_not_sent), true),
         AccountSaid::NoThread { error } => {
             let why = fill(labels.thread_failed, &[error.as_str()]);
             (fill(labels.write_no_thread, &[why.as_str()]), true)

@@ -603,6 +603,10 @@ pub struct Labels {
     pub resume_all_unsupported: &'static str,
     pub write_unconfirmed: &'static str,
     pub write_not_sent: &'static str,
+    /// Any press's "not sent" line while the Runtime found up is not this installation folder's
+    /// (root mode); the same with the time of the press.
+    pub not_sent_not_this_root: &'static str,
+    pub not_sent_not_this_root_at: &'static str,
     /// Why no thread: `thread_failed` filled in.
     pub write_no_thread: &'static str,
     pub write_restarted: &'static str,
@@ -1951,6 +1955,8 @@ pub const ZH: Labels = Labels {
     resume_all_unsupported: "这个版本的 Runtime 不支持这样恢复，什么都没变",
     write_unconfirmed: "结果未确认，以现状为准；没有重发",
     write_not_sent: "没有发出去：连不上 Runtime",
+    not_sent_not_this_root: "没有发出去：在运行的 Runtime 不是这个安装文件夹的，见上方红字",
+    not_sent_not_this_root_at: "没有发出去：在运行的 Runtime 不是这个安装文件夹的，见上方红字（{}）",
     write_no_thread: "没有发出去：{}",
     write_restarted: "Runtime 已重启，请看现状",
     pause_account: "暂停这个号",
@@ -3029,6 +3035,8 @@ pub const EN: Labels = Labels {
     resume_all_unsupported: "This version of the Runtime cannot lift a pause this way; nothing changed",
     write_unconfirmed: "The result is not confirmed: go by what is shown now. Not sent again",
     write_not_sent: "Not sent: the Runtime cannot be reached",
+    not_sent_not_this_root: "Not sent: the running Runtime is not this installation folder's; see the red words above",
+    not_sent_not_this_root_at: "Not sent: the running Runtime is not this installation folder's; see the red words above ({})",
     write_no_thread: "Not sent: {}",
     write_restarted: "The Runtime restarted: see what is shown now",
     pause_account: "Pause This Account",
