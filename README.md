@@ -29,12 +29,12 @@ and guesses nothing.
   `acforward.exe` (the fixed entry), `LICENSE`, `README.md` and the `BUILD-MANIFEST.json` that binds them
   to their commit; `acsetup.exe` is not in it for now (see the note above). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
-  of Runtime v0.12.47; the pin is now v0.12.55.
-- **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 28], `ledger` [3, 8],
-  `runtime-client` [3, 7] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.55: each of
+  of Runtime v0.12.47; the pin is now v0.12.58.
+- **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 29], `ledger` [3, 8],
+  `runtime-client` [3, 8] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.58: each of
   them declares a `ledger` maximum within [3, 8] and an `actingd-config` and a `runtime-client` range
-  that meet the console's. v0.12.55's ledger (revision 8) is one way: once a v0.12.55 Runtime has run on
-  a state root, no earlier Runtime opens it, and a console whose `ledger` range ends at 7 may fail to
+  that meet the console's. The ledger of v0.12.55 and later (revision 8) is one way: once such a Runtime has run on
+  a state root, no Runtime before v0.12.55 opens it, and a console whose `ledger` range ends at 7 may fail to
   read it, so switch the console first, then the Runtime. Whether another Runtime fits is judged from
   the interfaces each side declares, not from version numbers (see "Component interfaces").
 - **The 0.11 series**: UI v0.11.4 and earlier speak the 0.11 protocols only and cannot connect to a
@@ -227,8 +227,34 @@ was read and Read Earlier is not offered, moving "Show up to" again or a tab or 
 locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
 reopening, which read without it.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.55
-(#428 S168-LB1a, v0.12.55: a `fact.published` record's `record_list` may hold up to 1024 rows
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.58
+(#434 LAB-6S1a, v0.12.58: `runtime-client` revision 8 adds an optional `initiator` to `BindChannel`, to
+its answer `ChannelBound` and to every receipt of a connection that declared one, taken only on the `lab`
+channel and never written on `ui`, so this console, which binds `ui` and declares none, sends and reads
+every message byte for byte as under revision 7 and pairs with a Runtime of [3, 7] as before; #434
+LAB-6S3, v0.12.58: on a connection bound to `ui` the Runtime takes only the request kinds of its UI list,
+and a `ConfigureSettings` only of keys whose console tier is `daily` or `advanced` and that are settable,
+refusing anything else `channel_request_refused`; every kind this console sends is on that list and every
+key it sets is of those two tiers; #434 LAB-6S1b, v0.12.58: the contract crate no longer judges a request
+by its envelope's origin beyond the set of client origins, and the ten `invalid_…_origin` codes of the
+gates it dropped are retired; v0.12.56's configuration
+revision 29 adds `scheduling.task_held` (`enabled`, `after_ms`), also per instance (#438 HELD-1), and an
+`instances[]` entry's `device_group` (#437 MAPP-1, read at assembly, not settable), every new key `hidden`
+in `ui_tier`, so the settings page shows no new row; ledger revision 8 does not move (no record carries the
+initiator), and the ledger crate's run recovery no longer counts a record whose outcome code is of the
+ladder class `planned_stop` (a stop on request, a pause) as a failure of its group for its severity alone
+(#429 RG-STOP, v0.12.58); in the outcome-code catalog
+it embeds twelve codes (among them `task_held`, `task_held_ended` and four `device_group_…` codes), seven
+keys, one location, the vocabularies `device_group_problem`, `device_group_wait`, `held_end` and
+`held_state` and new tokens of `argument_problem`, `install_caveat`, `install_refusal` and
+`standard_pack_problem`, with those ten origin codes retired, none removed and no `console_` or `setup_`
+name; `package` revision 10 (#444 NOTICES-2, a bundle's `notices/`) is acsetup's; policy, which
+runtime-client links, gained device groups (MAPP-1); ledger-forensics, artifact-store, runtime-database
+and selection-policy have the same source, and the defaults file runtime-config and ledger-forensics embed
+only gained the `task_held` defaults and the ladder profile `without_emulator_restart`, which
+ledger-forensics does not read; the Runtime's `Cargo.lock` only gained its own two new programs
+`actinglab-mcp` and `mcp-entry-g2`, and no external crate moved;
+v0.12.55's #428 S168-LB1a: a `fact.published` record's `record_list` may hold up to 1024 rows
 (`MAX_FACT_RECORD_LIST_ROWS`, 256 before), which ledger revision 8 adds, one way (once a Runtime that
 declares it has run on a state root, no earlier Runtime opens it), and `runtime-client` revision 7 lets an
 `InstanceFactSnapshot` answer carry such a list, its request an optional `key_prefix` and its answer an
@@ -322,10 +348,10 @@ device switches its two backends while the Runtime runs, #402 HS-1 to HS-4, and 
 long as the contract's `BACKEND_SWITCH_WAIT_MS` and the client's IO margin say;
 with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 AGT-1b's optional status member
 `agent_wake`, which the console reads and does not show, on top of #429 R-0b, R-4, R-11, R-7a and 114-A; it keeps
-v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 7, ledger revision 8):
+v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 8, ledger revision 8):
 
 ```
-rev = "c0f75c7e833bd42773d1a55a22c920b3b6df1662"
+rev = "ef94d950a102a595fa0bde974b8d77ad54329b48"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -602,7 +628,7 @@ or on a handset scrcpy, for capture), with where the value comes from (the confi
 online, when and through which way) and the device's latest self-check. Apply switches that device at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.55, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.58, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -1121,7 +1147,7 @@ through or was stopped.
   module's `instance add` (Runtime INST-5) sets on the account it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
-  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.55 has
+  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.58 has
   both. An instance
   pause still draining or handing its device back gets none either: the Runtime refuses its resume
   then. Each line shows its pause's reason verbatim, whatever the operator wrote.
