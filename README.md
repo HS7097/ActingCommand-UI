@@ -1540,7 +1540,8 @@ the set the wizard reads, in the same format; the two change together. It only c
 and zips the console's folder; it runs nothing it copies, and it deletes and overwrites nothing: **the
 output folder must not exist yet**. It checks each input as it copies: the Runtime and Tools zips against
 their `SHA256SUMS`, the console's folder against its `BUILD-MANIFEST.json`, each pack zip against the
-`SHA256SUMS` beside it (when there is one) and its `bundle.json`'s game, and each vision file against the
+`SHA256SUMS` beside it (a zip without one beside it, or not listed in it, stops the script) and its
+`bundle.json`'s game, and each vision file against the
 size and SHA-256 pinned in the script.
 
 ```text

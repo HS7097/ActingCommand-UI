@@ -1079,7 +1079,7 @@ acsetup install --set <安装集文件夹> --root <新的安装文件夹> --plan
 **拼安装集**：`tools/make_install_set.py`（Python 3，只用标准库）拼出向导读的安装集，格式就是向导认的那一种，
 两边一起改。它只复制文件、算哈希、把监控台的文件夹打成 zip，不运行它复制的任何东西，也不删除、不覆盖任何东西：
 **输出文件夹必须是新的，事先不能存在**。复制时逐项核对：Runtime 和 Tools 的 zip 对它们的 `SHA256SUMS`，监控台的
-文件夹对它的 `BUILD-MANIFEST.json`，每个标准包 zip 对旁边的 `SHA256SUMS`（有就核）和它 `bundle.json` 里的游戏，
+文件夹对它的 `BUILD-MANIFEST.json`，每个标准包 zip 对旁边的 `SHA256SUMS`（旁边没有这个文件、或者文件里没列这个 zip，脚本就报错停下）和它 `bundle.json` 里的游戏，
 每个识别文件对脚本里钉住的大小和 SHA-256。
 
 ```text

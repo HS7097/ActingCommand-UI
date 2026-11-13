@@ -10,7 +10,7 @@ Usage:
   python make_install_set.py --out <new folder> --label <text>
       --runtime-dir <folder with the Runtime zip, the Tools zip and SHA256SUMS> --runtime-tag <tag>
       --console-dir <downloaded console artifact folder> --console-tag <tag>
-      --bundle <game>=<bundle zip> [--bundle ...]   (a SHA256SUMS beside the zip is checked)
+      --bundle <game>=<bundle zip> [--bundle ...]   (the SHA256SUMS beside the zip must list it)
       --vision <path below the vision root>=<file> [--vision ...]
       [--bundle-file <game>=<path below licenses\<game>\>=<file> ...]   (each also listed in the
           bundle's required_files: a set missing one is refused by the wizard)
@@ -168,8 +168,10 @@ def bundle_files(out, game, pairs):
 def bundle_entry(out, game, source):
     folder, name = os.path.split(source)
     sums = sums_of(folder)
-    expected = sums.get(name) if sums else None
-    if sums is not None and expected is None:
+    if sums is None:
+        raise Failure(f"{source}: no SHA256SUMS beside it")
+    expected = sums.get(name)
+    if expected is None:
         raise Failure(f"{source}: not listed in its SHA256SUMS")
     target = os.path.join(out, "bundles", game, name)
     size, sha = checked_copy(source, target, expected_sha=expected)
