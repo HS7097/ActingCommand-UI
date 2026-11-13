@@ -1,0 +1,1215 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// The 0.12 setup wizard's window (Workflow #429 UI-W2b): ten pages, a step bar on the left,
+// the language switch at the top right, Back / Next / Cancel at the bottom. It is drawn with
+// the console's kit in its flat skin, so the two programs look like one family. Every word is
+// the Rust side's (src/gui/labels.rs): the static ones through `Strings`, everything that
+// changes through `Wiz`, which also carries every action back.
+import { LineEdit, ProgressIndicator, ScrollView, TextEdit } from "std-widgets.slint";
+import { Card, FocusRing, Look, Scale, SkinButton, SkinComboBox, SkinSegment } from "../../acui-app/ui/kit/lib.slint";
+
+export { Look, Scale }
+
+// One step of the bar: state 0 to come, 1 the page shown, 2 done, 3 skipped, 4 failed.
+export struct StepItem {
+    label: string,
+    state: int,
+}
+
+// A line with a mark in front: 0 none, 1 ok, 2 wrong, 3 waiting, 4 running, 5 skipped.
+// `detail` stands after the text, fainter.
+export struct MarkLine {
+    mark: int,
+    text: string,
+    detail: string,
+}
+
+// A key and its value, as the summaries list them.
+export struct KeyValue {
+    key: string,
+    value: string,
+}
+
+export struct GameRow {
+    text: string,
+    picked: bool,
+}
+
+// One emulator MuMu lists: `taken` names the other ActingCommand that uses it, empty when
+// none does.
+export struct EmulatorRow {
+    text: string,
+    taken: string,
+    picked: bool,
+}
+
+// One account: the emulator, its name, and what it plays. The first entry of `games` and of
+// `servers` is "choose…", which stands for none chosen.
+export struct AccountRow {
+    emulator: string,
+    alias: string,
+    games: [string],
+    game-index: int,
+    servers: [string],
+    server-index: int,
+    touch-index: int,
+    capture-index: int,
+    start-emulator: bool,
+    advanced: bool,
+}
+
+// The words that never change while a language is shown.
+export global Strings {
+    in property <string> window-title;
+    in property <string> back;
+    in property <string> cancel;
+    in property <string> browse;
+    in property <string> choose-folder;
+    in property <string> search-again;
+    in property <string> skip-step;
+    in property <string> welcome-body;
+    in property <string> welcome-what-head;
+    in property <string> welcome-before-head;
+    in property <string> req-windows;
+    in property <string> req-mumu;
+    in property <string> welcome-untouched;
+    in property <string> root-body;
+    in property <string> root-folders;
+    in property <string> root-label;
+    in property <string> games-body;
+    in property <string> accounts-body;
+    in property <string> col-emulator;
+    in property <string> col-name;
+    in property <string> col-game;
+    in property <string> col-server;
+    in property <string> name-hint;
+    in property <string> advanced;
+    in property <string> touch-label;
+    in property <string> capture-label;
+    in property <string> start-emulator;
+    in property <string> advanced-note;
+    in property <string> opt-desktop;
+    in property <string> opt-start-menu;
+    in property <string> opt-watchdog;
+    in property <string> opt-watchdog-note;
+    in property <string> opt-start;
+    in property <string> opt-pause;
+    in property <string> opt-pause-note;
+    in property <string> open-console;
+    in property <string> open-folder;
+    in property <string> copy-error;
+    in property <string> open-log;
+    in property <[string]> touch-options;
+    in property <[string]> capture-options;
+}
+
+// What changes, and every action.
+export global Wiz {
+    // The page shown, 0 to 9, its title, the step bar and the language.
+    in property <int> page;
+    in property <string> page-title;
+    in property <[StepItem]> steps;
+    in property <bool> english;
+    // The bottom row.
+    in property <bool> back-shown;
+    in property <bool> next-shown;
+    in property <bool> next-enabled;
+    in property <string> next-text;
+    in property <bool> cancel-enabled;
+    in property <string> cancel-text;
+    in property <string> log-line;
+    // The question over the window; no second button when `dialog-no` is empty.
+    in property <bool> dialog-shown;
+    in property <string> dialog-text;
+    in property <string> dialog-yes;
+    in property <string> dialog-no;
+    // A folder dialog is open.
+    in property <bool> picking;
+    // 1 Welcome.
+    in property <string> welcome-what;
+    in property <string> welcome-space;
+    // 2 Files.
+    in property <string> set-where;
+    in property <string> set-status;
+    in property <bool> set-busy;
+    in property <float> set-progress;
+    in property <string> set-line;
+    in property <string> set-error;
+    in property <string> set-error-detail;
+    in property <[KeyValue]> set-summary;
+    in property <bool> set-choosable;
+    // 3 Location: the box is the person's and the Rust side's alike.
+    in-out property <string> root-text;
+    in property <[MarkLine]> root-lines;
+    in property <string> root-status;
+    // 4 Games.
+    in property <[GameRow]> games;
+    in property <string> games-problem;
+    // 5 Emulators.
+    in property <string> emu-text;
+    in property <bool> emu-busy;
+    in property <string> emu-caution;
+    in property <[EmulatorRow]> emulators;
+    in property <bool> emu-skippable;
+    // 6 Accounts.
+    in property <[AccountRow]> accounts;
+    in property <[string]> account-problems;
+    // 7 Options.
+    in property <bool> opt-desktop;
+    in property <bool> opt-start-menu;
+    in property <bool> opt-watchdog;
+    in property <bool> opt-start;
+    in property <bool> opt-pause;
+    in property <string> options-problem;
+    // 8 Confirm.
+    in property <[KeyValue]> summary;
+    in property <string> confirm-note;
+    // 9 Install: `install-current` is the row of the step under way, -1 before the first.
+    in property <string> install-pre;
+    in property <[MarkLine]> install-steps;
+    in property <int> install-current;
+    in property <string> install-detail;
+    in property <float> install-progress;
+    in property <bool> install-indeterminate;
+    // 10 Finish.
+    in property <bool> finished-ok;
+    in property <string> finish-body;
+    in property <string> finish-next;
+    in property <string> finish-note;
+    in property <string> finish-transcript;
+    in property <bool> finish-has-log;
+    in property <string> finish-action;
+
+    callback next();
+    callback back();
+    callback cancel();
+    callback language(bool);
+    callback dialog-answer(bool);
+    callback choose-set-folder();
+    callback root-edited(string);
+    callback browse-root();
+    callback game-toggled(int);
+    callback search-again();
+    callback skip-emulators();
+    callback emulator-toggled(int);
+    callback alias-edited(int, string);
+    callback game-picked(int, int);
+    callback server-picked(int, int);
+    callback touch-picked(int, int);
+    callback capture-picked(int, int);
+    callback start-toggled(int);
+    callback advanced-toggled(int);
+    callback option-toggled(int);
+    callback open-console();
+    callback open-folder();
+    callback open-log();
+}
+
+component Body inherits Text {
+    font-size: Scale.body-font;
+    color: Look.text;
+    wrap: word-wrap;
+}
+
+component Caption inherits Text {
+    font-size: Scale.grey-font;
+    color: Look.text-caption;
+    wrap: word-wrap;
+}
+
+component Head inherits Text {
+    font-size: Scale.body-font;
+    font-weight: 700;
+    color: Look.text;
+    wrap: word-wrap;
+}
+
+// A sentence that stops the page: in the fault colour.
+component Problem inherits Text {
+    font-size: Scale.body-font;
+    color: Look.status-fault;
+    wrap: word-wrap;
+}
+
+// A sentence to heed that stops nothing.
+component Caution inherits Text {
+    font-size: Scale.body-font;
+    color: Look.status-attention;
+    wrap: word-wrap;
+}
+
+// A mark drawn rather than typed, so no font has to hold it: 1 ok, 2 wrong, 3 waiting,
+// 4 running, 5 skipped; 0 draws nothing.
+component Mark {
+    in property <int> kind;
+    width: 16px;
+    height: 16px;
+    if root.kind == 1: Path {
+        x: 0;
+        y: 0;
+        width: 16px;
+        height: 16px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        commands: "M 3 8.5 L 6.5 12 L 13 4.5";
+        stroke: Look.status-ok;
+        stroke-width: 2px;
+        fill: transparent;
+    }
+    if root.kind == 2: Path {
+        x: 0;
+        y: 0;
+        width: 16px;
+        height: 16px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        commands: "M 4 4 L 12 12 M 12 4 L 4 12";
+        stroke: Look.status-fault;
+        stroke-width: 2px;
+        fill: transparent;
+    }
+    if root.kind == 3: Rectangle {
+        x: 5px;
+        y: 5px;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        border-width: 1px;
+        border-color: Look.text-faint;
+    }
+    if root.kind == 4: Rectangle {
+        x: 3px;
+        y: 3px;
+        width: 10px;
+        height: 10px;
+        border-radius: 5px;
+        background: Look.accent;
+    }
+    if root.kind == 5: Rectangle {
+        x: 4px;
+        y: 7px;
+        width: 8px;
+        height: 2px;
+        background: Look.text-faint;
+    }
+}
+
+// A mark, its words and a fainter detail after them.
+component MarkRow inherits HorizontalLayout {
+    in property <MarkLine> line;
+    spacing: 8px;
+    VerticalLayout {
+        alignment: start;
+        padding-top: 1px;
+        Mark { kind: root.line.mark; }
+    }
+    Text {
+        text: root.line.text;
+        font-size: Scale.body-font;
+        font-weight: root.line.mark == 4 ? 700 : 400;
+        color: root.line.mark == 2 ? Look.status-fault : root.line.mark == 3 ? Look.text-faint : Look.text;
+        wrap: word-wrap;
+        horizontal-stretch: 1;
+    }
+    if root.line.detail != "": Text {
+        text: root.line.detail;
+        font-size: Scale.body-font;
+        color: Look.text-faint;
+        horizontal-stretch: 0;
+    }
+}
+
+// A check box whose state is only ever the Rust side's: a click asks, `checked` answers. Tab
+// reaches it; Space or Return asks as a click does.
+component Tick {
+    in property <bool> checked;
+    in property <string> text;
+    in property <bool> enabled: true;
+    // Greyed words, for a row that is offered but not advised.
+    in property <bool> dim;
+    callback toggled();
+    min-height: 24px;
+    accessible-role: checkbox;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.toggled();
+        }
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        VerticalLayout {
+            alignment: start;
+            padding-top: 3px;
+            Rectangle {
+                width: 18px;
+                height: 18px;
+                border-radius: 3px;
+                background: root.checked ? Look.accent : Look.control-background;
+                border-width: root.checked ? 0px : 1px;
+                border-color: touch.has-hover && root.enabled ? Look.accent : Look.control-border;
+                opacity: root.enabled ? 1.0 : 0.5;
+                if root.checked: Path {
+                    x: 0;
+                    y: 0;
+                    width: 18px;
+                    height: 18px;
+                    viewbox-width: 18;
+                    viewbox-height: 18;
+                    commands: "M 4 9.5 L 7.5 13 L 14 5.5";
+                    stroke: Look.accent-text;
+                    stroke-width: 2px;
+                    fill: transparent;
+                }
+            }
+        }
+        Text {
+            text: root.text;
+            font-size: Scale.body-font;
+            color: root.dim || !root.enabled ? Look.text-secondary : Look.text;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+            accessible-role: none;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.toggled();
+        }
+    }
+    focus := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (root.enabled && (event.text == Key.Space || event.text == Key.Return)) {
+                root.toggled();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus && root.enabled: FocusRing { }
+}
+
+// One step of the bar on the left: its number in a round badge (a tick once done, a cross
+// once failed) and its name.
+component StepLine {
+    in property <int> number;
+    in property <string> label;
+    in property <int> state;
+    height: 30px;
+    accessible-role: text;
+    accessible-label: root.label;
+    Rectangle {
+        border-radius: Look.radius;
+        background: root.state == 1 ? Look.selection : transparent;
+    }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                border-radius: 10px;
+                background: root.state == 2 ? Look.status-ok
+                    : root.state == 4 ? Look.status-fault
+                    : root.state == 1 ? Look.accent
+                    : transparent;
+                border-width: root.state == 0 || root.state == 3 ? 1px : 0px;
+                border-color: Look.text-faint;
+                if root.state == 2: Path {
+                    x: 0;
+                    y: 0;
+                    width: 20px;
+                    height: 20px;
+                    viewbox-width: 20;
+                    viewbox-height: 20;
+                    commands: "M 5.5 10.5 L 8.5 13.5 L 14.5 6.5";
+                    stroke: #ffffff;
+                    stroke-width: 2px;
+                    fill: transparent;
+                }
+                if root.state == 4: Path {
+                    x: 0;
+                    y: 0;
+                    width: 20px;
+                    height: 20px;
+                    viewbox-width: 20;
+                    viewbox-height: 20;
+                    commands: "M 6.5 6.5 L 13.5 13.5 M 13.5 6.5 L 6.5 13.5";
+                    stroke: #ffffff;
+                    stroke-width: 2px;
+                    fill: transparent;
+                }
+                if root.state == 0 || root.state == 1 || root.state == 3: Text {
+                    x: 0;
+                    y: 0;
+                    width: 20px;
+                    height: 20px;
+                    text: root.number;
+                    font-size: 11px;
+                    color: root.state == 1 ? Look.accent-text : Look.text-faint;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+            }
+        }
+        Text {
+            text: root.label;
+            font-size: Scale.body-font;
+            font-weight: root.state == 1 ? 700 : 400;
+            color: root.state == 1 ? Look.text : root.state == 0 || root.state == 3 ? Look.text-faint : Look.text-secondary;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+            accessible-role: none;
+        }
+    }
+}
+
+component WelcomePage inherits ScrollView {
+    viewport-width: self.visible-width;
+    VerticalLayout {
+        padding-right: 16px;
+        spacing: 12px;
+        alignment: start;
+        Body { text: Strings.welcome-body; }
+        Card {
+            VerticalLayout {
+                padding: Look.pad;
+                spacing: 6px;
+                Head { text: Strings.welcome-what-head; }
+                Body { text: Wiz.welcome-what; }
+            }
+        }
+        Card {
+            VerticalLayout {
+                padding: Look.pad;
+                spacing: 6px;
+                Head { text: Strings.welcome-before-head; }
+                Body { text: "• " + Strings.req-windows; }
+                Body { text: "• " + Strings.req-mumu; }
+                Body { text: "• " + Wiz.welcome-space; }
+            }
+        }
+        Body { text: Strings.welcome-untouched; }
+    }
+}
+
+component SetPage inherits ScrollView {
+    viewport-width: self.visible-width;
+    VerticalLayout {
+        padding-right: 16px;
+        spacing: 10px;
+        alignment: start;
+        if Wiz.set-where != "": Body { text: Wiz.set-where; }
+        if Wiz.set-status != "": Body { text: Wiz.set-status; }
+        if Wiz.set-busy: VerticalLayout {
+            spacing: 6px;
+            ProgressIndicator {
+                progress: Wiz.set-progress;
+            }
+            Caption {
+                text: Wiz.set-line;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+        }
+        if Wiz.set-error != "": Problem { text: Wiz.set-error; }
+        if Wiz.set-error-detail != "": Caption { text: Wiz.set-error-detail; }
+        if Wiz.set-summary.length > 0: Card {
+            VerticalLayout {
+                padding: Look.pad;
+                spacing: 6px;
+                for line in Wiz.set-summary: HorizontalLayout {
+                    spacing: 12px;
+                    Text {
+                        text: line.key;
+                        width: 90px;
+                        font-size: Scale.body-font;
+                        color: Look.text-secondary;
+                    }
+                    Body {
+                        text: line.value;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+        if Wiz.set-choosable: HorizontalLayout {
+            alignment: start;
+            SkinButton {
+                text: Strings.choose-folder;
+                enabled: !Wiz.picking;
+                clicked => {
+                    Wiz.choose-set-folder();
+                }
+            }
+        }
+    }
+}
+
+component RootPage inherits ScrollView {
+    viewport-width: self.visible-width;
+    VerticalLayout {
+        padding-right: 16px;
+        spacing: 10px;
+        alignment: start;
+        Body { text: Strings.root-body; }
+        HorizontalLayout {
+            spacing: 8px;
+            LineEdit {
+                text <=> Wiz.root-text;
+                font-size: Scale.body-font;
+                horizontal-stretch: 1;
+                accessible-label: Strings.root-label;
+                edited(text) => {
+                    Wiz.root-edited(text);
+                }
+            }
+            SkinButton {
+                text: Strings.browse;
+                enabled: !Wiz.picking;
+                clicked => {
+                    Wiz.browse-root();
+                }
+            }
+        }
+        for line in Wiz.root-lines: MarkRow { line: line; }
+        if Wiz.root-status != "": Caption { text: Wiz.root-status; }
+        Rectangle { height: 4px; }
+        Caption { text: Strings.root-folders; }
+    }
+}
+
+component GamesPage inherits ScrollView {
+    viewport-width: self.visible-width;
+    VerticalLayout {
+        padding-right: 16px;
+        spacing: 8px;
+        alignment: start;
+        Body { text: Strings.games-body; }
+        for row[index] in Wiz.games: Tick {
+            text: row.text;
+            checked: row.picked;
+            toggled => {
+                Wiz.game-toggled(index);
+            }
+        }
+        if Wiz.games-problem != "": Problem { text: Wiz.games-problem; }
+    }
+}
+
+component EmulatorsPage inherits ScrollView {
+    viewport-width: self.visible-width;
+    VerticalLayout {
+        padding-right: 16px;
+        spacing: 8px;
+        alignment: start;
+        Body { text: Wiz.emu-text; }
+        if Wiz.emu-busy: ProgressIndicator { indeterminate: true; }
+        if Wiz.emu-caution != "": Caution { text: Wiz.emu-caution; }
+        for row[index] in Wiz.emulators: VerticalLayout {
+            spacing: 2px;
+            Tick {
+                text: row.text;
+                checked: row.picked;
+                dim: row.taken != "";
+                toggled => {
+                    Wiz.emulator-toggled(index);
+                }
+            }
+            if row.taken != "": HorizontalLayout {
+                padding-left: 26px;
+                Caption { text: row.taken; }
+            }
+        }
+        HorizontalLayout {
+            alignment: start;
+            spacing: 8px;
+            SkinButton {
+                text: Strings.search-again;
+                enabled: !Wiz.emu-busy;
+                clicked => {
+                    Wiz.search-again();
+                }
+            }
+            if Wiz.emu-skippable: SkinButton {
+                text: Strings.skip-step;
+                clicked => {
+                    Wiz.skip-emulators();
+                }
+            }
+        }
+    }
+}
+
+// The small triangle of a fold: pointing right when shut, down when open.
+component FoldMark {
+    in property <bool> open;
+    width: 10px;
+    height: 10px;
+    if root.open: Path {
+        x: 0;
+        y: 0;
+        width: 10px;
+        height: 10px;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        commands: "M 1 2.5 L 9 2.5 L 5 7.5 Z";
+        fill: Look.accent;
+    }
+    if !root.open: Path {
+        x: 0;
+        y: 0;
+        width: 10px;
+        height: 10px;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        commands: "M 2.5 1 L 7.5 5 L 2.5 9 Z";
+        fill: Look.accent;
+    }
+}
+
+// The fold's switch: the words "Advanced" and their triangle, clicked anywhere.
+component FoldSwitch {
+    in property <bool> open;
+    callback toggled();
+    accessible-role: button;
+    accessible-label: Strings.advanced;
+    accessible-action-default => {
+        root.toggled();
+    }
+    HorizontalLayout {
+        spacing: 6px;
+        VerticalLayout {
+            alignment: center;
+            FoldMark { open: root.open; }
+        }
+        Text {
+            text: Strings.advanced;
+            font-size: Scale.grey-font;
+            color: Look.accent;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggled();
+        }
+    }
+}
+
+// One account's row of the table, and its fold of advanced settings.
+component AccountLine inherits VerticalLayout {
+    in property <AccountRow> row;
+    in property <int> index;
+    spacing: 4px;
+    HorizontalLayout {
+        spacing: 8px;
+        Text {
+            width: 110px;
+            text: root.row.emulator;
+            font-size: Scale.body-font;
+            color: Look.text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        LineEdit {
+            text: root.row.alias;
+            font-size: Scale.body-font;
+            horizontal-stretch: 1;
+            min-width: 90px;
+            accessible-label: Strings.col-name;
+            edited(text) => {
+                Wiz.alias-edited(root.index, text);
+            }
+        }
+        game-box := SkinComboBox {
+            width: 140px;
+            min-width: 100px;
+            model: root.row.games;
+            current-index: root.row.game-index;
+            selected(value) => {
+                Wiz.game-picked(root.index, self.current-index);
+            }
+        }
+        server-box := SkinComboBox {
+            width: 140px;
+            min-width: 100px;
+            model: root.row.servers;
+            current-index: root.row.server-index;
+            enabled: root.row.game-index > 0;
+            selected(value) => {
+                Wiz.server-picked(root.index, self.current-index);
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 118px;
+        alignment: start;
+        FoldSwitch {
+            open: root.row.advanced;
+            toggled => {
+                Wiz.advanced-toggled(root.index);
+            }
+        }
+    }
+    if root.row.advanced: VerticalLayout {
+        padding-left: 118px;
+        spacing: 6px;
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            Text {
+                width: 110px;
+                text: Strings.touch-label;
+                font-size: Scale.body-font;
+                color: Look.text;
+                vertical-alignment: center;
+            }
+            SkinComboBox {
+                width: 170px;
+                model: Strings.touch-options;
+                current-index: root.row.touch-index;
+                selected(value) => {
+                    Wiz.touch-picked(root.index, self.current-index);
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            Text {
+                width: 110px;
+                text: Strings.capture-label;
+                font-size: Scale.body-font;
+                color: Look.text;
+                vertical-alignment: center;
+            }
+            SkinComboBox {
+                width: 170px;
+                model: Strings.capture-options;
+                current-index: root.row.capture-index;
+                selected(value) => {
+                    Wiz.capture-picked(root.index, self.current-index);
+                }
+            }
+        }
+        Tick {
+            text: Strings.start-emulator;
+            checked: root.row.start-emulator;
+            toggled => {
+                Wiz.start-toggled(root.index);
+            }
+        }
+        Caption { text: Strings.advanced-note; }
+    }
+    // The boxes follow the row whenever the Rust side changes it (a game picked anew resets
+    // the server), since a pick by hand ends their bindings to it.
+    changed row => {
+        game-box.current-index = root.row.game-index;
+        server-box.current-index = root.row.server-index;
+    }
+}
+
+component AccountsPage inherits ScrollView {
+    viewport-width: self.visible-width;
+    VerticalLayout {
+        padding-right: 16px;
+        spacing: 8px;
+        alignment: start;
+        Body { text: Strings.accounts-body; }
+        Caption { text: Strings.name-hint; }
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                width: 110px;
+                text: Strings.col-emulator;
+                font-size: Scale.grey-font;
+                color: Look.text-secondary;
+            }
+            Text {
+                horizontal-stretch: 1;
+                min-width: 90px;
+                text: Strings.col-name;
+                font-size: Scale.grey-font;
+                color: Look.text-secondary;
+            }
+            Text {
+                width: 140px;
+                text: Strings.col-game;
+                font-size: Scale.grey-font;
+                color: Look.text-secondary;
+            }
+            Text {
+                width: 140px;
+                text: Strings.col-server;
+                font-size: Scale.grey-font;
+                color: Look.text-secondary;
+            }
+        }
+        for row[index] in Wiz.accounts: VerticalLayout {
+            spacing: 2px;
+            AccountLine {
+                row: row;
+                index: index;
+            }
+            Rectangle { height: 4px; }
+        }
+        for problem in Wiz.account-problems: Problem { text: problem; }
+    }
+}
+
+component OptionsPage inherits ScrollView {
+    viewport-width: self.visible-width;
+    VerticalLayout {
+        padding-right: 16px;
+        spacing: 8px;
+        alignment: start;
+        Tick {
+            text: Strings.opt-desktop;
+            checked: Wiz.opt-desktop;
+            toggled => {
+                Wiz.option-toggled(0);
+            }
+        }
+        Tick {
+            text: Strings.opt-start-menu;
+            checked: Wiz.opt-start-menu;
+            toggled => {
+                Wiz.option-toggled(1);
+            }
+        }
+        Tick {
+            text: Strings.opt-watchdog;
+            checked: Wiz.opt-watchdog;
+            toggled => {
+                Wiz.option-toggled(2);
+            }
+        }
+        HorizontalLayout {
+            padding-left: 26px;
+            Caption { text: Strings.opt-watchdog-note; }
+        }
+        Tick {
+            text: Strings.opt-start;
+            checked: Wiz.opt-start;
+            toggled => {
+                Wiz.option-toggled(3);
+            }
+        }
+        Tick {
+            text: Strings.opt-pause;
+            checked: Wiz.opt-pause;
+            toggled => {
+                Wiz.option-toggled(4);
+            }
+        }
+        HorizontalLayout {
+            padding-left: 26px;
+            Caption { text: Strings.opt-pause-note; }
+        }
+        if Wiz.options-problem != "": Problem { text: Wiz.options-problem; }
+    }
+}
+
+component ConfirmPage inherits ScrollView {
+    viewport-width: self.visible-width;
+    VerticalLayout {
+        padding-right: 16px;
+        spacing: 10px;
+        alignment: start;
+        Card {
+            VerticalLayout {
+                padding: Look.pad;
+                spacing: 8px;
+                for line in Wiz.summary: HorizontalLayout {
+                    spacing: 12px;
+                    Text {
+                        text: line.key;
+                        width: 110px;
+                        font-size: Scale.body-font;
+                        color: Look.text-secondary;
+                    }
+                    Body {
+                        text: line.value;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+        Body { text: Wiz.confirm-note; }
+    }
+}
+
+component InstallPage inherits ScrollView {
+    viewport-width: self.visible-width;
+    VerticalLayout {
+        padding-right: 16px;
+        spacing: 6px;
+        alignment: start;
+        if Wiz.install-current < 0 && Wiz.install-pre != "": VerticalLayout {
+            spacing: 6px;
+            Body { text: Wiz.install-pre; }
+            ProgressIndicator {
+                progress: Wiz.install-progress;
+                indeterminate: Wiz.install-indeterminate;
+            }
+            Caption {
+                text: Wiz.install-detail;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+            Rectangle { height: 6px; }
+        }
+        for line[index] in Wiz.install-steps: VerticalLayout {
+            spacing: 4px;
+            MarkRow { line: line; }
+            if index == Wiz.install-current: VerticalLayout {
+                padding-left: 24px;
+                spacing: 4px;
+                ProgressIndicator {
+                    progress: Wiz.install-progress;
+                    indeterminate: Wiz.install-indeterminate;
+                }
+                Caption {
+                    text: Wiz.install-detail;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+}
+
+component FinishPage inherits ScrollView {
+    viewport-width: self.visible-width;
+    VerticalLayout {
+        padding-right: 16px;
+        spacing: 10px;
+        alignment: start;
+        Body { text: Wiz.finish-body; }
+        if Wiz.finish-next != "": Body { text: Wiz.finish-next; }
+        if Wiz.finished-ok: HorizontalLayout {
+            alignment: start;
+            spacing: 8px;
+            SkinButton {
+                text: Strings.open-console;
+                clicked => {
+                    Wiz.open-console();
+                }
+            }
+            SkinButton {
+                text: Strings.open-folder;
+                clicked => {
+                    Wiz.open-folder();
+                }
+            }
+        }
+        if !Wiz.finished-ok: VerticalLayout {
+            spacing: 8px;
+            HorizontalLayout {
+                alignment: start;
+                spacing: 8px;
+                SkinButton {
+                    text: Strings.copy-error;
+                    clicked => {
+                        transcript.select-all();
+                        transcript.copy();
+                    }
+                }
+                SkinButton {
+                    text: Strings.open-log;
+                    enabled: Wiz.finish-has-log;
+                    clicked => {
+                        Wiz.open-log();
+                    }
+                }
+            }
+            transcript := TextEdit {
+                read-only: true;
+                wrap: word-wrap;
+                text: Wiz.finish-transcript;
+                font-size: Scale.grey-font;
+                min-height: 140px;
+                preferred-height: 160px;
+                vertical-stretch: 0;
+            }
+        }
+        if Wiz.finish-action != "": Problem { text: Wiz.finish-action; }
+        if Wiz.finish-note != "": Caption { text: Wiz.finish-note; }
+    }
+}
+
+export component WizardWindow inherits Window {
+    title: Strings.window-title;
+    icon: @image-url("../../acui-app/assets/acui-256.png");
+    preferred-width: 880px;
+    preferred-height: 640px;
+    min-width: 760px;
+    min-height: 560px;
+    background: Look.page;
+    default-font-size: Scale.body-font;
+
+    HorizontalLayout {
+        // The step bar.
+        Rectangle {
+            width: 190px;
+            background: Look.card-background;
+            VerticalLayout {
+                padding: 14px;
+                padding-top: 18px;
+                spacing: 4px;
+                alignment: start;
+                Text {
+                    text: Strings.window-title;
+                    font-size: Scale.head-font;
+                    font-weight: 700;
+                    color: Look.card-title;
+                    wrap: word-wrap;
+                }
+                Rectangle { height: 10px; }
+                for step[index] in Wiz.steps: StepLine {
+                    number: index + 1;
+                    label: step.label;
+                    state: step.state;
+                }
+            }
+        }
+        Rectangle {
+            width: 1px;
+            background: Look.card-border;
+        }
+        VerticalLayout {
+            padding: 18px;
+            padding-right: 18px;
+            spacing: 12px;
+            HorizontalLayout {
+                spacing: 4px;
+                Text {
+                    text: Wiz.page-title;
+                    font-size: Scale.head-font * 1.3;
+                    font-weight: 700;
+                    color: Look.text;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                    horizontal-stretch: 1;
+                }
+                VerticalLayout {
+                    alignment: start;
+                    HorizontalLayout {
+                        spacing: 4px;
+                        SkinSegment {
+                            label: "中文";
+                            selected: !Wiz.english;
+                            clicked => {
+                                Wiz.language(false);
+                            }
+                        }
+                        SkinSegment {
+                            label: "English";
+                            selected: Wiz.english;
+                            clicked => {
+                                Wiz.language(true);
+                            }
+                        }
+                    }
+                }
+            }
+            VerticalLayout {
+                vertical-stretch: 1;
+                if Wiz.page == 0: WelcomePage { }
+                if Wiz.page == 1: SetPage { }
+                if Wiz.page == 2: RootPage { }
+                if Wiz.page == 3: GamesPage { }
+                if Wiz.page == 4: EmulatorsPage { }
+                if Wiz.page == 5: AccountsPage { }
+                if Wiz.page == 6: OptionsPage { }
+                if Wiz.page == 7: ConfirmPage { }
+                if Wiz.page == 8: InstallPage { }
+                if Wiz.page == 9: FinishPage { }
+            }
+            if Wiz.log-line != "": Text {
+                text: Wiz.log-line;
+                font-size: Scale.grey-font;
+                color: Look.text-caption;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                if Wiz.back-shown: SkinButton {
+                    text: Strings.back;
+                    clicked => {
+                        Wiz.back();
+                    }
+                }
+                if Wiz.next-shown: SkinButton {
+                    text: Wiz.next-text;
+                    enabled: Wiz.next-enabled;
+                    clicked => {
+                        Wiz.next();
+                    }
+                }
+                SkinButton {
+                    text: Wiz.cancel-text;
+                    enabled: Wiz.cancel-enabled;
+                    clicked => {
+                        Wiz.cancel();
+                    }
+                }
+            }
+        }
+    }
+
+    // A question over the whole window; nothing behind it takes a click while it shows.
+    if Wiz.dialog-shown: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        background: #00000066;
+        TouchArea { }
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                Card {
+                    width: min(460px, root.width - 80px);
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 14px;
+                        Body { text: Wiz.dialog-text; }
+                        HorizontalLayout {
+                            alignment: end;
+                            spacing: 8px;
+                            if Wiz.dialog-no != "": SkinButton {
+                                text: Wiz.dialog-no;
+                                clicked => {
+                                    Wiz.dialog-answer(false);
+                                }
+                            }
+                            SkinButton {
+                                text: Wiz.dialog-yes;
+                                clicked => {
+                                    Wiz.dialog-answer(true);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -312,7 +312,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "slint",
+ "slint-build",
  "windows",
+ "winresource",
  "zip",
 ]
 

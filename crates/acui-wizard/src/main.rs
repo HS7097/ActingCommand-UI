@@ -1,8 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `acsetup`, the 0.12 setup wizard. This slice (UI-W2a) has the command line only; the window
-//! comes with UI-W2b and shares the whole back end (`acui_wizard`).
+//! `acsetup`, the 0.12 setup wizard. Without arguments it opens its window (`gui`, UI-W2b);
+//! with a command it is a command line that writes to the caller's console. Both share the
+//! whole back end (`acui_wizard`). The release build is a window program, so no black console
+//! window comes up when it is opened from Explorer; its command line attaches to the console
+//! it was started from.
 //!
-//! Exit codes: 0 done, 1 failed (stderr says which step and why), 2 usage.
+//! Exit codes: 0 done, 1 failed (stderr says which step and why; the window: the install
+//! failed or the window could not open), 2 usage.
+
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
+mod desktop;
+mod gui;
 
 use std::ffi::OsString;
 use std::fs;
@@ -21,6 +30,8 @@ use acui_wizard::{install, Event, Request, Said, Step};
 const USAGE: &str = "\
 acsetup — ActingCommand 安装向导 / setup wizard (0.12)
 
+  acsetup
+      不带参数：打开安装向导窗口 / without arguments: opens the setup window
   acsetup check-set --set <安装集文件夹 / install set folder>
       只核对安装集，打印摘要 / checks the install set only and prints what it holds
   acsetup discover [--mumu-root <MuMu 文件夹 / folder>]
@@ -35,6 +46,10 @@ const SET_LIMIT: u64 = 1 << 20;
 
 fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if arguments.is_empty() {
+        return gui::run();
+    }
+    desktop::attach_console();
     let Some(command) = arguments.first().and_then(|word| word.to_str()).map(str::to_owned) else {
         eprintln!("{USAGE}");
         return ExitCode::from(2);

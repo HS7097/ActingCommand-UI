@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# The 0.12 setup wizard (Workflow #429 UI-W2): a library the window (UI-W2b) and the
-# command line share, and the program acsetup. UI-W2a ships the command line only.
+# The 0.12 setup wizard (Workflow #429 UI-W2): a library the window and the command line
+# share, and the program acsetup (the window without arguments, the command line with them).
 [lib]
 path = "src/lib.rs"
 
@@ -17,8 +17,16 @@ path = "src/main.rs"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+# The window (UI-W2b), drawn with the console's kit.
+slint = { workspace = true }
 zip = { workspace = true }
 getrandom = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true }
+
+[build-dependencies]
+slint-build = { workspace = true }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
