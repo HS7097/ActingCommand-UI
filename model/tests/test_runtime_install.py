@@ -25,7 +25,10 @@ MARKS = ("actingd.config.json", "runtime/BUILD-MANIFEST.json", "install/active.j
 # not on the way up.
 DECOYS = ("BUILD-MANIFEST.json", "active.json", "ui/BUILD-MANIFEST.json", "other/actingd.config.json")
 # The commands that write into the model folder; `export tables` writes into its `--repo` too.
-WRITERS = ("export thresholds", "export prices", "export values", "export tables", "export scoring", "bindings apply")
+WRITERS = (
+    "export thresholds", "export prices", "export values", "export valuations", "export tables", "export scoring",
+    "bindings apply",
+)
 
 
 def fake_install_root(base: Path, mark: str) -> Path:

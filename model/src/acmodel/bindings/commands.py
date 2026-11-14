@@ -26,8 +26,25 @@ value's `cost_paid_by_pool` (`value_consumes_mismatch`); and `schedule.json`'s `
 member a rule lacks (the fixed value after `package_id`, the origin after the fixed value; `splice`), each in the style of
 the member it follows (`insert_style_unknown` when there is none to copy). It never removes a member.
 
-**The origin guard**, always on: every rule of `schedule.json` whose `fixed_value_origin` is `"model"`, and every pool
-whose `valuation_origin` is, must be named by a value binding (`origin_unbound`): only the model's export writes `model`.
+**The limited mark** (#466 W3). A value binding whose value counts an activity that a `limit` rule of the model counts (its
+subject, or one it is `shared_with`) is limited: on a rule that declares `consumes`, `apply` writes `"limited": true`
+right after the origin (`limited_missing` until then). A limited value on a rule without `consumes` is only reported
+(`limited_without_consumes`), and so is a rule's mark the model does not hold (`limited_unmodelled`): never written, never
+removed. A mark that is not `true` is `limited_invalid`, which `apply` refuses and never rewrites.
+
+**Valuations** (#466 W3). A binding of a valuation (`valuation`, a resource of the model) names the base weight W of a
+`schedule.json` pool's valuation block (`/valuation/base_weight_milli`). Its W is computed as `export valuations` computes
+it (`export.valuations.weigh`): the resource's price in milli times the pool's own scale Q, rounded as the binding says;
+Q, `name` and `unit` are never written. A pending price is refused (`export_refused`, `pending`), and so are a W that
+rounds to 0 at a price above 0 and one beyond 0..1,000,000 (`valuation_rounds_to_zero`, `valuation_out_of_range`); a W
+whose rounding is off by more than the bound is the warning `precision_low`, and written. Each carries the suggested
+scale. W must be the number (`binding_mismatch` `value`), and the pool say who wrote it, `valuation_origin: "model"`,
+inserted after the block (`origin_missing`; another origin is `origin_invalid`, never rewritten); a pool whose valuation is
+the pending marker is `valuation_pending_marker`, and `requires` must hold `benefit_fixed_value`.
+
+**The origin guard**, always on: every rule of `schedule.json` whose `fixed_value_origin` is `"model"` must be named by a
+value binding, and every pool whose `valuation_origin` is by a valuation binding (`origin_unbound`): only the model's
+export writes `model`.
 
 `check` compares every bound literal with its threshold or value (`binding_mismatch`), and with `--strict` refuses
 every integer literal of a `fact` or `resource_projection` predicate of a `schedule.json` rule, and every
@@ -42,7 +59,10 @@ the model (`binding_mismatch`, `slot`; #424 ACM-PRICE 3.1): a slot is no Runtime
 `export prices` delivered in `out/prices.json`, read back, as the repository's schedule.json meets it (each pool by its
 class, each rule that declares effects by the worst class of its pools, the counts). It computes no steady state: that
 is the export's. Without the file it is null; a file of other versions of the model is the warning `prices_stale`. And
-whether `out/values.json` is of the current inputs (`data.values`; the warning `values_stale` otherwise, #464 W1).
+whether `out/values.json` is of the current inputs (`data.values`; the warning `values_stale` otherwise, #464 W1), and
+`out/valuations.json` (`data.valuations`; `valuations_stale`, #466 W3).
+
+Warnings (`precision_low`, the limited reports, the stale files) are reported with the errors too, when there are any.
 """
 
 from __future__ import annotations
@@ -79,6 +99,10 @@ from acmodel.codes import (
     EXPORT_WRITE_FAILED,
     FILE_CHANGED,
     INSERT_STYLE_UNKNOWN,
+    LIMITED_INVALID,
+    LIMITED_MISSING,
+    LIMITED_UNMODELLED,
+    LIMITED_WITHOUT_CONSUMES,
     MODEL_ID_DUPLICATE,
     ORIGIN_INVALID,
     ORIGIN_MISSING,
@@ -86,6 +110,7 @@ from acmodel.codes import (
     PRICES_STALE,
     REQUIRES_WORD_MISSING,
     RULE_REFERENCE_MISSING,
+    VALUATIONS_STALE,
     VALUE_CONSUMES_MISMATCH,
     VALUES_STALE,
 )
@@ -95,9 +120,10 @@ from acmodel.core.provenance import STATE_NODES, assemble
 from acmodel.core.run import Run, evaluate_model
 from acmodel.core.versions import versions
 from acmodel.envelope import Failure, error
+from acmodel.export import valuations as valuation_export
 from acmodel.export import values as value_export
 from acmodel.export.thresholds import threshold_entry
-from acmodel.model import read_bindings, read_prices, read_values
+from acmodel.model import read_bindings, read_prices, read_valuations, read_values
 from acmodel.model.jsonfile import read, refusal
 from acmodel.model.readers import SCHEDULE_FILE
 from acmodel.model.shape import json_type
@@ -107,14 +133,19 @@ PRICES = "out/prices.json"  # what `export prices` writes (`export.prices`)
 # #464 W1: a value's members in a rule of schedule.json, and the origin of a pool's valuation.
 MILLI, ORIGIN, ANCHOR, POOL_ORIGIN = "fixed_value_milli", "fixed_value_origin", "package_id", "valuation_origin"
 MODEL = "model"
-REQUIRED_WORD = "benefit_fixed_value"  # what schedule.json's `requires` must hold for a fixed value
+LIMITED = "limited"  # #466 W3: a rule's mark that a limit counts its runs, after its origin
+BLOCK = valuation_export.BLOCK  # #466 W3: a pool's valuation block, which its origin follows
+REQUIRED_WORD = "benefit_fixed_value"  # what schedule.json's `requires` must hold for a fixed value or a pool's origin
 PART = ".part"  # `apply` writes `<file>.part`, then renames it over the file
 RATIO_LOW, RATIO_HIGH = Fraction(1, 2), Fraction(2)  # a changed value outside these times its old one is flagged
 
 
-def _raise(errors: list[dict[str, Any]]) -> None:
+def _raise(errors: list[dict[str, Any]], warnings: list[dict[str, Any]] | None = None) -> None:
+    """`Failure` with the errors, and the warnings found so far (they are reported with the errors)."""
     if errors:
-        raise Failure(*errors)
+        failure = Failure(*errors)
+        failure.warnings = list(warnings or [])
+        raise failure
 
 
 def _entries(bindings: File) -> Iterator[tuple[str, dict[str, Any]]]:
@@ -133,7 +164,8 @@ def _load(
 
 
 def _references(run: Run, bindings: File) -> list[dict[str, Any]]:
-    """Each binding names a threshold or a value of exports.json, and no literal is named twice."""
+    """Each binding names a threshold or a value of exports.json, or a resource of the model (a valuation, #466 W3), and
+    no literal is named twice."""
     thresholds = {threshold["id"] for threshold in run.exports.doc["thresholds"]}
     values = {value["id"] for value in run.exports.doc.get("values", [])}
     errors, seen = [], {}
@@ -150,6 +182,7 @@ def _references(run: Run, bindings: File) -> list[dict[str, Any]]:
             errors.append(error(MODEL_ID_DUPLICATE, detail, ref))
         else:
             seen[key] = ref
+    errors.extend(valuation_export.problems(run, bindings.path, valuation_export.bound(bindings.doc)))
     return errors
 
 
@@ -223,6 +256,46 @@ def _valued(run: Run, bindings: File) -> tuple[dict[str, value_export.Valued], l
     return values, errors
 
 
+def _valuated(
+    run: Run, bindings: File, targets: dict[str, Target], slot_ids: frozenset[str]
+) -> tuple[dict[str, valuation_export.Weighed], list[dict[str, Any]]]:
+    """Each valuation binding as `export valuations` computes it (#466 W3), by its pointer in bindings.json, and the
+    refusals of the others: a binding whose pool, block or scale does not hold, a W refused for its range, and one whose
+    price is pending (`export_refused`, `pending`, one error per reason). Without a valuation binding nothing of the
+    prices is read for them; with one, the prices must be current (`prices_stale`, `output` `valuations`)."""
+    entries = valuation_export.bound(bindings.doc)
+    if not entries:
+        return {}, []
+    prices = value_export.current_prices(run, valuation_export.WHOLE)
+    schedule = targets[SCHEDULE_FILE]  # a valuation binding names schedule.json (the reader holds it to that)
+    reader = value_export.PriceReader(run, prices)
+    weighed, errors = {}, []
+    for ref, entry in entries:
+        found = valuation_export.weigh(reader, schedule.path, schedule.pools, schedule.doc, slot_ids, ref, entry)
+        if found.refusals:
+            errors.extend(found.refusals)
+        elif found.status == value_export.PENDING:
+            errors.extend(
+                error(EXPORT_REFUSED, {"path": bindings.path, "output": found.output, "reason": "pending",
+                                       "value": token}, ref)
+                for token in found.tokens()
+            )
+        else:
+            weighed[ref] = found
+    return weighed, errors
+
+
+def _limits(run: Run) -> dict[str, list[str]]:
+    """The `limit` rules of the model (#466 W3) that count each activity's runs, by activity: a limit counts its subject
+    and the activities it is `shared_with`, as the economy counts them."""
+    checker, found = run.checker, {}
+    for rule in checker.rules:
+        if checker.active(rule) and rule.kind == "limit":
+            for activity in (rule.doc["subject"], *rule.doc["logic"].get("shared_with", ())):
+                found.setdefault(activity, []).append(rule.id)
+    return found
+
+
 class _Literal:
     """One entry of bindings.json and the literal it names in its file."""
 
@@ -245,7 +318,9 @@ class _Literal:
         """`binding_mismatch` at `ref`, by default the literal's pointer (or /rules or /pools, without the rule
         or the pool)."""
         detail = {"path": str(self.target.path), "entry": self.entry_ref, "reason": reason}
-        detail.update({key: self.entry[key] for key in ("threshold", "value", "rule_id", "pool_id") if key in self.entry})
+        detail.update({
+            key: self.entry[key] for key in ("threshold", "value", "valuation", "rule_id", "pool_id") if key in self.entry
+        })
         if ref is None:
             ref = at("", self.holder) if self.ref is None else self.ref
         return error(BINDING_MISMATCH, {**detail, **values}, ref)
@@ -291,7 +366,7 @@ class _Literal:
 
     def describe(self) -> dict[str, Any]:
         out = {"entry": self.entry_ref}
-        keys = ("threshold", "value", "file", "rule_id", "pool_id", "path")
+        keys = ("threshold", "value", "valuation", "file", "rule_id", "pool_id", "path", "round")
         out.update({key: self.entry[key] for key in keys if key in self.entry})
         return out
 
@@ -310,23 +385,32 @@ class _Layouts:
 
 class _ValuePlan:
     """What a value binding needs of its rule (#464 W1): the problems both `check` and `apply` refuse (an origin other than
-    `"model"` among them); the differences `check` reports and `apply` writes (the fixed value, an absent origin); the
-    edits that write them, and the members they insert."""
+    `"model"` among them, and a limited mark that is not `true`, #466 W3); the differences `check` reports and `apply`
+    writes (the fixed value, an absent origin, an absent limited mark the model holds on a consumer); the warnings about
+    the mark that are only reported; the edits that write the differences, and the members they insert."""
 
-    def __init__(self, literal: _Literal, valued: value_export.Valued, layouts: _Layouts) -> None:
+    def __init__(
+        self, literal: _Literal, valued: value_export.Valued, layouts: _Layouts, limits: dict[str, list[str]]
+    ) -> None:
         self.literal, self.valued = literal, valued
         self.problems: list[dict[str, Any]] = []
         self.differences: list[dict[str, Any]] = []
+        self.warnings: list[dict[str, Any]] = []
         self.edits: list[splice.Edit] = []
         self.inserted: list[str] = []
         self.rule_ref: str | None = None if literal.ref is None else parent(literal.ref)
         self.origin: Any = MISSING
+        # #466 W3: the limit rules that count an activity of the value (a resource's term shows no activity).
+        activities = [term["activity"] for term in valued.definition["terms"] if "activity" in term]
+        self.limited_by = sorted({rule for activity in activities for rule in limits.get(activity, ())})
+        self.insert_limited = False
         if self.rule_ref is None:  # no rule of that id
             self.problems.append(literal.mismatch("literal_missing"))
             return
         self.rule = rule = resolve(literal.target.doc, self.rule_ref)
         self.origin = rule.get(ORIGIN, MISSING)
         self._compare()
+        self._limited()
         if not self.problems:
             self._edits(layouts.of(literal.target))
 
@@ -362,37 +446,71 @@ class _ValuePlan:
             detail = self._detail(found=shown(self.origin))
             self.problems.append(error(ORIGIN_INVALID, detail, at(rule_ref, ORIGIN)))
 
+    def _limited(self) -> None:
+        """The limited mark (#466 W3; the Runtime writes it only for a consumer, standard-pack-schedule's "What a resource
+        repository writes"): a mark that is not `true` is refused (the Runtime refuses it too) and never rewritten; a value
+        the model counts as limited, on a rule that declares `consumes` and has no mark, is a difference `apply` writes;
+        on a rule without `consumes` it is only reported; and a mark the model does not hold is only reported, never
+        removed."""
+        rule, rule_ref = self.rule, self.rule_ref
+        consumes = rule.get("consumes")
+        declared = isinstance(consumes, list) and bool(consumes)
+        mark = rule.get(LIMITED, MISSING)
+        if mark is not MISSING and mark is not True:
+            self.problems.append(error(LIMITED_INVALID, self._detail(found=shown(mark)), at(rule_ref, LIMITED)))
+        elif self.limited_by and not declared:
+            self.warnings.append(error(LIMITED_WITHOUT_CONSUMES, self._detail(limited_by=self.limited_by), rule_ref))
+        elif self.limited_by and mark is MISSING:
+            self.differences.append(error(LIMITED_MISSING, self._detail(limited_by=self.limited_by), rule_ref))
+            self.insert_limited = True
+        elif not self.limited_by and mark is True:
+            self.warnings.append(error(LIMITED_UNMODELLED, self._detail(), at(rule_ref, LIMITED)))
+
     def _edits(self, layout: splice.Layout) -> None:
+        """The literal replaced in place when it differs, and each absent member inserted right after the member before
+        it: `fixed_value_milli` after `package_id`, `fixed_value_origin` after the value, `limited` after the origin.
+        Consecutive members after one anchor are one insertion."""
         literal, rule_ref, value, milli = self.literal, self.rule_ref, self.literal.value, self.valued.milli
-        members: list[tuple[str, bytes]] = []
-        number = str(milli).encode("ascii")
-        if value is MISSING:
-            members.append((MILLI, number))
-        elif value != milli:
+        if value is not MISSING and value != milli:
             self.edits.append(_literal_edit(layout, literal.target, literal.ref, milli))
-        if self.origin is MISSING:  # any other origin than "model" is refused (`_compare`), never replaced
-            members.append((ORIGIN, json.dumps(MODEL).encode("ascii")))
-        if not members:
-            return
-        anchor = ANCHOR if value is MISSING else MILLI
-        edit = layout.insert_after(at(rule_ref, anchor), members) if anchor in self.rule else None
-        if edit is None:
-            detail = self._detail(anchor=anchor, member=members[0][0])
-            self.problems.append(error(INSERT_STYLE_UNKNOWN, detail, rule_ref))
-            self.edits = []
-            return
-        self.edits.append(edit)
-        self.inserted = [key for key, _ in members]
+        sequence = (  # in order; any other origin than "model" is refused (`_compare`), never replaced
+            (MILLI, str(milli).encode("ascii"), value is MISSING),
+            (ORIGIN, json.dumps(MODEL).encode("ascii"), self.origin is MISSING),
+            (LIMITED, b"true", self.insert_limited),
+        )
+        anchor, groups = ANCHOR, []
+        current: list[tuple[str, bytes]] | None = None
+        for key, data, insert in sequence:
+            if insert:
+                if current is None:
+                    current = []
+                    groups.append((anchor, current))
+                current.append((key, data))
+            elif key in self.rule:
+                anchor, current = key, None
+        for anchor, members in groups:
+            edit = layout.insert_after(at(rule_ref, anchor), members) if anchor in self.rule else None
+            if edit is None:
+                detail = self._detail(anchor=anchor, member=members[0][0])
+                self.problems.append(error(INSERT_STYLE_UNKNOWN, detail, rule_ref))
+                self.edits, self.inserted = [], []
+                return
+            self.edits.append(edit)
+            self.inserted.extend(key for key, _ in members)
 
     def expect(self, doc: Any) -> None:
-        """The document the edits make: the rule with its fixed value and its origin, each in its place or right after
-        the member it follows."""
+        """The document the edits make: the rule with its fixed value, its origin and the limited mark it gets, each in its
+        place or right after the member it follows."""
         rule = splice.placed(resolve(doc, self.rule_ref), ANCHOR, MILLI, self.valued.milli)
-        splice.assign(doc, self.rule_ref, splice.placed(rule, MILLI, ORIGIN, MODEL))
+        rule = splice.placed(rule, MILLI, ORIGIN, MODEL)
+        if self.insert_limited:
+            rule = splice.placed(rule, ORIGIN, LIMITED, True)
+        splice.assign(doc, self.rule_ref, rule)
 
     def described(self) -> dict[str, Any]:
         """What `check` shows of the binding: the literal and the origin as they are (null when absent), the value as
-        `export values` computes it, its status, the acceptances it rests on and what it leaves out."""
+        `export values` computes it, its status, the acceptances it rests on and what it leaves out, and whether the model
+        counts it as limited, by which limit rules (#466 W3)."""
         literal, valued = self.literal, self.valued
         entry = valued.entry()
         return {
@@ -404,6 +522,8 @@ class _ValuePlan:
             "acceptances": entry["acceptances"],
             "partial": entry["partial"],
             "exclude": entry["exclude"],
+            "limited": bool(self.limited_by),
+            "limited_by": self.limited_by,
         }
 
     def changed(self) -> dict[str, Any]:
@@ -422,6 +542,93 @@ class _ValuePlan:
         }
 
 
+class _ValuationPlan:
+    """What a valuation binding needs of its pool (#466 W3), once its pool, block and scale hold and its W is computed
+    (`export.valuations.weigh`): the problems both `check` and `apply` refuse (an origin other than `"model"`, a block no
+    member follows); the differences `check` reports and `apply` writes (W, an absent origin); the edits that write them.
+    Q, `name` and `unit` are never written."""
+
+    def __init__(self, literal: _Literal, weighed: valuation_export.Weighed, layouts: _Layouts) -> None:
+        self.literal, self.weighed = literal, weighed
+        self.problems: list[dict[str, Any]] = []
+        self.differences: list[dict[str, Any]] = []
+        self.edits: list[splice.Edit] = []
+        self.inserted: list[str] = []
+        self.pool_ref = weighed.pool_ref
+        self.origin: Any = resolve(literal.target.doc, self.pool_ref).get(POOL_ORIGIN, MISSING)
+        self._compare()
+        if not self.problems:
+            self._edits(layouts.of(literal.target))
+
+    def _compare(self) -> None:
+        """W against the literal (`binding_mismatch` `value`, which `apply` writes), and the pool's origin as the Runtime
+        reads it: absent is the pack's, a difference `apply` writes; anything but `"model"` is refused, never rewritten."""
+        literal, weighed = self.literal, self.weighed
+        if literal.value != weighed.weight:
+            detail = {"expected": str(weighed.weight), "found": str(literal.value)}
+            self.differences.append(literal.mismatch("value", **detail))
+        if self.origin is MISSING:
+            self.differences.append(error(ORIGIN_MISSING, weighed.detail(), self.pool_ref))
+        elif self.origin != MODEL:
+            detail = weighed.detail(found=shown(self.origin))
+            self.problems.append(error(ORIGIN_INVALID, detail, at(self.pool_ref, POOL_ORIGIN)))
+
+    def _edits(self, layout: splice.Layout) -> None:
+        """W replaced in place, and `valuation_origin: "model"` inserted right after the block, in the style of the block
+        (`insert_style_unknown` when no member follows it)."""
+        literal, weighed = self.literal, self.weighed
+        if literal.value != weighed.weight:
+            self.edits.append(_literal_edit(layout, literal.target, literal.ref, weighed.weight))
+        if self.origin is not MISSING:
+            return
+        edit = layout.insert_after(at(self.pool_ref, BLOCK), [(POOL_ORIGIN, json.dumps(MODEL).encode("ascii"))])
+        if edit is None:
+            detail = weighed.detail(anchor=BLOCK, member=POOL_ORIGIN)
+            self.problems.append(error(INSERT_STYLE_UNKNOWN, detail, self.pool_ref))
+            self.edits = []
+            return
+        self.edits.append(edit)
+        self.inserted = [POOL_ORIGIN]
+
+    def expect(self, doc: Any) -> None:
+        """The document the edits make: the block with W, and the pool with its origin right after the block."""
+        splice.assign(doc, self.literal.ref, self.weighed.weight)
+        splice.assign(doc, self.pool_ref, splice.placed(resolve(doc, self.pool_ref), BLOCK, POOL_ORIGIN, MODEL))
+
+    def described(self) -> dict[str, Any]:
+        """What `check` shows of the binding: W and the origin as the pool holds them (the origin null when absent), W as
+        `export valuations` computes it, the scale it read, its status, the acceptances it rests on and its precision
+        (null within the bound)."""
+        weighed = self.weighed
+        return {
+            **self.literal.describe(),
+            "literal": self.literal.value,
+            "origin": None if self.origin is MISSING else self.origin,
+            "weight": weighed.weight,
+            "scale": weighed.scale,
+            "status": weighed.status,
+            "acceptances": [weighed.acceptances[name] for name in sorted(weighed.acceptances)],
+            "precision": weighed.precision,
+        }
+
+    def changed(self) -> dict[str, Any]:
+        """What `apply` shows of a change: W from and to, their ratio (null when W was 0) flagged outside one half to two,
+        the origin from and to, the members inserted, the scale and the precision."""
+        value, weight = self.literal.value, self.weighed.weight
+        ratio = None if value == 0 else Fraction(weight, value)
+        return {
+            **self.literal.describe(),
+            "from": value,
+            "to": weight,
+            "ratio": None if ratio is None else str(ratio),
+            "ratio_flagged": ratio is not None and not RATIO_LOW <= ratio <= RATIO_HIGH,
+            "origin": {"from": None if self.origin is MISSING else self.origin, "to": MODEL},
+            "inserted": self.inserted,
+            "scale": self.weighed.scale,
+            "precision": self.weighed.precision,
+        }
+
+
 def _literal_edit(layout: splice.Layout, target: Target, ref: str, value: int) -> splice.Edit:
     """The literal at `ref` written as `value`; the scanner's span must hold the literal the reader read."""
     start, end = layout.values[ref]
@@ -431,10 +638,12 @@ def _literal_edit(layout: splice.Layout, target: Target, ref: str, value: int) -
 
 
 def _requires(targets: dict[str, Target], bindings: File) -> list[dict[str, Any]]:
-    """`requires_word_missing` when a value is bound and schedule.json's `requires` lacks `benefit_fixed_value`, the
-    word the Runtime reads a fixed value under: the tool never adds it."""
+    """`requires_word_missing` when a value or a valuation (#466 W3) is bound and schedule.json's `requires` lacks
+    `benefit_fixed_value`, the word the Runtime reads a fixed value and a pool's `valuation_origin` under: the tool never
+    adds it."""
     schedule = targets.get(SCHEDULE_FILE)
-    if schedule is None or not any("value" in entry for entry in bindings.doc["bindings"]):
+    bound = any("value" in entry or "valuation" in entry for entry in bindings.doc["bindings"])
+    if schedule is None or not bound:
         return []
     requires = schedule.doc.get("requires")
     if isinstance(requires, list) and REQUIRED_WORD in requires:
@@ -445,19 +654,22 @@ def _requires(targets: dict[str, Target], bindings: File) -> list[dict[str, Any]
 
 def _unbound_origins(targets: dict[str, Target], bindings: File) -> list[dict[str, Any]]:
     """The origin guard (#464 W1), always on: `origin_unbound` for each rule of schedule.json whose `fixed_value_origin`
-    is `"model"` and that no value binding names, then for each pool whose `valuation_origin` is (no binding names a
-    pool's valuation yet)."""
+    is `"model"` and that no value binding names, then for each pool whose `valuation_origin` is and that no valuation
+    binding names (#466 W3)."""
     schedule = targets.get(SCHEDULE_FILE)
     if schedule is None:
         return []
-    bound = {entry["rule_id"] for entry in bindings.doc["bindings"] if "value" in entry}
+    bound = {
+        "rules": {entry["rule_id"] for entry in bindings.doc["bindings"] if "value" in entry},
+        "pools": {entry["pool_id"] for entry in bindings.doc["bindings"] if "valuation" in entry},
+    }
     errors = []
     for holder, member, items, origin in (
         ("rules", "rule_id", schedule.rules, ORIGIN), ("pools", "pool_id", schedule.pools, POOL_ORIGIN)
     ):
         for item_id, index in items.items():
             item = schedule.doc[holder][index]
-            if item.get(origin) == MODEL and not (holder == "rules" and item_id in bound):
+            if item.get(origin) == MODEL and item_id not in bound[holder]:
                 detail = {"path": str(schedule.path), member: item_id, "member": origin}
                 errors.append(error(ORIGIN_UNBOUND, detail, at("", holder, index, origin)))
     return errors
@@ -583,6 +795,42 @@ def _values_file(run: Run) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]
     return {"file": str(path), "current": not stale, "stale": stale}, warnings
 
 
+def _valuations_file(run: Run, targets: dict[str, Target]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Whether `out/valuations.json` (#466 W3) is of the current inputs: the model's versions (`rules`, `data`, `tool`), the
+    bytes of `out/prices.json` (`prices`) and of bindings.json (`bindings`), and the scale Q each valuation read of its
+    pool, which schedule.json must still hold (`scale`). None when there is no such file; one that is not current is the
+    warning `valuations_stale`, with the members that differ."""
+    path = run.folder / valuation_export.VALUATIONS
+    if not path.exists():
+        return None, []
+    doc = read_valuations(path)
+    if doc["model_id"] != run.head["model_id"]:
+        raise Failure(refusal(
+            "value_invalid", path, doc["schema_version"], "/model_id", expected=[run.head["model_id"]],
+            literal=doc["model_id"],
+        ))
+    model = versions(run.checker, run.folder)
+    stale = [member for member in ("rules", "data", "tool") if doc["versions"][member] != model[member]]
+    prices = run.folder / PRICES
+    prices_sha = digest(read(prices, "acmodel.prices.v2")) if prices.exists() else None
+    if doc["prices"]["sha256"] != prices_sha:
+        stale.append("prices")
+    if doc["bindings"]["sha256"] != valuation_export.bindings_sha(run):
+        stale.append("bindings")
+    schedule = targets.get(SCHEDULE_FILE)
+
+    def scale(pool_id: str) -> Any:
+        if schedule is None or pool_id not in schedule.pools:
+            return MISSING
+        block = schedule.doc["pools"][schedule.pools[pool_id]].get(BLOCK)
+        return block.get(valuation_export.SCALE, MISSING) if isinstance(block, dict) else MISSING
+
+    if any(scale(entry["pool_id"]) != entry["scale"] for entry in doc["valuations"]):
+        stale.append("scale")
+    warnings = [error(VALUATIONS_STALE, {"path": str(path), "members": stale})] if stale else []
+    return {"file": str(path), "current": not stale, "stale": stale}, warnings
+
+
 def check_bindings(
     path: Path | str,
     state_path: Path | str,
@@ -592,29 +840,42 @@ def check_bindings(
     strict: bool,
     unknowns: Unknowns = Unknowns(),
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """`acmodel bindings check [--strict]`: every bound literal equals its exported threshold or value (with its origin);
-    the origin guard; with `strict`, no literal of a `fact` or `resource_projection` predicate of a schedule.json rule,
-    and no quantity of one of its pools, is left unbound. `data.coverage` is what `export prices` delivered, as
-    schedule.json meets it (`_coverage`), and `data.values` whether out/values.json is current (`_values_file`); the
-    warnings are their `prices_stale` and `values_stale`."""
+    """`acmodel bindings check [--strict]`: every bound literal equals its exported threshold, value (with its origin and
+    the limited mark) or valuation (with its origin); the origin guard; with `strict`, no literal of a `fact` or
+    `resource_projection` predicate of a schedule.json rule, and no quantity of one of its pools, is left unbound.
+    `data.coverage` is what `export prices` delivered, as schedule.json meets it (`_coverage`), and `data.values` and
+    `data.valuations` whether out/values.json and out/valuations.json are current; the warnings are `precision_low` and
+    the limited reports (#466 W3), then `prices_stale`, `values_stale` and `valuations_stale`."""
     run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
     repo, targets = _targets(run, bindings, strict)
     values, errors = _values(run, bindings)
     valued, refused = _valued(run, bindings)
     errors.extend(refused)
-    errors.extend(_requires(targets, bindings))
-    bound, fixed = [], []
     slot_ids = slots(run.checker, run.graph.typed)
+    weighed, refused = _valuated(run, bindings, targets, slot_ids)
+    errors.extend(refused)
+    errors.extend(_requires(targets, bindings))
+    bound, fixed, warnings = [], [], []
     layouts = _Layouts()
+    limits = _limits(run)
     for ref, entry in _entries(bindings):
         literal = _Literal(targets, ref, entry)
         if "value" in entry:
             if entry["value"] in valued:
-                plan = _ValuePlan(literal, valued[entry["value"]], layouts)
+                plan = _ValuePlan(literal, valued[entry["value"]], layouts, limits)
                 errors.extend(plan.problems + plan.differences)
+                warnings.extend(plan.warnings)
                 if not plan.problems:
                     bound.append(plan.described())
+            continue
+        if "valuation" in entry:
+            if ref in weighed:
+                warnings.extend(weighed[ref].warnings)
+                valuation = _ValuationPlan(literal, weighed[ref], layouts)
+                errors.extend(valuation.problems + valuation.differences)
+                if not valuation.problems:
+                    bound.append(valuation.described())
             continue
         missing = literal.slot(slot_ids) or literal.missing()
         if missing is not None:
@@ -634,10 +895,11 @@ def check_bindings(
     if strict:
         data["literals"], unbound = _unbound(targets[SCHEDULE_FILE], bindings)
         errors.extend(unbound)
-    _raise(errors)
-    data["coverage"], warnings = _coverage(run, repo, targets)
-    data["values"], stale = _values_file(run)
-    return data, warnings + stale
+    _raise(errors, warnings)
+    data["coverage"], stale_prices = _coverage(run, repo, targets)
+    data["values"], stale_values = _values_file(run)
+    data["valuations"], stale_valuations = _valuations_file(run, targets)
+    return data, warnings + stale_prices + stale_values + stale_valuations
 
 
 def _failed(path: Path, exc: OSError) -> dict[str, Any]:
@@ -705,30 +967,41 @@ def _commit(staged: list[tuple[Target, bytes]]) -> None:
 
 def apply_bindings(
     path: Path | str, state_path: Path | str, *, datasets: Path | str, max_bits: int, unknowns: Unknowns = Unknowns()
-) -> dict[str, Any]:
-    """`acmodel bindings apply`: write each bound literal that differs from its exported threshold or value, changing
-    only its bytes, and for a value its origin and the members it inserts. Anything else `check` refuses is refused, and
-    then nothing is written. The edited bytes must read back as the document the edits make, and every file is renamed
-    from its part only when it is still the bytes that were read (`_commit`)."""
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """`acmodel bindings apply`: write each bound literal that differs from its exported threshold, value or valuation,
+    changing only its bytes, and for a value its origin, the limited mark and the members it inserts, for a valuation its
+    origin. Anything else `check` refuses is refused, and then nothing is written. The edited bytes must read back as the
+    document the edits make, and every file is renamed from its part only when it is still the bytes that were read
+    (`_commit`). The warnings (`precision_low`, the limited reports, #466 W3) are reported, and change nothing."""
     run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
     repo, targets = _targets(run, bindings, False)
     values, errors = _values(run, bindings)
     valued, refused = _valued(run, bindings)
     errors.extend(refused)
+    slot_ids = slots(run.checker, run.graph.typed)
+    weighed, refused = _valuated(run, bindings, targets, slot_ids)
+    errors.extend(refused)
     errors.extend(_requires(targets, bindings))
     edits: dict[str, list[splice.Edit]] = {}
     expected: dict[str, Any] = {}  # the document each edited file must read back as
-    changed = []
-    slot_ids = slots(run.checker, run.graph.typed)
+    changed, warnings = [], []
     layouts = _Layouts()
+    limits = _limits(run)
     for ref, entry in _entries(bindings):
         literal = _Literal(targets, ref, entry)
         name = entry["file"]
-        if "value" in entry:
-            if entry["value"] not in valued:  # refused above
-                continue
-            plan = _ValuePlan(literal, valued[entry["value"]], layouts)
+        if "value" in entry or "valuation" in entry:
+            if "value" in entry:
+                if entry["value"] not in valued:  # refused above
+                    continue
+                plan: _ValuePlan | _ValuationPlan = _ValuePlan(literal, valued[entry["value"]], layouts, limits)
+                warnings.extend(plan.warnings)
+            else:
+                if ref not in weighed:  # refused above
+                    continue
+                warnings.extend(weighed[ref].warnings)
+                plan = _ValuationPlan(literal, weighed[ref], layouts)
             errors.extend(plan.problems)
             if plan.problems or not plan.edits:
                 continue
@@ -749,7 +1022,7 @@ def apply_bindings(
             splice.assign(expected.setdefault(name, copy.deepcopy(literal.target.doc)), literal.ref, value)
             changed.append({**literal.describe(), "from": literal.value, "to": value})
     errors.extend(_unbound_origins(targets, bindings))
-    _raise(errors)
+    _raise(errors, warnings)
     staged = []
     for name, file_edits in edits.items():
         target = targets[name]
@@ -758,4 +1031,4 @@ def apply_bindings(
         staged.append((target, raw))
     _commit(staged)
     written = [str(target.path) for target, _ in staged]
-    return {**run.head, "repo": str(repo), "changed": changed, "written": sorted(written)}
+    return {**run.head, "repo": str(repo), "changed": changed, "written": sorted(written)}, warnings

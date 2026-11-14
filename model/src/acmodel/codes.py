@@ -98,6 +98,18 @@ REQUIRES_WORD_MISSING = "requires_word_missing"  # schedule.json's requires lack
 INSERT_STYLE_UNKNOWN = "insert_style_unknown"  # bindings apply: no separator to copy for a member it inserts
 FILE_CHANGED = "file_changed"  # bindings apply: a file changed between its reading and its rename
 VALUES_STALE = "values_stale"  # bindings check (a warning): out/values.json is not of the current inputs
+# #466 W3, a pool's valuation (W of `export valuations` and the valuation bindings) and the limited mark. Each code is one
+# reason: a W that rounds to 0 at a price above 0, one beyond 0..1,000,000, and one whose rounding loses more than the
+# bound (a warning) are three codes, each with its suggested scale.
+VALUATION_ROUNDS_TO_ZERO = "valuation_rounds_to_zero"  # W rounds to 0 while the price is above 0: refused
+VALUATION_OUT_OF_RANGE = "valuation_out_of_range"  # W beyond 0..1,000,000, what the Runtime takes: refused
+PRECISION_LOW = "precision_low"  # a warning: W's rounding is off by more than the bound; it is written
+VALUATION_PENDING_MARKER = "valuation_pending_marker"  # the bound pool's valuation is the pending marker
+VALUATIONS_STALE = "valuations_stale"  # bindings check (a warning): out/valuations.json is not of the current inputs
+LIMITED_MISSING = "limited_missing"  # bindings check: a bound consumer the model counts as limited has no mark
+LIMITED_INVALID = "limited_invalid"  # bindings check|apply: a bound rule's limited is not true
+LIMITED_WITHOUT_CONSUMES = "limited_without_consumes"  # a warning: limited by the model, no consumes; not written
+LIMITED_UNMODELLED = "limited_unmodelled"  # a warning: the rule says limited, the model does not; not removed
 
 EXIT_OK = 0
 
@@ -184,4 +196,13 @@ EXIT_STATUS = {
     INSERT_STYLE_UNKNOWN: 6,
     FILE_CHANGED: 5,
     VALUES_STALE: 0,
+    VALUATION_ROUNDS_TO_ZERO: 5,
+    VALUATION_OUT_OF_RANGE: 5,
+    PRECISION_LOW: 0,
+    VALUATION_PENDING_MARKER: 6,
+    VALUATIONS_STALE: 0,
+    LIMITED_MISSING: 6,
+    LIMITED_INVALID: 6,
+    LIMITED_WITHOUT_CONSUMES: 0,
+    LIMITED_UNMODELLED: 0,
 }
