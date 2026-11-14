@@ -151,8 +151,8 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   the schedule is worth, as exports.json's `values` define it (activities or resources, how often, over how many runs),
   from the derivation graph and the prices `export prices` delivered, which must be of the model's versions
   (`prices_stale` is an error here). It computes no steady state. Every value is listed: its number, confirmed or
-  provisional with each acceptance it rests on, or pending with why. One that read the account state or rounds below 1 is
-  refused (`value_not_positive`), and then nothing is written.
+  provisional with each acceptance it rests on, or pending with why. One that read the account state is refused
+  (`export_refused`, `per_account`), and so is one that rounds below 1 (`value_not_positive`); then nothing is written.
 - **The export policy** decides what a delivered file takes from an output: a confirmed value as it is; a
   provisional one only when `acceptances` of exports.json accept it (a table cell is `null` otherwise, the
   others are refused); a blocked or per-account one never. A number is scaled and rounded as declared
@@ -179,9 +179,10 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   `"model"`; an origin `"model"` that no binding names is refused (`origin_unbound`), and `data.values` says whether
   `out/values.json` is current.
 - **`bindings apply`** writes the bound literals that differ, and changes only their bytes: line ends
-  (CRLF files stay CRLF) and formatting are kept. For a value it writes the origin too, and inserts a member the rule
-  lacks in the style of the member before it. It refuses what `check` refuses, other than a differing
-  value or origin (a pending value too), and then writes nothing. Each file is written as its `.part` and renamed over
+  (CRLF files stay CRLF) and formatting are kept. For a value it writes the origin `"model"` too when the rule has none,
+  and inserts a member the rule lacks in the style of the member before it; it never rewrites another origin
+  (`origin_invalid`). It refuses what `check` refuses, other than a differing value or an absent origin (a pending value
+  too), and then writes nothing. Each file is written as its `.part` and renamed over
   it only when the file did not change meanwhile (`file_changed`) (`contracts/formats.md`, "Bindings").
 - **`watch`** keeps a model's outputs for one state up to date while it runs. It is long-lived: Task Scheduler
   or WMI starts it, never an agent session, and an interrupt ends it. Every `watch.poll_interval_ms` it scans the

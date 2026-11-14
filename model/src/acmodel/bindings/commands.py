@@ -18,11 +18,13 @@ them (`export.thresholds.threshold_entry`), so a binding holds only what the exp
 rule (`/fixed_value_milli`). Its number is computed as `export values` computes it (`export.values.evaluate`), from the
 same run and the delivered prices: a value that export leaves pending is refused (`export_refused`, `pending`), and one it
 refuses is refused the same way. The rule's fixed value must be that number and say who wrote it,
-`fixed_value_origin: "model"` (`binding_mismatch` `value`, `origin_missing`); the rule's `consumes` must name exactly the
+`fixed_value_origin: "model"` (`binding_mismatch` `value`, `origin_missing` when the rule has no origin); an origin other
+than `"model"` is `origin_invalid`, which `apply` refuses and never rewrites (the Runtime reads an absent origin as the
+pack's, `"model"` beside a fixed value as the model's, and refuses any other); the rule's `consumes` must name exactly the
 value's `cost_paid_by_pool` (`value_consumes_mismatch`); and `schedule.json`'s `requires` must hold
-`benefit_fixed_value` (`requires_word_missing`; the tool never adds it). `apply` writes the number and the origin, and
-inserts either member a rule lacks (the fixed value after `package_id`, the origin after the fixed value; `splice`), each
-in the style of the member it follows (`insert_style_unknown` when there is none to copy). It never removes a member.
+`benefit_fixed_value` (`requires_word_missing`; the tool never adds it). `apply` writes the number, and inserts either
+member a rule lacks (the fixed value after `package_id`, the origin after the fixed value; `splice`), each in the style of
+the member it follows (`insert_style_unknown` when there is none to copy). It never removes a member.
 
 **The origin guard**, always on: every rule of `schedule.json` whose `fixed_value_origin` is `"model"`, and every pool
 whose `valuation_origin` is, must be named by a value binding (`origin_unbound`): only the model's export writes `model`.
@@ -78,6 +80,7 @@ from acmodel.codes import (
     FILE_CHANGED,
     INSERT_STYLE_UNKNOWN,
     MODEL_ID_DUPLICATE,
+    ORIGIN_INVALID,
     ORIGIN_MISSING,
     ORIGIN_UNBOUND,
     PRICES_STALE,
@@ -306,9 +309,9 @@ class _Layouts:
 
 
 class _ValuePlan:
-    """What a value binding needs of its rule (#464 W1): the problems both `check` and `apply` refuse; the differences
-    `check` reports and `apply` writes (the fixed value, the origin); the edits that write them, and the members they
-    insert."""
+    """What a value binding needs of its rule (#464 W1): the problems both `check` and `apply` refuse (an origin other than
+    `"model"` among them); the differences `check` reports and `apply` writes (the fixed value, an absent origin); the
+    edits that write them, and the members they insert."""
 
     def __init__(self, literal: _Literal, valued: value_export.Valued, layouts: _Layouts) -> None:
         self.literal, self.valued = literal, valued
@@ -350,10 +353,14 @@ class _ValuePlan:
             found_value = {} if value is MISSING else {"found": str(value)}
             ref = literal.ref if value is not MISSING else rule_ref
             self.differences.append(literal.mismatch("value", ref, expected=str(valued.milli), **found_value))
-        if self.origin != MODEL:
-            where = rule_ref if self.origin is MISSING else at(rule_ref, ORIGIN)
-            found_origin = {} if self.origin is MISSING else {"found": shown(self.origin)}
-            self.differences.append(error(ORIGIN_MISSING, self._detail(**found_origin), where))
+        # The origin, as the Runtime reads it (standard-pack-schedule): absent is the pack's, `"model"` beside a fixed value
+        # the model's, anything else invalid. Absent is a difference `apply` writes; another origin is refused, and never
+        # rewritten: who wrote the number is not the tool's to change.
+        if self.origin is MISSING:
+            self.differences.append(error(ORIGIN_MISSING, self._detail(), rule_ref))
+        elif self.origin != MODEL:
+            detail = self._detail(found=shown(self.origin))
+            self.problems.append(error(ORIGIN_INVALID, detail, at(rule_ref, ORIGIN)))
 
     def _edits(self, layout: splice.Layout) -> None:
         literal, rule_ref, value, milli = self.literal, self.rule_ref, self.literal.value, self.valued.milli
@@ -363,11 +370,8 @@ class _ValuePlan:
             members.append((MILLI, number))
         elif value != milli:
             self.edits.append(_literal_edit(layout, literal.target, literal.ref, milli))
-        quoted = json.dumps(MODEL).encode("ascii")
-        if self.origin is MISSING:
-            members.append((ORIGIN, quoted))
-        elif self.origin != MODEL:
-            self.edits.append(layout.replace(at(rule_ref, ORIGIN), quoted))
+        if self.origin is MISSING:  # any other origin than "model" is refused (`_compare`), never replaced
+            members.append((ORIGIN, json.dumps(MODEL).encode("ascii")))
         if not members:
             return
         anchor = ANCHOR if value is MISSING else MILLI

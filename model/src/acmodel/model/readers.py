@@ -637,24 +637,32 @@ ACCEPTANCE = Object(
 )
 
 # #464 W1: the values of the schedule's rules (`acmodel export values`). A quantity is an exact number (an integer, a
-# decimal or a ratio of two integers) or `rule:<id>`, the value of a rule of the run; a count of runs is a positive exact
-# number. `per` is a period of model.json or `run` (once per run of the rule).
+# decimal or a ratio of two integers) or `rule:<id>`, the value of a rule of the run; how often (`times`) is never
+# negative (only an `amount` is: what a run takes out) and, written as a number, above 0 (`_term`), and a count of runs is
+# a positive exact number (`_value`). `per` is a period of model.json or `run` (once per run of the rule).
 _NUMBER = r"(0|[1-9][0-9]*)(\.[0-9]+|/[1-9][0-9]*)?"
 QUANTITY = Text(r"-?" + _NUMBER + r"|rule:" + ids.ID)
+TIMES = Text(_NUMBER + r"|rule:" + ids.ID)
 POSITIVE = Text(_NUMBER)
 PER_RUN = "run"
 
 
 def _term(value: dict[str, Any], ref: str, ctx: Context) -> bool:
     """A term of a value: exactly one of `activity` (an activity, run `times`) and `resource` (a resource, `amount` of it
-    `times`); `amount` belongs to a resource's term only."""
+    `times`); `amount` belongs to a resource's term only; `times`, written as a number, above 0 (`value_invalid`, as a
+    count of runs of 0: a term that happens no times is no term, and a negative one would turn what comes in into what
+    goes out)."""
     if not exactly_one("activity", "resource")(value, ref, ctx):
         return False
+    ok = True
+    times = value["times"]
+    if not times.startswith("rule:") and Fraction(times) <= 0:
+        ok = ctx.refuse("value_invalid", pointer(ref, "times"), literal=times)
     if "resource" in value and "amount" not in value:
         return ctx.refuse("member_missing", pointer(ref, "amount"), key="amount")
     if "activity" in value and "amount" in value:
         return ctx.refuse("member_unknown", pointer(ref, "amount"), key="amount")
-    return True
+    return ok
 
 
 def _value(value: dict[str, Any], ref: str, ctx: Context) -> bool:
@@ -676,7 +684,7 @@ def _value(value: dict[str, Any], ref: str, ctx: Context) -> bool:
 
 
 VALUE_TERM = Object(
-    {"times": QUANTITY, "per": ID},
+    {"times": TIMES, "per": ID},
     {"activity": ID, "resource": ID, "amount": QUANTITY, "ref": TEXT, **NOTE},
     _term,
 )

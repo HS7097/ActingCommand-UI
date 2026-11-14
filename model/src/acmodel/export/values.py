@@ -1,6 +1,7 @@
 """`acmodel export values` (#464 W1; contracts/formats.md, "`acmodel export values`"): what one run of a schedule's rule is
 worth, from the model's derivation graph and the prices `export prices` delivered, written into the model folder:
-- `out/provenance/values/<id>.json`: the provenance document of each value that is exported;
+- `out/provenance/values/<id>.json`: the provenance document of each value, a pending one too (with its pending and why,
+  and what it could read), so that no file of an earlier export stays behind with other versions;
 - `out/values.json` (`acmodel.values.v1`), last: every value of exports.json's `values`, each with its number or
   `pending` and why, its status and the acceptances it rests on, and what one run brings in and takes out of each pool.
 
@@ -21,8 +22,10 @@ reads in an expression); anything else is refused by its reader, and `rule:` of 
 
 **Every value is listed** (as prices.json lists every pool): a value is `pending`, with each reason, when a quantity is
 blocked, provisional and not accepted (`acceptances` of exports.json accept `rule:<id>`; a flow's amount is no output, so
-a provisional one is pending), not one number, or a pool it counts has no exported price; otherwise `provisional` when it
-rests on an acceptance (of a quantity or of a price), each listed with its `ref` and `until`, and `confirmed`. A value
+a provisional one is pending), not one number, or a pool it counts has no exported price, or one delivered under an
+acceptance that exports.json no longer holds as prices.json recorded it (withdrawn or changed since: the prices are
+exported again); otherwise `provisional` when it rests on an acceptance (of a quantity or of a price), each listed with
+its `ref` and `until`, and `confirmed`. A value
 that read the account state (`per_account`), one that rounds below 1 (`value_not_positive`: a value of 0 is no value) or
 beyond the JSON-safe range (`out_of_range`) refuses the whole export, and nothing is written. So does a prices.json that
 is not of the model's versions or of exports.json's κ (`export_refused`, `prices_stale`): the prices are read, never
@@ -51,7 +54,16 @@ from acmodel.config import Unknowns
 from acmodel.core.common import BLOCKED, CONFIRMED, PROVISIONAL, has_value, solve
 from acmodel.core.flow import MONTH_DAYS, WEEK_STEPS
 from acmodel.core.provenance import SCHEMA_VERSION as PROVENANCE_FORMAT
-from acmodel.core.provenance import STATE_NODES, acceptance, assemble, node_id, output_result, relative, tree
+from acmodel.core.provenance import (
+    STATE_NODES,
+    acceptance,
+    acceptances,
+    assemble,
+    node_id,
+    output_result,
+    relative,
+    tree,
+)
 from acmodel.core.run import Run, evaluate_model
 from acmodel.core.unknown import status as unknowns_status
 from acmodel.core.versions import sha256, versions
@@ -67,6 +79,9 @@ VALUES = "out/values.json"
 PROVENANCE = "out/provenance/values"
 PRICES = "out/prices.json"
 PENDING = "pending"
+# A price delivered under an acceptance that exports.json no longer holds as prices.json recorded it (formats.md,
+# "`acmodel export values`", step 6): withdrawn since, or changed since. The value waits for `export prices`.
+WITHDRAWN, CHANGED = "price_acceptance_withdrawn", "price_acceptance_changed"
 OUTPUT = "value:"  # a value's output id, as its provenance document and its refusals name it
 WHOLE = "values"  # the output of a refusal of the whole export (`prices_stale`)
 # What `rule:<id>` may name (formats.md, "Model checks of the run", "Rule values"): a rule with a value.
@@ -101,7 +116,9 @@ def current_prices(run: Run) -> Prices:
     """The prices the values are counted in: `out/prices.json` of the model folder, read back by its reader
     (`model_file_invalid` when it is not there), of the model (`value_invalid` at `/model_id`), of the model's versions
     and in exports.json's κ. A file of other versions, or of another κ, is `export_refused` (`prices_stale`), one error per
-    member that differs (`value` the member: `rules`, `data`, `tool`, `unit_milli`): the prices are exported again first."""
+    member that differs (`value` the member: `rules`, `data`, `tool`, `unit_milli`): the prices are exported again first.
+    `tool` is the tool's own version, so after an upgrade of acmodel every prices.json is stale until `export prices`
+    runs again (formats.md, step 2)."""
     path = run.folder / PRICES
     raw = read(path, readers.PRICES.name)
     doc = read_prices(path, raw)
@@ -251,7 +268,7 @@ class Valued:
     refusals: list[dict[str, Any]] = field(default_factory=list)
     nodes: dict[str, dict[str, Any]] = field(default_factory=dict)  # the provenance nodes of what it read
     roots: list[str] = field(default_factory=list)  # the outputs and flow amounts it read, and the prices
-    priced: list[str] = field(default_factory=list)  # the pools whose price it read
+    priced: list[str] = field(default_factory=list)  # the pools whose entry of prices.json it read (pending ones too)
 
     @property
     def ref(self) -> str:
@@ -285,7 +302,7 @@ class Valued:
             "cost_paid_by_pool": list(definition.get("cost_paid_by_pool", [])),
             "runs": definition["runs"],
             "yields": self.yields,
-            "provenance": None if self.status == PENDING else f"{PROVENANCE}/{self.id}.json",
+            "provenance": f"{PROVENANCE}/{self.id}.json",  # a pending value's too
         }
 
 
@@ -298,6 +315,7 @@ class _Evaluation:
         self.taken: dict[str, Fraction] = {}
         self.brought: dict[str, Fraction] = {}
         self.marked: set[str] = set()  # the pools an expected quantity reaches
+        self.accepted: dict[str, int] | None = None  # exports.json's acceptances now, by output (read when a price needs it)
 
     def refuse(self, ref: str, reason: str, **values: Any) -> None:
         detail = {"path": self.run.exports.path, "output": self.valued.output, "reason": reason, **values}
@@ -397,24 +415,42 @@ class _Evaluation:
         if expected:
             self.marked.add(pool)
 
+    def withdrawn_or_changed(self, pool: str, recorded: dict[str, Any]) -> str | None:
+        """Whether the acceptance a price was delivered under is still exports.json's as prices.json recorded it (its
+        entry there, `entry` aside, note included): None when it is, `WITHDRAWN` when exports.json holds none of
+        `price:<pool>` now, `CHANGED` when it holds another."""
+        if self.accepted is None:
+            self.accepted = acceptances(self.run)
+        index = self.accepted.get("price:" + pool)
+        if index is None:
+            return WITHDRAWN
+        held = {key: value for key, value in recorded.items() if key != "entry"}
+        return None if self.run.exports.doc["acceptances"][index] == held else CHANGED
+
     def price(self, pool: str) -> Fraction | None:
         """A pool's price in milli, as prices.json delivered it; a price delivered under an acceptance (a provisional one,
-        or a verified zero) adds that acceptance."""
+        or a verified zero) adds that acceptance, but only while exports.json still holds it as prices.json recorded it
+        (`price_acceptance_withdrawn`, `price_acceptance_changed` otherwise: the prices are exported again)."""
         entry = self.prices.by_pool.get(pool)
         if entry is None:  # a slot, or no pool of the model
             self.wait("price_missing", pool)
             return None
+        self.valued.priced.append(pool)  # its entry is read, and its provenance names it, pending or not
         if entry["price"] == PENDING or entry["milli"] is None:
             self.wait("price_pending", pool, pending=list(entry["pending"]))
             return None
         if entry["class"] == "verified_zero" or entry["status"] != CONFIRMED:
             kind = "accept_zero" if entry["class"] == "verified_zero" else "accept_provisional"
-            given = entry["acceptance"].get(kind) if isinstance(entry["acceptance"], dict) else None
+            recorded = entry["acceptance"] if isinstance(entry["acceptance"], dict) else {}
+            given = recorded.get(kind)
             if given is None:
                 self.wait("price_pending", pool, pending=["not_accepted"])
                 return None
+            moved = self.withdrawn_or_changed(pool, recorded)
+            if moved is not None:
+                self.wait(moved, pool)
+                return None
             self.accept("price:" + pool, given)
-        self.valued.priced.append(pool)
         return Fraction(entry["milli"])
 
     def compute(self) -> Valued:
@@ -494,9 +530,10 @@ def exports_sha(run: Run) -> str:
 
 
 def _document(run: Run, valued: Valued, entry: dict[str, Any], prices: Prices) -> dict[str, Any]:
-    """The provenance document of an exported value: a node for the value (its entry in exports.json, which reads the
-    outputs and flow amounts it computes with and the prices it counts in), the trees of what it read, and a node per
-    price, as prices.json delivered it (the price's own provenance is its file there)."""
+    """The provenance document of a value, a pending one too: a node for the value (its entry in exports.json, which
+    reads the outputs and flow amounts it computes with and the prices it counts in), the trees of what it read, and a
+    node per price whose entry of prices.json it read, as prices.json has it, pending or not (the price's own provenance
+    is its file there). Of a pending value it holds what it could read, and `result` says it is pending and why."""
     by_pool = prices.by_pool
     nodes = dict(valued.nodes)
     for pool in valued.priced:
@@ -535,11 +572,10 @@ def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any]]:
     _raise([entry for valued in found.values() for entry in valued.refusals])
     files: dict[str, Any] = {}
     entries = []
-    for name in sorted(found):
+    for name in sorted(found):  # every value's provenance file, a pending one's too: none stays of an earlier export
         valued = found[name]
         entry = valued.entry()
-        if entry["provenance"] is not None:
-            files[entry["provenance"]] = _document(run, valued, entry, prices)
+        files[entry["provenance"]] = _document(run, valued, entry, prices)
         entries.append(entry)
     counts = {status: sum(1 for entry in entries if entry["status"] == status) for status in (CONFIRMED, PROVISIONAL, PENDING)}
     counts["partial"] = sum(1 for entry in entries if entry["partial"])

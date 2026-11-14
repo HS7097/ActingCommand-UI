@@ -112,32 +112,39 @@ def price(pool: str, value: str, *, status: str = "confirmed", pending: tuple[st
     }
 
 
-ACCEPTED_C = {
-    "entry": "/acceptances/1", "output": "price:pool.c",
+# pool.c's price is delivered under this acceptance of exports.json (its second), which prices.json records as it was.
+ACCEPTANCE_C = {
+    "output": "price:pool.c",
     "accept_provisional": {"ref": "P-1", "until": "a price check", "binds": "0" * 64, "scope": "game", "flips": []},
 }
+ACCEPTED_C = {"entry": "/acceptances/1", **ACCEPTANCE_C}
 PRICES = [
     price("pool.a", "1/250"), price("pool.b", "1/10"), price("pool.c", "1/20", status="provisional", acceptance=ACCEPTED_C),
     price("pool.d", "pending", status="provisional", pending=("not_accepted",)),
 ]
 
 
-def write_prices(folder: Path, entries: list[dict[str, Any]] = PRICES) -> None:
-    """out/prices.json of the model as it is now, as `export prices` would deliver it."""
+def write_prices(folder: Path, entries: list[dict[str, Any]] = PRICES, **other: str) -> None:
+    """out/prices.json of the model as it is now, as `export prices` would deliver it (`other` versions instead, by
+    member)."""
     write(base(folder) / "out" / "prices.json", {
-        "schema_version": "acmodel.prices.v2", "model_id": "economy", "versions": model_versions(base(folder)),
+        "schema_version": "acmodel.prices.v2", "model_id": "economy", "versions": {**model_versions(base(folder)), **other},
         "shared": {}, "unit_milli": UNIT, "prices": entries, "slots": [], "estimates": [], "impact": [], "counts": {},
     })
 
 
-def values_repo(folder: Path, values: list[dict[str, Any]], *extra: dict[str, Any]) -> Path:
-    """The neutral repository: the model (with `extra` rules), exports.json with κ, the values and the acceptance of
-    rate.b, an empty bindings.json, and the prices."""
+def values_repo(folder: Path, values: list[dict[str, Any]], *extra: dict[str, Any], periods: list | None = None) -> Path:
+    """The neutral repository: the model (with `extra` rules, and `periods`, by default a day and a week), exports.json
+    with κ, the values and the acceptances of rate.b and of pool.c's price, an empty bindings.json, and the prices."""
     entities = [resource(pool, "fact." + pool) for pool in POOLS] + [activity("act.make")]
-    model(folder, [DAY, WEEK], entities, [*FIXTURE_RULES, *extra], {"fact." + pool: 0 for pool in POOLS}, goals=[])
+    model(folder, periods or [DAY, WEEK], entities, [*FIXTURE_RULES, *extra], {"fact." + pool: 0 for pool in POOLS},
+          goals=[])
     edit(base(folder) / "exports.json", lambda doc: doc.update(
         prices={"unit_milli": UNIT}, values=values,
-        acceptances=[{"output": RATE_B["output"], "accept_provisional": {"ref": RATE_B["ref"], "until": RATE_B["until"]}}],
+        acceptances=[
+            {"output": RATE_B["output"], "accept_provisional": {"ref": RATE_B["ref"], "until": RATE_B["until"]}},
+            ACCEPTANCE_C,
+        ],
     ))
     write(base(folder) / "bindings.json", {"schema_version": "acmodel.bindings.v1", "bindings": [], "fixed": []})
     write_prices(folder)
@@ -169,15 +176,16 @@ def pool(name: str, brought: str = "0", taken: str = "0", *, paid: bool = False,
 
 
 def entry(definition: dict[str, Any], status: str, milli: int | None, yields: list[dict[str, Any]] | None, *,
-          acceptances: tuple[dict[str, str], ...] = (), pending: tuple[dict[str, Any], ...] = ()) -> dict[str, Any]:
-    """A value's entry of values.json."""
+          acceptances: tuple[dict[str, str], ...] = (), pending: tuple[dict[str, Any], ...] = (),
+          exact: str | None = None) -> dict[str, Any]:
+    """A value's entry of values.json (`exact`, the exact value, when it is no integer)."""
     return {
         "id": definition["id"], "status": status, "fixed_value_milli": milli,
-        "exact_milli": None if milli is None else str(milli), "round": definition["round"],
+        "exact_milli": exact if exact is not None else (None if milli is None else str(milli)), "round": definition["round"],
         "acceptances": list(acceptances), "pending": list(pending), "partial": bool(definition.get("exclude")),
         "exclude": definition.get("exclude", []), "cost_paid_by_pool": definition.get("cost_paid_by_pool", []),
         "runs": definition["runs"], "yields": yields,
-        "provenance": None if status == "pending" else f"out/provenance/values/{definition['id']}.json",
+        "provenance": f"out/provenance/values/{definition['id']}.json",  # a pending value's too
     }
 
 
@@ -185,13 +193,24 @@ def delivered(folder: Path) -> dict[str, Any]:
     return json.loads((base(folder) / "out" / "values.json").read_text(encoding="utf-8"))
 
 
+def provenance(folder: Path, value_id: str) -> dict[str, Any]:
+    path = base(folder) / "out" / "provenance" / "values" / f"{value_id}.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def result(definition: dict[str, Any], *args: Any, **kwargs: Any) -> dict[str, Any]:
+    """A provenance document's `result`: the value's entry without `provenance`."""
+    return {key: value for key, value in entry(definition, *args, **kwargs).items() if key != "provenance"}
+
+
 # export values --------------------------------------------------------------------------------------------------------
 
 
 def test_export_values_lists_every_value_with_its_number_or_why_it_waits(tmp_path, acmodel):
     """Day 2448 and night 9072 are confirmed; collect 57600 rests on two acceptances (rate.b's and pool.c's price), so it
-    is provisional and lists both; pool.d's price is pending, so that value is pending with why, and has no provenance
-    file. values.json records the model's versions and the sha256 of the bytes of prices.json and exports.json."""
+    is provisional and lists both; pool.d's price is pending, so that value is pending with why, and its provenance file
+    says so, of the current versions, with the price it read. values.json records the model's versions and the sha256 of
+    the bytes of prices.json and exports.json."""
     folder = values_repo(tmp_path, [DAY_RUN, NIGHT_RUN, COLLECT, WAITING])
     out = base(folder) / "out"
 
@@ -199,7 +218,7 @@ def test_export_values_lists_every_value_with_its_number_or_why_it_waits(tmp_pat
 
     assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
     assert doc["data"]["counts"] == {"confirmed": 2, "provisional": 1, "pending": 1, "partial": 0}
-    names = ["val.a.day", "val.a.night", "val.b.collect"]
+    names = ["val.a.day", "val.a.night", "val.b.collect", "val.d.pending"]
     assert doc["data"]["written"] == sorted(
         [str(out / "values.json")] + [str(out / "provenance" / "values" / f"{name}.json") for name in names]
     )
@@ -222,7 +241,23 @@ def test_export_values_lists_every_value_with_its_number_or_why_it_waits(tmp_pat
         entry(WAITING, "pending", None, [pool("pool.d", "5")],
               pending=({"reason": "price_pending", "item": "pool.d", "pending": ["not_accepted"]},)),
     ]
-    assert not (out / "provenance" / "values" / "val.d.pending.json").exists()
+    waiting = provenance(folder, "val.d.pending")
+    assert (waiting["output"], waiting["versions"], waiting["result"]) == (
+        "value:val.d.pending", model_versions(base(folder)), {
+            key: value for key, value in written["values"][3].items() if key != "provenance"})
+    assert waiting["result"]["status"] == "pending"
+    assert waiting["nodes"] == {
+        "value:val.d.pending": {
+            "node": "value", "id": "val.d.pending", "file": "exports.json", "ref": "/values/3",
+            "sha256": doc_sha256(WAITING), "reads": ["price:pool.d"],
+        },
+        "price:pool.d": {
+            "node": "price", "resource": "pool.d", "file": "out/prices.json", "sha256": sha(out / "prices.json"),
+            "class": "covered", "status": "provisional", "price": "pending", "milli": None,
+            "provenance": "out/provenance/prices/pool.d.json", "reads": [],
+        },
+    }
+    assert "acceptances" not in waiting
 
     day = json.loads((out / "provenance" / "values" / "val.a.day.json").read_text(encoding="utf-8"))
     assert (day["schema_version"], day["output"], day["versions"]) == (
@@ -358,11 +393,137 @@ def test_rule_of_a_rule_without_a_value_is_named_not_guessed(tmp_path, acmodel):
     }]
 
 
+# Three periods of the model's own, by ids that name no unit: a week, a month and a three-day period.
+CYCLE_W = {"id": "cycle.w", "unit": "week", "reset_minute": 0, "utc_offset_minutes": 0, "reset_weekday": "mon"}
+CYCLE_M = {"id": "cycle.m", "unit": "month", "reset_minute": 0, "utc_offset_minutes": 0, "reset_day": 1}
+CYCLE_D = {"id": "cycle.d", "unit": "days", "reset_minute": 0, "utc_offset_minutes": 0, "length": 3,
+           "anchor_date": "2026-01-05"}
+# 10 pool.a a week, one run a day: 10/7 a run, 40/7 milli, 6 rounded.
+WEEKLY = {"id": "val.weekly", "terms": [term("pool.a", "10", "1", "cycle.w")], "runs": runs("1", "day"),
+          "round": "half_even"}
+# 1000 pool.a a month (146097/4800 days), one run a day: 1000 x 4800/146097 = 1600000/48699 a run, 6400000/48699 milli
+# (131.42...), 131 rounded.
+MONTHLY = {"id": "val.monthly", "terms": [term("pool.a", "1000", "1", "cycle.m")], "runs": runs("1", "day"),
+           "round": "half_even"}
+# 10 pool.a every three days, two runs a week: a run is 7/2 days, so 10 x (7/2)/3 = 35/3 a run, 140/3 milli, 47 rounded.
+EVERY_THREE = {"id": "val.every_three", "terms": [term("pool.a", "10", "1", "cycle.d")], "runs": runs("2", "cycle.w"),
+               "round": "half_even"}
+
+
+def test_a_term_counts_per_run_by_the_days_of_the_models_own_periods(tmp_path, acmodel):
+    """A week is 7 days, a month 146097/4800, a `days` period its length, as the model defines them (not by the ids):
+    each value is exact before it is rounded once."""
+    folder = values_repo(tmp_path, [WEEKLY, MONTHLY, EVERY_THREE], periods=[DAY, CYCLE_W, CYCLE_M, CYCLE_D])
+
+    status, doc = export_values(acmodel, folder)
+
+    assert (status, doc["errors"]) == (0, [])
+    assert delivered(folder)["values"] == [
+        entry(EVERY_THREE, "confirmed", 47, [pool("pool.a", "35/3")], exact="140/3"),
+        entry(MONTHLY, "confirmed", 131, [pool("pool.a", "1600000/48699")], exact="6400000/48699"),
+        entry(WEEKLY, "confirmed", 6, [pool("pool.a", "10/7")], exact="40/7"),
+    ]
+    assert Fraction(6400000, 48699) == Fraction(1000 * 4800, 146097) * 4
+
+
+def test_a_value_that_becomes_pending_has_its_provenance_file_written_again(tmp_path, acmodel):
+    """val.a.day is exported; then the model changes and pool.a's price is pending in the prices exported again. The
+    export writes the value's provenance file again, of the current versions, saying it is pending and why: no file of
+    the earlier export stays behind with other versions (the resource side's check of `out/` would find it stale), nor
+    one that holds a number that no longer holds."""
+    folder = values_repo(tmp_path, [DAY_RUN])
+    path = base(folder) / "out" / "provenance" / "values" / "val.a.day.json"
+    assert export_values(acmodel, folder)[0] == 0
+    before = provenance(folder, "val.a.day")
+    assert before["result"]["status"] == "confirmed"
+
+    edit(base(folder) / "rules" / "economy.json", lambda doc: doc["rules"][0].update(note="edited"))
+    write_prices(folder, [price("pool.a", "pending", status="provisional", pending=("not_accepted",)), *PRICES[1:]])
+
+    status, doc = export_values(acmodel, folder)
+
+    assert (status, doc["errors"]) == (0, [])
+    assert str(path) in doc["data"]["written"]
+    after = provenance(folder, "val.a.day")
+    waits = {"reason": "price_pending", "item": "pool.a", "pending": ["not_accepted"]}
+    assert after["versions"] == model_versions(base(folder)) != before["versions"]
+    assert after["result"] == result(DAY_RUN, "pending", None, [pool("pool.a", "612")], pending=(waits,))
+    assert set(after["nodes"]) == {"value:val.a.day", "rule:rate.a", "price:pool.a"}
+    assert (after["nodes"]["price:pool.a"]["price"], after["nodes"]["price:pool.a"]["milli"]) == ("pending", None)
+
+
+def test_a_provisional_quantity_not_accepted_or_a_pool_without_a_price_is_pending(tmp_path, acmodel):
+    """rate.c is provisional and exports.json does not accept it; prices.json lists no pool.b. Each value is pending, with
+    its provenance file."""
+    unaccepted = {"id": "val.unaccepted", "terms": [term("pool.a", "rule:rate.c", "1", "run")], "runs": runs("1", "day"),
+                  "round": "floor"}
+    unpriced = {"id": "val.unpriced", "terms": [term("pool.b", "3", "1", "run")], "runs": runs("1", "day"),
+                "round": "floor"}
+    folder = values_repo(tmp_path, [unaccepted, unpriced], {**rule("rate.c", "derive", "pool.a", value="5"),
+                                                             "status": "provisional"})
+    write_prices(folder, [listed for listed in PRICES if listed["pool"] != "pool.b"])
+
+    status, doc = export_values(acmodel, folder)
+
+    assert (status, doc["errors"]) == (0, [])
+    assert doc["data"]["counts"] == {"confirmed": 0, "provisional": 0, "pending": 2, "partial": 0}
+    assert delivered(folder)["values"] == [
+        entry(unaccepted, "pending", None, None, pending=({"reason": "provisional", "item": "rule:rate.c"},)),
+        entry(unpriced, "pending", None, [pool("pool.b", "3")], pending=({"reason": "price_missing", "item": "pool.b"},)),
+    ]
+    assert provenance(folder, "val.unpriced")["nodes"]["value:val.unpriced"]["reads"] == []
+
+
+def test_a_value_beyond_the_safe_range_is_refused_and_nothing_is_written(tmp_path, acmodel):
+    """2^53 pool.a a run at 4 milli is 2^55 milli, beyond 2^53 - 1."""
+    huge = {"id": "val.huge", "terms": [term("pool.a", str(2 ** 53), "1", "run")], "runs": runs("1", "day"),
+            "round": "floor"}
+    folder = values_repo(tmp_path, [DAY_RUN, huge])
+
+    status, doc = export_values(acmodel, folder)
+
+    assert (status, doc["data"]) == (5, {})
+    assert doc["errors"] == [{
+        "code": "export_refused",
+        "detail": {"path": str(base(folder) / "exports.json"), "output": "value:val.huge", "reason": "out_of_range",
+                   "value": str(2 ** 55)},
+        "ref": "/values/1",
+    }]
+    assert not (base(folder) / "out" / "values.json").exists()
+    assert not (base(folder) / "out" / "provenance" / "values").exists()
+
+
+def test_how_often_a_term_happens_and_how_often_the_rule_runs_are_above_zero(tmp_path, acmodel):
+    """`times` 0 or negative, and `runs.count` 0 or negative, are refused by the reader of exports.json: a term that
+    happens no times is no term, and a negative count would turn what comes in into what goes out."""
+    values = [
+        {"id": "val.never", "terms": [term("pool.a", "1", "0", "run")], "runs": runs("1", "day"), "round": "floor"},
+        {"id": "val.back", "terms": [term("pool.a", "1", "-2", "day")], "runs": runs("1", "day"), "round": "floor"},
+        {"id": "val.no_runs", "terms": [term("pool.a", "1", "1", "run")], "runs": runs("0/3", "day"), "round": "floor"},
+        {"id": "val.minus", "terms": [term("pool.a", "1", "1", "run")], "runs": runs("-1", "day"), "round": "floor"},
+    ]
+    folder = values_repo(tmp_path, values)
+    exports = str(base(folder) / "exports.json")
+
+    status, doc = export_values(acmodel, folder)
+
+    assert status == 1
+    assert sorted(doc["errors"], key=lambda found: found["ref"]) == [
+        {"code": "model_file_invalid",
+         "detail": {"reason": "value_invalid", "path": exports, "format": "acmodel.exports.v1", "literal": literal_},
+         "ref": ref}
+        for ref, literal_ in (
+            ("/values/0/terms/0/times", "0"), ("/values/1/terms/0/times", "-2"), ("/values/2/runs/count", "0/3"),
+            ("/values/3/runs/count", "-1"),
+        )
+    ]
+
+
 # bindings: a value's literal and its origin -----------------------------------------------------------------------------
 
 DAY_RULE = '{"id":"rule.a.day","package_id":"pkg.a","priority":5}'
-NIGHT_RULE = '{"id":"rule.a.night","package_id":"pkg.a","fixed_value_milli":7844,"priority":5}'
-COLLECT_RULE = '{"id":"rule.b.collect","package_id":"pkg.b","fixed_value_milli":3,"fixed_value_origin":"pack","priority":2}'
+NIGHT_RULE = '{"id":"rule.a.night","package_id":"pkg.a","fixed_value_milli":7000,"priority":5}'
+COLLECT_RULE = '{"id":"rule.b.collect","package_id":"pkg.b","fixed_value_milli":3,"priority":2}'
 DAY_DONE = '{"id":"rule.a.day","package_id":"pkg.a","fixed_value_milli":2448,"fixed_value_origin":"model","priority":5}'
 NIGHT_DONE = '{"id":"rule.a.night","package_id":"pkg.a","fixed_value_milli":9072,"fixed_value_origin":"model","priority":5}'
 COLLECT_DONE = (
@@ -392,9 +553,9 @@ def literal(index: int, value: str, rule_id: str) -> dict[str, Any]:
 
 def test_apply_writes_each_value_and_its_origin_and_changes_no_other_byte(tmp_path, acmodel, monkeypatch):
     """Before: rule.a.day has neither member, rule.a.night a stale value and no origin, rule.b.collect a hand-written
-    value with origin pack. `check` names each difference; `apply` inserts the missing members after `package_id` and the
-    value (in the file's own style: no spaces), replaces the rest in place, writes the file through its part, and every
-    other byte stays. Then `check` passes and lists each value's status and the acceptances it rests on."""
+    value and no origin. `check` names each difference; `apply` inserts the missing members after `package_id` and the
+    value (in the file's own style: no spaces), replaces the stale values in place, writes the file through its part, and
+    every other byte stays. Then `check` passes and lists each value's status and the acceptances it rests on."""
     folder = values_repo(tmp_path, [DAY_RUN, NIGHT_RUN, COLLECT])
     schedule = folder / "schedule.json"
     schedule.write_bytes(one_line([DAY_RULE, NIGHT_RULE, COLLECT_RULE]))
@@ -413,14 +574,13 @@ def test_apply_writes_each_value_and_its_origin_and_changes_no_other_byte(tmp_pa
          "ref": "/rules/0"},
         {"code": "origin_missing", "detail": detail(0, "val.a.day", "rule.a.day"), "ref": "/rules/0"},
         {"code": "binding_mismatch",
-         "detail": detail(1, "val.a.night", "rule.a.night", reason="value", expected="9072", found="7844"),
+         "detail": detail(1, "val.a.night", "rule.a.night", reason="value", expected="9072", found="7000"),
          "ref": "/rules/1/fixed_value_milli"},
         {"code": "origin_missing", "detail": detail(1, "val.a.night", "rule.a.night"), "ref": "/rules/1"},
         {"code": "binding_mismatch",
          "detail": detail(2, "val.b.collect", "rule.b.collect", reason="value", expected="57600", found="3"),
          "ref": "/rules/2/fixed_value_milli"},
-        {"code": "origin_missing", "detail": detail(2, "val.b.collect", "rule.b.collect", found="pack"),
-         "ref": "/rules/2/fixed_value_origin"},
+        {"code": "origin_missing", "detail": detail(2, "val.b.collect", "rule.b.collect"), "ref": "/rules/2"},
     ]
 
     renamed: list[tuple[str, bool, str]] = []
@@ -441,10 +601,10 @@ def test_apply_writes_each_value_and_its_origin_and_changes_no_other_byte(tmp_pa
     assert doc["data"]["changed"] == [
         {**literal(0, "val.a.day", "rule.a.day"), "from": None, "to": 2448, "ratio": None, "ratio_flagged": False,
          "origin": model_origin, "inserted": ["fixed_value_milli", "fixed_value_origin"]},
-        {**literal(1, "val.a.night", "rule.a.night"), "from": 7844, "to": 9072, "ratio": str(Fraction(9072, 7844)),
+        {**literal(1, "val.a.night", "rule.a.night"), "from": 7000, "to": 9072, "ratio": str(Fraction(9072, 7000)),
          "ratio_flagged": False, "origin": model_origin, "inserted": ["fixed_value_origin"]},
         {**literal(2, "val.b.collect", "rule.b.collect"), "from": 3, "to": 57600, "ratio": "19200",
-         "ratio_flagged": True, "origin": {"from": "pack", "to": "model"}, "inserted": []},
+         "ratio_flagged": True, "origin": model_origin, "inserted": ["fixed_value_origin"]},
     ]
 
     status, doc = bindings(acmodel, folder, "check")
@@ -505,7 +665,7 @@ def indented(day: list[str], night: str, origin: list[str]) -> bytes:
 def test_apply_keeps_crlf_and_writes_inserted_members_with_the_files_own_line_ends_and_indent(tmp_path, acmodel):
     folder = values_repo(tmp_path, [DAY_RUN, NIGHT_RUN])
     schedule = folder / "schedule.json"
-    schedule.write_bytes(indented([], "7844", []))
+    schedule.write_bytes(indented([], "7000", []))
     bind(folder, ("val.a.day", "rule.a.day"), ("val.a.night", "rule.a.night"))
     origin = ['      "fixed_value_origin": "model",']
     expected = indented(['      "fixed_value_milli": 2448,', *origin], "9072", origin)
@@ -661,6 +821,115 @@ def test_check_says_whether_out_values_json_is_current(tmp_path, acmodel):
     assert doc["warnings"] == [{"code": "values_stale", "detail": {"path": path, "members": ["exports"]}}]
 
 
+def test_an_origin_other_than_model_is_refused_and_never_rewritten(tmp_path, acmodel):
+    """The Runtime reads an absent origin as the pack's and `"model"` beside a fixed value as the model's, and refuses any
+    other. A bound rule whose origin says `pack`, or holds no text at all, is `origin_invalid`: `check` reports it with the
+    other differences, and `apply` refuses and writes nothing, not even the other binding's value."""
+    folder = values_repo(tmp_path, [DAY_RUN, NIGHT_RUN])
+    schedule = folder / "schedule.json"
+    bind(folder, ("val.a.day", "rule.a.day"), ("val.a.night", "rule.a.night"))
+
+    def night(origin: str) -> str:
+        return '{"id":"rule.a.night","package_id":"pkg.a","fixed_value_milli":9072,"fixed_value_origin":' + origin + "}"
+
+    def invalid(found: str) -> dict[str, Any]:
+        return {
+            "code": "origin_invalid",
+            "detail": {"path": str(schedule), "entry": "/bindings/1", "value": "val.a.night", "rule_id": "rule.a.night",
+                       "found": found},
+            "ref": "/rules/1/fixed_value_origin",
+        }
+
+    schedule.write_bytes(one_line([DAY_RULE, night('"pack"')]))
+    before = schedule.read_bytes()
+
+    status, doc = bindings(acmodel, folder, "check")
+
+    assert status == 6
+    day = {"path": str(schedule), "entry": "/bindings/0", "value": "val.a.day", "rule_id": "rule.a.day"}
+    assert doc["errors"] == [
+        {"code": "binding_mismatch", "detail": {**day, "reason": "value", "expected": "2448"}, "ref": "/rules/0"},
+        {"code": "origin_missing", "detail": day, "ref": "/rules/0"},
+        invalid("pack"),
+    ]
+
+    status, doc = bindings(acmodel, folder, "apply")
+
+    assert (status, doc["data"], doc["errors"]) == (6, {}, [invalid("pack")])
+    assert schedule.read_bytes() == before
+    assert not (folder / "schedule.json.part").exists()
+
+    schedule.write_bytes(one_line([DAY_DONE, night("true")]))
+    before = schedule.read_bytes()
+
+    status, doc = bindings(acmodel, folder, "apply")
+
+    assert (status, doc["errors"]) == (6, [invalid("boolean")])
+    assert schedule.read_bytes() == before
+
+
+def test_a_value_binding_needs_prices_of_the_current_versions_the_tools_too(tmp_path, acmodel):
+    """With a value binding, `check` reads the prices to compute the value: prices.json of other versions is the error
+    `prices_stale`, not the coverage's warning. The tool's own version counts too, so after an upgrade the prices are
+    exported again before `check` passes."""
+    folder = values_repo(tmp_path, [DAY_RUN])
+    (folder / "schedule.json").write_bytes(one_line([DAY_DONE]))
+    bind(folder, ("val.a.day", "rule.a.day"))
+    prices = str(base(folder) / "out" / "prices.json")
+    assert bindings(acmodel, folder, "check")[0] == 0
+
+    def stale(member: str) -> list[dict[str, Any]]:
+        return [{
+            "code": "export_refused",
+            "detail": {"path": prices, "output": "values", "reason": "prices_stale", "value": member},
+            "ref": f"/versions/{member}",
+        }]
+
+    write_prices(folder, tool="0.0.0-earlier")
+    status, doc = bindings(acmodel, folder, "check")
+
+    assert (status, doc["errors"]) == (5, stale("tool"))
+
+    write_prices(folder)
+    edit(base(folder) / "rules" / "economy.json", lambda doc: doc["rules"][0].update(note="edited"))
+    status, doc = bindings(acmodel, folder, "check")
+
+    assert (status, doc["errors"]) == (5, stale("rules"))
+
+
+def test_a_price_whose_acceptance_was_changed_or_withdrawn_since_is_pending_and_check_says_why(tmp_path, acmodel):
+    """pool.c's price was delivered under an acceptance. exports.json changes it, then withdraws it, and the prices are
+    not exported again (exports.json is no part of the versions, so prices.json stays current): the value that counts
+    pool.c waits for the prices, with why, and `check` names that reason for its binding."""
+    folder = values_repo(tmp_path, [COLLECT])
+    (folder / "schedule.json").write_bytes(one_line([COLLECT_DONE]))
+    bind(folder, ("val.b.collect", "rule.b.collect"))
+    assert bindings(acmodel, folder, "check")[0] == 0
+
+    for change, reason in (
+        (lambda entries: entries[1]["accept_provisional"].update(until="another check"), "price_acceptance_changed"),
+        (lambda entries: entries.pop(1), "price_acceptance_withdrawn"),
+    ):
+        edit(base(folder) / "exports.json", lambda doc: change(doc["acceptances"]))
+
+        status, doc = export_values(acmodel, folder)
+
+        assert (status, doc["errors"]) == (0, [])
+        [written] = delivered(folder)["values"]
+        assert (written["status"], written["fixed_value_milli"], written["pending"]) == (
+            "pending", None, [{"reason": reason, "item": "pool.c"}])
+        assert provenance(folder, "val.b.collect")["result"]["pending"] == written["pending"]
+
+        status, doc = bindings(acmodel, folder, "check")
+
+        assert (status, doc["errors"]) == (5, [{
+            "code": "export_refused",
+            "detail": {"path": str(base(folder) / "exports.json"), "output": "value:val.b.collect", "reason": "pending",
+                       "value": f"{reason}:pool.c"},
+            "ref": "/values/0",
+        }])
+
+
 # Writing through a part: thresholds too ---------------------------------------------------------------------------------
 
 
@@ -732,7 +1001,8 @@ def test_every_code_is_registered_with_its_exit_status():
     assert set(EXIT_STATUS) == set(CODES)
     assert {code: CODES[code]["exit"] for code in CODES} == EXIT_STATUS
     new = {
-        "value_not_positive": ("error", 5), "origin_missing": ("error", 6), "origin_unbound": ("error", 6),
+        "value_not_positive": ("error", 5), "origin_missing": ("error", 6), "origin_invalid": ("error", 6),
+        "origin_unbound": ("error", 6),
         "value_consumes_mismatch": ("error", 6), "requires_word_missing": ("error", 6),
         "insert_style_unknown": ("error", 6), "file_changed": ("error", 5), "values_stale": ("warning", 0),
     }
