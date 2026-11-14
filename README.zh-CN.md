@@ -24,9 +24,9 @@
   `acui.exe`（监控台）、`acsetup.exe`（安装向导，UI v0.12.17 起）、`acforward.exe`（固定入口）、`LICENSE`、
   `README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。向导要从一份安装集安装，安装集另外拼，不在这个 zip
   里（见「安装向导 acsetup」一节）。每一版都基于它所在提交钉的 Runtime
-  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 v0.12.59。
-- **可与 0.12 的 Runtime 搭配**：它声明 `actingd-config` [5, 29]、`ledger` [3, 8]、`runtime-client`
-  [3, 8] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.47 到 v0.12.59：这几版的 `ledger` 上限都在
+  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 v0.12.60。
+- **可与 0.12 的 Runtime 搭配**：它声明 `actingd-config` [5, 32]、`ledger` [3, 8]、`runtime-client`
+  [3, 8] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.47 到 v0.12.60：这几版的 `ledger` 上限都在
   [3, 8] 里，`actingd-config`、`runtime-client` 的区间都和监控台的有交集。v0.12.55 起的账本（修订 8）是单向的：
   v0.12.55 或更新的 Runtime 在一个状态根上跑过之后，v0.12.55 之前的 Runtime 就打不开它，`ledger` 只到 7 的监控台也可能读不了，
   所以要先换监控台，再上 Runtime。别的 Runtime 能否搭配，按双方声明的接口判断，不看版本号（见"组件接口"）。
@@ -164,10 +164,17 @@
 「只看到」或换页签、筛选，会重新定位，或者把手柄拉回最右端（全部）、在线时按「跳到最新」、关掉窗口再打开，
 这样就不用游标往下读。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.59（`803fdfa3`）。v0.12.59 相对 v0.12.58，
-接口只把 `package` 升到 11，`actingd-config`、`ledger`、`runtime-client` 都不变，控制台认的区间也不变；ledger-forensics
-多依赖一个只依赖 contract 的 crate `actingcommand-display-adapter`，`Cargo.lock` 跟着加了这一项。下面各条注明了从哪一版起
-（#434 LAB-6S1a，v0.12.58 起：`runtime-client` 修订 8 给 `BindChannel`、它的回答 `ChannelBound` 和声明了发起方的连接的每个回执
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.60（`2eaf9b7e`）。v0.12.60 相对 v0.12.59，
+接口把 `actingd-config` 升到 32、`package` 升到 12，`ledger`、`runtime-client` 仍是 8，控制台认的 `actingd-config` 跟到 [5, 32]。
+修订 30 加 `scheduling.device_group.switch_failure_cooldown_ms`（#437 MAPP-2b）；修订 31 给 `instances[]` 条目加可选的
+`start_paused`（#453 S2：第一次见到这种条目的启动，用 `instance.added` 暂停这个实例，Lab 的 `instance add` 原来就用这个理由；
+装配时读，不能在线设）；修订 32 加 `scheduling.device_group.max_queue_wait_ms`（#437 ORD-1c）。三者在 `ui_tier` 里都是
+`hidden`，设置页不多出行；这个仓库里没有哪处改写已有配置文件时会丢掉条目里不认识的成员。`package` 12 带来游戏根的
+`goals.json`（#455 G-R1），安装向导照 Runtime 自己的放置方式放它。默认的 `ledger_observer.tag.workbench_patterns` 从 14 条
+变成 16 条（`host.state_root_installation`，#453 S11；`host.start_pause_applied`，#453 S2），账本修订不变，控制台两项事实都不读。
+`ui` 通道可用的请求多了 `ApplyResourceTargets`（#455 T1-R），这个控制台还不发它。两把锁里的 crate 都没改依赖，`Cargo.lock`
+只换提交号。下面各条注明了从哪一版起（v0.12.59 起：`package` 11，ledger-forensics 多依赖一个只依赖 contract 的 crate
+`actingcommand-display-adapter`；#434 LAB-6S1a，v0.12.58 起：`runtime-client` 修订 8 给 `BindChannel`、它的回答 `ChannelBound` 和声明了发起方的连接的每个回执
 加了可选的 `initiator`，只在 `lab` 通道上收，`ui` 上从不写；这个控制台绑 `ui`、不声明发起方，发的和读的每条消息都和修订 7
 逐字节一样，和声明 [3, 7] 的 Runtime 照旧配得上。#434 LAB-6S3，v0.12.58 起：绑在 `ui` 上的连接，Runtime 只收它的 UI 清单里的
 请求种类，`ConfigureSettings` 只收控制台层级是 `daily` 或 `advanced`、并且可设的键，别的都拒成 `channel_request_refused`；
@@ -249,7 +256,7 @@ v0.12.38 起读帧的账本查找由读者池在写线程外回答，#422 RA-1�
 照旧），说 0.12 协议（`runtime-client` 修订 8、账本修订 8）：
 
 ```
-rev = "803fdfa3c382edafc7547f48d55ff7c662774383"
+rev = "2eaf9b7e8456427d4407e73f807c9085771f2dec"
 ```
 
 六个 crate（contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
@@ -440,7 +447,7 @@ acui --help
 MuMu 原生（Nemu IPC）；截图：ADB 截图，模拟器还有 DroidCast 和 MuMu 原生，真机还有 scrcpy），旁边写值的来源（配置文件，
 或在线设置及其时间、入口）和这台最近一次自检的结果。按「应用」后，这台空闲时立刻切换（最多等 3 秒，即契约的
 `CONNECTION_PREPARATION_CLAIM_WAIT_MS`）：用新后端重连并自检，监控台等回执最长约 138 秒（契约的 `BACKEND_SWITCH_WAIT_MS`，
-钉住的 v0.12.59 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
+钉住的 v0.12.60 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
 先问触控一起改成哪个，再两项一起发。在线设置的值有「恢复为文件值」，这也是一次切换（单清一项可能拆散这一对时两项一起清）；
 文件值和在线值相同时设备不动，结果行只写已恢复为文件值。结果在顶栏下面单独一行，带实例；拒绝照原因写人话：这台正忙（忙什么）、
 你正在玩、被围栏、没开，或新后端没打开（以及为什么，比如 MuMu 原生触控时这台没装配置的游戏包；v0.12.40 起游戏没在跑不再是原因，只有回退到 v0.12.39 或更早的 Runtime 还这样说）、原来的已换回或也
@@ -879,7 +886,8 @@ Runtime v0.12.53 起），调度器派的运行是「关闭这个任务」（UI-
   （`instance add`，Runtime INST-5）后给刚加进来的实例挂的暂停，它和这个模块那些 `lab-…` 暂停不一样，
   没有哪次操作会自己解除它；二是 `policy_settlement_facts_skipped`，Runtime 启动时给记不下结算事实的实例
   挂的暂停（Runtime ISO-START-1）。到 0.12.51 为止的 Runtime 发行版都不会加这两种
-  暂停，0.12.52 起才有，钉住的 0.12.59 两种都有。
+  暂停，0.12.52 起才有，钉住的 0.12.60 两种都有；0.12.60 起，Runtime 启动时也会给声明了 `start_paused` 的条目挂
+  `instance.added`（#453 S2）。
   还在排空或交还设备的实例暂停也不给按钮，
   Runtime 这时会拒绝恢复。每一行都照原样显示暂停的理由，不管操作方写的是什么。
 
