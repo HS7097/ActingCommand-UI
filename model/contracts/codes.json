@@ -564,7 +564,7 @@
         "value": {"type": "token", "required": false},
         "rule_id": {"type": "token", "required": true}
       },
-      "description": "acmodel bindings check|apply (#466 W4a): the rule rule_id of schedule.json (path) declares itself maintenance (\"maintenance\": true), and a fixed value is bound to it by a value binding (entry, its pointer in bindings.json; value, the value of exports.json), which apply would write, or registered on it by a hand entry (entry, /hand/<index>; no value). The Runtime's reader of schedule.json refuses a fixed value on a rule that declares itself maintenance, held or not (its standard-pack-schedule, the reader's table, and The fixed value: a maintenance rule is never judged, and only a judged rule's benefit reads a fixed value), and then the whole file. So check reports it, and apply refuses it and writes nothing. The resource side decides: the rule is a business rule (remove the declaration), or it has no value (remove the binding or the hand entry, and the value). The error's ref is the maintenance member."
+      "description": "acmodel bindings check|apply (#466 W4a): the rule rule_id of schedule.json (path) declares itself maintenance (\"maintenance\": true), and a fixed value is bound to it by a value binding (entry, its pointer in bindings.json; value, the value of exports.json), which apply would write, or registered on it by a hand entry (entry, /hand/<index>; no value). The Runtime's reader of schedule.json refuses a fixed value on a rule that declares itself maintenance, held or not (its standard-pack-schedule, the reader's table, and The fixed value: a maintenance rule is never judged, and only a judged rule's benefit reads a fixed value), and then the whole file. So check reports it, and apply refuses it and writes nothing. The resource side decides: the rule is a business rule (remove the declaration), or it has no value (remove the binding or the hand entry, and the value). A fixed value on a rule whose package is maintenance-role (by the game root's maintenance.json, pages.json, interrupts.json and navigation.json) the Runtime's composer refuses too; the tool does not read a package's role, and that case is left to the composer's own check (actinglab standard-pack check) and the resource repository's (contracts/formats.md, What the tool guarantees, and what it leaves to the composer). The error's ref is the maintenance member."
     },
     "fixed_value_beside_pending_product": {
       "category": "error",
@@ -632,6 +632,33 @@
       },
       "description": "acmodel bindings check|apply (#466 W4a): the hand entry entry (its pointer in bindings.json, path) registers the fixed value of the rule rule_id of schedule.json as written by hand, and the value binding binding (its pointer) ties the same rule's fixed value to the value value of exports.json. A rule's fixed value is the model's or a person's, never both: a rule is named once among the value bindings and the hand entries. Remove the hand entry (the model writes the value) or the binding (a person does). It is no model_id_duplicate, which says that an id or a literal is declared twice. Nothing further is checked and nothing is written. The error's ref is the hand entry."
     },
+    "hand_also_fixed": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "entry": {"type": "token", "required": true},
+        "rule_id": {"type": "token", "required": true},
+        "fixed_entry": {"type": "token", "required": true}
+      },
+      "description": "acmodel bindings check|apply (#466 W4a fix1): the hand entry entry (its pointer in bindings.json, path) registers the fixed value of the rule rule_id of schedule.json as written by hand, and the fixed entry fixed_entry (its pointer) lists the same literal, that rule's /fixed_value_milli, as a literal that is no quantity. One number is registered twice, with two reasons: a rule's fixed value is a person's value (a hand entry, with its status and ref) or the model's (a value binding), and is a quantity. Remove the fixed entry. It is no hand_also_bound (a value binding's) and no model_id_duplicate (which says that a binding and a fixed entry name one literal). Nothing further is checked and nothing is written. The error's ref is the hand entry."
+    },
+    "hand_also_threshold": {
+      "category": "error",
+      "exit": 1,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "entry": {"type": "token", "required": true},
+        "rule_id": {"type": "token", "required": true},
+        "binding": {"type": "token", "required": true},
+        "threshold": {"type": "token", "required": true}
+      },
+      "description": "acmodel bindings check|apply (#466 W4a fix1): the hand entry entry (its pointer in bindings.json, path) registers the fixed value of the rule rule_id of schedule.json as written by hand, and the threshold binding binding (its pointer) ties the same literal, that rule's /fixed_value_milli, to the threshold threshold of exports.json. apply would write the threshold's number into a value a person wrote, which it never does. Remove the threshold binding (a person keeps the value), or remove the hand entry and bind the rule to a value of exports.json (the model writes it). It is no hand_also_bound, whose binding is a value binding, and no model_id_duplicate. Nothing further is checked and nothing is written. The error's ref is the hand entry."
+    },
     "hand_duplicate": {
       "category": "error",
       "exit": 1,
@@ -668,6 +695,19 @@
         "rule_id": {"type": "token", "required": true}
       },
       "description": "acmodel bindings check|apply (#466 W4a): the rule rule_id of schedule.json (path), which the hand entry entry (its pointer in bindings.json) names, writes no fixed_value_milli. A hand entry registers a value a person wrote on the rule; the tool never writes it. Write the value on the rule, or remove the entry. No rule of that id, or a fixed_value_milli that holds no integer, is binding_mismatch literal_missing, as for a value binding. Nothing is written. The error's ref is the rule."
+    },
+    "hand_value_out_of_range": {
+      "category": "error",
+      "exit": 6,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "entry": {"type": "token", "required": true},
+        "rule_id": {"type": "token", "required": true},
+        "found": {"type": "token", "required": true}
+      },
+      "description": "acmodel bindings check|apply (#466 W4a fix1): the rule rule_id of schedule.json (path), whose fixed value the hand entry entry (its pointer in bindings.json) registers as written by hand, writes fixed_value_milli found, outside 1..2^53 - 1. The Runtime's catalog compiler refuses such a value (limit_exceeded; its scheduling/README.md, Fixed values written in the pack: a value of 0 is no value; validate_fixed_value), so check reports it and apply refuses it and writes nothing, on a held package's rule too, as a value binding's number below 1 is value_not_positive. A value above 2^53 - 1 the strict reader refuses before (model_file_invalid, integer_out_of_range), so found is 0 or below. Write a value of at least 1 (a placeholder is 1), or remove the value and the hand entry. The error's ref is the member."
     },
     "held_fixed_value_beside_pending_product": {
       "category": "warning",
@@ -1560,7 +1600,7 @@
         "path": {"type": "path", "required": true},
         "members": {"type": "list:token", "required": true}
       },
-      "description": "acmodel bindings check (a warning; #466 W3): out/valuations.json (path) was not written from the current inputs: members lists what differs, of the model's versions (rules, data, tool), the bytes of out/prices.json (prices; also when it is gone), the bytes of exports.json (exports: the acceptances a price rests on are there; fix1), the bytes of bindings.json (bindings), and the scale Q a valuation read of its pool, which schedule.json no longer holds (scale). The check compares each bound W with the one computed now, never with the file; export valuations brings the file up to date."
+      "description": "acmodel bindings check (a warning; #466 W3): out/valuations.json (path) was not written from the current inputs: members lists what differs, of the model's versions (rules, data, tool), the bytes of out/prices.json (prices; also when it is gone), the bytes of exports.json (exports: the acceptances a price rests on are there; fix1), the valuation bindings of bindings.json, each by its pointer, all the export reads of that file (bindings; #466 W4a fix1: a hand entry, a threshold or value binding, a fixed entry or a note elsewhere in it changes nothing), and the scale Q a valuation read of its pool, which schedule.json no longer holds (scale). The check compares each bound W with the one computed now, never with the file; export valuations brings the file up to date."
     },
     "value_consumes_mismatch": {
       "category": "error",

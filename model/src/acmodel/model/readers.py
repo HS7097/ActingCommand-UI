@@ -904,8 +904,9 @@ VALUES = Format(
     }),
 )
 # #466 W3: `out/valuations.json`, which `export valuations` writes and `bindings check` reads back to tell whether it is
-# current: the versions of the model, the sha256 of the bytes of the prices.json, the exports.json (fix1) and the
-# bindings.json it was computed from, and each valuation's pool and the scale Q it read there. The rest is only passed on.
+# current: the versions of the model, the sha256 of the bytes of the prices.json and the exports.json (fix1) it was
+# computed from, the sha256 of the valuation bindings of bindings.json alone (`valuations_sha256`, #466 W4a fix1), and
+# each valuation's pool and the scale Q it read there. The rest is only passed on.
 VALUATIONS = Format(
     "acmodel.valuations.v1",
     "acmodel.valuations.v1",
@@ -915,7 +916,7 @@ VALUATIONS = Format(
         "versions": MODEL_VERSIONS,
         "prices": Object({"file": TEXT, "sha256": SHA256, "versions": MODEL_VERSIONS}),
         "exports": Object({"file": TEXT, "sha256": SHA256}),
-        "bindings": Object({"file": TEXT, "sha256": SHA256}),
+        "bindings": Object({"file": TEXT, "valuations_sha256": SHA256}),
         "schedule": Object({"file": TEXT}),
         "unit_milli": Integer(1, MAX),
         "precision_bound": TEXT,

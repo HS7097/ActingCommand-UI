@@ -143,8 +143,9 @@ def delivered(folder: Path) -> dict[str, Any]:
 def test_export_valuations_writes_w_into_its_own_file_and_values_json_keeps_every_byte(tmp_path, acmodel):
     """pool.b: 100 milli × Q 1000 = 100000, confirmed. pool.c: 50 × 10 = 500, provisional on its price's acceptance.
     pool.d's price is pending, so that valuation is pending with why. The valuations go into out/valuations.json, of its
-    own format, which records the sha256 of prices.json, exports.json (fix1) and bindings.json; out/values.json, written
-    before, keeps every byte, and schedule.json too (an export writes no schedule)."""
+    own format, which records the sha256 of prices.json and exports.json (fix1), and of the valuation bindings of
+    bindings.json, each by its pointer (#466 W4a fix1); out/values.json, written before, keeps every byte, and
+    schedule.json too (an export writes no schedule)."""
     folder = values_repo(tmp_path, [DAY_RUN])
     (folder / "schedule.json").write_bytes(schedule(pool("pool.b", 1000, 1), pool("pool.c", 10, 1), pool("pool.d", 1, 1)))
     bind(folder, ("pool.b", "pool.b", "half_even"), ("pool.c", "pool.c", "floor"), ("pool.d", "pool.d", "ceil"))
@@ -165,6 +166,7 @@ def test_export_valuations_writes_w_into_its_own_file_and_values_json_keeps_ever
     )
     raw = (out / "valuations.json").read_bytes()
     written = delivered(folder)
+    bound = json.loads((base(folder) / "bindings.json").read_text(encoding="utf-8"))["bindings"]
     assert raw == (json.dumps(written, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
     assert {key: value for key, value in written.items() if key not in ("valuations", "counts")} == {
         "schema_version": "acmodel.valuations.v1",
@@ -172,7 +174,9 @@ def test_export_valuations_writes_w_into_its_own_file_and_values_json_keeps_ever
         "versions": model_versions(base(folder)),
         "prices": {"file": "out/prices.json", "sha256": sha(out / "prices.json"), "versions": model_versions(base(folder))},
         "exports": {"file": "exports.json", "sha256": sha(base(folder) / "exports.json")},
-        "bindings": {"file": "bindings.json", "sha256": sha(base(folder) / "bindings.json")},
+        "bindings": {"file": "bindings.json", "valuations_sha256": doc_sha256(
+            [[f"/bindings/{index}", binding] for index, binding in enumerate(bound)]
+        )},
         "schedule": {"file": "schedule.json"},
         "unit_milli": 1000,
         "precision_bound": "1/200",
@@ -731,9 +735,13 @@ def test_a_pending_price_refuses_the_whole_apply(tmp_path, acmodel):
 
 def test_check_says_whether_out_valuations_json_is_current(tmp_path, acmodel):
     """valuations.json records the bytes of exports.json too (fix1), where the acceptances a price rests on are: an
-    edited exports.json makes the file stale (`exports`), and an edited bindings.json too (`bindings`)."""
+    edited exports.json makes the file stale (`exports`). Of bindings.json it records the valuation bindings alone, each
+    by its pointer (#466 W4a fix1), all the export reads of it: a note of the file and a hand entry leave it current
+    (`exports` stays, from the first edit), and the valuation's own `round` makes it stale (`bindings`). pool.b's W is
+    10 × 100 = 1000 exactly, whichever the rounding, so the check passes throughout."""
     folder = values_repo(tmp_path, [DAY_RUN])
-    (folder / "schedule.json").write_bytes(schedule(pool("pool.b", 10, 1000, origin='"model"')))
+    hand_rule = '{"id":"rule.h","package_id":"pkg.h","fixed_value_milli":500,"priority":3}'
+    (folder / "schedule.json").write_bytes(schedule(pool("pool.b", 10, 1000, origin='"model"'), rules=(hand_rule,)))
     bind(folder, ("pool.b", "pool.b", "half_even"))
     assert export_valuations(acmodel, folder)[0] == 0
     path = str(base(folder) / "out" / "valuations.json")
@@ -743,11 +751,25 @@ def test_check_says_whether_out_valuations_json_is_current(tmp_path, acmodel):
     assert (status, doc["warnings"]) == (0, [])
     assert doc["data"]["valuations"] == {"file": path, "current": True, "stale": []}
 
-    for edited, stale in (("exports.json", ["exports"]), ("bindings.json", ["exports", "bindings"])):
-        edit(base(folder) / edited, lambda doc: doc.update(note="edited"))
+    def note(doc: dict[str, Any]) -> None:
+        doc.update(note="edited")
+
+    def by_hand(doc: dict[str, Any]) -> None:
+        doc.update(hand=[{"rule_id": "rule.h", "status": "written by hand", "ref": "R-7"}])
+
+    def rounding(doc: dict[str, Any]) -> None:
+        doc["bindings"][0].update(round="floor")
+
+    for edited, change, stale in (
+        ("exports.json", note, ["exports"]),
+        ("bindings.json", note, ["exports"]),
+        ("bindings.json", by_hand, ["exports"]),
+        ("bindings.json", rounding, ["exports", "bindings"]),
+    ):
+        edit(base(folder) / edited, change)
         status, doc = bindings(acmodel, folder, "check")
 
-        assert status == 0
+        assert (status, doc["errors"]) == (0, [])
         assert doc["data"]["valuations"] == {"file": path, "current": False, "stale": stale}
         assert doc["warnings"] == [{"code": "valuations_stale", "detail": {"path": path, "members": stale}}]
 

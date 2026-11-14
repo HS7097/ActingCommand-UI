@@ -2233,7 +2233,7 @@ its entry below without `provenance`; `acceptances` when it rests on one). Then 
 | `model_id`, `versions` | as in a provenance document |
 | `prices` | the prices it weighed in: `file` (`out/prices.json`), `sha256` of its bytes, and its `versions` |
 | `exports` | `file` (`exports.json`) and the `sha256` of its bytes (fix1): the acceptances a provisional price rests on are there, as for `out/values.json` |
-| `bindings` | `file` (`bindings.json`) and the `sha256` of its bytes: the valuations are bound there |
+| `bindings` | `file` (`bindings.json`) and `valuations_sha256` (#466 W4a fix1): the sha256 of the canonical JSON (sorted keys, no whitespace, UTF-8) of the list of `[pointer, binding]` of each valuation binding, in the file's order, its pointer in `bindings.json` (`/bindings/<index>`, which its provenance file names) and the binding as written. It is all the export reads of that file, so a hand entry, a threshold or value binding, a fixed entry or a note elsewhere in it changes nothing of it; a valuation binding's own change, one more or one fewer, or its place does |
 | `schedule` | `file` (`schedule.json`, relative to the repository); the scale each valuation read is in its entry |
 | `unit_milli` | κ, as prices.json has it |
 | `precision_bound` | the precision bound, `1/200` |
@@ -2285,8 +2285,13 @@ fixed value that a person wrote, with its status and its reference: the tool che
 - **One rule** (#466 W4a) is named once among the value bindings and the hand entries: a hand entry whose rule a value
   binding names is `hand_also_bound` (exit 1, `binding` and `value` the binding's pointer and value, at the hand entry),
   and a second hand entry of one rule `hand_duplicate` (exit 1, `first_entry`, at the second). A fixed value is the
-  model's or a person's, never both. Neither is `model_id_duplicate`, which says that an id or a literal is declared
-  twice. Each is found before any file of the repository is read, as a reference is.
+  model's or a person's, never both. A hand entry's literal, its rule's `/fixed_value_milli`, is no other entry's
+  either (fix1): a threshold binding of it is `hand_also_threshold` (exit 1, `binding` and `threshold` the binding's
+  pointer and threshold, at the hand entry: `apply` would write the threshold's number into a value a person wrote), and
+  a fixed entry of it `hand_also_fixed` (exit 1, `fixed_entry` its pointer, at the hand entry: one number registered
+  twice). Each that holds is reported. None is `model_id_duplicate`, which says that an id or a literal is declared
+  twice (a binding and a fixed entry of one literal are that). Each is found before any file of the repository is read,
+  as a reference is.
 - **A threshold** that `exports.json` does not list is `rule_reference_missing` (`expected` `threshold`), and so is a
   value its `values` do not list (`expected` `value`).
 
@@ -2354,8 +2359,9 @@ wrote it (the Runtime's `standard-pack-schedule` reads both; only Provenance rea
     member), which `apply` refuses and never rewrites.
   The mark has no origin member: the Runtime's contract gives it none.
 - **What the Runtime refuses beside the value** (#466 W4a): `"maintenance": true`, `"realization": true` and a
-  `produces` entry on a pool with a valuation block or the pending marker refuse `check` and `apply`, one code each, or
-  warn on a held rule ("Fixed values the Runtime refuses").
+  `produces` entry on a pool with a valuation block or the pending marker refuse `check` and `apply`, one code each. On
+  a held rule the last three (the realization mark, a valuation block, the pending marker) are warnings; `"maintenance":
+  true` stays an error, held or not ("Fixed values the Runtime refuses").
 - **Inserting.** A member the rule lacks is inserted right after another: `fixed_value_milli` after `package_id`,
   `fixed_value_origin` after `fixed_value_milli`, `limited` after `fixed_value_origin` (consecutive absent members after
   one present member go in at once, in that order). Each is written in the
@@ -2414,6 +2420,11 @@ hand entry is there, and for each:
   `hand_value_missing` (exit 6, at the rule): a hand entry registers a value, the tool never writes one. A `rule_id` that
   names no rule, or a member that holds no integer, is `binding_mismatch` `literal_missing` (at `/rules`, or `found` its
   JSON type at the member), as for a value binding.
+- **The value is one the Runtime compiles** (fix1): in 1..2<sup>53</sup> − 1 (the Runtime's `scheduling/README.md`,
+  "Fixed values written in the pack": a value of 0 is no value; its compiler refuses any other, `limit_exceeded`).
+  Otherwise it is `hand_value_out_of_range` (exit 6, `found` the value, at the member), on a held package's rule too, as
+  a value binding's number below 1 is `value_not_positive`. A literal above 2<sup>53</sup> − 1 the strict reader refuses
+  before (`model_file_invalid`, `integer_out_of_range`), so what this code reports is 0 or below.
 - **No origin.** A value written by hand carries no `fixed_value_origin` (the Runtime reads that as the pack's).
   `"model"` is `hand_origin_model` (exit 6, at the member): only the model's export writes `model`, and then a value
   binding names the rule, not a hand entry. Any other origin is `origin_invalid` (`found`, without `value`), which the
@@ -2429,7 +2440,8 @@ hand entry is there, and for each:
 
 A fixed value that a value binding binds (whether the rule holds one yet or `apply` would insert it) or a hand entry
 registers must be one the Runtime takes. The Runtime refuses it beside three members of its rule, so `check` reports each
-and `apply` refuses each, writing nothing: no file the tool writes is one the Runtime refuses. Each situation is one code,
+and `apply` refuses each, writing nothing (what the tool guarantees, and the one case it leaves to the Runtime's composer,
+are below: "What the tool guarantees, and what it leaves to the composer"). Each situation is one code,
 with `path`, `entry` (the binding's or the hand entry's pointer), `value` (a value binding's) and `rule_id`, at the member:
 - **`"maintenance": true`**: `fixed_value_beside_maintenance` (exit 6, at `maintenance`). The Runtime's reader of
   `schedule.json` refuses a fixed value on a rule that declares itself maintenance (its `standard-pack-schedule`, the
@@ -2450,6 +2462,46 @@ on such a rule the last three are the warnings `held_fixed_value_beside_realizat
 `held_fixed_value_beside_priced_product` and `held_fixed_value_beside_pending_product` (exit 0, the same values), each the
 error once the hold is lifted; `apply` writes. The reader reads every rule, so `fixed_value_beside_maintenance` stays an
 error on a held one. The tool reads no instance and no server: a rule whose package is not held counts as composed.
+
+### What the tool guarantees, and what it leaves to the composer (#466 W4a fix1)
+
+The tool reads `schedule.json` member by member: the literals the entries name and the members beside them, the
+origins, `requires` and `held`, and under `--strict` or `--strict-values` the literals and fixed values they scan. It does
+not compose. What `check` passes, and what `apply` writes, holds this, each as the sections above say:
+- **The numbers.** A bound threshold's literal is its exported value or offset, where its form may sit. A bound value is
+  the number `export values` computes from the same run and the current prices, at least 1. A bound W is the number
+  `export valuations` computes from the pool's own scale Q, of a price not below 0, above 0 when the price is, and at
+  most 1,000,000. One that is refused or pending is never written. A value written by hand is an integer in
+  1..2<sup>53</sup> − 1, and the tool never writes it.
+- **Who wrote them.** A bound value or W stands beside the origin `"model"`, inserted when absent; another origin is
+  refused and never rewritten; no `"model"` origin of `schedule.json` is left without its binding; a value written by
+  hand carries none. Each rule's fixed value is named once: by a value binding or by a hand entry, and a hand entry's by
+  no threshold binding and no fixed entry.
+- **What the Runtime reads them under.** `requires` holds `benefit_fixed_value` whenever a value or a valuation is bound
+  or a hand entry is there (the tool never adds it); a bound value's rule `consumes` exactly its `cost_paid_by_pool`;
+  its limited mark is `true` or absent, and written where the model counts the value as limited on a consumer.
+- **The bytes.** Only the bound literals and the inserted members change, each insertion in the file's own style
+  (`insert_style_unknown` otherwise, and nothing is guessed); the edited bytes read back as the document the edits make,
+  and a file another writer changed meanwhile is not written.
+- **The conflicts above.** No bound or hand-written fixed value stands beside `"maintenance": true`, `"realization":
+  true` or a `produces` entry on a pool with a valuation block or the pending marker (on a held rule the last three are
+  warnings, since the Runtime does not compose it yet).
+
+**One case the tool does not read: a fixed value on a rule whose package is maintenance-role.** The Runtime's composer
+judges a rule's benefit only when the rule does not declare itself maintenance and its package is not maintenance-role
+(`judged`), and when a rule it does not judge writes `fixed_value_milli` it refuses the whole schedule
+(`schedule_invalid`, at that rule's `fixed_value_milli`; `read_game`), a held rule too, since it reads the file before it
+leaves the held rules out. Which packages are maintenance-role it derives from the game root's own files
+(`standard_pack_maintenance_packages`): the entries of `maintenance.json` (the bundle's `maintenance[]` is built from
+it), the `features` of `pages.json`, the handlers and `then.run` packages of `interrupts.json`, and the edges and the
+recovery chain of `navigation.json`. The tool reads none of them, on purpose: reading a package's role again would make a
+second copy of the composer's rule, and the two would sooner or later disagree. This case is checked where the composer
+itself runs: a schedule that enters a resource repository passes `actinglab standard-pack check`, which calls the
+composer (the one function the Runtime's scheduler workbench, check-config and `actinglab standard-pack check|compose`
+all call), and
+the resource repository's static check (#466 W4b) checks it once more. A rule that declares `"maintenance": true` itself
+is the tool's (`fixed_value_beside_maintenance`, above). Whether `schedule.json` is valid as a whole stays the
+validator's ("Reading the files").
 
 ### Reading the files
 
@@ -2554,9 +2606,10 @@ says `greater_than_or_equal`).
     null without the file. A file of another model is `value_invalid` at `/model_id`;
   - `valuations` (#466 W3): whether `out/valuations.json` is of the current inputs, `{file, current, stale}`: `stale`
     lists what differs of the model's versions (`rules`, `data`, `tool`), the bytes of `out/prices.json` (`prices`), of
-    exports.json (`exports`, fix1: an acceptance a price rests on withdrawn or changed) and of `bindings.json`
-    (`bindings`), and `scale` when a pool no longer holds the scale a valuation read; not current is the warning
-    `valuations_stale` (it never changes the exit status); null without the file.
+    exports.json (`exports`, fix1: an acceptance a price rests on withdrawn or changed), the valuation bindings of
+    `bindings.json` (`bindings`, by the file's `valuations_sha256`; #466 W4a fix1: the rest of that file does not count),
+    and `scale` when a pool no longer holds the scale a valuation read; not current is the warning `valuations_stale` (it
+    never changes the exit status); null without the file.
 - **The provenance classes** of `acmodel check` (warnings, or errors under `check --strict-provenance`) are not
   read here: `--strict` concerns the literals of the schedule only.
 

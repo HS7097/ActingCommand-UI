@@ -191,11 +191,15 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   `"model"` that no binding names is refused (`origin_unbound`), and `data.values` and `data.valuations` say whether
   `out/values.json` and `out/valuations.json` are current. A `hand` entry records a fixed value a person wrote, with its
   `status` and `ref` (texts the tool stores and never reads): a rule is named once among the value bindings and the hand
-  entries, and a hand entry's rule writes a value and no origin. A bound or hand-written fixed value the Runtime refuses
-  beside its rule's `"maintenance": true`, `"realization": true` or a `produces` entry on a pool with a valuation block or
-  the pending marker is an error, one code each (a warning on a held package's rule, which the Runtime does not compose
-  yet). With `--strict-values`, apart from `--strict`, every rule that writes `fixed_value_milli` must be named by a
-  value binding or a hand entry (`fixed_value_unregistered`).
+  entries, a hand entry's value by no threshold binding or fixed entry either, and a hand entry's rule writes a value in
+  1..2^53 − 1 and no origin. A bound or hand-written fixed value the Runtime refuses beside its rule's
+  `"maintenance": true`, `"realization": true` or a `produces` entry on a pool with a valuation block or the pending
+  marker is an error, one code each; on a held package's rule, which the Runtime does not compose yet, the last three are
+  warnings, and `"maintenance": true` stays an error (the Runtime's reader reads every rule). The tool does not read a
+  package's role: a fixed value on a rule of a maintenance-role package, which the Runtime's composer refuses too, is
+  left to `actinglab standard-pack check` and the resource repository's own check (`contracts/formats.md`, "What the
+  tool guarantees, and what it leaves to the composer"). With `--strict-values`, apart from `--strict`, every rule that
+  writes `fixed_value_milli` must be named by a value binding or a hand entry (`fixed_value_unregistered`).
 - **`bindings apply`** writes the bound literals that differ, and changes only their bytes: line ends
   (CRLF files stay CRLF) and formatting are kept. For a value it writes the origin `"model"` too when the rule has none,
   and the limited mark where the model holds it on a consumer; for a valuation W and the pool's origin; it inserts a

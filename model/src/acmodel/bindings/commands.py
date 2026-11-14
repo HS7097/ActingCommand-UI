@@ -49,17 +49,22 @@ export writes `model`.
 
 **Values written by hand** (#466 W4a). A `hand` entry of bindings.json names a rule whose fixed value a person wrote, with
 its `status` and `ref` (opaque texts, never read). A rule is named once among the value bindings and the hand entries
-(`hand_also_bound`, `hand_duplicate`); a hand entry's rule writes a `fixed_value_milli` (`hand_value_missing`) and no
-origin (`hand_origin_model` for `"model"`, `origin_invalid` for any other). With `--strict-values`, `check` refuses every
-rule of schedule.json that writes `fixed_value_milli` and that no value binding and no hand entry names
-(`fixed_value_unregistered`).
+(`hand_also_bound`, `hand_duplicate`), and a hand entry's fixed value is no threshold binding's literal
+(`hand_also_threshold`: `apply` would write the threshold into it) and no fixed entry's (`hand_also_fixed`; fix1); a
+hand entry's rule writes a `fixed_value_milli` (`hand_value_missing`) in 1..2^53 - 1, which the Runtime's compiler takes
+(`hand_value_out_of_range`; fix1), and no origin (`hand_origin_model` for `"model"`, `origin_invalid` for any other).
+With `--strict-values`, `check` refuses every rule of schedule.json that writes `fixed_value_milli` and that no value
+binding and no hand entry names (`fixed_value_unregistered`).
 
 **Fixed values the Runtime refuses** (#466 W4a; the Runtime's `contracts/scheduling/README.md`, "Fixed values written in
 the pack", and `crates/policy/src/validation.rs` `validate_fixed_value`): a rule of a value binding or a hand entry whose
-fixed value stands beside `"realization": true`, beside a `produces` entry on a pool whose `valuation` is a block or the
-pending marker (`fixed_value_conflict` there), or beside `"maintenance": true` (the reader's `schedule_invalid`) is an
-error, one code each, which `apply` refuses. The composer leaves a held package's rules out of the catalog, so for such a
-rule the first three are warnings (`held_…`), refused once the hold is lifted.
+fixed value stands beside `"maintenance": true` (the reader's `schedule_invalid`, held or not), beside
+`"realization": true` or beside a `produces` entry on a pool whose `valuation` is a block or the pending marker
+(`fixed_value_conflict` there) is an error, one code each, which `apply` refuses. The composer leaves a held package's
+rules out of the catalog, so for such a rule the last three are warnings (`held_…`), refused once the hold is lifted.
+The tool reads no package's role: a fixed value on a rule of a maintenance-role package, which the composer refuses too,
+is caught where the composer runs (`actinglab standard-pack check`) and by the resource repository's own check (W4b;
+contracts/formats.md, "What the tool guarantees, and what it leaves to the composer").
 
 `check` compares every bound literal with its threshold or value (`binding_mismatch`), and with `--strict` refuses
 every integer literal of a `fact` or `resource_projection` predicate of a `schedule.json` rule, and every
@@ -121,9 +126,12 @@ from acmodel.codes import (
     FIXED_VALUE_BESIDE_REALIZATION,
     FIXED_VALUE_UNREGISTERED,
     HAND_ALSO_BOUND,
+    HAND_ALSO_FIXED,
+    HAND_ALSO_THRESHOLD,
     HAND_DUPLICATE,
     HAND_ORIGIN_MODEL,
     HAND_VALUE_MISSING,
+    HAND_VALUE_OUT_OF_RANGE,
     HELD_FIXED_VALUE_BESIDE_PENDING_PRODUCT,
     HELD_FIXED_VALUE_BESIDE_PRICED_PRODUCT,
     HELD_FIXED_VALUE_BESIDE_REALIZATION,
@@ -153,7 +161,7 @@ from acmodel.export import valuations as valuation_export
 from acmodel.export import values as value_export
 from acmodel.export.thresholds import threshold_entry
 from acmodel.model import read_bindings, read_prices, read_valuations, read_values
-from acmodel.model.jsonfile import read, refusal
+from acmodel.model.jsonfile import MAX_SAFE_INTEGER, read, refusal
 from acmodel.model.readers import SCHEDULE_FILE, VALUE_PATH
 from acmodel.model.shape import json_type
 
@@ -195,27 +203,47 @@ def _hand_entries(bindings: File) -> Iterator[tuple[str, dict[str, Any]]]:
         yield at("", HAND, index), entry
 
 
+def _fixed_value_literal(entry: dict[str, Any]) -> bool:
+    """Whether a threshold binding or a fixed entry names a rule's fixed value: `schedule.json`, a `rule_id`, and the
+    pointer `/fixed_value_milli` (a value binding always does; a valuation binding names a pool)."""
+    return entry["file"] == SCHEDULE_FILE and "rule_id" in entry and entry["path"] == VALUE_PATH
+
+
 def _hand_references(bindings: File) -> list[dict[str, Any]]:
-    """#466 W4a: a rule is named once among the value bindings and the hand entries. A hand entry whose rule a value
-    binding names is `hand_also_bound` (the value is the model's or a person's, not both); a second hand entry of one rule
-    is `hand_duplicate`. Each at the hand entry; neither is `model_id_duplicate`, which says that an id or a literal is
-    declared twice."""
+    """#466 W4a: a rule's fixed value is named once in bindings.json. A hand entry whose rule a value binding names is
+    `hand_also_bound` (the value is the model's or a person's, not both); one whose rule's `/fixed_value_milli` a
+    threshold binding names is `hand_also_threshold` (fix1: `apply` would write the threshold's number into a value a
+    person wrote), and one whose rule's `/fixed_value_milli` a fixed entry names `hand_also_fixed` (fix1: one number
+    registered twice, as a person's value and as no quantity); a second hand entry of one rule is `hand_duplicate`. Each
+    is one reason, at the hand entry, and each that holds is reported; none is `model_id_duplicate`, which says that an
+    id or a literal is declared twice (two of the bindings and fixed entries that name one literal are that)."""
     bound: dict[str, tuple[str, str]] = {}
+    thresholds: dict[str, tuple[str, str]] = {}
+    fixed: dict[str, str] = {}
     for index, entry in enumerate(bindings.doc["bindings"]):
         if "value" in entry:
             bound.setdefault(entry["rule_id"], (at("", "bindings", index), entry["value"]))
+        elif "threshold" in entry and _fixed_value_literal(entry):
+            thresholds.setdefault(entry["rule_id"], (at("", "bindings", index), entry["threshold"]))
+    for index, entry in enumerate(bindings.doc["fixed"]):
+        if _fixed_value_literal(entry):
+            fixed.setdefault(entry["rule_id"], at("", "fixed", index))
     errors, seen = [], {}
     for ref, entry in _hand_entries(bindings):
         rule_id = entry["rule_id"]
+        named = {"path": bindings.path, "entry": ref, "rule_id": rule_id}
         if rule_id in seen:
-            detail = {"path": bindings.path, "entry": ref, "rule_id": rule_id, "first_entry": seen[rule_id]}
-            errors.append(error(HAND_DUPLICATE, detail, ref))
+            errors.append(error(HAND_DUPLICATE, {**named, "first_entry": seen[rule_id]}, ref))
             continue
         seen[rule_id] = ref
         if rule_id in bound:
             binding, value = bound[rule_id]
-            detail = {"path": bindings.path, "entry": ref, "rule_id": rule_id, "binding": binding, "value": value}
-            errors.append(error(HAND_ALSO_BOUND, detail, ref))
+            errors.append(error(HAND_ALSO_BOUND, {**named, "binding": binding, "value": value}, ref))
+        if rule_id in thresholds:
+            binding, threshold = thresholds[rule_id]
+            errors.append(error(HAND_ALSO_THRESHOLD, {**named, "binding": binding, "threshold": threshold}, ref))
+        if rule_id in fixed:
+            errors.append(error(HAND_ALSO_FIXED, {**named, "fixed_entry": fixed[rule_id]}, ref))
     return errors
 
 
@@ -772,6 +800,10 @@ def _hand(
     - The rule must be there and hold an integer `fixed_value_milli`: no rule of that id, or a member that holds no
       integer, is `binding_mismatch` `literal_missing`, as for a value binding; a rule without the member is
       `hand_value_missing` (a hand entry registers a value the rule writes; it never writes one).
+    - The value lies in 1..2^53 - 1, the range the Runtime's compiler takes (a value of 0 is no value;
+      `validate_fixed_value`, `limit_exceeded`): `hand_value_out_of_range` otherwise (fix1), at the member, held or not,
+      as a value binding's number below 1 is `value_not_positive`. Above 2^53 - 1 the strict reader refuses the file
+      first (`model_file_invalid`, `integer_out_of_range`), so what reaches here is 0 or below.
     - A value written by hand carries no origin: `"model"` is `hand_origin_model` (only the model's export writes model,
       and then a value binding names the rule), any other origin `origin_invalid` (the Runtime refuses it).
     - What the Runtime refuses beside the value (`_conflicts`), as for a value binding."""
@@ -784,6 +816,8 @@ def _hand(
     if literal.value is MISSING:
         return [error(HAND_VALUE_MISSING, detail, rule_ref)], [], None
     problems = [] if integer(literal.value) else [literal.mismatch("literal_missing", found=json_type(literal.value))]
+    if integer(literal.value) and not 1 <= literal.value <= MAX_SAFE_INTEGER:
+        problems.append(error(HAND_VALUE_OUT_OF_RANGE, {**detail, "found": str(literal.value)}, literal.ref))
     origin = rule.get(ORIGIN, MISSING)
     if origin is not MISSING:
         problems.append(
@@ -980,12 +1014,15 @@ def _values_file(run: Run) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]
     return {"file": str(path), "current": not stale, "stale": stale}, warnings
 
 
-def _valuations_file(run: Run, targets: dict[str, Target]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+def _valuations_file(
+    run: Run, bindings: File, targets: dict[str, Target]
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     """Whether `out/valuations.json` (#466 W3) is of the current inputs: the model's versions (`rules`, `data`, `tool`), the
-    bytes of `out/prices.json` (`prices`), of exports.json (`exports`, whose acceptances a price rests on; fix1) and of
-    bindings.json (`bindings`), and the scale Q each valuation read of its pool, which schedule.json must still hold
-    (`scale`). None when there is no such file; one that is not current is the warning `valuations_stale`, with the members
-    that differ."""
+    bytes of `out/prices.json` (`prices`), of exports.json (`exports`, whose acceptances a price rests on; fix1), the
+    valuation bindings of bindings.json, each by its pointer (`bindings`; #466 W4a fix1: a hand entry, a threshold or value
+    binding, a fixed entry or a note elsewhere in the file leaves it current), and the scale Q each valuation read of its
+    pool, which schedule.json must still hold (`scale`). None when there is no such file; one that is not current is the
+    warning `valuations_stale`, with the members that differ."""
     path = run.folder / valuation_export.VALUATIONS
     if not path.exists():
         return None, []
@@ -1003,7 +1040,7 @@ def _valuations_file(run: Run, targets: dict[str, Target]) -> tuple[dict[str, An
         stale.append("prices")
     if doc["exports"]["sha256"] != value_export.exports_sha(run):
         stale.append("exports")
-    if doc["bindings"]["sha256"] != valuation_export.bindings_sha(run):
+    if doc["bindings"][valuation_export.BOUND_SHA] != valuation_export.bound_sha(valuation_export.bound(bindings.doc)):
         stale.append("bindings")
     schedule = targets.get(SCHEDULE_FILE)
 
@@ -1103,7 +1140,7 @@ def check_bindings(
     _raise(errors, warnings)
     data["coverage"], stale_prices = _coverage(run, repo, targets)
     data["values"], stale_values = _values_file(run)
-    data["valuations"], stale_valuations = _valuations_file(run, targets)
+    data["valuations"], stale_valuations = _valuations_file(run, bindings, targets)
     return data, warnings + stale_prices + stale_values + stale_valuations
 
 
