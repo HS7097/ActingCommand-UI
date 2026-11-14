@@ -30,9 +30,9 @@ and guesses nothing.
   `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. The wizard installs from an
   install set, which is put together apart from this zip (see "Setup wizard acsetup"). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
-  of Runtime v0.12.47; the pin is now v0.12.58.
+  of Runtime v0.12.47; the pin is now v0.12.59.
 - **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 29], `ledger` [3, 8],
-  `runtime-client` [3, 8] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.58: each of
+  `runtime-client` [3, 8] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.59: each of
   them declares a `ledger` maximum within [3, 8] and an `actingd-config` and a `runtime-client` range
   that meet the console's. The ledger of v0.12.55 and later (revision 8) is one way: once such a Runtime has run on
   a state root, no Runtime before v0.12.55 opens it, and a console whose `ledger` range ends at 7 may fail to
@@ -228,7 +228,10 @@ was read and Read Earlier is not offered, moving "Show up to" again or a tab or 
 locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
 reopening, which read without it.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.58
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.59 (`803fdfa3`). Against
+v0.12.58 it raises only `package` to 11; `actingd-config`, `ledger` and `runtime-client` stay, and so do the
+console's ranges; ledger-forensics depends on one more crate, `actingcommand-display-adapter` (which depends
+on the contract only), and `Cargo.lock` lists it. Each note below says from which release
 (#434 LAB-6S1a, v0.12.58: `runtime-client` revision 8 adds an optional `initiator` to `BindChannel`, to
 its answer `ChannelBound` and to every receipt of a connection that declared one, taken only on the `lab`
 channel and never written on `ui`, so this console, which binds `ui` and declares none, sends and reads
@@ -352,7 +355,7 @@ with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 
 v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 8, ledger revision 8):
 
 ```
-rev = "ef94d950a102a595fa0bde974b8d77ad54329b48"
+rev = "803fdfa3c382edafc7547f48d55ff7c662774383"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -629,7 +632,7 @@ or on a handset scrcpy, for capture), with where the value comes from (the confi
 online, when and through which way) and the device's latest self-check. Apply switches that device at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at v0.12.58, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.59, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -661,9 +664,9 @@ front). `--state-root` alone opens none, since the fixed entry passes it on ever
 window's reader stops after the page in hand; opening it again is a new window and a new session. Closing
 the workbench ends the program, except while an unlock runs (see "Launcher").
 
-The main page's right column has two tabs, **Live View** and **Daily Tasks**, before the alias of the
-instance picked on the left; the tab picked stays for the run, across instances and pages, Live View being
-the first. Daily Tasks is that instance's task packages, those the Runtime's switch view lists with a
+The main page's right column has three tabs, **Live View**, **Daily Tasks** and **Goals** (below), before
+the alias of the instance picked on the left; the tab picked stays for the run, across instances and pages,
+Live View being the first. Daily Tasks is that instance's task packages, those the Runtime's switch view lists with a
 switch at the front of their row (see the next paragraph): one row per package, with its name (its
 package id when the game's `ui.json` gives none), "Irreversible" when the Runtime derives it so and
 "Risky" when its `ui.json` entry names a risk word (the word itself is not shown), why it runs or does
@@ -739,6 +742,45 @@ instance data (`_fact_refresh`) is not held by a row that turns a package off; a
 names, which no task of the instance uses any more, is not in the view, so it is neither shown nor
 withdrawn here. Once a package turned off reaches the deferral step, the card and the list say "This task
 is turned off".
+
+**Goals** (#455 T1-C, the first half: read only) is that instance's resource goals, drawn from its
+`ResourceTargetView` alone, the very read the Lab's `targets` answers. Nothing on it can be pressed yet: a
+line at its top says that setting goals here comes in a later version and that the Lab (command line or
+MCP) can set them now. A resource has one row, named by its pool id, the only name it has in this step (no
+title is made up for it, and no package id is shown). The rows go top to bottom: first each resource a goal
+can be set on (the pack gives it both a step, `valuation.scale`, and an importance, `gap.weight_milli`),
+with its current amount and when it was read ("Now 1200 (read hh:mm)") or why there is no usable reading
+("No reading yet", "The reading has expired", "The reading is not reliable enough", "The reading is not a
+valid amount"), and its goal: "No goal set", "Goal: at least 5000, 3800 short", "Goal: at least 5000,
+met" (in the accent: the gap is 0), or "Goal: at least 5000; No reading yet, so how far it is is not known
+yet"; then each resource a goal could only name with numbers of its own, the same with "The pack gives this
+resource no step, so no goal can be set on it here" in grey (the console does not choose a model's
+numbers); then, greyed, each resource no goal can name, with why: "no task produces it" (`unmapped_task`),
+"nothing reads its amount" (`resource_not_observable`), "it is outside this instance's scope"
+(`resource_out_of_scope`), any other reason by its code; then each goal stored on a resource that is not
+offered any more, greyed, with its goal and in amber "No longer offered:" and why, or that the Runtime does
+not list the resource now (such a resource has this row instead of the greyed one). Under the rows: "These
+goals are valid until yyyy-mm-dd hh:mm" (local time; the Runtime's document holds for at most a year), in
+amber "These goals expired at … and no longer count" once it has passed, or "No goals are set for this
+instance". A document an agent wrote in the old form (`actingcommand.resource-targets.v1`) is shown the same
+way with "These goals were written by an agent in the old form; shown read-only here"; one of a newer form
+than `v2` is not interpreted: an amber line says that reading it needs a newer console, each resource a goal
+can name says that whether it has a goal cannot be read here, and the technical log hears of it once; a stored target that
+does not read as an `at_least` target with an id and a resource has a row of its own ("Goal 2 cannot be read
+here"), and the log hears of that once too. Without an active task catalog no resource is listed, and the
+tab says so. The view is read on the switches' terms (the main page of a window that is not minimized, this
+tab, the Runtime online, that instance only): every 60 seconds, 60 after a failure, and at once when the tab,
+the instance or the owner epoch changes or a write lands; the live view and the task list read nothing
+meanwhile. A read that fails shows no rows of an earlier one: it says in red "The goals cannot be read right
+now" with its codes (the host's, the Runtime's, the client's); when the client cannot decode the answer
+(`runtime_receipt_decode_failed`: the view is decoded with strict types inside the receipt, so a shape newer
+than this console's client fails there), it says in red instead "The Runtime's answer cannot be read: most
+likely this goal record or the Runtime is newer than this console, which needs a newer console", with the
+codes too; nothing new for 180 seconds says in amber
+that nothing new of the goals came for a while. A Runtime that does not have the view (it answers
+`not_implemented`, or does not know the request) says so with its code, and the view is not read again until
+the tab is shown anew. Each read takes the policy's locks and the fact write gate a moment, so it is read
+seldom; the technical log's read counts at the end of a run call it `resource target view`.
 
 `--state-root` applies to this run only and overrides `state_root` in the settings file; if neither is
 present the workbench still opens, with a red bar at its top that says in plain words that there is no
@@ -1258,7 +1300,7 @@ through or was stopped.
   module's `instance add` (Runtime INST-5) sets on the instance it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
-  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.58 has
+  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.59 has
   both. An instance
   pause still draining or handing its device back gets none either: the Runtime refuses its resume
   then. Each line shows its pause's reason verbatim, whatever the operator wrote.

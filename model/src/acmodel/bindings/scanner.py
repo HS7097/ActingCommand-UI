@@ -2,8 +2,10 @@
 
 `spans(raw)` gives the byte span of every value of a JSON document by its JSON pointer, so that
 `bindings apply` replaces exactly a literal's bytes: line ends (CRLF files stay CRLF), spacing, key order and
-every other byte stay as they are. It reads only bytes the strict reader (`model.jsonfile.parse`) has already
-accepted, so it trusts the grammar; a document it cannot follow is a defect, raised as `ValueError`.
+every other byte stay as they are. `layout(raw)` gives those spans and, for every member of an object, the span of
+its key, which `bindings apply` needs to insert a member after another (#464 W1, `bindings.splice`). It reads only
+bytes the strict reader (`model.jsonfile.parse`) has already accepted, so it trusts the grammar; a document it
+cannot follow is a defect, raised as `ValueError`.
 """
 
 from __future__ import annotations
@@ -50,6 +52,7 @@ class _Scanner:
         self.raw = raw
         self.pos = 0
         self.spans: dict[str, tuple[int, int]] = {}
+        self.keys: dict[str, tuple[int, int]] = {}  # each object member's key, by the member's pointer
 
     def skip(self) -> None:
         self.pos = _SPACE.match(self.raw, self.pos).end()
@@ -75,14 +78,23 @@ class _Scanner:
         """The pointer of the next member of the open container `frame`; an object's key is read first."""
         if frame[2] == b"]":
             return pointer(frame[0], frame[3])
-        key = json.loads(self.match(_STRING).group().decode("utf-8"))
+        found = self.match(_STRING)
+        key = json.loads(found.group().decode("utf-8"))
         self.step(b":")
-        return pointer(frame[0], key)
+        ref = pointer(frame[0], key)
+        self.keys[ref] = found.span()
+        return ref
 
 
 def spans(raw: bytes) -> dict[str, tuple[int, int]]:
     """The byte span `(start, end)` of every value of the JSON document `raw`, by its JSON pointer (the empty
     pointer for the whole document). It works without recursion, so depth is no limit."""
+    return layout(raw)[0]
+
+
+def layout(raw: bytes) -> tuple[dict[str, tuple[int, int]], dict[str, tuple[int, int]]]:
+    """The byte span of every value of the JSON document `raw` by its JSON pointer (`spans`), and the byte span of the
+    key of every member of an object, by the member's pointer (its quotes included)."""
     scan = _Scanner(raw)
     scan.skip()
     stack: list[list[Any]] = []  # each open container: [its pointer, its first byte, its closing byte, members read]
@@ -113,4 +125,4 @@ def spans(raw: bytes) -> dict[str, tuple[int, int]]:
         else:
             if scan.pos != len(raw):
                 raise ValueError(f"bytes after the document at byte {scan.pos}")
-            return scan.spans
+            return scan.spans, scan.keys

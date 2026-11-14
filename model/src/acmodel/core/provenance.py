@@ -265,6 +265,12 @@ def _tree(run: Run, root: tuple[str, ...], stop: frozenset[str] = frozenset()) -
     return nodes
 
 
+def tree(run: Run, root: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+    """The nodes of the tree rooted at the graph node `root`, by id and sorted: what a value of `export values` reads
+    of a flow's amounts (#464 W1), which are no outputs of their own."""
+    return dict(sorted(_tree(run, root).items()))
+
+
 def _document(
     run: Run, output: str, root: tuple[str, ...], result: dict[str, Any], model_versions: dict[str, str] | None = None,
     stop: frozenset[str] = frozenset(),

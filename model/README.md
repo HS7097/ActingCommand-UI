@@ -8,9 +8,9 @@ This folder holds the launcher, `setup`, `version`, the output envelope, the dep
 readers of the model files, the expression language, the static check (`check`), the derivation graph
 (`run`) with its unknowns and their sensitivity and its random processes (exact pity chains, Wilson bounds of
 rates from samples), its cache with incremental recompute (`cache`), provenance
-(`explain`), the exports (`export thresholds`, `export prices`, `export tables`, `export scoring`) with their export policy and
-the check of the prices' shared provenance tree (`verify prices`), the
-bindings of thresholds to the schedule (`bindings check`, `bindings apply`), the economy's LP and MILP
+(`explain`), the exports (`export thresholds`, `export prices`, `export values`, `export tables`, `export scoring`) with their
+export policy and the check of the prices' shared provenance tree (`verify prices`), the
+bindings of thresholds and values to the schedule (`bindings check`, `bindings apply`), the economy's LP and MILP
 (`economy`), the engine host, which runs engines kept outside this repository in worker processes of its own,
 the generic search for teams over those engines (no command runs it yet) and the automatic refresh (`watch`).
 The other computation commands come in later slices.
@@ -47,6 +47,7 @@ model\acmodel.cmd explain <resource repo>\ours\model threshold:<id> --state <sta
 model\acmodel.cmd export thresholds <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd export prices <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd verify prices <resource repo>\ours\model --state <state snapshot>
+model\acmodel.cmd export values <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd export tables <resource repo>\ours\model --state <state snapshot> --repo <resource repo>
 model\acmodel.cmd export scoring <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd bindings check <resource repo>\ours\model --state <state snapshot> --strict
@@ -146,6 +147,12 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
 - **`verify prices`** computes that tree again from the model and checks it against the digest `out/prices.json`
   records: recorded versions that are not the model's are `shared_tree_stale`, a tree or a price file that names another
   digest `shared_tree_mismatch` (exit 6). A tree that checks is kept under the state root again if its copy is gone.
+- **`export values`** (#464 W1) writes `out/values.json` and one provenance file per value: what one run of a rule of
+  the schedule is worth, as exports.json's `values` define it (activities or resources, how often, over how many runs),
+  from the derivation graph and the prices `export prices` delivered, which must be of the model's versions
+  (`prices_stale` is an error here). It computes no steady state. Every value is listed: its number, confirmed or
+  provisional with each acceptance it rests on, or pending with why. One that read the account state is refused
+  (`export_refused`, `per_account`), and so is one that rounds below 1 (`value_not_positive`); then nothing is written.
 - **The export policy** decides what a delivered file takes from an output: a confirmed value as it is; a
   provisional one only when `acceptances` of exports.json accept it (a table cell is `null` otherwise, the
   others are refused); a blocked or per-account one never. A number is scaled and rounded as declared
@@ -168,9 +175,15 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   schedule. It also reports
   the coverage of the prices `export prices` delivered, as `schedule.json` meets it (`data.coverage`; `prices_stale`
   when `out/prices.json` is of another version of the model), without computing a steady state. It writes nothing.
+  A value binding ties a rule's `fixed_value_milli` to a value of exports.json and its `fixed_value_origin` to
+  `"model"`; an origin `"model"` that no binding names is refused (`origin_unbound`), and `data.values` says whether
+  `out/values.json` is current.
 - **`bindings apply`** writes the bound literals that differ, and changes only their bytes: line ends
-  (CRLF files stay CRLF) and formatting are kept. It refuses what `check` refuses, other than a differing
-  value, and then writes nothing (`contracts/formats.md`, "Bindings").
+  (CRLF files stay CRLF) and formatting are kept. For a value it writes the origin `"model"` too when the rule has none,
+  and inserts a member the rule lacks in the style of the member before it; it never rewrites another origin
+  (`origin_invalid`). It refuses what `check` refuses, other than a differing value or an absent origin (a pending value
+  too), and then writes nothing. Each file is written as its `.part` and renamed over
+  it only when the file did not change meanwhile (`file_changed`) (`contracts/formats.md`, "Bindings").
 - **`watch`** keeps a model's outputs for one state up to date while it runs. It is long-lived: Task Scheduler
   or WMI starts it, never an agent session, and an interrupt ends it. Every `watch.poll_interval_ms` it scans the
   model, the preference layer, the datasets and the state snapshot by size and modification time, and hashes

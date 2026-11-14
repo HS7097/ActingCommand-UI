@@ -88,6 +88,16 @@ REUSE_REFUSED = "reuse_refused"
 # the steady state's (`acmodel verify passes`).
 STEADY_STATE_MISMATCH = "steady_state_mismatch"
 CERTIFICATE_MISMATCH = "certificate_mismatch"
+# #464 W1, the model's writer of the schedule's values: `export values` and the value bindings of `bindings check|apply`.
+VALUE_NOT_POSITIVE = "value_not_positive"  # a value that rounds below 1 (a value of 0 is no value)
+ORIGIN_MISSING = "origin_missing"  # bindings check: a bound value's rule has no fixed_value_origin (apply writes "model")
+ORIGIN_INVALID = "origin_invalid"  # bindings check|apply: a bound value's rule holds another origin than "model"
+ORIGIN_UNBOUND = "origin_unbound"  # bindings check|apply: an origin "model" that no value binding names
+VALUE_CONSUMES_MISMATCH = "value_consumes_mismatch"  # cost_paid_by_pool is not the bound rule's consumes
+REQUIRES_WORD_MISSING = "requires_word_missing"  # schedule.json's requires lacks benefit_fixed_value
+INSERT_STYLE_UNKNOWN = "insert_style_unknown"  # bindings apply: no separator to copy for a member it inserts
+FILE_CHANGED = "file_changed"  # bindings apply: a file changed between its reading and its rename
+VALUES_STALE = "values_stale"  # bindings check (a warning): out/values.json is not of the current inputs
 
 EXIT_OK = 0
 
@@ -165,4 +175,13 @@ EXIT_STATUS = {
     REUSE_REFUSED: 5,
     STEADY_STATE_MISMATCH: 6,
     CERTIFICATE_MISMATCH: 6,
+    VALUE_NOT_POSITIVE: 5,
+    ORIGIN_MISSING: 6,
+    ORIGIN_INVALID: 6,
+    ORIGIN_UNBOUND: 6,
+    VALUE_CONSUMES_MISMATCH: 6,
+    REQUIRES_WORD_MISSING: 6,
+    INSERT_STYLE_UNKNOWN: 6,
+    FILE_CHANGED: 5,
+    VALUES_STALE: 0,
 }
