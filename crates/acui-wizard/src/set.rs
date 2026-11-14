@@ -18,7 +18,9 @@
 //! ONNX Runtime's two files exactly as the Runtime pins them ([`ORT_PINS`]), and its licence and
 //! notices beside the library ([`ORT_LICENSE`], [`ORT_NOTICES`]). It
 //! may carry DirectML ([`DIRECTML_LIBRARY`], only the file the Runtime pins), and then DirectML's
-//! own licence files too ([`DIRECTML_LICENSES`]); the configuration still names the CPU provider.
+//! own licence files too ([`DIRECTML_LICENSES`]); only then does the options page offer the
+//! graphics card for text recognition, and the configuration names DirectML only when the person
+//! chose a card ([`crate::gpu`]).
 //! The licences of the vision models (`vision.licenses`, at least one with a model) go to
 //! `<root>\licenses\vision\<path>`, by the rules of a standard package's own files.
 
@@ -45,9 +47,9 @@ use crate::text::Said;
 
 pub const SET_FILE: &str = "install-set.json";
 pub const SET_SCHEMA: &str = "actingcommand.install-set.v1";
-/// The one execution provider the configuration names in v1. A set may already carry DirectML
-/// ([`DIRECTML_LIBRARY`]); the configuration that selects it (and its `directml_device`) comes
-/// later.
+/// The one `vision.provider` a set names in v1: its vision files run on the CPU. A set may carry
+/// DirectML besides ([`DIRECTML_LIBRARY`]); whether the configuration selects it, and which
+/// graphics card, is the person's choice at install ([`crate::gpu`]), not the set's.
 pub const VISION_PROVIDER: &str = "cpu";
 /// The file a vision root needs whenever `vision` is configured (Runtime
 /// `contracts/vision-model-folders.md`).
@@ -325,8 +327,11 @@ pub fn set_problems(set: &InstallSet) -> Vec<Said> {
     }
     if set.vision.provider != VISION_PROVIDER {
         problems.push(
-            Said::new("这一版只装 CPU 视觉", "this version installs the CPU vision set only")
-                .with(&set.vision.provider),
+            Said::new(
+                "安装集的 vision.provider 只能是 cpu（用不用显卡在安装时选，不由安装集定）",
+                "the install set's vision.provider must be cpu (whether the graphics card is used is chosen at install, not by the set)",
+            )
+            .with(&set.vision.provider),
         );
     }
     let mut paths = BTreeSet::new();

@@ -19,6 +19,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use acui_wizard::dxgi;
+use acui_wizard::gpu;
 use acui_wizard::manifest::Program;
 use acui_wizard::mumu::{self, Discovery};
 use acui_wizard::occupancy::{self, OtherRoot};
@@ -35,8 +37,9 @@ acsetup — ActingCommand 安装向导 / setup wizard (0.12)
   acsetup check-set --set <安装集文件夹 / install set folder>
       只核对安装集，打印摘要 / checks the install set only and prints what it holds
   acsetup discover [--mumu-root <MuMu 文件夹 / folder>]
-      列出 MuMu 里的模拟器和别的 ActingCommand 用着的模拟器（只读）
-      / lists MuMu's emulators and those another ActingCommand uses (read only)
+      列出 MuMu 里的模拟器、别的 ActingCommand 用着的模拟器和这台电脑的显卡（只读）
+      / lists MuMu's emulators, those another ActingCommand uses, and this computer's
+        graphics cards (read only)
   acsetup install --set <文件夹 / folder> --root <新的安装文件夹 / new install folder> --plan <plan.json>
       照计划安装 / installs as the plan says
 
@@ -202,7 +205,11 @@ fn print_set(set: &VerifiedSet) {
         "  视觉 / vision {}: {} files{}, {} model licence files, {}",
         set.set.vision.provider,
         set.set.vision.files.len(),
-        if set.set.carries_directml() { " (with DirectML, unused by the cpu provider)" } else { "" },
+        if set.set.carries_directml() {
+            "（带 DirectML：安装时可以选用显卡做文字识别，默认用 CPU / with DirectML: the graphics card may be chosen for text recognition at install, the CPU by default）"
+        } else {
+            ""
+        },
         set.set.vision.licenses.len(),
         size_text(set.vision_bytes)
     );
@@ -220,10 +227,39 @@ fn discover(given: Option<PathBuf>) -> ExitCode {
         println!("  {note}");
     }
     print_discovery(&discovery, &others);
+    // Each failure is said; either makes the exit 1.
+    let adapters = print_adapters().map_err(|problem| failed(&problem));
     match (&discovery.problem, discovery.absent) {
         (Some(problem), false) => failed(problem),
-        _ => ExitCode::SUCCESS,
+        _ => adapters.err().unwrap_or(ExitCode::SUCCESS),
     }
+}
+
+/// This computer's DXGI adapters, each with what the graphics card option makes of it: the
+/// identity a plan's `options.directml_adapter` names, and whether it can be chosen or why not
+/// (software adapters and other listings of a card included, which the window leaves out).
+fn print_adapters() -> Result<(), Said> {
+    let adapters = dxgi::adapters()?;
+    println!("显卡 / graphics cards (DXGI; options.directml_adapter 取「可以选」的标识 / takes an identity that \"can be chosen\"):");
+    if adapters.is_empty() {
+        println!("  -");
+    }
+    for (adapter, standing) in adapters.iter().zip(gpu::standings(&adapters)) {
+        let pci = adapter.pci_address().map_or_else(|| "-".to_owned(), |address| address.to_string());
+        println!(
+            "  #{} {} · {} · {} · PCI {} — {}",
+            adapter.dxgi_index,
+            adapter.name,
+            gpu::memory_gb(adapter.dedicated_video_memory),
+            adapter.identity(),
+            pci,
+            standing.said()
+        );
+        if standing.offered() && gpu::looks_integrated(adapter.dedicated_video_memory) {
+            println!("      {}", gpu::integrated_warning());
+        }
+    }
+    Ok(())
 }
 
 fn print_discovery(discovery: &Discovery, others: &[OtherRoot]) {
@@ -294,6 +330,12 @@ fn run_install(set_dir: &Path, root: &Path, plan_path: &Path) -> ExitCode {
             println!("  日志 / log: {}", done.log.display());
             for shortcut in &done.shortcuts {
                 println!("  已建快捷方式 / shortcut created: {}", shortcut.display());
+            }
+            if let Some(card) = &done.directml {
+                println!(
+                    "  文字识别用显卡 {} ({})：安装时的检查（check-config）只确认找得到这块显卡，不能证明它真的能用。第一个任务跑过以后，打开监控台的性能状态，看有没有 vision_gpu_unavailable：显卡用不上时，ActingCommand 改用 CPU，并在那里说明。 / text recognition uses the graphics card {} ({}): the check during setup (check-config) only confirms the card is found and does not prove it works. After the first task has run, open the console's performance status and look for vision_gpu_unavailable: if the card cannot be used, ActingCommand runs on the CPU and says so there.",
+                    card.name, card.identity, card.name, card.identity
+                );
             }
             if done.paused {
                 println!("  所有实例已暂停：在监控台确认无误后点「全部开始执勤」 / every instance is paused: after a look in the console, press \"put all on duty\"");

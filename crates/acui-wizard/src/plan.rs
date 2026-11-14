@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::alias::{alias_problem, MAX_ALIAS_BYTES};
 use crate::apps::Game;
 use crate::config::{backend_problem, DEFAULT_BACKEND};
+use crate::gpu::{identity_problem, is_identity};
 use crate::text::{Lang, Said};
 
 pub const PLAN_SCHEMA: &str = "actingcommand.install-wizard-plan.v1";
@@ -65,6 +66,12 @@ pub struct PlanOptions {
     /// The first start's global pause, which the console lifts ("put all on duty").
     #[serde(default = "yes")]
     pub pause_first_start: bool,
+    /// The graphics card for text recognition (DirectML), by its stable identity
+    /// `dxgi-pci:<vendor>:<device>:<subsys>:<rev>` as `acsetup discover` lists it (`gpu`);
+    /// absent for the CPU, the default. Only a set that carries DirectML takes it, and only a
+    /// card this computer offers (the install's checks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directml_adapter: Option<String>,
 }
 
 impl Default for PlanOptions {
@@ -75,6 +82,7 @@ impl Default for PlanOptions {
             watchdog: false,
             start_after_install: true,
             pause_first_start: true,
+            directml_adapter: None,
         }
     }
 }
@@ -107,9 +115,11 @@ pub fn parse_plan(bytes: &[u8]) -> Result<Plan, Said> {
 /// whitespace, within the game's alias limit), its game chosen, its server one of the game's,
 /// its backends a valid pair; with instances, the first-start pause only together with the
 /// wizard's start, which alone can set it (a first start with the instances and without the
-/// pause the options page promised is never possible). The watchdog needs no rule: it never
-/// starts a root that never started (Runtime `contracts/runtime-watchdog.md`, "Decision", row
-/// 3), so with the wizard's start left out the root stays down until a person starts it.
+/// pause the options page promised is never possible); the graphics card, when named, a stable
+/// identity in its form (whether the set carries DirectML and this computer offers the card is
+/// the install's own check). The watchdog needs no rule: it never starts a root that never
+/// started (Runtime `contracts/runtime-watchdog.md`, "Decision", row 3), so with the wizard's
+/// start left out the root stays down until a person starts it.
 pub fn plan_problems(plan: &Plan, games: &[Game]) -> Vec<Said> {
     let mut problems = Vec::new();
     if plan.schema_version != PLAN_SCHEMA {
@@ -171,6 +181,11 @@ pub fn plan_problems(plan: &Plan, games: &[Game]) -> Vec<Said> {
             "The first-start pause needs \"start after install\": only a Runtime the wizard started takes the pause. Not to start it, leave the pause out too (the instances then go on duty at the first start)",
         ));
     }
+    if let Some(identity) = &plan.options.directml_adapter {
+        if !is_identity(identity) {
+            problems.push(identity_problem().with(format!("options.directml_adapter {identity}")));
+        }
+    }
     problems
 }
 
@@ -218,8 +233,32 @@ mod tests {
         assert!(plan.options.desktop_shortcut && plan.options.start_menu_shortcut);
         assert!(plan.options.start_after_install && plan.options.pause_first_start);
         assert!(!plan.options.watchdog);
+        assert_eq!(plan.options.directml_adapter, None);
         assert_eq!(plan.mumu_root, None);
         assert_eq!(plan.lang(), Lang::Zh);
+        // The CPU is written by leaving the card out.
+        let written = serde_json::to_value(&plan.options).unwrap();
+        assert_eq!(written.get("directml_adapter"), None);
+    }
+
+    #[test]
+    fn a_graphics_card_is_named_by_a_stable_identity() {
+        let card = GOOD.replace(
+            "{\"watchdog\": false}",
+            "{\"watchdog\": false, \"directml_adapter\": \"dxgi-pci:10de:2504:8a1f1043:a1\"}",
+        );
+        let card = plan(&card);
+        assert_eq!(card.options.directml_adapter.as_deref(), Some("dxgi-pci:10de:2504:8a1f1043:a1"));
+        assert_eq!(plan_problems(&card, &games()), Vec::<Said>::new());
+        for wrong in ["0", "dxgi-pci:10DE:2504:8a1f1043:a1", "dxgi-pci:10de:2504:8a1f1043", "luid:0x14ad3", ""] {
+            let text = GOOD.replace(
+                "{\"watchdog\": false}",
+                &format!("{{\"watchdog\": false, \"directml_adapter\": \"{wrong}\"}}"),
+            );
+            let problems = plan_problems(&plan(&text), &games());
+            assert_eq!(problems.len(), 1, "{wrong}");
+            assert!(problems[0].en.contains("options.directml_adapter"), "{}", problems[0]);
+        }
     }
 
     #[test]

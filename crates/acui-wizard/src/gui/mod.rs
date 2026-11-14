@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The wizard's window (Workflow #429 UI-W2b): ten pages over the back end the command line
 //! uses too. The pages only gather choices and run read-only checks (the install set, the
-//! folder, MuMu and the other ActingCommand); nothing is written before "Install" on page 8,
-//! and then `acui_wizard::install` does it all on a worker thread, step by step.
+//! folder, MuMu and the other ActingCommand, and this computer's graphics cards when the set
+//! carries DirectML); nothing is written before "Install" on page 8, and then
+//! `acui_wizard::install` does it all on a worker thread, step by step.
 //!
 //! Everything the window shows is painted from `State` in the language picked: a switch of
 //! language paints it all again. Work that waits (hashing the set, a folder check, the emulator
-//! search, a folder picker, the install) runs on a thread of its own and hands its result back
-//! to the window's thread; a result for a question asked again since is dropped.
+//! search, the listing of the graphics cards, a folder picker, the install) runs on a thread of
+//! its own and hands its result back to the window's thread; a result for a question asked again
+//! since is dropped.
 
 mod labels;
 
@@ -23,6 +25,8 @@ use slint::{CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString,
 use acui_wizard::alias::{alias_problem, default_alias, MAX_ALIAS_BYTES};
 use acui_wizard::apps::Game;
 use acui_wizard::config::{backend_problem, CAPTURE_BACKENDS, DEFAULT_BACKEND, TOUCH_BACKENDS};
+use acui_wizard::dxgi;
+use acui_wizard::gpu::{self, Adapter, Standing};
 use acui_wizard::log::LOG_FILE;
 use acui_wizard::mumu::{self, Discovery, MumuInstance, MINIMUM_VERSION};
 use acui_wizard::occupancy::{self, OtherRoot};
@@ -107,6 +111,22 @@ enum EmuState {
     Done { discovery: Discovery, others: Vec<OtherRoot> },
 }
 
+/// This computer's graphics cards for the options page: read once, on a worker, when the page is
+/// first shown with a set that carries DirectML; each listed card with its standing.
+enum GpuState {
+    NotRead,
+    Reading,
+    Read(Result<Vec<(Adapter, Standing)>, Said>),
+}
+
+/// The cards read, when they were read.
+fn gpu_listed(gpu: &GpuState) -> Option<&[(Adapter, Standing)]> {
+    match gpu {
+        GpuState::Read(Ok(listed)) => Some(listed),
+        _ => None,
+    }
+}
+
 struct EmuRow {
     instance: MumuInstance,
     /// The other installation that uses it: its root, or its process.
@@ -176,7 +196,10 @@ struct State {
     emu_generation: u64,
     emu_rows: Vec<EmuRow>,
     accounts: Vec<Account>,
+    /// The options, the graphics card among them (`directml_adapter`, the card's identity: set
+    /// only to a card the page offers).
     options: PlanOptions,
+    gpu: GpuState,
     install: InstallState,
     marks: Vec<StepMark>,
     current: Option<usize>,
@@ -229,6 +252,11 @@ impl State {
                 .map(|found| strip_verbatim(&found.root.to_string_lossy())),
             _ => None,
         }
+    }
+
+    /// Whether the set checked carries DirectML: only then is the graphics card offered.
+    fn carries_directml(&self) -> bool {
+        self.verified().is_some_and(|set| set.set.carries_directml())
     }
 }
 
@@ -314,6 +342,7 @@ pub fn run() -> ExitCode {
         emu_rows: Vec::new(),
         accounts: Vec::new(),
         options: PlanOptions::default(),
+        gpu: GpuState::NotRead,
         install: InstallState::NotStarted,
         marks: vec![StepMark::Waiting; Step::ALL.len()],
         current: None,
@@ -386,6 +415,7 @@ impl App {
             with_app(|app| app.account_changed(row, |account| account.advanced = !account.advanced))
         });
         wiz.on_option_toggled(|which| with_app(|app| app.option_toggled(which)));
+        wiz.on_gpu_picked(|row| with_app(|app| app.gpu_picked(row)));
         wiz.on_open_console(|| with_app(App::open_console));
         wiz.on_open_folder(|| with_app(App::open_folder));
         wiz.on_open_log(|| with_app(App::open_log));
@@ -438,6 +468,7 @@ impl App {
         strings.set_opt_pause(l.opt_pause.into());
         strings.set_opt_pause_note(l.opt_pause_note.into());
         strings.set_opt_pause_off_note(l.opt_pause_off_note.into());
+        strings.set_opt_gpu(l.opt_gpu.into());
         strings.set_open_console(l.open_console.into());
         strings.set_open_folder(l.open_folder.into());
         strings.set_copy_error(l.copy_error.into());
@@ -593,6 +624,7 @@ impl App {
                 }
             }
             ACCOUNTS => self.paint_accounts(),
+            OPTIONS => self.read_adapters(),
             _ => {}
         }
         self.paint();
@@ -1091,6 +1123,7 @@ impl App {
     fn option_toggled(&self, which: i32) {
         {
             let mut state = self.state.borrow_mut();
+            let state = &mut *state;
             let options = &mut state.options;
             match which {
                 0 => options.desktop_shortcut = !options.desktop_shortcut,
@@ -1103,9 +1136,61 @@ impl App {
                     options.pause_first_start = options.start_after_install;
                 }
                 4 if options.start_after_install => options.pause_first_start = !options.pause_first_start,
+                // The graphics card: ticked, the card with the most video memory of its own among
+                // those the page offers is chosen first; unticked, the CPU. Nothing to offer,
+                // nothing to tick.
+                5 => {
+                    options.directml_adapter = if options.directml_adapter.is_some() {
+                        None
+                    } else {
+                        gpu_listed(&state.gpu)
+                            .and_then(|listed| gpu::preselect(listed).map(|at| listed[at].0.identity()))
+                    };
+                }
                 _ => {}
             }
         }
+        self.paint();
+    }
+
+    /// One of the cards listed chosen: only one the page offers, and only while the option is
+    /// ticked.
+    fn gpu_picked(&self, row: i32) {
+        {
+            let mut state = self.state.borrow_mut();
+            let state = &mut *state;
+            let picked = usize::try_from(row)
+                .ok()
+                .and_then(|row| gpu_listed(&state.gpu)?.get(row))
+                .filter(|(_, standing)| standing.offered())
+                .map(|(adapter, _)| adapter.identity());
+            if picked.is_some() && state.options.directml_adapter.is_some() {
+                state.options.directml_adapter = picked;
+            }
+        }
+        self.paint();
+    }
+
+    /// This computer's graphics cards, on a worker, once: only when the set carries DirectML.
+    fn read_adapters(&self) {
+        {
+            let mut state = self.state.borrow_mut();
+            if !state.carries_directml() || !matches!(state.gpu, GpuState::NotRead) {
+                return;
+            }
+            state.gpu = GpuState::Reading;
+        }
+        let spawned = spawn("acsetup-adapters", || {
+            let listed = dxgi::adapters().map(|adapters| gpu::listing(&adapters));
+            post(move |app| app.adapters_read(listed));
+        });
+        if let Err(error) = spawned {
+            self.adapters_read(Err(Said::new(fill(ZH.worker_failed, &[&error]), fill(EN.worker_failed, &[&error]))));
+        }
+    }
+
+    fn adapters_read(&self, listed: Result<Vec<(Adapter, Standing)>, Said>) {
+        self.state.borrow_mut().gpu = GpuState::Read(listed);
         self.paint();
     }
 
@@ -1628,6 +1713,72 @@ fn paint_options(state: &State, wiz: &Wiz<'_>) {
     wiz.set_opt_watchdog(options.watchdog);
     wiz.set_opt_start(options.start_after_install);
     wiz.set_opt_pause(options.pause_first_start);
+    paint_gpu(state, wiz);
+}
+
+/// The graphics card option: shown only for a set that carries DirectML; tickable when a card can
+/// be chosen, with what it does under it, else why not. Once ticked, every card listed: the one
+/// chosen marked, the warning beside it when it looks integrated, each that cannot be chosen
+/// greyed with why. With none to choose, the cards are listed as well, greyed, so the page shows
+/// why the option cannot be ticked.
+fn paint_gpu(state: &State, wiz: &Wiz<'_>) {
+    let l = state.labels();
+    let lang = state.lang;
+    let shown = state.carries_directml();
+    let chosen = state.options.directml_adapter.as_deref();
+    let mut offerable = false;
+    let mut note = String::new();
+    let mut rows: Vec<GpuRow> = Vec::new();
+    if shown {
+        match &state.gpu {
+            GpuState::NotRead | GpuState::Reading => note = l.gpu_reading.to_owned(),
+            GpuState::Read(Err(problem)) => note = fill(l.gpu_failed, &[&said(problem, lang)]),
+            GpuState::Read(Ok(listed)) => {
+                offerable = listed.iter().any(|(_, standing)| standing.offered());
+                note = if offerable { l.gpu_note } else { l.gpu_none }.to_owned();
+                if chosen.is_some() || !offerable {
+                    rows = listed
+                        .iter()
+                        .map(|(adapter, standing)| {
+                            let picked = standing.offered() && chosen == Some(adapter.identity().as_str());
+                            let (words, caution) = if !standing.offered() {
+                                (said(&standing.said(), lang), false)
+                            } else if picked && gpu::looks_integrated(adapter.dedicated_video_memory) {
+                                (gpu::integrated_warning().in_lang(lang).to_owned(), true)
+                            } else {
+                                (String::new(), false)
+                            };
+                            GpuRow {
+                                text: fill(l.gpu_row, &[&adapter.name, &gpu::memory_gb(adapter.dedicated_video_memory)]).into(),
+                                note: words.into(),
+                                picked,
+                                selectable: standing.offered(),
+                                caution,
+                            }
+                        })
+                        .collect();
+                }
+            }
+        }
+    }
+    wiz.set_gpu_shown(shown);
+    wiz.set_gpu_offerable(offerable);
+    wiz.set_opt_gpu(chosen.is_some());
+    wiz.set_gpu_note(note.into());
+    wiz.set_gpu_adapters(model(rows));
+}
+
+/// The card chosen, by its name as this computer lists it, and its identity.
+fn gpu_chosen(state: &State) -> Option<(String, String)> {
+    let identity = state.options.directml_adapter.as_deref()?;
+    let name = gpu_listed(&state.gpu)
+        .and_then(|listed| {
+            listed
+                .iter()
+                .find(|(adapter, standing)| standing.offered() && adapter.identity() == identity)
+        })
+        .map_or_else(|| "?".to_owned(), |(adapter, _)| adapter.name.clone());
+    Some((name, identity.to_owned()))
 }
 
 fn plan_of(state: &State) -> Plan {
@@ -1645,13 +1796,18 @@ fn plan_of(state: &State) -> Plan {
             confirmed_in_use: account.confirmed_in_use,
         })
         .collect();
+    let mut options = state.options.clone();
+    // The card goes only with a set that carries DirectML (the install refuses it otherwise).
+    if !state.carries_directml() {
+        options.directml_adapter = None;
+    }
     Plan {
         schema_version: PLAN_SCHEMA.to_owned(),
         language: state.lang.wire().to_owned(),
         games: state.chosen_games().into_iter().map(|game| game.game).collect(),
         mumu_root: if instances.is_empty() { None } else { state.mumu_root() },
         instances,
-        options: state.options.clone(),
+        options,
     }
 }
 
@@ -1722,6 +1878,15 @@ fn paint_confirm(state: &State, wiz: &Wiz<'_>) {
         key: l.key_options.into(),
         value: if chosen.is_empty() { l.options_none.to_owned() } else { chosen.join(l.list_separator) }.into(),
     });
+    // What does the text recognition, where the page offered the choice: the card by its name and
+    // identity, or the CPU.
+    if state.carries_directml() {
+        let value = match gpu_chosen(state) {
+            Some((name, identity)) => fill(l.gpu_value, &[&name, &identity]),
+            None => l.gpu_cpu.to_owned(),
+        };
+        summary.push(KeyValue { key: l.key_gpu.into(), value: value.into() });
+    }
     // Said where it is decided: instances that go on duty at the first start.
     if !state.accounts.is_empty() && !(options.start_after_install && options.pause_first_start) {
         summary.push(KeyValue { key: l.key_attention.into(), value: l.attention_unpaused.into() });
@@ -1802,6 +1967,14 @@ fn paint_finish(state: &State, wiz: &Wiz<'_>) {
             wiz.set_finished_ok(true);
             wiz.set_finish_body(fill(body, &[&root]).into());
             wiz.set_finish_next(if done.paused { l.finish_next } else { l.finish_next_plain }.into());
+            // The check during setup did not prove the card works: where to look after the first
+            // task.
+            wiz.set_finish_gpu(
+                done.directml
+                    .as_ref()
+                    .map_or_else(String::new, |card| fill(l.finish_gpu, &[&card.name, &card.identity]))
+                    .into(),
+            );
             wiz.set_finish_more(l.finish_more.into());
             let mut note = String::new();
             if !done.shortcuts.is_empty() {
@@ -1836,6 +2009,7 @@ fn paint_finish(state: &State, wiz: &Wiz<'_>) {
                 l.failed_nothing.to_owned()
             };
             wiz.set_finish_next(next.into());
+            wiz.set_finish_gpu(SharedString::new());
             wiz.set_finish_more(SharedString::new());
             wiz.set_finish_note(SharedString::new());
             wiz.set_finish_transcript(transcript(state, failure).into());

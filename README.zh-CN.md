@@ -914,10 +914,10 @@ English 之间切换；带子命令时是命令行（见下文）。它不联网
 `9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1`，见 Runtime
 `crates/vision-ffi/src/runtime_pin.rs`）；带了它，就必须同时带上它的许可文件，即 Runtime 工具登记表
 （`scripts/windows-tools/windows-tool-sources.v1.json` 的 `directml-1.15.4`）要放在它旁边的三个：
-`ort/licenses/directml/LICENSE.txt`、`LICENSE-CODE.txt` 和 `ThirdPartyNotices.txt`。配置仍写 CPU 提供方
-（`vision.execution_provider` 为 `cpu`）：CPU 运行只加载 `onnxruntime_providers_shared.dll` 和 `onnxruntime.dll`，
-旁边有没有 `DirectML.dll` 都一样，`cpu` 时 `check-config` 和启动也都不看它（Runtime
-`contracts/vision-model-folders.md`「Loading」）；选用 DirectML 和显卡是下一步的事。文字识别模型的许可（例如
+`ort/licenses/directml/LICENSE.txt`、`LICENSE-CODE.txt` 和 `ThirdPartyNotices.txt`。只有带 DirectML 的安装集，
+第 7 页才提供「用显卡做文字识别」（见下文）。不选它时配置写 CPU 提供方（`vision.execution_provider` 为 `cpu`）：
+CPU 运行只加载 `onnxruntime_providers_shared.dll` 和 `onnxruntime.dll`，旁边有没有 `DirectML.dll` 都一样，`cpu` 时
+`check-config` 和启动也都不看它（Runtime `contracts/vision-model-folders.md`「Loading」）。文字识别模型的许可（例如
 PP-OCR 的 Apache-2.0 许可）写在 `vision.licenses` 里，带了模型就至少要有一份，装到 `<根>\licenses\vision\<path>`，
 规则与下面标准包旁边的文件相同。哪一项不对就停下，什么也不写：文件坏了、
 和这一版不配套、读不懂，各有一句人话，技术细节写在下面一行小字里。安装集由提供安装包的人拼好交给你。
@@ -999,17 +999,30 @@ PP-OCR 的 Apache-2.0 许可）写在 `vision.licenses` 里，带了模型就至
    只有向导启动的 Runtime 才挂得上暂停，所以暂停跟着启动走：没勾「装完马上启动」时，暂停这一项变灰、不勾，
    页面上写明这时实例会在第一次启动时直接开始执勤（计划文件里有实例、要暂停却不启动的，直接拒）。看门狗不用
    限制：它从不拉起一个从没启动过的根，没勾「装完马上启动」时，这一套会一直停着，直到你自己启动它。
+   安装集带 DirectML 时还有一项：用显卡做文字识别（DirectML），**默认不勾**（这时文字识别用 CPU）。这一页只读地
+   读这台电脑的显卡，读法与 Runtime 相同（Runtime `crates/vision-ffi/src/adapters.rs`）：按 DXGI 的顺序列出适配器，
+   带名字和专用显存，再向内核要适配器类型和 PCI 位置；`dxgi.dll`、`gdi32.dll` 只从 System32 加载，不创建
+   Direct3D 设备。只提供 Runtime 能按标识解析到的那块（物理适配器：内核类型读得出、能做图形计算、不是软件的、
+   不是间接显示的、也不是半虚拟化的）。软件适配器不列；已经列出的显卡的另一个条目（标识相同的间接显示或半虚拟化
+   副本，Runtime 同样跳过）也不再列。不是物理显卡的（虚拟机的、虚拟显示器的、内核读不出类型的）和 Runtime 分不清的
+   两块同标识物理显卡（即它的 `adapter_ambiguous`：两块都有或都没有 PCI 位置）灰字列出，各写原因。集成显卡不排除。
+   勾上后列出各块显卡的名字和专用显存（GB），默认选专用显存最大的那块，可以改选；选中的那块专用显存不到 2 GiB 时，
+   旁边直接写：「这看起来是集成显卡：实测文字识别结果和 CPU 不完全一致，速度也没有优势，建议不要开。」由人自己决定。
+   没有能提供的显卡，或者显卡读不出来时，这一项变灰，并写明原因。
 8. **确认**：把安装位置、版本、游戏、实例、选项、会建的文件夹和会写的文件列一遍（选的游戏或文字识别模型带
-   许可文件时多一个 `licenses`；有实例又勾了启动和暂停时多一个 `install-wizard.config.json`）；有实例、第一次启动
+   许可文件时多一个 `licenses`；有实例又勾了启动和暂停时多一个 `install-wizard.config.json`）；安装集带 DirectML 时，
+   还写文字识别用什么（CPU，或者显卡的名字和标识）；有实例、第一次启动
    不暂停时，多一行「注意」，写明 ActingCommand 一启动实例就开始执勤。第 3 页说到文件夹时也这样写。按「开始安装」
    后不能再回到前面几页。
 9. **安装**：逐步显示，每步完成、跳过或失败，进行中的一步下面有一行细节和进度条。写入之前先把安装文件、
-   模拟器和安装位置再核一遍。任何一步失败就停下，已经写下的东西原样留着，向导不删除任何东西。安装中关窗会被
+   模拟器、安装位置和选的显卡（安装集带 DirectML，这台电脑也提供这块显卡）再核一遍。任何一步失败就停下，已经写下的东西原样留着，向导不删除任何东西。安装中关窗会被
    拦住。
 10. **完成**：写明装在哪里、安装记录在哪里、建了哪些快捷方式。「打开监控台」（从新装的根启动 `ui\acui.exe`，
     与向导分开运行，不带向导自己继承来的任何 `ACTINGCOMMAND_…`、`ACTINGLAB_…` 环境变量）和
     「打开安装文件夹」都由人自己按，向导不自动打开任何东西。这一页还写明以后怎么加实例（监控台现在还不能直接
-    添加）：再运行一次向导装到另一个文件夹（那是另一套，分开运行），或者等以后的新版。失败时这一页写明在哪一步、为什么，可以复制错误
+    添加）：再运行一次向导装到另一个文件夹（那是另一套，分开运行），或者等以后的新版。选了显卡时，这一页写明安装时的
+    检查（`check-config`）不能证明显卡真的能用：第一个任务跑过以后，打开监控台的性能状态，看有没有
+    `vision_gpu_unavailable`（显卡用不上时，ActingCommand 改用 CPU，并在那里说明）。失败时这一页写明在哪一步、为什么，可以复制错误
     信息、打开安装记录（里面写着安装位置等文件夹的路径，用户文件夹写成 `%USERPROFILE%`），并按向导真的做过的
     几样逐项写怎么收拾。向导启动过、可能开着却没有已确认的暂停的 Runtime（没要暂停、还没挂上暂停，或者接上实例的
     那次启动、最后一次读状态没能确认暂停），在显示失败之前先由向导正式关闭，清单上写它已经停下；还可能开着的，写它
@@ -1041,7 +1054,7 @@ PP-OCR 的 Apache-2.0 许可）写在 `vision.licenses` 里，带了模型就至
 第 9 页的十五步依次是：建文件夹和安装记录；铺开 Runtime、Tools 和监控台，每个文件都对 `BUILD-MANIFEST.json`
 核一遍；放视觉文件并逐个核哈希，模型的许可放进 `licenses\vision\`；铺标准包（铺之前对 zip 再算一次 SHA-256，和安装集对上才铺），并把它旁边的
 许可文件逐个核哈希放进 `licenses\<游戏>\`；用 `actinglab standard-pack check` 检查每个游戏；写配置（先写成
-`actingd.config.json.part`）；`actingd check-config` 通过才改名就位；`actinglab adopt` 把这个根交给 Runtime
+`actingd.config.json.part`）；`actingd check-config` 通过才改名就位（选了显卡时见下文）；`actinglab adopt` 把这个根交给 Runtime
 自己的安装器；写监控台设置；建快捷方式（名字带根文件夹名，如「ActingCommand 监控台（AC2）」，同名的已经在
 就加序号，从不动别人的）；启动（`actinglab up`：退出码要是 0，答复里 `post_check.checks` 列出的启动后检查中，
 `fail_class` 为 true 的不能有 `fail`，有就报错并逐项写出失败项和它的数值——启动遇到检查不过只报告、不拒绝；不属于
@@ -1050,9 +1063,25 @@ Runtime，换上带实例的配置，再启动（见下文）；`actinglab statu
 install`）。没勾的步骤显示「跳过」。所有子程序都不开窗口；窗口里只显示每条答复的一句话，安装记录里除了这句，还
 另起一行存下答复的完整输出。
 
+选了显卡时，第 6 步按 Runtime `actingd-config` 第 27 修订（Runtime `apps/actingd/src/config.rs`；
+`contracts/actingd-check-config.md`「DirectML」；在监控台和 Runtime 已声明的区间之内）写 `vision` 一节，显卡只用
+稳定标识来指（不写 DXGI 序号，也不写 LUID），退回 CPU 也明写出来：
+
+```json
+"vision": {"execution_provider": "directml", "directml_device": {"expected_identity": "dxgi-pci:10de:2504:8a1f1043:a1"}, "gpu_fallback": "cpu"}
+```
+
+首次启动用的那份不带实例的配置，这一节相同。`check-config` 会把 ONNX Runtime 的两个文件对 DirectML 版的钉值核哈希，
+不加载地核 `DirectML.dll` 的哈希，列出适配器（DXGI 加内核类型）来解析标识，不创建 Direct3D 12 设备；DirectML 用不上
+时它照样通过，只带一条 `vision_gpu_unavailable` 提示。所以第 7 步读每一次通过的答复：有这条提示，或者
+`report.vision.directml` 没有解析到选的那块（`expected_identity` 是那个标识、`unavailable_reason` 为 null、`resolved`
+是它的 `adapters` 里标识相同的那一块），这一步就失败，用人话写明原因，并请人重新运行向导、装到一个新文件夹、这次不勾
+这一项；向导从不自己把配置改回 CPU。这一步通过也不能证明显卡真的能用：第一次文字识别才算数，`gpu_fallback` 为 `cpu`
+时用不上就改用 CPU，并在监控台的性能状态里显示 `vision_gpu_unavailable`。
+
 为什么实例最后才接上：全局暂停不打断已经在跑的任务，带着实例启动的 Runtime 在启动和暂停之间就可能派出任务。
 所以有实例又勾了「先暂停」时，第 7 步核过带实例的完整配置后，先把它留成 `install-wizard.config.json`，放进去的是
-同一份配置去掉实例（盐、状态根、MuMu 位置都不变，也过一遍 `check-config`）；Runtime 带着它启动、挂上暂停之后，
+同一份配置去掉实例（盐、状态根、MuMu 位置、文字识别都不变，也过一遍 `check-config`）；Runtime 带着它启动、挂上暂停之后，
 第 13 步分三段接上实例，每段都核答复：
 
 1. 正式关闭：`"<根>\runtime\actingctl.exe" request-shutdown --state-root "<根>\state" --wait 60`，要答
@@ -1095,16 +1124,20 @@ install`）。没勾的步骤显示「跳过」。所有子程序都不开窗口
 acsetup check-set --set <安装集文件夹>
     只核对安装集，打印摘要
 acsetup discover [--mumu-root <MuMu 文件夹>]
-    列出 MuMu 里的模拟器，以及别的 ActingCommand 正用着的那些（只读）
+    列出 MuMu 里的模拟器、别的 ActingCommand 正用着的那些，以及这台电脑的显卡（只读）
 acsetup install --set <安装集文件夹> --root <新的安装文件夹> --plan <plan.json>
     照计划安装，步骤与窗口第 9 页相同
 ```
 
-退出码：0 完成，1 失败（stderr 写明哪一步、为什么，以及和失败页一样逐项写怎么收拾），2 用法。计划文件是窗口在第 1 到 8 页收集的那些选择
+退出码：0 完成，1 失败（stderr 写明哪一步、为什么，以及和失败页一样逐项写怎么收拾），2 用法。`discover` 列出每个 DXGI
+适配器的名字、专用显存、标识、PCI 位置，以及能不能选来做文字识别、不能选的原因（窗口不列的软件适配器和同一块显卡的
+其他条目也列）；显卡读不出来时退出码为 1。计划文件是窗口在第 1 到 8 页收集的那些选择
 （`actingcommand.install-wizard-plan.v1`）：`language`（`zh` 或 `en`）、`games`（游戏文件夹名）、可选的
 `mumu_root`、`instances`（每台的 `index`、`alias`、`game`、`server`，可选 `touch_backend`、`capture_backend`、
 `start_emulator`、`confirmed_in_use`）和 `options`（`desktop_shortcut`、`start_menu_shortcut`、`watchdog`、
-`start_after_install`、`pause_first_start`，缺省与窗口相同）。规则与窗口相同，不合规则就在写任何东西之前停下。
+`start_after_install`、`pause_first_start`，缺省与窗口相同；还有可选的 `directml_adapter`：`discover` 列出的显卡标识，
+不写就用 CPU）。规则与窗口相同，不合规则就在写任何东西之前停下：`directml_adapter` 必须是 `dxgi-pci:` 标识；安装集
+不带 DirectML、或者这台电脑不提供这块显卡时，安装直接拒。
 
 **拼安装集**：`tools/make_install_set.py`（Python 3，只用标准库）拼出向导读的安装集，格式就是向导认的那一种，
 两边一起改。它只复制文件、算哈希、把监控台的文件夹打成 zip，不运行它复制的任何东西，也不删除、不覆盖任何东西：
@@ -1128,7 +1161,8 @@ python tools/make_install_set.py --out <新文件夹> --label <安装集的名�
 `secret_fingerprint_salt` 与每台的 `instance_id`），以及仅限 Windows 的 `windows` 0.62（`Win32_Foundation`、
 `Win32_System_Com`、`Win32_System_RestartManager`、`Win32_UI_Shell`：经 `SHGetKnownFolderPath` 找开始菜单与
 桌面文件夹，经 `IShellLinkW` + `IPersistFile` 写快捷方式，经 `IFileOpenDialog` 选文件夹；与 Slint 已锁定的同一
-版本，锁文件不新增 crate）。exe 图标同监控台，由 `winresource` 编进资源段。旧的 0.11 向导 `crates/acui-setup`
+版本，锁文件不新增 crate）。读显卡不另加绑定：和 Runtime 一样，`dxgi.dll`、`gdi32.dll` 只从 System32 加载，用
+`GetProcAddress` 取导出函数，DXGI 按虚表手工调用。exe 图标同监控台，由 `winresource` 编进资源段。旧的 0.11 向导 `crates/acui-setup`
 已移出工作区，代码原样留着；它的 A/B 槽、在线下载、升级与只更新资源，新向导都不做。
 
 监控台的 Win7 Aero 外框在锁文件里只多本仓的 `acui-glass` 一个 crate。它打开 Slint 的 `raw-window-handle-06` 特性

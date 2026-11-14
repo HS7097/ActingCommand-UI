@@ -12,8 +12,10 @@
 //!   `bind_port` 0, the system's choice; `secret_fingerprint_salt` 16 to 1024 bytes, here the
 //!   hex of 32 bytes of the operating system's random source, never shown or logged;
 //! - `mumu_root` absolute, when known; `standard_packs.root` `packages` (relative to the file's
-//!   folder; composer mode requires it); `vision.execution_provider` `cpu` (the vision root is
-//!   then `<root>\vision`);
+//!   folder; composer mode requires it); `vision` without `root` (the vision root is then
+//!   `<root>\vision`): `execution_provider` `cpu`, or, with the graphics card chosen for text
+//!   recognition, `directml` with `directml_device.expected_identity` and `gpu_fallback` `cpu`
+//!   written out ([`vision_section`]);
 //! - `instances[]`: `alias` (1 to 256 bytes, no control character; the wizard holds it to the
 //!   schedule's stricter rule, see `alias`), `instance_id`
 //!   (`instance_` and 32 lowercase hex digits, minted here), `instance_index` (the MuMu index;
@@ -56,6 +58,13 @@ pub const CAPTURE_BACKENDS: [&str; 3] = ["adb", "droidcast_raw", "nemu_ipc"];
 /// Today's production pair (the same table: "Nemu capture beside any touch backend is today's
 /// production"), the wizard's default.
 pub const DEFAULT_BACKEND: &str = "nemu_ipc";
+/// The execution provider of the CPU, the default, and of the graphics card (`actingd-config`
+/// revision 27, inside the range the console and the Runtime declare).
+pub const CPU_PROVIDER: &str = "cpu";
+pub const DIRECTML_PROVIDER: &str = "directml";
+/// What a DirectML section does when the card cannot be used: the work goes on on the CPU, with
+/// one warning. The Runtime's default, written out all the same.
+pub const GPU_FALLBACK: &str = "cpu";
 
 /// One instance of the configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +88,24 @@ pub struct ConfigInput {
     pub salt: String,
     pub mumu_root: Option<String>,
     pub instances: Vec<ConfigInstance>,
+    /// The graphics card chosen for text recognition, by its stable identity (`gpu`); `None` for
+    /// the CPU.
+    pub directml_adapter: Option<String>,
+}
+
+/// The `vision` section (Runtime `apps/actingd/src/config.rs` `VisionConfigFile`, which denies
+/// unknown members; `contracts/actingd-check-config.md`, "DirectML"): `execution_provider` `cpu`
+/// without any DirectML member; or, with a card, `directml`, the card by its stable identity in
+/// `directml_device.expected_identity` (no DXGI index, no LUID) and `gpu_fallback` `cpu`.
+pub fn vision_section(directml_adapter: Option<&str>) -> Value {
+    match directml_adapter {
+        None => json!({ "execution_provider": CPU_PROVIDER }),
+        Some(identity) => json!({
+            "execution_provider": DIRECTML_PROVIDER,
+            "directml_device": { "expected_identity": identity },
+            "gpu_fallback": GPU_FALLBACK,
+        }),
+    }
 }
 
 /// The configuration document (see the module's description).
@@ -91,7 +118,7 @@ pub fn build(input: &ConfigInput) -> Value {
         "bind_port": 0,
         "secret_fingerprint_salt": input.salt,
         "standard_packs": { "root": PACKAGES_DIR },
-        "vision": { "execution_provider": "cpu" },
+        "vision": vision_section(input.directml_adapter.as_deref()),
         "instances": entries,
     });
     if let Some(root) = &input.mumu_root {
@@ -167,7 +194,8 @@ pub fn with_mumu_root(document: &Value, root: &str) -> Value {
 
 /// `document` without its instances and the policy that names them: the configuration the first
 /// start runs with, everything else as it is (the same salt, state root, MuMu folder, packages
-/// and vision), so that no instance exists before the first-start pause holds.
+/// and vision, the graphics card with it), so that no instance exists before the first-start
+/// pause holds.
 pub fn without_instances(document: &Value) -> Value {
     let mut document = document.clone();
     document["instances"] = json!([]);
@@ -242,7 +270,37 @@ mod tests {
             salt: "ab".repeat(32),
             mumu_root: mumu_root.map(str::to_owned),
             instances,
+            directml_adapter: None,
         }
+    }
+
+    const CARD: &str = "dxgi-pci:10de:2504:8a1f1043:a1";
+
+    #[test]
+    fn the_graphics_card_is_named_by_its_identity_with_the_cpu_to_fall_back_on() {
+        assert_eq!(vision_section(None), json!({"execution_provider": "cpu"}));
+        assert_eq!(
+            vision_section(Some(CARD)),
+            json!({
+                "execution_provider": "directml",
+                "directml_device": {"expected_identity": CARD},
+                "gpu_fallback": "cpu",
+            })
+        );
+        let mut chosen = input(vec![instance("azurlane-5", 5, "cn")], Some("C:\\MuMu"));
+        chosen.directml_adapter = Some(CARD.to_owned());
+        let document = build(&chosen);
+        assert_eq!(document["vision"], vision_section(Some(CARD)));
+        // No index, no LUID, no root: the Runtime denies what it does not know.
+        let device = document["vision"]["directml_device"].as_object().unwrap();
+        assert_eq!(device.len(), 1);
+        assert_eq!(document["vision"].get("root"), None);
+        // The first start runs the same card.
+        let start = without_instances(&document);
+        assert_eq!(start["vision"], document["vision"]);
+        let mut control_plane = input(Vec::new(), Some("C:\\MuMu"));
+        control_plane.directml_adapter = Some(CARD.to_owned());
+        assert_eq!(start, build(&control_plane));
     }
 
     #[test]

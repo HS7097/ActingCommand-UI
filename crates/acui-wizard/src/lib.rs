@@ -6,8 +6,9 @@
 //! share everything here.
 //!
 //! What the Runtime 0.12.58 has no command for, the wizard does itself, each step checked by a
-//! Runtime program afterwards: the first configuration (`actingd check-config`), the cold
-//! layout of the standard packages (`actinglab standard-pack check`), the offline emulator
+//! Runtime program afterwards: the first configuration (`actingd check-config`, which also
+//! resolves the graphics card when the person chose one for text recognition, see [`gpu`]), the
+//! cold layout of the standard packages (`actinglab standard-pack check`), the offline emulator
 //! discovery (`MuMuManager.exe info -v all`, read only), the vision files (each against its
 //! pinned SHA-256) and the first start's pause (a pause the console can lift), set before the
 //! instances are bound (the Runtime is then closed, its `config replace` puts them in place, and
@@ -24,7 +25,9 @@ pub mod child;
 pub mod config;
 pub mod console;
 pub mod digest;
+pub mod dxgi;
 pub mod engine;
+pub mod gpu;
 pub mod layout;
 pub mod log;
 pub mod manifest;

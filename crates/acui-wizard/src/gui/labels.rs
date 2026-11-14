@@ -142,6 +142,15 @@ pub struct Labels {
     pub opt_pause: &'static str,
     pub opt_pause_note: &'static str,
     pub opt_pause_off_note: &'static str,
+    /// The graphics card for text recognition, offered only when the set carries DirectML.
+    pub opt_gpu: &'static str,
+    /// Under it: while the cards are read, what it does, why it cannot be ticked.
+    pub gpu_reading: &'static str,
+    pub gpu_note: &'static str,
+    pub gpu_none: &'static str,
+    pub gpu_failed: &'static str,
+    /// One card: its name and its video memory of its own.
+    pub gpu_row: &'static str,
     /// The confirm page's line when instances are bound and the first start does not pause.
     pub key_attention: &'static str,
     pub attention_unpaused: &'static str,
@@ -162,6 +171,11 @@ pub struct Labels {
     pub files_value: &'static str,
     /// After the files, when the instances come after the first-start pause.
     pub file_full_config: &'static str,
+    /// What does the text recognition, when the set carries DirectML: the CPU, or the card by its
+    /// name and identity.
+    pub key_gpu: &'static str,
+    pub gpu_cpu: &'static str,
+    pub gpu_value: &'static str,
     pub confirm_note: &'static str,
 
     // 9 Install, in the order the install runs them (`Step::ALL`).
@@ -182,6 +196,8 @@ pub struct Labels {
     pub open_folder: &'static str,
     /// How to add instances later: the console cannot add them yet.
     pub finish_more: &'static str,
+    /// With a graphics card: the check did not prove it works, and where to look.
+    pub finish_gpu: &'static str,
     pub uninstall_note: &'static str,
     /// With the watchdog installed: the console's settings page only reads the watchdog, so the
     /// note names the Runtime's own command that removes it.
@@ -355,6 +371,12 @@ pub const ZH: Labels = Labels {
     opt_pause: "第一次启动时，先让所有实例暂停",
     opt_pause_note: "建议勾选。在监控台里看过每个实例都正常后，按「全部开始执勤」，ActingCommand 才会开始操作游戏。",
     opt_pause_off_note: "要先暂停，向导得先启动一次 ActingCommand，所以不勾「装完马上启动」时这一项用不了：你第一次启动 ActingCommand 时，实例会直接开始执勤。",
+    opt_gpu: "用显卡做文字识别（DirectML）",
+    gpu_reading: "正在读这台电脑的显卡……",
+    gpu_note: "默认不勾，文字识别用 CPU。勾上后用下面选的那块显卡；显卡用不上时，ActingCommand 会自己改用 CPU，并在监控台的性能状态里说明。",
+    gpu_none: "这台电脑上没有 ActingCommand 能用的显卡，所以这一项用不了，文字识别用 CPU。",
+    gpu_failed: "读不出这台电脑的显卡，所以这一项用不了，文字识别用 CPU：{}。",
+    gpu_row: "{} · 专用显存 {}",
     key_attention: "注意",
     attention_unpaused: "第一次启动时不会先暂停：ActingCommand 一启动，实例就会开始执勤、操作游戏。",
 
@@ -377,6 +399,9 @@ pub const ZH: Labels = Labels {
     folder_licenses: "licenses",
     files_value: "actingd.config.json（设置）、acui.toml（监控台设置）、install-wizard.log（安装记录）",
     file_full_config: "install-wizard.config.json（带实例的设置：暂停之后先停下 ActingCommand，再换上）",
+    key_gpu: "文字识别",
+    gpu_cpu: "CPU",
+    gpu_value: "显卡（DirectML）：{} · {}",
     confirm_note: "按「开始安装」后，向导会把文件写进 {}。安装时请不要关窗口。开始以后就不能再回到前面几页了。",
 
     install_steps: [
@@ -409,6 +434,7 @@ pub const ZH: Labels = Labels {
     open_console: "打开监控台",
     open_folder: "打开安装文件夹",
     finish_more: "以后要加实例：监控台里现在还不能直接添加。可以再运行一次安装向导，装到另一个文件夹（那是另一套 ActingCommand，和这一套分开运行）；也可以等以后的新版支持。",
+    finish_gpu: "文字识别会用显卡 {}（{}）。安装时的检查（check-config）只确认 ActingCommand 找得到这块显卡，不能证明它真的能用：第一个任务跑过以后，打开监控台的性能状态，看有没有 vision_gpu_unavailable。显卡用不上时，ActingCommand 会改用 CPU，并在那里说明。",
     uninstall_note: "卸载时，删除整个 {} 文件夹即可。",
     uninstall_note_watchdog: "卸载时，先运行 \"{}\\runtime\\actingctl.exe\" watchdog uninstall --root \"{}\" 关掉开机后自动运行，再删除整个 {} 文件夹即可。",
     failed_at: "在「{}」这一步出了问题：{}。",
@@ -555,6 +581,12 @@ pub const EN: Labels = Labels {
     opt_pause: "On the first start, keep every instance paused",
     opt_pause_note: "Recommended. ActingCommand starts playing only after you check every instance in the console and press \"Put All on Duty\".",
     opt_pause_off_note: "To pause first, the wizard has to start ActingCommand once, so this needs \"Start ActingCommand when setup finishes\": without it, the instances go on duty as soon as you first start ActingCommand.",
+    opt_gpu: "Use the graphics card for text recognition (DirectML)",
+    gpu_reading: "Reading this computer's graphics cards…",
+    gpu_note: "Off by default: text recognition runs on the CPU. Ticked, it uses the graphics card chosen below; if that card cannot be used, ActingCommand switches to the CPU on its own and says so in the console's performance status.",
+    gpu_none: "This computer has no graphics card ActingCommand can use, so this option is not available; text recognition runs on the CPU.",
+    gpu_failed: "This computer's graphics cards cannot be read, so this option is not available; text recognition runs on the CPU: {}.",
+    gpu_row: "{} · {} dedicated video memory",
     key_attention: "Note",
     attention_unpaused: "The first start does not pause: as soon as ActingCommand starts, the instances go on duty and play the games.",
 
@@ -577,6 +609,9 @@ pub const EN: Labels = Labels {
     folder_licenses: "licenses",
     files_value: "actingd.config.json (settings), acui.toml (console settings), install-wizard.log (setup log)",
     file_full_config: "install-wizard.config.json (the settings with the instances: after the pause, ActingCommand is stopped and they are put in place)",
+    key_gpu: "Text recognition",
+    gpu_cpu: "CPU",
+    gpu_value: "Graphics card (DirectML): {} · {}",
     confirm_note: "When you press Install, the wizard writes files into {}. Keep this window open while it installs. Once it starts you cannot go back to the earlier pages.",
 
     install_steps: [
@@ -609,6 +644,7 @@ pub const EN: Labels = Labels {
     open_console: "Open console",
     open_folder: "Open folder",
     finish_more: "To add instances later: the console cannot add them yet. Run this wizard again and install into another folder (that is a second ActingCommand, running apart from this one), or wait for a later version that can.",
+    finish_gpu: "Text recognition will use the graphics card {} ({}). The check during setup (check-config) only confirms that ActingCommand finds this card; it does not prove the card works. After the first task has run, open the console's performance status and look for vision_gpu_unavailable: if the card cannot be used, ActingCommand runs on the CPU and says so there.",
     uninstall_note: "To uninstall, delete the whole {} folder.",
     uninstall_note_watchdog: "To uninstall, first run \"{}\\runtime\\actingctl.exe\" watchdog uninstall --root \"{}\" to turn automatic start off, then delete the whole {} folder.",
     failed_at: "Something went wrong at \"{}\": {}.",

@@ -42,6 +42,16 @@ export struct EmulatorRow {
     picked: bool,
 }
 
+// One graphics card the options page lists: its name and memory, and under it a note, the
+// warning beside a chosen card that looks integrated (`caution`) or why it cannot be chosen.
+export struct GpuRow {
+    text: string,
+    note: string,
+    picked: bool,
+    selectable: bool,
+    caution: bool,
+}
+
 // One account: the emulator, its name, and what it plays. The first entry of `games` and of
 // `servers` is "choose…", which stands for none chosen.
 export struct AccountRow {
@@ -100,6 +110,7 @@ export global Strings {
     in property <string> opt-pause-note;
     // Under the pause while the wizard's start is not chosen (the pause needs the start).
     in property <string> opt-pause-off-note;
+    in property <string> opt-gpu;
     in property <string> open-console;
     in property <string> open-folder;
     in property <string> copy-error;
@@ -165,6 +176,13 @@ export global Wiz {
     in property <bool> opt-watchdog;
     in property <bool> opt-start;
     in property <bool> opt-pause;
+    // The graphics card: shown when the set carries DirectML, tickable when a card can be
+    // chosen; the note under it, and the cards once ticked (or, none to choose, why not).
+    in property <bool> gpu-shown;
+    in property <bool> gpu-offerable;
+    in property <bool> opt-gpu;
+    in property <string> gpu-note;
+    in property <[GpuRow]> gpu-adapters;
     // 8 Confirm.
     in property <[KeyValue]> summary;
     in property <string> confirm-note;
@@ -180,6 +198,8 @@ export global Wiz {
     in property <string> finish-body;
     in property <string> finish-next;
     in property <string> finish-more;
+    // With a graphics card: where to look after the first task.
+    in property <string> finish-gpu;
     in property <string> finish-note;
     in property <string> finish-transcript;
     in property <bool> finish-has-log;
@@ -205,6 +225,7 @@ export global Wiz {
     callback start-toggled(int);
     callback advanced-toggled(int);
     callback option-toggled(int);
+    callback gpu-picked(int);
     callback open-console();
     callback open-folder();
     callback open-log();
@@ -461,6 +482,96 @@ component Tick {
         }
     }
     if focus.has-focus && root.enabled: FocusRing { }
+}
+
+// One of several, as Tick is one on its own: a round mark, a dot in it once chosen. The choice
+// is only ever the Rust side's: a click asks, `checked` answers. A row that cannot be chosen is
+// greyed and takes no click. Tab reaches it; Space or Return asks as a click does.
+component Choice {
+    in property <bool> checked;
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback chosen();
+    min-height: 24px;
+    accessible-role: radio-button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.chosen();
+        }
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        VerticalLayout {
+            alignment: start;
+            padding-top: 3px;
+            Rectangle {
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                background: Look.control-background;
+                border-width: 1px;
+                border-color: root.checked || (touch.has-hover && root.enabled) ? Look.accent : Look.control-border;
+                opacity: root.enabled ? 1.0 : 0.5;
+                if root.checked: Rectangle {
+                    x: 4px;
+                    y: 4px;
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: Look.accent;
+                }
+            }
+        }
+        Text {
+            text: root.text;
+            font-size: Scale.body-font;
+            color: root.enabled ? Look.text : Look.text-secondary;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+            accessible-role: none;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.chosen();
+        }
+    }
+    focus := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (root.enabled && (event.text == Key.Space || event.text == Key.Return)) {
+                root.chosen();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus && root.enabled: FocusRing { }
+}
+
+// A note set in under the row above it (the width of a mark and its gap), in the caption's
+// colour, or the attention colour for a `caution`. Placed by hand, as KeyValueCard is and for its
+// reason: these notes come under rows a `for` or an `if` repeats.
+component Indented inherits Rectangle {
+    in property <string> text;
+    in property <bool> caution;
+    height: words.preferred-height;
+    words := Text {
+        x: 26px;
+        y: 0;
+        width: max(0px, root.width - 26px);
+        text: root.text;
+        font-size: root.caution ? Scale.body-font : Scale.grey-font;
+        color: root.caution ? Look.status-attention : Look.text-caption;
+        wrap: word-wrap;
+    }
 }
 
 // One step of the bar on the left: its number in a round badge (a tick once done, a cross
@@ -993,6 +1104,37 @@ component OptionsPage inherits ScrollView {
             padding-left: 26px;
             Caption { text: Wiz.opt-start ? Strings.opt-pause-note : Strings.opt-pause-off-note; }
         }
+        // The graphics card for text recognition: unticked by default, the cards listed once it
+        // is ticked, one of them chosen.
+        if Wiz.gpu-shown: Tick {
+            text: Strings.opt-gpu;
+            checked: Wiz.opt-gpu;
+            enabled: Wiz.gpu-offerable;
+            dim: !Wiz.gpu-offerable;
+            toggled => {
+                Wiz.option-toggled(5);
+            }
+        }
+        if Wiz.gpu-shown && Wiz.gpu-note != "": Indented { text: Wiz.gpu-note; }
+        if Wiz.gpu-shown: VerticalLayout {
+            padding-left: 26px;
+            spacing: 4px;
+            for row[index] in Wiz.gpu-adapters: VerticalLayout {
+                spacing: 2px;
+                Choice {
+                    text: row.text;
+                    checked: row.picked;
+                    enabled: row.selectable;
+                    chosen => {
+                        Wiz.gpu-picked(index);
+                    }
+                }
+                if row.note != "": Indented {
+                    text: row.note;
+                    caution: row.caution;
+                }
+            }
+        }
     }
 }
 
@@ -1058,6 +1200,7 @@ component FinishPage inherits ScrollView {
         alignment: start;
         Body { text: Wiz.finish-body; }
         if Wiz.finish-next != "": Body { text: Wiz.finish-next; }
+        if Wiz.finish-gpu != "": Body { text: Wiz.finish-gpu; }
         if Wiz.finished-ok: HorizontalLayout {
             alignment: start;
             spacing: 8px;
