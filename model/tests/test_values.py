@@ -885,7 +885,7 @@ def test_a_value_binding_needs_prices_of_the_current_versions_the_tools_too(tmp_
             "ref": f"/versions/{member}",
         }]
 
-    write_prices(folder, tool="0.0.0-earlier")
+    write_prices(folder, tool="0.0.9")
     status, doc = bindings(acmodel, folder, "check")
 
     assert (status, doc["errors"]) == (5, stale("tool"))
