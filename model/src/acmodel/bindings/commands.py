@@ -35,12 +35,13 @@ removed. A mark that is not `true` is `limited_invalid`, which `apply` refuses a
 **Valuations** (#466 W3). A binding of a valuation (`valuation`, a resource of the model) names the base weight W of a
 `schedule.json` pool's valuation block (`/valuation/base_weight_milli`). Its W is computed as `export valuations` computes
 it (`export.valuations.weigh`): the resource's price in milli times the pool's own scale Q, rounded as the binding says;
-Q, `name` and `unit` are never written. A pending price is refused (`export_refused`, `pending`), and so are a W that
-rounds to 0 at a price above 0 and one beyond 0..1,000,000 (`valuation_rounds_to_zero`, `valuation_out_of_range`); a W
-whose rounding is off by more than the bound is the warning `precision_low`, and written. Each carries the suggested
-scale. W must be the number (`binding_mismatch` `value`), and the pool say who wrote it, `valuation_origin: "model"`,
-inserted after the block (`origin_missing`; another origin is `origin_invalid`, never rewritten); a pool whose valuation is
-the pending marker is `valuation_pending_marker`, and `requires` must hold `benefit_fixed_value`.
+Q, `name` and `unit` are never written. A pending price is refused (`export_refused`, `pending`), and so are a price below
+0 (`valuation_price_negative`: no scale helps), a W that rounds to 0 at a price above 0 and one above 1,000,000
+(`valuation_rounds_to_zero`, `valuation_out_of_range`, each with the suggested scale); a W whose rounding is off by more
+than the bound is the warning `precision_low`, with the suggested scale, and written. W must be the number
+(`binding_mismatch` `value`), and the pool say who wrote it, `valuation_origin: "model"`, inserted after the block
+(`origin_missing`; another origin is `origin_invalid`, never rewritten); a pool whose valuation is the pending marker is
+`valuation_pending_marker`, and `requires` must hold `benefit_fixed_value`.
 
 **The origin guard**, always on: every rule of `schedule.json` whose `fixed_value_origin` is `"model"` must be named by a
 value binding, and every pool whose `valuation_origin` is by a valuation binding (`origin_unbound`): only the model's
@@ -62,7 +63,9 @@ is the export's. Without the file it is null; a file of other versions of the mo
 whether `out/values.json` is of the current inputs (`data.values`; the warning `values_stale` otherwise, #464 W1), and
 `out/valuations.json` (`data.valuations`; `valuations_stale`, #466 W3).
 
-Warnings (`precision_low`, the limited reports, the stale files) are reported with the errors too, when there are any.
+The warnings `precision_low`, `limited_without_consumes` and `limited_unmodelled` are reported with the errors too, when
+there are any; `prices_stale`, `values_stale` and `valuations_stale` only when there are none (the files are read after
+the bindings check).
 """
 
 from __future__ import annotations
@@ -544,8 +547,8 @@ class _ValuePlan:
 
 class _ValuationPlan:
     """What a valuation binding needs of its pool (#466 W3), once its pool, block and scale hold and its W is computed
-    (`export.valuations.weigh`): the problems both `check` and `apply` refuse (an origin other than `"model"`, a block no
-    member follows); the differences `check` reports and `apply` writes (W, an absent origin); the edits that write them.
+    (`export.valuations.weigh`): the problems both `check` and `apply` refuse (an origin other than `"model"`, a block alone
+    in its pool); the differences `check` reports and `apply` writes (W, an absent origin); the edits that write them.
     Q, `name` and `unit` are never written."""
 
     def __init__(self, literal: _Literal, weighed: valuation_export.Weighed, layouts: _Layouts) -> None:
@@ -574,8 +577,9 @@ class _ValuationPlan:
             self.problems.append(error(ORIGIN_INVALID, detail, at(self.pool_ref, POOL_ORIGIN)))
 
     def _edits(self, layout: splice.Layout) -> None:
-        """W replaced in place, and `valuation_origin: "model"` inserted right after the block, in the style of the block
-        (`insert_style_unknown` when no member follows it)."""
+        """W replaced in place, and `valuation_origin: "model"` inserted right after the block, in the file's style: the
+        separator after the block, or, when the block is the pool's last member (as a pool usually ends), the one before it
+        (#466 W3 fix1; `insert_style_unknown` when the block is the pool's only member)."""
         literal, weighed = self.literal, self.weighed
         if literal.value != weighed.weight:
             self.edits.append(_literal_edit(layout, literal.target, literal.ref, weighed.weight))
@@ -797,9 +801,10 @@ def _values_file(run: Run) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]
 
 def _valuations_file(run: Run, targets: dict[str, Target]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     """Whether `out/valuations.json` (#466 W3) is of the current inputs: the model's versions (`rules`, `data`, `tool`), the
-    bytes of `out/prices.json` (`prices`) and of bindings.json (`bindings`), and the scale Q each valuation read of its
-    pool, which schedule.json must still hold (`scale`). None when there is no such file; one that is not current is the
-    warning `valuations_stale`, with the members that differ."""
+    bytes of `out/prices.json` (`prices`), of exports.json (`exports`, whose acceptances a price rests on; fix1) and of
+    bindings.json (`bindings`), and the scale Q each valuation read of its pool, which schedule.json must still hold
+    (`scale`). None when there is no such file; one that is not current is the warning `valuations_stale`, with the members
+    that differ."""
     path = run.folder / valuation_export.VALUATIONS
     if not path.exists():
         return None, []
@@ -815,6 +820,8 @@ def _valuations_file(run: Run, targets: dict[str, Target]) -> tuple[dict[str, An
     prices_sha = digest(read(prices, "acmodel.prices.v2")) if prices.exists() else None
     if doc["prices"]["sha256"] != prices_sha:
         stale.append("prices")
+    if doc["exports"]["sha256"] != value_export.exports_sha(run):
+        stale.append("exports")
     if doc["bindings"]["sha256"] != valuation_export.bindings_sha(run):
         stale.append("bindings")
     schedule = targets.get(SCHEDULE_FILE)
@@ -845,7 +852,8 @@ def check_bindings(
     `resource_projection` predicate of a schedule.json rule, and no quantity of one of its pools, is left unbound.
     `data.coverage` is what `export prices` delivered, as schedule.json meets it (`_coverage`), and `data.values` and
     `data.valuations` whether out/values.json and out/valuations.json are current; the warnings are `precision_low` and
-    the limited reports (#466 W3), then `prices_stale`, `values_stale` and `valuations_stale`."""
+    the limited reports (#466 W3), with the errors too, then, only without errors, `prices_stale`, `values_stale` and
+    `valuations_stale`."""
     run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
     repo, targets = _targets(run, bindings, strict)

@@ -663,7 +663,7 @@
         "anchor": {"type": "token", "required": true},
         "member": {"type": "token", "required": true}
       },
-      "description": "acmodel bindings check|apply (#464 W1): the rule rule_id of schedule.json (path) lacks a member that its value binding (entry, its pointer in bindings.json; value, the value of exports.json) writes (member: fixed_value_milli, fixed_value_origin, or limited, #466 W3), and apply inserts it right after the member anchor (package_id, fixed_value_milli, or fixed_value_origin), in the style of that member: the separator after it (its comma and the whitespace around it) and its own colon. Or (#466 W3) the pool pool_id lacks the valuation_origin its valuation binding (valuation, the resource of the model) writes, right after the member anchor valuation, its block. Here the rule or the pool has no member anchor, or no member follows it, so there is no separator to copy; the tool never guesses one, and nothing is written. Write the member by hand in the file's style, or put another member after the anchor. Either value and rule_id, or valuation and pool_id, are there. The error's ref is the rule or the pool."
+      "description": "acmodel bindings check|apply (#464 W1): the rule rule_id of schedule.json (path) lacks a member that its value binding (entry, its pointer in bindings.json; value, the value of exports.json) writes (member: fixed_value_milli, fixed_value_origin, or limited, #466 W3), and apply inserts it right after the member anchor (package_id, fixed_value_milli, or fixed_value_origin), in the style of that member: the separator after it (its comma and the whitespace around it), or, when the anchor is the last member of its object (#466 W3 fix1), the separator before it, between the member before and the anchor, and the anchor's own colon. Or (#466 W3) the pool pool_id lacks the valuation_origin its valuation binding (valuation, the resource of the model) writes, right after the member anchor valuation, its block. Here the rule or the pool has no member anchor, or the anchor is the only member of its object, so there is no separator to copy; the tool never guesses one, and nothing is written. Give the rule the anchor (package_id) or the object another member, in the file's style, and run apply again: it inserts what is absent itself. Never write an origin \"model\" by hand: only the model's export writes model (origin_unbound). Either value and rule_id, or valuation and pool_id, are there. The error's ref is the rule or the pool."
     },
     "limited_invalid": {
       "category": "error",
@@ -1009,7 +1009,7 @@
         "bound": {"type": "token", "required": true},
         "suggested_scale": {"type": "token", "required": true}
       },
-      "description": "acmodel export valuations, and bindings check|apply for a bound valuation (a warning; #466 W3; the Runtime's outcome-code policy names it): the base weight W of the pool pool_id of schedule.json (path), which a valuation binding (entry, its pointer in bindings.json; valuation, the resource whose price it weighs) ties to the model, rounds (weight) away from its exact value (exact: the price in milli times the pool's scale Q, scale) by more than the precision bound (bound, 1/200, the 0.5 % of formats.md) of it (error, the relative error, both exact rationals). W is still written, with the precision in out/valuations.json and in apply's changed: whether Q changes is the resource side's to decide, and the tool never changes it. suggested_scale is the least power of ten whose W lies in 0..1,000,000 and within the bound, or none when no power of ten up to 10^15 does. One reason only: a W that rounds to 0 is valuation_rounds_to_zero, one beyond the range valuation_out_of_range, both refused. It changes no exit status. The warning's ref is the pool's scale, /pools/<i>/valuation/scale."
+      "description": "acmodel export valuations, and bindings check|apply for a bound valuation (a warning; #466 W3; the Runtime's outcome-code policy names it): the base weight W of the pool pool_id of schedule.json (path), which a valuation binding (entry, its pointer in bindings.json; valuation, the resource whose price it weighs) ties to the model, rounds (weight) away from its exact value (exact: the price in milli times the pool's scale Q, scale) by more than the precision bound (bound, 1/200, the 0.5 % of formats.md) of it (error, the relative error, both exact rationals). W is still written, with the precision in out/valuations.json and in apply's changed: whether Q changes is the resource side's to decide, and the tool never changes it. suggested_scale is the least power of ten whose W lies in 0..1,000,000 and within the bound, or none when no power of ten up to 10^15 does. One reason only: a W that rounds to 0 is valuation_rounds_to_zero, one beyond the range valuation_out_of_range, a price below 0 valuation_price_negative, all refused. It changes no exit status. The warning's ref is the pool's scale, /pools/<i>/valuation/scale."
     },
     "prices_stale": {
       "category": "warning",
@@ -1346,7 +1346,7 @@
         "weight": {"type": "token", "required": true},
         "suggested_scale": {"type": "token", "required": true}
       },
-      "description": "acmodel export valuations, and bindings check|apply for a bound valuation (#466 W3): the base weight W of the pool pool_id of schedule.json (path), which a valuation binding (entry, its pointer in bindings.json; valuation, the resource whose price it weighs) ties to the model, lies beyond 0..1,000,000 once rounded (weight; exact, the price in milli times the pool's scale Q, scale, before rounding), or its price is below 0. The Runtime refuses such a base_weight_milli, so a schedule with it would not compile: the export writes nothing, and apply refuses. suggested_scale is the least power of ten whose W lies in range and within the precision bound, or none when no power of ten up to 10^15 does (a price above 1,000,000 milli a step, or below 0). The tool never changes Q: the resource side does. The error's ref is the pool's scale, /pools/<i>/valuation/scale."
+      "description": "acmodel export valuations, and bindings check|apply for a bound valuation (#466 W3): the base weight W of the pool pool_id of schedule.json (path), which a valuation binding (entry, its pointer in bindings.json; valuation, the resource whose price it weighs) ties to the model, lies above 1,000,000 once rounded (weight; exact, the price in milli times the pool's scale Q, scale, before rounding), and the price is not below 0 (that is valuation_price_negative, fix1). The Runtime refuses such a base_weight_milli, so a schedule with it would not compile: the export writes nothing, and apply refuses. suggested_scale is the least power of ten whose W lies in range and within the precision bound, or none when no power of ten up to 10^15 does (a price above 1,000,000 milli a step). The tool never changes Q: the resource side does. The error's ref is the pool's scale, /pools/<i>/valuation/scale."
     },
     "valuation_pending_marker": {
       "category": "error",
@@ -1360,6 +1360,22 @@
         "pool_id": {"type": "token", "required": true}
       },
       "description": "acmodel export valuations, and bindings check|apply for a bound valuation (#466 W3): the pool pool_id of schedule.json (path), whose W a valuation binding (entry, its pointer in bindings.json; valuation, the resource whose price it weighs) ties to the model, writes \"valuation\": \"pending\", the Runtime's marker of a worth not known yet. The marker has no scale Q to weigh in, and the Runtime takes valuation_origin only beside a block, so nothing is written: the tool never makes a block (its name, unit and scale are the resource side's). Write the block with its scale, and the binding writes W; or remove the binding. The error's ref is the pool's valuation."
+    },
+    "valuation_price_negative": {
+      "category": "error",
+      "exit": 5,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "entry": {"type": "token", "required": true},
+        "valuation": {"type": "token", "required": true},
+        "pool_id": {"type": "token", "required": true},
+        "milli": {"type": "token", "required": true},
+        "scale": {"type": "token", "required": true},
+        "suggested_scale": {"type": "vocab", "required": true, "members": ["none"]}
+      },
+      "description": "acmodel export valuations, and bindings check|apply for a bound valuation (#466 W3 fix1): the price of the resource (valuation) whose worth a valuation binding (entry, its pointer in bindings.json) ties to the pool pool_id of schedule.json (path) is below 0 (milli, the price in milli of one step as out/prices.json delivered it, an exact rational; scale, the pool's Q). A pool's worth below 0 says that using the pool brings value in, and no scale Q changes that: suggested_scale is always none. It is the model's to look at (the price), not the resource side's scale. The export writes nothing, and apply refuses. A W beyond the range at a price not below 0 is valuation_out_of_range instead. The error's ref is the pool's W, /pools/<i>/valuation/base_weight_milli."
     },
     "valuation_rounds_to_zero": {
       "category": "error",
@@ -1387,7 +1403,7 @@
         "path": {"type": "path", "required": true},
         "members": {"type": "list:token", "required": true}
       },
-      "description": "acmodel bindings check (a warning; #466 W3): out/valuations.json (path) was not written from the current inputs: members lists what differs, of the model's versions (rules, data, tool), the bytes of out/prices.json (prices; also when it is gone), the bytes of bindings.json (bindings), and the scale Q a valuation read of its pool, which schedule.json no longer holds (scale). The check compares each bound W with the one computed now, never with the file; export valuations brings the file up to date."
+      "description": "acmodel bindings check (a warning; #466 W3): out/valuations.json (path) was not written from the current inputs: members lists what differs, of the model's versions (rules, data, tool), the bytes of out/prices.json (prices; also when it is gone), the bytes of exports.json (exports: the acceptances a price rests on are there; fix1), the bytes of bindings.json (bindings), and the scale Q a valuation read of its pool, which schedule.json no longer holds (scale). The check compares each bound W with the one computed now, never with the file; export valuations brings the file up to date."
     },
     "value_consumes_mismatch": {
       "category": "error",

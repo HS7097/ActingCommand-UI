@@ -11,20 +11,22 @@ consuming `c` costs `c·W/Q`): the pool's price in milli (prices.json's `milli`,
 binding declares (`round`). Q, the pool's `scale`, is the schedule's, and so are the block's `name` and `unit`: they are
 read, never written.
 
-**Range and precision**: three reasons, three codes, each with a suggested scale (`suggest`), so that no code holds two
-reasons:
+**Price, range and precision**: four reasons, four codes, so that no code holds two reasons:
+- the price is below 0 (`valuation_price_negative`): refused, and the suggested scale is none, since no Q makes a price
+  below 0 a weight the Runtime takes: that is the model's to look at (fix1);
 - W rounds to 0 while the price is above 0 (`valuation_rounds_to_zero`): refused. A W of 0 says the pool costs nothing
   to use, which would be wrong without a word;
-- W lies beyond 0..1,000,000 (`valuation_out_of_range`), what the Runtime takes; a price below 0 too: refused;
+- W lies above 1,000,000 (`valuation_out_of_range`), beyond what the Runtime takes: refused;
 - W is off its exact value by more than `PRECISION_BOUND` of it (`precision_low`): a warning only. W is written, and
   whether Q changes is the resource side's to decide.
-The suggested scale is the least power of ten whose W is in range and within the bound, or none when no power of ten
-within Q's range does: the tool never suggests a scale that does not hold, and never changes Q.
+The last three carry a suggested scale (`suggest`): the least power of ten whose W is in range and within the bound, or
+none when no power of ten within Q's range does. The tool never suggests a scale that does not hold, and never changes Q.
 
 **Every valuation is listed**: one whose price is pending (as `export values` reads prices, `values.PriceReader`) is
 written `pending` with why. A binding whose pool is not there, is a slot, holds the pending marker for its valuation or no
-block with an integer W and a scale in range, a resource the model lacks, a W refused for its range, or prices.json of
-other versions or another κ, refuses the whole export, and nothing is written.
+block with an integer W and a scale in range, a resource the model lacks, a price below 0, a W refused for its range, or
+prices.json of other versions or another κ, refuses the whole export, and nothing is written. valuations.json records the
+sha256 of the bytes of prices.json, exports.json (the acceptances a price rests on) and bindings.json.
 
 `bindings check|apply` take a bound valuation from here too (`weigh`), so a binding holds only what this export writes.
 """
@@ -44,6 +46,7 @@ from acmodel.codes import (
     PRECISION_LOW,
     VALUATION_OUT_OF_RANGE,
     VALUATION_PENDING_MARKER,
+    VALUATION_PRICE_NEGATIVE,
     VALUATION_ROUNDS_TO_ZERO,
 )
 from acmodel.config import Unknowns
@@ -56,7 +59,7 @@ from acmodel.core.versions import sha256, versions
 from acmodel.envelope import Failure, error
 from acmodel.export.policy import delivered, scaled
 from acmodel.export.thresholds import write_file
-from acmodel.export.values import PENDING, PRICES, PriceReader, Prices, current_prices
+from acmodel.export.values import PENDING, PRICES, PriceReader, Prices, current_prices, exports_sha
 from acmodel.model import read_bindings, readers
 from acmodel.model.jsonfile import MAX_SAFE_INTEGER, read
 from acmodel.model.shape import json_type
@@ -214,17 +217,23 @@ def _pool(weighed: Weighed, pools: dict[str, int], doc: Any, slot_ids: frozenset
 
 
 def _range(weighed: Weighed, mode: str) -> None:
-    """W of the price and Q, and the one code of the three that holds, if any, each with its suggested scale."""
+    """W of the price and Q, and the one code of the four that holds, if any: a price below 0 (`valuation_price_negative`,
+    the suggested scale none, at the pool's W: no Q helps), then W rounding to 0, W above 1,000,000 and W off by more than
+    the bound, each with its suggested scale, at the pool's scale."""
     milli, scale = weighed.milli, weighed.scale
     exact = milli * scale
     weight = scaled(milli, scale, mode)
     weighed.exact, weighed.weight = exact, weight
+    if milli < 0:
+        detail = weighed.detail(milli=str(milli), scale=str(scale), suggested_scale=NONE)
+        weighed.refusals.append(error(VALUATION_PRICE_NEGATIVE, detail, at(weighed.pool_ref, BLOCK, WEIGHT)))
+        return
     suggested = suggest(milli, mode)
     shown = {"scale": str(scale), "exact": str(exact), "weight": str(weight),
              "suggested_scale": NONE if suggested is None else str(suggested)}
     if exact > 0 and weight == 0:
         weighed.refusals.append(error(VALUATION_ROUNDS_TO_ZERO, weighed.detail(**shown), weighed.scale_ref))
-    elif exact < 0 or weight > WEIGHT_MAX:
+    elif weight > WEIGHT_MAX:
         weighed.refusals.append(error(VALUATION_OUT_OF_RANGE, weighed.detail(**shown), weighed.scale_ref))
     elif abs(weight - exact) > PRECISION_BOUND * exact:
         off = abs(weight - exact) / exact
@@ -353,6 +362,7 @@ def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, An
         "model_id": run.head["model_id"],
         "versions": versions(run.checker, run.folder),
         "prices": {"file": PRICES, "sha256": prices.sha, "versions": prices.doc["versions"]},
+        "exports": {"file": relative(run, run.exports.path), "sha256": exports_sha(run)},
         "bindings": {"file": relative(run, str(path)), "sha256": bindings_sha(run)},
         "schedule": {"file": readers.SCHEDULE_FILE},
         "unit_milli": prices.doc["unit_milli"],

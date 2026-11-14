@@ -99,10 +99,11 @@ INSERT_STYLE_UNKNOWN = "insert_style_unknown"  # bindings apply: no separator to
 FILE_CHANGED = "file_changed"  # bindings apply: a file changed between its reading and its rename
 VALUES_STALE = "values_stale"  # bindings check (a warning): out/values.json is not of the current inputs
 # #466 W3, a pool's valuation (W of `export valuations` and the valuation bindings) and the limited mark. Each code is one
-# reason: a W that rounds to 0 at a price above 0, one beyond 0..1,000,000, and one whose rounding loses more than the
-# bound (a warning) are three codes, each with its suggested scale.
+# reason: a price below 0 (no scale helps; fix1), a W that rounds to 0 at a price above 0, one above 1,000,000, and one
+# whose rounding loses more than the bound (a warning) are four codes, the last three each with its suggested scale.
+VALUATION_PRICE_NEGATIVE = "valuation_price_negative"  # the bound resource's price is below 0: refused, no scale helps
 VALUATION_ROUNDS_TO_ZERO = "valuation_rounds_to_zero"  # W rounds to 0 while the price is above 0: refused
-VALUATION_OUT_OF_RANGE = "valuation_out_of_range"  # W beyond 0..1,000,000, what the Runtime takes: refused
+VALUATION_OUT_OF_RANGE = "valuation_out_of_range"  # W above 1,000,000, beyond what the Runtime takes: refused
 PRECISION_LOW = "precision_low"  # a warning: W's rounding is off by more than the bound; it is written
 VALUATION_PENDING_MARKER = "valuation_pending_marker"  # the bound pool's valuation is the pending marker
 VALUATIONS_STALE = "valuations_stale"  # bindings check (a warning): out/valuations.json is not of the current inputs
@@ -196,6 +197,7 @@ EXIT_STATUS = {
     INSERT_STYLE_UNKNOWN: 6,
     FILE_CHANGED: 5,
     VALUES_STALE: 0,
+    VALUATION_PRICE_NEGATIVE: 5,
     VALUATION_ROUNDS_TO_ZERO: 5,
     VALUATION_OUT_OF_RANGE: 5,
     PRECISION_LOW: 0,

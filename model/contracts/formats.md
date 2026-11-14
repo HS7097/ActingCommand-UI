@@ -2204,21 +2204,22 @@ never touched, and a resource repository that reads `acmodel.values.v1` reads on
    with why (`price_pending` with the price's `pending`, `price_missing`, `price_acceptance_withdrawn`,
    `price_acceptance_changed`); one delivered under an acceptance (provisional, or an accepted verified zero) makes it
    `provisional`, listing the acceptance `price:<pool>` with its `ref` and `until`; otherwise it is `confirmed`.
-6. **Range and precision**: three reasons, three codes, so that no code holds two reasons (each tells a person something
-   else to do), each with a suggested scale:
+6. **Price, range and precision**: four reasons, four codes, so that no code holds two reasons (each tells a person
+   something else to do):
 
    | W | Code | Then |
    |---|---|---|
+   | of a price below 0 | `valuation_price_negative` (exit 5; fix1) | refused, nothing is written: a pool worth less than nothing says using it brings value in, and no Q changes that, so the suggested scale is `none`; the price is the model's to look at. `milli` and `scale` in the detail, at the pool's `base_weight_milli` |
    | rounds to 0 while the price is above 0 | `valuation_rounds_to_zero` (exit 5) | refused, nothing is written: a W of 0 says using the pool costs nothing, which the price denies |
-   | beyond 0..1,000,000 once rounded, or of a price below 0 | `valuation_out_of_range` (exit 5) | refused, nothing is written: the Runtime refuses such a `base_weight_milli`, so the schedule would not compile |
+   | above 1,000,000 once rounded (the price not below 0) | `valuation_out_of_range` (exit 5) | refused, nothing is written: the Runtime refuses such a `base_weight_milli`, so the schedule would not compile |
    | off its exact value by more than the **precision bound** of it | `precision_low` (a warning) | written, and its `precision` recorded; whether Q changes is the resource side's to decide |
 
    The **precision bound** is `1/200` (0.5 %): the relative error `|W − exact| / exact` may be at most that
    (`valuations.PRECISION_BOUND`). A price of 0 weighs 0 exactly and is none of these.
-   The **suggested scale** is the least power of ten Q′ (10<sup>0</sup> to 10<sup>15</sup>, within Q's range) whose W lies
-   in 0..1,000,000 and within the bound, or `none` when no power of ten does (a price above 1,000,000 milli a step, or
-   below 0, or one too small for 10<sup>15</sup> steps): the tool never suggests a scale that does not hold, and never
-   changes Q.
+   The last three carry a **suggested scale**: the least power of ten Q′ (10<sup>0</sup> to 10<sup>15</sup>, within Q's
+   range) whose W lies in 0..1,000,000 and within the bound, or `none` when no power of ten does (a price above
+   1,000,000 milli a step, or one too small for 10<sup>15</sup> steps), at the pool's `scale`: the tool never suggests a
+   scale that does not hold, and never changes Q.
 
 **Every valuation is listed**: a pending one is written `pending` with each reason, as the values are. It writes into the
 model folder `out/provenance/valuations/<pool>.json` for each (`acmodel.provenance.v1`, "Provenance": `output`
@@ -2231,6 +2232,7 @@ its entry below without `provenance`; `acceptances` when it rests on one). Then 
 | `schema_version` | `acmodel.valuations.v1` |
 | `model_id`, `versions` | as in a provenance document |
 | `prices` | the prices it weighed in: `file` (`out/prices.json`), `sha256` of its bytes, and its `versions` |
+| `exports` | `file` (`exports.json`) and the `sha256` of its bytes (fix1): the acceptances a provisional price rests on are there, as for `out/values.json` |
 | `bindings` | `file` (`bindings.json`) and the `sha256` of its bytes: the valuations are bound there |
 | `schedule` | `file` (`schedule.json`, relative to the repository); the scale each valuation read is in its entry |
 | `unit_milli` | κ, as prices.json has it |
@@ -2303,8 +2305,9 @@ value:
   `price_pending:<pool>` or `price_acceptance_changed:<pool>`). Without a value binding nothing of the values is read.
 - **A bound valuation** (#466 W3) is computed exactly as `export valuations` computes it, from the same prices and the
   pool's own scale ("`acmodel export valuations`", steps 2 to 6): prices of other versions are `export_refused`
-  (`prices_stale`, `output` `valuations`, exit 5); a W the export refuses (`valuation_rounds_to_zero`,
-  `valuation_out_of_range`, exit 5), and a pool, block or scale it refuses (exit 6), are refused the same way; one whose
+  (`prices_stale`, `output` `valuations`, exit 5); a price or W the export refuses (`valuation_price_negative`,
+  `valuation_rounds_to_zero`, `valuation_out_of_range`, exit 5), and a pool, block or scale it refuses (exit 6), are
+  refused the same way; one whose
   price is pending is `export_refused` (`pending`, exit 5, `output` `valuation:<pool>`, `path` `bindings.json`, at the
   binding, one error per reason, `value` `<reason>:<resource>`); a W off by more than the precision bound is the warning
   `precision_low`, with the suggested scale. A valuation names a resource of the model (`rule_reference_missing`,
@@ -2348,8 +2351,11 @@ wrote it (the Runtime's `standard-pack-schedule` reads both; only Provenance rea
   one present member go in at once, in that order). Each is written in the
   style of the member it follows: the separator that follows it, a comma with the whitespace before and after it (so a
   line end and an indent, CRLF or LF as the file has them), then the key, that member's own colon with its whitespace,
-  and the value. A rule without that member, or one where no member follows it, has no separator to copy:
-  `insert_style_unknown` (at the rule), and nothing is guessed.
+  and the value. When no member follows it (it is the last member of its object), the separator copied is the one
+  that precedes it, between the member before it and its key (#466 W3 fix1), and the new members go in right after its
+  value, before the object's closing brace: still the file's own bytes, never a guess. A rule without that member, or
+  one where it is the only member of its object, has no separator to copy: `insert_style_unknown` (at the rule), and
+  nothing is guessed.
 - **Nothing is removed.** A value that becomes pending, or a binding that is gone, leaves the rule as it is: the tool
   reports, and a person writes the value by hand and its origin then.
 
@@ -2369,12 +2375,15 @@ say: the tool knows no game and no kind of pool. For each:
   difference `apply` writes in place. Q, `name`, `unit` and `gap` are never written.
 - **The origin**, as the Runtime reads it: absent is the pack's, `"model"` beside a block the model's, anything else
   refused. A pool without `valuation_origin` is `origin_missing` (`valuation`, `pool_id`, at the pool), a difference
-  `apply` writes, inserting `"model"` right after the block in the block's style (`insert_style_unknown`, anchor
-  `valuation`, at the pool, when no member follows the block). Another origin is `origin_invalid` (`found`, at the
+  `apply` writes, inserting `"model"` right after the block, as "A value's rule" inserts (its "Inserting"): with the
+  separator that follows the block, or, when the block is the pool's last member (as a pool usually ends, and as the
+  Runtime's contract has it), the one that precedes it (#466 W3 fix1); `insert_style_unknown` (anchor `valuation`, at
+  the pool) only when the block is the pool's only member. Another origin is `origin_invalid` (`found`, at the
   member): `check` reports it, `apply` refuses it and writes nothing, and the tool never rewrites it.
 - **The word.** `schedule.json`'s `requires` must hold `benefit_fixed_value` (`requires_word_missing`), as for a value.
-- **Range and precision** are those of `export valuations` (step 6 there): `valuation_rounds_to_zero` and
-  `valuation_out_of_range` refuse `check` and `apply`; `precision_low` is a warning, W is written, and `apply`'s
+- **Price, range and precision** are those of `export valuations` (step 6 there): `valuation_price_negative`,
+  `valuation_rounds_to_zero` and `valuation_out_of_range` refuse `check` and `apply`; `precision_low` is a warning, W is
+  written, and `apply`'s
   `changed` shows its `precision`.
 - **Nothing is removed**, as for a value.
 
@@ -2472,9 +2481,10 @@ says `greater_than_or_equal`).
     warning `values_stale` (it never changes the exit status: the literals are compared with the values computed now);
     null without the file. A file of another model is `value_invalid` at `/model_id`;
   - `valuations` (#466 W3): whether `out/valuations.json` is of the current inputs, `{file, current, stale}`: `stale`
-    lists what differs of the model's versions (`rules`, `data`, `tool`), the bytes of `out/prices.json` (`prices`) and
-    of `bindings.json` (`bindings`), and `scale` when a pool no longer holds the scale a valuation read; not current is
-    the warning `valuations_stale` (it never changes the exit status); null without the file.
+    lists what differs of the model's versions (`rules`, `data`, `tool`), the bytes of `out/prices.json` (`prices`), of
+    exports.json (`exports`, fix1: an acceptance a price rests on withdrawn or changed) and of `bindings.json`
+    (`bindings`), and `scale` when a pool no longer holds the scale a valuation read; not current is the warning
+    `valuations_stale` (it never changes the exit status); null without the file.
 - **The provenance classes** of `acmodel check` (warnings, or errors under `check --strict-provenance`) are not
   read here: `--strict` concerns the literals of the schedule only.
 

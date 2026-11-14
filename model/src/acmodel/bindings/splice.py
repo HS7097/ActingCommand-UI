@@ -5,8 +5,10 @@
 - **an insertion** (#464 W1): new members right after a member of an object, the anchor (`Layout.insert_after`). Each
   is written as the file writes the anchor: the separator that follows the anchor (its comma with the whitespace before
   and after it, which may hold a line end and an indent, CRLF or LF as the file has it), then the key, the anchor's own
-  colon with its whitespace, then the value. An anchor that no member follows has no separator to copy: the insertion
-  is refused (None), never guessed.
+  colon with its whitespace, then the value. When the anchor is the last member of its object, the separator copied is
+  the one that precedes it, between the member before it and its key (#466 W3 fix1), and the members go in right after
+  its value, before the object's closing brace. An anchor that is the only member of its object has no separator to
+  copy either way: the insertion is refused (None), never guessed.
 
 `expected` gives the document the edits must make: the original document with each changed value and each inserted
 member in place (`assign`, `placed`), and `check` parses the edited bytes with the strict reader and compares them with
@@ -28,6 +30,7 @@ from acmodel.model import jsonfile
 
 _COLON = re.compile(rb"[ \t\r\n]*:[ \t\r\n]*")
 _SEPARATOR = re.compile(rb"[ \t\r\n]*,[ \t\r\n]*")
+_WHITESPACE = (b" ", b"\t", b"\r", b"\n")  # JSON's whitespace, one byte each
 
 
 @dataclass(frozen=True)
@@ -53,19 +56,41 @@ class Layout:
 
     def insert_after(self, anchor: str, members: list[tuple[str, bytes]]) -> Edit | None:
         """`members` (each a key and its value's bytes), in order, right after the member at the pointer `anchor`, each
-        written with the separator that follows the anchor and the anchor's colon. None when no member follows the anchor
-        (no separator to copy)."""
-        key_end = self.keys[anchor][1]
+        written with a separator of the file and the anchor's colon: the separator that follows the anchor, or, when the
+        anchor is the last member of its object, the one that precedes it (#466 W3 fix1). None when the anchor is the only
+        member of its object (no separator to copy)."""
+        key_start, key_end = self.keys[anchor]
         value_start, value_end = self.values[anchor]
         colon = self.raw[key_end:value_start]
         if _COLON.fullmatch(colon) is None:  # the scanner read a colon there, so this is a defect
             raise ValueError(f"no colon between the key and the value of {anchor}")
         found = _SEPARATOR.match(self.raw, value_end)
-        if found is None or self.raw[found.end():found.end() + 1] != b'"':
-            return None
-        separator = found.group()
+        if found is not None and self.raw[found.end():found.end() + 1] == b'"':
+            separator = found.group()
+        else:
+            preceding = self._preceding(key_start)
+            if preceding is None:
+                return None
+            separator = preceding
         data = b"".join(separator + json.dumps(key).encode("ascii") + colon + value for key, value in members)
         return Edit(value_end, value_end, data)
+
+    def _preceding(self, key_start: int) -> bytes | None:
+        """The separator right before the key that starts at byte `key_start`: the whitespace, the comma and the
+        whitespace between the value of the member before and the key. None when the key is the first of its object (an
+        opening brace precedes it)."""
+        start = key_start
+        while start > 0 and self.raw[start - 1:start] in _WHITESPACE:
+            start -= 1
+        if self.raw[start - 1:start] != b",":
+            return None
+        start -= 1
+        while start > 0 and self.raw[start - 1:start] in _WHITESPACE:
+            start -= 1
+        separator = self.raw[start:key_start]
+        if _SEPARATOR.fullmatch(separator) is None:  # the scanner read a member before it, so this is a defect
+            raise ValueError(f"no separator before the key at byte {key_start}")
+        return separator
 
 
 def apply(raw: bytes, edits: list[Edit]) -> bytes:

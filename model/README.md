@@ -157,10 +157,11 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
 - **`export valuations`** (#466 W3) writes `out/valuations.json` and one provenance file per bound pool valuation, apart
   from `out/values.json`, which it never touches: the base weight W of each pool that a valuation binding of
   `bindings.json` names, the price `export prices` delivered times the pool's own scale Q in `schedule.json`, rounded as
-  the binding declares. Q, `name` and `unit` are only read. Three reasons, three codes, each with the suggested scale
-  (the least power of ten that holds, or none): W rounding to 0 at a price above 0 (`valuation_rounds_to_zero`) and W
-  beyond 0..1,000,000 (`valuation_out_of_range`) refuse the export; a W whose rounding is off by more than 0.5 % is the
-  warning `precision_low`, and written. A pending price leaves the valuation pending, with why.
+  the binding declares. Q, `name` and `unit` are only read. Four reasons, four codes: a price below 0
+  (`valuation_price_negative`; no scale helps, the suggested scale is none), W rounding to 0 at a price above 0
+  (`valuation_rounds_to_zero`) and W above 1,000,000 (`valuation_out_of_range`) refuse the export; a W whose rounding is
+  off by more than 0.5 % is the warning `precision_low`, and written. The last three carry the suggested scale (the
+  least power of ten that holds, or none). A pending price leaves the valuation pending, with why.
 - **The export policy** decides what a delivered file takes from an output: a confirmed value as it is; a
   provisional one only when `acceptances` of exports.json accept it (a table cell is `null` otherwise, the
   others are refused); a blocked or per-account one never. A number is scaled and rounded as declared

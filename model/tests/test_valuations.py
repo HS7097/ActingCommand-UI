@@ -8,8 +8,10 @@ and the limited mark of the value bindings (contracts/formats.md, "`acmodel expo
 Every fixture is neutral, the one of test_values: four pools, one activity with one flow, and an `out/prices.json`
 written as `export prices` writes it. With κ = 1000 the prices in milli are pool.a 4 (or another price a test writes),
 pool.b 100, pool.c 50 (provisional, accepted) and pool.d pending. The schedule's pools carry other ids than the model's
-resources where a test needs several pools of one price: a valuation binding names both. Each docstring works W out by
-hand: W = the price in milli × the pool's scale Q, rounded as the binding declares."""
+resources where a test needs several pools of one price: a valuation binding names both. Each pool has the shape pools
+have in a resource repository (fix1): its valuation block is its last member, so the origin goes in after the pool's last
+member. Each docstring works W out by hand: W = the price in milli × the pool's scale Q, rounded as the binding
+declares."""
 
 from __future__ import annotations
 
@@ -21,10 +23,11 @@ from typing import Any
 import pytest
 
 from acmodel import cli
+from acmodel.bindings import splice
 from acmodel.codes import EXIT_STATUS
 from acmodel.core.versions import sha256 as doc_sha256
 from acmodel.export.valuations import PRECISION_BOUND, fits, suggest
-from test_economy import CODES, activity, limit
+from test_economy import CODES, activity, cap, limit
 from test_values import (
     DAY_RUN,
     MAKE,
@@ -100,10 +103,11 @@ def priced(folder: Path, value: str) -> None:
 
 
 def pool(pool_id: str, scale: Any, weight: Any, *, origin: str | None = None) -> str:
-    """A pool of one line, without spaces: its valuation block, its origin when given, then its capacity."""
+    """A pool of one line, without spaces, as pools end in a resource repository: its capacity, then its valuation block,
+    its last member, then its origin when given (after the block, where `apply` inserts it)."""
     block = '{"name":"N","unit":"u","scale":' + json.dumps(scale) + ',"base_weight_milli":' + json.dumps(weight) + "}"
     after = "" if origin is None else ',"valuation_origin":' + origin
-    return '{"id":"' + pool_id + '","valuation":' + block + after + ',"capacity":10}'
+    return '{"id":"' + pool_id + '","capacity":10,"valuation":' + block + after + "}"
 
 
 def schedule(*pools: str, rules: tuple[str, ...] = (), requires: str = f'["{WORD}"]') -> bytes:
@@ -139,7 +143,8 @@ def delivered(folder: Path) -> dict[str, Any]:
 def test_export_valuations_writes_w_into_its_own_file_and_values_json_keeps_every_byte(tmp_path, acmodel):
     """pool.b: 100 milli × Q 1000 = 100000, confirmed. pool.c: 50 × 10 = 500, provisional on its price's acceptance.
     pool.d's price is pending, so that valuation is pending with why. The valuations go into out/valuations.json, of its
-    own format; out/values.json, written before, keeps every byte, and schedule.json too (an export writes no schedule)."""
+    own format, which records the sha256 of prices.json, exports.json (fix1) and bindings.json; out/values.json, written
+    before, keeps every byte, and schedule.json too (an export writes no schedule)."""
     folder = values_repo(tmp_path, [DAY_RUN])
     (folder / "schedule.json").write_bytes(schedule(pool("pool.b", 1000, 1), pool("pool.c", 10, 1), pool("pool.d", 1, 1)))
     bind(folder, ("pool.b", "pool.b", "half_even"), ("pool.c", "pool.c", "floor"), ("pool.d", "pool.d", "ceil"))
@@ -166,6 +171,7 @@ def test_export_valuations_writes_w_into_its_own_file_and_values_json_keeps_ever
         "model_id": "economy",
         "versions": model_versions(base(folder)),
         "prices": {"file": "out/prices.json", "sha256": sha(out / "prices.json"), "versions": model_versions(base(folder))},
+        "exports": {"file": "exports.json", "sha256": sha(base(folder) / "exports.json")},
         "bindings": {"file": "bindings.json", "sha256": sha(base(folder) / "bindings.json")},
         "schedule": {"file": "schedule.json"},
         "unit_milli": 1000,
@@ -213,8 +219,9 @@ THIRD = "1/3000"
 
 def test_apply_writes_w_as_rounded_and_the_origin_and_never_q(tmp_path, acmodel):
     """Three pools of one price, three roundings. `check` names each difference (W, the absent origin); `apply` writes
-    W in place and inserts the origin right after the block in the file's own style (no spaces); Q, `name`, `unit` and
-    every other byte stay. Then `check` passes and shows each valuation."""
+    W in place and inserts the origin right after the block, the pool's last member, in the file's own style (the
+    separator before the block: no spaces); Q, `name`, `unit` and every other byte stay. Then `check` passes and shows
+    each valuation."""
     folder = values_repo(tmp_path, [DAY_RUN])
     priced(folder, THIRD)
     path = folder / "schedule.json"
@@ -272,7 +279,10 @@ def test_apply_writes_w_as_rounded_and_the_origin_and_never_q(tmp_path, acmodel)
     assert (status, doc["data"]["changed"], doc["data"]["written"]) == (0, [], [])
 
 
-# One pool over several lines, indented: the origin goes in on a line of its own, with the file's line end and indent.
+# The shapes of a pool (fix1). `indented`: over several lines, the block last, as resource repositories write pools; the
+# origin goes in after the block on a line of its own, with the separator before the block (its comma, line end and
+# indent). `compact`: one pool a line without spaces, the block last. `followed`: the block followed by a member, whose
+# separator is copied as before.
 INDENTED = [
     "{",
     '  "schema_version": "actingcommand.schedule.v1",',
@@ -280,66 +290,85 @@ INDENTED = [
     '  "pools": [',
     "    {",
     '      "id": "p.even",',
+    '      "capacity": 10,',
     '      "valuation": {',
     '        "name": "N",',
     '        "unit": "u",',
     '        "scale": 1000,',
     '        "base_weight_milli": @W@',
-    "      },",
-    "@ORIGIN@",
-    '      "capacity": 10',
+    "@CLOSE@",
     "    }",
     "  ]",
     "}",
 ]
+FOLLOWED = '{"id":"p.even","valuation":{"name":"N","unit":"u","scale":1000,"base_weight_milli":@W@}@ORIGIN@,"capacity":10}'
+ORDER = {
+    "indented": ["id", "capacity", "valuation", "valuation_origin"],
+    "compact": ["id", "capacity", "valuation", "valuation_origin"],
+    "followed": ["id", "valuation", "valuation_origin", "capacity"],
+}
 
 
-def indented(weight: str, origin: list[str], end: str) -> bytes:
-    lines: list[str] = []
-    for line in INDENTED:
-        if line == "@ORIGIN@":
-            lines.extend(origin)
+def shaped(form: str, weight: str, origin: bool, end: str) -> bytes:
+    """schedule.json with the one pool p.even of Q 1000 in the shape `form`, W `weight`, the origin `"model"` after the
+    block when `origin`, its lines ended by `end`."""
+    if form == "indented":
+        close = ["      },", '      "valuation_origin": "model"'] if origin else ["      }"]
+        lines = [part for line in INDENTED for part in (close if line == "@CLOSE@" else [line.replace("@W@", weight)])]
+    else:
+        if form == "compact":
+            item = pool("p.even", 1000, int(weight), origin='"model"' if origin else None)
         else:
-            lines.append(line.replace("@W@", weight))
+            item = FOLLOWED.replace("@W@", weight).replace("@ORIGIN@", ',"valuation_origin":"model"' if origin else "")
+        lines = ['{"schema_version":"actingcommand.schedule.v1","requires":["' + WORD + '"],"pools":[', item, "]}"]
     return (end.join(lines) + end).encode("utf-8")
 
 
 @pytest.mark.parametrize("end", ["\r\n", "\n"], ids=["crlf", "lf"])
-def test_the_origin_is_inserted_after_the_block_and_every_other_byte_stays(tmp_path, acmodel, end):
+@pytest.mark.parametrize("form", ["indented", "compact", "followed"])
+def test_the_origin_is_inserted_after_the_block_and_every_other_byte_stays(tmp_path, acmodel, form, end):
+    """The block ends its pool (`indented`, `compact`): no separator follows it, so the origin is written with the one
+    before it, between `capacity` and the block, right after the block and before the pool's closing brace. A block a
+    member follows (`followed`) gives its own separator, as before. W is replaced in place, and every other byte stays,
+    the line ends (LF or CRLF) and the indent too: the file reads back as the document with W and the origin, member order
+    included, and `check` then passes."""
     folder = values_repo(tmp_path, [DAY_RUN])
     priced(folder, THIRD)
     path = folder / "schedule.json"
-    path.write_bytes(indented("7", [], end))
+    path.write_bytes(shaped(form, "7", False, end))
+    document = json.loads(path.read_bytes())
     bind(folder, ("pool.a", "p.even", "half_even"))
-    expected = indented("333", ['      "valuation_origin": "model",'], end)
+    expected = shaped(form, "333", True, end)
     assert expected.count(b"\n") == expected.count(end.encode("ascii"))
 
     status, doc = bindings(acmodel, folder, "apply")
 
     assert (status, doc["errors"]) == (0, [])
     assert path.read_bytes() == expected
+    assert doc["data"]["changed"][0]["inserted"] == ["valuation_origin"]
+    document["pools"][0]["valuation"]["base_weight_milli"] = 333
+    document["pools"][0]["valuation_origin"] = "model"
+    written = json.loads(path.read_bytes())
+    assert (written, list(written["pools"][0])) == (document, ORDER[form])
     assert bindings(acmodel, folder, "check")[0] == 0
 
 
-def test_a_block_no_member_follows_has_no_style_to_copy(tmp_path, acmodel):
-    """The block is the pool's last member: no separator after it to copy, so the origin is not guessed in."""
-    folder = values_repo(tmp_path, [DAY_RUN])
-    priced(folder, THIRD)
-    path = folder / "schedule.json"
-    path.write_bytes(schedule('{"id":"p.last","capacity":10,"valuation":{"scale":1000,"base_weight_milli":333}}'))
-    before = path.read_bytes()
-    bind(folder, ("pool.a", "p.last", "half_even"))
+def test_a_separator_is_copied_from_after_the_anchor_or_before_it_and_never_guessed():
+    """The insertion on bytes alone (`splice.Layout.insert_after`): after an anchor a member follows, that member's
+    separator, spacing and line end as they are; after the last member of an object, the separator before it, the new
+    member then going in before the closing brace; after a member alone in its object (or the first and last), none: no
+    separator to copy, so nothing is guessed (None), even when the object itself follows a comma."""
 
-    status, doc = bindings(acmodel, folder, "apply")
+    def inserted(raw: bytes, anchor: str) -> bytes | None:
+        edit = splice.Layout(raw).insert_after(anchor, [("k", b"1")])
+        return None if edit is None else splice.apply(raw, [edit])
 
-    assert status == 6
-    assert doc["errors"] == [{
-        "code": "insert_style_unknown",
-        "detail": {"path": str(path), "entry": "/bindings/0", "valuation": "pool.a", "pool_id": "p.last",
-                   "anchor": "valuation", "member": "valuation_origin"},
-        "ref": "/pools/0",
-    }]
-    assert path.read_bytes() == before
+    assert inserted(b'{"a": 1 ,\n  "b": 2}', "/a") == b'{"a": 1 ,\n  "k": 1 ,\n  "b": 2}'
+    assert inserted(b'{"a":1,\r\n  "b":{"c":2}\r\n}', "/b") == b'{"a":1,\r\n  "b":{"c":2},\r\n  "k":1\r\n}'
+    assert inserted(b'{"x":{"y":1} ,"b" : 2}', "/b") == b'{"x":{"y":1} ,"b" : 2 ,"k" : 1}'
+    assert inserted(b'{"o":{"b":2}}', "/o/b") is None
+    assert inserted(b'{"a":1,"o":{ "b":2 }}', "/o/b") is None
+    assert inserted(b'{"b": 2}', "/b") is None
 
 
 # Range and precision: three reasons, three codes ------------------------------------------------------------------------
@@ -438,6 +467,36 @@ def test_with_no_power_of_ten_that_holds_the_suggestion_says_none(tmp_path, acmo
                    "exact": "2000000", "weight": "2000000", "suggested_scale": "none"},
         "ref": "/pools/0/valuation/scale",
     }]
+
+
+def test_a_price_below_0_is_a_code_of_its_own_with_no_suggested_scale(tmp_path, acmodel):
+    """fix1: pool.a at −3/10000 is −3/10 milli a step. With Q 1 and `ceil`, W rounds to 0, inside 0..1,000,000, yet the
+    price says using the pool brings value in, and no Q changes that: `valuation_price_negative` (not
+    `valuation_out_of_range`), with the price in milli and the suggested scale none, at the pool's W. The export writes
+    nothing, `check` and `apply` refuse the same way, and the pool stays as it is."""
+    folder = values_repo(tmp_path, [DAY_RUN])
+    priced(folder, "-3/10000")
+    path = folder / "schedule.json"
+    path.write_bytes(schedule(pool("p.a", 1, 7)))
+    before = path.read_bytes()
+    bind(folder, ("pool.a", "p.a", "ceil"))
+    refused = {
+        "code": "valuation_price_negative",
+        "detail": {"path": str(path), "entry": "/bindings/0", "valuation": "pool.a", "pool_id": "p.a", "milli": "-3/10",
+                   "scale": "1", "suggested_scale": "none"},
+        "ref": "/pools/0" + PATH,
+    }
+
+    status, doc = export_valuations(acmodel, folder)
+
+    assert (status, doc["data"], doc["errors"]) == (5, {}, [refused])
+    assert not (base(folder) / "out" / "valuations.json").exists()
+    assert not (base(folder) / "out" / "provenance" / "valuations").exists()
+    for command in ("check", "apply"):
+        status, doc = bindings(acmodel, folder, command)
+
+        assert (status, doc["errors"]) == (5, [refused])
+    assert path.read_bytes() == before
 
 
 def test_the_suggested_scale_is_the_least_power_of_ten_that_holds_or_none():
@@ -556,6 +615,95 @@ def test_a_pool_without_a_block_to_weigh_in_is_refused_and_nothing_is_written(tm
     assert path.read_bytes() == before
 
 
+def test_a_slot_is_no_pool_to_weigh(tmp_path, acmodel):
+    """fix1: pool.d under a hard cap of 0 is a slot of the model (formats.md, "Slots"), no Runtime pool, so the schedule's
+    pool of that id cannot be weighed: `binding_mismatch` `slot`, at the pool, in the export, check and apply, as for a
+    threshold (test_bindings), and nothing is written."""
+    folder = values_repo(tmp_path, [DAY_RUN], cap("cap.slot.d", "pool.d", "hard", "discard", value="0"))
+    path = folder / "schedule.json"
+    path.write_bytes(schedule(pool("pool.d", 10, 7)))
+    before = path.read_bytes()
+    bind(folder, ("pool.b", "pool.d", "half_even"))
+    slot = {
+        "code": "binding_mismatch",
+        "detail": {"path": str(path), "entry": "/bindings/0", "reason": "slot", "valuation": "pool.b", "pool_id": "pool.d"},
+        "ref": "/pools/0",
+    }
+
+    status, doc = export_valuations(acmodel, folder)
+
+    assert (status, doc["errors"]) == (6, [slot])
+    assert not (base(folder) / "out" / "valuations.json").exists()
+    for command in ("check", "apply"):
+        status, doc = bindings(acmodel, folder, command)
+
+        assert (status, doc["errors"]) == (6, [slot])
+    assert path.read_bytes() == before
+
+
+def test_a_valuation_names_a_resource_of_the_model_and_a_pool_once(tmp_path, acmodel):
+    """fix1: a valuation of pool.x, which the model lacks, is `rule_reference_missing` at its `valuation`; two valuations
+    of one pool are `model_id_duplicate`, at the second binding. Each is exit 1 in the export, check and apply, and
+    nothing is written."""
+    folder = values_repo(tmp_path, [DAY_RUN])
+    path = folder / "schedule.json"
+    path.write_bytes(schedule(pool("p.a", 10, 7)))
+    before = path.read_bytes()
+    where = str(base(folder) / "bindings.json")
+    missing = {"code": "rule_reference_missing", "detail": {"path": where, "target": "pool.x", "expected": ["resource"]},
+               "ref": "/bindings/0/valuation"}
+    twice = {
+        "code": "model_id_duplicate",
+        "detail": {"path": where, "namespace": "literal", "id": "schedule.json:p.a:" + PATH, "first_path": where,
+                   "first_ref": "/bindings/0"},
+        "ref": "/bindings/1",
+    }
+
+    for valuations, refused in (
+        ((("pool.x", "p.a", "floor"),), missing),
+        ((("pool.b", "p.a", "floor"), ("pool.c", "p.a", "ceil")), twice),
+    ):
+        bind(folder, *valuations)
+
+        status, doc = export_valuations(acmodel, folder)
+
+        assert (status, doc["errors"]) == (1, [refused])
+        assert not (base(folder) / "out" / "valuations.json").exists()
+        for command in ("check", "apply"):
+            status, doc = bindings(acmodel, folder, command)
+
+            assert (status, doc["errors"]) == (1, [refused])
+        assert path.read_bytes() == before
+
+
+def test_a_valuation_needs_prices_of_the_current_versions(tmp_path, acmodel):
+    """fix1: with a valuation binding the prices are read to weigh W, so prices.json of another tool version is the error
+    `export_refused` (`prices_stale`, `output` `valuations`) in the export, check and apply, and nothing is written."""
+    folder = values_repo(tmp_path, [DAY_RUN])
+    path = folder / "schedule.json"
+    path.write_bytes(schedule(pool("pool.b", 10, 1000, origin='"model"')))
+    bind(folder, ("pool.b", "pool.b", "half_even"))
+    assert bindings(acmodel, folder, "check")[0] == 0
+    write_prices(folder, tool="0.0.9")
+    before = path.read_bytes()
+    stale = {
+        "code": "export_refused",
+        "detail": {"path": str(base(folder) / "out" / "prices.json"), "output": "valuations", "reason": "prices_stale",
+                   "value": "tool"},
+        "ref": "/versions/tool",
+    }
+
+    status, doc = export_valuations(acmodel, folder)
+
+    assert (status, doc["errors"]) == (5, [stale])
+    assert not (base(folder) / "out" / "valuations.json").exists()
+    for command in ("check", "apply"):
+        status, doc = bindings(acmodel, folder, command)
+
+        assert (status, doc["errors"]) == (5, [stale])
+    assert path.read_bytes() == before
+
+
 def test_a_pending_price_refuses_the_whole_apply(tmp_path, acmodel):
     """pool.d's price is pending: `apply` refuses and writes not even pool.b's W."""
     folder = values_repo(tmp_path, [DAY_RUN])
@@ -582,6 +730,8 @@ def test_a_pending_price_refuses_the_whole_apply(tmp_path, acmodel):
 
 
 def test_check_says_whether_out_valuations_json_is_current(tmp_path, acmodel):
+    """valuations.json records the bytes of exports.json too (fix1), where the acceptances a price rests on are: an
+    edited exports.json makes the file stale (`exports`), and an edited bindings.json too (`bindings`)."""
     folder = values_repo(tmp_path, [DAY_RUN])
     (folder / "schedule.json").write_bytes(schedule(pool("pool.b", 10, 1000, origin='"model"')))
     bind(folder, ("pool.b", "pool.b", "half_even"))
@@ -593,12 +743,13 @@ def test_check_says_whether_out_valuations_json_is_current(tmp_path, acmodel):
     assert (status, doc["warnings"]) == (0, [])
     assert doc["data"]["valuations"] == {"file": path, "current": True, "stale": []}
 
-    edit(base(folder) / "bindings.json", lambda doc: doc.update(note="edited"))
-    status, doc = bindings(acmodel, folder, "check")
+    for edited, stale in (("exports.json", ["exports"]), ("bindings.json", ["exports", "bindings"])):
+        edit(base(folder) / edited, lambda doc: doc.update(note="edited"))
+        status, doc = bindings(acmodel, folder, "check")
 
-    assert status == 0
-    assert doc["data"]["valuations"] == {"file": path, "current": False, "stale": ["bindings"]}
-    assert doc["warnings"] == [{"code": "valuations_stale", "detail": {"path": path, "members": ["bindings"]}}]
+        assert status == 0
+        assert doc["data"]["valuations"] == {"file": path, "current": False, "stale": stale}
+        assert doc["warnings"] == [{"code": "valuations_stale", "detail": {"path": path, "members": stale}}]
 
 
 def test_a_valuation_binding_takes_round_and_only_a_valuation_does(tmp_path, acmodel):
@@ -736,6 +887,7 @@ def test_a_limited_mark_other_than_true_is_refused_and_never_rewritten(tmp_path,
 
 def test_the_codes_of_w3_are_registered_each_of_its_category():
     new = {
+        "valuation_price_negative": ("error", 5),
         "valuation_rounds_to_zero": ("error", 5), "valuation_out_of_range": ("error", 5),
         "precision_low": ("warning", 0), "valuation_pending_marker": ("error", 6), "valuations_stale": ("warning", 0),
         "limited_missing": ("error", 6), "limited_invalid": ("error", 6), "limited_without_consumes": ("warning", 0),
