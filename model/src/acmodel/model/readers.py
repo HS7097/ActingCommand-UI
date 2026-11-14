@@ -11,6 +11,7 @@ present, expressions) is the static check's, not the readers'.
 
 from __future__ import annotations
 
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Callable
 
@@ -635,6 +636,65 @@ ACCEPTANCE = Object(
     _acceptance,
 )
 
+# #464 W1: the values of the schedule's rules (`acmodel export values`). A quantity is an exact number (an integer, a
+# decimal or a ratio of two integers) or `rule:<id>`, the value of a rule of the run; a count of runs is a positive exact
+# number. `per` is a period of model.json or `run` (once per run of the rule).
+_NUMBER = r"(0|[1-9][0-9]*)(\.[0-9]+|/[1-9][0-9]*)?"
+QUANTITY = Text(r"-?" + _NUMBER + r"|rule:" + ids.ID)
+POSITIVE = Text(_NUMBER)
+PER_RUN = "run"
+
+
+def _term(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """A term of a value: exactly one of `activity` (an activity, run `times`) and `resource` (a resource, `amount` of it
+    `times`); `amount` belongs to a resource's term only."""
+    if not exactly_one("activity", "resource")(value, ref, ctx):
+        return False
+    if "resource" in value and "amount" not in value:
+        return ctx.refuse("member_missing", pointer(ref, "amount"), key="amount")
+    if "activity" in value and "amount" in value:
+        return ctx.refuse("member_unknown", pointer(ref, "amount"), key="amount")
+    return True
+
+
+def _value(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """A value: its count of runs above 0; each pool of `cost_paid_by_pool` and of `exclude` named once, and none in
+    both."""
+    ok = True
+    if Fraction(value["runs"]["count"]) <= 0:
+        ok = ctx.refuse("value_invalid", pointer(pointer(ref, "runs"), "count"), literal=value["runs"]["count"])
+    seen: set[str] = set()
+    named = [(pointer(pointer(ref, "cost_paid_by_pool"), index), pool)
+             for index, pool in enumerate(value.get("cost_paid_by_pool", []))]
+    named += [(pointer(pointer(pointer(ref, "exclude"), index), "resource"), entry["resource"])
+              for index, entry in enumerate(value.get("exclude", []))]
+    for where, pool in named:
+        if pool in seen:
+            ok = ctx.refuse("value_invalid", where, literal=pool)
+        seen.add(pool)
+    return ok
+
+
+VALUE_TERM = Object(
+    {"times": QUANTITY, "per": ID},
+    {"activity": ID, "resource": ID, "amount": QUANTITY, "ref": TEXT, **NOTE},
+    _term,
+)
+VALUE = Object(
+    {
+        "id": ID,
+        "terms": ListOf(VALUE_TERM, min_items=1),
+        "runs": Object({"count": POSITIVE, "per": ID, "ref": TEXT}, NOTE),
+        "round": ROUND,
+    },
+    {
+        "cost_paid_by_pool": ListOf(ID),
+        "exclude": ListOf(Object({"resource": ID, "reason": TEXT, "ref": TEXT}, NOTE)),
+        **NOTE,
+    },
+    _value,
+)
+
 EXPORTS = Format(
     "acmodel.exports.v1",
     "acmodel.exports.v1",
@@ -655,6 +715,8 @@ EXPORTS = Format(
             # The game's price unit (#424 ACM-PRICE 4.2, PRICE-4a): one value unit is `unit_milli` thousandths of a
             # priority. One per game; prices of two games are never compared (137 K2).
             "prices": Object({"unit_milli": Integer(1, MAX)}, NOTE),
+            # #464 W1: what each value of the schedule is made of (`acmodel export values`); absent means none.
+            "values": ListOf(VALUE),
             **NOTE,
         },
     ),
@@ -682,6 +744,30 @@ def _schedule_item(value: dict[str, Any], ref: str, ctx: Context) -> bool:
     return not present
 
 
+# #464 W1: a binding of a value (`value`, a value of exports.json) names the fixed value of a rule of schedule.json.
+VALUE_PATH = "/fixed_value_milli"
+
+
+def _binding(value: dict[str, Any], ref: str, ctx: Context) -> bool:
+    """A binding names exactly one of a threshold and a value. A threshold's literal is a rule's or a pool's in
+    `schedule.json`, or one of a pack file (`_schedule_item`); a value's is the fixed value of a rule of `schedule.json`:
+    `file` is `schedule.json`, `rule_id` names the rule and `path` is `/fixed_value_milli`."""
+    if not exactly_one("threshold", "value")(value, ref, ctx):
+        return False
+    if "threshold" in value:
+        return _schedule_item(value, ref, ctx)
+    ok = True
+    if value["file"] != SCHEDULE_FILE:
+        ok = ctx.refuse("value_invalid", pointer(ref, "file"), expected=[SCHEDULE_FILE], literal=value["file"])
+    if "pool_id" in value:
+        ok = ctx.refuse("member_unknown", pointer(ref, "pool_id"), key="pool_id")
+    if "rule_id" not in value:
+        ok = ctx.refuse("member_missing", pointer(ref, "rule_id"), key="rule_id")
+    if value["path"] != VALUE_PATH:
+        ok = ctx.refuse("value_invalid", pointer(ref, "path"), expected=[VALUE_PATH], literal=value["path"])
+    return ok
+
+
 LITERAL = {"file": REPO_FILE, "path": POINTER}
 BINDINGS = Format(
     "acmodel.bindings.v1",
@@ -689,7 +775,7 @@ BINDINGS = Format(
     Object(
         {
             "schema_version": ANY,
-            "bindings": ListOf(Object({"threshold": ID, **LITERAL}, {**SCHEDULE_ITEMS, **NOTE}, _schedule_item)),
+            "bindings": ListOf(Object(LITERAL, {"threshold": ID, "value": ID, **SCHEDULE_ITEMS, **NOTE}, _binding)),
             "fixed": ListOf(
                 Object({**LITERAL, "reason": TEXT, "ref": TEXT}, {**SCHEDULE_ITEMS, **NOTE}, _schedule_item)
             ),
@@ -767,6 +853,23 @@ PRICES = _prices(
     "acmodel.prices.v2",
     {name: spec for name, spec in PRICE_ENTRY.items() if name != "estimates"},
     {"evaluator": EVALUATOR, "reused_assessment": REUSED_ASSESSMENT, "steady_timing_ms": ANY},
+)
+# #464 W1: `out/values.json`, which `export values` writes and `bindings check` reads back to tell whether it is current:
+# the versions of the model, and the sha256 of the bytes of the prices.json and the exports.json it was computed from.
+# The values themselves are only passed on.
+VALUES = Format(
+    "acmodel.values.v1",
+    "acmodel.values.v1",
+    Object({
+        "schema_version": ANY,
+        "model_id": ID,
+        "versions": MODEL_VERSIONS,
+        "prices": Object({"file": TEXT, "sha256": SHA256, "versions": MODEL_VERSIONS}),
+        "exports": Object({"file": TEXT, "sha256": SHA256}),
+        "unit_milli": Integer(1, MAX),
+        "values": ANY,
+        "counts": ANY,
+    }),
 )
 # What `export prices --reuse-assessment` takes over from an earlier v2 file (#424 PRICE-REUSE), which the format above
 # passes on as any JSON: each estimate's `assessed` and `skipped`, each pool's `impact` and the groups.
@@ -909,5 +1012,12 @@ def check_assessment(doc: dict[str, Any], path: Path | str) -> None:
 
 
 def read_bindings(path: Path | str) -> dict[str, Any]:
-    """`bindings.json` (`acmodel.bindings.v1`): where each threshold's literal sits, and the fixed literals."""
+    """`bindings.json` (`acmodel.bindings.v1`): where each threshold's literal and each value's sits, and the fixed
+    literals."""
     return _read(path, BINDINGS)
+
+
+def read_values(path: Path | str) -> dict[str, Any]:
+    """`out/values.json` (`acmodel.values.v1`), as `export values` wrote it: the members `bindings check` reads to tell
+    whether it is current (#464 W1)."""
+    return _read(path, VALUES)

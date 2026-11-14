@@ -17,7 +17,15 @@ from acmodel.codes import COMMAND_CRASHED, LOCATION_REFUSED, USAGE_INVALID
 from acmodel.core import run_economy, run_model
 from acmodel.core.provenance import explain
 from acmodel.envelope import Failure, build, error, write
-from acmodel.export import Validator, export_prices, export_scoring, export_tables, export_thresholds, verify_prices
+from acmodel.export import (
+    Validator,
+    export_prices,
+    export_scoring,
+    export_tables,
+    export_thresholds,
+    export_values,
+    verify_prices,
+)
 from acmodel.host import windows
 from acmodel.system import System
 from acmodel.watch.watcher import Watcher
@@ -33,6 +41,7 @@ COMMANDS = {
     "explain": (("model", "output"), ("--state",)),
     "export thresholds": (("model",), ("--state",)),
     "export prices": (("model",), ("--state",)),
+    "export values": (("model",), ("--state",)),
     "export tables": (("model",), ("--state", "--repo")),
     "export scoring": (("model",), ("--state",)),
     "verify prices": (("model",), ("--state",)),
@@ -64,6 +73,7 @@ OPTIONAL = {"export prices": ("--reuse-assessment",)}
 WRITES = {
     "export thresholds": ("model",),
     "export prices": ("model",),
+    "export values": ("model",),
     "export tables": ("model", "--repo"),
     "export scoring": ("model",),
     "bindings apply": ("model",),
@@ -78,6 +88,7 @@ USAGE = (
     "          export thresholds <model folder or model.json> --state <state file>,\n"
     "          export prices <model folder or model.json> --state <state file>\n"
     "                        [--reuse-assessment <out folder of an earlier export>],\n"
+    "          export values <model folder or model.json> --state <state file>,\n"
     "          export tables <model folder or model.json> --state <state file> --repo <repository>,\n"
     "          export scoring <model folder or model.json> --state <state file>,\n"
     "          verify prices <model folder or model.json> --state <state file>,\n"
@@ -275,6 +286,15 @@ def _export_thresholds(args: list[str], cfg: config.Config, system: System) -> d
     )
 
 
+def _export_values(args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
+    """What one run of each schedule rule of exports.json's `values` is worth, from the derivation graph and the prices
+    `export prices` delivered (#464 W1); no steady state is computed."""
+    _dependencies(system)
+    return export_values(
+        Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits, unknowns=cfg.unknowns
+    )
+
+
 def _export_tables(args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
     """The tables into the repository `--repo`, each checked by the validator `paths.actinglab`."""
     _dependencies(system)
@@ -376,6 +396,8 @@ def main(argv: Sequence[str], system: System) -> int:
             data = _verify_prices(args, cfg, system)
         elif command == "export thresholds":
             data = _export_thresholds(args, cfg, system)
+        elif command == "export values":
+            data = _export_values(args, cfg, system)
         elif command == "export tables":
             data = _export_tables(args, cfg, system)
         elif command == "export scoring":

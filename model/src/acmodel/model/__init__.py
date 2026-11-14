@@ -10,6 +10,7 @@ from acmodel.model.readers import (
     read_rules,
     read_sources,
     read_state,
+    read_values,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "read_rules",
     "read_sources",
     "read_state",
+    "read_values",
 ]
