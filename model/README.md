@@ -51,7 +51,7 @@ model\acmodel.cmd export values <resource repo>\ours\model --state <state snapsh
 model\acmodel.cmd export valuations <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd export tables <resource repo>\ours\model --state <state snapshot> --repo <resource repo>
 model\acmodel.cmd export scoring <resource repo>\ours\model --state <state snapshot>
-model\acmodel.cmd bindings check <resource repo>\ours\model --state <state snapshot> --strict
+model\acmodel.cmd bindings check <resource repo>\ours\model --state <state snapshot> --strict [--strict-values]
 model\acmodel.cmd bindings apply <resource repo>\ours\model --state <state snapshot>
 model\acmodel.cmd cache stats
 model\acmodel.cmd cache verify
@@ -189,13 +189,20 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   counts the value's activities (otherwise only reported, never removed); a valuation binding ties a pool's
   `valuation.base_weight_milli` to the W of `export valuations` and its `valuation_origin` to `"model"`. An origin
   `"model"` that no binding names is refused (`origin_unbound`), and `data.values` and `data.valuations` say whether
-  `out/values.json` and `out/valuations.json` are current.
+  `out/values.json` and `out/valuations.json` are current. A `hand` entry records a fixed value a person wrote, with its
+  `status` and `ref` (texts the tool stores and never reads): a rule is named once among the value bindings and the hand
+  entries, and a hand entry's rule writes a value and no origin. A bound or hand-written fixed value the Runtime refuses
+  beside its rule's `"maintenance": true`, `"realization": true` or a `produces` entry on a pool with a valuation block or
+  the pending marker is an error, one code each (a warning on a held package's rule, which the Runtime does not compose
+  yet). With `--strict-values`, apart from `--strict`, every rule that writes `fixed_value_milli` must be named by a
+  value binding or a hand entry (`fixed_value_unregistered`).
 - **`bindings apply`** writes the bound literals that differ, and changes only their bytes: line ends
   (CRLF files stay CRLF) and formatting are kept. For a value it writes the origin `"model"` too when the rule has none,
   and the limited mark where the model holds it on a consumer; for a valuation W and the pool's origin; it inserts a
   member the rule or pool lacks in the style of the member before it, and never rewrites another origin
   (`origin_invalid`) or a limited mark (`limited_invalid`). It refuses what `check` refuses, other than a differing
-  value or W, an absent origin or an absent limited mark (a pending value or valuation too), and then writes nothing.
+  value or W, an absent origin or an absent limited mark (a pending value or valuation too, a hand entry's problem and a
+  fixed value the Runtime would refuse), and then writes nothing; it never writes a hand entry's value.
   Each file is written as its `.part` and renamed over
   it only when the file did not change meanwhile (`file_changed`) (`contracts/formats.md`, "Bindings").
 - **`watch`** keeps a model's outputs for one state up to date while it runs. It is long-lived: Task Scheduler

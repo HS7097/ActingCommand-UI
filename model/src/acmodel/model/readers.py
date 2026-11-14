@@ -788,6 +788,14 @@ def _binding(value: dict[str, Any], ref: str, ctx: Context) -> bool:
 
 
 LITERAL = {"file": REPO_FILE, "path": POINTER}
+# #466 W4a: a fixed value written by hand, by its rule of schedule.json (the literal is always the rule's
+# `/fixed_value_milli` there, so the entry names neither `file` nor `path`). `status` and `ref` are opaque texts the tool
+# stores and never reads, and so are `to_replace_with` and `note`; `inherited_from` is the id of the rule whose value it
+# inherits, in the shape of a rule id.
+HAND = Object(
+    {"rule_id": FACT_KEY, "status": TEXT, "ref": TEXT},
+    {"to_replace_with": TEXT, "inherited_from": FACT_KEY, **NOTE},
+)
 BINDINGS = Format(
     "acmodel.bindings.v1",
     "acmodel.bindings.v1",
@@ -803,7 +811,8 @@ BINDINGS = Format(
                 Object({**LITERAL, "reason": TEXT, "ref": TEXT}, {**SCHEDULE_ITEMS, **NOTE}, _schedule_item)
             ),
         },
-        NOTE,
+        # #466 W4a: absent means none, so a bindings.json written before reads as it did.
+        {"hand": ListOf(HAND), **NOTE},
     ),
 )
 
@@ -1061,8 +1070,8 @@ def check_assessment(doc: dict[str, Any], path: Path | str) -> None:
 
 
 def read_bindings(path: Path | str) -> dict[str, Any]:
-    """`bindings.json` (`acmodel.bindings.v1`): where each threshold's literal and each value's sits, and the fixed
-    literals."""
+    """`bindings.json` (`acmodel.bindings.v1`): where each threshold's literal and each value's sits, the fixed
+    literals, and the fixed values written by hand (`hand`, #466 W4a)."""
     return _read(path, BINDINGS)
 
 
