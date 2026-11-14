@@ -233,8 +233,39 @@ absent for now: the static check warns of a source without it (see "Provenance c
 | `tables` | a list of tables, each `{table_id, game, row_key, columns, rows}` [`note`] (below) |
 | `scoring` | a list of `{id, template}` [`note`]: `id` is an id; `template` a file relative to the model folder, `/`-separated segments `[a-z0-9][a-z0-9_.-]*` ending in `.json` |
 | [`acceptances`] | a list of `{output, accept_provisional: {ref, until}}` [`note`]: `output` is an output id (`rule:<id>`, `general_logic:<id>`, `threshold:<id>`); `ref` names the ruling or board comment, `until` the pending check. Absent means none. An acceptance of a pool's price (`price:<pool>`, PRICE-4a) holds instead exactly one of `accept_provisional: {ref, until, binds, scope, flips}` and `accept_zero: {ref, scope, until}` (see "`acmodel export prices`"); `binds`, `scope` and `flips` on any other output, and `accept_zero` on one, are `member_unknown`, and their absence on a price's `accept_provisional` `member_missing`. |
-| [`prices`] | `{unit_milli}` [`note`] (#424 ACM-PRICE 4.2, PRICE-4a): the game's price unit κ, an integer ≥ 1: one value unit is `unit_milli` thousandths of a priority. One per game; two games' prices are never compared (137 K2). Absent, `export prices` refuses (`member_missing`); nothing else reads it. |
+| [`prices`] | `{unit_milli}` [`note`] (#424 ACM-PRICE 4.2, PRICE-4a): the game's price unit κ, an integer ≥ 1: one value unit is `unit_milli` thousandths of a priority. One per game; two games' prices are never compared (137 K2). Absent, `export prices` refuses (`member_missing`); `export values` compares it with the κ of the prices it reads. |
+| [`values`] | a list of values (#464 W1, below): what one run of a rule of the schedule is worth, which `export values` computes and a value binding of `bindings.json` writes into the rule's `fixed_value_milli`. Absent means none; `export values` then refuses (`member_missing`). |
 | [`note`] | |
+
+**A value** (#464 W1; `acmodel export values`) says what one run of a schedule's rule brings in, in the model's own
+terms, never by a rule id of the schedule (the binding names the rule). Members: `id`, `terms`, `runs`, `round`
+[`cost_paid_by_pool`, `exclude`, `note`]:
+- `id` is an id, unique among the values (`model_id_duplicate`, `namespace` `value`).
+- `terms`: a non-empty list. Each term is exactly one of (`member_missing` or `member_conflict`, with `expected` both):
+  - `{activity, times, per}` [`ref`, `note`]: an activity of the model run `times` per `per`; what one execution brings
+    in and takes out is what its active flows produce, consume and move into or out of a resource (an activity with no
+    active flow is `rule_reference_missing`, `expected` `rule.flow`);
+  - `{resource, amount, times, per}` [`ref`, `note`]: `amount` of a resource, `times` per `per` (an activity's term takes
+    no `amount`: `member_unknown`). This is the term for what comes in at a rate, where the model's flow reads what a
+    store holds and so the account state.
+- A quantity (`times`, `amount`) is an exact number, an integer, a decimal or a ratio of two integers (`-12`, `2.5`,
+  `3/4`), or `rule:<id>`, the value of a rule of the run: what `rule:` reads in an expression, a derive, cap, limit, or a
+  random rule's pity chain or drop (`rule_reference_missing` otherwise, with `found`; a regen, say, has no value). It is
+  never an expression: write a derive for anything to compute. A boolean is `expr_dimension_mismatch` (`operator`
+  `value`), and a resource's `amount` of another resource's dimension too (`operator` `amount`).
+- Only an `amount` takes a sign (a negative one is what a run takes out). `times` written as a number is above 0, as
+  `runs.count` is: 0 or a negative number is `value_invalid` (with `literal`, at the member), since a term that happens
+  no times is no term, and a negative count would turn what comes in into what goes out.
+- `per` is a period of model.json, or `run`: `times` once per run of the rule. (`run` is that word, never a period's id.)
+- `runs`: `{count, per, ref}` [`note`]: how many times the rule runs per period `per` (a period of model.json), a
+  positive exact number (`value_invalid` otherwise), with where that comes from (the schedule's clock times, say).
+- `cost_paid_by_pool`: the resources whose spending the rule declares in the schedule's `consumes`, which the Runtime
+  takes off itself by their valuation: what one run takes out of them is not counted. A binding checks that the rule's
+  `consumes` names exactly these pools (`value_consumes_mismatch`).
+- `exclude`: a list of `{resource, reason, ref}` [`note`]: resources left out of the value whole, each with why and where
+  that was decided; a value with any is `partial`.
+- `round`: `floor`, `ceil` or `half_even`, always declared.
+- No pool is named twice among `cost_paid_by_pool` and `exclude` (`value_invalid`).
 
 **A table** becomes the Runtime's shared table `tables/<table_id>.json` (`actingcommand.table.v1`) of the
 resource repository; see "`acmodel export tables`" below.
@@ -1453,7 +1484,7 @@ kind's evaluator version, and it adds no version: the full run's output is uncha
 
 ## Outputs: provenance, `explain`, `thresholds.json`, the tables and the scoring documents
 
-**Where they are written** (#424, 2026-11-09). The exports and `bindings apply` write into the model folder (and
+**Where they are written** (#424, 2026-11-09). The exports (`export values` too, #464 W1) and `bindings apply` write into the model folder (and
 `export tables` into its `--repo`), and the shared trees go under `paths.state_root`. None of these may be a Runtime
 install root or lie inside one: a model folder or repository that does is refused before anything is computed
 (`location_refused`), and such a state root is `config_invalid` (`runtime_install_root`) when the configuration is
@@ -1469,12 +1500,13 @@ of an `if`, the row a `lookup` found, every row of a set.
 |---|---|
 | `schema_version` | `acmodel.provenance.v1` |
 | `model_id` | the model's id |
-| `output` | `rule:<id>`, `general_logic:<id>` or `threshold:<id>`; or an output of the economy's steady state, `price:<resource>` or `activity_value:<activity>` (PRICE-2b-1) |
+| `output` | `rule:<id>`, `general_logic:<id>` or `threshold:<id>`; or an output of the economy's steady state, `price:<resource>` or `activity_value:<activity>` (PRICE-2b-1); or `value:<id>`, a value of `export values` (#464 W1) |
 | `result` | the output as `run` shows it (a rule without its `general_logic`, which is an output of its own) |
 | `versions` | `rules`: the sha256 over `model.json`, `sources.json` and the rule files; `data`: over the data files; `tool`: the tool version. Each file counts as `[path, document]`, sorted by path. A hash is over canonical JSON: sorted keys, no whitespace, UTF-8. |
 | `nodes` | node id to node; the tree is rooted at `output` |
 | [`shared`] | only in a price's provenance file that `export prices` writes (PRICE-4a2): the trees the document reads but does not hold, each root's id (`economy:steady`) to the sha256 of the canonical JSON (JCS, `export/jcs.py`) of its tree document (below); `nodes` then holds the document's own nodes only |
 | [`acceptance`] | only for a provisional output that `acceptances` of exports.json accepts: `file` (`exports.json`), `ref` (its entry, `/acceptances/<index>`), `sha256` of the entry and its `accept_provisional` |
+| [`acceptances`] | only in a value's provenance file (#464 W1) that rests on acceptances: each `{output, ref, until}`, of a quantity (`rule:<id>`) or of a price (`price:<pool>`), sorted by `output` |
 
 **A shared tree** (`acmodel.provenance.tree.v1`, PRICE-4a2). Every price reads the steady state whole, so its tree is
 the bulk of each price's provenance (about a megabyte for the smallest real model, the same in every price's document).
@@ -1508,6 +1540,8 @@ one of the same output `model_id_duplicate` (`namespace` `acceptance`): `explain
 | `threshold` | `threshold:<id>` | `id`, `form`, [`round`], `file` (`exports.json`), `ref`, `sha256` of its entry |
 | `price`, `activity_value` | `price:<resource>`, `activity_value:<activity>` | `resource` or `activity` |
 | `economy` | `economy:steady` | `solve` (`steady`), `file` (`model.json`) |
+| `value` | `value:<id>` (#464 W1, a value's provenance file) | `id`, `file` (`exports.json`), `ref` (its entry), `sha256` of the entry; it reads the outputs and flow amounts it computes with and the prices it counts in |
+| `price` (of prices.json) | `price:<resource>`, in a value's provenance file | `resource`, `file` (`out/prices.json`), `sha256` of that file's bytes, `class`, `status`, `price`, `milli` and `provenance` (the price's own file) as prices.json delivered them; it reads nothing |
 | `rule` | `rule:<id>` (its value), `general_logic:<id>`, `offset:<id>` (`live.offset`); the flow amounts `flow:<id>:consumes:<resource>`, `flow:<id>:produces:<resource>` and `flow:<id>:moves`; `entry:<id>`, a rule consulted for its logic only (the cap of `max_single_income`, and an income whose amount needs the account state, which its store's storage cap bounds) | `kind`, `id`, `file`, `ref` (the pointer of the expression, or of a cap's `reading`, or a random rule's form; for `entry:` the rule's), `sha256` of the rule entry, and its `status` and `provenance` as written; a random rule whose value the run carries as its enclosure adds `exact_values`, `[{"unknowns", "value"}]`, the exact value per scenario |
 | `unknown` | `member:<unknown>:<member>`; `point:<unknown>` (an interval or a distribution) | as a rule, with `member` for a member; `ref` is the unknown's |
 | `row` | `row:<table>[<key parts joined with commas>]` | `table`, `key`, `file`, `ref`, `sha256` of the row, `status`, `provenance` (the row's, else the table's) |
@@ -2059,18 +2093,106 @@ computed: the proof makes the proven vector the exact one, so a difference is a 
 blocked steady state or pass is refused as `export prices` refuses it (`export_refused`, exit 5). Nothing is written: no
 `out/`, no provenance file or shared tree, no cache entry.
 
+### `acmodel export values <model> --state <file>`
+
+What one run of a rule of the schedule is worth (#464 W1; `src/acmodel/export/values.py`): the model's writer of the
+schedule's fixed values. It runs the model as `run` does, without the cache, and computes the derivation graph only: no
+steady state, no LP. The prices are those `export prices` delivered, read back from `out/prices.json`.
+1. **The values.** exports.json's `values` ("`exports.json`", "A value"); without the member, `model_file_invalid`
+   (`member_missing` at `/values`), and nothing is computed or written.
+2. **The prices.** `out/prices.json` of the model folder, read by its reader (`model_file_invalid` without it; a file of
+   another model is `value_invalid` at `/model_id`). Its `versions` must be the model's, and its `unit_milli` exports.json's
+   `prices.unit_milli`: otherwise `export_refused` (`prices_stale`, exit 5; `output` `values`, one error per member that
+   differs, `value` the member, `rules`, `data`, `tool` or `unit_milli`, `ref` `/versions/<member>` or `/unit_milli`). It is
+   an error here, not the warning `bindings check` gives for its coverage: a value is counted in these prices, so they
+   must be the model's. Export the prices again first. `tool` is acmodel's own version, which counts too: after an
+   upgrade of the tool every prices.json is stale, so `export prices` (a heavy computation) runs again before `export
+   values`, or `bindings check` of a repository with a value binding, can pass.
+3. **The references** of every value are checked as the run checks its own (exports.json `values`, "A value"): one error
+   per problem, exit 1, and nothing is written.
+4. **Each value** is computed. A term counts per run: `times` × the days of `runs.per` / (the days of `per` ×
+   `runs.count`), or `times` itself when `per` is `run`; a period's days are the model's own, as the economy reads them (a
+   day 1, a week 7, a `days` period its `length`, a month 146097/4800, "The economy", Time). A resource's term brings in
+   `amount` × that (out when negative); an activity's term brings in and takes out what one execution of each of its active
+   flows produces, consumes and moves into or out of a resource, × that (a move into or out of a store is no pool's).
+   Over the pools, what one run brings in less what it takes out (but out of a pool of `cost_paid_by_pool`), times the
+   pool's `milli` in prices.json (the price × κ), but for the pools of `exclude`; rounded by `round`. Everything is exact.
+5. **A quantity** (`rule:<id>`) is taken as the export policy takes an output ("The export policy"), and a flow's amount
+   (a node of the graph, no output) the same way:
+   - **blocked**: the value is `pending` (`blocked`);
+   - **it read the account state** (`per_account`, as for a threshold: "Only account-independent values are exported"):
+     refused (`export_refused`, `per_account`, `output` `value:<id>`, at the quantity, or at the term's activity);
+   - **provisional**: delivered only under an acceptance of exports.json of that output (`acceptances`, `rule:<id>`),
+     which the value then lists; otherwise `pending` (`provisional`). A flow's amount is no output, so a provisional one
+     is always `pending`: give the rate a derive, accept it, and write the term by its resource;
+   - **not one number** (variants of several values, or an enclosure): `pending` (`not_single`).
+6. **A price** a value counts (one whose pool it brings in or takes out of, but out of a pool of `cost_paid_by_pool`, and
+   of no pool of `exclude`) is the pool's exported price. One that prices.json does not export is `pending`:
+   `price_pending`, with its `pending` reasons, or `price_missing` when prices.json lists no such pool (a slot, or a
+   resource the coverage does not price). A price delivered under an acceptance (provisional, or a verified zero) adds
+   that acceptance, `price:<pool>`, with its `ref` and `until`, but only while exports.json still holds it as prices.json
+   recorded it: the price's `acceptance` there, without its `entry`, must be exports.json's acceptance of `price:<pool>`
+   now, member for member (`note` included). exports.json is no part of `versions`, so a withdrawn or edited acceptance
+   leaves prices.json current; the value is then `pending`: `price_acceptance_withdrawn` (exports.json accepts that price
+   no more) or `price_acceptance_changed` (it holds another acceptance of it), with the pool. Export the prices again.
+7. **Refusals**, each writing nothing (exit 5): a quantity of the account state (`per_account`); a value that rounds below
+   1 (`value_not_positive`, with the rounded `milli` and the `exact` value: a value of 0 is no value, and a claim worth
+   nothing at the prices is a placeholder written by hand); one beyond ±(2<sup>53</sup> − 1) (`export_refused`,
+   `out_of_range`).
+
+**Every value is listed, none refuses the others for being pending** (as prices.json lists every pool): a value that
+cannot be exported is written `pending` with each reason, so the file is the list of what each value still waits for.
+
+It writes into the model folder `out/provenance/values/<id>.json` for each value, a pending one too (`acmodel.provenance.v1`,
+"Provenance": `output` `value:<id>`; `versions`, the model's now; `nodes`, the value's node, the trees of the outputs and
+flow amounts it read, and a node per price whose entry of prices.json it read, as prices.json has it, a pending price
+too; `result`, its entry below without `provenance`, so a pending value's says `pending` and each reason; and
+`acceptances`, when it rests on any). A pending value's file holds what it could read: the quantities it computed before
+one was pending, and the prices it read once every quantity was there. So a value that becomes pending has its file
+written again, of the current versions, and no file of an earlier export stays behind with other versions or a number
+that no longer holds. Then `out/values.json` (`acmodel.values.v1`), last:
+
+| Member | Value |
+|---|---|
+| `schema_version` | `acmodel.values.v1` |
+| `model_id`, `versions` | as in a provenance document |
+| `prices` | the prices it counted in: `file` (`out/prices.json`), `sha256` of its bytes, and its `versions` |
+| `exports` | `file` (`exports.json`) and the `sha256` of its bytes: the values are defined there, and exports.json is no part of `versions` |
+| `unit_milli` | κ, as prices.json has it |
+| `values` | one entry per value, by id (below) |
+| `counts` | how many are `confirmed`, `provisional`, `pending`, and `partial` |
+
+A value's entry: `id`; `status`, `confirmed`, `provisional` (it rests on an acceptance, of a quantity or of a price) or
+`pending`; `fixed_value_milli`, the rounded value (an integer, what a binding writes), or null; `exact_milli`, the exact
+value before rounding, or null; `round`; `acceptances`, each `{output, ref, until}` it rests on, sorted by `output`;
+`pending`, each reason it waits for, `{reason, item}` (`blocked`, `provisional` or `not_single`, with the output or the
+flow amount's node id, and `value` for an enclosure's ends; `price_pending`, with the pool and its `pending`;
+`price_missing`, `price_acceptance_withdrawn` or `price_acceptance_changed`, with the pool: step 6), empty unless
+pending; `partial`, whether it has `exclude`; `exclude` and
+`cost_paid_by_pool`, as defined; `runs`, as defined; `yields`, what one run brings in and takes out of each pool, by pool
+id (`pool`, `in` and `out` as exact amounts in the pool's own unit, `expected` when a quantity it rests on is an expected
+value: it read a random rule or a derive with an `estimate`; `paid_by_pool`, `excluded`), or null when a quantity is
+pending; and `provenance`, its provenance file (a pending value has one too).
+
+Where its status shows in the schedule: nowhere. A bound value is written with `fixed_value_origin: "model"` whether
+it is confirmed or provisional; how reliable it is, and what each acceptance waits for, is in this file and in `bindings
+check`. The files have sorted keys, a two-space indent, UTF-8 and LF line ends; a write that fails is
+`export_write_failed`. Nothing is deleted: the provenance file of a value that exports.json no longer lists stays as an
+earlier export wrote it (a value that became pending has its file written again, above).
+
 ## Bindings: `bindings.json`, `bindings check` and `bindings apply`
 
 A binding ties a literal of the resource repository to a threshold of `exports.json` (#424 design 6.3), so that
 a number in `schedule.json` or in a pack file has the threshold's provenance. `bindings.json` sits beside
 `model.json`. Its file names are relative to the repository, the folder two above the model folder
-(`<repo>/ours/model`).
+(`<repo>/ours/model`). A binding of a value (#464 W1) ties a rule's fixed value to a value of exports.json the same
+way, and it writes who wrote it: the model.
 
 ### `bindings.json` (`acmodel.bindings.v1`)
 
 | Member | Value |
 |---|---|
-| `bindings` | a list of `{threshold, file, path}` [`rule_id` or `pool_id`, `note`]: `threshold` is the id of a threshold of `exports.json`, `file` the file that holds the literal and `path` its JSON pointer |
+| `bindings` | a list of `{threshold, file, path}` [`rule_id` or `pool_id`, `note`]: `threshold` is the id of a threshold of `exports.json`, `file` the file that holds the literal and `path` its JSON pointer; or of `{value, file, rule_id, path}` [`note`] (#464 W1): `value` is the id of a value of `exports.json`, `file` is `schedule.json`, `rule_id` its rule and `path` `/fixed_value_milli` (`value_invalid` otherwise; `pool_id` is `member_unknown`). Each binding names exactly one of `threshold` and `value` (`member_missing` or `member_conflict`, with `expected` both). |
 | `fixed` | a list of `{file, path, reason, ref}` [`rule_id` or `pool_id`, `note`]: a literal that is no quantity, with the reason and a reference (a ruling, a board item) |
 | [`note`] | |
 
@@ -2085,7 +2207,8 @@ a number in `schedule.json` or in a pack file has the threshold's provenance. `b
   - For any other file, `path` points into the whole file.
 - **One literal**, by its file, rule or pool, and pointer, is named once among the bindings and the fixed
   entries (`model_id_duplicate`, `namespace` `literal`).
-- **A threshold** that `exports.json` does not list is `rule_reference_missing` (`expected` `threshold`).
+- **A threshold** that `exports.json` does not list is `rule_reference_missing` (`expected` `threshold`), and so is a
+  value its `values` do not list (`expected` `value`).
 
 ### The values
 
@@ -2099,12 +2222,54 @@ value:
   with the state nodes it read. A fact reference holds one fact plus a constant (#386 CF-4), and the tool never
   writes an account's value as a constant. The scheduler side chooses: a pack publishes the derived fact, or a
   selection document computes it.
+- **A bound value** (#464 W1) is computed exactly as `export values` computes it, from the same run and `out/prices.json`
+  ("`acmodel export values`", steps 2 to 7), so it holds only what that export writes. With a value binding the prices
+  must be current (`export_refused`, `prices_stale`, exit 5; the tool's version counts, so after an upgrade of acmodel
+  `export prices` runs again before `check` passes, and until then nothing else of the check, the thresholds included,
+  is reported) and every value of exports.json must name what it names (exit 1);
+  a value the export refuses is refused the same way, and one it leaves pending is `export_refused` (`pending`, exit 5,
+  `output` `value:<id>`, one error per reason, `value` the reason as `<reason>:<item>`, for example
+  `price_pending:<pool>` or `price_acceptance_changed:<pool>`). Without a value binding nothing of the values is read.
+
+### A value's rule (#464 W1)
+
+A value binding writes two members of its rule: `fixed_value_milli`, the value, and `fixed_value_origin: "model"`, who
+wrote it (the Runtime's `standard-pack-schedule` reads both; only Provenance reads the origin). For each:
+- **The value.** An integer at `/fixed_value_milli` that is not the computed value is `binding_mismatch` (`value`,
+  `expected` and `found`, at the literal); an absent one too (`value`, no `found`, at the rule). Either is a difference
+  `apply` writes. A member that holds no integer is `binding_mismatch` (`literal_missing`, `found` its JSON type), and so
+  is a `rule_id` that names no rule: `apply` refuses both.
+- **The origin**, as the Runtime's `standard-pack-schedule` reads it: absent is the pack's, `"model"` beside a
+  `fixed_value_milli` the model's, and any other value invalid (the Runtime refuses the schedule). A rule without
+  `fixed_value_origin` is `origin_missing` (at the rule): a difference `apply` writes, inserting `"model"`. A rule whose
+  origin is anything else than `"model"` (a text such as `pack`, or another JSON type) is `origin_invalid` (`found`, at
+  the member): `check` reports it and `apply` refuses it, writing nothing. The tool never rewrites an origin: who wrote
+  the number is a person's to say (remove the member, and `apply` inserts `"model"`; or remove the binding).
+- **The declared cost.** The value's `cost_paid_by_pool`, as a set, must be the pools of the rule's `consumes`
+  (`value_consumes_mismatch`, `expected` and `found` sorted, at the rule's `consumes` or the rule): what the rule
+  declares it consumes is what the Runtime takes off by the pools' valuation, so the value leaves out exactly that.
+- **The word.** `schedule.json`'s `requires` must hold `benefit_fixed_value` (`requires_word_missing`, at `/requires`, or
+  at the document without one). The tool never adds it.
+- **Inserting.** A member the rule lacks is inserted right after another: `fixed_value_milli` after `package_id`,
+  `fixed_value_origin` after `fixed_value_milli` (both after `package_id` when both are absent). Each is written in the
+  style of the member it follows: the separator that follows it, a comma with the whitespace before and after it (so a
+  line end and an indent, CRLF or LF as the file has them), then the key, that member's own colon with its whitespace,
+  and the value. A rule without that member, or one where no member follows it, has no separator to copy:
+  `insert_style_unknown` (at the rule), and nothing is guessed.
+- **Nothing is removed.** A value that becomes pending, or a binding that is gone, leaves the rule as it is: the tool
+  reports, and a person writes the value by hand and its origin then.
+
+**The origin guard**, always on (in `check`, with or without `--strict`, and in `apply`): `schedule.json` is read
+whenever it is there, and each of its rules whose `fixed_value_origin` is `"model"` must be named by a value binding,
+and no pool's `valuation_origin` may be `"model"` (no binding names a pool's valuation yet): `origin_unbound` (exit 6,
+`member` the origin member, with `rule_id` or `pool_id`, at the member). Only the model's export writes `model`; a number
+written by hand says nothing, or `pack`.
 
 ### Reading the files
 
-- Every file an entry names is read once, as strict JSON (see "Reading JSON"). A refusal is
-  `model_file_invalid`, with `format` `json` for a pack file and `actingcommand.schedule.v1` for
-  `schedule.json`.
+- Every file an entry names is read once, as strict JSON (see "Reading JSON"), and `schedule.json` whenever it is
+  there, for the origin guard (#464 W1). A refusal is `model_file_invalid`, with `format` `json` for a pack file and
+  `actingcommand.schedule.v1` for `schedule.json`.
 - The tool needs only pointers and literals. Whether `schedule.json` is valid as a whole is the validator's
   job (`actinglab`, resource CI).
 - Of `schedule.json` it needs `schema_version` `actingcommand.schedule.v1`, and `rules` and `pools` (each
@@ -2149,10 +2314,16 @@ says `greater_than_or_equal`).
   - Other literals are not scanned: `max_age_ms`, counts and budgets, a pool's `value_source`, `group_delay` and
     `valuation`, and the pack files. They are bound when a threshold covers them.
   - The errors come in document order, the rules' before the pools'.
+- **Each bound value** (#464 W1) is checked as "A value's rule" says: its value and its origin (a differing value and an
+  absent origin are differences `apply` writes; another origin is `origin_invalid`), its declared cost, the word, and
+  whether `apply` could insert what is absent. The origin guard runs too.
 - **It writes nothing.** Every problem is reported at once, and the exit status is the first error's.
 - **`data`** holds `path`, `model_id`, `state`, `repo` and `strict`, and:
   - `bindings`: each with `entry` (its pointer in `bindings.json`), `threshold`, `form`, `file`, [`rule_id` or
-    `pool_id`], `path` and `literal`;
+    `pool_id`], `path` and `literal`; a value binding (#464 W1) with `entry`, `value`, `file`, `rule_id`, `path`,
+    `literal` and `origin` (as the rule holds them, null when absent), `milli` (the value as `export values` computes
+    it), `status` (`confirmed` or `provisional`), `acceptances` (each `{output, ref, until}` it rests on: what to look at
+    again, and when), `partial` and `exclude` (what it leaves out, each with its reason);
   - `fixed`: each with `entry`, `file`, [`rule_id` or `pool_id`], `path`, `literal`, `reason` and `ref`;
   - with `--strict`, `literals`: how many literals it scanned, those of the rules' predicates and the pools'
     quantities;
@@ -2167,7 +2338,12 @@ says `greater_than_or_equal`).
     or `consumes`, with the pools they name (`pools`), the worst class among them (covered, then verified zero, then
     structural gap, then unknown) and their worst status, and the pools whose price is pending (`pending`); and `counts`:
     the pools and the rules of each class, and the model's own counts (`model`). It computes no steady state: that is the
-    export's.
+    export's;
+  - `values` (#464 W1): whether `out/values.json` is of the current inputs, `{file, current, stale}`: `stale` lists what
+    differs of the model's versions (`rules`, `data`, `tool`), the bytes of `out/prices.json` (`prices`; also when it is
+    gone) and the bytes of exports.json (`exports`), each by what the file records; a file that is not current is the
+    warning `values_stale` (it never changes the exit status: the literals are compared with the values computed now);
+    null without the file. A file of another model is `value_invalid` at `/model_id`.
 - **The provenance classes** of `acmodel check` (warnings, or errors under `check --strict-provenance`) are not
   read here: `--strict` concerns the literals of the schedule only.
 
@@ -2176,12 +2352,34 @@ says `greater_than_or_equal`).
 - **It writes each bound literal that differs from its threshold.** Only the literal's bytes change. A
   position-tracking scanner finds them, so line ends (CRLF stays CRLF), spacing and every other byte stay as
   they are.
-- **It refuses everything `check` refuses but a differing value**, and then writes nothing. It does not scan
-  for unbound literals; `check --strict` does that afterwards.
-- **A file that cannot be written** is `export_write_failed`. The files written before it stay written, and
-  `apply` can run again.
+- **And each bound value** (#464 W1): its value, replaced in place or inserted, and its origin `"model"`, inserted when
+  the rule has none ("A value's rule"; an origin is never replaced); no other byte changes, and no member is removed.
+- **It refuses everything `check` refuses but a differing value or an absent origin**, and then writes nothing: a pending
+  or refused value, any one of them, or an origin other than `"model"` (`origin_invalid`), refuses the whole apply. It
+  does not scan for unbound literals; `check --strict` does that afterwards.
+- **Before anything is written**, the edited bytes of each file are read back with the strict reader and must be
+  exactly the document the edits make: the file as read, with each changed literal and each inserted member in its
+  place, member order included. Otherwise it is a defect (`command_crashed`), and nothing is written.
+- **Writing** (#464 W1). Each file is first written beside itself as `<file>.part`; then every file is read again, and
+  only when each is still the bytes that were read is each part renamed over its file. A file changed meanwhile, by
+  another writer (the adoption of a standard pack writes `schedule.json` too), or no longer readable, is `file_changed`
+  (exit 5): the parts this run wrote are removed again and nothing is written. A part that cannot be written or renamed
+  is `export_write_failed`; the files renamed before it stay written, and `apply` can run again.
+  - **The part's name** is the file's own name with `.part` added, in the same folder: `schedule.json.part` beside
+    `schedule.json`, `<pack file>.json.part` beside a pack file. It is the same name on every run (no process id), and
+    a run writes it over whatever is there.
+  - **A part can be left behind.** A process killed after it wrote a part and before it renamed it (or removed it again)
+    leaves the part where it was. Nothing reads it, the next `apply` that gets as far writes it over, and nothing
+    else removes it: a person deletes it by hand. A repository that does not ignore `*.part` shows it in `git status`;
+    it must not be committed.
+  - **What `file_changed` removes**: only the parts this run wrote, those of the files it was about to write, never
+    another file; a file another writer changed keeps that writer's bytes.
 - **`data`** holds `path`, `model_id`, `state`, `repo`, and:
-  - `changed`: each with `entry`, `threshold`, `file`, [`rule_id` or `pool_id`], `path`, `from` and `to`;
+  - `changed`: each with `entry`, `threshold`, `file`, [`rule_id` or `pool_id`], `path`, `from` and `to`; a value
+    binding's (#464 W1) with `entry`, `value`, `file`, `rule_id`, `path`, `from` (null when inserted), `to`, `ratio` (`to`
+    over `from` as an exact rational, null without a `from` or when it is 0), `ratio_flagged` (the ratio is below 1/2 or
+    above 2: a change to show before it is merged), `origin` (`{from, to}`, `from` null when absent) and `inserted` (the
+    members inserted, in order);
   - `written`: the files whose bytes changed.
 
 ### Stop lines and hard lines

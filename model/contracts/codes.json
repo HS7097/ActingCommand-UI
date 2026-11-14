@@ -49,12 +49,13 @@
           "members": ["value", "fact_key", "reference_fact", "form", "literal_missing", "slot"]
         },
         "threshold": {"type": "token", "required": false},
+        "value": {"type": "token", "required": false},
         "rule_id": {"type": "token", "required": false},
         "pool_id": {"type": "token", "required": false},
         "expected": {"type": "token", "required": false},
         "found": {"type": "token", "required": false}
       },
-      "description": "acmodel bindings check|apply: a literal that bindings.json names (entry, its pointer there: /bindings/<index> or /fixed/<index>) does not agree with its threshold, or is not there. path is the file that holds it (schedule.json or a pack file), rule_id its schedule.json rule or pool_id its schedule.json pool, and the error's ref the literal's JSON pointer in the file (/rules/<index>/... or /pools/<index>/... in schedule.json; /rules when no rule has rule_id, /pools when no pool has pool_id). value: the literal (found) is not the threshold's exported value, or its offset in the fact_offset form (expected); check reports it, apply writes the expected value. fact_key, reference_fact (fact_offset form): the fact key of the fact predicate, or of its fact reference (found), is not the threshold's fact or reference_fact (expected). The comparison is not compared: a rule may test the opposite side of a threshold. form: a fact_offset threshold is bound to something other than the offset of a fact reference {\"type\": \"fact\", \"fact_key\", \"offset\"} in a fact predicate, or a constant threshold to such an offset (the offset of a fact reference in a resource_projection predicate or a pool's capacity takes a constant). literal_missing: the file has no rule rule_id or no pool pool_id, or the pointer names nothing or no integer (found is the JSON type there). slot (#424 ACM-PRICE 3.1): pool_id is a slot resource of the model, a resource with a hard cap whose value is 0, counted in slot-hours that never carry over; it is no Runtime pool and its price is a diagnosis only, so no binding or fixed entry names it; the error's ref is the pool (/pools/<index>, or /pools when no pool has that id)."
+      "description": "acmodel bindings check|apply. A value binding (#464 W1; value, the value of exports.json, which names the fixed_value_milli of the rule rule_id): value, its literal is not the value export values computes (expected), or it is absent (no found, at the rule; apply inserts it); literal_missing, no rule has rule_id, or the member holds no integer (found its JSON type). Otherwise a literal that bindings.json names (entry, its pointer there: /bindings/<index> or /fixed/<index>) does not agree with its threshold, or is not there. path is the file that holds it (schedule.json or a pack file), rule_id its schedule.json rule or pool_id its schedule.json pool, and the error's ref the literal's JSON pointer in the file (/rules/<index>/... or /pools/<index>/... in schedule.json; /rules when no rule has rule_id, /pools when no pool has pool_id). value: the literal (found) is not the threshold's exported value, or its offset in the fact_offset form (expected); check reports it, apply writes the expected value. fact_key, reference_fact (fact_offset form): the fact key of the fact predicate, or of its fact reference (found), is not the threshold's fact or reference_fact (expected). The comparison is not compared: a rule may test the opposite side of a threshold. form: a fact_offset threshold is bound to something other than the offset of a fact reference {\"type\": \"fact\", \"fact_key\", \"offset\"} in a fact predicate, or a constant threshold to such an offset (the offset of a fact reference in a resource_projection predicate or a pool's capacity takes a constant). literal_missing: the file has no rule rule_id or no pool pool_id, or the pointer names nothing or no integer (found is the JSON type there). slot (#424 ACM-PRICE 3.1): pool_id is a slot resource of the model, a resource with a hard cap whose value is 0, counted in slot-hours that never carry over; it is no Runtime pool and its price is a diagnosis only, so no binding or fixed entry names it; the error's ref is the pool (/pools/<index>, or /pools when no pool has that id)."
     },
     "binding_unbound_literal": {
       "category": "error",
@@ -426,11 +427,11 @@
         "reason": {
           "type": "vocab",
           "required": true,
-          "members": ["blocked", "per_account", "provisional", "not_integer", "not_single", "out_of_range", "validator_path_unknown", "impact_blocked"]
+          "members": ["blocked", "per_account", "provisional", "not_integer", "not_single", "out_of_range", "validator_path_unknown", "impact_blocked", "prices_stale", "pending"]
         },
         "value": {"type": "token", "required": false}
       },
-      "description": "acmodel export thresholds, and acmodel bindings check|apply for a bound threshold: an output (threshold:<id>) cannot go into a shared output, so nothing is written (contracts/formats.md, Outputs; bindings take only what the export writes). blocked: it cannot be computed; the errors that block it follow, with needed_by. per_account: it read the account state, and a per-account value never enters a shared output (#424, ruling 66); run and explain show it locally. provisional: it is not confirmed, and acceptances of exports.json do not accept it (#424 design 6.6). not_integer, out_of_range: its exact value (value) is not an integer (exports.json can declare a round), or lies beyond +-(2^53-1); a value that continuous unknowns leave open is not_integer, with value <low>..<high>. not_single: an accepted provisional output whose scenarios hold more than one integer (value <lowest>..<highest>); none of them is picked. path is exports.json and the error's ref the threshold's entry in it. acmodel export tables: a cell (ref, its pointer in exports.json, /tables/<i>/rows/<j>/<column>) whose output is blocked, per_account, out_of_range or not_single (its scenarios, each scaled and rounded as the column declares, both ends of an enclosure, give more than one integer, value <lowest>..<highest>; a boolean that is not one value, value false..true); a provisional output that is not accepted is written as null instead. acmodel export scoring: a placeholder of a scoring template (path the template, ref the placeholder) refused for the same reasons, and provisional when it is not accepted; one refused placeholder refuses the whole document. validator_path_unknown (acmodel export scoring): a template that fills is not written, because where scoring.json lives and which validator family reads it are not decided yet (367-D1); output is scoring:<id>, path exports.json and ref the entry /scoring/<i>. acmodel export prices (#424 ACM-PRICE PRICE-4a): blocked, the economy's steady state is blocked (output economy:steady, path exports.json, ref /prices), and the errors that block it follow, each needed by it; impact_blocked, the impact assessment cannot move an estimate (output rule:<id>, the provisional derive; path its rule file and ref its estimate; value the pass, each moved unknown or estimate end as <id>=<point>, or the member of, low or high when the estimate itself cannot be computed): the estimate or the pass's steady state is blocked, and the errors that block it follow, each needed by it; per_account, the same where the estimate needs the account state. acmodel verify passes (#430 METHOD-C) refuses a blocked steady state or pass the same way (blocked, impact_blocked, per_account). Nothing is written."
+      "description": "acmodel export thresholds, and acmodel bindings check|apply for a bound threshold: an output (threshold:<id>) cannot go into a shared output, so nothing is written (contracts/formats.md, Outputs; bindings take only what the export writes). blocked: it cannot be computed; the errors that block it follow, with needed_by. per_account: it read the account state, and a per-account value never enters a shared output (#424, ruling 66); run and explain show it locally. provisional: it is not confirmed, and acceptances of exports.json do not accept it (#424 design 6.6). not_integer, out_of_range: its exact value (value) is not an integer (exports.json can declare a round), or lies beyond +-(2^53-1); a value that continuous unknowns leave open is not_integer, with value <low>..<high>. not_single: an accepted provisional output whose scenarios hold more than one integer (value <lowest>..<highest>); none of them is picked. path is exports.json and the error's ref the threshold's entry in it. acmodel export tables: a cell (ref, its pointer in exports.json, /tables/<i>/rows/<j>/<column>) whose output is blocked, per_account, out_of_range or not_single (its scenarios, each scaled and rounded as the column declares, both ends of an enclosure, give more than one integer, value <lowest>..<highest>; a boolean that is not one value, value false..true); a provisional output that is not accepted is written as null instead. acmodel export scoring: a placeholder of a scoring template (path the template, ref the placeholder) refused for the same reasons, and provisional when it is not accepted; one refused placeholder refuses the whole document. validator_path_unknown (acmodel export scoring): a template that fills is not written, because where scoring.json lives and which validator family reads it are not decided yet (367-D1); output is scoring:<id>, path exports.json and ref the entry /scoring/<i>. acmodel export prices (#424 ACM-PRICE PRICE-4a): blocked, the economy's steady state is blocked (output economy:steady, path exports.json, ref /prices), and the errors that block it follow, each needed by it; impact_blocked, the impact assessment cannot move an estimate (output rule:<id>, the provisional derive; path its rule file and ref its estimate; value the pass, each moved unknown or estimate end as <id>=<point>, or the member of, low or high when the estimate itself cannot be computed): the estimate or the pass's steady state is blocked, and the errors that block it follow, each needed by it; per_account, the same where the estimate needs the account state. acmodel verify passes (#430 METHOD-C) refuses a blocked steady state or pass the same way (blocked, impact_blocked, per_account). acmodel export values (#464 W1), and bindings check|apply for a bound value: per_account, a quantity of a value (output value:<id>, path exports.json, ref the term's quantity or activity) read the account state; out_of_range, the value (value) rounds beyond 2^53-1; prices_stale, out/prices.json (path; output values) is not of the model's versions or of exports.json's prices.unit_milli, one error per member that differs (value rules, data, tool or unit_milli, ref /versions/<member> or /unit_milli): the prices are exported again first; tool is the tool's own version, so after an upgrade of acmodel export prices runs again before export values, or bindings check with a value binding, can pass. bindings check|apply only: pending, a bound value (output value:<id>, ref its entry in exports.json) that export values leaves pending, one error per reason (value <reason>:<item>: blocked, provisional or not_single with the output or flow amount; price_pending, price_missing, price_acceptance_withdrawn or price_acceptance_changed with the pool: the last two, a price delivered under an acceptance that exports.json no longer holds, or holds otherwise, than prices.json recorded it). Nothing is written."
     },
     "export_table_invalid": {
       "category": "error",
@@ -476,7 +477,7 @@
         "exception_type": {"type": "name", "required": true},
         "raw_text": {"type": "raw_text", "required": true}
       },
-      "description": "acmodel export thresholds: a file of the export (path) or its folder could not be written. The provenance files are written before thresholds.json, so thresholds.json is left as it was when a provenance file fails; nothing is deleted. acmodel bindings apply: a file whose literals it rewrites (path) could not be written; the files written before it stay written, and apply can run again. acmodel export tables: a table or provenance file (path) or a folder could not be written, its previous bytes read, or, when the export puts the files back, restored (path the file, or a folder it created and could not remove again); every other file is put back."
+      "description": "acmodel export thresholds: a file of the export (path) or its folder could not be written. The provenance files are written before thresholds.json, so thresholds.json is left as it was when a provenance file fails; nothing is deleted. acmodel bindings apply: a file whose literals it rewrites could not be written as its part (path, <file>.part), or that part could not be renamed over it (path the file), or a part could not be removed again (path the part; #464 W1); the files renamed before it stay written, and apply can run again. acmodel export values (#464 W1): as export thresholds, the value provenance files before values.json. acmodel export tables: a table or provenance file (path) or a folder could not be written, its previous bytes read, or, when the export puts the files back, restored (path the file, or a folder it created and could not remove again); every other file is put back."
     },
     "expr_dimension_mismatch": {
       "category": "error",
@@ -489,7 +490,7 @@
         "position": {"type": "integer", "required": true},
         "path": {"type": "path", "required": false}
       },
-      "description": "An operator or function of an expression gets operands whose types do not fit: an amount of one resource with another, an amount with a time, a bare number with a time, a boolean where a number is needed or the reverse (expr/dimensions.py lists the rules). operands are the operands' types (amount:<resource>, time, count, value, none, number, bool); position is the character offset of the operator. The error's ref is the JSON pointer of the expression. acmodel run (contracts/formats.md, The run) adds path, the file, and also refuses: an expression whose type does not fit what its member expects (operator is the member, e.g. when, value, max, every, consumes, moves, general_logic, offset, and estimate for the of, low and high of a derive's estimate, which take a number of the value's dimension; operands are the expected and the found type; position is the expression's top operator); a reference whose value has no type in the language (operator reference; operands is a preference's JSON type string, array, object or null, or a column's type enum or id); a fact key declared with two dimensions (operator read); a lookup key that does not fit its key column (operator lookup); the variants of a member or the bounds of a range that do not fit each other (operator variants, interval or distribution); a threshold of a boolean (operator threshold, ref in exports.json); a column of a secondary objective's tables that is not of the type the economy reads it with (operator demand: count a count, points and main none; operator costs: a resource's column the amount of that resource; position 0, operands the expected and the found type or column type; path the data file and the error's ref the column, or its dimension). acmodel export tables and export scoring: a cell or placeholder whose output does not fit it (operator table or scoring, position 0, operands the expected type, number or bool, and the output's): an integer column or a placeholder takes a number, a boolean column a boolean; path is exports.json or the template, and the error's ref the $model."
+      "description": "An operator or function of an expression gets operands whose types do not fit: an amount of one resource with another, an amount with a time, a bare number with a time, a boolean where a number is needed or the reverse (expr/dimensions.py lists the rules). operands are the operands' types (amount:<resource>, time, count, value, none, number, bool); position is the character offset of the operator. The error's ref is the JSON pointer of the expression. acmodel run (contracts/formats.md, The run) adds path, the file, and also refuses: an expression whose type does not fit what its member expects (operator is the member, e.g. when, value, max, every, consumes, moves, general_logic, offset, and estimate for the of, low and high of a derive's estimate, which take a number of the value's dimension; operands are the expected and the found type; position is the expression's top operator); a reference whose value has no type in the language (operator reference; operands is a preference's JSON type string, array, object or null, or a column's type enum or id); a fact key declared with two dimensions (operator read); a lookup key that does not fit its key column (operator lookup); the variants of a member or the bounds of a range that do not fit each other (operator variants, interval or distribution); a threshold of a boolean (operator threshold, ref in exports.json); a column of a secondary objective's tables that is not of the type the economy reads it with (operator demand: count a count, points and main none; operator costs: a resource's column the amount of that resource; position 0, operands the expected and the found type or column type; path the data file and the error's ref the column, or its dimension). acmodel export tables and export scoring: a cell or placeholder whose output does not fit it (operator table or scoring, position 0, operands the expected type, number or bool, and the output's): an integer column or a placeholder takes a number, a boolean column a boolean; path is exports.json or the template, and the error's ref the $model. acmodel export values (#464 W1): a quantity rule:<id> of a value that is a boolean (operator value, operands number and bool), or a resource's amount that is an amount of another resource (operator amount, operands the term's amount:<resource> and the rule's type); position 0, path exports.json and the error's ref the quantity."
     },
     "expr_eval_failed": {
       "category": "error",
@@ -540,6 +541,16 @@
         "path": {"type": "path", "required": false}
       },
       "description": "An expression does not parse (grammar in expr/syntax.py): a character outside the language, a malformed number, an unexpected token or end, an unknown reference kind, a malformed reference (or a set where a value is needed), the member key $ outside a sum or count over its set, an unknown function, a wrong number of arguments, or an argument of the wrong form. position is the character offset; token is the offending text. The error's ref is the JSON pointer of the expression; acmodel check adds path, the file that holds it."
+    },
+    "file_changed": {
+      "category": "error",
+      "exit": 5,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true}
+      },
+      "description": "acmodel bindings apply (#464 W1): a file it would write (path) is no longer the bytes it read: another writer changed it (or it cannot be read again) between the reading and the rename of its part. apply writes each file as <file>.part, reads every file again, and renames the parts over them only when none changed; so nothing is written, and the parts it wrote are removed again. Run apply again on the file as it is now."
     },
     "host_gate_paused": {
       "category": "error",
@@ -635,6 +646,21 @@
         "raw_text": {"type": "raw_text", "required": false}
       },
       "description": "A reading of the host layer failed, so the gate or the check cannot decide and does not guess. memory: GlobalMemoryStatusEx. cpu_times: GetSystemTimes, or counters that did not advance consistently over a window. pause_file: checking whether host.pause_file exists failed other than by its absence (path, exception_type, raw_text). process: opening or closing a child process to verify it (OpenProcess, CloseHandle). call is the Win32 function and os_error its GetLastError."
+    },
+    "insert_style_unknown": {
+      "category": "error",
+      "exit": 6,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "entry": {"type": "token", "required": true},
+        "value": {"type": "token", "required": true},
+        "rule_id": {"type": "token", "required": true},
+        "anchor": {"type": "token", "required": true},
+        "member": {"type": "token", "required": true}
+      },
+      "description": "acmodel bindings check|apply (#464 W1): the rule rule_id of schedule.json (path) lacks a member that its value binding (entry, its pointer in bindings.json; value, the value of exports.json) writes (member: fixed_value_milli, or fixed_value_origin), and apply inserts it right after the member anchor (package_id, or fixed_value_milli), in the style of that member: the separator after it (its comma and the whitespace around it) and its own colon. Here the rule has no member anchor, or no member follows it, so there is no separator to copy; the tool never guesses one, and nothing is written. Write the member by hand in the file's style, or put another member after the anchor. The error's ref is the rule."
     },
     "location_refused": {
       "category": "error",
@@ -800,13 +826,13 @@
         "namespace": {
           "type": "vocab",
           "required": true,
-          "members": ["model", "table", "row", "source", "engine", "threshold", "literal", "export_table", "scoring", "acceptance"]
+          "members": ["model", "table", "row", "source", "engine", "threshold", "literal", "export_table", "scoring", "acceptance", "value"]
         },
         "id": {"type": "token", "required": true},
         "first_path": {"type": "path", "required": true},
         "first_ref": {"type": "token", "required": true}
       },
-      "description": "acmodel check: an id is declared twice in one namespace. model: entities, periods, rules and unknowns share one; table: data tables; row: the keys of one table's rows (id joins the key parts with commas); source: sources.json; engine: model.json engines; threshold (acmodel run): the thresholds of exports.json; literal (acmodel bindings): the literals that the bindings and the fixed entries of bindings.json name, by file, rule_id or pool_id, and pointer (id joins them with colons). export_table (acmodel export tables): the table_id of the tables of exports.json; scoring (acmodel export scoring): the ids of its scoring templates; acceptance (acmodel explain and the exports): the outputs its acceptances accept. path and the error's ref are the second declaration, first_path and first_ref the first, which references resolve to."
+      "description": "acmodel check: an id is declared twice in one namespace. model: entities, periods, rules and unknowns share one; table: data tables; row: the keys of one table's rows (id joins the key parts with commas); source: sources.json; engine: model.json engines; threshold (acmodel run): the thresholds of exports.json; literal (acmodel bindings): the literals that the bindings and the fixed entries of bindings.json name, by file, rule_id or pool_id, and pointer (id joins them with colons). export_table (acmodel export tables): the table_id of the tables of exports.json; scoring (acmodel export scoring): the ids of its scoring templates; acceptance (acmodel explain and the exports): the outputs its acceptances accept; value (acmodel export values, and bindings with a value binding; #464 W1): the ids of exports.json's values. path and the error's ref are the second declaration, first_path and first_ref the first, which references resolve to."
     },
     "no_use_condition_incomplete": {
       "category": "error",
@@ -864,6 +890,46 @@
       },
       "description": "acmodel economy (a warning; #424 ACM-PRICE addendum 2.1 section 4.2): an activity that some optimum of the steady state's S3 (the value V alone) uses and no optimum of S2 (V with the protected acquisition A at least A*) does: by value alone it is as good as the acquisition it would take from, and it would lower A. Its activity is a structural gap of the coverage report (PRICE-2b) and never takes a realization mark. One warning per activity; the steady state stands, priced from S3. path is model.json."
     },
+    "origin_invalid": {
+      "category": "error",
+      "exit": 6,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "entry": {"type": "token", "required": true},
+        "value": {"type": "token", "required": true},
+        "rule_id": {"type": "token", "required": true},
+        "found": {"type": "token", "required": true}
+      },
+      "description": "acmodel bindings check|apply (#464 W1): the rule rule_id of schedule.json (path), whose fixed value a value binding (entry, its pointer in bindings.json; value, the value of exports.json) ties to the model, holds a fixed_value_origin other than \"model\" (found: its text, such as pack, or its JSON type). The Runtime's standard-pack-schedule reads an absent origin as the pack's, \"model\" beside a fixed value as the model's, and refuses any other value; so the tool never rewrites it: who wrote the number is the resource side's to say. bindings apply refuses it, and then writes nothing. A person decides: the model writes the number (remove the member, and apply inserts \"model\"), or it is not the model's (remove the binding). The error's ref is the origin."
+    },
+    "origin_missing": {
+      "category": "error",
+      "exit": 6,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "entry": {"type": "token", "required": true},
+        "value": {"type": "token", "required": true},
+        "rule_id": {"type": "token", "required": true}
+      },
+      "description": "acmodel bindings check (#464 W1): the rule rule_id of schedule.json (path), whose fixed value a value binding (entry, its pointer in bindings.json; value, the value of exports.json) ties to the model, has no fixed_value_origin. Only the model's export writes model, and it says so. bindings apply writes it, inserted right after fixed_value_milli, as it writes a differing value. Another origin is origin_invalid, never rewritten. The error's ref is the rule."
+    },
+    "origin_unbound": {
+      "category": "error",
+      "exit": 6,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "member": {"type": "vocab", "required": true, "members": ["fixed_value_origin", "valuation_origin"]},
+        "rule_id": {"type": "token", "required": false},
+        "pool_id": {"type": "token", "required": false}
+      },
+      "description": "acmodel bindings check|apply (#464 W1; the origin guard, always on): schedule.json (path) says that the model wrote a number no binding ties to it: a rule (rule_id) whose fixed_value_origin is \"model\" and that no value binding of bindings.json names, or a pool (pool_id) whose valuation_origin is \"model\" (no binding names a pool's valuation yet). Only the model's export writes model: a number written by hand says nothing, or pack. Bind it, or write the origin that is true. Nothing is written. The error's ref is the origin member."
+    },
     "prices_stale": {
       "category": "warning",
       "exit": 0,
@@ -873,7 +939,18 @@
         "path": {"type": "path", "required": true},
         "members": {"type": "list:token", "required": true}
       },
-      "description": "acmodel bindings check (a warning; #424 ACM-PRICE PRICE-4a): out/prices.json (path), whose coverage the check reports, was written for other versions of the model: its versions differ from the model's in members (rules, data, tool). The coverage is still shown, with current false; export prices brings it up to date."
+      "description": "acmodel bindings check (a warning; #424 ACM-PRICE PRICE-4a): out/prices.json (path), whose coverage the check reports, was written for other versions of the model: its versions differ from the model's in members (rules, data, tool). The coverage is still shown, with current false; export prices brings it up to date. Where the prices are read to compute values (acmodel export values, and bindings check|apply with a value binding; #464 W1), such a file is no warning but the error export_refused, reason prices_stale; tool counts there too, so after an upgrade of acmodel the prices are exported again first."
+    },
+    "requires_word_missing": {
+      "category": "error",
+      "exit": 6,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "word": {"type": "token", "required": true}
+      },
+      "description": "acmodel bindings check|apply (#464 W1): bindings.json binds a value to a rule of schedule.json (path), whose requires does not hold word (benefit_fixed_value), the capability the Runtime reads a rule's fixed value and its origin under. The tool never adds it: a change of what the schedule requires is the resource side's. Nothing is written. The error's ref is /requires, or the document when it has none."
     },
     "reuse_refused": {
       "category": "error",
@@ -1003,7 +1080,7 @@
         "superseded_by": {"type": "token", "required": false},
         "position": {"type": "integer", "required": false}
       },
-      "description": "acmodel check: a reference to a declaration of the model does not resolve to one of the expected kinds (an entity kind, entity, rule, rule.<kind>, unknown, unknown_member, metric, engine, source or param; value for the numeraire of model.json, which names the value entity; resource for a main objective's subject and a no_use rule's (a declared zero is a pool's), numeraire for a secondary objective's, which must be the model's numeraire, and resource for a column of a secondary objective's costs table, the error's path then that data file and its ref the column): nothing has that id, it is of another kind (found), or it is a superseded rule (superseded_by), which is never read. The error's ref is the JSON pointer of the referring member or expression, and position the reference's character offset in an expression. acmodel run (contracts/formats.md, The run) adds: pref, a preference key (pref:<key>, a gate's prefs) that the preference defaults do not hold; rule.derive, rule.cap, rule.limit, a rule: reference to a rule without a value; resource, store, a cap's subject; rule.flow, a cost or yield (target the activity) or max_single_income (target the cap) with no flow amount behind it; rule.derive and rule.derive.live, the from of a threshold in exports.json, which needs live in the fact_offset form. acmodel bindings adds threshold, the threshold of a binding in bindings.json that exports.json does not list (ref is the binding's threshold). The exports (and acmodel explain, for acceptances) add output: an acceptance of exports.json (ref its output), a table cell (ref its $model) or a scoring template's placeholder (path the template, ref its $model) that names no output of the model (rule:<id> of a rule with a value, general_logic:<id>, threshold:<id>; for an acceptance also price:<pool>, a resource of the model that is no slot, PRICE-4a); acmodel export tables adds window, a column's valid_until that names no window entity (found the kind it names)."
+      "description": "acmodel check: a reference to a declaration of the model does not resolve to one of the expected kinds (an entity kind, entity, rule, rule.<kind>, unknown, unknown_member, metric, engine, source or param; value for the numeraire of model.json, which names the value entity; resource for a main objective's subject and a no_use rule's (a declared zero is a pool's), numeraire for a secondary objective's, which must be the model's numeraire, and resource for a column of a secondary objective's costs table, the error's path then that data file and its ref the column): nothing has that id, it is of another kind (found), or it is a superseded rule (superseded_by), which is never read. The error's ref is the JSON pointer of the referring member or expression, and position the reference's character offset in an expression. acmodel run (contracts/formats.md, The run) adds: pref, a preference key (pref:<key>, a gate's prefs) that the preference defaults do not hold; rule.derive, rule.cap, rule.limit, a rule: reference to a rule without a value; resource, store, a cap's subject; rule.flow, a cost or yield (target the activity) or max_single_income (target the cap) with no flow amount behind it; rule.derive and rule.derive.live, the from of a threshold in exports.json, which needs live in the fact_offset form. acmodel bindings adds threshold, the threshold of a binding in bindings.json that exports.json does not list (ref is the binding's threshold), and value (#464 W1), the value of a binding that exports.json's values do not list (ref is the binding's value). acmodel export values (#464 W1; also bindings with a value binding) checks what exports.json's values name, path exports.json: activity, resource and period, a term's activity, resource and per (but run), runs.per, and the pools of cost_paid_by_pool and exclude; rule.flow, an activity with no active flow (target the activity); rule.derive, rule.cap, rule.limit and rule.random, a quantity rule:<id> that names no rule with a value (found its kind, or rule.random.outcomes with expected rule.random.pity_chain and rule.random.drop). The exports (and acmodel explain, for acceptances) add output: an acceptance of exports.json (ref its output), a table cell (ref its $model) or a scoring template's placeholder (path the template, ref its $model) that names no output of the model (rule:<id> of a rule with a value, general_logic:<id>, threshold:<id>; for an acceptance also price:<pool>, a resource of the model that is no slot, PRICE-4a); acmodel export tables adds window, a column's valid_until that names no window entity (found the kind it names)."
     },
     "rule_status_invalid": {
       "category": "error",
@@ -1172,6 +1249,48 @@
         "argument": {"type": "token", "required": false}
       },
       "description": "The command line names no command, an unknown command, or an argument the command does not take, or it lacks an argument the command needs (argument is the argument's name). output_unknown (acmodel explain): the output argument is not an output of the model (rule:<id>, general_logic:<id> or threshold:<id>); argument is the id given. acmodel verify passes (#430 METHOD-C) names its passes by --pass, once per pass, or by the lines of --passes-file, never both (both: argument_unexpected, argument --passes-file; neither: argument_missing, argument --pass). pass_empty: a name is empty (an empty --pass; an empty line of --passes-file, or an empty file; argument is the option); a name given again is argument_unexpected (argument the name); both are found before the model is run, one error each. pass_unknown: a name that is no pass of the impact assessment (a skipped estimate has none), one error each, found after the steady state and before any pass is computed; argument is the name given. The usage text goes to stderr."
+    },
+    "value_consumes_mismatch": {
+      "category": "error",
+      "exit": 6,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "entry": {"type": "token", "required": true},
+        "value": {"type": "token", "required": true},
+        "rule_id": {"type": "token", "required": true},
+        "expected": {"type": "list:token", "required": true},
+        "found": {"type": "list:token", "required": true}
+      },
+      "description": "acmodel bindings check|apply (#464 W1): the value (value, of exports.json) that a binding (entry) ties to the rule rule_id of schedule.json (path) leaves out what the rule's spending of the pools of its cost_paid_by_pool costs (expected, sorted), because the Runtime takes that off itself by the pools' valuation, from what the rule declares it consumes; but the rule's consumes names other pools (found, sorted; empty when it declares none). Either the value would count a spending twice or not at all. Nothing is written. The error's ref is the rule's consumes, or the rule when it has none."
+    },
+    "value_not_positive": {
+      "category": "error",
+      "exit": 5,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "value": {"type": "token", "required": true},
+        "milli": {"type": "token", "required": true},
+        "exact": {"type": "token", "required": true}
+      },
+      "description": "acmodel export values, and bindings check|apply for a bound value (#464 W1): the value (value, of exports.json, path) is below 1 once rounded as it declares (milli; exact, the exact value in thousandths of a priority before rounding). A fixed value is at least 1: a value of 0 is no value (the Runtime's scheduling contract). The export writes nothing; a claim worth nothing at the prices is written by hand, as a placeholder. The error's ref is the value's entry, /values/<index>."
+    },
+    "values_stale": {
+      "category": "warning",
+      "exit": 0,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "members": {
+          "type": "list:token",
+          "required": true
+        }
+      },
+      "description": "acmodel bindings check (a warning; #464 W1): out/values.json (path) was not written from the current inputs: members lists what differs, of the model's versions (rules, data, tool), the bytes of out/prices.json (prices; also when it is gone) and the bytes of exports.json (exports). The check compares each bound literal with the value computed now, never with the file; export values brings the file up to date."
     },
     "venv_failed": {
       "category": "error",
