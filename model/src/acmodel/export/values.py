@@ -112,13 +112,13 @@ class Prices:
         return digest(self.raw)
 
 
-def current_prices(run: Run) -> Prices:
+def current_prices(run: Run, whole: str = WHOLE) -> Prices:
     """The prices the values are counted in: `out/prices.json` of the model folder, read back by its reader
     (`model_file_invalid` when it is not there), of the model (`value_invalid` at `/model_id`), of the model's versions
-    and in exports.json's κ. A file of other versions, or of another κ, is `export_refused` (`prices_stale`), one error per
-    member that differs (`value` the member: `rules`, `data`, `tool`, `unit_milli`): the prices are exported again first.
-    `tool` is the tool's own version, so after an upgrade of acmodel every prices.json is stale until `export prices`
-    runs again (formats.md, step 2)."""
+    and in exports.json's κ. A file of other versions, or of another κ, is `export_refused` (`prices_stale`, `output`
+    `whole`: `values`, or `valuations` for the pools' valuations, #466 W3), one error per member that differs (`value` the
+    member: `rules`, `data`, `tool`, `unit_milli`): the prices are exported again first. `tool` is the tool's own version,
+    so after an upgrade of acmodel every prices.json is stale until `export prices` runs again (formats.md, step 2)."""
     path = run.folder / PRICES
     raw = read(path, readers.PRICES.name)
     doc = read_prices(path, raw)
@@ -133,10 +133,66 @@ def current_prices(run: Run) -> Prices:
     if run.exports.doc.get("prices", {}).get("unit_milli") != doc["unit_milli"]:
         stale.append(("unit_milli", "/unit_milli"))
     _raise([
-        error(EXPORT_REFUSED, {"path": str(path), "output": WHOLE, "reason": "prices_stale", "value": member}, ref)
+        error(EXPORT_REFUSED, {"path": str(path), "output": whole, "reason": "prices_stale", "value": member}, ref)
         for member, ref in stale
     ])
     return Prices(path, raw, doc)
+
+
+@dataclass(frozen=True)
+class PriceRead:
+    """What a value or a pool's valuation (#466 W3) reads of one pool's price in prices.json (formats.md, "`acmodel export
+    values`", step 6): the price in milli, or why it is pending (`{reason, item}`, with the price's `pending` reasons for
+    `price_pending`); whether prices.json lists the pool (its entry was read); and the acceptance it was delivered under
+    (`price:<pool>` and its `{ref, until}`), if any."""
+
+    milli: Fraction | None
+    listed: bool
+    pending: dict[str, Any] | None = None
+    acceptance: tuple[str, dict[str, Any]] | None = None
+
+
+class PriceReader:
+    """The prices of one prices.json as values and valuations read them, each checked against exports.json's acceptances
+    now (read once, when a price needs them)."""
+
+    def __init__(self, run: Run, prices: Prices) -> None:
+        self.run, self.prices = run, prices
+        self.by_pool = prices.by_pool
+        self.accepted: dict[str, int] | None = None  # exports.json's acceptances now, by output
+
+    def withdrawn_or_changed(self, pool: str, recorded: dict[str, Any]) -> str | None:
+        """Whether the acceptance a price was delivered under is still exports.json's as prices.json recorded it (its
+        entry there, `entry` aside, note included): None when it is, `WITHDRAWN` when exports.json holds none of
+        `price:<pool>` now, `CHANGED` when it holds another."""
+        if self.accepted is None:
+            self.accepted = acceptances(self.run)
+        index = self.accepted.get("price:" + pool)
+        if index is None:
+            return WITHDRAWN
+        held = {key: value for key, value in recorded.items() if key != "entry"}
+        return None if self.run.exports.doc["acceptances"][index] == held else CHANGED
+
+    def read(self, pool: str) -> PriceRead:
+        """A pool's price in milli, as prices.json delivered it; a price delivered under an acceptance (a provisional one,
+        or a verified zero) carries that acceptance, but only while exports.json still holds it as prices.json recorded it
+        (`price_acceptance_withdrawn`, `price_acceptance_changed` otherwise: the prices are exported again)."""
+        entry = self.by_pool.get(pool)
+        if entry is None:  # a slot, or no pool of the model
+            return PriceRead(None, False, {"reason": "price_missing", "item": pool})
+        if entry["price"] == PENDING or entry["milli"] is None:
+            return PriceRead(None, True, {"reason": "price_pending", "item": pool, "pending": list(entry["pending"])})
+        if entry["class"] == "verified_zero" or entry["status"] != CONFIRMED:
+            kind = "accept_zero" if entry["class"] == "verified_zero" else "accept_provisional"
+            recorded = entry["acceptance"] if isinstance(entry["acceptance"], dict) else {}
+            given = recorded.get(kind)
+            if given is None:
+                return PriceRead(None, True, {"reason": "price_pending", "item": pool, "pending": ["not_accepted"]})
+            moved = self.withdrawn_or_changed(pool, recorded)
+            if moved is not None:
+                return PriceRead(None, True, {"reason": moved, "item": pool})
+            return PriceRead(Fraction(entry["milli"]), True, None, ("price:" + pool, given))
+        return PriceRead(Fraction(entry["milli"]), True)
 
 
 def period_days(run: Run, period_id: str) -> Fraction:
@@ -315,7 +371,7 @@ class _Evaluation:
         self.taken: dict[str, Fraction] = {}
         self.brought: dict[str, Fraction] = {}
         self.marked: set[str] = set()  # the pools an expected quantity reaches
-        self.accepted: dict[str, int] | None = None  # exports.json's acceptances now, by output (read when a price needs it)
+        self.reader = PriceReader(run, prices)
 
     def refuse(self, ref: str, reason: str, **values: Any) -> None:
         detail = {"path": self.run.exports.path, "output": self.valued.output, "reason": reason, **values}
@@ -415,43 +471,18 @@ class _Evaluation:
         if expected:
             self.marked.add(pool)
 
-    def withdrawn_or_changed(self, pool: str, recorded: dict[str, Any]) -> str | None:
-        """Whether the acceptance a price was delivered under is still exports.json's as prices.json recorded it (its
-        entry there, `entry` aside, note included): None when it is, `WITHDRAWN` when exports.json holds none of
-        `price:<pool>` now, `CHANGED` when it holds another."""
-        if self.accepted is None:
-            self.accepted = acceptances(self.run)
-        index = self.accepted.get("price:" + pool)
-        if index is None:
-            return WITHDRAWN
-        held = {key: value for key, value in recorded.items() if key != "entry"}
-        return None if self.run.exports.doc["acceptances"][index] == held else CHANGED
-
     def price(self, pool: str) -> Fraction | None:
-        """A pool's price in milli, as prices.json delivered it; a price delivered under an acceptance (a provisional one,
-        or a verified zero) adds that acceptance, but only while exports.json still holds it as prices.json recorded it
-        (`price_acceptance_withdrawn`, `price_acceptance_changed` otherwise: the prices are exported again)."""
-        entry = self.prices.by_pool.get(pool)
-        if entry is None:  # a slot, or no pool of the model
-            self.wait("price_missing", pool)
+        """A pool's price in milli, as prices.json delivered it (`PriceReader.read`); a price delivered under an acceptance
+        adds that acceptance, and a pending one the reason it waits for."""
+        found = self.reader.read(pool)
+        if found.listed:  # its entry is read, and its provenance names it, pending or not
+            self.valued.priced.append(pool)
+        if found.pending is not None:
+            self.valued.pending.append(found.pending)
             return None
-        self.valued.priced.append(pool)  # its entry is read, and its provenance names it, pending or not
-        if entry["price"] == PENDING or entry["milli"] is None:
-            self.wait("price_pending", pool, pending=list(entry["pending"]))
-            return None
-        if entry["class"] == "verified_zero" or entry["status"] != CONFIRMED:
-            kind = "accept_zero" if entry["class"] == "verified_zero" else "accept_provisional"
-            recorded = entry["acceptance"] if isinstance(entry["acceptance"], dict) else {}
-            given = recorded.get(kind)
-            if given is None:
-                self.wait("price_pending", pool, pending=["not_accepted"])
-                return None
-            moved = self.withdrawn_or_changed(pool, recorded)
-            if moved is not None:
-                self.wait(moved, pool)
-                return None
-            self.accept("price:" + pool, given)
-        return Fraction(entry["milli"])
+        if found.acceptance is not None:
+            self.accept(*found.acceptance)
+        return found.milli
 
     def compute(self) -> Valued:
         valued, definition = self.valued, self.valued.definition

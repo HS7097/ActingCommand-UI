@@ -610,7 +610,7 @@ def test_apply_writes_each_value_and_its_origin_and_changes_no_other_byte(tmp_pa
     status, doc = bindings(acmodel, folder, "check")
 
     assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
-    shown = {"literal": None, "origin": "model", "partial": False, "exclude": []}
+    shown = {"literal": None, "origin": "model", "partial": False, "exclude": [], "limited": False, "limited_by": []}
     assert doc["data"]["bindings"] == [
         {**literal(0, "val.a.day", "rule.a.day"), **shown, "literal": 2448, "milli": 2448, "status": "confirmed",
          "acceptances": []},
@@ -783,13 +783,26 @@ def test_the_declared_cost_must_be_the_bound_rules_consumes(tmp_path, acmodel):
     assert (doc["data"]["bindings"][0]["partial"], doc["data"]["bindings"][0]["exclude"]) == (True, MAKE["exclude"])
 
 
-def test_a_member_with_no_separator_to_copy_is_not_inserted(tmp_path, acmodel):
-    """`package_id` is the rule's last member: there is no separator after it to copy, so nothing is guessed."""
+def test_a_member_after_the_last_one_copies_the_separator_before_it_and_without_its_anchor_none_is_guessed(
+    tmp_path, acmodel
+):
+    """`package_id` is the rule's last member (#466 W3 fix1): no separator follows it, so the members go in right after it
+    with the separator before it (between `id` and `package_id`), before the rule's closing brace. A rule without
+    `package_id` has no member to insert the fixed value after: there is no separator to copy, so nothing is guessed."""
     folder = values_repo(tmp_path, [DAY_RUN])
     schedule = folder / "schedule.json"
     schedule.write_bytes(one_line(['{"id":"rule.z","package_id":"pkg.z"}']))
-    before = schedule.read_bytes()
     bind(folder, ("val.a.day", "rule.z"))
+
+    status, doc = bindings(acmodel, folder, "apply")
+
+    assert (status, doc["errors"]) == (0, [])
+    assert schedule.read_bytes() == one_line(
+        ['{"id":"rule.z","package_id":"pkg.z","fixed_value_milli":2448,"fixed_value_origin":"model"}'])
+    assert doc["data"]["changed"][0]["inserted"] == ["fixed_value_milli", "fixed_value_origin"]
+
+    schedule.write_bytes(one_line(['{"id":"rule.z","priority":1}']))
+    before = schedule.read_bytes()
 
     status, doc = bindings(acmodel, folder, "apply")
 
