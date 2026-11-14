@@ -1484,7 +1484,7 @@ kind's evaluator version, and it adds no version: the full run's output is uncha
 
 ## Outputs: provenance, `explain`, `thresholds.json`, the tables and the scoring documents
 
-**Where they are written** (#424, 2026-11-09). The exports (`export values` too, #464 W1) and `bindings apply` write into the model folder (and
+**Where they are written** (#424, 2026-11-09). The exports (`export values` too, #464 W1, and `export valuations`, #466 W3) and `bindings apply` write into the model folder (and
 `export tables` into its `--repo`), and the shared trees go under `paths.state_root`. None of these may be a Runtime
 install root or lie inside one: a model folder or repository that does is refused before anything is computed
 (`location_refused`), and such a state root is `config_invalid` (`runtime_install_root`) when the configuration is
@@ -1500,13 +1500,13 @@ of an `if`, the row a `lookup` found, every row of a set.
 |---|---|
 | `schema_version` | `acmodel.provenance.v1` |
 | `model_id` | the model's id |
-| `output` | `rule:<id>`, `general_logic:<id>` or `threshold:<id>`; or an output of the economy's steady state, `price:<resource>` or `activity_value:<activity>` (PRICE-2b-1); or `value:<id>`, a value of `export values` (#464 W1) |
+| `output` | `rule:<id>`, `general_logic:<id>` or `threshold:<id>`; or an output of the economy's steady state, `price:<resource>` or `activity_value:<activity>` (PRICE-2b-1); or `value:<id>`, a value of `export values` (#464 W1); or `valuation:<pool>`, a pool's valuation of `export valuations` (#466 W3) |
 | `result` | the output as `run` shows it (a rule without its `general_logic`, which is an output of its own) |
 | `versions` | `rules`: the sha256 over `model.json`, `sources.json` and the rule files; `data`: over the data files; `tool`: the tool version. Each file counts as `[path, document]`, sorted by path. A hash is over canonical JSON: sorted keys, no whitespace, UTF-8. |
 | `nodes` | node id to node; the tree is rooted at `output` |
 | [`shared`] | only in a price's provenance file that `export prices` writes (PRICE-4a2): the trees the document reads but does not hold, each root's id (`economy:steady`) to the sha256 of the canonical JSON (JCS, `export/jcs.py`) of its tree document (below); `nodes` then holds the document's own nodes only |
 | [`acceptance`] | only for a provisional output that `acceptances` of exports.json accepts: `file` (`exports.json`), `ref` (its entry, `/acceptances/<index>`), `sha256` of the entry and its `accept_provisional` |
-| [`acceptances`] | only in a value's provenance file (#464 W1) that rests on acceptances: each `{output, ref, until}`, of a quantity (`rule:<id>`) or of a price (`price:<pool>`), sorted by `output` |
+| [`acceptances`] | only in a value's provenance file (#464 W1) that rests on acceptances: each `{output, ref, until}`, of a quantity (`rule:<id>`) or of a price (`price:<pool>`), sorted by `output`; and in a valuation's (#466 W3), of its price |
 
 **A shared tree** (`acmodel.provenance.tree.v1`, PRICE-4a2). Every price reads the steady state whole, so its tree is
 the bulk of each price's provenance (about a megabyte for the smallest real model, the same in every price's document).
@@ -1541,7 +1541,8 @@ one of the same output `model_id_duplicate` (`namespace` `acceptance`): `explain
 | `price`, `activity_value` | `price:<resource>`, `activity_value:<activity>` | `resource` or `activity` |
 | `economy` | `economy:steady` | `solve` (`steady`), `file` (`model.json`) |
 | `value` | `value:<id>` (#464 W1, a value's provenance file) | `id`, `file` (`exports.json`), `ref` (its entry), `sha256` of the entry; it reads the outputs and flow amounts it computes with and the prices it counts in |
-| `price` (of prices.json) | `price:<resource>`, in a value's provenance file | `resource`, `file` (`out/prices.json`), `sha256` of that file's bytes, `class`, `status`, `price`, `milli` and `provenance` (the price's own file) as prices.json delivered them; it reads nothing |
+| `valuation` | `valuation:<pool>` (#466 W3, a valuation's provenance file) | `pool_id`, `resource` (the binding's `valuation`), `file` (`bindings.json`), `ref` (its binding), `sha256` of the binding, `schedule` (`file` `schedule.json`, relative to the repository; `ref`, the pool's scale; `scale`, Q as read); it reads the price it weighs, when prices.json lists it |
+| `price` (of prices.json) | `price:<resource>`, in a value's or a valuation's provenance file | `resource`, `file` (`out/prices.json`), `sha256` of that file's bytes, `class`, `status`, `price`, `milli` and `provenance` (the price's own file) as prices.json delivered them; it reads nothing |
 | `rule` | `rule:<id>` (its value), `general_logic:<id>`, `offset:<id>` (`live.offset`); the flow amounts `flow:<id>:consumes:<resource>`, `flow:<id>:produces:<resource>` and `flow:<id>:moves`; `entry:<id>`, a rule consulted for its logic only (the cap of `max_single_income`, and an income whose amount needs the account state, which its store's storage cap bounds) | `kind`, `id`, `file`, `ref` (the pointer of the expression, or of a cap's `reading`, or a random rule's form; for `entry:` the rule's), `sha256` of the rule entry, and its `status` and `provenance` as written; a random rule whose value the run carries as its enclosure adds `exact_values`, `[{"unknowns", "value"}]`, the exact value per scenario |
 | `unknown` | `member:<unknown>:<member>`; `point:<unknown>` (an interval or a distribution) | as a rule, with `member` for a member; `ref` is the unknown's |
 | `row` | `row:<table>[<key parts joined with commas>]` | `table`, `key`, `file`, `ref`, `sha256` of the row, `status`, `provenance` (the row's, else the table's) |
@@ -2180,19 +2181,89 @@ check`. The files have sorted keys, a two-space indent, UTF-8 and LF line ends; 
 `export_write_failed`. Nothing is deleted: the provenance file of a value that exports.json no longer lists stays as an
 earlier export wrote it (a value that became pending has its file written again, above).
 
+### `acmodel export valuations <model> --state <file>`
+
+The base weight W of each pool valuation a valuation binding of `bindings.json` ties to the model (#466 W3;
+`src/acmodel/export/valuations.py`). It runs the model as `run` does, without the cache, computes no steady state, and
+reads the prices `export prices` delivered and the repository's `schedule.json` (two folders above the model folder).
+Its result has its own file and its own format, `out/valuations.json` (`acmodel.valuations.v1`): `out/values.json` is
+never touched, and a resource repository that reads `acmodel.values.v1` reads on as before.
+1. **The valuations** are the valuation bindings of `bindings.json` ("`bindings.json`"), each one pool. A pool named by two
+   is `model_id_duplicate` (`namespace` `literal`), and a `valuation` that names no resource of the model
+   `rule_reference_missing` (`expected` `resource`, at the binding's `valuation`): exit 1, and nothing is written.
+2. **The prices** are read as for `export values` (step 2 there): `out/prices.json` of the model's versions and of
+   exports.json's κ, or `export_refused` (`prices_stale`, `output` `valuations`, exit 5).
+3. **The pool** must be a pool of `schedule.json` that is no slot, whose `valuation` is a block with an integer
+   `base_weight_milli` and an integer `scale` Q in 1..2<sup>53</sup> − 1 ("A pool's valuation" below: `binding_mismatch`,
+   `valuation_pending_marker`; exit 6, and nothing is written).
+4. **W** is the milli of value of Q steps of the pool, as the Runtime weighs a consumption, `c·W/Q` (its scheduling
+   contract, "Fixed values written in the pack"): the price's `milli` (the price × κ) × Q, exactly, then rounded by the
+   binding's `round` (`floor`, `ceil` or `half_even`, always declared). Q, the block's `name` and `unit` are the
+   schedule's: they are read, and never written.
+5. **The price** is read as a value reads one (`export values`, step 6): a pending price leaves the valuation `pending`,
+   with why (`price_pending` with the price's `pending`, `price_missing`, `price_acceptance_withdrawn`,
+   `price_acceptance_changed`); one delivered under an acceptance (provisional, or an accepted verified zero) makes it
+   `provisional`, listing the acceptance `price:<pool>` with its `ref` and `until`; otherwise it is `confirmed`.
+6. **Range and precision**: three reasons, three codes, so that no code holds two reasons (each tells a person something
+   else to do), each with a suggested scale:
+
+   | W | Code | Then |
+   |---|---|---|
+   | rounds to 0 while the price is above 0 | `valuation_rounds_to_zero` (exit 5) | refused, nothing is written: a W of 0 says using the pool costs nothing, which the price denies |
+   | beyond 0..1,000,000 once rounded, or of a price below 0 | `valuation_out_of_range` (exit 5) | refused, nothing is written: the Runtime refuses such a `base_weight_milli`, so the schedule would not compile |
+   | off its exact value by more than the **precision bound** of it | `precision_low` (a warning) | written, and its `precision` recorded; whether Q changes is the resource side's to decide |
+
+   The **precision bound** is `1/200` (0.5 %): the relative error `|W − exact| / exact` may be at most that
+   (`valuations.PRECISION_BOUND`). A price of 0 weighs 0 exactly and is none of these.
+   The **suggested scale** is the least power of ten Q′ (10<sup>0</sup> to 10<sup>15</sup>, within Q's range) whose W lies
+   in 0..1,000,000 and within the bound, or `none` when no power of ten does (a price above 1,000,000 milli a step, or
+   below 0, or one too small for 10<sup>15</sup> steps): the tool never suggests a scale that does not hold, and never
+   changes Q.
+
+**Every valuation is listed**: a pending one is written `pending` with each reason, as the values are. It writes into the
+model folder `out/provenance/valuations/<pool>.json` for each (`acmodel.provenance.v1`, "Provenance": `output`
+`valuation:<pool>`; `nodes`, the valuation's node and the price's node, as prices.json has it, pending or not; `result`,
+its entry below without `provenance`; `acceptances` when it rests on one). Then `out/valuations.json`
+(`acmodel.valuations.v1`), last:
+
+| Member | Value |
+|---|---|
+| `schema_version` | `acmodel.valuations.v1` |
+| `model_id`, `versions` | as in a provenance document |
+| `prices` | the prices it weighed in: `file` (`out/prices.json`), `sha256` of its bytes, and its `versions` |
+| `bindings` | `file` (`bindings.json`) and the `sha256` of its bytes: the valuations are bound there |
+| `schedule` | `file` (`schedule.json`, relative to the repository); the scale each valuation read is in its entry |
+| `unit_milli` | κ, as prices.json has it |
+| `precision_bound` | the precision bound, `1/200` |
+| `valuations` | one entry per valuation binding, by `pool_id` (below) |
+| `counts` | how many are `confirmed`, `provisional`, `pending`, and `precision_low` |
+
+A valuation's entry: `pool_id`; `valuation` (the resource); `status`, `confirmed`, `provisional` or `pending`; `round`;
+`scale`, Q as the pool holds it; `milli`, the price in milli of one step, an exact rational, or null; `base_weight_milli`,
+W (an integer, what a binding writes), or null; `exact_weight_milli`, W before rounding, or null; `precision`, null within
+the bound, else `{error, bound, suggested_scale}` (the relative error and the bound as exact rationals, the suggested scale
+an integer or null for none); `acceptances`, each `{output, ref, until}`; `pending`, each `{reason, item}` it waits for;
+and `provenance`, its provenance file.
+
+Where its status shows in the schedule: nowhere. A bound W is written with `valuation_origin: "model"` whether it is
+confirmed or provisional. The files have sorted keys, a two-space indent, UTF-8 and LF line ends; a write that fails is
+`export_write_failed`; the warnings are each `precision_low`. Nothing is deleted. Without a valuation binding the file
+lists none.
+
 ## Bindings: `bindings.json`, `bindings check` and `bindings apply`
 
 A binding ties a literal of the resource repository to a threshold of `exports.json` (#424 design 6.3), so that
 a number in `schedule.json` or in a pack file has the threshold's provenance. `bindings.json` sits beside
 `model.json`. Its file names are relative to the repository, the folder two above the model folder
 (`<repo>/ours/model`). A binding of a value (#464 W1) ties a rule's fixed value to a value of exports.json the same
-way, and it writes who wrote it: the model.
+way, and it writes who wrote it: the model. A binding of a valuation (#466 W3) ties the base weight W of a pool's
+valuation to the price of a resource of the model, and writes who wrote it too.
 
 ### `bindings.json` (`acmodel.bindings.v1`)
 
 | Member | Value |
 |---|---|
-| `bindings` | a list of `{threshold, file, path}` [`rule_id` or `pool_id`, `note`]: `threshold` is the id of a threshold of `exports.json`, `file` the file that holds the literal and `path` its JSON pointer; or of `{value, file, rule_id, path}` [`note`] (#464 W1): `value` is the id of a value of `exports.json`, `file` is `schedule.json`, `rule_id` its rule and `path` `/fixed_value_milli` (`value_invalid` otherwise; `pool_id` is `member_unknown`). Each binding names exactly one of `threshold` and `value` (`member_missing` or `member_conflict`, with `expected` both). |
+| `bindings` | a list of `{threshold, file, path}` [`rule_id` or `pool_id`, `note`]: `threshold` is the id of a threshold of `exports.json`, `file` the file that holds the literal and `path` its JSON pointer; or of `{value, file, rule_id, path}` [`note`] (#464 W1): `value` is the id of a value of `exports.json`, `file` is `schedule.json`, `rule_id` its rule and `path` `/fixed_value_milli` (`value_invalid` otherwise; `pool_id` is `member_unknown`); or of `{valuation, file, pool_id, path, round}` [`note`] (#466 W3): `valuation` is the id of a resource of the model, whose exported price W weighs, `file` is `schedule.json`, `pool_id` its pool, `path` `/valuation/base_weight_milli` (`value_invalid` otherwise; `rule_id` is `member_unknown`), and `round` how W is rounded, `floor`, `ceil` or `half_even` (`member_missing` without it; on any other binding `member_unknown`). Each binding names exactly one of `threshold`, `value` and `valuation` (`member_missing` or `member_conflict`, with `expected` the three). |
 | `fixed` | a list of `{file, path, reason, ref}` [`rule_id` or `pool_id`, `note`]: a literal that is no quantity, with the reason and a reference (a ruling, a board item) |
 | [`note`] | |
 
@@ -2230,6 +2301,14 @@ value:
   a value the export refuses is refused the same way, and one it leaves pending is `export_refused` (`pending`, exit 5,
   `output` `value:<id>`, one error per reason, `value` the reason as `<reason>:<item>`, for example
   `price_pending:<pool>` or `price_acceptance_changed:<pool>`). Without a value binding nothing of the values is read.
+- **A bound valuation** (#466 W3) is computed exactly as `export valuations` computes it, from the same prices and the
+  pool's own scale ("`acmodel export valuations`", steps 2 to 6): prices of other versions are `export_refused`
+  (`prices_stale`, `output` `valuations`, exit 5); a W the export refuses (`valuation_rounds_to_zero`,
+  `valuation_out_of_range`, exit 5), and a pool, block or scale it refuses (exit 6), are refused the same way; one whose
+  price is pending is `export_refused` (`pending`, exit 5, `output` `valuation:<pool>`, `path` `bindings.json`, at the
+  binding, one error per reason, `value` `<reason>:<resource>`); a W off by more than the precision bound is the warning
+  `precision_low`, with the suggested scale. A valuation names a resource of the model (`rule_reference_missing`,
+  `expected` `resource`, exit 1).
 
 ### A value's rule (#464 W1)
 
@@ -2250,8 +2329,23 @@ wrote it (the Runtime's `standard-pack-schedule` reads both; only Provenance rea
   declares it consumes is what the Runtime takes off by the pools' valuation, so the value leaves out exactly that.
 - **The word.** `schedule.json`'s `requires` must hold `benefit_fixed_value` (`requires_word_missing`, at `/requires`, or
   at the document without one). The tool never adds it.
+- **The limited mark** (#466 W3; the Runtime's `standard-pack-schedule`, "The limited mark": whether a limit counts a
+  rule's runs is the model's to say). A value is **limited** when one of its terms is an activity that a `limit` rule of
+  the model counts: the limit's `subject`, or an activity of its `shared_with`, as the economy counts them (a resource's
+  term shows no activity, so it is never limited). The Runtime gives the mark to a consumer of a regenerating pool only
+  ("What a resource repository writes"), so:
+  - a limited value whose rule declares `consumes` (a non-empty list) and has no `limited`: `limited_missing` (exit 6,
+    `limited_by` the limit rules, sorted, at the rule), a difference `apply` writes, `"limited": true`;
+  - a limited value whose rule declares no `consumes`: the warning `limited_without_consumes` (`limited_by`, at the
+    rule); nothing is written, and a mark the rule writes stays;
+  - a rule that writes `"limited": true` while its value is not limited: the warning `limited_unmodelled` (at the
+    mark); it is never removed;
+  - a `limited` that is not `true` (the Runtime refuses anything else): `limited_invalid` (exit 6, `found`, at the
+    member), which `apply` refuses and never rewrites.
+  The mark has no origin member: the Runtime's contract gives it none.
 - **Inserting.** A member the rule lacks is inserted right after another: `fixed_value_milli` after `package_id`,
-  `fixed_value_origin` after `fixed_value_milli` (both after `package_id` when both are absent). Each is written in the
+  `fixed_value_origin` after `fixed_value_milli`, `limited` after `fixed_value_origin` (consecutive absent members after
+  one present member go in at once, in that order). Each is written in the
   style of the member it follows: the separator that follows it, a comma with the whitespace before and after it (so a
   line end and an indent, CRLF or LF as the file has them), then the key, that member's own colon with its whitespace,
   and the value. A rule without that member, or one where no member follows it, has no separator to copy:
@@ -2259,9 +2353,34 @@ wrote it (the Runtime's `standard-pack-schedule` reads both; only Provenance rea
 - **Nothing is removed.** A value that becomes pending, or a binding that is gone, leaves the rule as it is: the tool
   reports, and a person writes the value by hand and its origin then.
 
+### A pool's valuation (#466 W3)
+
+A valuation binding writes two members of its pool: `base_weight_milli` inside the `valuation` block, W, and
+`valuation_origin: "model"` after the block, who wrote it (the Runtime's `standard-pack-schedule`, "Provenance": only
+`"model"`, and only beside a block; it requires `benefit_fixed_value`). Which pools are bound is the resource side's to
+say: the tool knows no game and no kind of pool. For each:
+- **The pool and its block.** The pool must be there (`binding_mismatch` `literal_missing`, at `/pools`), no slot
+  (`slot`), and its `valuation` a block: the pending marker `"pending"` is `valuation_pending_marker` (exit 6, at the
+  member: it has no scale, and the tool never makes a block, whose `name`, `unit` and `scale` are the resource side's);
+  an absent `valuation` or one that is no object is `literal_missing` (`found` its JSON type), and so is a block without
+  an integer `base_weight_milli`. Its `scale` Q must be an integer in 1..2<sup>53</sup> − 1 (`binding_mismatch` `scale`,
+  `found`, at the member, or at the block without one). Each refuses `check` and `apply` (exit 6).
+- **W.** An integer that is not the computed W is `binding_mismatch` (`value`, `expected` and `found`, at the literal): a
+  difference `apply` writes in place. Q, `name`, `unit` and `gap` are never written.
+- **The origin**, as the Runtime reads it: absent is the pack's, `"model"` beside a block the model's, anything else
+  refused. A pool without `valuation_origin` is `origin_missing` (`valuation`, `pool_id`, at the pool), a difference
+  `apply` writes, inserting `"model"` right after the block in the block's style (`insert_style_unknown`, anchor
+  `valuation`, at the pool, when no member follows the block). Another origin is `origin_invalid` (`found`, at the
+  member): `check` reports it, `apply` refuses it and writes nothing, and the tool never rewrites it.
+- **The word.** `schedule.json`'s `requires` must hold `benefit_fixed_value` (`requires_word_missing`), as for a value.
+- **Range and precision** are those of `export valuations` (step 6 there): `valuation_rounds_to_zero` and
+  `valuation_out_of_range` refuse `check` and `apply`; `precision_low` is a warning, W is written, and `apply`'s
+  `changed` shows its `precision`.
+- **Nothing is removed**, as for a value.
+
 **The origin guard**, always on (in `check`, with or without `--strict`, and in `apply`): `schedule.json` is read
 whenever it is there, and each of its rules whose `fixed_value_origin` is `"model"` must be named by a value binding,
-and no pool's `valuation_origin` may be `"model"` (no binding names a pool's valuation yet): `origin_unbound` (exit 6,
+and each of its pools whose `valuation_origin` is `"model"` by a valuation binding (#466 W3): `origin_unbound` (exit 6,
 `member` the origin member, with `rule_id` or `pool_id`, at the member). Only the model's export writes `model`; a number
 written by hand says nothing, or `pack`.
 
@@ -2312,18 +2431,26 @@ says `greater_than_or_equal`).
     reference's offset (`stop_line/offset`, `hard_line/offset`). A binding or a fixed entry names them by
     `pool_id`.
   - Other literals are not scanned: `max_age_ms`, counts and budgets, a pool's `value_source`, `group_delay` and
-    `valuation`, and the pack files. They are bound when a threshold covers them.
+    `valuation`, and the pack files. They are bound when a threshold covers them (a valuation's W by a valuation
+    binding, #466 W3).
   - The errors come in document order, the rules' before the pools'.
 - **Each bound value** (#464 W1) is checked as "A value's rule" says: its value and its origin (a differing value and an
-  absent origin are differences `apply` writes; another origin is `origin_invalid`), its declared cost, the word, and
-  whether `apply` could insert what is absent. The origin guard runs too.
-- **It writes nothing.** Every problem is reported at once, and the exit status is the first error's.
+  absent origin are differences `apply` writes; another origin is `origin_invalid`), its declared cost, the word, its
+  limited mark (#466 W3), and whether `apply` could insert what is absent. The origin guard runs too.
+- **Each bound valuation** (#466 W3) is checked as "A pool's valuation" says: its pool, block and scale, W and the
+  origin, the word, its range and precision, and whether `apply` could insert the origin.
+- **It writes nothing.** Every problem is reported at once, and the exit status is the first error's. The warnings
+  (`precision_low`, `limited_without_consumes`, `limited_unmodelled`) are reported with the errors too.
 - **`data`** holds `path`, `model_id`, `state`, `repo` and `strict`, and:
   - `bindings`: each with `entry` (its pointer in `bindings.json`), `threshold`, `form`, `file`, [`rule_id` or
     `pool_id`], `path` and `literal`; a value binding (#464 W1) with `entry`, `value`, `file`, `rule_id`, `path`,
     `literal` and `origin` (as the rule holds them, null when absent), `milli` (the value as `export values` computes
     it), `status` (`confirmed` or `provisional`), `acceptances` (each `{output, ref, until}` it rests on: what to look at
-    again, and when), `partial` and `exclude` (what it leaves out, each with its reason);
+    again, and when), `partial` and `exclude` (what it leaves out, each with its reason), `limited` (whether the model
+    counts it as limited, #466 W3) and `limited_by` (the limit rules that count it, sorted); a valuation binding (#466
+    W3) with `entry`, `valuation`, `file`, `pool_id`, `path`, `round`, `literal` (W as the pool holds it), `origin` (null
+    when absent), `weight` (W as `export valuations` computes it), `scale` (Q as read), `status`, `acceptances` and
+    `precision` (null within the bound, else `{error, bound, suggested_scale}`);
   - `fixed`: each with `entry`, `file`, [`rule_id` or `pool_id`], `path`, `literal`, `reason` and `ref`;
   - with `--strict`, `literals`: how many literals it scanned, those of the rules' predicates and the pools'
     quantities;
@@ -2343,7 +2470,11 @@ says `greater_than_or_equal`).
     differs of the model's versions (`rules`, `data`, `tool`), the bytes of `out/prices.json` (`prices`; also when it is
     gone) and the bytes of exports.json (`exports`), each by what the file records; a file that is not current is the
     warning `values_stale` (it never changes the exit status: the literals are compared with the values computed now);
-    null without the file. A file of another model is `value_invalid` at `/model_id`.
+    null without the file. A file of another model is `value_invalid` at `/model_id`;
+  - `valuations` (#466 W3): whether `out/valuations.json` is of the current inputs, `{file, current, stale}`: `stale`
+    lists what differs of the model's versions (`rules`, `data`, `tool`), the bytes of `out/prices.json` (`prices`) and
+    of `bindings.json` (`bindings`), and `scale` when a pool no longer holds the scale a valuation read; not current is
+    the warning `valuations_stale` (it never changes the exit status); null without the file.
 - **The provenance classes** of `acmodel check` (warnings, or errors under `check --strict-provenance`) are not
   read here: `--strict` concerns the literals of the schedule only.
 
@@ -2353,10 +2484,15 @@ says `greater_than_or_equal`).
   position-tracking scanner finds them, so line ends (CRLF stays CRLF), spacing and every other byte stay as
   they are.
 - **And each bound value** (#464 W1): its value, replaced in place or inserted, and its origin `"model"`, inserted when
-  the rule has none ("A value's rule"; an origin is never replaced); no other byte changes, and no member is removed.
-- **It refuses everything `check` refuses but a differing value or an absent origin**, and then writes nothing: a pending
-  or refused value, any one of them, or an origin other than `"model"` (`origin_invalid`), refuses the whole apply. It
-  does not scan for unbound literals; `check --strict` does that afterwards.
+  the rule has none ("A value's rule"; an origin is never replaced), and `"limited": true` where `limited_missing` says so
+  (#466 W3); no other byte changes, and no member is removed.
+- **And each bound valuation** (#466 W3): W, replaced in place, and `valuation_origin: "model"`, inserted after the block
+  when the pool has none ("A pool's valuation"); Q is never written.
+- **It refuses everything `check` refuses but a differing value or W, an absent origin and an absent limited mark**, and
+  then writes nothing: a pending or refused value or valuation, any one of them, an origin other than `"model"`
+  (`origin_invalid`) or a limited mark that is not `true` (`limited_invalid`), refuses the whole apply. The warnings
+  (`precision_low`, `limited_without_consumes`, `limited_unmodelled`) refuse nothing; they are reported. It does not scan
+  for unbound literals; `check --strict` does that afterwards.
 - **Before anything is written**, the edited bytes of each file are read back with the strict reader and must be
   exactly the document the edits make: the file as read, with each changed literal and each inserted member in its
   place, member order included. Otherwise it is a defect (`command_crashed`), and nothing is written.
@@ -2379,7 +2515,10 @@ says `greater_than_or_equal`).
     binding's (#464 W1) with `entry`, `value`, `file`, `rule_id`, `path`, `from` (null when inserted), `to`, `ratio` (`to`
     over `from` as an exact rational, null without a `from` or when it is 0), `ratio_flagged` (the ratio is below 1/2 or
     above 2: a change to show before it is merged), `origin` (`{from, to}`, `from` null when absent) and `inserted` (the
-    members inserted, in order);
+    members inserted, in order, `limited` among them, #466 W3); a valuation binding's (#466 W3) with `entry`,
+    `valuation`, `file`, `pool_id`, `path`, `round`, `from`, `to` (W), `ratio` (null when `from` is 0), `ratio_flagged`,
+    `origin`, `inserted` (`valuation_origin` when inserted), `scale` (Q, as read) and `precision` (null within the bound,
+    else `{error, bound, suggested_scale}`: a W written with `precision_low`);
   - `written`: the files whose bytes changed.
 
 ### Stop lines and hard lines

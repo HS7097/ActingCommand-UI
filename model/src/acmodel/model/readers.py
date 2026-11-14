@@ -754,25 +754,36 @@ def _schedule_item(value: dict[str, Any], ref: str, ctx: Context) -> bool:
 
 # #464 W1: a binding of a value (`value`, a value of exports.json) names the fixed value of a rule of schedule.json.
 VALUE_PATH = "/fixed_value_milli"
+# #466 W3: a binding of a valuation (`valuation`, a resource of the model, priced in out/prices.json) names the base weight
+# W of a pool's valuation block in schedule.json, rounded as it declares (`round`).
+VALUATION_PATH = "/valuation/base_weight_milli"
+BOUND = ("threshold", "value", "valuation")
 
 
 def _binding(value: dict[str, Any], ref: str, ctx: Context) -> bool:
-    """A binding names exactly one of a threshold and a value. A threshold's literal is a rule's or a pool's in
-    `schedule.json`, or one of a pack file (`_schedule_item`); a value's is the fixed value of a rule of `schedule.json`:
-    `file` is `schedule.json`, `rule_id` names the rule and `path` is `/fixed_value_milli`."""
-    if not exactly_one("threshold", "value")(value, ref, ctx):
+    """A binding names exactly one of a threshold, a value and a valuation. A threshold's literal is a rule's or a pool's
+    in `schedule.json`, or one of a pack file (`_schedule_item`); a value's is the fixed value of a rule of
+    `schedule.json`: `file` is `schedule.json`, `rule_id` names the rule and `path` is `/fixed_value_milli`; a valuation's
+    is the base weight of a pool of `schedule.json`: `file` is `schedule.json`, `pool_id` names the pool, `path` is
+    `/valuation/base_weight_milli` and `round` says how W is rounded. Only a valuation takes `round`."""
+    if not exactly_one(*BOUND)(value, ref, ctx):
         return False
+    if "valuation" not in value and "round" in value:
+        return ctx.refuse("member_unknown", pointer(ref, "round"), key="round")
     if "threshold" in value:
         return _schedule_item(value, ref, ctx)
     ok = True
     if value["file"] != SCHEDULE_FILE:
         ok = ctx.refuse("value_invalid", pointer(ref, "file"), expected=[SCHEDULE_FILE], literal=value["file"])
-    if "pool_id" in value:
-        ok = ctx.refuse("member_unknown", pointer(ref, "pool_id"), key="pool_id")
-    if "rule_id" not in value:
-        ok = ctx.refuse("member_missing", pointer(ref, "rule_id"), key="rule_id")
-    if value["path"] != VALUE_PATH:
-        ok = ctx.refuse("value_invalid", pointer(ref, "path"), expected=[VALUE_PATH], literal=value["path"])
+    own, other, path = ("rule_id", "pool_id", VALUE_PATH) if "value" in value else ("pool_id", "rule_id", VALUATION_PATH)
+    if other in value:
+        ok = ctx.refuse("member_unknown", pointer(ref, other), key=other)
+    if own not in value:
+        ok = ctx.refuse("member_missing", pointer(ref, own), key=own)
+    if "valuation" in value and "round" not in value:
+        ok = ctx.refuse("member_missing", pointer(ref, "round"), key="round")
+    if value["path"] != path:
+        ok = ctx.refuse("value_invalid", pointer(ref, "path"), expected=[path], literal=value["path"])
     return ok
 
 
@@ -783,7 +794,11 @@ BINDINGS = Format(
     Object(
         {
             "schema_version": ANY,
-            "bindings": ListOf(Object(LITERAL, {"threshold": ID, "value": ID, **SCHEDULE_ITEMS, **NOTE}, _binding)),
+            "bindings": ListOf(Object(
+                LITERAL,
+                {"threshold": ID, "value": ID, "valuation": ID, "round": ROUND, **SCHEDULE_ITEMS, **NOTE},
+                _binding,
+            )),
             "fixed": ListOf(
                 Object({**LITERAL, "reason": TEXT, "ref": TEXT}, {**SCHEDULE_ITEMS, **NOTE}, _schedule_item)
             ),
@@ -876,6 +891,31 @@ VALUES = Format(
         "exports": Object({"file": TEXT, "sha256": SHA256}),
         "unit_milli": Integer(1, MAX),
         "values": ANY,
+        "counts": ANY,
+    }),
+)
+# #466 W3: `out/valuations.json`, which `export valuations` writes and `bindings check` reads back to tell whether it is
+# current: the versions of the model, the sha256 of the bytes of the prices.json and the bindings.json it was computed
+# from, and each valuation's pool and the scale Q it read there. The rest is only passed on.
+VALUATIONS = Format(
+    "acmodel.valuations.v1",
+    "acmodel.valuations.v1",
+    Object({
+        "schema_version": ANY,
+        "model_id": ID,
+        "versions": MODEL_VERSIONS,
+        "prices": Object({"file": TEXT, "sha256": SHA256, "versions": MODEL_VERSIONS}),
+        "bindings": Object({"file": TEXT, "sha256": SHA256}),
+        "schedule": Object({"file": TEXT}),
+        "unit_milli": Integer(1, MAX),
+        "precision_bound": TEXT,
+        "valuations": ListOf(Object(
+            {"pool_id": FACT_KEY, "valuation": ID, "round": ROUND, "scale": Integer(1, MAX)},
+            {name: ANY for name in (
+                "status", "milli", "base_weight_milli", "exact_weight_milli", "precision", "acceptances", "pending",
+                "provenance",
+            )},
+        )),
         "counts": ANY,
     }),
 )
@@ -1029,3 +1069,9 @@ def read_values(path: Path | str) -> dict[str, Any]:
     """`out/values.json` (`acmodel.values.v1`), as `export values` wrote it: the members `bindings check` reads to tell
     whether it is current (#464 W1)."""
     return _read(path, VALUES)
+
+
+def read_valuations(path: Path | str) -> dict[str, Any]:
+    """`out/valuations.json` (`acmodel.valuations.v1`), as `export valuations` wrote it: the members `bindings check`
+    reads to tell whether it is current (#466 W3)."""
+    return _read(path, VALUATIONS)

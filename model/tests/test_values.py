@@ -610,7 +610,7 @@ def test_apply_writes_each_value_and_its_origin_and_changes_no_other_byte(tmp_pa
     status, doc = bindings(acmodel, folder, "check")
 
     assert (status, doc["errors"], doc["warnings"]) == (0, [], [])
-    shown = {"literal": None, "origin": "model", "partial": False, "exclude": []}
+    shown = {"literal": None, "origin": "model", "partial": False, "exclude": [], "limited": False, "limited_by": []}
     assert doc["data"]["bindings"] == [
         {**literal(0, "val.a.day", "rule.a.day"), **shown, "literal": 2448, "milli": 2448, "status": "confirmed",
          "acceptances": []},

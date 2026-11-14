@@ -23,6 +23,7 @@ from acmodel.export import (
     export_scoring,
     export_tables,
     export_thresholds,
+    export_valuations,
     export_values,
     verify_prices,
 )
@@ -42,6 +43,7 @@ COMMANDS = {
     "export thresholds": (("model",), ("--state",)),
     "export prices": (("model",), ("--state",)),
     "export values": (("model",), ("--state",)),
+    "export valuations": (("model",), ("--state",)),
     "export tables": (("model",), ("--state", "--repo")),
     "export scoring": (("model",), ("--state",)),
     "verify prices": (("model",), ("--state",)),
@@ -74,6 +76,7 @@ WRITES = {
     "export thresholds": ("model",),
     "export prices": ("model",),
     "export values": ("model",),
+    "export valuations": ("model",),
     "export tables": ("model", "--repo"),
     "export scoring": ("model",),
     "bindings apply": ("model",),
@@ -89,6 +92,7 @@ USAGE = (
     "          export prices <model folder or model.json> --state <state file>\n"
     "                        [--reuse-assessment <out folder of an earlier export>],\n"
     "          export values <model folder or model.json> --state <state file>,\n"
+    "          export valuations <model folder or model.json> --state <state file>,\n"
     "          export tables <model folder or model.json> --state <state file> --repo <repository>,\n"
     "          export scoring <model folder or model.json> --state <state file>,\n"
     "          verify prices <model folder or model.json> --state <state file>,\n"
@@ -295,6 +299,17 @@ def _export_values(args: list[str], cfg: config.Config, system: System) -> dict[
     )
 
 
+def _export_valuations(
+    args: list[str], cfg: config.Config, system: System
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The base weight W of each pool valuation bindings.json ties to the model, from the prices `export prices`
+    delivered and the pool's own scale in schedule.json (#466 W3); the warnings are `precision_low`."""
+    _dependencies(system)
+    return export_valuations(
+        Path(args[0]), Path(args[1]), datasets=cfg.datasets, max_bits=cfg.expr_max_bits, unknowns=cfg.unknowns
+    )
+
+
 def _export_tables(args: list[str], cfg: config.Config, system: System) -> dict[str, Any]:
     """The tables into the repository `--repo`, each checked by the validator `paths.actinglab`."""
     _dependencies(system)
@@ -337,9 +352,11 @@ def _verify_prices(args: list[str], cfg: config.Config, system: System) -> dict[
     )
 
 
-def _bindings(command: str, args: list[str], cfg: config.Config, system: System) -> Any:
-    """`bindings check [--strict]` compares the bound literals with their thresholds, and reports the coverage of
-    the prices with its warnings; `bindings apply` writes the ones that differ."""
+def _bindings(
+    command: str, args: list[str], cfg: config.Config, system: System
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """`bindings check [--strict]` compares the bound literals with their thresholds, values and valuations, and reports
+    the coverage of the prices with its warnings; `bindings apply` writes the ones that differ, with its warnings."""
     _dependencies(system)
     model, state = Path(args[0]), Path(args[1])
     if command == "bindings check":
@@ -389,7 +406,7 @@ def main(argv: Sequence[str], system: System) -> int:
         elif command == "bindings check":
             data, warnings = _bindings(command, args, cfg, system)
         elif command == "bindings apply":
-            data = _bindings(command, args, cfg, system)
+            data, warnings = _bindings(command, args, cfg, system)
         elif command == "export prices":
             data, warnings = _export_prices(args, cfg, system)
         elif command == "verify prices":
@@ -398,6 +415,8 @@ def main(argv: Sequence[str], system: System) -> int:
             data = _export_thresholds(args, cfg, system)
         elif command == "export values":
             data = _export_values(args, cfg, system)
+        elif command == "export valuations":
+            data, warnings = _export_valuations(args, cfg, system)
         elif command == "export tables":
             data = _export_tables(args, cfg, system)
         elif command == "export scoring":

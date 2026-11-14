@@ -10,6 +10,8 @@
   by its digest; `verify_prices` (`acmodel verify prices`) computes it again and checks the digest.
 - #464 W1: `export_values` (`acmodel export values`), `out/values.json` and one provenance file per exported value: what
   one run of a schedule's rule is worth, from the derivation graph and the delivered prices.
+- #466 W3: `export_valuations` (`acmodel export valuations`), `out/valuations.json` and one provenance file per bound pool
+  valuation: its base weight W, the delivered price times the pool's own scale Q, with its range and precision.
 """
 
 from acmodel.export.prices import export_prices, verify_prices
@@ -17,8 +19,10 @@ from acmodel.export.scoring import export_scoring
 from acmodel.export.tables import export_tables
 from acmodel.export.thresholds import export_thresholds
 from acmodel.export.validator import Validator
+from acmodel.export.valuations import export_valuations
 from acmodel.export.values import export_values
 
 __all__ = [
-    "Validator", "export_prices", "export_scoring", "export_tables", "export_thresholds", "export_values", "verify_prices",
+    "Validator", "export_prices", "export_scoring", "export_tables", "export_thresholds", "export_valuations",
+    "export_values", "verify_prices",
 ]
