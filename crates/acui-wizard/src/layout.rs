@@ -19,8 +19,9 @@ pub const BUNDLE_FILE: &str = "bundle.json";
 pub const INTERFACES_FILE: &str = "interfaces.json";
 pub const APPLICATIONS_FILE: &str = "applications.json";
 pub const SCHEDULE_FILE: &str = "schedule.json";
-/// The root files a bundle zip may carry (Runtime `place.rs` `ROOT_FILES`).
-pub const ROOT_FILES: [&str; 9] = [
+/// The root files a bundle zip may carry (Runtime `place.rs` `ROOT_FILES`; `goals.json` since
+/// Runtime 0.12.60, `package` 12, Workflow #455 G-R1).
+pub const ROOT_FILES: [&str; 10] = [
     "bundle.json",
     "pages.json",
     "interrupts.json",
@@ -30,6 +31,7 @@ pub const ROOT_FILES: [&str; 9] = [
     "ui.json",
     "applications.json",
     "schedule.json",
+    "goals.json",
 ];
 const PACKS_DIRECTORY: &str = "packs";
 const TABLES_DIRECTORY: &str = "tables";
