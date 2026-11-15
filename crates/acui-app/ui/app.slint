@@ -2583,17 +2583,18 @@ component GoalLineView {
         if root.line.kind == GoalRowKind.entry && root.line.control != GoalControl.none: HorizontalLayout {
             spacing: 6px;
             vertical-stretch: 0;
+            // Greyed while this line's question waits: the confirmation sends the amount asked about.
             if root.line.control == GoalControl.amount: GoalAmount {
                 text-shown: root.line.amount-text;
                 placeholder: root.line.amount-placeholder;
-                enabled: root.line.enabled && root.line.settable;
+                enabled: root.line.enabled && root.line.settable && root.line.confirm == "";
                 edited(text) => {
                     root.amount-edited(text);
                 }
             }
             if root.line.control == GoalControl.amount: SkinButton {
                 text: Strings.goals-set;
-                enabled: root.line.enabled && root.line.settable && root.line.set-ready;
+                enabled: root.line.enabled && root.line.settable && root.line.set-ready && root.line.confirm == "";
                 clicked => {
                     root.set-pressed();
                 }

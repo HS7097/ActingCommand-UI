@@ -902,11 +902,13 @@ asks nothing: only that amber line says it was set elsewhere. Back to the defaul
 is in effect, a choice or switch changed while the value in effect is the one set, and a goal this console
 set on a pool that takes one ask nothing.
 Only **Confirm** sends it, and it reckons the press again on the newest page read, of the same line: when
-that no longer writes or asks what was asked about (the page was read again meanwhile), the question goes,
-nothing is sent, and the line says in amber "The page was read again before the confirmation, and this
-press no longer changes what was asked about: nothing was sent. Look again, then press again"; else it goes
-naming that page's version. **Cancel**, a press anywhere else, another instance or a restart lets the
-question go.
+that no longer writes or asks what was asked about (the page was read again meanwhile, or cannot be read
+now), the question goes, nothing is sent, and the line says in amber "By the confirmation the page was no
+longer the one asked about (read again, or not readable now): nothing was sent. Look again, then press
+again"; else it goes
+naming that page's version. While the question waits, its line's amount box and **Set** are greyed, so
+what is confirmed is the amount asked about. **Cancel**, a press anywhere else, another instance or a
+restart lets the question go.
 
 The write goes on a fresh person's connection (the `ui` channel, the full receipt) at the slow reads' io
 timeout of 20 seconds, on a thread of its own, once. Its answer: taken, nothing said, and the page read
