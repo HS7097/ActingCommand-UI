@@ -2502,6 +2502,12 @@ component GoalAmount {
 // A choice of more than four options on the Goals tab (Workflow #455 G2): a drop-down that shows
 // what the newest read says (`chosen`); a pick says what was picked and puts the box back, so the
 // box moves only as a read moves it.
+//
+// After a pick the keyboard focus waits in `park`, just after the box: Return and Space there do
+// nothing. The list closes after the pick and hands the focus back to the box; when the pick's
+// write has greyed the box by then, the focus goes on to the next place that takes it, which is
+// `park` rather than, round the window, the top bar's buttons that act on every instance. When the
+// box is not greyed, `park-after-close` moves the focus there once the list has closed.
 component GoalChoiceBox {
     in property <[string]> options;
     in property <int> chosen;
@@ -2519,7 +2525,31 @@ component GoalChoiceBox {
             selected => {
                 root.picked(self.current-index);
                 self.current-index = root.chosen;
+                park-after-close.start();
             }
+        }
+    }
+    // No click and no Tab gives it the focus; only the list closing or `park-after-close` does.
+    park := FocusScope {
+        x: 0px;
+        y: 0px;
+        width: 0px;
+        height: 0px;
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == Key.Space) {
+                return accept;
+            }
+            return reject;
+        }
+    }
+    park-after-close := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.stop();
+            park.focus();
         }
     }
     changed chosen => {
