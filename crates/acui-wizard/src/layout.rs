@@ -20,7 +20,7 @@ pub const INTERFACES_FILE: &str = "interfaces.json";
 pub const APPLICATIONS_FILE: &str = "applications.json";
 pub const SCHEDULE_FILE: &str = "schedule.json";
 /// The root files a bundle zip may carry (Runtime `place.rs` `ROOT_FILES`; `goals.json` since
-/// Runtime 0.12.60, `package` 12, Workflow #455 G-R1).
+/// Runtime 0.12.60, Workflow #455 G-R1, version 2 and `package` 14 since 0.12.61, Workflow #463 V1).
 pub const ROOT_FILES: [&str; 10] = [
     "bundle.json",
     "pages.json",
