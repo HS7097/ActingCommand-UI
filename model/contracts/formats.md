@@ -2260,7 +2260,34 @@ a number in `schedule.json` or in a pack file has the threshold's provenance. `b
 (`<repo>/ours/model`). A binding of a value (#464 W1) ties a rule's fixed value to a value of exports.json the same
 way, and it writes who wrote it: the model. A binding of a valuation (#466 W3) ties the base weight W of a pool's
 valuation to the price of a resource of the model, and writes who wrote it too. A hand entry (#466 W4a) records a rule's
-fixed value that a person wrote, with its status and its reference: the tool checks it and never writes it.
+fixed value that a person wrote, with its status and its reference: the tool checks it and never writes it. A default
+binding (#466 V-a) ties the default of an integer variable of the packs' `control.json` to a constant threshold, in every
+declaration of that name, and writes who wrote it.
+
+### Errors and warnings (#466 V-a)
+
+Every problem `bindings check` and `bindings apply` report is one code, and each code is one reason. Which are errors
+(they refuse `apply`, and give the exit status) and which are warnings (reported, never refusing, exit 0) follows one
+rule. **Errors** are of three kinds:
+- **(a) the writer's own input does not hold**: the model's export refuses the number (`export_refused`, and the
+  export's own codes), `bindings.json` does not meet the repository or the model (a threshold, value, rule or variable
+  it names is not there; one literal, rule or variable named twice), an entry goes round the table it must go through
+  (`hand_also_threshold`, `variable_literal_bound`), or the files are not in a state the writer can write
+  (`file_changed`, `part_file_present`);
+- **(b) what the Runtime or the Lab would refuse** if the writer wrote it: a number, an origin or a member beside it that
+  the Runtime's readers, composer or compiler refuse, or a pack file that `actinglab package fmt --check` refuses
+  (`pack_file_not_canonical`), and two declarations of one variable that the write would leave unlike
+  (`variable_declarations_differ`: the Runtime's `variable_conflict`);
+- **(c) the guards of the overview's rulings**: only the model's export writes `model`, so an origin `"model"` that no
+  binding names is `origin_unbound`, an error, though the Runtime refuses nothing of it (and so is `hand_origin_model`).
+
+**Warnings** are of one kind only: what nobody refuses now, and would be refused once a state changes, such as a fixed
+value beside a member the compiler refuses on a rule whose package is held (the `held_…` codes, each refused once the
+hold is lifted). The warnings made before this rule report what nothing refuses at all: a file that is not of the
+current inputs (`prices_stale`, `values_stale`, `valuations_stale`), a rounding that is not exact (`precision_low`), a
+mark that is not written or not removed (`limited_without_consumes`, `limited_unmodelled`); they stay as they are. A
+new code follows the rule; the codes of #466 V-a are all errors. Each code's entry in `codes.json` says its category and
+its exit status.
 
 ### `bindings.json` (`acmodel.bindings.v1`)
 
@@ -2269,6 +2296,7 @@ fixed value that a person wrote, with its status and its reference: the tool che
 | `bindings` | a list of `{threshold, file, path}` [`rule_id` or `pool_id`, `note`]: `threshold` is the id of a threshold of `exports.json`, `file` the file that holds the literal and `path` its JSON pointer; or of `{value, file, rule_id, path}` [`note`] (#464 W1): `value` is the id of a value of `exports.json`, `file` is `schedule.json`, `rule_id` its rule and `path` `/fixed_value_milli` (`value_invalid` otherwise; `pool_id` is `member_unknown`); or of `{valuation, file, pool_id, path, round}` [`note`] (#466 W3): `valuation` is the id of a resource of the model, whose exported price W weighs, `file` is `schedule.json`, `pool_id` its pool, `path` `/valuation/base_weight_milli` (`value_invalid` otherwise; `rule_id` is `member_unknown`), and `round` how W is rounded, `floor`, `ceil` or `half_even` (`member_missing` without it; on any other binding `member_unknown`). Each binding names exactly one of `threshold`, `value` and `valuation` (`member_missing` or `member_conflict`, with `expected` the three). |
 | `fixed` | a list of `{file, path, reason, ref}` [`rule_id` or `pool_id`, `note`]: a literal that is no quantity, with the reason and a reference (a ruling, a board item) |
 | [`hand`] | (#466 W4a) a list of `{rule_id, status, ref}` [`to_replace_with`, `inherited_from`, `note`]: the fixed value of the rule `rule_id` of `schedule.json` is written by hand. Its literal is always that rule's `/fixed_value_milli`, so the entry names no `file` and no `path` (each is `member_unknown`). `status` and `ref` (non-empty texts) say how the number was had and where it comes from, `to_replace_with` what is to replace it, and `note` anything else: opaque texts, stored as written, which the tool never reads (it knows no game and no word of the resource side's vocabulary; their check is the resource side's). `inherited_from` is the id of the rule whose value it inherits, in the shape of a rule id (`id_invalid` otherwise); whether that rule is there and the two values agree is the resource side's check too. Absent means none. See "A value written by hand". |
+| [`defaults`] | (#466 V-a) a list of `{threshold, variable}` [`note`]: the default of the integer variable `variable`, in every pack's `control.json` that declares it, is the number of the constant threshold `threshold` of `exports.json`. `variable` is a variable's name, `[a-z][a-z0-9_]{0,63}` as the Runtime's `package-variables` has it (`value_invalid` otherwise). The entry names no `file` and no `path` (each is `member_unknown`): a variable's name is the game root's, and the tool finds every declaration of it. Absent means none. See "A variable's default". |
 | [`note`] | |
 
 - **`file`** is relative to the repository: `/`-separated segments of `[A-Za-z0-9_-][A-Za-z0-9_.-]*`, ending
@@ -2293,7 +2321,13 @@ fixed value that a person wrote, with its status and its reference: the tool che
   twice (a binding and a fixed entry of one literal are that). Each is found before any file of the repository is read,
   as a reference is.
 - **A threshold** that `exports.json` does not list is `rule_reference_missing` (`expected` `threshold`), and so is a
-  value its `values` do not list (`expected` `value`).
+  value its `values` do not list (`expected` `value`). A default binding's threshold too (#466 V-a).
+- **One variable** (#466 V-a) is named once among the default bindings: a second one is `model_id_duplicate`
+  (`namespace` `literal`, `id` `variable:<name>`, at the second), one literal named twice. And no threshold binding or
+  fixed entry names a literal under `/variables` of a pack's `control.json` (`packs/<folder>/control.json`):
+  `variable_literal_bound` (exit 1, `file` and `pointer` the entry's, at the entry). A variable's default goes through a
+  default binding, which judges its range and step, writes its origin and keeps the declarations of the name alike. Both
+  are found before any file of the repository is read.
 
 ### The values
 
@@ -2324,6 +2358,10 @@ value:
   binding, one error per reason, `value` `<reason>:<resource>`); a W off by more than the precision bound is the warning
   `precision_low`, with the suggested scale. A valuation names a resource of the model (`rule_reference_missing`,
   `expected` `resource`, exit 1).
+- **A default binding's threshold** (#466 V-a) is taken as for a threshold binding, the same refusals included (a
+  blocked or provisional threshold that is not accepted refuses the whole `apply`), and only in the `constant` form: one
+  of the `fact_offset` form is `binding_mismatch` (`form`, `path` bindings.json, at the binding's `threshold`), since a
+  default holds one integer, never a fact plus an offset. Nothing else of the model is read for it: no value, no price.
 
 ### A value's rule (#464 W1)
 
@@ -2408,7 +2446,10 @@ whenever it is there, and each of its rules whose `fixed_value_origin` is `"mode
 and each of its pools whose `valuation_origin` is `"model"` by a valuation binding (#466 W3): `origin_unbound` (exit 6,
 `member` the origin member, with `rule_id` or `pool_id`, at the member). Only the model's export writes `model`; a number
 written by hand carries no origin member (the Runtime refuses any origin but `"model"`). A rule a hand entry names is
-`hand_origin_model` instead (#466 W4a, below): one reason, one code.
+`hand_origin_model` instead (#466 W4a, below): one reason, one code. The guard covers the packs too (#466 V-a): every
+`packs/<folder>/control.json` is read, and each declaration whose `default_origin` is `"model"` must be of a variable a
+default binding names (`origin_unbound`, `member` `default_origin`, with `variable`, `path` that control.json, at the
+member). The Runtime refuses none of these; each is an error by the ruling this guard holds ("Errors and warnings", (c)).
 
 ### A value written by hand (#466 W4a)
 
@@ -2467,27 +2508,101 @@ on such a rule the last three are the warnings `held_fixed_value_beside_realizat
 error once the hold is lifted; `apply` writes. The reader reads every rule, so `fixed_value_beside_maintenance` stays an
 error on a held one. The tool reads no instance and no server: a rule whose package is not held counts as composed.
 
+### A variable's default (#466 V-a)
+
+A default binding writes two members of every declaration of its variable in the packs' `control.json`: `default`, the
+threshold's number, and `default_origin: "model"` right after it, who wrote it (the Runtime's
+`contracts/package-variables.md`, "The declaration" and "The default's origin": `default_origin` is optional and only the
+word `"model"`; only the provenance listing of `standard-pack check` reads it). `min`, `max`, `step`, `unit`, `title`,
+`help` and `block` are the pack author's, read and never written, and so are the defaults of the other three types.
+
+- **Where.** The tool reads every `packs/<folder>/control.json` of the repository (in the order of the folder names; a
+  folder whose name ends in `.part`, which an interrupted adoption leaves, is skipped; a folder without a control.json
+  is no pack and is passed by), each with the strict reader (`model_file_invalid`, `format` `json`). Of each it needs an
+  object whose `variables`, when there, is a list of objects, each with a string `name` (`type_invalid`,
+  `member_missing`); the rest of a declaration is judged only when a default binding names it. A declaration is the
+  binding's when its `name` is the binding's `variable`.
+- **One name, one variable.** A variable's name is the game root's: several packages may declare it, and then only with
+  byte-identical declarations (each entry in compact JSON, member order included; the Runtime's "Shared names and the
+  root check", `variable_conflict`). So the tool writes every declaration of the name, the same bytes into each. No pack
+  declaring it is `variable_unknown` (exit 6, at the binding's `variable`): bindings.json does not meet the repository.
+  One file declaring it twice is `variable_declared_twice` (exit 6, `first`, at the later `name`; the Runtime refuses the
+  package, `variable_name_taken`), and none of that file's declarations is judged. Written, the declarations must be
+  alike: one that would differ from the first, in compact JSON, with the default the number and the origin `"model"` in
+  its place or right after the default, is `variable_declarations_differ` (exit 6, `first_path`, `first_ref`, at the
+  declaration). Only the default and an absent origin are what the write makes alike; any other member, or a
+  `default_origin` at another place, is the pack author's to align.
+- **The declaration**, judged as the Runtime's reader judges an integer variable (`parse_package_variables`,
+  `integer_variable`): `type` `integer` (`variable_not_integer`, exit 6, `found`, at the type, or at the declaration
+  without one); a range that holds a value (`variable_range_invalid`, exit 6, `member` and `found`, the first of: `min`
+  or `max` absent or no integer, `step` written and no integer, `min` above `max`, `step` below 1; at the member, or at
+  the declaration when `min` or `max` is absent); a `default` that is an integer (`binding_mismatch` `literal_missing`,
+  `found` its JSON type, at the default, or at the declaration without one: the tool writes into the default the author
+  wrote and never adds one).
+- **The number** must be one the Runtime takes as that default: in `min..=max` (`default_out_of_range`, exit 5, `min`,
+  `max`, `expected`) and on a step from `min`, `(number − min) % step == 0` (`default_off_step`, exit 5, `min`, `step`,
+  `expected`), each at the default. The tool never rounds it or clamps it: the declaration's range and step, or the
+  model's number (its derive, the threshold's `round` in exports.json), change. A default that is not the number is
+  `binding_mismatch` (`value`, `expected`, `found`, at the default): a difference `apply` writes in place.
+- **The origin**, as the Runtime reads it: absent is the pack's, `"model"` the model's export's, anything else refused.
+  A declaration without `default_origin` is `origin_missing` (`threshold`, `variable`, at the declaration), a difference
+  `apply` writes, inserting `"model"` right after `default`, as "A value's rule" inserts (its "Inserting"): with the
+  separator that follows the default, or, when it is the declaration's last member, the one that precedes it;
+  `insert_style_unknown` (anchor `default`, member `default_origin`) only when it is the only member. Another origin is
+  `origin_invalid` (`found`, at the member), which `apply` refuses and never rewrites. The place is fixed, so that the
+  declarations of a name stay alike.
+- **The canonical form.** Each control.json that declares a variable a default binding names must be in the canonical
+  serialization of the Runtime's `actinglab package fmt` (its `contracts/package-reference.md`, "The canonical
+  serialization": UTF-8 without a byte-order mark, two-space indentation, one member or element per line, `": "` after a
+  member name, `{}` and `[]` when empty, the members in their order, only what JSON requires escaped, LF line ends, the
+  last line's too): `pack_file_not_canonical` otherwise (exit 6, at the document). `package fmt --check` (which a
+  resource repository's CI may run on every pack) and the `format` step of `resource verify` refuse such a file, and the
+  write changes only the bytes it must, so the file would stay so; fix it apart, with `actinglab package fmt --package packs/<folder>` in a commit of its own. The
+  tool only compares with that form (its own copy of it is `bindings/canonical.py`); it never rewrites a file into it.
+- **Units.** The tool checks no dimension and no unit: a threshold bound to a default is one integer, as for a literal
+  of a policy file. A variable whose `unit` is a time word holds milliseconds (the Runtime's "The declaration"), so the
+  threshold used as its default says its unit in its `note` in exports.json.
+- **Nothing is removed**, as for a value: a binding that is gone, or a threshold that becomes pending, leaves the
+  declarations as they are, `default_origin` included; the tool reports. A hand-written default is a declaration
+  without `default_origin`, as the Runtime reads it, and is registered nowhere.
+- **A package change.** The package's content hash covers its `control.json` (the Runtime's "The default's origin"), so
+  a written default or origin changes the package: once installed, a policy suspension of it (or of a package it is a
+  layer of) lifts at its next lift check (the Runtime's `contracts/policy-suspension.md`, "Lifting (R19)"). The tool adds
+  no code for it; `apply`'s `changed` lists each declaration it writes, by file, for the pull request to name.
+
 ### What the tool guarantees, and what it leaves to the composer (#466 W4a fix1)
 
 The tool reads `schedule.json` member by member: the literals the entries name and the members beside them, the
-origins, `requires` and `held`, and under `--strict` or `--strict-values` the literals and fixed values they scan. It does
-not compose. What `check` passes, and what `apply` writes, holds this, each as the sections above say:
+origins, `requires` and `held`, and under `--strict` or `--strict-values` the literals and fixed values they scan; and
+(#466 V-a) each pack's `control.json`, of which only the variables' names and origins, and the bound declarations whole.
+It does not compose. What `check` passes, and what `apply` writes, holds this, each as the sections above say:
 - **The numbers.** A bound threshold's literal is its exported value or offset, where its form may sit. A bound value is
   the number `export values` computes from the same run and the current prices, at least 1. A bound W is the number
   `export valuations` computes from the pool's own scale Q, of a price not below 0, above 0 when the price is, and at
   most 1,000,000. One that is refused or pending is never written. A value written by hand is an integer in
   1..2<sup>53</sup> − 1 (on a held rule one outside it is a warning, fix3, since the Runtime does not compile it yet),
-  and the tool never writes it.
+  and the tool never writes it. A variable's default (#466 V-a) is the number of a `constant` threshold, the export's,
+  in its declaration's `min..max` on a step from `min`, in an `integer` declaration whose range holds; never rounded or
+  clamped.
 - **Who wrote them.** A bound value or W stands beside the origin `"model"`, inserted when absent; another origin is
   refused and never rewritten; no `"model"` origin of `schedule.json` is left without its binding; a value written by
   hand carries none. Each rule's fixed value is named once: by a value binding or by a hand entry, and a hand entry's by
-  no threshold binding and no fixed entry.
+  no threshold binding and no fixed entry. A bound default stands beside `default_origin: "model"`, right after it;
+  no `"model"` default origin of any pack is left without its default binding; a variable's default is bound only by a
+  default binding, never by a threshold binding or a fixed entry, and each variable by one.
 - **What the Runtime reads them under.** `requires` holds `benefit_fixed_value` whenever a value or a valuation is bound
   or a hand entry is there (the tool never adds it); a bound value's rule `consumes` exactly its `cost_paid_by_pool`;
-  its limited mark is `true` or absent, and written where the model counts the value as limited on a consumer.
+  its limited mark is `true` or absent, and written where the model counts the value as limited on a consumer. Every
+  declaration of a bound variable is written, one per file, and all of them are alike once written, as the Runtime's
+  root check requires of a name.
 - **The bytes.** Only the bound literals and the inserted members change, each insertion in the file's own style
   (`insert_style_unknown` otherwise, and nothing is guessed); the edited bytes read back as the document the edits make,
-  and a file another writer changed meanwhile is not written.
+  and a file another writer changed meanwhile is not written. A control.json that declares a bound variable is in the
+  canonical serialization before (`pack_file_not_canonical`) and after: before anything is written, the edited bytes
+  of each such file are checked in memory to be that serialization, and every two declarations of a name that were
+  alike before to be alike after (a defect otherwise, `command_crashed`, and nothing is written). A part another write
+  left beside a file to write is never written over, nor removed (`part_file_present`), and what fails removes only the
+  parts of this run.
 - **The conflicts above.** No bound or hand-written fixed value stands beside `"maintenance": true`, `"realization":
   true` or a `produces` entry on a pool with a valuation block or the pending marker (on a held rule the last three are
   warnings, since the Runtime does not compose it yet).
@@ -2515,6 +2630,10 @@ validator's ("Reading the files").
   there, for the origin guard (#464 W1), and whenever a hand entry is there or `--strict` or `--strict-values` is given
   (#466 W4a; then a missing file is `model_file_invalid`). A refusal is `model_file_invalid`, with `format` `json` for a pack file and
   `actingcommand.schedule.v1` for `schedule.json`.
+- Every pack's `control.json` (`packs/<folder>/control.json`, a folder ending in `.part` skipped) is read too, always
+  (#466 V-a): the default bindings and the origin guard over the packs read them all, so one that the strict reader
+  refuses refuses the whole `check` (exit 1). Of each the tool needs an object whose `variables`, when there, is a list
+  of objects each with a string `name` ("A variable's default").
 - The tool needs only pointers and literals. Whether `schedule.json` is valid as a whole is the validator's
   job (`actinglab`, resource CI).
 - Of `schedule.json` it needs `schema_version` `actingcommand.schedule.v1`, and `rules` and `pools` (each
@@ -2574,6 +2693,12 @@ says `greater_than_or_equal`).
 - **Each hand entry** (#466 W4a) is checked as "A value written by hand" says.
 - **Each bound valuation** (#466 W3) is checked as "A pool's valuation" says: its pool, block and scale, W and the
   origin, the word, its range and precision, and whether `apply` could insert the origin.
+- **Each default binding** (#466 V-a) is checked as "A variable's default" says, in every declaration of its variable:
+  the declaration, the number, the default and the origin (a differing default and an absent origin are differences
+  `apply` writes), the declarations alike once written, the canonical form of each file that declares it, and whether
+  `apply` could insert the origin. The origin guard covers the packs' `default_origin`.
+- **A part already there** (#466 V-a): beside a file with a difference `apply` writes, a `<file>.part` that another
+  write left is `part_file_present` (exit 5, `path` the file, `part` the part), as `apply` refuses it ("Writing").
 - **It writes nothing.** Every problem is reported at once, and the exit status is the first error's. The warnings
   (`precision_low`, `limited_without_consumes`, `limited_unmodelled`, the three `held_fixed_value_beside_…`, #466 W4a,
   and `held_hand_value_out_of_range`, fix3) are reported with the errors too.
@@ -2590,6 +2715,12 @@ says `greater_than_or_equal`).
   - `fixed`: each with `entry`, `file`, [`rule_id` or `pool_id`], `path`, `literal`, `reason` and `ref`;
   - `hand` (#466 W4a): each hand entry without a problem, with `entry`, `rule_id`, `literal`, `status`, `ref`, and
     `to_replace_with`, `inherited_from` and `note` when written; empty without hand entries;
+  - `defaults` (#466 V-a): each default binding, with `entry`, `threshold`, `variable`, `value` (the threshold's
+    number), `status` (`confirmed` or `provisional`), `acceptances` (the `{output, ref, until}` it rests on, empty when
+    confirmed), `min`, `max` and `step` (as the declarations hold them, `step` 1 when absent) and `declarations`, each
+    `{file, pointer, literal, origin}` (the file as bindings.json would name it, the declaration's pointer, its default
+    and its origin, null when absent); empty without default bindings;
+  - `control_files` (#466 V-a): how many packs' `control.json` it read;
   - with `--strict`, `literals`: how many literals it scanned, those of the rules' predicates and the pools'
     quantities;
   - with `--strict-values` (#466 W4a), `fixed_values`: how many rules of `schedule.json` write `fixed_value_milli`;
@@ -2629,31 +2760,48 @@ says `greater_than_or_equal`).
   (#466 W3); no other byte changes, and no member is removed.
 - **And each bound valuation** (#466 W3): W, replaced in place, and `valuation_origin: "model"`, inserted after the block
   when the pool has none ("A pool's valuation"); Q is never written.
-- **It refuses everything `check` refuses but a differing value or W, an absent origin and an absent limited mark**, and
-  then writes nothing: a pending or refused value or valuation, any one of them, an origin other than `"model"`
-  (`origin_invalid`) or a limited mark that is not `true` (`limited_invalid`), refuses the whole apply, and so does a
-  hand entry's problem or a fixed value the Runtime would refuse (#466 W4a: "A value written by hand", "Fixed values the
-  Runtime refuses"). The warnings (`precision_low`, `limited_without_consumes`, `limited_unmodelled`, the three
-  `held_fixed_value_beside_…`, `held_hand_value_out_of_range`) refuse nothing; they are reported. It does not scan for
-  unbound literals or unregistered fixed values; `check --strict` and `check --strict-values` do that afterwards. It
-  never writes a hand entry's value.
+- **And each default binding** (#466 V-a): the number, replaced in place in the `default` of every declaration of its
+  variable, and `default_origin: "model"`, inserted right after the default when the declaration has none ("A
+  variable's default"); no other member of a declaration is written.
+- **It refuses everything `check` refuses but a differing value, W or default, an absent origin and an absent limited
+  mark**, and then writes nothing: a pending or refused value, valuation or threshold, any one of them, an origin other
+  than `"model"` (`origin_invalid`) or a limited mark that is not `true` (`limited_invalid`), refuses the whole apply, and
+  so does a hand entry's problem, a fixed value the Runtime would refuse (#466 W4a: "A value written by hand", "Fixed
+  values the Runtime refuses"), a declaration or a number the Runtime would refuse, a control.json that is not canonical
+  (#466 V-a) and a part already there (`part_file_present`). The warnings (`precision_low`, `limited_without_consumes`,
+  `limited_unmodelled`, the three `held_fixed_value_beside_…`, `held_hand_value_out_of_range`) refuse nothing; they are
+  reported. It does not scan for unbound literals or unregistered fixed values; `check --strict` and `check
+  --strict-values` do that afterwards. It never writes a hand entry's value.
 - **Before anything is written**, the edited bytes of each file are read back with the strict reader and must be
   exactly the document the edits make: the file as read, with each changed literal and each inserted member in its
-  place, member order included. Otherwise it is a defect (`command_crashed`), and nothing is written.
+  place, member order included. The edited bytes of each control.json that declares a bound variable must be in the
+  canonical serialization, and every two declarations of a variable, in all the packs, that were alike in compact JSON
+  before must be alike after (#466 V-a). Otherwise it is a defect (`command_crashed`), and nothing is written.
 - **Writing** (#464 W1). Each file is first written beside itself as `<file>.part`; then every file is read again, and
   only when each is still the bytes that were read is each part renamed over its file. A file changed meanwhile, by
   another writer (the adoption of a standard pack writes `schedule.json` too), or no longer readable, is `file_changed`
   (exit 5): the parts this run wrote are removed again and nothing is written. A part that cannot be written or renamed
   is `export_write_failed`; the files renamed before it stay written, and `apply` can run again.
-  - **The part's name** is the file's own name with `.part` added, in the same folder: `schedule.json.part` beside
-    `schedule.json`, `<pack file>.json.part` beside a pack file. It is the same name on every run (no process id), and
-    a run writes it over whatever is there.
+  - **The part's name** is the file's own name with `.part` added, in the same folder, so the rename stays on one volume:
+    `schedule.json.part` beside `schedule.json`, `<pack file>.json.part` beside a pack file, `control.json.part` in the
+    pack's folder. It is the same name on every run (no process id).
+  - **A part that is already there** (#466 V-a; for every write of `apply`, the values' and the valuations' too). Before
+    it writes anything, `apply` looks beside each file it would write: a `<file>.part` there (a file, a folder or a
+    link) was left by another write, an `apply` killed before it renamed or removed its part, or an interrupted adoption
+    of a standard pack, whose `schedule.json.part` the Runtime's `actinglab` trusts to finish that adoption (its
+    `contracts/standard-pack-authoring.md`, "If a call was interrupted"). It is `part_file_present` (exit 5, `path` the
+    file, `part` the part; `check` reports it too, for each file with a difference `apply` writes), the whole `apply` is
+    refused, and nothing is written, written over or removed: a person looks at it, finishes or undoes what left it, and
+    moves it out of the checkout. Each part is created exclusively, so one that appears after `apply` looked is refused
+    the same way (and the parts this run wrote before it are removed again). Its exit status is `file_changed`'s: both
+    say that another write's state of the files stands in the way.
   - **A part can be left behind.** A process killed after it wrote a part and before it renamed it (or removed it again)
-    leaves the part where it was. Nothing reads it, the next `apply` that gets as far writes it over, and nothing
-    else removes it: a person deletes it by hand. A repository that does not ignore `*.part` shows it in `git status`;
-    it must not be committed.
-  - **What `file_changed` removes**: only the parts this run wrote, those of the files it was about to write, never
-    another file; a file another writer changed keeps that writer's bytes.
+    leaves the part where it was. Nothing reads it, the next `check` and `apply` report it (`part_file_present`), and
+    nothing removes it: a person does. A repository that does not ignore `*.part` shows it in `git status`; it must not
+    be committed (a pack's folder is the pack's content, every file of it).
+  - **What a failure removes**: only the parts this run created, those of the files it was about to write (one it
+    created and could not write too), never another file; a file another writer changed keeps that writer's bytes, and
+    a part another write left stays as it is.
 - **`data`** holds `path`, `model_id`, `state`, `repo`, and:
   - `changed`: each with `entry`, `threshold`, `file`, [`rule_id` or `pool_id`], `path`, `from` and `to`; a value
     binding's (#464 W1) with `entry`, `value`, `file`, `rule_id`, `path`, `from` (null when inserted), `to`, `ratio` (`to`
@@ -2662,7 +2810,10 @@ says `greater_than_or_equal`).
     members inserted, in order, `limited` among them, #466 W3); a valuation binding's (#466 W3) with `entry`,
     `valuation`, `file`, `pool_id`, `path`, `round`, `from`, `to` (W), `ratio` (null when `from` is 0), `ratio_flagged`,
     `origin`, `inserted` (`valuation_origin` when inserted), `scale` (Q, as read) and `precision` (null within the bound,
-    else `{error, bound, suggested_scale}`: a W written with `precision_low`);
+    else `{error, bound, suggested_scale}`: a W written with `precision_low`); a default binding's (#466 V-a), one per
+    declaration it writes, with `entry`, `threshold`, `variable`, `file` (the control.json as bindings.json would name
+    it), `pointer` (the declaration's default), `from`, `to`, `ratio` (null when `from` is 0), `ratio_flagged`, `origin`
+    (`{from, to}`) and `inserted` (`default_origin` when inserted);
   - `written`: the files whose bytes changed.
 
 ### Stop lines and hard lines

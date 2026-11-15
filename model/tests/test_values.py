@@ -1,7 +1,8 @@
 """#464 W1, the model's writer of the schedule's values: `acmodel export values` (`out/values.json` and the value provenance
 files), the value bindings of `bindings check` and `bindings apply` (the fixed value and its origin, written in place or
 inserted in the file's own style), the origin guard, and `apply` writing each file as its part and renaming it only when
-the file did not change meanwhile (contracts/formats.md, "`acmodel export values`" and "Bindings").
+the file did not change meanwhile, never over a part another write left and never removing one (#466 V-a)
+(contracts/formats.md, "`acmodel export values`" and "Bindings").
 
 Every fixture is neutral: four pools, two derived rates, one activity with one flow, and an `out/prices.json` written
 here as `export prices` writes it (the values read the prices, they never compute a steady state). With κ = 1000 the
@@ -34,6 +35,7 @@ UNIT = 1000
 POOLS = ("pool.a", "pool.b", "pool.c", "pool.d")
 WORD = "benefit_fixed_value"
 EXAMPLE = Path(__file__).resolve().parent / "fixtures" / "example"
+POLICY_FILE = "packs/p.daily/resources/operations/p.daily/policies/floor.json"  # the example's pack file
 
 
 @pytest.fixture
@@ -1003,6 +1005,125 @@ def test_a_file_changed_before_the_rename_is_refused_and_left_as_it_is(example, 
     assert doc["errors"] == [{"code": "file_changed", "detail": {"path": str(schedule)}}]
     assert schedule.read_bytes() == before + b"\n"
     assert not (example / "schedule.json.part").exists()
+
+
+# A part another write left (#466 V-a): never written over, never removed -------------------------------------------------
+
+# What an interrupted adoption of a standard pack leaves beside schedule.json: its own whole schedule, which it trusts to
+# finish that adoption (the Runtime's standard-pack-authoring, "If a call was interrupted").
+LEFT = b'{"schema_version":"actingcommand.schedule.v1","rules":[]}\n'
+
+
+def test_a_part_left_beside_the_schedule_is_reported_and_refuses_a_value_binding(tmp_path, acmodel):
+    """schedule.json.part is there when a value binding would write schedule.json: `check` reports it with the
+    differences, `apply` refuses the whole write (`part_file_present`), and the schedule and the part keep their bytes.
+    Once a person has moved the part away, `apply` writes as before."""
+    folder = values_repo(tmp_path, [DAY_RUN])
+    schedule = folder / "schedule.json"
+    schedule.write_bytes(one_line([DAY_RULE]))
+    bind(folder, ("val.a.day", "rule.a.day"))
+    part = folder / "schedule.json.part"
+    part.write_bytes(LEFT)
+    before = schedule.read_bytes()
+    present = {"code": "part_file_present", "detail": {"path": str(schedule), "part": str(part)}}
+
+    status, doc = bindings(acmodel, folder, "check")
+
+    assert status == 6
+    assert [error["code"] for error in doc["errors"]] == ["binding_mismatch", "origin_missing", "part_file_present"]
+    assert doc["errors"][-1] == present
+
+    status, doc = bindings(acmodel, folder, "apply")
+
+    assert (status, doc["data"], doc["errors"]) == (5, {}, [present])
+    assert schedule.read_bytes() == before
+    assert part.read_bytes() == LEFT
+
+    part.rename(folder / "moved-away.json")
+    status, doc = bindings(acmodel, folder, "apply")
+
+    assert (status, doc["errors"]) == (0, [])
+    assert schedule.read_bytes() == one_line([DAY_DONE])
+    assert not part.exists()
+    assert (folder / "moved-away.json").read_bytes() == LEFT
+
+
+def test_a_part_that_appears_before_apply_creates_its_own_is_kept_and_this_runs_parts_are_removed(
+    example, acmodel, monkeypatch
+):
+    """Two files to write, schedule.json and the pack policy file. The policy's part appears after `apply` looked and
+    before it creates its own: the exclusive creation refuses it (`part_file_present`), the part schedule.json had
+    already got from this run is removed again, the other write's part stays, and neither file is written."""
+    schedule, policy = example / "schedule.json", example / POLICY_FILE
+    edit(policy, lambda doc: doc.update(threshold=21))
+    other = policy.with_name(policy.name + ".part")
+    stage = commands._stage
+    staged: list[str] = []
+
+    def meanwhile(target, raw: bytes) -> Path:
+        if target.name == POLICY_FILE:
+            other.write_bytes(b"another write\n")
+        part = stage(target, raw)
+        staged.append(part.name)
+        return part
+
+    monkeypatch.setattr(commands, "_stage", meanwhile)
+    before = (schedule.read_bytes(), policy.read_bytes())
+
+    status, doc = example_apply(acmodel, example)
+
+    assert (status, doc["data"]) == (5, {})
+    assert doc["errors"] == [{"code": "part_file_present", "detail": {"path": str(policy), "part": str(other)}}]
+    assert staged == ["schedule.json.part"]
+    assert (schedule.read_bytes(), policy.read_bytes()) == before
+    assert not (example / "schedule.json.part").exists()
+    assert other.read_bytes() == b"another write\n"
+
+
+class _Full:
+    """A part's handle whose write fails, as on a full disk."""
+
+    def __init__(self, handle) -> None:
+        self.handle = handle
+
+    def __enter__(self) -> "_Full":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        self.handle.close()
+        return False
+
+    def write(self, data: bytes) -> int:
+        raise OSError(28, "No space left on device")
+
+
+def test_a_part_this_run_created_and_could_not_write_is_removed_and_no_other_file(example, acmodel, monkeypatch):
+    """The policy's part is created by this run and its write fails: `export_write_failed` at the part, both parts of this
+    run are removed (the one that failed too, since this run created it), and a part another write left elsewhere in
+    the repository stays."""
+    schedule, policy = example / "schedule.json", example / POLICY_FILE
+    edit(policy, lambda doc: doc.update(threshold=21))
+    elsewhere = example / "packs" / "kept.json.part"
+    elsewhere.write_bytes(b"another write\n")
+    create = commands._create
+
+    def full(part: Path):
+        handle = create(part)
+        return _Full(handle) if part.name.startswith("floor.json") else handle
+
+    monkeypatch.setattr(commands, "_create", full)
+    before = (schedule.read_bytes(), policy.read_bytes())
+
+    status, doc = example_apply(acmodel, example)
+
+    assert (status, doc["data"]) == (5, {})
+    part = policy.with_name(policy.name + ".part")
+    assert doc["errors"] == [{"code": "export_write_failed",
+                              "detail": {"path": str(part), "exception_type": "OSError",
+                                         "raw_text": "[Errno 28] No space left on device"}}]
+    assert (schedule.read_bytes(), policy.read_bytes()) == before
+    assert not part.exists() and not (example / "schedule.json.part").exists()
+    assert elsewhere.read_bytes() == b"another write\n"
 
 
 # The catalog ------------------------------------------------------------------------------------------------------------

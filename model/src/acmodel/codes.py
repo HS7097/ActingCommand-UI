@@ -134,6 +134,18 @@ FIXED_VALUE_BESIDE_MAINTENANCE = "fixed_value_beside_maintenance"
 HELD_FIXED_VALUE_BESIDE_REALIZATION = "held_fixed_value_beside_realization"
 HELD_FIXED_VALUE_BESIDE_PRICED_PRODUCT = "held_fixed_value_beside_priced_product"
 HELD_FIXED_VALUE_BESIDE_PENDING_PRODUCT = "held_fixed_value_beside_pending_product"
+# #466 V-a, an integer variable's default in the packs' control.json (`defaults` of bindings.json), and a part another
+# write left beside a file `bindings apply` writes (W1, W3 and V-a alike). Each code is one reason.
+VARIABLE_LITERAL_BOUND = "variable_literal_bound"  # a threshold binding or fixed entry names a control.json's /variables
+VARIABLE_UNKNOWN = "variable_unknown"  # no pack declares the variable a default binding names
+VARIABLE_DECLARED_TWICE = "variable_declared_twice"  # one control.json declares the name twice
+VARIABLE_NOT_INTEGER = "variable_not_integer"  # the bound declaration's type is not integer
+VARIABLE_RANGE_INVALID = "variable_range_invalid"  # its min, max or step holds no range
+VARIABLE_DECLARATIONS_DIFFER = "variable_declarations_differ"  # the declarations of the name differ, written or not
+DEFAULT_OUT_OF_RANGE = "default_out_of_range"  # the threshold's number lies outside min..max
+DEFAULT_OFF_STEP = "default_off_step"  # it lies on no step from min
+PACK_FILE_NOT_CANONICAL = "pack_file_not_canonical"  # a control.json that declares a bound variable is not canonical
+PART_FILE_PRESENT = "part_file_present"  # a <file>.part is beside a file apply writes: never written over or removed
 
 EXIT_OK = 0
 
@@ -246,4 +258,14 @@ EXIT_STATUS = {
     HELD_FIXED_VALUE_BESIDE_REALIZATION: 0,
     HELD_FIXED_VALUE_BESIDE_PRICED_PRODUCT: 0,
     HELD_FIXED_VALUE_BESIDE_PENDING_PRODUCT: 0,
+    VARIABLE_LITERAL_BOUND: 1,
+    VARIABLE_UNKNOWN: 6,
+    VARIABLE_DECLARED_TWICE: 6,
+    VARIABLE_NOT_INTEGER: 6,
+    VARIABLE_RANGE_INVALID: 6,
+    VARIABLE_DECLARATIONS_DIFFER: 6,
+    DEFAULT_OUT_OF_RANGE: 5,
+    DEFAULT_OFF_STEP: 5,
+    PACK_FILE_NOT_CANONICAL: 6,
+    PART_FILE_PRESENT: 5,
 }

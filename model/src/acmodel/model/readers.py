@@ -796,6 +796,12 @@ HAND = Object(
     {"rule_id": FACT_KEY, "status": TEXT, "ref": TEXT},
     {"to_replace_with": TEXT, "inherited_from": FACT_KEY, **NOTE},
 )
+# #466 V-a: the default of an integer variable of the packs' `control.json`, by the variable's name (the Runtime's
+# package-variables, "The declaration": a name of the game root, `^[a-z][a-z0-9_]{0,63}$`), written from a constant
+# threshold of exports.json into every declaration of that name. It names neither a file nor a pointer: the tool finds
+# the declarations itself.
+VARIABLE_NAME = Text(r"[a-z][a-z0-9_]{0,63}")
+DEFAULT = Object({"threshold": ID, "variable": VARIABLE_NAME}, NOTE)
 BINDINGS = Format(
     "acmodel.bindings.v1",
     "acmodel.bindings.v1",
@@ -811,8 +817,8 @@ BINDINGS = Format(
                 Object({**LITERAL, "reason": TEXT, "ref": TEXT}, {**SCHEDULE_ITEMS, **NOTE}, _schedule_item)
             ),
         },
-        # #466 W4a: absent means none, so a bindings.json written before reads as it did.
-        {"hand": ListOf(HAND), **NOTE},
+        # #466 W4a, V-a: absent means none, so a bindings.json written before reads as it did.
+        {"hand": ListOf(HAND), "defaults": ListOf(DEFAULT), **NOTE},
     ),
 )
 
@@ -1072,7 +1078,8 @@ def check_assessment(doc: dict[str, Any], path: Path | str) -> None:
 
 def read_bindings(path: Path | str) -> dict[str, Any]:
     """`bindings.json` (`acmodel.bindings.v1`): where each threshold's literal and each value's sits, the fixed
-    literals, and the fixed values written by hand (`hand`, #466 W4a)."""
+    literals, the fixed values written by hand (`hand`, #466 W4a), and the variables whose default a threshold writes
+    (`defaults`, #466 V-a)."""
     return _read(path, BINDINGS)
 
 

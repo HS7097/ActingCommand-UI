@@ -733,6 +733,40 @@ def test_a_pending_price_refuses_the_whole_apply(tmp_path, acmodel):
     assert (status, doc["errors"][0]) == (5, refused)
 
 
+def test_a_part_left_beside_the_schedule_is_reported_and_refuses_a_valuation_binding(tmp_path, acmodel):
+    """#466 V-a: schedule.json.part is there (a folder, as anything another write left) when a valuation binding would
+    write W and the origin: `check` reports it with the differences, `apply` refuses the whole write
+    (`part_file_present`), and the schedule and the folder stay as they were; moved away, `apply` writes."""
+    folder = values_repo(tmp_path, [DAY_RUN])
+    priced(folder, THIRD)
+    path = folder / "schedule.json"
+    path.write_bytes(schedule(pool("p.floor", 1000, 7)))
+    bind(folder, ("pool.a", "p.floor", "floor"))
+    part = folder / "schedule.json.part"
+    part.mkdir()
+    (part / "left.txt").write_bytes(b"another write\n")
+    before = path.read_bytes()
+    present = {"code": "part_file_present", "detail": {"path": str(path), "part": str(part)}}
+
+    status, doc = bindings(acmodel, folder, "check")
+
+    assert status == 6
+    assert [error["code"] for error in doc["errors"]] == ["binding_mismatch", "origin_missing", "part_file_present"]
+    assert doc["errors"][-1] == present
+
+    status, doc = bindings(acmodel, folder, "apply")
+
+    assert (status, doc["data"], doc["errors"]) == (5, {}, [present])
+    assert path.read_bytes() == before
+    assert (part / "left.txt").read_bytes() == b"another write\n"
+
+    part.rename(folder / "moved-away")
+    status, doc = bindings(acmodel, folder, "apply")
+
+    assert (status, doc["errors"]) == (0, [])
+    assert path.read_bytes() == schedule(pool("p.floor", 1000, 333, origin='"model"'))
+
+
 def test_check_says_whether_out_valuations_json_is_current(tmp_path, acmodel):
     """valuations.json records the bytes of exports.json too (fix1), where the acceptances a price rests on are: an
     edited exports.json makes the file stale (`exports`). Of bindings.json it records the valuation bindings alone, each
