@@ -30,9 +30,9 @@ and guesses nothing.
   `README.md` and the `BUILD-MANIFEST.json` that binds them to their commit. The wizard installs from an
   install set, which is put together apart from this zip (see "Setup wizard acsetup"). Each release is built
   against the crates of the Runtime rev its commit pins (see "Data source"): UI v0.12.15 against those
-  of Runtime v0.12.47; the pin is now v0.12.61.
+  of Runtime v0.12.47; the pin is now v0.12.62.
 - **Works with the 0.12 Runtime**: it declares `actingd-config` [5, 32], `ledger` [3, 8],
-  `runtime-client` [3, 9] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.61: each of
+  `runtime-client` [3, 9] and `runtime-outcomes` [1, 1]. It fits Runtime v0.12.47 to v0.12.62: each of
   them declares a `ledger` maximum within [3, 8] and an `actingd-config` and a `runtime-client` range
   that meet the console's. The ledger of v0.12.55 and later (revision 8) is one way: once such a Runtime has run on
   a state root, no Runtime before v0.12.55 opens it, and a console whose `ledger` range ends at 7 may fail to
@@ -228,8 +228,11 @@ was read and Read Earlier is not offered, moving "Show up to" again or a tab or 
 locate it again, or its handle back at the far right ("all"), Jump to Latest (online) or closing and
 reopening, which read without it.
 
-Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.61 (`5c629e3b`). Against
-v0.12.60 it raises `runtime-client` to 9 and `package` to 15; `actingd-config` [5, 32] and `ledger` [3, 8]
+Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.12.62 (`44cbab53`). Against
+v0.12.61 no interface moves and no crate's dependencies change, so `Cargo.lock` changes only in the rev; a
+run's terminal in the contract crate's run summary gains the optional `failure_values`, the values codes mode
+keeps of its outcome (#469 F1), which this console does not read yet, and the outcome catalog registers the
+reason words of Workflow #469 V0. v0.12.61 against v0.12.60 raises `runtime-client` to 9 and `package` to 15; `actingd-config` [5, 32] and `ledger` [3, 8]
 stay, and the console's `runtime-client` range follows to [3, 9]. Revision 9 adds the request kinds
 `GoalView` (one application's goal page) and `EditGoal` (one value of it set or cleared by name, refused
 `goal_value_invalid` with a `goal_problem` word), both on the `ui` channel's list (#463 V3); this console reads
@@ -372,7 +375,7 @@ with v0.12.38's frame reads off the ledger writer, #422 RA-1, and Workflow #432 
 v0.12.32's bounded offline opening), which speaks the 0.12 protocols (`runtime-client` revision 9, ledger revision 8):
 
 ```
-rev = "5c629e3bc72d94f86f68973535494a2412502c29"
+rev = "44cbab5349ae2d2e5a3a4a17178240ac4e1b79de"
 ```
 
 The six crates (contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel) share this one rev.
@@ -649,7 +652,7 @@ or on a handset scrcpy, for capture), with where the value comes from (the confi
 online, when and through which way) and the device's latest self-check. Apply switches that device at
 once if it is free (waiting at most 3 seconds, the contract's `CONNECTION_PREPARATION_CLAIM_WAIT_MS`): it
 reconnects and self-checks on the new backends, and the console waits for the answer up to about 138 seconds
-(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.61, plus the client's 5 s IO margin; the page takes
+(the contract's `BACKEND_SWITCH_WAIT_MS`, 133 s at the pinned v0.12.62, plus the client's 5 s IO margin; the page takes
 both numbers from the pinned crates), and the group says "Switching…" meanwhile. MuMu native touch goes only with
 MuMu native capture: picking it brings that capture along, and picking another capture under it first asks
 which touch goes with it, then sends both at once. A value set online offers "Use File Value", which is a
@@ -1357,7 +1360,7 @@ through or was stopped.
   module's `instance add` (Runtime INST-5) sets on the instance it has just added and which, unlike that
   module's `lab-…` pauses, no operation lifts; and `policy_settlement_facts_skipped`, the hold the
   Runtime's start sets on an instance whose settlement facts it could not record (Runtime ISO-START-1).
-  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.61 has
+  No Runtime release up to 0.12.51 sets either; both come with 0.12.52, and the pinned 0.12.62 has
   both; from 0.12.60 the Runtime's start also sets `instance.added` on an entry that declares
   `start_paused` (#453 S2). An instance
   pause still draining or handing its device back gets none either: the Runtime refuses its resume
