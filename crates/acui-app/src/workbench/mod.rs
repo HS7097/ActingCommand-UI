@@ -32,7 +32,9 @@
 //!    one when it may have changed the account's switches or says another tool did; one of them
 //!    is out for an account at a time, and holds nothing else back. A person's "close this task"
 //!    of a scheduled run (`stop`, UI-3e2b) writes that switch's off before it stops the run, and
-//!    is one of them too: it and a switch of the same account never both have a write out.
+//!    is one of them too: it and a switch of the same account never both have a write out. So is
+//!    a person's write of one goal of an account on its Goals tab (`goals`, Workflow #455 G2),
+//!    one of them out for an account at a time, which holds nothing else back either.
 //!
 //! Another thread runs the Runtime's `actingctl` (`tools`), only when asked: `packs` for the
 //! task names and the picture proportions each game's standard pack declares, and `watchdog
@@ -66,7 +68,7 @@
 //!
 //! The right column has three tabs (UI-3f1), the `Model`'s too (`tab_picked`): the live view,
 //! that same account's daily task list (`tasks`), with a switch for each of its task packages
-//! (UI-3f2), and its goals (`goals`, Workflow #455, read only). The picture reads only under
+//! (UI-3f2), and its goals (`goals`, Workflow #455), some of which it sets. The picture reads only under
 //! its own tab, the list and its switches only under theirs, and the goals only under theirs:
 //! which account's list or goals the slow thread reads, if any, and whether its switches too, is
 //! told it in one place (`tasks_sync`), each time that may change, as for the picture. A tab shown
@@ -607,11 +609,12 @@ fn live_landed(ui: &Ui, read: LiveRead) {
         ask(ui, Read::Tasks.lane(), Poke::List);
     }
     // No refresh of the picture out holds across a restart, nor any operation of a device, nor a
-    // switch of a task.
+    // switch of a task, nor a write of a goal.
     if landed.epoch_changed {
         refresh::restarted(ui);
         rescue::restarted(ui);
         switch::restarted(ui);
+        goals::restarted(ui);
     }
     // A stop of a run is judged by a read online only, of its own epoch or another: its follow-up,
     // or a restart's letting it go (`stop`).
@@ -811,7 +814,7 @@ fn goals_landed(ui: &Ui, alias: &str, read: Result<GoalsRead, ClientFailure>) {
             }
             for line in &page.lines {
                 match line {
-                    GoalLine::OtherTarget(OtherTarget { id, target: None }) if !newer => {
+                    GoalLine::OtherTarget(OtherTarget { id, target: None, .. }) if !newer => {
                         problems.push(format!(
                             "the other target {id} of the goals of {alias} does not read as an \
                              at_least target with a resource and a whole amount: shown as not \

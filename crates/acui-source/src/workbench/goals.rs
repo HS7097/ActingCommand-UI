@@ -1,11 +1,37 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! An instance's goals (Workflow #455, the goal page; Workflow #463 V3, read only): what the Runtime
-//! says of one application's goal page, read with `GoalView` ([`super::ReadLane::read_goals`],
+//! An instance's goals (Workflow #455, the goal page; Workflow #463 V3): what the Runtime says of
+//! one application's goal page, read with `GoalView` ([`super::ReadLane::read_goals`],
 //! [`GoalsRead`]), and the lines the console's Goals tab shows of it, a pure function of that page,
-//! of the language shown and of the packages' display names ([`page`]). Nothing here writes, and
-//! nothing out of here names a wire type: an answer is kept whole ([`GoalsLoaded`]) until it is
+//! of the language shown and of the packages' display names ([`page`]); what a press on one of its
+//! lines writes, and whether it asks first ([`press`]); and that write, one `EditGoal` ([`edit`]).
+//! Nothing out of here names a wire type: an answer is kept whole ([`GoalsLoaded`]) until it is
 //! shown, because its words depend on the language and on the names `actingctl packs` gives, which
 //! come and go on their own.
+//!
+//! The writes (G2: the simple controls). A resource entry's amount (`{"at_least": n}`, a whole
+//! number of at least 1 checked here, the pool's capacity by the Runtime, whose `out_of_range` names
+//! it), a `choice` variable's option (its value as a JSON string) and a `switch` variable (`true` or
+//! `false`) are set; a resource entry's goal, a variable's value ("back to the default"), a value no
+//! longer offered, a value of a placement no bound package offers, and an other target whose id has
+//! an entry name's form (`goal_name`, `[a-z0-9][a-z0-9_]*` of at most 64 bytes, the only names
+//! `EditGoal` takes) are cleared. `integer` and `ordered` variables, tiers (`tier_not_built`) and
+//! remedy parameters are only shown. One press is one `EditGoal`, of one name, naming the page's
+//! version (`GoalView.version`) as its `expected_version`.
+//!
+//! A press asks first only where what it loses cannot be set back from here ([`Loses`]): a value no
+//! run reads (no longer offered, or of a placement not offered), an other target, and a resource goal
+//! set elsewhere (no setter, or another channel than this console's) that carries what a goal set by
+//! name does not: tasks, a step, an importance, a validity. Setting a pool's amount replaces its goal
+//! whole, whatever its id (`crates/runtime-host/src/goals.rs:305-311`), so those are lost then too;
+//! which of them it carries is read from the stored document's target of the same id, and all four
+//! are said when that does not read. Back to a variable's default, and a goal this console set, ask
+//! nothing.
+//!
+//! The write goes on a fresh person's connection, the `ui` channel with the full receipt, at the
+//! slow reads' 20 seconds ([`EDIT_IO`]), and is sent once, but for `fact_observation_not_newer`,
+//! sent again at once on the same connection. What came back is told apart by its code and values
+//! alone ([`answered`]): a version conflict (`current_version`), a Runtime without the write, the
+//! goal refused with its `goal_problem` word and the values that locate it, or another refusal.
 //!
 //! What the page says, all at the pinned Runtime (5c629e3b; `contracts/runtime-interface.md`,
 //! "Goal request kinds"; `crates/actingcommand-contract/src/runtime/goals.rs`):
@@ -64,15 +90,23 @@
 //! ([`GoalsAnswer::Unsupported`]).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+use std::time::Duration;
 
 use acui_rows::outcome::Tongue;
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::{
-    ActiveResourceTargets, GoalDeclarationRead, GoalEntryState, GoalEntryType, GoalOrphan,
-    GoalSetBy, GoalValueSource, GoalView, GoalViewEntry, Initiator, ResourceTargetCondition,
-    ResourceTargetConditionState, ResourceTargetObservation, ResourceTargetPendingReason,
-    ResourceTargetView, ResourceTargetsRejectionReason, RuntimeChannel,
+    goal_name, ActiveResourceTargets, GoalDeclarationRead, GoalEdit, GoalEntryState,
+    GoalEntryType, GoalOrphan, GoalProblem, GoalSetBy, GoalValueSource, GoalView, GoalViewEntry,
+    Initiator, ResourceTargetCondition, ResourceTargetConditionState, ResourceTargetObservation,
+    ResourceTargetPendingReason, ResourceTargetView, ResourceTargetsRejectionReason,
+    RuntimeChannel,
 };
-use serde_json::Value;
+use actingcommand_runtime_client::RuntimeClientError;
+use serde_json::{Map, Value};
+
+use super::{configure_config, pack};
+use crate::{runtime_connection, ClientFailure, Spelling};
 
 /// The record versions the view serves (`contracts/resource-targets.md:62-64`, `:1054-1059`).
 const SCHEMA_V1: &str = "actingcommand.resource-targets.v1";
@@ -82,6 +116,35 @@ const SCHEMA_V3: &str = "actingcommand.resource-targets.v3";
 const AT_LEAST: &str = "at_least";
 /// The `variable_problem` word of an `ordered` value applied in part, while `in_effect`.
 const KEYS_LEFT_OUT: &str = "keys_left_out";
+
+/// A write's connection's io timeout: the slow reads' (the console's `acui-slow` lane), since the
+/// Runtime takes the fact write gate for it; the client's default of 5 seconds is a read's.
+pub const EDIT_IO: Duration = Duration::from_secs(20);
+
+/// The codes a write's answer is told apart by: the client's own of a request the Runtime does not
+/// know; the shared `not_implemented`; and the host's own spellings, of a crate this one does not
+/// use: another writer's change since the version named, another write in the same millisecond,
+/// and the goal refused.
+const OPERATION_UNSUPPORTED: &str = "runtime_operation_unsupported";
+const NOT_IMPLEMENTED: &str = SharedCode::NotImplemented.as_str();
+const VERSION_CONFLICT: &str = "fact_observation_version_conflict";
+const NOT_NEWER: &str = "fact_observation_not_newer";
+const GOAL_VALUE_INVALID: &str = "goal_value_invalid";
+/// What those refusals say beyond their code (`contracts/outcome-codes/runtime-host.json`,
+/// `goal_value_invalid` and `fact_observation_version_conflict`).
+const CURRENT_VERSION: &str = "current_version";
+const GOAL_PROBLEM: &str = "goal_problem";
+const JSON_POINTER: &str = "json_pointer";
+const RANGE_MIN: &str = "range_min";
+const RANGE_MAX: &str = "range_max";
+const POOL_ID: &str = "pool_id";
+const VARIABLE_PROBLEM: &str = "variable_problem";
+/// The members of a stored target a goal set by name does not carry
+/// (`contracts/resource-targets.md`, the v2 and v3 targets).
+const TASKS: &str = "tasks";
+const SCALE: &str = "scale";
+const IMPORTANCE: &str = "importance_milli";
+const VALID_UNTIL: &str = "valid_until_unix_ms";
 
 /// One answered `GoalView` of one instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +193,19 @@ pub struct GoalsPage {
     pub no_catalog: bool,
     /// The Runtime reads the instance's stored record as no document (`stale_schema`).
     pub stale_schema: bool,
+}
+
+impl GoalsPage {
+    /// Whether anything of it can be written: only a page that lists; one that does not
+    /// (`not_checked_yet`, `root_failing`, `no_schedule`) refuses every `EditGoal` with its word.
+    pub fn writable(&self) -> bool {
+        matches!(self.state, PageState::Listed { .. })
+    }
+
+    /// The line of `key` ([`GoalLine::key`]).
+    pub fn line(&self, key: &str) -> Option<&GoalLine> {
+        self.lines.iter().find(|line| line.key().as_deref() == Some(key))
+    }
 }
 
 /// Whether the page lists its entries.
@@ -183,6 +259,27 @@ pub enum GoalLine {
     Closed { pool: String, why: Closed },
 }
 
+impl GoalLine {
+    /// What names the line among the page's lines, never shown: the entry's name for a resource
+    /// entry or a variable, the stored name for a value no longer offered, the id for an other
+    /// target, each with its kind, as names of different kinds may be the same. None of a line
+    /// nothing writes.
+    pub fn key(&self) -> Option<String> {
+        match self {
+            Self::Resource(line) => Some(format!("entry:{}", line.name)),
+            Self::Variable(line) => Some(format!("entry:{}", line.name)),
+            Self::Orphan(line) => Some(format!("orphan:{}", line.name)),
+            Self::OtherTarget(other) => Some(format!("target:{}", other.id)),
+            Self::Heading(_)
+            | Self::Note { .. }
+            | Self::Tier(_)
+            | Self::Package(_)
+            | Self::Group(_)
+            | Self::Closed { .. } => None,
+        }
+    }
+}
+
 /// The groups that close the page, in this order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Group {
@@ -194,18 +291,52 @@ pub enum Group {
     NotTargetable,
 }
 
-/// A `resource` entry: its title, whether its pool takes a goal here, the pool's reading and the
-/// goal stored on it.
+/// A `resource` entry: its name, its title, whether its pool takes a goal here, the pool's reading
+/// and the goal stored on it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceLine {
+    /// The entry's name, which a write names; never shown.
+    pub name: String,
     pub title: Option<String>,
     pub pool: PoolState,
-    /// None while the pool is not targetable.
+    /// None while the pool is not targetable, and while the goal waits for a reading, which says
+    /// why already ([`Progress::Awaiting`]).
     pub reading: Option<Reading>,
     /// None: no goal, the default.
     pub goal: Option<StoredGoal>,
     /// Who set it; none when the record names nobody (a target a v2 document wrote).
     pub set: Option<SetBy>,
+    /// A goal set elsewhere (no setter, or another channel than this console's): what of it a
+    /// goal set here loses. None without a goal, and of this console's.
+    pub elsewhere: Option<Carried>,
+}
+
+impl ResourceLine {
+    /// Whether an amount can be set on it here: its pool is targetable with the pack's own step
+    /// and importance (else `pool_not_targetable` or `pool_unvalued`).
+    pub fn settable(&self) -> bool {
+        self.pool == PoolState::Open
+    }
+}
+
+/// What a stored target carries that a goal set by name does not, and so loses as it is replaced
+/// or cleared: its own tasks, step (`scale`), importance (`importance_milli`) and validity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Carried {
+    pub tasks: bool,
+    pub step: bool,
+    pub importance: bool,
+    pub validity: bool,
+}
+
+impl Carried {
+    /// All four: what is said of a target whose stored document does not read here.
+    pub const ALL: Self = Self { tasks: true, step: true, importance: true, validity: true };
+
+    /// Whether it carries any of them.
+    pub fn any(self) -> bool {
+        self.tasks || self.step || self.importance || self.validity
+    }
 }
 
 /// What the resource target view says of a pool.
@@ -289,11 +420,18 @@ pub struct TierLine {
     pub title: Option<String>,
     /// The default option's title (its value when it has none).
     pub default: Option<String>,
+    /// A value stored under its name, which no run reads in this build: its option's title, its
+    /// value when it has none, or its text when it is no option value at all.
+    pub stored: Option<String>,
+    /// Who set the value stored, when one is.
+    pub set: Option<SetBy>,
 }
 
 /// A package variable, placed by an entry or not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VariableLine {
+    /// The variable's name, which a write names; never shown.
+    pub name: String,
     /// The entry's title, or else the variable's.
     pub title: Option<String>,
     /// The value the next run reads, in words; for a variable not offered, the value stored under
@@ -306,6 +444,67 @@ pub struct VariableLine {
     pub state: VariableState,
     /// The stored keys of an `ordered` value the run leaves out (`keys_left_out`), as stored.
     pub left_out: Vec<String>,
+    /// What a press changes of it here, at the value the next run reads.
+    pub control: ValueControl,
+    /// A value is stored under its name (`value_json`).
+    pub stored: bool,
+}
+
+impl VariableLine {
+    /// Whether a value can be set on it now: one a bound package offers, which applies in the game
+    /// root (else `not_offered` or `variable_not_applying`).
+    pub fn settable(&self) -> bool {
+        match &self.state {
+            VariableState::InEffect => true,
+            VariableState::NotApplied { why, .. } => !why.as_ref().is_some_and(Unapplied::by_root),
+            VariableState::NotOffered => false,
+        }
+    }
+
+    /// What clears the value stored under its name, when one is: "back to the default" of a
+    /// variable this page has a control of; "clear" of a placement no bound package offers, whose
+    /// value no run reads. None of an `integer` or `ordered` variable, which this version only
+    /// shows: its value could not be set back from here.
+    pub fn clear_offer(&self) -> Option<ClearOffer> {
+        if !self.stored {
+            return None;
+        }
+        match (&self.state, &self.control) {
+            (VariableState::NotOffered, _) => Some(ClearOffer::Clear),
+            (_, ValueControl::None) => None,
+            (_, ValueControl::Choice { .. } | ValueControl::Switch { .. }) => {
+                Some(ClearOffer::Restore)
+            }
+        }
+    }
+}
+
+/// What a press changes of a variable here (G2): a `choice`'s option, a `switch`. None of an
+/// `integer`, an `ordered` or an unknown type, which this version only shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValueControl {
+    None,
+    /// Its options in the declaration's order, and the one the next run reads when it is one.
+    Choice { options: Vec<ChoiceOption>, chosen: Option<String> },
+    /// Whether the next run reads it on, when that reads as a boolean.
+    Switch { on: Option<bool> },
+}
+
+/// One option of a `choice`: its value, which a write names, and its title in the language shown
+/// (its value when it has none).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChoiceOption {
+    pub value: String,
+    pub title: String,
+}
+
+/// How a variable's stored value is cleared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearOffer {
+    /// "Back to the default": the next run reads the pack's default again.
+    Restore,
+    /// "Clear": a value no run reads, which this page cannot set back.
+    Clear,
 }
 
 /// Whether a variable's value is in effect.
@@ -313,10 +512,10 @@ pub struct VariableLine {
 pub enum VariableState {
     /// The next run reads [`VariableLine::value`].
     InEffect,
-    /// The next run reads the default instead: of a value stored that it does not take
-    /// (`stored`), or of a variable that does not apply in the game root; why, by the
+    /// The next run reads the default instead: of a value stored that it does not take (`stored`,
+    /// that value in words), or of a variable that does not apply in the game root; why, by the
     /// `variable_problem` word.
-    NotApplied { stored: bool, why: Option<Unapplied> },
+    NotApplied { stored: Option<Shown>, why: Option<Unapplied> },
     /// No package bound on the instance declares it.
     NotOffered,
 }
@@ -367,6 +566,31 @@ impl Unapplied {
             "cap_range" => Self::CapRange,
             "root_unchecked" => Self::RootUnchecked,
             other => Self::Other(other.to_owned()),
+        }
+    }
+
+    /// Whether it is the game root's judgement of the variable, which no value set here changes: a
+    /// set of it is refused `variable_not_applying` (`contracts/package-variables.md:280-359`).
+    pub fn by_root(&self) -> bool {
+        match self {
+            Self::IrreversibleByRoot
+            | Self::PackageUnreadable
+            | Self::GoalsUnreadable
+            | Self::DeclarationConflict
+            | Self::GoalNameConflict
+            | Self::NameOutOfLimits
+            | Self::CapRange
+            | Self::RootUnchecked => true,
+            Self::NotAnOption
+            | Self::OutOfRange
+            | Self::OffStep
+            | Self::TypeChanged
+            | Self::KeysRemoved
+            | Self::CountOutOfRange
+            | Self::KeyRepeated
+            | Self::KeysLeftOut
+            | Self::EntryUnreadable
+            | Self::Other(_) => false,
         }
     }
 }
@@ -479,6 +703,8 @@ pub enum LabEntry {
 /// A stored value no entry offers any more: no run reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrphanLine {
+    /// The name it is stored under, which its clear names; never shown.
+    pub name: String,
     pub value: Shown,
     pub set: Option<SetBy>,
 }
@@ -490,6 +716,10 @@ pub struct OrphanLine {
 pub struct OtherTarget {
     pub id: String,
     pub target: Option<OtherGoal>,
+    /// Its id has an entry name's form (`goal_name`), so `EditGoal` can clear it by that name;
+    /// else only the Lab's whole document can
+    /// (`crates/actingcommand-contract/src/standard_pack_goals.rs:783-791`).
+    pub by_name: bool,
 }
 
 /// An other target that reads: its pool (the only name it has), what the view says of that pool,
@@ -682,6 +912,38 @@ impl Targets<'_> {
             expired || until_ms.is_some_and(|until| until < self.view.evaluated_at_unix_ms);
         StoredGoal { amount, progress, until_ms, lapsed }
     }
+
+    /// What the stored target `id` carries that a goal set by name does not: by its own members,
+    /// its validity a v3 target's own or a v1 or v2 document's; all four when it does not read
+    /// here (no id, no such target, a document of a newer form).
+    fn carried(&self, id: Option<&str>) -> Carried {
+        let Some(target) = id.and_then(|id| self.target(id)) else {
+            return Carried::ALL;
+        };
+        let has = |member: &str| target.get(member).is_some_and(|value| !value.is_null());
+        let validity = match self.form {
+            Some(Form::PerTarget) => has(VALID_UNTIL),
+            Some(Form::Whole | Form::Old) => {
+                self.active.is_some_and(|active| active.valid_until_unix_ms.is_some())
+            }
+            Some(Form::Newer(_)) | None => true,
+        };
+        Carried {
+            tasks: target.get(TASKS).and_then(Value::as_array).is_some_and(|tasks| !tasks.is_empty()),
+            step: has(SCALE),
+            importance: has(IMPORTANCE),
+            validity,
+        }
+    }
+}
+
+/// A pool's reading as a line says it: none while its goal waits for a reading, whose words say
+/// why already, so that "no reading yet" is said once.
+fn reading_beside(reading: Option<Reading>, goal: Option<&StoredGoal>) -> Option<Reading> {
+    match (reading, goal.map(|goal| goal.progress)) {
+        (Some(Reading::Pending(_)), Some(Progress::Awaiting(_))) => None,
+        (reading, _) => reading,
+    }
 }
 
 /// The lines of a page that lists: its entries in their order, each group of the variables no
@@ -771,24 +1033,34 @@ fn entry_line(entry: &GoalViewEntry, targets: &Targets<'_>, tongue: Tongue) -> G
         GoalEntryType::Tier => GoalLine::Tier(TierLine {
             title: text_of(declared, "title", tongue),
             default: tier_default(declared, tongue),
+            stored: entry.value_json.as_deref().map(|json| tier_value(declared, json, tongue)),
+            set: entry.set.as_ref().map(set_by),
         }),
         GoalEntryType::Variable => GoalLine::Variable(variable_line(entry, tongue)),
     }
 }
 
-/// A `resource` entry: its pool as the view says it, and the target on it.
+/// A `resource` entry: its pool as the view says it, and the target on it, with what that carries
+/// when it was set elsewhere.
 fn resource_line(entry: &GoalViewEntry, targets: &Targets<'_>, tongue: Tongue) -> ResourceLine {
     let pool = entry.resource.as_ref().map(|resource| resource.pool.as_str());
-    let goal = entry.value_json.as_deref().map(|json| {
-        let id = entry.resource.as_ref().and_then(|resource| resource.target_id.as_deref());
-        targets.goal(id, at_least(json))
-    });
+    let id = entry.resource.as_ref().and_then(|resource| resource.target_id.as_deref());
+    let goal = entry.value_json.as_deref().map(|json| targets.goal(id, at_least(json)));
+    let by_console =
+        entry.set.as_ref().is_some_and(|set| matches!(set.channel, RuntimeChannel::Ui));
+    let elsewhere = match &goal {
+        Some(_) if !by_console => Some(targets.carried(id)),
+        Some(_) | None => None,
+    };
+    let reading = reading_beside(pool.and_then(|pool| targets.reading(pool)), goal.as_ref());
     ResourceLine {
+        name: entry.name.clone(),
         title: text_of(entry.entry.as_ref(), "title", tongue),
         pool: pool.map_or(PoolState::Unlisted, |pool| targets.pool(pool)),
-        reading: pool.and_then(|pool| targets.reading(pool)),
+        reading,
         goal,
         set: entry.set.as_ref().map(set_by),
+        elsewhere,
     }
 }
 
@@ -800,15 +1072,29 @@ fn at_least(json: &str) -> Option<u64> {
 
 /// A `tier` entry's default option's title, or its value.
 fn tier_default(declared: Option<&Value>, tongue: Tongue) -> Option<String> {
-    let declared = declared?;
-    let default = declared.get("default")?.as_str()?;
+    let default = declared?.get("default")?.as_str()?;
+    Some(tier_option(declared, default, tongue))
+}
+
+/// A value stored under a `tier` entry's name: its option's title, its value when it has none, or
+/// its text when it is no string.
+fn tier_value(declared: Option<&Value>, json: &str, tongue: Tongue) -> String {
+    match serde_json::from_str::<Value>(json) {
+        Ok(Value::String(value)) => tier_option(declared, &value, tongue),
+        Ok(value) => value.to_string(),
+        Err(_) => json.to_owned(),
+    }
+}
+
+/// The title of a `tier` entry's option `value`, or the value.
+fn tier_option(declared: Option<&Value>, value: &str, tongue: Tongue) -> String {
     let option = declared
-        .get("options")
+        .and_then(|declared| declared.get("options"))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .find(|option| option.get("value").and_then(Value::as_str) == Some(default));
-    Some(text_of(option, "title", tongue).unwrap_or_else(|| default.to_owned()))
+        .find(|option| option.get("value").and_then(Value::as_str) == Some(value));
+    text_of(option, "title", tongue).unwrap_or_else(|| value.to_owned())
 }
 
 /// A variable's line.
@@ -819,7 +1105,7 @@ fn variable_line(entry: &GoalViewEntry, tongue: Tongue) -> VariableLine {
     let state = match entry.state {
         Some(GoalEntryState::NotOffered) => VariableState::NotOffered,
         Some(GoalEntryState::NotApplied) => VariableState::NotApplied {
-            stored: entry.value_json.is_some(),
+            stored: entry.value_json.as_deref().map(|json| declaration.shown(json, None, tongue)),
             why: entry.variable_problem.as_deref().map(Unapplied::of),
         },
         Some(GoalEntryState::InEffect) | Some(GoalEntryState::NotBuilt) | None => {
@@ -842,12 +1128,15 @@ fn variable_line(entry: &GoalViewEntry, tongue: Tongue) -> VariableLine {
         Some(GoalValueSource::Default) | None => None,
     };
     VariableLine {
+        name: entry.name.clone(),
         title,
         value,
         default,
         set: entry.set.as_ref().map(set_by),
         state,
         left_out: entry.removed_keys.clone(),
+        control: declaration.control(entry.effective_json.as_deref(), tongue),
+        stored: entry.value_json.is_some(),
     }
 }
 
@@ -942,6 +1231,32 @@ impl Declared {
             Self::Unknown => plain(&value),
         }
     }
+
+    /// What a press changes of a variable of this declaration here, at `effective`, the value the
+    /// next run reads: a `choice`'s options, titled in `tongue`, with the one chosen when it is
+    /// one of them; a `switch`, on when it reads as `true`. Nothing of the other types (G3's).
+    fn control(&self, effective: Option<&str>, tongue: Tongue) -> ValueControl {
+        let value = effective.and_then(|json| serde_json::from_str::<Value>(json).ok());
+        match self {
+            Self::Choice(options) => {
+                let chosen = value
+                    .as_ref()
+                    .and_then(Value::as_str)
+                    .filter(|chosen| options.iter().any(|(option, _)| option.as_str() == *chosen))
+                    .map(str::to_owned);
+                let options = options
+                    .iter()
+                    .map(|(option, titles)| ChoiceOption {
+                        value: option.clone(),
+                        title: in_language(titles, tongue).unwrap_or(option.as_str()).to_owned(),
+                    })
+                    .collect();
+                ValueControl::Choice { options, chosen }
+            }
+            Self::Switch => ValueControl::Switch { on: value.as_ref().and_then(Value::as_bool) },
+            Self::Integer(_) | Self::Ordered(_) | Self::Unknown => ValueControl::None,
+        }
+    }
 }
 
 /// A list of strings' items.
@@ -978,6 +1293,7 @@ fn plain(value: &Value) -> Shown {
 /// A stored value no entry offers any more.
 fn orphan_line(orphan: &GoalOrphan) -> GoalLine {
     GoalLine::Orphan(OrphanLine {
+        name: orphan.name.clone(),
         value: Declared::Unknown.shown(&orphan.value_json, None, Tongue::En),
         set: orphan.set.as_ref().map(set_by),
     })
@@ -992,14 +1308,15 @@ fn other_target(id: &str, targets: &Targets<'_>) -> OtherTarget {
             return None;
         }
         let amount = condition.get("amount")?.as_u64()?;
+        let goal = targets.goal(Some(id), Some(amount));
         Some(OtherGoal {
             pool: pool.to_owned(),
             state: targets.pool(pool),
-            reading: targets.reading(pool),
-            goal: targets.goal(Some(id), Some(amount)),
+            reading: reading_beside(targets.reading(pool), Some(&goal)),
+            goal,
         })
     });
-    OtherTarget { id: id.to_owned(), target }
+    OtherTarget { id: id.to_owned(), target, by_name: goal_name(id) }
 }
 
 /// Who set a stored row.
@@ -1118,18 +1435,464 @@ fn display_texts(display: &BTreeMap<String, String>) -> Vec<(String, String)> {
     display.iter().map(|(locale, text)| (locale.clone(), text.clone())).collect()
 }
 
+/// One write of the page, one `EditGoal`: the name it names, and what it does to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalWrite {
+    pub name: String,
+    pub change: GoalChange,
+}
+
+/// Set the value of a name to a JSON text, or clear what is stored under it (the default again; a
+/// resource entry's goal removed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GoalChange {
+    Set(String),
+    Clear,
+}
+
+impl GoalWrite {
+    fn set(name: &str, value_json: String) -> Self {
+        Self { name: name.to_owned(), change: GoalChange::Set(value_json) }
+    }
+
+    fn clear(name: &str) -> Self {
+        Self { name: name.to_owned(), change: GoalChange::Clear }
+    }
+
+    /// As the wire spells it.
+    fn edit(&self) -> GoalEdit {
+        match &self.change {
+            GoalChange::Set(value_json) => {
+                GoalEdit::Set { name: self.name.clone(), value_json: value_json.clone() }
+            }
+            GoalChange::Clear => GoalEdit::Clear { name: self.name.clone() },
+        }
+    }
+
+    /// For the log only.
+    pub fn line(&self) -> String {
+        match &self.change {
+            GoalChange::Set(value_json) => format!("set {} to {value_json}", self.name),
+            GoalChange::Clear => format!("clear {}", self.name),
+        }
+    }
+}
+
+/// A `choice` variable's value: its option's value, a JSON string.
+pub fn choice_json(option: &str) -> String {
+    Value::String(option.to_owned()).to_string()
+}
+
+/// A `switch` variable's value: `true` or `false`.
+pub fn switch_json(on: bool) -> String {
+    Value::Bool(on).to_string()
+}
+
+/// A resource entry's value: `{"at_least": n}`, no other member (a `by_unix_ms` is
+/// `deadline_unsupported`, any other `wrong_type`).
+pub fn resource_json(at_least: u64) -> String {
+    let mut value = Map::new();
+    value.insert(AT_LEAST.to_owned(), Value::from(at_least));
+    Value::Object(value).to_string()
+}
+
+/// Why the amount typed for a resource goal is not sent: only what holds of every pool, a whole
+/// number of at least 1. Its pool's capacity is the Runtime's to judge, since the view gives none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmountProblem {
+    /// Nothing typed.
+    Empty,
+    /// Not a whole number in digits.
+    NotWhole,
+    /// Below 1.
+    BelowOne,
+    /// More digits than a number here holds.
+    TooLarge,
+}
+
+/// The amount `text` types for a resource goal, around spaces: a whole number of at least 1, in
+/// ASCII digits, a sign of `+` allowed.
+pub fn amount(text: &str) -> Result<u64, AmountProblem> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(AmountProblem::Empty);
+    }
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(digits) => (true, digits),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(AmountProblem::NotWhole);
+    }
+    if negative {
+        return Err(AmountProblem::BelowOne);
+    }
+    match digits.parse::<u64>() {
+        Ok(0) => Err(AmountProblem::BelowOne),
+        Ok(amount) => Ok(amount),
+        Err(_) => Err(AmountProblem::TooLarge),
+    }
+}
+
+/// What a press on a line does: set an amount (as typed), clear, pick a `choice`'s option (by its
+/// place among the options), turn a `switch`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GoalAct {
+    Amount(String),
+    Clear,
+    Pick(usize),
+    Switch(bool),
+}
+
+/// What one press writes, and what it loses that this page cannot set back, which it asks about
+/// first; none: it goes at once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Press {
+    pub write: GoalWrite,
+    pub asks: Option<Loses>,
+}
+
+/// What a press loses that this page cannot set back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Loses {
+    /// A value stored that no run reads: no longer offered, or of a placement no bound package
+    /// offers. The value.
+    Value(Shown),
+    /// An other target, with its pool and amount when it reads.
+    Target(Option<(String, u64)>),
+    /// A declared resource's goal set elsewhere, cleared (`cleared`) or replaced by a goal set
+    /// here: what it carries that one set here does not.
+    Elsewhere { cleared: bool, carried: Carried },
+}
+
+/// What a press `act` on `line` writes, the one place that decides it: none when it writes nothing
+/// (the line takes no such press, the value is as pressed already, the amount typed is not one).
+/// A resource entry's amount only on a pool that takes a goal here, a variable's value only while
+/// one can be set on it; a clear wherever something is stored to clear. See the module's words
+/// for what asks first.
+pub fn press(line: &GoalLine, act: &GoalAct) -> Option<Press> {
+    match (line, act) {
+        (GoalLine::Resource(line), GoalAct::Amount(text)) if line.settable() => {
+            let at_least = amount(text).ok()?;
+            let asks = line
+                .elsewhere
+                .filter(|carried| carried.any())
+                .map(|carried| Loses::Elsewhere { cleared: false, carried });
+            Some(Press { write: GoalWrite::set(&line.name, resource_json(at_least)), asks })
+        }
+        (GoalLine::Resource(line), GoalAct::Clear) => {
+            line.goal.as_ref()?;
+            let asks = line
+                .elsewhere
+                .filter(|carried| carried.any())
+                .map(|carried| Loses::Elsewhere { cleared: true, carried });
+            Some(Press { write: GoalWrite::clear(&line.name), asks })
+        }
+        (GoalLine::Variable(line), GoalAct::Pick(index)) if line.settable() => {
+            let ValueControl::Choice { options, chosen } = &line.control else {
+                return None;
+            };
+            let option = options.get(*index)?;
+            if chosen.as_deref() == Some(option.value.as_str()) {
+                return None;
+            }
+            let write = GoalWrite::set(&line.name, choice_json(&option.value));
+            Some(Press { write, asks: None })
+        }
+        (GoalLine::Variable(line), GoalAct::Switch(on)) if line.settable() => {
+            let ValueControl::Switch { on: now } = &line.control else {
+                return None;
+            };
+            if *now == Some(*on) {
+                return None;
+            }
+            Some(Press { write: GoalWrite::set(&line.name, switch_json(*on)), asks: None })
+        }
+        (GoalLine::Variable(line), GoalAct::Clear) => {
+            let asks = match line.clear_offer()? {
+                ClearOffer::Restore => None,
+                ClearOffer::Clear => {
+                    let value = line.value.clone().unwrap_or_else(|| Shown::Raw(String::new()));
+                    Some(Loses::Value(value))
+                }
+            };
+            Some(Press { write: GoalWrite::clear(&line.name), asks })
+        }
+        (GoalLine::Orphan(line), GoalAct::Clear) => Some(Press {
+            write: GoalWrite::clear(&line.name),
+            asks: Some(Loses::Value(line.value.clone())),
+        }),
+        (GoalLine::OtherTarget(other), GoalAct::Clear) if other.by_name => {
+            let held = other
+                .target
+                .as_ref()
+                .and_then(|target| Some((target.pool.clone(), target.goal.amount?)));
+            Some(Press { write: GoalWrite::clear(&other.id), asks: Some(Loses::Target(held)) })
+        }
+        _ => None,
+    }
+}
+
+/// Why the Runtime refused a write `goal_value_invalid`: the `goal_problem` vocabulary (Runtime
+/// `contracts/outcome-codes/catalog.json:10217-10295`), one word each.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteProblem {
+    NameUnknown,
+    HoldsNoValue,
+    TierNotBuilt,
+    RemedyParameter,
+    VariableNotApplying,
+    NotOffered,
+    ValueNotJson,
+    WrongType,
+    OutOfRange,
+    OffStep,
+    NotAnOption,
+    KeyRepeated,
+    CountOutOfRange,
+    ValueTooLarge,
+    PoolNotTargetable,
+    PoolUnvalued,
+    DeadlineUnsupported,
+    ValueNotSet,
+    RecordUnreadable,
+    RecordOutOfLimits,
+    NotCheckedYet,
+    RootFailing,
+    NoSchedule,
+    /// A word of a newer Runtime, by itself.
+    Other(String),
+}
+
+impl WriteProblem {
+    /// The word `word`, by the pinned contract's own vocabulary.
+    pub fn of(word: &str) -> Self {
+        match GoalProblem::ALL.iter().find(|problem| problem.as_str() == word) {
+            Some(problem) => Self::from_contract(*problem),
+            None => Self::Other(word.to_owned()),
+        }
+    }
+
+    fn from_contract(problem: GoalProblem) -> Self {
+        match problem {
+            GoalProblem::NameUnknown => Self::NameUnknown,
+            GoalProblem::HoldsNoValue => Self::HoldsNoValue,
+            GoalProblem::TierNotBuilt => Self::TierNotBuilt,
+            GoalProblem::RemedyParameter => Self::RemedyParameter,
+            GoalProblem::VariableNotApplying => Self::VariableNotApplying,
+            GoalProblem::NotOffered => Self::NotOffered,
+            GoalProblem::ValueNotJson => Self::ValueNotJson,
+            GoalProblem::WrongType => Self::WrongType,
+            GoalProblem::OutOfRange => Self::OutOfRange,
+            GoalProblem::OffStep => Self::OffStep,
+            GoalProblem::NotAnOption => Self::NotAnOption,
+            GoalProblem::KeyRepeated => Self::KeyRepeated,
+            GoalProblem::CountOutOfRange => Self::CountOutOfRange,
+            GoalProblem::ValueTooLarge => Self::ValueTooLarge,
+            GoalProblem::PoolNotTargetable => Self::PoolNotTargetable,
+            GoalProblem::PoolUnvalued => Self::PoolUnvalued,
+            GoalProblem::DeadlineUnsupported => Self::DeadlineUnsupported,
+            GoalProblem::ValueNotSet => Self::ValueNotSet,
+            GoalProblem::RecordUnreadable => Self::RecordUnreadable,
+            GoalProblem::RecordOutOfLimits => Self::RecordOutOfLimits,
+            GoalProblem::NotCheckedYet => Self::NotCheckedYet,
+            GoalProblem::RootFailing => Self::RootFailing,
+            GoalProblem::NoSchedule => Self::NoSchedule,
+        }
+    }
+}
+
+/// A `goal_value_invalid`: its word, and the values that locate it, each when the Runtime gives it:
+/// the range (`range_min`, `range_max`: a number's bounds, a resource's 1 to its pool's capacity, a
+/// list's counts, the 1024 bytes a value's text holds, the targets or entries a record holds), the
+/// member or item at fault (`json_pointer`), the pool (`pool_id`) and why a variable does not apply
+/// (`variable_problem`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteInvalid {
+    pub problem: WriteProblem,
+    pub min: Option<i64>,
+    pub max: Option<i64>,
+    pub pointer: Option<String>,
+    pub pool: Option<String>,
+    pub variable: Option<Unapplied>,
+}
+
+/// A refusal the Runtime answered and went on after, by its receipt's code and values alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answered {
+    /// The record is at another version than the one named: another writer changed it since the
+    /// page was read, and nothing changed. `current` only for the log.
+    Conflict { current: Option<u64> },
+    /// This Runtime has no such write.
+    NotImplemented,
+    /// Another write of the record landed in the same millisecond.
+    NotNewer,
+    /// The name or the value is refused, and why.
+    Invalid(WriteInvalid),
+    /// Any other refusal: its codes are in the failure.
+    Other,
+}
+
+/// What a refusal of `code` with `values` says, the one place that tells them apart.
+pub fn answered(code: &str, values: &Map<String, Value>) -> Answered {
+    let integer = |key: &str| values.get(key).and_then(Value::as_i64);
+    let text = |key: &str| values.get(key).and_then(Value::as_str).map(str::to_owned);
+    match code {
+        VERSION_CONFLICT => {
+            Answered::Conflict { current: values.get(CURRENT_VERSION).and_then(Value::as_u64) }
+        }
+        NOT_IMPLEMENTED => Answered::NotImplemented,
+        NOT_NEWER => Answered::NotNewer,
+        GOAL_VALUE_INVALID => Answered::Invalid(WriteInvalid {
+            problem: WriteProblem::of(&text(GOAL_PROBLEM).unwrap_or_default()),
+            min: integer(RANGE_MIN),
+            max: integer(RANGE_MAX),
+            pointer: text(JSON_POINTER),
+            pool: text(POOL_ID),
+            variable: text(VARIABLE_PROBLEM).as_deref().map(Unapplied::of),
+        }),
+        _ => Answered::Other,
+    }
+}
+
+/// What became of one [`edit`], and whether it was sent a second time after
+/// `fact_observation_not_newer`, which only the log says.
+#[derive(Debug, Clone)]
+pub struct WriteAnswer {
+    pub outcome: WriteOutcome,
+    pub resent: bool,
+}
+
+/// What became of one write.
+#[derive(Debug, Clone)]
+pub enum WriteOutcome {
+    /// The Runtime took it: the record's version after it, and the id of a target on the same pool
+    /// it replaced, both for the log (the next write names the version of a page read after this).
+    Edited { version: u64, replaced: Option<String> },
+    /// Another writer changed the record since its version was read: nothing changed.
+    Conflict { current: Option<u64> },
+    /// Refused, nothing changed: why, and the Runtime's codes.
+    Refused { why: WriteRefusal, failure: ClientFailure },
+    /// This Runtime has no such write: the client's word that it does not know the request, or a
+    /// refusal `not_implemented`; `code` says which.
+    Unsupported { code: &'static str, failure: ClientFailure },
+    /// No connection, so nothing was sent.
+    NotSent(ClientFailure),
+    /// Sent, or perhaps sent, and nothing says what became of it: a receipt that did not come in
+    /// time, a failed write, a refusal that halted the host. It is not sent again: the page is read
+    /// again first, and since the write named a version, one sent again after it took would only
+    /// meet a version conflict.
+    Unconfirmed(ClientFailure),
+}
+
+/// Why the Runtime refused a write.
+#[derive(Debug, Clone)]
+pub enum WriteRefusal {
+    /// Another write of the record landed in the same millisecond, the second time too.
+    NotNewer,
+    Invalid(WriteInvalid),
+    Other,
+}
+
+/// One person's write `write` of the goals of the instance `alias`: a fresh person's connection at
+/// [`EDIT_IO`], one `EditGoal` of `write` only while the record is at `expected`, the version of the
+/// page the press was on, and the connection let go. Sent once, whatever comes back, but for one
+/// `fact_observation_not_newer`, sent again at once on the same connection.
+pub fn edit(root: &Path, alias: &str, write: &GoalWrite, expected: u64) -> WriteAnswer {
+    let client = match runtime_connection(configure_config(root).with_io_timeout(EDIT_IO)) {
+        Ok(client) => client,
+        Err(error) => {
+            let outcome = WriteOutcome::NotSent(ClientFailure::from(error));
+            return WriteAnswer { outcome, resent: false };
+        }
+    };
+    let send = || client.edit_goal(alias, Some(expected), write.edit());
+    let (answer, resent) = match send() {
+        Err(error) if pack::refused_not_newer(&error) => (send(), true),
+        answer => (answer, false),
+    };
+    let outcome = match answer {
+        Ok(edited) => {
+            WriteOutcome::Edited { version: edited.version, replaced: edited.replaced_target_id }
+        }
+        Err(error) => failed(error),
+    };
+    WriteAnswer { outcome, resent }
+}
+
+/// What a failed write after the connection comes to, before its failure's codes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Failed {
+    /// This Runtime has no such write, by the code that says so.
+    Unsupported(&'static str),
+    /// Nothing says what became of it.
+    Unconfirmed,
+    /// A refusal the Runtime answered and went on after, other than `not_implemented`.
+    Answered(Answered),
+}
+
+/// What a failed write comes to, the one place that tells it, in this order: the client's own code
+/// `client` that the Runtime does not know the request; anything but a refusal the Runtime answered
+/// and went on after, of a request nothing leaves uncertain (`settled`: a refusal that halted the
+/// host is not), unconfirmed, since a failed write may have got the request out; then the refusal
+/// by its receipt's `code` and `values` ([`answered`]), `not_implemented` saying the Runtime has no
+/// such write.
+pub fn failure_of(client: &str, settled: bool, code: &str, values: &Map<String, Value>) -> Failed {
+    if client == OPERATION_UNSUPPORTED {
+        return Failed::Unsupported(OPERATION_UNSUPPORTED);
+    }
+    if !settled {
+        return Failed::Unconfirmed;
+    }
+    match answered(code, values) {
+        Answered::NotImplemented => Failed::Unsupported(NOT_IMPLEMENTED),
+        said => Failed::Answered(said),
+    }
+}
+
+/// A failed write after the connection ([`failure_of`]), with its codes.
+fn failed(error: RuntimeClientError) -> WriteOutcome {
+    let class = {
+        let answer = error.receipt_outcome();
+        let code = answer.map_or("", |outcome| outcome.code().as_str());
+        let empty = Map::new();
+        let values = answer.map_or(&empty, |outcome| outcome.values());
+        failure_of(error.code().spelling(), pack::answered(&error), code, values)
+    };
+    let failure = ClientFailure::from(error);
+    match class {
+        Failed::Unsupported(code) => WriteOutcome::Unsupported { code, failure },
+        Failed::Unconfirmed => WriteOutcome::Unconfirmed(failure),
+        Failed::Answered(Answered::Conflict { current }) => WriteOutcome::Conflict { current },
+        Failed::Answered(Answered::NotImplemented) => {
+            WriteOutcome::Unsupported { code: NOT_IMPLEMENTED, failure }
+        }
+        Failed::Answered(Answered::NotNewer) => {
+            WriteOutcome::Refused { why: WriteRefusal::NotNewer, failure }
+        }
+        Failed::Answered(Answered::Invalid(invalid)) => {
+            WriteOutcome::Refused { why: WriteRefusal::Invalid(invalid), failure }
+        }
+        Failed::Answered(Answered::Other) => {
+            WriteOutcome::Refused { why: WriteRefusal::Other, failure }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        in_language, newer_than_this_console, page, whole_time, Closed, Declaration, Document,
-        Form, GoalLine, GoalsPage, Group, LabEntry, OrphanLine, OtherGoal, OtherTarget, PageState,
-        Pending, PoolState, Progress, Reading, ResourceLine, SetBy, Setter, Shown, Stored,
-        StoredGoal, TierLine, TimeUnit, Unapplied, VariableLine, VariableState,
-        RECEIPT_DECODE_FAILED,
+        amount, answered, choice_json, failure_of, in_language, newer_than_this_console, page,
+        press, resource_json, switch_json, whole_time, AmountProblem, Answered, Carried,
+        ChoiceOption, ClearOffer, Closed, Declaration, Document, Failed, Form, GoalAct, GoalChange,
+        GoalLine, GoalWrite, GoalsPage, Group, LabEntry, Loses, OrphanLine, OtherGoal, OtherTarget,
+        PageState, Pending, PoolState, Press, Progress, Reading, ResourceLine, SetBy, Setter,
+        Shown, Stored, StoredGoal, TierLine, TimeUnit, Unapplied, ValueControl, VariableLine,
+        VariableState, WriteInvalid, WriteProblem, RECEIPT_DECODE_FAILED,
     };
     use acui_rows::outcome::Tongue;
-    use actingcommand_contract::GoalView;
-    use serde_json::{json, Value};
+    use actingcommand_contract::{GoalProblem, GoalView};
+    use serde_json::{json, Map, Value};
 
     const EVALUATED: u64 = 1_794_532_592_000;
     const OBSERVED: u64 = 1_794_532_500_000;
@@ -1423,20 +2186,34 @@ mod tests {
         )
     }
 
-    fn switch_line(title: &str) -> GoalLine {
+    fn switch_line(name: &str, title: &str) -> GoalLine {
         GoalLine::Variable(VariableLine {
+            name: name.to_owned(),
             title: Some(title.to_owned()),
             value: Some(Shown::Switch(false)),
             default: None,
             set: None,
             state: VariableState::InEffect,
             left_out: Vec::new(),
+            control: ValueControl::Switch { on: Some(false) },
+            stored: false,
         })
     }
 
     fn goal(amount: u64, progress: Progress) -> StoredGoal {
         StoredGoal { amount: Some(amount), progress, until_ms: None, lapsed: false }
     }
+
+    /// The `choice` declaration's two options in English.
+    fn item_options() -> Vec<ChoiceOption> {
+        vec![
+            ChoiceOption { value: "item_a".to_owned(), title: "Item A".to_owned() },
+            ChoiceOption { value: "item_b".to_owned(), title: "Item B".to_owned() },
+        ]
+    }
+
+    /// Carried: nothing a goal set by name does not carry.
+    const NOTHING: Carried = Carried { tasks: false, step: false, importance: false, validity: false };
 
     #[test]
     fn the_five_kinds_of_entry_go_in_the_runtimes_order() {
@@ -1502,6 +2279,7 @@ mod tests {
                     help: Some("More words".to_owned()),
                 },
                 GoalLine::Resource(ResourceLine {
+                    name: "gold".to_owned(),
                     title: Some("gold".to_owned()),
                     pool: PoolState::Open,
                     reading: Some(Reading::Read { current: 1200, at_ms: OBSERVED }),
@@ -1510,18 +2288,28 @@ mod tests {
                         Progress::Computed { current: 1200, at_ms: OBSERVED, gap: 3800 },
                     )),
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(Some(LabEntry::CommandLine)) }),
+                    // Set by the Lab, as a goal by name: nothing it carries is lost here.
+                    elsewhere: Some(NOTHING),
                 }),
                 GoalLine::Tier(TierLine {
                     title: Some("Pace".to_owned()),
                     default: Some("Slow".to_owned()),
+                    stored: None,
+                    set: None,
                 }),
                 GoalLine::Variable(VariableLine {
+                    name: "pick".to_owned(),
                     title: Some("Item".to_owned()),
                     value: Some(Shown::Words("Item A".to_owned())),
                     default: Some(Shown::Words("Item B".to_owned())),
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Console }),
                     state: VariableState::InEffect,
                     left_out: Vec::new(),
+                    control: ValueControl::Choice {
+                        options: item_options(),
+                        chosen: Some("item_a".to_owned()),
+                    },
+                    stored: true,
                 }),
             ]
         );
@@ -1551,9 +2339,29 @@ mod tests {
                 assert_eq!(line.title.as_deref(), Some("物品"));
                 assert_eq!(line.value, Some(Shown::Words("甲".to_owned())));
                 assert_eq!(line.default, Some(Shown::Words("乙".to_owned())));
+                // The options in the language shown, their values as declared.
+                assert_eq!(
+                    line.control,
+                    ValueControl::Choice {
+                        options: vec![
+                            ChoiceOption { value: "item_a".to_owned(), title: "甲".to_owned() },
+                            ChoiceOption { value: "item_b".to_owned(), title: "乙".to_owned() },
+                        ],
+                        chosen: Some("item_a".to_owned()),
+                    }
+                );
             }
             line => panic!("{line:?}"),
         }
+        // Only a page that lists is written, and each line that writes is found by its key.
+        assert!(english.writable());
+        let keys: Vec<Option<String>> = english.lines.iter().map(GoalLine::key).collect();
+        assert_eq!(
+            keys,
+            vec![None, None, Some("entry:gold".to_owned()), None, Some("entry:pick".to_owned())]
+        );
+        assert_eq!(english.line("entry:pick"), english.lines.get(4));
+        assert_eq!(english.line("entry:pace"), None);
     }
 
     #[test]
@@ -1575,6 +2383,7 @@ mod tests {
             let page = read(&view(declaration, entries.clone(), json!({}), no_targets()));
             assert_eq!(page.state, expected);
             assert!(page.lines.is_empty(), "{:?}", page.lines);
+            assert!(!page.writable());
         }
     }
 
@@ -1598,7 +2407,10 @@ mod tests {
         ] {
             let page = read(&view(declaration, entries.clone(), json!({}), no_targets()));
             assert_eq!(page.state, PageState::Listed { declaration: expected, nothing: false });
-            assert_eq!(page.lines, vec![GoalLine::Package(None), switch_line("Also the extra")]);
+            assert_eq!(
+                page.lines,
+                vec![GoalLine::Package(None), switch_line("extra", "Also the extra")]
+            );
         }
     }
 
@@ -1683,60 +2495,224 @@ mod tests {
             json!({}),
             no_targets(),
         );
+        let lines = read(&view).lines;
         assert_eq!(
-            read(&view).lines,
+            lines,
             vec![
+                // G1's follow-up: the value stored that is not used, in words.
                 GoalLine::Variable(VariableLine {
+                    name: "rounds".to_owned(),
                     title: Some("Rounds".to_owned()),
                     value: Some(Shown::Number(0)),
                     default: None,
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Mcp }),
                     state: VariableState::NotApplied {
-                        stored: true,
+                        stored: Some(Shown::Number(900_000_000)),
                         why: Some(Unapplied::OutOfRange),
                     },
                     left_out: Vec::new(),
+                    control: ValueControl::None,
+                    stored: true,
                 }),
                 GoalLine::Variable(VariableLine {
+                    name: "extra".to_owned(),
                     title: Some("Also the extra".to_owned()),
                     value: Some(Shown::Switch(false)),
                     default: None,
                     set: None,
                     state: VariableState::NotApplied {
-                        stored: false,
+                        stored: None,
                         why: Some(Unapplied::IrreversibleByRoot),
                     },
                     left_out: Vec::new(),
+                    control: ValueControl::Switch { on: Some(false) },
+                    stored: false,
                 }),
                 GoalLine::Variable(VariableLine {
+                    name: "later".to_owned(),
                     title: Some("Later".to_owned()),
                     value: Some(Shown::Switch(false)),
                     default: None,
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Console }),
                     state: VariableState::NotApplied {
-                        stored: true,
+                        stored: Some(Shown::Switch(true)),
                         why: Some(Unapplied::Other("a_newer_word".to_owned())),
                     },
                     left_out: Vec::new(),
+                    control: ValueControl::Switch { on: Some(false) },
+                    stored: true,
                 }),
                 GoalLine::Variable(VariableLine {
+                    name: "route".to_owned(),
                     title: Some("Item".to_owned()),
                     value: Some(Shown::Words("Item A".to_owned())),
                     default: None,
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::CommandLine }),
                     state: VariableState::NotOffered,
                     left_out: Vec::new(),
+                    control: ValueControl::Choice { options: item_options(), chosen: None },
+                    stored: true,
                 }),
                 GoalLine::Variable(VariableLine {
+                    name: "order".to_owned(),
                     title: Some("Order".to_owned()),
                     value: Some(Shown::List(vec!["Item A".to_owned()])),
                     default: Some(Shown::List(vec!["Item B".to_owned(), "Item A".to_owned()])),
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(Some(LabEntry::Mcp)) }),
                     state: VariableState::InEffect,
                     left_out: vec!["item_c".to_owned()],
+                    control: ValueControl::None,
+                    stored: true,
                 }),
             ]
         );
+        // What can be set and cleared of each: not of a variable the root does not apply, nor of
+        // one no bound package offers, whose stored value is cleared; an `ordered` one only shows.
+        let variables: Vec<&VariableLine> = lines
+            .iter()
+            .map(|line| match line {
+                GoalLine::Variable(line) => line,
+                line => panic!("{line:?}"),
+            })
+            .collect();
+        let settable: Vec<bool> = variables.iter().map(|line| line.settable()).collect();
+        assert_eq!(settable, vec![true, false, true, false, true]);
+        let offers: Vec<Option<ClearOffer>> =
+            variables.iter().map(|line| line.clear_offer()).collect();
+        assert_eq!(offers, vec![None, None, Some(ClearOffer::Restore), Some(ClearOffer::Clear), None]);
+    }
+
+    /// G1's follow-up: a value stored that is not used reads by its declaration, a number with its
+    /// unit's text too, in the language shown.
+    #[test]
+    fn a_value_stored_and_not_used_is_shown_in_its_declarations_words() {
+        let view = view(
+            state("accepted"),
+            json!([
+                variable("points", true, integer("points", Some(json!({"en": "points", "zh-Hans": "点"}))), &["pack.a"], json!({
+                    "default_json": "0",
+                    "value_json": "120",
+                    "effective_json": "0",
+                    "source": "default",
+                    "set": set("ui", None),
+                    "state": "not_applied",
+                    "variable_problem": "off_step",
+                    "display": {"en": "0 points", "zh-Hans": "0 点"},
+                })),
+                variable("pick", true, choice("pick"), &["pack.a"], json!({
+                    "default_json": "\"item_b\"",
+                    "value_json": "\"item_c\"",
+                    "effective_json": "\"item_b\"",
+                    "source": "default",
+                    "state": "not_applied",
+                    "variable_problem": "not_an_option",
+                })),
+            ]),
+            json!({}),
+            no_targets(),
+        );
+        let states = |tongue: Tongue| -> Vec<VariableState> {
+            page(&view, tongue, &|_| None)
+                .lines
+                .into_iter()
+                .map(|line| match line {
+                    GoalLine::Variable(line) => line.state,
+                    line => panic!("{line:?}"),
+                })
+                .collect()
+        };
+        assert_eq!(
+            states(Tongue::ZhHans),
+            vec![
+                VariableState::NotApplied {
+                    stored: Some(Shown::Words("120 点".to_owned())),
+                    why: Some(Unapplied::OffStep),
+                },
+                // An option no longer offered has no title: its value.
+                VariableState::NotApplied {
+                    stored: Some(Shown::Words("item_c".to_owned())),
+                    why: Some(Unapplied::NotAnOption),
+                },
+            ]
+        );
+        match &states(Tongue::En)[0] {
+            VariableState::NotApplied { stored, .. } => {
+                assert_eq!(stored, &Some(Shown::Words("120 points".to_owned())));
+            }
+            state => panic!("{state:?}"),
+        }
+    }
+
+    /// G1's follow-up: a value stored under a tier's name, which this build does not use, and who
+    /// set it.
+    #[test]
+    fn a_tier_shows_a_value_stored_under_its_name() {
+        let tier = |name: &str, stored: Option<&str>| {
+            let mut entry = json!({
+                "name": name,
+                "entry_type": "tier",
+                "placed": true,
+                "entry": {
+                    "name": name,
+                    "type": "tier",
+                    "title": {"en": "Pace"},
+                    "governs": {"rules": ["rule.a"]},
+                    "options": [
+                        {"value": "slow", "title": {"en": "Slow", "zh-Hans": "慢"}, "scale_milli": 500},
+                        {"value": "fast", "title": {"en": "Fast", "zh-Hans": "快"}, "scale_milli": 2000},
+                    ],
+                    "default": "slow",
+                },
+                "default_json": "\"slow\"",
+                "source": "default",
+                "state": "not_built",
+            });
+            if let Some(stored) = stored {
+                entry["value_json"] = json!(stored);
+                entry["set"] = set("cli", None);
+            }
+            entry
+        };
+        let view = view(
+            state("accepted"),
+            json!([
+                tier("pace", Some("\"fast\"")),
+                tier("speed", Some("\"odd\"")),
+                tier("rate", Some("3")),
+                tier("calm", None),
+            ]),
+            json!({}),
+            no_targets(),
+        );
+        let tiers = |tongue: Tongue| -> Vec<TierLine> {
+            page(&view, tongue, &|_| None)
+                .lines
+                .into_iter()
+                .map(|line| match line {
+                    GoalLine::Tier(line) => line,
+                    line => panic!("{line:?}"),
+                })
+                .collect()
+        };
+        let set_by = Some(SetBy { at_ms: SET_AT, by: Setter::CommandLine });
+        let line = |stored: Option<&str>, set: Option<SetBy>| TierLine {
+            title: Some("Pace".to_owned()),
+            default: Some("Slow".to_owned()),
+            stored: stored.map(str::to_owned),
+            set,
+        };
+        assert_eq!(
+            tiers(Tongue::En),
+            vec![
+                line(Some("Fast"), set_by),
+                line(Some("odd"), set_by),
+                line(Some("3"), set_by),
+                line(None, None),
+            ]
+        );
+        assert_eq!(tiers(Tongue::ZhHans)[0].stored.as_deref(), Some("快"));
+        // A tier is never written here.
+        assert_eq!(read(&view).lines.iter().filter_map(GoalLine::key).count(), 0);
     }
 
     #[test]
@@ -1804,19 +2780,29 @@ mod tests {
             vec![
                 // Its pool says why on its line, so no closed line of it below.
                 GoalLine::Resource(ResourceLine {
+                    name: "gold".to_owned(),
                     title: Some("gold".to_owned()),
                     pool: PoolState::Closed(Closed::UnmappedTask),
                     reading: None,
                     goal: Some(goal(50, Progress::NoCondition)),
                     set: None,
+                    // A v2 document's target names no setter: set elsewhere, with the document's
+                    // validity.
+                    elsewhere: Some(Carried { validity: true, ..NOTHING }),
                 }),
                 GoalLine::Group(Group::NoLongerOffered),
                 GoalLine::Orphan(OrphanLine {
+                    name: "old_route".to_owned(),
                     value: Shown::Words("a".to_owned()),
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(None) }),
                 }),
-                GoalLine::Orphan(OrphanLine { value: Shown::Number(3), set: None }),
                 GoalLine::Orphan(OrphanLine {
+                    name: "old_rounds".to_owned(),
+                    value: Shown::Number(3),
+                    set: None,
+                }),
+                GoalLine::Orphan(OrphanLine {
+                    name: "gold".to_owned(),
                     value: Shown::Raw("{\"at_least\":5}".to_owned()),
                     set: None,
                 }),
@@ -1829,9 +2815,14 @@ mod tests {
                         reading: Some(Reading::Read { current: 10, at_ms: OBSERVED }),
                         goal: goal(80, Progress::Computed { current: 10, at_ms: OBSERVED, gap: 70 }),
                     }),
+                    by_name: true,
                 }),
                 // No `at_least` target: not read here, so its pool is said below.
-                GoalLine::OtherTarget(OtherTarget { id: "odd".to_owned(), target: None }),
+                GoalLine::OtherTarget(OtherTarget {
+                    id: "odd".to_owned(),
+                    target: None,
+                    by_name: true,
+                }),
                 GoalLine::Group(Group::NotTargetable),
                 GoalLine::Closed { pool: "pool.gems".to_owned(), why: Closed::NotObservable },
                 GoalLine::Closed { pool: "pool.keys".to_owned(), why: Closed::OutOfScope },
@@ -1888,18 +2879,80 @@ mod tests {
                         reading: None,
                         goal: goal(300, Progress::NoCondition),
                     }),
+                    by_name: true,
                 }),
-                GoalLine::OtherTarget(OtherTarget { id: "missing".to_owned(), target: None }),
+                GoalLine::OtherTarget(OtherTarget {
+                    id: "missing".to_owned(),
+                    target: None,
+                    by_name: true,
+                }),
+                // G1's follow-up: a goal waiting for a reading says why, so the pool's own "no
+                // reading" is not said a second time.
                 GoalLine::OtherTarget(OtherTarget {
                     id: "wood".to_owned(),
                     target: Some(OtherGoal {
                         pool: "pool.wood".to_owned(),
                         state: PoolState::Open,
-                        reading: Some(Reading::Pending(Some(Pending::Missing))),
+                        reading: None,
                         goal: goal(80, Progress::Awaiting(Pending::LowConfidence)),
                     }),
+                    by_name: true,
                 }),
-                GoalLine::OtherTarget(OtherTarget { id: "half".to_owned(), target: None }),
+                GoalLine::OtherTarget(OtherTarget {
+                    id: "half".to_owned(),
+                    target: None,
+                    by_name: true,
+                }),
+            ]
+        );
+    }
+
+    /// G1's follow-up: "no reading yet" once on a resource line, by its goal while one waits for
+    /// a reading; the pool's reading stays without a goal, and beside a goal that has one.
+    #[test]
+    fn a_goal_waiting_for_a_reading_says_so_once() {
+        let view = view(
+            state("accepted"),
+            json!([
+                resource("gold", "pool.gold", Some(("gold", 5000)), Some(set("ui", None))),
+                resource("wood", "pool.wood", None, None),
+                resource("gems", "pool.gems", Some(("gems", 10)), Some(set("ui", None))),
+            ]),
+            json!({}),
+            targets(
+                json!([
+                    pool("pool.gold", true, true, None),
+                    pool("pool.wood", true, true, None),
+                    pool("pool.gems", true, true, Some(4)),
+                ]),
+                json!([]),
+                Some(active(
+                    V3,
+                    json!([target("gold", "pool.gold", json!(5000)), target("gems", "pool.gems", json!(10))]),
+                    json!([awaiting("gold", "pool.gold", "missing"), computed("gems", "pool.gems", 4, 6)]),
+                    false,
+                    None,
+                )),
+            ),
+        );
+        let readings: Vec<Option<Reading>> = read(&view)
+            .lines
+            .into_iter()
+            .map(|line| match line {
+                GoalLine::Resource(line) => {
+                    // Set by this console: nothing it carries is lost.
+                    assert_eq!(line.elsewhere, None, "{}", line.name);
+                    line.reading
+                }
+                line => panic!("{line:?}"),
+            })
+            .collect();
+        assert_eq!(
+            readings,
+            vec![
+                None,
+                Some(Reading::Pending(Some(Pending::Missing))),
+                Some(Reading::Read { current: 4, at_ms: OBSERVED }),
             ]
         );
     }
@@ -1949,13 +3002,25 @@ mod tests {
         assert_eq!(
             lines[1],
             GoalLine::Resource(ResourceLine {
+                name: "scale".to_owned(),
                 title: Some("scale".to_owned()),
                 pool: PoolState::NoStep,
                 reading: Some(Reading::Read { current: 2, at_ms: OBSERVED }),
                 goal: Some(goal(40, Progress::Computed { current: 2, at_ms: OBSERVED, gap: 38 })),
                 set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(Some(LabEntry::Authoring)) }),
+                elsewhere: Some(NOTHING),
             })
         );
+        // No amount is set on a pool without a step; only the open one takes one.
+        let settable: Vec<bool> = lines
+            .iter()
+            .map(|line| match line {
+                GoalLine::Resource(line) => line.settable(),
+                line => panic!("{line:?}"),
+            })
+            .collect();
+        assert_eq!(settable, vec![true, false, false, false]);
+        assert_eq!(press(&lines[1], &GoalAct::Amount("50".to_owned())), None);
     }
 
     #[test]
@@ -1981,13 +3046,13 @@ mod tests {
             page(&view, Tongue::En, &titles).lines,
             vec![
                 GoalLine::Package(Some("Pack A".to_owned())),
-                switch_line("One"),
-                switch_line("Three"),
+                switch_line("one", "One"),
+                switch_line("three", "Three"),
                 GoalLine::Package(Some("Pack C".to_owned())),
-                switch_line("Four"),
+                switch_line("four", "Four"),
                 GoalLine::Package(None),
-                switch_line("Two"),
-                switch_line("Five"),
+                switch_line("two", "Two"),
+                switch_line("five", "Five"),
             ]
         );
         // Without any name, all of them are the one group of other settings.
@@ -2032,20 +3097,26 @@ mod tests {
             read(&view).lines,
             vec![
                 GoalLine::Variable(VariableLine {
+                    name: "wait".to_owned(),
                     title: Some("Rounds".to_owned()),
                     value: Some(Shown::Time { amount: 90, unit: TimeUnit::Minute }),
                     default: Some(Shown::Time { amount: 1500, unit: TimeUnit::Millisecond }),
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(Some(LabEntry::Rescue)) }),
                     state: VariableState::InEffect,
                     left_out: Vec::new(),
+                    control: ValueControl::None,
+                    stored: true,
                 }),
                 GoalLine::Variable(VariableLine {
+                    name: "count".to_owned(),
                     title: Some("Rounds".to_owned()),
                     value: Some(Shown::Words("3 rounds".to_owned())),
                     default: Some(Shown::Words("0 rounds".to_owned())),
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(Some(LabEntry::Watchdog)) }),
                     state: VariableState::InEffect,
                     left_out: Vec::new(),
+                    control: ValueControl::None,
+                    stored: true,
                 }),
             ]
         );
@@ -2214,7 +3285,11 @@ mod tests {
             read(&view).lines,
             vec![
                 GoalLine::Group(Group::OtherTargets),
-                GoalLine::OtherTarget(OtherTarget { id: "wood".to_owned(), target: None }),
+                GoalLine::OtherTarget(OtherTarget {
+                    id: "wood".to_owned(),
+                    target: None,
+                    by_name: true,
+                }),
             ]
         );
     }
@@ -2242,7 +3317,7 @@ mod tests {
             .lines
             .into_iter()
             .filter_map(|line| match line {
-                GoalLine::Orphan(OrphanLine { value: Shown::Switch(true), set: Some(set) }) => {
+                GoalLine::Orphan(OrphanLine { value: Shown::Switch(true), set: Some(set), .. }) => {
                     assert_eq!(set.at_ms, SET_AT);
                     Some(set.by)
                 }
@@ -2318,5 +3393,528 @@ mod tests {
         assert!(page.no_catalog);
         assert!(page.stale_schema);
         assert_eq!(page.stored, Stored::None);
+    }
+
+    #[test]
+    fn values_are_written_as_the_runtime_reads_them() {
+        assert_eq!(choice_json("item_a"), "\"item_a\"");
+        assert_eq!(switch_json(true), "true");
+        assert_eq!(switch_json(false), "false");
+        assert_eq!(resource_json(5000), "{\"at_least\":5000}");
+        let back: Value = serde_json::from_str(&resource_json(5000)).expect("JSON");
+        assert_eq!(back, json!({"at_least": 5000}));
+        let back: Value = serde_json::from_str(&choice_json("item_a")).expect("JSON");
+        assert_eq!(back, json!("item_a"));
+        // One EditGoal of one name, as the contract spells it.
+        let pick = GoalWrite { name: "pick".to_owned(), change: GoalChange::Set(choice_json("item_b")) };
+        assert_eq!(
+            serde_json::to_value(pick.edit()).expect("an edit"),
+            json!({"kind": "set", "name": "pick", "value_json": "\"item_b\""})
+        );
+        let gone = GoalWrite { name: "gold".to_owned(), change: GoalChange::Clear };
+        assert_eq!(
+            serde_json::to_value(gone.edit()).expect("an edit"),
+            json!({"kind": "clear", "name": "gold"})
+        );
+        assert_eq!(pick.line(), "set pick to \"item_b\"");
+        assert_eq!(gone.line(), "clear gold");
+    }
+
+    /// What a write sets reads back on the next page as what was set.
+    #[test]
+    fn what_is_written_reads_back_on_the_page() {
+        let view = view(
+            state("accepted"),
+            json!([
+                {
+                    "name": "gold",
+                    "entry_type": "resource",
+                    "placed": true,
+                    "entry": {"name": "gold", "type": "resource", "title": {"en": "gold"}, "governs": {"pool": "pool.gold"}},
+                    "value_json": resource_json(300),
+                    "effective_json": resource_json(300),
+                    "source": "set",
+                    "set": set("ui", None),
+                    "state": "in_effect",
+                    "resource": {"pool": "pool.gold", "target_id": "gold"},
+                },
+                variable("pick", true, choice("pick"), &["pack.a"], json!({
+                    "default_json": choice_json("item_b"),
+                    "value_json": choice_json("item_a"),
+                    "effective_json": choice_json("item_a"),
+                    "source": "set",
+                    "set": set("ui", None),
+                    "state": "in_effect",
+                })),
+                variable("extra", true, switch("extra", "Extra"), &["pack.a"], json!({
+                    "default_json": switch_json(false),
+                    "value_json": switch_json(true),
+                    "effective_json": switch_json(true),
+                    "source": "set",
+                    "set": set("ui", None),
+                    "state": "in_effect",
+                })),
+            ]),
+            json!({}),
+            targets(
+                json!([pool("pool.gold", true, true, Some(1))]),
+                json!([]),
+                Some(active(
+                    V3,
+                    json!([target("gold", "pool.gold", json!(300))]),
+                    json!([computed("gold", "pool.gold", 1, 299)]),
+                    false,
+                    None,
+                )),
+            ),
+        );
+        let lines = read(&view).lines;
+        match &lines[0] {
+            GoalLine::Resource(line) => {
+                assert_eq!(line.goal.as_ref().and_then(|goal| goal.amount), Some(300));
+                assert_eq!(line.elsewhere, None);
+            }
+            line => panic!("{line:?}"),
+        }
+        match &lines[1] {
+            GoalLine::Variable(line) => assert_eq!(
+                line.control,
+                ValueControl::Choice { options: item_options(), chosen: Some("item_a".to_owned()) }
+            ),
+            line => panic!("{line:?}"),
+        }
+        match &lines[2] {
+            GoalLine::Variable(line) => {
+                assert_eq!(line.control, ValueControl::Switch { on: Some(true) });
+            }
+            line => panic!("{line:?}"),
+        }
+    }
+
+    #[test]
+    fn an_amount_is_a_whole_number_of_at_least_one() {
+        for (text, expected) in [
+            ("5000", Ok::<u64, AmountProblem>(5000)),
+            (" 12 ", Ok(12)),
+            ("+7", Ok(7)),
+            ("1", Ok(1)),
+            ("", Err(AmountProblem::Empty)),
+            ("   ", Err(AmountProblem::Empty)),
+            ("0", Err(AmountProblem::BelowOne)),
+            ("-3", Err(AmountProblem::BelowOne)),
+            ("-0", Err(AmountProblem::BelowOne)),
+            ("1.5", Err(AmountProblem::NotWhole)),
+            ("abc", Err(AmountProblem::NotWhole)),
+            ("1e3", Err(AmountProblem::NotWhole)),
+            ("１２", Err(AmountProblem::NotWhole)),
+            ("1 000", Err(AmountProblem::NotWhole)),
+            ("-", Err(AmountProblem::NotWhole)),
+            ("+", Err(AmountProblem::NotWhole)),
+            ("99999999999999999999999", Err(AmountProblem::TooLarge)),
+        ] {
+            assert_eq!(amount(text), expected, "{text:?}");
+        }
+    }
+
+    /// A page to press on: resource entries with a goal this console set, one set elsewhere that
+    /// carries tasks and a step, one without a goal, one whose target does not read; a choice set
+    /// here, one at its default, a switch, an `integer` set, a placement not offered with a value;
+    /// a value no longer offered; other targets by a name, by an id that is no name, not read.
+    fn pressed_page() -> GoalsPage {
+        let view = view(
+            state("accepted"),
+            json!([
+                resource("gold", "pool.gold", Some(("gold", 50)), Some(set("ui", None))),
+                resource("wood", "pool.wood", Some(("agent_wood", 80)), Some(set("mcp", None))),
+                resource("gems", "pool.gems", None, None),
+                resource("keys", "pool.keys", Some(("lost", 5)), None),
+                variable("pick", true, choice("pick"), &["pack.a"], json!({
+                    "default_json": "\"item_b\"",
+                    "value_json": "\"item_a\"",
+                    "effective_json": "\"item_a\"",
+                    "source": "set",
+                    "set": set("ui", None),
+                    "state": "in_effect",
+                })),
+                variable("other", true, choice("other"), &["pack.a"], json!({
+                    "default_json": "\"item_b\"",
+                    "effective_json": "\"item_b\"",
+                    "source": "default",
+                    "state": "in_effect",
+                })),
+                variable("extra", true, switch("extra", "Extra"), &["pack.a"], json!({
+                    "default_json": "false",
+                    "effective_json": "false",
+                    "source": "default",
+                    "state": "in_effect",
+                })),
+                variable("rounds", true, integer("rounds", None), &["pack.a"], json!({
+                    "default_json": "0",
+                    "value_json": "3",
+                    "effective_json": "3",
+                    "source": "set",
+                    "set": set("ui", None),
+                    "state": "in_effect",
+                })),
+                {
+                    "name": "route",
+                    "entry_type": "variable",
+                    "placed": true,
+                    "entry": {"name": "route", "type": "variable"},
+                    "variable": choice("route"),
+                    "unbound_packages": ["pack.b"],
+                    "value_json": "\"item_a\"",
+                    "set": set("cli", None),
+                    "state": "not_offered",
+                },
+            ]),
+            json!({
+                "orphans": [{"name": "old_route", "value_json": "\"a\""}],
+                "other_targets": ["stone", "energy-floor", "lost_target"],
+            }),
+            targets(
+                json!([
+                    pool("pool.gold", true, true, Some(1)),
+                    pool("pool.wood", true, true, Some(2)),
+                    pool("pool.gems", true, true, Some(3)),
+                    pool("pool.keys", true, true, Some(4)),
+                    pool("pool.stone", true, true, Some(5)),
+                ]),
+                json!([]),
+                Some(active(
+                    V3,
+                    json!([
+                        target("gold", "pool.gold", json!(50)),
+                        {
+                            "id": "agent_wood",
+                            "resource": "pool.wood",
+                            "condition": {"kind": "at_least", "amount": 80},
+                            "scale": 10,
+                            "apply": {"mode": "adjust", "weight": "score_stage"},
+                            "tasks": ["task.daily"],
+                        },
+                        target("stone", "pool.stone", json!(20)),
+                        target("energy-floor", "pool.iron", json!(7)),
+                    ]),
+                    json!([]),
+                    false,
+                    None,
+                )),
+            ),
+        );
+        read(&view)
+    }
+
+    #[test]
+    fn a_press_writes_one_name_and_asks_only_for_what_cannot_be_set_back() {
+        let page = pressed_page();
+        assert!(page.writable());
+        let on = |key: &str, act: GoalAct| -> Option<Press> {
+            let line = page.line(key).unwrap_or_else(|| panic!("no line {key}"));
+            press(line, &act)
+        };
+        let set_of = |name: &str, json: &str| GoalWrite {
+            name: name.to_owned(),
+            change: GoalChange::Set(json.to_owned()),
+        };
+        let clear_of = |name: &str| GoalWrite { name: name.to_owned(), change: GoalChange::Clear };
+        let typed = |text: &str| GoalAct::Amount(text.to_owned());
+        let goes = |write: GoalWrite| Some(Press { write, asks: None });
+        let asks = |write: GoalWrite, loses: Loses| Some(Press { write, asks: Some(loses) });
+
+        // A goal this console set: replaced and cleared without a question.
+        assert_eq!(on("entry:gold", typed("300")), goes(set_of("gold", "{\"at_least\":300}")));
+        assert_eq!(on("entry:gold", typed(" 7 ")), goes(set_of("gold", "{\"at_least\":7}")));
+        assert_eq!(on("entry:gold", typed("0")), None);
+        assert_eq!(on("entry:gold", typed("")), None);
+        assert_eq!(on("entry:gold", GoalAct::Clear), goes(clear_of("gold")));
+        assert_eq!(on("entry:gold", GoalAct::Switch(true)), None);
+        // One set elsewhere, carrying tasks and a step: asked, saying so.
+        let carried = Carried { tasks: true, step: true, ..NOTHING };
+        assert_eq!(
+            on("entry:wood", typed("90")),
+            asks(set_of("wood", "{\"at_least\":90}"), Loses::Elsewhere { cleared: false, carried })
+        );
+        assert_eq!(
+            on("entry:wood", GoalAct::Clear),
+            asks(clear_of("wood"), Loses::Elsewhere { cleared: true, carried })
+        );
+        // No goal: set without a question, nothing to clear.
+        assert_eq!(on("entry:gems", typed("5")), goes(set_of("gems", "{\"at_least\":5}")));
+        assert_eq!(on("entry:gems", GoalAct::Clear), None);
+        // Set elsewhere, its target not read: all four are said.
+        assert_eq!(
+            on("entry:keys", typed("5")),
+            asks(
+                set_of("keys", "{\"at_least\":5}"),
+                Loses::Elsewhere { cleared: false, carried: Carried::ALL }
+            )
+        );
+        // A choice: another option is set, the one chosen is nothing; back to the default asks
+        // nothing.
+        assert_eq!(on("entry:pick", GoalAct::Pick(1)), goes(set_of("pick", "\"item_b\"")));
+        assert_eq!(on("entry:pick", GoalAct::Pick(0)), None);
+        assert_eq!(on("entry:pick", GoalAct::Pick(2)), None);
+        assert_eq!(on("entry:pick", GoalAct::Switch(true)), None);
+        assert_eq!(on("entry:pick", GoalAct::Clear), goes(clear_of("pick")));
+        // At its default: nothing stored to clear.
+        assert_eq!(on("entry:other", GoalAct::Pick(0)), goes(set_of("other", "\"item_a\"")));
+        assert_eq!(on("entry:other", GoalAct::Clear), None);
+        // A switch.
+        assert_eq!(on("entry:extra", GoalAct::Switch(true)), goes(set_of("extra", "true")));
+        assert_eq!(on("entry:extra", GoalAct::Switch(false)), None);
+        assert_eq!(on("entry:extra", GoalAct::Pick(0)), None);
+        // An `integer` is only shown in this version: nothing set, nothing cleared.
+        assert_eq!(on("entry:rounds", typed("5")), None);
+        assert_eq!(on("entry:rounds", GoalAct::Clear), None);
+        // Not offered: nothing set; its stored value cleared, asked.
+        assert_eq!(on("entry:route", GoalAct::Pick(1)), None);
+        assert_eq!(
+            on("entry:route", GoalAct::Clear),
+            asks(clear_of("route"), Loses::Value(Shown::Words("Item A".to_owned())))
+        );
+        // No longer offered: cleared, asked.
+        assert_eq!(
+            on("orphan:old_route", GoalAct::Clear),
+            asks(clear_of("old_route"), Loses::Value(Shown::Words("a".to_owned())))
+        );
+        assert_eq!(on("orphan:old_route", typed("5")), None);
+        // Other targets: by a name, asked with what it holds; by an id that is no name, only the
+        // Lab's; not read, asked without.
+        assert_eq!(
+            on("target:stone", GoalAct::Clear),
+            asks(clear_of("stone"), Loses::Target(Some(("pool.stone".to_owned(), 20))))
+        );
+        assert_eq!(on("target:energy-floor", GoalAct::Clear), None);
+        assert_eq!(
+            on("target:lost_target", GoalAct::Clear),
+            asks(clear_of("lost_target"), Loses::Target(None))
+        );
+        let by_name: Vec<bool> = page
+            .lines
+            .iter()
+            .filter_map(|line| match line {
+                GoalLine::OtherTarget(other) => Some(other.by_name),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(by_name, vec![true, false, true]);
+    }
+
+    fn values(given: Value) -> Map<String, Value> {
+        match given {
+            Value::Object(values) => values,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_refusal_is_told_apart_by_its_code_and_values() {
+        let conflict = values(json!({"fact_key": "session.resource_targets", "current_version": 12}));
+        assert_eq!(
+            answered("fact_observation_version_conflict", &conflict),
+            Answered::Conflict { current: Some(12) }
+        );
+        assert_eq!(
+            answered("fact_observation_version_conflict", &Map::new()),
+            Answered::Conflict { current: None }
+        );
+        assert_eq!(answered("not_implemented", &Map::new()), Answered::NotImplemented);
+        assert_eq!(answered("fact_observation_not_newer", &Map::new()), Answered::NotNewer);
+        for code in [
+            "instance_unknown",
+            "channel_binding_missing",
+            "resource_target_view_instance_unconfigured",
+            "resource_target_view_policy_unreadable",
+            "",
+        ] {
+            assert_eq!(answered(code, &Map::new()), Answered::Other, "{code}");
+        }
+        let invalid = |given: Value| match answered("goal_value_invalid", &values(given)) {
+            Answered::Invalid(invalid) => invalid,
+            other => panic!("{other:?}"),
+        };
+        let bare = |problem: WriteProblem| WriteInvalid {
+            problem,
+            min: None,
+            max: None,
+            pointer: None,
+            pool: None,
+            variable: None,
+        };
+        // A resource's amount above its pool's capacity: the range, the member and the pool.
+        assert_eq!(
+            invalid(json!({
+                "goal_problem": "out_of_range",
+                "goal_name": "gold",
+                "json_pointer": "/at_least",
+                "range_min": 1,
+                "range_max": 9999,
+                "pool_id": "pool.gold",
+            })),
+            WriteInvalid {
+                min: Some(1),
+                max: Some(9999),
+                pointer: Some("/at_least".to_owned()),
+                pool: Some("pool.gold".to_owned()),
+                ..bare(WriteProblem::OutOfRange)
+            }
+        );
+        assert_eq!(
+            invalid(json!({"goal_problem": "value_too_large", "range_min": 0, "range_max": 1024})),
+            WriteInvalid { min: Some(0), max: Some(1024), ..bare(WriteProblem::ValueTooLarge) }
+        );
+        assert_eq!(
+            invalid(json!({"goal_problem": "count_out_of_range", "range_min": 1, "range_max": 3})),
+            WriteInvalid { min: Some(1), max: Some(3), ..bare(WriteProblem::CountOutOfRange) }
+        );
+        assert_eq!(
+            invalid(json!({"goal_problem": "record_out_of_limits", "range_min": 0, "range_max": 16})),
+            WriteInvalid { min: Some(0), max: Some(16), ..bare(WriteProblem::RecordOutOfLimits) }
+        );
+        assert_eq!(
+            invalid(json!({
+                "goal_problem": "variable_not_applying",
+                "goal_name": "extra",
+                "variable_problem": "irreversible_by_root",
+            })),
+            WriteInvalid {
+                variable: Some(Unapplied::IrreversibleByRoot),
+                ..bare(WriteProblem::VariableNotApplying)
+            }
+        );
+        assert_eq!(
+            invalid(json!({"goal_problem": "wrong_type", "json_pointer": "/by"})),
+            WriteInvalid { pointer: Some("/by".to_owned()), ..bare(WriteProblem::WrongType) }
+        );
+        assert_eq!(
+            invalid(json!({"goal_problem": "pool_unvalued", "pool_id": "pool.wood"})),
+            WriteInvalid { pool: Some("pool.wood".to_owned()), ..bare(WriteProblem::PoolUnvalued) }
+        );
+        assert_eq!(
+            invalid(json!({"goal_problem": "not_checked_yet"})),
+            bare(WriteProblem::NotCheckedYet)
+        );
+        assert_eq!(
+            invalid(json!({"goal_problem": "a_newer_word"})),
+            bare(WriteProblem::Other("a_newer_word".to_owned()))
+        );
+    }
+
+    /// The seven kinds of answer but the one that took: a Runtime without the write (the client's
+    /// word, or `not_implemented`), nothing known, a conflict, another write in the same
+    /// millisecond, the value refused, another refusal.
+    #[test]
+    fn a_failed_write_comes_to_one_of_its_kinds() {
+        let none = Map::new();
+        // The client's own word that the Runtime does not know the request comes first.
+        assert_eq!(
+            failure_of("runtime_operation_unsupported", false, "", &none),
+            Failed::Unsupported("runtime_operation_unsupported")
+        );
+        assert_eq!(
+            failure_of("runtime_request_failed", true, "not_implemented", &none),
+            Failed::Unsupported("not_implemented")
+        );
+        // Nothing settles it: a failed write, a receipt not in time, a refusal that halted the
+        // host, whatever its code.
+        for code in ["", "goal_value_invalid", "fact_observation_version_conflict"] {
+            assert_eq!(failure_of("runtime_io_timeout", false, code, &none), Failed::Unconfirmed);
+        }
+        let conflict = values(json!({"current_version": 3}));
+        assert_eq!(
+            failure_of("runtime_request_refused", true, "fact_observation_version_conflict", &conflict),
+            Failed::Answered(Answered::Conflict { current: Some(3) })
+        );
+        assert_eq!(
+            failure_of("runtime_request_refused", true, "fact_observation_not_newer", &none),
+            Failed::Answered(Answered::NotNewer)
+        );
+        let invalid = values(json!({"goal_problem": "not_offered", "goal_name": "route"}));
+        assert_eq!(
+            failure_of("runtime_request_refused", true, "goal_value_invalid", &invalid),
+            Failed::Answered(Answered::Invalid(WriteInvalid {
+                problem: WriteProblem::NotOffered,
+                min: None,
+                max: None,
+                pointer: None,
+                pool: None,
+                variable: None,
+            }))
+        );
+        assert_eq!(
+            failure_of("runtime_request_refused", true, "channel_binding_missing", &none),
+            Failed::Answered(Answered::Other)
+        );
+    }
+
+    #[test]
+    fn every_word_of_goal_problem_is_read() {
+        assert_eq!(GoalProblem::ALL.len(), 23);
+        let words: Vec<WriteProblem> =
+            GoalProblem::ALL.iter().map(|problem| WriteProblem::of(problem.as_str())).collect();
+        for (problem, word) in words.iter().zip(GoalProblem::ALL) {
+            assert!(!matches!(problem, WriteProblem::Other(_)), "{word}");
+        }
+        for (at, problem) in words.iter().enumerate() {
+            assert!(!words[..at].contains(problem), "{problem:?} twice");
+        }
+        for (word, expected) in [
+            ("name_unknown", WriteProblem::NameUnknown),
+            ("holds_no_value", WriteProblem::HoldsNoValue),
+            ("tier_not_built", WriteProblem::TierNotBuilt),
+            ("remedy_parameter", WriteProblem::RemedyParameter),
+            ("variable_not_applying", WriteProblem::VariableNotApplying),
+            ("not_offered", WriteProblem::NotOffered),
+            ("value_not_json", WriteProblem::ValueNotJson),
+            ("wrong_type", WriteProblem::WrongType),
+            ("out_of_range", WriteProblem::OutOfRange),
+            ("off_step", WriteProblem::OffStep),
+            ("not_an_option", WriteProblem::NotAnOption),
+            ("key_repeated", WriteProblem::KeyRepeated),
+            ("count_out_of_range", WriteProblem::CountOutOfRange),
+            ("value_too_large", WriteProblem::ValueTooLarge),
+            ("pool_not_targetable", WriteProblem::PoolNotTargetable),
+            ("pool_unvalued", WriteProblem::PoolUnvalued),
+            ("deadline_unsupported", WriteProblem::DeadlineUnsupported),
+            ("value_not_set", WriteProblem::ValueNotSet),
+            ("record_unreadable", WriteProblem::RecordUnreadable),
+            ("record_out_of_limits", WriteProblem::RecordOutOfLimits),
+            ("not_checked_yet", WriteProblem::NotCheckedYet),
+            ("root_failing", WriteProblem::RootFailing),
+            ("no_schedule", WriteProblem::NoSchedule),
+        ] {
+            assert_eq!(WriteProblem::of(word), expected, "{word}");
+        }
+    }
+
+    #[test]
+    fn a_variable_the_root_does_not_apply_takes_no_value() {
+        for word in [
+            "irreversible_by_root",
+            "package_unreadable",
+            "goals_unreadable",
+            "declaration_conflict",
+            "goal_name_conflict",
+            "name_out_of_limits",
+            "cap_range",
+            "root_unchecked",
+        ] {
+            assert!(Unapplied::of(word).by_root(), "{word}");
+        }
+        for word in [
+            "not_an_option",
+            "out_of_range",
+            "off_step",
+            "type_changed",
+            "keys_removed",
+            "count_out_of_range",
+            "key_repeated",
+            "keys_left_out",
+            "entry_unreadable",
+            "a_newer_word",
+        ] {
+            assert!(!Unapplied::of(word).by_root(), "{word}");
+        }
     }
 }

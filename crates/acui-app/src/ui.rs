@@ -559,9 +559,11 @@ fn language_index(language: Language) -> i32 {
 /// The workbench's controls. The top bar's page button switches between the
 /// accounts and the settings; a card picked is the account whose picture shows (`workbench`),
 /// the right column's three tabs switch between its live view, its daily task list and its goals
-/// (read only, Workflow #455), the list being the one whose
+/// (Workflow #455), the list being the one whose
 /// line of tasks without a package opens and closes (`workbench`, UI-3f1) and whose packages'
-/// switches turn them on or off for the account (`workbench::switch`, UI-3f2),
+/// switches turn them on or off for the account (`workbench::switch`, UI-3f2), the goals' lines
+/// being the ones whose controls set or clear one value each, a question's two buttons included
+/// (`workbench::goals`, G2),
 /// the box beside the picture's title draws on it or not (`workbench::preview`), the
 /// button under it refreshes it (`workbench::refresh`), and the rescue bar over it operates
 /// that account's device, its confirmation's two buttons included (`workbench::rescue`), and
@@ -638,6 +640,41 @@ fn install_workbench(window: &WorkbenchWindow) {
     window.on_task_switch_toggled(|package, on| {
         if let Some(ui) = current() {
             workbench::switch::toggled(&ui, &package, on);
+        }
+    });
+    window.on_goal_amount_edited(|key, text| {
+        if let Some(ui) = current() {
+            workbench::goals::amount_edited(&ui, &key, &text);
+        }
+    });
+    window.on_goal_set(|key| {
+        if let Some(ui) = current() {
+            workbench::goals::set_pressed(&ui, &key);
+        }
+    });
+    window.on_goal_picked(|key, index| {
+        if let Some(ui) = current() {
+            workbench::goals::picked(&ui, &key, index);
+        }
+    });
+    window.on_goal_toggled(|key, on| {
+        if let Some(ui) = current() {
+            workbench::goals::toggled(&ui, &key, on);
+        }
+    });
+    window.on_goal_clear(|key| {
+        if let Some(ui) = current() {
+            workbench::goals::clear_pressed(&ui, &key);
+        }
+    });
+    window.on_goal_confirmed(|| {
+        if let Some(ui) = current() {
+            workbench::goals::confirmed(&ui);
+        }
+    });
+    window.on_goal_cancelled(|| {
+        if let Some(ui) = current() {
+            workbench::goals::cancelled(&ui);
         }
     });
     window.on_rules_toggled(|| {
@@ -988,6 +1025,9 @@ fn fill_strings(global: Strings<'_>, labels: &Labels) {
     global.set_tasks_risky(labels.tasks_risky.into());
     global.set_goals_tab(labels.goals_tab.into());
     global.set_goals_later(labels.goals_later.into());
+    global.set_goals_set(labels.goals_set.into());
+    global.set_goals_confirm(labels.goals_confirm.into());
+    global.set_goals_cancel(labels.goals_cancel.into());
     global.set_refresh_frame(labels.refresh_frame.into());
     global.set_refresh_cost(labels.refresh_cost.into());
     global.set_rescue_check(labels.rescue_check.into());

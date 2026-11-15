@@ -233,7 +233,7 @@ v0.12.60 it raises `runtime-client` to 9 and `package` to 15; `actingd-config` [
 stay, and the console's `runtime-client` range follows to [3, 9]. Revision 9 adds the request kinds
 `GoalView` (one application's goal page) and `EditGoal` (one value of it set or cleared by name, refused
 `goal_value_invalid` with a `goal_problem` word), both on the `ui` channel's list (#463 V3); this console reads
-the goal page with `GoalView` on its Goals tab and does not send `EditGoal` yet. `package` 13 to 15 bring a `linear_steps` task's select step (#463 K1), a pack's
+the goal page with `GoalView` on its Goals tab and sets or clears one value of it per press with `EditGoal`. `package` 13 to 15 bring a `linear_steps` task's select step (#463 K1), a pack's
 `variables` with version 2 of `goals.json` (#463 V1) and a `linear_steps` task's ending pages (#463 K2); the
 setup wizard holds a bundle's range to the one the Runtime zip declares, and the root files a bundle may
 carry did not change. No crate the locks list changed its dependencies, so `Cargo.lock` changes only in the
@@ -760,9 +760,10 @@ names, which no task of the instance uses any more, is not in the view, so it is
 withdrawn here. Once a package turned off reaches the deferral step, the card and the list say "This task
 is turned off".
 
-**Goals** (#455, the goal page, read only) is that instance's goal page, drawn from its `GoalView` alone
-(#463 V3, Runtime 0.12.61), the very read the Lab's `goals` answers. Nothing on it can be pressed: a line
-at its top says that this version only shows it and that the Lab (command line or MCP) can set values. Its
+**Goals** (#455, the goal page) is that instance's goal page, drawn from its `GoalView` alone (#463 V3,
+Runtime 0.12.61), the very read the Lab's `goals` answers, and some of it can be changed there (below). A
+line at its top says what can be changed there and that number and order settings need the Lab (command
+line or MCP) until the next version. Its
 lines go in the Runtime's order: first the entries of the game's `goals.json`, then each package variable
 no entry places, in groups under the display name of its first package (the `ui.json` title the task
 names come from; every variable whose package has none goes in one last group, "Other settings"). No
@@ -777,8 +778,10 @@ and in grey its current amount ("Now 1200 (read hh:mm)", or why there is no usab
 yet", "The reading has expired", "The reading is not reliable enough", "The reading is not a valid
 amount"), "The pack gives this resource no step, so no goal can be set on it here" for a pool a goal names
 only with a step or an importance of its own (`scale_required` or `importance_required`, what the Runtime
-refuses as `pool_unvalued`), and who set it; it is greyed, with why, while its pool takes no goal now. A
-**tier** shows its default option's title, with "This version of the Runtime does not use tiers yet". A
+refuses as `pool_unvalued`), and who set it; it is greyed, with why, while its pool takes no goal now.
+While its goal waits for a reading, "No reading yet" is said once, in the goal's words, not again under
+it. A **tier** shows its default option's title, with "This version of the Runtime does not use tiers
+yet", and a value stored under its name, "Value stored: … (not used in this version)", with who set it. A
 **variable** (`choice`, `integer`, `switch` or `ordered`) shows its title and the value the next run reads
 in the declaration's own words: an option's title, a number with its unit's text, On or Off, the chosen
 items' titles in order ("None chosen"); a time unit's milliseconds are shown in the largest unit at most
@@ -787,7 +790,8 @@ fraction (90 minutes declared in hours is "90 min"). In grey under it: the pack'
 set is in effect, and who set it, "Set by this console", "the command line", "MCP", "the Lab", or the
 Lab's entry ("the Lab's command line", "the Lab's MCP", "the Lab's pack
 authoring", "a Lab rescue", "the Lab's watchdog"), with the date and time. A value set that the next run
-does not take says in amber "The value set is not used: …; the default is used instead", with one sentence
+does not take says in amber "The value set, …, is not used: …; the default is used instead", the value
+stored in the declaration's own words, with one sentence
 per `variable_problem` word (a word this console does not know by its code, which the technical log hears
 of once); a variable that does not apply in the game says "This does not apply in this game: …", and one
 no root check judges now (`root_unchecked`) "Whether this applies in this game is not known now: …"; a
@@ -838,6 +842,50 @@ goals came for a while. A Runtime that does not have the page (one before 0.12.6
 request; or it answers `not_implemented`) says so with its code, and the page is not read again until the
 tab is shown anew or the owner epoch changes. Each read takes the policy's locks and the fact write gate a
 moment, so it is read seldom; the technical log's read counts at the end of a run call it `goal view`.
+
+What can be changed on it (#455 G2), one `EditGoal` of one name a press, naming the version of the page
+it was pressed on (`GoalView.version`) as its `expected_version`. A **resource** whose pool takes a goal
+here (not one without a step, nor one no goal can name) has a field, "Keep at least", and **Set**, which
+writes `{"at_least": n}`: here only a whole number of at least 1 is checked ("Type a whole number", "At
+least 1"), the pool's capacity being the Runtime's to judge, and its `out_of_range` names the bound, which
+the line then says. A resource with a goal has **Clear**. A **choice** variable shows its options side by
+side, four or fewer, else in a drop-down, and a **switch** variable a box; changing either writes the
+option's value (a JSON string) or `true` or `false` at once. A variable with a value stored has **Back to
+Default**, which clears it; `integer` and `ordered` variables are only shown in this version, and so have
+neither a control nor **Back to Default**, since their values could not be set back from here. A placement
+no bound pack offers that holds a value, and each value **No longer offered**, has **Clear**. An **other
+resource goal** whose id has an entry name's form (`[a-z0-9][a-z0-9_]*`, at most 64 bytes, the only names
+`EditGoal` takes) has **Clear**; any other says "Change it with the Lab". Tiers and remedy parameters are
+only shown. Every control is off while the page lists nothing (`not_checked_yet`, `root_failing`,
+`no_schedule`), while a write of the instance is out, and after an answer until the page read again has
+come.
+
+A press asks to be confirmed first only where what it loses cannot be set back from here, and the question
+says what: clearing a value no run reads (no longer offered, or of a placement not offered), "the value
+stored (…) cannot be set back"; clearing an other resource goal, with its pool and amount; and clearing or
+replacing a declared resource's goal set elsewhere (no setter, or another channel than this console's)
+that carries what a goal set by name does not, its own tasks, step, importance or validity: setting a
+pool's amount replaces its goal whole, whatever its id, and those are lost. Which of them it carries is
+read from the stored record's target of the same id, all four when that does not read; such a goal's line
+also says in amber "This goal was set elsewhere: changing it here replaces how it was set". Back to the
+default, a value this console set and a goal this console set ask nothing. Only **Confirm** sends it;
+**Cancel**, a press anywhere else, another instance or a restart lets the question go.
+
+The write goes on a fresh person's connection (the `ui` channel, the full receipt) at the slow reads' io
+timeout of 20 seconds, on a thread of its own, once. Its answer: taken, nothing said, and the page read
+again at once; another tool changed the page since it was read (`fact_observation_version_conflict`), in
+amber "This page was just changed elsewhere and is read again: press again", read again, not sent again;
+another write in the same millisecond (`fact_observation_not_newer`), sent once more at once on the same
+connection; the value refused (`goal_value_invalid`), on its line one sentence per `goal_problem` word with
+the values it comes with (a range "allowed: 1 to 9999", a bound, why a variable does not apply; a word
+this console does not know by its code, which the technical log hears of once), nothing read again; not
+known what became of it, read again first, and pressed again only once that read came (the version it
+named makes a second write after a first that took meet a version conflict, never write twice); a Runtime
+without the write (`runtime_operation_unsupported`, `not_implemented`), the page only shown in that owner
+epoch, said once above the lines; any other refusal (`instance_unknown`, `channel_binding_missing`, …) in
+red on its line with its codes. What a press came to is said on its line with when it landed, until that
+line is pressed again, the tab shows another instance, or the Runtime starts again; every answer goes in
+the technical log under `acui-act-goal`.
 
 `--state-root` applies to this run only and overrides `state_root` in the settings file; if neither is
 present the workbench still opens, with a red bar at its top that says in plain words that there is no

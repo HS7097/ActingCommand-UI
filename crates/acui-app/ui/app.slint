@@ -196,11 +196,21 @@ export struct TaskListData {
 // What one line of the Goals tab is: an entry, a group's title, or a note's words.
 export enum GoalRowKind { entry, heading, note }
 
-// One line of the account's Goals tab (Workflow #455, #463 V3, read only), in words, at most three
-// layers. A group's title in bold; a note's words in grey, its help under them. An entry: its
-// title, greyed while no goal can be set on its pool or no pack offers it; the value now, in the
-// accent once a goal is met (never once it lapsed); under it in amber what is not used, does not
-// read or lapsed, and in grey the rest (a reading, a default, who set it, why not).
+// Which control an entry of the Goals tab has (Workflow #455 G2): none; a resource's amount, typed
+// then set; a choice's options side by side (four or fewer) or in a drop-down (more); a switch.
+export enum GoalControl { none, amount, segments, dropdown, switch }
+
+// One line of the account's Goals tab (Workflow #455, #463 V3), in words, at most three layers. A
+// group's title in bold; a note's words in grey, its help under them. An entry: its title, greyed
+// while no goal can be set on its pool or no pack offers it; the value now, in the accent once a
+// goal is met (never once it lapsed); under it in amber what is not used, does not read or lapsed,
+// and in grey the rest (a reading, a default, who set it, why not). G2: what names the line to a
+// press (never shown); its control and whether the page's controls can be pressed now
+// (`enabled`), this one's too (`settable`); the amount typed, what the field says when empty, why
+// that is no amount, and whether "set" can be pressed; a choice's options, the one chosen (-1:
+// none) and a switch's state; the clear's words ("clear", "back to the default"; none: no clear);
+// what its last press came to, red when that failed and amber when it asks to look again; and the
+// question a press asks first, with "confirm" and "cancel".
 export struct GoalRowData {
     kind: GoalRowKind,
     title: string,
@@ -209,6 +219,22 @@ export struct GoalRowData {
     value-met: bool,
     warning: string,
     note: string,
+    key: string,
+    control: GoalControl,
+    enabled: bool,
+    settable: bool,
+    amount-text: string,
+    amount-placeholder: string,
+    amount-problem: string,
+    set-ready: bool,
+    options: [string],
+    chosen: int,
+    switch-on: bool,
+    clear-label: string,
+    said: string,
+    said-failed: bool,
+    said-warning: bool,
+    confirm: string,
 }
 
 // Around the Goals tab's lines, in words: what it says instead of them, red or amber when that says
@@ -535,10 +561,14 @@ export global Strings {
     in property <string> tasks-fold-note;
     in property <string> tasks-irreversible;
     in property <string> tasks-risky;
-    // The right column's third tab, the account's goals (Workflow #455), and on it, in grey, that
-    // this version only shows them and the Lab sets them.
+    // The right column's third tab, the account's goals (Workflow #455), and on it, in grey, what
+    // can be changed there and what still needs the Lab; the buttons of its lines: "set" beside an
+    // amount, "confirm" and "cancel" of a question.
     in property <string> goals-tab;
     in property <string> goals-later;
+    in property <string> goals-set;
+    in property <string> goals-confirm;
+    in property <string> goals-cancel;
     // Under the live view: the button that refreshes the picture of the account picked, and in
     // grey what a refresh costs.
     in property <string> refresh-frame;
@@ -2437,13 +2467,83 @@ component TaskList {
     }
 }
 
-// One line of the Goals tab (Workflow #455, #463 V3, read only), by its kind. A group's title, in
-// bold. A note's words in grey, its help under them. An entry: its title, greyed while no goal can
-// be set on its pool or no pack offers it; the value now, in the accent once a goal is met; in
-// amber what is not used, does not read or lapsed; in grey the rest. Nothing on it can be pressed:
-// a value is shown, never a control. All of it wraps.
+// A resource line's amount field on the Goals tab (Workflow #455 G2): what is typed is the
+// caller's as much as the person's, both ways. The field takes what the caller holds whenever that
+// changes, which is what was typed, or nothing once a set took or the line is another's.
+component GoalAmount {
+    in property <string> text-shown;
+    in property <string> placeholder;
+    in property <bool> enabled;
+    callback edited(string);
+    HorizontalLayout {
+        padding: 0;
+        field := LineEdit {
+            text: root.text-shown;
+            placeholder-text: root.placeholder;
+            enabled: root.enabled;
+            accessible-label: root.placeholder;
+            font-size: Scale.body-font;
+            // The std field asks for 160px; an amount needs less.
+            min-width: 80px * Scale.factor;
+            preferred-width: 110px * Scale.factor;
+            horizontal-stretch: 0;
+            edited(text) => {
+                root.edited(text);
+            }
+        }
+    }
+    changed text-shown => {
+        if (field.text != root.text-shown) {
+            field.text = root.text-shown;
+        }
+    }
+}
+
+// A choice of more than four options on the Goals tab (Workflow #455 G2): a drop-down that shows
+// what the newest read says (`chosen`); a pick says what was picked and puts the box back, so the
+// box moves only as a read moves it.
+component GoalChoiceBox {
+    in property <[string]> options;
+    in property <int> chosen;
+    in property <bool> enabled;
+    callback picked(int);
+    HorizontalLayout {
+        padding: 0;
+        picker := SkinComboBox {
+            model: root.options;
+            current-index: root.chosen;
+            enabled: root.enabled;
+            min-width: 150px * Scale.factor;
+            preferred-width: 200px * Scale.factor;
+            horizontal-stretch: 0;
+            selected => {
+                root.picked(self.current-index);
+                self.current-index = root.chosen;
+            }
+        }
+    }
+    changed chosen => {
+        picker.current-index = root.chosen;
+    }
+}
+
+// One line of the Goals tab (Workflow #455, #463 V3), by its kind. A group's title, in bold. A
+// note's words in grey, its help under them. An entry: its title, greyed while no goal can be set
+// on its pool or no pack offers it; the value now, in the accent once a goal is met; G2's control
+// where it has one: an amount and "set" (and beside them why what is typed is no amount), a
+// choice's options side by side or in a drop-down, a switch, each showing what the newest read
+// says; in amber what is not used, does not read, lapsed or was set elsewhere; in grey the rest;
+// its clear, "clear" or "back to the default"; what its last press came to; the question a press
+// asks first, in amber, with "confirm" and "cancel". All of it wraps.
 component GoalLineView {
     in property <GoalRowData> line;
+    callback amount-edited(string);
+    callback set-pressed();
+    callback picked(int);
+    callback toggled(bool);
+    callback clear-pressed();
+    callback confirmed();
+    callback cancelled();
     vertical-stretch: 0;
     VerticalLayout {
         spacing: 2px;
@@ -2480,6 +2580,61 @@ component GoalLineView {
             min-height: self.preferred-height;
             vertical-stretch: 0;
         }
+        if root.line.kind == GoalRowKind.entry && root.line.control != GoalControl.none: HorizontalLayout {
+            spacing: 6px;
+            vertical-stretch: 0;
+            if root.line.control == GoalControl.amount: GoalAmount {
+                text-shown: root.line.amount-text;
+                placeholder: root.line.amount-placeholder;
+                enabled: root.line.enabled && root.line.settable;
+                edited(text) => {
+                    root.amount-edited(text);
+                }
+            }
+            if root.line.control == GoalControl.amount: SkinButton {
+                text: Strings.goals-set;
+                enabled: root.line.enabled && root.line.settable && root.line.set-ready;
+                clicked => {
+                    root.set-pressed();
+                }
+            }
+            if root.line.control == GoalControl.amount && root.line.amount-problem != "": Text {
+                text: root.line.amount-problem;
+                font-size: Scale.grey-font;
+                color: Severity.warning;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                min-width: 40px * Scale.factor;
+                horizontal-stretch: 1;
+            }
+            if root.line.control == GoalControl.switch: PackSwitch {
+                on: root.line.switch-on;
+                enabled: root.line.enabled && root.line.settable;
+                toggled(pressed) => {
+                    root.toggled(pressed);
+                }
+            }
+            if root.line.control == GoalControl.segments: HorizontalLayout {
+                spacing: 4px;
+                for option[index] in root.line.options: SkinSegment {
+                    label: option;
+                    selected: index == root.line.chosen;
+                    enabled: root.line.enabled && root.line.settable;
+                    clicked => {
+                        root.picked(index);
+                    }
+                }
+            }
+            if root.line.control == GoalControl.dropdown: GoalChoiceBox {
+                options: root.line.options;
+                chosen: root.line.chosen;
+                enabled: root.line.enabled && root.line.settable;
+                picked(index) => {
+                    root.picked(index);
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
         if root.line.warning != "": Text {
             text: root.line.warning;
             font-size: Scale.grey-font;
@@ -2496,18 +2651,66 @@ component GoalLineView {
             min-height: self.preferred-height;
             vertical-stretch: 0;
         }
+        if root.line.clear-label != "" && root.line.confirm == "": HorizontalLayout {
+            vertical-stretch: 0;
+            SkinButton {
+                text: root.line.clear-label;
+                enabled: root.line.enabled;
+                clicked => {
+                    root.clear-pressed();
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if root.line.said != "": Notice {
+            text: root.line.said;
+            failed: root.line.said-failed;
+            warning: root.line.said-warning;
+        }
+        // In two steps: only the confirmation sends it.
+        if root.line.confirm != "": HorizontalLayout {
+            spacing: 8px;
+            vertical-stretch: 0;
+            Notice {
+                text: root.line.confirm;
+                warning: true;
+                vertical-alignment: center;
+                min-width: 40px * Scale.factor;
+                horizontal-stretch: 1;
+            }
+            SkinButton {
+                text: Strings.goals-confirm;
+                enabled: root.line.enabled;
+                clicked => {
+                    root.confirmed();
+                }
+            }
+            SkinButton {
+                text: Strings.goals-cancel;
+                clicked => {
+                    root.cancelled();
+                }
+            }
+        }
     }
 }
 
-// The account's Goals tab on the workbench (Workflow #455, #463 V3, read only), under its own tab in
-// the right column. Always, in grey, that this version only shows and the Lab sets values. What it
-// says instead of its lines; else above them in amber how the page stands where something is wrong,
-// when it was read, and in grey how it stands otherwise; the lines; under them, in grey, the old
-// form's note, and whether the resource goals stored hold and until when. Nothing on it can be
-// pressed. All of it wraps; the whole card scrolls when it is too short for it.
+// The account's Goals tab on the workbench (Workflow #455, #463 V3), under its own tab in the right
+// column. Always, in grey, what can be changed here and what still needs the Lab. What it says
+// instead of its lines; else above them in amber how the page stands where something is wrong,
+// when it was read, and in grey how it stands otherwise; the lines, each press naming its line by
+// its key (G2); under them, in grey, the old form's note, and whether the resource goals stored
+// hold and until when. All of it wraps; the whole card scrolls when it is too short for it.
 component GoalList {
     in property <GoalListData> data;
     in property <[GoalRowData]> rows;
+    callback amount-edited(string, string);
+    callback set-pressed(string);
+    callback picked(string, int);
+    callback toggled(string, bool);
+    callback clear-pressed(string);
+    callback confirmed();
+    callback cancelled();
     vertical-stretch: 0;
     VerticalLayout {
         spacing: 6px;
@@ -2546,6 +2749,27 @@ component GoalList {
         }
         for item in root.rows: GoalLineView {
             line: item;
+            amount-edited(text) => {
+                root.amount-edited(item.key, text);
+            }
+            set-pressed => {
+                root.set-pressed(item.key);
+            }
+            picked(index) => {
+                root.picked(item.key, index);
+            }
+            toggled(on) => {
+                root.toggled(item.key, on);
+            }
+            clear-pressed => {
+                root.clear-pressed(item.key);
+            }
+            confirmed => {
+                root.confirmed();
+            }
+            cancelled => {
+                root.cancelled();
+            }
         }
         if root.data.form != "": Text {
             text: root.data.form;
@@ -2885,6 +3109,16 @@ export component WorkbenchWindow inherits Window {
     callback right-tab-picked(WorkbenchTab);
     callback tasks-fold-toggled();
     callback task-switch-toggled(string, bool);
+    // On the Goals tab (Workflow #455 G2), each by its line's key: an amount typed (as typed), its
+    // "set", a choice's option picked (its index), a switch turned, a clear; the question's
+    // "confirm" and "cancel".
+    callback goal-amount-edited(string, string);
+    callback goal-set(string);
+    callback goal-picked(string, int);
+    callback goal-toggled(string, bool);
+    callback goal-clear(string);
+    callback goal-confirmed();
+    callback goal-cancelled();
     // The box beside the picture's title, as it is now.
     callback picture-overlays-toggled(bool);
     // The button under the picture that refreshes it.
@@ -3692,6 +3926,27 @@ export component WorkbenchWindow inherits Window {
                                     if root.right-tab == WorkbenchTab.goals: GoalList {
                                         data: root.goals;
                                         rows: root.goal-rows;
+                                        amount-edited(key, text) => {
+                                            root.goal-amount-edited(key, text);
+                                        }
+                                        set-pressed(key) => {
+                                            root.goal-set(key);
+                                        }
+                                        picked(key, index) => {
+                                            root.goal-picked(key, index);
+                                        }
+                                        toggled(key, on) => {
+                                            root.goal-toggled(key, on);
+                                        }
+                                        clear-pressed(key) => {
+                                            root.goal-clear(key);
+                                        }
+                                        confirmed => {
+                                            root.goal-confirmed();
+                                        }
+                                        cancelled => {
+                                            root.goal-cancelled();
+                                        }
                                     }
                                     if !root.picture-tab: Rectangle {
                                         vertical-stretch: 1;
