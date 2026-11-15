@@ -501,6 +501,18 @@ impl VariableLine {
         }
     }
 
+    /// Whether a value put back to the default could be set again here: one settable now, whose
+    /// reason for not being used, if any, this console knows. Of a `variable_problem` word newer
+    /// than the pinned Runtime it is not known, which counts as not (the coordinator's ruling on
+    /// #178: what is not known to be set back is asked first).
+    fn can_set_back(&self) -> bool {
+        self.settable()
+            && !matches!(
+                &self.state,
+                VariableState::NotApplied { why: Some(Unapplied::Other(_)), .. }
+            )
+    }
+
     /// The value stored under its name, in words, as a question of its clear says it: of a value
     /// not applied, the one stored; else the one shown, which of a variable not offered is the one
     /// stored.
@@ -1749,10 +1761,11 @@ pub fn press(line: &GoalLine, act: &GoalAct) -> Option<Press> {
         }
         // Back to the default asks nothing while a value can be set on the variable again here;
         // of one the game root does not apply (`variable_not_applying`), the value stored is lost
-        // as a value not offered is.
+        // as a value not offered is; of one not used for a reason this console does not know, it
+        // is not known whether it could be set again, so it asks as well.
         (GoalLine::Variable(line), GoalAct::Clear) => {
             let asks = match line.clear_offer()? {
-                ClearOffer::Restore if line.settable() => None,
+                ClearOffer::Restore if line.can_set_back() => None,
                 ClearOffer::Restore | ClearOffer::Clear => Some(Loses::Value(line.stored_value())),
             };
             Some(Press { write: GoalWrite::clear(&line.name), asks })
@@ -4102,11 +4115,9 @@ mod tests {
         // Nothing is set on either.
         assert_eq!(on(&english, "entry:extra", GoalAct::Switch(true)), None);
         assert_eq!(on(&english, "entry:pick", GoalAct::Pick(0)), None);
-        // Not the root's judgement: a value can be set on it again, so nothing is asked.
-        assert_eq!(
-            on(&english, "entry:later", GoalAct::Clear),
-            Some(Press { write: clear_of("later"), asks: None })
-        );
+        // A reason word newer than this console: whether a value could be set on it again is not
+        // known, so it asks too, with the value stored.
+        assert_eq!(on(&english, "entry:later", GoalAct::Clear), asks("later", Shown::Switch(true)));
         // Nothing stored: nothing to clear.
         assert_eq!(on(&english, "entry:calm", GoalAct::Clear), None);
         // The question's value is in the page's language: the page a press reads is made in the

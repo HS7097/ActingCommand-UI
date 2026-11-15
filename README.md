@@ -875,9 +875,10 @@ A press asks to be confirmed first only where what it loses cannot be set back f
 says what: clearing a value no run reads (no longer offered, or of a placement not offered), "the value
 stored (…) cannot be set back"; **Back to Default** of a variable the game does not apply (the game root's
 own judgement, such as a pack that counts as able to do something irreversible: no value can be set on it
-here again), likewise with the value stored; clearing an other resource goal, with its pool and amount;
-setting an amount on a resource whose name an other resource goal has as its id, which the Runtime then
-removes too, with that goal's pool and amount; and clearing or replacing a declared resource's goal set
+here again), likewise with the value stored, and so of one not used for a reason word this console does not
+know (whether a value could be set on it again is not known); clearing an other resource goal, with its pool
+and amount; setting an amount on a resource whose name an other resource goal, or another resource's goal,
+has as its id, which the Runtime then removes too, with that goal's pool and amount; and clearing or replacing a declared resource's goal set
 elsewhere (no setter, or another channel than this console's) that carries what a goal set by name does
 not, its own tasks, step, importance or validity: setting a pool's amount replaces its goal whole,
 whatever its id, and those are lost. Which of them it carries is read from the stored record's target of
