@@ -47,6 +47,26 @@ than the bound is the warning `precision_low`, with the suggested scale, and wri
 value binding, and every pool whose `valuation_origin` is by a valuation binding (`origin_unbound`): only the model's
 export writes `model`.
 
+**Values written by hand** (#466 W4a). A `hand` entry of bindings.json names a rule whose fixed value a person wrote, with
+its `status` and `ref` (opaque texts, never read). A rule is named once among the value bindings and the hand entries
+(`hand_also_bound`, `hand_duplicate`), and a hand entry's fixed value is no threshold binding's literal
+(`hand_also_threshold`: `apply` would write the threshold into it) and no fixed entry's (`hand_also_fixed`; fix1); a
+hand entry's rule writes a `fixed_value_milli` (`hand_value_missing`) in 1..2^53 - 1, which the Runtime's compiler takes
+(`hand_value_out_of_range`; fix1; on a held package's rule, which the compiler does not see yet, the warning
+`held_hand_value_out_of_range`, fix3), and no origin (`hand_origin_model` for `"model"`, `origin_invalid` for any other).
+With `--strict-values`, `check` refuses every rule of schedule.json that writes `fixed_value_milli` and that no value
+binding and no hand entry names (`fixed_value_unregistered`).
+
+**Fixed values the Runtime refuses** (#466 W4a; the Runtime's `contracts/scheduling/README.md`, "Fixed values written in
+the pack", and `crates/policy/src/validation.rs` `validate_fixed_value`): a rule of a value binding or a hand entry whose
+fixed value stands beside `"maintenance": true` (the reader's `schedule_invalid`, held or not), beside
+`"realization": true` or beside a `produces` entry on a pool whose `valuation` is a block or the pending marker
+(`fixed_value_conflict` there) is an error, one code each, which `apply` refuses. The composer leaves a held package's
+rules out of the catalog, so for such a rule the last three are warnings (`held_…`), refused once the hold is lifted.
+The tool reads no package's role: a fixed value on a rule of a maintenance-role package, which the composer refuses too,
+is caught where the composer runs (`actinglab standard-pack check`) and by the resource repository's own check (W4b;
+contracts/formats.md, "What the tool guarantees, and what it leaves to the composer").
+
 `check` compares every bound literal with its threshold or value (`binding_mismatch`), and with `--strict` refuses
 every integer literal of a `fact` or `resource_projection` predicate of a `schedule.json` rule, and every
 quantity of a `schedule.json` pool (#424 ACM-POOL), that is neither bound nor fixed (`binding_unbound_literal`).
@@ -63,9 +83,9 @@ is the export's. Without the file it is null; a file of other versions of the mo
 whether `out/values.json` is of the current inputs (`data.values`; the warning `values_stale` otherwise, #464 W1), and
 `out/valuations.json` (`data.valuations`; `valuations_stale`, #466 W3).
 
-The warnings `precision_low`, `limited_without_consumes` and `limited_unmodelled` are reported with the errors too, when
-there are any; `prices_stale`, `values_stale` and `valuations_stale` only when there are none (the files are read after
-the bindings check).
+The warnings `precision_low`, `limited_without_consumes`, `limited_unmodelled`, the three `held_fixed_value_beside_…` and
+`held_hand_value_out_of_range` are reported with the errors too, when there are any; `prices_stale`, `values_stale`
+and `valuations_stale` only when there are none (the files are read after the bindings check).
 """
 
 from __future__ import annotations
@@ -101,6 +121,22 @@ from acmodel.codes import (
     EXPORT_REFUSED,
     EXPORT_WRITE_FAILED,
     FILE_CHANGED,
+    FIXED_VALUE_BESIDE_MAINTENANCE,
+    FIXED_VALUE_BESIDE_PENDING_PRODUCT,
+    FIXED_VALUE_BESIDE_PRICED_PRODUCT,
+    FIXED_VALUE_BESIDE_REALIZATION,
+    FIXED_VALUE_UNREGISTERED,
+    HAND_ALSO_BOUND,
+    HAND_ALSO_FIXED,
+    HAND_ALSO_THRESHOLD,
+    HAND_DUPLICATE,
+    HAND_ORIGIN_MODEL,
+    HAND_VALUE_MISSING,
+    HAND_VALUE_OUT_OF_RANGE,
+    HELD_FIXED_VALUE_BESIDE_PENDING_PRODUCT,
+    HELD_FIXED_VALUE_BESIDE_PRICED_PRODUCT,
+    HELD_FIXED_VALUE_BESIDE_REALIZATION,
+    HELD_HAND_VALUE_OUT_OF_RANGE,
     INSERT_STYLE_UNKNOWN,
     LIMITED_INVALID,
     LIMITED_MISSING,
@@ -127,8 +163,8 @@ from acmodel.export import valuations as valuation_export
 from acmodel.export import values as value_export
 from acmodel.export.thresholds import threshold_entry
 from acmodel.model import read_bindings, read_prices, read_valuations, read_values
-from acmodel.model.jsonfile import read, refusal
-from acmodel.model.readers import SCHEDULE_FILE
+from acmodel.model.jsonfile import MAX_SAFE_INTEGER, read, refusal
+from acmodel.model.readers import SCHEDULE_FILE, VALUE_PATH
 from acmodel.model.shape import json_type
 
 BINDINGS = "bindings.json"
@@ -141,6 +177,11 @@ BLOCK = valuation_export.BLOCK  # #466 W3: a pool's valuation block, which its o
 REQUIRED_WORD = "benefit_fixed_value"  # what schedule.json's `requires` must hold for a fixed value or a pool's origin
 PART = ".part"  # `apply` writes `<file>.part`, then renames it over the file
 RATIO_LOW, RATIO_HIGH = Fraction(1, 2), Fraction(2)  # a changed value outside these times its old one is flagged
+HAND = "hand"  # #466 W4a: bindings.json's fixed values written by hand, each by its rule
+# #466 W4a: the members of a schedule.json rule beside which the Runtime refuses a fixed value, and the list of held
+# packages, whose rules the composer leaves out of the catalog.
+MAINTENANCE, REALIZATION, PRODUCES, HELD = "maintenance", "realization", "produces", "held"
+MARKER = valuation_export.MARKER  # a pool's valuation not known yet, `"valuation": "pending"`
 
 
 def _raise(errors: list[dict[str, Any]], warnings: list[dict[str, Any]] | None = None) -> None:
@@ -158,6 +199,56 @@ def _entries(bindings: File) -> Iterator[tuple[str, dict[str, Any]]]:
             yield at("", member, index), entry
 
 
+def _hand_entries(bindings: File) -> Iterator[tuple[str, dict[str, Any]]]:
+    """(pointer in bindings.json, entry) of every fixed value written by hand (#466 W4a; absent means none)."""
+    for index, entry in enumerate(bindings.doc.get(HAND, [])):
+        yield at("", HAND, index), entry
+
+
+def _fixed_value_literal(entry: dict[str, Any]) -> bool:
+    """Whether a threshold binding or a fixed entry names a rule's fixed value: `schedule.json`, a `rule_id`, and the
+    pointer `/fixed_value_milli` (a value binding always does; a valuation binding names a pool)."""
+    return entry["file"] == SCHEDULE_FILE and "rule_id" in entry and entry["path"] == VALUE_PATH
+
+
+def _hand_references(bindings: File) -> list[dict[str, Any]]:
+    """#466 W4a: a rule's fixed value is named once in bindings.json. A hand entry whose rule a value binding names is
+    `hand_also_bound` (the value is the model's or a person's, not both); one whose rule's `/fixed_value_milli` a
+    threshold binding names is `hand_also_threshold` (fix1: `apply` would write the threshold's number into a value a
+    person wrote), and one whose rule's `/fixed_value_milli` a fixed entry names `hand_also_fixed` (fix1: one number
+    registered twice, as a person's value and as no quantity); a second hand entry of one rule is `hand_duplicate`. Each
+    is one reason, at the hand entry, and each that holds is reported; none is `model_id_duplicate`, which says that an
+    id or a literal is declared twice (two of the bindings and fixed entries that name one literal are that)."""
+    bound: dict[str, tuple[str, str]] = {}
+    thresholds: dict[str, tuple[str, str]] = {}
+    fixed: dict[str, str] = {}
+    for index, entry in enumerate(bindings.doc["bindings"]):
+        if "value" in entry:
+            bound.setdefault(entry["rule_id"], (at("", "bindings", index), entry["value"]))
+        elif "threshold" in entry and _fixed_value_literal(entry):
+            thresholds.setdefault(entry["rule_id"], (at("", "bindings", index), entry["threshold"]))
+    for index, entry in enumerate(bindings.doc["fixed"]):
+        if _fixed_value_literal(entry):
+            fixed.setdefault(entry["rule_id"], at("", "fixed", index))
+    errors, seen = [], {}
+    for ref, entry in _hand_entries(bindings):
+        rule_id = entry["rule_id"]
+        named = {"path": bindings.path, "entry": ref, "rule_id": rule_id}
+        if rule_id in seen:
+            errors.append(error(HAND_DUPLICATE, {**named, "first_entry": seen[rule_id]}, ref))
+            continue
+        seen[rule_id] = ref
+        if rule_id in bound:
+            binding, value = bound[rule_id]
+            errors.append(error(HAND_ALSO_BOUND, {**named, "binding": binding, "value": value}, ref))
+        if rule_id in thresholds:
+            binding, threshold = thresholds[rule_id]
+            errors.append(error(HAND_ALSO_THRESHOLD, {**named, "binding": binding, "threshold": threshold}, ref))
+        if rule_id in fixed:
+            errors.append(error(HAND_ALSO_FIXED, {**named, "fixed_entry": fixed[rule_id]}, ref))
+    return errors
+
+
 def _load(
     path: Path | str, state_path: Path | str, *, datasets: Path | str, max_bits: int, unknowns: Unknowns
 ) -> tuple[Run, File]:
@@ -167,8 +258,8 @@ def _load(
 
 
 def _references(run: Run, bindings: File) -> list[dict[str, Any]]:
-    """Each binding names a threshold or a value of exports.json, or a resource of the model (a valuation, #466 W3), and
-    no literal is named twice."""
+    """Each binding names a threshold or a value of exports.json, or a resource of the model (a valuation, #466 W3), no
+    literal is named twice, and no rule twice among the value bindings and the hand entries (#466 W4a)."""
     thresholds = {threshold["id"] for threshold in run.exports.doc["thresholds"]}
     values = {value["id"] for value in run.exports.doc.get("values", [])}
     errors, seen = [], {}
@@ -186,15 +277,17 @@ def _references(run: Run, bindings: File) -> list[dict[str, Any]]:
         else:
             seen[key] = ref
     errors.extend(valuation_export.problems(run, bindings.path, valuation_export.bound(bindings.doc)))
+    errors.extend(_hand_references(bindings))
     return errors
 
 
-def _targets(run: Run, bindings: File, strict: bool) -> tuple[Path, dict[str, Target]]:
-    """The repository and every file the entries name, and `schedule.json` when it is there (the origin guard reads it)
-    or under `--strict`, each read once."""
+def _targets(run: Run, bindings: File, scan: bool) -> tuple[Path, dict[str, Target]]:
+    """The repository and every file the entries name, and `schedule.json` when it is there (the origin guard reads it),
+    when a hand entry names one of its rules (#466 W4a) or under `--strict` or `--strict-values` (`scan`), each read
+    once."""
     repo = run.folder.parent.parent
     names = dict.fromkeys(entry["file"] for _, entry in _entries(bindings))
-    if strict or (repo / SCHEDULE_FILE).exists():
+    if scan or bindings.doc.get(HAND) or (repo / SCHEDULE_FILE).exists():
         names.setdefault(SCHEDULE_FILE)
     targets, errors = {}, []
     for name in names:
@@ -299,6 +392,63 @@ def _limits(run: Run) -> dict[str, list[str]]:
     return found
 
 
+def _held(schedule: Target | None) -> frozenset[str]:
+    """The packages schedule.json holds (`held`, each `{package_id, reason, …}`; #466 W4a): the Runtime's composer leaves
+    their rules out of the catalog (standard-pack-schedule, "Composition", step 3). What is not of that shape is the
+    validator's to refuse."""
+    held = None if schedule is None else schedule.doc.get(HELD)
+    return frozenset(
+        entry["package_id"] for entry in (held if isinstance(held, list) else ())
+        if isinstance(entry, dict) and isinstance(entry.get("package_id"), str)
+    )
+
+
+def _is_held(rule: dict[str, Any], held: frozenset[str]) -> bool:
+    """Whether the rule's package is one schedule.json holds (#466 W4a): the composer leaves the rule out of the catalog,
+    so the compiler refuses nothing of it until the hold is lifted."""
+    package = rule.get("package_id")
+    return isinstance(package, str) and package in held
+
+
+# #466 W4a: what the Runtime refuses beside a rule's fixed value, by the codes of a composed rule and of a held one.
+_REALIZATION = (FIXED_VALUE_BESIDE_REALIZATION, HELD_FIXED_VALUE_BESIDE_REALIZATION)
+_PRICED = (FIXED_VALUE_BESIDE_PRICED_PRODUCT, HELD_FIXED_VALUE_BESIDE_PRICED_PRODUCT)
+_PENDING = (FIXED_VALUE_BESIDE_PENDING_PRODUCT, HELD_FIXED_VALUE_BESIDE_PENDING_PRODUCT)
+
+
+def _conflicts(
+    schedule: Target, rule_ref: str, rule: dict[str, Any], held: frozenset[str], detail: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The members of a rule beside which the Runtime refuses the fixed value a value binding writes or a hand entry names
+    (#466 W4a), each one code, at the member: (errors, warnings).
+    - `"maintenance": true`: the reader refuses a fixed value on a rule that declares itself maintenance, held or not
+      (standard-pack-schedule, the reader's table; `parse_standard_pack_schedule`): `fixed_value_beside_maintenance`.
+    - `"realization": true`, and each `produces` entry on a pool of schedule.json whose `valuation` is a block or the
+      pending marker: the compiler's `fixed_value_conflict` (b) and (a) (scheduling/README.md, "Fixed values written in
+      the pack", "Refused at compile time"; `validate_fixed_value`), on the composed task only. A rule whose package is
+      held is not composed, so for it each is a warning (`held_…`), an error once the hold is lifted.
+    Only `true` marks, as the reader takes it: any other value of either member is refused whatever the value, and is
+    the validator's. A `produces` entry on a pool without a valuation is no conflict: the compiler takes it."""
+    errors: list[dict[str, Any]] = []
+    if rule.get(MAINTENANCE) is True:
+        errors.append(error(FIXED_VALUE_BESIDE_MAINTENANCE, detail, at(rule_ref, MAINTENANCE)))
+    found: list[tuple[tuple[str, str], dict[str, Any], str]] = []
+    if rule.get(REALIZATION) is True:
+        found.append((_REALIZATION, {}, at(rule_ref, REALIZATION)))
+    produces = rule.get(PRODUCES)
+    for index, effect in enumerate(produces if isinstance(produces, list) else ()):
+        pool_id = effect.get("pool_id") if isinstance(effect, dict) else None
+        if not isinstance(pool_id, str) or pool_id not in schedule.pools:
+            continue
+        valuation = schedule.doc["pools"][schedule.pools[pool_id]].get(BLOCK)
+        codes = _PRICED if isinstance(valuation, dict) else _PENDING if valuation == MARKER else None
+        if codes is not None:
+            found.append((codes, {"pool_id": pool_id}, at(rule_ref, PRODUCES, index)))
+    later = _is_held(rule, held)
+    reported = [error(codes[1 if later else 0], {**detail, **extra}, ref) for codes, extra, ref in found]
+    return (errors, reported) if later else (errors + reported, [])
+
+
 class _Literal:
     """One entry of bindings.json and the literal it names in its file."""
 
@@ -388,12 +538,14 @@ class _Layouts:
 
 class _ValuePlan:
     """What a value binding needs of its rule (#464 W1): the problems both `check` and `apply` refuse (an origin other than
-    `"model"` among them, and a limited mark that is not `true`, #466 W3); the differences `check` reports and `apply`
-    writes (the fixed value, an absent origin, an absent limited mark the model holds on a consumer); the warnings about
-    the mark that are only reported; the edits that write the differences, and the members they insert."""
+    `"model"` among them, a limited mark that is not `true`, #466 W3, and a member beside which the Runtime refuses the
+    fixed value, #466 W4a); the differences `check` reports and `apply` writes (the fixed value, an absent origin, an
+    absent limited mark the model holds on a consumer); the warnings that are only reported (about the mark, and the
+    conflicts of a held rule); the edits that write the differences, and the members they insert."""
 
     def __init__(
-        self, literal: _Literal, valued: value_export.Valued, layouts: _Layouts, limits: dict[str, list[str]]
+        self, literal: _Literal, valued: value_export.Valued, layouts: _Layouts, limits: dict[str, list[str]],
+        held: frozenset[str],
     ) -> None:
         self.literal, self.valued = literal, valued
         self.problems: list[dict[str, Any]] = []
@@ -414,6 +566,10 @@ class _ValuePlan:
         self.origin = rule.get(ORIGIN, MISSING)
         self._compare()
         self._limited()
+        # #466 W4a: what the Runtime refuses beside the value, whether the rule holds one yet or `apply` inserts it.
+        conflicts, warnings = _conflicts(literal.target, self.rule_ref, rule, held, self._detail())
+        self.problems.extend(conflicts)
+        self.warnings.extend(warnings)
         if not self.problems:
             self._edits(layouts.of(literal.target))
 
@@ -641,12 +797,67 @@ def _literal_edit(layout: splice.Layout, target: Target, ref: str, value: int) -
     return splice.Edit(start, end, str(value).encode("ascii"))
 
 
+HAND_OPTIONAL = ("to_replace_with", "inherited_from", "note")
+
+
+def _hand(
+    targets: dict[str, Target], held: frozenset[str], ref: str, entry: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
+    """A fixed value written by hand (#466 W4a): the problems both `check` and `apply` refuse, the warnings, and what
+    `check` shows of the entry (None with a problem). The tool writes nothing of it and reads neither `status` nor `ref`.
+    - The rule must be there and hold an integer `fixed_value_milli`: no rule of that id, or a member that holds no
+      integer, is `binding_mismatch` `literal_missing`, as for a value binding; a rule without the member is
+      `hand_value_missing` (a hand entry registers a value the rule writes; it never writes one).
+    - The value lies in 1..2^53 - 1, the range the Runtime's compiler takes (a value of 0 is no value;
+      `validate_fixed_value`, `limit_exceeded`): `hand_value_out_of_range` otherwise (fix1), at the member. A rule whose
+      package is held is not compiled, so for it this is the warning `held_hand_value_out_of_range` (fix3), an error once
+      the hold is lifted, as for the conflicts. (A value binding's number below 1 stays `value_not_positive` on any rule:
+      the writer never writes a bad number.) Above 2^53 - 1 the strict reader refuses the file first
+      (`model_file_invalid`, `integer_out_of_range`), so what reaches here is 0 or below.
+    - A value written by hand carries no origin: `"model"` is `hand_origin_model` (only the model's export writes model,
+      and then a value binding names the rule), any other origin `origin_invalid` (the Runtime refuses it).
+    - What the Runtime refuses beside the value (`_conflicts`), as for a value binding."""
+    literal = _Literal(targets, ref, {**entry, "file": SCHEDULE_FILE, "path": VALUE_PATH})
+    if literal.ref is None:  # no rule of that id
+        return [literal.mismatch("literal_missing")], [], None
+    schedule, rule_ref = literal.target, parent(literal.ref)
+    rule = resolve(schedule.doc, rule_ref)
+    detail = {"path": str(schedule.path), "entry": ref, "rule_id": entry["rule_id"]}
+    if literal.value is MISSING:
+        return [error(HAND_VALUE_MISSING, detail, rule_ref)], [], None
+    problems = [] if integer(literal.value) else [literal.mismatch("literal_missing", found=json_type(literal.value))]
+    warnings: list[dict[str, Any]] = []
+    if integer(literal.value) and not 1 <= literal.value <= MAX_SAFE_INTEGER:
+        out_of_range = {**detail, "found": str(literal.value)}
+        if _is_held(rule, held):
+            warnings.append(error(HELD_HAND_VALUE_OUT_OF_RANGE, out_of_range, literal.ref))
+        else:
+            problems.append(error(HAND_VALUE_OUT_OF_RANGE, out_of_range, literal.ref))
+    origin = rule.get(ORIGIN, MISSING)
+    if origin is not MISSING:
+        problems.append(
+            error(HAND_ORIGIN_MODEL, detail, at(rule_ref, ORIGIN)) if origin == MODEL
+            else error(ORIGIN_INVALID, {**detail, "found": shown(origin)}, at(rule_ref, ORIGIN))
+        )
+    conflicts, later = _conflicts(schedule, rule_ref, rule, held, detail)
+    problems.extend(conflicts)
+    warnings.extend(later)
+    if problems:
+        return problems, warnings, None
+    shown_entry = {"entry": ref, "rule_id": entry["rule_id"], "literal": literal.value, "status": entry["status"],
+                   "ref": entry["ref"]}
+    shown_entry.update({key: entry[key] for key in HAND_OPTIONAL if key in entry})
+    return [], warnings, shown_entry
+
+
 def _requires(targets: dict[str, Target], bindings: File) -> list[dict[str, Any]]:
-    """`requires_word_missing` when a value or a valuation (#466 W3) is bound and schedule.json's `requires` lacks
-    `benefit_fixed_value`, the word the Runtime reads a fixed value and a pool's `valuation_origin` under: the tool never
-    adds it."""
+    """`requires_word_missing` when a value or a valuation (#466 W3) is bound, or a hand entry names a fixed value (#466
+    W4a), and schedule.json's `requires` lacks `benefit_fixed_value`, the word the Runtime reads a fixed value and a
+    pool's `valuation_origin` under: the tool never adds it."""
     schedule = targets.get(SCHEDULE_FILE)
-    bound = any("value" in entry or "valuation" in entry for entry in bindings.doc["bindings"])
+    bound = bool(bindings.doc.get(HAND)) or any(
+        "value" in entry or "valuation" in entry for entry in bindings.doc["bindings"]
+    )
     if schedule is None or not bound:
         return []
     requires = schedule.doc.get("requires")
@@ -659,12 +870,14 @@ def _requires(targets: dict[str, Target], bindings: File) -> list[dict[str, Any]
 def _unbound_origins(targets: dict[str, Target], bindings: File) -> list[dict[str, Any]]:
     """The origin guard (#464 W1), always on: `origin_unbound` for each rule of schedule.json whose `fixed_value_origin`
     is `"model"` and that no value binding names, then for each pool whose `valuation_origin` is and that no valuation
-    binding names (#466 W3)."""
+    binding names (#466 W3). A rule a hand entry names is `hand_origin_model` instead (#466 W4a, `_hand`): one reason,
+    one code."""
     schedule = targets.get(SCHEDULE_FILE)
     if schedule is None:
         return []
     bound = {
-        "rules": {entry["rule_id"] for entry in bindings.doc["bindings"] if "value" in entry},
+        "rules": {entry["rule_id"] for entry in bindings.doc["bindings"] if "value" in entry}
+        | {entry["rule_id"] for _, entry in _hand_entries(bindings)},
         "pools": {entry["pool_id"] for entry in bindings.doc["bindings"] if "valuation" in entry},
     }
     errors = []
@@ -698,6 +911,24 @@ def _unbound(schedule: Target, bindings: File) -> tuple[int, list[dict[str, Any]
                 if (holder, item_id, ref) not in named:
                     detail = {"path": str(schedule.path), member: item_id, "pointer": ref, "literal": str(literal)}
                     errors.append(error(BINDING_UNBOUND_LITERAL, detail, at("", holder, index) + ref))
+    return count, errors
+
+
+def _unregistered(schedule: Target, bindings: File) -> tuple[int, list[dict[str, Any]]]:
+    """`--strict-values` (#466 W4a): how many rules of schedule.json write `fixed_value_milli`, held ones too, and
+    `fixed_value_unregistered` for each that no value binding and no hand entry names, in file order. That none is named
+    twice is always checked (`hand_also_bound`, `hand_duplicate`; two value bindings of one rule name one literal,
+    `model_id_duplicate`), so each such rule is in exactly one of them."""
+    named = {entry["rule_id"] for entry in bindings.doc["bindings"] if "value" in entry}
+    named |= {entry["rule_id"] for _, entry in _hand_entries(bindings)}
+    count, errors = 0, []
+    for rule_id, index in schedule.rules.items():
+        if MILLI not in schedule.doc["rules"][index]:
+            continue
+        count += 1
+        if rule_id not in named:
+            detail = {"path": str(schedule.path), "rule_id": rule_id}
+            errors.append(error(FIXED_VALUE_UNREGISTERED, detail, at("", "rules", index, MILLI)))
     return count, errors
 
 
@@ -799,12 +1030,15 @@ def _values_file(run: Run) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]
     return {"file": str(path), "current": not stale, "stale": stale}, warnings
 
 
-def _valuations_file(run: Run, targets: dict[str, Target]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+def _valuations_file(
+    run: Run, bindings: File, targets: dict[str, Target]
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     """Whether `out/valuations.json` (#466 W3) is of the current inputs: the model's versions (`rules`, `data`, `tool`), the
-    bytes of `out/prices.json` (`prices`), of exports.json (`exports`, whose acceptances a price rests on; fix1) and of
-    bindings.json (`bindings`), and the scale Q each valuation read of its pool, which schedule.json must still hold
-    (`scale`). None when there is no such file; one that is not current is the warning `valuations_stale`, with the members
-    that differ."""
+    bytes of `out/prices.json` (`prices`), of exports.json (`exports`, whose acceptances a price rests on; fix1), the
+    valuation bindings of bindings.json, each by its pointer (`bindings`; #466 W4a fix1: a hand entry, a threshold or value
+    binding, a fixed entry or a note elsewhere in the file leaves it current), and the scale Q each valuation read of its
+    pool, which schedule.json must still hold (`scale`). None when there is no such file; one that is not current is the
+    warning `valuations_stale`, with the members that differ."""
     path = run.folder / valuation_export.VALUATIONS
     if not path.exists():
         return None, []
@@ -822,7 +1056,7 @@ def _valuations_file(run: Run, targets: dict[str, Target]) -> tuple[dict[str, An
         stale.append("prices")
     if doc["exports"]["sha256"] != value_export.exports_sha(run):
         stale.append("exports")
-    if doc["bindings"]["sha256"] != valuation_export.bindings_sha(run):
+    if doc["bindings"][valuation_export.BOUND_SHA] != valuation_export.bound_sha(valuation_export.bound(bindings.doc)):
         stale.append("bindings")
     schedule = targets.get(SCHEDULE_FILE)
 
@@ -845,18 +1079,22 @@ def check_bindings(
     datasets: Path | str,
     max_bits: int,
     strict: bool,
+    strict_values: bool = False,
     unknowns: Unknowns = Unknowns(),
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """`acmodel bindings check [--strict]`: every bound literal equals its exported threshold, value (with its origin and
-    the limited mark) or valuation (with its origin); the origin guard; with `strict`, no literal of a `fact` or
-    `resource_projection` predicate of a schedule.json rule, and no quantity of one of its pools, is left unbound.
-    `data.coverage` is what `export prices` delivered, as schedule.json meets it (`_coverage`), and `data.values` and
-    `data.valuations` whether out/values.json and out/valuations.json are current; the warnings are `precision_low` and
-    the limited reports (#466 W3), with the errors too, then, only without errors, `prices_stale`, `values_stale` and
-    `valuations_stale`."""
+    """`acmodel bindings check [--strict] [--strict-values]`: every bound literal equals its exported threshold, value
+    (with its origin and the limited mark) or valuation (with its origin); each value written by hand is registered as
+    `_hand` says (#466 W4a); no bound or hand-written fixed value stands where the Runtime refuses it (`_conflicts`); the
+    origin guard; with `strict`, no literal of a `fact` or `resource_projection` predicate of a schedule.json rule, and no
+    quantity of one of its pools, is left unbound; with `strict_values`, no rule's fixed value is named by neither a value
+    binding nor a hand entry (`_unregistered`). `data.coverage` is what `export prices` delivered, as schedule.json meets
+    it (`_coverage`), and `data.values` and `data.valuations` whether out/values.json and out/valuations.json are current;
+    the warnings are `precision_low`, the limited reports (#466 W3), the conflicts of a held rule (#466 W4a) and a held
+    rule's hand-written value out of range (fix3), with the errors too, then, only without errors, `prices_stale`,
+    `values_stale` and `valuations_stale`."""
     run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
-    repo, targets = _targets(run, bindings, strict)
+    repo, targets = _targets(run, bindings, strict or strict_values)
     values, errors = _values(run, bindings)
     valued, refused = _valued(run, bindings)
     errors.extend(refused)
@@ -864,14 +1102,15 @@ def check_bindings(
     weighed, refused = _valuated(run, bindings, targets, slot_ids)
     errors.extend(refused)
     errors.extend(_requires(targets, bindings))
-    bound, fixed, warnings = [], [], []
+    bound, fixed, hands, warnings = [], [], [], []
     layouts = _Layouts()
     limits = _limits(run)
+    held = _held(targets.get(SCHEDULE_FILE))
     for ref, entry in _entries(bindings):
         literal = _Literal(targets, ref, entry)
         if "value" in entry:
             if entry["value"] in valued:
-                plan = _ValuePlan(literal, valued[entry["value"]], layouts, limits)
+                plan = _ValuePlan(literal, valued[entry["value"]], layouts, limits, held)
                 errors.extend(plan.problems + plan.differences)
                 warnings.extend(plan.warnings)
                 if not plan.problems:
@@ -898,15 +1137,27 @@ def check_bindings(
             if expected is not None and literal.value != expected:
                 errors.append(literal.mismatch("value", expected=str(expected), found=str(literal.value)))
             bound.append({**literal.describe(), "form": value["form"], "literal": literal.value})
+    for ref, entry in _hand_entries(bindings):
+        problems, found, shown_entry = _hand(targets, held, ref, entry)
+        errors.extend(problems)
+        warnings.extend(found)
+        if shown_entry is not None:
+            hands.append(shown_entry)
     errors.extend(_unbound_origins(targets, bindings))
-    data = {**run.head, "repo": str(repo), "strict": strict, "bindings": bound, "fixed": fixed}
+    data = {
+        **run.head, "repo": str(repo), "strict": strict, "strict_values": strict_values, "bindings": bound,
+        "fixed": fixed, "hand": hands,
+    }
     if strict:
         data["literals"], unbound = _unbound(targets[SCHEDULE_FILE], bindings)
         errors.extend(unbound)
+    if strict_values:
+        data["fixed_values"], unregistered = _unregistered(targets[SCHEDULE_FILE], bindings)
+        errors.extend(unregistered)
     _raise(errors, warnings)
     data["coverage"], stale_prices = _coverage(run, repo, targets)
     data["values"], stale_values = _values_file(run)
-    data["valuations"], stale_valuations = _valuations_file(run, targets)
+    data["valuations"], stale_valuations = _valuations_file(run, bindings, targets)
     return data, warnings + stale_prices + stale_values + stale_valuations
 
 
@@ -978,9 +1229,12 @@ def apply_bindings(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """`acmodel bindings apply`: write each bound literal that differs from its exported threshold, value or valuation,
     changing only its bytes, and for a value its origin, the limited mark and the members it inserts, for a valuation its
-    origin. Anything else `check` refuses is refused, and then nothing is written. The edited bytes must read back as the
-    document the edits make, and every file is renamed from its part only when it is still the bytes that were read
-    (`_commit`). The warnings (`precision_low`, the limited reports, #466 W3) are reported, and change nothing."""
+    origin. Anything else `check` refuses is refused, and then nothing is written: a value written by hand that is not
+    registered as `_hand` says, and a fixed value the Runtime would refuse (`_conflicts`, #466 W4a), too. The edited bytes
+    must read back as the document the edits make, and every file is renamed from its part only when it is still the
+    bytes that were read (`_commit`). The warnings (`precision_low`, the limited reports, #466 W3, the conflicts of a held
+    rule, #466 W4a, and a held rule's hand-written value out of range, fix3) are reported, and change nothing. A hand
+    entry's value is never written."""
     run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
     repo, targets = _targets(run, bindings, False)
@@ -996,6 +1250,7 @@ def apply_bindings(
     changed, warnings = [], []
     layouts = _Layouts()
     limits = _limits(run)
+    held = _held(targets.get(SCHEDULE_FILE))
     for ref, entry in _entries(bindings):
         literal = _Literal(targets, ref, entry)
         name = entry["file"]
@@ -1003,7 +1258,9 @@ def apply_bindings(
             if "value" in entry:
                 if entry["value"] not in valued:  # refused above
                     continue
-                plan: _ValuePlan | _ValuationPlan = _ValuePlan(literal, valued[entry["value"]], layouts, limits)
+                plan: _ValuePlan | _ValuationPlan = _ValuePlan(
+                    literal, valued[entry["value"]], layouts, limits, held
+                )
                 warnings.extend(plan.warnings)
             else:
                 if ref not in weighed:  # refused above
@@ -1029,6 +1286,10 @@ def apply_bindings(
             edits.setdefault(name, []).append(_literal_edit(layouts.of(literal.target), literal.target, literal.ref, value))
             splice.assign(expected.setdefault(name, copy.deepcopy(literal.target.doc)), literal.ref, value)
             changed.append({**literal.describe(), "from": literal.value, "to": value})
+    for ref, entry in _hand_entries(bindings):
+        problems, found, _ = _hand(targets, held, ref, entry)
+        errors.extend(problems)
+        warnings.extend(found)
     errors.extend(_unbound_origins(targets, bindings))
     _raise(errors, warnings)
     staged = []

@@ -111,6 +111,29 @@ LIMITED_MISSING = "limited_missing"  # bindings check: a bound consumer the mode
 LIMITED_INVALID = "limited_invalid"  # bindings check|apply: a bound rule's limited is not true
 LIMITED_WITHOUT_CONSUMES = "limited_without_consumes"  # a warning: limited by the model, no consumes; not written
 LIMITED_UNMODELLED = "limited_unmodelled"  # a warning: the rule says limited, the model does not; not removed
+# #466 W4a, the fixed values written by hand (`hand` of bindings.json), `bindings check --strict-values`, and the fixed
+# values the Runtime refuses beside another member of their rule. Each code is one reason.
+HAND_ALSO_BOUND = "hand_also_bound"  # a hand entry's rule is a value binding's too
+HAND_DUPLICATE = "hand_duplicate"  # two hand entries name one rule
+HAND_VALUE_MISSING = "hand_value_missing"  # a hand entry's rule has no fixed_value_milli
+HAND_ORIGIN_MODEL = "hand_origin_model"  # a hand entry's rule says the model wrote its value
+# fix1: a hand entry's rule's fixed value is a threshold binding's literal too, or a fixed entry's; a hand entry's value
+# lies outside 1..2^53 - 1, which the Runtime's compiler refuses (a rule whose package is not held).
+HAND_ALSO_THRESHOLD = "hand_also_threshold"
+HAND_ALSO_FIXED = "hand_also_fixed"
+HAND_VALUE_OUT_OF_RANGE = "hand_value_out_of_range"
+# fix3: the same on a rule whose package is held, a warning: a held rule is not compiled until the hold is lifted.
+HELD_HAND_VALUE_OUT_OF_RANGE = "held_hand_value_out_of_range"
+FIXED_VALUE_UNREGISTERED = "fixed_value_unregistered"  # --strict-values: a fixed value no binding or hand entry names
+# A bound or hand-written fixed value the Runtime refuses when it composes the rule (an error), or would once the rule's
+# package is no longer held (a warning: a held rule is not composed).
+FIXED_VALUE_BESIDE_REALIZATION = "fixed_value_beside_realization"
+FIXED_VALUE_BESIDE_PRICED_PRODUCT = "fixed_value_beside_priced_product"
+FIXED_VALUE_BESIDE_PENDING_PRODUCT = "fixed_value_beside_pending_product"
+FIXED_VALUE_BESIDE_MAINTENANCE = "fixed_value_beside_maintenance"
+HELD_FIXED_VALUE_BESIDE_REALIZATION = "held_fixed_value_beside_realization"
+HELD_FIXED_VALUE_BESIDE_PRICED_PRODUCT = "held_fixed_value_beside_priced_product"
+HELD_FIXED_VALUE_BESIDE_PENDING_PRODUCT = "held_fixed_value_beside_pending_product"
 
 EXIT_OK = 0
 
@@ -207,4 +230,20 @@ EXIT_STATUS = {
     LIMITED_INVALID: 6,
     LIMITED_WITHOUT_CONSUMES: 0,
     LIMITED_UNMODELLED: 0,
+    HAND_ALSO_BOUND: 1,
+    HAND_DUPLICATE: 1,
+    HAND_VALUE_MISSING: 6,
+    HAND_ORIGIN_MODEL: 6,
+    HAND_ALSO_THRESHOLD: 1,
+    HAND_ALSO_FIXED: 1,
+    HAND_VALUE_OUT_OF_RANGE: 6,
+    HELD_HAND_VALUE_OUT_OF_RANGE: 0,
+    FIXED_VALUE_UNREGISTERED: 6,
+    FIXED_VALUE_BESIDE_REALIZATION: 6,
+    FIXED_VALUE_BESIDE_PRICED_PRODUCT: 6,
+    FIXED_VALUE_BESIDE_PENDING_PRODUCT: 6,
+    FIXED_VALUE_BESIDE_MAINTENANCE: 6,
+    HELD_FIXED_VALUE_BESIDE_REALIZATION: 0,
+    HELD_FIXED_VALUE_BESIDE_PRICED_PRODUCT: 0,
+    HELD_FIXED_VALUE_BESIDE_PENDING_PRODUCT: 0,
 }

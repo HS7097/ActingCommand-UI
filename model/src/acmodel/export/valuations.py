@@ -26,7 +26,8 @@ none when no power of ten within Q's range does. The tool never suggests a scale
 written `pending` with why. A binding whose pool is not there, is a slot, holds the pending marker for its valuation or no
 block with an integer W and a scale in range, a resource the model lacks, a price below 0, a W refused for its range, or
 prices.json of other versions or another κ, refuses the whole export, and nothing is written. valuations.json records the
-sha256 of the bytes of prices.json, exports.json (the acceptances a price rests on) and bindings.json.
+sha256 of the bytes of prices.json and exports.json (the acceptances a price rests on), and of the valuation bindings of
+bindings.json, each by its pointer (#466 W4a fix1, `bound_sha`): the export reads nothing else of that file.
 
 `bindings check|apply` take a bound valuation from here too (`weigh`), so a binding holds only what this export writes.
 """
@@ -38,7 +39,6 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
-from acmodel.cache.keys import digest
 from acmodel.check.walk import at
 from acmodel.codes import (
     BINDING_MISMATCH,
@@ -61,7 +61,7 @@ from acmodel.export.policy import delivered, scaled
 from acmodel.export.thresholds import write_file
 from acmodel.export.values import PENDING, PRICES, PriceReader, Prices, current_prices, exports_sha
 from acmodel.model import read_bindings, readers
-from acmodel.model.jsonfile import MAX_SAFE_INTEGER, read
+from acmodel.model.jsonfile import MAX_SAFE_INTEGER
 from acmodel.model.shape import json_type
 
 SCHEMA_VERSION = "acmodel.valuations.v1"
@@ -79,6 +79,7 @@ SCALES = tuple(10 ** power for power in range(16))
 BLOCK, WEIGHT, SCALE = "valuation", "base_weight_milli", "scale"  # a pool's valuation block and the two members read
 MARKER = "pending"  # the Runtime's marker of a valuation not known yet (`"valuation": "pending"`)
 NONE = "none"  # a suggested scale, in an error's detail, when no power of ten holds
+BOUND_SHA = "valuations_sha256"  # valuations.json's `bindings` member: the sha256 of the valuation bindings (`bound_sha`)
 
 
 def _raise(errors: list[dict[str, Any]]) -> None:
@@ -285,9 +286,13 @@ def problems(run: Run, path: str, entries: list[tuple[str, dict[str, Any]]]) -> 
     return errors
 
 
-def bindings_sha(run: Run) -> str:
-    """The sha256 of bindings.json's bytes, as valuations.json records it."""
-    return digest(read(run.folder / BINDINGS, readers.BINDINGS.name))
+def bound_sha(entries: list[tuple[str, dict[str, Any]]]) -> str:
+    """The sha256 of the valuation bindings (`bound`), as valuations.json records it (#466 W4a fix1): the canonical JSON
+    (sorted keys, no whitespace, UTF-8) of the list of `[pointer in bindings.json, binding]` of each, in order. The
+    pointer counts, since each provenance file names its binding by it. It is all the export reads of bindings.json, so
+    a hand entry, a threshold or value binding, a fixed entry or a note elsewhere in the file changes nothing of it; a
+    valuation binding's own change (its `round`, pool, resource or note), one more or one fewer, or its place does."""
+    return sha256([[ref, entry] for ref, entry in entries])
 
 
 def _document(run: Run, weighed: Weighed, entry: dict[str, Any], prices: Prices) -> dict[str, Any]:
@@ -363,7 +368,7 @@ def build(run: Run) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, An
         "versions": versions(run.checker, run.folder),
         "prices": {"file": PRICES, "sha256": prices.sha, "versions": prices.doc["versions"]},
         "exports": {"file": relative(run, run.exports.path), "sha256": exports_sha(run)},
-        "bindings": {"file": relative(run, str(path)), "sha256": bindings_sha(run)},
+        "bindings": {"file": relative(run, str(path)), BOUND_SHA: bound_sha(entries)},
         "schedule": {"file": readers.SCHEDULE_FILE},
         "unit_milli": prices.doc["unit_milli"],
         "precision_bound": str(PRECISION_BOUND),

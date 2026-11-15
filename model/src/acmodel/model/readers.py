@@ -788,6 +788,14 @@ def _binding(value: dict[str, Any], ref: str, ctx: Context) -> bool:
 
 
 LITERAL = {"file": REPO_FILE, "path": POINTER}
+# #466 W4a: a fixed value written by hand, by its rule of schedule.json (the literal is always the rule's
+# `/fixed_value_milli` there, so the entry names neither `file` nor `path`). `status` and `ref` are opaque texts the tool
+# stores and never reads, and so are `to_replace_with` and `note`; `inherited_from` is the id of the rule whose value it
+# inherits, in the shape of a rule id.
+HAND = Object(
+    {"rule_id": FACT_KEY, "status": TEXT, "ref": TEXT},
+    {"to_replace_with": TEXT, "inherited_from": FACT_KEY, **NOTE},
+)
 BINDINGS = Format(
     "acmodel.bindings.v1",
     "acmodel.bindings.v1",
@@ -803,7 +811,8 @@ BINDINGS = Format(
                 Object({**LITERAL, "reason": TEXT, "ref": TEXT}, {**SCHEDULE_ITEMS, **NOTE}, _schedule_item)
             ),
         },
-        NOTE,
+        # #466 W4a: absent means none, so a bindings.json written before reads as it did.
+        {"hand": ListOf(HAND), **NOTE},
     ),
 )
 
@@ -895,8 +904,9 @@ VALUES = Format(
     }),
 )
 # #466 W3: `out/valuations.json`, which `export valuations` writes and `bindings check` reads back to tell whether it is
-# current: the versions of the model, the sha256 of the bytes of the prices.json, the exports.json (fix1) and the
-# bindings.json it was computed from, and each valuation's pool and the scale Q it read there. The rest is only passed on.
+# current: the versions of the model, the sha256 of the bytes of the prices.json and the exports.json (fix1) it was
+# computed from, the sha256 of the valuation bindings of bindings.json alone (`valuations_sha256`, #466 W4a fix1), and
+# each valuation's pool and the scale Q it read there. The rest is only passed on.
 VALUATIONS = Format(
     "acmodel.valuations.v1",
     "acmodel.valuations.v1",
@@ -906,7 +916,7 @@ VALUATIONS = Format(
         "versions": MODEL_VERSIONS,
         "prices": Object({"file": TEXT, "sha256": SHA256, "versions": MODEL_VERSIONS}),
         "exports": Object({"file": TEXT, "sha256": SHA256}),
-        "bindings": Object({"file": TEXT, "sha256": SHA256}),
+        "bindings": Object({"file": TEXT, "valuations_sha256": SHA256}),
         "schedule": Object({"file": TEXT}),
         "unit_milli": Integer(1, MAX),
         "precision_bound": TEXT,
@@ -1061,8 +1071,8 @@ def check_assessment(doc: dict[str, Any], path: Path | str) -> None:
 
 
 def read_bindings(path: Path | str) -> dict[str, Any]:
-    """`bindings.json` (`acmodel.bindings.v1`): where each threshold's literal and each value's sits, and the fixed
-    literals."""
+    """`bindings.json` (`acmodel.bindings.v1`): where each threshold's literal and each value's sits, the fixed
+    literals, and the fixed values written by hand (`hand`, #466 W4a)."""
     return _read(path, BINDINGS)
 
 

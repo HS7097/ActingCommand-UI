@@ -59,7 +59,7 @@ GROUPS = {name.split(" ")[0] for name in COMMANDS if " " in name}
 FLAGS = {
     "check": ("--strict-provenance", "--report-supplements"),
     "economy": ("--steady-only", "--quick"),
-    "bindings check": ("--strict",),
+    "bindings check": ("--strict", "--strict-values"),
     "cache gc": ("--apply",),
 }
 # A flag that is only valid together with another of its command's; without it, it is `argument_unexpected`.
@@ -96,7 +96,7 @@ USAGE = (
     "          export tables <model folder or model.json> --state <state file> --repo <repository>,\n"
     "          export scoring <model folder or model.json> --state <state file>,\n"
     "          verify prices <model folder or model.json> --state <state file>,\n"
-    "          bindings check <model folder or model.json> --state <state file> [--strict],\n"
+    "          bindings check <model folder or model.json> --state <state file> [--strict] [--strict-values],\n"
     "          bindings apply <model folder or model.json> --state <state file>,\n"
     "          cache stats, cache verify, cache gc [--apply],\n"
     "          watch <model folder or model.json> --state <state file>\n"
@@ -355,14 +355,17 @@ def _verify_prices(args: list[str], cfg: config.Config, system: System) -> dict[
 def _bindings(
     command: str, args: list[str], cfg: config.Config, system: System
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """`bindings check [--strict]` compares the bound literals with their thresholds, values and valuations, and reports
-    the coverage of the prices with its warnings; `bindings apply` writes the ones that differ, with its warnings."""
+    """`bindings check [--strict] [--strict-values]` compares the bound literals with their thresholds, values and
+    valuations, checks the values written by hand (#466 W4a), and reports the coverage of the prices with its warnings;
+    `bindings apply` writes the ones that differ, with its warnings. The two flags are independent: `--strict` scans the
+    predicates' and pools' literals, `--strict-values` the rules' fixed values."""
     _dependencies(system)
     model, state = Path(args[0]), Path(args[1])
     if command == "bindings check":
-        strict = "--strict" in args[2:]
+        flags = args[2:]
         return check_bindings(
-            model, state, datasets=cfg.datasets, max_bits=cfg.expr_max_bits, strict=strict, unknowns=cfg.unknowns
+            model, state, datasets=cfg.datasets, max_bits=cfg.expr_max_bits, strict="--strict" in flags,
+            strict_values="--strict-values" in flags, unknowns=cfg.unknowns,
         )
     return apply_bindings(model, state, datasets=cfg.datasets, max_bits=cfg.expr_max_bits, unknowns=cfg.unknowns)
 
