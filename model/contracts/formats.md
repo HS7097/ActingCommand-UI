@@ -2496,10 +2496,11 @@ leaves the held rules out. Which packages are maintenance-role it derives from t
 it), the `features` of `pages.json`, the handlers and `then.run` packages of `interrupts.json`, and the edges and the
 recovery chain of `navigation.json`. The tool reads none of them, on purpose: reading a package's role again would make a
 second copy of the composer's rule, and the two would sooner or later disagree. This case is checked where the composer
-itself runs: a schedule that enters a resource repository passes `actinglab standard-pack check`, which calls the
-composer (the one function the Runtime's scheduler workbench, check-config and `actinglab standard-pack check|compose`
-all call), and
-the resource repository's static check (#466 W4b) checks it once more. A rule that declares `"maintenance": true` itself
+itself runs, the one function the Runtime's scheduler workbench, check-config and `actinglab standard-pack check|compose`
+all call: a resource repository merges a change only after its local validation admits the head commit, and that
+validation runs the repository's bundle build, with `actinglab standard-pack check` on the installed game root (the
+same build makes every resource version); the Runtime composes it again when it loads it. The resource repository's
+static check (#466 W4b) checks this case once more. A rule that declares `"maintenance": true` itself
 is the tool's (`fixed_value_beside_maintenance`, above). Whether `schedule.json` is valid as a whole stays the
 validator's ("Reading the files").
 
