@@ -1020,7 +1020,8 @@ fn lines(
         .iter()
         .map(|id| other_target(id, targets, shared.contains(id.as_str())))
         .collect();
-    let line_of = |entry: &GoalViewEntry| entry_line(entry, targets, &others, tongue);
+    let line_of =
+        |entry: &GoalViewEntry| entry_line(entry, targets, &others, &view.entries, tongue);
     // By the first package's id, in the order the page first names it, with its display name.
     let mut groups: Vec<(&str, String, Vec<&GoalViewEntry>)> = Vec::new();
     let mut unnamed: Vec<&GoalViewEntry> = Vec::new();
@@ -1105,11 +1106,13 @@ fn shared_names(view: &GoalView) -> BTreeSet<&str> {
     shared
 }
 
-/// One entry of the page, by its type; `others` the page's other targets.
+/// One entry of the page, by its type; `others` the page's other targets, `entries` all its
+/// entries.
 fn entry_line(
     entry: &GoalViewEntry,
     targets: &Targets<'_>,
     others: &[OtherTarget],
+    entries: &[GoalViewEntry],
     tongue: Tongue,
 ) -> GoalLine {
     let declared = entry.entry.as_ref();
@@ -1120,7 +1123,7 @@ fn entry_line(
             help: text_of(declared, "help", tongue),
         },
         GoalEntryType::Resource => {
-            GoalLine::Resource(resource_line(entry, targets, others, tongue))
+            GoalLine::Resource(resource_line(entry, targets, others, entries, tongue))
         }
         GoalEntryType::Tier => GoalLine::Tier(TierLine {
             title: text_of(declared, "title", tongue),
@@ -1133,11 +1136,15 @@ fn entry_line(
 }
 
 /// A `resource` entry: its pool as the view says it, and the target on it, with what that carries
-/// when it was set elsewhere; and the other target of its name among `others`, if any.
+/// when it was set elsewhere; and the target of its name on another pool, if any: an other target
+/// among `others`, else the goal of another resource entry among `entries` whose id is this
+/// entry's name. A set on this entry removes every target of its name on another pool
+/// (`crates/policy/src/resource_targets/v3.rs:1555-1556` at the pinned Runtime).
 fn resource_line(
     entry: &GoalViewEntry,
     targets: &Targets<'_>,
     others: &[OtherTarget],
+    entries: &[GoalViewEntry],
     tongue: Tongue,
 ) -> ResourceLine {
     let pool = entry.resource.as_ref().map(|resource| resource.pool.as_str());
@@ -1158,8 +1165,31 @@ fn resource_line(
         goal,
         set: entry.set.as_ref().map(set_by),
         elsewhere,
-        same_name: others.iter().find(|other| other.id == entry.name).map(OtherTarget::held),
+        same_name: others
+            .iter()
+            .find(|other| other.id == entry.name)
+            .map(OtherTarget::held)
+            .or_else(|| entry_of_name_elsewhere(entries, &entry.name, pool)),
     }
+}
+
+/// The goal of a resource entry of `entries` on another pool than `pool` whose target id is
+/// `name`, as a question says it.
+fn entry_of_name_elsewhere(entries: &[GoalViewEntry], name: &str, pool: Option<&str>) -> Option<Held> {
+    entries
+        .iter()
+        .filter(|other| matches!(other.entry_type, GoalEntryType::Resource))
+        .filter_map(|other| other.resource.as_ref().map(|resource| (other, resource)))
+        .find(|(_, resource)| {
+            resource.target_id.as_deref() == Some(name) && Some(resource.pool.as_str()) != pool
+        })
+        .map(|(other, resource)| {
+            other
+                .value_json
+                .as_deref()
+                .and_then(at_least)
+                .map(|amount| (resource.pool.clone(), amount))
+        })
 }
 
 /// The `at_least` of a resource entry's value `{"at_least": n}`.
@@ -3838,6 +3868,8 @@ mod tests {
                 resource("gold", "pool.gold", Some(("gold_main", 50)), Some(set("ui", None))),
                 resource("wood", "pool.wood", Some(("agent_wood", 80)), Some(set("mcp", None))),
                 resource("gems", "pool.gems", None, None),
+                // Another resource entry whose goal's id is the entry name `gems`.
+                resource("silver", "pool.silver", Some(("gems", 40)), Some(set("mcp", None))),
                 variable("pick", true, choice("pick"), &["pack.a"], json!({
                     "default_json": "\"item_b\"",
                     "value_json": "\"item_a\"",
@@ -3862,6 +3894,7 @@ mod tests {
                     pool("pool.wood", true, true, Some(2)),
                     pool("pool.gems", true, true, Some(3)),
                     pool("pool.old_gold", true, true, Some(4)),
+                    pool("pool.silver", true, true, Some(5)),
                 ]),
                 json!([]),
                 Some(active(
@@ -3880,6 +3913,7 @@ mod tests {
                         target("pick", "pool.iron", json!(9)),
                         target("stone", "pool.stone", json!(8)),
                         target("iron", "pool.ore", json!(7)),
+                        target("gems", "pool.silver", json!(40)),
                     ]),
                     json!([]),
                     false,
@@ -3978,8 +4012,17 @@ mod tests {
             on("entry:wood", GoalAct::Clear),
             asks(clear_of("wood"), Loses::Elsewhere { cleared: true, carried })
         );
-        // No other target of its name: set at once.
-        assert_eq!(on("entry:gems", typed("5")), goes(set_of("gems", "{\"at_least\":5}")));
+        // No other target of its name, but another resource entry's goal has its name as its id:
+        // that goal goes too, so asked, with what it holds.
+        assert_eq!(
+            on("entry:gems", typed("5")),
+            asks(
+                set_of("gems", "{\"at_least\":5}"),
+                Loses::SameName { held: Some(("pool.silver".to_owned(), 40)), carried: None }
+            )
+        );
+        // No target of its name anywhere else: set at once.
+        assert_eq!(on("entry:silver", typed("45")).map(|press| press.asks.is_some()), Some(false));
     }
 
     /// fix1: a variable the game root does not apply takes no value set here

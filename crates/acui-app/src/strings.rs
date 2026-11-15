@@ -2706,7 +2706,7 @@ pub const ZH: Labels = Labels {
     goals_problem_other: "原因代码 {}",
     goals_problem_value_too_large_at: "这个值超过了上限 {} 字节，存不下",
     goals_problem_record_out_of_limits_at: "这个实例存的目标或设置项已经到上限 {} 项，要先清掉一些",
-    goals_problem_range: "允许 {} 到 {}",
+    goals_problem_range: "{} 到 {}",
     goals_problem_with: "{}：{}",
     picture_title: "实时画面",
     picture_looking: "正在找这个实例最近的画面…",
