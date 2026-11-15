@@ -70,8 +70,8 @@ fixed value stands beside `"maintenance": true` (the reader's `schedule_invalid`
 (`fixed_value_conflict` there) is an error, one code each, which `apply` refuses. The composer leaves a held package's
 rules out of the catalog, so for such a rule the last three are warnings (`held_…`), refused once the hold is lifted.
 The tool reads no package's role: a fixed value on a rule of a maintenance-role package, which the composer refuses too,
-is caught where the composer runs (`actinglab standard-pack check`) and by the resource repository's own check (W4b;
-contracts/formats.md, "What the tool guarantees, and what it leaves to the composer").
+is caught where the composer runs: the resource repository's local validation, before every merge (`actinglab
+standard-pack check`; contracts/formats.md, "What the tool guarantees, and what it leaves to the composer").
 
 `check` compares every bound literal with its threshold or value (`binding_mismatch`), and with `--strict` refuses
 every integer literal of a `fact` or `resource_projection` predicate of a `schedule.json` rule, and every
