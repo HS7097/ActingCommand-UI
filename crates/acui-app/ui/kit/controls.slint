@@ -352,7 +352,9 @@ export component SkinComboBox inherits ComboBox { }
 // it before, and no other key on the box does anything. In the list the
 // pointer and the Up and Down keys only move the highlight; Return or a click
 // on a row picks that row, but not the repeats of a Return held down since it
-// opened the list; Esc closes the list, and other keys do nothing. Each pick
+// opened the list; Esc closes the list, and other keys do nothing. After a
+// click picks a row, the clicks and the wheel of the next half second or so
+// reach nothing, so the second click of a double-click lands nowhere. Each pick
 // is said once through `picked`, the chosen row's too: what is chosen stays the
 // caller's, so the box changes only as `chosen` does. After a pick the focus
 // waits in `park`, just after the box, where Return and Space do nothing and
@@ -388,7 +390,7 @@ export component SkinDropDown inherits Rectangle {
     accessible-value: root.chosen-text;
     accessible-enabled: root.enabled;
     accessible-expandable: true;
-    accessible-expanded: list.is-open;
+    accessible-expanded: drop-list.is-open;
     accessible-action-expand => {
         root.open(false);
     }
@@ -404,23 +406,34 @@ export component SkinDropDown inherits Rectangle {
         if (!focus-scope.has-focus) {
             park.focus();
         }
-        list.show();
+        drop-list.show();
     }
     // Off, the list only closes. Else the pick is said before the list
     // closes, as the std ComboBox does it, and the focus goes to `park` at
     // once, after the list has handed it back.
     function pick(index: int) {
         if (!root.enabled) {
-            list.close();
+            drop-list.close();
             return;
         }
         root.picked(index);
-        list.close();
+        drop-list.close();
         park.focus();
+    }
+    // A click on a row picks it, and then for a moment `guard` takes every
+    // click and turn of the wheel, so the second click of a double-click
+    // reaches nothing the list was over. The keys are not held back: the
+    // guard opens with no focus to keep, and `park` has it again at once.
+    function click-pick(index: int) {
+        root.pick(index);
+        park.clear-focus();
+        guard.show();
+        park.focus();
+        guard-time.start();
     }
     changed enabled => {
         if (!root.enabled) {
-            list.close();
+            drop-list.close();
         }
     }
     HorizontalLayout {
@@ -502,7 +515,7 @@ export component SkinDropDown inherits Rectangle {
     }
     // Nothing outside the list reaches into it but `show()`, `close()` and
     // `is-open`, so what scrolls it is in here.
-    list := PopupWindow {
+    drop-list := PopupWindow {
         x: 0px;
         y: root.height;
         width: root.width;
@@ -539,7 +552,7 @@ export component SkinDropDown inherits Rectangle {
                             root.pick(root.mark);
                         }
                     } else if (event.text == Key.Escape) {
-                        list.close();
+                        drop-list.close();
                     }
                     return accept;
                 }
@@ -591,13 +604,33 @@ export component SkinDropDown inherits Rectangle {
                                     }
                                 }
                                 clicked => {
-                                    root.pick(index);
+                                    root.click-pick(index);
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+    }
+    // Open for a moment after a click picked a row: a popup that is not
+    // closed by clicks and has no size, so every press, release and turn of
+    // the wheel falls outside it, and while it is open the window hands
+    // those to nothing. It never holds the focus: it opens when none is held,
+    // so closing hands none back, and meanwhile the keys reach `park`.
+    guard := PopupWindow {
+        x: 0px;
+        y: 0px;
+        width: 0px;
+        height: 0px;
+        close-policy: no-auto-close;
+    }
+    guard-time := Timer {
+        interval: 450ms;
+        running: false;
+        triggered => {
+            self.stop();
+            guard.close();
         }
     }
 }
