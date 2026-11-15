@@ -24,9 +24,9 @@
   `acui.exe`（监控台）、`acsetup.exe`（安装向导，UI v0.12.17 起）、`acforward.exe`（固定入口）、`LICENSE`、
   `README.md`，以及把它们绑到所在提交的 `BUILD-MANIFEST.json`。向导要从一份安装集安装，安装集另外拼，不在这个 zip
   里（见「安装向导 acsetup」一节）。每一版都基于它所在提交钉的 Runtime
-  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 v0.12.61。
+  源提交的 crate 构建（钉点见「数据来源」一节）：UI v0.12.15 基于 Runtime v0.12.47，现在钉的是 v0.12.62。
 - **可与 0.12 的 Runtime 搭配**：它声明 `actingd-config` [5, 32]、`ledger` [3, 8]、`runtime-client`
-  [3, 9] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.47 到 v0.12.61：这几版的 `ledger` 上限都在
+  [3, 9] 与 `runtime-outcomes` [1, 1]。它适配 Runtime v0.12.47 到 v0.12.62：这几版的 `ledger` 上限都在
   [3, 8] 里，`actingd-config`、`runtime-client` 的区间都和监控台的有交集。v0.12.55 起的账本（修订 8）是单向的：
   v0.12.55 或更新的 Runtime 在一个状态根上跑过之后，v0.12.55 之前的 Runtime 就打不开它，`ledger` 只到 7 的监控台也可能读不了，
   所以要先换监控台，再上 Runtime。别的 Runtime 能否搭配，按双方声明的接口判断，不看版本号（见"组件接口"）。
@@ -164,7 +164,9 @@
 「只看到」或换页签、筛选，会重新定位，或者把手柄拉回最右端（全部）、在线时按「跳到最新」、关掉窗口再打开，
 这样就不用游标往下读。
 
-依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.61（`5c629e3b`）。v0.12.61 相对 v0.12.60，
+依赖钉在一个准确的 Runtime 源提交上（`Cargo.toml`），即 Runtime v0.12.62（`44cbab53`）。v0.12.62 相对 v0.12.61，接口一个
+没动，各 crate 的依赖也没变，`Cargo.lock` 只换提交号；契约库的运行摘要给运行的结局加了可选的 `failure_values`（结局在只留码模式下
+留得住的值，#469 F1），这个控制台还不读它；结果码目录登记了 #469 V0 的原因词。v0.12.61 相对 v0.12.60，
 接口把 `runtime-client` 升到 9、`package` 升到 15，`actingd-config` [5, 32]、`ledger` [3, 8] 不变，控制台认的 `runtime-client`
 跟到 [3, 9]。修订 9 加两种请求：`GoalView`（读一个应用的目标页）和 `EditGoal`（按名字设或清其中一个值，写不进去时回
 `goal_value_invalid`，带一个 `goal_problem` 词），都在 `ui` 通道的清单里（#463 V3），这个控制台在「目标」页签上用 `GoalView`
@@ -260,7 +262,7 @@ v0.12.38 起读帧的账本查找由读者池在写线程外回答，#422 RA-1�
 照旧），说 0.12 协议（`runtime-client` 修订 9、账本修订 8）：
 
 ```
-rev = "5c629e3bc72d94f86f68973535494a2412502c29"
+rev = "44cbab5349ae2d2e5a3a4a17178240ac4e1b79de"
 ```
 
 六个 crate（contract / ledger / ledger-forensics / runtime-client / runtime-config / execution-kernel）共用这一个 rev。
@@ -451,7 +453,7 @@ acui --help
 MuMu 原生（Nemu IPC）；截图：ADB 截图，模拟器还有 DroidCast 和 MuMu 原生，真机还有 scrcpy），旁边写值的来源（配置文件，
 或在线设置及其时间、入口）和这台最近一次自检的结果。按「应用」后，这台空闲时立刻切换（最多等 3 秒，即契约的
 `CONNECTION_PREPARATION_CLAIM_WAIT_MS`）：用新后端重连并自检，监控台等回执最长约 138 秒（契约的 `BACKEND_SWITCH_WAIT_MS`，
-钉住的 v0.12.61 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
+钉住的 v0.12.62 是 133 秒，加客户端 5 秒的 IO 余量；页面上的两个数都取自钉住的 crate），期间这一组写「切换中」。MuMu 原生触控只能配 MuMu 原生截图：选它时截图跟着改；触控是它时把截图改成别的，
 先问触控一起改成哪个，再两项一起发。在线设置的值有「恢复为文件值」，这也是一次切换（单清一项可能拆散这一对时两项一起清）；
 文件值和在线值相同时设备不动，结果行只写已恢复为文件值。结果在顶栏下面单独一行，带实例；拒绝照原因写人话：这台正忙（忙什么）、
 你正在玩、被围栏、没开，或新后端没打开（以及为什么，比如 MuMu 原生触控时这台没装配置的游戏包；v0.12.40 起游戏没在跑不再是原因，只有回退到 v0.12.39 或更早的 Runtime 还这样说）、原来的已换回或也
@@ -915,7 +917,7 @@ Runtime v0.12.53 起），调度器派的运行是「关闭这个任务」（UI-
   （`instance add`，Runtime INST-5）后给刚加进来的实例挂的暂停，它和这个模块那些 `lab-…` 暂停不一样，
   没有哪次操作会自己解除它；二是 `policy_settlement_facts_skipped`，Runtime 启动时给记不下结算事实的实例
   挂的暂停（Runtime ISO-START-1）。到 0.12.51 为止的 Runtime 发行版都不会加这两种
-  暂停，0.12.52 起才有，钉住的 0.12.61 两种都有；0.12.60 起，Runtime 启动时也会给声明了 `start_paused` 的条目挂
+  暂停，0.12.52 起才有，钉住的 0.12.62 两种都有；0.12.60 起，Runtime 启动时也会给声明了 `start_paused` 的条目挂
   `instance.added`（#453 S2）。
   还在排空或交还设备的实例暂停也不给按钮，
   Runtime 这时会拒绝恢复。每一行都照原样显示暂停的理由，不管操作方写的是什么。
