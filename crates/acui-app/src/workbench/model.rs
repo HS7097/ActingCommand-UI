@@ -1227,7 +1227,7 @@ impl Model {
             WriteTarget { key: key.to_owned(), write: press.write, expected: page.version, epoch };
         match press.asks {
             Some(loses) => {
-                self.goal_writes.ask(&alias, target, loses);
+                self.goal_writes.ask(&alias, target, act.clone(), loses);
                 GoalPressed::Asked
             }
             None => match self.goal_writes.press(&alias, target) {
@@ -1237,12 +1237,23 @@ impl Model {
         }
     }
 
-    /// The question on the Goals tab confirmed: the account and the request to send, none when
-    /// there is none to send now (`Writes::confirm`).
-    pub fn goal_confirmed(&mut self) -> Option<(String, GoalRequest)> {
+    /// The question on the Goals tab confirmed, shown in `language`: the account and the request to
+    /// send, none when there is none to send now (`Writes::confirm`). Its press is reckoned again
+    /// here on the newest page read, made as a press reads it, of the same line: none while that
+    /// page does not show or takes no writes, else what `goals::press` says of it now, with that
+    /// page's version.
+    pub fn goal_confirmed(&mut self, language: Language) -> Option<(String, GoalRequest)> {
         let alias = self.goals_wanted()?;
         let epoch = self.online_epoch()?.to_owned();
-        let request = self.goal_writes.confirm(&alias, &epoch)?;
+        let again = self.goals_page_now(Instant::now(), language).and_then(|(_, _, page)| {
+            if !page.writable() {
+                return None;
+            }
+            let (key, act) = self.goal_writes.question(&alias)?;
+            let press = goals::press(page.line(key)?, act)?;
+            Some((press, page.version))
+        });
+        let request = self.goal_writes.confirm(&alias, &epoch, again)?;
         Some((alias, request))
     }
 

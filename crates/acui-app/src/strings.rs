@@ -1201,7 +1201,7 @@ pub struct Labels {
     pub goals_days: &'static str,
     pub goals_orphan: &'static str,
     /// Why a run does not read a variable's value, one sentence per `variable_problem` word
-    /// (Runtime `contracts/outcome-codes/catalog.json:9733-9792`); a word not given.
+    /// (Runtime `contracts/outcome-codes/catalog.json:9749-9809`); a word not given.
     pub goals_unapplied_not_an_option: &'static str,
     pub goals_unapplied_out_of_range: &'static str,
     pub goals_unapplied_off_step: &'static str,
@@ -1254,7 +1254,8 @@ pub struct Labels {
     /// What a line's last press came to: being changed; changed elsewhere and read again; another
     /// write at the same moment (time); the value not taken (why, time); another refusal (its
     /// codes, time), or with no code; not sent (time); not confirmed (time); no thread (the
-    /// system's words); a restart meanwhile.
+    /// system's words); a restart meanwhile; confirmed after the page read again no longer makes
+    /// the press what was asked about, so not sent.
     pub goals_write_sending: &'static str,
     pub goals_write_conflict: &'static str,
     pub goals_write_not_newer: &'static str,
@@ -1265,27 +1266,40 @@ pub struct Labels {
     pub goals_write_unconfirmed: &'static str,
     pub goals_write_no_thread: &'static str,
     pub goals_write_restarted: &'static str,
+    pub goals_write_stale: &'static str,
     /// The question a press asks first, of what it loses that this page cannot set back: a value
-    /// stored that no run reads (value); an other target (pool, amount), or one that does not read;
-    /// a goal set elsewhere, cleared or replaced (what it carries); an amount set that removes the
-    /// other target of the entry's name too (what that holds), and with a goal set elsewhere
-    /// replaced (what that holds, what the goal carries); what that other target holds (pool,
-    /// amount), empty when it does not read. What a goal carries: its tasks, its step, its
-    /// importance, its validity, joined by the list's separator.
+    /// stored that no run reads, cleared (value); a value stored that the next run does not take,
+    /// replaced (value); an other target (pool, amount), or one that does not read; a goal set
+    /// elsewhere, cleared or replaced (what it carries); a goal cleared on a pool that takes no
+    /// goal here now (what it holds); an amount set that removes the other target of the entry's
+    /// name too (what that holds), and with a goal set elsewhere replaced (what that holds, what
+    /// the goal carries); what that other target holds (pool, amount), empty when it does not
+    /// read; an amount set that removes another entry's goal of the entry's name (that entry's
+    /// title, what its goal holds), and with a goal set elsewhere replaced (title, what it holds,
+    /// what the goal carries). What a goal holds: its amount and what it carries (amount, carried),
+    /// its amount (amount), what it carries (carried), empty of neither. What a goal carries: its
+    /// tasks, its step, its importance, its validity, joined by the list's separator.
     pub goals_confirm_value: &'static str,
+    pub goals_confirm_value_replaced: &'static str,
     pub goals_confirm_target: &'static str,
     pub goals_confirm_target_unread: &'static str,
     pub goals_confirm_clear_elsewhere: &'static str,
     pub goals_confirm_replace_elsewhere: &'static str,
+    pub goals_confirm_clear_unsettable: &'static str,
     pub goals_confirm_same_name: &'static str,
     pub goals_confirm_same_name_elsewhere: &'static str,
     pub goals_confirm_same_name_held: &'static str,
+    pub goals_confirm_same_entry: &'static str,
+    pub goals_confirm_same_entry_elsewhere: &'static str,
+    pub goals_confirm_held_both: &'static str,
+    pub goals_confirm_held_amount: &'static str,
+    pub goals_confirm_held_carried: &'static str,
     pub goals_carried_tasks: &'static str,
     pub goals_carried_step: &'static str,
     pub goals_carried_importance: &'static str,
     pub goals_carried_validity: &'static str,
     /// Why the Runtime did not take a value, one sentence per `goal_problem` word (Runtime
-    /// `contracts/outcome-codes/catalog.json:10217-10295`, `runtime-host.json:21707-21733`), and
+    /// `contracts/outcome-codes/catalog.json:10233-10311`, `runtime-host.json:21712-21738`), and
     /// of a word this console has no sentence for (the word); the two with a bound, each with it in
     /// its unit (the bytes a value holds, the items a record holds); the values others come with: a
     /// range (min, max), and a sentence with its detail (sentence, detail).
@@ -2668,14 +2682,22 @@ pub const ZH: Labels = Labels {
     goals_write_unconfirmed: "结果未确认：可能已经改了（{}）。已重新读，读到以后才能再按",
     goals_write_no_thread: "没有发出去：{}",
     goals_write_restarted: "Runtime 重启了，这次改动的结果不明；这一页显示的是重读后的情况",
+    goals_write_stale: "确认时这一页已经重新读过，这一下要改的和问的时候不一样了，没有发出去；请看过再按一次",
     goals_confirm_value: "清掉以后，存着的值（{}）在这里设不回去。确定清掉吗？",
+    goals_confirm_value_replaced: "在这里改，会换掉存着的值（{}），它在这里设不回去。确定改吗？",
     goals_confirm_target: "清掉以后，这个资源目标（{} 至少 {}）在这里设不回去。确定清掉吗？",
     goals_confirm_target_unread: "清掉以后，这个资源目标在这里设不回去。确定清掉吗？",
     goals_confirm_clear_elsewhere: "这个目标是别处设的：清掉会连它带的{}一起丢掉，这些在这里设不回去。确定清掉吗？",
     goals_confirm_replace_elsewhere: "这个目标是别处设的：在这里改会整个换掉它，它带的{}会丢掉，这些在这里设不回去。确定改吗？",
+    goals_confirm_clear_unsettable: "这个资源现在不能在这里设目标：清掉以后，这个目标{}在这里设不回去。确定清掉吗？",
     goals_confirm_same_name: "在这里设定，会一并删掉「其他资源目标」里和这一项同名的那个目标{}，它在这里设不回去。确定改吗？",
     goals_confirm_same_name_elsewhere: "在这里设定，会一并删掉「其他资源目标」里和这一项同名的那个目标{}；这一项的目标又是别处设的，会被整个换掉，它带的{}也会丢掉。这些在这里设不回去。确定改吗？",
     goals_confirm_same_name_held: "（{} 至少 {}）",
+    goals_confirm_same_entry: "在这里设定，会一并删掉「{}」那一项的目标{}，它在这里设不回去。确定改吗？",
+    goals_confirm_same_entry_elsewhere: "在这里设定，会一并删掉「{}」那一项的目标{}；这一项的目标又是别处设的，会被整个换掉，它带的{}也会丢掉。这些在这里设不回去。确定改吗？",
+    goals_confirm_held_both: "（至少 {}，带着{}）",
+    goals_confirm_held_amount: "（至少 {}）",
+    goals_confirm_held_carried: "（带着{}）",
     goals_carried_tasks: "任务",
     goals_carried_step: "步长",
     goals_carried_importance: "重要度",
@@ -3914,14 +3936,22 @@ pub const EN: Labels = Labels {
     goals_write_unconfirmed: "The result is not confirmed: it may have changed ({}). The page is read again, and can be pressed once it is",
     goals_write_no_thread: "Not sent: {}",
     goals_write_restarted: "The Runtime restarted: what came of this change is not known; the page shows what was read again since",
+    goals_write_stale: "The page was read again before the confirmation, and this press no longer changes what was asked about: nothing was sent. Look again, then press again",
     goals_confirm_value: "Once cleared, the value stored ({}) cannot be set back from here. Clear it?",
+    goals_confirm_value_replaced: "Changing this here replaces the value stored ({}), which cannot be set back from here. Change it?",
     goals_confirm_target: "Once cleared, this resource goal ({}, at least {}) cannot be set back from here. Clear it?",
     goals_confirm_target_unread: "Once cleared, this resource goal cannot be set back from here. Clear it?",
     goals_confirm_clear_elsewhere: "This goal was set elsewhere: clearing it loses its {} too, which cannot be set back from here. Clear it?",
     goals_confirm_replace_elsewhere: "This goal was set elsewhere: changing it here replaces it whole and loses its {}, which cannot be set back from here. Change it?",
+    goals_confirm_clear_unsettable: "No goal can be set on this resource here now: once cleared, this goal{} cannot be set back from here. Clear it?",
     goals_confirm_same_name: "Setting this also removes the goal of the same name under Other resource goals{}, which cannot be set back from here. Change it?",
     goals_confirm_same_name_elsewhere: "Setting this also removes the goal of the same name under Other resource goals{}; and this goal, set elsewhere, is replaced whole and loses its {}. None of this can be set back from here. Change it?",
     goals_confirm_same_name_held: " ({}, at least {})",
+    goals_confirm_same_entry: "Setting this also removes the goal of “{}”{}, which cannot be set back from here. Change it?",
+    goals_confirm_same_entry_elsewhere: "Setting this also removes the goal of “{}”{}; and this goal, set elsewhere, is replaced whole and loses its {}. None of this can be set back from here. Change it?",
+    goals_confirm_held_both: " (at least {}, with its {})",
+    goals_confirm_held_amount: " (at least {})",
+    goals_confirm_held_carried: " (with its {})",
     goals_carried_tasks: "tasks",
     goals_carried_step: "step",
     goals_carried_importance: "importance",

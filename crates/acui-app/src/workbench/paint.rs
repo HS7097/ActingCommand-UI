@@ -28,8 +28,9 @@ use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
 use acui_source::workbench::goals::{
     amount as goal_amount, newer_than_this_console, AmountProblem, Carried, ClearOffer, Closed,
     Declaration, Form, GoalLine, GoalsPage, Group, LabEntry, Loses, OtherTarget, PageState,
-    Pending, PoolState, Progress, Reading, ResourceLine, SetBy, Setter, Shown, Stored, StoredGoal,
-    TimeUnit, Unapplied, ValueControl, VariableLine, VariableState, WriteInvalid, WriteProblem,
+    Pending, PoolState, Progress, Reading, Removed, ResourceLine, SetBy, Setter, Shown, Stored,
+    StoredGoal, TimeUnit, Unapplied, ValueControl, VariableLine, VariableState, WriteInvalid,
+    WriteProblem,
 };
 use acui_source::workbench::pack::{PackSource, PackState};
 use acui_source::workbench::preview::Overlay;
@@ -3164,12 +3165,13 @@ fn goals_page(
 }
 
 /// A line's controls (Workflow #455 G2), over its words: what names it to a press; a resource's
-/// amount where its pool takes a goal here, with why what is typed is no amount and, in amber, that
-/// its goal was set elsewhere; a choice's options (side by side up to four, else a drop-down) or a
-/// switch, at the value the next run reads; the clear it has; an other target the Lab alone can
-/// clear, so said in grey, as is a value no longer offered or an other target whose name another
-/// line has, which no clear here is sure to reach. Then what its last press came to and the
-/// question a press asks, if either.
+/// amount where its pool takes a goal here, with why what is typed is no amount; in amber, on any
+/// resource line, that its goal was set elsewhere; a choice's options (side by side up to four,
+/// else a drop-down) or a switch, at the value the next run reads; the clear it has; an other
+/// target the Lab alone can clear, so said in grey, as is a value no longer offered, an other
+/// target or a variable's value whose name another line has, which no clear here is sure to reach.
+/// Then what its last press came to and the question a press asks, if either. All of them are off
+/// while the page takes no press (`WritesNow::enabled`).
 fn goal_controls(
     ui: &Ui,
     labels: &Labels,
@@ -3198,9 +3200,10 @@ fn goal_controls(
                     Err(problem) => row.amount_problem = amount_problem_text(labels, problem).into(),
                 }
                 row.amount_text = typed.into();
-                if resource.elsewhere.is_some() {
-                    warnings.push(labels.goals_set_elsewhere.to_owned());
-                }
+            }
+            // Wherever its pool stands: a pool that takes no goal here now still has its clear.
+            if resource.elsewhere.is_some() {
+                warnings.push(labels.goals_set_elsewhere.to_owned());
             }
             if resource.goal.is_some() {
                 row.clear_label = labels.goals_clear.into();
@@ -3254,13 +3257,17 @@ fn goal_controls(
         | GoalLine::Group(_)
         | GoalLine::Closed { .. } => {}
     }
-    // A variable's clear, whether or not it has a control.
+    // A variable's clear, whether or not it has a control; none of a name another line has too,
+    // which a clear of it could take instead (`goals::press`).
     if let GoalLine::Variable(variable) = line {
-        row.clear_label = match variable.clear_offer() {
+        row.clear_label = match variable.clearable() {
             Some(ClearOffer::Restore) => labels.goals_restore.into(),
             Some(ClearOffer::Clear) => labels.goals_clear.into(),
             None => SharedString::new(),
         };
+        if variable.shared && variable.clear_offer().is_some() {
+            notes.push(labels.goals_same_name.to_owned());
+        }
     }
     if !warnings.is_empty() {
         let mut all: Vec<String> = Vec::new();
@@ -3303,10 +3310,29 @@ fn amount_problem_text(labels: &Labels, problem: AmountProblem) -> &'static str 
     }
 }
 
-/// The question a press asks first: what it loses that this page cannot set back.
+/// The question a press asks first: what it loses that this page cannot set back. Another entry's
+/// goal is named by that entry's title, never by its pool's id.
 fn loses_text(labels: &Labels, loses: &Loses) -> String {
     match loses {
         Loses::Value(value) => fill(labels.goals_confirm_value, &[&shown_text(labels, value)]),
+        Loses::Replaced(value) => {
+            fill(labels.goals_confirm_value_replaced, &[&shown_text(labels, value)])
+        }
+        Loses::Unsettable { amount, carried } => fill(
+            labels.goals_confirm_clear_unsettable,
+            &[&held_text(labels, *amount, carried.unwrap_or(Carried::NONE))],
+        ),
+        Loses::SameName { removed: Removed::Entry { title, amount, carried: other }, carried } => {
+            let title = title.as_deref().unwrap_or(labels.goals_untitled);
+            let held = held_text(labels, *amount, *other);
+            match carried {
+                Some(carried) => fill(
+                    labels.goals_confirm_same_entry_elsewhere,
+                    &[title, &held, &carried_text(labels, *carried)],
+                ),
+                None => fill(labels.goals_confirm_same_entry, &[title, &held]),
+            }
+        }
         Loses::Target(Some((pool, amount))) => {
             fill(labels.goals_confirm_target, &[pool.as_str(), &amount.to_string()])
         }
@@ -3320,7 +3346,7 @@ fn loses_text(labels: &Labels, loses: &Loses) -> String {
             };
             fill(template, &[&carried])
         }
-        Loses::SameName { held, carried } => {
+        Loses::SameName { removed: Removed::Other(held), carried } => {
             let held = match held {
                 Some((pool, amount)) => {
                     fill(labels.goals_confirm_same_name_held, &[pool.as_str(), &amount.to_string()])
@@ -3335,6 +3361,20 @@ fn loses_text(labels: &Labels, loses: &Loses) -> String {
                 None => fill(labels.goals_confirm_same_name, &[&held]),
             }
         }
+    }
+}
+
+/// What a goal a question names holds, in brackets: its amount when it reads, and what it carries
+/// that a goal set by name does not, when it carries any; empty of neither.
+fn held_text(labels: &Labels, amount: Option<u64>, carried: Carried) -> String {
+    let carried = carried.any().then(|| carried_text(labels, carried));
+    match (amount, carried) {
+        (Some(amount), Some(carried)) => {
+            fill(labels.goals_confirm_held_both, &[&amount.to_string(), &carried])
+        }
+        (Some(amount), None) => fill(labels.goals_confirm_held_amount, &[&amount.to_string()]),
+        (None, Some(carried)) => fill(labels.goals_confirm_held_carried, &[&carried]),
+        (None, None) => String::new(),
     }
 }
 
@@ -3388,11 +3428,13 @@ fn goal_said_text(ui: &Ui, labels: &Labels, said: &GoalSaid) -> (String, SaidTon
             (fill(labels.goals_write_no_thread, &[why.as_str()]), SaidTone::Failed)
         }
         GoalSaid::Restarted => (labels.goals_write_restarted.to_owned(), SaidTone::Plain),
+        GoalSaid::Stale => (labels.goals_write_stale.to_owned(), SaidTone::Warning),
     }
 }
 
 /// Why the Runtime did not take a value, one sentence per `goal_problem` word, with the values the
 /// word comes with: a range, a bound with its unit (bytes, items), why a variable does not apply. A
+/// number off its step is said without the range it comes with, which would read as the step's. A
 /// word of a newer Runtime by its code, which the log hears of once.
 fn invalid_text(ui: &Ui, labels: &Labels, invalid: &WriteInvalid) -> String {
     let words = match &invalid.problem {
@@ -3442,7 +3484,7 @@ fn invalid_text(ui: &Ui, labels: &Labels, invalid: &WriteInvalid) -> String {
         fill(labels.goals_problem_range, &[&min.to_string(), &max.to_string()])
     });
     let detail = match &invalid.problem {
-        WriteProblem::OutOfRange | WriteProblem::OffStep | WriteProblem::CountOutOfRange => range,
+        WriteProblem::OutOfRange | WriteProblem::CountOutOfRange => range,
         WriteProblem::VariableNotApplying => Some(unapplied_text(labels, &invalid.variable)),
         _ => None,
     };

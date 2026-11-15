@@ -18,30 +18,39 @@
 //! variables (neither set nor put back to their default: no control of them here could set one
 //! again, G3's), tiers (`tier_not_built`) and
 //! remedy parameters are only shown. One press is one `EditGoal`, of one name, naming the page's
-//! version (`GoalView.version`) as its `expected_version`.
+//! version (`GoalView.version`) as its `expected_version`. Nothing of a page is pressed while the
+//! stored record is of the old form (`v1`), against which the Runtime refuses every write
+//! `record_unreadable` ([`GoalsPage::writable`]).
 //!
 //! A press asks first only where what it loses cannot be set back from here ([`Loses`]): a value no
-//! run reads (no longer offered, or of a placement not offered), the value stored for a variable the
-//! game root does not apply (no value can be set on it here again, `variable_not_applying`), an
-//! other target, and a resource goal set elsewhere (no setter, or another channel than this
-//! console's) that carries what a goal set by name does not: tasks, a step, an importance, a
-//! validity. Setting a pool's amount replaces its goal whole, whatever its id
+//! run reads (no longer offered, or of a placement not offered); a value stored that the next run
+//! does not take, replaced by another option or switch or put back to the default (an option no
+//! longer offered, a value of another type, a number off its range or step: no control here sets
+//! it again, and of a variable the game root does not apply no value is set at all,
+//! `variable_not_applying`); an other target; a resource goal on a pool that takes no goal here
+//! now (without a step, not targetable, not listed), cleared, as no amount is set on that pool here
+//! again; and a resource goal set elsewhere (no setter, or another channel than this console's) that
+//! carries what a goal set by name does not: tasks, a step, an importance, a validity. Setting a
+//! pool's amount replaces its goal whole, whatever its id
 //! (`crates/runtime-host/src/goals.rs:305-311`), so those are lost then too; which of them it
 //! carries is read from the stored document's target of the same id, and all four are said when
-//! that does not read. A goal set elsewhere that carries none of them loses nothing a goal set here
-//! does not hold again, so it is only said beside the field, not asked. Back to the default of a
-//! variable that can be set again, and a goal this console set, ask nothing.
+//! that does not read. A goal set elsewhere that carries none of them, on a pool that takes a goal
+//! here, loses nothing a goal set here does not hold again, so it is only said beside the line, not
+//! asked. Back to the default of a variable whose value is in effect, and a goal this console set on
+//! a pool that takes one here, ask nothing.
 //!
 //! A write names a name only, which the Runtime resolves by what is stored under it, in its order
 //! (`crates/runtime-host/src/goals.rs:354-377`): a `clear` takes a resource entry's goal on its pool
 //! first, then a stored value of the name, then a target of that id; a resource entry's `set` also
 //! removes the targets of its name on other pools
-//! (`crates/policy/src/resource_targets/v3.rs:1555-1556`). So a value no longer offered, or an
-//! other target, whose name another line of the page has too
-//! (an entry of any type, another value no longer offered, another other target) is not cleared
-//! here, which could clear the other line's instead ([`OrphanLine::shared`],
-//! [`OtherTarget::shared`]); and an amount set on a resource entry whose name an other target has
-//! asks first, saying it removes that target ([`ResourceLine::same_name`]).
+//! (`crates/policy/src/resource_targets/v3.rs:1555-1556`). So a value no longer offered, an other
+//! target or a variable's value, whose name another line of the page has too (an entry of any type,
+//! a resource entry and a variable the game root both names among them, another value no longer
+//! offered, another other target) is not cleared here, which could clear the other line's instead
+//! ([`OrphanLine::shared`], [`OtherTarget::shared`], [`VariableLine::shared`]); a resource entry's
+//! own clear is not in doubt, the Runtime taking its pool's goal first. An amount set on a resource
+//! entry whose name an other target, or another resource entry's goal, has as its id asks first,
+//! saying it removes that goal too ([`ResourceLine::same_name`]).
 //!
 //! The write goes on a fresh person's connection, the `ui` channel with the full receipt, at the
 //! slow reads' 20 seconds ([`EDIT_IO`]), and is sent once, but for `fact_observation_not_newer`,
@@ -49,8 +58,9 @@
 //! alone ([`answered`]): a version conflict (`current_version`), a Runtime without the write, the
 //! goal refused with its `goal_problem` word and the values that locate it, or another refusal.
 //!
-//! What the page says, all at the pinned Runtime (5c629e3b; `contracts/runtime-interface.md`,
-//! "Goal request kinds"; `crates/actingcommand-contract/src/runtime/goals.rs`):
+//! What the page says, all at the pinned Runtime (v0.12.62, 44cbab53;
+//! `contracts/runtime-interface.md`, "Goal request kinds";
+//! `crates/actingcommand-contract/src/runtime/goals.rs`):
 //!
 //! - `declaration.state`, one of eight words. Three of them list nothing at all, whatever is
 //!   stored (`crates/runtime-host/src/host/goals.rs:140-177`): `not_checked_yet` (not in the
@@ -94,7 +104,9 @@
 //! The stored record's form is `targets.active.schema_version`: `v2`, one validity for the whole
 //! document; `v3`, the record `EditGoal` writes, each target with a lifetime of its own or none and
 //! the document with none (`contracts/resource-targets.md:1054-1059`); `v1`, an agent's old form,
-//! read only; any other, a form newer than this console, whose targets it does not interpret. A
+//! read only, which no `EditGoal` writes against (`record_unreadable`, "neither a v2 nor a v3
+//! record", `contracts/outcome-codes/catalog.json:10295-10297`); any other, a form newer than this
+//! console, whose targets it does not interpret. A
 //! target lapsed (the document expired, or its own lifetime is before the view's time) counts no
 //! more, so it is never shown as met.
 //!
@@ -212,10 +224,14 @@ pub struct GoalsPage {
 }
 
 impl GoalsPage {
-    /// Whether anything of it can be written: only a page that lists; one that does not
-    /// (`not_checked_yet`, `root_failing`, `no_schedule`) refuses every `EditGoal` with its word.
+    /// Whether anything of it can be written: only a page that lists, of a record not stored in the
+    /// old form. One that does not list (`not_checked_yet`, `root_failing`, `no_schedule`) refuses
+    /// every `EditGoal` with its word; against a `v1` record every one is refused
+    /// `record_unreadable`, the record being "neither a v2 nor a v3 record the readers read"
+    /// (`contracts/outcome-codes/catalog.json:10295-10297`), so that page only shows.
     pub fn writable(&self) -> bool {
-        matches!(self.state, PageState::Listed { .. })
+        let old = matches!(&self.stored, Stored::Document(Document { form: Form::Old, .. }));
+        matches!(self.state, PageState::Listed { .. }) && !old
     }
 
     /// The line of `key` ([`GoalLine::key`]).
@@ -278,12 +294,13 @@ pub enum GoalLine {
 impl GoalLine {
     /// What names the line among the page's lines, never shown: the entry's name for a resource
     /// entry or a variable, the stored name for a value no longer offered, the id for an other
-    /// target, each with its kind, as names of different kinds may be the same. None of a line
-    /// nothing writes.
+    /// target, each with its kind, as names of different kinds may be the same: a resource entry
+    /// and a variable of one name are both listed when the game root names them both
+    /// (`goal_name_conflict`). None of a line nothing writes.
     pub fn key(&self) -> Option<String> {
         match self {
-            Self::Resource(line) => Some(format!("entry:{}", line.name)),
-            Self::Variable(line) => Some(format!("entry:{}", line.name)),
+            Self::Resource(line) => Some(format!("resource:{}", line.name)),
+            Self::Variable(line) => Some(format!("variable:{}", line.name)),
             Self::Orphan(line) => Some(format!("orphan:{}", line.name)),
             Self::OtherTarget(other) => Some(format!("target:{}", other.id)),
             Self::Heading(_)
@@ -325,14 +342,26 @@ pub struct ResourceLine {
     /// A goal set elsewhere (no setter, or another channel than this console's): what of it a
     /// goal set here loses. None without a goal, and of this console's.
     pub elsewhere: Option<Carried>,
-    /// An other target whose id is this entry's name: an amount set here removes it too, its pool
-    /// being another (`crates/policy/src/resource_targets/v3.rs:1555-1556`). What it holds, as its
-    /// own line has it.
-    pub same_name: Option<Held>,
+    /// The target of another pool whose id is this entry's name, an other target's or another
+    /// resource entry's goal: an amount set here removes it too
+    /// (`crates/policy/src/resource_targets/v3.rs:1555-1556`).
+    pub same_name: Option<Removed>,
 }
 
 /// What an other target holds, as a question says it: its pool and amount, when it reads.
 pub type Held = Option<(String, u64)>;
+
+/// The target of a resource entry's name on another pool, which an amount set on the entry removes
+/// too, as a question says it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Removed {
+    /// An other target: what it holds, as its own line has it.
+    Other(Held),
+    /// The goal of another resource entry: that entry's title (no pool's id is shown), its amount
+    /// when it reads, and what it carries that a goal set by name does not, read as a goal set
+    /// elsewhere's is ([`Carried`]).
+    Entry { title: Option<String>, amount: Option<u64>, carried: Carried },
+}
 
 impl ResourceLine {
     /// Whether an amount can be set on it here: its pool is targetable with the pack's own step
@@ -355,6 +384,8 @@ pub struct Carried {
 impl Carried {
     /// All four: what is said of a target whose stored document does not read here.
     pub const ALL: Self = Self { tasks: true, step: true, importance: true, validity: true };
+    /// None of them: what a goal set by name carries.
+    pub const NONE: Self = Self { tasks: false, step: false, importance: false, validity: false };
 
     /// Whether it carries any of them.
     pub fn any(self) -> bool {
@@ -471,6 +502,11 @@ pub struct VariableLine {
     pub control: ValueControl,
     /// A value is stored under its name (`value_json`).
     pub stored: bool,
+    /// Another line of the page has its name (an entry of any type, as a resource entry the game
+    /// root names it for too, `goal_name_conflict`; a value no longer offered, an other target): a
+    /// clear of the name could clear that line's instead (a resource entry's goal is taken first),
+    /// so its value is not cleared here (see the module's words).
+    pub shared: bool,
 }
 
 impl VariableLine {
@@ -487,7 +523,8 @@ impl VariableLine {
     /// What clears the value stored under its name, when one is: "back to the default" of a
     /// variable this page has a control of; "clear" of a placement no bound package offers, whose
     /// value no run reads. None of an `integer` or `ordered` variable, which this version only
-    /// shows: its value could not be set back from here.
+    /// shows: its value could not be set back from here. Whether it is pressed here is
+    /// [`Self::clearable`].
     pub fn clear_offer(&self) -> Option<ClearOffer> {
         if !self.stored {
             return None;
@@ -501,16 +538,24 @@ impl VariableLine {
         }
     }
 
-    /// Whether a value put back to the default could be set again here: one settable now, whose
-    /// reason for not being used, if any, this console knows. Of a `variable_problem` word newer
-    /// than the pinned Runtime it is not known, which counts as not (the coordinator's ruling on
-    /// #178: what is not known to be set back is asked first).
-    fn can_set_back(&self) -> bool {
-        self.settable()
-            && !matches!(
-                &self.state,
-                VariableState::NotApplied { why: Some(Unapplied::Other(_)), .. }
-            )
+    /// The clear pressed here, of [`Self::clear_offer`]: none of a name another line has
+    /// ([`Self::shared`]), which says so instead.
+    pub fn clearable(&self) -> Option<ClearOffer> {
+        self.clear_offer().filter(|_| !self.shared)
+    }
+
+    /// The value stored under its name that the next run does not take, while there is one (a
+    /// value not applied): none set here could be that value again (an option no longer offered, a
+    /// value of another type, a number off its range or step), and of a variable the game root does
+    /// not apply none is set at all, so a press that replaces it or puts it back to the default
+    /// asks first, saying it.
+    pub fn unused(&self) -> Option<&Shown> {
+        match &self.state {
+            VariableState::NotApplied { stored: Some(stored), .. } => Some(stored),
+            VariableState::NotApplied { stored: None, .. }
+            | VariableState::InEffect
+            | VariableState::NotOffered => None,
+        }
     }
 
     /// The value stored under its name, in words, as a question of its clear says it: of a value
@@ -570,7 +615,7 @@ pub enum VariableState {
 }
 
 /// Why a run does not read a variable's value: the `variable_problem` vocabulary (Runtime
-/// `contracts/outcome-codes/catalog.json:9733-9792`), one word each.
+/// `contracts/outcome-codes/catalog.json:9749-9809`), one word each.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unapplied {
     NotAnOption,
@@ -1032,8 +1077,10 @@ fn lines(
         .iter()
         .map(|id| other_target(id, targets, shared.contains(id.as_str())))
         .collect();
-    let line_of =
-        |entry: &GoalViewEntry| entry_line(entry, targets, &others, &view.entries, tongue);
+    let line_of = |entry: &GoalViewEntry| {
+        let shared = shared.contains(entry.name.as_str());
+        entry_line(entry, targets, &others, &view.entries, shared, tongue)
+    };
     // By the first package's id, in the order the page first names it, with its display name.
     let mut groups: Vec<(&str, String, Vec<&GoalViewEntry>)> = Vec::new();
     let mut unnamed: Vec<&GoalViewEntry> = Vec::new();
@@ -1119,12 +1166,13 @@ fn shared_names(view: &GoalView) -> BTreeSet<&str> {
 }
 
 /// One entry of the page, by its type; `others` the page's other targets, `entries` all its
-/// entries.
+/// entries, `shared` whether another line has its name.
 fn entry_line(
     entry: &GoalViewEntry,
     targets: &Targets<'_>,
     others: &[OtherTarget],
     entries: &[GoalViewEntry],
+    shared: bool,
     tongue: Tongue,
 ) -> GoalLine {
     let declared = entry.entry.as_ref();
@@ -1143,7 +1191,7 @@ fn entry_line(
             stored: entry.value_json.as_deref().map(|json| tier_value(declared, json, tongue)),
             set: entry.set.as_ref().map(set_by),
         }),
-        GoalEntryType::Variable => GoalLine::Variable(variable_line(entry, tongue)),
+        GoalEntryType::Variable => GoalLine::Variable(variable_line(entry, shared, tongue)),
     }
 }
 
@@ -1151,7 +1199,8 @@ fn entry_line(
 /// when it was set elsewhere; and the target of its name on another pool, if any: an other target
 /// among `others`, else the goal of another resource entry among `entries` whose id is this
 /// entry's name. A set on this entry removes every target of its name on another pool
-/// (`crates/policy/src/resource_targets/v3.rs:1555-1556` at the pinned Runtime).
+/// (`crates/policy/src/resource_targets/v3.rs:1555-1556` at the pinned Runtime). Its own clear is
+/// not in doubt whatever other line has its name: the Runtime takes its pool's goal first.
 fn resource_line(
     entry: &GoalViewEntry,
     targets: &Targets<'_>,
@@ -1180,14 +1229,21 @@ fn resource_line(
         same_name: others
             .iter()
             .find(|other| other.id == entry.name)
-            .map(OtherTarget::held)
-            .or_else(|| entry_of_name_elsewhere(entries, &entry.name, pool)),
+            .map(|other| Removed::Other(other.held()))
+            .or_else(|| entry_of_name_elsewhere(entries, &entry.name, pool, targets, tongue)),
     }
 }
 
 /// The goal of a resource entry of `entries` on another pool than `pool` whose target id is
-/// `name`, as a question says it.
-fn entry_of_name_elsewhere(entries: &[GoalViewEntry], name: &str, pool: Option<&str>) -> Option<Held> {
+/// `name`, as a question says it: that entry's title in `tongue`, its amount, and what the stored
+/// target of that id carries ([`Targets::carried`], all four when it does not read).
+fn entry_of_name_elsewhere(
+    entries: &[GoalViewEntry],
+    name: &str,
+    pool: Option<&str>,
+    targets: &Targets<'_>,
+    tongue: Tongue,
+) -> Option<Removed> {
     entries
         .iter()
         .filter(|other| matches!(other.entry_type, GoalEntryType::Resource))
@@ -1195,12 +1251,10 @@ fn entry_of_name_elsewhere(entries: &[GoalViewEntry], name: &str, pool: Option<&
         .find(|(_, resource)| {
             resource.target_id.as_deref() == Some(name) && Some(resource.pool.as_str()) != pool
         })
-        .map(|(other, resource)| {
-            other
-                .value_json
-                .as_deref()
-                .and_then(at_least)
-                .map(|amount| (resource.pool.clone(), amount))
+        .map(|(other, _)| Removed::Entry {
+            title: text_of(other.entry.as_ref(), "title", tongue),
+            amount: other.value_json.as_deref().and_then(at_least),
+            carried: targets.carried(Some(name)),
         })
 }
 
@@ -1237,8 +1291,8 @@ fn tier_option(declared: Option<&Value>, value: &str, tongue: Tongue) -> String 
     text_of(option, "title", tongue).unwrap_or_else(|| value.to_owned())
 }
 
-/// A variable's line.
-fn variable_line(entry: &GoalViewEntry, tongue: Tongue) -> VariableLine {
+/// A variable's line; `shared` whether another line has its name.
+fn variable_line(entry: &GoalViewEntry, shared: bool, tongue: Tongue) -> VariableLine {
     let declaration = Declared::of(entry.variable.as_ref());
     let title = text_of(entry.entry.as_ref(), "title", tongue)
         .or_else(|| text_of(entry.variable.as_ref(), "title", tongue));
@@ -1277,6 +1331,7 @@ fn variable_line(entry: &GoalViewEntry, tongue: Tongue) -> VariableLine {
         left_out: entry.removed_keys.clone(),
         control: declaration.control(entry.effective_json.as_deref(), tongue),
         stored: entry.value_json.is_some(),
+        shared,
     }
 }
 
@@ -1697,48 +1752,63 @@ pub struct Press {
 /// What a press loses that this page cannot set back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Loses {
-    /// A value stored that no run reads, or that no value set here replaces again: no longer
-    /// offered, of a placement no bound package offers, of a variable the game root does not
-    /// apply. The value.
+    /// A value stored that no run reads, or that no value set here replaces again, cleared: no
+    /// longer offered, of a placement no bound package offers, of a variable whose value stored
+    /// the next run does not take. The value.
     Value(Shown),
+    /// A value stored that the next run does not take, replaced by an option or a switch set
+    /// here: the value ([`VariableLine::unused`]).
+    Replaced(Shown),
     /// An other target, with its pool and amount when it reads.
     Target(Held),
     /// A declared resource's goal set elsewhere, cleared (`cleared`) or replaced by a goal set
     /// here: what it carries that one set here does not.
     Elsewhere { cleared: bool, carried: Carried },
-    /// A declared resource's amount set here, which removes the other target of the entry's name
-    /// too ([`ResourceLine::same_name`]): what that holds; and what the goal on the entry's own
-    /// pool, set elsewhere, carries that one set here does not, when it carries any.
-    SameName { held: Held, carried: Option<Carried> },
+    /// A declared resource's goal cleared on a pool that takes no goal here now (without a step,
+    /// not targetable, not listed), so that no amount is set on it here again: its amount when it
+    /// reads; and what it carries that a goal set by name does not, when it was set elsewhere and
+    /// carries any.
+    Unsettable { amount: Option<u64>, carried: Option<Carried> },
+    /// A declared resource's amount set here, which removes the target of the entry's name on
+    /// another pool too ([`ResourceLine::same_name`]): that target, an other target or another
+    /// entry's goal; and what the goal on the entry's own pool, set elsewhere, carries that one
+    /// set here does not, when it carries any.
+    SameName { removed: Removed, carried: Option<Carried> },
 }
 
 /// What a press `act` on `line` writes, the one place that decides it: none when it writes nothing
 /// (the line takes no such press, the value is as pressed already, the amount typed is not one).
 /// A resource entry's amount only on a pool that takes a goal here, a variable's value only while
 /// one can be set on it; a clear wherever something is stored to clear, but of a value no longer
-/// offered or an other target whose name another line of the page has. See the module's words for
-/// what asks first; what of the page that depends on is on the line already (`shared`,
-/// `same_name`).
+/// offered, an other target or a variable's value whose name another line of the page has. See
+/// the module's words for what asks first; what of the page that depends on is on the line already
+/// (`shared`, `same_name`).
 pub fn press(line: &GoalLine, act: &GoalAct) -> Option<Press> {
     match (line, act) {
         (GoalLine::Resource(line), GoalAct::Amount(text)) if line.settable() => {
             let at_least = amount(text).ok()?;
             let carried = line.elsewhere.filter(|carried| carried.any());
             let asks = match (&line.same_name, carried) {
-                (Some(held), carried) => Some(Loses::SameName { held: held.clone(), carried }),
+                (Some(removed), carried) => {
+                    Some(Loses::SameName { removed: removed.clone(), carried })
+                }
                 (None, Some(carried)) => Some(Loses::Elsewhere { cleared: false, carried }),
                 (None, None) => None,
             };
             Some(Press { write: GoalWrite::set(&line.name, resource_json(at_least)), asks })
         }
+        // On a pool that takes no goal here now, no amount is set back here: asked whoever set it.
         (GoalLine::Resource(line), GoalAct::Clear) => {
-            line.goal.as_ref()?;
-            let asks = line
-                .elsewhere
-                .filter(|carried| carried.any())
-                .map(|carried| Loses::Elsewhere { cleared: true, carried });
+            let goal = line.goal.as_ref()?;
+            let carried = line.elsewhere.filter(|carried| carried.any());
+            let asks = if line.settable() {
+                carried.map(|carried| Loses::Elsewhere { cleared: true, carried })
+            } else {
+                Some(Loses::Unsettable { amount: goal.amount, carried })
+            };
             Some(Press { write: GoalWrite::clear(&line.name), asks })
         }
+        // A value stored that the next run does not take is lost as another is set: asked.
         (GoalLine::Variable(line), GoalAct::Pick(index)) if line.settable() => {
             let ValueControl::Choice { options, chosen } = &line.control else {
                 return None;
@@ -1748,7 +1818,7 @@ pub fn press(line: &GoalLine, act: &GoalAct) -> Option<Press> {
                 return None;
             }
             let write = GoalWrite::set(&line.name, choice_json(&option.value));
-            Some(Press { write, asks: None })
+            Some(Press { write, asks: line.unused().cloned().map(Loses::Replaced) })
         }
         (GoalLine::Variable(line), GoalAct::Switch(on)) if line.settable() => {
             let ValueControl::Switch { on: now } = &line.control else {
@@ -1757,15 +1827,16 @@ pub fn press(line: &GoalLine, act: &GoalAct) -> Option<Press> {
             if *now == Some(*on) {
                 return None;
             }
-            Some(Press { write: GoalWrite::set(&line.name, switch_json(*on)), asks: None })
+            let write = GoalWrite::set(&line.name, switch_json(*on));
+            Some(Press { write, asks: line.unused().cloned().map(Loses::Replaced) })
         }
-        // Back to the default asks nothing while a value can be set on the variable again here;
-        // of one the game root does not apply (`variable_not_applying`), the value stored is lost
-        // as a value not offered is; of one not used for a reason this console does not know, it
-        // is not known whether it could be set again, so it asks as well.
+        // Back to the default asks nothing while the value stored is in effect; one the next run
+        // does not take, for any reason (of a variable the game root does not apply too, on which
+        // no value is set here, `variable_not_applying`), is lost as a value not offered is. A
+        // name another line has is not cleared here.
         (GoalLine::Variable(line), GoalAct::Clear) => {
-            let asks = match line.clear_offer()? {
-                ClearOffer::Restore if line.can_set_back() => None,
+            let asks = match line.clearable()? {
+                ClearOffer::Restore if line.unused().is_none() => None,
                 ClearOffer::Restore | ClearOffer::Clear => Some(Loses::Value(line.stored_value())),
             };
             Some(Press { write: GoalWrite::clear(&line.name), asks })
@@ -1783,7 +1854,7 @@ pub fn press(line: &GoalLine, act: &GoalAct) -> Option<Press> {
 }
 
 /// Why the Runtime refused a write `goal_value_invalid`: the `goal_problem` vocabulary (Runtime
-/// `contracts/outcome-codes/catalog.json:10217-10295`), one word each.
+/// `contracts/outcome-codes/catalog.json:10233-10311`), one word each.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteProblem {
     NameUnknown,
@@ -2035,9 +2106,9 @@ mod tests {
         press, resource_json, switch_json, whole_time, AmountProblem, Answered, Carried,
         ChoiceOption, ClearOffer, Closed, Declaration, Document, Failed, Form, GoalAct, GoalChange,
         GoalLine, GoalWrite, GoalsPage, Group, LabEntry, Loses, OrphanLine, OtherGoal, OtherTarget,
-        PageState, Pending, PoolState, Press, Progress, Reading, ResourceLine, SetBy, Setter,
-        Shown, Stored, StoredGoal, TierLine, TimeUnit, Unapplied, ValueControl, VariableLine,
-        VariableState, WriteInvalid, WriteProblem, RECEIPT_DECODE_FAILED,
+        PageState, Pending, PoolState, Press, Progress, Reading, Removed, ResourceLine, SetBy,
+        Setter, Shown, Stored, StoredGoal, TierLine, TimeUnit, Unapplied, ValueControl,
+        VariableLine, VariableState, WriteInvalid, WriteProblem, RECEIPT_DECODE_FAILED,
     };
     use acui_rows::outcome::Tongue;
     use actingcommand_contract::{GoalProblem, GoalView};
@@ -2346,6 +2417,7 @@ mod tests {
             left_out: Vec::new(),
             control: ValueControl::Switch { on: Some(false) },
             stored: false,
+            shared: false,
         })
     }
 
@@ -2460,6 +2532,7 @@ mod tests {
                         chosen: Some("item_a".to_owned()),
                     },
                     stored: true,
+                    shared: false,
                 }),
             ]
         );
@@ -2508,10 +2581,17 @@ mod tests {
         let keys: Vec<Option<String>> = english.lines.iter().map(GoalLine::key).collect();
         assert_eq!(
             keys,
-            vec![None, None, Some("entry:gold".to_owned()), None, Some("entry:pick".to_owned())]
+            vec![
+                None,
+                None,
+                Some("resource:gold".to_owned()),
+                None,
+                Some("variable:pick".to_owned()),
+            ]
         );
-        assert_eq!(english.line("entry:pick"), english.lines.get(4));
-        assert_eq!(english.line("entry:pace"), None);
+        assert_eq!(english.line("variable:pick"), english.lines.get(4));
+        assert_eq!(english.line("resource:pick"), None);
+        assert_eq!(english.line("variable:pace"), None);
     }
 
     #[test]
@@ -2663,6 +2743,7 @@ mod tests {
                     left_out: Vec::new(),
                     control: ValueControl::None,
                     stored: true,
+                    shared: false,
                 }),
                 GoalLine::Variable(VariableLine {
                     name: "extra".to_owned(),
@@ -2677,6 +2758,7 @@ mod tests {
                     left_out: Vec::new(),
                     control: ValueControl::Switch { on: Some(false) },
                     stored: false,
+                    shared: false,
                 }),
                 GoalLine::Variable(VariableLine {
                     name: "later".to_owned(),
@@ -2691,6 +2773,7 @@ mod tests {
                     left_out: Vec::new(),
                     control: ValueControl::Switch { on: Some(false) },
                     stored: true,
+                    shared: false,
                 }),
                 GoalLine::Variable(VariableLine {
                     name: "route".to_owned(),
@@ -2702,6 +2785,7 @@ mod tests {
                     left_out: Vec::new(),
                     control: ValueControl::Choice { options: item_options(), chosen: None },
                     stored: true,
+                    shared: false,
                 }),
                 GoalLine::Variable(VariableLine {
                     name: "order".to_owned(),
@@ -2713,6 +2797,7 @@ mod tests {
                     left_out: vec!["item_c".to_owned()],
                     control: ValueControl::None,
                     stored: true,
+                    shared: false,
                 }),
             ]
         );
@@ -3269,6 +3354,7 @@ mod tests {
                     left_out: Vec::new(),
                     control: ValueControl::None,
                     stored: true,
+                    shared: false,
                 }),
                 GoalLine::Variable(VariableLine {
                     name: "count".to_owned(),
@@ -3280,6 +3366,7 @@ mod tests {
                     left_out: Vec::new(),
                     control: ValueControl::None,
                     stored: true,
+                    shared: false,
                 }),
             ]
         );
@@ -3787,28 +3874,28 @@ mod tests {
         let asks = |write: GoalWrite, loses: Loses| Some(Press { write, asks: Some(loses) });
 
         // A goal this console set: replaced and cleared without a question.
-        assert_eq!(on("entry:gold", typed("300")), goes(set_of("gold", "{\"at_least\":300}")));
-        assert_eq!(on("entry:gold", typed(" 7 ")), goes(set_of("gold", "{\"at_least\":7}")));
-        assert_eq!(on("entry:gold", typed("0")), None);
-        assert_eq!(on("entry:gold", typed("")), None);
-        assert_eq!(on("entry:gold", GoalAct::Clear), goes(clear_of("gold")));
-        assert_eq!(on("entry:gold", GoalAct::Switch(true)), None);
+        assert_eq!(on("resource:gold", typed("300")), goes(set_of("gold", "{\"at_least\":300}")));
+        assert_eq!(on("resource:gold", typed(" 7 ")), goes(set_of("gold", "{\"at_least\":7}")));
+        assert_eq!(on("resource:gold", typed("0")), None);
+        assert_eq!(on("resource:gold", typed("")), None);
+        assert_eq!(on("resource:gold", GoalAct::Clear), goes(clear_of("gold")));
+        assert_eq!(on("resource:gold", GoalAct::Switch(true)), None);
         // One set elsewhere, carrying tasks and a step: asked, saying so.
         let carried = Carried { tasks: true, step: true, ..NOTHING };
         assert_eq!(
-            on("entry:wood", typed("90")),
+            on("resource:wood", typed("90")),
             asks(set_of("wood", "{\"at_least\":90}"), Loses::Elsewhere { cleared: false, carried })
         );
         assert_eq!(
-            on("entry:wood", GoalAct::Clear),
+            on("resource:wood", GoalAct::Clear),
             asks(clear_of("wood"), Loses::Elsewhere { cleared: true, carried })
         );
         // No goal: set without a question, nothing to clear.
-        assert_eq!(on("entry:gems", typed("5")), goes(set_of("gems", "{\"at_least\":5}")));
-        assert_eq!(on("entry:gems", GoalAct::Clear), None);
+        assert_eq!(on("resource:gems", typed("5")), goes(set_of("gems", "{\"at_least\":5}")));
+        assert_eq!(on("resource:gems", GoalAct::Clear), None);
         // Set elsewhere, its target not read: all four are said.
         assert_eq!(
-            on("entry:keys", typed("5")),
+            on("resource:keys", typed("5")),
             asks(
                 set_of("keys", "{\"at_least\":5}"),
                 Loses::Elsewhere { cleared: false, carried: Carried::ALL }
@@ -3816,25 +3903,25 @@ mod tests {
         );
         // A choice: another option is set, the one chosen is nothing; back to the default asks
         // nothing.
-        assert_eq!(on("entry:pick", GoalAct::Pick(1)), goes(set_of("pick", "\"item_b\"")));
-        assert_eq!(on("entry:pick", GoalAct::Pick(0)), None);
-        assert_eq!(on("entry:pick", GoalAct::Pick(2)), None);
-        assert_eq!(on("entry:pick", GoalAct::Switch(true)), None);
-        assert_eq!(on("entry:pick", GoalAct::Clear), goes(clear_of("pick")));
+        assert_eq!(on("variable:pick", GoalAct::Pick(1)), goes(set_of("pick", "\"item_b\"")));
+        assert_eq!(on("variable:pick", GoalAct::Pick(0)), None);
+        assert_eq!(on("variable:pick", GoalAct::Pick(2)), None);
+        assert_eq!(on("variable:pick", GoalAct::Switch(true)), None);
+        assert_eq!(on("variable:pick", GoalAct::Clear), goes(clear_of("pick")));
         // At its default: nothing stored to clear.
-        assert_eq!(on("entry:other", GoalAct::Pick(0)), goes(set_of("other", "\"item_a\"")));
-        assert_eq!(on("entry:other", GoalAct::Clear), None);
+        assert_eq!(on("variable:other", GoalAct::Pick(0)), goes(set_of("other", "\"item_a\"")));
+        assert_eq!(on("variable:other", GoalAct::Clear), None);
         // A switch.
-        assert_eq!(on("entry:extra", GoalAct::Switch(true)), goes(set_of("extra", "true")));
-        assert_eq!(on("entry:extra", GoalAct::Switch(false)), None);
-        assert_eq!(on("entry:extra", GoalAct::Pick(0)), None);
+        assert_eq!(on("variable:extra", GoalAct::Switch(true)), goes(set_of("extra", "true")));
+        assert_eq!(on("variable:extra", GoalAct::Switch(false)), None);
+        assert_eq!(on("variable:extra", GoalAct::Pick(0)), None);
         // An `integer` is only shown in this version: nothing set, nothing cleared.
-        assert_eq!(on("entry:rounds", typed("5")), None);
-        assert_eq!(on("entry:rounds", GoalAct::Clear), None);
+        assert_eq!(on("variable:rounds", typed("5")), None);
+        assert_eq!(on("variable:rounds", GoalAct::Clear), None);
         // Not offered: nothing set; its stored value cleared, asked.
-        assert_eq!(on("entry:route", GoalAct::Pick(1)), None);
+        assert_eq!(on("variable:route", GoalAct::Pick(1)), None);
         assert_eq!(
-            on("entry:route", GoalAct::Clear),
+            on("variable:route", GoalAct::Clear),
             asks(clear_of("route"), Loses::Value(Shown::Words("Item A".to_owned())))
         );
         // No longer offered: cleared, asked.
@@ -3868,10 +3955,10 @@ mod tests {
     /// fix1: the Runtime resolves a name by what is stored under it (a clear takes a resource
     /// entry's goal on its pool first, then a stored value, then a target of that id), and a
     /// resource entry's set removes the targets of its name on other pools. So a value no longer
-    /// offered, or an other target, whose name another line has (an entry of any type, a value no
-    /// longer offered, an other target) is not cleared here; an amount set on an entry whose name
-    /// an other target has asks first, with what that target holds, and with what the entry's own
-    /// goal set elsewhere carries.
+    /// offered, an other target, or (fix4) a variable's value, whose name another line has (an
+    /// entry of any type, a value no longer offered, an other target) is not cleared here; an
+    /// amount set on an entry whose name an other target, or another entry's goal, has asks first,
+    /// with what that goal holds, and with what the entry's own goal set elsewhere carries.
     #[test]
     fn a_name_two_lines_share_is_not_cleared_by_it() {
         let view = view(
@@ -3990,52 +4077,76 @@ mod tests {
             on("target:iron", GoalAct::Clear),
             asks(clear_of("iron"), Loses::Target(Some(("pool.ore".to_owned(), 7))))
         );
-        // The entries' own clears are not in doubt: the Runtime takes theirs first.
-        assert_eq!(on("entry:gold", GoalAct::Clear), goes(clear_of("gold")));
-        assert_eq!(on("entry:pick", GoalAct::Clear), goes(clear_of("pick")));
-
-        // 3. An amount set on an entry whose name an other target has removes that target too:
-        // asked, with what it holds; with what its own goal set elsewhere carries as well.
-        match page.line("entry:gold") {
-            Some(GoalLine::Resource(line)) => {
-                assert_eq!(line.same_name, Some(Some(("pool.old_gold".to_owned(), 30))));
+        // A resource entry's own clear is not in doubt: the Runtime takes its pool's goal first.
+        assert_eq!(on("resource:gold", GoalAct::Clear), goes(clear_of("gold")));
+        // fix4: a variable's value whose name another line has (here an other target) is not put
+        // back to the default here either.
+        match page.line("variable:pick") {
+            Some(GoalLine::Variable(line)) => {
+                assert!(line.shared);
+                assert_eq!(line.clear_offer(), Some(ClearOffer::Restore));
+                assert_eq!(line.clearable(), None);
             }
             line => panic!("{line:?}"),
         }
+        assert_eq!(on("variable:pick", GoalAct::Clear), None);
+        // Its value is still set: a set names the variable before any target.
+        assert_eq!(on("variable:pick", GoalAct::Pick(1)), goes(set_of("pick", "\"item_b\"")));
+
+        // 3. An amount set on an entry whose name an other target has removes that target too:
+        // asked, with what it holds; with what its own goal set elsewhere carries as well.
+        match page.line("resource:gold") {
+            Some(GoalLine::Resource(line)) => assert_eq!(
+                line.same_name,
+                Some(Removed::Other(Some(("pool.old_gold".to_owned(), 30))))
+            ),
+            line => panic!("{line:?}"),
+        }
         assert_eq!(
-            on("entry:gold", typed("60")),
+            on("resource:gold", typed("60")),
             asks(
                 set_of("gold", "{\"at_least\":60}"),
-                Loses::SameName { held: Some(("pool.old_gold".to_owned(), 30)), carried: None }
+                Loses::SameName {
+                    removed: Removed::Other(Some(("pool.old_gold".to_owned(), 30))),
+                    carried: None,
+                }
             )
         );
         let carried = Carried { tasks: true, ..NOTHING };
         assert_eq!(
-            on("entry:wood", typed("90")),
+            on("resource:wood", typed("90")),
             asks(
                 set_of("wood", "{\"at_least\":90}"),
                 Loses::SameName {
-                    held: Some(("pool.old_wood".to_owned(), 20)),
+                    removed: Removed::Other(Some(("pool.old_wood".to_owned(), 20))),
                     carried: Some(carried),
                 }
             )
         );
         // Its clear takes only its own pool's goal.
         assert_eq!(
-            on("entry:wood", GoalAct::Clear),
+            on("resource:wood", GoalAct::Clear),
             asks(clear_of("wood"), Loses::Elsewhere { cleared: true, carried })
         );
         // No other target of its name, but another resource entry's goal has its name as its id:
-        // that goal goes too, so asked, with what it holds.
+        // that goal goes too, so asked, naming that entry by its title, with what its goal holds
+        // (fix4: a goal by name, it carries none of the four).
         assert_eq!(
-            on("entry:gems", typed("5")),
+            on("resource:gems", typed("5")),
             asks(
                 set_of("gems", "{\"at_least\":5}"),
-                Loses::SameName { held: Some(("pool.silver".to_owned(), 40)), carried: None }
+                Loses::SameName {
+                    removed: Removed::Entry {
+                        title: Some("silver".to_owned()),
+                        amount: Some(40),
+                        carried: NOTHING,
+                    },
+                    carried: None,
+                }
             )
         );
         // No target of its name anywhere else: set at once.
-        assert_eq!(on("entry:silver", typed("45")).map(|press| press.asks.is_some()), Some(false));
+        assert_eq!(on("resource:silver", typed("45")).map(|press| press.asks.is_some()), Some(false));
     }
 
     /// fix1: a variable the game root does not apply takes no value set here
@@ -4107,26 +4218,403 @@ mod tests {
             offers,
             vec![Some(ClearOffer::Restore), Some(ClearOffer::Restore), Some(ClearOffer::Restore), None]
         );
-        assert_eq!(on(&english, "entry:extra", GoalAct::Clear), asks("extra", Shown::Switch(true)));
+        assert_eq!(on(&english, "variable:extra", GoalAct::Clear), asks("extra", Shown::Switch(true)));
         assert_eq!(
-            on(&english, "entry:pick", GoalAct::Clear),
+            on(&english, "variable:pick", GoalAct::Clear),
             asks("pick", Shown::Words("Item A".to_owned()))
         );
         // Nothing is set on either.
-        assert_eq!(on(&english, "entry:extra", GoalAct::Switch(true)), None);
-        assert_eq!(on(&english, "entry:pick", GoalAct::Pick(0)), None);
+        assert_eq!(on(&english, "variable:extra", GoalAct::Switch(true)), None);
+        assert_eq!(on(&english, "variable:pick", GoalAct::Pick(0)), None);
         // A reason word newer than this console: whether a value could be set on it again is not
         // known, so it asks too, with the value stored.
-        assert_eq!(on(&english, "entry:later", GoalAct::Clear), asks("later", Shown::Switch(true)));
+        assert_eq!(on(&english, "variable:later", GoalAct::Clear), asks("later", Shown::Switch(true)));
         // Nothing stored: nothing to clear.
-        assert_eq!(on(&english, "entry:calm", GoalAct::Clear), None);
+        assert_eq!(on(&english, "variable:calm", GoalAct::Clear), None);
         // The question's value is in the page's language: the page a press reads is made in the
         // language shown.
         let chinese = page(&view, Tongue::ZhHans, &|_| None);
         assert_eq!(
-            on(&chinese, "entry:pick", GoalAct::Clear),
+            on(&chinese, "variable:pick", GoalAct::Clear),
             asks("pick", Shown::Words("甲".to_owned()))
         );
+    }
+
+    /// The writes and questions a page's presses come to, by line key.
+    struct Presses<'a>(&'a GoalsPage);
+
+    impl Presses<'_> {
+        fn on(&self, key: &str, act: GoalAct) -> Option<Press> {
+            let line = self.0.line(key).unwrap_or_else(|| panic!("no line {key}"));
+            press(line, &act)
+        }
+    }
+
+    fn set_of(name: &str, json: &str) -> GoalWrite {
+        GoalWrite { name: name.to_owned(), change: GoalChange::Set(json.to_owned()) }
+    }
+
+    fn clear_of(name: &str) -> GoalWrite {
+        GoalWrite { name: name.to_owned(), change: GoalChange::Clear }
+    }
+
+    fn goes(write: GoalWrite) -> Option<Press> {
+        Some(Press { write, asks: None })
+    }
+
+    fn asks(write: GoalWrite, loses: Loses) -> Option<Press> {
+        Some(Press { write, asks: Some(loses) })
+    }
+
+    fn typed(text: &str) -> GoalAct {
+        GoalAct::Amount(text.to_owned())
+    }
+
+    /// fix4 (1): a value stored that the next run does not take, for any reason, is set back from
+    /// here by no control (an option no longer offered, a value of another type, a reason word
+    /// this console does not know): another option picked, the switch turned, or back to the
+    /// default, each asks first, saying the value stored. A value in effect asks nothing either way.
+    #[test]
+    fn a_value_the_next_run_does_not_take_is_asked_about_before_it_goes() {
+        let view = view(
+            state("accepted"),
+            json!([
+                variable("pick", true, choice("pick"), &["pack.a"], json!({
+                    "default_json": "\"item_b\"",
+                    "value_json": "\"item_c\"",
+                    "effective_json": "\"item_b\"",
+                    "source": "default",
+                    "set": set("cli", None),
+                    "state": "not_applied",
+                    "variable_problem": "not_an_option",
+                })),
+                variable("extra", true, switch("extra", "Extra"), &["pack.a"], json!({
+                    "default_json": "false",
+                    "value_json": "\"yes\"",
+                    "effective_json": "false",
+                    "source": "default",
+                    "set": set("mcp", None),
+                    "state": "not_applied",
+                    "variable_problem": "type_changed",
+                })),
+                variable("later", true, switch("later", "Later"), &["pack.a"], json!({
+                    "default_json": "false",
+                    "value_json": "true",
+                    "effective_json": "false",
+                    "source": "default",
+                    "set": set("ui", None),
+                    "state": "not_applied",
+                    "variable_problem": "a_newer_word",
+                })),
+                variable("route", true, choice("route"), &["pack.a"], json!({
+                    "default_json": "\"item_b\"",
+                    "value_json": "\"item_a\"",
+                    "effective_json": "\"item_a\"",
+                    "source": "set",
+                    "set": set("ui", None),
+                    "state": "in_effect",
+                })),
+            ]),
+            json!({}),
+            no_targets(),
+        );
+        let page = read(&view);
+        let presses = Presses(&page);
+        // An option no longer offered: another option, or the default again, loses it.
+        let item_c = Shown::Words("item_c".to_owned());
+        assert_eq!(
+            presses.on("variable:pick", GoalAct::Pick(0)),
+            asks(set_of("pick", "\"item_a\""), Loses::Replaced(item_c.clone()))
+        );
+        assert_eq!(
+            presses.on("variable:pick", GoalAct::Clear),
+            asks(clear_of("pick"), Loses::Value(item_c))
+        );
+        // A value of another type: the switch turned, or the default again.
+        let yes = Shown::Raw("\"yes\"".to_owned());
+        assert_eq!(
+            presses.on("variable:extra", GoalAct::Switch(true)),
+            asks(set_of("extra", "true"), Loses::Replaced(yes.clone()))
+        );
+        assert_eq!(
+            presses.on("variable:extra", GoalAct::Clear),
+            asks(clear_of("extra"), Loses::Value(yes))
+        );
+        // A reason word this console does not know: the same.
+        assert_eq!(
+            presses.on("variable:later", GoalAct::Switch(true)),
+            asks(set_of("later", "true"), Loses::Replaced(Shown::Switch(true)))
+        );
+        // In effect: another option and the default again, at once.
+        assert_eq!(presses.on("variable:route", GoalAct::Pick(1)), goes(set_of("route", "\"item_b\"")));
+        assert_eq!(presses.on("variable:route", GoalAct::Clear), goes(clear_of("route")));
+    }
+
+    /// fix4 (2): on a pool that takes no goal here now (without a step, not targetable, not
+    /// listed) "Set" sends nothing, and a goal on it, whoever set it, is not set back from here
+    /// once cleared: its clear asks first, with its amount, and with what it carries when it was
+    /// set elsewhere and carries any. On a pool that takes a goal, this console's goal goes at once.
+    #[test]
+    fn a_goal_on_a_pool_that_takes_none_here_asks_before_it_is_cleared() {
+        let view = view(
+            state("accepted"),
+            json!([
+                resource("scale", "pool.scale", Some(("scale", 40)), Some(set("ui", None))),
+                resource("gems", "pool.gems", Some(("gems", 10)), Some(set("mcp", None))),
+                resource("keys", "pool.keys", Some(("keys", 5)), Some(set("lab", Some("Lab-CLI")))),
+                resource("gold", "pool.gold", Some(("gold", 50)), Some(set("ui", None))),
+            ]),
+            json!({}),
+            targets(
+                json!([pool("pool.scale", true, false, Some(2)), pool("pool.gold", true, true, Some(1))]),
+                json!([closed_pool("pool.gems", "unmapped_task")]),
+                Some(active(
+                    V3,
+                    json!([
+                        target("scale", "pool.scale", json!(40)),
+                        {
+                            "id": "gems",
+                            "resource": "pool.gems",
+                            "condition": {"kind": "at_least", "amount": 10},
+                            "apply": {"mode": "adjust", "weight": "score_stage"},
+                            "tasks": ["task.daily"],
+                        },
+                        target("keys", "pool.keys", json!(5)),
+                        target("gold", "pool.gold", json!(50)),
+                    ]),
+                    json!([]),
+                    false,
+                    None,
+                )),
+            ),
+        );
+        let page = read(&view);
+        let pools: Vec<PoolState> = page
+            .lines
+            .iter()
+            .map(|line| match line {
+                GoalLine::Resource(line) => line.pool.clone(),
+                line => panic!("{line:?}"),
+            })
+            .collect();
+        assert_eq!(
+            pools,
+            vec![
+                PoolState::NoStep,
+                PoolState::Closed(Closed::UnmappedTask),
+                PoolState::Unlisted,
+                PoolState::Open,
+            ]
+        );
+        let presses = Presses(&page);
+        for key in ["resource:scale", "resource:gems", "resource:keys"] {
+            assert_eq!(presses.on(key, typed("60")), None, "{key}");
+        }
+        assert_eq!(presses.on("resource:gold", typed("60")), goes(set_of("gold", "{\"at_least\":60}")));
+        // This console's goal on a pool without a step: asked, with its amount.
+        assert_eq!(
+            presses.on("resource:scale", GoalAct::Clear),
+            asks(clear_of("scale"), Loses::Unsettable { amount: Some(40), carried: None })
+        );
+        // Set elsewhere with tasks of its own, on a pool not targetable: with those too.
+        assert_eq!(
+            presses.on("resource:gems", GoalAct::Clear),
+            asks(
+                clear_of("gems"),
+                Loses::Unsettable {
+                    amount: Some(10),
+                    carried: Some(Carried { tasks: true, ..NOTHING }),
+                }
+            )
+        );
+        // Set elsewhere by name, carrying none of the four, on a pool not listed: asked all the
+        // same, which it was not while its pool took a goal.
+        assert_eq!(
+            presses.on("resource:keys", GoalAct::Clear),
+            asks(clear_of("keys"), Loses::Unsettable { amount: Some(5), carried: None })
+        );
+        assert_eq!(presses.on("resource:gold", GoalAct::Clear), goes(clear_of("gold")));
+    }
+
+    /// fix4 (3): a resource entry and a variable of one name, both listed when the game root names
+    /// them both (`goal_name_conflict`), are two lines of two keys. The variable's value is not put
+    /// back to the default here, since a clear of the name takes the resource's goal first; the
+    /// resource's own clear is not in doubt. A variable no other line names is cleared at once.
+    #[test]
+    fn a_resource_and_a_variable_of_one_name_are_two_lines() {
+        let view = view(
+            state("accepted"),
+            json!([
+                resource("gold", "pool.gold", Some(("gold", 50)), Some(set("ui", None))),
+                variable("gold", false, switch("gold", "Gold"), &["pack.a"], json!({
+                    "default_json": "false",
+                    "value_json": "true",
+                    "effective_json": "false",
+                    "source": "default",
+                    "set": set("cli", None),
+                    "state": "not_applied",
+                    "variable_problem": "goal_name_conflict",
+                })),
+                variable("extra", false, switch("extra", "Extra"), &["pack.a"], json!({
+                    "default_json": "false",
+                    "value_json": "true",
+                    "effective_json": "true",
+                    "source": "set",
+                    "set": set("ui", None),
+                    "state": "in_effect",
+                })),
+            ]),
+            json!({}),
+            targets(
+                json!([pool("pool.gold", true, true, Some(1))]),
+                json!([]),
+                Some(active(
+                    V3,
+                    json!([target("gold", "pool.gold", json!(50))]),
+                    json!([]),
+                    false,
+                    None,
+                )),
+            ),
+        );
+        let page = read(&view);
+        let keys: Vec<String> = page.lines.iter().filter_map(GoalLine::key).collect();
+        assert_eq!(keys, vec!["resource:gold", "variable:gold", "variable:extra"]);
+        assert!(matches!(page.line("resource:gold"), Some(GoalLine::Resource(_))));
+        match page.line("variable:gold") {
+            Some(GoalLine::Variable(line)) => {
+                assert!(line.shared);
+                assert_eq!(line.clear_offer(), Some(ClearOffer::Restore));
+                assert_eq!(line.clearable(), None);
+            }
+            line => panic!("{line:?}"),
+        }
+        let presses = Presses(&page);
+        assert_eq!(presses.on("variable:gold", GoalAct::Clear), None);
+        // Nor is a value set on it: the game root does not apply it.
+        assert_eq!(presses.on("variable:gold", GoalAct::Switch(true)), None);
+        assert_eq!(presses.on("resource:gold", GoalAct::Clear), goes(clear_of("gold")));
+        assert_eq!(presses.on("variable:extra", GoalAct::Clear), goes(clear_of("extra")));
+    }
+
+    /// fix4 (4): an amount that removes another resource entry's goal of the entry's name says
+    /// that entry by its title, in the language shown, never by its pool, with what its goal
+    /// holds: its amount, and what it carries, read from the stored target of that id as a goal
+    /// set elsewhere's is. And a goal set elsewhere that carries an importance only is said to
+    /// lose only that.
+    #[test]
+    fn another_entrys_goal_removed_is_said_by_its_title_and_what_it_carries() {
+        let mut silver =
+            resource("silver", "pool.silver", Some(("gems", 40)), Some(set("mcp", None)));
+        silver["entry"]["title"] = json!({"en": "Silver", "zh-Hans": "银币"});
+        let view = view(
+            state("accepted"),
+            json!([
+                resource("gems", "pool.gems", None, None),
+                silver,
+                resource("wood", "pool.wood", Some(("agent_wood", 80)), Some(set("lab", None))),
+            ]),
+            json!({}),
+            targets(
+                json!([
+                    pool("pool.gems", true, true, Some(1)),
+                    pool("pool.silver", true, true, Some(2)),
+                    pool("pool.wood", true, true, Some(3)),
+                ]),
+                json!([]),
+                Some(active(
+                    V3,
+                    json!([
+                        {
+                            "id": "gems",
+                            "resource": "pool.silver",
+                            "condition": {"kind": "at_least", "amount": 40},
+                            "apply": {"mode": "adjust", "weight": "score_stage"},
+                            "importance_milli": 700,
+                            "valid_until_unix_ms": VALID_UNTIL,
+                        },
+                        {
+                            "id": "agent_wood",
+                            "resource": "pool.wood",
+                            "condition": {"kind": "at_least", "amount": 80},
+                            "apply": {"mode": "adjust", "weight": "score_stage"},
+                            "importance_milli": 300,
+                        },
+                    ]),
+                    json!([]),
+                    false,
+                    None,
+                )),
+            ),
+        );
+        let removed = |title: &str| Removed::Entry {
+            title: Some(title.to_owned()),
+            amount: Some(40),
+            carried: Carried { importance: true, validity: true, ..NOTHING },
+        };
+        for (tongue, title) in [(Tongue::En, "Silver"), (Tongue::ZhHans, "银币")] {
+            let shown = page(&view, tongue, &|_| None);
+            match shown.line("resource:gems") {
+                Some(GoalLine::Resource(line)) => assert_eq!(line.same_name, Some(removed(title))),
+                line => panic!("{line:?}"),
+            }
+            assert_eq!(
+                Presses(&shown).on("resource:gems", typed("5")),
+                asks(
+                    set_of("gems", "{\"at_least\":5}"),
+                    Loses::SameName { removed: removed(title), carried: None }
+                )
+            );
+        }
+        // An importance of its own only: that alone is said, replaced or cleared.
+        let page = read(&view);
+        let presses = Presses(&page);
+        let importance = Carried { importance: true, ..NOTHING };
+        assert_eq!(
+            presses.on("resource:wood", typed("90")),
+            asks(
+                set_of("wood", "{\"at_least\":90}"),
+                Loses::Elsewhere { cleared: false, carried: importance }
+            )
+        );
+        assert_eq!(
+            presses.on("resource:wood", GoalAct::Clear),
+            asks(clear_of("wood"), Loses::Elsewhere { cleared: true, carried: importance })
+        );
+    }
+
+    /// fix4 (5): against a record of the old form every write is refused `record_unreadable`, so a
+    /// page over one takes no press at all, though it lists; over the other forms, or no record, it
+    /// does.
+    #[test]
+    fn a_page_over_an_old_record_takes_no_press() {
+        let of = |active: Option<Value>| {
+            read(&view(
+                state("accepted"),
+                json!([resource("gold", "pool.gold", Some(("gold", 5)), None)]),
+                json!({}),
+                targets(json!([pool("pool.gold", true, true, Some(1))]), json!([]), active),
+            ))
+        };
+        let document = |schema: &str| {
+            Some(active(
+                schema,
+                json!([target("gold", "pool.gold", json!(5))]),
+                json!([]),
+                false,
+                Some(VALID_UNTIL),
+            ))
+        };
+        let old = of(document(V1));
+        assert_eq!(
+            old.state,
+            PageState::Listed { declaration: Declaration::Accepted, nothing: false }
+        );
+        assert!(matches!(&old.stored, Stored::Document(Document { form: Form::Old, .. })));
+        assert!(!old.writable());
+        assert!(of(document(V2)).writable());
+        assert!(of(document(V3)).writable());
+        assert!(of(None).writable());
     }
 
     fn values(given: Value) -> Map<String, Value> {

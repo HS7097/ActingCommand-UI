@@ -6,11 +6,14 @@
 //! decides them; this says only why there are none.
 //!
 //! A press writes what `acui_source::workbench::goals::press` says, the one place that decides it,
-//! of the newest page read and only while that shows: a resource entry's amount (typed, then
-//! "set"), a `choice`'s option, a `switch`, or a clear. One that loses what the page cannot set
-//! back asks first, on its line, with what it loses; only the confirmation sends it, and a press
-//! anywhere else, another account or a restart lets go of the question. `integer` and `ordered`
-//! variables are only shown in this version (G3's).
+//! of the newest page read and only while that shows and takes writes (not of a record in the old
+//! form, `GoalsPage::writable`): a resource entry's amount (typed, then "set"), a `choice`'s
+//! option, a `switch`, or a clear. One that loses what the page cannot set back asks first, on its
+//! line, with what it loses; only the confirmation sends it, and a press anywhere else, another
+//! account or a restart lets go of the question. The confirmation reckons the press again on the
+//! newest page read, of the same line: one that no longer writes the same, or no longer asks the
+//! same, is not sent, and its line says so; one that does goes naming that page's version.
+//! `integer` and `ordered` variables are only shown in this version (G3's).
 //!
 //! The write goes out on a thread of its own (`THREAD`), over a fresh person's connection, once
 //! (`goals::edit`, which sends a `fact_observation_not_newer` once more itself), naming the version
@@ -25,7 +28,8 @@
 //! it says once.
 //!
 //! What a press came to is said on its line, with when it landed (not that it is out, nor of a
-//! conflict, a thread refused or a restart), until that line is pressed again, the tab shows
+//! conflict, a thread refused, a restart or a confirmation the page read again no longer bears
+//! out), until that line is pressed again, the tab shows
 //! another account than it last did, or the Runtime starts again. One that took says nothing: the
 //! line read again says what holds now. Every answer goes in the log, from the thread, with the
 //! version it named and its codes.
@@ -38,7 +42,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
 use acui_source::workbench::goals::{
-    edit, GoalAct, GoalWrite, GoalsPage, Loses, WriteAnswer, WriteInvalid, WriteOutcome,
+    edit, GoalAct, GoalWrite, GoalsPage, Loses, Press, WriteAnswer, WriteInvalid, WriteOutcome,
     WriteRefusal,
 };
 use acui_source::ClientFailure;
@@ -115,6 +119,9 @@ pub enum GoalSaid {
     NoThread { error: String },
     /// It was out across a restart: what came of it is not known.
     Restarted,
+    /// Confirmed after the page was read again, which no longer makes the press write or ask what
+    /// it asked about: nothing was sent.
+    Stale,
 }
 
 /// Each account's writes of its goals this run, and the owner epoch whose Runtime said it takes
@@ -138,8 +145,16 @@ pub struct Writes {
 struct Slot {
     stage: Stage,
     said: BTreeMap<String, GoalSaid>,
-    asking: Option<(WriteTarget, Loses)>,
+    asking: Option<Question>,
     amounts: BTreeMap<String, String>,
+}
+
+/// A press that asks to be confirmed: what it writes, the press itself, reckoned again as it is
+/// confirmed, and what it loses.
+struct Question {
+    target: WriteTarget,
+    act: GoalAct,
+    loses: Loses,
 }
 
 #[derive(Default)]
@@ -209,7 +224,7 @@ impl Writes {
             said: slot.map(|slot| slot.said.clone()).unwrap_or_default(),
             asking: slot
                 .and_then(|slot| slot.asking.as_ref())
-                .map(|(target, loses)| (target.key.clone(), loses.clone())),
+                .map(|question| (question.target.key.clone(), question.loses.clone())),
             amounts: slot.map(|slot| slot.amounts.clone()).unwrap_or_default(),
         }
     }
@@ -229,12 +244,20 @@ impl Writes {
         slot.amounts.insert(key.to_owned(), text.to_owned());
     }
 
-    /// A press of `alias` that asks to be confirmed before it writes `target`, losing `loses`: it
-    /// takes the place of any other question, and what the line's last press came to goes.
-    pub fn ask(&mut self, alias: &str, target: WriteTarget, loses: Loses) {
+    /// A press `act` of `alias` that asks to be confirmed before it writes `target`, losing
+    /// `loses`: it takes the place of any other question, and what the line's last press came to
+    /// goes.
+    pub fn ask(&mut self, alias: &str, target: WriteTarget, act: GoalAct, loses: Loses) {
         let slot = self.slots.entry(alias.to_owned()).or_default();
         slot.said.remove(&target.key);
-        slot.asking = Some((target, loses));
+        slot.asking = Some(Question { target, act, loses });
+    }
+
+    /// The question of `alias`: the key of its line and the press, to be reckoned again on the
+    /// newest page read as it is confirmed.
+    pub fn question(&self, alias: &str) -> Option<(&str, &GoalAct)> {
+        let question = self.slots.get(alias)?.asking.as_ref()?;
+        Some((question.target.key.as_str(), &question.act))
     }
 
     /// The question of `alias` cancelled: whether there was one.
@@ -242,16 +265,37 @@ impl Writes {
         self.slots.get_mut(alias).is_some_and(|slot| slot.asking.take().is_some())
     }
 
-    /// The question of `alias` confirmed in owner epoch `epoch`: the request to send, none when
-    /// there was none, it was asked in another epoch, the Runtime takes no writes, or a write of
-    /// the account is out or waits for a read.
-    pub fn confirm(&mut self, alias: &str, epoch: &str) -> Option<GoalRequest> {
+    /// The question of `alias` confirmed in owner epoch `epoch`, its press reckoned again as
+    /// `again` on the newest page read, of that page's version: the request to send, naming that
+    /// version; none when there was no question, it was asked in another epoch, the Runtime takes
+    /// no writes, or a write of the account is out or waits for a read; and none when `again` does
+    /// not write what was asked about or does not ask the same (or there is none: the page does
+    /// not show or take writes now, the line is gone, or the press writes nothing now), which the
+    /// line then says, and the person looks again.
+    pub fn confirm(
+        &mut self,
+        alias: &str,
+        epoch: &str,
+        again: Option<(Press, u64)>,
+    ) -> Option<GoalRequest> {
         let unsupported = self.unsupported(epoch);
-        let (target, _) = self.slots.get_mut(alias)?.asking.take()?;
+        let slot = self.slots.get_mut(alias)?;
+        let Question { target, loses, .. } = slot.asking.take()?;
         if unsupported || target.epoch != epoch {
             return None;
         }
-        self.press(alias, target)
+        let expected = match again {
+            Some((press, version))
+                if press.write == target.write && press.asks.as_ref() == Some(&loses) =>
+            {
+                version
+            }
+            Some(_) | None => {
+                slot.said.insert(target.key, GoalSaid::Stale);
+                return None;
+            }
+        };
+        self.press(alias, WriteTarget { expected, ..target })
     }
 
     /// A press of `alias` that writes `target`: the request to send, none while one of the account
@@ -530,12 +574,15 @@ pub fn clear_pressed(ui: &Ui, key: &str) {
     pressed(ui, key, GoalAct::Clear);
 }
 
-/// The question on the page confirmed: what it asked about is sent, once, at once.
+/// The question on the page confirmed: what it asked about is sent, once, at once, while the newest
+/// page read, in the language shown, still makes the press write and ask the same
+/// (`Model::goal_confirmed`); else nothing is sent, and its line says so.
 pub fn confirmed(ui: &Ui) {
     let Ok(launcher) = &ui.launcher else {
         return;
     };
-    let request = ui.model.borrow_mut().goal_confirmed();
+    let language = ui.labels().tongue;
+    let request = ui.model.borrow_mut().goal_confirmed(language);
     match request {
         Some((alias, request)) => send(ui, launcher.state_root.clone(), &alias, request),
         None => paint::tasks(ui),

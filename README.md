@@ -828,7 +828,8 @@ lifetime is on its line ("This goal is valid until …", in amber once it lapsed
 lines speaks only once every goal of it lapsed; with no record, "No resource goals are set for this
 instance" while the page has a resource. A goal that lapsed is never in the accent. A record an agent wrote
 in the old form (`actingcommand.resource-targets.v1`) adds "These resource goals were written by an agent
-in the old form; shown read-only here"; one of a form newer than `v3` says in amber that it needs a newer
+in the old form; shown read-only here", and every control of the page is off then (against such a record
+the Runtime refuses every write `record_unreadable`); one of a form newer than `v3` says in amber that it needs a newer
 console, its other targets' amounts are not shown, and the technical log hears of it once.
 
 The page is read on the switches' terms (the main page of a window that is not minimized, this tab, the
@@ -856,7 +857,8 @@ least 1"), the pool's capacity being the Runtime's to judge, and its `out_of_ran
 the line's result then says (under the line, with when it landed, not beside the field). A resource with a
 goal has **Clear**. A **choice** variable shows its options side by side, four or fewer, else in a
 drop-down, and a **switch** variable a box; changing either writes the option's value (a JSON string) or
-`true` or `false` at once. A variable with a value stored has **Back to Default**, which clears it;
+`true` or `false` at once. A variable with a value stored has **Back to Default**, which clears it
+(but for a name another line has, below);
 `integer` and `ordered` variables are only shown in this version, and so have neither a control nor
 **Back to Default**: with no control of them here a value cleared could not be set back from here, so both
 come with their controls in the next version. A placement no bound pack offers that holds a value, and
@@ -864,30 +866,45 @@ each value **No longer offered**, has **Clear**. An **other resource goal** whos
 form (`[a-z0-9][a-z0-9_]*`, at most 64 bytes, the only names `EditGoal` takes) has **Clear**; any other
 says "Change it with the Lab". A write names a name only, and the Runtime takes what is stored under it in
 its own order (a clear: a resource entry's goal on its pool first, then a stored value of the name, then a
-target of that id), so a value **No longer offered** or an **other resource goal** whose name another
-line of the page has too (an entry of any kind, another value no longer offered, another other resource
-goal) has no **Clear**, and says in grey "Another line on this page has the same name, so it cannot be
-cleared reliably here; change it with the Lab". Tiers and remedy parameters are only shown. Every control
-is off while the page lists nothing (`not_checked_yet`, `root_failing`, `no_schedule`), while a write of
-the instance is out, and after an answer until the page read again has come.
+target of that id), so a value **No longer offered**, an **other resource goal** or a variable's value
+whose name another line of the page has too (an entry of any kind, another value no longer offered,
+another other resource goal; when the game's goal declaration has a resource entry and a package variable
+of one name, the Runtime's `goal_name_conflict`, both lines are listed, each told apart by its kind) has
+no **Clear** or **Back to Default**, and says in grey "Another line on this page has the same name, so it
+cannot be cleared reliably here; change it with the Lab"; a resource entry's own **Clear** stays (the
+Runtime takes its pool's goal first). Tiers and remedy parameters are only shown. Every control is off
+while the page lists nothing (`not_checked_yet`, `root_failing`, `no_schedule`), while the record stored
+is of the old form (v1), while a write of the instance is out, and after an answer until the page read
+again has come.
 
 A press asks to be confirmed first only where what it loses cannot be set back from here, and the question
 says what: clearing a value no run reads (no longer offered, or of a placement not offered), "the value
-stored (…) cannot be set back"; **Back to Default** of a variable the game does not apply (the game root's
-own judgement, such as a pack that counts as able to do something irreversible: no value can be set on it
-here again), likewise with the value stored, and so of one not used for a reason word this console does not
-know (whether a value could be set on it again is not known); clearing an other resource goal, with its pool
-and amount; setting an amount on a resource whose name an other resource goal, or another resource's goal,
-has as its id, which the Runtime then removes too, with that goal's pool and amount; and clearing or replacing a declared resource's goal set
+stored (…) cannot be set back"; for a variable whose value stored the next run does not take (an option no
+longer offered, a value of another type, a number off its range or step, a reason word this console does
+not know, or the game root's own judgement that it does not apply, such as a pack that counts as able to
+do something irreversible, after which no value can be set on it here), **Back to Default**, another option
+or the switch turned, likewise with the value stored, which no control here sets again; clearing an other
+resource goal, with its pool and amount; setting an amount on a resource whose name an other resource goal,
+or another resource's goal, has as its id, which the Runtime then removes too: of an other resource goal
+with its pool and amount, of another resource entry's goal with that entry's title (never its pool's id),
+its amount, and the tasks, step, importance and validity it carries, read as for a goal set elsewhere
+(below); clearing a goal on a pool that takes no goal here now (one without a step, one no goal can name,
+one not listed), whoever set it, as no amount is set on that pool here again, with its amount (and what it
+carries, when set elsewhere); and clearing or replacing a declared resource's goal set
 elsewhere (no setter, or another channel than this console's) that carries what a goal set by name does
 not, its own tasks, step, importance or validity: setting a pool's amount replaces its goal whole,
 whatever its id, and those are lost. Which of them it carries is read from the stored record's target of
-the same id, all four when that does not read; such a goal's line also says in amber "This goal was set
-elsewhere: changing it here replaces how it was set". A goal set elsewhere that carries none of the four
-(as one set by name elsewhere) loses nothing a goal set here does not hold again, so replacing or
-clearing it asks nothing: only that amber line says it was set elsewhere. Back to the default of a
-variable a value can be set on again, a value this console set and a goal this console set ask nothing.
-Only **Confirm** sends it; **Cancel**, a press anywhere else, another instance or a restart lets the
+the same id, only those it carries, all four when that does not read; such a goal's line also says in
+amber "This goal was set elsewhere: changing it here replaces how it was set", whether or not its pool
+takes a goal here. A goal set elsewhere that carries none of the four (as one set by name elsewhere), on a
+pool that takes a goal here, loses nothing a goal set here does not hold again, so replacing or clearing it
+asks nothing: only that amber line says it was set elsewhere. Back to the default of a variable whose value
+is in effect, a value this console set and a goal this console set on a pool that takes one ask nothing.
+Only **Confirm** sends it, and it reckons the press again on the newest page read, of the same line: when
+that no longer writes or asks what was asked about (the page was read again meanwhile), the question goes,
+nothing is sent, and the line says in amber "The page was read again before the confirmation, and this
+press no longer changes what was asked about: nothing was sent. Look again, then press again"; else it goes
+naming that page's version. **Cancel**, a press anywhere else, another instance or a restart lets the
 question go.
 
 The write goes on a fresh person's connection (the `ui` channel, the full receipt) at the slow reads' io
@@ -896,7 +913,8 @@ again at once; another tool changed the page since it was read (`fact_observatio
 amber "This page was just changed elsewhere and is read again: press again", read again, not sent again;
 another write in the same millisecond (`fact_observation_not_newer`), sent once more at once on the same
 connection; the value refused (`goal_value_invalid`), on its line one sentence per `goal_problem` word with
-the values it comes with (a range "1 to 9999", a bound with its unit, "1024 bytes" a value holds or the
+the values it comes with (a range "1 to 9999", but not for a number off its step, where it would read as
+the step's; a bound with its unit, "1024 bytes" a value holds or the
 items a record holds, why a variable does not apply; a word
 this console does not know by its code, which the technical log hears of once), nothing read again; not
 known what became of it, read again first, and pressed again only once that read came (the version it
