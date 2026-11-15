@@ -2267,27 +2267,41 @@ declaration of that name, and writes who wrote it.
 ### Errors and warnings (#466 V-a)
 
 Every problem `bindings check` and `bindings apply` report is one code, and each code is one reason. Which are errors
-(they refuse `apply`, and give the exit status) and which are warnings (reported, never refusing, exit 0) follows one
-rule. **Errors** are of three kinds:
+and which are warnings follows one rule.
+
+**Errors that refuse `apply`** (and give the exit status of `check` and `apply`) are of three kinds:
 - **(a) the writer's own input does not hold**: the model's export refuses the number (`export_refused`, and the
   export's own codes), `bindings.json` does not meet the repository or the model (a threshold, value, rule or variable
   it names is not there; one literal, rule or variable named twice), an entry goes round the table it must go through
-  (`hand_also_threshold`, `variable_literal_bound`), or the files are not in a state the writer can write
-  (`file_changed`, `part_file_present`);
+  (`hand_also_threshold`, `variable_literal_bound`), or a place the writer itself is to write is not clean
+  (`file_changed`, `part_file_present`, exit 5);
 - **(b) what the Runtime or the Lab would refuse** if the writer wrote it: a number, an origin or a member beside it that
   the Runtime's readers, composer or compiler refuse, or a pack file that `actinglab package fmt --check` refuses
   (`pack_file_not_canonical`), and two declarations of one variable that the write would leave unlike
-  (`variable_declarations_differ`: the Runtime's `variable_conflict`);
+  (`variable_declarations_differ`): the root check that `actinglab standard-pack check` runs reports such a name
+  `variable_conflict`, and no declaration of it applies, though the Runtime refuses no package for it (the root still
+  runs);
 - **(c) the guards of the overview's rulings**: only the model's export writes `model`, so an origin `"model"` that no
   binding names is `origin_unbound`, an error, though the Runtime refuses nothing of it (and so is `hand_origin_model`).
 
-**Warnings** are of one kind only: what nobody refuses now, and would be refused once a state changes, such as a fixed
-value beside a member the compiler refuses on a rule whose package is held (the `held_…` codes, each refused once the
-hold is lifted). The warnings made before this rule report what nothing refuses at all: a file that is not of the
-current inputs (`prices_stale`, `values_stale`, `valuations_stale`), a rounding that is not exact (`precision_low`), a
-mark that is not written or not removed (`limited_without_consumes`, `limited_unmodelled`); they stay as they are. A
-new code follows the rule; the codes of #466 V-a are all errors. Each code's entry in `codes.json` says its category and
-its exit status.
+**The differences `apply` writes** are errors of `check` too, and refuse nothing of `apply`: a literal whose number is
+not the model's (`binding_mismatch` `value`: a threshold's number, a value, a W or a default), an absent origin
+(`origin_missing`) and an absent limited mark (`limited_missing`). `check` reports such an error, with its exit status,
+when the number or the member in the repository has not caught up with the model yet; `apply` is what writes it right.
+They are of none of the three kinds above.
+
+**Warnings** never refuse `apply` and leave the exit status 0. They are of two kinds:
+- **the first kind: what nobody refuses now, and would be refused once a state changes**, such as a fixed value beside
+  a member the compiler refuses on a rule whose package is held (the `held_…` codes, each refused once the hold is
+  lifted);
+- **the second kind: what neither the Runtime nor the Lab refuses, and the one who writes should look at**: a file that
+  is not of the current inputs (`prices_stale`, `values_stale`, `valuations_stale`), a rounding that is not exact
+  (`precision_low`), a mark that is not written or not removed (`limited_without_consumes`, `limited_unmodelled`).
+
+A new code follows the rule; the codes of #466 V-a are all errors. Each code's entry in `codes.json` says its category
+and its exit status, and the description of each warning says its kind; the warnings of the tool's other commands (the
+acceptances and estimates of `export prices`, the cross-checks and probes of `economy`, a solve stopped by its budget)
+are of the second kind.
 
 ### `bindings.json` (`acmodel.bindings.v1`)
 
@@ -2775,8 +2789,10 @@ says `greater_than_or_equal`).
 - **Before anything is written**, the edited bytes of each file are read back with the strict reader and must be
   exactly the document the edits make: the file as read, with each changed literal and each inserted member in its
   place, member order included. The edited bytes of each control.json that declares a bound variable must be in the
-  canonical serialization, and every two declarations of a variable, in all the packs, that were alike in compact JSON
-  before must be alike after (#466 V-a). Otherwise it is a defect (`command_crashed`), and nothing is written.
+  canonical serialization, every two declarations of a variable, in all the packs, that were alike in compact JSON
+  before must be alike after (#466 V-a), and every declaration of a bound variable must be alike after, also where
+  they differed before (fix1: a backstop to `variable_declarations_differ`). Otherwise it is a defect
+  (`command_crashed`), and nothing is written.
 - **Writing** (#464 W1). Each file is first written beside itself as `<file>.part`; then every file is read again, and
   only when each is still the bytes that were read is each part renamed over its file. A file changed meanwhile, by
   another writer (the adoption of a standard pack writes `schedule.json` too), or no longer readable, is `file_changed`
@@ -2793,8 +2809,11 @@ says `greater_than_or_equal`).
     file, `part` the part; `check` reports it too, for each file with a difference `apply` writes), the whole `apply` is
     refused, and nothing is written, written over or removed: a person looks at it, finishes or undoes what left it, and
     moves it out of the checkout. Each part is created exclusively, so one that appears after `apply` looked is refused
-    the same way (and the parts this run wrote before it are removed again). Its exit status is `file_changed`'s: both
-    say that another write's state of the files stands in the way.
+    the same way, a file or a folder alike (and the parts this run wrote before it are removed again): Windows refuses
+    the creation over a folder as a permission, not as a file that exists, so when a creation fails the tool looks
+    again, and what is there then is `part_file_present`, never `export_write_failed` (fix1). It is an error of kind (a)
+    ("Errors and warnings"): a place the writer itself is to write is not clean. Its exit status is `file_changed`'s
+    (5), which says the same of the file itself.
   - **A part can be left behind.** A process killed after it wrote a part and before it renamed it (or removed it again)
     leaves the part where it was. Nothing reads it, the next `check` and `apply` report it (`part_file_present`), and
     nothing removes it: a person does. A repository that does not ignore `*.part` shows it in `git status`; it must not

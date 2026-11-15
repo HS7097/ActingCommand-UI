@@ -207,7 +207,9 @@ def check_written(controls: list[Control], names: frozenset[str], written: dict[
     in memory before anything is written; a check that fails is a defect (`ValueError`), and nothing is written:
     - each written file that declares a bound variable is in the canonical serialization;
     - every declaration is where it was, and two declarations of a name that were the same in compact JSON before are
-      the same after."""
+      the same after;
+    - every declaration of a bound variable is the same in compact JSON after (fix1): a backstop to the plan's
+      agreement (`DefaultPlan._agree`, `variable_declarations_differ`), also where they differed before."""
     for control in canonical_files(controls, names):
         name = control.target.name
         if name in written and not is_canonical(*written[name]):
@@ -225,6 +227,9 @@ def check_written(controls: list[Control], names: frozenset[str], written: dict[
             for other, other_text in found[position + 1:]:
                 if text == other_text and after[name][place] != after[name][other]:
                     raise ValueError(f"the edits made two declarations of {name} differ")
+    for name in sorted(names):
+        if len(set(after.get(name, {}).values())) > 1:
+            raise ValueError(f"the declarations of {name} differ after the edits")
 
 
 class _Declaration:

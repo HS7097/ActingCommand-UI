@@ -770,6 +770,45 @@ def test_check_written_holds_the_canonical_form_and_the_declarations_alike(tmp_p
             defaults.check_written(controls, names, written)
 
 
+def test_check_written_holds_every_declaration_of_a_bound_name_alike_after_the_edits(tmp_path):
+    """fix1, a backstop to the plan's agreement: written, every declaration of a bound variable is the same in compact
+    JSON, also where they differed before (defaults 5 and 10 here, which the check above does not hold); one left unlike
+    is a defect. A variable no binding names is not judged: `pick` differs between the files and passes."""
+    other = {**PICK, "default": "item_a"}
+    write_control(tmp_path, ONE, control("pkg.one", floor(default=5), other))
+    write_control(tmp_path, TWO, control("pkg.two", PICK, floor(default=10)))
+    controls = [defaults.read_control(read_target(tmp_path, name)) for name in (ONE, TWO)]
+    names = frozenset({"floor"})
+
+    def made(doc: Any) -> tuple[bytes, Any]:
+        return pretty(doc), doc
+
+    alike = floor(default=FLOOR, default_origin="model")
+    defaults.check_written(controls, names, {ONE: made(control("pkg.one", alike, other)),
+                                             TWO: made(control("pkg.two", PICK, alike))})
+    for written in (
+        {ONE: made(control("pkg.one", alike, other))},
+        {ONE: made(control("pkg.one", alike, other)), TWO: made(control("pkg.two", PICK, floor(default=FLOOR)))},
+    ):
+        with pytest.raises(ValueError, match="differ after the edits"):
+            defaults.check_written(controls, names, written)
+
+
+def test_declarations_the_plan_let_through_unlike_are_a_defect_and_nothing_is_written(example, acmodel, monkeypatch):
+    """fix1: were the plan's agreement to miss declarations that stay unlike once written (another title here), the
+    check in memory stops `apply` (`command_crashed`) before it writes anything."""
+    one, two = two_packs(example, floor(), floor(title={"en": "Keep at most"}))
+    bind_defaults(example, BINDING)
+    before = (one.read_bytes(), two.read_bytes())
+    monkeypatch.setattr(defaults.DefaultPlan, "_agree", lambda self: None)
+
+    status, doc = bindings(acmodel, example, "apply")
+
+    assert (status, doc["errors"]) == (1, [{"code": "command_crashed", "detail": {"exception_type": "ValueError"}}])
+    assert (one.read_bytes(), two.read_bytes()) == before
+    assert not (one.parent / "control.json.part").exists() and not (two.parent / "control.json.part").exists()
+
+
 @pytest.mark.parametrize(
     ("raw", "holds"),
     [
@@ -804,3 +843,17 @@ def test_the_codes_of_v_a_are_registered_each_of_its_category():
     assert {code: (CODES[code]["category"], CODES[code]["exit"]) for code in new} == new
     assert "default_origin" in CODES["origin_unbound"]["values"]["member"]["members"]
     assert {"variable"} <= set(CODES["binding_mismatch"]["values"]) & set(CODES["origin_missing"]["values"])
+
+
+def test_every_warning_says_its_kind():
+    """fix1, the code rule (contracts/formats.md, "Errors and warnings"): the description of every warning says which of
+    the two kinds it is, once; the held ones are of the first kind (refused once the hold is lifted), every other of the
+    second (refused by neither the Runtime nor the Lab)."""
+    phrase = "A warning of the {} kind"
+    kinds = {
+        code: [kind for kind in ("first", "second") for _ in range(spec["description"].count(phrase.format(kind)))]
+        for code, spec in CODES.items() if spec["category"] == "warning"
+    }
+    assert kinds == {code: ["first" if code.startswith("held_") else "second"] for code in kinds}
+    assert {"prices_stale", "values_stale", "valuations_stale", "precision_low", "limited_without_consumes",
+            "limited_unmodelled"} <= set(kinds)

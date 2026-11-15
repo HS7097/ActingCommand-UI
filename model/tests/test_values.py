@@ -1080,6 +1080,65 @@ def test_a_part_that_appears_before_apply_creates_its_own_is_kept_and_this_runs_
     assert other.read_bytes() == b"another write\n"
 
 
+def test_a_folder_that_appears_where_a_part_goes_is_kept_and_refused_as_a_part_on_every_system(
+    example, acmodel, monkeypatch
+):
+    """fix1: as above, but what appears at the policy's part is a folder. Windows refuses its exclusive creation as a
+    `PermissionError`, not as an existing file; it is still `part_file_present` there as elsewhere, not
+    `export_write_failed`: the folder and what it holds stay, this run's part is removed, and no file is written."""
+    schedule, policy = example / "schedule.json", example / POLICY_FILE
+    edit(policy, lambda doc: doc.update(threshold=21))
+    other = policy.with_name(policy.name + ".part")
+    stage = commands._stage
+    staged: list[str] = []
+
+    def meanwhile(target, raw: bytes) -> Path:
+        if target.name == POLICY_FILE:
+            other.mkdir()
+            (other / "left.txt").write_bytes(b"another write\n")
+        part = stage(target, raw)
+        staged.append(part.name)
+        return part
+
+    monkeypatch.setattr(commands, "_stage", meanwhile)
+    before = (schedule.read_bytes(), policy.read_bytes())
+
+    status, doc = example_apply(acmodel, example)
+
+    assert (status, doc["data"]) == (5, {})
+    assert doc["errors"] == [{"code": "part_file_present", "detail": {"path": str(policy), "part": str(other)}}]
+    assert staged == ["schedule.json.part"]
+    assert (schedule.read_bytes(), policy.read_bytes()) == before
+    assert not (example / "schedule.json.part").exists()
+    assert other.is_dir() and (other / "left.txt").read_bytes() == b"another write\n"
+
+
+def test_a_part_that_cannot_be_created_and_is_not_there_is_a_failed_write(example, acmodel, monkeypatch):
+    """fix1: a creation refused for another reason, with nothing at the part afterwards, stays `export_write_failed` at
+    the part, and this run's other part is removed."""
+    schedule, policy = example / "schedule.json", example / POLICY_FILE
+    edit(policy, lambda doc: doc.update(threshold=21))
+    create = commands._create
+
+    def refused(part: Path):
+        if part.name.startswith("floor.json"):
+            raise PermissionError(13, "Permission denied")
+        return create(part)
+
+    monkeypatch.setattr(commands, "_create", refused)
+    before = (schedule.read_bytes(), policy.read_bytes())
+
+    status, doc = example_apply(acmodel, example)
+
+    assert (status, doc["data"]) == (5, {})
+    part = policy.with_name(policy.name + ".part")
+    assert doc["errors"] == [{"code": "export_write_failed",
+                              "detail": {"path": str(part), "exception_type": "PermissionError",
+                                         "raw_text": "[Errno 13] Permission denied"}}]
+    assert (schedule.read_bytes(), policy.read_bytes()) == before
+    assert not part.exists() and not (example / "schedule.json.part").exists()
+
+
 class _Full:
     """A part's handle whose write fails, as on a full disk."""
 

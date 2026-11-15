@@ -1273,7 +1273,8 @@ class _Unwritten(Exception):
 
 def _create(part: Path) -> BinaryIO:
     """A part, created by this run (#466 V-a): an exclusive creation, so one that is there already, whoever left it, is
-    never written over (`FileExistsError`, and nothing is created)."""
+    never written over (`FileExistsError`, and nothing is created). A folder there is refused too, but on Windows as a
+    `PermissionError` (fix1): `_commit` looks again before it calls that a failure."""
     return open(part, "xb")
 
 
@@ -1314,10 +1315,10 @@ def _commit(staged: list[tuple[Target, bytes]]) -> None:
     """Write every file: first each as its part, then, when every file is still the bytes that were read, each part
     renamed over its file. A file changed since (or no longer readable) is `file_changed`, and every part this run wrote
     is removed again, so nothing is written. A part that is there when this run would create it (another write left it
-    after `apply` looked, #466 V-a) is `part_file_present`: it is neither written over nor removed, and the parts this run
-    wrote before are removed again. A part that cannot be written or renamed is `export_write_failed`; only this run's
-    parts are removed (one it created and could not write too), the files renamed before it stay written, and `apply`
-    can run again."""
+    after `apply` looked, #466 V-a; a file, or a folder, which Windows refuses as a `PermissionError`, fix1) is
+    `part_file_present`: it is neither written over nor removed, and the parts this run wrote before are removed again.
+    A part that cannot be written or renamed is `export_write_failed`; only this run's parts are removed (one it created
+    and could not write too), the files renamed before it stay written, and `apply` can run again."""
     parts: list[Path] = []
     for target, raw in staged:
         try:
@@ -1327,6 +1328,8 @@ def _commit(staged: list[tuple[Target, bytes]]) -> None:
         except _Unwritten as exc:
             raise Failure(_failed(exc.part, exc.cause), *_discard([*parts, exc.part])) from exc.cause
         except OSError as exc:  # nothing was created
+            if os.path.lexists(_part(target)):  # another write's part, as a folder on Windows (fix1)
+                raise Failure(_present(target), *_discard(parts)) from None
             raise Failure(_failed(_part(target), exc), *_discard(parts)) from exc
     changed = []
     for target, _ in staged:
@@ -1356,9 +1359,10 @@ def apply_bindings(
     bytes that were read (`_commit`). The warnings (`precision_low`, the limited reports, #466 W3, the conflicts of a held
     rule, #466 W4a, and a held rule's hand-written value out of range, fix3) are reported, and change nothing. A hand
     entry's value is never written. Each default binding (#466 V-a) writes its number into every declaration of its
-    variable and inserts the origin `"model"` after it; the edited control files must be canonical and keep alike the
-    declarations that were alike (`defaults.check_written`). A part already beside a file it writes refuses the whole
-    write (`part_file_present`), and nothing is written or removed."""
+    variable and inserts the origin `"model"` after it; the edited control files must be canonical, keep alike the
+    declarations that were alike and leave every declaration of a bound variable alike (`defaults.check_written`). A
+    part already beside a file it writes refuses the whole write (`part_file_present`), and nothing is written or
+    removed."""
     run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
     repo, targets, controls = _targets(run, bindings, False)
