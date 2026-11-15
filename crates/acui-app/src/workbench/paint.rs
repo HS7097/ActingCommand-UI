@@ -26,8 +26,9 @@ use acui_source::workbench::backends::{
 };
 use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
 use acui_source::workbench::goals::{
-    newer_than_this_console, Closed, Form, GoalRow, Goals, GoalsPage, Pending, PoolRow, Progress,
-    Reading, Stored, StoredGoal,
+    newer_than_this_console, Closed, Declaration, Form, GoalLine, GoalsPage, Group, LabEntry,
+    OtherTarget, PageState, Pending, PoolState, Progress, Reading, ResourceLine, SetBy, Setter,
+    Shown, Stored, StoredGoal, TimeUnit, Unapplied, VariableLine, VariableState,
 };
 use acui_source::workbench::pack::{PackSource, PackState};
 use acui_source::workbench::preview::Overlay;
@@ -72,9 +73,10 @@ use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
 use crate::{
-    AccountCard, BackendGroupItem, GoalListData, GoalRowData, IdlePick, OverlayItem, PresetChoice,
-    QuietData, QuietEditor, QuietLine, RescueBar, RescueOp, RulesData, SettingItem, StatusTone,
-    TargetItem, TaskListData, TaskRowData, TaskTone, WorkbenchPage, WorkbenchTab, WorkbenchWindow,
+    AccountCard, BackendGroupItem, GoalListData, GoalRowData, GoalRowKind, IdlePick, OverlayItem,
+    PresetChoice, QuietData, QuietEditor, QuietLine, RescueBar, RescueOp, RulesData, SettingItem,
+    StatusTone, TargetItem, TaskListData, TaskRowData, TaskTone, WorkbenchPage, WorkbenchTab,
+    WorkbenchWindow,
 };
 
 /// What the technical log's lines about the settings page are under.
@@ -2968,13 +2970,13 @@ pub fn tasks(ui: &Ui) {
     goals(ui, &window, labels, tab);
 }
 
-/// Under the third tab, the account's goals (Workflow #455 T1-C, read only), from their view: why
-/// there are no rows, a failure with its codes; or around the rows what cannot be read of the
-/// goals stored, when they were read, why there are none, and under them the old form's note and
-/// the validity. Each row as `goal_row` says. Under another tab the list holds nothing.
+/// Under the third tab, the account's goal page (Workflow #455, #463 V3, read only), from its view:
+/// why there are no lines, a failure with its codes; or around the lines how the page stands, what
+/// cannot be read of the targets stored, when it was read, and under them the old form's note and
+/// the validity. Each line as `goal_row` says. Under another tab the list holds nothing.
 fn goals(ui: &Ui, window: &WorkbenchWindow, labels: &Labels, tab: RightTab) {
     let view = match tab {
-        RightTab::Goals => Some(ui.model.borrow().goals_view(Instant::now())),
+        RightTab::Goals => Some(ui.model.borrow().goals_view(Instant::now(), labels.tongue)),
         RightTab::Picture | RightTab::Tasks => None,
     };
     let (data, rows) = match &view {
@@ -3032,41 +3034,76 @@ fn failure_codes_text(failure: &ClientFailure) -> String {
     codes.join(", ")
 }
 
-/// One read page of the Goals tab: above its rows, in amber, a document of a newer form or one the
-/// Runtime reads as none, when it was read, and why there are no rows (no task catalog active, or
-/// no resource declared); its rows; under them the old form's note and the document's validity.
+/// One read page of the Goals tab. Above its lines: how it stands (in amber the game's goal
+/// declaration not applied, the game root failing, targets stored in a newer form or read as none;
+/// in grey not read by this Runtime, not checked yet, no schedule, nothing to set, no task catalog),
+/// and when it was read. Its lines, but on a page that lists nothing. Under them, while the page
+/// lists: the old form's note, and the stored targets' validity (for a per-target record only
+/// once every target expired, each target's own being on its line; "none set" only while the page
+/// has a resource line).
 fn goals_page(labels: &Labels, page: &GoalsPage) -> (GoalListData, Vec<GoalRowData>) {
     let document = match &page.stored {
         Stored::Document(document) => Some(document),
         Stored::None => None,
     };
     let form = document.map(|document| &document.form);
-    let mut notice: Vec<&str> = Vec::new();
-    if matches!(form, Some(Form::Newer(_))) {
-        notice.push(labels.goals_form_newer);
+    let mut notice: Vec<String> = Vec::new();
+    let mut said: Vec<String> = Vec::new();
+    let listed = match &page.state {
+        PageState::Listed { declaration, nothing } => {
+            match declaration {
+                Declaration::NotTaken => notice.push(labels.goals_not_taken.to_owned()),
+                Declaration::NotRead => said.push(labels.goals_not_read.to_owned()),
+                Declaration::Accepted | Declaration::Absent => {}
+            }
+            if *nothing {
+                said.push(labels.goals_nothing.to_owned());
+            }
+            true
+        }
+        PageState::NotCheckedYet => {
+            said.push(labels.goals_not_checked_yet.to_owned());
+            false
+        }
+        PageState::RootFailing { path: Some(path) } => {
+            notice.push(fill(labels.goals_root_failing, &[path.as_str()]));
+            false
+        }
+        PageState::RootFailing { path: None } => {
+            notice.push(labels.goals_root_failing_unnamed.to_owned());
+            false
+        }
+        PageState::NoSchedule => {
+            said.push(labels.goals_no_schedule.to_owned());
+            false
+        }
+    };
+    if listed && matches!(form, Some(Form::Newer(_))) {
+        notice.push(labels.goals_form_newer.to_owned());
     }
     if page.stale_schema {
-        notice.push(labels.goals_stale);
+        notice.push(labels.goals_stale.to_owned());
     }
-    let empty = if page.no_catalog {
-        labels.goals_no_catalog
-    } else if page.rows.is_empty() {
-        labels.goals_no_pools
-    } else {
-        ""
-    };
-    let old = if matches!(form, Some(Form::Old)) { labels.goals_form_old } else { "" };
+    if listed && page.no_catalog {
+        said.push(labels.goals_no_catalog.to_owned());
+    }
+    let old = if listed && matches!(form, Some(Form::Old)) { labels.goals_form_old } else { "" };
+    let resources = page.lines.iter().any(|line| matches!(line, GoalLine::Resource(_)));
     let (validity, expired) = match document {
-        None => (labels.goals_none_set.to_owned(), false),
-        Some(document) => match (document.expired, document.valid_until_ms) {
-            (true, Some(until)) => {
+        _ if !listed => (String::new(), false),
+        None if resources => (labels.goals_none_set.to_owned(), false),
+        None => (String::new(), false),
+        Some(document) => match (&document.form, document.expired, document.valid_until_ms) {
+            (Form::PerTarget, true, _) => (labels.goals_expired_all.to_owned(), true),
+            (Form::PerTarget, false, _) => (String::new(), false),
+            (_, true, Some(until)) => {
                 (fill(labels.goals_expired, &[&format_date_minute(until)]), true)
             }
-            (true, None) => (labels.goals_expired_undated.to_owned(), true),
-            (false, Some(until)) => {
+            (_, true, None) => (labels.goals_expired_undated.to_owned(), true),
+            (_, false, Some(until)) => {
                 (fill(labels.goals_valid_until, &[&format_date_minute(until)]), false)
             }
-            (false, None) => (labels.goals_validity_unstated.to_owned(), true),
+            (_, false, None) => (labels.goals_validity_unstated.to_owned(), true),
         },
     };
     let data = GoalListData {
@@ -3075,86 +3112,296 @@ fn goals_page(labels: &Labels, page: &GoalsPage) -> (GoalListData, Vec<GoalRowDa
         instead_warning: false,
         notice: notice.join("\n").into(),
         read_at: fill(labels.goals_read_at, &[&format_minute(page.evaluated_at_ms)]).into(),
-        empty: empty.into(),
+        said: said.join("\n").into(),
         form: old.into(),
         document: validity.into(),
         document_warning: expired,
     };
-    let rows = page.rows.iter().map(|row| goal_row(labels, row)).collect();
+    let rows = if listed {
+        page.lines.iter().map(|line| goal_row(labels, line)).collect()
+    } else {
+        Vec::new()
+    };
     (data, rows)
 }
 
-/// One row of the Goals tab: the pool's id for its name, never a title made up for it. A pool a
-/// goal can name: its reading and its goal, and in grey under it that the pack gives it no step
-/// where it does not. A pool no goal can name: greyed, and why. A goal stored on a pool no longer
-/// offered: greyed, its goal and its reading, and in amber that it is no longer offered and why. A
-/// target that does not read: its place, in amber.
-fn goal_row(labels: &Labels, row: &GoalRow) -> GoalRowData {
-    match row {
-        GoalRow::Goal(pool) => pool_row(labels, pool, ""),
-        GoalRow::NoStep(pool) => pool_row(labels, pool, labels.goals_no_step),
-        GoalRow::Closed { pool, why } => GoalRowData {
-            name: pool.as_str().into(),
+/// One line of the Goals tab, at most three layers: its title, the value now, and under it amber
+/// then grey words. A `heading`, a group of variables no entry places (its package's name, or
+/// "other settings") and the three closing groups' titles are headings; a `note` is grey words, its
+/// help after them. An entry's own name, a declared pool's id and a package's id are never shown:
+/// an entry with no text in any language says it has no title.
+fn goal_row(labels: &Labels, line: &GoalLine) -> GoalRowData {
+    let titled = |title: &Option<String>| match title {
+        Some(title) => title.clone(),
+        None => labels.goals_untitled.to_owned(),
+    };
+    let heading = |title: String| GoalRowData {
+        kind: GoalRowKind::Heading,
+        title: title.into(),
+        ..GoalRowData::default()
+    };
+    match line {
+        GoalLine::Heading(title) => heading(titled(title)),
+        GoalLine::Package(Some(title)) => heading(title.clone()),
+        GoalLine::Package(None) => heading(labels.goals_other_settings.to_owned()),
+        GoalLine::Group(group) => heading(group_title(labels, *group).to_owned()),
+        GoalLine::Note { text, help } => GoalRowData {
+            kind: GoalRowKind::Note,
+            title: titled(text).into(),
+            note: help.clone().unwrap_or_default().into(),
+            ..GoalRowData::default()
+        },
+        GoalLine::Resource(resource) => resource_row(labels, resource),
+        GoalLine::Tier(tier) => GoalRowData {
+            kind: GoalRowKind::Entry,
+            title: titled(&tier.title).into(),
+            value: tier
+                .default
+                .as_deref()
+                .map(|default| fill(labels.goals_tier_default, &[default]))
+                .unwrap_or_default()
+                .into(),
+            note: labels.goals_tier_not_built.into(),
+            ..GoalRowData::default()
+        },
+        GoalLine::Variable(variable) => variable_row(labels, variable),
+        GoalLine::Orphan(orphan) => GoalRowData {
+            kind: GoalRowKind::Entry,
+            warning: fill(labels.goals_orphan, &[&shown_text(labels, &orphan.value)]).into(),
+            note: orphan.set.map(|set| set_by_text(labels, set)).unwrap_or_default().into(),
+            ..GoalRowData::default()
+        },
+        GoalLine::OtherTarget(other) => other_row(labels, other),
+        GoalLine::Closed { pool, why } => GoalRowData {
+            kind: GoalRowKind::Entry,
+            title: pool.as_str().into(),
             greyed: true,
             note: fill(labels.goals_closed, &[&closed_text(labels, why)]).into(),
             ..GoalRowData::default()
         },
-        GoalRow::NoLongerOffered { goal, why } => {
-            let note = match why {
-                Some(why) => fill(labels.goals_no_longer_offered, &[&closed_text(labels, why)]),
-                None => labels.goals_no_longer_listed.to_owned(),
-            };
-            let reading = match goal.progress {
-                Progress::Computed { current, at_ms, .. } => {
-                    reading_text(labels, Reading::Read { current, at_ms })
-                }
-                Progress::Awaiting(_) | Progress::NoCondition => String::new(),
-            };
-            GoalRowData {
-                name: goal.pool.as_str().into(),
-                greyed: true,
-                reading: reading.into(),
-                goal: goal_text(labels, goal).into(),
-                goal_met: goal.progress.met(),
-                note: note.into(),
-                note_warning: true,
-            }
-        }
-        GoalRow::Unread { position } => GoalRowData {
-            name: fill(labels.goals_unread, &[&(position + 1).to_string()]).into(),
-            greyed: true,
-            note_warning: true,
-            ..GoalRowData::default()
-        },
     }
 }
 
-/// A pool a goal can name, with `note` in grey under it.
-fn pool_row(labels: &Labels, pool: &PoolRow, note: &str) -> GoalRowData {
-    let (goal, met) = match &pool.goals {
-        Goals::Unknown => (labels.goals_target_unknown.to_owned(), false),
-        Goals::Set(goals) if goals.is_empty() => (labels.goals_target_none.to_owned(), false),
-        Goals::Set(goals) => {
-            let lines: Vec<String> = goals.iter().map(|goal| goal_text(labels, goal)).collect();
-            (lines.join("\n"), goals.iter().all(|goal| goal.progress.met()))
+fn group_title(labels: &Labels, group: Group) -> &'static str {
+    match group {
+        Group::NoLongerOffered => labels.goals_group_orphans,
+        Group::OtherTargets => labels.goals_group_other_targets,
+        Group::NotTargetable => labels.goals_group_closed,
+    }
+}
+
+/// A `resource` entry: its title; its goal; in amber what does not read of it or that it lapsed;
+/// in grey its pool's reading, its own lifetime, whether its pool takes a goal here, and who set
+/// it. Greyed while its pool is not targetable.
+fn resource_row(labels: &Labels, line: &ResourceLine) -> GoalRowData {
+    let mut warnings: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    if let Some(reading) = line.reading {
+        notes.push(reading_text(labels, reading));
+    }
+    let (value, met) = match &line.goal {
+        Some(goal) => stored_goal_text(labels, goal, &mut warnings, &mut notes),
+        None => (labels.goals_target_none.to_owned(), false),
+    };
+    if let Some(note) = pool_note(labels, &line.pool) {
+        notes.push(note);
+    }
+    if let Some(set) = line.set {
+        notes.push(set_by_text(labels, set));
+    }
+    GoalRowData {
+        kind: GoalRowKind::Entry,
+        title: line.title.clone().unwrap_or_else(|| labels.goals_untitled.to_owned()).into(),
+        greyed: pool_greyed(&line.pool),
+        value: value.into(),
+        value_met: met,
+        warning: warnings.join("\n").into(),
+        note: notes.join("\n").into(),
+    }
+}
+
+/// A stored target on no declared resource entry's pool: its pool's id, the only name it has, its
+/// goal and the rest as a resource entry's; one that does not read, by its id, in amber.
+fn other_row(labels: &Labels, other: &OtherTarget) -> GoalRowData {
+    let Some(target) = &other.target else {
+        return GoalRowData {
+            kind: GoalRowKind::Entry,
+            title: other.id.as_str().into(),
+            greyed: true,
+            warning: labels.goals_target_unread.into(),
+            ..GoalRowData::default()
+        };
+    };
+    let mut warnings: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    if let Some(reading) = target.reading {
+        notes.push(reading_text(labels, reading));
+    }
+    let (value, met) = stored_goal_text(labels, &target.goal, &mut warnings, &mut notes);
+    // A goal of its own carries its own step: only a pool no goal can name is said.
+    match &target.state {
+        PoolState::Open | PoolState::NoStep => {}
+        state => notes.extend(pool_note(labels, state)),
+    }
+    GoalRowData {
+        kind: GoalRowKind::Entry,
+        title: target.pool.as_str().into(),
+        greyed: pool_greyed(&target.state),
+        value: value.into(),
+        value_met: met,
+        warning: warnings.join("\n").into(),
+        note: notes.join("\n").into(),
+    }
+}
+
+/// Whether a line of `pool` is greyed: no goal can name it now.
+fn pool_greyed(pool: &PoolState) -> bool {
+    matches!(pool, PoolState::Closed(_) | PoolState::Unlisted)
+}
+
+/// What a line says of its pool, in grey: no step, why no goal can name it, not listed.
+fn pool_note(labels: &Labels, pool: &PoolState) -> Option<String> {
+    match pool {
+        PoolState::Open => None,
+        PoolState::NoStep => Some(labels.goals_no_step.to_owned()),
+        PoolState::Closed(why) => Some(fill(labels.goals_closed, &[&closed_text(labels, why)])),
+        PoolState::Unlisted => Some(labels.goals_unlisted.to_owned()),
+    }
+}
+
+/// A stored goal's words, and whether they are met (the accent): never once it lapsed, which goes
+/// in amber, nor while its amount does not read, which does too. Its own lifetime goes in grey.
+fn stored_goal_text(
+    labels: &Labels,
+    goal: &StoredGoal,
+    warnings: &mut Vec<String>,
+    notes: &mut Vec<String>,
+) -> (String, bool) {
+    let value = match goal.amount {
+        Some(amount) => goal_text(labels, amount, goal.progress),
+        None => {
+            warnings.push(labels.goals_target_unread.to_owned());
+            String::new()
         }
     };
-    GoalRowData {
-        name: pool.pool.as_str().into(),
-        greyed: false,
-        reading: reading_text(labels, pool.reading).into(),
-        goal: goal.into(),
-        goal_met: met,
-        note: note.into(),
-        note_warning: false,
+    match (goal.lapsed, goal.until_ms) {
+        (true, Some(until)) => warnings.push(fill(labels.goals_lapsed, &[&format_date_minute(until)])),
+        (true, None) => warnings.push(labels.goals_lapsed_undated.to_owned()),
+        (false, Some(until)) => notes.push(fill(labels.goals_lifetime, &[&format_date_minute(until)])),
+        (false, None) => {}
     }
+    let met = goal.amount.is_some() && !goal.lapsed && goal.progress.met();
+    (value, met)
+}
+
+/// A variable: its title; the value the next run reads; in amber that a value set is not used or
+/// the variable does not apply, and why; in grey that no pack offers it, the keys skipped, the
+/// pack's default while a value set is in effect, and who set it. Greyed while not offered.
+fn variable_row(labels: &Labels, line: &VariableLine) -> GoalRowData {
+    let mut warnings: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    match &line.state {
+        VariableState::InEffect => {}
+        VariableState::NotApplied { stored: true, why } => {
+            warnings.push(fill(labels.goals_not_applied, &[&unapplied_text(labels, why)]));
+        }
+        VariableState::NotApplied { stored: false, why } => {
+            warnings.push(fill(labels.goals_not_applying, &[&unapplied_text(labels, why)]));
+        }
+        VariableState::NotOffered => notes.push(labels.goals_not_offered.to_owned()),
+    }
+    if !line.left_out.is_empty() {
+        let keys = line.left_out.join(labels.goals_list_separator);
+        notes.push(fill(labels.goals_left_out, &[&keys]));
+    }
+    if let Some(default) = &line.default {
+        notes.push(fill(labels.goals_default, &[&shown_text(labels, default)]));
+    }
+    if let Some(set) = line.set {
+        notes.push(set_by_text(labels, set));
+    }
+    GoalRowData {
+        kind: GoalRowKind::Entry,
+        title: line.title.clone().unwrap_or_else(|| labels.goals_untitled.to_owned()).into(),
+        greyed: matches!(line.state, VariableState::NotOffered),
+        value: line.value.as_ref().map(|value| shown_text(labels, value)).unwrap_or_default().into(),
+        value_met: false,
+        warning: warnings.join("\n").into(),
+        note: notes.join("\n").into(),
+    }
+}
+
+/// A value in words: the declaration's, a number, a time in its unit, on or off, a list's items in
+/// order, or as written.
+fn shown_text(labels: &Labels, shown: &Shown) -> String {
+    match shown {
+        Shown::Words(words) | Shown::Raw(words) => words.clone(),
+        Shown::Number(number) => number.to_string(),
+        Shown::Time { amount, unit } => {
+            let template = match unit {
+                TimeUnit::Millisecond => labels.goals_milliseconds,
+                TimeUnit::Second => labels.goals_seconds,
+                TimeUnit::Minute => labels.goals_minutes,
+                TimeUnit::Hour => labels.goals_hours,
+                TimeUnit::Day => labels.goals_days,
+            };
+            fill(template, &[&amount.to_string()])
+        }
+        Shown::Switch(true) => labels.goals_on.to_owned(),
+        Shown::Switch(false) => labels.goals_off.to_owned(),
+        Shown::List(items) if items.is_empty() => labels.goals_none_chosen.to_owned(),
+        Shown::List(items) => items.join(labels.goals_list_separator),
+    }
+}
+
+/// Who set a value, and when (local date and time).
+fn set_by_text(labels: &Labels, set: SetBy) -> String {
+    let who = match set.by {
+        Setter::Console => labels.goals_setter_console,
+        Setter::CommandLine => labels.goals_setter_cli,
+        Setter::Mcp => labels.goals_setter_mcp,
+        Setter::Lab(None) => labels.goals_setter_lab,
+        Setter::Lab(Some(LabEntry::CommandLine)) => labels.goals_setter_lab_cli,
+        Setter::Lab(Some(LabEntry::Mcp)) => labels.goals_setter_lab_mcp,
+        Setter::Lab(Some(LabEntry::Authoring)) => labels.goals_setter_lab_authoring,
+        Setter::Lab(Some(LabEntry::Rescue)) => labels.goals_setter_lab_rescue,
+        Setter::Lab(Some(LabEntry::Watchdog)) => labels.goals_setter_lab_watchdog,
+    };
+    fill(labels.goals_set_by, &[who, &format_date_minute(set.at_ms)])
+}
+
+/// Why a run does not read a variable's value, in the console's words; a word of a newer Runtime
+/// by its code.
+fn unapplied_text(labels: &Labels, why: &Option<Unapplied>) -> String {
+    let words = match why {
+        None => labels.goals_unapplied_unstated,
+        Some(Unapplied::NotAnOption) => labels.goals_unapplied_not_an_option,
+        Some(Unapplied::OutOfRange) => labels.goals_unapplied_out_of_range,
+        Some(Unapplied::OffStep) => labels.goals_unapplied_off_step,
+        Some(Unapplied::TypeChanged) => labels.goals_unapplied_type_changed,
+        Some(Unapplied::KeysRemoved) => labels.goals_unapplied_keys_removed,
+        Some(Unapplied::CountOutOfRange) => labels.goals_unapplied_count_out_of_range,
+        Some(Unapplied::KeyRepeated) => labels.goals_unapplied_key_repeated,
+        Some(Unapplied::KeysLeftOut) => labels.goals_unapplied_keys_left_out,
+        Some(Unapplied::EntryUnreadable) => labels.goals_unapplied_entry_unreadable,
+        Some(Unapplied::IrreversibleByRoot) => labels.goals_unapplied_irreversible_by_root,
+        Some(Unapplied::PackageUnreadable) => labels.goals_unapplied_package_unreadable,
+        Some(Unapplied::GoalsUnreadable) => labels.goals_unapplied_goals_unreadable,
+        Some(Unapplied::DeclarationConflict) => labels.goals_unapplied_declaration_conflict,
+        Some(Unapplied::GoalNameConflict) => labels.goals_unapplied_goal_name_conflict,
+        Some(Unapplied::NameOutOfLimits) => labels.goals_unapplied_name_out_of_limits,
+        Some(Unapplied::CapRange) => labels.goals_unapplied_cap_range,
+        Some(Unapplied::RootUnchecked) => labels.goals_unapplied_root_unchecked,
+        Some(Unapplied::Other(code)) => return fill(labels.goals_why_other, &[code.as_str()]),
+    };
+    words.to_owned()
 }
 
 /// A stored goal's amount and how far it is: short by its gap, met, waiting for a reading and why,
 /// or its amount alone while its pool has no reading for the instance at all.
-fn goal_text(labels: &Labels, goal: &StoredGoal) -> String {
-    let amount = goal.amount.to_string();
-    match goal.progress {
+fn goal_text(labels: &Labels, amount: u64, progress: Progress) -> String {
+    let amount = amount.to_string();
+    match progress {
         Progress::Computed { gap: 0, .. } => fill(labels.goals_target_met, &[&amount]),
         Progress::Computed { gap, .. } => {
             fill(labels.goals_target_short, &[&amount, &gap.to_string()])

@@ -558,7 +558,8 @@ fn language_index(language: Language) -> i32 {
 
 /// The workbench's controls. The top bar's page button switches between the
 /// accounts and the settings; a card picked is the account whose picture shows (`workbench`),
-/// the right column's two tabs switch between its live view and its daily task list, whose
+/// the right column's three tabs switch between its live view, its daily task list and its goals
+/// (read only, Workflow #455), the list being the one whose
 /// line of tasks without a package opens and closes (`workbench`, UI-3f1) and whose packages'
 /// switches turn them on or off for the account (`workbench::switch`, UI-3f2),
 /// the box beside the picture's title draws on it or not (`workbench::preview`), the

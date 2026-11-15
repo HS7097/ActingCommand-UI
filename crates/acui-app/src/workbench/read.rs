@@ -25,10 +25,10 @@
 //! once more as the list is shown anew `PACKS_PROBE_AFTER` or longer after it said so, until an
 //! answer says so again or shows the switches.
 //!
-//! Or, while that account's Goals tab shows instead (Workflow #455 T1-C), its `ResourceTargetView`,
-//! on the switches' clock: it records nothing, but is computed under the policy's locks and the
+//! Or, while that account's Goals tab shows instead (Workflow #455, #463 V3), its `GoalView`, on
+//! the switches' clock: it records nothing, but is computed under the policy's locks and the
 //! fact write gate, so it is read as seldom. Not after the Runtime said it has no such read,
-//! which the slot says too, until the tab is shown anew.
+//! which the slot says too, until the tab is shown anew or the owner epoch changes.
 //!
 //! A thread reads what is due, hands each result to the event loop, and sleeps
 //! until the next is due or it is poked. It ends once the event loop lets its
@@ -175,7 +175,7 @@ impl Read {
             Self::Start => "start report",
             Self::Tasks => "task list",
             Self::Packs => "pack schedule",
-            Self::Goals => "resource target view",
+            Self::Goals => "goal view",
         }
     }
 

@@ -137,7 +137,7 @@ export struct PresetChoice {
 export enum WorkbenchPage { main, settings }
 
 // Which of the main page's right column's three tabs shows (UI-3f1): the live view, the account's
-// daily task list, or its goals (Workflow #455 T1-C).
+// daily task list, or its goals (Workflow #455).
 export enum WorkbenchTab { picture, tasks, goals }
 
 // The colour of a line's sentence on the daily task list: in the accent while its package runs or
@@ -193,31 +193,37 @@ export struct TaskListData {
     fold-note: bool,
 }
 
-// One line of the account's Goals tab (Workflow #455 T1-C, read only), in words: the pool's id (the
-// only name it has), greyed while no goal can name it; in grey its reading, or why there is none;
-// its goal and how far it is, in the accent once met; in grey under it why no goal can be set or
-// that it is no longer offered, amber for a goal stored that is no longer offered or does not read.
+// What one line of the Goals tab is: an entry, a group's title, or a note's words.
+export enum GoalRowKind { entry, heading, note }
+
+// One line of the account's Goals tab (Workflow #455, #463 V3, read only), in words, at most three
+// layers. A group's title in bold; a note's words in grey, its help under them. An entry: its
+// title, greyed while no goal can be set on its pool or no pack offers it; the value now, in the
+// accent once a goal is met (never once it lapsed); under it in amber what is not used, does not
+// read or lapsed, and in grey the rest (a reading, a default, who set it, why not).
 export struct GoalRowData {
-    name: string,
+    kind: GoalRowKind,
+    title: string,
     greyed: bool,
-    reading: string,
-    goal: string,
-    goal-met: bool,
+    value: string,
+    value-met: bool,
+    warning: string,
     note: string,
-    note-warning: bool,
 }
 
-// Around the Goals tab's rows, in words: what it says instead of them, red or amber when that says
-// a failure; in amber what it cannot read of the goals stored; when they were read; in grey why
-// there are no rows; under the rows, in grey, the old form's note, and whether the goals stored
-// hold and until when, amber once they expired.
+// Around the Goals tab's lines, in words: what it says instead of them, red or amber when that says
+// a failure; in amber how the page stands where something is wrong (the game's goal declaration not
+// applied, the game root failing, targets stored in a form this console cannot read); when it was
+// read; in grey how it stands otherwise (not checked yet, no schedule, nothing to set); under the
+// lines, in grey, the old form's note, and whether the resource goals stored hold and until when,
+// amber once they expired.
 export struct GoalListData {
     instead: string,
     instead-failed: bool,
     instead-warning: bool,
     notice: string,
     read-at: string,
-    empty: string,
+    said: string,
     form: string,
     document: string,
     document-warning: bool,
@@ -529,8 +535,8 @@ export global Strings {
     in property <string> tasks-fold-note;
     in property <string> tasks-irreversible;
     in property <string> tasks-risky;
-    // The right column's third tab, the account's goals (Workflow #455 T1-C), and on it, in grey,
-    // that setting them here comes later and the Lab sets them now.
+    // The right column's third tab, the account's goals (Workflow #455), and on it, in grey, that
+    // this version only shows them and the Lab sets them.
     in property <string> goals-tab;
     in property <string> goals-later;
     // Under the live view: the button that refreshes the picture of the account picked, and in
@@ -2431,34 +2437,53 @@ component TaskList {
     }
 }
 
-// One line of the Goals tab (Workflow #455 T1-C): the pool's id, cut short, greyed while no goal can
-// name it; under it in grey its reading; its goal and how far it is, in the accent once met; in
-// grey, or amber, why no goal can be set or that it is no longer offered. All but the id wraps.
+// One line of the Goals tab (Workflow #455, #463 V3, read only), by its kind. A group's title, in
+// bold. A note's words in grey, its help under them. An entry: its title, greyed while no goal can
+// be set on its pool or no pack offers it; the value now, in the accent once a goal is met; in
+// amber what is not used, does not read or lapsed; in grey the rest. Nothing on it can be pressed:
+// a value is shown, never a control. All of it wraps.
 component GoalLineView {
     in property <GoalRowData> line;
     vertical-stretch: 0;
     VerticalLayout {
         spacing: 2px;
-        Text {
-            text: root.line.name;
+        if root.line.kind == GoalRowKind.heading: Text {
+            text: root.line.title;
             font-size: Scale.body-font;
-            color: root.line.greyed ? Look.text-caption : Look.text;
-            overflow: elide;
-            min-width: 0px;
+            font-weight: 700;
+            color: Look.text;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
             vertical-stretch: 0;
         }
-        if root.line.reading != "": Text {
-            text: root.line.reading;
+        if root.line.kind == GoalRowKind.note: Text {
+            text: root.line.title;
             font-size: Scale.grey-font;
             color: Look.text-caption;
             wrap: word-wrap;
             min-height: self.preferred-height;
             vertical-stretch: 0;
         }
-        if root.line.goal != "": Text {
-            text: root.line.goal;
+        if root.line.kind == GoalRowKind.entry && root.line.title != "": Text {
+            text: root.line.title;
             font-size: Scale.body-font;
-            color: root.line.goal-met ? Look.accent : Look.text-secondary;
+            color: root.line.greyed ? Look.text-caption : Look.text;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.line.value != "": Text {
+            text: root.line.value;
+            font-size: Scale.body-font;
+            color: root.line.value-met ? Look.accent : root.line.greyed ? Look.text-caption : Look.text-secondary;
+            wrap: word-wrap;
+            min-height: self.preferred-height;
+            vertical-stretch: 0;
+        }
+        if root.line.warning != "": Text {
+            text: root.line.warning;
+            font-size: Scale.grey-font;
+            color: Severity.warning;
             wrap: word-wrap;
             min-height: self.preferred-height;
             vertical-stretch: 0;
@@ -2466,7 +2491,7 @@ component GoalLineView {
         if root.line.note != "": Text {
             text: root.line.note;
             font-size: Scale.grey-font;
-            color: root.line.note-warning ? Severity.warning : Look.text-caption;
+            color: Look.text-caption;
             wrap: word-wrap;
             min-height: self.preferred-height;
             vertical-stretch: 0;
@@ -2474,12 +2499,12 @@ component GoalLineView {
     }
 }
 
-// The account's Goals tab on the workbench (Workflow #455 T1-C, read only), under its own tab in the
-// right column. Always, in grey, that setting goals here comes later and the Lab sets them now. What
-// it says instead of its rows; else above them in amber what it cannot read of the goals stored,
-// when they were read, and in grey why there are none; the rows; under them, in grey, the old
-// form's note, and whether the goals stored hold and until when. Nothing on it can be pressed. All
-// of it wraps but a pool's id; the whole card scrolls when it is too short for it.
+// The account's Goals tab on the workbench (Workflow #455, #463 V3, read only), under its own tab in
+// the right column. Always, in grey, that this version only shows and the Lab sets values. What it
+// says instead of its lines; else above them in amber how the page stands where something is wrong,
+// when it was read, and in grey how it stands otherwise; the lines; under them, in grey, the old
+// form's note, and whether the resource goals stored hold and until when. Nothing on it can be
+// pressed. All of it wraps; the whole card scrolls when it is too short for it.
 component GoalList {
     in property <GoalListData> data;
     in property <[GoalRowData]> rows;
@@ -2511,8 +2536,8 @@ component GoalList {
             min-height: self.preferred-height;
             vertical-stretch: 0;
         }
-        if root.data.empty != "": Text {
-            text: root.data.empty;
+        if root.data.said != "": Text {
+            text: root.data.said;
             font-size: Scale.grey-font;
             color: Look.text-caption;
             wrap: word-wrap;
@@ -2755,8 +2780,8 @@ export component WorkbenchWindow inherits Window {
     // Which of the right column's three tabs shows (UI-3f1); a press asks for another, and the
     // console says which shows. Under the second, in the picture's place, the account's daily task
     // list: above its rows, its rows, and while open its own tasks without a package. Under the
-    // third, likewise, the account's goals (Workflow #455 T1-C): around its rows, its rows. Nothing
-    // of the live view shows meanwhile.
+    // third, likewise, the account's goals (Workflow #455, #463 V3): around its lines, its lines.
+    // Nothing of the live view shows meanwhile.
     in property <WorkbenchTab> right-tab;
     property <bool> picture-tab: root.right-tab == WorkbenchTab.picture;
     in property <TaskListData> tasks;
@@ -3283,9 +3308,9 @@ export component WorkbenchWindow inherits Window {
                                         log-note: root.log-note;
                                         log-failed: root.log-failed;
                                     }
-                                    // The two tabs (UI-3f1), and whose picture and tasks these are:
-                                    // what gives way. At the end, under the live view's tab, the box
-                                    // that draws on the frame.
+                                    // The three tabs (UI-3f1, Workflow #455), and whose picture, tasks
+                                    // and goals these are: what gives way. At the end, under the live
+                                    // view's tab, the box that draws on the frame.
                                     HorizontalLayout {
                                         spacing: 8px;
                                         vertical-stretch: 0;
@@ -3652,7 +3677,7 @@ export component WorkbenchWindow inherits Window {
                                     // Under the second tab, in the place of all of the live view:
                                     // the account's daily task list (UI-3f1), its rows at the top
                                     // and what the column spares under them; under the third, its
-                                    // goals (Workflow #455 T1-C), likewise.
+                                    // goals (Workflow #455, #463 V3), likewise.
                                     if root.right-tab == WorkbenchTab.tasks: TaskList {
                                         data: root.tasks;
                                         rows: root.task-rows;

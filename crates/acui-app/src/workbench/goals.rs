@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! What an account's Goals tab says (Workflow #455 T1-C, step 1, read only), as the reads leave
-//! it: no words and no Slint here, `paint` makes both of a view. Its rows are
-//! `acui_source::workbench::goals::page`'s, a pure function of the account's `ResourceTargetView`
-//! and the one place that decides them; this says only why there are none.
+//! What an account's Goals tab says (Workflow #455, the goal page; #463 V3, read only), as the
+//! reads leave it: no words and no Slint here, `paint` makes both of a view. Its lines are
+//! `acui_source::workbench::goals::page`'s, a pure function of the account's `GoalView`, the
+//! language shown and the packages' task names, and the one place that decides them; this says
+//! only why there are none.
 //!
-//! The tab writes nothing: setting a goal here is the write half's (T1-C's second part), and the
-//! Lab (its command line and its MCP) sets them meanwhile, which the tab says in its own words.
+//! The tab writes nothing: setting a value here is the write slices' (G2, G3), and the Lab (its
+//! command line and its MCP) sets them meanwhile, which the tab says in its own words.
 
 use acui_source::workbench::goals::GoalsPage;
 use acui_source::ClientFailure;
@@ -13,7 +14,7 @@ use acui_source::ClientFailure;
 use super::card::Down;
 use super::model::Fault;
 
-/// What the Goals tab shows now: why no row does, or its rows. A failure is said with its codes,
+/// What the Goals tab shows now: why no line does, or its lines. A failure is said with its codes,
 /// never as an empty page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GoalsView {

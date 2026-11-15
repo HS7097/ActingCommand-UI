@@ -45,6 +45,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
+use acui_source::workbench::goals;
 use serde_json::Value;
 
 use super::read::panic_message;
@@ -78,15 +79,6 @@ const TASK_MISMATCH: &str = "watchdog_task_mismatch";
 /// `warning` exits 0, as an installer operation left unfinished does when it is the decision.
 const ROUTINE: [&str; 2] = ["info", "success"];
 
-/// The locales a language tries, in order, before `en` and then the first written.
-/// `ui.json` treats locale names as opaque: these are the spellings expected.
-fn locales(language: Language) -> &'static [&'static str] {
-    match language {
-        Language::Zh => &["zh-Hans", "zh", "zh-CN"],
-        Language::En => &["en"],
-    }
-}
-
 /// The task names of one `packs` answer: by package id, each title per locale in the
 /// order the file wrote them. A package two games list keeps the first game's.
 pub struct NameTable(BTreeMap<String, Vec<(String, String)>>);
@@ -102,18 +94,12 @@ impl NameTable {
     }
 }
 
-/// The text of `texts`, each per locale in the order the file wrote them, in `language`: its
-/// locales in order, then `en`, then the first written.
+/// The text of `texts`, each per locale in the order the file wrote them, in `language`: the
+/// console's one fallback, the goal page's too (`goals::in_language`): Chinese tries `zh-Hans`,
+/// `zh` and `zh-CN`, then `en`; English tries `en`; either then takes the first written.
+/// `ui.json` treats locale names as opaque: these are the spellings expected.
 fn in_language(texts: &[(String, String)], language: Language) -> Option<&str> {
-    locales(language)
-        .iter()
-        .find_map(|locale| title_in(texts, locale))
-        .or_else(|| title_in(texts, "en"))
-        .or_else(|| texts.first().map(|(_, text)| text.as_str()))
-}
-
-fn title_in<'a>(titles: &'a [(String, String)], locale: &str) -> Option<&'a str> {
-    titles.iter().find(|(name, _)| name == locale).map(|(_, title)| title.as_str())
+    goals::in_language(texts, language.outcome_tongue())
 }
 
 /// What an account's daily task list shows of each package beside its name (UI-3f1), of one
