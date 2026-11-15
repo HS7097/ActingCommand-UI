@@ -784,12 +784,13 @@ in the declaration's own words: an option's title, a number with its unit's text
 items' titles in order ("None chosen"); a time unit's milliseconds are shown in the largest unit at most
 the declared one in which they are a whole number, down to seconds, else in milliseconds, never as a
 fraction (90 minutes declared in hours is "90 min"). In grey under it: the pack's default while a value
-set is in effect, and who set it, "Set by this console", "the command line (actingctl)", "MCP
-(actingctl)", "the Lab", or the Lab's entry ("the Lab's command line", "the Lab's MCP", "the Lab's pack
+set is in effect, and who set it, "Set by this console", "the command line", "MCP", "the Lab", or the
+Lab's entry ("the Lab's command line", "the Lab's MCP", "the Lab's pack
 authoring", "a Lab rescue", "the Lab's watchdog"), with the date and time. A value set that the next run
 does not take says in amber "The value set is not used: …; the default is used instead", with one sentence
 per `variable_problem` word (a word this console does not know by its code, which the technical log hears
-of once); a variable that does not apply in the game says "This does not apply in this game: …"; a
+of once); a variable that does not apply in the game says "This does not apply in this game: …", and one
+no root check judges now (`root_unchecked`) "Whether this applies in this game is not known now: …"; a
 placement no pack of the instance offers is greyed with "No pack of this instance offers this"; an
 `ordered` value applied in part lists in grey the items skipped. The packages' remedy parameters, which
 `remedy set` writes, are not shown.
@@ -797,8 +798,8 @@ placement no pack of the instance offers is greyed with "No pack of this instanc
 Three groups close the page. **No longer offered**: each value stored under a name nothing offers any more,
 in amber, with who set it. **Other resource goals**: each stored target on no declared resource's pool, by
 its pool's id, with its amount and how far it is as the stored record holds them; one that does not read
-(no `at_least` target with a resource and a whole amount) says so in amber, and the technical log hears of
-it once. **Resources no goal can be set on**: greyed, with why, "no task produces it" (`unmapped_task`),
+(no `at_least` target with a resource and a whole amount) is named by its target id and says so in amber,
+and the technical log hears of it once. **Resources no goal can be set on**: greyed, with why, "no task produces it" (`unmapped_task`),
 "nothing reads its amount" (`resource_not_observable`), "it is outside this instance's scope"
 (`resource_out_of_scope`), any other reason by its code; a pool a line above names says why on that line
 instead.
@@ -806,9 +807,10 @@ instead.
 Above the lines: in amber "The standard pack's goal declaration is not applied" when the game's
 `goals.json` is refused or cannot be read (its packs' variables are still listed), in grey that this
 Runtime does not read the game's goal declaration (no composed standard pack). A page the Runtime lists
-nothing on says only why: "The Runtime has not checked this game's standard pack yet" (it is read again by
-itself), in amber that the game's standard pack cannot be read and must be repaired first (with the file at
-fault), or that it has no schedule file, so nothing is there to set. A page with no entry, no value no
+nothing on says only why: in grey "The Runtime has not checked this game's standard pack yet" (it is read
+again by itself), or, while the Runtime has no active task catalog (which does not pass by itself), that it
+has none; in amber that the game's standard pack cannot be read and must be repaired first (with the file
+at fault); in grey that it has no schedule file, so nothing is there to set. A page with no entry, no value no
 longer offered and no other target says "This instance has nothing to set now". Under the lines: for a v2
 record, "These resource goals are valid until yyyy-mm-dd hh:mm" (local time; the Runtime's document holds
 for at most a year), or in amber "These resource goals expired at … and no longer count" once it has
@@ -818,8 +820,7 @@ lines speaks only once every goal of it lapsed; with no record, "No resource goa
 instance" while the page has a resource. A goal that lapsed is never in the accent. A record an agent wrote
 in the old form (`actingcommand.resource-targets.v1`) adds "These resource goals were written by an agent
 in the old form; shown read-only here"; one of a form newer than `v3` says in amber that it needs a newer
-console, its other targets' amounts are not shown, and the technical log hears of it once. Without an
-active task catalog the tab says so.
+console, its other targets' amounts are not shown, and the technical log hears of it once.
 
 The page is read on the switches' terms (the main page of a window that is not minimized, this tab, the
 Runtime online, that instance only): every 60 seconds, 60 after a failure, and at once when the tab, the

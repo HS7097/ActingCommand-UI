@@ -3061,6 +3061,12 @@ fn goals_page(labels: &Labels, page: &GoalsPage) -> (GoalListData, Vec<GoalRowDa
             }
             true
         }
+        // Without an active catalog the Runtime answers the page not checked yet, which does not
+        // pass by itself: say that instead of "read again shortly".
+        PageState::NotCheckedYet if page.no_catalog => {
+            said.push(labels.goals_no_catalog.to_owned());
+            false
+        }
         PageState::NotCheckedYet => {
             said.push(labels.goals_not_checked_yet.to_owned());
             false
@@ -3304,6 +3310,10 @@ fn variable_row(labels: &Labels, line: &VariableLine) -> GoalRowData {
         VariableState::InEffect => {}
         VariableState::NotApplied { stored: true, why } => {
             warnings.push(fill(labels.goals_not_applied, &[&unapplied_text(labels, why)]));
+        }
+        // No root check judges the game now: whether the variable applies is not known.
+        VariableState::NotApplied { stored: false, why } if matches!(why, Some(Unapplied::RootUnchecked)) => {
+            warnings.push(fill(labels.goals_not_known, &[&unapplied_text(labels, why)]));
         }
         VariableState::NotApplied { stored: false, why } => {
             warnings.push(fill(labels.goals_not_applying, &[&unapplied_text(labels, why)]));
