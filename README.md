@@ -899,7 +899,8 @@ amber "This goal was set elsewhere: changing it here replaces how it was set", w
 takes a goal here. A goal set elsewhere that carries none of the four (as one set by name elsewhere), on a
 pool that takes a goal here, loses nothing a goal set here does not hold again, so replacing or clearing it
 asks nothing: only that amber line says it was set elsewhere. Back to the default of a variable whose value
-is in effect, a value this console set and a goal this console set on a pool that takes one ask nothing.
+is in effect, a choice or switch changed while the value in effect is the one set, and a goal this console
+set on a pool that takes one ask nothing.
 Only **Confirm** sends it, and it reckons the press again on the newest page read, of the same line: when
 that no longer writes or asks what was asked about (the page was read again meanwhile), the question goes,
 nothing is sent, and the line says in amber "The page was read again before the confirmation, and this

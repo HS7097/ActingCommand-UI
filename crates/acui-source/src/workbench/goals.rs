@@ -32,7 +32,8 @@
 //! again; and a resource goal set elsewhere (no setter, or another channel than this console's) that
 //! carries what a goal set by name does not: tasks, a step, an importance, a validity. Setting a
 //! pool's amount replaces its goal whole, whatever its id
-//! (`crates/runtime-host/src/goals.rs:305-311`), so those are lost then too; which of them it
+//! (`crates/runtime-host/src/goals.rs:305-311`; `crates/policy/src/resource_targets/v3.rs:1539-1566`),
+//! so those are lost then too; which of them it
 //! carries is read from the stored document's target of the same id, and all four are said when
 //! that does not read. A goal set elsewhere that carries none of them, on a pool that takes a goal
 //! here, loses nothing a goal set here does not hold again, so it is only said beside the line, not
@@ -4151,8 +4152,9 @@ mod tests {
 
     /// fix1: a variable the game root does not apply takes no value set here
     /// (`variable_not_applying`), so a value stored for it is lost for good once put back to the
-    /// default: that asks first, with the value stored, in the language the page is shown in. One
-    /// a value can be set on again asks nothing; one with no value stored has nothing to clear.
+    /// default: that asks first, with the value stored, in the language the page is shown in. So
+    /// does any value stored and not used (fix4); one whose value is in effect asks nothing; one
+    /// with no value stored has nothing to clear.
     #[test]
     fn back_to_the_default_asks_first_where_the_root_does_not_apply_the_variable() {
         let view = view(
