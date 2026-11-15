@@ -19,8 +19,8 @@
 //! instance's `PackScheduleView` ([`ReadLane::read_packs`]), answered from memory once the
 //! Runtime has brought its fact store up to the ledger under the fact write gate, a read of the
 //! ledger's newest records on its writer's thread that is nearly always empty; and for that
-//! account's goals (Workflow #455 T1-C), its `ResourceTargetView` ([`ReadLane::read_goals`]), which
-//! records nothing and is computed under the same gate. The picture's lane
+//! account's goals (Workflow #455, #463 V3), its `GoalView` ([`ReadLane::read_goals`]), which
+//! records nothing and is computed under the policy's locks and the same gate. The picture's lane
 //! ([`preview::PreviewLane`], UI-3c) is the one exception: it reads ledger pages, which take no
 //! record either but are read from the ledger, and frames' material, whose read takes no record
 //! when it succeeds or
@@ -236,10 +236,11 @@ impl ReadLane {
         self.asked_once_more(|lane| lane.ask_packs(alias))
     }
 
-    /// One `ResourceTargetView` of the one instance `alias`: that account's goals (Workflow #455
-    /// T1-C, read only), as its rows ([`goals::page`]). A Runtime that has no such read says so as
-    /// its answer ([`goals::GoalsAnswer::Unsupported`]), as for the switches, and one that does not
-    /// know the request costs this lane its connection, as any fatal failure does.
+    /// One `GoalView` of the one instance `alias`: that account's goal page (Workflow #455, Workflow
+    /// #463 V3, read only), kept whole until it is shown as its lines ([`goals::page`]). A Runtime
+    /// that has no such read says so as its answer ([`goals::GoalsAnswer::Unsupported`]), as for the
+    /// switches, and one that does not know the request costs this lane its connection, as any
+    /// fatal failure does.
     pub fn read_goals(&mut self, alias: &str) -> Result<goals::GoalsRead, ClientFailure> {
         self.asked_once_more(|lane| lane.ask_goals(alias))
     }
@@ -314,8 +315,8 @@ impl ReadLane {
     fn ask_goals(&mut self, alias: &str) -> Result<goals::GoalsRead, NoConnection> {
         let client = self.connection()?;
         let epoch = code(&client.runtime_info().owner_epoch());
-        match client.resource_target_view(alias) {
-            Ok(view) => Ok(goals::goals_read(epoch, alias, &view)),
+        match client.goal_view(alias) {
+            Ok(view) => Ok(goals::goals_read(epoch, alias, view)),
             Err(error) => match pack::view_unsupported(&error) {
                 Some(code) => {
                     self.settled(error);

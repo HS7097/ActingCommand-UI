@@ -172,8 +172,8 @@ struct PacksSlice {
     asked_at: Option<Instant>,
 }
 
-/// The Goals tab's read (Workflow #455 T1-C), of the one account `of` names while that tab shows,
-/// on the same terms as the list's. Another account, or none, starts it anew.
+/// The Goals tab's read (Workflow #455, #463 V3: `GoalView`), of the one account `of` names while
+/// that tab shows, on the same terms as the list's. Another account, or none, starts it anew.
 #[derive(Default)]
 struct GoalsSlice {
     of: Option<String>,
@@ -1127,11 +1127,13 @@ impl Model {
             && since.is_some_and(|since| now.saturating_duration_since(since) > GOALS_TOO_OLD)
     }
 
-    /// The Goals tab of the account whose picture the right column names (Workflow #455 T1-C), as
-    /// the reads leave it at `now`: no row of an answer that is not of this account and epoch, or
-    /// not new, or after a failure, which is said with its codes. A Runtime that has no such read
-    /// is said so, and no clock makes that late: nothing reads the goals then.
-    pub fn goals_view(&self, now: Instant) -> GoalsView {
+    /// The Goals tab of the account whose picture the right column names (Workflow #455, #463 V3),
+    /// as the reads leave it at `now`: no row of an answer that is not of this account and epoch,
+    /// or not new, or after a failure, which is said with its codes. A Runtime that has no such
+    /// read is said so, and no clock makes that late: nothing reads the goals then. The page's
+    /// lines are made here, in `language`, each group of variables no entry places titled by its
+    /// package's task name as `actingctl packs` last gave it.
+    pub fn goals_view(&self, now: Instant, language: Language) -> GoalsView {
         if let Some(down) = Down::of(&self.link) {
             return GoalsView::Down(down);
         }
@@ -1158,8 +1160,10 @@ impl Model {
                 GoalsView::Unsupported(*code)
             }
             _ if self.goals_late(now) => GoalsView::Late,
-            Some(GoalsRead { answer: GoalsAnswer::Read(page), .. }) => {
-                GoalsView::Read(page.clone())
+            Some(GoalsRead { answer: GoalsAnswer::Read(loaded), .. }) => {
+                let pack_title =
+                    |package: &str| self.task_title(package, language).map(str::to_owned);
+                GoalsView::Read(loaded.page(language.outcome_tongue(), &pack_title))
             }
             None => GoalsView::Reading,
         }

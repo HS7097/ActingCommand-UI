@@ -232,8 +232,8 @@ Dependencies are pinned to one exact Runtime source (`Cargo.toml`), Runtime v0.1
 v0.12.60 it raises `runtime-client` to 9 and `package` to 15; `actingd-config` [5, 32] and `ledger` [3, 8]
 stay, and the console's `runtime-client` range follows to [3, 9]. Revision 9 adds the request kinds
 `GoalView` (one application's goal page) and `EditGoal` (one value of it set or cleared by name, refused
-`goal_value_invalid` with a `goal_problem` word), both on the `ui` channel's list (#463 V3); this console does
-not send them yet. `package` 13 to 15 bring a `linear_steps` task's select step (#463 K1), a pack's
+`goal_value_invalid` with a `goal_problem` word), both on the `ui` channel's list (#463 V3); this console reads
+the goal page with `GoalView` on its Goals tab and does not send `EditGoal` yet. `package` 13 to 15 bring a `linear_steps` task's select step (#463 K1), a pack's
 `variables` with version 2 of `goals.json` (#463 V1) and a `linear_steps` task's ending pages (#463 K2); the
 setup wizard holds a bundle's range to the one the Runtime zip declares, and the root files a bundle may
 carry did not change. No crate the locks list changed its dependencies, so `Cargo.lock` changes only in the
@@ -760,44 +760,84 @@ names, which no task of the instance uses any more, is not in the view, so it is
 withdrawn here. Once a package turned off reaches the deferral step, the card and the list say "This task
 is turned off".
 
-**Goals** (#455 T1-C, the first half: read only) is that instance's resource goals, drawn from its
-`ResourceTargetView` alone, the very read the Lab's `targets` answers. Nothing on it can be pressed yet: a
-line at its top says that setting goals here comes in a later version and that the Lab (command line or
-MCP) can set them now. A resource has one row, named by its pool id, the only name it has in this step (no
-title is made up for it, and no package id is shown). The rows go top to bottom: first each resource a goal
-can be set on (the pack gives it both a step, `valuation.scale`, and an importance, `gap.weight_milli`),
-with its current amount and when it was read ("Now 1200 (read hh:mm)") or why there is no usable reading
-("No reading yet", "The reading has expired", "The reading is not reliable enough", "The reading is not a
-valid amount"), and its goal: "No goal set", "Goal: at least 5000, 3800 short", "Goal: at least 5000,
-met" (in the accent: the gap is 0), or "Goal: at least 5000; No reading yet, so how far it is is not known
-yet"; then each resource a goal could only name with numbers of its own, the same with "The pack gives this
-resource no step, so no goal can be set on it here" in grey (the console does not choose a model's
-numbers); then, greyed, each resource no goal can name, with why: "no task produces it" (`unmapped_task`),
+**Goals** (#455, the goal page, read only) is that instance's goal page, drawn from its `GoalView` alone
+(#463 V3, Runtime 0.12.61), the very read the Lab's `goals` answers. Nothing on it can be pressed: a line
+at its top says that this version only shows it and that the Lab (command line or MCP) can set values. Its
+lines go in the Runtime's order: first the entries of the game's `goals.json`, then each package variable
+no entry places, in groups under the display name of its first package (the `ui.json` title the task
+names come from; every variable whose package has none goes in one last group, "Other settings"). No
+entry's name, no declared resource's pool id and no package id is shown; an entry with no text says "(no
+title)". Texts in several languages are taken as `ui.json`'s are: Chinese tries `zh-Hans`, `zh`, `zh-CN`,
+then `en`; English tries `en`; either then takes the first written.
+
+Five kinds of entry. A **heading** is a group title in bold; a **note** is grey words, with its help. A
+**resource** shows its goal, "No goal set", "Goal: at least 5000, 3800 short", "Goal: at least 5000, met"
+(in the accent: the gap is 0) or "Goal: at least 5000. No reading yet, so how far it is is not known yet",
+and in grey its current amount ("Now 1200 (read hh:mm)", or why there is no usable reading: "No reading
+yet", "The reading has expired", "The reading is not reliable enough", "The reading is not a valid
+amount"), "The pack gives this resource no step, so no goal can be set on it here" for a pool a goal names
+only with a step or an importance of its own (`scale_required` or `importance_required`, what the Runtime
+refuses as `pool_unvalued`), and who set it; it is greyed, with why, while its pool takes no goal now. A
+**tier** shows its default option's title, with "This version of the Runtime does not use tiers yet". A
+**variable** (`choice`, `integer`, `switch` or `ordered`) shows its title and the value the next run reads
+in the declaration's own words: an option's title, a number with its unit's text, On or Off, the chosen
+items' titles in order ("None chosen"); a time unit's milliseconds are shown in the largest unit at most
+the declared one in which they are a whole number, down to seconds, else in milliseconds, never as a
+fraction (90 minutes declared in hours is "90 min"). In grey under it: the pack's default while a value
+set is in effect, and who set it, "Set by this console", "the command line", "MCP", "the Lab", or the
+Lab's entry ("the Lab's command line", "the Lab's MCP", "the Lab's pack
+authoring", "a Lab rescue", "the Lab's watchdog"), with the date and time. A value set that the next run
+does not take says in amber "The value set is not used: …; the default is used instead", with one sentence
+per `variable_problem` word (a word this console does not know by its code, which the technical log hears
+of once); a variable that does not apply in the game says "This does not apply in this game: …", and one
+no root check judges now (`root_unchecked`) "Whether this applies in this game is not known now: …"; a
+placement no pack of the instance offers is greyed with "No pack of this instance offers this"; an
+`ordered` value applied in part lists in grey the items skipped. The packages' remedy parameters, which
+`remedy set` writes, are not shown.
+
+Three groups close the page. **No longer offered**: each value stored under a name nothing offers any more,
+in amber, with who set it. **Other resource goals**: each stored target on no declared resource's pool, by
+its pool's id, with its amount and how far it is as the stored record holds them; one that does not read
+(no `at_least` target with a resource and a whole amount) is named by its target id and says so in amber,
+and the technical log hears of it once. **Resources no goal can be set on**: greyed, with why, "no task produces it" (`unmapped_task`),
 "nothing reads its amount" (`resource_not_observable`), "it is outside this instance's scope"
-(`resource_out_of_scope`), any other reason by its code; then each goal stored on a resource that is not
-offered any more, greyed, with its goal and in amber "No longer offered:" and why, or that the Runtime does
-not list the resource now (such a resource has this row instead of the greyed one). Under the rows: "These
-goals are valid until yyyy-mm-dd hh:mm" (local time; the Runtime's document holds for at most a year), in
-amber "These goals expired at … and no longer count" once it has passed, or "No goals are set for this
-instance". A document an agent wrote in the old form (`actingcommand.resource-targets.v1`) is shown the same
-way with "These goals were written by an agent in the old form; shown read-only here"; one of a newer form
-than `v2` is not interpreted: an amber line says that reading it needs a newer console, each resource a goal
-can name says that whether it has a goal cannot be read here, and the technical log hears of it once; a stored target that
-does not read as an `at_least` target with an id and a resource has a row of its own ("Goal 2 cannot be read
-here"), and the log hears of that once too. Without an active task catalog no resource is listed, and the
-tab says so. The view is read on the switches' terms (the main page of a window that is not minimized, this
-tab, the Runtime online, that instance only): every 60 seconds, 60 after a failure, and at once when the tab,
-the instance or the owner epoch changes or a write lands; the live view and the task list read nothing
-meanwhile. A read that fails shows no rows of an earlier one: it says in red "The goals cannot be read right
-now" with its codes (the host's, the Runtime's, the client's); when the client cannot decode the answer
-(`runtime_receipt_decode_failed`: the view is decoded with strict types inside the receipt, so a shape newer
-than this console's client fails there), it says in red instead "The Runtime's answer cannot be read: most
-likely this goal record or the Runtime is newer than this console, which needs a newer console", with the
-codes too; nothing new for 180 seconds says in amber
-that nothing new of the goals came for a while. A Runtime that does not have the view (it answers
-`not_implemented`, or does not know the request) says so with its code, and the view is not read again until
-the tab is shown anew. Each read takes the policy's locks and the fact write gate a moment, so it is read
-seldom; the technical log's read counts at the end of a run call it `resource target view`.
+(`resource_out_of_scope`), any other reason by its code; a pool a line above names says why on that line
+instead.
+
+Above the lines: in amber "The standard pack's goal declaration is not applied" when the game's
+`goals.json` is refused or cannot be read (its packs' variables are still listed), in grey that this
+Runtime does not read the game's goal declaration (no composed standard pack). A page the Runtime lists
+nothing on says only why: in grey "The Runtime has not checked this game's standard pack yet" (it is read
+again by itself), or, while the Runtime has no active task catalog (which does not pass by itself), that it
+has none; in amber that the game's standard pack cannot be read and must be repaired first (with the file
+at fault); in grey that it has no schedule file, so nothing is there to set. A page with no entry, no value no
+longer offered and no other target says "This instance has nothing to set now". Under the lines: for a v2
+record, "These resource goals are valid until yyyy-mm-dd hh:mm" (local time; the Runtime's document holds
+for at most a year), or in amber "These resource goals expired at … and no longer count" once it has
+passed; a v3 record, what goals set by name are stored in, has no validity of its own: a goal's own
+lifetime is on its line ("This goal is valid until …", in amber once it lapsed), and the line under the
+lines speaks only once every goal of it lapsed; with no record, "No resource goals are set for this
+instance" while the page has a resource. A goal that lapsed is never in the accent. A record an agent wrote
+in the old form (`actingcommand.resource-targets.v1`) adds "These resource goals were written by an agent
+in the old form; shown read-only here"; one of a form newer than `v3` says in amber that it needs a newer
+console, its other targets' amounts are not shown, and the technical log hears of it once.
+
+The page is read on the switches' terms (the main page of a window that is not minimized, this tab, the
+Runtime online, that instance only): every 60 seconds, 60 after a failure, and at once when the tab, the
+instance or the owner epoch changes or a write lands; the live view and the task list read nothing
+meanwhile. A read that fails shows no lines of an earlier one: it says in red "The goals cannot be read
+right now" with its codes (the host's, the Runtime's, the client's), so also for an instance the Runtime
+does not know (`instance_unknown`), one no policy input configures
+(`resource_target_view_instance_unconfigured`) or a stored record it cannot read
+(`resource_target_view_policy_unreadable`, `resource_target_view_policy_inconsistent`); when the client
+cannot decode the answer (`runtime_receipt_decode_failed`: the page is decoded with strict types inside the
+receipt, so a shape newer than this console's client fails there), it says in red instead "The Runtime's
+answer cannot be read: most likely this goal record or the Runtime is newer than this console, which needs
+a newer console", with the codes too; nothing new for 180 seconds says in amber that nothing new of the
+goals came for a while. A Runtime that does not have the page (one before 0.12.61 does not know the
+request; or it answers `not_implemented`) says so with its code, and the page is not read again until the
+tab is shown anew or the owner epoch changes. Each read takes the policy's locks and the fact write gate a
+moment, so it is read seldom; the technical log's read counts at the end of a run call it `goal view`.
 
 `--state-root` applies to this run only and overrides `state_root` in the settings file; if neither is
 present the workbench still opens, with a red bar at its top that says in plain words that there is no

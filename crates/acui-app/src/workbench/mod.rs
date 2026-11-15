@@ -11,7 +11,7 @@
 //!    `monitor_status`. The two reading threads read `Status`, `ScheduleExplanation`
 //!    without candidates and, while an account's daily task list shows, of that one account
 //!    with them (UI-3f1) and its `PackScheduleView` (UI-3f2), while its goals show, its
-//!    `ResourceTargetView` (Workflow #455 T1-C), and `RuntimeFactSnapshot`, none of
+//!    `GoalView` (Workflow #455, #463 V3), and `RuntimeFactSnapshot`, none of
 //!    which walks the ledger or takes a ledger record. The picture's thread is the one
 //!    exception: it reads ledger pages, which take no record either, and frames' material,
 //!    whose read takes none when it succeeds or finds the file gone and one for any other
@@ -66,7 +66,7 @@
 //!
 //! The right column has three tabs (UI-3f1), the `Model`'s too (`tab_picked`): the live view,
 //! that same account's daily task list (`tasks`), with a switch for each of its task packages
-//! (UI-3f2), and its goals (`goals`, Workflow #455 T1-C, read only). The picture reads only under
+//! (UI-3f2), and its goals (`goals`, Workflow #455, read only). The picture reads only under
 //! its own tab, the list and its switches only under theirs, and the goals only under theirs:
 //! which account's list or goals the slow thread reads, if any, and whether its switches too, is
 //! told it in one place (`tasks_sync`), each time that may change, as for the picture. A tab shown
@@ -97,7 +97,11 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use acui_source::workbench::goals::{Form, GoalRow, GoalsAnswer, GoalsRead, Stored};
+use acui_rows::outcome::Tongue;
+use acui_source::workbench::goals::{
+    Form, GoalLine, GoalsAnswer, GoalsRead, OtherTarget, Stored, Unapplied, VariableLine,
+    VariableState,
+};
 use acui_source::workbench::pack::PacksRead;
 use acui_source::workbench::{ConfigRead, ExplainRead, LiveRead, StartRead, TasksRead};
 use acui_source::{ClientFailure, RuntimeFacts};
@@ -782,30 +786,49 @@ fn packs_landed(ui: &Ui, alias: &str, read: Result<PacksRead, ClientFailure>) {
     paint::tasks(ui);
 }
 
-/// The goals' read of `alias` (Workflow #455 T1-C), taken as the switches' is: a failure and its
-/// end each one line of the log, and the tab says the failure with its codes. A Runtime that said it
-/// has no such read is said once for its owner epoch, with the code that said so, and the slow
-/// thread reads the goals no more until the tab is shown anew (`tasks_sync`). What this console
-/// cannot read of an answer, a document of a newer form or a target that does not read, is said
-/// once too, beside what the tab says of it.
+/// The goals' read of `alias` (Workflow #455, #463 V3), taken as the switches' is: a failure and
+/// its end each one line of the log, and the tab says the failure with its codes. A Runtime that
+/// said it has no such read is said once for its owner epoch, with the code that said so, and the
+/// slow thread reads the goals no more until the tab is shown anew or the owner epoch changes
+/// (`tasks_sync`). What this console cannot read of an answer, targets stored in a newer form, an
+/// other target that does not read, or a `variable_problem` word it has no words for, is said once
+/// too, beside what the tab says of it.
 fn goals_landed(ui: &Ui, alias: &str, read: Result<GoalsRead, ClientFailure>) {
     let problems = match &read {
-        Ok(GoalsRead { answer: GoalsAnswer::Read(page), .. }) => {
+        Ok(GoalsRead { answer: GoalsAnswer::Read(loaded), .. }) => {
+            // The words of the lines do not matter here: what does not read is the same in any.
+            let page = loaded.page(Tongue::En, &|_| None);
             let mut problems = Vec::new();
+            let mut newer = false;
             if let Stored::Document(document) = &page.stored {
                 if let Form::Newer(schema) = &document.form {
+                    newer = true;
                     problems.push(format!(
-                        "the goals of {alias} are stored as {schema}, which this console does not \
-                         read: shown as not readable here"
+                        "the targets of {alias} are stored as {schema}, which this console does \
+                         not read: its other targets are shown as not readable here"
                     ));
                 }
             }
-            for row in &page.rows {
-                if let GoalRow::Unread { position } = row {
-                    problems.push(format!(
-                        "the target at index {position} of the goals of {alias} does not read as \
-                         an at_least target with an id and a resource: shown as not readable here"
-                    ));
+            for line in &page.lines {
+                match line {
+                    GoalLine::OtherTarget(OtherTarget { id, target: None }) if !newer => {
+                        problems.push(format!(
+                            "the other target {id} of the goals of {alias} does not read as an \
+                             at_least target with a resource and a whole amount: shown as not \
+                             readable here"
+                        ));
+                    }
+                    GoalLine::Variable(VariableLine {
+                        state: VariableState::NotApplied { why: Some(Unapplied::Other(word)), .. },
+                        ..
+                    }) => {
+                        problems.push(format!(
+                            "a variable of the goals of {alias} is not applied for \
+                             variable_problem {word}, which this console has no words for: shown \
+                             by its code"
+                        ));
+                    }
+                    _ => {}
                 }
             }
             problems
@@ -824,8 +847,8 @@ fn goals_landed(ui: &Ui, alias: &str, read: Result<GoalsRead, ClientFailure>) {
     }
     if let Some((epoch, code)) = &landed.unsupported {
         let line = format!(
-            "the Runtime of owner epoch {epoch} has no goals to read (ResourceTargetView of \
-             {alias}: {code}): not read again until the tab is shown anew"
+            "the Runtime of owner epoch {epoch} has no goals to read (GoalView of {alias}: \
+             {code}): not read again until the tab is shown anew or the owner epoch changes"
         );
         if ui.model.borrow_mut().first_told(&line) {
             report::log(thread, &line);
