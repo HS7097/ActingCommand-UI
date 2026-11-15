@@ -355,32 +355,90 @@ def test_a_hand_entrys_value_is_no_threshold_bindings_literal_and_no_fixed_entry
     assert not (folder / "schedule.json.part").exists()
 
 
-def test_a_hand_written_value_outside_what_the_runtime_compiles_is_refused(tmp_path, acmodel):
-    """fix1. The Runtime's compiler takes a fixed value in 1..2^53 - 1 only (a value of 0 is no value): rule.z's 0 and
-    rule.n's -5 are each `hand_value_out_of_range`, at the member, in check and in apply, rule.n's though its package is
-    held (as a value binding's number below 1 is `value_not_positive`, held or not); rule.one's 1 passes. Above 2^53 - 1
-    the strict reader refuses the file first."""
+def test_a_hand_written_value_outside_what_the_runtime_compiles_is_refused_and_on_a_held_rule_a_warning(
+    tmp_path, acmodel
+):
+    """fix1, fix3. The Runtime's compiler takes a fixed value in 1..2^53 - 1 only (a value of 0 is no value): rule.z's 0
+    is `hand_value_out_of_range`, at the member, in check and in apply; rule.one's 1 passes. rule.n's -5 is on a rule
+    whose package is held, which the composer leaves out of the catalog: the warning `held_hand_value_out_of_range`,
+    no error, exit 0, the entry listed in data.hand and nothing written; once the hold is lifted it is the error. (A value
+    binding's number below 1 stays `value_not_positive`, held or not.) Above 2^53 - 1 the strict reader refuses the file
+    first."""
     folder = values_repo(tmp_path, [DAY_RUN])
     schedule = folder / "schedule.json"
-    schedule.write_bytes(held(one_line([
-        '{"id":"rule.z","package_id":"pkg.x","fixed_value_milli":0,"priority":1}',
-        '{"id":"rule.n","package_id":"pkg.n","fixed_value_milli":-5,"priority":1}',
-        '{"id":"rule.one","package_id":"pkg.x","fixed_value_milli":1,"priority":1}',
-    ]), "pkg.n"))
-    register(folder, hand("rule.z"), hand("rule.n"), hand("rule.one"))
+    zero = '{"id":"rule.z","package_id":"pkg.x","fixed_value_milli":0,"priority":1}'
+    negative = '{"id":"rule.n","package_id":"pkg.n","fixed_value_milli":-5,"priority":1}'
+    one = '{"id":"rule.one","package_id":"pkg.x","fixed_value_milli":1,"priority":1}'
+    schedule.write_bytes(one_line([zero, one]))
+    register(folder, hand("rule.z"), hand("rule.one"))
     before = schedule.read_bytes()
-    expected = [
-        {"code": "hand_value_out_of_range", "detail": detail(folder, "/hand/0", "rule.z", found="0"),
-         "ref": "/rules/0/fixed_value_milli"},
-        {"code": "hand_value_out_of_range", "detail": detail(folder, "/hand/1", "rule.n", found="-5"),
-         "ref": "/rules/1/fixed_value_milli"},
-    ]
+    refused = [{"code": "hand_value_out_of_range", "detail": detail(folder, "/hand/0", "rule.z", found="0"),
+                "ref": "/rules/0/fixed_value_milli"}]
 
     for command in ("check", "apply"):
         status, doc = bindings(acmodel, folder, command)
 
-        assert (status, doc["errors"], doc["warnings"]) == (6, expected, [])
+        assert (status, doc["errors"], doc["warnings"]) == (6, refused, [])
     assert schedule.read_bytes() == before
+
+    schedule.write_bytes(held(one_line([negative, one]), "pkg.n"))
+    register(folder, hand("rule.n"), hand("rule.one"))
+    before = schedule.read_bytes()
+    later = [{"code": "held_hand_value_out_of_range", "detail": detail(folder, "/hand/0", "rule.n", found="-5"),
+              "ref": "/rules/0/fixed_value_milli"}]
+
+    status, doc = bindings(acmodel, folder, "check")
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], later)
+    assert [(found["rule_id"], found["literal"]) for found in doc["data"]["hand"]] == [("rule.n", -5), ("rule.one", 1)]
+
+    status, doc = bindings(acmodel, folder, "apply")
+
+    assert (status, doc["errors"], doc["warnings"]) == (0, [], later)
+    assert (doc["data"]["changed"], doc["data"]["written"]) == ([], [])
+    assert schedule.read_bytes() == before
+
+    schedule.write_bytes(one_line([negative, one]))
+    status, doc = bindings(acmodel, folder, "check")
+
+    assert (status, doc["warnings"]) == (6, [])
+    assert doc["errors"] == [{**warning, "code": warning["code"].removeprefix("held_")} for warning in later]
+
+
+def test_a_held_rules_hand_written_value_out_of_range_is_reported_with_the_errors(tmp_path, acmodel):
+    """fix3. rule.n's -5 is on a held package's rule (the warning `held_hand_value_out_of_range`), rule.z's 0 is not (the
+    error `hand_value_out_of_range`): `check` and `apply` report the warning with the errors, exit 6, and `apply` writes
+    nothing, not even rule.a.day's bound value."""
+    folder = values_repo(tmp_path, [DAY_RUN])
+    schedule = folder / "schedule.json"
+    schedule.write_bytes(held(one_line([
+        DAY_RULE,
+        '{"id":"rule.n","package_id":"pkg.n","fixed_value_milli":-5,"priority":1}',
+        '{"id":"rule.z","package_id":"pkg.x","fixed_value_milli":0,"priority":1}',
+    ]), "pkg.n"))
+    register(folder, hand("rule.n"), hand("rule.z"), values=(("val.a.day", "rule.a.day"),))
+    before = schedule.read_bytes()
+    day = detail(folder, "/bindings/0", "rule.a.day", value="val.a.day")
+    refused = {"code": "hand_value_out_of_range", "detail": detail(folder, "/hand/1", "rule.z", found="0"),
+               "ref": "/rules/2/fixed_value_milli"}
+    later = [{"code": "held_hand_value_out_of_range", "detail": detail(folder, "/hand/0", "rule.n", found="-5"),
+              "ref": "/rules/1/fixed_value_milli"}]
+
+    status, doc = bindings(acmodel, folder, "check")
+
+    assert (status, doc["data"]) == (6, {})
+    assert doc["errors"] == [
+        {"code": "binding_mismatch", "detail": {**day, "reason": "value", "expected": "2448"}, "ref": "/rules/0"},
+        {"code": "origin_missing", "detail": day, "ref": "/rules/0"},
+        refused,
+    ]
+    assert doc["warnings"] == later
+
+    status, doc = bindings(acmodel, folder, "apply")
+
+    assert (status, doc["data"], doc["errors"], doc["warnings"]) == (6, {}, [refused], later)
+    assert schedule.read_bytes() == before
+    assert not (folder / "schedule.json.part").exists()
 
 
 def test_two_value_bindings_of_one_rule_are_a_duplicate_with_or_without_strict_values(tmp_path, acmodel):
@@ -556,12 +614,14 @@ def test_the_codes_of_w4a_are_registered_with_their_category_and_exit_status():
     """Each code is one reason: an error the Runtime's refusal makes one (exit 6), a held rule's the warning it stays
     until the hold is lifted; a rule named twice in bindings.json is an input error (exit 1), as a duplicate is. fix1: a
     hand entry's value that a threshold binding or a fixed entry names too is that input error; one outside the range the
-    Runtime compiles is an error of the schedule (exit 6)."""
+    Runtime compiles is an error of the schedule (exit 6). fix3: on a held rule that value is the warning it stays until
+    the hold is lifted."""
     assert set(EXIT_STATUS) == set(CODES)
     new = {
         "hand_also_bound": ("error", 1), "hand_duplicate": ("error", 1), "hand_value_missing": ("error", 6),
         "hand_origin_model": ("error", 6), "fixed_value_unregistered": ("error", 6),
         "hand_also_threshold": ("error", 1), "hand_also_fixed": ("error", 1), "hand_value_out_of_range": ("error", 6),
+        "held_hand_value_out_of_range": ("warning", 0),
         "fixed_value_beside_realization": ("error", 6), "fixed_value_beside_priced_product": ("error", 6),
         "fixed_value_beside_pending_product": ("error", 6), "fixed_value_beside_maintenance": ("error", 6),
         "held_fixed_value_beside_realization": ("warning", 0),

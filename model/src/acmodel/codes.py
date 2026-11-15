@@ -118,10 +118,12 @@ HAND_DUPLICATE = "hand_duplicate"  # two hand entries name one rule
 HAND_VALUE_MISSING = "hand_value_missing"  # a hand entry's rule has no fixed_value_milli
 HAND_ORIGIN_MODEL = "hand_origin_model"  # a hand entry's rule says the model wrote its value
 # fix1: a hand entry's rule's fixed value is a threshold binding's literal too, or a fixed entry's; a hand entry's value
-# lies outside 1..2^53 - 1, which the Runtime's compiler refuses.
+# lies outside 1..2^53 - 1, which the Runtime's compiler refuses (a rule whose package is not held).
 HAND_ALSO_THRESHOLD = "hand_also_threshold"
 HAND_ALSO_FIXED = "hand_also_fixed"
 HAND_VALUE_OUT_OF_RANGE = "hand_value_out_of_range"
+# fix3: the same on a rule whose package is held, a warning: a held rule is not compiled until the hold is lifted.
+HELD_HAND_VALUE_OUT_OF_RANGE = "held_hand_value_out_of_range"
 FIXED_VALUE_UNREGISTERED = "fixed_value_unregistered"  # --strict-values: a fixed value no binding or hand entry names
 # A bound or hand-written fixed value the Runtime refuses when it composes the rule (an error), or would once the rule's
 # package is no longer held (a warning: a held rule is not composed).
@@ -235,6 +237,7 @@ EXIT_STATUS = {
     HAND_ALSO_THRESHOLD: 1,
     HAND_ALSO_FIXED: 1,
     HAND_VALUE_OUT_OF_RANGE: 6,
+    HELD_HAND_VALUE_OUT_OF_RANGE: 0,
     FIXED_VALUE_UNREGISTERED: 6,
     FIXED_VALUE_BESIDE_REALIZATION: 6,
     FIXED_VALUE_BESIDE_PRICED_PRODUCT: 6,

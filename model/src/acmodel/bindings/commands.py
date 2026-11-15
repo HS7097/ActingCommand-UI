@@ -52,7 +52,8 @@ its `status` and `ref` (opaque texts, never read). A rule is named once among th
 (`hand_also_bound`, `hand_duplicate`), and a hand entry's fixed value is no threshold binding's literal
 (`hand_also_threshold`: `apply` would write the threshold into it) and no fixed entry's (`hand_also_fixed`; fix1); a
 hand entry's rule writes a `fixed_value_milli` (`hand_value_missing`) in 1..2^53 - 1, which the Runtime's compiler takes
-(`hand_value_out_of_range`; fix1), and no origin (`hand_origin_model` for `"model"`, `origin_invalid` for any other).
+(`hand_value_out_of_range`; fix1; on a held package's rule, which the compiler does not see yet, the warning
+`held_hand_value_out_of_range`, fix3), and no origin (`hand_origin_model` for `"model"`, `origin_invalid` for any other).
 With `--strict-values`, `check` refuses every rule of schedule.json that writes `fixed_value_milli` and that no value
 binding and no hand entry names (`fixed_value_unregistered`).
 
@@ -82,9 +83,9 @@ is the export's. Without the file it is null; a file of other versions of the mo
 whether `out/values.json` is of the current inputs (`data.values`; the warning `values_stale` otherwise, #464 W1), and
 `out/valuations.json` (`data.valuations`; `valuations_stale`, #466 W3).
 
-The warnings `precision_low`, `limited_without_consumes`, `limited_unmodelled` and the three `held_…` are reported with
-the errors too, when there are any; `prices_stale`, `values_stale` and `valuations_stale` only when there are none (the
-files are read after the bindings check).
+The warnings `precision_low`, `limited_without_consumes`, `limited_unmodelled`, the three `held_fixed_value_beside_…` and
+`held_hand_value_out_of_range` are reported with the errors too, when there are any; `prices_stale`, `values_stale`
+and `valuations_stale` only when there are none (the files are read after the bindings check).
 """
 
 from __future__ import annotations
@@ -135,6 +136,7 @@ from acmodel.codes import (
     HELD_FIXED_VALUE_BESIDE_PENDING_PRODUCT,
     HELD_FIXED_VALUE_BESIDE_PRICED_PRODUCT,
     HELD_FIXED_VALUE_BESIDE_REALIZATION,
+    HELD_HAND_VALUE_OUT_OF_RANGE,
     INSERT_STYLE_UNKNOWN,
     LIMITED_INVALID,
     LIMITED_MISSING,
@@ -401,6 +403,13 @@ def _held(schedule: Target | None) -> frozenset[str]:
     )
 
 
+def _is_held(rule: dict[str, Any], held: frozenset[str]) -> bool:
+    """Whether the rule's package is one schedule.json holds (#466 W4a): the composer leaves the rule out of the catalog,
+    so the compiler refuses nothing of it until the hold is lifted."""
+    package = rule.get("package_id")
+    return isinstance(package, str) and package in held
+
+
 # #466 W4a: what the Runtime refuses beside a rule's fixed value, by the codes of a composed rule and of a held one.
 _REALIZATION = (FIXED_VALUE_BESIDE_REALIZATION, HELD_FIXED_VALUE_BESIDE_REALIZATION)
 _PRICED = (FIXED_VALUE_BESIDE_PRICED_PRODUCT, HELD_FIXED_VALUE_BESIDE_PRICED_PRODUCT)
@@ -435,8 +444,7 @@ def _conflicts(
         codes = _PRICED if isinstance(valuation, dict) else _PENDING if valuation == MARKER else None
         if codes is not None:
             found.append((codes, {"pool_id": pool_id}, at(rule_ref, PRODUCES, index)))
-    package = rule.get("package_id")
-    later = isinstance(package, str) and package in held
+    later = _is_held(rule, held)
     reported = [error(codes[1 if later else 0], {**detail, **extra}, ref) for codes, extra, ref in found]
     return (errors, reported) if later else (errors + reported, [])
 
@@ -801,9 +809,11 @@ def _hand(
       integer, is `binding_mismatch` `literal_missing`, as for a value binding; a rule without the member is
       `hand_value_missing` (a hand entry registers a value the rule writes; it never writes one).
     - The value lies in 1..2^53 - 1, the range the Runtime's compiler takes (a value of 0 is no value;
-      `validate_fixed_value`, `limit_exceeded`): `hand_value_out_of_range` otherwise (fix1), at the member, held or not,
-      as a value binding's number below 1 is `value_not_positive`. Above 2^53 - 1 the strict reader refuses the file
-      first (`model_file_invalid`, `integer_out_of_range`), so what reaches here is 0 or below.
+      `validate_fixed_value`, `limit_exceeded`): `hand_value_out_of_range` otherwise (fix1), at the member. A rule whose
+      package is held is not compiled, so for it this is the warning `held_hand_value_out_of_range` (fix3), an error once
+      the hold is lifted, as for the conflicts. (A value binding's number below 1 stays `value_not_positive` on any rule:
+      the writer never writes a bad number.) Above 2^53 - 1 the strict reader refuses the file first
+      (`model_file_invalid`, `integer_out_of_range`), so what reaches here is 0 or below.
     - A value written by hand carries no origin: `"model"` is `hand_origin_model` (only the model's export writes model,
       and then a value binding names the rule), any other origin `origin_invalid` (the Runtime refuses it).
     - What the Runtime refuses beside the value (`_conflicts`), as for a value binding."""
@@ -816,16 +826,22 @@ def _hand(
     if literal.value is MISSING:
         return [error(HAND_VALUE_MISSING, detail, rule_ref)], [], None
     problems = [] if integer(literal.value) else [literal.mismatch("literal_missing", found=json_type(literal.value))]
+    warnings: list[dict[str, Any]] = []
     if integer(literal.value) and not 1 <= literal.value <= MAX_SAFE_INTEGER:
-        problems.append(error(HAND_VALUE_OUT_OF_RANGE, {**detail, "found": str(literal.value)}, literal.ref))
+        out_of_range = {**detail, "found": str(literal.value)}
+        if _is_held(rule, held):
+            warnings.append(error(HELD_HAND_VALUE_OUT_OF_RANGE, out_of_range, literal.ref))
+        else:
+            problems.append(error(HAND_VALUE_OUT_OF_RANGE, out_of_range, literal.ref))
     origin = rule.get(ORIGIN, MISSING)
     if origin is not MISSING:
         problems.append(
             error(HAND_ORIGIN_MODEL, detail, at(rule_ref, ORIGIN)) if origin == MODEL
             else error(ORIGIN_INVALID, {**detail, "found": shown(origin)}, at(rule_ref, ORIGIN))
         )
-    conflicts, warnings = _conflicts(schedule, rule_ref, rule, held, detail)
+    conflicts, later = _conflicts(schedule, rule_ref, rule, held, detail)
     problems.extend(conflicts)
+    warnings.extend(later)
     if problems:
         return problems, warnings, None
     shown_entry = {"entry": ref, "rule_id": entry["rule_id"], "literal": literal.value, "status": entry["status"],
@@ -1073,8 +1089,9 @@ def check_bindings(
     quantity of one of its pools, is left unbound; with `strict_values`, no rule's fixed value is named by neither a value
     binding nor a hand entry (`_unregistered`). `data.coverage` is what `export prices` delivered, as schedule.json meets
     it (`_coverage`), and `data.values` and `data.valuations` whether out/values.json and out/valuations.json are current;
-    the warnings are `precision_low`, the limited reports (#466 W3) and the conflicts of a held rule (#466 W4a), with the
-    errors too, then, only without errors, `prices_stale`, `values_stale` and `valuations_stale`."""
+    the warnings are `precision_low`, the limited reports (#466 W3), the conflicts of a held rule (#466 W4a) and a held
+    rule's hand-written value out of range (fix3), with the errors too, then, only without errors, `prices_stale`,
+    `values_stale` and `valuations_stale`."""
     run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
     repo, targets = _targets(run, bindings, strict or strict_values)
@@ -1216,7 +1233,8 @@ def apply_bindings(
     registered as `_hand` says, and a fixed value the Runtime would refuse (`_conflicts`, #466 W4a), too. The edited bytes
     must read back as the document the edits make, and every file is renamed from its part only when it is still the
     bytes that were read (`_commit`). The warnings (`precision_low`, the limited reports, #466 W3, the conflicts of a held
-    rule, #466 W4a) are reported, and change nothing. A hand entry's value is never written."""
+    rule, #466 W4a, and a held rule's hand-written value out of range, fix3) are reported, and change nothing. A hand
+    entry's value is never written."""
     run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
     repo, targets = _targets(run, bindings, False)

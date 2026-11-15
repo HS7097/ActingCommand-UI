@@ -707,7 +707,7 @@
         "rule_id": {"type": "token", "required": true},
         "found": {"type": "token", "required": true}
       },
-      "description": "acmodel bindings check|apply (#466 W4a fix1): the rule rule_id of schedule.json (path), whose fixed value the hand entry entry (its pointer in bindings.json) registers as written by hand, writes fixed_value_milli found, outside 1..2^53 - 1. The Runtime's catalog compiler refuses such a value (limit_exceeded; its scheduling/README.md, Fixed values written in the pack: a value of 0 is no value; validate_fixed_value), so check reports it and apply refuses it and writes nothing, on a held package's rule too, as a value binding's number below 1 is value_not_positive. A value above 2^53 - 1 the strict reader refuses before (model_file_invalid, integer_out_of_range), so found is 0 or below. Write a value of at least 1 (a placeholder is 1), or remove the value and the hand entry. The error's ref is the member."
+      "description": "acmodel bindings check|apply (#466 W4a fix1): the rule rule_id of schedule.json (path), whose fixed value the hand entry entry (its pointer in bindings.json) registers as written by hand, writes fixed_value_milli found, outside 1..2^53 - 1. The Runtime's catalog compiler refuses such a value (limit_exceeded; its scheduling/README.md, Fixed values written in the pack: a value of 0 is no value; validate_fixed_value), so on a rule whose package is not held check reports it and apply refuses it and writes nothing. On a rule whose package schedule.json holds (held), which the Runtime does not compile yet, this is the warning held_hand_value_out_of_range (fix3). A value binding's number below 1 is value_not_positive on any rule: the writer never writes a bad number. A value above 2^53 - 1 the strict reader refuses before (model_file_invalid, integer_out_of_range), so found is 0 or below. Write a value of at least 1 (a placeholder is 1), or remove the value and the hand entry. The error's ref is the member."
     },
     "held_fixed_value_beside_pending_product": {
       "category": "warning",
@@ -749,6 +749,19 @@
         "rule_id": {"type": "token", "required": true}
       },
       "description": "acmodel bindings check|apply (a warning; #466 W4a): fixed_value_beside_realization on a rule whose package schedule.json holds (held). The Runtime's composer leaves a held package's rules out of the catalog (its standard-pack-schedule, Composition, step 3), so its compiler does not see this rule and refuses nothing today; once the hold is lifted it refuses the schedule, and this is the error fixed_value_beside_realization. Resolve it before the hold is lifted. It changes no exit status, and apply writes. The warning's ref is the realization member."
+    },
+    "held_hand_value_out_of_range": {
+      "category": "warning",
+      "exit": 0,
+      "review": "pending",
+      "since": "0.1.0",
+      "values": {
+        "path": {"type": "path", "required": true},
+        "entry": {"type": "token", "required": true},
+        "rule_id": {"type": "token", "required": true},
+        "found": {"type": "token", "required": true}
+      },
+      "description": "acmodel bindings check|apply (a warning; #466 W4a fix3): hand_value_out_of_range on a rule whose package schedule.json holds (held): the rule rule_id of schedule.json (path), whose fixed value the hand entry entry (its pointer in bindings.json) registers as written by hand, writes fixed_value_milli found, outside 1..2^53 - 1. The Runtime's composer leaves a held package's rules out of the catalog (its standard-pack-schedule, Composition, step 3), so its compiler does not see this rule and refuses nothing today; once the hold is lifted it refuses the schedule (limit_exceeded), and this is the error hand_value_out_of_range. Write a value of at least 1 (a placeholder is 1) before the hold is lifted. It changes no exit status, and apply writes (never the hand entry's value). A value binding's number below 1 stays value_not_positive, held or not. The warning's ref is the member."
     },
     "host_gate_paused": {
       "category": "error",

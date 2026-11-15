@@ -2422,9 +2422,13 @@ hand entry is there, and for each:
   JSON type at the member), as for a value binding.
 - **The value is one the Runtime compiles** (fix1): in 1..2<sup>53</sup> − 1 (the Runtime's `scheduling/README.md`,
   "Fixed values written in the pack": a value of 0 is no value; its compiler refuses any other, `limit_exceeded`).
-  Otherwise it is `hand_value_out_of_range` (exit 6, `found` the value, at the member), on a held package's rule too, as
-  a value binding's number below 1 is `value_not_positive`. A literal above 2<sup>53</sup> − 1 the strict reader refuses
-  before (`model_file_invalid`, `integer_out_of_range`), so what this code reports is 0 or below.
+  Otherwise it is `hand_value_out_of_range` (exit 6, `found` the value, at the member) on a rule whose package is not
+  held. On a rule whose package `schedule.json` holds (`held`), which the composer leaves out of the catalog, the
+  compiler refuses nothing today: there it is the warning `held_hand_value_out_of_range` (exit 0, the same values, at the
+  member; fix3), the error once the hold is lifted, as for the conflicts ("Fixed values the Runtime refuses"); `apply`
+  writes. A value binding's number below 1 stays `value_not_positive`, held or not: the writer never writes a bad
+  number. A literal above 2<sup>53</sup> − 1 the strict reader refuses before (`model_file_invalid`,
+  `integer_out_of_range`), so what either code reports is 0 or below.
 - **No origin.** A value written by hand carries no `fixed_value_origin` (the Runtime reads that as the pack's).
   `"model"` is `hand_origin_model` (exit 6, at the member): only the model's export writes `model`, and then a value
   binding names the rule, not a hand entry. Any other origin is `origin_invalid` (`found`, without `value`), which the
@@ -2472,7 +2476,8 @@ not compose. What `check` passes, and what `apply` writes, holds this, each as t
   the number `export values` computes from the same run and the current prices, at least 1. A bound W is the number
   `export valuations` computes from the pool's own scale Q, of a price not below 0, above 0 when the price is, and at
   most 1,000,000. One that is refused or pending is never written. A value written by hand is an integer in
-  1..2<sup>53</sup> − 1, and the tool never writes it.
+  1..2<sup>53</sup> − 1 (on a held rule one outside it is a warning, fix3, since the Runtime does not compile it yet),
+  and the tool never writes it.
 - **Who wrote them.** A bound value or W stands beside the origin `"model"`, inserted when absent; another origin is
   refused and never rewritten; no `"model"` origin of `schedule.json` is left without its binding; a value written by
   hand carries none. Each rule's fixed value is named once: by a value binding or by a hand entry, and a hand entry's by
@@ -2570,8 +2575,8 @@ says `greater_than_or_equal`).
 - **Each bound valuation** (#466 W3) is checked as "A pool's valuation" says: its pool, block and scale, W and the
   origin, the word, its range and precision, and whether `apply` could insert the origin.
 - **It writes nothing.** Every problem is reported at once, and the exit status is the first error's. The warnings
-  (`precision_low`, `limited_without_consumes`, `limited_unmodelled`, and the three `held_fixed_value_beside_…`, #466
-  W4a) are reported with the errors too.
+  (`precision_low`, `limited_without_consumes`, `limited_unmodelled`, the three `held_fixed_value_beside_…`, #466 W4a,
+  and `held_hand_value_out_of_range`, fix3) are reported with the errors too.
 - **`data`** holds `path`, `model_id`, `state`, `repo`, `strict` and `strict_values` (#466 W4a), and:
   - `bindings`: each with `entry` (its pointer in `bindings.json`), `threshold`, `form`, `file`, [`rule_id` or
     `pool_id`], `path` and `literal`; a value binding (#464 W1) with `entry`, `value`, `file`, `rule_id`, `path`,
@@ -2629,8 +2634,9 @@ says `greater_than_or_equal`).
   (`origin_invalid`) or a limited mark that is not `true` (`limited_invalid`), refuses the whole apply, and so does a
   hand entry's problem or a fixed value the Runtime would refuse (#466 W4a: "A value written by hand", "Fixed values the
   Runtime refuses"). The warnings (`precision_low`, `limited_without_consumes`, `limited_unmodelled`, the three
-  `held_fixed_value_beside_…`) refuse nothing; they are reported. It does not scan for unbound literals or unregistered
-  fixed values; `check --strict` and `check --strict-values` do that afterwards. It never writes a hand entry's value.
+  `held_fixed_value_beside_…`, `held_hand_value_out_of_range`) refuse nothing; they are reported. It does not scan for
+  unbound literals or unregistered fixed values; `check --strict` and `check --strict-values` do that afterwards. It
+  never writes a hand entry's value.
 - **Before anything is written**, the edited bytes of each file are read back with the strict reader and must be
   exactly the document the edits make: the file as read, with each changed literal and each inserted member in its
   place, member order included. Otherwise it is a defect (`command_crashed`), and nothing is written.
