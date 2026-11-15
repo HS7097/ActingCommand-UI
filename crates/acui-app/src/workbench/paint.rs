@@ -3320,11 +3320,11 @@ fn loses_text(labels: &Labels, loses: &Loses) -> String {
         }
         Loses::Unsettable { amount, carried } => fill(
             labels.goals_confirm_clear_unsettable,
-            &[&held_text(labels, *amount, carried.unwrap_or(Carried::NONE))],
+            &[&goal_held_text(labels, *amount, carried.unwrap_or(Carried::NONE))],
         ),
         Loses::SameName { removed: Removed::Entry { title, amount, carried: other }, carried } => {
             let title = title.as_deref().unwrap_or(labels.goals_untitled);
-            let held = held_text(labels, *amount, *other);
+            let held = goal_held_text(labels, *amount, *other);
             match carried {
                 Some(carried) => fill(
                     labels.goals_confirm_same_entry_elsewhere,
@@ -3366,7 +3366,7 @@ fn loses_text(labels: &Labels, loses: &Loses) -> String {
 
 /// What a goal a question names holds, in brackets: its amount when it reads, and what it carries
 /// that a goal set by name does not, when it carries any; empty of neither.
-fn held_text(labels: &Labels, amount: Option<u64>, carried: Carried) -> String {
+fn goal_held_text(labels: &Labels, amount: Option<u64>, carried: Carried) -> String {
     let carried = carried.any().then(|| carried_text(labels, carried));
     match (amount, carried) {
         (Some(amount), Some(carried)) => {
