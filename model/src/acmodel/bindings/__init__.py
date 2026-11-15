@@ -3,7 +3,9 @@
 PY-6: `check_bindings` (`acmodel bindings check [--strict] [--strict-values]`) and `apply_bindings` (`acmodel bindings
 apply`), with a position-tracking scanner that changes only a literal's bytes. #464 W1 adds the rules' values and their
 origin, #466 W3 the pools' valuations, their origin and the limited mark, #466 W4a the values written by hand
-(`--strict-values`) and the fixed values the Runtime refuses beside another member of their rule.
+(`--strict-values`) and the fixed values the Runtime refuses beside another member of their rule, #466 V-a the defaults
+of the packs' integer variables (`defaults`, checked against the canonical serialization of `canonical`) and the part
+another write left beside a file `apply` writes, which it never writes over or removes.
 """
 
 from acmodel.bindings.commands import apply_bindings, check_bindings

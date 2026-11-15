@@ -10,7 +10,8 @@ readers of the model files, the expression language, the static check (`check`),
 rates from samples), its cache with incremental recompute (`cache`), provenance
 (`explain`), the exports (`export thresholds`, `export prices`, `export values`, `export valuations`, `export tables`,
 `export scoring`) with their export policy and the check of the prices' shared provenance tree (`verify prices`), the
-bindings of thresholds, values and pool valuations to the schedule (`bindings check`, `bindings apply`), the economy's LP and MILP
+bindings of thresholds, values and pool valuations to the schedule and of thresholds to the packs' variable defaults
+(`bindings check`, `bindings apply`), the economy's LP and MILP
 (`economy`), the engine host, which runs engines kept outside this repository in worker processes of its own,
 the generic search for teams over those engines (no command runs it yet) and the automatic refresh (`watch`).
 The other computation commands come in later slices.
@@ -200,16 +201,25 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   package's role: a fixed value on a rule of a maintenance-role package, which the Runtime's composer refuses too, is
   left to `actinglab standard-pack check` and the resource repository's own check (`contracts/formats.md`, "What the
   tool guarantees, and what it leaves to the composer"). With `--strict-values`, apart from `--strict`, every rule that
-  writes `fixed_value_milli` must be named by a value binding or a hand entry (`fixed_value_unregistered`).
+  writes `fixed_value_milli` must be named by a value binding or a hand entry (`fixed_value_unregistered`). A default
+  binding (`defaults`, `{threshold, variable}`) ties the `default` of an integer variable, in every pack's
+  `control.json` that declares it, to a `constant` threshold, and its `default_origin` to `"model"`: the number must lie
+  in the declaration's range on its step (never rounded or clamped), the declarations of the name must be alike once
+  written, and each such `control.json` in `actinglab package fmt`'s canonical serialization. Every `control.json` is
+  read for the origin guard too. Which problems are errors and which warnings follows one rule (`contracts/formats.md`,
+  "Errors and warnings").
 - **`bindings apply`** writes the bound literals that differ, and changes only their bytes: line ends
   (CRLF files stay CRLF) and formatting are kept. For a value it writes the origin `"model"` too when the rule has none,
   and the limited mark where the model holds it on a consumer; for a valuation W and the pool's origin; it inserts a
   member the rule or pool lacks in the style of the member before it, and never rewrites another origin
   (`origin_invalid`) or a limited mark (`limited_invalid`). It refuses what `check` refuses, other than a differing
   value or W, an absent origin or an absent limited mark (a pending value or valuation too, a hand entry's problem and a
-  fixed value the Runtime would refuse), and then writes nothing; it never writes a hand entry's value.
+  fixed value the Runtime would refuse), and then writes nothing; it never writes a hand entry's value. For a default
+  binding it writes the number into every declaration of the variable, and `default_origin: "model"` right after it.
   Each file is written as its `.part` and renamed over
-  it only when the file did not change meanwhile (`file_changed`) (`contracts/formats.md`, "Bindings").
+  it only when the file did not change meanwhile (`file_changed`) (`contracts/formats.md`, "Bindings"). A `.part` that
+  another write left beside a file to write refuses the whole apply (`part_file_present`): the tool never writes it over
+  or removes it, a person looks at it.
 - **`watch`** keeps a model's outputs for one state up to date while it runs. It is long-lived: Task Scheduler
   or WMI starts it, never an agent session, and an interrupt ends it. Every `watch.poll_interval_ms` it scans the
   model, the preference layer, the datasets and the state snapshot by size and modification time, and hashes
@@ -346,7 +356,8 @@ src/acmodel/          the package: model/ the strict readers, expr/ the expressi
                       stats/verify/gc), export/ the exports (thresholds, tables with their JCS
                       writer and validator call, scoring templates, the prices, the values and the
                       pools' valuations, the export policy), bindings/
-                      the bindings check and apply with their position-tracking scanner, host/ the
+                      the bindings check and apply with their position-tracking scanner, the
+                      packs' variable defaults and the canonical serialization of a pack file, host/ the
                       host caps (priority, Job object, memory gates, quiet windows, PAUSE file),
                       engine/ the engine host (manifest and fingerprint, workers, guards, the cached
                       call and the verify sample), watch/ the automatic refresh (scan, import hook,

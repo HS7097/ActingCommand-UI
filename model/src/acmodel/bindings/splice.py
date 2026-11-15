@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from acmodel.bindings.scanner import layout, parent, tokens
+from acmodel.bindings.scanner import layout, parent, resolve, tokens
 from acmodel.envelope import Failure
 from acmodel.model import jsonfile
 
@@ -53,6 +53,14 @@ class Layout:
         """The value at `ref` written as `data`."""
         start, end = self.values[ref]
         return Edit(start, end, data)
+
+    def integer(self, doc: Any, ref: str, value: int) -> Edit:
+        """The integer literal at `ref` written as `value`; the scanner's span must hold the literal the reader read as
+        `doc` (a defect otherwise)."""
+        start, end = self.values[ref]
+        if json.loads(self.raw[start:end]) != resolve(doc, ref):
+            raise ValueError(f"the scanner's span of {ref} does not hold its literal")
+        return Edit(start, end, str(value).encode("ascii"))
 
     def insert_after(self, anchor: str, members: list[tuple[str, bytes]]) -> Edit | None:
         """`members` (each a key and its value's bytes), in order, right after the member at the pointer `anchor`, each

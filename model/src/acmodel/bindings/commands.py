@@ -57,6 +57,12 @@ hand entry's rule writes a `fixed_value_milli` (`hand_value_missing`) in 1..2^53
 With `--strict-values`, `check` refuses every rule of schedule.json that writes `fixed_value_milli` and that no value
 binding and no hand entry names (`fixed_value_unregistered`).
 
+**Variable defaults** (#466 V-a; `bindings.defaults`). A default binding of bindings.json (`defaults`, `{threshold,
+variable}`) writes a `constant` threshold's number, as `export thresholds` computes it, into the `default` of every
+declaration of the integer variable of that name in the packs' `control.json` (`packs/<folder>/control.json`, every one
+of which is read, for the guard too), with `"default_origin": "model"` right after it; a `fact_offset` threshold is
+`binding_mismatch` `form`. What a declaration must hold, and the codes, are `bindings.defaults`'s.
+
 **Fixed values the Runtime refuses** (#466 W4a; the Runtime's `contracts/scheduling/README.md`, "Fixed values written in
 the pack", and `crates/policy/src/validation.rs` `validate_fixed_value`): a rule of a value binding or a hand entry whose
 fixed value stands beside `"maintenance": true` (the reader's `schedule_invalid`, held or not), beside
@@ -73,8 +79,12 @@ quantity of a `schedule.json` pool (#424 ACM-POOL), that is neither bound nor fi
 `apply` writes each bound literal that differs, changing only the literal's bytes, and for a value the origin and the
 members it inserts; it refuses everything `check` refuses but a differing value or origin, and then writes nothing. It
 writes each file as `<file>.part` first, reads the file again, and renames the part over it only when the file is still
-the bytes it read (`file_changed` otherwise, and the parts are removed). Neither binds a pool that is a slot resource of
-the model (`binding_mismatch`, `slot`; #424 ACM-PRICE 3.1): a slot is no Runtime pool.
+the bytes it read (`file_changed` otherwise, and the parts it wrote are removed). A part that is already there beside a
+file `apply` writes (#466 V-a, for the writes of W1 and W3 too) was left by another write, perhaps an interrupted
+adoption of the Runtime's, which trusts its `schedule.json.part`: `check` reports it and `apply` refuses the whole write
+(`part_file_present`), and neither writes it over nor removes it; a person looks at it. A part is created only where none
+is (an exclusive creation), and what fails removes only the parts this run created. Neither binds a pool that is a slot
+resource of the model (`binding_mismatch`, `slot`; #424 ACM-PRICE 3.1): a slot is no Runtime pool.
 
 `check` also reports the coverage of the prices (#424 ACM-PRICE PRICE-4a; addendum 2.1 §3.1) in `data.coverage`: what
 `export prices` delivered in `out/prices.json`, read back, as the repository's schedule.json meets it (each pool by its
@@ -95,9 +105,9 @@ import json
 import os
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, BinaryIO, Iterator
 
-from acmodel.bindings import splice
+from acmodel.bindings import defaults, splice
 from acmodel.bindings.scanner import MISSING, parent, resolve, tokens
 from acmodel.bindings.targets import (
     POLICY_FORMAT,
@@ -146,6 +156,7 @@ from acmodel.codes import (
     ORIGIN_INVALID,
     ORIGIN_MISSING,
     ORIGIN_UNBOUND,
+    PART_FILE_PRESENT,
     PRICES_STALE,
     REQUIRES_WORD_MISSING,
     RULE_REFERENCE_MISSING,
@@ -155,7 +166,7 @@ from acmodel.codes import (
 )
 from acmodel.config import Unknowns
 from acmodel.core.flow import slots
-from acmodel.core.provenance import STATE_NODES, assemble
+from acmodel.core.provenance import STATE_NODES, acceptance, assemble
 from acmodel.core.run import Run, evaluate_model
 from acmodel.core.versions import versions
 from acmodel.envelope import Failure, error
@@ -259,15 +270,19 @@ def _load(
 
 def _references(run: Run, bindings: File) -> list[dict[str, Any]]:
     """Each binding names a threshold or a value of exports.json, or a resource of the model (a valuation, #466 W3), no
-    literal is named twice, and no rule twice among the value bindings and the hand entries (#466 W4a)."""
+    literal is named twice, no rule twice among the value bindings and the hand entries (#466 W4a), each default binding
+    names a threshold and a variable no other default binding names, and no threshold binding or fixed entry names a
+    literal under `/variables` of a pack's control.json (#466 V-a, `defaults.references`)."""
     thresholds = {threshold["id"] for threshold in run.exports.doc["thresholds"]}
     values = {value["id"] for value in run.exports.doc.get("values", [])}
     errors, seen = [], {}
-    for ref, entry in _entries(bindings):
+    for ref, entry in [*_entries(bindings), *defaults.entries(bindings.doc)]:
         for member, known in (("threshold", thresholds), ("value", values)):
             if member in entry and entry[member] not in known:
                 detail = {"path": bindings.path, "target": entry[member], "expected": [member]}
                 errors.append(error(RULE_REFERENCE_MISSING, detail, at(ref, member)))
+        if "file" not in entry:  # a default binding names no file
+            continue
         key = (entry["file"], entry.get("rule_id"), entry.get("pool_id"), entry["path"])
         if key in seen:
             name = ":".join(part for part in key if part is not None)
@@ -278,17 +293,21 @@ def _references(run: Run, bindings: File) -> list[dict[str, Any]]:
             seen[key] = ref
     errors.extend(valuation_export.problems(run, bindings.path, valuation_export.bound(bindings.doc)))
     errors.extend(_hand_references(bindings))
+    errors.extend(defaults.references(bindings.path, bindings.doc, _entries(bindings)))
     return errors
 
 
-def _targets(run: Run, bindings: File, scan: bool) -> tuple[Path, dict[str, Target]]:
+def _targets(run: Run, bindings: File, scan: bool) -> tuple[Path, dict[str, Target], list[defaults.Control]]:
     """The repository and every file the entries name, and `schedule.json` when it is there (the origin guard reads it),
     when a hand entry names one of its rules (#466 W4a) or under `--strict` or `--strict-values` (`scan`), each read
-    once."""
+    once; and every pack's control.json (#466 V-a: the default bindings and the guard over the packs read them all), each
+    with the places of its variables (`defaults.read_control`)."""
     repo = run.folder.parent.parent
     names = dict.fromkeys(entry["file"] for _, entry in _entries(bindings))
     if scan or bindings.doc.get(HAND) or (repo / SCHEDULE_FILE).exists():
         names.setdefault(SCHEDULE_FILE)
+    control_names = defaults.control_names(repo)
+    names.update((name, None) for name in control_names if name not in names)
     targets, errors = {}, []
     for name in names:
         try:
@@ -296,16 +315,29 @@ def _targets(run: Run, bindings: File, scan: bool) -> tuple[Path, dict[str, Targ
         except Failure as failure:
             errors.extend(failure.errors)
     _raise(errors)
-    return repo, targets
+    controls = []
+    for name in control_names:
+        try:
+            controls.append(defaults.read_control(targets[name]))
+        except Failure as failure:
+            errors.extend(failure.errors)
+    _raise(errors)
+    return repo, targets, controls
 
 
 def _values(run: Run, bindings: File) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     """The thresholds.json entry of each bound threshold, as `export thresholds` writes it, and the refusals
-    of the others, followed by the errors that block them."""
+    of the others, followed by the errors that block them. A default binding's threshold is one of them when it is a
+    `constant` (#466 V-a; one of the `fact_offset` form is `binding_mismatch` `form`, `_default_plans`)."""
     thresholds = run.exports.doc["thresholds"]
     index = {threshold["id"]: (position, threshold) for position, threshold in enumerate(thresholds)}
     values, refusals = {}, []
-    for name in dict.fromkeys(entry["threshold"] for entry in bindings.doc["bindings"] if "threshold" in entry):
+    wanted = [entry["threshold"] for entry in bindings.doc["bindings"] if "threshold" in entry]
+    wanted += [
+        entry["threshold"] for _, entry in defaults.entries(bindings.doc)
+        if index[entry["threshold"]][1]["form"] == "constant"
+    ]
+    for name in dict.fromkeys(wanted):
         position, threshold = index[name]
         entry = threshold_entry(run, position, threshold, {})
         if entry.get("code") != EXPORT_REFUSED:
@@ -791,10 +823,7 @@ class _ValuationPlan:
 
 def _literal_edit(layout: splice.Layout, target: Target, ref: str, value: int) -> splice.Edit:
     """The literal at `ref` written as `value`; the scanner's span must hold the literal the reader read."""
-    start, end = layout.values[ref]
-    if json.loads(target.raw[start:end]) != resolve(target.doc, ref):
-        raise ValueError(f"the scanner's span of {ref} does not hold its literal")
-    return splice.Edit(start, end, str(value).encode("ascii"))
+    return layout.integer(target.doc, ref, value)
 
 
 HAND_OPTIONAL = ("to_replace_with", "inherited_from", "note")
@@ -848,6 +877,53 @@ def _hand(
                    "ref": entry["ref"]}
     shown_entry.update({key: entry[key] for key in HAND_OPTIONAL if key in entry})
     return [], warnings, shown_entry
+
+
+def _default_plans(
+    run: Run, bindings: File, values: dict[str, dict[str, Any]], controls: list[defaults.Control], layouts: _Layouts
+) -> tuple[list[defaults.DefaultPlan], list[dict[str, Any]]]:
+    """Each default binding's plan (#466 V-a, `defaults.DefaultPlan`) whose threshold is exported, and the errors of the
+    others: a threshold of the `fact_offset` form is `binding_mismatch` `form` (a default holds one integer, never a fact
+    plus an offset; at the entry's threshold); one the export refuses is refused above (`_values`), and its binding has no
+    plan. The number is the threshold's `value`, its status as the export writes it, and its acceptance when it is
+    provisional."""
+    forms = {threshold["id"]: threshold["form"] for threshold in run.exports.doc["thresholds"]}
+    plans, errors = [], []
+    for ref, entry in defaults.entries(bindings.doc):
+        name = entry["threshold"]
+        if forms[name] != "constant":
+            detail = {"path": bindings.path, "entry": ref, "reason": "form", "threshold": name,
+                      "variable": entry["variable"]}
+            errors.append(error(BINDING_MISMATCH, detail, at(ref, "threshold")))
+            continue
+        if name not in values:
+            continue
+        output = "threshold:" + name
+        accepted = acceptance(run, output)
+        acceptances = [] if accepted is None else [
+            {"output": output, "ref": accepted["accept_provisional"]["ref"],
+             "until": accepted["accept_provisional"]["until"]}
+        ]
+        found = values[name]
+        plans.append(defaults.DefaultPlan(
+            bindings.path, ref, entry, found["value"], found["status"], acceptances, controls, layouts
+        ))
+    return plans, errors
+
+
+def _present(target: Target) -> dict[str, Any]:
+    """`part_file_present`: the part of a file `apply` writes is there already (#466 V-a)."""
+    return error(PART_FILE_PRESENT, {"path": str(target.path), "part": str(_part(target))})
+
+
+def _parts_present(targets: list[Target]) -> list[dict[str, Any]]:
+    """`part_file_present` for each file `apply` writes (each once) beside which a `<file>.part` is there already, a file,
+    a folder or a link: another write left it (an interrupted `apply`, or an interrupted adoption of a standard pack,
+    which writes `schedule.json.part` and trusts it to finish the adoption; the Runtime's standard-pack-authoring, "If a
+    call was interrupted"). The tool never writes it over and never removes it: a person looks at it first."""
+    found = dict.fromkeys(target.name for target in targets)
+    by_name = {target.name: target for target in targets}
+    return [_present(by_name[name]) for name in found if os.path.lexists(_part(by_name[name]))]
 
 
 def _requires(targets: dict[str, Target], bindings: File) -> list[dict[str, Any]]:
@@ -1091,10 +1167,13 @@ def check_bindings(
     it (`_coverage`), and `data.values` and `data.valuations` whether out/values.json and out/valuations.json are current;
     the warnings are `precision_low`, the limited reports (#466 W3), the conflicts of a held rule (#466 W4a) and a held
     rule's hand-written value out of range (fix3), with the errors too, then, only without errors, `prices_stale`,
-    `values_stale` and `valuations_stale`."""
+    `values_stale` and `valuations_stale`. Each variable a default binding names is checked in every declaration
+    (#466 V-a, `defaults.DefaultPlan`), each control.json that declares one is canonical, and the guard covers the packs'
+    `default_origin` too; `data.defaults` shows each default binding and `data.control_files` how many control.json files
+    were read. A part already beside a file with a difference `apply` writes is `part_file_present` (#466 V-a)."""
     run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
-    repo, targets = _targets(run, bindings, strict or strict_values)
+    repo, targets, controls = _targets(run, bindings, strict or strict_values)
     values, errors = _values(run, bindings)
     valued, refused = _valued(run, bindings)
     errors.extend(refused)
@@ -1102,7 +1181,8 @@ def check_bindings(
     weighed, refused = _valuated(run, bindings, targets, slot_ids)
     errors.extend(refused)
     errors.extend(_requires(targets, bindings))
-    bound, fixed, hands, warnings = [], [], [], []
+    bound, fixed, hands, shown_defaults, warnings = [], [], [], [], []
+    differing: list[Target] = []  # the files with a difference `apply` writes
     layouts = _Layouts()
     limits = _limits(run)
     held = _held(targets.get(SCHEDULE_FILE))
@@ -1113,6 +1193,7 @@ def check_bindings(
                 plan = _ValuePlan(literal, valued[entry["value"]], layouts, limits, held)
                 errors.extend(plan.problems + plan.differences)
                 warnings.extend(plan.warnings)
+                differing.extend([literal.target] if plan.differences else [])
                 if not plan.problems:
                     bound.append(plan.described())
             continue
@@ -1121,6 +1202,7 @@ def check_bindings(
                 warnings.extend(weighed[ref].warnings)
                 valuation = _ValuationPlan(literal, weighed[ref], layouts)
                 errors.extend(valuation.problems + valuation.differences)
+                differing.extend([literal.target] if valuation.differences else [])
                 if not valuation.problems:
                     bound.append(valuation.described())
             continue
@@ -1136,6 +1218,7 @@ def check_bindings(
             errors.extend(problems)
             if expected is not None and literal.value != expected:
                 errors.append(literal.mismatch("value", expected=str(expected), found=str(literal.value)))
+                differing.append(literal.target)
             bound.append({**literal.describe(), "form": value["form"], "literal": literal.value})
     for ref, entry in _hand_entries(bindings):
         problems, found, shown_entry = _hand(targets, held, ref, entry)
@@ -1143,10 +1226,20 @@ def check_bindings(
         warnings.extend(found)
         if shown_entry is not None:
             hands.append(shown_entry)
+    plans, refused = _default_plans(run, bindings, values, controls, layouts)
+    errors.extend(refused)
+    for default in plans:
+        errors.extend(default.problems + default.differences)
+        differing.extend(targets[name] for name in default.differing)
+        if not default.problems:
+            shown_defaults.append(default.described())
+    variables = defaults.bound(bindings.doc)
+    errors.extend(defaults.not_canonical(controls, variables))
     errors.extend(_unbound_origins(targets, bindings))
+    errors.extend(defaults.unbound_origins(controls, variables))
     data = {
         **run.head, "repo": str(repo), "strict": strict, "strict_values": strict_values, "bindings": bound,
-        "fixed": fixed, "hand": hands,
+        "fixed": fixed, "hand": hands, "defaults": shown_defaults, "control_files": len(controls),
     }
     if strict:
         data["literals"], unbound = _unbound(targets[SCHEDULE_FILE], bindings)
@@ -1154,6 +1247,7 @@ def check_bindings(
     if strict_values:
         data["fixed_values"], unregistered = _unregistered(targets[SCHEDULE_FILE], bindings)
         errors.extend(unregistered)
+    errors.extend(_parts_present(differing))
     _raise(errors, warnings)
     data["coverage"], stale_prices = _coverage(run, repo, targets)
     data["values"], stale_values = _values_file(run)
@@ -1169,10 +1263,31 @@ def _part(target: Target) -> Path:
     return target.path.with_name(target.path.name + PART)
 
 
+class _Unwritten(Exception):
+    """A part this run created and could not write (#466 V-a): it is this run's, so it is removed with the others."""
+
+    def __init__(self, part: Path, cause: OSError) -> None:
+        super().__init__(str(part))
+        self.part, self.cause = part, cause
+
+
+def _create(part: Path) -> BinaryIO:
+    """A part, created by this run (#466 V-a): an exclusive creation, so one that is there already, whoever left it, is
+    never written over (`FileExistsError`, and nothing is created). A folder there is refused too, but on Windows as a
+    `PermissionError` (fix1): `_commit` looks again before it calls that a failure."""
+    return open(part, "xb")
+
+
 def _stage(target: Target, raw: bytes) -> Path:
-    """The new bytes of a file written beside it, as `<file>.part`."""
+    """The new bytes of a file written beside it, as `<file>.part`, which this run creates (`_create`). A part it created
+    and then could not write is `_Unwritten`."""
     part = _part(target)
-    part.write_bytes(raw)
+    handle = _create(part)
+    try:
+        with handle:
+            handle.write(raw)
+    except OSError as exc:
+        raise _Unwritten(part, exc) from exc
     return part
 
 
@@ -1198,15 +1313,24 @@ def _discard(parts: list[Path]) -> list[dict[str, Any]]:
 
 def _commit(staged: list[tuple[Target, bytes]]) -> None:
     """Write every file: first each as its part, then, when every file is still the bytes that were read, each part
-    renamed over its file. A file changed since (or no longer readable) is `file_changed`, and every part is removed
-    again, so nothing is written. A part that cannot be written or renamed is `export_write_failed`; the files renamed
-    before it stay written, and `apply` can run again."""
+    renamed over its file. A file changed since (or no longer readable) is `file_changed`, and every part this run wrote
+    is removed again, so nothing is written. A part that is there when this run would create it (another write left it
+    after `apply` looked, #466 V-a; a file, or a folder, which Windows refuses as a `PermissionError`, fix1) is
+    `part_file_present`: it is neither written over nor removed, and the parts this run wrote before are removed again.
+    A part that cannot be written or renamed is `export_write_failed`; only this run's parts are removed (one it created
+    and could not write too), the files renamed before it stay written, and `apply` can run again."""
     parts: list[Path] = []
     for target, raw in staged:
         try:
             parts.append(_stage(target, raw))
-        except OSError as exc:
-            raise Failure(_failed(_part(target), exc), *_discard([*parts, _part(target)])) from exc
+        except FileExistsError:
+            raise Failure(_present(target), *_discard(parts)) from None
+        except _Unwritten as exc:
+            raise Failure(_failed(exc.part, exc.cause), *_discard([*parts, exc.part])) from exc.cause
+        except OSError as exc:  # nothing was created
+            if os.path.lexists(_part(target)):  # another write's part, as a folder on Windows (fix1)
+                raise Failure(_present(target), *_discard(parts)) from None
+            raise Failure(_failed(_part(target), exc), *_discard(parts)) from exc
     changed = []
     for target, _ in staged:
         try:
@@ -1234,10 +1358,14 @@ def apply_bindings(
     must read back as the document the edits make, and every file is renamed from its part only when it is still the
     bytes that were read (`_commit`). The warnings (`precision_low`, the limited reports, #466 W3, the conflicts of a held
     rule, #466 W4a, and a held rule's hand-written value out of range, fix3) are reported, and change nothing. A hand
-    entry's value is never written."""
+    entry's value is never written. Each default binding (#466 V-a) writes its number into every declaration of its
+    variable and inserts the origin `"model"` after it; the edited control files must be canonical, keep alike the
+    declarations that were alike and leave every declaration of a bound variable alike (`defaults.check_written`). A
+    part already beside a file it writes refuses the whole write (`part_file_present`), and nothing is written or
+    removed."""
     run, bindings = _load(path, state_path, datasets=datasets, max_bits=max_bits, unknowns=unknowns)
     _raise(_references(run, bindings))
-    repo, targets = _targets(run, bindings, False)
+    repo, targets, controls = _targets(run, bindings, False)
     values, errors = _values(run, bindings)
     valued, refused = _valued(run, bindings)
     errors.extend(refused)
@@ -1290,14 +1418,30 @@ def apply_bindings(
         problems, found, _ = _hand(targets, held, ref, entry)
         errors.extend(problems)
         warnings.extend(found)
+    plans, refused = _default_plans(run, bindings, values, controls, layouts)
+    errors.extend(refused)
+    for default in plans:
+        errors.extend(default.problems)
+        if default.problems:
+            continue
+        for name, file_edits in default.edits.items():
+            edits.setdefault(name, []).extend(file_edits)
+            default.expect(name, expected.setdefault(name, copy.deepcopy(targets[name].doc)))
+        changed.extend(default.changed())
+    variables = defaults.bound(bindings.doc)
+    errors.extend(defaults.not_canonical(controls, variables))
     errors.extend(_unbound_origins(targets, bindings))
+    errors.extend(defaults.unbound_origins(controls, variables))
+    errors.extend(_parts_present([targets[name] for name in edits]))
     _raise(errors, warnings)
-    staged = []
+    staged, made = [], {}  # made: each edited file's bytes and the document they read back as
     for name, file_edits in edits.items():
         target = targets[name]
         raw = splice.apply(target.raw, file_edits)
         splice.check(raw, expected[name], target.path, SCHEDULE_FORMAT if name == SCHEDULE_FILE else POLICY_FORMAT)
         staged.append((target, raw))
+        made[name] = (raw, expected[name])
+    defaults.check_written(controls, variables, made)
     _commit(staged)
     written = [str(target.path) for target, _ in staged]
     return {**run.head, "repo": str(repo), "changed": changed, "written": sorted(written)}, warnings
