@@ -199,9 +199,10 @@ model\acmodel.cmd watch <resource repo>\ours\model --state <state snapshot>
   marker is an error, one code each; on a held package's rule, which the Runtime does not compose yet, the last three are
   warnings, and `"maintenance": true` stays an error (the Runtime's reader reads every rule). The tool does not read a
   package's role: a fixed value on a rule of a maintenance-role package, which the Runtime's composer refuses too, is
-  left to `actinglab standard-pack check` and the resource repository's own check (`contracts/formats.md`, "What the
-  tool guarantees, and what it leaves to the composer"). With `--strict-values`, apart from `--strict`, every rule that
-  writes `fixed_value_milli` must be named by a value binding or a hand entry (`fixed_value_unregistered`). A default
+  left to the composer, which the resource repository's local validation runs before every merge (`actinglab
+  standard-pack check`; `contracts/formats.md`, "What the tool guarantees, and what it leaves to the composer").
+  With `--strict-values`, apart from `--strict`, every rule that writes `fixed_value_milli` must be named by a value
+  binding or a hand entry (`fixed_value_unregistered`). A default
   binding (`defaults`, `{threshold, variable}`) ties the `default` of an integer variable, in every pack's
   `control.json` that declares it, to a `constant` threshold, and its `default_origin` to `"model"`: the number must lie
   in the declaration's range on its step (never rounded or clamped), the declarations of the name must be alike once
