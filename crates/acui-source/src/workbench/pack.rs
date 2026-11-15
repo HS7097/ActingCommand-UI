@@ -372,15 +372,15 @@ pub fn close_then_stop(root: &Path, alias: &str, package: &str, run: RunKey) -> 
 }
 
 /// Whether the Runtime answered a write `fact_observation_not_newer` and went on: the one refusal
-/// sent again.
-fn refused_not_newer(error: &RuntimeClientError) -> bool {
+/// sent again, of a goal's write too (`super::goals::edit`).
+pub(super) fn refused_not_newer(error: &RuntimeClientError) -> bool {
     answered(error)
         && error.receipt_outcome().is_some_and(|outcome| outcome.code().as_str() == NOT_NEWER)
 }
 
 /// Whether a failed request was answered with a refusal the Runtime went on after, and nothing
 /// leaves it uncertain.
-fn answered(error: &RuntimeClientError) -> bool {
+pub(super) fn answered(error: &RuntimeClientError) -> bool {
     error.projection().is_some_and(|refusal| !refusal.fatal)
         && !matches!(error.disposition(), RuntimeClientErrorClass::Uncertain)
 }

@@ -12,7 +12,7 @@ use std::mem;
 use std::time::Instant;
 
 use acui_source::workbench::device::DeviceOp;
-use acui_source::workbench::goals::{GoalsAnswer, GoalsRead};
+use acui_source::workbench::goals::{self, GoalAct, GoalsAnswer, GoalsPage, GoalsRead};
 use acui_source::workbench::pack::{self, PacksAnswer, PacksRead};
 use acui_source::workbench::{
     ActivityKind, ConfigRead, ExplainRead, FenceFact, InstanceLive, LiveRead, LiveSnapshot,
@@ -22,7 +22,7 @@ use acui_source::{ClientFailure, PauseFact};
 
 use super::actions::{self, AccountEntry, Actions, ActionsView, PresetView, RulesView};
 use super::card::{self, CardView, Down, Schedule};
-use super::goals::GoalsView;
+use super::goals::{GoalPressed, GoalRequest, GoalsView, WriteTarget, Writes};
 use super::picture::{
     Doing, LinkNow, Offline, PictureView, Pictures, PreviewGate, RefreshHold, RefreshView,
 };
@@ -274,13 +274,15 @@ pub struct Model {
     goals_fault: Option<Fault>,
     /// The right column's tab, and its daily task list's read and whether its line of tasks
     /// without a package is open (UI-3f1); its switches' read, and each account's presses of them
-    /// (UI-3f2), which a restart lets go of (`super::switch::restarted`); and its goals' read.
+    /// (UI-3f2), which a restart lets go of (`super::switch::restarted`); and its goals' read, and
+    /// each account's writes of them (Workflow #455 G2), likewise (`super::goals::restarted`).
     right_tab: RightTab,
     tasks: TasksSlice,
     tasks_fold_open: bool,
     packs: PacksSlice,
     switches: Switches,
     goals: GoalsSlice,
+    goal_writes: Writes,
     /// The lines the log got about codes the cards have no words for: once each.
     told_codes: BTreeSet<String>,
     actions: Actions,
@@ -426,6 +428,7 @@ impl Model {
             packs: PacksSlice::default(),
             switches: Switches::default(),
             goals: GoalsSlice::default(),
+            goal_writes: Writes::default(),
             told_codes: BTreeSet::new(),
             actions: Actions::default(),
             page: Page::Main,
@@ -1061,12 +1064,14 @@ impl Model {
 
     /// The slow thread is told to read the goals of `wanted` from now on, or none: whether that
     /// changed. A change lets go of all that was read, so the tab says it is reading until an
-    /// answer of that account comes.
+    /// answer of that account comes. What each write came to is not let go by the tab hidden and
+    /// shown again, only by its showing another account than it last did (`Writes::follow`).
     pub fn goals_follow(&mut self, wanted: Option<&str>) -> bool {
         if self.goals.of.as_deref() == wanted {
             return false;
         }
         self.goals = GoalsSlice { of: wanted.map(str::to_owned), ..GoalsSlice::default() };
+        self.goal_writes.follow(wanted);
         true
     }
 
@@ -1101,6 +1106,8 @@ impl Model {
                     landed.unsupported = Some((epoch.clone(), *code));
                 }
                 landed.counted = true;
+                // The read a write's answer waited for.
+                self.goal_writes.read(alias);
                 let recovered = slice.error.take().is_some();
                 slice.value = Some(read);
                 slice.read_at = Some(now);
@@ -1160,13 +1167,117 @@ impl Model {
                 GoalsView::Unsupported(*code)
             }
             _ if self.goals_late(now) => GoalsView::Late,
-            Some(GoalsRead { answer: GoalsAnswer::Read(loaded), .. }) => {
+            Some(GoalsRead { answer: GoalsAnswer::Read(loaded), epoch, .. }) => {
                 let pack_title =
                     |package: &str| self.task_title(package, language).map(str::to_owned);
-                GoalsView::Read(loaded.page(language.outcome_tongue(), &pack_title))
+                let page = loaded.page(language.outcome_tongue(), &pack_title);
+                let writes = self.goal_writes.now(&instance.alias, epoch, page.writable());
+                GoalsView::Read(page, writes)
             }
             None => GoalsView::Reading,
         }
+    }
+
+    /// The page the Goals tab shows now, of the account and owner epoch its newest read is of, as a
+    /// press reads it: none but while `goals_view` shows its lines. It is made as `goals_view`
+    /// makes it, in `language` with the packages' names, since a question a press asks says what it
+    /// loses in the page's words (an option's title, a number's unit).
+    fn goals_page_now(
+        &self,
+        now: Instant,
+        language: Language,
+    ) -> Option<(String, String, GoalsPage)> {
+        let alias = self.goals_wanted()?;
+        let epoch = self.online_epoch()?.to_owned();
+        let thread_gone = matches!(self.slow_fault, Some(Fault::NoThread(_)));
+        if self.goals_fault.is_some() || thread_gone || self.goals.error.is_some() {
+            return None;
+        }
+        if self.goals.of.as_deref() != Some(alias.as_str()) || self.goals_late(now) {
+            return None;
+        }
+        let Some(GoalsRead { answer: GoalsAnswer::Read(loaded), epoch: read_epoch, .. }) =
+            &self.goals.value
+        else {
+            return None;
+        };
+        if *read_epoch != epoch {
+            return None;
+        }
+        let pack_title = |package: &str| self.task_title(package, language).map(str::to_owned);
+        let page = loaded.page(language.outcome_tongue(), &pack_title);
+        Some((alias, epoch, page))
+    }
+
+    /// A press `act` on the line `key` of the Goals tab (Workflow #455 G2), shown in `language`:
+    /// what it writes, of the page shown while its controls can be pressed (`Writes::now`), as
+    /// `goals::press` decides it, naming the page's version; asked first when it loses what the
+    /// page cannot set back.
+    pub fn goal_pressed(&mut self, key: &str, act: &GoalAct, language: Language) -> GoalPressed {
+        let Some((alias, epoch, page)) = self.goals_page_now(Instant::now(), language) else {
+            return GoalPressed::Nothing;
+        };
+        if !self.goal_writes.now(&alias, &epoch, page.writable()).enabled {
+            return GoalPressed::Nothing;
+        }
+        let Some(press) = page.line(key).and_then(|line| goals::press(line, act)) else {
+            return GoalPressed::Nothing;
+        };
+        let target =
+            WriteTarget { key: key.to_owned(), write: press.write, expected: page.version, epoch };
+        match press.asks {
+            Some(loses) => {
+                self.goal_writes.ask(&alias, target, act.clone(), loses);
+                GoalPressed::Asked
+            }
+            None => match self.goal_writes.press(&alias, target) {
+                Some(request) => GoalPressed::Send(alias, request),
+                None => GoalPressed::Nothing,
+            },
+        }
+    }
+
+    /// The question on the Goals tab confirmed, shown in `language`: the account and the request to
+    /// send, none when there is none to send now (`Writes::confirm`). Its press is reckoned again
+    /// here on the newest page read, made as a press reads it, of the same line: none while that
+    /// page does not show or takes no writes, else what `goals::press` says of it now, with that
+    /// page's version.
+    pub fn goal_confirmed(&mut self, language: Language) -> Option<(String, GoalRequest)> {
+        let alias = self.goals_wanted()?;
+        let epoch = self.online_epoch()?.to_owned();
+        let again = self.goals_page_now(Instant::now(), language).and_then(|(_, _, page)| {
+            if !page.writable() {
+                return None;
+            }
+            let (key, act) = self.goal_writes.question(&alias)?;
+            let press = goals::press(page.line(key)?, act)?;
+            Some((press, page.version))
+        });
+        let request = self.goal_writes.confirm(&alias, &epoch, again)?;
+        Some((alias, request))
+    }
+
+    /// The question on the Goals tab cancelled.
+    pub fn goal_cancelled(&mut self) {
+        if let Some(alias) = self.goals_wanted() {
+            self.goal_writes.cancel(&alias);
+        }
+    }
+
+    /// The amount typed on the resource line `key` of the Goals tab.
+    pub fn goal_amount(&self, key: &str) -> String {
+        self.goals_wanted().map_or_else(String::new, |alias| self.goal_writes.amount(&alias, key))
+    }
+
+    /// The amount on the resource line `key` of the Goals tab typed as `text`.
+    pub fn goal_amount_edited(&mut self, key: &str, text: &str) {
+        if let Some(alias) = self.goals_wanted() {
+            self.goal_writes.amount_edited(&alias, key, text);
+        }
+    }
+
+    pub fn goal_writes_mut(&mut self) -> &mut Writes {
+        &mut self.goal_writes
     }
 
     pub fn pictures(&self) -> &Pictures {

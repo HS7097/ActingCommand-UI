@@ -13,7 +13,7 @@
 //! it says so the account's rules panel in the picture's place (UI-3e1-b). And which of the right
 //! column's three tabs shows, under the second the account's daily task list (UI-3f1), its
 //! reasons in the cards' words, and its packages' switches (UI-3f2), and under the third its goals
-//! (Workflow #455 T1-C, read only).
+//! (Workflow #455 T1-C), with the controls of those it sets (G2).
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -26,9 +26,11 @@ use acui_source::workbench::backends::{
 };
 use acui_source::workbench::device::{DeviceDone, DeviceOp, Startup};
 use acui_source::workbench::goals::{
-    newer_than_this_console, Closed, Declaration, Form, GoalLine, GoalsPage, Group, LabEntry,
-    OtherTarget, PageState, Pending, PoolState, Progress, Reading, ResourceLine, SetBy, Setter,
-    Shown, Stored, StoredGoal, TimeUnit, Unapplied, VariableLine, VariableState,
+    amount as goal_amount, newer_than_this_console, AmountProblem, Carried, ClearOffer, Closed,
+    Declaration, Form, GoalLine, GoalsPage, Group, LabEntry, Loses, OtherTarget, PageState,
+    Pending, PoolState, Progress, Reading, Removed, ResourceLine, SetBy, Setter, Shown, Stored,
+    StoredGoal, TimeUnit, Unapplied, ValueControl, VariableLine, VariableState, WriteInvalid,
+    WriteProblem,
 };
 use acui_source::workbench::pack::{PackSource, PackState};
 use acui_source::workbench::preview::Overlay;
@@ -49,7 +51,7 @@ use super::actions::{
     StepperView, Write, PRESET_ADAPTIVE, PRESET_LIGHT, PRESET_STANDARD,
 };
 use super::card::{reason_logged, Band, CardView, Down, Line, ReasonClass};
-use super::goals::GoalsView;
+use super::goals::{GoalSaid, GoalsView, WritesNow};
 use super::model::{Fault, Page, RightTab};
 use super::picture::{
     DimWhy, Doing, EmptyWhy, Offline, Origin, OverlayView, PictureView, RefreshHold, RefreshWhyNot,
@@ -73,7 +75,8 @@ use crate::report;
 use crate::strings::{fill, outcome_short, Labels};
 use crate::ui::Ui;
 use crate::{
-    AccountCard, BackendGroupItem, GoalListData, GoalRowData, GoalRowKind, IdlePick, OverlayItem,
+    AccountCard, BackendGroupItem, GoalControl, GoalListData, GoalRowData, GoalRowKind, IdlePick,
+    OverlayItem,
     PresetChoice, QuietData, QuietEditor, QuietLine, RescueBar, RescueOp, RulesData, SettingItem,
     StatusTone, TargetItem, TaskListData, TaskRowData, TaskTone, WorkbenchPage, WorkbenchTab,
     WorkbenchWindow,
@@ -2970,17 +2973,23 @@ pub fn tasks(ui: &Ui) {
     goals(ui, &window, labels, tab);
 }
 
-/// Under the third tab, the account's goal page (Workflow #455, #463 V3, read only), from its view:
-/// why there are no lines, a failure with its codes; or around the lines how the page stands, what
-/// cannot be read of the targets stored, when it was read, and under them the old form's note and
-/// the validity. Each line as `goal_row` says. Under another tab the list holds nothing.
+/// Under the third tab, the account's goal page (Workflow #455, #463 V3), from its view: why there
+/// are no lines, a failure with its codes; or around the lines how the page stands, what cannot be
+/// read of the targets stored, when it was read, and under them the old form's note and the
+/// validity. Each line as `goal_row` says, with its controls (G2). A choice's options keep the
+/// list the window shows of them while their words do not change, so a paint closes no open box.
+/// Under another tab the list holds nothing.
 fn goals(ui: &Ui, window: &WorkbenchWindow, labels: &Labels, tab: RightTab) {
     let view = match tab {
         RightTab::Goals => Some(ui.model.borrow().goals_view(Instant::now(), labels.tongue)),
         RightTab::Picture | RightTab::Tasks => None,
     };
+    let shown = window.get_goal_rows();
+    let old = |at: usize| -> Option<GoalRowData> {
+        shown.as_any().downcast_ref::<VecModel<GoalRowData>>()?.row_data(at)
+    };
     let (data, rows) = match &view {
-        Some(view) => goals_data(labels, view),
+        Some(view) => goals_data(ui, labels, view, &old),
         None => (GoalListData::default(), Vec::new()),
     };
     sync(window.get_goal_rows(), rows, |rows| window.set_goal_rows(rows));
@@ -2989,8 +2998,14 @@ fn goals(ui: &Ui, window: &WorkbenchWindow, labels: &Labels, tab: RightTab) {
     }
 }
 
-/// What the Goals tab says instead of its rows, or its page.
-fn goals_data(labels: &Labels, view: &GoalsView) -> (GoalListData, Vec<GoalRowData>) {
+/// What the Goals tab says instead of its rows, or its page; `old` the row the window shows at a
+/// place.
+fn goals_data(
+    ui: &Ui,
+    labels: &Labels,
+    view: &GoalsView,
+    old: &dyn Fn(usize) -> Option<GoalRowData>,
+) -> (GoalListData, Vec<GoalRowData>) {
     let instead = |text: String, failed: bool, warning: bool| GoalListData {
         instead: text.into(),
         instead_failed: failed,
@@ -3014,7 +3029,7 @@ fn goals_data(labels: &Labels, view: &GoalsView) -> (GoalListData, Vec<GoalRowDa
         GoalsView::Unsupported(code) => {
             instead(fill(labels.goals_unsupported, &[*code]), false, true)
         }
-        GoalsView::Read(page) => return goals_page(labels, page),
+        GoalsView::Read(page, writes) => return goals_page(ui, labels, page, writes, old),
     };
     (data, Vec::new())
 }
@@ -3040,8 +3055,15 @@ fn failure_codes_text(failure: &ClientFailure) -> String {
 /// and when it was read. Its lines, but on a page that lists nothing. Under them, while the page
 /// lists: the old form's note, and the stored targets' validity (for a per-target record only
 /// once every target expired, each target's own being on its line; "none set" only while the page
-/// has a resource line).
-fn goals_page(labels: &Labels, page: &GoalsPage) -> (GoalListData, Vec<GoalRowData>) {
+/// has a resource line). In amber, once, a Runtime that takes no writes of goals: the page only
+/// shows.
+fn goals_page(
+    ui: &Ui,
+    labels: &Labels,
+    page: &GoalsPage,
+    writes: &WritesNow,
+    old: &dyn Fn(usize) -> Option<GoalRowData>,
+) -> (GoalListData, Vec<GoalRowData>) {
     let document = match &page.stored {
         Stored::Document(document) => Some(document),
         Stored::None => None,
@@ -3090,10 +3112,14 @@ fn goals_page(labels: &Labels, page: &GoalsPage) -> (GoalListData, Vec<GoalRowDa
     if page.stale_schema {
         notice.push(labels.goals_stale.to_owned());
     }
+    if listed && writes.unsupported {
+        notice.push(labels.goals_write_unsupported.to_owned());
+    }
     if listed && page.no_catalog {
         said.push(labels.goals_no_catalog.to_owned());
     }
-    let old = if listed && matches!(form, Some(Form::Old)) { labels.goals_form_old } else { "" };
+    let form_note =
+        if listed && matches!(form, Some(Form::Old)) { labels.goals_form_old } else { "" };
     let resources = page.lines.iter().any(|line| matches!(line, GoalLine::Resource(_)));
     let (validity, expired) = match document {
         _ if !listed => (String::new(), false),
@@ -3119,16 +3145,353 @@ fn goals_page(labels: &Labels, page: &GoalsPage) -> (GoalListData, Vec<GoalRowDa
         notice: notice.join("\n").into(),
         read_at: fill(labels.goals_read_at, &[&format_minute(page.evaluated_at_ms)]).into(),
         said: said.join("\n").into(),
-        form: old.into(),
+        form: form_note.into(),
         document: validity.into(),
         document_warning: expired,
     };
     let rows = if listed {
-        page.lines.iter().map(|line| goal_row(labels, line)).collect()
+        page.lines
+            .iter()
+            .enumerate()
+            .map(|(at, line)| {
+                let row = goal_row(labels, line);
+                goal_controls(ui, labels, row, line, writes, old(at).as_ref())
+            })
+            .collect()
     } else {
         Vec::new()
     };
     (data, rows)
+}
+
+/// A line's controls (Workflow #455 G2), over its words: what names it to a press; a resource's
+/// amount where its pool takes a goal here, with why what is typed is no amount; in amber, on any
+/// resource line, that its goal was set elsewhere; a choice's options (side by side up to four,
+/// else a drop-down) or a switch, at the value the next run reads; the clear it has; an other
+/// target the Lab alone can clear, so said in grey, as is a value no longer offered, an other
+/// target or a variable's value whose name another line has, which no clear here is sure to reach.
+/// Then what its last press came to and the question a press asks, if either. All of them are off
+/// while the page takes no press (`WritesNow::enabled`).
+fn goal_controls(
+    ui: &Ui,
+    labels: &Labels,
+    mut row: GoalRowData,
+    line: &GoalLine,
+    writes: &WritesNow,
+    old: Option<&GoalRowData>,
+) -> GoalRowData {
+    let Some(key) = line.key() else {
+        return row;
+    };
+    let mut warnings: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    row.enabled = writes.enabled;
+    row.chosen = -1;
+    match line {
+        GoalLine::Resource(resource) => {
+            if resource.settable() {
+                let typed = writes.amounts.get(&key).cloned().unwrap_or_default();
+                row.control = GoalControl::Amount;
+                row.settable = true;
+                row.amount_placeholder = labels.goals_amount_placeholder.into();
+                match goal_amount(&typed) {
+                    Ok(_) => row.set_ready = true,
+                    Err(AmountProblem::Empty) => {}
+                    Err(problem) => row.amount_problem = amount_problem_text(labels, problem).into(),
+                }
+                row.amount_text = typed.into();
+            }
+            // Wherever its pool stands: a pool that takes no goal here now still has its clear.
+            if resource.elsewhere.is_some() {
+                warnings.push(labels.goals_set_elsewhere.to_owned());
+            }
+            if resource.goal.is_some() {
+                row.clear_label = labels.goals_clear.into();
+            }
+        }
+        // Only one a value can be set on has its control: not one no bound package offers, nor one
+        // the game root does not apply, which say so in their words.
+        GoalLine::Variable(variable) if variable.settable() => {
+            row.settable = true;
+            match &variable.control {
+                ValueControl::Choice { options: choices, chosen } => {
+                    let words: Vec<SharedString> = choices
+                        .iter()
+                        .map(|choice| SharedString::from(choice.title.as_str()))
+                        .collect();
+                    row.control = if choices.len() <= 4 {
+                        GoalControl::Segments
+                    } else {
+                        GoalControl::Dropdown
+                    };
+                    row.chosen = chosen
+                        .as_deref()
+                        .and_then(|chosen| choices.iter().position(|choice| choice.value == chosen))
+                        .map_or(-1, index);
+                    row.options = options(old.map(|old| &old.options), words);
+                }
+                ValueControl::Switch { on } => {
+                    row.control = GoalControl::Switch;
+                    row.switch_on = on.unwrap_or(false);
+                }
+                ValueControl::None => {}
+            }
+        }
+        GoalLine::Variable(_) => {}
+        // A name another line has too: a clear of it could take that line's (`goals::press`).
+        GoalLine::Orphan(orphan) if orphan.shared => {
+            notes.push(labels.goals_same_name.to_owned());
+        }
+        GoalLine::Orphan(_) => row.clear_label = labels.goals_clear.into(),
+        GoalLine::OtherTarget(other) if other.shared => {
+            notes.push(labels.goals_same_name.to_owned());
+        }
+        GoalLine::OtherTarget(other) if other.by_name => {
+            row.clear_label = labels.goals_clear.into();
+        }
+        GoalLine::OtherTarget(_) => notes.push(labels.goals_lab_only.to_owned()),
+        GoalLine::Heading(_)
+        | GoalLine::Note { .. }
+        | GoalLine::Tier(_)
+        | GoalLine::Package(_)
+        | GoalLine::Group(_)
+        | GoalLine::Closed { .. } => {}
+    }
+    // A variable's clear, whether or not it has a control; none of a name another line has too,
+    // which a clear of it could take instead (`goals::press`).
+    if let GoalLine::Variable(variable) = line {
+        row.clear_label = match variable.clearable() {
+            Some(ClearOffer::Restore) => labels.goals_restore.into(),
+            Some(ClearOffer::Clear) => labels.goals_clear.into(),
+            None => SharedString::new(),
+        };
+        if variable.shared && variable.clear_offer().is_some() {
+            notes.push(labels.goals_same_name.to_owned());
+        }
+    }
+    if !warnings.is_empty() {
+        let mut all: Vec<String> = Vec::new();
+        if !row.warning.is_empty() {
+            all.push(row.warning.to_string());
+        }
+        all.extend(warnings);
+        row.warning = all.join("\n").into();
+    }
+    if !notes.is_empty() {
+        let mut all: Vec<String> = Vec::new();
+        if !row.note.is_empty() {
+            all.push(row.note.to_string());
+        }
+        all.extend(notes);
+        row.note = all.join("\n").into();
+    }
+    if let Some(said) = writes.said.get(&key) {
+        let (text, tone) = goal_said_text(ui, labels, said);
+        row.said = text.into();
+        row.said_failed = matches!(tone, SaidTone::Failed);
+        row.said_warning = matches!(tone, SaidTone::Warning);
+    }
+    if let Some((asking, loses)) = &writes.asking {
+        if *asking == key {
+            row.confirm = loses_text(labels, loses).into();
+        }
+    }
+    row.key = key.into();
+    row
+}
+
+/// Why what is typed for a resource goal is no amount.
+fn amount_problem_text(labels: &Labels, problem: AmountProblem) -> &'static str {
+    match problem {
+        AmountProblem::Empty => "",
+        AmountProblem::NotWhole => labels.goals_amount_not_whole,
+        AmountProblem::BelowOne => labels.goals_amount_below_one,
+        AmountProblem::TooLarge => labels.goals_amount_too_large,
+    }
+}
+
+/// The question a press asks first: what it loses that this page cannot set back. Another entry's
+/// goal is named by that entry's title, never by its pool's id.
+fn loses_text(labels: &Labels, loses: &Loses) -> String {
+    match loses {
+        Loses::Value(value) => fill(labels.goals_confirm_value, &[&shown_text(labels, value)]),
+        Loses::Replaced(value) => {
+            fill(labels.goals_confirm_value_replaced, &[&shown_text(labels, value)])
+        }
+        Loses::Unsettable { amount, carried } => fill(
+            labels.goals_confirm_clear_unsettable,
+            &[&goal_held_text(labels, *amount, carried.unwrap_or(Carried::NONE))],
+        ),
+        Loses::SameName { removed: Removed::Entry { title, amount, carried: other }, carried } => {
+            let title = title.as_deref().unwrap_or(labels.goals_untitled);
+            let held = goal_held_text(labels, *amount, *other);
+            match carried {
+                Some(carried) => fill(
+                    labels.goals_confirm_same_entry_elsewhere,
+                    &[title, &held, &carried_text(labels, *carried)],
+                ),
+                None => fill(labels.goals_confirm_same_entry, &[title, &held]),
+            }
+        }
+        Loses::Target(Some((pool, amount))) => {
+            fill(labels.goals_confirm_target, &[pool.as_str(), &amount.to_string()])
+        }
+        Loses::Target(None) => labels.goals_confirm_target_unread.to_owned(),
+        Loses::Elsewhere { cleared, carried } => {
+            let carried = carried_text(labels, *carried);
+            let template = if *cleared {
+                labels.goals_confirm_clear_elsewhere
+            } else {
+                labels.goals_confirm_replace_elsewhere
+            };
+            fill(template, &[&carried])
+        }
+        Loses::SameName { removed: Removed::Other(held), carried } => {
+            let held = match held {
+                Some((pool, amount)) => {
+                    fill(labels.goals_confirm_same_name_held, &[pool.as_str(), &amount.to_string()])
+                }
+                None => String::new(),
+            };
+            match carried {
+                Some(carried) => fill(
+                    labels.goals_confirm_same_name_elsewhere,
+                    &[&held, &carried_text(labels, *carried)],
+                ),
+                None => fill(labels.goals_confirm_same_name, &[&held]),
+            }
+        }
+    }
+}
+
+/// What a goal a question names holds, in brackets: its amount when it reads, and what it carries
+/// that a goal set by name does not, when it carries any; empty of neither.
+fn goal_held_text(labels: &Labels, amount: Option<u64>, carried: Carried) -> String {
+    let carried = carried.any().then(|| carried_text(labels, carried));
+    match (amount, carried) {
+        (Some(amount), Some(carried)) => {
+            fill(labels.goals_confirm_held_both, &[&amount.to_string(), &carried])
+        }
+        (Some(amount), None) => fill(labels.goals_confirm_held_amount, &[&amount.to_string()]),
+        (None, Some(carried)) => fill(labels.goals_confirm_held_carried, &[&carried]),
+        (None, None) => String::new(),
+    }
+}
+
+/// What a goal set elsewhere carries, in words, in the list's order.
+fn carried_text(labels: &Labels, carried: Carried) -> String {
+    let items: Vec<&str> = [
+        (carried.tasks, labels.goals_carried_tasks),
+        (carried.step, labels.goals_carried_step),
+        (carried.importance, labels.goals_carried_importance),
+        (carried.validity, labels.goals_carried_validity),
+    ]
+    .into_iter()
+    .filter_map(|(has, words)| has.then_some(words))
+    .collect();
+    items.join(labels.goals_list_separator)
+}
+
+/// What a line's last press came to, in words, with when it landed: a refused value in the words of
+/// its `goal_problem`, another refusal by its codes.
+fn goal_said_text(ui: &Ui, labels: &Labels, said: &GoalSaid) -> (String, SaidTone) {
+    let at = |template: &str, at_ms: u64| fill(template, &[&format_second(at_ms)]);
+    match said {
+        GoalSaid::Sending => (labels.goals_write_sending.to_owned(), SaidTone::Plain),
+        GoalSaid::Conflict => (labels.goals_write_conflict.to_owned(), SaidTone::Warning),
+        GoalSaid::NotNewer { at_ms } => {
+            (at(labels.goals_write_not_newer, *at_ms), SaidTone::Warning)
+        }
+        GoalSaid::Invalid { at_ms, invalid } => {
+            let words = invalid_text(ui, labels, invalid);
+            (fill(labels.goals_write_invalid, &[&words, &format_second(*at_ms)]), SaidTone::Failed)
+        }
+        GoalSaid::Refused { at_ms, codes } => {
+            let codes = if codes.is_empty() {
+                labels.goals_write_no_code.to_owned()
+            } else {
+                codes.join(", ")
+            };
+            (fill(labels.goals_write_refused, &[&codes, &format_second(*at_ms)]), SaidTone::Failed)
+        }
+        GoalSaid::NotSent { at_ms, not_this_root: true } => {
+            (at(labels.not_sent_not_this_root_at, *at_ms), SaidTone::Failed)
+        }
+        GoalSaid::NotSent { at_ms, not_this_root: false } => {
+            (at(labels.goals_write_not_sent, *at_ms), SaidTone::Failed)
+        }
+        GoalSaid::Unconfirmed { at_ms } => {
+            (at(labels.goals_write_unconfirmed, *at_ms), SaidTone::Failed)
+        }
+        GoalSaid::NoThread { error } => {
+            let why = fill(labels.thread_failed, &[error.as_str()]);
+            (fill(labels.goals_write_no_thread, &[why.as_str()]), SaidTone::Failed)
+        }
+        GoalSaid::Restarted => (labels.goals_write_restarted.to_owned(), SaidTone::Plain),
+        GoalSaid::Stale => (labels.goals_write_stale.to_owned(), SaidTone::Warning),
+    }
+}
+
+/// Why the Runtime did not take a value, one sentence per `goal_problem` word, with the values the
+/// word comes with: a range, a bound with its unit (bytes, items), why a variable does not apply. A
+/// number off its step is said without the range it comes with, which would read as the step's. A
+/// word of a newer Runtime by its code, which the log hears of once.
+fn invalid_text(ui: &Ui, labels: &Labels, invalid: &WriteInvalid) -> String {
+    let words = match &invalid.problem {
+        WriteProblem::NameUnknown => labels.goals_problem_name_unknown,
+        WriteProblem::HoldsNoValue => labels.goals_problem_holds_no_value,
+        WriteProblem::TierNotBuilt => labels.goals_problem_tier_not_built,
+        WriteProblem::RemedyParameter => labels.goals_problem_remedy_parameter,
+        WriteProblem::VariableNotApplying => labels.goals_problem_variable_not_applying,
+        WriteProblem::NotOffered => labels.goals_problem_not_offered,
+        WriteProblem::ValueNotJson => labels.goals_problem_value_not_json,
+        WriteProblem::WrongType => labels.goals_problem_wrong_type,
+        WriteProblem::OutOfRange => labels.goals_problem_out_of_range,
+        WriteProblem::OffStep => labels.goals_problem_off_step,
+        WriteProblem::NotAnOption => labels.goals_problem_not_an_option,
+        WriteProblem::KeyRepeated => labels.goals_problem_key_repeated,
+        WriteProblem::CountOutOfRange => labels.goals_problem_count_out_of_range,
+        WriteProblem::ValueTooLarge => labels.goals_problem_value_too_large,
+        WriteProblem::PoolNotTargetable => labels.goals_problem_pool_not_targetable,
+        WriteProblem::PoolUnvalued => labels.goals_problem_pool_unvalued,
+        WriteProblem::DeadlineUnsupported => labels.goals_problem_deadline_unsupported,
+        WriteProblem::ValueNotSet => labels.goals_problem_value_not_set,
+        WriteProblem::RecordUnreadable => labels.goals_problem_record_unreadable,
+        WriteProblem::RecordOutOfLimits => labels.goals_problem_record_out_of_limits,
+        WriteProblem::NotCheckedYet => labels.goals_problem_not_checked_yet,
+        WriteProblem::RootFailing => labels.goals_problem_root_failing,
+        WriteProblem::NoSchedule => labels.goals_problem_no_schedule,
+        WriteProblem::Other(word) => {
+            let line = format!("no words for the goal_problem word {word:?}: shown by its code");
+            if ui.model.borrow_mut().first_told(&line) {
+                report::log(TASKS_LOG, &line);
+            }
+            return fill(labels.goals_problem_other, &[word.as_str()]);
+        }
+    };
+    // A bound with its unit, within the sentence: the bytes a value's text holds, the targets or
+    // entries a record holds.
+    let bound = |template: &str| invalid.max.map(|max| fill(template, &[&max.to_string()]));
+    let whole = match &invalid.problem {
+        WriteProblem::ValueTooLarge => bound(labels.goals_problem_value_too_large_at),
+        WriteProblem::RecordOutOfLimits => bound(labels.goals_problem_record_out_of_limits_at),
+        _ => None,
+    };
+    if let Some(whole) = whole {
+        return whole;
+    }
+    let range = invalid.min.zip(invalid.max).map(|(min, max)| {
+        fill(labels.goals_problem_range, &[&min.to_string(), &max.to_string()])
+    });
+    let detail = match &invalid.problem {
+        WriteProblem::OutOfRange | WriteProblem::CountOutOfRange => range,
+        WriteProblem::VariableNotApplying => Some(unapplied_text(labels, &invalid.variable)),
+        _ => None,
+    };
+    match detail {
+        Some(detail) => fill(labels.goals_problem_with, &[words, &detail]),
+        None => words.to_owned(),
+    }
 }
 
 /// One line of the Goals tab, at most three layers: its title, the value now, and under it amber
@@ -3158,18 +3521,28 @@ fn goal_row(labels: &Labels, line: &GoalLine) -> GoalRowData {
             ..GoalRowData::default()
         },
         GoalLine::Resource(resource) => resource_row(labels, resource),
-        GoalLine::Tier(tier) => GoalRowData {
-            kind: GoalRowKind::Entry,
-            title: titled(&tier.title).into(),
-            value: tier
-                .default
-                .as_deref()
-                .map(|default| fill(labels.goals_tier_default, &[default]))
-                .unwrap_or_default()
-                .into(),
-            note: labels.goals_tier_not_built.into(),
-            ..GoalRowData::default()
-        },
+        GoalLine::Tier(tier) => {
+            let mut notes: Vec<String> = Vec::new();
+            if let Some(stored) = &tier.stored {
+                notes.push(fill(labels.goals_tier_stored, &[stored.as_str()]));
+            }
+            if let Some(set) = tier.set {
+                notes.push(set_by_text(labels, set));
+            }
+            notes.push(labels.goals_tier_not_built.to_owned());
+            GoalRowData {
+                kind: GoalRowKind::Entry,
+                title: titled(&tier.title).into(),
+                value: tier
+                    .default
+                    .as_deref()
+                    .map(|default| fill(labels.goals_tier_default, &[default]))
+                    .unwrap_or_default()
+                    .into(),
+                note: notes.join("\n").into(),
+                ..GoalRowData::default()
+            }
+        }
         GoalLine::Variable(variable) => variable_row(labels, variable),
         GoalLine::Orphan(orphan) => GoalRowData {
             kind: GoalRowKind::Entry,
@@ -3223,6 +3596,7 @@ fn resource_row(labels: &Labels, line: &ResourceLine) -> GoalRowData {
         value_met: met,
         warning: warnings.join("\n").into(),
         note: notes.join("\n").into(),
+        ..GoalRowData::default()
     }
 }
 
@@ -3257,6 +3631,7 @@ fn other_row(labels: &Labels, other: &OtherTarget) -> GoalRowData {
         value_met: met,
         warning: warnings.join("\n").into(),
         note: notes.join("\n").into(),
+        ..GoalRowData::default()
     }
 }
 
@@ -3308,14 +3683,16 @@ fn variable_row(labels: &Labels, line: &VariableLine) -> GoalRowData {
     let mut notes: Vec<String> = Vec::new();
     match &line.state {
         VariableState::InEffect => {}
-        VariableState::NotApplied { stored: true, why } => {
-            warnings.push(fill(labels.goals_not_applied, &[&unapplied_text(labels, why)]));
+        // The value stored, in its declaration's words, and why it is not used.
+        VariableState::NotApplied { stored: Some(stored), why } => {
+            let stored = shown_text(labels, stored);
+            warnings.push(fill(labels.goals_not_applied, &[&stored, &unapplied_text(labels, why)]));
         }
         // No root check judges the game now: whether the variable applies is not known.
-        VariableState::NotApplied { stored: false, why } if matches!(why, Some(Unapplied::RootUnchecked)) => {
+        VariableState::NotApplied { stored: None, why } if matches!(why, Some(Unapplied::RootUnchecked)) => {
             warnings.push(fill(labels.goals_not_known, &[&unapplied_text(labels, why)]));
         }
-        VariableState::NotApplied { stored: false, why } => {
+        VariableState::NotApplied { stored: None, why } => {
             warnings.push(fill(labels.goals_not_applying, &[&unapplied_text(labels, why)]));
         }
         VariableState::NotOffered => notes.push(labels.goals_not_offered.to_owned()),
@@ -3338,6 +3715,7 @@ fn variable_row(labels: &Labels, line: &VariableLine) -> GoalRowData {
         value_met: false,
         warning: warnings.join("\n").into(),
         note: notes.join("\n").into(),
+        ..GoalRowData::default()
     }
 }
 
