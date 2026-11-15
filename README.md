@@ -762,8 +762,10 @@ is turned off".
 
 **Goals** (#455, the goal page) is that instance's goal page, drawn from its `GoalView` alone (#463 V3,
 Runtime 0.12.61), the very read the Lab's `goals` answers, and some of it can be changed there (below). A
-line at its top says what can be changed there and that number and order settings need the Lab (command
-line or MCP) until the next version. Its
+line at its top says what can be changed there (resource goal amounts, switches and choices, each put back
+to its default or cleared, and values no longer offered and other resource goals cleared) and that number
+and order settings, putting them back to their defaults included, need the Lab (command line or MCP) until
+the next version. Its
 lines go in the Runtime's order: first the entries of the game's `goals.json`, then each package variable
 no entry places, in groups under the display name of its first package (the `ui.json` title the task
 names come from; every variable whose package has none goes in one last group, "Other settings"). No
@@ -848,28 +850,41 @@ it was pressed on (`GoalView.version`) as its `expected_version`. A **resource**
 here (not one without a step, nor one no goal can name) has a field, "Keep at least", and **Set**, which
 writes `{"at_least": n}`: here only a whole number of at least 1 is checked ("Type a whole number", "At
 least 1"), the pool's capacity being the Runtime's to judge, and its `out_of_range` names the bound, which
-the line then says. A resource with a goal has **Clear**. A **choice** variable shows its options side by
-side, four or fewer, else in a drop-down, and a **switch** variable a box; changing either writes the
-option's value (a JSON string) or `true` or `false` at once. A variable with a value stored has **Back to
-Default**, which clears it; `integer` and `ordered` variables are only shown in this version, and so have
-neither a control nor **Back to Default**, since their values could not be set back from here. A placement
-no bound pack offers that holds a value, and each value **No longer offered**, has **Clear**. An **other
-resource goal** whose id has an entry name's form (`[a-z0-9][a-z0-9_]*`, at most 64 bytes, the only names
-`EditGoal` takes) has **Clear**; any other says "Change it with the Lab". Tiers and remedy parameters are
-only shown. Every control is off while the page lists nothing (`not_checked_yet`, `root_failing`,
-`no_schedule`), while a write of the instance is out, and after an answer until the page read again has
-come.
+the line's result then says (under the line, with when it landed, not beside the field). A resource with a
+goal has **Clear**. A **choice** variable shows its options side by side, four or fewer, else in a
+drop-down, and a **switch** variable a box; changing either writes the option's value (a JSON string) or
+`true` or `false` at once. A variable with a value stored has **Back to Default**, which clears it;
+`integer` and `ordered` variables are only shown in this version, and so have neither a control nor
+**Back to Default**: with no control of them here a value cleared could not be set back from here, so both
+come with their controls in the next version. A placement no bound pack offers that holds a value, and
+each value **No longer offered**, has **Clear**. An **other resource goal** whose id has an entry name's
+form (`[a-z0-9][a-z0-9_]*`, at most 64 bytes, the only names `EditGoal` takes) has **Clear**; any other
+says "Change it with the Lab". A write names a name only, and the Runtime takes what is stored under it in
+its own order (a clear: a resource entry's goal on its pool first, then a stored value of the name, then a
+target of that id), so a value **No longer offered** or an **other resource goal** whose name another
+line of the page has too (an entry of any kind, another value no longer offered, another other resource
+goal) has no **Clear**, and says in grey "Another line on this page has the same name, so it cannot be
+cleared reliably here; change it with the Lab". Tiers and remedy parameters are only shown. Every control
+is off while the page lists nothing (`not_checked_yet`, `root_failing`, `no_schedule`), while a write of
+the instance is out, and after an answer until the page read again has come.
 
 A press asks to be confirmed first only where what it loses cannot be set back from here, and the question
 says what: clearing a value no run reads (no longer offered, or of a placement not offered), "the value
-stored (…) cannot be set back"; clearing an other resource goal, with its pool and amount; and clearing or
-replacing a declared resource's goal set elsewhere (no setter, or another channel than this console's)
-that carries what a goal set by name does not, its own tasks, step, importance or validity: setting a
-pool's amount replaces its goal whole, whatever its id, and those are lost. Which of them it carries is
-read from the stored record's target of the same id, all four when that does not read; such a goal's line
-also says in amber "This goal was set elsewhere: changing it here replaces how it was set". Back to the
-default, a value this console set and a goal this console set ask nothing. Only **Confirm** sends it;
-**Cancel**, a press anywhere else, another instance or a restart lets the question go.
+stored (…) cannot be set back"; **Back to Default** of a variable the game does not apply (the game root's
+own judgement, such as a pack that counts as able to do something irreversible: no value can be set on it
+here again), likewise with the value stored; clearing an other resource goal, with its pool and amount;
+setting an amount on a resource whose name an other resource goal has as its id, which the Runtime then
+removes too, with that goal's pool and amount; and clearing or replacing a declared resource's goal set
+elsewhere (no setter, or another channel than this console's) that carries what a goal set by name does
+not, its own tasks, step, importance or validity: setting a pool's amount replaces its goal whole,
+whatever its id, and those are lost. Which of them it carries is read from the stored record's target of
+the same id, all four when that does not read; such a goal's line also says in amber "This goal was set
+elsewhere: changing it here replaces how it was set". A goal set elsewhere that carries none of the four
+(as one set by name elsewhere) loses nothing a goal set here does not hold again, so replacing or
+clearing it asks nothing: only that amber line says it was set elsewhere. Back to the default of a
+variable a value can be set on again, a value this console set and a goal this console set ask nothing.
+Only **Confirm** sends it; **Cancel**, a press anywhere else, another instance or a restart lets the
+question go.
 
 The write goes on a fresh person's connection (the `ui` channel, the full receipt) at the slow reads' io
 timeout of 20 seconds, on a thread of its own, once. Its answer: taken, nothing said, and the page read
@@ -877,7 +892,8 @@ again at once; another tool changed the page since it was read (`fact_observatio
 amber "This page was just changed elsewhere and is read again: press again", read again, not sent again;
 another write in the same millisecond (`fact_observation_not_newer`), sent once more at once on the same
 connection; the value refused (`goal_value_invalid`), on its line one sentence per `goal_problem` word with
-the values it comes with (a range "allowed: 1 to 9999", a bound, why a variable does not apply; a word
+the values it comes with (a range "1 to 9999", a bound with its unit, "1024 bytes" a value holds or the
+items a record holds, why a variable does not apply; a word
 this console does not know by its code, which the technical log hears of once), nothing read again; not
 known what became of it, read again first, and pressed again only once that read came (the version it
 named makes a second write after a first that took meet a version conflict, never write twice); a Runtime

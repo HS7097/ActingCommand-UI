@@ -14,18 +14,34 @@
 //! `false`) are set; a resource entry's goal, a variable's value ("back to the default"), a value no
 //! longer offered, a value of a placement no bound package offers, and an other target whose id has
 //! an entry name's form (`goal_name`, `[a-z0-9][a-z0-9_]*` of at most 64 bytes, the only names
-//! `EditGoal` takes) are cleared. `integer` and `ordered` variables, tiers (`tier_not_built`) and
+//! `EditGoal` takes) are cleared, but for a name two lines share (below). `integer` and `ordered`
+//! variables (neither set nor put back to their default: no control of them here could set one
+//! again, G3's), tiers (`tier_not_built`) and
 //! remedy parameters are only shown. One press is one `EditGoal`, of one name, naming the page's
 //! version (`GoalView.version`) as its `expected_version`.
 //!
 //! A press asks first only where what it loses cannot be set back from here ([`Loses`]): a value no
-//! run reads (no longer offered, or of a placement not offered), an other target, and a resource goal
-//! set elsewhere (no setter, or another channel than this console's) that carries what a goal set by
-//! name does not: tasks, a step, an importance, a validity. Setting a pool's amount replaces its goal
-//! whole, whatever its id (`crates/runtime-host/src/goals.rs:305-311`), so those are lost then too;
-//! which of them it carries is read from the stored document's target of the same id, and all four
-//! are said when that does not read. Back to a variable's default, and a goal this console set, ask
-//! nothing.
+//! run reads (no longer offered, or of a placement not offered), the value stored for a variable the
+//! game root does not apply (no value can be set on it here again, `variable_not_applying`), an
+//! other target, and a resource goal set elsewhere (no setter, or another channel than this
+//! console's) that carries what a goal set by name does not: tasks, a step, an importance, a
+//! validity. Setting a pool's amount replaces its goal whole, whatever its id
+//! (`crates/runtime-host/src/goals.rs:305-311`), so those are lost then too; which of them it
+//! carries is read from the stored document's target of the same id, and all four are said when
+//! that does not read. A goal set elsewhere that carries none of them loses nothing a goal set here
+//! does not hold again, so it is only said beside the field, not asked. Back to the default of a
+//! variable that can be set again, and a goal this console set, ask nothing.
+//!
+//! A write names a name only, which the Runtime resolves by what is stored under it, in its order
+//! (`crates/runtime-host/src/goals.rs:354-377`): a `clear` takes a resource entry's goal on its pool
+//! first, then a stored value of the name, then a target of that id; a resource entry's `set` also
+//! removes the targets of its name on other pools
+//! (`crates/policy/src/resource_targets/v3.rs:1555-1556`). So a value no longer offered, or an
+//! other target, whose name another line of the page has too
+//! (an entry of any type, another value no longer offered, another other target) is not cleared
+//! here, which could clear the other line's instead ([`OrphanLine::shared`],
+//! [`OtherTarget::shared`]); and an amount set on a resource entry whose name an other target has
+//! asks first, saying it removes that target ([`ResourceLine::same_name`]).
 //!
 //! The write goes on a fresh person's connection, the `ui` channel with the full receipt, at the
 //! slow reads' 20 seconds ([`EDIT_IO`]), and is sent once, but for `fact_observation_not_newer`,
@@ -309,7 +325,14 @@ pub struct ResourceLine {
     /// A goal set elsewhere (no setter, or another channel than this console's): what of it a
     /// goal set here loses. None without a goal, and of this console's.
     pub elsewhere: Option<Carried>,
+    /// An other target whose id is this entry's name: an amount set here removes it too, its pool
+    /// being another (`crates/policy/src/resource_targets/v3.rs:1555-1556`). What it holds, as its
+    /// own line has it.
+    pub same_name: Option<Held>,
 }
+
+/// What an other target holds, as a question says it: its pool and amount, when it reads.
+pub type Held = Option<(String, u64)>;
 
 impl ResourceLine {
     /// Whether an amount can be set on it here: its pool is targetable with the pack's own step
@@ -474,6 +497,20 @@ impl VariableLine {
             (_, ValueControl::None) => None,
             (_, ValueControl::Choice { .. } | ValueControl::Switch { .. }) => {
                 Some(ClearOffer::Restore)
+            }
+        }
+    }
+
+    /// The value stored under its name, in words, as a question of its clear says it: of a value
+    /// not applied, the one stored; else the one shown, which of a variable not offered is the one
+    /// stored.
+    fn stored_value(&self) -> Shown {
+        match &self.state {
+            VariableState::NotApplied { stored: Some(stored), .. } => stored.clone(),
+            VariableState::NotApplied { stored: None, .. }
+            | VariableState::InEffect
+            | VariableState::NotOffered => {
+                self.value.clone().unwrap_or_else(|| Shown::Raw(String::new()))
             }
         }
     }
@@ -707,6 +744,10 @@ pub struct OrphanLine {
     pub name: String,
     pub value: Shown,
     pub set: Option<SetBy>,
+    /// Another line of the page has its name (an entry of any type, another value no longer
+    /// offered, an other target): a clear of the name could clear that line's instead, so it is
+    /// not cleared here (see the module's words).
+    pub shared: bool,
 }
 
 /// A stored target on no declared resource entry's pool, by its id: as the stored document holds
@@ -720,6 +761,24 @@ pub struct OtherTarget {
     /// else only the Lab's whole document can
     /// (`crates/actingcommand-contract/src/standard_pack_goals.rs:783-791`).
     pub by_name: bool,
+    /// Another line of the page has its id as its name (an entry of any type, a value no longer
+    /// offered, another other target): a clear of the name could clear that line's instead, so it
+    /// is not cleared here (see the module's words).
+    pub shared: bool,
+}
+
+impl OtherTarget {
+    /// What it holds, as a question says it.
+    pub fn held(&self) -> Held {
+        let target = self.target.as_ref()?;
+        Some((target.pool.clone(), target.goal.amount?))
+    }
+
+    /// Whether a clear of its id can be pressed here: an entry name's form, which no other line
+    /// of the page has.
+    pub fn clearable(&self) -> bool {
+        self.by_name && !self.shared
+    }
 }
 
 /// An other target that reads: its pool (the only name it has), what the view says of that pool,
@@ -955,12 +1014,19 @@ fn lines(
     pack_title: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<GoalLine> {
     let mut lines = Vec::new();
+    let shared = shared_names(view);
+    let others: Vec<OtherTarget> = view
+        .other_targets
+        .iter()
+        .map(|id| other_target(id, targets, shared.contains(id.as_str())))
+        .collect();
+    let line_of = |entry: &GoalViewEntry| entry_line(entry, targets, &others, tongue);
     // By the first package's id, in the order the page first names it, with its display name.
     let mut groups: Vec<(&str, String, Vec<&GoalViewEntry>)> = Vec::new();
     let mut unnamed: Vec<&GoalViewEntry> = Vec::new();
     for entry in &view.entries {
         if entry.placed {
-            lines.push(entry_line(entry, targets, tongue));
+            lines.push(line_of(entry));
             continue;
         }
         let first = entry.packages.first().map(String::as_str);
@@ -976,18 +1042,18 @@ fn lines(
     }
     for (_, title, entries) in groups {
         lines.push(GoalLine::Package(Some(title)));
-        lines.extend(entries.into_iter().map(|entry| entry_line(entry, targets, tongue)));
+        lines.extend(entries.into_iter().map(line_of));
     }
     if !unnamed.is_empty() {
         lines.push(GoalLine::Package(None));
-        lines.extend(unnamed.into_iter().map(|entry| entry_line(entry, targets, tongue)));
+        lines.extend(unnamed.into_iter().map(line_of));
     }
     if !view.orphans.is_empty() {
         lines.push(GoalLine::Group(Group::NoLongerOffered));
-        lines.extend(view.orphans.iter().map(orphan_line));
+        lines.extend(view.orphans.iter().map(|orphan| {
+            orphan_line(orphan, shared.contains(orphan.name.as_str()))
+        }));
     }
-    let others: Vec<OtherTarget> =
-        view.other_targets.iter().map(|id| other_target(id, targets)).collect();
     // A pool a declared entry or an other target names says why on that line, not on one of its
     // own.
     let mut named: BTreeSet<&str> = view
@@ -1020,8 +1086,32 @@ fn lines(
     lines
 }
 
-/// One entry of the page, by its type.
-fn entry_line(entry: &GoalViewEntry, targets: &Targets<'_>, tongue: Tongue) -> GoalLine {
+/// The names more than one line of the page has: its entries' (of any type, placed or not), its
+/// values' no longer offered and its other targets' ids, together.
+fn shared_names(view: &GoalView) -> BTreeSet<&str> {
+    let names = view
+        .entries
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .chain(view.orphans.iter().map(|orphan| orphan.name.as_str()))
+        .chain(view.other_targets.iter().map(String::as_str));
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut shared: BTreeSet<&str> = BTreeSet::new();
+    for name in names {
+        if !seen.insert(name) {
+            shared.insert(name);
+        }
+    }
+    shared
+}
+
+/// One entry of the page, by its type; `others` the page's other targets.
+fn entry_line(
+    entry: &GoalViewEntry,
+    targets: &Targets<'_>,
+    others: &[OtherTarget],
+    tongue: Tongue,
+) -> GoalLine {
     let declared = entry.entry.as_ref();
     match entry.entry_type {
         GoalEntryType::Heading => GoalLine::Heading(text_of(declared, "title", tongue)),
@@ -1029,7 +1119,9 @@ fn entry_line(entry: &GoalViewEntry, targets: &Targets<'_>, tongue: Tongue) -> G
             text: text_of(declared, "title", tongue),
             help: text_of(declared, "help", tongue),
         },
-        GoalEntryType::Resource => GoalLine::Resource(resource_line(entry, targets, tongue)),
+        GoalEntryType::Resource => {
+            GoalLine::Resource(resource_line(entry, targets, others, tongue))
+        }
         GoalEntryType::Tier => GoalLine::Tier(TierLine {
             title: text_of(declared, "title", tongue),
             default: tier_default(declared, tongue),
@@ -1041,8 +1133,13 @@ fn entry_line(entry: &GoalViewEntry, targets: &Targets<'_>, tongue: Tongue) -> G
 }
 
 /// A `resource` entry: its pool as the view says it, and the target on it, with what that carries
-/// when it was set elsewhere.
-fn resource_line(entry: &GoalViewEntry, targets: &Targets<'_>, tongue: Tongue) -> ResourceLine {
+/// when it was set elsewhere; and the other target of its name among `others`, if any.
+fn resource_line(
+    entry: &GoalViewEntry,
+    targets: &Targets<'_>,
+    others: &[OtherTarget],
+    tongue: Tongue,
+) -> ResourceLine {
     let pool = entry.resource.as_ref().map(|resource| resource.pool.as_str());
     let id = entry.resource.as_ref().and_then(|resource| resource.target_id.as_deref());
     let goal = entry.value_json.as_deref().map(|json| targets.goal(id, at_least(json)));
@@ -1061,6 +1158,7 @@ fn resource_line(entry: &GoalViewEntry, targets: &Targets<'_>, tongue: Tongue) -
         goal,
         set: entry.set.as_ref().map(set_by),
         elsewhere,
+        same_name: others.iter().find(|other| other.id == entry.name).map(OtherTarget::held),
     }
 }
 
@@ -1290,17 +1388,19 @@ fn plain(value: &Value) -> Shown {
     }
 }
 
-/// A stored value no entry offers any more.
-fn orphan_line(orphan: &GoalOrphan) -> GoalLine {
+/// A stored value no entry offers any more; `shared` whether another line has its name.
+fn orphan_line(orphan: &GoalOrphan, shared: bool) -> GoalLine {
     GoalLine::Orphan(OrphanLine {
         name: orphan.name.clone(),
         value: Declared::Unknown.shown(&orphan.value_json, None, Tongue::En),
         set: orphan.set.as_ref().map(set_by),
+        shared,
     })
 }
 
-/// An other target by its id, as the stored document holds it.
-fn other_target(id: &str, targets: &Targets<'_>) -> OtherTarget {
+/// An other target by its id, as the stored document holds it; `shared` whether another line has
+/// its id as its name.
+fn other_target(id: &str, targets: &Targets<'_>, shared: bool) -> OtherTarget {
     let target = targets.target(id).and_then(|target| {
         let pool = target.get("resource")?.as_str()?;
         let condition = target.get("condition")?;
@@ -1316,7 +1416,7 @@ fn other_target(id: &str, targets: &Targets<'_>) -> OtherTarget {
             goal,
         })
     });
-    OtherTarget { id: id.to_owned(), target, by_name: goal_name(id) }
+    OtherTarget { id: id.to_owned(), target, by_name: goal_name(id), shared }
 }
 
 /// Who set a stored row.
@@ -1555,29 +1655,38 @@ pub struct Press {
 /// What a press loses that this page cannot set back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Loses {
-    /// A value stored that no run reads: no longer offered, or of a placement no bound package
-    /// offers. The value.
+    /// A value stored that no run reads, or that no value set here replaces again: no longer
+    /// offered, of a placement no bound package offers, of a variable the game root does not
+    /// apply. The value.
     Value(Shown),
     /// An other target, with its pool and amount when it reads.
-    Target(Option<(String, u64)>),
+    Target(Held),
     /// A declared resource's goal set elsewhere, cleared (`cleared`) or replaced by a goal set
     /// here: what it carries that one set here does not.
     Elsewhere { cleared: bool, carried: Carried },
+    /// A declared resource's amount set here, which removes the other target of the entry's name
+    /// too ([`ResourceLine::same_name`]): what that holds; and what the goal on the entry's own
+    /// pool, set elsewhere, carries that one set here does not, when it carries any.
+    SameName { held: Held, carried: Option<Carried> },
 }
 
 /// What a press `act` on `line` writes, the one place that decides it: none when it writes nothing
 /// (the line takes no such press, the value is as pressed already, the amount typed is not one).
 /// A resource entry's amount only on a pool that takes a goal here, a variable's value only while
-/// one can be set on it; a clear wherever something is stored to clear. See the module's words
-/// for what asks first.
+/// one can be set on it; a clear wherever something is stored to clear, but of a value no longer
+/// offered or an other target whose name another line of the page has. See the module's words for
+/// what asks first; what of the page that depends on is on the line already (`shared`,
+/// `same_name`).
 pub fn press(line: &GoalLine, act: &GoalAct) -> Option<Press> {
     match (line, act) {
         (GoalLine::Resource(line), GoalAct::Amount(text)) if line.settable() => {
             let at_least = amount(text).ok()?;
-            let asks = line
-                .elsewhere
-                .filter(|carried| carried.any())
-                .map(|carried| Loses::Elsewhere { cleared: false, carried });
+            let carried = line.elsewhere.filter(|carried| carried.any());
+            let asks = match (&line.same_name, carried) {
+                (Some(held), carried) => Some(Loses::SameName { held: held.clone(), carried }),
+                (None, Some(carried)) => Some(Loses::Elsewhere { cleared: false, carried }),
+                (None, None) => None,
+            };
             Some(Press { write: GoalWrite::set(&line.name, resource_json(at_least)), asks })
         }
         (GoalLine::Resource(line), GoalAct::Clear) => {
@@ -1608,27 +1717,24 @@ pub fn press(line: &GoalLine, act: &GoalAct) -> Option<Press> {
             }
             Some(Press { write: GoalWrite::set(&line.name, switch_json(*on)), asks: None })
         }
+        // Back to the default asks nothing while a value can be set on the variable again here;
+        // of one the game root does not apply (`variable_not_applying`), the value stored is lost
+        // as a value not offered is.
         (GoalLine::Variable(line), GoalAct::Clear) => {
             let asks = match line.clear_offer()? {
-                ClearOffer::Restore => None,
-                ClearOffer::Clear => {
-                    let value = line.value.clone().unwrap_or_else(|| Shown::Raw(String::new()));
-                    Some(Loses::Value(value))
-                }
+                ClearOffer::Restore if line.settable() => None,
+                ClearOffer::Restore | ClearOffer::Clear => Some(Loses::Value(line.stored_value())),
             };
             Some(Press { write: GoalWrite::clear(&line.name), asks })
         }
-        (GoalLine::Orphan(line), GoalAct::Clear) => Some(Press {
+        (GoalLine::Orphan(line), GoalAct::Clear) if !line.shared => Some(Press {
             write: GoalWrite::clear(&line.name),
             asks: Some(Loses::Value(line.value.clone())),
         }),
-        (GoalLine::OtherTarget(other), GoalAct::Clear) if other.by_name => {
-            let held = other
-                .target
-                .as_ref()
-                .and_then(|target| Some((target.pool.clone(), target.goal.amount?)));
-            Some(Press { write: GoalWrite::clear(&other.id), asks: Some(Loses::Target(held)) })
-        }
+        (GoalLine::OtherTarget(other), GoalAct::Clear) if other.clearable() => Some(Press {
+            write: GoalWrite::clear(&other.id),
+            asks: Some(Loses::Target(other.held())),
+        }),
         _ => None,
     }
 }
@@ -2290,6 +2396,7 @@ mod tests {
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(Some(LabEntry::CommandLine)) }),
                     // Set by the Lab, as a goal by name: nothing it carries is lost here.
                     elsewhere: Some(NOTHING),
+                    same_name: None,
                 }),
                 GoalLine::Tier(TierLine {
                     title: Some("Pace".to_owned()),
@@ -2789,22 +2896,28 @@ mod tests {
                     // A v2 document's target names no setter: set elsewhere, with the document's
                     // validity.
                     elsewhere: Some(Carried { validity: true, ..NOTHING }),
+                    same_name: None,
                 }),
                 GoalLine::Group(Group::NoLongerOffered),
                 GoalLine::Orphan(OrphanLine {
                     name: "old_route".to_owned(),
                     value: Shown::Words("a".to_owned()),
                     set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(None) }),
+                    shared: false,
                 }),
                 GoalLine::Orphan(OrphanLine {
                     name: "old_rounds".to_owned(),
                     value: Shown::Number(3),
                     set: None,
+                    shared: false,
                 }),
+                // Stored under the resource entry's name: a clear of "gold" takes that entry's
+                // goal first, so this one is not cleared here.
                 GoalLine::Orphan(OrphanLine {
                     name: "gold".to_owned(),
                     value: Shown::Raw("{\"at_least\":5}".to_owned()),
                     set: None,
+                    shared: true,
                 }),
                 GoalLine::Group(Group::OtherTargets),
                 GoalLine::OtherTarget(OtherTarget {
@@ -2816,12 +2929,14 @@ mod tests {
                         goal: goal(80, Progress::Computed { current: 10, at_ms: OBSERVED, gap: 70 }),
                     }),
                     by_name: true,
+                    shared: false,
                 }),
                 // No `at_least` target: not read here, so its pool is said below.
                 GoalLine::OtherTarget(OtherTarget {
                     id: "odd".to_owned(),
                     target: None,
                     by_name: true,
+                    shared: false,
                 }),
                 GoalLine::Group(Group::NotTargetable),
                 GoalLine::Closed { pool: "pool.gems".to_owned(), why: Closed::NotObservable },
@@ -2880,11 +2995,13 @@ mod tests {
                         goal: goal(300, Progress::NoCondition),
                     }),
                     by_name: true,
+                    shared: false,
                 }),
                 GoalLine::OtherTarget(OtherTarget {
                     id: "missing".to_owned(),
                     target: None,
                     by_name: true,
+                    shared: false,
                 }),
                 // G1's follow-up: a goal waiting for a reading says why, so the pool's own "no
                 // reading" is not said a second time.
@@ -2897,11 +3014,13 @@ mod tests {
                         goal: goal(80, Progress::Awaiting(Pending::LowConfidence)),
                     }),
                     by_name: true,
+                    shared: false,
                 }),
                 GoalLine::OtherTarget(OtherTarget {
                     id: "half".to_owned(),
                     target: None,
                     by_name: true,
+                    shared: false,
                 }),
             ]
         );
@@ -3009,6 +3128,7 @@ mod tests {
                 goal: Some(goal(40, Progress::Computed { current: 2, at_ms: OBSERVED, gap: 38 })),
                 set: Some(SetBy { at_ms: SET_AT, by: Setter::Lab(Some(LabEntry::Authoring)) }),
                 elsewhere: Some(NOTHING),
+                same_name: None,
             })
         );
         // No amount is set on a pool without a step; only the open one takes one.
@@ -3289,6 +3409,7 @@ mod tests {
                     id: "wood".to_owned(),
                     target: None,
                     by_name: true,
+                    shared: false,
                 }),
             ]
         );
@@ -3699,6 +3820,259 @@ mod tests {
             })
             .collect();
         assert_eq!(by_name, vec![true, false, true]);
+    }
+
+    /// fix1: the Runtime resolves a name by what is stored under it (a clear takes a resource
+    /// entry's goal on its pool first, then a stored value, then a target of that id), and a
+    /// resource entry's set removes the targets of its name on other pools. So a value no longer
+    /// offered, or an other target, whose name another line has (an entry of any type, a value no
+    /// longer offered, an other target) is not cleared here; an amount set on an entry whose name
+    /// an other target has asks first, with what that target holds, and with what the entry's own
+    /// goal set elsewhere carries.
+    #[test]
+    fn a_name_two_lines_share_is_not_cleared_by_it() {
+        let view = view(
+            state("accepted"),
+            json!([
+                note("about", json!({"en": "Read me"}), json!({"en": "More words"})),
+                resource("gold", "pool.gold", Some(("gold_main", 50)), Some(set("ui", None))),
+                resource("wood", "pool.wood", Some(("agent_wood", 80)), Some(set("mcp", None))),
+                resource("gems", "pool.gems", None, None),
+                variable("pick", true, choice("pick"), &["pack.a"], json!({
+                    "default_json": "\"item_b\"",
+                    "value_json": "\"item_a\"",
+                    "effective_json": "\"item_a\"",
+                    "source": "set",
+                    "set": set("ui", None),
+                    "state": "in_effect",
+                })),
+            ]),
+            json!({
+                "orphans": [
+                    {"name": "gems", "value_json": "{\"at_least\":5}"},
+                    {"name": "about", "value_json": "true"},
+                    {"name": "stone", "value_json": "3"},
+                    {"name": "old_route", "value_json": "\"a\""},
+                ],
+                "other_targets": ["gold", "wood", "pick", "stone", "iron"],
+            }),
+            targets(
+                json!([
+                    pool("pool.gold", true, true, Some(1)),
+                    pool("pool.wood", true, true, Some(2)),
+                    pool("pool.gems", true, true, Some(3)),
+                    pool("pool.old_gold", true, true, Some(4)),
+                ]),
+                json!([]),
+                Some(active(
+                    V3,
+                    json!([
+                        target("gold_main", "pool.gold", json!(50)),
+                        {
+                            "id": "agent_wood",
+                            "resource": "pool.wood",
+                            "condition": {"kind": "at_least", "amount": 80},
+                            "apply": {"mode": "adjust", "weight": "score_stage"},
+                            "tasks": ["task.daily"],
+                        },
+                        target("gold", "pool.old_gold", json!(30)),
+                        target("wood", "pool.old_wood", json!(20)),
+                        target("pick", "pool.iron", json!(9)),
+                        target("stone", "pool.stone", json!(8)),
+                        target("iron", "pool.ore", json!(7)),
+                    ]),
+                    json!([]),
+                    false,
+                    None,
+                )),
+            ),
+        );
+        let page = read(&view);
+        let on = |key: &str, act: GoalAct| -> Option<Press> {
+            let line = page.line(key).unwrap_or_else(|| panic!("no line {key}"));
+            press(line, &act)
+        };
+        let set_of = |name: &str, json: &str| GoalWrite {
+            name: name.to_owned(),
+            change: GoalChange::Set(json.to_owned()),
+        };
+        let clear_of = |name: &str| GoalWrite { name: name.to_owned(), change: GoalChange::Clear };
+        let typed = |text: &str| GoalAct::Amount(text.to_owned());
+        let goes = |write: GoalWrite| Some(Press { write, asks: None });
+        let asks = |write: GoalWrite, loses: Loses| Some(Press { write, asks: Some(loses) });
+
+        // Which lines' names another line has.
+        let orphans: Vec<bool> = page
+            .lines
+            .iter()
+            .filter_map(|line| match line {
+                GoalLine::Orphan(orphan) => Some(orphan.shared),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(orphans, vec![true, true, true, false]);
+        let others: Vec<(bool, bool)> = page
+            .lines
+            .iter()
+            .filter_map(|line| match line {
+                GoalLine::OtherTarget(other) => Some((other.shared, other.clearable())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            others,
+            vec![(true, false), (true, false), (true, false), (true, false), (false, true)]
+        );
+
+        // 1. A value no longer offered under a resource entry's name, a note's, an other target's:
+        // not cleared here. One no other line has is, asked.
+        assert_eq!(on("orphan:gems", GoalAct::Clear), None);
+        assert_eq!(on("orphan:about", GoalAct::Clear), None);
+        assert_eq!(on("orphan:stone", GoalAct::Clear), None);
+        assert_eq!(
+            on("orphan:old_route", GoalAct::Clear),
+            asks(clear_of("old_route"), Loses::Value(Shown::Words("a".to_owned())))
+        );
+        // 2. An other target of a resource entry's name, of a variable's with a value stored, of a
+        // value no longer offered's: not cleared here. One no other line has is, asked.
+        assert_eq!(on("target:gold", GoalAct::Clear), None);
+        assert_eq!(on("target:wood", GoalAct::Clear), None);
+        assert_eq!(on("target:pick", GoalAct::Clear), None);
+        assert_eq!(on("target:stone", GoalAct::Clear), None);
+        assert_eq!(
+            on("target:iron", GoalAct::Clear),
+            asks(clear_of("iron"), Loses::Target(Some(("pool.ore".to_owned(), 7))))
+        );
+        // The entries' own clears are not in doubt: the Runtime takes theirs first.
+        assert_eq!(on("entry:gold", GoalAct::Clear), goes(clear_of("gold")));
+        assert_eq!(on("entry:pick", GoalAct::Clear), goes(clear_of("pick")));
+
+        // 3. An amount set on an entry whose name an other target has removes that target too:
+        // asked, with what it holds; with what its own goal set elsewhere carries as well.
+        match page.line("entry:gold") {
+            Some(GoalLine::Resource(line)) => {
+                assert_eq!(line.same_name, Some(Some(("pool.old_gold".to_owned(), 30))));
+            }
+            line => panic!("{line:?}"),
+        }
+        assert_eq!(
+            on("entry:gold", typed("60")),
+            asks(
+                set_of("gold", "{\"at_least\":60}"),
+                Loses::SameName { held: Some(("pool.old_gold".to_owned(), 30)), carried: None }
+            )
+        );
+        let carried = Carried { tasks: true, ..NOTHING };
+        assert_eq!(
+            on("entry:wood", typed("90")),
+            asks(
+                set_of("wood", "{\"at_least\":90}"),
+                Loses::SameName {
+                    held: Some(("pool.old_wood".to_owned(), 20)),
+                    carried: Some(carried),
+                }
+            )
+        );
+        // Its clear takes only its own pool's goal.
+        assert_eq!(
+            on("entry:wood", GoalAct::Clear),
+            asks(clear_of("wood"), Loses::Elsewhere { cleared: true, carried })
+        );
+        // No other target of its name: set at once.
+        assert_eq!(on("entry:gems", typed("5")), goes(set_of("gems", "{\"at_least\":5}")));
+    }
+
+    /// fix1: a variable the game root does not apply takes no value set here
+    /// (`variable_not_applying`), so a value stored for it is lost for good once put back to the
+    /// default: that asks first, with the value stored, in the language the page is shown in. One
+    /// a value can be set on again asks nothing; one with no value stored has nothing to clear.
+    #[test]
+    fn back_to_the_default_asks_first_where_the_root_does_not_apply_the_variable() {
+        let view = view(
+            state("accepted"),
+            json!([
+                variable("extra", true, switch("extra", "Extra"), &["pack.a"], json!({
+                    "default_json": "false",
+                    "value_json": "true",
+                    "effective_json": "false",
+                    "source": "default",
+                    "set": set("ui", None),
+                    "state": "not_applied",
+                    "variable_problem": "irreversible_by_root",
+                })),
+                variable("pick", true, choice("pick"), &["pack.a"], json!({
+                    "default_json": "\"item_b\"",
+                    "value_json": "\"item_a\"",
+                    "effective_json": "\"item_b\"",
+                    "source": "default",
+                    "set": set("cli", None),
+                    "state": "not_applied",
+                    "variable_problem": "package_unreadable",
+                })),
+                variable("later", true, switch("later", "Later"), &["pack.a"], json!({
+                    "default_json": "false",
+                    "value_json": "true",
+                    "effective_json": "false",
+                    "source": "default",
+                    "set": set("ui", None),
+                    "state": "not_applied",
+                    "variable_problem": "a_newer_word",
+                })),
+                variable("calm", true, switch("calm", "Calm"), &["pack.a"], json!({
+                    "default_json": "false",
+                    "effective_json": "false",
+                    "source": "default",
+                    "state": "not_applied",
+                    "variable_problem": "root_unchecked",
+                })),
+            ]),
+            json!({}),
+            no_targets(),
+        );
+        let clear_of = |name: &str| GoalWrite { name: name.to_owned(), change: GoalChange::Clear };
+        let asks = |name: &str, value: Shown| {
+            Some(Press { write: clear_of(name), asks: Some(Loses::Value(value)) })
+        };
+        let english = read(&view);
+        let on = |page: &GoalsPage, key: &str, act: GoalAct| -> Option<Press> {
+            let line = page.line(key).unwrap_or_else(|| panic!("no line {key}"));
+            press(line, &act)
+        };
+        // Offered as "back to the default", as any variable with a control and a value stored.
+        let offers: Vec<Option<ClearOffer>> = english
+            .lines
+            .iter()
+            .map(|line| match line {
+                GoalLine::Variable(line) => line.clear_offer(),
+                line => panic!("{line:?}"),
+            })
+            .collect();
+        assert_eq!(
+            offers,
+            vec![Some(ClearOffer::Restore), Some(ClearOffer::Restore), Some(ClearOffer::Restore), None]
+        );
+        assert_eq!(on(&english, "entry:extra", GoalAct::Clear), asks("extra", Shown::Switch(true)));
+        assert_eq!(
+            on(&english, "entry:pick", GoalAct::Clear),
+            asks("pick", Shown::Words("Item A".to_owned()))
+        );
+        // Nothing is set on either.
+        assert_eq!(on(&english, "entry:extra", GoalAct::Switch(true)), None);
+        assert_eq!(on(&english, "entry:pick", GoalAct::Pick(0)), None);
+        // Not the root's judgement: a value can be set on it again, so nothing is asked.
+        assert_eq!(
+            on(&english, "entry:later", GoalAct::Clear),
+            Some(Press { write: clear_of("later"), asks: None })
+        );
+        // Nothing stored: nothing to clear.
+        assert_eq!(on(&english, "entry:calm", GoalAct::Clear), None);
+        // The question's value is in the page's language: the page a press reads is made in the
+        // language shown.
+        let chinese = page(&view, Tongue::ZhHans, &|_| None);
+        assert_eq!(
+            on(&chinese, "entry:pick", GoalAct::Clear),
+            asks("pick", Shown::Words("甲".to_owned()))
+        );
     }
 
     fn values(given: Value) -> Map<String, Value> {

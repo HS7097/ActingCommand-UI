@@ -549,14 +549,16 @@ pub fn cancelled(ui: &Ui) {
 }
 
 /// A press `act` on the line `key` of the page shown: nothing when it cannot be pressed now, which
-/// the newest read of the page and the account's own writes decide (`Model::goal_pressed`); a
-/// question on the line when it asks first; else what it writes is sent, once, at once. The
-/// controls show what the reads say either way, which this paints.
+/// the newest read of the page and the account's own writes decide (`Model::goal_pressed`, of the
+/// page in the language shown, whose words the question says); a question on the line when it asks
+/// first; else what it writes is sent, once, at once. The controls show what the reads say either
+/// way, which this paints.
 fn pressed(ui: &Ui, key: &str, act: GoalAct) {
     let Ok(launcher) = &ui.launcher else {
         return;
     };
-    let pressed = ui.model.borrow_mut().goal_pressed(key, &act);
+    let language = ui.labels().tongue;
+    let pressed = ui.model.borrow_mut().goal_pressed(key, &act, language);
     match pressed {
         GoalPressed::Send(alias, request) => {
             send(ui, launcher.state_root.clone(), &alias, request);

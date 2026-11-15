@@ -1233,9 +1233,10 @@ pub struct Labels {
     /// The Goals tab's writes (Workflow #455 G2). The buttons: set an amount, clear, back to the
     /// default, confirm and cancel a question. A resource line's field when empty; why what is
     /// typed is no amount: not a whole number, below 1, too large. In amber beside a goal set
-    /// elsewhere that a change here replaces; in grey of an other target the Lab alone can change;
-    /// in amber above the lines, a Runtime that takes no writes of goals. A value stored under a
-    /// tier's name (value).
+    /// elsewhere that a change here replaces; in grey of an other target the Lab alone can change,
+    /// and of a value no longer offered or an other target whose name another line has, which a
+    /// clear here could miss; in amber above the lines, a Runtime that takes no writes of goals. A
+    /// value stored under a tier's name (value).
     pub goals_set: &'static str,
     pub goals_clear: &'static str,
     pub goals_restore: &'static str,
@@ -1247,6 +1248,7 @@ pub struct Labels {
     pub goals_amount_too_large: &'static str,
     pub goals_set_elsewhere: &'static str,
     pub goals_lab_only: &'static str,
+    pub goals_same_name: &'static str,
     pub goals_write_unsupported: &'static str,
     pub goals_tier_stored: &'static str,
     /// What a line's last press came to: being changed; changed elsewhere and read again; another
@@ -1265,21 +1267,28 @@ pub struct Labels {
     pub goals_write_restarted: &'static str,
     /// The question a press asks first, of what it loses that this page cannot set back: a value
     /// stored that no run reads (value); an other target (pool, amount), or one that does not read;
-    /// a goal set elsewhere, cleared or replaced (what it carries). What it carries: its tasks, its
-    /// step, its importance, its validity, joined by the list's separator.
+    /// a goal set elsewhere, cleared or replaced (what it carries); an amount set that removes the
+    /// other target of the entry's name too (what that holds), and with a goal set elsewhere
+    /// replaced (what that holds, what the goal carries); what that other target holds (pool,
+    /// amount), empty when it does not read. What a goal carries: its tasks, its step, its
+    /// importance, its validity, joined by the list's separator.
     pub goals_confirm_value: &'static str,
     pub goals_confirm_target: &'static str,
     pub goals_confirm_target_unread: &'static str,
     pub goals_confirm_clear_elsewhere: &'static str,
     pub goals_confirm_replace_elsewhere: &'static str,
+    pub goals_confirm_same_name: &'static str,
+    pub goals_confirm_same_name_elsewhere: &'static str,
+    pub goals_confirm_same_name_held: &'static str,
     pub goals_carried_tasks: &'static str,
     pub goals_carried_step: &'static str,
     pub goals_carried_importance: &'static str,
     pub goals_carried_validity: &'static str,
     /// Why the Runtime did not take a value, one sentence per `goal_problem` word (Runtime
-    /// `contracts/outcome-codes/catalog.json:10217-10295`, `runtime-host.json:21707-21733`); the
-    /// values some come with: a range (min, max), a bound (max), and a sentence with its detail
-    /// (sentence, detail).
+    /// `contracts/outcome-codes/catalog.json:10217-10295`, `runtime-host.json:21707-21733`), and
+    /// of a word this console has no sentence for (the word); the two with a bound, each with it in
+    /// its unit (the bytes a value holds, the items a record holds); the values others come with: a
+    /// range (min, max), and a sentence with its detail (sentence, detail).
     pub goals_problem_name_unknown: &'static str,
     pub goals_problem_holds_no_value: &'static str,
     pub goals_problem_tier_not_built: &'static str,
@@ -1303,8 +1312,10 @@ pub struct Labels {
     pub goals_problem_not_checked_yet: &'static str,
     pub goals_problem_root_failing: &'static str,
     pub goals_problem_no_schedule: &'static str,
+    pub goals_problem_other: &'static str,
+    pub goals_problem_value_too_large_at: &'static str,
+    pub goals_problem_record_out_of_limits_at: &'static str,
     pub goals_problem_range: &'static str,
-    pub goals_problem_at_most: &'static str,
     pub goals_problem_with: &'static str,
     /// The workbench's live view, in its right column: its title, beside which the alias of
     /// the account picked shows. What it says while no frame shows: the account's latest
@@ -2541,7 +2552,7 @@ pub const ZH: Labels = Labels {
     goals_newer_answer: "读不懂 Runtime 的答复：多半是这份目标记录或 Runtime 比这一版监控台新，需要更新版的监控台（{}）",
     goals_late: "目标有一阵没读到新的了，稍后会自动再读",
     goals_unsupported: "这一版 Runtime 读不了目标（{}）",
-    goals_later: "在这里可以设资源目标、改开关和选项、恢复默认、清掉不再提供的值；数字和排序类的设置下一版才能在这里改，现在要用 Lab（命令行或 MCP）。",
+    goals_later: "这一版能在这里改：资源目标的数量、开关和选项，以及它们的恢复默认或清掉；也能清掉不再提供的值和其他资源目标。整数和排序类的设置（包括恢复它们的默认值）还要用 Lab（命令行或 MCP），下一版才能在这里改。",
     goals_read_at: "按 {} 读到的",
     goals_not_taken: "标准包的目标声明没有被采用：各个包的变量照列",
     goals_not_read: "这个 Runtime 不读游戏的目标声明：各个包的变量照列",
@@ -2644,6 +2655,7 @@ pub const ZH: Labels = Labels {
     goals_amount_too_large: "这个数太大了",
     goals_set_elsewhere: "这个目标是别处设的，在这里改会换掉它原来的设置",
     goals_lab_only: "请用 Lab 修改",
+    goals_same_name: "和页上另一项同名，这里清不准；请用 Lab 修改",
     goals_write_unsupported: "这一版 Runtime 不能在这里改目标，这一页只能看",
     goals_tier_stored: "存着的值：{}（这一版不用）",
     goals_write_sending: "正在改…",
@@ -2661,6 +2673,9 @@ pub const ZH: Labels = Labels {
     goals_confirm_target_unread: "清掉以后，这个资源目标在这里设不回去。确定清掉吗？",
     goals_confirm_clear_elsewhere: "这个目标是别处设的：清掉会连它带的{}一起丢掉，这些在这里设不回去。确定清掉吗？",
     goals_confirm_replace_elsewhere: "这个目标是别处设的：在这里改会整个换掉它，它带的{}会丢掉，这些在这里设不回去。确定改吗？",
+    goals_confirm_same_name: "在这里设定，会一并删掉「其他资源目标」里和这一项同名的那个目标{}，它在这里设不回去。确定改吗？",
+    goals_confirm_same_name_elsewhere: "在这里设定，会一并删掉「其他资源目标」里和这一项同名的那个目标{}；这一项的目标又是别处设的，会被整个换掉，它带的{}也会丢掉。这些在这里设不回去。确定改吗？",
+    goals_confirm_same_name_held: "（{} 至少 {}）",
     goals_carried_tasks: "任务",
     goals_carried_step: "步长",
     goals_carried_importance: "重要度",
@@ -2688,8 +2703,10 @@ pub const ZH: Labels = Labels {
     goals_problem_not_checked_yet: "Runtime 还没检查这个游戏的标准包，等它下一次检查后再按一次",
     goals_problem_root_failing: "这个游戏的标准包读不了，要先修好，再按也没用",
     goals_problem_no_schedule: "这个游戏的标准包没有排程文件，这里没有可设的项",
+    goals_problem_other: "原因代码 {}",
+    goals_problem_value_too_large_at: "这个值超过了上限 {} 字节，存不下",
+    goals_problem_record_out_of_limits_at: "这个实例存的目标或设置项已经到上限 {} 项，要先清掉一些",
     goals_problem_range: "允许 {} 到 {}",
-    goals_problem_at_most: "上限 {}",
     goals_problem_with: "{}：{}",
     picture_title: "实时画面",
     picture_looking: "正在找这个实例最近的画面…",
@@ -3781,7 +3798,7 @@ pub const EN: Labels = Labels {
     goals_newer_answer: "The Runtime's answer cannot be read: most likely this goal record or the Runtime is newer than this console, which needs a newer console ({})",
     goals_late: "Nothing new of the goals came for a while; they are read again by themselves shortly",
     goals_unsupported: "This version of the Runtime cannot read goals ({})",
-    goals_later: "Resource goals, switches and choices can be set here, values put back to their defaults, and values no longer offered cleared; number and order settings come to this page in the next version, and need the Lab (command line or MCP) until then.",
+    goals_later: "In this version, resource goal amounts, switches and choices are changed here, and put back to their defaults or cleared; values no longer offered and other resource goals are cleared here too. Number and order settings, putting them back to their defaults included, still need the Lab (command line or MCP) and come to this page in the next version.",
     goals_read_at: "As read at {}",
     goals_not_taken: "The standard pack's goal declaration is not applied: the packs' variables are still listed below",
     goals_not_read: "This Runtime does not read the game's goal declaration: the packs' variables are still listed below",
@@ -3884,12 +3901,13 @@ pub const EN: Labels = Labels {
     goals_amount_too_large: "This number is too large",
     goals_set_elsewhere: "This goal was set elsewhere: changing it here replaces how it was set",
     goals_lab_only: "Change it with the Lab",
+    goals_same_name: "Another line on this page has the same name, so it cannot be cleared reliably here; change it with the Lab",
     goals_write_unsupported: "This version of the Runtime cannot change goals from here; this page only shows them",
     goals_tier_stored: "Value stored: {} (not used in this version)",
     goals_write_sending: "Changing…",
     goals_write_conflict: "This page was just changed elsewhere and is read again: press again",
     goals_write_not_newer: "Something else changed this instance's goals at the same moment, and this did not go through ({}); press again",
-    goals_write_invalid: "Not changed: {} ({})",
+    goals_write_invalid: "Not changed. {} ({})",
     goals_write_refused: "Not changed, the Runtime refused it: {} ({})",
     goals_write_no_code: "no code given",
     goals_write_not_sent: "Not sent: the Runtime cannot be reached ({})",
@@ -3901,6 +3919,9 @@ pub const EN: Labels = Labels {
     goals_confirm_target_unread: "Once cleared, this resource goal cannot be set back from here. Clear it?",
     goals_confirm_clear_elsewhere: "This goal was set elsewhere: clearing it loses its {} too, which cannot be set back from here. Clear it?",
     goals_confirm_replace_elsewhere: "This goal was set elsewhere: changing it here replaces it whole and loses its {}, which cannot be set back from here. Change it?",
+    goals_confirm_same_name: "Setting this also removes the goal of the same name under Other resource goals{}, which cannot be set back from here. Change it?",
+    goals_confirm_same_name_elsewhere: "Setting this also removes the goal of the same name under Other resource goals{}; and this goal, set elsewhere, is replaced whole and loses its {}. None of this can be set back from here. Change it?",
+    goals_confirm_same_name_held: " ({}, at least {})",
     goals_carried_tasks: "tasks",
     goals_carried_step: "step",
     goals_carried_importance: "importance",
@@ -3928,8 +3949,10 @@ pub const EN: Labels = Labels {
     goals_problem_not_checked_yet: "The Runtime has not checked this game's standard pack yet; press again after its next check",
     goals_problem_root_failing: "This game's standard pack cannot be read and must be repaired first; pressing again does not help",
     goals_problem_no_schedule: "This game's standard pack has no schedule file, so nothing can be set here",
-    goals_problem_range: "allowed: {} to {}",
-    goals_problem_at_most: "at most {}",
+    goals_problem_other: "Reason code {}",
+    goals_problem_value_too_large_at: "The value is longer than the {} bytes a value can hold",
+    goals_problem_record_out_of_limits_at: "This instance holds as many goals or settings as a record keeps, at most {} items; clear some first",
+    goals_problem_range: "{} to {}",
     goals_problem_with: "{}: {}",
     picture_title: "Live View",
     picture_looking: "Looking for this instance's latest picture…",

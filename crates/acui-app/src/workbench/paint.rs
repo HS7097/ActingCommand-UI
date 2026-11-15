@@ -3117,7 +3117,8 @@ fn goals_page(
     if listed && page.no_catalog {
         said.push(labels.goals_no_catalog.to_owned());
     }
-    let old = if listed && matches!(form, Some(Form::Old)) { labels.goals_form_old } else { "" };
+    let form_note =
+        if listed && matches!(form, Some(Form::Old)) { labels.goals_form_old } else { "" };
     let resources = page.lines.iter().any(|line| matches!(line, GoalLine::Resource(_)));
     let (validity, expired) = match document {
         _ if !listed => (String::new(), false),
@@ -3143,7 +3144,7 @@ fn goals_page(
         notice: notice.join("\n").into(),
         read_at: fill(labels.goals_read_at, &[&format_minute(page.evaluated_at_ms)]).into(),
         said: said.join("\n").into(),
-        form: old.into(),
+        form: form_note.into(),
         document: validity.into(),
         document_warning: expired,
     };
@@ -3166,8 +3167,9 @@ fn goals_page(
 /// amount where its pool takes a goal here, with why what is typed is no amount and, in amber, that
 /// its goal was set elsewhere; a choice's options (side by side up to four, else a drop-down) or a
 /// switch, at the value the next run reads; the clear it has; an other target the Lab alone can
-/// clear, so said in grey. Then what its last press came to and the question a press asks, if
-/// either.
+/// clear, so said in grey, as is a value no longer offered or an other target whose name another
+/// line has, which no clear here is sure to reach. Then what its last press came to and the
+/// question a press asks, if either.
 fn goal_controls(
     ui: &Ui,
     labels: &Labels,
@@ -3233,7 +3235,14 @@ fn goal_controls(
             }
         }
         GoalLine::Variable(_) => {}
+        // A name another line has too: a clear of it could take that line's (`goals::press`).
+        GoalLine::Orphan(orphan) if orphan.shared => {
+            notes.push(labels.goals_same_name.to_owned());
+        }
         GoalLine::Orphan(_) => row.clear_label = labels.goals_clear.into(),
+        GoalLine::OtherTarget(other) if other.shared => {
+            notes.push(labels.goals_same_name.to_owned());
+        }
         GoalLine::OtherTarget(other) if other.by_name => {
             row.clear_label = labels.goals_clear.into();
         }
@@ -3311,6 +3320,21 @@ fn loses_text(labels: &Labels, loses: &Loses) -> String {
             };
             fill(template, &[&carried])
         }
+        Loses::SameName { held, carried } => {
+            let held = match held {
+                Some((pool, amount)) => {
+                    fill(labels.goals_confirm_same_name_held, &[pool.as_str(), &amount.to_string()])
+                }
+                None => String::new(),
+            };
+            match carried {
+                Some(carried) => fill(
+                    labels.goals_confirm_same_name_elsewhere,
+                    &[&held, &carried_text(labels, *carried)],
+                ),
+                None => fill(labels.goals_confirm_same_name, &[&held]),
+            }
+        }
     }
 }
 
@@ -3368,8 +3392,8 @@ fn goal_said_text(ui: &Ui, labels: &Labels, said: &GoalSaid) -> (String, SaidTon
 }
 
 /// Why the Runtime did not take a value, one sentence per `goal_problem` word, with the values the
-/// word comes with: a range, a bound, why a variable does not apply. A word of a newer Runtime by
-/// its code, which the log hears of once.
+/// word comes with: a range, a bound with its unit (bytes, items), why a variable does not apply. A
+/// word of a newer Runtime by its code, which the log hears of once.
 fn invalid_text(ui: &Ui, labels: &Labels, invalid: &WriteInvalid) -> String {
     let words = match &invalid.problem {
         WriteProblem::NameUnknown => labels.goals_problem_name_unknown,
@@ -3400,17 +3424,25 @@ fn invalid_text(ui: &Ui, labels: &Labels, invalid: &WriteInvalid) -> String {
             if ui.model.borrow_mut().first_told(&line) {
                 report::log(TASKS_LOG, &line);
             }
-            return fill(labels.goals_why_other, &[word.as_str()]);
+            return fill(labels.goals_problem_other, &[word.as_str()]);
         }
     };
+    // A bound with its unit, within the sentence: the bytes a value's text holds, the targets or
+    // entries a record holds.
+    let bound = |template: &str| invalid.max.map(|max| fill(template, &[&max.to_string()]));
+    let whole = match &invalid.problem {
+        WriteProblem::ValueTooLarge => bound(labels.goals_problem_value_too_large_at),
+        WriteProblem::RecordOutOfLimits => bound(labels.goals_problem_record_out_of_limits_at),
+        _ => None,
+    };
+    if let Some(whole) = whole {
+        return whole;
+    }
     let range = invalid.min.zip(invalid.max).map(|(min, max)| {
         fill(labels.goals_problem_range, &[&min.to_string(), &max.to_string()])
     });
     let detail = match &invalid.problem {
         WriteProblem::OutOfRange | WriteProblem::OffStep | WriteProblem::CountOutOfRange => range,
-        WriteProblem::ValueTooLarge | WriteProblem::RecordOutOfLimits => {
-            invalid.max.map(|max| fill(labels.goals_problem_at_most, &[&max.to_string()]))
-        }
         WriteProblem::VariableNotApplying => Some(unapplied_text(labels, &invalid.variable)),
         _ => None,
     };
@@ -3522,6 +3554,7 @@ fn resource_row(labels: &Labels, line: &ResourceLine) -> GoalRowData {
         value_met: met,
         warning: warnings.join("\n").into(),
         note: notes.join("\n").into(),
+        ..GoalRowData::default()
     }
 }
 
@@ -3556,6 +3589,7 @@ fn other_row(labels: &Labels, other: &OtherTarget) -> GoalRowData {
         value_met: met,
         warning: warnings.join("\n").into(),
         note: notes.join("\n").into(),
+        ..GoalRowData::default()
     }
 }
 
@@ -3639,6 +3673,7 @@ fn variable_row(labels: &Labels, line: &VariableLine) -> GoalRowData {
         value_met: false,
         warning: warnings.join("\n").into(),
         note: notes.join("\n").into(),
+        ..GoalRowData::default()
     }
 }
 

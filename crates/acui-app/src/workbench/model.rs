@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 use std::time::Instant;
 
-use acui_rows::outcome::Tongue;
 use acui_source::workbench::device::DeviceOp;
 use acui_source::workbench::goals::{self, GoalAct, GoalsAnswer, GoalsPage, GoalsRead};
 use acui_source::workbench::pack::{self, PacksAnswer, PacksRead};
@@ -1180,9 +1179,14 @@ impl Model {
     }
 
     /// The page the Goals tab shows now, of the account and owner epoch its newest read is of, as a
-    /// press reads it: none but while `goals_view` shows its lines. Its words are no matter to a
-    /// press, which names values, so it is made in English, without the packages' names.
-    fn goals_page_now(&self, now: Instant) -> Option<(String, String, GoalsPage)> {
+    /// press reads it: none but while `goals_view` shows its lines. It is made as `goals_view`
+    /// makes it, in `language` with the packages' names, since a question a press asks says what it
+    /// loses in the page's words (an option's title, a number's unit).
+    fn goals_page_now(
+        &self,
+        now: Instant,
+        language: Language,
+    ) -> Option<(String, String, GoalsPage)> {
         let alias = self.goals_wanted()?;
         let epoch = self.online_epoch()?.to_owned();
         let thread_gone = matches!(self.slow_fault, Some(Fault::NoThread(_)));
@@ -1200,15 +1204,17 @@ impl Model {
         if *read_epoch != epoch {
             return None;
         }
-        let page = loaded.page(Tongue::En, &|_| None);
+        let pack_title = |package: &str| self.task_title(package, language).map(str::to_owned);
+        let page = loaded.page(language.outcome_tongue(), &pack_title);
         Some((alias, epoch, page))
     }
 
-    /// A press `act` on the line `key` of the Goals tab (Workflow #455 G2): what it writes, of the
-    /// page shown while its controls can be pressed (`Writes::now`), as `goals::press` decides it,
-    /// naming the page's version; asked first when it loses what the page cannot set back.
-    pub fn goal_pressed(&mut self, key: &str, act: &GoalAct) -> GoalPressed {
-        let Some((alias, epoch, page)) = self.goals_page_now(Instant::now()) else {
+    /// A press `act` on the line `key` of the Goals tab (Workflow #455 G2), shown in `language`:
+    /// what it writes, of the page shown while its controls can be pressed (`Writes::now`), as
+    /// `goals::press` decides it, naming the page's version; asked first when it loses what the
+    /// page cannot set back.
+    pub fn goal_pressed(&mut self, key: &str, act: &GoalAct, language: Language) -> GoalPressed {
+        let Some((alias, epoch, page)) = self.goals_page_now(Instant::now(), language) else {
             return GoalPressed::Nothing;
         };
         if !self.goal_writes.now(&alias, &epoch, page.writable()).enabled {
